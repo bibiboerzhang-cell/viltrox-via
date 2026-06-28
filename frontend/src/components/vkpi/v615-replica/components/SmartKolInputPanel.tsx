@@ -33,9 +33,25 @@ import {
   textFrom,
 } from "./KOLVideoAnalysisPanel";
 
-type Mode = "idle" | "url" | "text";
+// 纯函数工具已抽到 SmartKolInputPanel.helpers.ts(行为不变)。
+import {
+  actionDescription,
+  asRecord,
+  cleanText,
+  detectMode,
+  display,
+  durationLabel,
+  numberLabel,
+  sessionIdFrom,
+  terminalSessionStatus,
+  urlTypeLabel,
+  videoExecutionDone,
+  youtubeEmbedUrl,
+  type Mode,
+  type Row,
+} from "./SmartKolInputPanel.helpers";
+
 type State = "idle" | "loading" | "ready" | "executing" | "error";
-type Row = Record<string, unknown>;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
 // 刀2·流2 路A:贴账号 URL 自动分析的代表视频条数(dossier 据此出 LLM 账号分)。2 = 信号与成本/排队的折中;
 // 想更深可在抽屉点「发现并分析全部视频」。代表视频走交互优先(并发A tier0)插队,不被批量饿死。
@@ -43,14 +59,6 @@ const PROFILE_REP_VIDEO_LIMIT = 2;
 // 搜索展示态持久化:把当前激活搜索的 ①②③ 显示态存进 sessionStorage,挂载时回填。
 // 即便父级 90s/10min 刷新偶发重挂本面板(useState 归零),也能恢复结果,不让用户的搜索凭空消失。
 const ACTIVE_SEARCH_DISPLAY_KEY = "vkpi:activeKolSearchDisplay";
-
-function cleanText(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function asRecord(value: unknown): Row {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
-}
 
 // 搜索展示态的持久化形状(只存渲染所需,够回填 ①②③ 与轮询续接)。
 type PersistedSearchDisplay = {
@@ -85,81 +93,6 @@ function writePersistedSearchDisplay(value: PersistedSearchDisplay | null): void
   } catch {
     // 配额/隐私模式失败时静默:持久化只是兜底,失败不影响实时搜索。
   }
-}
-
-// YouTube embed:复用 KOLDetailDrawer 的 youtube-nocookie 格式(B:视频结果区可播放)。
-function youtubeEmbedUrl(videoId: string): string {
-  const id = String(videoId || "").trim();
-  if (!id) return "";
-  const origin = typeof window !== "undefined" && window.location?.origin
-    ? `&origin=${encodeURIComponent(window.location.origin)}`
-    : "";
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0&playsinline=1&modestbranding=1${origin}`;
-}
-
-function display(value: unknown, fallback = "--"): string {
-  const text = cleanText(value);
-  return text || fallback;
-}
-
-function numberLabel(value: unknown): string {
-  const next = Number(value);
-  if (!Number.isFinite(next) || next <= 0) return "";
-  if (next >= 1_000_000) return `${(next / 1_000_000).toFixed(1)}M`;
-  if (next >= 10_000) return `${Math.round(next / 1_000)}K`;
-  if (next >= 1_000) return `${(next / 1_000).toFixed(1)}K`;
-  return String(Math.round(next));
-}
-
-function durationLabel(value: unknown): string {
-  const ms = Number(value);
-  if (!Number.isFinite(ms) || ms <= 0) return "";
-  const totalSeconds = Math.max(1, Math.round(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function detectMode(input: string): Mode {
-  const value = cleanText(input);
-  if (!value) return "idle";
-  try {
-    const parsed = new URL(value.includes("://") ? value : `https://${value}`);
-    const supportedProtocol = parsed.protocol === "http:" || parsed.protocol === "https:";
-    return supportedProtocol && parsed.hostname.includes(".") ? "url" : "text";
-  } catch {
-    return "text";
-  }
-}
-
-function sessionIdFrom(value: unknown): number | undefined {
-  const record = asRecord(value);
-  const raw = record.session_id ?? record.id;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function terminalSessionStatus(value: unknown): boolean {
-  const status = cleanText(value).toLowerCase();
-  return ["ready", "partial", "failed", "done", "blocked", "cancelled", "canceled"].includes(status);
-}
-
-function actionDescription(value: unknown): string {
-  if (typeof value === "string") return value;
-  const record = asRecord(value);
-  return cleanText(record.description || record.label || record.code);
-}
-
-function urlTypeLabel(value: unknown): string {
-  const text = cleanText(value);
-  if (text === "profile") return "Profile URL";
-  if (text === "video") return "Video URL";
-  if (text === "unknown") return "Unknown URL";
-  return text || "--";
-}
-
-function videoExecutionDone(status: unknown): boolean {
-  return ["queued", "already_queued", "already_analyzed", "ready", "partial"].includes(cleanText(status));
 }
 
 function recallTopItems(response: VkpiKolRecallResponse | null): VkpiKolRecallItem[] {
