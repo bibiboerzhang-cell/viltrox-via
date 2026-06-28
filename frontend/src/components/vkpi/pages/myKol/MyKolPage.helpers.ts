@@ -117,7 +117,7 @@ export function staffFocusLine(card: StaffCard) {
   if (value.includes('founder') || value.includes('director') || value.includes('admin')) return '焦点: 全局';
   const platformNames = Array.from(new Set(card.accounts.map((account) => platformDisplay(account.platform)))).slice(0, 2);
   if (platformNames.length) return `焦点: ${platformNames.join(' · ')}`;
-  return '焦点: 待接入';
+  return '焦点: 暂无';
 }
 
 export function statusLabel(value: string) {
@@ -129,7 +129,7 @@ export function statusLabel(value: string) {
     official_readonly: '只读',
     synced: '已同步',
   };
-  return labels[value] || value || '待接入';
+  return labels[value] || value || '暂无';
 }
 
 export function readCollapse(storageKey: string, fallback: boolean) {

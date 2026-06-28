@@ -20,6 +20,7 @@ from app.api.routers import activities, auth, admin, audit, creator, jobs, leade
 from app.api.routers import dashboard_account_picker
 from app.api.routers import vkpi_kol_portal
 from app.api.routers import vkpi_skills
+from app.api.routers import vkpi_analytics_export
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -780,6 +781,7 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_metrics.router)
     app.include_router(vkpi_agents.router)
     app.include_router(vkpi_skills.router)
+    app.include_router(vkpi_analytics_export.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

@@ -2,7 +2,7 @@
 // 从 SmartKolInputPanel.tsx 抽出,行为不变:JSX 逐字保留,容器本体 + 全部 hooks 仍留 SmartKolInputPanel.tsx,
 // 这里只是「仅吃 props」的展示组件(无自身 hooks),容器把 state/派生值/回调透传进来,调用点不变。
 // 红线:纯展示,绝不写任何 viltrox_fit_score。
-import { FolderPlus, Info, Loader2, MessageSquare, Sparkles, UserPlus } from "lucide-react";
+import { FolderPlus, Info, Loader2, MessageSquare, RefreshCw, Sparkles, UserPlus } from "lucide-react";
 
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
@@ -59,6 +59,7 @@ export function TextResultSection({
   sessionBanner,
   activeSessionCounts,
   sessionPollNotice,
+  retrySearchSession,
 }: {
   recallResult: VkpiKolRecallResponse;
   llmPlan: Row;
@@ -103,6 +104,7 @@ export function TextResultSection({
   sessionBanner: SessionBanner;
   activeSessionCounts: Record<string, any>;
   sessionPollNotice: string;
+  retrySearchSession: () => void;
 }) {
   return (
     <div className="mt-3 space-y-2.5">
@@ -339,6 +341,20 @@ export function TextResultSection({
           }`}>
             <div className="font-medium">{sessionBanner.label}</div>
             <div className="mt-0.5 opacity-85">{sessionBanner.note}</div>
+            {/* 失败/未完成 → 「重试」(重新入队该搜索,续接轮询回填 ①②③) */}
+            <button
+              type="button"
+              onClick={() => void retrySearchSession()}
+              disabled={state === "executing" || !apiToken || !cleanText(input)}
+              className={`mt-1.5 inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-md border px-2.5 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55 ${
+                sessionBanner.tone === "error"
+                  ? "border-rose-300/30 bg-rose-500/[0.14] text-rose-100 hover:bg-rose-500/[0.22]"
+                  : "border-amber-300/30 bg-amber-500/[0.14] text-amber-100 hover:bg-amber-500/[0.22]"
+              }`}
+            >
+              {state === "executing" ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+              重试
+            </button>
           </div>
         ) : (
           <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-3 text-center text-[10.5px] text-slate-500">全网发现恒开 · 搜索后自动从所选平台发现新号</div>

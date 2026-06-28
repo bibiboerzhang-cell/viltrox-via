@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Presentational overlay mounts extracted verbatim from CockpitApp.tsx (行为不变抽取).
 // 这一大坨 e(AnimatePresence, ...) 模态 / popover 挂载原本平铺在容器 return 里;
 // 现以显式 props 的纯展示组件形式上移,JSX 逐字不变,所有 state / setter / 派生值由容器透传。
@@ -41,7 +40,7 @@ import { createStaffGroup, updateStaffGroup } from "../../../services/vkpi/group
 const e = React.createElement;
 
 // 返回容器 return 里那一长串 overlay 节点(数组)。在 CockpitApp 里以 ...CockpitOverlays({...}) 展开。
-export function CockpitOverlays(p) {
+export function CockpitOverlays(p: any) {
   const {
     selectedPin, setSelectedPin, currentMode, setActiveNav,
     selectedEvent, setSelectedEvent, openEventsPage,
@@ -118,9 +117,9 @@ export function CockpitOverlays(p) {
       canManage: ["admin", "owner"].includes(String(currentUser?.role || "").toLowerCase()),
       onAssigned: () => { onRefreshData && onRefreshData(); },
       onClose: () => setSelectedProject(null),
-      onOpenFullPage: (project) => {
+      onOpenFullPage: (project: any) => {
         const projectId = String(project?.projectId || project?.id || "");
-        const row = (dashboardData.projects || []).find((item) => item.id === projectId);
+        const row = (dashboardData.projects || []).find((item: any) => item.id === projectId);
         setSelectedLegacyProject(row || null);
         setOpenLegacyProjectId(projectId);
         setSelectedProject(null);
@@ -143,7 +142,7 @@ export function CockpitOverlays(p) {
     e(AnimatePresence, { key: "ov-allsignals" }, showAllSignals && e(SignalsAllModal, {
       alerts: dashboardRuntime.signals,
       onClose: () => setShowAllSignals(false),
-      onAlertClick: (a) => { setShowAllSignals(false); setSelectedSignal(a); }
+      onAlertClick: (a: any) => { setShowAllSignals(false); setSelectedSignal(a); }
     })),
     e(AnimatePresence, { key: "ov-aiconfirm" }, showAIConfirm && e(AIDecisionConfirmModal, {
       insight: dashboardRuntime.aiInsight,
@@ -189,18 +188,18 @@ export function CockpitOverlays(p) {
       notifications: runtimeNotifications,
       anchorRef: notifsBtnRef, t,
       onViewAll: () => setShowAllNotifs(true),
-      onItemClick: (n) => setSelectedNotif(n),
+      onItemClick: (n: any) => setSelectedNotif(n),
     })),
     e(AnimatePresence, { key: "ov-usermenu" }, showUserMenu && e(UserMenuPopover, {
       onClose: () => setShowUserMenu(false),
-      theme, onToggleTheme: () => setTheme(t => t === "light" ? "dark" : "light"),
+      theme, onToggleTheme: () => setTheme((t: any) => t === "light" ? "dark" : "light"),
       anchorRef: userMenuBtnRef, t, user: currentUser, staff: uiStaff, lang,
-      onToggleLang: () => setLang(l => l === "zh" ? "en" : "zh"),
+      onToggleLang: () => setLang((l: any) => l === "zh" ? "en" : "zh"),
       viewingAs, onResetView: () => setViewingAs(null),
       onOpenProfile: () => setShowProfile(true),
       onOpenTeam: () => setShowTeam(true),
       onOpenSettings: () => setShowSettingsModal(true),
-      onImpersonate: (s) => setViewingAs(s),
+      onImpersonate: (s: any) => setViewingAs(s),
       onLogout: async () => {
         await logoutCockpit().catch(() => null);
         onSignOut && onSignOut();
@@ -211,8 +210,8 @@ export function CockpitOverlays(p) {
     e(AnimatePresence, { key: "ov-team" }, showTeam && e(TeamModal, {
       user: currentUser, staff: uiStaff, groups: staffGroups, apiToken,
       onClose: () => setShowTeam(false),
-      onImpersonate: (s) => setViewingAs(s),
-      onOpenEditGroup: (g) => openGroupEditor("edit", g || null),
+      onImpersonate: (s: any) => setViewingAs(s),
+      onOpenEditGroup: (g: any) => openGroupEditor("edit", g || null),
       onOpenNewGroup: () => openGroupEditor("new"),
       t
     })),
@@ -235,17 +234,17 @@ export function CockpitOverlays(p) {
     e(AnimatePresence, { key: "ov-allprojects" }, showAllProjects && e(AllProjectsModal, {
       campaigns: dashboardRuntime.campaigns,
       onClose: () => setShowAllProjects(false),
-      onProjectClick: (c) => setSelectedProject(c)
+      onProjectClick: (c: any) => setSelectedProject(c)
     })),
     e(AnimatePresence, { key: "ov-allmovers" }, showAllMovers && e(AllMoversModal, {
       movers: dashboardRuntime.topMovers,
       onClose: () => setShowAllMovers(false),
-      onMoverClick: (m) => setSelectedMover(m)
+      onMoverClick: (m: any) => setSelectedMover(m)
     })),
     e(AnimatePresence, { key: "ov-fullcal" }, showFullCalendar && e(FullCalendarModal, {
       days: dashboardRuntime.calendarDays,
       onClose: () => setShowFullCalendar(false),
-      onItemClick: (item) => setSelectedPublish(item)
+      onItemClick: (item: any) => setSelectedPublish(item)
     })),
     e(AnimatePresence, { key: "ov-allreminders" }, showAllReminders && e(AllRemindersModal, {
       reminders: activeReminders,
@@ -255,15 +254,15 @@ export function CockpitOverlays(p) {
     e(AnimatePresence, { key: "ov-allnotifs" }, showAllNotifs && e(AllNotificationsModal, {
       notifications: runtimeNotifications,
       onClose: () => setShowAllNotifs(false),
-      onNotifClick: (n) => setSelectedNotif(n)
+      onNotifClick: (n: any) => setSelectedNotif(n)
     })),
     e(AnimatePresence, { key: "ov-notifdetail" }, selectedNotif && e(NotificationDetailModal, {
       notification: selectedNotif,
       onClose: () => setSelectedNotif(null),
-      onMarkRead: async (id) => {
+      onMarkRead: async (id: any) => {
         if (!apiToken) return;
         await resolveCockpitAlert(apiToken, id).catch(() => null);
-        setRuntimeNotifications(prev => prev.map(item => item.id === id ? { ...item, unread: false, status: "done" } : item));
+        setRuntimeNotifications((prev: any) => prev.map((item: any) => item.id === id ? { ...item, unread: false, status: "done" } : item));
       },
       onNavigate: (linked: any) => {
         const ty = String(linked?.type || "").toLowerCase();
@@ -284,7 +283,7 @@ export function CockpitOverlays(p) {
       initialDesc: editGroupTarget?.description || "",
       permissions: editGroupTarget?.permissions || null,
       onClose: () => setShowEditGroup(false),
-      onSave: async (group) => {
+      onSave: async (group: any) => {
         try {
           if (!apiToken) throw new Error("缺少 API token，不能保存分组。");
           const body = { name: group.name, description: group.desc, member_ids: group.members, permissions: group.permissions };
@@ -309,7 +308,7 @@ export function CockpitOverlays(p) {
             priority: "low",
             source: "team_group",
           });
-        } catch (err) {
+        } catch (err: any) {
           pushLocalNotification({
             id: `team-group-err-${Date.now()}`,
             raw: { error: String(err && err.message ? err.message : err) },
@@ -333,7 +332,7 @@ export function CockpitOverlays(p) {
       event: previewEvent,
       allEvents: mappedEvents,
       onClose: () => setPreviewEvent(null),
-      onViewDetails: (evt) => {
+      onViewDetails: (evt: any) => {
         setPreviewEvent(null);
         setSelectedEvent(evt);
       }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from CockpitApp.tsx — conservative leaf extraction (行为不变).
 // 纯展示侧边栏:吃 props,不持有任何 state/effect。
 

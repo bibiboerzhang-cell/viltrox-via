@@ -201,7 +201,7 @@ export function ProjectFunnel({
           className="text-[10px] px-2 py-0.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.08] text-emerald-300 inline-flex items-center gap-1 pointer-events-none select-none"
           title="真刷新功能将在视频 URL 每日刷新 job 接入后启用"
         >
-          状态 · 每日刷新待接入
+          状态 · 每日刷新未开放
         </span>
       </div>
       <div className="grid grid-cols-10 gap-2">

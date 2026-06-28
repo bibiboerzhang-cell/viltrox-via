@@ -1,6 +1,47 @@
-import { apiFetch, jsonBody } from "../http";
+import { apiFetch, jsonBody, buildApiUrl } from "../http";
 
 type Row = Record<string, unknown>;
+
+// F3 运行态信任块:GET /health 顶层 trust 字段(server/client/worker sha · 对齐 · worker 在线 · 迁移号)。
+// /health 是公开只读端点(无需 token),直接 fetch;任何字段缺失返回 null,绝不编造。
+export interface VkpiHealthTrust {
+  server_git_sha: string | null;
+  client_git_sha: string | null;
+  worker_sha: string | null;
+  worker_sha_source?: string | null;
+  sha_aligned: boolean | null;
+  worker_online: boolean | null;
+  worker_heartbeat: string | null;
+  db_migration_max: string | null;
+}
+
+export async function getHealthTrust(clientBuildSha?: string): Promise<VkpiHealthTrust | null> {
+  try {
+    const suffix = clientBuildSha ? `?client_build=${encodeURIComponent(clientBuildSha)}` : "";
+    const response = await fetch(buildApiUrl(`/health${suffix}`), {
+      credentials: "same-origin",
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const trust = (payload && typeof payload === "object" ? (payload as Row).trust : null) as Row | null;
+    if (!trust || typeof trust !== "object") return null;
+    const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+    const boolN = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+    return {
+      server_git_sha: str(trust.server_git_sha),
+      client_git_sha: str(trust.client_git_sha),
+      worker_sha: str(trust.worker_sha),
+      worker_sha_source: str(trust.worker_sha_source),
+      sha_aligned: boolN(trust.sha_aligned),
+      worker_online: boolN(trust.worker_online),
+      worker_heartbeat: str(trust.worker_heartbeat),
+      db_migration_max: str(trust.db_migration_max),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export async function getRbacStatus(token: string, includeStaff = false) {
   const suffix = includeStaff ? "?include_staff=true" : "";

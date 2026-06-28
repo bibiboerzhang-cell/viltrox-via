@@ -4,7 +4,7 @@
  * 只读:调用 GET /api/admin/vkpi/my-kol/contribution-rollup(后端用 scope.can_view_all
  * 二次 gate,仅管理层可读)。每个负责人一行,各指标分列:
  *   负责人 / 在管 KOL 数 / 已发布数 / 归因销售。
- * 诚实降级:某指标无数据源接入时显示「— / 待接入」(归因销售看 has_attribution)。
+ * 诚实降级:某指标无数据源接入时显示「— / 暂无数据源」(归因销售看 has_attribution)。
  *
  * 设计约束:此组件不改 MyKolPage.tsx(集成者挂),不引入新 CSS 文件(用内联样式),
  * 仅依赖 services/vkpi/kol-api 的 fetchContributionRollup。
@@ -33,7 +33,7 @@ function usd(value: number): string {
   }).format(Number.isFinite(value) ? value : 0);
 }
 
-const PLACEHOLDER = '— / 待接入';
+const PLACEHOLDER = '— / 暂无数据源';
 
 export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: ContributionRollupPanelProps) {
   const [items, setItems] = useState<VkpiContributionRollupItem[]>([]);
@@ -236,7 +236,7 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
       </div>
 
       <p style={{ fontSize: 11, opacity: 0.5, marginTop: 12 }}>
-        已发布数来自内容库(window 内 published_at);归因销售来自销售归因表(按 KOL 关联),无数据源时显示「待接入」。
+        已发布数来自内容库(window 内 published_at);归因销售来自销售归因表(按 KOL 关联),无数据源时显示「暂无数据源」。
       </p>
     </section>
   );

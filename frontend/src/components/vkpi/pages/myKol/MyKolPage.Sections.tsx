@@ -100,11 +100,11 @@ export function TeamMatrix({
           <div className="mykol-chip-row">
             <span><b>{allAccounts.length}</b> 账号</span>
             <span><b>{cards.length}</b> 负责人</span>
-            <span><b>{platformCount || '待接入'}</b> 平台</span>
+            <span><b>{platformCount || '暂无'}</b> 平台</span>
             <span><b>{compactNumber(totalPosts)}</b> 内容 <Delta value={totalPostsDelta} /></span>
             <span><b>{compactNumber(totalFollowers)}</b> 粉丝 <Delta value={totalFollowersDelta} /></span>
             <span><b>{compactNumber(totalViews)}</b> 播放 <Delta value={totalViewsDelta} /></span>
-            <span><b>{contractCount || '待接入'}</b> 签约</span>
+            <span><b>{contractCount || '暂无'}</b> 签约</span>
             <span><b>{pendingCount}</b> 待定</span>
           </div>
           {cards.length && !collapsed ? (
@@ -177,10 +177,10 @@ export function TeamMatrix({
                   </div>
                 </div>
                 <div className="mykol-staff-stats">
-                  <span><em>账号</em><b>{card.accounts.length ? `${card.accounts.length} · ${platforms} 平台` : '待接入'}</b></span>
+                  <span><em>账号</em><b>{card.accounts.length ? `${card.accounts.length} · ${platforms} 平台` : '暂无'}</b></span>
                   <span><em>粉丝</em><b>{compactNumber(followers)}</b>{followersDelta ? <small>{signedNumber(followersDelta)}</small> : null}</span>
-                  <span><em>管 KOL</em><b>{card.projects.length ? `${card.projects.length} 人` : '待接入'}</b>{pending ? <small className="is-warn">{pending} 待定</small> : null}</span>
-                  <span><em>KOL 视频</em><b>{posts ? `${compactNumber(posts)} · ${compactNumber(views)}` : '待接入'}</b></span>
+                  <span><em>管 KOL</em><b>{card.projects.length ? `${card.projects.length} 人` : '暂无'}</b>{pending ? <small className="is-warn">{pending} 待定</small> : null}</span>
+                  <span><em>KOL 视频</em><b>{posts ? `${compactNumber(posts)} · ${compactNumber(views)}` : '暂无'}</b></span>
                 </div>
                 <div className="mykol-platform-tags">
                   {platformTags.map((platform) => (
@@ -191,7 +191,7 @@ export function TeamMatrix({
                       {platformDisplay(platform)}
                     </span>
                   ))}
-                  {!platformTags.length ? <span>账号待接入</span> : null}
+                  {!platformTags.length ? <span>账号暂无</span> : null}
                 </div>
               </article>
             );
@@ -560,7 +560,7 @@ export function EmployeeKolLibrary({
     <section className="mykol-panel mykol-employee-panel">
       <header className="mykol-section-head">
         <div>
-          <h2><span className="is-cyan" />{viewMode === 'manager' ? 'MY KOL 库' : '我的 KOL 库'} <em>/ 真实项目与自然人待接入</em></h2>
+          <h2><span className="is-cyan" />{viewMode === 'manager' ? 'MY KOL 库' : '我的 KOL 库'} <em>/ 真实项目与自然人(预览)</em></h2>
           <p>{viewMode === 'manager' ? '管理层视角 · 当前用现有 KOL/project 数据过渡' : '我的视角 · 当前仅展示可见 KOL 与项目内容'}</p>
         </div>
         <div className="mykol-chip-row">
@@ -689,7 +689,7 @@ export function EmployeeKolLibrary({
                 <span className="mykol-avatar">{kol.avatar ? <img src={proxiedImageUrl(kol.avatar)} alt="" /> : initials(kol.name)}</span>
                 <div>
                   <h3>{kol.name}</h3>
-                  <p>{kol.handle || 'handle 待接入'} · {platformDisplay(kol.platform)} · {kol.followerLabel || '粉丝待接入'} · {poolId ? `${poolFit != null ? `Fit ${poolFit.toFixed(1)}` : 'Fit —'}${projects.length ? ` · ${projects.length} 项目` : ''}` : `${projects.length} 项目`}</p>
+                  <p>{kol.handle || 'handle 暂无'} · {platformDisplay(kol.platform)} · {kol.followerLabel || '粉丝暂无'} · {poolId ? `${poolFit != null ? `Fit ${poolFit.toFixed(1)}` : 'Fit —'}${projects.length ? ` · ${projects.length} 项目` : ''}` : `${projects.length} 项目`}</p>
                 </div>
                 <strong>{poolId ? '收藏' : kol.activeClaimId ? '长期合作' : projects.length ? '进行中' : '待定'}</strong>
               </button>

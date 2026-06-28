@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from CockpitApp.tsx — conservative leaf extraction (行为不变).
 // 纯展示顶栏:吃 props,不持有任何 state/effect。
 
@@ -52,7 +51,7 @@ export function CockpitTopbar({
         className: "hidden relative rounded-lg p-2 text-slate-400 hover:bg-white/[0.04] hover:text-white md:block"
       },
         e(MessageCircle, { size: 16 }),
-        activeReminders.filter(r => r.status === "todo").length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" })
+        activeReminders.filter((r: any) => r.status === "todo").length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" })
       ),
       // V6.10: Generate Report 按钮
       e("button", {
@@ -71,7 +70,7 @@ export function CockpitTopbar({
         className: "relative rounded-lg p-2 text-slate-400 hover:bg-white/[0.04] hover:text-white"
       },
         e(Bell, { size: 16 }),
-        runtimeNotifications.filter(n => n.unread).length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" })
+        runtimeNotifications.filter((n: any) => n.unread).length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" })
       ),
       // V6.14: User Menu(整个 wrap 加 onClick + ref)
       e("button", {

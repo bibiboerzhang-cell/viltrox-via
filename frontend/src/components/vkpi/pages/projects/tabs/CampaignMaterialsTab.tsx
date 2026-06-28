@@ -123,7 +123,7 @@ export function CampaignMaterialsTab({
                 onUploadEvidenceFile={onUploadEvidenceFile}
               />
               <div className="mt-2 text-[10px] text-slate-500">
-                条款附件 / 物流凭证支持真实文件上传(落 evidence 存储)。消息记录与发布内容两个表单的写入接口待接入,按钮已禁用。
+                条款附件 / 物流凭证支持真实文件上传(落 evidence 存储)。消息记录与发布内容两个表单的写入接口未开放,按钮已禁用。
               </div>
             </div>
           ) : (

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
@@ -86,7 +85,7 @@ export function CockpitApp(props: any = {}) {
   const stored = loadStoredState();
   const urlNav = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("cockpit") : "";
   const urlReport = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("report") : "";
-  const normalizeReplicaNav = (key) => key === "discover" || key === "channels" ? "my-kol" : key;
+  const normalizeReplicaNav = (key: any) => key === "discover" || key === "channels" ? "my-kol" : key;
   const initialNav = normalizeReplicaNav(urlNav) || normalizeReplicaNav(stored.activeNav) || "dashboard";
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
@@ -101,7 +100,7 @@ export function CockpitApp(props: any = {}) {
   }, [activeNav]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 版本徽标:启动时拉一次 /health,展示 server 短 sha 与前后端同步状态(纯只读,失败静默)
-  const [versionBadge, setVersionBadge] = useState(null);
+  const [versionBadge, setVersionBadge] = useState<any>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -149,7 +148,7 @@ export function CockpitApp(props: any = {}) {
       setActiveNav("my-kol");
     };
     // 2026-06-12 波5 R5:泳道 target_type=project 的任务点开 → 直达项目详情(复用 Active Campaigns 同款管道)
-    const handleOpenProjectTask = (event) => {
+    const handleOpenProjectTask = (event: any) => {
       const projectId = String(event?.detail?.projectId || "");
       if (projectId) setOpenLegacyProjectId(projectId);
       setActiveNav("projects");
@@ -178,24 +177,24 @@ export function CockpitApp(props: any = {}) {
   const [item, setItem]           = useState(stored.item || "");
   const [venue, setVenue]         = useState(stored.venue || "");
 
-  const [selectedPin, setSelectedPin] = useState(null);
-  const [selectedLegacyProject, setSelectedLegacyProject] = useState(null);
+  const [selectedPin, setSelectedPin] = useState<any>(null);
+  const [selectedLegacyProject, setSelectedLegacyProject] = useState<any>(null);
   const [openLegacyProjectId, setOpenLegacyProjectId] = useState("");
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [selectedKpi, setSelectedKpi] = useState(null);
-  const [previewEvent, setPreviewEvent] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState<any>(null);
+  const [selectedKpi, setSelectedKpi] = useState<any>(null);
+  const [previewEvent, setPreviewEvent] = useState<any>(null);
   // 从 dashboard「查看完整报告/编辑」跳到 Events 页时,带上要自动打开的活动 id。
-  const [pendingEventId, setPendingEventId] = useState(null);
+  const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   // 2026-06-14 诚实化:Upcoming Events 卡接真实 /api/admin/vkpi/events,不再传空数组。
-  const [eventRows, setEventRows] = useState([]);
+  const [eventRows, setEventRows] = useState<any[]>([]);
   const [dealerPins, setDealerPins] = useState<any[]>([]);
   const [kpiScope, setKpiScope] = useState(stored.kpiScope || "all");
   const [reportOpen, setReportOpen] = useState(urlReport === "1"); // V6.10: Report Panel
-  const [selectedSignal, setSelectedSignal] = useState(null); // V6.11: Signal detail modal
+  const [selectedSignal, setSelectedSignal] = useState<any>(null); // V6.11: Signal detail modal
   // V6.13: 新 modal states
-  const [selectedProject, setSelectedProject] = useState(null); // Active Campaigns 项目详情
-  const [selectedPublish, setSelectedPublish] = useState(null); // 7 天日历某条
-  const [selectedMover, setSelectedMover] = useState(null);     // Top Movers 单条
+  const [selectedProject, setSelectedProject] = useState<any>(null); // Active Campaigns 项目详情
+  const [selectedPublish, setSelectedPublish] = useState<any>(null); // 7 天日历某条
+  const [selectedMover, setSelectedMover] = useState<any>(null);     // Top Movers 单条
   const [showAllSignals, setShowAllSignals] = useState(false);  // Signals View All
   const [showAIConfirm, setShowAIConfirm] = useState(false);    // AI Today Approve 确认
   const [aiRegenerating, setAiRegenerating] = useState(false);  // AI Today Regenerate loading
@@ -212,7 +211,7 @@ export function CockpitApp(props: any = {}) {
   // V6.14.2: i18n + role
   const [lang, setLang] = useState("zh");
   const t = useMemo(() => makeT(lang), [lang]);
-  const [viewingAs, setViewingAs] = useState(null);  // Admin 切换查看身份
+  const [viewingAs, setViewingAs] = useState<any>(null);  // Admin 切换查看身份
   const {
     currentUser,
     runtimeNotifications,
@@ -230,7 +229,7 @@ export function CockpitApp(props: any = {}) {
   // Real staff (17) adapted to the UI shape the team/group/events modals expect.
   const uiStaff = useMemo(() => toUiStaffList(dashboardData.staffMembers || []), [dashboardData.staffMembers]);
   // Real staff-groups loaded from the new backend (replaces hardcoded "KOL Operations").
-  const [staffGroups, setStaffGroups] = useState([]);
+  const [staffGroups, setStaffGroups] = useState<any[]>([]);
   const refreshStaffGroups = useCallback(async () => {
     if (!apiToken) return;
     try {
@@ -242,7 +241,7 @@ export function CockpitApp(props: any = {}) {
   }, [apiToken]);
   useEffect(() => { refreshStaffGroups(); }, [refreshStaffGroups]);
   // The group currently targeted by the editor (edit mode binds to a real group).
-  const [editGroupTarget, setEditGroupTarget] = useState(null);
+  const [editGroupTarget, setEditGroupTarget] = useState<any>(null);
   const reportData = useMemo(() => ({
     currentUser,
     dashboard: dashboardRuntime,
@@ -258,10 +257,10 @@ export function CockpitApp(props: any = {}) {
     setEditGroupName(mode === "new" ? "新分组" : (target?.name || "新分组"));
     setShowEditGroup(true);
   };
-  const pushLocalNotification = (notification) => {
+  const pushLocalNotification = (notification: any) => {
     setRuntimeNotifications(prev => [notification, ...prev].slice(0, 80));
   };
-  const handleFeedbackSubmitted = (result, payload) => {
+  const handleFeedbackSubmitted = (result: any, payload: any) => {
     const alert = result?.alert || {};
     pushLocalNotification({
       id: alert.id || result?.feedback?.uid || `feedback-${Date.now()}`,
@@ -279,7 +278,7 @@ export function CockpitApp(props: any = {}) {
       source: "vkpi_feedback",
     });
   };
-  const handleReplicaSelectPage = (page) => {
+  const handleReplicaSelectPage = (page: any) => {
     if (page === "channels" || page === "discover") {
       setActiveNav("my-kol");
       return;
@@ -309,7 +308,7 @@ export function CockpitApp(props: any = {}) {
   const refreshReplicaProjects = useCallback(async () => {
     await onRefreshData?.();
   }, [onRefreshData]);
-  const handleReplicaCreateProject = useCallback(async (payload) => {
+  const handleReplicaCreateProject = useCallback(async (payload: any) => {
     if (!apiToken) throw new Error("缺少 API token，不能创建项目。");
     const visiblePayload = payload?.sourceType === "cockpit_projects_ui"
       ? { ...payload, sourceType: "excel_promo_plan" }
@@ -319,19 +318,19 @@ export function CockpitApp(props: any = {}) {
     try { await refreshReplicaProjects(); } catch { /* 刷新打嗝不影响创建成功 */ }
     return result;
   }, [apiToken, refreshReplicaProjects]);
-  const handleReplicaUpdateProject = useCallback(async (projectId, payload) => {
+  const handleReplicaUpdateProject = useCallback(async (projectId: any, payload: any) => {
     if (!apiToken) throw new Error("缺少 API token，不能更新项目。");
     const result = await updateProject(apiToken, projectId, payload);
     await refreshReplicaProjects();
     return result;
   }, [apiToken, refreshReplicaProjects]);
-  const handleReplicaDeleteProject = useCallback(async (projectId, reason) => {
+  const handleReplicaDeleteProject = useCallback(async (projectId: any, reason: any) => {
     if (!apiToken) throw new Error("缺少 API token，不能取消项目。");
     const result = await deleteProject(apiToken, projectId, reason || "用户在 Cockpit Projects 取消项目");
     await refreshReplicaProjects();
     return result;
   }, [apiToken, refreshReplicaProjects]);
-  const handleReplicaAddProjectCost = useCallback(async (payload) => {
+  const handleReplicaAddProjectCost = useCallback(async (payload: any) => {
     if (!apiToken) throw new Error("缺少 API token，不能登记费用。");
     const result = await addProjectCost(apiToken, payload);
     await refreshReplicaProjects();
@@ -349,7 +348,7 @@ export function CockpitApp(props: any = {}) {
   const [showFullCalendar, setShowFullCalendar] = useState(false);
   const [showAllReminders, setShowAllReminders] = useState(false);
   const [showAllNotifs, setShowAllNotifs] = useState(false);
-  const [selectedNotif, setSelectedNotif] = useState(null);
+  const [selectedNotif, setSelectedNotif] = useState<any>(null);
   const [showEditGroup, setShowEditGroup] = useState(false);
   const [editGroupMode, setEditGroupMode] = useState("edit");
   const [editGroupName, setEditGroupName] = useState("KOL Operations");
@@ -402,7 +401,7 @@ export function CockpitApp(props: any = {}) {
       available: eventsGeoCount > 0,
     },
   }), [dashboardRuntime.mapHierarchy, kolHierarchyReady, eventsHierarchy, eventsGeoCount, dealersHierarchy, dealersGeoCount]);
-  const currentMode = viewMode ? runtimeViewModes[viewMode] : null;
+  const currentMode = viewMode ? (runtimeViewModes as any)[viewMode] : null;
   const isAvailable = currentMode?.available;
   const hierarchy = currentMode?.hierarchy || {};
 
@@ -462,13 +461,13 @@ export function CockpitApp(props: any = {}) {
   };
 
   // 切换上级自动清空下层
-  const handleCountryChange = (c) => {
+  const handleCountryChange = (c: any) => {
     setCountry(c); setCity(""); setItem(""); setVenue("");
   };
-  const handleCityChange = (c) => {
+  const handleCityChange = (c: any) => {
     setCity(c); setItem(""); setVenue("");
   };
-  const handleItemChange = (i) => {
+  const handleItemChange = (i: any) => {
     setItem(i); setVenue("");
   };
 
@@ -512,7 +511,7 @@ export function CockpitApp(props: any = {}) {
   // 必须先于其定义,否则 events 视图下 pins 工厂触发 eventPins 的 TDZ)。
 
   // 跳到 Events 页(可选自动打开某活动详情)。复用 onOpenProjectsList 等同款 storage + setActiveNav 模式。
-  const openEventsPage = useCallback((eventId = null) => {
+  const openEventsPage = useCallback((eventId: any = null) => {
     setPendingEventId(eventId ? String(eventId) : null);
     saveStoredState({ activeNav: "events" });
     setActiveNav("events");
@@ -609,7 +608,7 @@ export function CockpitApp(props: any = {}) {
             activeNav === "projects" && e(React.Suspense, {
               fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Projects 加载中...")
             },
-              e(LegacyProjectsPage, {
+              e(LegacyProjectsPage as React.ComponentType<any>, {
                 data: dashboardData,
                 filteredProjects: dashboardData.projects || [],
                 selectedProjectId: selectedLegacyProject?.id,
@@ -654,7 +653,7 @@ export function CockpitApp(props: any = {}) {
               )
             ),
 
-            activeNav === "shopify" && e(ShopifyHubPage, { apiToken }),
+            activeNav === "shopify" && e(ShopifyHubPage as React.ComponentType<any>, { apiToken }),
             activeNav === "dealers" && e(DealerMapPage, { apiToken }),
 
             // Placeholder for nav items not yet built

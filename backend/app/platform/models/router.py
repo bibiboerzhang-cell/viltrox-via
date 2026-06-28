@@ -19,6 +19,7 @@ Algorithm:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from . import cost_policy, quality_policy, registry
@@ -193,3 +194,236 @@ def route_and_invoke(
             "degraded": decision.degraded,
         }
     return result
+
+
+# ---------------------------------------------------------------------------
+# Multi-key pool selection (N8): optional helper layered over api_key_pool.
+#
+# This ONLY chooses *which* pooled key to use for a provider; it never injects
+# the key into any LLM call (that is a later cut). When the pool is empty or
+# every candidate is exhausted/unhealthy/in-cooldown it returns None, so callers
+# fall back to the existing single-key path with NO behaviour change.
+#
+# The key-pool stores provider names as ``gemini`` / ``openai`` / ``anthropic``
+# / ``apify`` / ``youtube`` / ``resend`` (settings whitelist), while the model
+# registry uses ``llm_gateway`` provider names (``google`` / ``openai`` /
+# ``anthropic`` / ``rule_v0``). ``_KEY_POOL_PROVIDER_ALIASES`` bridges the gap so
+# a registry ``gateway_provider`` can look up the right pool rows.
+# ---------------------------------------------------------------------------
+
+# gateway_provider name -> api_key_pool provider name.
+_KEY_POOL_PROVIDER_ALIASES: dict[str, str] = {
+    "google": "gemini",
+    "gemini": "gemini",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "apify": "apify",
+    "youtube": "youtube",
+    "resend": "resend",
+}
+
+
+def _pool_provider_name(provider: str) -> str:
+    """Normalise a gateway/registry provider name to the key-pool provider name."""
+    name = str(provider or "").strip().lower()
+    return _KEY_POOL_PROVIDER_ALIASES.get(name, name)
+
+
+def _truthy(value: Any) -> bool:
+    """Tolerant truthiness (DB BOOLEAN reads back as int 1/0; treat that too)."""
+    if value is True:
+        return True
+    if value in (1, "1", "true", "True", "t", "yes"):
+        return True
+    return bool(value) and value not in (0, "0", "false", "False", "f", "no", "")
+
+
+def _key_meta(row: dict[str, Any]) -> dict[str, Any]:
+    """Pull the per-key metadata dict out of a pool row (metadata_json or dict)."""
+    meta = row.get("metadata_json")
+    if isinstance(meta, dict):
+        return meta
+    if isinstance(meta, str) and meta.strip():
+        import json
+
+        try:
+            parsed = json.loads(meta)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    # Some callers may pass an already-parsed ``metadata`` key.
+    alt = row.get("metadata")
+    return alt if isinstance(alt, dict) else {}
+
+
+def _key_available(row: dict[str, Any], *, now: datetime) -> bool:
+    """A pool key is usable when enabled, quota left, health ok, not cooling down.
+
+    Health / quota-used / cooldown live in ``metadata_json`` (no dedicated
+    columns), so this reads them defensively and treats anything missing as the
+    permissive default (healthy, zero used, no cooldown).
+    """
+    if not _truthy(row.get("enabled", True)):
+        return False
+
+    meta = _key_meta(row)
+
+    # Health: only block on an explicit non-ok status.
+    health = str(meta.get("health", "ok") or "ok").strip().lower()
+    if health not in ("ok", "healthy", "", "up"):
+        return False
+
+    # Quota: daily_quota == 0 means "unlimited / unset" (no ceiling).
+    try:
+        quota = int(row.get("daily_quota") or 0)
+    except (TypeError, ValueError):
+        quota = 0
+    if quota > 0:
+        try:
+            used = int(meta.get("quota_used") or 0)
+        except (TypeError, ValueError):
+            used = 0
+        if used >= quota:
+            return False
+
+    # Cooldown: ISO8601 timestamp in metadata; in the future -> skip.
+    cooldown_until = meta.get("cooldown_until")
+    if cooldown_until:
+        parsed = _parse_iso(str(cooldown_until))
+        if parsed is not None and parsed > now:
+            return False
+
+    return True
+
+
+def _parse_iso(text: str) -> Optional[datetime]:
+    raw = text.strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _rotation_sort_key(row: dict[str, Any]) -> tuple[int, int, int]:
+    """Round-robin order: lowest rotation_cursor, then least-recently used, then id.
+
+    ``last_used_at`` is ISO text; NULL/empty sorts first (never used -> pick it).
+    """
+    try:
+        cursor = int(row.get("rotation_cursor") or 0)
+    except (TypeError, ValueError):
+        cursor = 0
+    last_used = row.get("last_used_at")
+    parsed = _parse_iso(str(last_used)) if last_used else None
+    # Never-used (None) sorts before any timestamp.
+    last_bucket = 0 if parsed is None else 1
+    last_ts = 0 if parsed is None else int(parsed.timestamp())
+    try:
+        row_id = int(row.get("id") or 0)
+    except (TypeError, ValueError):
+        row_id = 0
+    return (cursor, last_bucket, last_ts, row_id)  # type: ignore[return-value]
+
+
+def select_key_from_rows(
+    rows: list[dict[str, Any]], *, now: Optional[datetime] = None
+) -> Optional[dict[str, Any]]:
+    """Pure selection over already-fetched pool rows (no DB / no decryption).
+
+    Returns the chosen row (the original dict), or None if none are available.
+    Kept separate from ``select_key_for`` so the rotation/availability logic is
+    unit-testable without a database.
+    """
+    when = now or datetime.now(timezone.utc)
+    available = [r for r in rows if _key_available(r, now=when)]
+    if not available:
+        return None
+    available.sort(key=_rotation_sort_key)
+    return available[0]
+
+
+def select_key_for(provider: str) -> Optional[dict[str, Any]]:
+    """Pick an available pooled key for ``provider`` (round-robin), or None.
+
+    None means "no usable pooled key" -> the caller keeps its existing single-key
+    behaviour. This NEVER injects the key into an LLM call. The returned dict is
+    the pool's runtime descriptor (``account_name`` + decrypted ``key``) from
+    :func:`api_key_pool.pick_active_key`, which already filters enabled + skips
+    undecryptable entries; we apply the additional quota/health/cooldown gate
+    here over the full enabled set first.
+
+    Import of the settings module is lazy so this router stays import-light.
+    """
+    pool_provider = _pool_provider_name(provider)
+    if not pool_provider:
+        return None
+    try:
+        from app.domains.settings import api_key_pool  # lazy: keep router import-light
+    except Exception:
+        return None
+
+    # Fetch enabled rows (with metadata) so we can apply the full gate + rotation.
+    rows = _fetch_pool_rows(api_key_pool, pool_provider)
+    if rows is None:
+        # No raw-row accessor available -> defer to the module's own picker,
+        # which still honours enabled + decryptability (degraded but safe).
+        try:
+            picked = api_key_pool.pick_active_key(pool_provider)
+        except Exception:
+            return None
+        return picked
+
+    chosen = select_key_from_rows(rows)
+    if chosen is None:
+        return None
+
+    # Resolve the plaintext lazily via the module's own decrypt path; never log it.
+    try:
+        plain = api_key_pool.decrypt_key(chosen.get("key_encrypted") or "")
+    except Exception:
+        plain = None
+    if not plain:
+        # Chosen row could not be decrypted; fall back to the module picker which
+        # auto-skips undecryptable entries.
+        try:
+            return api_key_pool.pick_active_key(pool_provider)
+        except Exception:
+            return None
+    return {"account_name": chosen.get("account_name") or "", "key": plain}
+
+
+def _fetch_pool_rows(api_key_pool: Any, pool_provider: str) -> Optional[list[dict[str, Any]]]:
+    """Best-effort fetch of enabled pool rows (incl. metadata) for a provider.
+
+    Returns a list of row dicts, or None when no raw accessor is reachable (the
+    caller then degrades to ``pick_active_key``). Never raises.
+    """
+    try:
+        from app.db.connection import get_conn, is_postgres_runtime
+    except Exception:
+        return None
+    try:
+        api_key_pool.ensure_vkpi_api_key_pool_schema()
+    except Exception:
+        pass
+    try:
+        enabled_flag = True if is_postgres_runtime() else 1
+        rows = get_conn().execute(
+            """
+            SELECT id, account_name, provider, key_encrypted, daily_quota,
+                   enabled, rotation_cursor, last_used_at, metadata_json
+            FROM vkpi_api_key_pool
+            WHERE provider=? AND enabled=?
+            """,
+            (pool_provider, enabled_flag),
+        ).fetchall()
+    except Exception:
+        return None
+    return [dict(r) for r in rows]

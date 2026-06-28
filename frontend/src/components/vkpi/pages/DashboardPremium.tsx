@@ -390,7 +390,7 @@ export function DashboardPremium({ apiToken, userName = 'Jianbo', userRole = 'Ma
           <div className="left-grid">
             <div className="glass-card panel geo-map-card">
               <div className="geo-map-head">
-                <div><h3>全球 KOL 分布</h3><p>{regions.length ? `${regions.length} 国家 · ${compact(regions.reduce((sum, row) => sum + row.count, 0))} KOL` : '国家分布待接入'}</p></div>
+                <div><h3>全球 KOL 分布</h3><p>{regions.length ? `${regions.length} 国家 · ${compact(regions.reduce((sum, row) => sum + row.count, 0))} KOL` : '国家分布暂无数据'}</p></div>
               </div>
               <div className="geo-map-layout">
                 <div className="geo-map-stage"><div className="holo-map"><RealWorldMap points={mapPoints} /><div className="map-hint">KOL 国家分布</div></div></div>

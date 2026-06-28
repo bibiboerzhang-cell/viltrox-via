@@ -231,7 +231,7 @@ export function GoaffproConnectCard({ apiToken = "" }: { apiToken?: string } = {
     e(
       "p",
       { className: "text-[12px] text-slate-400 mb-4" },
-      "每个 KOL = 一个 GOAFFPRO affiliate，注册后自动获得专属追踪链与优惠码；点击 / 销售 / 佣金归因由 GOAFFPRO 自动接入，无需手动生成短链。token / 密钥仅管理员可在此配置。",
+      "每个 KOL = 一个 GOAFFPRO affiliate，注册后自动获得专属追踪链与优惠码；点击 / 销售 / 佣金归因由 GOAFFPRO 自动接入，无需手动生成短链。token / 密钥仅公司账号可在此配置。",
     ),
     e(
       "div",

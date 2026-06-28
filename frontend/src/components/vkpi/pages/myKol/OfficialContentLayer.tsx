@@ -405,7 +405,7 @@ export function OfficialContentLayer({ account, apiToken }: { account?: Official
                   <span>分享 {compact(post.shares)}</span>
                 </div>
                 <footer className="mykol-post-card__footer">
-                  <small>{post.postedAt ? compactDate(post.postedAt) : '发布时间待接入'}</small>
+                  <small>{post.postedAt ? compactDate(post.postedAt) : '发布时间暂无'}</small>
                   <div>
                     <button type="button" onClick={() => setCommentsPost(post)}>评论明细</button>
                     {external ? <a href={external} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>原帖</a> : null}

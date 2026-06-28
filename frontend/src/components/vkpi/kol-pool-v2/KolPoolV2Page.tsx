@@ -59,7 +59,7 @@ function daysSince(value?: string | null): number | null {
 
 function formatSignedPercent(value: unknown): string {
   const next = numberValue(value);
-  if (next === null) return '待接入';
+  if (next === null) return '暂无数据';
   return `${next > 0 ? '+' : ''}${next.toFixed(1)}%`;
 }
 
@@ -119,7 +119,7 @@ function KolPoolTrendPulse() {
     <section className="kol-pool-v2-pulse">
       <div>
         <span>Trend Pulse</span>
-        <strong>待接入 trend endpoint</strong>
+        <strong>预览 · 未开放</strong>
       </div>
       <i /><i /><i /><i />
     </section>
@@ -153,7 +153,7 @@ function KolPoolDetailDrawer({
         <div>
           <span>KOL Pool Detail</span>
           <h2>{kolDisplayName(item)}</h2>
-          <p>{textValue(item.platform, '未知平台')} · {textValue(item.country, '地区待接入')}</p>
+          <p>{textValue(item.platform, '未知平台')} · {textValue(item.country, '地区暂无数据')}</p>
         </div>
         <button type="button" onClick={onClose} aria-label="关闭">×</button>
       </header>
@@ -163,7 +163,7 @@ function KolPoolDetailDrawer({
         <div>
           <CandidateChip item={item} />
           <strong>{item.handle || item.pool_uid || `#${item.id}`}</strong>
-          <span>{item.profile_url ? '主页已记录' : '主页待接入'} · {item.sync_status || 'sync status 待接入'}</span>
+          <span>{item.profile_url ? '主页已记录' : '主页暂无数据'} · {item.sync_status || 'sync status 暂无数据'}</span>
         </div>
       </section>
 
@@ -173,7 +173,7 @@ function KolPoolDetailDrawer({
         <div><span>平均播放</span><b>{formatCount(item.avg_views)}</b></div>
         <div><span>Real ER</span><b>{formatPercent(item.real_engagement_rate ?? item.engagement_rate)}</b></div>
         <div><span>Validation</span><b>待评估</b></div>
-        <div><span>设备</span><b>{textValue(item.device_primary, '待接入')}</b></div>
+        <div><span>设备</span><b>{textValue(item.device_primary, '暂无数据')}</b></div>
       </section>
 
       <section className="kol-pool-v2-section">
@@ -356,11 +356,11 @@ export function KolPoolV2Page({
 
       <section className="kol-pool-v2-kpis">
         <button type="button" onClick={() => setClassFilter('')}><span>Pool 总数</span><b>{metricValue(loaded, formatCount(poolSummary.total))}</b><em>kol-pool list</em></button>
-        <button type="button"><span>新发现</span><b>{compactMetric(loaded, hasCreatedAt, formatCount(new7dCount))}</b><em>{hasCreatedAt ? 'created_at · 7d' : '待接入 created_at'}</em></button>
+        <button type="button"><span>新发现</span><b>{compactMetric(loaded, hasCreatedAt, formatCount(new7dCount))}</b><em>{hasCreatedAt ? 'created_at · 7d' : '暂无信号'}</em></button>
         <button type="button" onClick={() => setClassFilter('legacy-stale')}><span>待补全</span><b>{metricValue(loaded, formatCount(poolSummary.missing))}</b><em>不假造完整度</em></button>
         <button type="button"><span>平均 V6 Fit</span><b>{poolSummary.avgFit === null ? '--' : formatScore(poolSummary.avgFit)}</b><em>{poolSummary.avgFit === null ? '数据不足' : '真实字段'}</em></button>
-        <button type="button"><span>本周高 Trend</span><b>{compactMetric(loaded, hasTrendSignal, formatCount(highTrendCount))}</b><em>{hasTrendSignal ? 'trend_score / trend_topic' : '待接入 trend endpoint'}</em></button>
-        <button type="button"><span>月度估算 Reach</span><b>--</b><em>待接入 monthly reach</em></button>
+        <button type="button"><span>本周高 Trend</span><b>{compactMetric(loaded, hasTrendSignal, formatCount(highTrendCount))}</b><em>{hasTrendSignal ? 'trend_score / trend_topic' : '暂无信号'}</em></button>
+        <button type="button"><span>月度估算 Reach</span><b>--</b><em>预览 · 未开放</em></button>
       </section>
 
       <KolPoolTrendPulse />
@@ -463,15 +463,15 @@ export function KolPoolV2Page({
                   </td>
                   <td><b className="kol-pool-v2-num">{formatCount(item.followers)}</b><small>{formatPercent(item.real_followers_pct)} 真实</small></td>
                   <td><b className="kol-pool-v2-num">{formatPercent(item.real_engagement_rate ?? item.engagement_rate)}</b><small>raw {formatPercent(item.raw_engagement_rate ?? item.engagement_rate)}</small></td>
-                  <td><b>{textValue(item.audience_type, '待评估')}</b><small>{textValue(item.country, 'Geo 待接入')}</small></td>
-                  <td><span className={`kol-pool-v2-trend is-${trendTone(item)}`}>{formatScore(item.trend_score)}</span><small>{textValue(item.trend_topic, '待接入')}</small></td>
-                  <td><b>{textValue(item.device_primary, '待接入')}</b><small>升级窗口：{textValue(item.device_upgrade_window, '待评估')}</small></td>
+                  <td><b>{textValue(item.audience_type, '待评估')}</b><small>{textValue(item.country, 'Geo 暂无数据')}</small></td>
+                  <td><span className={`kol-pool-v2-trend is-${trendTone(item)}`}>{formatScore(item.trend_score)}</span><small>{textValue(item.trend_topic, '暂无数据')}</small></td>
+                  <td><b>{textValue(item.device_primary, '暂无数据')}</b><small>升级窗口：{textValue(item.device_upgrade_window, '待评估')}</small></td>
                   <td><FitCell item={item} /></td>
                   <td>{dataGaps(item).length ? <span className="kol-pool-v2-chip is-orange">缺 {dataGaps(item).length}</span> : <span className="kol-pool-v2-chip is-green">完整</span>}</td>
                 </tr>
               ))}
               {!filteredItems.length ? (
-                <tr><td colSpan={8}><div className="kol-pool-v2-empty">{loaded ? '暂无匹配候选' : '待接入 / 无信号'}</div></td></tr>
+                <tr><td colSpan={8}><div className="kol-pool-v2-empty">{loaded ? '暂无匹配候选' : '暂无数据 / 无信号'}</div></td></tr>
               ) : null}
             </tbody>
           </table>

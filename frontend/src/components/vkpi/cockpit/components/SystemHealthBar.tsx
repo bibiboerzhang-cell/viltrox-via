@@ -3,10 +3,16 @@
 // 任何字段 available=false 时显示「待接入」,绝不编造数字。
 
 import React, { useEffect, useRef, useState } from "react";
-import { Activity, AlertTriangle, Database, DollarSign, Server } from "lucide-react";
+import { Activity, AlertTriangle, Database, DollarSign, GitCommit, Server, ShieldCheck, ShieldAlert } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { getHealthTrust, type VkpiHealthTrust } from "../../../../services/vkpi/settings-api";
 
 const e = React.createElement;
+
+function shortSha(value: any) {
+  const s = String(value || "").trim();
+  return s ? s.slice(0, 8) : "--";
+}
 
 const REFRESH_MS = 30000;
 
@@ -38,6 +44,8 @@ const PENDING = e("span", { className: "text-amber-400/80" }, "待接入");
 export function SystemHealthBar({ apiToken }: any) {
   const [health, setHealth] = useState<any>(null);
   const [error, setError] = useState("");
+  // F3:运行态信任块(/health trust)——三 sha · 对齐 · worker 在线 · 迁移号。
+  const [trust, setTrust] = useState<VkpiHealthTrust | null>(null);
   const aliveRef = useRef(true);
 
   useEffect(() => {
@@ -61,8 +69,14 @@ export function SystemHealthBar({ apiToken }: any) {
         setError("真实 API 无信号");
       }
     };
+    const loadTrust = async () => {
+      const data = await getHealthTrust();
+      if (!aliveRef.current) return;
+      setTrust(data);
+    };
     load();
-    const timer = globalThis.setInterval(load, REFRESH_MS);
+    loadTrust();
+    const timer = globalThis.setInterval(() => { load(); loadTrust(); }, REFRESH_MS);
     return () => {
       aliveRef.current = false;
       globalThis.clearInterval(timer);
@@ -143,8 +157,77 @@ export function SystemHealthBar({ apiToken }: any) {
     );
   }
 
-  return e("div", {
-    className: "mb-4 flex items-stretch flex-wrap divide-x divide-white/[0.05] rounded-xl border border-white/[0.06] bg-white/[0.012] overflow-hidden",
+  // F3 运行态信任块:三 sha 一栏 + 对齐绿/红醒目 + worker 离线红字。
+  // trust=null(/health 不可达)时整块隐藏,不编造对齐状态。
+  let trustBar: any = null;
+  if (trust) {
+    const aligned = trust.sha_aligned;
+    const alignedAccent = aligned === true ? "text-emerald-400" : aligned === false ? "text-rose-400" : "text-amber-400";
+    const alignBox = aligned === true
+      ? "border-emerald-400/40 bg-emerald-400/[0.06]"
+      : aligned === false
+        ? "border-rose-400/50 bg-rose-400/[0.08]"
+        : "border-amber-400/30 bg-amber-400/[0.05]";
+    const alignLabel = aligned === true ? "版本对齐" : aligned === false ? "版本不一致" : "对齐待确认";
+
+    const workerOnline = trust.worker_online;
+    const workerOffline = workerOnline === false;
+
+    const shaChip = (label: string, value: any, mismatch: boolean) => e("div",
+      { className: "flex items-center gap-1" },
+      e("span", { className: "text-[9px] uppercase tracking-wide text-slate-500" }, label),
+      e("span", {
+        className: `text-[10px] font-mono tabular-nums ${mismatch ? "text-rose-300" : "text-slate-300"}`,
+        title: String(value || ""),
+      }, shortSha(value)),
+    );
+
+    const serverSha = trust.server_git_sha;
+    const clientSha = trust.client_git_sha;
+    const workerShaVal = trust.worker_sha;
+
+    trustBar = e("div", {
+      className: `mb-2 flex items-center flex-wrap gap-x-4 gap-y-1.5 rounded-xl border px-3 py-2 ${alignBox}`,
+    },
+      // 对齐徽标(绿/红/待确认醒目)
+      e("div", { className: "flex items-center gap-1.5" },
+        e(aligned === false ? ShieldAlert : ShieldCheck, { size: 14, className: alignedAccent, strokeWidth: 2.2 }),
+        e("span", { className: `text-[11px] font-semibold ${alignedAccent}` }, alignLabel),
+      ),
+      // 三 sha 一栏可见
+      e("div", { className: "flex items-center gap-3" },
+        e(GitCommit, { size: 12, className: "text-slate-500", strokeWidth: 2 }),
+        shaChip("server", serverSha, aligned === false),
+        shaChip("client", clientSha, aligned === false),
+        shaChip("worker", workerShaVal, false),
+      ),
+      // db 迁移号
+      e("div", { className: "flex items-center gap-1" },
+        e(Database, { size: 12, className: "text-slate-500", strokeWidth: 2 }),
+        e("span", { className: "text-[9px] uppercase tracking-wide text-slate-500" }, "迁移"),
+        e("span", { className: "text-[10px] font-mono tabular-nums text-slate-300" }, trust.db_migration_max || "--"),
+      ),
+      // Worker 离线醒目红字 / 在线绿点
+      workerOffline
+        ? e("div", { className: "flex items-center gap-1.5 ml-auto rounded-md border border-rose-400/50 bg-rose-400/[0.12] px-2 py-0.5", title: trust.worker_heartbeat || "" },
+            e(AlertTriangle, { size: 13, className: "text-rose-400", strokeWidth: 2.2 }),
+            e("span", { className: "text-[11px] font-semibold text-rose-300" }, "Worker 离线"),
+            (() => { const rel = relativeTime(trust.worker_heartbeat); return rel ? e("span", { className: "text-[9px] text-rose-400/70" }, `· ${rel}`) : null; })(),
+          )
+        : workerOnline === true
+          ? e("div", { className: "flex items-center gap-1.5 ml-auto" },
+              e("span", { className: "inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" }),
+              e("span", { className: "text-[10px] text-emerald-400/90" }, "Worker 在线"),
+            )
+          : e("div", { className: "flex items-center gap-1.5 ml-auto" },
+              e("span", { className: "inline-block h-1.5 w-1.5 rounded-full bg-slate-600" }),
+              e("span", { className: "text-[10px] text-slate-500" }, "Worker 状态未知"),
+            ),
+    );
+  }
+
+  const healthBar = e("div", {
+    className: "flex items-stretch flex-wrap divide-x divide-white/[0.05] rounded-xl border border-white/[0.06] bg-white/[0.012] overflow-hidden",
   },
     e("div", { className: "flex items-center gap-2 px-3 py-1.5" },
       e(Activity, { size: 13, className: "text-violet-400", strokeWidth: 2 }),
@@ -157,4 +240,6 @@ export function SystemHealthBar({ apiToken }: any) {
       e(Cell, { icon: worker.online ? Activity : AlertTriangle, label: "Worker 状态", accent: workerAccent }, workerCell)
     )
   );
+
+  return e("div", { className: "mb-4" }, trustBar, healthBar);
 }

@@ -4,9 +4,87 @@ import type { VkpiProductCatalogItem } from "../../vkpiTypes";
 import { CardHeader } from "../../shared/CardHeader";
 import { InfoBlock } from "../../shared/InfoBlock";
 import { ProviderStatusTable } from "../../tables/ProviderStatusTable";
+import { getHealthTrust, type VkpiHealthTrust } from "../../../../services/vkpi/settings-api";
+import { frontendBuildInfo } from "../../../../lib/buildInfo";
 import { STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, vkpiPermissionFromTemplate } from "./staffPermissionTemplates";
 
 type Row = Record<string, unknown>;
+
+function shortSha(value: string | null): string {
+  const s = String(value || "").trim();
+  return s ? s.slice(0, 8) : "--";
+}
+
+// F3 运行态信任卡:GET /health 顶层 trust 字段醒目化。
+// ① sha_aligned 绿/红;② worker 离线红字;③ 三 sha 一栏可见 + 迁移号。
+// 自取数(复用 settingsApi.getHealthTrust),挂载即拉一次。trust 不可达显「无信号」,绝不编造。
+export function RuntimeTrustCard() {
+  const [trust, setTrust] = React.useState<VkpiHealthTrust | null>(null);
+  const [loaded, setLoaded] = React.useState(false);
+
+  const reload = React.useCallback(async () => {
+    setLoaded(false);
+    const data = await getHealthTrust(frontendBuildInfo?.gitSha);
+    setTrust(data);
+    setLoaded(true);
+  }, []);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      const data = await getHealthTrust(frontendBuildInfo?.gitSha);
+      if (alive) {
+        setTrust(data);
+        setLoaded(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const aligned = trust?.sha_aligned ?? null;
+  const alignClass = aligned === true ? "is-ok" : aligned === false ? "is-error" : "";
+  const alignLabel = !loaded
+    ? "读取中"
+    : trust == null
+      ? "无信号"
+      : aligned === true
+        ? "版本对齐 ✓"
+        : aligned === false
+          ? "版本不一致 ✗"
+          : "对齐待确认";
+
+  const workerOnline = trust?.worker_online ?? null;
+  const workerLabel = !loaded
+    ? "读取中"
+    : trust == null
+      ? "无信号"
+      : workerOnline === true
+        ? "在线"
+        : workerOnline === false
+          ? "Worker 离线"
+          : "状态未知";
+
+  return (
+    <section className="vkpi-card vkpi-action-card">
+      <div className="vkpi-table-card__header">
+        <div><h2>运行态信任</h2><span>{loaded ? (trust ? "/health trust" : "/health 不可达") : "读取中"}</span></div>
+        <button className="vkpi-button" type="button" onClick={() => { void reload(); }}>刷新</button>
+      </div>
+      <div className={`vkpi-info-block ${alignClass}`}>
+        <span>版本对齐 (sha_aligned)</span>
+        <strong style={aligned === true ? { color: "#34d399" } : aligned === false ? { color: "#f43f5e" } : undefined}>{alignLabel}</strong>
+      </div>
+      <div className="vkpi-info-block">
+        <span>Worker 状态</span>
+        <strong style={workerOnline === false ? { color: "#f43f5e" } : workerOnline === true ? { color: "#34d399" } : undefined}>{workerLabel}</strong>
+      </div>
+      <InfoBlock label="server sha" value={shortSha(trust?.server_git_sha ?? null)} />
+      <InfoBlock label="client sha" value={shortSha(trust?.client_git_sha ?? null)} />
+      <InfoBlock label="worker sha" value={shortSha(trust?.worker_sha ?? null)} />
+      <InfoBlock label="DB 迁移号 (max)" value={trust?.db_migration_max || "--"} />
+    </section>
+  );
+}
 
 export function ProviderHealthCard({
   providers,

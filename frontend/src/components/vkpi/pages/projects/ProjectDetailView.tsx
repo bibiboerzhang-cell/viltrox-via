@@ -340,7 +340,7 @@ export function ProjectDetailView({
     payload: { costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> },
   ) => {
     if (!onAddProjectCost) {
-      setNotice({ tone: 'warning', title: '费用入口待接入', body: '当前环境没有提供费用写入 API。' });
+      setNotice({ tone: 'warning', title: '费用入口未开放', body: '当前环境没有提供费用写入 API。' });
       setActionModal(null);
       return;
     }

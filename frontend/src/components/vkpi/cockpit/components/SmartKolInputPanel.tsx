@@ -292,7 +292,6 @@ export function SmartKolInputPanel({
     const query = cleanText(session.query_text);
     if (query) setInput(query);
     setAdvanceResult(null);
-    setActiveSearchSessionId(null);
     setActiveSearchSession(session);
     setSessionPollNotice("");
     setError("");
@@ -304,8 +303,18 @@ export function SmartKolInputPanel({
       setRecallResult(null);
     } else {
       setMode("text");
+      // 框2(库内召回)+ 框3(全网发现,派生自 activeSearchSession)立即由完整会话回填,不再只填 query。
       setRecallResult(recallResultFromSession(session));
       setUrlResult(null);
+    }
+    // 重开的会话若仍未终态(running/排队),续接轮询让后到的发现/分析项继续回填 ①②③;
+    // 已终态则不再起轮询(避免空转),展示态已由上面完整回填。
+    const sessionId = historySessionId(session);
+    if (sessionId && !isSearchSessionTerminal(session)) {
+      setActiveSearchSessionId(sessionId);
+      setSessionPollNotice("正在续接后台查找…");
+    } else {
+      setActiveSearchSessionId(null);
     }
     setState("ready");
   }, []);
@@ -637,6 +646,15 @@ export function SmartKolInputPanel({
     }
   };
 
+  // 失败/未完成会话重试:重新入队该搜索(用当前会话/输入的查询语再跑一遍全网查找管线)。
+  // 走 queueTextAdvance → smartKolSearchProfileAdvanceJob 重新排队,并续接轮询回填 ①②③。
+  const retrySearchSession = async () => {
+    const query = cleanText(activeSearchSession?.query_text || input);
+    if (!apiToken || !query || state === "executing") return;
+    setSessionPollNotice("正在重新入队该搜索…");
+    await queueTextAdvance(query);
+  };
+
   return (
     <section
       data-testid="smart-kol-input-panel"
@@ -768,6 +786,7 @@ export function SmartKolInputPanel({
           sessionBanner={sessionBanner}
           activeSessionCounts={activeSessionCounts}
           sessionPollNotice={sessionPollNotice}
+          retrySearchSession={retrySearchSession}
         />
       ) : null}
 

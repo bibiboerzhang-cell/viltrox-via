@@ -114,7 +114,7 @@ async function fetchKolCommentRows(apiToken: string, kolId: string, postUrl: str
 function postOneLine(post: PostPreview) {
   const signals = [...post.gearMentions, ...post.brandMentions, ...post.competitorMentions].slice(0, 4);
   if (signals.length) return `识别：${signals.join(' / ')}`;
-  return post.title || '内容描述待接入';
+  return post.title || '内容描述暂无';
 }
 
 function CommentsModal({

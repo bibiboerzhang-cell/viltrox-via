@@ -111,7 +111,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
       <header className="mykol-hero">
         <div>
           <h1><Heart size={18} fill="currentColor" /> MY KOL <span>/ {viewMode === 'manager' ? '团队矩阵 / 账号管理' : '我的 KOL'}</span></h1>
-          <p>{viewMode === 'manager' ? `管理层视角 · ${staffCards.length || '待接入'} 名负责人 · ${data.kolOptions.length || '待接入'} 个 KOL` : `${userName || '成员'} · 只看自己负责的数据`}</p>
+          <p>{viewMode === 'manager' ? `管理层视角 · ${staffCards.length || '暂无'} 名负责人 · ${data.kolOptions.length || '暂无'} 个 KOL` : `${userName || '成员'} · 只看自己负责的数据`}</p>
         </div>
         <div className="mykol-hero-actions">
           <span className={pendingCount ? 'is-pending' : ''}><Bell size={14} /> {pendingCount ? `${pendingCount} 个待定` : '无待定'}</span>
