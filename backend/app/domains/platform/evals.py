@@ -87,12 +87,25 @@ def _c_prediction_honest() -> tuple[bool, float, str]:
     return ok, 1.0 if ok else 0.0, f"confidence_cap={cap} status={r.get('status')}"
 
 
+def _c_marketing_brain_scorecard_available() -> tuple[bool, float, str]:
+    """Marketing Brain 评分卡:六维度存在,并能指出离 90+ 最近的短板。"""
+    from app.domains.intelligence import marketing_brain_scorecard
+
+    r = marketing_brain_scorecard.build_marketing_brain_scorecard()
+    dimensions = r.get("dimensions") if isinstance(r.get("dimensions"), list) else []
+    weak = r.get("weakest_dimensions") if isinstance(r.get("weakest_dimensions"), list) else []
+    score = float(r.get("score") or 0.0)
+    ok = r.get("status") == "ok" and len(dimensions) >= 6 and bool(weak) and not _has_fit_key(r)
+    return ok, 1.0 if ok else 0.0, f"score={score} dimensions={len(dimensions)} weakest={len(weak)} fit_key_absent={not _has_fit_key(r)}"
+
+
 _BUILTIN: list[Case] = [
     ("recommendation_no_fit", _c_recommendation_no_fit),
     ("recall_nonempty", _c_recall_nonempty),
     ("weight_bounded", _c_weight_bounded),
     ("event_ledger_roundtrip", _c_event_ledger_roundtrip),
     ("prediction_honest", _c_prediction_honest),
+    ("marketing_brain_scorecard_available", _c_marketing_brain_scorecard_available),
 ]
 
 

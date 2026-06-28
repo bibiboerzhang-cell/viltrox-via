@@ -23,6 +23,7 @@ _CAPABILITIES: list[dict[str, Any]] = [
     {"group": "行动", "name": "执行台账(before/after)", "endpoint": "GET /actions/ledger/recent", "status": "ready"},
     {"group": "行动", "name": "编排器(一句话→计划,PLAN-ONLY)", "endpoint": "POST /agents/plan", "status": "ready"},
     {"group": "行动", "name": "工具白名单", "endpoint": "GET /agents/tools", "status": "ready"},
+    {"group": "行动", "name": "Marketing Brain 90+评分卡", "endpoint": "GET /agents/marketing-brain/scorecard", "status": "ready"},
     # ── 履约 ──
     {"group": "履约", "name": "主链路就绪度(5断点)", "endpoint": "GET /projects/pipeline-readiness", "status": "ready"},
     {"group": "履约", "name": "发货审批门槛", "endpoint": "GET /projects/shipping-approvals", "status": "ready"},
