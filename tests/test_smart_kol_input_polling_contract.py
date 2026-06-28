@@ -5,25 +5,26 @@ import unittest
 from pathlib import Path
 
 
-SMART_PANEL = (
+_COMPONENTS_DIR = (
     Path(__file__).resolve().parents[1]
-    / "frontend"
-    / "src"
-    / "components"
-    / "vkpi"
-    / "v615-replica"
-    / "components"
-    / "SmartKolInputPanel.tsx"
+    / "frontend" / "src" / "components" / "vkpi" / "v615-replica" / "components"
 )
+SMART_PANEL = _COMPONENTS_DIR / "SmartKolInputPanel.tsx"
+# 纯函数(含 terminalSessionStatus)已抽到 helpers.ts;契约测试读两份源(定义在 helpers,调用在 tsx)。
+SMART_PANEL_HELPERS = _COMPONENTS_DIR / "SmartKolInputPanel.helpers.ts"
 
 
 class SmartKolInputPollingContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.source = SMART_PANEL.read_text(encoding="utf-8")
+        cls.source = (
+            SMART_PANEL.read_text(encoding="utf-8")
+            + "\n"
+            + SMART_PANEL_HELPERS.read_text(encoding="utf-8")
+        )
 
     def test_terminal_statuses_include_partial_and_failed_states(self) -> None:
-        match = re.search(r"function terminalSessionStatus\(value: unknown\): boolean \{(?P<body>.*?)\n\}", self.source, re.S)
+        match = re.search(r"(?:export )?function terminalSessionStatus\(value: unknown\): boolean \{(?P<body>.*?)\n\}", self.source, re.S)
         self.assertIsNotNone(match)
         body = match.group("body") if match else ""
         for status in ("ready", "partial", "failed", "done", "blocked", "cancelled", "canceled"):
