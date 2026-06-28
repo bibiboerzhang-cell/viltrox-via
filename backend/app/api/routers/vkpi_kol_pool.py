@@ -47,12 +47,16 @@ from app.domains.projects import cost_estimate as project_cost_estimate
 from app.domains.projects import outreach as project_outreach
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
-import app.domains.tasks.queue_view as task_queue_view
 from app.domains.audit.decorator import audit_action
 from app.domains.access.firewall import firewall_check
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])
+
+# task-queue 端点已抽到 vkpi_task_queue.py(无 prefix);include 后继承本 router 的 /api/admin/vkpi,路径不变。
+from app.api.routers.vkpi_task_queue import router as _task_queue_router  # noqa: E402
+
+router.include_router(_task_queue_router)
 
 
 # ─── Read endpoints (无装饰器) ──────────────────────
@@ -1658,38 +1662,6 @@ async def get_pool_item_content_fit(
         return await run_in_threadpool(kol_content_fit.get_content_fit, int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/task-queue")
-def get_vkpi_task_queue(
-    limit: int = Query(default=50, ge=1, le=100),
-    recent_minutes: int = Query(default=10, ge=1, le=120),
-    include_llm_calls: bool = Query(default=True),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Read-only sidebar task queue projection; no worker/provider side effects."""
-    # 波2 R1:重型端点同样按 viewer 遮蔽(此前 del staff 绕过 compact 隐私)
-    return task_queue_view.get_task_queue(
-        limit=int(limit),
-        recent_minutes=int(recent_minutes),
-        include_llm_calls=bool(include_llm_calls),
-        viewer=staff if isinstance(staff, dict) else None,
-    )
-
-
-@router.get("/task-queue/compact")
-def get_vkpi_task_queue_compact(
-    limit: int = Query(default=30, ge=1, le=50),
-    recent_minutes: int = Query(default=5, ge=1, le=30),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Cached read-only sidebar task queue projection for 2.5s polling."""
-    # viewer 用于队列隐私(非管理员只见他人任务的存在与位次,内容遮蔽)——缓存仍全员共享。
-    return task_queue_view.get_task_queue_compact(
-        limit=int(limit),
-        recent_minutes=int(recent_minutes),
-        viewer=staff if isinstance(staff, dict) else None,
-    )
 
 
 @router.get("/kol-pool/{kol_pool_id}/intelligence-card")
