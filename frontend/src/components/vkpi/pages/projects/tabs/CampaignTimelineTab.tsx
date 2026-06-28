@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Activity, AlertCircle, Check } from 'lucide-react';
 import { stageLabels } from '../../../shared/vkpiConstants';
-import { ProjectTimeline } from '../../../v615-replica/components/ProjectTimeline';
+import { ProjectTimeline } from '../../../cockpit/components/ProjectTimeline';
 import type { VkpiProjectDetail, VkpiProjectRow } from '../../../vkpiTypes';
 import { PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from '../projectDeliverableStyle';
 import { stageIndex } from '../../../../../domains/projects';

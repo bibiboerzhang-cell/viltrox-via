@@ -4,7 +4,7 @@ import { CommandCenter } from './dashboard/CommandCenter';
 import { DashboardPremium } from './pages/DashboardPremium';
 import { GlassDemoPage } from './pages/GlassDemoPage';
 import { MissionControlV2Page } from './pages/MissionControlV2Page';
-import { V615ReplicaApp } from './v615-replica/V615ReplicaApp';
+import { CockpitApp } from './cockpit/CockpitApp';
 import { MANAGER_NAV_ITEMS } from './layout/vkpiLayoutConstants';
 import {
   cleanVkpiPageCandidate,
@@ -402,11 +402,11 @@ export function VkpiDashboard({
     return <GlassDemoPage apiToken={apiToken} userName={userName} userRole={userRole} />;
   }
 
-  if (activePage === 'v615Replica') {
+  if (activePage === 'cockpit') {
     return (
       <TaskCenterProvider apiToken={apiToken}>
         <VersionBanner />
-        <V615ReplicaApp
+        <CockpitApp
           apiToken={apiToken}
           userName={userName}
           userRole={userRole}

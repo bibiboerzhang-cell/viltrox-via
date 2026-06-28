@@ -1,5 +1,5 @@
 // 共享:KOL「生成追踪链(GOAFFPRO)」区块。
-// 从 v615-replica/components/KOLDetailDrawer.tsx 原样抽出(逻辑零改),
+// 从 cockpit/components/KOLDetailDrawer.tsx 原样抽出(逻辑零改),
 // 供 KOL 详情抽屉 + MY KOL 详情(PoolEvidenceContent)两处复用。
 import React from "react";
 import { AlertTriangle, Check, Link2 } from "lucide-react";

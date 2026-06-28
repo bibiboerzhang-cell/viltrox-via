@@ -16,7 +16,7 @@ import {
 describe("isVkpiPageKey 页面键识别", () => {
   it("已知键 → true", () => {
     expect(isVkpiPageKey("projects")).toBe(true);
-    expect(isVkpiPageKey("v615Replica")).toBe(true);
+    expect(isVkpiPageKey("cockpit")).toBe(true);
     expect(isVkpiPageKey("settings")).toBe(true);
   });
   it("未知串 → false", () => {
@@ -38,30 +38,30 @@ describe("cleanVkpiPageCandidate 候选清洗", () => {
 });
 
 describe("normalizeVkpiPage 归一化分支", () => {
-  it("manager:command/dashboard → v615Replica(默认管理页)", () => {
-    expect(normalizeVkpiPage("command", "manager")).toBe("v615Replica");
-    expect(normalizeVkpiPage("dashboard", "manager")).toBe("v615Replica");
+  it("manager:command/dashboard → cockpit(默认管理页)", () => {
+    expect(normalizeVkpiPage("command", "manager")).toBe("cockpit");
+    expect(normalizeVkpiPage("dashboard", "manager")).toBe("cockpit");
   });
   it("manager:已知页原样返回", () => {
     expect(normalizeVkpiPage("projects", "manager")).toBe("projects");
     expect(normalizeVkpiPage("#/costs?x=1", "manager")).toBe("costs");
   });
-  it("manager:未知串 → 默认管理页 v615Replica", () => {
-    expect(normalizeVkpiPage("garbage", "manager")).toBe("v615Replica");
+  it("manager:未知串 → 默认管理页 cockpit", () => {
+    expect(normalizeVkpiPage("garbage", "manager")).toBe("cockpit");
   });
-  it("employee:管理层专属页(costs/audit)→ 回退 v615Replica", () => {
-    expect(normalizeVkpiPage("costs", "employee")).toBe("v615Replica");
-    expect(normalizeVkpiPage("audit", "employee")).toBe("v615Replica");
+  it("employee:管理层专属页(costs/audit)→ 回退 cockpit", () => {
+    expect(normalizeVkpiPage("costs", "employee")).toBe("cockpit");
+    expect(normalizeVkpiPage("audit", "employee")).toBe("cockpit");
   });
   it("employee:允许页原样返回", () => {
     expect(normalizeVkpiPage("projects", "employee")).toBe("projects");
     expect(normalizeVkpiPage("links", "employee")).toBe("links");
   });
   it("employee:dashboard → 默认员工页", () => {
-    expect(normalizeVkpiPage("dashboard", "employee")).toBe("v615Replica");
+    expect(normalizeVkpiPage("dashboard", "employee")).toBe("cockpit");
   });
   it("employee:未知串 → 默认员工页", () => {
-    expect(normalizeVkpiPage("garbage", "employee")).toBe("v615Replica");
+    expect(normalizeVkpiPage("garbage", "employee")).toBe("cockpit");
   });
 });
 
@@ -80,7 +80,7 @@ describe("canAccessPage 访问门禁", () => {
   it("EMPLOYEE_ALLOWED_PAGES 不含管理层专属页", () => {
     expect(EMPLOYEE_ALLOWED_PAGES.has("costs")).toBe(false);
     expect(EMPLOYEE_ALLOWED_PAGES.has("audit")).toBe(false);
-    expect(EMPLOYEE_ALLOWED_PAGES.has("v615Replica")).toBe(true);
+    expect(EMPLOYEE_ALLOWED_PAGES.has("cockpit")).toBe(true);
   });
 });
 
@@ -90,10 +90,10 @@ describe("enforcePageAccess 越权回退", () => {
     expect(enforcePageAccess("costs", "manager")).toBe("costs");
   });
   it("employee 越权(costs)→ 回退默认员工页", () => {
-    expect(enforcePageAccess("costs", "employee")).toBe("v615Replica");
+    expect(enforcePageAccess("costs", "employee")).toBe("cockpit");
   });
   it("manager 未知页 → 回退默认管理页", () => {
-    expect(enforcePageAccess("garbage", "manager")).toBe("v615Replica");
+    expect(enforcePageAccess("garbage", "manager")).toBe("cockpit");
   });
 });
 
@@ -102,8 +102,8 @@ describe("getInitialVkpiPage / writeVkpiHash 触 window", () => {
     window.history.replaceState(null, "", "/");
   });
   it("无 hash/query → 默认页", () => {
-    expect(getInitialVkpiPage("manager")).toBe("v615Replica");
-    expect(getInitialVkpiPage("employee")).toBe("v615Replica");
+    expect(getInitialVkpiPage("manager")).toBe("cockpit");
+    expect(getInitialVkpiPage("employee")).toBe("cockpit");
   });
   it("hash 命中已知页 → 归一化结果", () => {
     window.history.replaceState(null, "", "#projects");
@@ -111,7 +111,7 @@ describe("getInitialVkpiPage / writeVkpiHash 触 window", () => {
   });
   it("employee + hash=costs → 越权回退默认员工页", () => {
     window.history.replaceState(null, "", "#costs");
-    expect(getInitialVkpiPage("employee")).toBe("v615Replica");
+    expect(getInitialVkpiPage("employee")).toBe("cockpit");
   });
   it("writeVkpiHash 写入 location.hash", () => {
     writeVkpiHash("projects");

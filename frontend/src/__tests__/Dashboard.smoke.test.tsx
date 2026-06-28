@@ -21,7 +21,7 @@ vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock("../components/vkpi/v615-replica/components/RealMap", () => ({
+vi.mock("../components/vkpi/cockpit/components/RealMap", () => ({
   RealMap: () => null,
 }));
 
@@ -38,7 +38,7 @@ vi.mock("../services/vkpi/actionInbox-api", () => ({
   snoozeAction: vi.fn(),
 }));
 
-import { DashboardReplicaPage } from "../components/vkpi/v615-replica/DashboardReplicaPage";
+import { DashboardReplicaPage } from "../components/vkpi/cockpit/DashboardReplicaPage";
 
 beforeEach(() => {
   apiFetch.mockReset().mockResolvedValue({});

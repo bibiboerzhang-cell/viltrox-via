@@ -15,7 +15,7 @@ export const rangeOptions: Array<{ key: VkpiRangeKey; label: string }> = [
 ];
 
 export const MANAGER_NAV_ITEMS: VkpiNavItem[] = [
-  { key: 'v615Replica', label: '管理主控', icon: 'grid' },
+  { key: 'cockpit', label: '管理主控', icon: 'grid' },
   { key: 'intelligenceCenter', label: '智能中心', icon: 'spark' },
   { key: 'agents', label: 'Agents 战情室', icon: 'nodes' },
   { key: 'channels', label: 'MY KOL', icon: 'heart' },

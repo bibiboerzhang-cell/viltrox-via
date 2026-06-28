@@ -300,7 +300,7 @@ def workspace(
     sort_by: str = "fit",
     enrichable: bool | None = None,
 ) -> dict[str, Any]:
-    """Return one read-only KOL Pool page bundle for the V615 workspace."""
+    """Return one read-only KOL Pool page bundle for the cockpit workspace."""
 
     ensure_vkpi_product_industry_schema()
     safe_limit = max(1, min(2000, int(limit or 1200)))

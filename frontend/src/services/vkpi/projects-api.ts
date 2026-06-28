@@ -316,7 +316,7 @@ export async function createProject(token: string, payload: VkpiCreateProjectPay
         products: payload.products,
         platform: payload.platform,
         marketplace: payload.marketplace,
-        source_type: payload.sourceType || "v615_projects_ui",
+        source_type: payload.sourceType || "cockpit_projects_ui",
         note: payload.note,
       }),
     },

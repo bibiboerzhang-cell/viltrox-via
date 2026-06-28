@@ -66,7 +66,7 @@ import { computeSettingsDerived, resolveDrawerMember } from './settings/Settings
 import { GoaffproConnectCard } from './settings/GoaffproConnectCard';
 import { SettingsSkuPanel } from './settings/SettingsSkuPanel';
 import { SettingsStatusPanel } from './settings/SettingsStatusPanel';
-import { SystemHealthBar } from '../v615-replica/components/SystemHealthBar';
+import { SystemHealthBar } from '../cockpit/components/SystemHealthBar';
 import { SettingsSchedulerPanel } from './settings/SettingsSchedulerPanel';
 import {
   boolLabel,

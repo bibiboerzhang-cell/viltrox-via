@@ -7,7 +7,7 @@ from pathlib import Path
 
 _COMPONENTS_DIR = (
     Path(__file__).resolve().parents[1]
-    / "frontend" / "src" / "components" / "vkpi" / "v615-replica" / "components"
+    / "frontend" / "src" / "components" / "vkpi" / "cockpit" / "components"
 )
 # 瘦身重构把 SmartKolInputPanel 的纯函数/派生器/子组件拆到多个 sibling
 # (.helpers.ts / .Sections.tsx / .derivers.ts …,terminalSessionStatus / isSearchSessionTerminal

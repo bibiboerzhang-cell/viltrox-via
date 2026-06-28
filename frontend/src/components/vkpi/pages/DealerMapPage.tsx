@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { RealMap } from "../v615-replica/components/RealMap";
+import { RealMap } from "../cockpit/components/RealMap";
 import {
   createDealer,
   getDealerLocations,

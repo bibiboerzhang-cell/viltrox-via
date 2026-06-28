@@ -46,7 +46,7 @@ type PermissionKey = TabPermissionKey | SystemPermissionKey;
 type PermissionLevel = 'none' | 'read' | 'write' | 'admin';
 type VkpiPageKey =
   | 'command'
-  | 'v615Replica'
+  | 'cockpit'
   | 'missionControlV2'
   | 'dashboardPremium'
   | 'agents'
@@ -129,7 +129,7 @@ function levelAllows(value: string, level: PermissionLevel): boolean {
  *
  * Single source of truth: imported from vkpiDashboardRouting.ts so this hook and the
  * routing gate (canAccessPage / enforcePageAccess) can never drift apart. Includes the
- * employee landing page (v615Replica = company official-account aggregate, a public asset)
+ * employee landing page (cockpit = company official-account aggregate, a public asset)
  * plus the curated EMPLOYEE_NAV_ITEMS keys. Data-level scoping (scope=self) hides other
  * people's funnels / projects / activities; this set only gates manager-only pages.
  */

@@ -1,6 +1,6 @@
 // KOL 自助门户(只读·token 隔离)前端服务。
 //
-// 安全/隔离:门户是 standalone(不进 admin V615 壳),绝不走 admin 的 apiFetch
+// 安全/隔离:门户是 standalone(不进 admin Cockpit 壳),绝不走 admin 的 apiFetch
 // (它会注入 admin 鉴权/credentials)。这里用 buildApiUrl + 裸 fetch,只读公开端点。
 // 端点只返回 token 持有者(单个 KOL)自己的数据。404 → 统一「无效/过期」提示,
 // 不泄露该 KOL 是否存在。

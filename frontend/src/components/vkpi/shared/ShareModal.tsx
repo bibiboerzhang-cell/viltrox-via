@@ -1,5 +1,5 @@
 // Share modal — 把 Project / Event 的成员分享接到真后端(member CRUD 已就绪)。
-// 同时被 v615 (.tsx, React.createElement 风格) 和 events (.js) 两套世界复用,
+// 同时被 cockpit (.tsx, React.createElement 风格) 和 events (.js) 两套世界复用,
 //
 // props:
 //   kind: 'project' | 'event'   —— 决定走哪套 API

@@ -144,7 +144,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const userRoleLabel = isManager
     ? effectiveViewMode === "manager" ? "管理层" : "成员视角"
     : "成员";
-  const canRenderWithoutDashboardData = getInitialVkpiPage(effectiveViewMode) === "v615Replica";
+  const canRenderWithoutDashboardData = getInitialVkpiPage(effectiveViewMode) === "cockpit";
 
   const load = useCallback(async () => {
     setLoading(true);

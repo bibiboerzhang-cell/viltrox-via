@@ -1,12 +1,12 @@
 @tailwind components;
 
 @layer components {
-  :where(.v615-shell),
-  :where(.v615-modal) {
+  :where(.cockpit-shell),
+  :where(.cockpit-modal) {
     color-scheme: dark;
   }
 
-  :where(.v615-shell button) {
+  :where(.cockpit-shell button) {
     appearance: none;
     background: transparent;
     border: 0 solid transparent;
@@ -15,7 +15,7 @@
     text-align: inherit;
   }
 
-  :where(.v615-modal button) {
+  :where(.cockpit-modal button) {
     appearance: none;
     background: transparent;
     border: 0 solid transparent;
@@ -24,9 +24,9 @@
     text-align: inherit;
   }
 
-  :where(.v615-shell input),
-  :where(.v615-shell textarea),
-  :where(.v615-shell select) {
+  :where(.cockpit-shell input),
+  :where(.cockpit-shell textarea),
+  :where(.cockpit-shell select) {
     appearance: none;
     color: inherit;
     font: inherit;

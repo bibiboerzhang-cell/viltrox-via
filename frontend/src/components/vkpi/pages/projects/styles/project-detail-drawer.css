@@ -808,7 +808,7 @@
 }
 
 /* Final Projects dark-mode guardrail: copied deliverable pieces must not leak
-   the older light dashboard skin into the V615 Projects page. */
+   the older light dashboard skin into the Cockpit Projects page. */
 .vkpi-campaign-table-card,
 .vkpi-campaign-analytics-head,
 .vkpi-campaign-materials-head,

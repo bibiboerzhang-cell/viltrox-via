@@ -3,7 +3,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 
 // RealMap 用 Leaflet,jsdom 里无地图运行时 → 桩成占位 div,避免假崩。
-vi.mock("../v615-replica/components/RealMap", () => ({
+vi.mock("../cockpit/components/RealMap", () => ({
   RealMap: () => React.createElement("div", { "data-testid": "real-map-stub" }),
 }));
 

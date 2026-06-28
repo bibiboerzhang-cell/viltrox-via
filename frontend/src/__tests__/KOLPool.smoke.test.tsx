@@ -21,7 +21,7 @@ vi.mock("../services/vkpi/kolPool-api", () => ({
   getKolVideoAnalysisCache: vi.fn().mockResolvedValue({ state: "empty", entry: null }),
 }));
 
-import { KOLPoolPage } from "../components/vkpi/v615-replica/KOLPoolPage";
+import { KOLPoolPage } from "../components/vkpi/cockpit/KOLPoolPage";
 
 describe("KOL Pool page smoke", () => {
   it("空数据挂载不抛 → 渲染指挥中心标题与诚实空态", () => {

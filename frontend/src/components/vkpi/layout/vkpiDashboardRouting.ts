@@ -2,7 +2,7 @@ import type { VkpiPageKey } from '../vkpiTypes';
 
 const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'command',
-  'v615Replica',
+  'cockpit',
   'missionControlV2',
   'dashboardPremium',
   'agents',
@@ -31,14 +31,14 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
 ]);
 
 // 成员默认可达页面(单一事实来源,2026-06-14 RBAC UX 决策):
-// - v615Replica:成员默认落地页 = 公司官方账号聚合看板 + Events / MY KOL / 项目宿主(公共资产 + 本人数据)。
+// - cockpit:成员默认落地页 = 公司官方账号聚合看板 + Events / MY KOL / 项目宿主(公共资产 + 本人数据)。
 // - 其余键与 EMPLOYEE_NAV_ITEMS(vkpiLayoutConstants.ts)一一对应:我的工作台 / MY KOL / 搜索红人 /
 //   我的项目 / 我的短链 / 我的归因 / 我的周报 / 个人设置。
 // 数据可见范围由 scope=self 在数据层收窄(别人的漏斗/项目/活动不可见);页面门禁只挡管理层专属页
 // (costs / audit / dataQuality / productBattle / dataAnalysis / agents / kolPoolV2 / 智能中心等)。
 // usePermissions.ts 直接 import 本常量,保证两套权限层不再各自维护一份而漂移。
 export const EMPLOYEE_ALLOWED_PAGES = new Set<VkpiPageKey>([
-  'v615Replica',
+  'cockpit',
   'command',
   'channels',
   'discover',
@@ -49,8 +49,8 @@ export const EMPLOYEE_ALLOWED_PAGES = new Set<VkpiPageKey>([
   'settings',
 ]);
 
-const DEFAULT_MANAGER_PAGE: VkpiPageKey = 'v615Replica';
-const DEFAULT_EMPLOYEE_PAGE: VkpiPageKey = 'v615Replica';
+const DEFAULT_MANAGER_PAGE: VkpiPageKey = 'cockpit';
+const DEFAULT_EMPLOYEE_PAGE: VkpiPageKey = 'cockpit';
 const importMetaEnv = (import.meta as { env?: { DEV?: boolean } }).env;
 
 if (importMetaEnv?.DEV) {

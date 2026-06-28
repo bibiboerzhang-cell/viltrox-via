@@ -368,7 +368,7 @@ from app.domains.dashboard.summary_scope import (  # noqa: E402,F401
 def _build_funnel_summary(staff_scope_id: int | None = None) -> dict[str, Any]:
     """四环漏斗聚合(波3 R1 / 施工卡 C9,2026-06-12)。全部真 SQL 聚合,零估算零硬编码。
 
-    输出 shape(前端 v615 normalizers.ts 消费契约——键名勿改,前端按此解析):
+    输出 shape(前端 cockpit normalizers.ts 消费契约——键名勿改,前端按此解析):
 
     summary.funnel = {
         "favorites_total":  int,        # 环1 收藏:vkpi_kol_pool_favorites 总对数(staff×kol 对;体检日口径 772)

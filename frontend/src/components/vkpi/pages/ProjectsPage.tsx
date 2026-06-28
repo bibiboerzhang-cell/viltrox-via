@@ -254,7 +254,7 @@ export function ProjectsPage({
         productSku: matchedProduct?.productSku,
         productName: productName.trim() || matchedProduct?.productName,
         products: matchedProduct ? [{ productSku: matchedProduct.productSku, productName: matchedProduct.productName }] : undefined,
-        sourceType: 'v615_projects_ui',
+        sourceType: 'cockpit_projects_ui',
         note: noteLines.length ? noteLines.join('\n') : undefined,
       });
       resetCreateForm();

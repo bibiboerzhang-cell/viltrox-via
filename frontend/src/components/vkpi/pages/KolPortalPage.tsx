@@ -1,4 +1,4 @@
-// KOL 自助门户(只读·token 隔离)— standalone 页面,不进 admin V615 壳。
+// KOL 自助门户(只读·token 隔离)— standalone 页面,不进 admin Cockpit 壳。
 //
 // 从 URL 取 token(支持 /portal/kol/{token} 路径、#token、或 ?token=),调公开端点,
 // 渲染「该 KOL 自己的」点击/订单/GMV/被分配项目。无 token / 404 → 友好提示,
