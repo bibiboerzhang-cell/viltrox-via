@@ -128,7 +128,7 @@ function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }
 // 渲染:画面质量分 layer6(content_quality_score 内容质量 / marketing_value 投放价值)、
 // 分镜时间线 layer1、三观/归因/建议 layer3-5(复用 DeepLayersSection)、关键帧 QA。
 // 绝不触 viltrox_fit_score:此处只读 final_v1/QA,从不写任何评分。
-function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; evidenceId: string }) {
+function VideoSceneAnalysis({ apiToken, evidenceId, onVideoUrl }: { apiToken: string; evidenceId: string; onVideoUrl?: (url: string) => void }) {
   const [entry, setEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
   const [qaEntry, setQaEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
   useEffect(() => {
@@ -144,6 +144,10 @@ function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; eviden
       getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
         .then((res) => {
           if (cancelled) return;
+          // R2 缓存视频地址由后端按 evidence 解析,与分析就绪无关 —— 视频已缓存即可先点亮播放器,
+          // 不必等分镜跑完。上抛给父组件合并进 cachedVideoUrl(根治历史重建丢地址)。
+          const vurl = cleanText(res.cached_video_url);
+          if (vurl && onVideoUrl) onVideoUrl(vurl);
           if (res.state === "ready" && res.entry) setEntry(res.entry);
           else if (attempts < 25) {
             attempts += 1;
@@ -293,6 +297,9 @@ export function UrlSummary({
   onExecute: () => void;
   onOpenProfile?: (result: VkpiKolUrlDeepCrawlResponse) => void;
 }) {
+  // 播放器地址兜底:分镜分析轮询(VideoSceneAnalysis)按 evidence 从后端解析 R2 缓存地址后上抛到此。
+  // 根治「从会话历史重建结果时丢掉实时算出的 cached_video_url → 播放器不出」(分镜照常出)。
+  const [polledVideoUrl, setPolledVideoUrl] = useState("");
   const profileFlow = asRecord(result.profile_flow);
   const videoFlow = asRecord(result.video_flow);
   const creator = asRecord(result.creator_identity || videoFlow.creator_identity);
@@ -306,7 +313,7 @@ export function UrlSummary({
   const isVideo = result.url_type === "video";
   // 顶层兜底:execute 响应把 cached_video_url/evidence_id 摊平到 result 顶层(不在嵌套 video_flow 下),
   // 旧码只读 videoFlow.* → 取空 → 播放器/分镜静默不渲染。两处都加 result.* 兜底。
-  const cachedVideoUrl = cleanText(videoFlow.cached_video_url || asRecord(result).cached_video_url);
+  const cachedVideoUrl = cleanText(videoFlow.cached_video_url || asRecord(result).cached_video_url) || polledVideoUrl;
   const effectiveEvidenceId = String(videoFlow.evidence_id ?? asRecord(result).evidence_id ?? "").trim();
   const youtubeVideoId = cleanText(result.video_id || videoFlow.video_id);
   const videoPoster = proxiedImageUrl(cleanText(metadata.thumbnail_url));
@@ -514,7 +521,7 @@ export function UrlSummary({
         // 图文/轮播帖(isImageCarousel)不跑视频分镜(上面已展示图片轮播)。
         // evidenceId 走顶层兜底,配合 VideoSceneAnalysis 轮询「原地丝滑补上」;历史记录点开同样命中(evidence_id 来自会话项)。
         <div className="mt-2">
-          <VideoSceneAnalysis apiToken={apiToken} evidenceId={effectiveEvidenceId} />
+          <VideoSceneAnalysis apiToken={apiToken} evidenceId={effectiveEvidenceId} onVideoUrl={setPolledVideoUrl} />
         </div>
       ) : null}
       {disabledReason ? (

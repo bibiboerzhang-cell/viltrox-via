@@ -38,6 +38,46 @@ from app.api.routers import vkpi_projects_fulfillment as _fulfillment_sub  # noq
 router.include_router(_fulfillment_sub.router)
 
 
+def _resolve_video_cached_url(evidence_id: str) -> str | None:
+    """按 video 证据 id 解析其 R2 缓存视频地址,供前端内联播放器与分镜分析共用一条轮询。
+
+    背景:URL 结果卡从「会话历史」重建时会丢掉实时算出的 cached_video_url(历史里没存),
+    导致分镜出来了、播放器不出。这里在分镜分析缓存接口顺带解析:证据 -> 平台/原生短码
+    -> 现成的 cached_video_url_for_item(键与 worker 一致)。纯只读,任何异常静默返回 None,
+    绝不影响分析主体渲染,绝不触碰 viltrox_fit_score。
+    """
+    try:
+        eid = int(str(evidence_id).strip())
+    except (TypeError, ValueError):
+        return None
+    if eid <= 0:
+        return None
+    try:
+        from app.db.connection import get_conn
+        from app.domains.kol.url_deep_crawl import classify_url
+        from app.domains.media.cache import cached_video_url_for_item
+
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT platform, content_url FROM vkpi_kol_video_evidence WHERE id = ?",
+            (eid,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        platform = str(data.get("platform") or "").strip().lower()
+        content_url = str(data.get("content_url") or "").strip()
+        if not platform or not content_url:
+            return None
+        classified = classify_url(content_url)
+        video_key = str(getattr(classified, "video_id", "") or "").strip()
+        if not video_key:
+            return None
+        return cached_video_url_for_item(platform, video_key)
+    except Exception:
+        return None
+
+
 @router.get("/analysis-cache")
 def analysis_cache(
     target_type: str = Query(..., min_length=1),
@@ -67,6 +107,12 @@ def analysis_cache(
         "state": "ready" if entry else "pending",
         "entry": entry,
     }
+    # 视频目标:顺带解析 R2 缓存视频地址,供前端内联播放器(与分镜分析共用同一轮询,
+    # 历史重建/实时执行都稳)。只读,缺失则不附带该字段。
+    if target_type.lower() == "video":
+        cached_video_url = _resolve_video_cached_url(target_id)
+        if cached_video_url:
+            result["cached_video_url"] = cached_video_url
     if target_type.lower() == "contract":
         result = _mask_payment_fields(result, staff, project_id=scoped_project_id)
     return result

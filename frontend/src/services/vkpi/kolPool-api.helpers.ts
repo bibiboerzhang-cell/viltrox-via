@@ -58,6 +58,8 @@ export interface VkpiKolVideoAnalysisCacheResponse {
   derive_method?: string | null;
   state: "ready" | "pending";
   entry?: VkpiKolVideoAnalysisCacheEntry | null;
+  // 视频目标:后端顺带解析的 R2 缓存视频地址,供内联播放器与分镜分析共用同一轮询(历史重建也稳)。
+  cached_video_url?: string | null;
 }
 
 export interface VkpiVideoAnalysisEnqueueResponse {
