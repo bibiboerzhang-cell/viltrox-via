@@ -151,6 +151,20 @@ def _enqueue_final_v1_video_analysis(
     if not evidence:
         raise LookupError("video evidence not found for this KOL")
 
+    # 识别闸:图文/轮播帖(evidence_type=image)没视频可下,排了必 media_resolve_failed。
+    # 这里统一拦下(批量/URL/手动所有入队路径都过这条),不入队、不当失败。缺省/video 放行。
+    _etype = _text(evidence.get("evidence_type")).lower()
+    if _etype and _etype != "video":
+        return {
+            "status": "skipped_non_video",
+            "kol_pool_id": kol_pool_id,
+            "evidence_id": evidence_id,
+            "derive_method": FINAL_V1_DERIVE_METHOD,
+            "provider_calls": False,
+            "write_db": False,
+            "reason": f"evidence_type={_etype}(图文/轮播,不跑视频深析)",
+        }
+
     platform = _platform_from_url(_text(evidence.get("content_url")))
     if platform == "unsupported":
         return {

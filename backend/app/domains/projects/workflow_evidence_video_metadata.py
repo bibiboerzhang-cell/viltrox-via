@@ -255,8 +255,22 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
         caption = _text(_first(item, "caption", "text"))
         published_at, posted_at = _published_pair(_first(item, "timestamp", "takenAtTimestamp"))
         images = item.get("images") if isinstance(item.get("images"), list) else []
+        # 初步进入识别:IG 的 /p/ 既可能是单视频/reel,也可能是多图轮播(Sidecar)或纯图片。
+        # 仅当真有视频(type=Video / 顶层视频字段 / 轮播子项里含视频)才按 video 处理;否则 image,
+        # 不进视频深析管线(避免对图文帖反复 media_resolve_failed)。
+        _item_type = _text(item.get("type")).lower()
+        _children = item.get("childPosts") if isinstance(item.get("childPosts"), list) else []
+        _has_video = (
+            _item_type == "video"
+            or bool(_text(_first(item, "videoUrl", "videoUrlNoWaterMark")))
+            or any(
+                (str((cp or {}).get("type") or "").lower() == "video" or (cp or {}).get("videoUrl"))
+                for cp in _children
+            )
+        )
         return {
             "platform": "instagram",
+            "media_kind": "video" if _has_video else "image",
             "content_url": _text(_first(item, "url")) or video_url,
             "title": caption[:500],
             "description": caption,

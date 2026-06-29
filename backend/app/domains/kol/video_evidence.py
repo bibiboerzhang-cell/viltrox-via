@@ -166,7 +166,9 @@ def _evidence_values(
         "like_count": _int_or_none(metadata.get("like_count")),
         "comment_count": _int_or_none(metadata.get("comment_count")),
         "share_count": _int_or_none(metadata.get("share_count")),
-        "evidence_type": "video",
+        # 识别分流:抓取层标 media_kind=image(IG 图文/轮播)→ 存成 image 证据,不进视频深析;
+        # 缺省/video → 仍按 video。只动类型标签,不碰 viltrox_fit_score。
+        "evidence_type": "image" if _text(metadata.get("media_kind")) == "image" else "video",
         "source": source,
         "source_ref": f"url_video:{method}:{_digest(video_url)}",
         "confidence": "high",
