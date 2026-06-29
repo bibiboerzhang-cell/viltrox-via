@@ -63,7 +63,11 @@ def _cache_video_flow_url(
     try:
         from app.domains.media.cache import cache_video_for_item
 
-        vid = cache_video_for_item(platform_key, str(evidence_id), content_url)
+        # 键对齐 worker:视频缓存按平台原生 ID(IG 短码 / TikTok video id = classified.video_id)存。
+        # 此前这里用 evidence_id 查 → 命中不到 worker 已缓存的资产 → 播放器拿不到 cached_url、视频不出。
+        # 改用 classified.video_id(短码)兜底 evidence_id。
+        video_key = str(getattr(classified, "video_id", "") or "").strip() or str(evidence_id)
+        vid = cache_video_for_item(platform_key, video_key, content_url)
         cached_url = str(vid.get("cached_url") or "").strip() or None
         logger.info(
             "video_flow r2 warm evidence_id=%s platform=%s status=%s",
