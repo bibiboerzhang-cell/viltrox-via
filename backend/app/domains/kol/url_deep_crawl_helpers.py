@@ -44,6 +44,8 @@ def _public_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "posted_at",
         "duration_seconds",
         "thumbnail_url",
+        "media_kind",
+        "image_urls",
         "channel_id",
         "channel_name",
         "scrape_source",

@@ -7,6 +7,7 @@ callers can create/reuse evidence without touching KOL scoring fields.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -169,6 +170,8 @@ def _evidence_values(
         # 识别分流:抓取层标 media_kind=image(IG 图文/轮播)→ 存成 image 证据,不进视频深析;
         # 缺省/video → 仍按 video。只动类型标签,不碰 viltrox_fit_score。
         "evidence_type": "image" if _text(metadata.get("media_kind")) == "image" else "video",
+        # 轮播多图 URL 列表(TEXT 存 json 串;无则不写,由 _should_write_value 过滤)。供前端图片轮播展示。
+        "image_urls": (json.dumps(metadata.get("image_urls"), ensure_ascii=False) if metadata.get("image_urls") else None),
         "source": source,
         "source_ref": f"url_video:{method}:{_digest(video_url)}",
         "confidence": "high",

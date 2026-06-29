@@ -268,9 +268,23 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
                 for cp in _children
             )
         )
+        # 轮播多图:优先取 childPosts 里非视频子项的图;退回顶层 images;再退回封面 displayUrl。最多 10 张。
+        _image_urls: list[str] = []
+        for cp in _children:
+            u = _text(_first(cp or {}, "displayUrl", "url"))
+            if u and str((cp or {}).get("type") or "").lower() != "video":
+                _image_urls.append(u)
+        if not _image_urls:
+            _image_urls = [str(x) for x in images if x]
+        if not _image_urls:
+            _du = _text(_first(item, "displayUrl"))
+            if _du:
+                _image_urls = [_du]
+        _image_urls = _image_urls[:10]
         return {
             "platform": "instagram",
             "media_kind": "video" if _has_video else "image",
+            "image_urls": _image_urls,
             "content_url": _text(_first(item, "url")) or video_url,
             "title": caption[:500],
             "description": caption,

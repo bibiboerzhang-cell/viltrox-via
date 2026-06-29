@@ -311,6 +311,12 @@ export function UrlSummary({
   const youtubeVideoId = cleanText(result.video_id || videoFlow.video_id);
   const videoPoster = proxiedImageUrl(cleanText(metadata.thumbnail_url));
   const hasPlayableVideo = isVideo && (platform === "youtube" ? Boolean(youtubeVideoId) : Boolean(cachedVideoUrl));
+  // 图片轮播:IG /p/ 按 URL 模式被当 video,但实际是图文/多图轮播(后端识别分流标 media_kind=image)。
+  // 此时不放视频播放器/分镜,直接展示图片轮转。image_urls 由 _public_video_metadata 透传。
+  const imageUrls = Array.isArray(metadata.image_urls)
+    ? (metadata.image_urls as unknown[]).map((u) => cleanText(u)).filter(Boolean)
+    : [];
+  const isImageCarousel = cleanText(metadata.media_kind) === "image" && imageUrls.length > 0;
   const profileOperation = cleanText(profileFlow.operation);
   const videoOperation = cleanText(videoFlow.operation);
   const operation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
@@ -459,7 +465,25 @@ export function UrlSummary({
           ) : null}
         </div>
       </div>
-      {hasPlayableVideo ? (
+      {isImageCarousel ? (
+        <div className="mt-2">
+          <div className="mx-auto w-full max-w-2xl">
+            <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto rounded-md border border-white/[0.08] bg-black/40 p-2">
+              {imageUrls.map((src, i) => (
+                <img
+                  key={`${src}-${i}`}
+                  src={proxiedImageUrl(src) || src}
+                  alt={`图 ${i + 1}/${imageUrls.length}`}
+                  loading="lazy"
+                  className="h-64 w-auto shrink-0 snap-center rounded bg-black object-contain"
+                />
+              ))}
+            </div>
+            <div className="mt-1 text-center text-[10px] text-slate-500">图文帖 · {imageUrls.length} 张图 · 左右滑动查看</div>
+          </div>
+        </div>
+      ) : null}
+      {hasPlayableVideo && !isImageCarousel ? (
         <div className="mt-2">
           <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-md border border-white/[0.08] bg-black/40">
             <div className="relative w-full" style={{ aspectRatio: "16 / 9" }}>
@@ -485,8 +509,9 @@ export function UrlSummary({
           </div>
         </div>
       ) : null}
-      {isVideo && apiToken && effectiveEvidenceId ? (
+      {isVideo && !isImageCarousel && apiToken && effectiveEvidenceId ? (
         // 分镜/评分独立渲染:不再嵌在 hasPlayableVideo(播放器 URL)闸内——视频文件未就绪也先出时间戳/评分。
+        // 图文/轮播帖(isImageCarousel)不跑视频分镜(上面已展示图片轮播)。
         // evidenceId 走顶层兜底,配合 VideoSceneAnalysis 轮询「原地丝滑补上」;历史记录点开同样命中(evidence_id 来自会话项)。
         <div className="mt-2">
           <VideoSceneAnalysis apiToken={apiToken} evidenceId={effectiveEvidenceId} />

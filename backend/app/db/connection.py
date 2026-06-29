@@ -246,6 +246,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "197_vkpi_bet_ledger.sql",
     "198_vkpi_metric_value_provenance.sql",
     "199_vkpi_skill_runs.sql",
+    "200_vkpi_evidence_image_urls.sql",
 )
 
 try:
