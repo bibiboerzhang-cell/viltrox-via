@@ -133,28 +133,44 @@ function VideoSceneAnalysis({ apiToken, evidenceId }: { apiToken: string; eviden
   const [qaEntry, setQaEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
   useEffect(() => {
     let cancelled = false;
+    let timer = 0;
+    let attempts = 0;
     setEntry(null);
     setQaEntry(null);
     if (!apiToken || !evidenceId) return undefined;
-    getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
-      .then((res) => {
-        if (cancelled) return;
-        if (res.state === "ready" && res.entry) setEntry(res.entry);
-      })
-      .catch(() => {
-        // 静默降级:无缓存/读取失败则不渲染分析框,不打断视频展示。
-      });
-    // 关键帧 QA 是独立 derive_method;缺它不影响 final_v1 主体渲染(独立 try)。
-    getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa")
-      .then((res) => {
-        if (cancelled) return;
-        if (res.state === "ready" && res.entry) setQaEntry(res.entry);
-      })
-      .catch(() => {
-        // QA 缺失静默:只是少一块复核信息,不阻断主分析展示。
-      });
+    // 轮询:视频深析在后台 worker 跑,首拉常未就绪(state!=ready)。每 6s 重拉直到就绪或 ~2.5min 上限,
+    // 让分镜/评分「原地丝滑补上」,无需刷新或点详情页。就绪即停;QA 为独立 derive_method,随主轮询附带尝试。
+    const poll = () => {
+      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
+        .then((res) => {
+          if (cancelled) return;
+          if (res.state === "ready" && res.entry) setEntry(res.entry);
+          else if (attempts < 25) {
+            attempts += 1;
+            timer = window.setTimeout(poll, 6000);
+          }
+        })
+        .catch(() => {
+          // 静默降级:读取失败也按未就绪继续轮询(上限内),不打断视频展示。
+          if (!cancelled && attempts < 25) {
+            attempts += 1;
+            timer = window.setTimeout(poll, 6000);
+          }
+        });
+      // 关键帧 QA 是独立 derive_method;缺它不影响 final_v1 主体渲染(独立 try)。
+      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa")
+        .then((res) => {
+          if (cancelled) return;
+          if (res.state === "ready" && res.entry) setQaEntry(res.entry);
+        })
+        .catch(() => {
+          // QA 缺失静默:只是少一块复核信息,不阻断主分析展示。
+        });
+    };
+    poll();
     return () => {
       cancelled = true;
+      if (timer) window.clearTimeout(timer);
     };
   }, [apiToken, evidenceId]);
   const result = asRecord(entry?.result);
@@ -288,7 +304,10 @@ export function UrlSummary({
   const latency = durationLabel(analysis.latency_ms);
   const platform = cleanText(result.platform).toLowerCase();
   const isVideo = result.url_type === "video";
-  const cachedVideoUrl = cleanText(videoFlow.cached_video_url);
+  // 顶层兜底:execute 响应把 cached_video_url/evidence_id 摊平到 result 顶层(不在嵌套 video_flow 下),
+  // 旧码只读 videoFlow.* → 取空 → 播放器/分镜静默不渲染。两处都加 result.* 兜底。
+  const cachedVideoUrl = cleanText(videoFlow.cached_video_url || asRecord(result).cached_video_url);
+  const effectiveEvidenceId = String(videoFlow.evidence_id ?? asRecord(result).evidence_id ?? "").trim();
   const youtubeVideoId = cleanText(result.video_id || videoFlow.video_id);
   const videoPoster = proxiedImageUrl(cleanText(metadata.thumbnail_url));
   const hasPlayableVideo = isVideo && (platform === "youtube" ? Boolean(youtubeVideoId) : Boolean(cachedVideoUrl));
@@ -464,14 +483,13 @@ export function UrlSummary({
               )}
             </div>
           </div>
-          {apiToken ? (
-            // A1·evidenceId 口径对齐:只用 video 证据 id 查 video 缓存。
-            // 移除 matched_kol_pool_id fallback——KOL 池 id 不是 video 证据 id,拿它查会命中错缓存。缺 evidence_id 则 VideoSceneAnalysis 自身静默不渲染。
-            <VideoSceneAnalysis
-              apiToken={apiToken}
-              evidenceId={String(videoFlow.evidence_id ?? "").trim()}
-            />
-          ) : null}
+        </div>
+      ) : null}
+      {isVideo && apiToken && effectiveEvidenceId ? (
+        // 分镜/评分独立渲染:不再嵌在 hasPlayableVideo(播放器 URL)闸内——视频文件未就绪也先出时间戳/评分。
+        // evidenceId 走顶层兜底,配合 VideoSceneAnalysis 轮询「原地丝滑补上」;历史记录点开同样命中(evidence_id 来自会话项)。
+        <div className="mt-2">
+          <VideoSceneAnalysis apiToken={apiToken} evidenceId={effectiveEvidenceId} />
         </div>
       ) : null}
       {disabledReason ? (
