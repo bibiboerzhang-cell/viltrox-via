@@ -13,40 +13,65 @@ export { normalizeMapHierarchy, normalizeEventsHierarchy, normalizeDealersHierar
 const DASH = "—";
 const COLORS = ["#a855f7", "#3b82f6", "#10b981", "#f59e0b", "#ec4899", "#06b6d4"];
 
-function record(value: any): any {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+// 塑形层基础类型:后端 summary 是无类型 JSON,这里用「未知值 + 运行时收窄」表达,
+// 而非 any——record()/list()/number() 在运行时把 unknown 收成对象/数组/数字。
+type RawValue = unknown;
+type RawRecord = Record<string, RawValue>;
+type RawList = RawValue[];
+
+// 单个指标卡格(metricData 的产物);scope 三联(all/kol/company)。
+interface MetricCell {
+  value: number | null;
+  trend: string;
+  source: string;
+  sourceLabel: string | null;
+  color: string;
+  spark: RawValue;
+  waiting: string;
+  anomaly: string | null;
+}
+interface MetricCellOptions {
+  source?: string;
+  sourceLabel?: string | null;
+  trend?: string;
+  waiting?: string;
+  spark?: RawValue;
+  anomaly?: string | null;
+}
+// 一个指标在 all/kol/company 三个口径下的卡格。
+interface MetricScopes {
+  all: MetricCell;
+  kol: MetricCell;
+  company: MetricCell;
 }
 
-function list(value: any): any[] {
+function record(value: RawValue): RawRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as RawRecord) : {};
+}
+
+function list(value: RawValue): RawList {
   return Array.isArray(value) ? value : [];
 }
 
-function number(value: any) {
+function number(value: RawValue): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function int(value: any) {
+function int(value: RawValue): number | null {
   const parsed = number(value);
   return parsed == null ? null : Math.round(parsed);
 }
 
-function percent(numerator: any, denominator: any) {
-  const top = number(numerator);
-  const bottom = number(denominator);
-  if (top == null || bottom == null || bottom <= 0) return null;
-  return (top / bottom) * 100;
-}
-
-function hashColor(seed: any) {
+function hashColor(seed: RawValue) {
   const raw = String(seed || "");
   let hash = 0;
   for (const char of raw) hash = (hash * 31 + char.charCodeAt(0)) % COLORS.length;
   return COLORS[Math.abs(hash)];
 }
 
-function compact(value: any) {
+function compact(value: RawValue) {
   const n = number(value);
   if (n == null) return DASH;
   if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
@@ -55,12 +80,12 @@ function compact(value: any) {
   return String(Math.round(n));
 }
 
-function percentLabel(value: any, digits = 0) {
+function percentLabel(value: RawValue, digits = 0) {
   const n = number(value);
   return n == null ? DASH : `${n.toFixed(digits)}%`;
 }
 
-function timeLabel(value: any) {
+function timeLabel(value: RawValue) {
   const raw = String(value || "");
   if (!raw) return "时间待接入";
   const date = new Date(raw);
@@ -73,7 +98,7 @@ function timeLabel(value: any) {
   return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
-function formatDay(value: any) {
+function formatDay(value: RawValue) {
   const date = new Date(String(value || Date.now()));
   if (Number.isNaN(date.getTime())) return { day: DASH, weekday: DASH, today: false };
   const today = new Date();
@@ -84,7 +109,7 @@ function formatDay(value: any) {
   };
 }
 
-function metricData(value: any, color: any, options: any = {}) {
+function metricData(value: number | null, color: string, options: MetricCellOptions = {}): MetricCell {
   const hasValue = value !== null && value !== undefined;
   const source = options.source || (hasValue ? "real" : "pending");
   return {
@@ -99,18 +124,20 @@ function metricData(value: any, color: any, options: any = {}) {
   };
 }
 
-function scopeKey(scope: any) {
+type Scope = "all" | "kol" | "company";
+
+function scopeKey(scope: Scope) {
   return scope === "company" ? "owned" : scope;
 }
 
-function scopeLabel(scope: any) {
+function scopeLabel(scope: Scope) {
   const key = scopeKey(scope);
   if (key === "owned") return "Owned";
   if (key === "kol") return "KOL";
   return "K + O";
 }
 
-function maturityForScope(dashboard: any, scope: any) {
+function maturityForScope(dashboard: RawRecord, scope: Scope) {
   const key = scopeKey(scope);
   const contract = record(dashboard.metric_contract);
   const scopes = record(contract.scopes);
@@ -118,21 +145,21 @@ function maturityForScope(dashboard: any, scope: any) {
   return record(scopes[key] || direct[key] || scopes.all || direct.all || dashboard.metric_maturity);
 }
 
-function maturityLabel(dashboard: any, scope: any) {
+function maturityLabel(dashboard: RawRecord, scope: Scope) {
   const maturity = maturityForScope(dashboard, scope);
   const days = int(maturity.snapshot_days) ?? 0;
   const required = int(maturity.required_days) ?? 30;
   return String(maturity.maturity_label || `累积中 ${days}/${required}`);
 }
 
-function isMaturityReady(dashboard: any, scope: any) {
+function isMaturityReady(dashboard: RawRecord, scope: Scope) {
   const maturity = maturityForScope(dashboard, scope);
   const days = int(maturity.snapshot_days) ?? 0;
   const required = int(maturity.required_days) ?? 30;
   return Boolean(maturity.is_ready) || days >= required;
 }
 
-function accumulatingMetricData(value: any, color: any, dashboard: any, scope: any, options: any = {}) {
+function accumulatingMetricData(value: number | null, color: string, dashboard: RawRecord, scope: Scope, options: MetricCellOptions = {}): MetricCell {
   const label = maturityLabel(dashboard, scope);
   return metricData(value, color, {
     ...options,
@@ -143,7 +170,7 @@ function accumulatingMetricData(value: any, color: any, dashboard: any, scope: a
   });
 }
 
-function windowMetricData(value: any, color: any, dashboard: any, scope: any, options: any = {}) {
+function windowMetricData(value: number | null, color: string, dashboard: RawRecord, scope: Scope, options: MetricCellOptions = {}): MetricCell {
   const label = maturityLabel(dashboard, scope);
   if (value !== null && value !== undefined && isMaturityReady(dashboard, scope)) {
     return metricData(value, color, {
@@ -158,7 +185,13 @@ function windowMetricData(value: any, color: any, dashboard: any, scope: any, op
   });
 }
 
-export function normalizeCurrentUser(apiUser: any, fallback: any = {}) {
+interface CurrentUserFallback {
+  userName?: string;
+  userRole?: string;
+  userAvatar?: string;
+}
+
+export function normalizeCurrentUser(apiUser: RawValue, fallback: CurrentUserFallback = {}) {
   const user = record(apiUser);
   const name = String(user.name || user.display_name || fallback.userName || CURRENT_USER.name);
   const role = String(user.role || user.staff_role || fallback.userRole || CURRENT_USER.role);
@@ -166,7 +199,7 @@ export function normalizeCurrentUser(apiUser: any, fallback: any = {}) {
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
-    .map((part: any) => part[0])
+    .map((part) => part[0])
     .join("")
     .toUpperCase() || "V";
   return {
@@ -181,7 +214,7 @@ export function normalizeCurrentUser(apiUser: any, fallback: any = {}) {
   };
 }
 
-export function normalizeAlerts(rawAlerts: any[] = []) {
+export function normalizeAlerts(rawAlerts: RawList = []) {
   const alerts = list(rawAlerts).map((raw, index) => {
     const row = record(raw);
     let metadata = record(row.metadata);
@@ -228,7 +261,7 @@ export function normalizeAlerts(rawAlerts: any[] = []) {
   };
 }
 
-export function normalizeDashboardMetrics(bundle: any, kolRows: any = []) {
+export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = []) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
   const evidenceMetrics = record(summary.evidence_metrics);
@@ -258,7 +291,7 @@ export function normalizeDashboardMetrics(bundle: any, kolRows: any = []) {
   // 防御性标注(2026-06-12 波3 R2):单条 evidence 占比 >80% 时提示数据被单源污染。
   // 数据问题本身由主控清理;这里只做卡面提示,不改数值。
   const moversTabs = record(rosterDetail.movers_tabs);
-  const maxTabValue = (rows: any) => list(rows).reduce((max: any, row: any) => Math.max(max, number(record(row).value) ?? 0), 0);
+  const maxTabValue = (rows: RawValue) => list(rows).reduce((max: number, row) => Math.max(max, number(record(row).value) ?? 0), 0);
   const topEvidenceViews = maxTabValue(moversTabs.by_views);
   const topEvidenceEngagement = maxTabValue(moversTabs.by_engagement);
   const totalEngagement = number(evidenceEngagement.total_engagement);
@@ -266,7 +299,7 @@ export function normalizeDashboardMetrics(bundle: any, kolRows: any = []) {
   const exposureAnomaly = totalExposure != null && totalExposure > 0 && topEvidenceViews / totalExposure > 0.8;
   const engagementAnomaly = totalEngagement != null && totalEngagement > 0 && topEvidenceEngagement / totalEngagement > 0.8;
 
-  const values = {
+  const values: Record<string, MetricScopes> = {
     "kol-count": {
       all: metricData(rosterAll, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: "实时 · evidence active roster" }),
       kol: metricData(rosterKol, "#ec4899", { source: "evidence_metrics", sourceLabel: "实时", trend: "实时 · KOL evidence active" }),
@@ -306,13 +339,13 @@ export function normalizeDashboardMetrics(bundle: any, kolRows: any = []) {
 
   return METRICS.map((metric) => ({
     ...metric,
-    data: (values as any)[metric.id] || metric.data,
+    data: values[metric.id] || metric.data,
     rosterDetail: metric.id === "kol-count" ? rosterDetail : undefined,
     sub: metric.id === "exposure" && totalExposure != null ? evidenceCoverageText : metric.id === "engagement" && engagementPercent != null ? evidenceVideoText : metric.id === "exposure" ? "30d 增量，不取 lifetime" : metric.sub,
   }));
 }
 
-function emptyFunnel(projectCount: any) {
+function emptyFunnel(projectCount: number | null) {
   return ["发现", "已联系", "已回复", "已合作", "已发货", "已到货", "已发布", "已统计", "已关闭"].map((name, index) => ({
     name,
     label: `${index + 1}.${name}`,
@@ -320,7 +353,7 @@ function emptyFunnel(projectCount: any) {
   }));
 }
 
-export function normalizeCampaigns(rows = []) {
+export function normalizeCampaigns(rows: RawValue = []) {
   return list(rows).slice(0, 8).map((row, index) => {
     const item = record(row);
     const views = int(item.views);
@@ -359,7 +392,7 @@ export function normalizeCampaigns(rows = []) {
   });
 }
 
-function normalizeActiveCampaigns(block = {}) {
+function normalizeActiveCampaigns(block: RawValue = {}) {
   const source = record(block);
   return list(source.items).map((row, index) => {
     const item = record(row);
@@ -408,7 +441,7 @@ function normalizeActiveCampaigns(block = {}) {
   });
 }
 
-function normalizeActiveCampaignsMeta(block = {}) {
+function normalizeActiveCampaignsMeta(block: RawValue = {}) {
   const source = record(block);
   const hasRealBlock = Object.keys(source).length > 0;
   const criteria = record(source.criteria);
@@ -420,13 +453,13 @@ function normalizeActiveCampaignsMeta(block = {}) {
   };
 }
 
-function timestampOrEmpty(value: any) {
+function timestampOrEmpty(value: RawValue) {
   const raw = String(value || "");
   const time = raw ? Date.parse(raw) : Number.NEGATIVE_INFINITY;
   return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
 }
 
-function normalizeProjectFunnel(stageCounts = {}) {
+function normalizeProjectFunnel(stageCounts: RawValue = {}) {
   const counts = record(stageCounts);
   const keys = ["discovery", "contacted", "replied", "agreed", "shipped", "received", "published", "measured", "closed"];
   const labels = ["发现", "已联系", "已回复", "已合作", "已发货", "已到货", "已发布", "已统计", "已关闭"];
@@ -437,8 +470,8 @@ function normalizeProjectFunnel(stageCounts = {}) {
   }));
 }
 
-function normalizeStarredCampaigns(rows = []) {
-  const latestPublishOf = (row: any) => String(record(row).latest_publish_date || record(row).latestEvidencePublishDate || record(row).evidencePublishDate || "");
+function normalizeStarredCampaigns(rows: RawValue = []) {
+  const latestPublishOf = (row: RawValue) => String(record(row).latest_publish_date || record(row).latestEvidencePublishDate || record(row).evidencePublishDate || "");
   return list(rows)
     .slice()
     .sort((a, b) => timestampOrEmpty(latestPublishOf(b)) - timestampOrEmpty(latestPublishOf(a)))
@@ -486,7 +519,7 @@ function normalizeStarredCampaigns(rows = []) {
 
 // 2026-06-12 波3 R3:recent-content 同批存在 "2026-05-28" 与 "Thu May 28" 两种日期串,
 // 直接 slice(0,10) 会把同一天拆成两桶;这里统一归一成 YYYY-MM-DD 再分桶。
-function calendarDateKey(value: any) {
+function calendarDateKey(value: RawValue) {
   const raw = String(value || "").trim();
   if (!raw) return "unknown";
   const direct = raw.slice(0, 10);
@@ -500,7 +533,7 @@ function calendarDateKey(value: any) {
 }
 
 // 数据源停更案(2026-06-12):取最近一条内容日期,卡面诚实标注「数据截至 …」。
-export function latestCalendarDate(items = []) {
+export function latestCalendarDate(items: RawValue = []) {
   let latest = "";
   for (const raw of list(items)) {
     const item = record(raw);
@@ -510,14 +543,27 @@ export function latestCalendarDate(items = []) {
   return latest || null;
 }
 
-export function normalizeCalendar(items = []) {
-  const buckets = new Map();
+interface CalendarEntry {
+  platform: string;
+  time: string;
+  label: string;
+  color: string;
+  raw: RawRecord;
+}
+type CalendarBucket = ReturnType<typeof formatDay> & { items: CalendarEntry[] };
+
+export function normalizeCalendar(items: RawValue = []) {
+  const buckets = new Map<string, CalendarBucket>();
   for (const raw of list(items)) {
     const item = record(raw);
     const dateKey = calendarDateKey(item.posted_at || item.published_at || item.created_at);
     const meta = formatDay(dateKey);
-    if (!buckets.has(dateKey)) buckets.set(dateKey, { ...meta, items: [] });
-    buckets.get(dateKey).items.push({
+    let bucket = buckets.get(dateKey);
+    if (!bucket) {
+      bucket = { ...meta, items: [] };
+      buckets.set(dateKey, bucket);
+    }
+    bucket.items.push({
       platform: String(item.platform || "").toLowerCase().includes("instagram") ? "IG" : String(item.platform || "").toLowerCase().includes("youtube") ? "YT" : "internal",
       time: String(item.posted_at || item.published_at || "").slice(11, 16) || "--:--",
       label: `${item.account_handle || item.kol_handle || "账号待接入"} · ${item.title || "内容标题待接入"}`,
@@ -528,7 +574,7 @@ export function normalizeCalendar(items = []) {
   return Array.from(buckets.values()).slice(0, 7);
 }
 
-export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: any = {}) {
+export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue = {}, aiTodayHot: RawValue = {}) {
   // 2026-06-15:优先用 AI Today LLM「今日热点」(每早8点生成的拍摄方案+话题);无则回落原 copilot-brief。
   const hot = record(aiTodayHot);
   const hotContent = record(hot.content);
@@ -544,10 +590,10 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
         secondaryAction: "稍后处理",
       },
       strengthenLabel: "🎬 拍摄方案",
-      strengthen: list(hotContent.shooting_plans).slice(0, 3).map((p: any) => ({ text: String(p), detail: "" })),
+      strengthen: list(hotContent.shooting_plans).slice(0, 3).map((p) => ({ text: String(p), detail: "" })),
       weaken: [],
       todayContentLabel: "🔥 当下热点·赛事",
-      todayContent: list(hotContent.hot_topics).slice(0, 3).map((x: any) => String(x)),
+      todayContent: list(hotContent.hot_topics).slice(0, 3).map((x) => String(x)),
       poweredBy: "每日早 8 点(中国)自动更新",
       raw: hot,
     };
@@ -580,11 +626,11 @@ export function normalizeAiInsight(copilotBrief = {}, tasks = {}, aiTodayHot: an
   };
 }
 
-export function normalizeSignals(marketCards = {}, competitorRadar: any = null) {
+export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: RawValue = null) {
   // 2026-06-15:竞品新品雷达(Gemini+Google 接地)置顶,后接 market-intelligence 信号。
   const radar = record(competitorRadar);
   const radarItems = (radar.available && Array.isArray(record(radar.content).items))
-    ? list(record(radar.content).items).slice(0, 5).map((it: any, i: number) => {
+    ? list(record(radar.content).items).slice(0, 5).map((it, i) => {
         const d = record(it);
         const isThreat = String(d.impact || "").includes("威胁");
         return {
@@ -622,13 +668,13 @@ export function normalizeSignals(marketCards = {}, competitorRadar: any = null) 
   return [...radarItems, ...signalCards];
 }
 
-export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
+export function normalizeTopMovers(kolRows: RawValue = [], fitMovers: RawValue = null) {
   // 2026-06-15 V6 Fit Top 真数据:优先用 fit 历史快照 diff 出的真实 Top Movers(变动方向 +/-Δfit)。
   // 不足两天(warming_up)时 available=false,回落到下方 scored-only 视图(诚实,不编造)。
   const fm = record(fitMovers);
   if (fm.available && Array.isArray(fm.movers) && fm.movers.length) {
     const mode = String(fm.mode || "movers");
-    return fm.movers.slice(0, 5).map((m: any, index: number) => {
+    return list(fm.movers).slice(0, 5).map((m, index) => {
       const mr = record(m);
       const delta = number(mr.delta) ?? 0;
       return {
@@ -652,6 +698,7 @@ export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
   // 它们的 deltaFollower 落「待评估」占满卡面,把 frank_of_all_trades(95)等真分挤掉。
   // 改为仅保留 v6_fit != null,DESC 排序、null 垫底,卡面只见真分不见占位。
   return list(kolRows)
+    .map(record)
     .filter((item) => item.v6_fit != null)
     .slice()
     .sort((a, b) => {
@@ -679,7 +726,7 @@ export function normalizeTopMovers(kolRows = [], fitMovers: any = null) {
 // 2026-06-12 C10(波3 R1):消费后端 summary.funnel
 // shape = { favorites_total, claimed_total, in_project_total, published_total, by_staff[] }
 // 后端块未上线前 isReal=false,卡面显示「漏斗数据待后端」,绝不硬编码假数。
-export function normalizeKolFunnel(summary = {}) {
+export function normalizeKolFunnel(summary: RawValue = {}) {
   const block = record(record(summary).funnel);
   const stages = [
     { key: "favorites", label: "收藏", count: int(block.favorites_total) },
@@ -692,7 +739,7 @@ export function normalizeKolFunnel(summary = {}) {
   return { isReal, stages, byStaff, raw: block };
 }
 
-export function normalizeCockpitDashboard(bundle: any, kolRows: any) {
+export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
   const activeCampaignsBlock = record(summary.active_campaigns);

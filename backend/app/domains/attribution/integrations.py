@@ -602,6 +602,16 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
             "topic": str(headers.get("x-shopify-topic") or "refunds/create").strip().lower(),
         }
     )
+    # GMV 归因桥(no-op until token):退款写入负归因后,把对应推荐的 outcome 重算一遍 ——
+    # refresh_business_outcome 从含本次退款负行的 ledger 重新聚合 attributed_orders/GMV,
+    # 即「退款 -> outcome 负向修正(重算)」。缺 shpat_ token 时桥内部直接 no-op;任何异常被吞,
+    # 绝不让 outcome 桥拖垮 refund webhook 主路径(与 order webhook 同一防护口径)。
+    try:
+        from app.domains.attribution import gmv_outcome_bridge
+
+        gmv_outcome_bridge.handle_refund_row(result.get("attribution") or {})
+    except Exception:
+        logger.debug("ingest_shopify_refund_webhook.gmv_outcome_bridge_failed", exc_info=True)
     return {
         "status": "ok",
         "source": "shopify",

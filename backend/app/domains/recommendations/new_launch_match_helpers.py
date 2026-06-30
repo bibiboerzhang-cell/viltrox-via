@@ -250,6 +250,121 @@ def _select_target_family(product_query: str) -> dict[str, Any]:
     raise ValueError(f"no product_family found for query: {product_query}")
 
 
+# Brand prefixes seen in operator queries / catalog model names. Used to build a short
+# distinctive "<brand> <focal>" probe (e.g. "epic 65", "af 35") that is a likely
+# substring of a real product_family display_name.
+_BRAND_TOKENS = ("epic", "af", "mc", "dc", "vp", "mf", "lab", "air", "evo", "pro")
+
+
+def _focal_of(text: str) -> str:
+    """Extract a 2-3 digit focal length token from free text (e.g. '65mm' -> '65')."""
+    low = _lower(text)
+    match = (
+        re.search(r"(\d{2,3})\s*mm", low)
+        or re.search(r"(\d{2,3})\s*macro", low)
+        or re.search(r"\b(\d{2,3})\b", low)
+    )
+    return match.group(1) if match else ""
+
+
+def _ascii_clean(query: str) -> str:
+    """Strip punctuation + non-ASCII (e.g. Chinese suffix) so a real-product query like
+    'EPIC-65mm 微距电影镜头' collapses to the catalog-shaped 'epic 65mm'."""
+    low = re.sub(r"[^a-z0-9 ]", " ", _lower(query))
+    return re.sub(r"\s+", " ", low).strip()
+
+
+def _query_derived_candidates(query: str) -> list[str]:
+    """Cheap, resolver-free candidate queries derived from the raw operator text alone.
+
+    Handles the common real-product-with-noise case (hyphens / Chinese marketing suffix)
+    without touching the catalog: the ASCII-clean form plus a short '<brand> <focal>' probe.
+    """
+    out: list[str] = []
+    cleaned = _ascii_clean(query)
+    if cleaned and cleaned != _lower(query).strip():
+        out.append(cleaned)
+    tokens = cleaned.split()
+    focal = _focal_of(query) or _focal_of(cleaned)
+    brand = next((tok for tok in tokens if tok in _BRAND_TOKENS), "")
+    if brand and focal:
+        out.append(f"{brand} {focal}")
+    return out
+
+
+def _resolver_derived_candidates(query: str) -> list[str]:
+    """Candidate queries derived by resolving raw text against the real product catalog.
+
+    Calls kol.product_resolver.resolve_product (read only, never raises) to turn glued /
+    nickname operator text ('epic 65macro', '550pro') into a canonical SKU, then emits
+    catalog-name forms ordered from most-distinctive to broadest so the first one that is a
+    substring of a product_family display_name wins. Returns [] if the resolver has no hit.
+    """
+    try:
+        from app.domains.kol.product_resolver import resolve_product
+
+        resolved = resolve_product(query)
+    except Exception:
+        resolved = None
+    if not resolved:
+        return []
+    out: list[str] = []
+    series = _lower(resolved.get("series")).strip()
+    # Prefer the focal the operator actually asked for; fall back to the resolved name.
+    focal = _focal_of(query) or _focal_of(
+        _text(resolved.get("model_name") or resolved.get("marketing_name"))
+    )
+    if series and focal:
+        out.append(f"{series} {focal}")
+    for key in ("marketing_name", "model_name"):
+        name = _lower(resolved.get(key)).strip()
+        if not name:
+            continue
+        name = re.sub(r"^viltrox\s+", "", name).strip()
+        tokens = name.split()
+        # Longest-prefix-first: the family name is usually a leading substring of the full
+        # catalog marketing name (e.g. 'epic 65mm t2.8 macro' ⊂ '...1.33x pl ... cine lens').
+        for take in range(len(tokens), 1, -1):
+            out.append(" ".join(tokens[:take]))
+    return out
+
+
+def resolve_target_family(product_query: str) -> tuple[dict[str, Any] | None, str, str]:
+    """Graceful product-family resolution: never raises, returns (family|None, used_query, reason).
+
+    Tries, in order, until a product_family is found:
+      1. the raw query verbatim (preserves all currently-working direct matches);
+      2. query-derived candidates (ASCII-clean + '<brand> <focal>' short probe);
+      3. resolver-derived candidates (real catalog SKU → catalog-name prefixes).
+
+    On success returns (family_dict, the_candidate_that_matched, ""). On total miss returns
+    (None, "", reason) so callers can honestly surface recs=0 instead of crashing. Read only;
+    never writes any score field.
+    """
+    raw = _text(product_query)
+    candidates: list[str] = [raw]
+    candidates.extend(_query_derived_candidates(raw))
+    candidates.extend(_resolver_derived_candidates(raw))
+
+    tried: list[str] = []
+    for candidate in candidates:
+        candidate = _text(candidate)
+        if not candidate or candidate in tried:
+            continue
+        tried.append(candidate)
+        try:
+            return _select_target_family(candidate), candidate, ""
+        except ValueError:
+            continue
+        except Exception:  # pragma: no cover - DB hiccup; treat as a miss, don't crash caller
+            continue
+    return (
+        None,
+        "",
+        f"no product_family matched query '{raw}' or {len(tried)} derived candidate(s)",
+    )
+
+
 def _product_family_maps() -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
     conn = get_conn()
     product_to_family: dict[int, dict[str, Any]] = {}

@@ -49,6 +49,51 @@ def provider_ready() -> bool:
     return _client() is not None
 
 
+# Instagram hashtag 召回口径:与 YouTube/TikTok 一致 —— 把多词 query 当作完整的
+# 召回意图,而不是只取首词当单 hashtag(旧逻辑系统性少召回/错召回)。
+# IG hashtag actor 不能整串去空格拼成一个超长无效 hashtag(搜不到 → 恒空),
+# 故拆成「多个 hashtag」:每个有意义词单独成 tag,保留组合关键词语义。
+_INSTAGRAM_HASHTAG_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "into", "your", "you", "are",
+    "this", "that", "best", "top", "new", "all", "any", "how", "why",
+    "what", "who", "kol", "kols", "influencer", "influencers", "creator",
+    "creators", "channel", "channels", "video", "videos", "review",
+    "reviews",
+})
+
+
+def _instagram_hashtags(query: str, *, max_tags: int = 5) -> List[str]:
+    """Split a (possibly multi-word) query into multiple Instagram hashtags.
+
+    Aligns IG recall with YouTube/TikTok, which pass the full query. Each
+    meaningful token becomes its own hashtag (alnum/underscore only, <=80
+    chars), stopwords and tiny tokens are dropped, duplicates collapsed, and
+    the count is capped at ``max_tags`` to preserve actor throttle/budget.
+
+    Pure function (no Apify call) so it can be unit-tested directly.
+    """
+    seen: set[str] = set()
+    tags: List[str] = []
+    fallback: List[str] = []  # short/stopword tokens kept only if nothing else
+    for word in (query or "").lower().split():
+        token = "".join(ch for ch in word if ch.isalnum() or ch == "_")[:80]
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        if len(token) > 2 and token not in _INSTAGRAM_HASHTAG_STOPWORDS:
+            tags.append(token)
+            if len(tags) >= max_tags:
+                break
+        elif len(token) > 1:
+            fallback.append(token)
+    if not tags:
+        # No "meaningful" token survived (e.g. very short brand like "
+        # dji" already >2, but pure-stopword/short queries) → keep what we
+        # have so IG still gets a real hashtag instead of returning empty.
+        tags = fallback[:max_tags]
+    return tags
+
+
 async def scan_instagram_account(handle: str, max_posts: int = 1000) -> Dict[str, Any]:
     normalized = handle.lstrip("@").split("/")[-1].strip()
     started_at = time.time()
@@ -522,18 +567,16 @@ async def search_platform_content(
         }
     elif normalized_platform == "instagram":
         actor_id = "apify/instagram-hashtag-scraper"
-        # 多词搜索短语不能整串去空格拼成一个超长无效 hashtag(IG actor 搜不到 → 恒空)。
-        # 取首个有意义词(>2 字符)作单 hashtag,保留关键词搜索语义、恢复 IG 可用结果。
-        hashtag = next(
-            ("".join(ch for ch in word if ch.isalnum() or ch == "_")[:80]
-             for word in search_query.lower().split()
-             if len(word) > 2),
-            "",
-        )
-        if not hashtag:
+        # 多词 query 拆成「多个 hashtag」(与 YouTube/TikTok 召回口径对齐),
+        # 而非旧逻辑只取首词当单 hashtag → 系统性少召回/错召回。
+        # 整串去空格会拼成超长无效 hashtag(IG actor 搜不到 → 恒空),故分词。
+        hashtags = _instagram_hashtags(search_query)
+        if not hashtags:
             return {"status": "invalid_query", "items": [], "message": "instagram hashtag query is empty after normalization"}
+        # resultsLimit 是「总条数」上限,保留既有节流/预算口径不变:多 hashtag
+        # 不放大总抓取量,仍由 safe_limit 封顶(actor 在多个 hashtag 间分摊)。
         payload = {
-            "hashtags": [hashtag],
+            "hashtags": hashtags,
             "resultsLimit": safe_limit,
             "resultsType": "posts",
         }

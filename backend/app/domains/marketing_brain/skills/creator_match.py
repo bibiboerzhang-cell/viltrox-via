@@ -69,16 +69,50 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _resolve_canonical_query(product_query: str) -> tuple[Optional[str], str]:
+    """把模糊 product_query 先过 product_resolver + 产品族解析,拿到一个【底层能命中】的 canonical 查询。
+
+    返回 (canonical_query | None, reason)。
+      - 命中 → (能让 _select_target_family 命中的那条候选查询, "")，底层 preview 直接用它出候选;
+      - 未命中 → (None, 诚实原因)，调用方据此【优雅返回 recs=0】，绝不抛异常空跑。
+    纯只读:resolve_target_family 内部只读目录 + Memory 实体,绝不写 viltrox_fit_score。
+    """
+    from app.domains.recommendations.new_launch_match_helpers import resolve_target_family
+
+    family, used_query, reason = resolve_target_family(product_query)
+    if family is None:
+        return None, (reason or "no product_family found")
+    # used_query 是【保证能让底层 _select_target_family 命中同一个族】的那条候选 → 喂给底层 preview。
+    return (used_query or product_query), ""
+
+
 def _build_preview(*, product_query: str, primary_markets: str,
                    secondary_markets: str, limit: int) -> dict[str, Any]:
     """边界:封装底层确定性匹配服务调用。单测 monkeypatch 这个函数即可隔离 DB/Memory。
+
+    入口处先把模糊 product_query 过 product_resolver(_resolve_canonical_query):
+      - 解析到 canonical 查询 → 用它跑底层 preview(确保 _select_target_family 命中,不再抛 ValueError);
+      - 无任何命中 → 返回一个【空 preview + miss 标注】,让 skill 诚实返回 recs=0(不 raise、不空跑)。
 
     with_llm_reasons=False —— 不让底层真烧 LLM;fit_reason 由本 skill 自己决定(规则/model_fn)。
     """
     from app.domains.recommendations import new_launch_match
 
+    canonical, miss_reason = _resolve_canonical_query(product_query)
+    if canonical is None:
+        # 无解产品:不抛异常,返回空 preview + 诚实原因(下游照常 shaping 出 recs=0)。
+        return {
+            "scenario": "p4_new_launch_match",
+            "mode": "dry_run",
+            "product_query": product_query,
+            "target_family_name": "",
+            "target_family_miss": miss_reason,
+            "summary": {"eligible_after_hard_filters": 0, "returned": 0},
+            "items": [],
+        }
+
     return new_launch_match.build_new_launch_match_preview(
-        product_query=product_query,
+        product_query=canonical,
         limit=limit,
         primary_markets=primary_markets,
         secondary_markets=secondary_markets,
@@ -199,13 +233,22 @@ def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None,
         recommendations.append(shaped)
 
     summary = preview.get("summary") or {}
-    family = _text(preview.get("target_family_name")) or product_query
-    rationale = (
-        f"Matched against product family '{family}' for market '{market or 'global'}': "
-        f"{len(recommendations)} candidates returned of "
-        f"{_safe_int(summary.get('eligible_after_hard_filters')) or 0} eligible "
-        f"(deterministic dry-run, no provider calls)."
-    )
+    family = _text(preview.get("target_family_name"))
+    miss_reason = _text(preview.get("target_family_miss"))
+    if miss_reason and not family:
+        # 无解产品:诚实空返,说清为何 recs=0(资料无对应产品族 + 已尝试 resolver),绝不假装匹配。
+        rationale = (
+            f"No candidates for '{product_query}' (market '{market or 'global'}'): "
+            f"{miss_reason}. Resolver + product-family lookup found no match, so recs=0 "
+            f"(honest empty, not an error)."
+        )
+    else:
+        rationale = (
+            f"Matched against product family '{family or product_query}' for market "
+            f"'{market or 'global'}': {len(recommendations)} candidates returned of "
+            f"{_safe_int(summary.get('eligible_after_hard_filters')) or 0} eligible "
+            f"(deterministic dry-run, no provider calls)."
+        )
 
     output = {"recommendations": recommendations, "rationale": rationale}
 

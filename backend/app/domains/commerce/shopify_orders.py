@@ -191,17 +191,94 @@ def ingest_orders(payloads: list[dict[str, Any]]) -> dict[str, Any]:
     return {"ingested": ingested, "errors": errors}
 
 
+def _attribution_gmv_cents(
+    window_days: int | None = None,
+    discount_codes: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Net confirmed Shopify GMV from the live attribution ledger (vkpi_sales_attributions).
+
+    Caliber matches dashboard account_picker._build_attributed_gmv_roi (confidence='confirmed')
+    so /shopify/gmv and the dashboard GMV card report the *same* number, PLUS refund rows:
+      GMV = SUM(revenue_cents)
+            WHERE source_platform='shopify' AND confidence IN ('confirmed','refund').
+    Refund webhooks append *negative* revenue_cents rows with confidence='refund', so including
+    that bucket means SUM() is already net of refunds — no separate subtraction needed. Unmatched
+    / excluded rows are dropped, matching the confirmed-only dashboard caliber (no double-count,
+    no fabrication).
+
+    The window/discount filters are reused from the order-ledger caliber:
+      - window_days -> COALESCE(occurred_at, created_at) >= cutoff
+      - discount_codes -> only rows whose evidence_json carries one of the codes
+        (matched with a compat-safe LIKE per code; '%' literals stay inside the bind value).
+    Returns {gmv_cents, order_count, currency}. Empty ledger -> {0, 0, None}.
+    """
+    where: list[str] = ["source_platform = 'shopify'", "confidence IN ('confirmed','refund')"]
+    params: list[Any] = []
+
+    if window_days is not None:
+        try:
+            days = int(window_days)
+        except Exception:
+            days = 0
+        if days > 0:
+            cutoff = _now() - timedelta(days=days)
+            where.append("COALESCE(occurred_at, created_at) >= ?")
+            params.append(cutoff)
+
+    codes = [str(c).strip() for c in (discount_codes or []) if str(c or "").strip()]
+    if codes:
+        # discount_codes are not a first-class column on vkpi_sales_attributions; they live
+        # inside evidence_json. Match each code with a compat LIKE (literal '%' kept inside the
+        # bound value so the '?'-placeholder compat layer never sees a bare % to choke on).
+        code_clauses = []
+        for code in codes:
+            code_clauses.append("evidence_json LIKE ?")
+            params.append(f"%{code}%")
+        where.append("(" + " OR ".join(code_clauses) + ")")
+
+    where_sql = " WHERE " + " AND ".join(where)
+    conn = get_conn()
+    row = conn.execute(
+        f"""
+        SELECT
+            COALESCE(SUM(revenue_cents), 0) AS gmv_cents,
+            COUNT(*) AS order_count,
+            MAX(currency) AS currency
+        FROM vkpi_sales_attributions
+        {where_sql}
+        """,
+        params,
+    ).fetchone()
+    return {
+        "gmv_cents": _as_int(_row_get(row, "gmv_cents")),
+        "order_count": _as_int(_row_get(row, "order_count")),
+        "currency": _str_or_none(_row_get(row, "currency")),
+    }
+
+
 def summarize_gmv(
     window_days: int | None = None,
     discount_codes: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    """Real attributed GMV over the ingested order ledger.
+    """Reconciled attributed GMV — single source of truth across both ledgers.
 
-    - window_days: when set (>0), only orders with ordered_at >= now-window_days.
-    - discount_codes: when non-empty, only orders whose discount_code is in the set
-      (KOL-coupon attribution). Empty/None -> all orders.
-    Returns {gmv_cents, order_count, currency}. Empty table -> {0, 0, None} so the
-    dashboard stays honest 待接入.
+    Caliber (口径,显式合并,两个数不打架):
+      1. Primary  = ingested Shopify order ledger (vkpi_shopify_orders, SUM total_price_cents).
+         This is the most granular source once live Shopify creds land.
+      2. Fallback = live attribution ledger (vkpi_sales_attributions, NET of refunds) when the
+         order ledger is empty. The attribution ledger is what the refund webhook + GMV outcome
+         bridge write into, and what dashboard _build_attributed_gmv_roi already reads — so
+         folding it in here keeps /shopify/gmv and the dashboard GMV card on the *same* number
+         instead of one reading 0 (empty orders table) while the other reads the real ledger.
+
+    Both ledgers are reconciled under one caliber and the chosen source is reported in
+    `gmv_source` for auditability. `attribution_gmv_cents` always carries the net-attribution
+    figure so callers can cross-check the two sources.
+
+    - window_days: when set (>0), restricts by ordered_at (orders) / occurred_at (attributions).
+    - discount_codes: when non-empty, restricts to KOL-coupon orders / attributions.
+    Returns {gmv_cents, order_count, currency, gmv_source, attribution_gmv_cents,
+    order_ledger_gmv_cents}. Both ledgers empty -> all 0 so the dashboard stays honest 待接入.
     """
     where: list[str] = []
     params: list[Any] = []
@@ -236,8 +313,44 @@ def summarize_gmv(
         params,
     ).fetchone()
 
+    order_gmv_cents = _as_int(_row_get(row, "gmv_cents"))
+    order_count = _as_int(_row_get(row, "order_count"))
+    order_currency = _str_or_none(_row_get(row, "currency"))
+
+    # Net-attribution figure (refund-inclusive) under the same window/discount caliber. Always
+    # computed so it can be returned for cross-check; degrade to zeros on any read error so the
+    # primary order-ledger answer is never disturbed.
+    try:
+        attr = _attribution_gmv_cents(window_days=window_days, discount_codes=discount_codes)
+    except Exception:
+        attr = {"gmv_cents": 0, "order_count": 0, "currency": None}
+    attribution_gmv_cents = _as_int(attr.get("gmv_cents"))
+
+    if order_count > 0:
+        # Order ledger has rows -> it is the granular source of truth.
+        gmv_cents = order_gmv_cents
+        out_count = order_count
+        out_currency = order_currency
+        gmv_source = "vkpi_shopify_orders.total_price_cents[ingested]"
+    elif attribution_gmv_cents != 0 or _as_int(attr.get("order_count")) > 0:
+        # Order ledger empty but the live attribution ledger has data -> reconcile onto it
+        # (net of refunds) so /gmv matches the dashboard instead of the two sources diverging.
+        gmv_cents = attribution_gmv_cents
+        out_count = _as_int(attr.get("order_count"))
+        out_currency = _str_or_none(attr.get("currency"))
+        gmv_source = "vkpi_sales_attributions.revenue_cents[shopify,confirmed+refund,net]"
+    else:
+        # Both empty -> honest 待接入.
+        gmv_cents = 0
+        out_count = 0
+        out_currency = None
+        gmv_source = "awaiting_data"
+
     return {
-        "gmv_cents": _as_int(_row_get(row, "gmv_cents")),
-        "order_count": _as_int(_row_get(row, "order_count")),
-        "currency": _str_or_none(_row_get(row, "currency")),
+        "gmv_cents": gmv_cents,
+        "order_count": out_count,
+        "currency": out_currency,
+        "gmv_source": gmv_source,
+        "attribution_gmv_cents": attribution_gmv_cents,
+        "order_ledger_gmv_cents": order_gmv_cents,
     }

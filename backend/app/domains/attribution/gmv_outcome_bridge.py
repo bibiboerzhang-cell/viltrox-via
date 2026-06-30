@@ -111,13 +111,39 @@ def _recommendation_ids_for(kol_id: int = 0, project_id: int = 0, limit: int = 5
     return unique
 
 
+def _outcome_gmv_cents(recommendation_id: int) -> int:
+    """Read-only: current attributed_gmv_cents on a recommendation outcome (0 if absent).
+
+    Used only to compute the signed GMV delta a refund recompute produces (for logging /
+    the bridge return). Never writes; any error -> 0 so a refund webhook is never disturbed.
+    """
+    try:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT attributed_gmv_cents FROM vkpi_recommendation_outcomes WHERE recommendation_id=?",
+            (int(recommendation_id),),
+        ).fetchone()
+    except Exception:
+        logger.debug("gmv_outcome_bridge.outcome_gmv_read_failed rec_id=%s", recommendation_id, exc_info=True)
+        return 0
+    if not row:
+        return 0
+    return _as_int(dict(row).get("attributed_gmv_cents"))
+
+
 def handle_gmv_attribution_event(event: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Promote recommendation_outcomes from a GMV attribution event (no-op until token).
+    """Promote / re-derive recommendation_outcomes from a GMV attribution event (no-op until token).
 
     event keys (any subset; resolved from a matched Shopify order / attribution row):
       - kol_id:     kols.id the order was attributed to (preferred linkage key)
       - project_id: vkpi_projects.id the order was attributed to (fallback linkage)
       - order_id / source_ref: carried through for log/debug only
+      - refund:     True when this event originates from a refund webhook. The bridge then
+                    treats the call as a downward *re-derivation* rather than a promotion —
+                    refresh_business_outcome() recomputes attributed_orders / attributed_gmv
+                    from the *current* ledger state, which now includes the refund's negative
+                    vkpi_sales_attributions row, so the outcome corrects itself. No new column,
+                    no manual subtraction: the recompute is the negative correction (重算=负向).
 
     Behaviour:
       - No Shopify token configured -> safe no-op: returns {ok:False, reason:'not_configured'},
@@ -132,6 +158,7 @@ def handle_gmv_attribution_event(event: dict[str, Any] | None = None) -> dict[st
     kol_id = _as_int(event.get("kol_id"))
     project_id = _as_int(event.get("project_id"))
     order_ref = str(event.get("order_id") or event.get("source_ref") or "").strip()
+    is_refund = bool(event.get("refund"))
 
     if not _shopify_token_configured():
         logger.debug(
@@ -164,7 +191,11 @@ def handle_gmv_attribution_event(event: dict[str, Any] | None = None) -> dict[st
 
     refreshed = 0
     promoted_order = 0
+    gmv_delta_cents = 0  # signed change in attributed GMV across the recompute (refunds -> negative)
     for rec_id in rec_ids:
+        # Read the outcome's attributed GMV *before* recompute so a refund webhook can report
+        # the realized downward correction. Read-only; tolerant of a missing row / column.
+        before_cents = _outcome_gmv_cents(int(rec_id))
         try:
             agg = (outcomes.refresh_business_outcome(int(rec_id)) or {}).get("aggregates") or {}
         except Exception:
@@ -173,11 +204,15 @@ def handle_gmv_attribution_event(event: dict[str, Any] | None = None) -> dict[st
         refreshed += 1
         if agg.get("order_attributed"):
             promoted_order += 1
+        after_cents = _as_int(agg.get("gmv_cents"))
+        gmv_delta_cents += after_cents - before_cents
 
     logger.info(
-        "gmv_outcome_bridge.refreshed count=%s order_attributed=%s kol_id=%s project_id=%s order=%s",
+        "gmv_outcome_bridge.refreshed count=%s order_attributed=%s gmv_delta_cents=%s refund=%s kol_id=%s project_id=%s order=%s",
         refreshed,
         promoted_order,
+        gmv_delta_cents,
+        is_refund,
         kol_id or None,
         project_id or None,
         order_ref or None,
@@ -186,6 +221,8 @@ def handle_gmv_attribution_event(event: dict[str, Any] | None = None) -> dict[st
         "ok": True,
         "refreshed": refreshed,
         "order_attributed_promoted": promoted_order,
+        "gmv_delta_cents": gmv_delta_cents,
+        "refund": is_refund,
         "recommendation_ids": rec_ids,
     }
 
@@ -208,7 +245,29 @@ def handle_attribution_row(attribution: dict[str, Any] | None = None) -> dict[st
     )
 
 
+def handle_refund_row(attribution: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Convenience adapter for a refund's negative vkpi_sales_attributions row.
+
+    The Shopify refund webhook hands the freshly-created *negative* attribution row here so
+    the outcome of the affected recommendation is re-derived from the now-refund-inclusive
+    ledger (refresh_business_outcome). Identical linkage to handle_attribution_row, but flags
+    refund=True so the bridge logs/returns the downward correction. Pre-token this is still a
+    safe no-op (delegates to handle_gmv_attribution_event).
+    """
+    attribution = attribution or {}
+    return handle_gmv_attribution_event(
+        {
+            "kol_id": attribution.get("kol_id"),
+            "project_id": attribution.get("project_id"),
+            "order_id": attribution.get("order_id"),
+            "source_ref": attribution.get("source_ref"),
+            "refund": True,
+        }
+    )
+
+
 __all__ = [
     "handle_gmv_attribution_event",
     "handle_attribution_row",
+    "handle_refund_row",
 ]

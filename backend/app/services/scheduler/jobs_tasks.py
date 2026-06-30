@@ -774,3 +774,44 @@ from .jobs_tasks_intel import (  # noqa: E402,F401
     job_vkpi_official_daily_report,
     job_vkpi_official_visual_scan,
 )
+
+
+async def job_vkpi_recommendation_refresh():
+    """学习闭环·输入段:周期重算推荐喂新鲜料。确定性/零LLM/零预算/幂等/有上限;只读 fit 不写 fit。"""
+    try:
+        from app.domains.recommendations import recommendation_refresh
+        result = await asyncio.to_thread(
+            recommendation_refresh.refresh_recommendations,
+            max_families=8,
+            per_family_limit=25,
+        )
+        logger.info("scheduler.vkpi_recommendation_refresh",
+                    extra={"families_refreshed": result.get("families_refreshed"),
+                           "recommendations_written": result.get("recommendations_written")})
+    except Exception:
+        logger.exception("scheduler.vkpi_recommendation_refresh_failed")
+
+
+async def job_fulfillment_window_backfill():
+    """履约:把已落库内容候选回填到活动观察窗口 matched_content_post_id(window->post 回链)。
+    config-gate 复用 scheduler_tasks.project_content_observation_scan;幂等+只增不覆盖(SQL 守卫 matched_content_post_id IS NULL)。
+    """
+    if not _scheduler_task_enabled("project_content_observation_scan"):
+        return
+    try:
+        from app.domains.projects import observation_windows
+        result = await asyncio.to_thread(
+            observation_windows.scan_windows_backfill_matched_post,
+            _scheduler_system_staff(),
+        )
+        if result.get("backfilled_windows") or result.get("scanned_windows"):
+            logger.info(
+                "scheduler.fulfillment_window_backfill",
+                extra={
+                    "backfilled": len(result.get("backfilled_windows") or []),
+                    "scanned_windows": result.get("scanned_windows"),
+                    "unmatched": result.get("unmatched"),
+                },
+            )
+    except Exception:
+        logger.exception("scheduler.fulfillment_window_backfill_failed")

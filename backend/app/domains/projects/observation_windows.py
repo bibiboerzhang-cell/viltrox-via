@@ -1024,3 +1024,163 @@ def scan_windows_for_content(
             "created_posts=[] 多因 KOL 尚未发布内容或无窗口(诚实)。"
         ),
     }
+
+
+def _find_post_for_window(
+    conn: Any,
+    *,
+    project_id: int,
+    assignment_id: int | None,
+    kol_pool_id: int | None,
+) -> int | None:
+    """为一个活动窗口在 **已落库的内容候选** 里挑最佳匹配帖子 id(window→post,与 link 的反向)。
+
+    匹配口径与 _link_post_to_observation_window / open_window_for_delivered 去重完全同款:
+    同 (project_id, assignment_id, kol_pool_id),NULL 维度用 IS NULL 比较。挑选优先级:
+    人已确认(status matched/retrospective_ready)> 曝光高(view_count)> 较新(id 大)。
+    纯 SELECT,不写任何表。
+    """
+    pid = int(project_id or 0)
+    if pid <= 0 or not table_exists("vkpi_project_content_posts"):
+        return None
+    aid = _nullable_int(assignment_id)
+    kpid = _nullable_int(kol_pool_id)
+    where_parts = ["project_id = ?", "status <> 'rejected'"]
+    params: list[Any] = [pid]
+    if aid is None:
+        where_parts.append("assignment_id IS NULL")
+    else:
+        where_parts.append("assignment_id = ?")
+        params.append(aid)
+    if kpid is None:
+        where_parts.append("kol_pool_id IS NULL")
+    else:
+        where_parts.append("kol_pool_id = ?")
+        params.append(kpid)
+    row = conn.execute(
+        f"""
+        SELECT id FROM vkpi_project_content_posts
+        WHERE {' AND '.join(where_parts)}
+        ORDER BY
+            CASE WHEN status IN ('matched', 'retrospective_ready') THEN 0 ELSE 1 END ASC,
+            view_count DESC,
+            id DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(dict(row)["id"])
+
+
+def scan_windows_backfill_matched_post(
+    staff: dict[str, Any] | None = None,
+    max_windows: int = 500,
+) -> dict[str, Any]:
+    """批量「window→post」回填作业:遍历活动观察窗口,把已存在的内容候选挂回 matched_content_post_id。
+
+    背景(实证):scan_windows_for_content 物化候选时,只有 record_content_candidate 走「新插入」
+    分支才会顺带 _link_post_to_observation_window 回填窗口;而 content_url 已是该项目候选(dupe)
+    时 record_content_candidate 早返回 skipped,窗口的 matched_content_post_id 永远留 NULL。
+    稳态下证据/候选都已存在 → 窗口虽被翻成 scanning/matched,matched_content_post_id 却全是 NULL,
+    履约后半链(content_post -> window 回链)从没自动闭合。本作业补这一环。
+
+    做法:对每个 status∈(pending/scanning/matched) 且 matched_content_post_id IS NULL 的窗口,
+    用 _find_post_for_window 在同 (project, assignment, kol_pool) 维度找最佳已落库候选,回填窗口的
+    matched_content_post_id 并把 status 抬到 'matched'(展示态,仍待人确认)。
+
+    幂等 + 只增不覆盖(红线):
+    - 只 UPDATE 已存在窗口行的 matched_content_post_id —— 且 SQL 守卫 matched_content_post_id IS NULL,
+      绝不覆盖既有匹配(再跑只会处理仍为 NULL 的窗口)。
+    - 找不到候选的窗口诚实跳过(unmatched++),不建窗、不造数据。
+    - 只动 vkpi_project_content_observation_windows 自己这张表;绝不写 project.stage/closed_at、
+      assignment.stage、cost_ledger,绝不碰 viltrox_fit_score / rule_v0。
+    - RBAC 经 scope.project_filter("p", staff) 收口(own-only 员工只回填自己可见项目的窗口)。
+    - compat:? 占位、bool 写 True、无 % / INTERVAL 字面量。
+
+    schema 守卫:窗口表缺失(迁移 128 未跑)→ 诚实返回空。
+    """
+    if not table_exists("vkpi_project_content_observation_windows") or not table_exists(
+        "vkpi_project_content_posts"
+    ):
+        return {
+            "status": "ok",
+            "scanned_windows": 0,
+            "backfilled_windows": [],
+            "unmatched": 0,
+            "schema_ready": False,
+            "scope_mode": scope.scope_context(staff)["scope_mode"],
+            "note": "观察窗口/内容帖表缺失(迁移 128 未应用)→ 空回填(诚实)。",
+        }
+
+    conn = get_conn()
+    safe_max = max(1, min(int(max_windows or 500), 1000))
+
+    scope_sql, scope_params = scope.project_filter("p", staff)
+    scope_clause = f"AND {scope_sql}" if scope_sql else ""
+    status_placeholders = ",".join(["?"] * len(_WINDOW_SCANNABLE_STATUSES))
+    rows = conn.execute(
+        f"""
+        SELECT w.id, w.project_id, w.assignment_id, w.kol_pool_id
+        FROM vkpi_project_content_observation_windows w
+        JOIN vkpi_projects p ON p.id = w.project_id
+        WHERE w.status IN ({status_placeholders})
+          AND w.matched_content_post_id IS NULL
+          {scope_clause}
+        ORDER BY w.ends_at ASC, w.id ASC
+        LIMIT ?
+        """,
+        (*_WINDOW_SCANNABLE_STATUSES, *scope_params, safe_max),
+    ).fetchall()
+
+    scanned_windows = 0
+    backfilled_windows: list[int] = []
+    unmatched = 0
+    now = datetime.utcnow()
+    for r in rows:
+        win = dict(r)
+        window_id = int(win.get("id") or 0)
+        project_id = win.get("project_id")
+        if not window_id or not project_id:
+            continue
+        scanned_windows += 1
+        post_id = _find_post_for_window(
+            conn,
+            project_id=int(project_id),
+            assignment_id=win.get("assignment_id"),
+            kol_pool_id=win.get("kol_pool_id"),
+        )
+        if post_id is None:
+            unmatched += 1
+            continue
+        # 只增不覆盖:SQL 守卫 matched_content_post_id IS NULL(并发/重跑也安全)。
+        cursor = conn.execute(
+            """
+            UPDATE vkpi_project_content_observation_windows
+            SET matched_content_post_id = ?, status = 'matched', updated_at = ?
+            WHERE id = ? AND matched_content_post_id IS NULL
+            """,
+            (int(post_id), now, window_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) > 0:
+            backfilled_windows.append(window_id)
+            _emit_event(
+                "observation.window_backfilled",
+                entity_type="observation_window",
+                entity_id=window_id,
+                payload={"project_id": int(project_id), "matched_content_post_id": int(post_id)},
+            )
+
+    conn.commit()
+    return {
+        "status": "ok",
+        "scanned_windows": scanned_windows,
+        "backfilled_windows": backfilled_windows,
+        "unmatched": unmatched,
+        "scope_mode": scope.scope_context(staff)["scope_mode"],
+        "note": (
+            "批量回填:把已落库内容候选挂回活动窗口 matched_content_post_id(只增不覆盖,幂等);"
+            "unmatched 窗口=暂无匹配候选(诚实跳过,不建窗不造数据)。"
+        ),
+    }

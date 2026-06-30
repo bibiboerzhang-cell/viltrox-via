@@ -91,6 +91,8 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_morning_sync,
     job_vkpi_official_daily_report,
     job_vkpi_official_visual_scan,
+    job_fulfillment_window_backfill,
+    job_vkpi_recommendation_refresh,
     job_vkpi_recommendation_outcomes,
     job_vkpi_weekly_report,
     job_worker_lease_expire_stale,
@@ -187,6 +189,16 @@ async def start_scheduler() -> None:
             coalesce=True,
         )
 
+    # ── Job 7a2: 学习闭环·输入段·推荐刷新(每日 04:00,早于 outcome 04:40 喂新鲜料)── 确定性/零成本/幂等/只读 fit。
+    _scheduler.add_job(
+        job_vkpi_recommendation_refresh,
+        trigger=CronTrigger(hour=4, minute=0),
+        id="vkpi_recommendation_refresh",
+        name="Recompute fresh KOL recommendations from current pool (deterministic, read-only fit)",
+        max_instances=1,
+        coalesce=True,
+    )
+
     # ── Job 7b: 学习闭环·推荐 outcome 业务标签回填(每日) ──
     _scheduler.add_job(
         job_vkpi_recommendation_outcomes,
@@ -208,11 +220,12 @@ async def start_scheduler() -> None:
     )
     _scheduler.add_job(
         job_vkpi_agent_cycle,
-        trigger=CronTrigger(hour=5, minute=30),
+        trigger=CronTrigger(hour=5, minute=30, timezone=CHINA_TZ),
         id="vkpi_agent_cycle",
         name="Daily durable agent suggestion cycle (workflow_runs)",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=3600,
     )
 
     # ── Job 7d: Bet Ledger 到期复盘催办(每日) ──
@@ -439,6 +452,15 @@ async def start_scheduler() -> None:
         trigger=IntervalTrigger(hours=2),
         id="fulfillment_content_scan",
         name="Fulfillment: scan due windows for KOL Viltrox content → candidates",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── 履约后半链:把已落库候选回填到活动观察窗口 matched_content_post_id(window→post 回链)──
+    _scheduler.add_job(
+        job_fulfillment_window_backfill,
+        trigger=IntervalTrigger(hours=2),
+        id="fulfillment_window_backfill",
+        name="Fulfillment: backfill matched_content_post_id onto active observation windows",
         max_instances=1,
         coalesce=True,
     )
