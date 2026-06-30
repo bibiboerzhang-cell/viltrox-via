@@ -580,7 +580,13 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
     category = _error_category(message)
     # 10E 失败池分流:把细类映射成处置动作。'retry' 类(timeout/proxy/限流/媒体解析/被回收)
     # 在仍有重试预算时重新 queued;'triage' 类(no_data/auth/下架/代码错)直接标 status='triage'
-    # 待人工;unknown / 重试预算耗尽 → 落 'failed'。last_error_category 始终写明确细类,不再留 null。
+    # 待人工;unknown → 落 'failed'。last_error_category 始终写明确细类,不再留 null。
+    #
+    # 早退缺口修复(失败池排水):此前「retry 类但重试预算耗尽」会掉进最后的 else 落 'failed',
+    # 永远绕过 triage 引擎,死在死信池里(审计:192 download + 152 media_resolve 全卡这条路)。
+    # 改为:retry 类一旦耗尽,不再落 'failed',而是和 triage 类一样停 status='triage' —— 让所有
+    # 「值得再看一眼」的失败都汇入同一个 triage 面待裁决(人工放量 / 离线排水重置后再跑),
+    # 而非分裂成两套死信池。只有 unknown / 不认识的类别仍保守落 'failed'(可能藏永久错)。
     disposition = _failure_disposition(category)
     # provider_pressure 保留它专属的更宽重试预算(5 次 + 指数退避);其余可重试类用通用预算闸。
     if category == "provider_pressure":
@@ -594,6 +600,8 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
             cur.execute("SELECT attempts FROM apify_jobs WHERE id=%s FOR UPDATE", (job_id,))
             row = cur.fetchone() or {}
             next_attempt = int(row.get("attempts") or 0) + 1
+            # retry 类预算耗尽 → 走 triage(而非 failed);triage 类与「耗尽的 retry 类」共用 triage 落点。
+            send_to_triage = disposition == "triage" or (disposition == "retry" and next_attempt >= retry_budget)
             if disposition == "retry" and next_attempt < retry_budget:
                 delay_seconds = _provider_retry_delay_seconds(next_attempt)
                 cur.execute(
@@ -621,8 +629,10 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
                     delay_seconds,
                     retry_row.get("next_retry_at"),
                 )
-            elif disposition == "triage":
-                # 不可重试类:不再消耗重试预算,直接停在 triage 待人工裁决(凭证/改代码/确认下架)。
+            elif send_to_triage:
+                # 两类汇入 triage：①不可重试类(凭证/改代码/确认下架);②可重试类但预算耗尽
+                # （再自动跑没用，但仍可由人工/离线排水重置 attempts 后放量）。都停 status='triage'
+                # 待裁决，不再消耗重试预算。
                 cur.execute(
                     """
                     UPDATE apify_jobs
@@ -638,12 +648,17 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
                 )
                 raw_status = "failed"
                 logger.warning(
-                    "apify_jobs failure sent to triage | id=%s category=%s attempt=%s",
+                    "apify_jobs failure sent to triage | id=%s category=%s disposition=%s attempt=%s budget=%s exhausted=%s",
                     job_id,
                     category,
+                    disposition,
                     next_attempt,
+                    retry_budget,
+                    disposition == "retry",
                 )
             else:
+                # 只剩 unknown / 不认识的类别落到这里:保守标 failed(可能藏永久错),
+                # 留给离线排水层重新派生类别后再定夺。retry 类已不会再走到这条分支。
                 cur.execute(
                     """
                     UPDATE apify_jobs

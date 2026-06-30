@@ -325,3 +325,31 @@ def kol_provenance(
     from app.domains.memory import provenance
 
     return provenance.get_kol_provenance(int(kol_pool_id), staff=staff)
+
+
+@router.post("/skills/orchestrate")
+def skills_orchestrate(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+    """编排器侧接线:据 goal+context 选 skill 并经 registry 真调用(非仅人工 HTTP)。
+    body: {goal(必填), context?, dry_run?(默认 true)}。dry_run=true 走规则不烧 LLM;预算闸+gate 守门;零触 fit。"""
+    from app.domains.marketing_brain import skill_orchestrator
+    goal = str((body or {}).get("goal") or "").strip()
+    if not goal:
+        raise HTTPException(status_code=400, detail="goal required")
+    context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    dry_run = body.get("dry_run", True)
+    dry_run = True if dry_run is None else bool(dry_run)
+    return skill_orchestrator.orchestrate_skills(goal, context=context, dry_run=dry_run, record=True, staff=staff)
+
+
+@router.get("/skills/plan")
+def skills_plan(goal: str, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """PLAN-ONLY 预览:编排器据 goal 会选哪些 skill + 各自 input(不执行)。"""
+    from app.domains.marketing_brain import skill_orchestrator
+    return skill_orchestrator.plan_skills(goal)
+
+
+@router.get("/skills/evals")
+def skills_evals(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """跑全部 5 个 skill 的 evaluate(),返回诚实 per-skill hit_rate + 汇总(creator_match 默认 fixture 模式)。"""
+    from app.domains.marketing_brain import evals as mb_evals
+    return mb_evals.run_skill_evals()

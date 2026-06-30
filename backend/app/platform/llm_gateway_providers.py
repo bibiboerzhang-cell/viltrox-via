@@ -16,6 +16,7 @@ from typing import Any, Callable
 from app.platform.llm_gateway import (
     PROVIDER_CONFIG,
     _estimate_cost_cents,
+    _estimate_cost_micro_usd,
     _get_api_key,
 )
 
@@ -68,6 +69,7 @@ def _call_openai(prompt: str, max_output_tokens: int) -> dict[str, Any]:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_cents": _estimate_cost_cents("openai", input_tokens, output_tokens),
+            "cost_micro_usd": _estimate_cost_micro_usd("openai", input_tokens, output_tokens),
             "latency_ms": int((time.monotonic() - started) * 1000),
         }
     except urllib.error.HTTPError as exc:
@@ -107,6 +109,7 @@ def _call_google(prompt: str, max_output_tokens: int) -> dict[str, Any]:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_cents": _estimate_cost_cents("google", input_tokens, output_tokens),
+            "cost_micro_usd": _estimate_cost_micro_usd("google", input_tokens, output_tokens),
             "latency_ms": int((time.monotonic() - started) * 1000),
         }
     except urllib.error.HTTPError as exc:
@@ -141,6 +144,7 @@ def _call_anthropic(prompt: str, max_output_tokens: int) -> dict[str, Any]:
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cost_cents": _estimate_cost_cents("anthropic", input_tokens, output_tokens),
+            "cost_micro_usd": _estimate_cost_micro_usd("anthropic", input_tokens, output_tokens),
             "latency_ms": int((time.monotonic() - started) * 1000),
         }
     except urllib.error.HTTPError as exc:

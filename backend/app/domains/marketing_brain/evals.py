@@ -161,3 +161,79 @@ CREATOR_MATCH_CASES: list[EvalCase] = [
         metric=set_overlap_metric,
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# 统一 skill eval 套件 —— 跑全部 5 个 skill 的 evaluate(),给诚实的 per-skill hit_rate 汇总。
+# 每个 skill 模块各自暴露 evaluate() -> EvalReport.to_dict();本函数惰性 import 它们逐一跑,
+# 单个 skill 跑挂只记 error 不打断整批(对齐 run_eval 的「单条异常=miss,不打断」精神)。
+# 红线:零真 LLM(各 skill evaluate 内 model_fn=None)、零落账(record=False)、零触 viltrox_fit_score。
+# ---------------------------------------------------------------------------
+_SKILL_EVAL_MODULES: tuple[str, ...] = (
+    "app.domains.marketing_brain.skills.creator_match",
+    "app.domains.marketing_brain.skills.brief_generate_v1",
+    "app.domains.marketing_brain.skills.content_score",
+    "app.domains.marketing_brain.skills.roi_review",
+    "app.domains.marketing_brain.skills.campaign_plan",
+)
+
+
+def run_skill_evals() -> dict[str, Any]:
+    """跑全部 5 个 skill 的 evaluate(),返回 {suites:[...], summary:{...}}。
+
+    summary:overall_hit_rate / overall_avg_score 按 case 加权(总命中 / 总样本),
+    并标注哪些 skill eval 是 fixture/hermetic、哪些诚实为 0 及原因 —— 给「诚实结果」。
+    """
+    import importlib
+
+    suites: list[dict[str, Any]] = []
+    total_cases = 0
+    total_hits = 0
+    score_sum = 0.0
+    for path in _SKILL_EVAL_MODULES:
+        try:
+            mod = importlib.import_module(path)
+        except Exception as exc:
+            suites.append({"skill": path.rsplit(".", 1)[-1], "status": "import_error",
+                           "error": str(exc)[:160]})
+            continue
+        skill_name = str(getattr(mod, "SKILL_NAME", path.rsplit(".", 1)[-1]))
+        evaluate_fn = getattr(mod, "evaluate", None)
+        if not callable(evaluate_fn):
+            suites.append({"skill": skill_name, "status": "no_evaluate"})
+            continue
+        try:
+            report = evaluate_fn()
+        except Exception as exc:
+            suites.append({"skill": skill_name, "status": "eval_error", "error": str(exc)[:160]})
+            continue
+        report = report if isinstance(report, dict) else {}
+        n = int(report.get("total") or 0)
+        h = int(report.get("hits") or 0)
+        total_cases += n
+        total_hits += h
+        score_sum += float(report.get("avg_score") or 0.0) * n
+        suites.append({
+            "skill": skill_name,
+            "status": "ok",
+            "total": n,
+            "hits": h,
+            "hit_rate": report.get("hit_rate"),
+            "avg_score": report.get("avg_score"),
+            "mode": report.get("mode"),
+            "honest_note": report.get("honest_note"),
+        })
+    return {
+        "suites": suites,
+        "summary": {
+            "skills_evaluated": sum(1 for s in suites if s.get("status") == "ok"),
+            "total_cases": total_cases,
+            "total_hits": total_hits,
+            "overall_hit_rate": round(total_hits / total_cases, 4) if total_cases else 0.0,
+            "overall_avg_score": round(score_sum / total_cases, 4) if total_cases else 0.0,
+        },
+        "note": (
+            "诚实结果:creator_match 默认 fixture 模式(注入确定性桩 preview 验 skill 逻辑,非依赖活库)；"
+            "creator_match.evaluate(live=True) 则用真 preview,hit_rate 偏低有诚实归因。零触 viltrox_fit_score。"
+        ),
+    }

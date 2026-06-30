@@ -8,6 +8,7 @@ import {
   generateLaunchPlan,
   type VkpiLaunchPlan,
 } from '../../../../services/vkpi/launch-api';
+import { FulfillmentObservationPanel } from './FulfillmentObservationPanel';
 import {
   CampaignAnalyticsTab,
   CampaignContractsTab,
@@ -380,24 +381,27 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
           onDeleteContract={deleteContractArchive}
         />
       ) : activeTab === '复盘' ? (
-        <CampaignRetrospectiveTab
-          project={project}
-          rows={rows}
-          stats={stats}
-          health={health}
-          apiToken={apiToken}
-          videoAnalysisCache={videoAnalysisCache}
-          videoQaCache={videoQaCache}
-          videoAnalysisLoading={videoAnalysisLoading}
-          videoAnalysisError={videoAnalysisError}
-          videoQaError={videoQaError}
-          retrospective={retrospective?.retrospective || null}
-          retrospectiveLastJob={retrospective?.last_job || null}
-          retrospectiveGenerating={retroBusy || Boolean(retrospective?.active_job)}
-          onGenerateRetrospective={onGenerateRetrospective}
-          onCopy={onCopy}
-          onPendingAction={(label) => setNotice({ tone: 'info', title: '暂存提醒', body: `${label} 已进入项目操作队列，后续同步后更新状态。` })}
-        />
+        <>
+          <CampaignRetrospectiveTab
+            project={project}
+            rows={rows}
+            stats={stats}
+            health={health}
+            apiToken={apiToken}
+            videoAnalysisCache={videoAnalysisCache}
+            videoQaCache={videoQaCache}
+            videoAnalysisLoading={videoAnalysisLoading}
+            videoAnalysisError={videoAnalysisError}
+            videoQaError={videoQaError}
+            retrospective={retrospective?.retrospective || null}
+            retrospectiveLastJob={retrospective?.last_job || null}
+            retrospectiveGenerating={retroBusy || Boolean(retrospective?.active_job)}
+            onGenerateRetrospective={onGenerateRetrospective}
+            onCopy={onCopy}
+            onPendingAction={(label) => setNotice({ tone: 'info', title: '暂存提醒', body: `${label} 已进入项目操作队列，后续同步后更新状态。` })}
+          />
+          <FulfillmentObservationPanel projectId={project.id} apiToken={apiToken} />
+        </>
       ) : activeTab === '时间轴' ? (
         <CampaignTimelineTab rows={rows} events={detail?.events || []} apiToken={apiToken} projectId={project.id} />
       ) : (

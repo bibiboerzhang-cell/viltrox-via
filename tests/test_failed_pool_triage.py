@@ -43,20 +43,25 @@ class FakeConn:
         self.update_count = 0
         self.commit_count = 0
 
+    # 排水覆盖的死信状态(与生产口径一致:failed + triage)。
+    _DRAINABLE = ("failed", "triage")
+
     def execute(self, sql: str, params=None):
         s = " ".join(sql.split()).lower()
         params = params or ()
         if s.startswith("update apify_jobs"):
             self.update_count += 1
-            # 模拟 WHERE id=? AND status='failed':把对应行置 queued
+            # 模拟 WHERE id=? AND status IN ('failed','triage'):把对应死信行置 queued。
             job_id = params[-1]
             for j in self.jobs:
-                if j["id"] == job_id and j.get("status") == "failed":
+                if j["id"] == job_id and j.get("status") in self._DRAINABLE:
                     j["status"] = "queued"
+                    if "attempts = 0" in s:  # reset_attempts 放量路径
+                        j["attempts"] = 0
             return _FakeCursor([])
         if s.startswith("select"):
-            failed = [j for j in self.jobs if j.get("status") == "failed"]
-            # recycle 的 SELECT 带 "attempts < ?" 过滤
+            failed = [j for j in self.jobs if j.get("status") in self._DRAINABLE]
+            # recycle 的 SELECT 带 "attempts < ?" 过滤(reset_attempts=False 路径)
             if "attempts < ?" in s:
                 max_attempts = params[0]
                 failed = [j for j in failed if int(j.get("attempts") or 0) < max_attempts]
@@ -209,6 +214,94 @@ class RecycleDryRunTests(unittest.TestCase):
         # 非候选仍 failed
         for bad in (4, 5, 6, 7):
             self.assertEqual(status_by_id[bad], "failed")
+
+
+class RecycleBatchLimitTests(unittest.TestCase):
+    """批量上限闸:单次排水不可超过 batch_limit / 硬上限,且 dry_run 清单即真实将放量。"""
+
+    def _run(self, jobs, *, dry_run, batch_limit=None, reset_attempts=False, env=None):
+        fake = FakeConn(jobs)
+        environ = {"APIFY_WORKER_MAX_ATTEMPTS": "2"}
+        environ.update(env or {})
+        with patch.object(triage, "get_conn", return_value=fake), \
+                patch.dict("os.environ", environ):
+            return (
+                triage.recycle_recyclable(
+                    dry_run=dry_run, batch_limit=batch_limit, reset_attempts=reset_attempts
+                ),
+                fake,
+            )
+
+    def _many_recyclable(self, n: int) -> list[dict]:
+        # n 条可回收 media_resolve(attempts=1,有预算),id 从 100 起避开 _make_jobs 冲突。
+        return [
+            {"id": 100 + i, "job_type": "video", "last_error_category": "media_resolve",
+             "last_error": "media_resolve_failed: media_resolve_failed", "attempts": 1, "status": "failed"}
+            for i in range(n)
+        ]
+
+    def test_batch_limit_caps_dry_run_candidates(self) -> None:
+        result, _ = self._run(self._many_recyclable(50), dry_run=True, batch_limit=10)
+        # 50 条够格,但单次只放 10:清单被截断到 batch_limit。
+        self.assertEqual(result["eligible_count"], 50)
+        self.assertEqual(result["candidate_count"], 10)
+        self.assertEqual(len(result["candidates"]), 10)
+        self.assertEqual(result["batch_limit"], 10)
+
+    def test_hard_max_caps_oversized_batch_limit(self) -> None:
+        # 误传超大 batch_limit 被硬上限(默认 100)钳住,绝不把 200 条整池放出去。
+        result, _ = self._run(self._many_recyclable(200), dry_run=True, batch_limit=10000)
+        self.assertEqual(result["eligible_count"], 200)
+        self.assertEqual(result["candidate_count"], 100)
+        self.assertEqual(result["batch_limit"], 100)
+
+    def test_default_batch_limit_from_env(self) -> None:
+        result, _ = self._run(
+            self._many_recyclable(50), dry_run=True,
+            env={"FAILED_POOL_RECYCLE_BATCH_LIMIT": "7"},
+        )
+        # 未显式传 batch_limit → 用 env 默认 7。
+        self.assertEqual(result["candidate_count"], 7)
+        self.assertEqual(result["batch_limit"], 7)
+
+    def test_wet_run_respects_batch_limit(self) -> None:
+        jobs = self._many_recyclable(30)
+        result, fake = self._run(jobs, dry_run=False, batch_limit=5)
+        self.assertEqual(result["recycled_count"], 5)
+        self.assertEqual(fake.update_count, 5)
+        queued = [j for j in jobs if j["status"] == "queued"]
+        self.assertEqual(len(queued), 5)
+
+    def test_reset_attempts_recycles_exhausted_and_zeros_attempts(self) -> None:
+        # 默认(reset_attempts=False)耗尽行(attempts>=2)不进候选;开 reset_attempts 后进且清零。
+        jobs = [
+            {"id": 200, "job_type": "video", "last_error_category": "download",
+             "last_error": "direct_video_download_failed: timed out", "attempts": 2, "status": "failed"},
+            # triage 池里的耗尽可重试类(模拟 _fail_job 修复后的落点)
+            {"id": 201, "job_type": "video", "last_error_category": "media_resolve",
+             "last_error": "media_resolve_failed: media_resolve_failed", "attempts": 5, "status": "triage"},
+        ]
+        # 不开 reset:两条都耗尽,候选为空。
+        base, _ = self._run([dict(j) for j in jobs], dry_run=True)
+        self.assertEqual(base["candidate_count"], 0)
+        # 开 reset:两条都进候选;wet run 清零 attempts 并置 queued。
+        wet_jobs = [dict(j) for j in jobs]
+        result, fake = self._run(wet_jobs, dry_run=False, reset_attempts=True)
+        self.assertTrue(result["reset_attempts"])
+        self.assertEqual(result["recycled_count"], 2)
+        for j in wet_jobs:
+            self.assertEqual(j["status"], "queued")
+            self.assertEqual(j["attempts"], 0)
+
+    def test_triage_status_rows_are_drained(self) -> None:
+        # 失败瞬间分流落 triage 的可重试类(有预算)也应被排水(覆盖 _fail_job 修复后的新落点)。
+        jobs = [
+            {"id": 300, "job_type": "video", "last_error_category": "media_resolve",
+             "last_error": "media_resolve_failed: media_resolve_failed", "attempts": 1, "status": "triage"},
+        ]
+        result, _ = self._run(jobs, dry_run=True)
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["candidates"][0]["id"], 300)
 
 
 if __name__ == "__main__":

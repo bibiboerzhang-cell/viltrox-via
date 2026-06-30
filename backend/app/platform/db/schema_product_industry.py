@@ -499,6 +499,7 @@ def ensure_vkpi_product_industry_schema() -> None:
             input_tokens INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
             cost_cents INTEGER NOT NULL DEFAULT 0,
+            cost_micro_usd INTEGER NOT NULL DEFAULT 0,
             latency_ms INTEGER,
             status TEXT NOT NULL DEFAULT 'not_configured',
             fallback_used INTEGER NOT NULL DEFAULT 0,

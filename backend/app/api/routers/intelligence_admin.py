@@ -48,17 +48,25 @@ def market_observations(
 @router.get("/intelligence/market/trends")
 def market_trends(
     kind: str | None = None,
+    history: bool = False,
+    limit: int = 100,
     admin=Depends(require_admin),
 ):
     """N7 市场趋势 / 观察:只读合成 market_brain + competitor_radar + bet_ledger 真数据。
 
     返回结构化观察 {topic, kind, source, evidence_refs, confidence, suggested_action}。
-    best-effort,无真数据诚实返回空。纯只读,绝不写表,绝不触 viltrox_fit_score。
-    可选 kind 过滤(热点 / 竞品 / 机会 / 风险)。
+    默认实时合成(并加性落库累积历史);best-effort,无真数据诚实返回空。
+    history=true 时改读历史快照表(累积视图,只读),不触发新合成。
+    纯只读 / 加性,绝不触 viltrox_fit_score。可选 kind 过滤(热点 / 竞品 / 机会 / 风险)。
     """
     from datetime import datetime, timezone
 
     from app.domains.market import market_observation
+
+    if history:
+        result = market_observation.list_observations_history(kind=kind, limit=limit)
+        result["generated_at"] = datetime.now(timezone.utc).isoformat()
+        return result
 
     result = market_observation.generate_observations(staff=admin if isinstance(admin, dict) else None)
     observations = result.get("observations") or []

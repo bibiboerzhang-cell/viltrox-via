@@ -169,15 +169,27 @@ def _monthly_budget_cents() -> int:
 
 
 def _current_month_spent_cents() -> int:
+    # 精度修复:月度累计改读 cost_micro_usd(精度源)而非被整除归零的 cost_cents,这样亚分/大 token
+    # 调用都进得了累计,月度 env 预算闸不再恒读 $0。迁移已把旧行回填 micro=cents*10000,故对每行取
+    # GREATEST(cost_micro_usd, cost_cents*10000) 既覆盖新精度行、又兜底极旧未回填行,无双计风险。
+    # 求和用 micro_usd,最后 /10000 折算成 cents(向下取整,亚分累计仍诚实)。
     try:
         ensure_vkpi_product_industry_schema()
         now = datetime.now(timezone.utc)
         first_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
         row = get_conn().execute(
-            "SELECT COALESCE(SUM(cost_cents),0) AS cents FROM vkpi_llm_calls WHERE created_at >= ?",
+            """
+            SELECT COALESCE(SUM(
+                CASE WHEN COALESCE(cost_micro_usd, 0) >= COALESCE(cost_cents, 0) * 10000
+                     THEN COALESCE(cost_micro_usd, 0)
+                     ELSE COALESCE(cost_cents, 0) * 10000 END
+            ), 0) AS micro
+            FROM vkpi_llm_calls WHERE created_at >= ?
+            """,
             (first_of_month,),
         ).fetchone()
-        return int(row["cents"] or 0) if row else 0
+        micro = int(row["micro"] or 0) if row else 0
+        return micro // 10000
     except Exception:
         logger.warning("vkpi.llm_gateway.monthly_spend_failed", exc_info=True)
         return 0
@@ -187,9 +199,28 @@ def _budget_remaining_cents() -> int:
     return max(0, _monthly_budget_cents() - _current_month_spent_cents())
 
 
-def _estimate_cost_cents(provider: str, input_tokens: int, output_tokens: int) -> int:
+# 精度修复:旧 _estimate_cost_cents 用整除 // 1_000_000 算 cents,任意 token 量都被截断归零
+# (如 google 1000 input tok x 7 cents/M = 7000//1_000_000 = 0),cost_cents 恒 0、月度预算闸
+# SUM 永读 $0 失效。新口径以「微美元」(micro_usd,$1 = 1_000_000 micro_usd)为精度源:
+#   micro_usd = tokens x cents_per_million / 100   (1 cent = 10_000 micro_usd,故 /1_000_000 x 10_000)
+# 用浮点累计再 round 成整数 micro_usd,避免整除归零;cost_cents 从 micro_usd 四舍五入派生
+# (真实亚分调用仍可诚实落 0,但精度由 cost_micro_usd 保住,不再把成本钉死在 0)。
+def _estimate_cost_micro_usd(provider: str, input_tokens: int, output_tokens: int) -> int:
     config = PROVIDER_CONFIG.get(provider) or {}
-    return int(input_tokens or 0) * int(config.get("input_cents_per_million") or 0) // 1_000_000 + int(output_tokens or 0) * int(config.get("output_cents_per_million") or 0) // 1_000_000
+    in_rate = float(config.get("input_cents_per_million") or 0)
+    out_rate = float(config.get("output_cents_per_million") or 0)
+    micro = (int(input_tokens or 0) * in_rate + int(output_tokens or 0) * out_rate) / 100.0
+    return int(round(micro))
+
+
+def _micro_usd_to_cents(micro_usd: int) -> int:
+    # 1 cent = 10_000 micro_usd; 四舍五入而非截断(亚分仍可为 0,但不再因 // 系统性归零)。
+    return int(round(int(micro_usd or 0) / 10000.0))
+
+
+def _estimate_cost_cents(provider: str, input_tokens: int, output_tokens: int) -> int:
+    # 向后兼容:返回整数 cents,但改由精度 micro_usd 派生(四舍五入),不再用整除直接归零。
+    return _micro_usd_to_cents(_estimate_cost_micro_usd(provider, input_tokens, output_tokens))
 
 
 def _estimate_prompt_tokens(prompt: str) -> int:
@@ -215,10 +246,15 @@ def _cost_scope_for_purpose(purpose: str = "", cost_tag: str | None = None) -> s
 
 
 def _estimated_cost_usd(provider: str, *, prompt: str, max_output_tokens: int) -> float:
-    cents = _estimate_cost_cents(provider, _estimate_prompt_tokens(prompt), int(max_output_tokens or 0))
-    if cents <= 0 and provider in PROVIDER_CONFIG:
-        cents = 1
-    return float(cents) / 100
+    # 精度修复:旧实现把任意 token 量钉死成硬地板 $0.01,既区分不了大小调用、又让 provider 预算闸
+    # 失真。改为按真实单价 x (prompt+max_output) token 走 micro_usd 浮点计量,随 token 量单调增长。
+    micro = _estimate_cost_micro_usd(provider, _estimate_prompt_tokens(prompt), int(max_output_tokens or 0))
+    cost = float(micro) / 1_000_000
+    # 仅对已配置 provider 保留极小非零下限,防 0 成本绕过 single_call/provider 上限的边界判定;
+    # 但任何真实 token 量算出的成本都会高于此下限(下限只在 token≈0 的退化输入时兜底)。
+    if cost <= 0 and provider in PROVIDER_CONFIG:
+        return 0.000001
+    return cost
 
 
 def _budget_scopes_for_provider(provider: str, cost_scope: str) -> list[str]:
@@ -492,14 +528,25 @@ def invoke(
         result = caller(safe_prompt, max_output_tokens)
         status = str(result.get("status") or "")
         if status == "success" and str(result.get("text") or "").strip():
+            result_in_tokens = int(result.get("input_tokens") or 0)
+            result_out_tokens = int(result.get("output_tokens") or 0)
+            # 精度:优先用 provider 适配器回传的 cost_micro_usd;缺失则按真实单价从 token 现算,
+            # 不再依赖被整除归零的 cost_cents 作为唯一成本源。
+            result_micro = result.get("cost_micro_usd")
+            result_micro = (
+                int(result_micro)
+                if result_micro is not None
+                else _estimate_cost_micro_usd(provider, result_in_tokens, result_out_tokens)
+            )
             record_call(
                 provider=provider,
                 model=str(result.get("model") or ""),
                 purpose=purpose,
                 prompt=safe_prompt,
-                input_tokens=int(result.get("input_tokens") or 0),
-                output_tokens=int(result.get("output_tokens") or 0),
+                input_tokens=result_in_tokens,
+                output_tokens=result_out_tokens,
                 cost_cents=int(result.get("cost_cents") or 0),
+                cost_micro_usd=result_micro,
                 status="success",
                 fallback_used=bool(errors),
                 cost_tag=cost_scope,
@@ -580,6 +627,7 @@ def record_call(
     input_tokens: int = 0,
     output_tokens: int = 0,
     cost_cents: int = 0,
+    cost_micro_usd: int | None = None,
     status: str = "not_configured",
     fallback_used: bool = True,
     cost_tag: str | None = None,
@@ -590,13 +638,18 @@ def record_call(
     ensure_vkpi_product_industry_schema()
     uid = f"llm-{secrets.token_hex(8)}"
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
+    # 精度成本:优先用调用方传入的 micro_usd(provider 适配器算出的真实计量);未传则从 cost_cents
+    # 回退派生(1 cent = 10_000 micro_usd),保证旧调用方零改动也写得进精度列。两者派生出最终 cents,
+    # 避免 cents 与 micro 各算一份不一致。
+    micro = int(cost_micro_usd) if cost_micro_usd is not None else int(round(int(cost_cents or 0) * 10000))
+    final_cents = _micro_usd_to_cents(micro) if cost_micro_usd is not None else int(cost_cents or 0)
     conn = get_conn()
     conn.execute(
         """
         INSERT INTO vkpi_llm_calls
             (call_uid, provider, model, purpose, prompt_hash, input_tokens, output_tokens, cost_cents,
-             latency_ms, status, fallback_used, created_by_staff_id, created_at, metadata_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             cost_micro_usd, latency_ms, status, fallback_used, created_by_staff_id, created_at, metadata_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             uid,
@@ -606,7 +659,8 @@ def record_call(
             prompt_hash,
             int(input_tokens or 0),
             int(output_tokens or 0),
-            int(cost_cents or 0),
+            int(final_cents or 0),
+            int(micro or 0),
             int((metadata or {}).get("latency_ms") or 0) if isinstance(metadata, dict) and (metadata or {}).get("latency_ms") is not None else None,
             status or "not_configured",
             bool(fallback_used),
@@ -616,7 +670,7 @@ def record_call(
         ),
     )
     conn.commit()
-    if cost_tag and (status == "success" or int(cost_cents or 0) > 0):
+    if cost_tag and (status == "success" or int(micro or 0) > 0):
         try:
             provider_scope = _provider_budget_scope(provider)
             _budget_guard().record_cost(
@@ -624,7 +678,9 @@ def record_call(
                 cron_task=purpose,
                 ai_provider=provider or "unknown",
                 model_name=model or "",
-                cost_usd=float(cost_cents or 0) / 100,
+                # 精度:用 micro_usd 折算真实 USD,不再用被整除归零的 cost_cents/100(否则亚分调用
+                # 进 ai_cost_ledger 也恒 $0,scope 预算同样失真)。
+                cost_usd=float(micro or 0) / 1_000_000,
                 tokens_in=int(input_tokens or 0),
                 tokens_out=int(output_tokens or 0),
                 staff_id=resolve_staff_id(staff) or None,

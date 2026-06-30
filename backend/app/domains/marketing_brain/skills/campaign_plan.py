@@ -383,3 +383,14 @@ try:  # 模块导入即暴露 EVAL_CASES(EvalCase 可用时);否则留空 list,r
     EVAL_CASES: list[Any] = build_eval_cases()
 except Exception:
     EVAL_CASES = []
+
+
+def evaluate(*, suite: str = "campaign_plan_v1") -> dict[str, Any]:
+    """跑 EVAL_CASES,返回 EvalReport.to_dict()。结构启发式输出与活 DB 无关 → 诚实可复现命中。
+
+    零真 LLM(model_fn=None)、record=False 不落账、零触 viltrox_fit_score。
+    """
+    from app.domains.marketing_brain.evals import run_eval
+
+    report = run_eval(_eval_skill_fn, EVAL_CASES, default_metric=_schema_metric, suite=suite)
+    return report.to_dict()

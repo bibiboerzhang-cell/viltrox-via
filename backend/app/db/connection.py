@@ -95,6 +95,18 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "046_vkpi_settings.sql",
     "047_vkpi_user_preferences.sql",
     "048_vkpi_notification_settings.sql",
+    # 049-054: comment intelligence / sentiment / pillars / weekly reports stack.
+    # These create vkpi_comments, vkpi_sentiment_results, vkpi_pillars, vkpi_post_pillars,
+    # vkpi_weekly_reports and vkpi_comment_intelligence_runs (all still in active use by
+    # backend code) but were never registered here, so a fresh DB rebuild would miss them.
+    # All DDL is CREATE TABLE/INDEX IF NOT EXISTS and the 052 seed uses ON CONFLICT DO NOTHING,
+    # so re-registration is idempotent and zero-impact on already-applied databases.
+    # (050 was folded into 049 at authoring time; there is intentionally no 050 file.)
+    "049_vkpi_comments.sql",
+    "051_vkpi_sentiment.sql",
+    "052_vkpi_pillars.sql",
+    "053_vkpi_weekly_reports.sql",
+    "054_vkpi_comment_intelligence_runs.sql",
     "055_vkpi_industry_post_media.sql",
     "056_vkpi_job_runtime_extensions.sql",
     "057_vkpi_ai_cost_budget.sql",
@@ -248,6 +260,8 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "199_vkpi_skill_runs.sql",
     "200_vkpi_evidence_image_urls.sql",
     "201_apify_jobs_triage_status.sql",
+    "202_vkpi_market_observations.sql",
+    "203_vkpi_llm_calls_cost_micro_usd.sql",
 )
 
 try:

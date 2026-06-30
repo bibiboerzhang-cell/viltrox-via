@@ -319,3 +319,15 @@ EVAL_CASES: list[EvalCase] = [
         metric=_brief_completeness_metric,
     ),
 ]
+
+
+def evaluate(*, suite: str = "brief_generate_v1") -> dict[str, Any]:
+    """跑 EVAL_CASES,返回 EvalReport.to_dict()。
+
+    brief 走确定性模板(model_fn=None);_load_kol_profile 缺活 DB 时离线兜底为空档案,仍出完整模板 brief。
+    故 hit_rate 诚实可复现(与活库内容无关)。零真 LLM、record=False、零触 viltrox_fit_score。
+    """
+    from app.domains.marketing_brain.evals import run_eval
+
+    report = run_eval(_eval_skill_fn, EVAL_CASES, default_metric=_brief_completeness_metric, suite=suite)
+    return report.to_dict()

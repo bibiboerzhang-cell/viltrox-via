@@ -15,11 +15,15 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 观察快照表(迁移 202_vkpi_market_observations.sql)。落库为加性:实时合成路径不变。
+_TABLE = "vkpi_market_observations"
 
 # 观察类型(中文口径,与产品语言一致)
 KIND_HOT = "热点"
@@ -203,6 +207,140 @@ def _observe_from_bet_ledger() -> list[dict[str, Any]]:
     return [o for o in out if o]
 
 
+def _persist_observations(observations: list[dict[str, Any]]) -> int:
+    """把本批观察落库(加性、幂等)。同 topic+kind+当天 去重 upsert,刷新 evidence/confidence。
+
+    best-effort:表缺失 / DB 异常 → 静默返回 0,绝不影响实时返回路径。
+    纯文本观察写入,绝不触 viltrox_fit_score。
+    """
+    if not observations:
+        return 0
+    try:
+        from app.db.connection import get_conn, table_exists
+    except Exception:
+        logger.debug("market_observation.persist_import_failed", exc_info=True)
+        return 0
+    try:
+        if not table_exists(_TABLE):
+            return 0
+    except Exception:
+        logger.debug("market_observation.persist_table_check_failed", exc_info=True)
+        return 0
+
+    written = 0
+    try:
+        conn = get_conn()
+        for o in observations:
+            if not isinstance(o, dict):
+                continue
+            topic = _s(o.get("topic"), 200)
+            kind = o.get("kind") if o.get("kind") in _VALID_KINDS else KIND_HOT
+            if not topic:
+                continue
+            refs = o.get("evidence_refs")
+            refs = refs if isinstance(refs, list) else []
+            conf = o.get("confidence") if o.get("confidence") in (_CONF_HIGH, _CONF_MED, _CONF_LOW) else _CONF_MED
+            conn.execute(
+                f"INSERT INTO {_TABLE} "
+                f"(topic, kind, source, evidence_refs, confidence, suggested_action, generated_date) "
+                f"VALUES (?,?,?,?::jsonb,?,?,CURRENT_DATE) "
+                f"ON CONFLICT (topic, kind, generated_date) DO UPDATE SET "
+                f"source = excluded.source, evidence_refs = excluded.evidence_refs, "
+                f"confidence = excluded.confidence, suggested_action = excluded.suggested_action, "
+                f"updated_at = NOW()",
+                (
+                    topic,
+                    kind,
+                    _s(o.get("source"), 60),
+                    json.dumps(refs, ensure_ascii=False),
+                    conf,
+                    _s(o.get("suggested_action"), 240),
+                ),
+            )
+            written += 1
+        conn.commit()
+    except Exception:
+        logger.debug("market_observation.persist_failed", exc_info=True)
+        return 0
+    return written
+
+
+def list_observations_history(
+    kind: str | None = None, limit: int = 100
+) -> dict[str, Any]:
+    """读历史观察快照(只读)。按 generated_at 倒序;可选 kind 过滤。
+
+    best-effort:表缺失 / DB 异常 → 诚实返回空 observations。纯只读,绝不触 viltrox_fit_score。
+    """
+    try:
+        from app.db.connection import get_conn, table_exists
+    except Exception:
+        return {"status": "ok", "count": 0, "observations": [], "source": "history", "note": "history unavailable"}
+    try:
+        if not table_exists(_TABLE):
+            return {"status": "ok", "count": 0, "observations": [], "source": "history", "note": "snapshot table not present"}
+    except Exception:
+        return {"status": "ok", "count": 0, "observations": [], "source": "history", "note": "history unavailable"}
+
+    where, params = "", []
+    k = str(kind or "").strip()
+    if k in _VALID_KINDS:
+        where = "WHERE kind = ?"
+        params.append(k)
+    try:
+        lim = int(max(1, min(int(limit or 100), 500)))
+    except Exception:
+        lim = 100
+    try:
+        rows = get_conn().execute(
+            f"SELECT topic, kind, source, evidence_refs, confidence, suggested_action, "
+            f"generated_date, generated_at FROM {_TABLE} {where} "
+            f"ORDER BY generated_at DESC, id DESC LIMIT ?",
+            (*params, lim),
+        ).fetchall()
+    except Exception:
+        logger.debug("market_observation.history_read_failed", exc_info=True)
+        return {"status": "ok", "count": 0, "observations": [], "source": "history", "note": "history read failed"}
+
+    observations: list[dict[str, Any]] = []
+    by_kind: dict[str, int] = {}
+    for r in rows:
+        d = dict(r)
+        refs = d.get("evidence_refs")
+        if isinstance(refs, str):
+            try:
+                refs = json.loads(refs or "[]")
+            except Exception:
+                refs = []
+        if not isinstance(refs, list):
+            refs = []
+        gen_at = d.get("generated_at")
+        gen_date = d.get("generated_date")
+        k_val = d.get("kind") if d.get("kind") in _VALID_KINDS else KIND_HOT
+        observations.append(
+            {
+                "topic": _s(d.get("topic"), 200),
+                "kind": k_val,
+                "source": _s(d.get("source"), 60),
+                "evidence_refs": refs,
+                "confidence": d.get("confidence") or _CONF_MED,
+                "suggested_action": _s(d.get("suggested_action"), 240),
+                "generated_date": str(gen_date) if gen_date is not None else None,
+                "generated_at": gen_at.isoformat() if hasattr(gen_at, "isoformat") else (str(gen_at) if gen_at is not None else None),
+            }
+        )
+        by_kind[k_val] = by_kind.get(k_val, 0) + 1
+
+    return {
+        "status": "ok",
+        "count": len(observations),
+        "observations": observations,
+        "by_kind": by_kind,
+        "source": "history",
+        "note": "市场观察历史快照(只读累积);实时合成路径不变,零触 viltrox_fit_score。",
+    }
+
+
 def generate_observations(staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """N7 市场观察:只读合成 market_brain + competitor_radar + bet_ledger 真数据。
 
@@ -234,12 +372,16 @@ def generate_observations(staff: dict[str, Any] | None = None) -> dict[str, Any]
     for o in observations:
         by_kind[o["kind"]] = by_kind.get(o["kind"], 0) + 1
 
+    # 加性落库:本批观察持久化以累积历史(幂等 upsert);失败不影响实时返回。
+    persisted = _persist_observations(observations)
+
     return {
         "status": "ok",
         "count": len(observations),
         "observations": observations,
         "sources_used": sources_used,
         "by_kind": by_kind,
+        "persisted": persisted,
         "note": (
             "N7 市场观察:只读合成 market_brain/competitor_radar/bet_ledger 真数据;"
             "best-effort,无真数据诚实返回空,零臆造,零触 viltrox_fit_score。"

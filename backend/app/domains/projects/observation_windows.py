@@ -601,15 +601,56 @@ def list_content_posts(
     }
 
 
+def matched_content_posts_for_retrospective(
+    project_id: int,
+    conn: Any | None = None,
+) -> list[dict[str, Any]]:
+    """复盘聚合用:取项目下「人已确认匹配」的履约内容帖(status in matched/retrospective_ready)。
+
+    这是「复盘口径诚实化」的履约内容侧:retrospective_aggregate 原本只读 video_analysis_final_v1
+    视频证据,与 matched content_posts 解耦(会在 0 帖 0 窗口的项目上产出,高估履约成熟度)。
+    本函数把人工确认的真实履约内容也喂进复盘,二者都计入。
+
+    纯只读:只 SELECT vkpi_project_content_posts,绝不写任何表、绝不碰 viltrox_fit_score。
+    无 RBAC 收口(调用方 retrospective 已按 project_id 定向,worker 侧无 staff 上下文);
+    口径与按曝光降序选取一致,供聚合侧 Top-N 截断。
+    """
+    pid = int(project_id or 0)
+    if pid <= 0:
+        return []
+    own_conn = conn if conn is not None else get_conn()
+    if not table_exists("vkpi_project_content_posts"):
+        return []
+    rows = own_conn.execute(
+        """
+        SELECT id, project_id, assignment_id, kol_pool_id, evidence_id, platform,
+               content_url, title, caption, published_at, view_count, like_count,
+               comment_count, match_reason, status
+        FROM vkpi_project_content_posts
+        WHERE project_id = ? AND status IN ('matched', 'retrospective_ready')
+        ORDER BY view_count DESC, id ASC
+        """,
+        (pid,),
+    ).fetchall()
+    return [_row_to_post(r) for r in rows]
+
+
 def review_content_post(
     post_id: int,
     action: str,
     staff: dict[str, Any] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
-    """人工复核一条内容帖子候选 → 仅置本帖子行 status(matched/rejected/needs_review)。
+    """人工复核一条内容帖子候选 → 置本帖子行 status(matched/rejected/needs_review)。
 
-    红线:绝不连带改 project/assignment/cost/复盘——只动 vkpi_project_content_posts 这一行。
+    履约后半链做实(R-fulfill):action='matched' 时,**额外** backfill 对应活动观察窗口的
+    matched_content_post_id(让人工确认的候选真正挂回窗口,链路 content_post -> window 闭合),
+    使前端「窗口/匹配帖」一栏能反映真匹配,复盘聚合也能据此纳入已匹配履约内容。
+
+    红线:只动 vkpi_project_content_posts(本帖行 status)+ 仅在 matched 时回填该窗口行的
+    matched_content_post_id/status(展示态)。绝不改 project.stage/closed_at/assignment.stage/
+    cost_ledger/viltrox_fit_score。回填复用 _link_post_to_observation_window(同款匹配口径,
+    仅当窗口 matched_content_post_id 为 NULL 才写,不覆盖既有匹配)。
     RBAC:own-only 员工只能复核自己可见(负责/创建项目下)的帖子;管理层全可复核。
     """
     cid = int(post_id or 0)
@@ -621,11 +662,12 @@ def review_content_post(
 
     conn = get_conn()
     # RBAC 收口:复用 project_filter,确认 actor 能看到这条帖子所属项目,再放行复核。
+    # 同时取出帖子的 (project_id, assignment_id, kol_pool_id) 供 matched 时回填窗口。
     scope_sql, scope_params = scope.project_filter("p", staff)
     scope_clause = f"AND {scope_sql}" if scope_sql else ""
     target = conn.execute(
         f"""
-        SELECT c.id
+        SELECT c.id, c.project_id, c.assignment_id, c.kol_pool_id
         FROM vkpi_project_content_posts c
         JOIN vkpi_projects p ON p.id = c.project_id
         WHERE c.id = ? {scope_clause}
@@ -634,6 +676,7 @@ def review_content_post(
     ).fetchone()
     if target is None:
         return {"status": "error", "error": "post not found or out of scope"}
+    target_row = dict(target)
 
     updated_at = datetime.utcnow()
     cursor = conn.execute(
@@ -646,8 +689,29 @@ def review_content_post(
         (act, str(note or ""), str(note or ""), updated_at, cid),
     )
     row = cursor.fetchone()
+
+    # 履约后半链做实:人工确认 matched → 把帖子挂回对应活动观察窗口(set matched_content_post_id)。
+    # best-effort:回填失败不回滚已落库的 status 改动(帖已 matched,仍可手动再触发)。
+    linked_window_id: int | None = None
+    if act == "matched":
+        try:
+            linked_window_id = _link_post_to_observation_window(
+                conn,
+                project_id=int(target_row.get("project_id") or 0),
+                assignment_id=target_row.get("assignment_id"),
+                kol_pool_id=target_row.get("kol_pool_id"),
+                post_id=cid,
+            )
+        except Exception:
+            logger.warning("review matched -> window backfill failed (additive, suppressed)", exc_info=True)
+            linked_window_id = None
+
     conn.commit()
-    return {"status": "ok", "action": act, "post": _row_to_post(row)}
+    if act == "matched":
+        _emit_event("content.matched", entity_type="content_post", entity_id=cid,
+                    payload={"project_id": target_row.get("project_id"),
+                             "observation_window_id": linked_window_id})
+    return {"status": "ok", "action": act, "post": _row_to_post(row), "observation_window_id": linked_window_id}
 
 
 def advance_matched_posts_to_retrospective_ready(

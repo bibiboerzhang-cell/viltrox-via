@@ -1,5 +1,5 @@
 import React from "react";
-import EventsPage from "./pages/EventsPage.js";
+import EventsPage from "./pages/EventsPage";
 
 type UiStaff = {
   id: string;

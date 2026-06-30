@@ -79,6 +79,77 @@ def _clean_float(value: Any) -> float | None:
         return None
 
 
+# ── 编排器侧分发表(canonical SKILL_NAME -> run 函数)──────────────────────────
+# 背景:register_skill 只取「合并视图 / manifest」(声明,不执行)。要让编排器 / planner 真正
+# 「经 registry 选择并调用 skill」,这里补一个 dispatch 入口:按 canonical SKILL_NAME 找到对应
+# skill 模块的 run(input, ...),供 skill_orchestrator 在合适节点真调用(非仅人工 HTTP)。
+#
+# 口径与 api/routers/vkpi_skills.py 的 _build_dispatch 完全一致(以各模块 SKILL_NAME 为准,
+# 而非文件名)—— 单一真源在此,HTTP 路由可复用,避免两处口径漂移。
+# 红线:本表只「找函数」,不执行、不烧 LLM、不触 viltrox_fit_score;真执行由调用方决定 model_fn。
+_SKILL_MODULE_PATHS: tuple[str, ...] = (
+    "app.domains.marketing_brain.skills.creator_match",
+    "app.domains.marketing_brain.skills.brief_generate_v1",
+    "app.domains.marketing_brain.skills.content_score",
+    "app.domains.marketing_brain.skills.roi_review",
+    "app.domains.marketing_brain.skills.campaign_plan",
+)
+
+_DISPATCH_CACHE: dict[str, Any] | None = None
+
+
+def _load_dispatch() -> dict[str, Any]:
+    """惰性构建 {SKILL_NAME: run_fn}(惰性 import 避免 import 期循环依赖)。缓存一次。"""
+    global _DISPATCH_CACHE
+    if _DISPATCH_CACHE is not None:
+        return _DISPATCH_CACHE
+    import importlib
+
+    table: dict[str, Any] = {}
+    for path in _SKILL_MODULE_PATHS:
+        try:
+            mod = importlib.import_module(path)
+        except Exception:
+            logger.debug("skill_registry: skill module import skipped: %s", path, exc_info=True)
+            continue
+        name = str(getattr(mod, "SKILL_NAME", "") or "").strip()
+        run_fn = getattr(mod, "run", None)
+        if name and callable(run_fn):
+            table[name] = run_fn
+    _DISPATCH_CACHE = table
+    return table
+
+
+def available_skills() -> list[str]:
+    """编排器可调度的 canonical skill 名清单(排序稳定)。"""
+    return sorted(_load_dispatch().keys())
+
+
+def dispatch_skill(skill_name: str, skill_input: dict[str, Any] | None, *,
+                   model_fn: Any = None, record: bool = True) -> dict[str, Any]:
+    """编排器侧统一分发:按 canonical SKILL_NAME 调对应 skill.run(input, model_fn=, record=)。
+
+    这是「经 registry 调用 skill」的真入口(供 skill_orchestrator 用),区别于 register_skill(只声明)。
+    - 未知 skill → {status:'error', error:'unknown_skill', available:[...]},绝不抛;
+    - skill.run 抛错 → 兜成 {status:'error', error:...},绝不向上炸编排循环;
+    - model_fn 默认 None(走规则,不真烧 LLM);record 透传给 skill(由它 best-effort 落账本)。
+    红线:不触 viltrox_fit_score;skill 内部只读 fit 作展示信号。
+    """
+    name = str(skill_name or "").strip()
+    table = _load_dispatch()
+    run_fn = table.get(name)
+    if run_fn is None:
+        return {"status": "error", "error": "unknown_skill", "skill_name": name,
+                "available": sorted(table.keys())}
+    payload = skill_input if isinstance(skill_input, dict) else {}
+    try:
+        out = run_fn(payload, model_fn=model_fn, record=record)
+    except Exception as exc:  # 编排循环里单个 skill 跑挂不应炸整批
+        logger.warning("skill_registry.dispatch_skill failed: %s", name, exc_info=True)
+        return {"status": "error", "error": f"skill_run_failed: {str(exc)[:160]}", "skill_name": name}
+    return {"status": "ok", "skill_name": name, "output": out if isinstance(out, dict) else {"result": out}}
+
+
 def register_skill(skill_name: str, *, skill_version: str = "v1",
                    overlay: dict[str, Any] | None = None) -> dict[str, Any]:
     """取一个 skill 的合并视图:tool_registry 既有元数据 + 本地 overlay(version 等)。

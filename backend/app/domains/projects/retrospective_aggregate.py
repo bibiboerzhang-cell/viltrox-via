@@ -1,8 +1,11 @@
-"""Project-level retrospective aggregation (P5 批3).
+"""Project-level retrospective aggregation (P5 批3 + 履约口径诚实化).
 
-Aggregates every ready final_v1 video analysis for a project into one LLM-written
-project retrospective. Read-only on vkpi_analysis_cache(video); writes ONLY
-vkpi_analysis_cache(target_type='project', derive_method='project_retrospective_v1').
+Aggregates two evidence sources for a project into one LLM-written retrospective:
+- ready final_v1 video analysis (vkpi_analysis_cache, video);
+- 人工已确认匹配的履约内容帖 (vkpi_project_content_posts, status matched/retrospective_ready).
+Both are counted so the retrospective no longer can be produced on a 0-post 0-window
+project off video evidence alone (口径不再高估履约成熟度). Read-only on both sources;
+writes ONLY vkpi_analysis_cache(target_type='project', derive_method='project_retrospective_v1').
 
 Scoring freeze guarantees:
 - This module never SELECTs or UPDATEs vkpi_kol_pool, and never touches
@@ -63,20 +66,49 @@ def _compact_video_text(item: dict[str, Any]) -> str:
     return (head + body)[:PER_VIDEO_CHARS]
 
 
-def _build_prompt(project_id: int, selected: list[dict[str, Any]], totals: dict[str, Any]) -> str:
+def _compact_post_text(item: dict[str, Any]) -> str:
+    """Flatten one matched content_post row into a compact text block (履约内容侧)。"""
+    head = (
+        f"平台 {item.get('platform') or '-'} · 曝光 {item.get('view_count') or 0} · "
+        f"赞 {item.get('like_count') or 0} · 评论 {item.get('comment_count') or 0} · "
+        f"状态 {item.get('status') or '-'}\n"
+        f"标题: {item.get('title') or '-'}\n"
+        f"链接: {item.get('content_url') or '-'}\n"
+    )
+    caption = str(item.get("caption") or "").strip()
+    if caption:
+        head += f"文案: {caption}\n"
+    return head[:PER_VIDEO_CHARS]
+
+
+def _build_prompt(
+    project_id: int,
+    selected: list[dict[str, Any]],
+    totals: dict[str, Any],
+    posts: list[dict[str, Any]] | None = None,
+) -> str:
     blocks = []
     for idx, item in enumerate(selected, 1):
         blocks.append(f"[视频 {idx}]\n{_compact_video_text(item)}")
-    joined = "\n\n".join(blocks)
-    return f"""你是 Viltrox 营销团队的资深复盘分析师。基于以下同一个项目下所有 KOL 成品视频的 final_v1 分析结果,
-写一篇**项目级**复盘,只总结证据支持的事实,不编造数据,不给任何 0-100 的打分。
+    joined = "\n\n".join(blocks) or "(无 final_v1 视频证据)"
+    posts = posts or []
+    post_blocks = [f"[履约内容 {i}]\n{_compact_post_text(p)}" for i, p in enumerate(posts, 1)]
+    posts_joined = "\n\n".join(post_blocks) or "(无人工确认的履约内容帖)"
+    return f"""你是 Viltrox 营销团队的资深复盘分析师。基于以下同一个项目下的两类证据,写一篇**项目级**复盘,
+只总结证据支持的事实,不编造数据,不给任何 0-100 的打分。两类证据都要纳入考量:
+- 视频深析:KOL 成品视频的 final_v1 分析结果;
+- 履约内容:人工已确认匹配的履约内容帖(matched content posts,代表派单真落地为内容)。
 
 项目 ID: {project_id}
 纳入视频数: {len(selected)}(按曝光降序选取的 Top-N)
+纳入已匹配履约内容数: {len(posts)}
 合计曝光: {totals.get('views') or 0} · 合计互动: {totals.get('engagement') or 0}
 
 各视频分析(已截断):
 {joined}
+
+已匹配履约内容帖(人工确认,已截断):
+{posts_joined}
 
 只返回合法 JSON(不要 markdown 包裹),全部文本用简体中文:
 {{
@@ -212,19 +244,41 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
     conn = get_conn()
     data = cache_repo.list_project_video_analysis_cache(project_id, derive_method=SOURCE_DERIVE_METHOD, conn=conn)
     ready = [it for it in (data.get("items") or []) if it.get("state") == "ready" and it.get("entry")]
-    if not ready:
-        return {"status": "skipped", "reason": "no_ready_video_analysis", "project_id": int(project_id)}
+
+    # 复盘口径诚实化:除 final_v1 视频证据外,也纳入「人工已确认匹配」的履约内容帖。
+    # 二者都计入,避免在 0 帖 0 窗口的项目上凭空产复盘而高估履约成熟度。
+    from app.domains.projects import observation_windows
+
+    try:
+        matched_posts = observation_windows.matched_content_posts_for_retrospective(int(project_id), conn=conn)
+    except Exception:
+        logger.warning("matched content posts fetch failed (additive, suppressed)", exc_info=True)
+        matched_posts = []
+
+    if not ready and not matched_posts:
+        # 两侧都空才诚实跳过(原来只看视频证据,会漏掉「有履约内容但无视频深析」的项目;
+        # 反过来也保证「无任何证据」时不再凭空生成复盘)。
+        return {"status": "skipped", "reason": "no_evidence_and_no_matched_content", "project_id": int(project_id)}
 
     # F5 确定性选取:view_count 降序、平手按 evidence_id 升序,取 Top-N
     ready.sort(key=lambda it: (-(int(it.get("view_count") or 0)), int(it.get("evidence_id") or 0)))
     selected = ready[:TOP_N_VIDEOS]
     evidence_ids = [int(it.get("evidence_id")) for it in selected if it.get("evidence_id") is not None]
+
+    selected_posts = matched_posts[:TOP_N_VIDEOS]
+    post_ids = [int(p.get("id")) for p in selected_posts if p.get("id") is not None]
     totals = {
-        "views": sum(int(it.get("view_count") or 0) for it in selected),
-        "engagement": sum(int(it.get("like_count") or 0) + int(it.get("comment_count") or 0) for it in selected),
+        "views": (
+            sum(int(it.get("view_count") or 0) for it in selected)
+            + sum(int(p.get("view_count") or 0) for p in selected_posts)
+        ),
+        "engagement": (
+            sum(int(it.get("like_count") or 0) + int(it.get("comment_count") or 0) for it in selected)
+            + sum(int(p.get("like_count") or 0) + int(p.get("comment_count") or 0) for p in selected_posts)
+        ),
     }
 
-    prompt = _build_prompt(int(project_id), selected, totals)
+    prompt = _build_prompt(int(project_id), selected, totals, selected_posts)
     resp = llm_gateway.invoke(
         prompt,
         purpose="vkpi_project_retrospective",
@@ -234,7 +288,11 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
         preferred_provider="openai",
         cost_tag=BUDGET_SCOPE,
         staff=staff or {},
-        metadata={"project_id": int(project_id), "video_count": len(selected)},
+        metadata={
+            "project_id": int(project_id),
+            "video_count": len(selected),
+            "matched_post_count": len(selected_posts),
+        },
     )
     text = str(resp.get("text") or "").strip()
     if resp.get("status") != "success" or not text:
@@ -268,9 +326,12 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
         "provenance": {
             "video_count": len(selected),
             "evidence_ids": evidence_ids,
+            "matched_post_count": len(selected_posts),
+            "matched_post_ids": post_ids,
             "selection": "top_by_view_count",
             "top_n": TOP_N_VIDEOS,
             "source_derive_method": SOURCE_DERIVE_METHOD,
+            "source_includes": ["video_analysis_final_v1", "matched_content_posts"],
             "model": resp.get("model"),
             "provider": resp.get("provider"),
             "generated_at": utcnow(),
