@@ -80,6 +80,29 @@ def ensure_video_evidence_from_url(
         now=now,
         method=method,
     )
+    # 兜底:写入用的 content_url 是 metadata 规范化后的 canonical,可能与传入的 raw source_url 不同
+    # (典型:TikTok 链接带 ?is_from_webapp=/sender_device= 等查询串;按 raw 查不到、但 canonical 已存在)。
+    # content_url 是全局唯一约束,不按 canonical 兜底查一次就会 INSERT 撞
+    # vkpi_kol_video_evidence_content_url_key -> 整条 deep_crawl run 崩、前端啥都不出。
+    if not evidence:
+        canonical_url = _text(values.get("content_url"))
+        if canonical_url and canonical_url != video_url:
+            existing_canonical = _load_existing_evidence(db, canonical_url, kol_pool_id=int(kol_pool_id))
+            if existing_canonical:
+                if int(existing_canonical.get("kol_pool_id") or 0) != int(kol_pool_id):
+                    return {
+                        "ok": False,
+                        "dry_run": dry_run,
+                        "status": "conflict_existing_other_kol",
+                        "kol_pool_id": int(kol_pool_id),
+                        "existing_evidence_id": int(existing_canonical["id"]),
+                        "existing_kol_pool_id": int(existing_canonical["kol_pool_id"]),
+                        "source_url": video_url,
+                        "viltrox_fit_score_changed_ids": [],
+                        "viltrox_fit_score_untouched": True,
+                        "method": method,
+                    }
+                evidence = existing_canonical
     operation = "reuse_update" if evidence else "insert"
     planned_values = _actual_write_values(values, operation=operation)
     before_scores = _score_snapshot(db, [int(kol_pool_id)])
