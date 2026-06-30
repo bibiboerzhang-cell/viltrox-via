@@ -21,6 +21,8 @@ from app.api.routers import dashboard_account_picker
 from app.api.routers import vkpi_kol_portal
 from app.api.routers import vkpi_skills
 from app.api.routers import vkpi_analytics_export
+from app.api.routers import vkpi_launch
+from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -788,6 +790,8 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_attribution_metrics.router)
     app.include_router(vkpi_audit.router)
     app.include_router(vkpi_budgets.router)
+    app.include_router(vkpi_launch.router)
+    app.include_router(vkpi_triage.router)
     app.include_router(vkpi_comments.router)
     app.include_router(vkpi_comment_intelligence.router)
     app.include_router(vkpi_costs.router)

@@ -136,6 +136,10 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
           updateEvent(token, ev.id, { team_ids: newTeamIds }) // 落库(原仅本地 state，刷新即丢=数据丢失 bug)
             .catch(err => { setLoadError("团队更新失败:" + String(err && err.message ? err.message : err)); });
         },
+        // 复盘 tab 已落库的结果/状态:把后端真值同步进列表(banner/卡片即时反映,非等整页刷新)
+        onEventPatched: (uiRow) => {
+          if (uiRow && uiRow.id) setEvents(prev => prev.map(x => x.id === uiRow.id ? { ...x, ...uiRow } : x));
+        },
         stock, setStock,
       }),
       editingEvent && e(NewEventModal, {

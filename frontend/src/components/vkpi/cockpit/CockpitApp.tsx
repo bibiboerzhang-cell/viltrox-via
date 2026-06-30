@@ -25,7 +25,7 @@ import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
-import { TaskProgressBoard } from "./components/TaskProgressBoard";
+import { useWorkflowRunsStream } from "./useWorkflowRunsStream";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 // 模态 / popover / ReportPanel / SettingsPage / logout/resolve/staff-group api 已随 CockpitOverlays 抽到 CockpitApp.Sections.tsx。
@@ -224,6 +224,10 @@ export function CockpitApp(props: any = {}) {
     dashboardLoading,
     dashboardError,
   } = useCockpitRuntime({ apiToken, userName, userRole, userAvatar, starredProjects: dashboardData.starredProjects || [] });
+  // 10C 状态同源:在 App 层持有唯一的 workflow_runs 轮询流(5s 间隔 + 可见性节流 + 卸载清理),
+  // 作为任务进度的统一数据源向下透传。后台任务推进/完成时该流自动刷新 → TaskProgressBoard 自动重渲染,
+  // 无需手动刷新。CockpitSidebar 把 taskStream 透传给 TaskProgressBoard(未拿到时该板内部自起兜底实例)。
+  const taskStream = useWorkflowRunsStream(apiToken, { intervalMs: 5000, limit: 30, recentMinutes: 5 });
   const activeStaffId = viewingAs ? viewingAs.id : currentUser.id;
   const activeReminders = useMemo(() => viewingAs ? [] : runtimeReminders, [viewingAs, runtimeReminders]);
   // Real staff (17) adapted to the UI shape the team/group/events modals expect.
@@ -561,6 +565,7 @@ export function CockpitApp(props: any = {}) {
       // ─── Sidebar ───(保守拆:纯展示叶子区块抽到 CockpitSidebar,props 显式传递,行为不变)
       e(CockpitSidebar, {
         collapsed, setCollapsed, activeNav, setActiveNav, theme, setTheme, versionBadge, apiToken,
+        taskStream,
       }),
 
       // ─── Main ───

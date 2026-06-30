@@ -1,8 +1,13 @@
 // 纯重构:从 ProjectDetailView.tsx 抽出的纯展示区块(只吃 props,零 state/effect/hook)。
 // JSX 逐字搬运,行为零变。所有 state/逻辑/handler 留主函数,经 prop 下传。
 
+import { useCallback, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { VkpiKolOption, VkpiPlatform, VkpiProjectDetail, VkpiProjectRow, VkpiStaffMember } from '../../vkpiTypes';
+import {
+  generateLaunchPlan,
+  type VkpiLaunchPlan,
+} from '../../../../services/vkpi/launch-api';
 import {
   CampaignAnalyticsTab,
   CampaignContractsTab,
@@ -118,6 +123,122 @@ export interface ProjectDetailTabContentProps {
   deleteContractArchive: (contractId: number, fileName?: string) => void;
 }
 
+// N3 Launch 计划面板:仅 source_type='launch' 项目展示。自管 state(busy/plan/error),
+// 点按钮 → POST /api/admin/vkpi/launch/{project_id}/plan → 渲染 KOL 候选 / 内容验证任务 / 观察窗口。
+function LaunchPlanPanel({ projectId, apiToken }: { projectId: string; apiToken?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [plan, setPlan] = useState<VkpiLaunchPlan | null>(null);
+  const [error, setError] = useState<string>('');
+
+  const onGenerate = useCallback(async () => {
+    if (!apiToken) {
+      setError('缺少登录凭证,无法生成 Launch 计划。');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const result = await generateLaunchPlan(apiToken, projectId);
+      setPlan(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成 Launch 计划失败。');
+    } finally {
+      setBusy(false);
+    }
+  }, [apiToken, projectId]);
+
+  const candidates = plan?.kol_candidates;
+  const tasks = plan?.content_validation_tasks ?? [];
+  const windows = plan?.observation_windows ?? [];
+
+  return (
+    <section className="vkpi-launch-plan-panel" style={{ marginBottom: 16, padding: 16, border: '1px solid var(--vkpi-border, #e2e8f0)', borderRadius: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Launch 计划</h3>
+          <p style={{ margin: '4px 0 0', fontSize: 13, opacity: 0.75 }}>
+            为新品 Launch 项目生成 KOL 候选、内容验证任务与观察窗口(只读,不写库)。
+          </p>
+        </div>
+        <button className="is-primary" type="button" disabled={busy} onClick={onGenerate}>
+          {busy ? '生成中…' : plan ? '重新生成 Launch 计划' : '生成 Launch 计划'}
+        </button>
+      </div>
+
+      {error ? <p style={{ marginTop: 12, color: 'var(--vkpi-danger, #dc2626)', fontSize: 13 }}>{error}</p> : null}
+
+      {plan ? (
+        <div style={{ marginTop: 16, display: 'grid', gap: 16 }}>
+          <div style={{ fontSize: 13, opacity: 0.75 }}>
+            产品查询:<strong>{plan.product_query || '—'}</strong> · 生成时间 {plan.generated_at}
+          </div>
+
+          <div>
+            <h4 style={{ margin: '0 0 8px' }}>
+              KOL 候选({plan.summary.candidate_count})
+            </h4>
+            {candidates && !candidates.available ? (
+              <p style={{ fontSize: 13, opacity: 0.7 }}>候选暂不可用:{candidates.reason || '前置条件未就绪'}</p>
+            ) : candidates && candidates.items.length ? (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', opacity: 0.7 }}>
+                    <th style={{ padding: '4px 8px' }}>#</th>
+                    <th style={{ padding: '4px 8px' }}>名称</th>
+                    <th style={{ padding: '4px 8px' }}>平台</th>
+                    <th style={{ padding: '4px 8px' }}>账号</th>
+                    <th style={{ padding: '4px 8px' }}>国家</th>
+                    <th style={{ padding: '4px 8px' }}>评分</th>
+                    <th style={{ padding: '4px 8px' }}>需人工</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candidates.items.map((item, idx) => (
+                    <tr key={`${item.kol_pool_id ?? item.kol_entity_uid ?? idx}`} style={{ borderTop: '1px solid var(--vkpi-border, #e2e8f0)' }}>
+                      <td style={{ padding: '4px 8px' }}>{item.rank ?? idx + 1}</td>
+                      <td style={{ padding: '4px 8px' }}>{item.display_name || '—'}</td>
+                      <td style={{ padding: '4px 8px' }}>{item.platform || '—'}</td>
+                      <td style={{ padding: '4px 8px' }}>{item.handle || '—'}</td>
+                      <td style={{ padding: '4px 8px' }}>{item.country || '—'}</td>
+                      <td style={{ padding: '4px 8px' }}>{item.score ?? '—'}</td>
+                      <td style={{ padding: '4px 8px' }}>{item.review_required ? '是' : '否'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p style={{ fontSize: 13, opacity: 0.7 }}>暂无候选。</p>
+            )}
+          </div>
+
+          <div>
+            <h4 style={{ margin: '0 0 8px' }}>内容验证任务({plan.summary.content_task_count})</h4>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+              {tasks.map((task) => (
+                <li key={task.sequence} style={{ marginBottom: 4 }}>
+                  {task.hypothesis}
+                  {task.target_audience ? <span style={{ opacity: 0.7 }}> · 受众:{task.target_audience}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <h4 style={{ margin: '0 0 8px' }}>观察窗口({plan.summary.observation_window_count})</h4>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+              {windows.map((win, idx) => (
+                <li key={`${win.market}-${idx}`} style={{ marginBottom: 4 }}>
+                  {win.market} · {win.duration_days} 天
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
   const {
     activeTab,
@@ -182,8 +303,11 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
     deleteContractArchive,
   } = props;
 
+  const isLaunchProject = String((detail?.project as Record<string, unknown> | undefined)?.source_type ?? '') === 'launch';
+
   return (
     <>
+      {isLaunchProject ? <LaunchPlanPanel projectId={project.id} apiToken={apiToken} /> : null}
       {activeTab === '参与 KOL' ? (
         <ProjectParticipationTab
           apiToken={apiToken}

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Archived legacy JSX block extracted verbatim from ShopifyHubPage.tsx (Region ①).
 // This was ALREADY dead code — a commented-out /* ... */ rollback copy of the old
 // GOAFFPRO config card (now living in settings/GoaffproConnectCard.tsx). Moved here

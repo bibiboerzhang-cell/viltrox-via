@@ -31,6 +31,7 @@ import {
   listRecentExecutionLedger,
   snoozeAction,
 } from "../../../../services/vkpi/actionInbox-api";
+import type { ActionInboxTodaySummary } from "../../../../services/vkpi/actionInbox-api";
 
 const e = React.createElement;
 
@@ -91,6 +92,8 @@ export function ActionInboxPanel({
   const [error, setError] = React.useState("");
   const [scope, setScope] = React.useState("");
   const [available, setAvailable] = React.useState(true);
+  // 灌水可见化:当天已执行 / 已批准计数(来自 inbox 响应的 today_summary,执行后增长)。
+  const [todaySummary, setTodaySummary] = React.useState<ActionInboxTodaySummary | null>(null);
   // per-id 操作态:'approve' | 'dismiss' | 'snooze' | 'execute' | undefined。
   const [busy, setBusy] = React.useState<Record<string, any>>({});
   const [actionError, setActionError] = React.useState("");
@@ -132,6 +135,8 @@ export function ActionInboxPanel({
         setItems(merged);
         setScope(sug?.scope || appr?.scope || "");
         setAvailable(sug?.available !== false);
+        // 当天闭环计数:两个响应同源(scope 一致),取任一存在的即可。
+        setTodaySummary(sug?.today_summary ?? appr?.today_summary ?? null);
       })
       .catch((err) => {
         setError(err?.message || "加载失败");
@@ -151,6 +156,14 @@ export function ActionInboxPanel({
   // 本地置态:approve 后不移除,改 status=approved 让「执行」第二步钮露出(两步分明)。
   const setItemStatus = React.useCallback((id: any, status: string) => {
     setItems((prev) => prev.map((it: any) => (it.id === id ? { ...it, status } : it)));
+  }, []);
+
+  // 灌水可见化:操作成功后乐观自增当天计数(下次 load 会被后端真值校正)。
+  const bumpToday = React.useCallback((key: keyof ActionInboxTodaySummary) => {
+    setTodaySummary((prev) => {
+      const base = prev ?? { today_executed_count: 0, today_approved_count: 0 };
+      return { ...base, [key]: (base[key] || 0) + 1 };
+    });
   }, []);
 
   // R7:回读最近执行台账(只读 vkpi_action_execution_ledger)。
@@ -208,6 +221,7 @@ export function ActionInboxPanel({
               setOkNote(`已执行 · ${label}${ckStr}${lid}`);
               setActionError("");
               removeItem(it.id);
+              bumpToday("today_executed_count"); // 当天「已执行」+1(即时增长)
               if (ledgerOpen) loadLedger();
               return;
             }
@@ -224,6 +238,7 @@ export function ActionInboxPanel({
           if (kind === "approve") {
             // 人审通过 → 本地转 approved,露出「执行」按钮(第二步)。
             setItemStatus(it.id, "approved");
+            bumpToday("today_approved_count"); // 当天「已批准」+1(即时增长)
           } else {
             // snooze / dismiss → 离开列表。
             removeItem(it.id);
@@ -238,7 +253,7 @@ export function ActionInboxPanel({
           }),
         );
     },
-    [apiToken, busy, removeItem, setItemStatus, ledgerOpen, loadLedger],
+    [apiToken, busy, removeItem, setItemStatus, bumpToday, ledgerOpen, loadLedger],
   );
 
   const headerRight = loading
@@ -471,6 +486,34 @@ export function ActionInboxPanel({
 
   const scopeLabel = scope === "all" ? "公司全局" : scope === "own" ? "仅我负责的" : "";
 
+  // 灌水可见化:面板顶部一行小统计「今日已执行 N 条 / 已批准 M 条」(闭环在转的即时反馈)。
+  const todayStrip =
+    todaySummary && available
+      ? e(
+          "div",
+          {
+            className:
+              "mb-2 flex items-center gap-3 rounded-md border border-emerald-500/15 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[10px]",
+          },
+          e(
+            "span",
+            { className: "flex items-center gap-1 text-emerald-300/90" },
+            e(Check, { size: 11, className: "shrink-0" }),
+            "今日已执行 ",
+            e("span", { className: "font-semibold text-emerald-200" }, String(todaySummary.today_executed_count)),
+            " 条",
+          ),
+          e("span", { className: "text-slate-600" }, "/"),
+          e(
+            "span",
+            { className: "flex items-center gap-1 text-sky-300/90" },
+            "已批准 ",
+            e("span", { className: "font-semibold text-sky-200" }, String(todaySummary.today_approved_count)),
+            " 条",
+          ),
+        )
+      : null;
+
   return e(
     motion.div,
     {
@@ -498,6 +541,8 @@ export function ActionInboxPanel({
       ),
       headerRight,
     ),
+    // 灌水可见化:今日已执行 / 已批准计数(执行后即时增长)
+    todayStrip,
     body,
     // R7 执行成功绿色提示
     okNote

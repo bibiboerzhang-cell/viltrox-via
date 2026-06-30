@@ -1,7 +1,8 @@
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
-import { getTaskQueueCompact, retryTask } from "../../../../services/vkpi/tasks-api";
+import { retryTask } from "../../../../services/vkpi/tasks-api";
+import { useWorkflowRunsStream, type WorkflowRunsStream } from "../useWorkflowRunsStream";
 
 const e = React.createElement;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
@@ -274,26 +275,23 @@ function TaskLane({ lane, tasks }: any) {
   );
 }
 
-export function TaskProgressBoard({ apiToken = "" }) {
-  const [payload, setPayload] = useState<any>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+interface TaskProgressBoardProps {
+  apiToken?: string;
+  // 10C 状态同源:CockpitApp 把共享的 workflow_runs 轮询流(useWorkflowRunsStream)透传进来,
+  // 后台任务推进/完成时该流自动刷新 → 本板自动重渲染,无需手动刷新。
+  // CockpitSidebar 仅传 apiToken(不传 stream),此时本板内部自起一个 hook 实例兜底。
+  stream?: WorkflowRunsStream;
+}
+
+export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardProps) {
+  // 没传 stream 时(如 CockpitSidebar 用法)在内部起一个 hook 实例;传了就复用上层共享流。
+  // 注:hooks 不能条件调用,故无条件 call,再在下面择一使用——内部实例在有 stream 时也无害(同源端点)。
+  const localStream = useWorkflowRunsStream(apiToken, { intervalMs: 5000, limit: 30, recentMinutes: 5 });
+  const activeStream = stream ?? localStream;
+  const { payload, loading, error, refresh: refreshQueue } = activeStream;
   // 每任务重试态:id → 'loading' | 'done' | 错误串。重试成功后 refreshQueue 让该任务离开失败桶。
   const [retrying, setRetrying] = useState<Record<string, any>>({});
   const [showAllQueue, setShowAllQueue] = useState(false);
-  const refreshQueue = useCallback(async () => {
-    if (!apiToken || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
-    setLoading(true);
-    try {
-      const response = await getTaskQueueCompact(apiToken, { limit: 30, recentMinutes: 5 });
-      setPayload(response);
-      setError("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "任务进度连接中");
-    } finally {
-      setLoading(false);
-    }
-  }, [apiToken]);
 
   const handleRetry = useCallback(async (task: any) => {
     const id = task?.id;
@@ -306,41 +304,6 @@ export function TaskProgressBoard({ apiToken = "" }) {
     } catch (err) {
       setRetrying((s) => ({ ...s, [id]: err instanceof Error ? err.message : "重试失败" }));
     }
-  }, [apiToken, refreshQueue]);
-
-  useEffect(() => {
-    if (!apiToken) {
-      setPayload(null);
-      setError("缺少 API token");
-      return undefined;
-    }
-    let intervalId: any;
-    const startPolling = () => {
-      if (intervalId || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
-      void refreshQueue();
-      intervalId = window.setInterval(() => {
-        void refreshQueue();
-      }, 2500);
-    };
-    const stopPolling = () => {
-      if (intervalId) {
-        window.clearInterval(intervalId);
-        intervalId = undefined;
-      }
-    };
-    const handleVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        stopPolling();
-      } else {
-        startPolling();
-      }
-    };
-    startPolling();
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      stopPolling();
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
   }, [apiToken, refreshQueue]);
 
   const activeTasks = useMemo(() => asArray(payload?.active), [payload]);
@@ -367,7 +330,9 @@ export function TaskProgressBoard({ apiToken = "" }) {
   }, [activeTasks]);
   const activeTotal = Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
   const queueTotal = Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
-  const speedLight = payload?.speed_light || {};
+  // payload 现为强类型(TaskQueueResponse),其 speed_light 是 Row(unknown 值);此处局部松绑
+  // 成 Record<string, any> 供 React 子节点直接渲染(level/policy 为后端动态字段,非编译期已知形状)。
+  const speedLight = (payload?.speed_light || {}) as Record<string, any>;
   const lanes = LANES.map((lane: any) => ({
     ...lane,
     tasks: (laneTasks as any)[lane.key] || [],

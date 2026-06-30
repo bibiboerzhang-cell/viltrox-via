@@ -15,10 +15,11 @@ import BudgetExpensesTab from "../tabs/BudgetExpensesTab.js";
 import KolsTab from "../tabs/KolsTab.js";
 import MaterialsTab from "../tabs/MaterialsTab.js";
 import OverviewTab from "../tabs/OverviewTab.js";
+import RetroTab from "../tabs/RetroTab.js";
 import TasksTab from "../tabs/TasksTab.js";
 
 const e = React.createElement;
-export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDelete, onUpdateTeam, stock, setStock, staff = [], token }) {
+export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDelete, onUpdateTeam, onEventPatched, stock, setStock, staff = [], token }) {
   const [tab, setTab] = useState("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);  // 分享 modal(成员管理走真后端)
@@ -186,7 +187,7 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
     tab === "kols"      && e(KolsTab, { ev, token, invites: detail.invites, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "materials" && e(MaterialsTab, { ev, stock, token, materials: detail.materials, products: detail.products, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "onsite"    && e(PlaceholderTab, { icon: Activity, title: "现场数据 (Event 进行中才激活)", message: "到场人数 / Lead 收集 / 现场销售 / 媒体到访 / KOL 内容产出 · 真接入时实时同步现场签到 iPad" }),
-    tab === "retro"     && e(PlaceholderTab, { icon: BookOpen, title: "复盘 (Event 结束后生成)", message: "投入 vs 产出 · ROI 计算 · 高光 + 痛点 · AI 起草复盘文档" }),
+    tab === "retro"     && e(RetroTab, { ev, token, reload: reloadDetail, onEventPatched }),
 
     // 分享 modal(成员管理走真后端 share-members)
     shareOpen && e(ShareModal, {

@@ -200,6 +200,80 @@ def generate_daily_action_inbox(
     }
 
 
+# ── 今日闭环计数(只读统计;灌水可见化) ──────────────────────────────
+def today_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """当天已执行 / 已批准计数(scope 同 list_inbox;成员只算自己 owner 的)。
+
+    today_executed_count:今天真跑成功的动作数 —— 读 vkpi_action_execution_ledger
+      (mode='executed' + outcome='success' + created_at::date=CURRENT_DATE)。这是
+      闭环"在转"的硬证据(execute 后立增)。成员按 JOIN inbox.owner_staff_id 收口。
+    today_approved_count:今天通过人审的动作数 —— 读 vkpi_action_inbox 当天 updated_at
+      且 status 已越过 'approved' 关口(approved/executed/failed 三态之一)。
+
+    红线:全程只读两张自身台账表,绝不写;不碰 viltrox_fit_score / rule_v0。
+    缺表 / 任意异常 → 返回 0(诚实降级,不拖垮 inbox 列表)。
+    """
+    out = {"today_executed_count": 0, "today_approved_count": 0}
+    if not table_exists(_TABLE):
+        return out
+    conn = get_conn()
+    can_all = scope.can_view_all(staff)
+    actor = int(scope.actor_staff_id(staff))
+
+    # 今日已执行:执行台账里今天成功落的 executed 行。
+    if table_exists(_LEDGER):
+        try:
+            if can_all:
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS n FROM {_LEDGER}
+                    WHERE mode = 'executed' AND outcome = 'success'
+                      AND created_at::date = CURRENT_DATE
+                    """,
+                ).fetchone()
+            else:
+                # 成员:只算归属自己 owner 的 action 的执行行(run 级 action_id NULL 不计)。
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS n FROM {_LEDGER} l
+                    JOIN {_TABLE} a ON a.id = l.action_id
+                    WHERE l.mode = 'executed' AND l.outcome = 'success'
+                      AND l.created_at::date = CURRENT_DATE
+                      AND a.owner_staff_id = ?
+                    """,
+                    (actor,),
+                ).fetchone()
+            out["today_executed_count"] = int(dict(row).get("n") or 0) if row else 0
+        except Exception:
+            logger.warning("action_inbox.today_executed_count_failed", exc_info=True)
+
+    # 今日已批准:今天 updated_at 且已越过人审关口(approved 及其后续 executed/failed)。
+    try:
+        if can_all:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM {_TABLE}
+                WHERE status IN ('approved', 'executed', 'failed')
+                  AND updated_at::date = CURRENT_DATE
+                """,
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n FROM {_TABLE}
+                WHERE status IN ('approved', 'executed', 'failed')
+                  AND updated_at::date = CURRENT_DATE
+                  AND owner_staff_id = ?
+                """,
+                (actor,),
+            ).fetchone()
+        out["today_approved_count"] = int(dict(row).get("n") or 0) if row else 0
+    except Exception:
+        logger.warning("action_inbox.today_approved_count_failed", exc_info=True)
+
+    return out
+
+
 # ── 读取(scope-gated) ────────────────────────────────────────────────
 def list_inbox(
     staff: dict[str, Any] | None = None,
@@ -263,6 +337,8 @@ def list_inbox(
         "count": len(items),
         "by_category": counts,
         "scope": "all" if scope.can_view_all(staff) else "own",
+        # 灌水可见化:当天闭环计数(已执行 / 已批准),纯加字段、scope 同上、只读统计。
+        "today_summary": today_summary(staff),
     }
 
 

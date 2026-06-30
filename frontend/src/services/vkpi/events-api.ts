@@ -276,6 +276,78 @@ export async function getEventDetail(
   );
 }
 
+// ── Retrospective(复盘:聚合只读 + 结果回填 + 定格快照)─────────────────────────
+// 后端 retrospective.py:GET /retrospective(实时聚合)、GET /retrospective/latest
+// (最近定格快照,无则回退实时)、POST /retrospective/finalize(落库快照)。
+// 结果字段(roi/leads/videos/retrospective)的真持久化走 updateEvent(PATCH /{id}),
+// 后端 _EVENT_UPDATABLE 已含这 4 列 + status,改了即落库,刷新仍在。
+
+export interface VkpiEventRetro {
+  status?: string;
+  event_id?: string;
+  title?: string;
+  event_status?: string;
+  start_date?: string;
+  end_date?: string;
+  budget?: { budget_total_cents?: number | null; actual_spend_cents?: number | null };
+  tasks?: { total?: number | null; done?: number | null; pending?: number | null };
+  kol?: { invited?: number | null; invited_kols_count?: number | null };
+  results?: {
+    roi?: number | null;
+    leads?: number | null;
+    videos?: number | null;
+    retrospective?: string | null;
+  };
+  related_project_ids?: string[];
+  missing_data?: string[];
+  completeness?: number;
+  note?: string;
+}
+
+export interface VkpiEventRetroLatest {
+  source: "finalized_snapshot" | "live_aggregate" | string;
+  retrospective_id?: number;
+  finalized_at?: string;
+  finalized_by?: number | null;
+  snapshot: VkpiEventRetro;
+}
+
+/** GET 实时复盘聚合(预算/任务/KOL/结果/待补数据/完整度,只读)。 */
+export async function getEventRetrospective(
+  token: string,
+  eventId: string,
+): Promise<VkpiEventRetro> {
+  return apiFetch<VkpiEventRetro>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/retrospective`,
+    {},
+    token,
+  );
+}
+
+/** GET 最近一次定格复盘快照(无则回退实时聚合,带 source 标记)。 */
+export async function getEventRetrospectiveLatest(
+  token: string,
+  eventId: string,
+): Promise<VkpiEventRetroLatest> {
+  return apiFetch<VkpiEventRetroLatest>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/retrospective/latest`,
+    {},
+    token,
+  );
+}
+
+/** POST 定格复盘:把当前聚合落库一行快照(vkpi_event_retrospectives)。 */
+export async function finalizeEventRetrospective(
+  token: string,
+  eventId: string,
+): Promise<VkpiEventRetro & { finalized?: boolean; retrospective_id?: number; finalized_at?: string; reason?: string }> {
+  return apiFetch(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/retrospective/finalize`,
+    { method: "POST" },
+    token,
+  );
+}
+
 export async function addEventTask(
   token: string,
   eventId: string,

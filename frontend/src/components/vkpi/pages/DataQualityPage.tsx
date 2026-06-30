@@ -9,6 +9,7 @@ import {
 } from '../../../domains/data-quality';
 import { SeverityBadge } from '../shared/SeverityBadge';
 import { PageShell } from './PageShell';
+import { listTriageJobs, requeueTriageJob, type TriageJob } from '../../../services/vkpi/triage-api';
 
 interface DataQualityPageProps {
   apiToken?: string;
@@ -81,6 +82,9 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
   const [brandSignalLoading, setBrandSignalLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [triageJobs, setTriageJobs] = useState<TriageJob[]>([]);
+  const [triageLoading, setTriageLoading] = useState(false);
+  const [triageRequeuingId, setTriageRequeuingId] = useState<number | null>(null);
   const {
     errorMessage,
     loading: qualityLoading,
@@ -165,7 +169,36 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
     }
   };
 
+  const refreshTriageJobs = async () => {
+    if (!apiToken || viewMode !== 'manager') return;
+    setTriageLoading(true);
+    try {
+      const response = await listTriageJobs(apiToken, 100);
+      setTriageJobs(response.items || []);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '失败 Triage 队列读取失败');
+    } finally {
+      setTriageLoading(false);
+    }
+  };
+
+  const requeueTriage = async (jobId: number) => {
+    if (!apiToken) return;
+    setTriageRequeuingId(jobId);
+    setMessage('');
+    try {
+      await requeueTriageJob(apiToken, jobId);
+      setMessage(`任务 #${jobId} 已重新入队, worker 将再次尝试。`);
+      await refreshTriageJobs();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '重新入队失败');
+    } finally {
+      setTriageRequeuingId(null);
+    }
+  };
+
   useEffect(() => { void refreshBrandSignals(); }, [apiToken, viewMode, brandSignalStatus, brandSignalRole, brandSignalType]);
+  useEffect(() => { void refreshTriageJobs(); }, [apiToken, viewMode]);
 
   if (viewMode !== 'manager') {
     return (
@@ -245,6 +278,50 @@ export function DataQualityPage({ apiToken, viewMode }: DataQualityPageProps) {
                 </tr>
               )) : (
                 <tr><td className="vkpi-table-empty" colSpan={6}>{brandSignalLoading ? '正在读取品牌信号...' : '当前筛选下没有品牌信号。'}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="vkpi-card vkpi-table-card">
+        <div className="vkpi-table-card__header">
+          <div>
+            <h2>失败 Triage 队列</h2>
+            <span>{triageJobs.length} 条待人工</span>
+          </div>
+          <div className="vkpi-table-actions">
+            <button className="vkpi-button vkpi-button--small" type="button" disabled={triageLoading || !apiToken} onClick={() => void refreshTriageJobs()}>
+              {triageLoading ? '读取中' : '刷新'}
+            </button>
+          </div>
+        </div>
+        <div className="vkpi-table-wrap">
+          <table className="vkpi-table">
+            <thead><tr><th>ID</th><th>分类</th><th>目标 URL</th><th>失败原因</th><th>时间</th><th>操作</th></tr></thead>
+            <tbody>
+              {triageJobs.length ? triageJobs.map((job) => (
+                <tr key={job.id}>
+                  <td>#{job.id}{job.job_type ? <><br /><small>{job.job_type}</small></> : null}</td>
+                  <td>{job.category || '-'}</td>
+                  <td>
+                    {job.url ? <a href={job.url} target="_blank" rel="noreferrer">打开</a> : '-'}
+                    {job.url ? <><br /><small className="vkpi-text-truncate">{job.url}</small></> : null}
+                  </td>
+                  <td><small>{job.error || '-'}</small></td>
+                  <td>{formatDateTime(job.updated_at)}</td>
+                  <td>
+                    <button
+                      className="vkpi-button vkpi-button--small"
+                      type="button"
+                      disabled={triageRequeuingId === job.id || triageLoading}
+                      onClick={() => void requeueTriage(job.id)}
+                    >
+                      {triageRequeuingId === job.id ? '入队中' : '重新入队'}
+                    </button>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td className="vkpi-table-empty" colSpan={6}>{triageLoading ? '正在读取失败 Triage 队列...' : '当前没有待人工处理的失败任务。'}</td></tr>
               )}
             </tbody>
           </table>

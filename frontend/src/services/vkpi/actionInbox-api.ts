@@ -37,6 +37,12 @@ export interface ActionInboxItem {
   updated_at: string;
 }
 
+// 灌水可见化:当天闭环计数(后端只读统计 vkpi_action_inbox/ledger;旧后端无此字段时缺省)。
+export interface ActionInboxTodaySummary {
+  today_executed_count: number;
+  today_approved_count: number;
+}
+
 export interface ActionInboxResponse {
   items: ActionInboxItem[];
   available: boolean;
@@ -44,6 +50,7 @@ export interface ActionInboxResponse {
   by_category?: Record<string, number>;
   scope?: "all" | "own" | string;
   reason?: string;
+  today_summary?: ActionInboxTodaySummary;
 }
 
 export async function listActionInbox(

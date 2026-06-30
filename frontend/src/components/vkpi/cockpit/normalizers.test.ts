@@ -7,7 +7,16 @@ import {
   normalizeTopMovers,
 } from "./normalizers";
 
-// P2-6: cockpit normalizers 纯归一化逻辑(源 @ts-nocheck,无网络)。
+// 源 normalizers.ts 的 `items = []` / `kolRows = []` 默认参被 TS 推断为 never[]
+// (源文件无类型注解,且不在本 lane 可改范围)。测试侧用 row 数组喂入是预期用法,
+// 这里把行数据声明为 Row[] 再经 Parameters<> 桥接到形参类型,既不放宽源签名也无 any。
+type Row = Record<string, unknown>;
+const asCalendarItems = (rows: Row[]): Parameters<typeof latestCalendarDate>[0] =>
+  rows as unknown as Parameters<typeof latestCalendarDate>[0];
+const asMoverRows = (rows: Row[]): Parameters<typeof normalizeTopMovers>[0] =>
+  rows as unknown as Parameters<typeof normalizeTopMovers>[0];
+
+// P2-6: cockpit normalizers 纯归一化逻辑(无网络)。本测试已在严格 tsc 下零报错。
 // 选纯且无随机精确值的导出;凡涉及 Date.now()/jitter 只断言「字段存在/类型/排序/长度」。
 // 红线:normalizeTopMovers 只留真分,绝不出现非真占位行。
 
@@ -79,11 +88,11 @@ describe("normalizeKolFunnel 真伪判定", () => {
 
 describe("latestCalendarDate 取最近日期", () => {
   it("混合日期串取最大 YYYY-MM-DD", () => {
-    const out = latestCalendarDate([
+    const out = latestCalendarDate(asCalendarItems([
       { posted_at: "2026-05-28" },
       { published_at: "2026-06-10" },
       { created_at: "2026-04-01" },
-    ]);
+    ]));
     expect(out).toBe("2026-06-10");
   });
 
@@ -112,21 +121,21 @@ describe("eventCoords 落点逻辑", () => {
 
 describe("normalizeTopMovers 真分排序(红线)", () => {
   it("只留 v6_fit != null,DESC 排序,≤5", () => {
-    const out = normalizeTopMovers([
+    const out = normalizeTopMovers(asMoverRows([
       { id: 1, handle: "@a", v6_fit: 70, followers: 100 },
       { id: 2, handle: "@b", v6_fit: 95, followers: 200 },
       { id: 3, handle: "@c", v6_fit: null, followers: 999 },
       { id: 4, handle: "@d", v6_fit: 82 },
-    ]);
+    ]));
     expect(out).toHaveLength(3);
     expect(out.map((m: { raw: { v6_fit: number } }) => m.raw.v6_fit)).toEqual([95, 82, 70]);
   });
 
   it("无 v6_fit 的行被剔除(不出现非真占位)", () => {
-    const out = normalizeTopMovers([
+    const out = normalizeTopMovers(asMoverRows([
       { id: 1, handle: "@noscore", followers: 5000 },
       { id: 2, handle: "@onlyfit", v6_fit: 88 },
-    ]);
+    ]));
     expect(out).toHaveLength(1);
     expect(out[0].handle).toBe("@onlyfit");
     // deltaFollower 必须是真分,绝不出现「待评估」占位
@@ -135,7 +144,7 @@ describe("normalizeTopMovers 真分排序(红线)", () => {
 
   it("超过 5 条只取前 5", () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({ id: i, handle: `@k${i}`, v6_fit: 10 + i }));
-    expect(normalizeTopMovers(rows)).toHaveLength(5);
+    expect(normalizeTopMovers(asMoverRows(rows))).toHaveLength(5);
   });
 
   it("空输入 → 空数组", () => {

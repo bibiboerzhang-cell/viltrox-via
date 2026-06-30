@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Pure helpers / types / constants extracted from ShopifyHubPage.tsx.
 // Behavior-preserving move: function bodies are verbatim. No container state here.
 
