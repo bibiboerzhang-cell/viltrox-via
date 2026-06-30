@@ -20,6 +20,8 @@ export type VkpiPageKey =
   | 'industryData'
   | 'industryBoard'
   | 'dataExport'
+  | 'dataQuery'
+  | 'marketTrends'
   | 'learning'
   | 'capabilities'
   | 'skillStudio'

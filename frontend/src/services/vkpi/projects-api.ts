@@ -109,6 +109,9 @@ export interface VkpiCreateProjectPayload {
   marketplace?: string;
   sourceType?: string;
   note?: string;
+  // 加性:N3 新品 Launch 等带 source_type='launch' 的项目把结构化元数据塞进 metadata_json
+  // (后端 workflow.create_project 直接读 body.metadata,无新列)。
+  metadata?: Record<string, unknown>;
 }
 
 export interface VkpiUpdateProjectPayload {
@@ -318,6 +321,7 @@ export async function createProject(token: string, payload: VkpiCreateProjectPay
         marketplace: payload.marketplace,
         source_type: payload.sourceType || "cockpit_projects_ui",
         note: payload.note,
+        metadata: payload.metadata,
       }),
     },
     token,

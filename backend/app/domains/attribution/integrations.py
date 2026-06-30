@@ -544,6 +544,15 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
             (_safe_int(row.get("order_id")), str(context["click_id"])),
         )
         get_conn().commit()
+    # GMV 归因桥(no-op until token):把这条订单的归因促升回对应推荐的 outcome
+    # (order_attributed + GMV)。缺 shpat_ token 时内部直接 no-op,绝不抛、不写脏数据;
+    # 任何异常都被吞,绝不让 outcome 桥拖垮 webhook 主路径。
+    try:
+        from app.domains.attribution import gmv_outcome_bridge
+
+        gmv_outcome_bridge.handle_attribution_row(row)
+    except Exception:
+        logger.debug("ingest_shopify_order_webhook.gmv_outcome_bridge_failed", exc_info=True)
     return {
         "status": "ok",
         "source": "shopify",

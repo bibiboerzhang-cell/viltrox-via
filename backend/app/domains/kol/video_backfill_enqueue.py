@@ -9,15 +9,12 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import search_sessions
 from app.domains.kol import url_deep_crawl
-
-DEFAULT_TOP_N = 2
-MAX_TOP_N = 5
-RESCRAPE_COOLDOWN_DAYS = 7  # 近期已抓 → 冷却期内不重抓(防反复 churn 抓不到的号)
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -25,6 +22,17 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+# 铺量开闸(运行态可调,默认即温和放宽):每次搜索顺带懒抓的头部数 / 上限 / 重抓冷却天数。
+# 全部走 env(改值不改代码、可回退到原值 top_n=2/max=5/cooldown=7),并夹在安全硬上限内,
+# 避免无上限烧钱:即便 env 配过大,top_n 也不会超过 HARD_CAP_TOP_N。
+# 控量四闸全保留(top_n / 仅缺视频 / 冷却 / URL 去重)+ worker 侧每日预算闸(闸A)不变。
+HARD_CAP_TOP_N = 15  # 安全硬上限:env 再大也封顶,防无上限铺量烧爆
+DEFAULT_TOP_N = max(1, min(HARD_CAP_TOP_N, _int(os.environ.get("VKPI_LAZY_BACKFILL_TOP_N"), 4)))
+MAX_TOP_N = max(DEFAULT_TOP_N, min(HARD_CAP_TOP_N, _int(os.environ.get("VKPI_LAZY_BACKFILL_MAX_TOP_N"), 8)))
+# 近期已抓 → 冷却期内不重抓(防反复 churn 抓不到的号);放宽=更短冷却→更多号进入可抓集。
+RESCRAPE_COOLDOWN_DAYS = max(1, _int(os.environ.get("VKPI_LAZY_BACKFILL_COOLDOWN_DAYS"), 3))
 
 
 def _top_pool_candidates(session: dict[str, Any], top_n: int) -> list[int]:

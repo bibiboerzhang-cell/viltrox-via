@@ -104,6 +104,173 @@ def _emit_event(event_type: str, **kw: Any) -> None:
         pass
 
 
+# 履约 content post 走规范路径可追溯(10D,additive)的来源标记。
+# vkpi_kol_video_evidence.source 列是 VARCHAR(20) → 这两个常量必须 <=20 字符。
+_CONTENT_POST_EVIDENCE_SOURCE = "content_post"  # 12 字符,安全。
+_CONTENT_POST_EVIDENCE_TYPE = "video"
+
+
+def _ensure_workflow_evidence_for_post(
+    conn: Any,
+    *,
+    project_id: int,
+    kol_pool_id: int | None,
+    content_url: str,
+    platform: str,
+    title: str,
+    published_at: Any,
+    view_count: int,
+    like_count: int,
+    comment_count: int,
+) -> int | None:
+    """为一条 content post 写/取一条可追溯的 workflow evidence(vkpi_kol_video_evidence)。
+
+    这是 10D 履约闭环「content post 走规范路径可追溯」的 evidence 侧:手录/抓取的内容落
+    canonical content_posts 表时,**同时**在真证据表登记一条按 URL 可追的 evidence,返回其 id
+    供回填 vkpi_project_content_posts.evidence_id。
+
+    additive 红线:
+    - 只 INSERT/UPSERT vkpi_kol_video_evidence 这一行;绝不写 viltrox_fit_score / rule_v0,
+      绝不改 project.stage / assignment.stage / cost_ledger。
+    - kol_pool_id 是 evidence 表 NOT NULL 列且 FK→vkpi_kol_pool:无 kol_pool_id 或该 KOL 不存在
+      时诚实跳过(返回 None),绝不伪造、绝不报错中断主流程。
+    - ON CONFLICT(content_url) 幂等:同 URL 已有 evidence(如 scan 路径先落)→ 复用其 id,
+      不覆盖既有抓取来源的 metrics(用 COALESCE 仅补空),只保证 project_id 挂上。
+    - compat:? 占位、bool 写 True、INTERVAL/% 不出现在 SQL 串里。
+    """
+    kpid = _nullable_int(kol_pool_id)
+    if kpid is None:
+        return None
+    if not table_exists("vkpi_kol_video_evidence") or not table_exists("vkpi_kol_pool"):
+        return None
+    # FK 守卫:kol_pool 行不存在则跳过(evidence.kol_pool_id NOT NULL + FK 会炸)。
+    pool_row = conn.execute(
+        "SELECT id FROM vkpi_kol_pool WHERE id = ? LIMIT 1",
+        (kpid,),
+    ).fetchone()
+    if pool_row is None:
+        return None
+
+    # published_at 是 TIMESTAMPTZ;evidence.posted_at 是 DATE。取日期部分(诚实从宽)。
+    posted_date = None
+    if isinstance(published_at, datetime):
+        posted_date = published_at.date()
+
+    source_ref = f"content_post:{int(project_id)}"
+    cursor = conn.execute(
+        """
+        INSERT INTO vkpi_kol_video_evidence
+            (kol_pool_id, project_id, content_url, platform, video_title, title,
+             posted_at, view_count, like_count, comment_count,
+             evidence_type, source, source_ref, confidence, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'medium', ?)
+        ON CONFLICT (content_url) DO UPDATE SET
+            project_id = COALESCE(vkpi_kol_video_evidence.project_id, excluded.project_id),
+            video_title = CASE WHEN vkpi_kol_video_evidence.video_title IS NULL
+                               OR vkpi_kol_video_evidence.video_title = ''
+                               THEN excluded.video_title ELSE vkpi_kol_video_evidence.video_title END,
+            posted_at = COALESCE(vkpi_kol_video_evidence.posted_at, excluded.posted_at),
+            updated_at = NOW()
+        RETURNING id
+        """,
+        (
+            kpid,
+            int(project_id),
+            content_url,
+            str(platform or ""),
+            str(title or ""),
+            str(title or ""),
+            posted_date,
+            int(view_count or 0),
+            int(like_count or 0),
+            int(comment_count or 0),
+            _CONTENT_POST_EVIDENCE_TYPE,
+            _CONTENT_POST_EVIDENCE_SOURCE,
+            source_ref,
+            True,
+        ),
+    )
+    ev_row = cursor.fetchone()
+    if ev_row is None:
+        return None
+    try:
+        return int(dict(ev_row)["id"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _link_post_to_observation_window(
+    conn: Any,
+    *,
+    project_id: int,
+    assignment_id: int | None,
+    kol_pool_id: int | None,
+    post_id: int,
+) -> int | None:
+    """把刚落库的 content post 挂到对应的活动观察窗口(set matched_content_post_id)。
+
+    这是 10D 履约闭环「可追溯」的 window 侧:content post → observation_window → workflow_evidence
+    形成可追链路。匹配口径与 open_window_for_delivered 去重同款(project + assignment + kol_pool,
+    NULL 维度用 IS NULL),挑最新的活动窗口(pending/scanning/matched)。
+
+    additive 红线:
+    - 只 UPDATE 该窗口行的 matched_content_post_id(仅当其当前为 NULL,不覆盖既有匹配)
+      + 把 status 抬到 'matched'(展示态,仍待人确认)+ updated_at;绝不改
+      project/assignment/cost/viltrox_fit_score。
+    - 找不到活动窗口 → 诚实返回 None(手录内容可能先于开窗;不强行建窗,保持零自动裁决)。
+    - compat:? 占位、bool 写 True。
+    """
+    pid = int(project_id or 0)
+    if pid <= 0 or not post_id:
+        return None
+    if not table_exists("vkpi_project_content_observation_windows"):
+        return None
+
+    aid = _nullable_int(assignment_id)
+    kpid = _nullable_int(kol_pool_id)
+    where_parts = ["project_id = ?"]
+    params: list[Any] = [pid]
+    if aid is None:
+        where_parts.append("assignment_id IS NULL")
+    else:
+        where_parts.append("assignment_id = ?")
+        params.append(aid)
+    if kpid is None:
+        where_parts.append("kol_pool_id IS NULL")
+    else:
+        where_parts.append("kol_pool_id = ?")
+        params.append(kpid)
+    status_placeholders = ",".join(["?"] * len(_WINDOW_ACTIVE_STATUSES))
+    where_parts.append(f"status IN ({status_placeholders})")
+    params.extend(_WINDOW_ACTIVE_STATUSES)
+
+    win_row = conn.execute(
+        f"""
+        SELECT id FROM vkpi_project_content_observation_windows
+        WHERE {' AND '.join(where_parts)}
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    if win_row is None:
+        return None
+    window_id = int(dict(win_row)["id"])
+
+    now = datetime.utcnow()
+    conn.execute(
+        """
+        UPDATE vkpi_project_content_observation_windows
+        SET matched_content_post_id = COALESCE(matched_content_post_id, ?),
+            status = 'matched',
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (int(post_id), now, window_id),
+    )
+    return window_id
+
+
 def open_window_for_delivered(
     project_id: int,
     assignment_id: int | None,
@@ -321,11 +488,69 @@ def record_content_candidate(
         ),
     )
     row = cursor.fetchone()
-    conn.commit()
     post = _row_to_post(row)
+    post_id = _nullable_int(post.get("id"))
+
+    # 10D 履约闭环「走规范路径可追溯」(additive,与上面 INSERT 同事务,一次性 commit):
+    # 1) 若调用方没带 evidence_id,补登一条可追 URL 的 workflow evidence 并回填 evidence_id;
+    # 2) 把这条 content post 挂到对应活动观察窗口(set matched_content_post_id)。
+    # 链路:content_post -> evidence_id -> vkpi_kol_video_evidence(URL) +
+    #      observation_window.matched_content_post_id -> content_post。任一环失败都 best-effort
+    #      吞掉(不回滚已落库的 candidate),绝不触 viltrox_fit_score / 业务状态。
+    linked_evidence_id = evidence_id
+    linked_window_id: int | None = None
+    if post_id is not None:
+        if linked_evidence_id is None:
+            try:
+                new_ev_id = _ensure_workflow_evidence_for_post(
+                    conn,
+                    project_id=pid,
+                    kol_pool_id=kpid,
+                    content_url=content_url,
+                    platform=str(data.get("platform") or ""),
+                    title=str(data.get("title") or ""),
+                    published_at=published_at,
+                    view_count=_int0("view_count"),
+                    like_count=_int0("like_count"),
+                    comment_count=_int0("comment_count"),
+                )
+            except Exception:
+                logger.warning("workflow_evidence backfill failed (additive, suppressed)", exc_info=True)
+                new_ev_id = None
+            if new_ev_id is not None:
+                conn.execute(
+                    "UPDATE vkpi_project_content_posts SET evidence_id = ?, updated_at = ? WHERE id = ?",
+                    (int(new_ev_id), datetime.utcnow(), int(post_id)),
+                )
+                linked_evidence_id = new_ev_id
+                post["evidence_id"] = int(new_ev_id)
+        try:
+            linked_window_id = _link_post_to_observation_window(
+                conn,
+                project_id=pid,
+                assignment_id=aid,
+                kol_pool_id=kpid,
+                post_id=int(post_id),
+            )
+        except Exception:
+            logger.warning("observation_window link failed (additive, suppressed)", exc_info=True)
+            linked_window_id = None
+
+    conn.commit()
     _emit_event("content.detected", entity_type="content_post", entity_id=post.get("id"),
-                payload={"project_id": pid, "kol_pool_id": kpid, "content_url": content_url})
-    return {"status": "created", "post": post}
+                payload={
+                    "project_id": pid,
+                    "kol_pool_id": kpid,
+                    "content_url": content_url,
+                    "evidence_id": linked_evidence_id,
+                    "observation_window_id": linked_window_id,
+                })
+    return {
+        "status": "created",
+        "post": post,
+        "evidence_id": linked_evidence_id,
+        "observation_window_id": linked_window_id,
+    }
 
 
 def list_content_posts(

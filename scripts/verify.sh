@@ -78,7 +78,8 @@ run_step "check_repo_hardening.py --strict" repo_hardening
 
 # ---- STEP 5: 红线 grep —— viltrox_fit_score 写点只能在 pool.py ----
 # 合法写点:
-#   1) backend/app/domains/kol/pool.py(rule_v0 enrich_item 在线写)
+#   1) backend/app/domains/kol/pool.py + backend/app/domains/kol/pool_enrich.py
+#      (rule_v0 enrich_item 在线写;god-object 拆分后 enrich_item 行为不变地搬到 pool_enrich.py)
 #   2) backend/scripts/backfill_fit_scores.py(2026-06-12 裁决①放行的离线 rule_v0 backfill)
 # 只盯【DB 写入】语义:SQL 占位符写法 `viltrox_fit_score=?`(compat ? 占位符)、
 #   `viltrox_fit_score=%`(% 字面写法)、以及 `SET viltrox_fit_score`(UPDATE)。
@@ -91,11 +92,12 @@ redline_fit_score() {
       backend frontend \
       --include='*.py' --include='*.ts' --include='*.tsx' 2>/dev/null \
     | grep -v 'backend/app/domains/kol/pool.py' \
+    | grep -v 'backend/app/domains/kol/pool_enrich.py' \
     | grep -v 'backend/scripts/backfill_fit_scores.py' \
     || true
   )"
   if [ -n "$offenders" ]; then
-    echo "[verify] 红线违规:viltrox_fit_score 写点只允许在 pool.py(及已放行的 backfill_fit_scores.py):"
+    echo "[verify] 红线违规:viltrox_fit_score 写点只允许在 pool.py / pool_enrich.py(及已放行的 backfill_fit_scores.py):"
     echo "$offenders"
     return 1
   fi
@@ -103,6 +105,41 @@ redline_fit_score() {
   return 0
 }
 run_step "redline grep (viltrox_fit_score write)" redline_fit_score
+
+# ---- STEP 6: 运行态 sha 对齐(8001 起着才校验;没起则跳过,静态 CI 不破)----
+# 根治"HEAD 领先运行态 / client 停在旧 sha"反复:服务在跑就强校验
+# /health 的 .trust.sha_aligned 必须为 true,否则整体非 0 退出。
+# 8001 没响应 = 纯静态校验场景,跳过(返回 0),不算失败。
+runtime_sha_aligned() {
+  local url="${VKPI_HEALTH_URL:-http://localhost:8102/health}"
+  local body
+  body="$(curl -s --max-time 3 "$url" 2>/dev/null || true)"
+  if [ -z "$body" ]; then
+    echo "[verify] ${url} 未响应,跳过运行态对齐校验(静态校验不依赖运行服务)。"
+    return 0
+  fi
+  local verdict
+  verdict="$(printf '%s' "$body" | "$VENV_PY" -c '
+import sys, json
+try:
+    t = (json.load(sys.stdin) or {}).get("trust") or {}
+except Exception:
+    print("ERR|?|?"); raise SystemExit
+a = t.get("sha_aligned")
+s = str(t.get("server_git_sha") or "?")[:8]
+c = str(t.get("client_git_sha") or "?")[:8]
+print(("OK" if a is True else "FAIL") + "|" + s + "|" + c)
+' 2>/dev/null || echo "ERR|?|?")"
+  local state="${verdict%%|*}"
+  local shas="${verdict#*|}"
+  if [ "$state" = "OK" ]; then
+    echo "[verify] 运行态对齐 OK:server/client sha 一致 (${shas/|/ vs })。"
+    return 0
+  fi
+  echo "[verify] 运行态 sha 未对齐(.trust.sha_aligned!=true)—— 需 build+重启对齐 HEAD。server vs client: ${shas/|/ vs }"
+  return 1
+}
+run_step "runtime sha aligned (skip if 8001 down)" runtime_sha_aligned
 
 # ---- 汇总 ----
 echo ""

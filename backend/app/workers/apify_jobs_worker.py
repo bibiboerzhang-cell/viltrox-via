@@ -42,6 +42,7 @@ from .apify_jobs_worker_helpers import (
     _compact_text,
     _derive_method,
     _error_category,
+    _failure_disposition,
     _final_v1_payload,
     _int_or_none,
     _json,
@@ -577,6 +578,15 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
     else:
         message = _redact_sensitive_text(f"{type(exc).__name__}: {exc}")
     category = _error_category(message)
+    # 10E 失败池分流:把细类映射成处置动作。'retry' 类(timeout/proxy/限流/媒体解析/被回收)
+    # 在仍有重试预算时重新 queued;'triage' 类(no_data/auth/下架/代码错)直接标 status='triage'
+    # 待人工;unknown / 重试预算耗尽 → 落 'failed'。last_error_category 始终写明确细类,不再留 null。
+    disposition = _failure_disposition(category)
+    # provider_pressure 保留它专属的更宽重试预算(5 次 + 指数退避);其余可重试类用通用预算闸。
+    if category == "provider_pressure":
+        retry_budget = PROVIDER_RETRY_MAX_ATTEMPTS
+    else:
+        retry_budget = MAX_JOB_ATTEMPTS
     raw_status = "failed"
     sync_reason = message
     with conn.transaction():
@@ -584,7 +594,7 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
             cur.execute("SELECT attempts FROM apify_jobs WHERE id=%s FOR UPDATE", (job_id,))
             row = cur.fetchone() or {}
             next_attempt = int(row.get("attempts") or 0) + 1
-            if category == "provider_pressure" and next_attempt < PROVIDER_RETRY_MAX_ATTEMPTS:
+            if disposition == "retry" and next_attempt < retry_budget:
                 delay_seconds = _provider_retry_delay_seconds(next_attempt)
                 cur.execute(
                     """
@@ -604,11 +614,34 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
                 raw_status = "queued"
                 sync_reason = _provider_retry_reason(message, next_retry_at=retry_row.get("next_retry_at"))
                 logger.warning(
-                    "apify_jobs provider pressure retry scheduled | id=%s attempt=%s delay_seconds=%s next_retry_at=%s",
+                    "apify_jobs failure requeued | id=%s category=%s attempt=%s delay_seconds=%s next_retry_at=%s",
                     job_id,
+                    category,
                     next_attempt,
                     delay_seconds,
                     retry_row.get("next_retry_at"),
+                )
+            elif disposition == "triage":
+                # 不可重试类:不再消耗重试预算,直接停在 triage 待人工裁决(凭证/改代码/确认下架)。
+                cur.execute(
+                    """
+                    UPDATE apify_jobs
+                    SET status='triage',
+                        attempts=%s,
+                        last_error=%s,
+                        last_error_category=%s,
+                        next_retry_at=NULL,
+                        updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (next_attempt, message, category, job_id),
+                )
+                raw_status = "failed"
+                logger.warning(
+                    "apify_jobs failure sent to triage | id=%s category=%s attempt=%s",
+                    job_id,
+                    category,
+                    next_attempt,
                 )
             else:
                 cur.execute(
@@ -623,6 +656,14 @@ def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> Non
                     WHERE id=%s
                     """,
                     (next_attempt, message, category, job_id),
+                )
+                logger.warning(
+                    "apify_jobs failure marked failed | id=%s category=%s disposition=%s attempt=%s budget=%s",
+                    job_id,
+                    category,
+                    disposition,
+                    next_attempt,
+                    retry_budget,
                 )
     _sync_search_session_job(conn, job_id, raw_status=raw_status, reason=sync_reason)
 

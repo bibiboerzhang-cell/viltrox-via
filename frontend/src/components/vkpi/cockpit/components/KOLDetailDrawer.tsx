@@ -8,6 +8,7 @@ import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
 import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
+import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import {
   asArray,
@@ -65,6 +66,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [contentFitError, setContentFitError] = React.useState("");
   // W3 长期记忆(纯聚合,显式独立于 V6 Fit · 不影响排序;snapshot 不含任何 fit/score 字段)。
   const [kolMemory, setKolMemory] = React.useState<any>(null);
+  // N2 Skill 触发:跑 brief_generate skill 为该 KOL 生成合作 brief 草案(默认走规则模板,不烧 LLM)。
+  const [briefResult, setBriefResult] = React.useState<SkillRunResult | null>(null);
+  const [briefBusy, setBriefBusy] = React.useState(false);
+  const [briefError, setBriefError] = React.useState("");
   // #1 入主表 promote:把候选写进 vkpi 主表(接已存在 /kol-pool/{id}/promote)。
   const [promoteMsg, setPromoteMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const onPromote = React.useCallback(async (it: any) => {
@@ -116,6 +121,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   React.useEffect(() => {
     setVideoEnqueueState({ status: "idle", message: "" });
     setActiveRepresentativeVideo(null);
+    // 换 KOL 时清掉上一条的 brief skill 结果,避免串号。
+    setBriefResult(null);
+    setBriefError("");
+    setBriefBusy(false);
   }, [item?.id]);
 
   // 内容契合深析:开抽屉先只读已有缓存(不烧 LLM);无缓存则留待用户点击触发。
@@ -175,6 +184,28 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       })
       .catch(() => setContentFitError("深析请求失败,请稍后重试。"))
       .finally(() => setContentFitBusy(false));
+  };
+
+  // N2 跑 Skill:brief_generate 需要 kol_pool_id + product;product 取该 KOL 首个推荐产品线,缺则回落通用产品名。
+  const handleRunBriefSkill = () => {
+    if (!apiToken || !item?.id || briefBusy) return;
+    const productLines = asArray(item.recommended_product_lines)
+      .map((x: any) => (typeof x === "string" ? x : String(x?.name ?? x?.label ?? "")).trim())
+      .filter(Boolean);
+    const product = productLines[0] || "Viltrox 镜头";
+    setBriefBusy(true);
+    setBriefError("");
+    setBriefResult(null);
+    void runSkill(apiToken, "brief_generate", { kol_pool_id: Number(item.id), product })
+      .then((res) => {
+        setBriefResult(res && typeof res === "object" ? res : null);
+        const out = (res && typeof res.output === "object" ? res.output : null) as Record<string, unknown> | null;
+        if (out && out.ok === false) {
+          setBriefError(String(out.reason || "skill 未产出结果"));
+        }
+      })
+      .catch((err: any) => setBriefError(err?.message ? String(err.message) : "跑 Skill 失败,请稍后重试。"))
+      .finally(() => setBriefBusy(false));
   };
 
   if (!item) return null;
@@ -323,6 +354,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       ),
       // ── D2 生成追踪链(GOAFFPRO):一键给该 KOL 建 affiliate + 追踪链 + 优惠码(KOL 零注册)──
       e(GoaffproLinkSection, { apiToken, kolPoolId: item?.id }),
+      // ── N2 跑 Skill:brief_generate → 合作 brief 草案(默认走规则模板,不烧 LLM;红线零触 fit)──
+      apiToken && item?.id && e(KOLDrawerBriefSkill, {
+        result: briefResult, busy: briefBusy, error: briefError, onRun: handleRunBriefSkill,
+      }),
       // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
       e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       e(KOLDrawerDevices, { item, devices }),
@@ -361,5 +396,64 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       apiToken,
       onClose: () => setShareOpen(false),
     })
+  );
+}
+
+// ── N2 跑 Skill 区块:brief_generate 触发按钮 + loading/错误/结果三态渲染 ──
+function KOLDrawerBriefSkill({ result, busy, error, onRun }: {
+  result: SkillRunResult | null;
+  busy: boolean;
+  error: string;
+  onRun: () => void;
+}) {
+  const output = (result && typeof result.output === "object" ? result.output : null) as Record<string, unknown> | null;
+  const brief = (output && typeof output.brief === "object" ? output.brief : null) as Record<string, unknown> | null;
+  const list = (value: unknown): string[] => (Array.isArray(value) ? value.map((x) => String(x)).filter(Boolean) : []);
+  const hook = brief && typeof brief.hook === "string" ? brief.hook : "";
+  const talkingPoints = brief ? list(brief.talking_points) : [];
+  const dos = brief ? list(brief.do) : [];
+  const donts = brief ? list(brief.dont) : [];
+  const deliverables = brief ? list(brief.deliverables) : [];
+  const okFalse = output ? output.ok === false : false;
+  const showResult = Boolean(result) && Boolean(brief) && !okFalse;
+
+  const renderListBlock = (label: string, items: string[], color: string) =>
+    items.length > 0 && e("div", { key: label },
+      e("div", { className: "text-[9px] mb-1", style: { color } }, label),
+      e("ul", { className: "space-y-0.5" },
+        items.map((it, i) => e("li", { key: i, className: "text-[10px] text-slate-300 leading-snug" }, "· " + it)),
+      ),
+    );
+
+  return e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+    e("div", { className: "flex items-center justify-between gap-2 mb-1.5" },
+      e("div", { className: "text-[11px] font-semibold text-white" }, "合作 Brief 草案 · Skill"),
+      result?.skill_run_id != null && e("span", {
+        className: "text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400",
+      }, "run #" + result.skill_run_id),
+    ),
+    e("button", {
+      type: "button",
+      disabled: busy,
+      onClick: onRun,
+      className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.06] px-3 py-2 text-[11px] font-medium text-emerald-200 transition-colors hover:bg-emerald-400/[0.12] disabled:opacity-50",
+    },
+      e(Sparkles, { size: 12 }),
+      busy ? "跑 Skill 中…" : (showResult ? "重新生成 Brief" : "跑 Skill·生成合作 Brief"),
+    ),
+    error && e("div", { className: "mt-1.5 text-[9.5px] leading-relaxed text-rose-300" }, error),
+    showResult && e("div", { className: "mt-2 rounded-md border border-white/[0.05] bg-black/20 p-2.5 space-y-2" },
+      hook && e("div", null,
+        e("div", { className: "text-[9px] text-emerald-300 mb-0.5" }, "开场钩子"),
+        e("div", { className: "text-[10.5px] text-slate-200 leading-relaxed" }, hook),
+      ),
+      renderListBlock("内容要点", talkingPoints, "#06b6d4"),
+      renderListBlock("建议做", dos, "#10b981"),
+      renderListBlock("避免", donts, "#fb7185"),
+      renderListBlock("交付物", deliverables, "#a855f7"),
+      output && typeof output.model_used === "string" && e("div", {
+        className: "text-[9px] text-slate-500 pt-1",
+      }, "模型 " + output.model_used + " · 草案仅供人审后编辑"),
+    ),
   );
 }

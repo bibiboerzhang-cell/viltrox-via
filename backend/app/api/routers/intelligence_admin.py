@@ -45,6 +45,34 @@ def market_observations(
     )
 
 
+@router.get("/intelligence/market/trends")
+def market_trends(
+    kind: str | None = None,
+    admin=Depends(require_admin),
+):
+    """N7 市场趋势 / 观察:只读合成 market_brain + competitor_radar + bet_ledger 真数据。
+
+    返回结构化观察 {topic, kind, source, evidence_refs, confidence, suggested_action}。
+    best-effort,无真数据诚实返回空。纯只读,绝不写表,绝不触 viltrox_fit_score。
+    可选 kind 过滤(热点 / 竞品 / 机会 / 风险)。
+    """
+    from datetime import datetime, timezone
+
+    from app.domains.market import market_observation
+
+    result = market_observation.generate_observations(staff=admin if isinstance(admin, dict) else None)
+    observations = result.get("observations") or []
+    if kind:
+        observations = [o for o in observations if isinstance(o, dict) and o.get("kind") == kind]
+        result = {
+            **result,
+            "observations": observations,
+            "count": len(observations),
+        }
+    result["generated_at"] = datetime.now(timezone.utc).isoformat()
+    return result
+
+
 @router.get("/intelligence/market/benchmarks")
 def market_benchmarks(admin=Depends(require_admin)):
     return market_svc.list_benchmarks()

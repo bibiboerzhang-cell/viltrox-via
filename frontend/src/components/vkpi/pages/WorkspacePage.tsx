@@ -22,6 +22,8 @@ const CostsPage = lazy(() => import('./CostsPage').then((module) => ({ default: 
 const DataAnalysisPage = lazy(() => import('./DataAnalysisPage').then((module) => ({ default: module.DataAnalysisPage })));
 const IndustryBoardPage = lazy(() => import('./IndustryBoardPage').then((module) => ({ default: module.IndustryBoardPage })));
 const DataExportPage = lazy(() => import('./DataExportPage').then((module) => ({ default: module.DataExportPage })));
+const DataQueryPage = lazy(() => import('./DataQueryPage').then((module) => ({ default: module.DataQueryPage })));
+const MarketTrendsPage = lazy(() => import('./MarketTrendsPage').then((module) => ({ default: module.MarketTrendsPage })));
 const LearningPage = lazy(() => import('./LearningPage').then((module) => ({ default: module.LearningPage })));
 const CapabilitiesPage = lazy(() => import('./CapabilitiesPage').then((module) => ({ default: module.CapabilitiesPage })));
 const SkillStudioPage = lazy(() => import('./SkillStudioPage').then((module) => ({ default: module.SkillStudioPage })));
@@ -177,6 +179,8 @@ export function WorkspacePage(props: WorkspacePageProps) {
   if (props.page === 'dataAnalysis' || props.page === 'industryData') page = <DataAnalysisPage {...props} />;
   if (props.page === 'industryBoard') page = <IndustryBoardPage apiToken={props.apiToken} />;
   if (props.page === 'dataExport') page = <DataExportPage apiToken={props.apiToken} />;
+  if (props.page === 'dataQuery') page = <DataQueryPage apiToken={props.apiToken} />;
+  if (props.page === 'marketTrends') page = <MarketTrendsPage apiToken={props.apiToken} />;
   if (props.page === 'learning') page = <LearningPage apiToken={props.apiToken} />;
   if (props.page === 'capabilities') page = <CapabilitiesPage apiToken={props.apiToken} />;
   if (props.page === 'discovery2') page = <DiscoveryPage apiToken={props.apiToken} />;

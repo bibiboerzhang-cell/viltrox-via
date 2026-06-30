@@ -4,6 +4,7 @@ import React from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
+import { ActionInboxPanel } from "./components/ActionInboxPanel";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Breadcrumb } from "./components/Breadcrumb";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
@@ -375,11 +376,15 @@ export function DashboardReplicaPage(props: any) {
               )
             ),
 
-            // ─── RIGHT RAIL (今日建议 + KOL 漏斗 + Active Campaigns + 7 天日历) ───
+            // ─── RIGHT RAIL (今日该做什么 + KOL 漏斗 + Active Campaigns + 7 天日历) ───
             e("div", { className: "space-y-4" },
-              // 2026-06-15:右栏只留 KOL 漏斗 / Active Campaigns / 近7天;今日建议(Action Inbox)
-              // 已迁移至顶栏「工作提醒」popover(WorkRemindersPopover),主界面更干净。
-              // 0. KOL 漏斗(收藏→认领→入项目→已发布)
+              // 0. 今日该做什么(Action Inbox 首屏卡):打开 Dashboard 即见今日待办建议(后端按优先级排序),
+              //    每条 标题 + 一句为何 + 复用 approve/execute 两步。仍走真实端点 /actions/inbox,scope 后端过滤。
+              //    保留顶栏「工作提醒」popover 内的同一面板;此处把它放回首屏,无需点开即可看见。
+              apiToken
+                ? e(ActionInboxPanel, { apiToken, heading: "今日该做什么", limit: 8 })
+                : null,
+              // 1. KOL 漏斗(收藏→认领→入项目→已发布)
               e(KolFunnelCard, {
                 funnel: kolFunnel,
                 onOpenMyKol,

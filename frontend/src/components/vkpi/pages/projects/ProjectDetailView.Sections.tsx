@@ -261,6 +261,7 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
           rows={rows}
           stats={stats}
           health={health}
+          apiToken={apiToken}
           videoAnalysisCache={videoAnalysisCache}
           videoQaCache={videoQaCache}
           videoAnalysisLoading={videoAnalysisLoading}

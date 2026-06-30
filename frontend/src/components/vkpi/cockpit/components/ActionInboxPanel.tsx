@@ -77,7 +77,15 @@ const RISK_META: Record<string, { label: string; cls: string }> = {
   low: { label: "风险低", cls: "bg-emerald-500/12 text-emerald-300/80 border-emerald-500/20" },
 };
 
-export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
+export function ActionInboxPanel({
+  apiToken = "",
+  limit = 6,
+  heading = "今日建议",
+}: {
+  apiToken?: string;
+  limit?: number;
+  heading?: string;
+}) {
   const [items, setItems] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState("");
@@ -480,7 +488,7 @@ export function ActionInboxPanel({ apiToken = "", limit = 6 }) {
         "div",
         { className: "flex items-center gap-2" },
         e(Sparkles, { size: 14, className: "text-emerald-300" }),
-        e("h3", { className: "text-sm font-semibold text-white" }, "今日建议"),
+        e("h3", { className: "text-sm font-semibold text-white" }, heading),
         items.length > 0 &&
           e(
             "span",

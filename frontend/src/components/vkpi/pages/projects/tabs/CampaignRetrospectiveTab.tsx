@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
-import { BookOpen, ExternalLink, ShoppingCart, Sparkles, Video } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { BarChart3, BookOpen, ExternalLink, ShoppingCart, Sparkles, Video } from 'lucide-react';
+import { runSkill, type SkillRunResult } from '../../../../../services/vkpi/skills-api';
 import { formatLargeNum, formatMoneyShort, healthColor } from '../projectDeliverableStyle';
 import type { VkpiProjectRow } from '../../../vkpiTypes';
 import type { VkpiProjectRetrospectiveResult, VkpiProjectVideoAnalysisCacheResponse } from '../../../../../services/vkpi/projects-api';
@@ -22,6 +23,7 @@ export function CampaignRetrospectiveTab({
   rows,
   stats,
   health,
+  apiToken,
   videoAnalysisCache,
   videoQaCache,
   videoAnalysisLoading,
@@ -35,6 +37,7 @@ export function CampaignRetrospectiveTab({
   onPendingAction,
 }: {
   project: VkpiProjectRow;
+  apiToken?: string;
   rows: VkpiProjectRow[];
   stats: ProjectStatsSummary;
   health: ReturnType<typeof healthForRows>;
@@ -76,6 +79,37 @@ export function CampaignRetrospectiveTab({
   const retroResult = retrospective?.result;
   const retroProvenance = retroResult?.provenance;
   const retroFailed = !retroResult && (retrospectiveLastJob?.status === 'failed' || retrospectiveLastJob?.status === 'blocked');
+
+  // N2 Skill 触发:跑 roi_review skill 给本项目算 ROI + 下一步建议(默认走规则,不烧 LLM;红线零触 fit)。
+  const [roiResult, setRoiResult] = useState<SkillRunResult | null>(null);
+  const [roiBusy, setRoiBusy] = useState(false);
+  const [roiError, setRoiError] = useState('');
+  const projectIdNum = Number(project.id);
+  const canRunRoiSkill = Boolean(apiToken) && Number.isFinite(projectIdNum) && projectIdNum > 0;
+
+  useEffect(() => {
+    setRoiResult(null);
+    setRoiError('');
+    setRoiBusy(false);
+  }, [project.id]);
+
+  function handleRunRoiSkill() {
+    if (!apiToken || !canRunRoiSkill || roiBusy) return;
+    setRoiBusy(true);
+    setRoiError('');
+    setRoiResult(null);
+    void runSkill(apiToken, 'roi_review', { project_id: projectIdNum })
+      .then((res) => {
+        setRoiResult(res && typeof res === 'object' ? res : null);
+        const out = (res && typeof res.output === 'object' ? res.output : null) as Record<string, unknown> | null;
+        const status = out && typeof out.status === 'string' ? out.status : '';
+        if (status === 'invalid_input' || status === 'not_found') {
+          setRoiError(status === 'not_found' ? '未找到该项目的归因数据。' : '入参无效,无法运行 ROI 复盘。');
+        }
+      })
+      .catch((err: unknown) => setRoiError(err instanceof Error ? err.message : '跑 Skill 失败,请稍后重试。'))
+      .finally(() => setRoiBusy(false));
+  }
 
   return (
     <div className="p-4 space-y-4" aria-label="项目复盘">
@@ -165,6 +199,10 @@ export function CampaignRetrospectiveTab({
             </div>
             {videoAnalysisError ? <div className="mt-2 text-[10px] text-rose-300">final_v1 缓存读取失败：{videoAnalysisError}</div> : null}
             {videoQaError ? <div className="mt-1 text-[10px] text-amber-300">关键帧 QA 读取失败：{videoQaError}</div> : null}
+
+            {canRunRoiSkill ? (
+              <RoiReviewSkillBlock result={roiResult} busy={roiBusy} error={roiError} onRun={handleRunRoiSkill} />
+            ) : null}
           </div>
         </div>
       </div>
@@ -307,6 +345,79 @@ export function CampaignRetrospectiveTab({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── N2 跑 Skill 区块:roi_review 触发按钮 + loading/错误/结果三态渲染 ──
+function RoiReviewSkillBlock({ result, busy, error, onRun }: {
+  result: SkillRunResult | null;
+  busy: boolean;
+  error: string;
+  onRun: () => void;
+}) {
+  const output = (result && typeof result.output === 'object' ? result.output : null) as Record<string, unknown> | null;
+  const roi = (output && typeof output.roi === 'object' ? output.roi : null) as Record<string, unknown> | null;
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const centsToYuan = (cents: number | null): string => (cents == null ? '—' : `¥${(cents / 100).toLocaleString('en-US', { maximumFractionDigits: 0 })}`);
+  const spend = roi ? num(roi.spend_cents) : null;
+  const gmv = roi ? num(roi.attributed_gmv_cents) : null;
+  const roiRatio = roi ? num(roi.roi_ratio) : null;
+  const labels = output && Array.isArray(output.outcome_labels) ? output.outcome_labels.map((x) => String(x)).filter(Boolean) : [];
+  const nextAction = output && typeof output.next_action === 'string' ? output.next_action : '';
+  const confidence = output ? num(output.confidence) : null;
+  const missingData = output ? output.missing_data === true : false;
+  const status = output && typeof output.status === 'string' ? output.status : '';
+  const isError = status === 'invalid_input' || status === 'not_found';
+  const showResult = Boolean(result) && Boolean(output) && !isError;
+
+  return (
+    <div className="mt-3 rounded-lg border border-cyan-500/25 bg-cyan-500/[0.04] p-3">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="flex items-center gap-2">
+          <BarChart3 size={13} className="text-cyan-300" />
+          <div className="text-[11.5px] font-semibold text-white">ROI 复盘 · Skill</div>
+          {result?.skill_run_id != null ? (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400">run #{result.skill_run_id}</span>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          className="px-2.5 py-1 rounded-md bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 text-[10.5px] font-medium flex items-center gap-1 disabled:opacity-50"
+          onClick={onRun}
+          disabled={busy}
+        >
+          <Sparkles size={10} />{busy ? '跑 Skill 中…' : showResult ? '重新运行' : '跑 Skill·ROI 复盘'}
+        </button>
+      </div>
+      {error ? <div className="text-[10px] text-rose-300">{error}</div> : null}
+      {showResult ? (
+        <div className="space-y-2">
+          <div className="grid grid-cols-3 gap-2">
+            {([['花费', centsToYuan(spend), '#fb923c'], ['归因 GMV', centsToYuan(gmv), '#10b981'], ['ROI', roiRatio == null ? '—' : `${(roiRatio * 100).toFixed(0)}%`, '#06b6d4']] as const).map(([label, value, color]) => (
+              <div key={label} className="rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">
+                <div className="text-[9px] text-slate-500 mb-0.5">{label}</div>
+                <div className="text-[12px] font-semibold tabular-nums" style={{ color }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {nextAction ? (
+            <div className="text-[10.5px] text-slate-200">
+              <span className="text-cyan-300 font-medium">下一步建议: </span>
+              {nextAction}
+              {confidence != null ? <span className="text-slate-500"> · 置信度 {(confidence * 100).toFixed(0)}%</span> : null}
+            </div>
+          ) : null}
+          {labels.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {labels.map((label) => (
+                <span key={label} className="text-[9.5px] px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-300">{label}</span>
+              ))}
+            </div>
+          ) : null}
+          {missingData ? <div className="text-[9.5px] text-amber-300">该项目暂无完整归因数据(无真实 GMV),结果仅供参考。</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -247,6 +247,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "198_vkpi_metric_value_provenance.sql",
     "199_vkpi_skill_runs.sql",
     "200_vkpi_evidence_image_urls.sql",
+    "201_apify_jobs_triage_status.sql",
 )
 
 try:

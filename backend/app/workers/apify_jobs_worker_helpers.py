@@ -172,6 +172,55 @@ def _provider_retry_reason(message: str, *, next_retry_at: Any | None = None) ->
     return f"provider_pressure_retry_scheduled: {message}{suffix}"[:2000]
 
 
+# 失败分流口径(10E):把 _error_category 输出的细类映射到「该怎么处置这条失败 job」。
+# 与 app.domains.kol.failed_pool_triage 的 RECYCLABLE/PERMANENT 口径**完全一致**,这里只是把
+# 它前移到 worker 失败的那一瞬(inline),让每条失败当场就分流,而不是先全堆成 failed 再批量治理。
+#
+# - 「天气问题」(瞬时态,再跑有合理成功概率)→ 可重试:provider 限流 / 瞬时 5xx / gemini 超时 /
+#   yt-dlp / 直链下载(代理·网络抖动)/ 媒体解析抖动 / 心跳过期被回收。
+# - 「确定性死」(再跑一万次也一样,需要人工/凭证/改代码)→ 转人工三角(triage):
+#   内容下架(content_blocked)/ 门禁登录墙(content_restricted=auth)/ 404 已删除
+#   (content_unavailable=no_data)/ 不支持的 URL(permanent)/ 代码缺陷(code_error)。
+# - unknown / 任何不认识的类别:**既不重试也不三角**,保守落 failed(可能藏永久错,留给批量
+#   治理层重新派生后再定夺),与 failed_pool_triage 对 unknown 的处置一致。
+_RETRYABLE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "provider_pressure",  # 429 / 5xx / 限流 / 临时过载
+        "timeout",            # gemini_call_timeout 等瞬时超时
+        "download",           # yt-dlp / 直链下载(代理·网络抖动)
+        "media_resolve",      # media_resolve_failed:解析抖动,重试可恢复
+        "stale_running",      # 心跳过期被 reclaim,本质是被打断而非真失败
+    }
+)
+
+_TRIAGE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "content_blocked",      # geo / DMCA / 封号 / 强制下架
+        "content_restricted",   # 私密 / 年龄限制 / 登录墙(auth:需凭证而非重试)
+        "content_unavailable",  # 404 / 已删除 / 不存在(no_data)
+        "permanent",            # unsupported / invalid_video_url / not_video
+        "code_error",           # ModuleNotFound / TypeError 等,要改代码
+    }
+)
+
+
+def _failure_disposition(category: str) -> str:
+    """把失败类别分流成处置动作:'retry' / 'triage' / 'failed'。
+
+    纯函数,不读 attempts 预算——预算闸由调用方(_fail_job)把守。这里只回答
+    「这一类失败本质上能不能靠再跑一次恢复」:
+      - 'retry'  → 可重试类(timeout/proxy/限流/媒体解析/被回收),重新 queued 由 worker 再跑;
+      - 'triage' → 不可重试类(no_data/auth/下架/代码错),标 status='triage' 待人工;
+      - 'failed' → unknown / 不认识的类别,保守落 failed(不重试也不三角)。
+    """
+    cat = str(category or "").strip().lower()
+    if cat in _RETRYABLE_CATEGORIES:
+        return "retry"
+    if cat in _TRIAGE_CATEGORIES:
+        return "triage"
+    return "failed"
+
+
 def _derive_method(payload: dict[str, Any]) -> str:
     return str(payload.get("derive_method") or payload.get("analysis_method") or "mock").strip().lower() or "mock"
 

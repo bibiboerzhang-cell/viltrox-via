@@ -77,7 +77,8 @@
 }
 
 .vkpi-project-create-grid input,
-.vkpi-project-create-grid select {
+.vkpi-project-create-grid select,
+.vkpi-project-create-grid textarea {
   width: 100%;
   min-height: 52px;
   border: 1px solid rgba(16, 24, 40, 0.10);
@@ -91,10 +92,44 @@
   outline: 0;
 }
 
+.vkpi-project-create-grid textarea {
+  padding: 12px 14px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
 .vkpi-project-create-grid input:focus,
-.vkpi-project-create-grid select:focus {
+.vkpi-project-create-grid select:focus,
+.vkpi-project-create-grid textarea:focus {
   border-color: rgba(21, 93, 252, 0.40);
   box-shadow: 0 0 0 4px rgba(21, 93, 252, 0.10);
+}
+
+/* N3 新品发布(Launch)切换器:整行勾选,行内 checkbox + 说明文案。 */
+.vkpi-project-create-grid label.vkpi-project-launch-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(21, 93, 252, 0.35);
+  border-radius: 16px;
+  background: rgba(21, 93, 252, 0.06);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.vkpi-project-create-grid label.vkpi-project-launch-toggle input {
+  width: auto;
+  min-height: 0;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  accent-color: rgba(21, 93, 252, 0.9);
+}
+
+.vkpi-project-launch-hint {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .vkpi-project-create-modal footer {

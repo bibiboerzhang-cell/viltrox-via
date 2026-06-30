@@ -66,6 +66,15 @@ export function ProjectsPage({
   const [endDate, setEndDate] = useState('');
   const [ownerName, setOwnerName] = useState(selectedProject?.ownerName || data.staffMembers[0]?.name || '');
   const [campaignType, setCampaignType] = useState('上市推广');
+  // N3 新品发布(Launch):勾选后走 source_type='launch' 分支,把结构化卖点/竞品/目标市场
+  // 等塞进 metadata.launch(后端 launch_project.normalize_launch_metadata 同款字段)。
+  const [isLaunch, setIsLaunch] = useState(false);
+  const [launchPriceBand, setLaunchPriceBand] = useState('');
+  const [launchTargetCountries, setLaunchTargetCountries] = useState('');
+  const [launchSellingPoints, setLaunchSellingPoints] = useState('');
+  const [launchCompetitors, setLaunchCompetitors] = useState('');
+  const [launchTargetAudience, setLaunchTargetAudience] = useState('');
+  const [launchHypotheses, setLaunchHypotheses] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
@@ -190,12 +199,44 @@ export function ProjectsPage({
     setEndDate('');
     setOwnerName(selectedProject?.ownerName || data.staffMembers[0]?.name || '');
     setCampaignType('上市推广');
+    setIsLaunch(false);
+    setLaunchPriceBand('');
+    setLaunchTargetCountries('');
+    setLaunchSellingPoints('');
+    setLaunchCompetitors('');
+    setLaunchTargetAudience('');
+    setLaunchHypotheses('');
   };
+
+  // 逗号/换行分隔的多值字段 → 去重保序的非空字符串列表(对齐后端 _as_list 清洗口径)。
+  const splitLaunchList = (raw: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    raw
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .forEach((item) => {
+        if (item && !seen.has(item)) {
+          seen.add(item);
+          out.push(item);
+        }
+      });
+    return out;
+  };
+
+  // Launch 分支:SKU 是后端 required 字段;无匹配 SKU 时回落主推产品自由文本。
+  const launchSku = (matchedProduct?.productSku || productName.trim()).trim();
+  const launchSkuMissing = isLaunch && !launchSku;
 
   const submitProject = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!onCreateProject || !projectName.trim()) return;
+    if (launchSkuMissing) {
+      setMessage('新品发布(Launch)需要先指定 SKU / 主推产品。');
+      return;
+    }
     const noteLines = [
+      isLaunch ? '类型：新品发布(Launch)' : '',
       campaignStatus ? `状态：${campaignStatus}` : '',
       campaignType.trim() ? `推广类型：${campaignType.trim()}` : '',
       price.trim() ? `价格：${price.trim()}` : '',
@@ -206,20 +247,41 @@ export function ProjectsPage({
       endDate ? `计划结束：${endDate}` : '',
       ownerName.trim() ? `负责人：${ownerName.trim()}` : '',
     ].filter(Boolean);
+
+    // N3 launch 元数据:字段名与后端 launch_project.LAUNCH_PROJECT_FIELDS 一一对齐,
+    // 落 metadata.launch;source_type='launch' 让 workflow.create_project 写标。
+    const launchMetadata = isLaunch
+      ? {
+          launch: {
+            sku: launchSku,
+            price_band: launchPriceBand.trim(),
+            target_countries: splitLaunchList(launchTargetCountries),
+            selling_points: splitLaunchList(launchSellingPoints),
+            competitors: splitLaunchList(launchCompetitors),
+            target_audience: launchTargetAudience.trim(),
+            validation_hypotheses: splitLaunchList(launchHypotheses),
+          },
+          project_type: 'launch',
+        }
+      : undefined;
+
     setBusy(true);
     try {
       await onCreateProject({
         projectName: projectName.trim(),
         kolId: kolId.trim() || undefined,
-        productSku: matchedProduct?.productSku,
+        productSku: isLaunch ? launchSku : matchedProduct?.productSku,
         productName: productName.trim() || matchedProduct?.productName,
         products: matchedProduct ? [{ productSku: matchedProduct.productSku, productName: matchedProduct.productName }] : undefined,
-        sourceType: 'cockpit_projects_ui',
+        sourceType: isLaunch ? 'launch' : 'cockpit_projects_ui',
         note: noteLines.length ? noteLines.join('\n') : undefined,
+        metadata: launchMetadata,
       });
       resetCreateForm();
       setCreateOpen(false);
-      setMessage('推广项目已创建。后续阶段推进、费用、物流和证据请在项目详情里处理。');
+      setMessage(isLaunch
+        ? '新品发布(Launch)项目已创建。KOL 候选、内容验证任务和观察窗口请在项目详情里推进。'
+        : '推广项目已创建。后续阶段推进、费用、物流和证据请在项目详情里处理。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '推广项目创建失败');
     } finally {
@@ -465,6 +527,10 @@ export function ProjectsPage({
               <button type="button" onClick={closeCreateModal}>关闭</button>
             </header>
             <div className="vkpi-project-create-grid">
+              <label className="is-full vkpi-project-launch-toggle">
+                <input type="checkbox" checked={isLaunch} onChange={(event) => setIsLaunch(event.target.checked)} />
+                新品发布(Launch)—— 建成 source_type=launch 项目，带卖点/竞品/目标市场，进项目仪表盘
+              </label>
               <label className="is-full">推广名称
                 <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="例：AF 35mm F1.2 LAB FE 上市推广" />
               </label>
@@ -503,6 +569,32 @@ export function ProjectsPage({
               <label>推广类型
                 <input value={campaignType} onChange={(event) => setCampaignType(event.target.value)} placeholder="上市推广" />
               </label>
+              {isLaunch ? (
+                <>
+                  <label className="is-full">SKU（必填）
+                    <input value={launchSku} readOnly placeholder="先在「主推产品」选 SKU" />
+                    {launchSkuMissing ? <small className="vkpi-project-launch-hint">请在主推产品里选/填 SKU。</small> : null}
+                  </label>
+                  <label>价格带
+                    <input value={launchPriceBand} onChange={(event) => setLaunchPriceBand(event.target.value)} placeholder="99-149 USD" />
+                  </label>
+                  <label>目标人群
+                    <input value={launchTargetAudience} onChange={(event) => setLaunchTargetAudience(event.target.value)} placeholder="入门级视频创作者" />
+                  </label>
+                  <label className="is-full">目标国家（逗号/换行分隔）
+                    <input value={launchTargetCountries} onChange={(event) => setLaunchTargetCountries(event.target.value)} placeholder="US, JP, DE" />
+                  </label>
+                  <label className="is-full">核心卖点（逗号/换行分隔）
+                    <textarea value={launchSellingPoints} onChange={(event) => setLaunchSellingPoints(event.target.value)} rows={2} placeholder="F1.2 大光圈, LAB 旗舰画质, 紧凑轻量" />
+                  </label>
+                  <label className="is-full">竞品（逗号/换行分隔）
+                    <input value={launchCompetitors} onChange={(event) => setLaunchCompetitors(event.target.value)} placeholder="Sony 35mm F1.4 GM, Sigma 35mm F1.2" />
+                  </label>
+                  <label className="is-full">验证假设（逗号/换行分隔）
+                    <textarea value={launchHypotheses} onChange={(event) => setLaunchHypotheses(event.target.value)} rows={2} placeholder="大光圈人像是核心传播点, 价格带可下探至入门用户" />
+                  </label>
+                </>
+              ) : null}
               {data.kolOptions.length ? (
                 <label className="is-full">合作 KOL（可选）
                   <select value={kolId} onChange={(event) => setKolId(event.target.value)}>
@@ -514,8 +606,8 @@ export function ProjectsPage({
             </div>
             <footer>
               <button className="vkpi-project-modal-button" type="button" onClick={closeCreateModal} disabled={busy}>取消</button>
-              <button className="vkpi-project-modal-button is-primary" type="submit" disabled={busy || !onCreateProject || !projectName.trim()}>
-                创建推广
+              <button className="vkpi-project-modal-button is-primary" type="submit" disabled={busy || !onCreateProject || !projectName.trim() || launchSkuMissing}>
+                {isLaunch ? '创建新品发布' : '创建推广'}
               </button>
             </footer>
           </form>
