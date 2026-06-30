@@ -12,6 +12,7 @@ export const I18N_EN = {
   "Report": "Report",
   // Help popover
   "帮助 & 反馈": "Help & Feedback", "文档 & 指南": "Docs & Guide", "V-KPI 完整使用文档": "Full V-KPI documentation",
+  "KOL 找人到项目操作说明": "KOL discovery-to-project guide",
   "键盘快捷键": "Keyboard Shortcuts", "提交反馈 / 报 bug": "Submit Feedback / Bug",
   "对接 vkpi_feedback": "Hooks vkpi_feedback API", "预留": "Soon",
   "技术支持": "Tech Support", "已认证": "Verified", "Viltrox 唯卓仕 · 北美组": "Viltrox · North America Team",

@@ -9,7 +9,7 @@ const e = React.createElement;
 
 export function HelpPopover({ onClose, anchorRef, t, onOpenDocs, onOpenShortcuts, onOpenFeedback }: any) {
   const items = [
-    { icon: BookOpen,    title: t("文档 & 指南"),       desc: t("V-KPI 完整使用文档"), badge: t("暂不可用"), disabled: true, onClick: onOpenDocs },
+    { icon: BookOpen,    title: t("文档 & 指南"),       desc: t("KOL 找人到项目操作说明"), badge: "PDF", disabled: !onOpenDocs, onClick: onOpenDocs },
     { icon: Keyboard,    title: t("键盘快捷键"),        desc: "⌘ K / ⌘ ? / ⌘ /",       badge: null,    onClick: onOpenShortcuts },
     { icon: Bug,         title: t("提交反馈 / 报 bug"), desc: t("发送到管理通知列表"), badge: t("已接入"), onClick: onOpenFeedback },
   ];

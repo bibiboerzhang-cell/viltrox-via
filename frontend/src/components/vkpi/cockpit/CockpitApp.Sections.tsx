@@ -38,6 +38,12 @@ import { saveStoredState } from "./lib/storage";
 import { createStaffGroup, updateStaffGroup } from "../../../services/vkpi/groups-api";
 
 const e = React.createElement;
+const VKPI_KOL_WORKFLOW_GUIDE_URL = "/assets/vkpi_kol_workflow_cloud_demo_2026-06-30.pdf?v=20260630-1115";
+
+function openKolWorkflowGuide() {
+  const guideWindow = window.open(VKPI_KOL_WORKFLOW_GUIDE_URL, "_blank", "noopener,noreferrer");
+  if (!guideWindow) window.location.assign(VKPI_KOL_WORKFLOW_GUIDE_URL);
+}
 
 // 返回容器 return 里那一长串 overlay 节点(数组)。在 CockpitApp 里以 ...CockpitOverlays({...}) 展开。
 export function CockpitOverlays(p: any) {
@@ -173,7 +179,7 @@ export function CockpitOverlays(p: any) {
     e(AnimatePresence, { key: "ov-help" }, showHelp && e(HelpPopover, {
       onClose: () => setShowHelp(false),
       anchorRef: helpBtnRef, t,
-      onOpenDocs: null,
+      onOpenDocs: openKolWorkflowGuide,
       onOpenShortcuts: () => setShowShortcuts(true),
       onOpenFeedback: () => setShowFeedback(true),
     })),

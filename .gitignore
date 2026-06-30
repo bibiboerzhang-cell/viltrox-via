@@ -90,3 +90,6 @@ exports/
 video-production-platform/
 BUILD_GIT_SHA
 BUILD_TIME
+
+# 本地运行资产(大二进制,不进 git)
+frontend/public/assets/
