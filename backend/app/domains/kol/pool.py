@@ -548,6 +548,34 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
                 "state": "ready" if final_entry else "pending",
             }
         )
+    # 当前设备 & 升级机会:从已有分析散文抽机身/镜头品牌(零 LLM、纯读),填 device_* 供前端「当前设备」块,
+    # 治「机身 待接入」占位。升级机会:已用 Viltrox=low(已是客户)/ 用竞品镜头=high(可推)/ 仅机身=medium。
+    # 红线:纯读分析文本,绝不触 viltrox_fit_score。
+    try:
+        import json as _gear_json
+        from app.domains.kol.creator_gear import aggregate_creator_gear
+
+        _gear_results: list[dict[str, Any]] = []
+        for _a in analysis_items:
+            _fe = _a.get("final_entry")
+            if not _fe:
+                continue
+            _res = _fe.get("result")
+            if isinstance(_res, str):
+                try:
+                    _res = _gear_json.loads(_res)
+                except Exception:
+                    continue
+            if isinstance(_res, dict):
+                _gear_results.append(_res)
+        _gear = aggregate_creator_gear(_gear_results)
+        if _gear.get("camera_body"):
+            item["device_primary"] = _gear["camera_body"]
+            item["device_lenses"] = _gear.get("lens_brands") or []
+            item["device_uses_viltrox"] = bool(_gear.get("uses_viltrox"))
+            item["upgrade_window"] = "low" if _gear.get("uses_viltrox") else ("high" if _gear.get("lens_brands") else "medium")
+    except Exception:
+        logger.warning("creator_gear extract failed kol=%s", kol_pool_id, exc_info=True)
     return {
         "status": "ready",
         "method": "kol_pool_detail_bundle_v1",

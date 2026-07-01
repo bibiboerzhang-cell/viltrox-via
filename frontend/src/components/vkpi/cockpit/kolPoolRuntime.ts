@@ -181,6 +181,15 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       rawPlatformData.device_primary,
       nestedObject(rawPlatformData, "devices").camera_body,
     );
+    // 在用镜头品牌:后端 detail_bundle 从视频分析散文抽出 device_lenses(品牌列表)。
+    // 映射成前端块要的 {brand,model,type};competitor 类=升级机会(可推 Viltrox)。
+    const deviceLenses = [
+      ...parseList((raw as Record<string, unknown>).device_lenses),
+      ...parseList(rawPlatformData.device_lenses),
+    ]
+      .map((b) => String(b).trim())
+      .filter(Boolean)
+      .map((b) => ({ brand: b, model: "", type: /viltrox/i.test(b) ? "viltrox" : "competitor" }));
     const evidenceVideos = representativeVideosFromEvidence(raw.video_evidence);
     const representativeVideos = evidenceVideos.length ? evidenceVideos : representativeVideosFrom(rawPlatformData);
     const profileUrl = String(firstValue(item.profile_url, rawIdentity.profile_url, rawPlatformData.profile_url, "") || "");
@@ -250,7 +259,7 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       avatar_color: avatarColor(item.handle || item.display_name || String(index)),
       devices: {
         camera_body: devicePrimary || "待接入",
-        lenses: [],
+        lenses: deviceLenses,
         has_viltrox: hasViltrox,
         competitor_brands: competitorBrands,
         upgrade_window: valueFrom(raw, ["upgrade_window"]) || "待评估",
