@@ -354,6 +354,78 @@ def _record_action_feedback_once(
     return True
 
 
+# Map real KOL-pool board actions onto the feedback vocabulary that the scoring
+# chain (recommendation_use_case.FEEDBACK_SCORE) already understands.
+_POOL_ACTION_FEEDBACK = {
+    "favorite": "shortlist",      # My KOL / star = positive shortlist signal
+    "shortlist": "shortlist",
+    "promote": "claim",           # promote to main roster = adopt/claim signal
+    "claim": "claim",
+    "reject": "reject",
+    "snooze": "snooze",
+    "unfavorite": "snooze",       # un-starring is a mild negative signal
+}
+
+
+def _latest_recommendation_id_for_pool(kol_pool_id: int) -> int:
+    """Most recent recommendation tied to a pool item (drives the feedback link)."""
+    if int(kol_pool_id or 0) <= 0:
+        return 0
+    row = get_conn().execute(
+        """
+        SELECT id
+        FROM vkpi_kol_recommendations
+        WHERE kol_pool_id=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    return int(dict(row)["id"]) if row else 0
+
+
+def record_pool_action_feedback(
+    kol_pool_id: int,
+    action: str,
+    *,
+    staff: dict[str, Any] | None = None,
+    note: str = "",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bridge a real KOL-pool board action into recommendation feedback.
+
+    Pure-additive, idempotent, best-effort: a board favorite/promote/reject of a
+    pool item that came from a recommendation lands one feedback row so the
+    learning corpus grows from real operator behavior. No-op (never raises) when
+    the pool item has no backing recommendation, so callers can fire-and-forget.
+    Never touches viltrox_fit_score.
+    """
+    clean_action = str(action or "").strip().lower()
+    feedback_type = _POOL_ACTION_FEEDBACK.get(clean_action)
+    if not feedback_type:
+        return {"linked": False, "reason": "unmapped_action", "action": clean_action}
+    recommendation_id = _latest_recommendation_id_for_pool(int(kol_pool_id or 0))
+    if not recommendation_id:
+        return {"linked": False, "reason": "no_recommendation", "kol_pool_id": int(kol_pool_id or 0)}
+    merged_payload = {"kol_pool_id": int(kol_pool_id or 0), "pool_action": clean_action, **(payload or {})}
+    inserted = _record_action_feedback_once(
+        recommendation_id,
+        feedback_type,
+        merged_payload,
+        staff=staff,
+        note=str(note or ""),
+    )
+    if inserted:
+        get_conn().commit()
+    return {
+        "linked": True,
+        "feedback_inserted": inserted,
+        "recommendation_id": recommendation_id,
+        "feedback_type": feedback_type,
+        "kol_pool_id": int(kol_pool_id or 0),
+    }
+
+
 def action_recommendation(recommendation_id: int, action: str, payload: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     payload = payload or {}

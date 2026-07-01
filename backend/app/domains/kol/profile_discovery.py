@@ -553,6 +553,30 @@ async def execute_smart_search_profile_advance_pipeline(
     }
 
 
+def _dedupe_enrolled_row_best_effort(enroll_result: Any) -> None:
+    """L6:enroll 落库后跑去重 hook(最佳努力)。
+
+    从 write_kol_profile_basics 返回里取写入行 id,调 pool_merge.dedupe_enrolled_pool_row:
+    email 强信号自动合并(走 apply_merge 带 fit 守卫)、模糊信号只进人工清单(不写)。
+    env(KOL_AUTO_DEDUP_ENROLL)可关。任何异常静默吞(只 debug),绝不阻断 enroll。
+    """
+    import os
+
+    if str(os.getenv("KOL_AUTO_DEDUP_ENROLL", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return
+    try:
+        if not isinstance(enroll_result, dict):
+            return
+        pool_id = enroll_result.get("kol_pool_id")
+        if not pool_id:
+            return
+        from app.domains.kol.pool_merge import dedupe_enrolled_pool_row
+
+        dedupe_enrolled_pool_row(int(pool_id), auto_merge=True)
+    except Exception:
+        logger.debug("auto_dedup_enroll skip", exc_info=True)
+
+
 def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
     """把本次「全网新发现」的人即时轻量入库,治去重根因(用户口径:「抓到自动入库就不会再重复出现」)。
 
@@ -589,11 +613,14 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("avg_views") or 0),
         }
         try:
-            write_kol_profile_basics(None, profile_data, dry_run=False)
+            _enroll_res = write_kol_profile_basics(None, profile_data, dry_run=False)
             # ⚠不要把 kol_pool_id 回写到会话项! 设计不变量(search_sessions.approve_session 注释):
             # new_creator 入池后会话项 kol_pool_id 必须保持 NULL,否则「会话项交集」会把这些真候选
             # 全误杀 → 全网发现框整组消失(550pro2 监视器搜索 15 个新发现却 0 显示的真因)。
             enrolled += 1
+            # L6 去重 hook:落库后立即为该行找跨平台同一人。email 强信号自动合并、模糊只进人工清单。
+            # 最佳努力:apply_merge 自带 fit 守卫;任何异常吞掉只记日志,绝不阻断 enroll 主流程。
+            _dedupe_enrolled_row_best_effort(_enroll_res)
         except Exception as exc:
             logger.info("auto_enroll_discovery skip handle=%r: %s", handle, str(exc)[:200])
     if enrolled:

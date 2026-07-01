@@ -12,6 +12,7 @@ import { FloatingCard } from "./components/FloatingCard";
 import { HierarchyDropdown } from "./components/HierarchyDropdown";
 import { KolFunnelCard } from "./components/KolFunnelCard";
 import { MetricCard } from "./components/MetricCard";
+import { OpsHealthCard } from "./components/OpsHealthCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
 import { TopMoversCard } from "./components/TopMoversCard";
@@ -44,7 +45,7 @@ export function DashboardReplicaPage(props: any) {
     setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
     breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
     setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
-    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, onOpenMyKol, onOpenEvents, focusTarget, viewModes = VIEW_MODES,
+    setSelectedPublish, setShowFullCalendar, onOpenProjectsList, onOpenMyKol, onOpenEvents, onOpenTriage, focusTarget, viewModes = VIEW_MODES,
     showSettingsModal = false,
     metrics = [], campaigns = [], campaignsMeta = {}, calendarDays = [], calendarMeta = {},
     signals = [], aiInsight = EMPTY_AI_INSIGHT, topMovers = [], kolFunnel = null,
@@ -383,6 +384,10 @@ export function DashboardReplicaPage(props: any) {
               //    保留顶栏「工作提醒」popover 内的同一面板;此处把它放回首屏,无需点开即可看见。
               apiToken
                 ? e(ActionInboxPanel, { apiToken, heading: "今日该做什么", limit: 8 })
+                : null,
+              // L1:运维健康小卡(triage 待处理数 + 一键进队列)。只读自取,无 token 静默。
+              apiToken
+                ? e(OpsHealthCard, { apiToken, onOpenTriage })
                 : null,
               // 1. KOL 漏斗(收藏→认领→入项目→已发布)
               e(KolFunnelCard, {

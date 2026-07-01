@@ -54,6 +54,31 @@ from app.domains.access.firewall import firewall_check
 
 logger = get_logger(__name__)
 
+
+def _record_pool_feedback_signal(
+    kol_pool_id: int,
+    action: str,
+    *,
+    staff: dict | None = None,
+    note: str = "",
+) -> None:
+    """L7: bridge a real board action (favorite/promote/unfavorite) into
+    recommendation feedback so the learning corpus grows from real operator
+    behavior. Best-effort — never breaks the primary board action, and never
+    touches viltrox_fit_score."""
+    try:
+        from app.domains.recommendations import actions as rec_actions
+
+        rec_actions.record_pool_action_feedback(
+            int(kol_pool_id),
+            action,
+            staff=staff,
+            note=note,
+        )
+    except Exception:
+        logger.debug("kol_pool.feedback_bridge_failed", exc_info=True)
+
+
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])
 
 # task-queue 端点已抽到 vkpi_task_queue.py(无 prefix);include 后继承本 router 的 /api/admin/vkpi,路径不变。
@@ -566,7 +591,7 @@ def promote_to_main_kol(
 ) -> dict:
     """自动匹配或创建 kols 主表记录并链接，替代前端手动输入 ID。"""
     try:
-        return kol_pool.promote_to_main(
+        result = kol_pool.promote_to_main(
             int(kol_pool_id),
             staff=staff,
             mode=str(body.get("mode") or "match_or_create"),
@@ -575,6 +600,8 @@ def promote_to_main_kol(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _record_pool_feedback_signal(int(kol_pool_id), "promote", staff=staff, note=str(body.get("note") or ""))
+    return result
 
 
 @router.post("/kol-pool/{kol_pool_id}/enrich")
@@ -728,11 +755,13 @@ def favorite_kol_pool_item(
     from app.domains.kol import pool_favorites
 
     try:
-        return pool_favorites.add_favorite(int(kol_pool_id), staff=staff, note=str(body.get("note") or ""))
+        result = pool_favorites.add_favorite(int(kol_pool_id), staff=staff, note=str(body.get("note") or ""))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    _record_pool_feedback_signal(int(kol_pool_id), "favorite", staff=staff, note=str(body.get("note") or ""))
+    return result
 
 
 @router.delete("/kol-pool/{kol_pool_id}/favorite")
@@ -750,9 +779,12 @@ def unfavorite_kol_pool_item(
     from app.domains.kol import pool_favorites
 
     try:
-        return pool_favorites.remove_favorite(int(kol_pool_id), staff=staff)
+        result = pool_favorites.remove_favorite(int(kol_pool_id), staff=staff)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if result.get("status") == "unfavorited":
+        _record_pool_feedback_signal(int(kol_pool_id), "unfavorite", staff=staff)
+    return result
 
 
 

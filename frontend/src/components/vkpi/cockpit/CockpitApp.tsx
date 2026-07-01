@@ -62,6 +62,17 @@ const e = React.createElement;
 const MyKolPage = React.lazy(() => import("../pages/myKol/MyKolPage").then((module) => ({ default: module.MyKolPage })));
 const LegacyProjectsPage = React.lazy(() => import("../pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const EventsMockupPage = React.lazy(() => import("../pages/events/EventsMockupPage").then((module) => ({ default: module.EventsMockupPage })));
+// L1(2026-06-30):Wave1-4 已建运维页接进 cockpit 壳(原硬白名单够不到 → 点不到)。
+const DataQualityPage = React.lazy(() => import("../pages/DataQualityPage").then((module) => ({ default: module.DataQualityPage })));
+const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((module) => ({ default: module.DataQueryPage })));
+const MarketTrendsPage = React.lazy(() => import("../pages/MarketTrendsPage").then((module) => ({ default: module.MarketTrendsPage })));
+const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then((module) => ({ default: module.SkillStudioPage })));
+
+// L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
+const COCKPIT_BOARDS = [
+  "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
+  "triage", "dataQuery", "marketTrends", "skillStudio",
+] as const;
 
 export function CockpitApp(props: any = {}) {
   const {
@@ -89,7 +100,7 @@ export function CockpitApp(props: any = {}) {
   const initialNav = normalizeReplicaNav(urlNav) || normalizeReplicaNav(stored.activeNav) || "dashboard";
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
-  const [activeNav, setActiveNav] = useState(["dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers"].includes(initialNav) ? initialNav : "dashboard");
+  const [activeNav, setActiveNav] = useState((COCKPIT_BOARDS as readonly string[]).includes(initialNav) ? initialNav : "dashboard");
   const [theme, setTheme] = useState(stored.theme || "dark");
 
   // 板块授权守卫:stored/程序化导航落到「被该成员隐藏」的板块时弹回 dashboard。
@@ -661,8 +672,39 @@ export function CockpitApp(props: any = {}) {
             activeNav === "shopify" && e(ShopifyHubPage as React.ComponentType<any>, { apiToken }),
             activeNav === "dealers" && e(DealerMapPage, { apiToken }),
 
+            // L1:智能运维组的 4 个 Wave1-4 页(各自只读自取数据;失败/无 token 静默)。
+            //   triage 复用 DataQualityPage(运维页宿主,viewMode=manager 才拉质量摘要)。
+            activeNav === "triage" && e(LazyErrorBoundary, { name: "Triage" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "运维 Triage 加载中...")
+              },
+                e(DataQualityPage as React.ComponentType<any>, { apiToken, viewMode: "manager" })
+              )
+            ),
+            activeNav === "dataQuery" && e(LazyErrorBoundary, { name: "DataQuery" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "问数 加载中...")
+              },
+                e(DataQueryPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            activeNav === "marketTrends" && e(LazyErrorBoundary, { name: "MarketTrends" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "市场趋势 加载中...")
+              },
+                e(MarketTrendsPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            activeNav === "skillStudio" && e(LazyErrorBoundary, { name: "SkillStudio" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Skill Studio 加载中...")
+              },
+                e(SkillStudioPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+
             // Placeholder for nav items not yet built
-            activeNav !== "dashboard" && activeNav !== "kol-pool" && activeNav !== "my-kol" && activeNav !== "projects" && activeNav !== "events" && activeNav !== "shopify" && activeNav !== "dealers" && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
+            !(COCKPIT_BOARDS as readonly string[]).includes(activeNav) && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
               e("div", { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-8 max-w-md w-full" },
                 (() => {
                   const navItem = NAV_ITEMS.find(n => n.key === activeNav);
@@ -714,6 +756,11 @@ export function CockpitApp(props: any = {}) {
               },
               // Upcoming Events 卡「View all events →」→ 跳真实 Events 页。
               onOpenEvents: () => openEventsPage(null),
+              // L1:运维健康卡「进入 Triage 队列」→ 切到运维 Triage 板块(DataQuality 宿主)。
+              onOpenTriage: () => {
+                saveStoredState({ activeNav: "triage" });
+                setActiveNav("triage");
+              },
             })
           )
         )

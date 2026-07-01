@@ -32,6 +32,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains import memory
 from app.domains.recommendations.new_launch_match import build_new_launch_match_preview
 
 logger = get_logger(__name__)
@@ -105,6 +106,26 @@ def _family_refreshed_today(family_name: str) -> bool:
     return count > 0
 
 
+def _readiness_blocker() -> str | None:
+    """Cheap pre-flight: returns a blocker reason if Memory is not P4-ready, else None.
+
+    ``build_new_launch_match_preview`` raises the *same* RuntimeError for every
+    family when Memory readiness is not ``ready_for_p4_dry_run`` (or when provider
+    calls are unexpectedly allowed). Probing once up front turns N identical
+    per-family failures into one clear, actionable summary reason. Read-only.
+    """
+    try:
+        readiness = memory.readiness() or {}
+    except Exception as exc:  # noqa: BLE001 - readiness probe must not abort the sweep
+        return f"memory_readiness_probe_failed: {str(exc)[:160]}"
+    status = str(readiness.get("status") or "")
+    if status != "ready_for_p4_dry_run":
+        return f"memory_not_ready: {status or 'unknown'}"
+    if bool(readiness.get("provider_calls_allowed")):
+        return "provider_calls_allowed_true"
+    return None
+
+
 def refresh_recommendations(
     *,
     max_families: int = 8,
@@ -118,24 +139,88 @@ def refresh_recommendations(
             (clamped to ``_MAX_FAMILIES_CAP``).
         per_family_limit: max recommendation rows per family
             (clamped to ``_PER_FAMILY_CAP``).
-        force: when False, families already refreshed today are skipped.
+        force: when False, families already refreshed today are skipped; when
+            True, every selected family is recomputed regardless of today's runs
+            (used by manual/operator triggers to guarantee fresh rows).
 
-    Returns a summary dict. Never raises for a single-family failure; it is
-    logged and counted so one bad family does not abort the whole sweep.
+    Returns a summary dict. Never raises:
+    - a global readiness blocker short-circuits with ``ok=False`` + ``reason``
+      (so it is reported once, not as N identical per-family failures);
+    - a single-family failure is logged and counted so one bad family does not
+      abort the whole sweep;
+    - families that persist but yield 0 rows ("empty family") are surfaced in
+      ``empty`` rather than masquerading as a successful refresh.
     """
     fam_budget = max(1, min(int(max_families or 0) or 8, _MAX_FAMILIES_CAP))
     item_budget = max(1, min(int(per_family_limit or 0) or 25, _PER_FAMILY_CAP))
 
-    families = _top_product_families(fam_budget)
     refreshed: list[dict[str, Any]] = []
     skipped: list[str] = []
     failed: list[dict[str, str]] = []
+    empty: list[str] = []
     total_recs = 0
 
+    # Pre-flight: one global blocker (readiness/provider) avoids N redundant failures.
+    blocker = _readiness_blocker()
+    if blocker is not None:
+        logger.warning("recommendation_refresh.blocked", extra={"reason": blocker})
+        return {
+            "ok": False,
+            "reason": blocker,
+            "families_considered": 0,
+            "families_refreshed": 0,
+            "families_skipped_today": 0,
+            "families_failed": 0,
+            "families_empty": 0,
+            "recommendations_written": 0,
+            "refreshed": [],
+            "skipped": [],
+            "failed": [],
+            "empty": [],
+            "force": bool(force),
+            "max_families": fam_budget,
+            "per_family_limit": item_budget,
+        }
+
+    # Family selection is itself read-only DB work; isolate it so a transient DB
+    # error reports cleanly instead of bubbling out of the scheduled job.
+    try:
+        families = _top_product_families(fam_budget)
+    except Exception as exc:  # noqa: BLE001 - selection failure must report, not crash the job
+        logger.warning("recommendation_refresh.family_selection_failed", extra={"error": str(exc)[:240]})
+        return {
+            "ok": False,
+            "reason": f"family_selection_failed: {str(exc)[:200]}",
+            "families_considered": 0,
+            "families_refreshed": 0,
+            "families_skipped_today": 0,
+            "families_failed": 0,
+            "families_empty": 0,
+            "recommendations_written": 0,
+            "refreshed": [],
+            "skipped": [],
+            "failed": [],
+            "empty": [],
+            "force": bool(force),
+            "max_families": fam_budget,
+            "per_family_limit": item_budget,
+        }
+
     for family in families:
-        if not force and _family_refreshed_today(family):
-            skipped.append(family)
-            continue
+        # Idempotency probe is per-family and read-only; a probe error must not
+        # skip the family silently — fall through and let the build attempt run.
+        if not force:
+            try:
+                already = _family_refreshed_today(family)
+            except Exception as exc:  # noqa: BLE001 - probe failure -> attempt the refresh anyway
+                logger.warning(
+                    "recommendation_refresh.skip_probe_failed",
+                    extra={"family": family, "error": str(exc)[:200]},
+                )
+                already = False
+            if already:
+                skipped.append(family)
+                continue
         try:
             payload = build_new_launch_match_preview(
                 product_query=family,
@@ -150,14 +235,17 @@ def refresh_recommendations(
         persistence = payload.get("persistence") or {}
         rec_count = int(persistence.get("recommendation_count") or 0)
         total_recs += rec_count
-        refreshed.append(
-            {
-                "family": family,
-                "run_uid": persistence.get("run_uid"),
-                "run_id": persistence.get("run_id"),
-                "recommendation_count": rec_count,
-            }
-        )
+        record = {
+            "family": family,
+            "run_uid": persistence.get("run_uid"),
+            "run_id": persistence.get("run_id"),
+            "recommendation_count": rec_count,
+        }
+        refreshed.append(record)
+        if rec_count == 0:
+            # Persisted a run but matched no eligible KOL: surface the empty family
+            # so a degraded selection口径 (only-empty families) is observable.
+            empty.append(family)
 
     result = {
         "ok": True,
@@ -165,10 +253,12 @@ def refresh_recommendations(
         "families_refreshed": len(refreshed),
         "families_skipped_today": len(skipped),
         "families_failed": len(failed),
+        "families_empty": len(empty),
         "recommendations_written": total_recs,
         "refreshed": refreshed,
         "skipped": skipped,
         "failed": failed,
+        "empty": empty,
         "force": bool(force),
         "max_families": fam_budget,
         "per_family_limit": item_budget,
@@ -180,6 +270,7 @@ def refresh_recommendations(
             "recommendations_written": total_recs,
             "families_skipped_today": len(skipped),
             "families_failed": len(failed),
+            "families_empty": len(empty),
         },
     )
     return result

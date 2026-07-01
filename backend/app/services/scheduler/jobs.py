@@ -97,6 +97,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_weekly_report,
     job_worker_lease_expire_stale,
 )
+from app.services.scheduler.jobs_pool_dedupe import job_kol_pool_dedupe_reconcile  # noqa: F401
 
 
 # ──────────────────────────────────────────────
@@ -192,9 +193,37 @@ async def start_scheduler() -> None:
     # ── Job 7a2: 学习闭环·输入段·推荐刷新(每日 04:00,早于 outcome 04:40 喂新鲜料)── 确定性/零成本/幂等/只读 fit。
     _scheduler.add_job(
         job_vkpi_recommendation_refresh,
-        trigger=CronTrigger(hour=4, minute=0),
+        trigger=CronTrigger(hour=4, minute=0, timezone=CHINA_TZ),
         id="vkpi_recommendation_refresh",
         name="Recompute fresh KOL recommendations from current pool (deterministic, read-only fit)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    # ── L4: Skill 编排自动触发(每日 06:20,对真产品出 recs>0 进生产账本)── gate+预算闸内建,dry_run 零成本。
+    def _vkpi_skill_auto_orchestrate():
+        try:
+            from app.domains.marketing_brain import skill_orchestrator
+            skill_orchestrator.auto_orchestrate(dry_run=True, record=True)
+        except Exception:
+            logger.warning("vkpi_skill_auto_orchestrate failed", exc_info=True)
+
+    _scheduler.add_job(
+        _vkpi_skill_auto_orchestrate,
+        trigger=CronTrigger(hour=6, minute=20, timezone=CHINA_TZ),
+        id="vkpi_skill_auto_orchestrate",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+    # ── L6: KOL Pool 去重 reconcile(每日 02:30;config-gate 默认 dry_run 只读报候选,放量才合并)──
+    _scheduler.add_job(
+        job_kol_pool_dedupe_reconcile,
+        trigger=CronTrigger(hour=2, minute=30, timezone=CHINA_TZ),
+        id="kol_pool_dedupe_reconcile",
+        name="KOL Pool dedupe reconcile (dry_run report; auto-merge when gated on)",
         max_instances=1,
         coalesce=True,
     )
