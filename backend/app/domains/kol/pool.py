@@ -576,6 +576,14 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
             item["upgrade_window"] = "low" if _gear.get("uses_viltrox") else ("high" if _gear.get("lens_brands") else "medium")
     except Exception:
         logger.warning("creator_gear extract failed kol=%s", kol_pool_id, exc_info=True)
+    # 受众语言估算(评论法):有评论出真语言分布(替代"创作者国@100%"假地理),无评论则 sample_size=0 诚实空。
+    # 覆盖现实:目前仅有评论的账号出数(18 官号 + 已抓评论的 KOL);外部 KOL 需先抓评论。红线不触 fit。
+    try:
+        from app.domains.kol.audience_language import audience_language_for_kol
+
+        item["audience_languages"] = audience_language_for_kol(int(kol_pool_id))
+    except Exception:
+        logger.warning("audience_language failed kol=%s", kol_pool_id, exc_info=True)
     return {
         "status": "ready",
         "method": "kol_pool_detail_bundle_v1",

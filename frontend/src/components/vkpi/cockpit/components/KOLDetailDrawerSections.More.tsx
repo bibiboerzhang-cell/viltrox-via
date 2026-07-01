@@ -67,32 +67,60 @@ export function KOLDrawerDevices({ item, devices }: any) {
 }
 
 // ── Geo distribution ──
+const LANG_LABEL: Record<string, string> = {
+  en: "英语", es: "西语", pt: "葡语", de: "德语", fr: "法语", it: "意语", id: "印尼语",
+  tr: "土耳其语", nl: "荷语", zh: "中文", ja: "日语", ko: "韩语", ru: "俄语", ar: "阿语",
+  th: "泰语", hi: "印地语", he: "希伯来语",
+};
+
+// 受众语言估算(评论法,真数据)+ 创作者所在地(诚实,非粉丝)。取代旧「粉丝地理分布=创作者国@100%」假值。
 export function KOLDrawerGeoDistribution({ item, geoDistribution }: any) {
-  if (!(geoDistribution.length > 0)) return null;
-  return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-    e("div", { className: "flex items-center gap-1.5 mb-2" },
-      e(Globe2, { size: 11, className: "text-cyan-400" }),
-      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "粉丝地理分布 · 估算 Reach")
+  const aud = (item.audience_languages || {}) as any;
+  const langs = Array.isArray(aud.languages) ? aud.languages : [];
+  const hasLang = langs.length > 0 && Number(aud.sample_size || 0) > 0;
+  const hasGeo = geoDistribution.length > 0;
+  if (!hasLang && !hasGeo) return null;
+  return e("div", { className: "px-5 py-3 border-b border-white/[0.06] space-y-3" },
+    hasLang && e("div", null,
+      e("div", { className: "flex items-center gap-1.5 mb-2" },
+        e(Globe2, { size: 11, className: "text-cyan-400" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "受众语言估算 · 评论法")
+      ),
+      e("div", { className: "space-y-1.5" },
+        langs.slice(0, 6).map((l: any, i: number) =>
+          e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
+            e("span", { className: "text-white font-medium w-[52px]" }, LANG_LABEL[l.lang] || l.lang),
+            e("div", { className: "flex-1 geo-bar-bg max-w-[120px]" },
+              e("div", { className: "geo-bar-fill", style: { width: Math.min(100, Number(l.pct) || 0) + "%", background: i === 0 ? "#06b6d4" : "#64748b" } })
+            ),
+            e("span", { className: "text-slate-300 tabular-nums w-[36px] text-right" }, (Number(l.pct) || 0) + "%")
+          )
+        )
+      ),
+      e("div", { className: "mt-1.5 text-[9px] text-slate-500" }, `样本 ${aud.sample_size} 评论 · 已判 ${aud.determined_pct || 0}% · 置信 ${aud.confidence}`),
+      Array.isArray(aud.top_markets) && aud.top_markets.length > 0 && e("div", { className: "text-[9px] text-slate-500" }, "推测市场: " + aud.top_markets.join(" · ")),
+      e("div", { className: "text-[9px] text-amber-400/70" }, aud.note || "估算值,非平台官方粉丝数据")
     ),
-    e("div", { className: "space-y-1.5" },
-      geoDistribution.map((g: any, i: number) => {
-        const cInfo = getCountryInfo(g.country) || { code: g.country, flag: "·", name: g.country, tier: "?" };
-        const reach = item.estimated_country_reach?.[cInfo.code] || item.estimated_country_reach?.[g.country];
-        const sharePct = pctOrZero(g.share);
-        return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
-          e("span", { style: { fontSize: 12 } }, cInfo.flag),
-          e("span", { className: "text-white font-medium w-[28px]" }, cInfo.code),
-          e(GeoTierChip, { tier: cInfo.tier }),
-          e("div", { className: "flex-1 geo-bar-bg max-w-[120px]" },
-            e("div", { className: "geo-bar-fill", style: {
-              width: sharePct + "%",
-              background: cInfo.tier === "A" ? "#10b981" : cInfo.tier === "B" ? "#fbbf24" : "#64748b"
-            }})
-          ),
-          e("span", { className: "text-slate-300 tabular-nums w-[40px] text-right" }, sharePct.toFixed(0) + "%"),
-          reach && e("span", { className: "text-slate-500 tabular-nums text-[10px] ml-auto" }, "~" + formatNumber(reach) + " reach")
-        );
-      })
+    hasGeo && e("div", null,
+      e("div", { className: "flex items-center gap-1.5 mb-2" },
+        e(Globe2, { size: 11, className: "text-slate-400" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "创作者所在地")
+      ),
+      e("div", { className: "space-y-1.5" },
+        geoDistribution.map((g: any, i: number) => {
+          const cInfo = getCountryInfo(g.country) || { code: g.country, flag: "·", name: g.country, tier: "?" };
+          const sharePct = pctOrZero(g.share);
+          return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
+            e("span", { style: { fontSize: 12 } }, cInfo.flag),
+            e("span", { className: "text-white font-medium w-[28px]" }, cInfo.code),
+            e(GeoTierChip, { tier: cInfo.tier }),
+            e("div", { className: "flex-1 geo-bar-bg max-w-[120px]" },
+              e("div", { className: "geo-bar-fill", style: { width: sharePct + "%", background: cInfo.tier === "A" ? "#10b981" : cInfo.tier === "B" ? "#fbbf24" : "#64748b" } })
+            ),
+            e("span", { className: "text-slate-300 tabular-nums w-[40px] text-right" }, sharePct.toFixed(0) + "%")
+          );
+        })
+      )
     )
   );
 }
