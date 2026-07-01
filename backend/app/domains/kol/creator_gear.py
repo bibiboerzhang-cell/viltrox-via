@@ -124,3 +124,27 @@ def aggregate_creator_gear(analysis_results: list[dict[str, Any]]) -> dict[str, 
         "lens_brands": [ln for ln, _ in lens_counter.most_common(6)],
         "uses_viltrox": any("viltrox" in ln.lower() for ln in lens_counter),
     }
+
+
+def gear_from_text(text: str) -> dict[str, Any]:
+    """从任意文本(bio/简介/raw)抽机身+镜头品牌。兜底给没做视频深析的 KOL —— 很多创作者
+    在简介里写机身(shot on Sony A7IV)。纯读、零成本。红线不触 viltrox_fit_score。"""
+    text = _text(text)
+    if not text:
+        return {"camera_body": "", "camera_bodies": [], "lens_brands": []}
+    bodies: list[str] = []
+    seen_b: set[str] = set()
+    for m in _CAMERA_RE.findall(text):
+        b = _norm_body(m)
+        k = b.lower().replace(" ", "")
+        if b and k not in seen_b:
+            seen_b.add(k)
+            bodies.append(b)
+    lenses: list[str] = []
+    seen_l: set[str] = set()
+    for m in _LENS_RE.findall(text):
+        b = m.strip()
+        if b and b.lower() not in seen_l:
+            seen_l.add(b.lower())
+            lenses.append(b)
+    return {"camera_body": bodies[0] if bodies else "", "camera_bodies": bodies[:5], "lens_brands": lenses[:6]}

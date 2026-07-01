@@ -569,6 +569,14 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
             if isinstance(_res, dict):
                 _gear_results.append(_res)
         _gear = aggregate_creator_gear(_gear_results)
+        if not _gear.get("camera_body"):
+            # 兜底:没视频深析(或分析没提到设备)时扫 bio/raw —— 很多创作者简介里写机身。
+            from app.domains.kol.creator_gear import gear_from_text
+
+            _bg = gear_from_text(str(item.get("bio") or "") + " " + str(item.get("raw_platform_data") or ""))
+            if _bg.get("camera_body"):
+                _bg["uses_viltrox"] = any("viltrox" in ln.lower() for ln in (_bg.get("lens_brands") or []))
+                _gear = _bg
         if _gear.get("camera_body"):
             item["device_primary"] = _gear["camera_body"]
             item["device_lenses"] = _gear.get("lens_brands") or []
