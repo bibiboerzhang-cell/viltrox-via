@@ -43,6 +43,155 @@ _BUSINESS_ANCHORS = (
 )
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
+# ---- L0 多源抽取(分层取证漏斗第一刀:榨已抓回的公开 raw)----
+# CDN/缩略图垃圾域名(外链过滤,非真个人站)。
+_CDN_JUNK = (
+    "ytimg", "tiktokcdn", "cdninstagram", "googleusercontent", "fbcdn",
+    "licdn", "twimg", "sndcdn", "w3.org", "schema.org", "gstatic",
+)
+# 社媒域名 -> 渠道标签(外链里属"社媒渠道"而非"独立站")。
+_SOCIAL_HOSTS = {
+    "instagram.com": "instagram", "tiktok.com": "tiktok", "youtube.com": "youtube",
+    "youtu.be": "youtube", "facebook.com": "facebook", "twitter.com": "twitter",
+    "x.com": "twitter", "t.me": "telegram", "wa.me": "whatsapp", "discord.gg": "discord",
+    "linkedin.com": "linkedin", "twitch.tv": "twitch", "pinterest.com": "pinterest",
+}
+# 聚合页(Linktree 类)—— L1 优先跟进,常把邮箱+全套社媒列齐。
+_LINK_HUBS = ("linktr.ee", "beacons.ai", "carrd.co", "stan.store", "linkin.bio", "koji.to", "campsite.bio", "solo.to", "linkpop.com")
+_EMAIL_PLACEHOLDER = {"user@domain.com", "name@example.com", "email@example.com", "you@example.com", "your@email.com", "someone@example.com"}
+_EMAIL_BAD_SUFFIX = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".mp4")
+_URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
+
+SOURCE_RAW_BIO = "raw_bio_scan"        # 裸 raw/bio/描述扫到(置信中)
+SOURCE_VIDEO_CAPTION = "video_caption"  # 视频标题/文案
+SOURCE_WEBSITE = "website_declared"    # 独立站/contact 页抓到(L1)
+
+
+# 真 TLD 白名单:所有 2 字母国别码视为有效 + 常见多字母 gTLD。用来砍掉
+# IG @提及链被误判成邮箱的假命中(如 n@hamid.monadi / n@flawless.finish.by.aaminah,
+# .monadi/.aaminah 不是真 TLD)。宁缺勿滥,漏掉极生僻 gTLD(.photography)可接受。
+_VALID_MULTICHAR_TLDS = {
+    "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "name", "pro",
+    "mobi", "online", "store", "shop", "site", "tech", "dev", "app", "live", "studio",
+    "media", "agency", "team", "world", "email", "link", "xyz", "club", "design",
+    "photography", "film", "video", "social", "blog", "news", "photo", "pics",
+    "asia", "eu", "cat", "tel",
+}
+
+
+def _valid_email(m: str) -> bool:
+    """过滤 CDN 后缀 / 占位 / @提及式假命中,只留合法 TLD 的真邮箱。"""
+    m = (m or "").strip().lower().rstrip(".")
+    if not m or m in _EMAIL_PLACEHOLDER or m.endswith(_EMAIL_BAD_SUFFIX):
+        return False
+    if m.count("@") != 1:
+        return False
+    local, _, domain = m.partition("@")
+    if not local or "." not in domain:
+        return False
+    tld = domain.rsplit(".", 1)[-1]
+    if not tld.isalpha():
+        return False
+    if len(tld) == 2:  # 所有 2 字母国别 TLD 视为有效(.de/.uk/.by/.jp ...)
+        return True
+    return tld in _VALID_MULTICHAR_TLDS
+
+
+def _text_blobs(profile: dict[str, Any]) -> list[str]:
+    """汇总 raw 里可能含联系方式的公开文本字段(bio/about/描述/文案/签名)。"""
+    blobs: list[str] = []
+    for k in ("biography", "bio", "description", "about", "channel_description", "signature", "title", "caption", "desc"):
+        v = profile.get(k)
+        if isinstance(v, str):
+            blobs.append(v)
+        elif isinstance(v, dict) and isinstance(v.get("description"), str):
+            blobs.append(v["description"])
+    snip = profile.get("snippet")
+    if isinstance(snip, dict) and isinstance(snip.get("description"), str):
+        blobs.append(snip["description"])
+    items = profile.get("items")
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        sn = items[0].get("snippet") or {}
+        if isinstance(sn, dict) and isinstance(sn.get("description"), str):
+            blobs.append(sn["description"])
+    return [b for b in blobs if b]
+
+
+def _email_confidence(email: str, blob: str) -> tuple[float, str]:
+    """按上下文给置信度 + 取证片段:所在行/全文有商务锚点 → 0.9,否则裸 raw → 0.55。"""
+    low = blob.lower()
+    idx = low.find(email.lower())
+    snippet = blob[max(0, idx - 40): idx + len(email) + 20].strip() if idx >= 0 else email
+    line = next((ln.lower() for ln in blob.splitlines() if email.lower() in ln.lower()), "")
+    if any(a in line for a in _BUSINESS_ANCHORS) or any(a in low for a in _BUSINESS_ANCHORS):
+        return 0.9, snippet
+    return 0.55, snippet
+
+
+def extract_contacts_multi_source(
+    raw_platform_data: dict[str, Any], *, platform: str = "", source_url: str = ""
+) -> list[dict[str, Any]]:
+    """L0 多源联系方式抽取(纯函数、零网络、零成本):从已抓回的公开 raw 里榨联系方式。
+    覆盖:email(bio/描述/文案)、显式 business_email 字段、外链独立站/Linktree(待 L1 跟进)、社媒渠道。
+    每条带 source_type + confidence + evidence_text。不做全网爬;比既有白名单版更全,用置信度分级替代硬白名单。
+    红线:纯读文本抽联系方式,绝不触 viltrox_fit_score。
+    """
+    del platform, source_url  # 预留签名(L1 独立站抓取会用 source_url)
+    profile = (raw_platform_data or {}).get("profile") or raw_platform_data or {}
+    if not isinstance(profile, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(ctype: str, value: str, source_type: str, confidence: float, evidence: str) -> None:
+        value = (value or "").strip().rstrip(".,​")
+        if not value:
+            return
+        key = (ctype, value.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "contact_type": ctype, "contact_value": value, "source_type": source_type,
+            "confidence": round(float(confidence), 2), "evidence_text": (evidence or "")[:280],
+        })
+
+    blobs = _text_blobs(profile)
+    full = "\n".join(blobs)
+    for blob in blobs:
+        for m in _EMAIL_RE.findall(blob):
+            if _valid_email(m):
+                conf, ev = _email_confidence(m, blob)
+                _add("email", m.strip().rstrip("."), SOURCE_RAW_BIO, conf, ev)
+    for k in ("public_email", "publicEmail", "business_email", "businessEmail", "email"):
+        v = str(profile.get(k) or "").strip()
+        if v and _valid_email(v):
+            _add("email", v, SOURCE_IG_BUSINESS, 0.92, f"{k}={v}")
+    for m in _URL_RE.findall(full):
+        u = m.strip().rstrip(".,)​")
+        low = u.lower()
+        if any(j in low for j in _CDN_JUNK):
+            continue
+        host = low.split("//", 1)[-1].split("/", 1)[0]
+        social = next((tag for h, tag in _SOCIAL_HOSTS.items() if h in host), "")
+        if social:
+            _add(f"{social}_link", u, SOURCE_RAW_BIO, 0.6, u)
+        elif any(h in low for h in _LINK_HUBS):
+            _add("link_hub", u, SOURCE_RAW_BIO, 0.5, u)
+        else:
+            _add("website", u, SOURCE_RAW_BIO, 0.45, u)
+    # 全 raw 兜底扫描:邮箱常在帖文案/嵌套字段里,结构化字段扫不到。创作者档案 raw 绝大多数是
+    # 其自有内容,故兜底扫到的邮箱多为本人。低置信(0.45)+ 独立来源标签,与结构化高置信条目区分;
+    # 已见的不重复(结构化先跑,高置信保留)。仍只吃已抓回的公开 raw,不做全网爬。
+    try:
+        full_raw = json.dumps(raw_platform_data, ensure_ascii=False)
+    except Exception:
+        full_raw = full
+    for m in _EMAIL_RE.findall(full_raw):
+        if _valid_email(m):
+            _add("email", m.strip().rstrip("."), "raw_full_scan", 0.45, "")
+    return out
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

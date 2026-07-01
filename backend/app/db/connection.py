@@ -262,6 +262,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "201_apify_jobs_triage_status.sql",
     "202_vkpi_market_observations.sql",
     "203_vkpi_llm_calls_cost_micro_usd.sql",
+    "204_vkpi_kol_pool_contacts_confidence.sql",
 )
 
 try:
