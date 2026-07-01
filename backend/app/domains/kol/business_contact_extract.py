@@ -193,6 +193,114 @@ def extract_contacts_multi_source(
     return out
 
 
+def enrich_contacts_l0(
+    kol_pool_id: int, *, conn: Any | None = None, staff: dict[str, Any] | None = None, dry_run: bool = False
+) -> dict[str, Any]:
+    """L0 免费富化:读该 KOL 已抓回的 raw -> extract_contacts_multi_source -> 落 vkpi_kol_pool_contacts
+    (带 confidence/evidence/首末见)+ 回填 vkpi_kol_pool.email(择最高置信 email,仅当主表空)/other_contacts_json。
+    纯读已有公开 raw、零外调、零成本。dry_run=True 只返回将写内容、不落库。红线:不触 viltrox_fit_score。"""
+    db = conn or get_conn()
+    row = db.execute(
+        "SELECT id, platform, email, other_contacts_json, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        return {"status": "not_found", "kol_pool_id": int(kol_pool_id)}
+    d = dict(row)
+    try:
+        raw = json.loads(d.get("raw_platform_data") or "{}")
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict) or not raw:
+        return {"status": "no_raw", "kol_pool_id": int(kol_pool_id)}
+    contacts = extract_contacts_multi_source(raw, platform=str(d.get("platform") or ""))
+    emails = sorted([c for c in contacts if c["contact_type"] == "email"], key=lambda c: -float(c.get("confidence") or 0))
+    best_email = emails[0]["contact_value"] if emails else ""
+    by_type: dict[str, int] = {}
+    for c in contacts:
+        by_type[c["contact_type"]] = by_type.get(c["contact_type"], 0) + 1
+    if dry_run:
+        return {
+            "status": "dry_run", "kol_pool_id": int(kol_pool_id), "found": len(contacts),
+            "best_email": best_email, "email_would_backfill": bool(best_email and not str(d.get("email") or "").strip()),
+            "by_type": by_type, "contacts": contacts[:20],
+        }
+    if not contacts:
+        return {"status": "no_contacts", "kol_pool_id": int(kol_pool_id)}
+    now = _utcnow()
+    actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
+    for cc in contacts:
+        conf = round(float(cc.get("confidence") or 0.0), 2)
+        db.execute(
+            """
+            INSERT INTO vkpi_kol_pool_contacts
+                (kol_pool_id, contact_type, contact_value, contact_source, source_url,
+                 consent_basis, is_public_declared, extracted_by_staff_id,
+                 confidence, evidence_text, first_seen_at, last_seen_at, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
+            """,
+            (int(kol_pool_id), cc["contact_type"], cc["contact_value"],
+             cc.get("source_type") or "raw_bio_scan", "", "public_scan", conf >= 0.85, actor,
+             conf, (cc.get("evidence_text") or "")[:280], now, now, now),
+        )
+    try:
+        existing = json.loads(d.get("other_contacts_json") or "[]")
+        if not isinstance(existing, list):
+            existing = []
+    except Exception:
+        existing = []
+    seen = {str((e or {}).get("contact_value") or "").strip().lower() for e in existing if isinstance(e, dict)}
+    for cc in contacts:
+        k = cc["contact_value"].strip().lower()
+        if k and k not in seen:
+            existing.append({
+                "contact_type": cc["contact_type"], "contact_value": cc["contact_value"],
+                "contact_source": cc.get("source_type"), "confidence": cc.get("confidence"),
+            })
+            seen.add(k)
+    db.execute(
+        """
+        UPDATE vkpi_kol_pool
+        SET email=CASE WHEN COALESCE(email,'')='' THEN ? ELSE email END,
+            other_contacts_json=?,
+            contact_source=CASE WHEN COALESCE(contact_source,'')='' THEN 'raw_scan' ELSE contact_source END,
+            contact_first_seen_at=COALESCE(contact_first_seen_at, ?),
+            updated_at=?
+        WHERE id=?
+        """,
+        (best_email, json.dumps(existing, ensure_ascii=False), now, now, int(kol_pool_id)),
+    )
+    db.commit()
+    return {"status": "ok", "kol_pool_id": int(kol_pool_id), "found": len(contacts), "email": best_email, "by_type": by_type}
+
+
+def backfill_contacts_l0(*, limit: int | None = None, only_missing_email: bool = False) -> dict[str, Any]:
+    """对全池已有 raw 的 KOL 跑一遍 L0 富化(纯读 raw、零外调、零成本)。管理员在 prod 手跑。
+    返回汇总。红线:不触 viltrox_fit_score。"""
+    db = get_conn()
+    where = "raw_platform_data IS NOT NULL AND raw_platform_data <> ''"
+    if only_missing_email:
+        where += " AND COALESCE(email,'')=''"
+    sql = f"SELECT id FROM vkpi_kol_pool WHERE {where} ORDER BY id"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    ids = [int(dict(r)["id"]) for r in db.execute(sql).fetchall()]
+    processed = with_contacts = email_filled = 0
+    for kid in ids:
+        try:
+            res = enrich_contacts_l0(kid, conn=db)
+        except Exception:
+            logger.warning("enrich_contacts_l0 failed kol=%s", kid, exc_info=True)
+            continue
+        processed += 1
+        if res.get("found"):
+            with_contacts += 1
+        if res.get("email"):
+            email_filled += 1
+    return {"status": "done", "candidates": len(ids), "processed": processed, "with_contacts": with_contacts, "email_filled": email_filled}
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
