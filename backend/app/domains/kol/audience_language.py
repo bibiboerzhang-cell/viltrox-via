@@ -132,3 +132,42 @@ def audience_language_for_kol(kol_pool_id: int, *, conn: Any = None, limit: int 
     dist = language_distribution(texts)
     dist["kol_pool_id"] = int(kol_pool_id)
     return dist
+
+
+def enqueue_audience_comments_for_high_value(
+    *, min_fit: float = 75.0, limit: int | None = 40, staff: Any = None
+) -> dict[str, Any]:
+    """给「高价值 / AI 看好」的 KOL 抓评论 —— 这样受众语言分布才对你实际评估的人生效。
+    高价值口径:viltrox_fit_score >= min_fit 或 已入主表(linked_main_kol_id 非空);且有视频证据、
+    且暂无评论(有则跳过,幂等)。逐个走现成 enqueue_kol_pool_comments_job(泳道可见、幂等)。
+    读 fit 仅用于筛选,绝不写 viltrox_fit_score。抓取有 Apify 成本,故默认 limit=40、只挑高价值。"""
+    from app.db.connection import get_conn
+    from app.domains.comments.collector import enqueue_kol_pool_comments_job
+
+    db = get_conn()
+    sql = (
+        "SELECT DISTINCT p.id, p.viltrox_fit_score FROM vkpi_kol_pool p "
+        "JOIN vkpi_kol_video_evidence e ON e.kol_pool_id = p.id AND e.is_active IS NOT FALSE "
+        "WHERE (COALESCE(p.viltrox_fit_score,0) >= ? OR p.linked_main_kol_id IS NOT NULL) "
+        "ORDER BY p.viltrox_fit_score DESC NULLS LAST"
+    )
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    ids = [int(dict(r)["id"]) for r in db.execute(sql, (float(min_fit),)).fetchall()]
+    enqueued = skipped = has_comments = 0
+    for kid in ids:
+        if audience_language_for_kol(kid, conn=db).get("sample_size", 0) > 0:
+            has_comments += 1
+            continue
+        try:
+            res = enqueue_kol_pool_comments_job(kid, staff=staff)
+            if str(res.get("status")) in ("queued", "already_queued"):
+                enqueued += 1
+            else:
+                skipped += 1
+        except Exception:
+            skipped += 1
+    return {
+        "status": "done", "candidates": len(ids),
+        "enqueued": enqueued, "already_has_comments": has_comments, "skipped": skipped,
+    }
