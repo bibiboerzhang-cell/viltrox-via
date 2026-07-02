@@ -256,6 +256,114 @@ def _pool_rows_fallback(kol_pool_ids: list[int]) -> dict[int, dict]:
     return out
 
 
+def _adoption_profile() -> dict:
+    """采纳回流(2026-07-02 用户令):收藏/入项目 KOL 的 platform 与主题词分布。
+    行数极小(收藏12+分配5级别),每次召回一小查;采纳样本 <5 不学,防两三条记录带偏。"""
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            """
+            SELECT p.platform, p.primary_topic, p.bio
+            FROM vkpi_kol_pool p
+            WHERE p.id IN (SELECT kol_pool_id FROM vkpi_kol_pool_favorites)
+               OR p.id IN (SELECT kol_pool_id FROM vkpi_project_kol_assignments)
+            """
+        ).fetchall()
+    except Exception:
+        return {}
+    platforms: dict[str, int] = {}
+    topic_words: dict[str, int] = {}
+    n = 0
+    for r in rows:
+        d = dict(r)
+        n += 1
+        p = str(d.get("platform") or "").lower()
+        if p:
+            platforms[p] = platforms.get(p, 0) + 1
+        blob = f"{d.get('primary_topic') or ''} {d.get('bio') or ''}".lower()
+        for w in re.findall(r"[a-z]{4,}", blob)[:20]:
+            topic_words[w] = topic_words.get(w, 0) + 1
+    if n < 5:
+        return {}
+    top_words = {w for w, c in sorted(topic_words.items(), key=lambda kv: -kv[1])[:15] if c >= 2}
+    return {"n": n, "platforms": platforms, "top_words": top_words}
+
+
+def _adoption_boost_for(item: dict[str, Any], profile: dict) -> float:
+    """展示层小幅上浮:平台份额 0.02 + 采纳主题词命中候选 bio/why_fit 0.03,封顶 0.05。"""
+    n = int(profile.get("n") or 0)
+    if not n:
+        return 0.0
+    boost = 0.0
+    p = str(item.get("platform") or "").lower()
+    if p and profile.get("platforms", {}).get(p):
+        boost += 0.02 * (profile["platforms"][p] / n)
+    blob = f"{item.get('bio') or ''} {item.get('why_fit') or ''}".lower()
+    if any(w in blob for w in profile.get("top_words", set())):
+        boost += 0.03
+    return round(min(0.05, boost), 4)
+
+
+def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text: str, product_label: str) -> str:
+    """头部候选 LLM 相关性重排(两桶各 top12 合一次 flash 调用,0.15 权重折进 display 分)。
+    任何失败静默跳过(返回诊断短语);红线:绝不触 vector/recall/fit 分。"""
+    try:
+        from app.platform import llm_gateway
+    except Exception as exc:
+        return f"gateway_unavailable: {exc}"[:80]
+    cands: list[dict[str, Any]] = []
+    for bucket in ("creator", "reviewer"):
+        cands.extend((buckets.get(bucket) or [])[:12])
+    if len(cands) < 4:
+        return "too_few_candidates"
+    lines = []
+    for i, it in enumerate(cands):
+        blurb = " ".join(
+            str(x) for x in (it.get("why_fit") or "", it.get("recall_reason") or "", it.get("bio") or "")
+        ).replace("\n", " ")[:200]
+        lines.append(f"{i + 1}. handle={str(it.get('handle'))[:30]} :: {blurb}")
+    prompt = (
+        "Task: rerank creator candidates for a marketing search.\nQuery: " + str(query_text)[:200]
+        + ("\nTarget persona: " + str(persona_text)[:200] if persona_text else "")
+        + ("\nProduct: " + str(product_label)[:80] if product_label else "")
+        + "\nFor EACH numbered candidate output one object {\"i\": number, \"s\": relevance 0-100}."
+        + " Output STRICTLY one JSON array, no prose, reply starts with [\n\n"
+        + "\n".join(lines)
+    )
+    resp = llm_gateway.invoke(
+        prompt,
+        purpose="vkpi_recall_rerank_v1",
+        preferred_provider="google",
+        max_output_tokens=3000,
+        cost_tag="kol_recall",
+    )
+    if str(resp.get("model") or "") == "rule_v0" or str(resp.get("status") or "") != "success":
+        return "llm_unusable"
+    text = str(resp.get("text") or "")
+    # 截断救援:thinking 模型思考 token 吃掉输出预算是常态,复用 audience_stats 的
+    # 残缺数组抢救解析(抢救到多少算多少,绝不编造)。
+    try:
+        from app.domains.kol.audience_stats import _extract_json_array
+
+        arr = _extract_json_array(text)
+    except Exception:
+        arr = []
+    if not arr:
+        return "parse_failed"
+    hits = 0
+    for obj in arr if isinstance(arr, list) else []:
+        try:
+            idx = int(obj.get("i")) - 1
+            score = max(0.0, min(100.0, float(obj.get("s"))))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if 0 <= idx < len(cands):
+            cands[idx]["display_rank_score"] = round(_float(cands[idx].get("display_rank_score")) + 0.15 * (score / 100.0), 6)
+            cands[idx]["llm_rerank_score"] = score
+            hits += 1
+    return f"ok:{hits}"
+
+
 def _clean_text(value: Any, limit: int = 240) -> str:
     text = " ".join(str(value or "").replace("\x00", " ").split())
     return text[:limit]
@@ -765,6 +873,36 @@ def recall_kol_profiles(
             reverse=True,
         )
 
+    # ── 展示层二段增强(2026-07-02 用户令):①采纳回流上浮 ②LLM 头部 rerank。
+    # 两段都只动 display_rank_score(与「新人优先」同款展示信号),失败静默、诊断留痕。
+    _rerank_note = ""
+    try:
+        _adoption = _adoption_profile()
+        _boosted = 0
+        if _adoption:
+            for _bucket_items in buckets.values():
+                for _it in _bucket_items:
+                    _b = _adoption_boost_for(_it, _adoption)
+                    if _b:
+                        _it["display_rank_score"] = round(_float(_it.get("display_rank_score")) + _b, 6)
+                        _it["adoption_boost"] = _b
+                        _boosted += 1
+        if os.environ.get("RECALL_LLM_RERANK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+            _rerank_note = _llm_rerank_buckets(buckets, resolved_text, persona_text, product_label)
+        if _boosted or _rerank_note.startswith("ok"):
+            for _bucket_items in buckets.values():
+                _bucket_items.sort(
+                    key=lambda item: (
+                        _float(item.get("display_rank_score")),
+                        _float(item.get("recall_rank_score")),
+                        _float(item.get("vector_score")),
+                    ),
+                    reverse=True,
+                )
+        _rerank_note = (_rerank_note or "off") + f" boost:{_boosted}"
+    except Exception as _rr_exc:
+        _rerank_note = f"stage_skipped: {str(_rr_exc)[:80]}"
+
     creator_take = min(safe_creator_quota, safe_limit)
     reviewer_take = min(safe_reviewer_quota, max(0, safe_limit - creator_take))
     selected_creator = buckets["creator"][:creator_take]
@@ -812,6 +950,7 @@ def recall_kol_profiles(
             "typed_candidate_count": len(buckets["creator"]) + len(buckets["reviewer"]),
             "missing_type_count": missing_type_count,
             "fallback_pool_rows": fallback_used_count,
+            "display_rerank": _rerank_note,
             "creator_candidate_count": len(buckets["creator"]),
             "reviewer_candidate_count": len(buckets["reviewer"]),
             "creator_returned": len(selected_creator),
