@@ -57,10 +57,13 @@ export function CockpitSidebar({
     );
   };
 
+  // 生产收敛(2026-07-02):实验模块(智能运维组 triage/问数/市场趋势/SkillStudio + V2 待开发)
+  // 默认隐藏,仅构建时 VITE_EXPERIMENTAL_NAV=1 才显示 —— 线上只保留业务功能,实验能力留本地/预发。
+  const showExperimental = String((import.meta as any).env?.VITE_EXPERIMENTAL_NAV ?? "") === "1";
   const visible = (NAV_ITEMS as NavItem[]).filter(({ key }) => perms.canViewBoard(key));
   const primaryItems = visible.filter((i) => !i.v2 && !i.ops);
-  const opsItems = visible.filter((i) => i.ops);
-  const v2Items = visible.filter((i) => i.v2);
+  const opsItems = showExperimental ? visible.filter((i) => i.ops) : [];
+  const v2Items = showExperimental ? visible.filter((i) => i.v2) : [];
 
   return e("aside", {
     className: `${collapsed ? "w-[64px]" : "w-[260px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-white/[0.06] bg-[#050810]/85 backdrop-blur-xl transition-all duration-300 md:flex`
