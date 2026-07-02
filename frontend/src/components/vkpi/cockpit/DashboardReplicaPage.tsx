@@ -22,6 +22,8 @@ import { KPI_SCOPES } from "./data/kpiScopes";
 import { VIEW_MODES } from "./data/viewModes";
 
 const e = React.createElement;
+// 与 CockpitSidebar 同一开关:实验模块仅在构建时 VITE_EXPERIMENTAL_NAV=1 显示。
+const SHOW_EXPERIMENTAL = String((import.meta as any).env?.VITE_EXPERIMENTAL_NAV ?? "") === "1";
 const EMPTY_AI_INSIGHT = {
   confidence: 0,
   updatedLabel: "无信号",
@@ -377,16 +379,15 @@ export function DashboardReplicaPage(props: any) {
               )
             ),
 
-            // ─── RIGHT RAIL (今日该做什么 + KOL 漏斗 + Active Campaigns + 7 天日历) ───
+            // ─── RIGHT RAIL (KOL 漏斗 + Active Campaigns + 7 天日历) ───
             e("div", { className: "space-y-4" },
-              // 0. 今日该做什么(Action Inbox 首屏卡):打开 Dashboard 即见今日待办建议(后端按优先级排序),
-              //    每条 标题 + 一句为何 + 复用 approve/execute 两步。仍走真实端点 /actions/inbox,scope 后端过滤。
-              //    保留顶栏「工作提醒」popover 内的同一面板;此处把它放回首屏,无需点开即可看见。
-              apiToken
+              // 生产收敛(2026-07-02):Action Inbox 首屏卡 + 运维健康小卡是 v615 之后加的运维模块,
+              // 随导航一起收进 VITE_EXPERIMENTAL_NAV 闸 —— 线上 Dashboard 保持 v615 组装,
+              // 今日建议仍可从顶栏「工作提醒」popover 进入(同一面板未删)。
+              SHOW_EXPERIMENTAL && apiToken
                 ? e(ActionInboxPanel, { apiToken, heading: "今日该做什么", limit: 8 })
                 : null,
-              // L1:运维健康小卡(triage 待处理数 + 一键进队列)。只读自取,无 token 静默。
-              apiToken
+              SHOW_EXPERIMENTAL && apiToken
                 ? e(OpsHealthCard, { apiToken, onOpenTriage })
                 : null,
               // 1. KOL 漏斗(收藏→认领→入项目→已发布)
