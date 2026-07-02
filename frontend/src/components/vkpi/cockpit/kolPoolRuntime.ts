@@ -195,6 +195,11 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
     const profileUrl = String(firstValue(item.profile_url, rawIdentity.profile_url, rawPlatformData.profile_url, "") || "");
     const displayName = String(firstValue(item.display_name, rawIdentity.display_name, item.handle, "待补全"));
     const evidenceCount = numberFromRecord(rawEvidence, ["evidence_count"]);
+    // 受众画像 ensemble_v1(P0):detail_bundle 透传的解析对象优先,行内 audience_estimated_json 兜底;无数据=null。
+    const audienceEstimatedRaw = (raw.audience_estimated && typeof raw.audience_estimated === "object" && !Array.isArray(raw.audience_estimated))
+      ? raw.audience_estimated as Record<string, unknown>
+      : parseObject(raw.audience_estimated_json);
+    const audienceEstimated = Object.keys(audienceEstimatedRaw).length ? audienceEstimatedRaw : null;
 
     return {
       id: item.id || index + 1,
@@ -224,6 +229,9 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       candidate_kind: candidateKind,
       linked_main_kol_id: item.linked_main_kol_id,
       audience_type: valueFrom(raw, ["audience_type"]) || null,
+      // Audience Stats·估算 BETA 面板数据源(此前 audience_* 键被本固定键白名单滤掉,面板永远饿死)。
+      audience_estimated: audienceEstimated,
+      audience_languages: (raw.audience_languages && typeof raw.audience_languages === "object") ? raw.audience_languages : null,
       geo_tier: GEO_A.has(country) ? "A" : GEO_B.has(country) ? "B" : country ? "C" : "X",
       geo_distribution: country ? [{ country, share: 1 }] : [],
       trend_resonance: trendScore == null ? null : trendScore / 100,

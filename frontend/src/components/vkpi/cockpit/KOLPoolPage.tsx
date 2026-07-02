@@ -247,6 +247,19 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     }
   };
 
+  // 受众画像刷新完成后重拉 detail_bundle(不重置抽屉,静默换水;失败保留旧详情)。
+  const reloadDetail = async () => {
+    const id = selectedItem?.id;
+    if (!apiToken || !id) return;
+    try {
+      const bundle = await getKolPoolDetailBundle(apiToken, id);
+      if (!bundle || !bundle.item) return;
+      const normalized = toCockpitKolPoolRows([bundle.item])[0];
+      setSelectedDetailBundle(bundle);
+      setSelectedItem((prev: any) => (prev && prev.id === id ? { ...prev, ...normalized, id } : prev));
+    } catch { /* 静默:重拉失败保留旧详情 */ }
+  };
+
   // item1:任务板「打开」video/账号任务 → 消费 pending id,按 id 拉 detail 开抽屉(池内必有,
   // 不依赖 watchlist)。挂载即消费一次 + 监听事件(已在本页时点开也生效)。失败静默。
   useEffect(() => {
@@ -560,6 +573,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         onToggleMyList: toggleMyList,
         onContact: (it: any) => setContactItem(it),
         staff,
+        onReloadDetail: reloadDetail,
       }),
       contactItem && e(ContactModal, {
         key: `kol-contact-${contactItem.id || contactItem.handle || "selected"}`,

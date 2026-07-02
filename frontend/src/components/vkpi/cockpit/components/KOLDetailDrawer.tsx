@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { Share2, Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
@@ -49,7 +49,7 @@ const e = React.createElement;
 
 // D2:CopyValueButton / GoaffproLinkCard / GoaffproLinkSection 已抽出至共享文件 ../../shared/GoaffproLinkSection(供 MY KOL 详情复用),渲染调用见下方。
 
-export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [] }: any) {
+export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
   const [dimensions11, setDimensions11] = React.useState<any>(null);
@@ -70,6 +70,29 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [briefResult, setBriefResult] = React.useState<SkillRunResult | null>(null);
   const [briefBusy, setBriefBusy] = React.useState(false);
   const [briefError, setBriefError] = React.useState("");
+  // 受众画像 ensemble_v1(P0):Audience Stats·估算 BETA 面板的刷新态(state 在此,展示组件保持纯 props)。
+  const [audienceState, setAudienceState] = React.useState<any>({ status: "idle", message: "" });
+  const handleRefreshAudience = React.useCallback(() => {
+    if (!apiToken || !item?.id) return;
+    setAudienceState({ status: "loading", message: "" });
+    void refreshAudienceStats(apiToken, item.id)
+      .then((payload: any) => {
+        const status = String(payload?.status || "");
+        if (status === "ok") {
+          setAudienceState({ status: "done", message: `已更新:样本 ${payload?.sample_size ?? "—"} 评论者 · 置信 ${payload?.confidence ?? "—"}` });
+          // 完成后重拉 detail_bundle,让面板吃到新 audience_estimated。
+          if (typeof onReloadDetail === "function") void onReloadDetail();
+        } else if (status === "pending_comments") {
+          setAudienceState({
+            status: "pending",
+            message: payload?.enqueued ? "评论不足,已入队抓评论 — 可稍后再刷新" : String(payload?.reason || "评论不足,稍后再试"),
+          });
+        } else {
+          setAudienceState({ status: "error", message: String(payload?.reason || payload?.status || "刷新失败") });
+        }
+      })
+      .catch((error: any) => setAudienceState({ status: "error", message: error?.message ? String(error.message) : "刷新失败" }));
+  }, [apiToken, item?.id, onReloadDetail]);
   // #1 入主表 promote:把候选写进 vkpi 主表(接已存在 /kol-pool/{id}/promote)。
   const [promoteMsg, setPromoteMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const onPromote = React.useCallback(async (it: any) => {
@@ -125,6 +148,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     setBriefResult(null);
     setBriefError("");
     setBriefBusy(false);
+    // 换 KOL 时受众刷新态归零,避免上一条的 loading/报错串号。
+    setAudienceState({ status: "idle", message: "" });
   }, [item?.id]);
 
   // 内容契合深析:开抽屉先只读已有缓存(不烧 LLM);无缓存则留待用户点击触发。
@@ -362,8 +387,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       e(KOLDrawerDevices, { item, devices }),
 
-      // ── Geo distribution ──
-      geoDistribution.length > 0 && e(KOLDrawerGeoDistribution, { item, geoDistribution }),
+      // ── Audience Stats·估算 BETA + Geo distribution(组件内部自判空;无数据但可刷新时也渲染)──
+      e(KOLDrawerGeoDistribution, { item, geoDistribution, apiToken, audienceState, onRefreshAudience: handleRefreshAudience }),
 
       // ── V6 Fit Breakdown ──
       e(KOLDrawerV6Breakdown, { item, v6Breakdown }),

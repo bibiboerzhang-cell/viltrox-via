@@ -325,6 +325,25 @@ export async function translateBio(token: string, text: string) {
   );
 }
 
+// 受众画像 ensemble_v1(P0):评论者抽样→三层推断→聚合收缩,写 audience_estimated_json。
+// YouTube 走免费 Data API;IG/TT 复用已抓评论(不足则后端入队抓评论并返回 status=pending_comments)。
+export async function refreshAudienceStats(token: string, kolPoolId: number | string) {
+  return apiFetch<{
+    status?: string;
+    reason?: string;
+    platform?: string;
+    sample_size?: number;
+    confidence?: number;
+    audience?: Record<string, unknown>;
+    enqueued?: boolean;
+    comments_found?: number;
+  }>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/audience-stats/refresh`,
+    { method: "POST", timeoutMs: 120000 },
+    token,
+  );
+}
+
 // #17 按 handle 解析到主池真记录(供 mover 弹窗 #5 / KOLDetailModal 真指标 #22)。
 // 命中:{ matched:true, kol_pool_id, followers, avg_views, profile_url, ...合作摘要 };未命中:{ matched:false }。
 export async function resolveKolPool(token: string, handle: string, platform = "") {
