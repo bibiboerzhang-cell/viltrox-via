@@ -613,16 +613,19 @@ export function SmartKolInputPanel({
     setState("executing");
     setError("");
     try {
+      // 2026-07-02 用户令:库内推荐 15(创作者8+测评7)/ 云端新发现 30(三平台轮转均匀,
+      // 每平台候选上限 12 留补位余量)。地区由 discoveryRegion 控制(非英语区按当地语言搜)。
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
         candidateLimit: 100,
-        limit: 30,
-        creatorQuota: 15,
-        reviewerQuota: 15,
+        limit: 15,
+        creatorQuota: 8,
+        reviewerQuota: 7,
         advanceLimit: 15,
         maxPosts: 12,
         representativeVideoLimit: 1,
         includeNewDiscovery: true,
-        newDiscoveryLimit: 15,
+        newDiscoveryLimit: 30,
+        newDiscoveryPerPlatformLimit: 12,
         newDiscoveryPlatforms: discoveryPlatforms,
         excludeChinese,
         market: discoveryRegion,

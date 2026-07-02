@@ -389,7 +389,7 @@ async def smart_kol_search(
             if execute_new_discovery:
                 discovery_payload = await kol_profile_discovery.discover_new_creators(
                     query_text=effective_query,
-                    platforms=discovery_platforms or llm_query_plan.get("platforms"),
+                    platforms=discovery_platforms,  # 2026-07-02:仅认用户显式选择;缺省交 _platforms 三平台兜底(不再被 LLM 规划锁两平台)
                     platform_hint=platform_hint,
                     market=str(body.get("market") or body.get("country") or llm_query_plan.get("market") or ""),
                     limit=discovery_limit,
@@ -405,7 +405,7 @@ async def smart_kol_search(
             else:
                 discovery_payload = kol_profile_discovery.discovery_plan(
                     query_text=effective_query,
-                    platforms=discovery_platforms or llm_query_plan.get("platforms"),
+                    platforms=discovery_platforms,  # 2026-07-02:仅认用户显式选择;缺省交 _platforms 三平台兜底(不再被 LLM 规划锁两平台)
                     platform_hint=platform_hint,
                     limit=discovery_limit,
                 )

@@ -767,10 +767,30 @@ async def discover_new_creators(
         )
     # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
     survivors.sort(key=lambda it: float(it.get("relevance_score") or 0.0), reverse=True)
+    # 平台轮转截断(platform_round_robin,2026-07-02 用户令):此前全局 relevance 排序取 top-N,
+    # YouTube 元数据富、分普遍更高 → 单平台屠榜。现按平台分组(组内保持 relevance 降序),
+    # YT/IG/TT 轮流各取一个直到装满;某平台弹尽由其余平台自然补位。
+    # red line 不变:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
+    _by_platform: dict[str, list[dict[str, Any]]] = {}
     for item in survivors:
-        if len(new_creators) >= safe_limit:
+        _by_platform.setdefault(_text(item.get("platform")).lower(), []).append(item)
+    _order = [p for p in resolved_platforms if _by_platform.get(p)]
+    for _extra in _by_platform:
+        if _extra not in _order:
+            _order.append(_extra)
+    _cursor = {p: 0 for p in _order}
+    while len(new_creators) < safe_limit and _order:
+        _progressed = False
+        for _p in _order:
+            if len(new_creators) >= safe_limit:
+                break
+            _lst = _by_platform.get(_p) or []
+            if _cursor[_p] < len(_lst):
+                new_creators.append(_lst[_cursor[_p]])
+                _cursor[_p] += 1
+                _progressed = True
+        if not _progressed:
             break
-        new_creators.append(item)
 
     # B 去重根治:把本次全网新发现即时轻量入库,下次同/近似搜索归「库内已有」、不再重复
     # (用户口径:「抓到自动入库就不会再出现这个状况」)。best-effort 同步小写,失败不阻断发现。

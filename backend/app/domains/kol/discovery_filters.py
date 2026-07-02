@@ -298,7 +298,9 @@ def _platforms(value: Any, fallback: str = "") -> list[str]:
     fallback_text = _text(fallback).lower()
     if not out and fallback_text in SUPPORTED_DISCOVERY_PLATFORMS:
         out.append(fallback_text)
-    return out or ["youtube"]
+    # 2026-07-02 用户令:未显式选平台时默认三平台齐搜(此前只兜 youtube,
+    # 异步 job 路径用户没选就单平台,YT/IG/TT 均匀分布无从谈起)。
+    return out or ["youtube", "instagram", "tiktok"]
 
 
 def _candidate_key(item: dict[str, Any], platform: str) -> str:

@@ -95,6 +95,7 @@ export async function smartKolSearchProfileAdvanceJob(
     representativeVideoLimit?: number;
     includeNewDiscovery?: boolean;
     newDiscoveryLimit?: number;
+    newDiscoveryPerPlatformLimit?: number;
     newDiscoveryPlatforms?: string[];
     excludeChinese?: boolean;
     market?: string;
@@ -118,6 +119,7 @@ export async function smartKolSearchProfileAdvanceJob(
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
   if (typeof params.newDiscoveryLimit === "number") body.new_discovery_limit = params.newDiscoveryLimit;
+  if (typeof params.newDiscoveryPerPlatformLimit === "number") body.new_discovery_per_platform_limit = params.newDiscoveryPerPlatformLimit;
   return apiFetch<VkpiKolSmartSearchProfileAdvanceResponse>(
     "/api/admin/vkpi/kol-smart-search/profile-advance-job",
     {
