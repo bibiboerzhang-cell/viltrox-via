@@ -41,6 +41,7 @@ METHOD = "ensemble_v1"
 _YT_API_BASE = "https://www.googleapis.com/youtube/v3"
 SHRINK_TAU = 50.0
 MIN_LOCAL_COMMENTS = 30  # IG/TT 本地评论少于此数 -> 先入队抓评论,不出低质画像
+AGE_MIN_DETERMINED = 5  # 年龄分布最小判定人数:低于此不出 bins(防 1 人外推 100%)
 
 # ── 年龄三路融合(v2)──
 AGE_BUCKETS = ("0-18", "19-29", "30-39", "40+")
@@ -653,6 +654,29 @@ def _age_from_channel_created(created_at: Any) -> tuple[str, float]:
     return "19-29", 0.3
 
 
+_HANDLE_YEAR_RE = re.compile(r"(?<!\d)(19[5-9]\d|20[01]\d)(?!\d)")
+
+
+def _age_from_handle(*texts: Any) -> tuple[str, float]:
+    """D 路:用户名/显示名里的生日年启发(jake2008 → ~18)。conf 0.4 只作一票,
+    数字可能不是生日(型号/纪念年),靠融合层与其它信号互证;不在 12-75 岁范围直接丢弃。"""
+    for text in texts:
+        m = _HANDLE_YEAR_RE.search(str(text or ""))
+        if not m:
+            continue
+        age = datetime.now(timezone.utc).year - int(m.group(1))
+        if not (12 <= age <= 75):
+            continue
+        if age <= 18:
+            return "0-18", 0.4
+        if age <= 29:
+            return "19-29", 0.4
+        if age <= 39:
+            return "30-39", 0.4
+        return "40+", 0.4
+    return "", 0.0
+
+
 def _fuse_age(signals: list[tuple[str, float]]) -> tuple[str, float]:
     """按 conf 加权投票融合多路年龄信号。
 
@@ -718,7 +742,9 @@ def _age_llm_batches(
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """A 路:Gemini 批推年龄/性别(llm_gateway:预算记账 + 代理 + 结果落 ledger)。
 
-    输入 显示名+bio(文本先行;头像视觉版留 P2),批 50 人/调用,单次刷新最多 max_batches 次。
+    输入 显示名+bio+评论原文片段(2026-07-02:评论用语/话题/表情是比名字强得多的年龄信号,
+    此前只喂名字+bio 导致判定率极低 → 1 人外推 100% 的笑话);头像视觉版留 P2。
+    批 50 人/调用,单次刷新最多 max_batches 次。
     红线:rule_v0 兜底文本不当真(model=rule_v0 一律丢弃);失败/超闸跳过不阻断主流程。
     返回 (author_key -> {age_bucket, gender, conf}, stats)。
     """
@@ -739,13 +765,15 @@ def _age_llm_batches(
         for idx, c in enumerate(batch):
             name = str(c.get("display_name") or "").replace('"', "'")[:60]
             bio = str(c.get("bio") or "").replace("\n", " ").replace('"', "'")[:160]
-            lines.append(f'{idx + 1}. name="{name}" bio="{bio}"')
+            comment = str(c.get("comment_text") or "").replace("\n", " ").replace('"', "'")[:150]
+            lines.append(f'{idx + 1}. name="{name}" bio="{bio}" comment="{comment}"')
         prompt = (
-            "Task: AGGREGATE audience statistics for a marketing dashboard. Below are PUBLIC display names "
-            "and public bios of anonymous social media commenters. Results are only used as aggregate "
-            "percentages (age buckets, gender split); nothing is attributed to any individual.\n"
-            "For EACH numbered entry, classify from TEXT STYLE ONLY (name style, emoji, wording, stated "
-            "roles like dad / retired / student / engineer):\n"
+            "Task: AGGREGATE audience statistics for a marketing dashboard. Below are PUBLIC display names, "
+            "public bios and one public comment of anonymous social media commenters. Results are only used "
+            "as aggregate percentages (age buckets, gender split); nothing is attributed to any individual.\n"
+            "For EACH numbered entry, classify from TEXT STYLE ONLY — name style, emoji, slang vs formal "
+            "wording, topics referenced in the comment, stated roles like dad / retired / student / engineer. "
+            "Comment language style (teen slang, professional jargon, dated phrasing) is the strongest cue:\n"
             '  "i": entry number, "age": "0-18"|"19-29"|"30-39"|"40+" or "" when no signal,\n'
             '  "gender": "male"|"female" or "" when no signal, "conf": 0.0-1.0.\n'
             "Be conservative: empty string beats a wild guess. Output STRICTLY one JSON array, no prose, "
@@ -876,10 +904,14 @@ def _age_ensemble(
     B=M3(装了就用,没装 coverage 标 unavailable);C=频道注册年龄弱先验。
     gender:LLM 输出仅在新 conf 高于现有 gender_conf 时覆盖(人名表 .8 通常保留)。
     """
-    need = [p for p in profiles if not p.get("age_bucket") and (p.get("display_name") or p.get("bio"))]
+    # 评论文本也算可推断输入(2026-07-02):很多评论者无 bio,但评论用语本身就是年龄信号。
+    need = [
+        p for p in profiles
+        if not p.get("age_bucket") and (p.get("display_name") or p.get("bio") or p.get("comment_text"))
+    ]
     llm_pred, llm_stats = _age_llm_batches(need, max_batches=llm_max_batches)
     m3_pred, m3_status = _age_m3_batch(need)
-    counts = {"cached": 0, "llm": 0, "m3": 0, "channel": 0, "fused": 0}
+    counts = {"cached": 0, "llm": 0, "m3": 0, "channel": 0, "handle_year": 0, "fused": 0}
     updates: list[dict[str, Any]] = []
     for p in profiles:
         if p.get("age_bucket"):
@@ -899,6 +931,10 @@ def _age_ensemble(
         if c_bucket:
             signals.append((c_bucket, c_conf))
             counts["channel"] += 1
+        h_bucket, h_conf = _age_from_handle(p.get("author_key"), p.get("display_name"))
+        if h_bucket:
+            signals.append((h_bucket, h_conf))
+            counts["handle_year"] += 1
         changed = False
         bucket, conf = _fuse_age(signals)
         if bucket:
@@ -1070,10 +1106,17 @@ def aggregate_audience(
         c.get("age_bucket") for c in commenters if c.get("age_bucket") in AGE_BUCKETS
     )
     age_known = sum(age_counter.values())
+    # 最小判定门槛(2026-07-02):判定人数 < 5 不出分布 —— 1 人外推 100% 是误导不是估算。
     payload["age_bins"] = {
-        "bins": [{"bucket": b, "pct": _pct(age_counter.get(b, 0), age_known)} for b in AGE_BUCKETS] if age_known else [],
+        "bins": (
+            [{"bucket": b, "pct": _pct(age_counter.get(b, 0), age_known)} for b in AGE_BUCKETS]
+            if age_known >= AGE_MIN_DETERMINED
+            else []
+        ),
         "determined_n": age_known,
         "determined_pct": _pct(age_known, n),
+        "low_sample": bool(age_known and age_known < AGE_MIN_DETERMINED),
+        "min_required": AGE_MIN_DETERMINED,
         "beta": True,
     }
     # 受众创作者浓度(v2):订阅数已知的评论者里,超过 CREATOR_DENSITY_MIN_SUBS 的占比。

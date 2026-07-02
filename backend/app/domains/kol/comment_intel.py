@@ -12,6 +12,7 @@ SQL 约束:compat 层禁 percent 字符(psycopg 会当占位符),本模块 SQL �
 """
 from __future__ import annotations
 
+import json
 import re
 import statistics
 from collections import Counter
@@ -244,6 +245,28 @@ def _has_kol_comments(db: Any) -> bool:
         return False
 
 
+def _rescued_author_key(rec: dict) -> str:
+    """platform:handle 键,带 TikTok 批次救援链(author_handle 空时依次
+    author_id → raw_data_json 的 uniqueId/username/ownerUsername/uid)。
+    与 audience_stats.sample_local_commenters 同口径 —— 否则 TikTok KOL 共同粉丝恒为 0。"""
+    handle = str(rec.get("author_handle") or "").strip()
+    if not handle:
+        handle = str(rec.get("author_id") or "").strip()
+    if not handle:
+        try:
+            raw = rec.get("raw_data_json")
+            data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            if isinstance(data, dict):
+                handle = str(
+                    data.get("uniqueId") or data.get("username") or data.get("ownerUsername") or data.get("uid") or ""
+                ).strip()
+        except Exception:
+            handle = ""
+    if not handle:
+        return ""
+    return f"{str(rec.get('platform') or '').lower()}:{handle.lower()}"
+
+
 def _self_commenter_keys(db: Any, kol_pool_id: int) -> set[str]:
     """该 KOL 的评论者集合(键=platform:handle 小写 —— 平台内比对,跨平台同名不算重叠)。
 
@@ -252,23 +275,24 @@ def _self_commenter_keys(db: Any, kol_pool_id: int) -> set[str]:
     """
     keys: set[str] = set()
     rows = db.execute(
-        "SELECT platform, author_handle FROM vkpi_comments "
-        "WHERE account_id=? AND post_table<>'vkpi_employee_channels' "
-        "AND author_handle IS NOT NULL AND author_handle<>''",
+        "SELECT platform, author_handle, author_id, raw_data_json FROM vkpi_comments "
+        "WHERE account_id=? AND post_table<>'vkpi_employee_channels'",
         (int(kol_pool_id),),
     ).fetchall()
     for r in rows:
-        rec = dict(r)
-        keys.add(f"{str(rec.get('platform') or '').lower()}:{str(rec.get('author_handle') or '').strip().lower()}")
+        key = _rescued_author_key(dict(r))
+        if key:
+            keys.add(key)
     ev_rows = db.execute(
-        "SELECT c.platform, c.author_handle FROM vkpi_comments c "
+        "SELECT c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
         "JOIN vkpi_kol_video_evidence e ON c.post_table IN ('evidence','vkpi_kol_video_evidence') AND c.post_id=e.id "
-        "WHERE e.kol_pool_id=? AND c.author_handle IS NOT NULL AND c.author_handle<>''",
+        "WHERE e.kol_pool_id=?",
         (int(kol_pool_id),),
     ).fetchall()
     for r in ev_rows:
-        rec = dict(r)
-        keys.add(f"{str(rec.get('platform') or '').lower()}:{str(rec.get('author_handle') or '').strip().lower()}")
+        key = _rescued_author_key(dict(r))
+        if key:
+            keys.add(key)
     # 主表桥:该池行已 link 到主 kols 时,把 kol_comments 里同主体的评论者并进来。
     if not _has_kol_comments(db):
         return keys
@@ -305,40 +329,41 @@ def compute_audience_overlap(kol_pool_id: int, *, conn: Any = None, top_n: int =
         }
 
     peer_sets: dict[tuple[str, int], set[str]] = {}
-    # 桥 1:evidence -> 其他 KOL
+    # 桥 1:evidence -> 其他 KOL(带救援链:TikTok 批次 author_handle 常为空)
     rows = db.execute(
-        "SELECT e.kol_pool_id AS peer_id, c.platform, c.author_handle FROM vkpi_comments c "
+        "SELECT e.kol_pool_id AS peer_id, c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
         "JOIN vkpi_kol_video_evidence e ON c.post_table IN ('evidence','vkpi_kol_video_evidence') AND c.post_id=e.id "
-        "WHERE e.kol_pool_id<>? AND c.author_handle IS NOT NULL AND c.author_handle<>''",
+        "WHERE e.kol_pool_id<>?",
         (int(kol_pool_id),),
     ).fetchall()
     for r in rows:
         rec = dict(r)
-        key = f"{str(rec.get('platform') or '').lower()}:{str(rec.get('author_handle') or '').strip().lower()}"
-        peer_sets.setdefault(("kol", int(rec["peer_id"])), set()).add(key)
+        key = _rescued_author_key(rec)
+        if key:
+            peer_sets.setdefault(("kol", int(rec["peer_id"])), set()).add(key)
     # 桥 2:account_id -> 其他 KOL(排除官号表口径)
     rows = db.execute(
-        "SELECT c.account_id AS peer_id, c.platform, c.author_handle FROM vkpi_comments c "
+        "SELECT c.account_id AS peer_id, c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
         "JOIN vkpi_kol_pool p ON p.id=c.account_id "
-        "WHERE c.account_id IS NOT NULL AND c.account_id<>? AND c.post_table<>'vkpi_employee_channels' "
-        "AND c.author_handle IS NOT NULL AND c.author_handle<>''",
+        "WHERE c.account_id IS NOT NULL AND c.account_id<>? AND c.post_table<>'vkpi_employee_channels'",
         (int(kol_pool_id),),
     ).fetchall()
     for r in rows:
         rec = dict(r)
-        key = f"{str(rec.get('platform') or '').lower()}:{str(rec.get('author_handle') or '').strip().lower()}"
-        peer_sets.setdefault(("kol", int(rec["peer_id"])), set()).add(key)
+        key = _rescued_author_key(rec)
+        if key:
+            peer_sets.setdefault(("kol", int(rec["peer_id"])), set()).add(key)
     # 桥 3:官号(vkpi_employee_channels)
     rows = db.execute(
-        "SELECT c.account_id AS peer_id, c.platform, c.author_handle FROM vkpi_comments c "
-        "WHERE c.post_table='vkpi_employee_channels' AND c.account_id IS NOT NULL "
-        "AND c.author_handle IS NOT NULL AND c.author_handle<>''",
+        "SELECT c.account_id AS peer_id, c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
+        "WHERE c.post_table='vkpi_employee_channels' AND c.account_id IS NOT NULL",
         (),
     ).fetchall()
     for r in rows:
         rec = dict(r)
-        key = f"{str(rec.get('platform') or '').lower()}:{str(rec.get('author_handle') or '').strip().lower()}"
-        peer_sets.setdefault(("official", int(rec["peer_id"])), set()).add(key)
+        key = _rescued_author_key(rec)
+        if key:
+            peer_sets.setdefault(("official", int(rec["peer_id"])), set()).add(key)
     # 桥 4:kol_comments(account_dossier 评论仓,主表 kols.id 口径;排除自己 link 的主体)
     if _has_kol_comments(db):
         self_linked = db.execute(

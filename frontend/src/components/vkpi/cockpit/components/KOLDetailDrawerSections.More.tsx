@@ -116,7 +116,11 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const estLangs = hasEst && Array.isArray(est.languages) ? est.languages.slice(0, 6) : [];
   // ── v2 各块数据(coverage/method 等实现细节留在 JSON 内部,不渲染)──
   const ageMeta = (hasEst && est.age_bins && typeof est.age_bins === "object") ? est.age_bins as any : null;
-  const ageBins = ageMeta && Array.isArray(ageMeta.bins) ? ageMeta.bins : [];
+  // 客户端同款最小判定门槛(2026-07-02):旧存量 JSON 可能带着 1 人=100% 的分布,
+  // 判定 <5 人一律按样本不足渲染,与后端 AGE_MIN_DETERMINED 口径一致。
+  const ageDeterminedN = ageMeta ? Number(ageMeta.determined_n) || 0 : 0;
+  const ageLowSample = ageDeterminedN > 0 && ageDeterminedN < 5;
+  const ageBins = ageMeta && Array.isArray(ageMeta.bins) && !ageLowSample ? ageMeta.bins : [];
   const agePctByBucket: Record<string, number> = {};
   for (const b of ageBins) agePctByBucket[String(b.bucket)] = Number(b.pct) || 0;
   const ageMaxBucket = ageBins.length ? ageBins.reduce((m: any, b: any) => (Number(b.pct) > Number(m.pct) ? b : m), ageBins[0]).bucket : "";
@@ -172,7 +176,7 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
         e("span", { className: "px-1 py-px rounded text-[8px] font-semibold tracking-wider bg-amber-400/15 text-amber-300 border border-amber-400/25" }, "BETA")
       ),
       // 性别环(归一发布口径:男/女两色补满 100,小字标外推基数;不可判定时诚实不画环)
-      hasEst && hasGenderRing && e("div", { className: "flex items-center gap-3 mb-1" },
+      hasEst && hasGenderRing && e("div", { className: "flex items-center justify-center gap-3 mb-1" },
         e("div", {
           className: "relative shrink-0",
           style: {
@@ -197,7 +201,7 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
           )
         )
       ),
-      hasEst && hasGenderRing && e("div", { className: "text-[9px] text-slate-500 mb-2.5" },
+      hasEst && hasGenderRing && e("div", { className: "text-[9px] text-slate-500 mb-2.5 text-center" },
         `基于可判定样本 ${genderDeterminedN}(占 ${genderDeterminedPct}%)外推`
       ),
       hasEst && !hasGenderRing && e("div", { className: "text-[9.5px] text-slate-500 mb-2.5" }, "性别:样本内无可判定信号(诚实不外推)"),
@@ -242,8 +246,15 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
             i,
           ))
         ),
-        e("div", { className: "text-[9px] text-slate-500 mt-1" },
+        e("div", { className: "text-[9px] text-slate-500 mt-1 text-center" },
           `已判定 ${Number(ageMeta?.determined_n) || 0} 人(占 ${Number(ageMeta?.determined_pct) || 0}%)`
+        )
+      ),
+      // 年龄样本不足:诚实提示,绝不拿 1-4 人外推分布
+      ageBins.length === 0 && ageLowSample && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "年龄段"),
+        e("div", { className: "text-[9.5px] text-slate-500" },
+          `已判定 ${ageDeterminedN} 人,样本不足(<5)暂不显示分布 —— 重新生成可补判`
         )
       ),
       // ── 评论情报(词表/直方统计,带证据可下钻)──
