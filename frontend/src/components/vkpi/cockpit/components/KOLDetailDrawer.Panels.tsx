@@ -9,6 +9,7 @@ import { KPAvatar } from "./KPAvatar";
 import { AnalysisCard } from "./KOLVideoAnalysisPanel";
 import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 import { getKolCooperation, getKolPoolAccountDossier, recordKolCooperation } from "../../../../services/vkpi/kolPool-api";
+import { SectionFold } from "./SectionFold";
 import {
   asArray,
   compactText,
@@ -485,19 +486,23 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
   const judgmentRisk = flexibleTextList(recordOr(judgment.risk).risk_flags, 3);
   const recentEvents = events.slice(0, 5).map((ev: any) => recordOr(ev));
 
+  // 可收起:整块折叠交给 SectionFold(chevron 由它出);原「展开 ▼」控件仍管内部详情(建议/风险/事件),
+  // 保留在 header 内改为 span + stopPropagation(button 不能嵌 button,点它只切详情、不折叠整块)。
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-    e("button", {
-      type: "button",
-      onClick: () => setOpen((v: boolean) => !v),
-      className: "flex w-full items-center justify-between",
-    },
-      e("div", { className: "flex items-center gap-1.5" },
+    e(SectionFold, {
+      id: "dossier",
+      header: e(React.Fragment, null,
         e(UserCircle2Icon, null),
         e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "账号档案"),
-        fit != null && e("span", { className: "rounded bg-fuchsia-500/12 px-1.5 py-0.5 text-[9px] text-fuchsia-200" }, "LLM fit " + scoreText(fit))
+        fit != null && e("span", { className: "rounded bg-fuchsia-500/12 px-1.5 py-0.5 text-[9px] text-fuchsia-200" }, "LLM fit " + scoreText(fit)),
+        e("span", {
+          role: "button",
+          title: open ? "收起详情(建议/风险/事件)" : "展开详情(建议/风险/事件)",
+          onClick: (ev: any) => { ev.stopPropagation(); setOpen((v: boolean) => !v); },
+          className: "ml-1",
+        }, e(ChevronsUpDownIcon, { expanded: open }))
       ),
-      e(ChevronsUpDownIcon, { expanded: open })
-    ),
+    },
     oneLineVerdict && e("div", { className: "mt-2 rounded-md border border-cyan-300/15 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[11px] font-medium leading-relaxed text-cyan-50" }, "📊 " + oneLineVerdict),
     e("div", { className: "mt-2 grid grid-cols-4 gap-1.5" },
       statCells.map((c) => e("div", { key: c.label, className: "rounded border border-white/[0.04] bg-black/15 px-2 py-1.5 text-center" },
@@ -531,7 +536,7 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
           ))
         )
       )
-    )
+    ))
   );
 }
 

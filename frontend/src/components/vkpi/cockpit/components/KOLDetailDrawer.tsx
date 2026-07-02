@@ -72,8 +72,19 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [briefError, setBriefError] = React.useState("");
   // 受众画像 ensemble_v1(P0):Audience Stats·估算 BETA 面板的刷新态(state 在此,展示组件保持纯 props)。
   const [audienceState, setAudienceState] = React.useState<any>({ status: "idle", message: "" });
+  // 后台抓评论完成后自动无痛刷新:pending_comments 入队后每 25s 静默重拉 detail_bundle,最多 20 次。
+  // interval id 存 ref(不进 state,避免无谓重渲染);卸载/切 KOL/再手动刷新时都要先清旧表。
+  const audiencePollRef = React.useRef<any>(null);
+  const clearAudiencePoll = React.useCallback(() => {
+    if (audiencePollRef.current) {
+      clearInterval(audiencePollRef.current);
+      audiencePollRef.current = null;
+    }
+  }, []);
   const handleRefreshAudience = React.useCallback(() => {
     if (!apiToken || !item?.id) return;
+    // 再次手动刷新时先清旧轮询,避免双计时器叠加打接口。
+    clearAudiencePoll();
     setAudienceState({ status: "loading", message: "" });
     void refreshAudienceStats(apiToken, item.id)
       .then((payload: any) => {
@@ -83,10 +94,27 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           // 完成后重拉 detail_bundle,让面板吃到新 audience_estimated。
           if (typeof onReloadDetail === "function") void onReloadDetail();
         } else if (status === "pending_comments") {
-          setAudienceState({
-            status: "pending",
-            message: payload?.enqueued ? "评论不足,已入队抓评论 — 可稍后再刷新" : String(payload?.reason || "评论不足,稍后再试"),
-          });
+          const enqueued = Boolean(payload?.enqueued);
+          if (enqueued && typeof onReloadDetail === "function") {
+            // 已入队抓评论 → 起轮询:每 25s 重拉一次 detail_bundle,上限 20 次(≈8 分钟)。
+            // 轮询回调里读不到最新 bundle(闭包旧值),所以无条件轮询到上限;
+            // 数据一旦出现由下方观察 item.audience_estimated 的 effect 提前停表。
+            let ticks = 0;
+            audiencePollRef.current = setInterval(() => {
+              ticks += 1;
+              if (ticks > 20) {
+                clearAudiencePoll();
+                return;
+              }
+              void onReloadDetail();
+            }, 25000);
+            setAudienceState({ status: "pending", message: "评论抓取中 — 完成后本页自动出数据" });
+          } else {
+            setAudienceState({
+              status: "pending",
+              message: enqueued ? "评论不足,已入队抓评论 — 可稍后再刷新" : String(payload?.reason || "评论不足,稍后再试"),
+            });
+          }
         } else if (status === "no_posts" || status === "no_commenters") {
           // 数据前置条件缺失(无帖子记录/帖子无评论)—— 中性提示引导下一步,不按报错渲染。
           setAudienceState({
@@ -98,7 +126,21 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         }
       })
       .catch((error: any) => setAudienceState({ status: "error", message: error?.message ? String(error.message) : "刷新失败" }));
-  }, [apiToken, item?.id, onReloadDetail]);
+  }, [apiToken, item?.id, onReloadDetail, clearAudiencePoll]);
+  // 轮询期间一旦 detail_bundle 带回受众数据(item.audience_estimated 出现),立刻停表并提示就绪;
+  // 没在轮询时(ref 为空)不动 audienceState,避免覆盖手动刷新的提示文案。
+  React.useEffect(() => {
+    const est = item?.audience_estimated;
+    const hasData = Boolean(est && typeof est === "object" && Number((est as any).sample_size || 0) > 0);
+    if (hasData && audiencePollRef.current) {
+      clearAudiencePoll();
+      setAudienceState({ status: "done", message: "受众数据已就绪(后台抓取完成)" });
+    }
+  }, [item?.audience_estimated, clearAudiencePoll]);
+  // 组件卸载或切换 KOL 时清掉受众轮询,避免对已关闭抽屉/上一条 KOL 持续打接口。
+  React.useEffect(() => {
+    return () => clearAudiencePoll();
+  }, [item?.id, clearAudiencePoll]);
   // v2 证据下钻:面板内可展开块(intent/brands/fans)单开手风琴;state 在父层,子组件仍零 state。
   const [audienceExpand, setAudienceExpand] = React.useState<string | null>(null);
   const handleToggleAudienceBlock = React.useCallback((key: string) => {

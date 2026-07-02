@@ -12,6 +12,7 @@ import { formatPercent } from "../lib/format";
 import { COUNTRY_INFO } from "../data/countryInfo";
 import { PlatformPill } from "./PlatformPill";
 import { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOLDetailDrawer";
+import { SectionFold } from "./SectionFold";
 import { asArray, compactText, concernLabel, fixedOrDash, numberOr, pctOrZero, recordOr, scoreText, scoreValue } from "./KOLDetailDrawer.helpers";
 
 const e = React.createElement;
@@ -543,21 +544,29 @@ export function KOLDrawerContentFit({ apiToken, item, contentFit, contentFitBusy
 export { KOLDrawerDevices, KOLDrawerGeoDistribution, KOLDrawerV6Breakdown, KOLDrawerTrendHits } from "./KOLDetailDrawerSections.More";
 
 // ── 文本区块合集: Viltrox 适配判断 / 推荐产品线 / 风险点 / 品牌合作历史 ──
+// 四小块逐块包 SectionFold(各自现有标题行原样进 header),内容做 children;纯包裹,行为零变。
 export function KOLDrawerTextSections({ item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs }: any) {
   return e(React.Fragment, null,
     // ── Viltrox Fit reason ──
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-      e("div", { className: "flex items-center gap-1.5 mb-1.5" },
-        e(Sparkles, { size: 11, className: "text-purple-400" }),
-        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Viltrox 适配判断")
-      ),
+      e(SectionFold, {
+        id: "fit-judgment",
+        header: e(React.Fragment, null,
+          e(Sparkles, { size: 11, className: "text-purple-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Viltrox 适配判断")
+        ),
+      },
       item.viltrox_fit_reason
         ? e("p", { className: "text-[11px] text-slate-300 leading-relaxed" }, item.viltrox_fit_reason)
         : e("p", { className: "text-[11px] text-slate-500 leading-relaxed" }, "本地适配原因字段为空 · 等待 enrichment 或人工补全")
+      )
     ),
     // ── Recommended products ──
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-      e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "推荐产品线"),
+      e(SectionFold, {
+        id: "product-lines",
+        header: e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "推荐产品线"),
+      },
       recommendedProductLines.length > 0
         ? e("div", { className: "flex flex-wrap gap-1.5" }, recommendedProductLines.map((p: any, i: number) => e("span", {
           key: i,
@@ -565,22 +574,31 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
           style: { background: "rgba(168,85,247,0.08)", borderColor: "rgba(168,85,247,0.3)", color: "#c4b5fd" }
         }, p)))
         : e("div", { className: "text-[11px] text-slate-500" }, "本地推荐字段为空 · 等待 enrichment 或历史合作导入")
+      )
     ),
     // ── Concerns ──
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-      e("div", { className: "flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-300 mb-2" },
-        e(AlertTriangle, { size: 10 }), "风险点"
-      ),
+      e(SectionFold, {
+        id: "risks",
+        // amber 色随原标题行走(lucide 图标吃 currentColor),整体包一个 span 保持配色不变
+        header: e("span", { className: "flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-300" },
+          e(AlertTriangle, { size: 10 }), "风险点"
+        ),
+      },
       potentialConcerns.length > 0
         ? e("div", { className: "space-y-1" }, potentialConcerns.map((c: any, i: number) => e("div", {
           key: i,
           className: "text-[11px] text-slate-300 pl-3 border-l-2 border-amber-400/40 py-0.5"
         }, concernLabel(c))))
         : e("div", { className: "text-[11px] text-slate-500" }, "暂无结构化风险点 · 本地风险字段为空")
+      )
     ),
     // ── Brand history ──
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-      e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "品牌合作历史"),
+      e(SectionFold, {
+        id: "coop-history",
+        header: e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "品牌合作历史"),
+      },
       brandCollaborations.length > 0
         ? e("div", { className: "space-y-1.5" }, brandCollaborations.map((b: any, i: number) => {
           const isCompetitor = competitorCollabs.includes(b.brand);
@@ -599,6 +617,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
           );
         }))
         : e("div", { className: "text-[11px] text-slate-500" }, "本地合作历史为空 · 等待历史合作导入")
+      )
     ),
   );
 }

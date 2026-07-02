@@ -5,6 +5,7 @@
 import React from "react";
 import { Camera, Check, Flame, Globe2, Layers } from "lucide-react";
 import { GeoTierChip } from "./GeoTierChip";
+import { SectionFold } from "./SectionFold";
 import { formatNumber } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
 import { getCountryInfo } from "../data/countryInfo";
@@ -15,11 +16,15 @@ const e = React.createElement;
 // ── 当前设备 & 升级机会 ──
 export function KOLDrawerDevices({ item, devices }: any) {
   if (!devices.camera_body) return null;
+  // 可收起:原头部行原样进 SectionFold header,内容全部下沉为 children(纯包裹,行为零变)
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-    e("div", { className: "flex items-center gap-1.5 mb-2" },
-      e(Camera, { size: 11, className: "text-slate-400" }),
-      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "当前设备 & 升级机会")
-    ),
+    e(SectionFold, {
+      id: "devices",
+      header: e(React.Fragment, null,
+        e(Camera, { size: 11, className: "text-slate-400" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "当前设备 & 升级机会")
+      ),
+    },
     // Camera body
     e("div", { className: "flex items-center gap-2 mb-2" },
       e("span", { className: "text-[10px] text-slate-500" }, "机身"),
@@ -62,7 +67,7 @@ export function KOLDrawerDevices({ item, devices }: any) {
         }
       }, devices.upgrade_window),
       e("span", { className: "text-[10px] text-slate-500" }, "× 系数 " + fixedOrDash(item.upgrade_factor || 1, 2))
-    )
+    ))
   );
 }
 
@@ -169,12 +174,17 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
 
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06] space-y-3" },
     // ── Audience Stats · 估算 BETA 面板(ensemble_v1)──
+    // 可收起:原头部行(Globe2+标题+BETA 徽章)进 SectionFold header;刷新按钮/证据下钻等
+    // 交互全部原样留在 children 里(收起时不渲染=不可点,展开即恢复,handler 零改动)
     (hasEst || canRefresh) && e("div", null,
-      e("div", { className: "flex items-center gap-1.5 mb-2" },
-        e(Globe2, { size: 11, className: "text-cyan-400" }),
-        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Audience Stats · 估算"),
-        e("span", { className: "px-1 py-px rounded text-[8px] font-semibold tracking-wider bg-amber-400/15 text-amber-300 border border-amber-400/25" }, "BETA")
-      ),
+      e(SectionFold, {
+        id: "audience",
+        header: e(React.Fragment, null,
+          e(Globe2, { size: 11, className: "text-cyan-400" }),
+          e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Audience Stats · 估算"),
+          e("span", { className: "px-1 py-px rounded text-[8px] font-semibold tracking-wider bg-amber-400/15 text-amber-300 border border-amber-400/25" }, "BETA")
+        ),
+      },
       // 性别环(归一发布口径:男/女两色补满 100,小字标外推基数;不可判定时诚实不画环)
       hasEst && hasGenderRing && e("div", { className: "flex items-center justify-center gap-3 mb-1" },
         e("div", {
@@ -369,7 +379,7 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
       audienceState.message && e("div", {
         className: "mt-1 text-[9.5px] leading-relaxed " + (audienceState.status === "error" ? "text-rose-300" : audienceState.status === "pending" ? "text-amber-300" : "text-slate-500")
       }, audienceState.message)
-    ),
+    )),
     // ── fallback:旧「受众语言估算·评论法」(无 ensemble 数据时仍展示已有语言分布)──
     !hasEst && hasLang && e("div", null,
       e("div", { className: "flex items-center gap-1.5 mb-2" },
@@ -417,11 +427,15 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
 
 // ── V6 Fit Breakdown ──
 export function KOLDrawerV6Breakdown({ item, v6Breakdown }: any) {
+  // 可收起:头部行进 SectionFold header,公式明细做 children(只读展示,红线不变)
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-    e("div", { className: "flex items-center gap-1.5 mb-2" },
-      e(Layers, { size: 11, className: "text-purple-400" }),
-      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "V6 Fit 公式 Breakdown")
-    ),
+    e(SectionFold, {
+      id: "v6breakdown",
+      header: e(React.Fragment, null,
+        e(Layers, { size: 11, className: "text-purple-400" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "V6 Fit 公式 Breakdown")
+      ),
+    },
     e("div", { className: "space-y-1.5" },
       [
         { label: "Base Match (内容)",        value: v6Breakdown?.base ?? item.v6_fit,         suffix: "" },
@@ -457,24 +471,28 @@ export function KOLDrawerV6Breakdown({ item, v6Breakdown }: any) {
           style: { color: item.v6_fit >= 85 ? "#10b981" : item.v6_fit >= 70 ? "#fbbf24" : "#fb923c" }
         }, scoreText(item.v6_fit))
       )
-    )
+    ))
   );
 }
 
 // ── Trend hits ──
 export function KOLDrawerTrendHits({ trendHits }: any) {
   if (!(trendHits.length > 0)) return null;
+  // 可收起:头部行进 SectionFold header,命中标签做 children
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-    e("div", { className: "flex items-center gap-1.5 mb-2" },
-      e(Flame, { size: 11, className: "text-rose-400" }),
-      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "本周 Trend 命中")
-    ),
+    e(SectionFold, {
+      id: "trendhits",
+      header: e(React.Fragment, null,
+        e(Flame, { size: 11, className: "text-rose-400" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "本周 Trend 命中")
+      ),
+    },
     e("div", { className: "flex flex-wrap gap-1" },
       trendHits.map((t: any, i: number) => e("span", {
         key: i,
         className: "px-2 py-0.5 rounded text-[10px] border",
         style: { background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.2)", color: "#fda4af" }
       }, "#" + t))
-    )
+    ))
   );
 }
