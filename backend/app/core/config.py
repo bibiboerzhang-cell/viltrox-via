@@ -227,7 +227,8 @@ TRUST_LIMIT_MIN_HOURLY = int(os.environ.get("TRUST_LIMIT_MIN_HOURLY", "2"))
 TRUST_LIMIT_MAX_HOURLY = int(os.environ.get("TRUST_LIMIT_MAX_HOURLY", "15"))
 TRUST_LIMIT_MIN_DAILY_POINTS = int(os.environ.get("TRUST_LIMIT_MIN_DAILY_POINTS", "100"))
 TRUST_LIMIT_MAX_DAILY_POINTS = int(os.environ.get("TRUST_LIMIT_MAX_DAILY_POINTS", "1000"))
-VIA_ENABLE_DAILY_LEARNING = os.environ.get("VIA_ENABLE_DAILY_LEARNING", "1").strip().lower() not in {"0", "false", "no"}
+# 成本闸(2026-07-01):via_daily_learning 每天抓 B&H 付费 actor,默认改停;要开在 .env 设 1。
+VIA_ENABLE_DAILY_LEARNING = os.environ.get("VIA_ENABLE_DAILY_LEARNING", "0").strip().lower() not in {"0", "false", "no"}
 VIA_LEARNING_MAX_POSTS = int(os.environ.get("VIA_LEARNING_MAX_POSTS", "18"))
 VIA_LEARNING_COMMENT_LIMIT = int(os.environ.get("VIA_LEARNING_COMMENT_LIMIT", "40"))
 VIA_LEARNING_COMMENT_SAMPLE = int(os.environ.get("VIA_LEARNING_COMMENT_SAMPLE", "12"))

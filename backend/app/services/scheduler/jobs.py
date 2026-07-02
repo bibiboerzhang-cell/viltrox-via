@@ -169,14 +169,17 @@ async def start_scheduler() -> None:
     )
     
     # ── Job 6: B&H daily snapshot ──
-    _scheduler.add_job(
-        job_bh_daily_snapshot,
-        trigger=CronTrigger(hour=3, minute=0),
-        id="bh_daily_snapshot",
-        name="Fetch B&H Viltrox products daily",
-        max_instances=1,
-        coalesce=True,
-    )
+    # 成本闸(2026-07-01):B&H 用按条计费的付费 actor(~$0.33/跑),周期额度耗尽前默认停;
+    # 要重开在 .env 设 BH_SNAPSHOT_ENABLED=1(建议 7/8 额度重置后再开,或改周频)。
+    if __import__("os").environ.get("BH_SNAPSHOT_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+        _scheduler.add_job(
+            job_bh_daily_snapshot,
+            trigger=CronTrigger(day_of_week="mon", hour=3, minute=0),
+            id="bh_daily_snapshot",
+            name="Fetch B&H Viltrox products daily",
+            max_instances=1,
+            coalesce=True,
+        )
     
 
     # ── Job 7: Via daily learning ──

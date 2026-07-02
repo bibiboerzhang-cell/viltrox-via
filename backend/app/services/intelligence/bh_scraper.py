@@ -62,6 +62,7 @@ def _bh_available() -> bool:
 async def fetch_bh_viltrox_products(
     max_items: int = 500,
     use_backup: bool = False,
+    force_refresh: bool = False,
 ) -> list[dict]:
     """
     抓 B&H 上所有 Viltrox 产品 (6 个 category 并行).
@@ -77,6 +78,32 @@ async def fetch_bh_viltrox_products(
         logger.warning("bh_scraper.apify_unavailable")
         return []
     
+    # 成本闸(2026-07-01):一次调用并行跑 6 个 category = 6 次付费 actor(约 $2/调用,
+    # 本周期已烧 $68/204 跑)。新鲜度守卫:库里最新快照 < BH_SNAPSHOT_TTL_DAYS(默认 6)天
+    # -> 直接回库存快照、零 actor;force_refresh=True 强刷。所有调用方一并受控。
+    # 注意:守卫返回的缓存数据若被调用方再 save_bh_snapshot,会刷新 snapshot_at 导致 TTL
+    # 永不过期(数据停更但零成本)。周频真刷新由 Job6(每周一)驱动,TTL=6 保证周一必过期。
+    if not force_refresh:
+        try:
+            import os as _os
+            from datetime import datetime as _dt, timezone as _tz
+            from app.services.intelligence.bh_repository import get_bh_summary, get_latest_bh_products
+
+            _ttl = max(1, int(_os.environ.get("BH_SNAPSHOT_TTL_DAYS", "6")))
+            _latest = str((get_bh_summary() or {}).get("latest_snapshot_at") or "")
+            if _latest:
+                _t = _dt.fromisoformat(_latest.replace("Z", "+00:00"))
+                if _t.tzinfo is None:
+                    _t = _t.replace(tzinfo=_tz.utc)
+                _age = (_dt.now(_tz.utc) - _t).total_seconds() / 86400.0
+                if _age < _ttl:
+                    _cached = get_latest_bh_products(limit=max(50, int(max_items)))
+                    if _cached:
+                        logger.info("bh_scraper.fresh_snapshot_reuse", extra={"age_days": round(_age, 1), "count": len(_cached)})
+                        return _cached
+        except Exception:
+            logger.warning("bh_scraper.freshness_guard_failed", exc_info=True)
+
     actor_id = BH_ACTOR_BACKUP if use_backup else BH_ACTOR_PRIMARY
     logger.info(
         "bh_scraper.fetch_started",
