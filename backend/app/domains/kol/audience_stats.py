@@ -439,7 +439,7 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
 
     db = conn or get_conn()
     rows = db.execute(
-        "SELECT author_handle, comment_text FROM vkpi_comments WHERE account_id=? LIMIT ?",
+        "SELECT author_handle, author_id, raw_data_json, comment_text FROM vkpi_comments WHERE account_id=? LIMIT ?",
         (int(kol_pool_id), int(limit)),
     ).fetchall()
     if not rows:
@@ -451,7 +451,7 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
         if eids:
             placeholders = ",".join(["?"] * len(eids))
             rows = db.execute(
-                "SELECT author_handle, comment_text FROM vkpi_comments "
+                "SELECT author_handle, author_id, raw_data_json, comment_text FROM vkpi_comments "
                 f"WHERE post_table IN ('evidence','vkpi_kol_video_evidence') AND post_id IN ({placeholders}) LIMIT ?",
                 (*eids, int(limit)),
             ).fetchall()
@@ -461,6 +461,22 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
         rec = dict(r)
         comments_scanned += 1
         handle = str(rec.get("author_handle") or "").strip()
+        if not handle:
+            # 救援链:部分抓取批次 author_handle 为空(TikTok 批次作者在 raw 的 uniqueId,
+            # 或仅有 author_id)。逐级兜底,救不出才跳过 —— 治 no_commenters 假空。
+            handle = str(rec.get("author_id") or "").strip()
+        if not handle:
+            try:
+                import json as _rj
+
+                _raw = rec.get("raw_data_json")
+                _rd = _rj.loads(_raw) if isinstance(_raw, str) else (_raw or {})
+                if isinstance(_rd, dict):
+                    handle = str(
+                        _rd.get("uniqueId") or _rd.get("username") or _rd.get("ownerUsername") or _rd.get("uid") or ""
+                    ).strip()
+            except Exception:
+                handle = ""
         if not handle:
             continue
         author_key = handle.lower()
