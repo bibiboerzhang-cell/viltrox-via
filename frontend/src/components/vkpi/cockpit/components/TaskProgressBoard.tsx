@@ -1,11 +1,14 @@
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
+import { buildApiUrl } from "../../../../services/http";
 import { retryTask } from "../../../../services/vkpi/tasks-api";
 import { useWorkflowRunsStream, type WorkflowRunsStream } from "../useWorkflowRunsStream";
 
 const e = React.createElement;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
+// 「只看我的」开关记忆键(2026-07-02):开=活跃/排队/最近完成只展示自己发起的任务。
+const MINE_ONLY_STORAGE_KEY = "vkpi:taskboard-mine-only";
 
 const LANES = [
   {
@@ -61,18 +64,25 @@ function taskLabel(task: any) {
   return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
 }
 
-function taskEtaText(task: any) {
+// 人性化 ETA:<60s 显示秒,≥60s 显示分钟。字段缺失/非法(旧任务、LLM 调用行)返回空串不显示。
+// 诊断 P1-1 根治已落(迁移112 started_at → queue_view 用真处理时长 claim→done):ETA 可信;
+// 无 started_at 样本时 queue_view 回退 300s 默认,不再是墙钟 7.8 天的谎言。
+function etaHumanText(task: any) {
   const eta = Number(task?.eta_seconds);
+  if (!Number.isFinite(eta) || eta <= 0) return "";
+  if (eta < 60) return `约 ${Math.max(1, Math.round(eta))} 秒`;
+  return `约 ${Math.round(eta / 60)} 分钟`;
+}
+
+// 排队行元信息:「第 X 位 · 约 Y」。queue_position 缺失退回 ahead_count(前方 N 个),都缺则不显示。
+function queueMetaText(task: any) {
+  const parts: string[] = [];
+  const pos = Number(task?.queue_position);
   const ahead = Number(task?.ahead_count);
-  if (!Number.isFinite(eta) && !Number.isFinite(ahead)) return "";
-  const parts: any[] = [];
-  if (Number.isFinite(ahead)) parts.push(ahead > 0 ? `前方 ${ahead} 个` : "下一个就是它");
-  // 诊断 P1-1 a根治已落(迁移112 started_at → queue_view 用真处理时长 claim→done):ETA 恢复。
-  // 无 started_at 样本时 queue_view 回退 300s 默认,不再是墙钟 7.8 天的谎言。
-  if (Number.isFinite(eta) && eta > 0) {
-    const mins = Math.max(1, Math.round(eta / 60));
-    parts.push(`约 ${mins} 分钟`);
-  }
+  if (Number.isFinite(pos) && pos > 0) parts.push(`第 ${pos} 位`);
+  else if (Number.isFinite(ahead)) parts.push(ahead > 0 ? `前方 ${ahead} 个` : "下一个就是它");
+  const eta = etaHumanText(task);
+  if (eta) parts.push(eta);
   return parts.join(" · ");
 }
 
@@ -194,9 +204,39 @@ function taskCanOpen(task: any) {
   return Boolean(taskMyKolPoolId(task) || taskKolPoolId(task) || taskProjectId(task) || taskSearchSessionId(task));
 }
 
-function taskInitiatorChip(task: any) {
-  const initiator = task?.initiator_user_id || task?.initiator_staff_id;
-  return initiator ? `用户 ${initiator}` : "";
+// 当前用户身份(/api/auth/me 拉一次,只留比较用的两个 id;拿不到时 me=null → 全部回退「用户 N」)。
+interface MeIdentity {
+  userId: string;
+  staffId: string;
+}
+
+// 归属判断:initiator_user_id 对 me.id、initiator_staff_id 对 me.staff_id(各对各的域,
+// 不交叉比 —— user id 与别人的 staff id 撞号会误标「我」)。后端可能给 number/string,统一转字符串比。
+function taskIsMine(task: any, me: MeIdentity | null) {
+  if (!me) return false;
+  const byUser = task?.initiator_user_id;
+  if (byUser != null && byUser !== "" && me.userId && String(byUser) === me.userId) return true;
+  const byStaff = task?.initiator_staff_id;
+  if (byStaff != null && byStaff !== "" && me.staffId && String(byStaff) === me.staffId) return true;
+  return false;
+}
+
+// 归属 chip:自己的任务显示「我」+ 金色高亮边;别人的保持「用户 N」;无发起人字段(系统任务)不显示。
+function initiatorChipNode(task: any, me: MeIdentity | null) {
+  const initiator = task?.initiator_user_id ?? task?.initiator_staff_id;
+  if (initiator == null || initiator === "") return null;
+  if (taskIsMine(task, me)) {
+    return e("span", {
+      className: "shrink-0 rounded border border-amber-300/50 bg-amber-400/[0.12] px-1 text-[9px] font-medium leading-4 text-amber-200",
+    }, "我");
+  }
+  return e("span", { className: "shrink-0 text-[9px] text-white/30" }, `用户 ${initiator}`);
+}
+
+// 我的任务置顶:稳定排序(现代 JS Array.sort 保证稳定),两组内部保持原有顺序。
+function sortMineFirst(tasks: any[], me: MeIdentity | null) {
+  if (!me) return tasks;
+  return tasks.slice().sort((a: any, b: any) => Number(taskIsMine(b, me)) - Number(taskIsMine(a, me)));
 }
 
 function lightColor(light: any) {
@@ -206,7 +246,7 @@ function lightColor(light: any) {
   return "#5DCAA5";
 }
 
-function TaskRow({ task, color, showBar }: any) {
+function TaskRow({ task, color, showBar, me }: any) {
   const rawProgress = task.progress_pct ?? task.progress;
   const hasProgress = Number.isFinite(Number(rawProgress));
   const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
@@ -225,7 +265,7 @@ function TaskRow({ task, color, showBar }: any) {
         style: { background: color }
       }),
       e("span", { className: "truncate text-[11px] leading-4 text-white/70" }, taskLabel(task)),
-      taskInitiatorChip(task) && e("span", { className: "shrink-0 text-[9px] text-white/30" }, taskInitiatorChip(task))
+      initiatorChipNode(task, me)
     ),
     retryText && e("div", { className: "ml-[11px] truncate text-[10px] leading-4 text-white/35" }, retryText),
     showBar && (
@@ -246,7 +286,7 @@ function TaskRow({ task, color, showBar }: any) {
   );
 }
 
-function TaskLane({ lane, tasks }: any) {
+function TaskLane({ lane, tasks, me }: any) {
   return e("section", {
     className: "rounded-lg border px-[9px] py-2",
     style: { borderColor: lane.border, background: lane.bg }
@@ -263,7 +303,7 @@ function TaskLane({ lane, tasks }: any) {
     ),
     e("div", { className: "flex flex-col gap-1.5" },
       tasks.length
-        ? tasks.map((task: any) => e(TaskRow, { key: task.id, task, color: lane.color, showBar: lane.showBar }))
+        ? tasks.map((task: any) => e(TaskRow, { key: task.id, task, color: lane.color, showBar: lane.showBar, me }))
         : e("span", { className: "text-[11px] leading-4 text-white/30" }, "—")
     )
   );
@@ -286,6 +326,33 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
   // 每任务重试态:id → 'loading' | 'done' | 错误串。重试成功后 refreshQueue 让该任务离开失败桶。
   const [retrying, setRetrying] = useState<Record<string, any>>({});
   const [showAllQueue, setShowAllQueue] = useState(false);
+  // 当前用户身份:拉一次 /api/auth/me(失败静默,me=null 全部回退「用户 N」口径)。
+  const [me, setMe] = useState<MeIdentity | null>(null);
+  useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    void fetch(buildApiUrl("/api/auth/me"), { headers: { Authorization: `Bearer ${apiToken}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: any) => {
+        if (!alive || !data) return;
+        const userId = String(data?.user?.id ?? data?.id ?? "");
+        const staffId = String(data?.staff?.id ?? data?.staff_id ?? data?.user?.staff_id ?? "");
+        if (userId || staffId) setMe({ userId, staffId });
+      })
+      .catch(() => { /* 身份拉取失败不影响任务板本体 */ });
+    return () => { alive = false; };
+  }, [apiToken]);
+  // 「只看我的」:开=活跃/排队/最近完成只留自己发起的;记忆到 localStorage。
+  const [mineOnly, setMineOnly] = useState<boolean>(() => {
+    try { return window.localStorage.getItem(MINE_ONLY_STORAGE_KEY) === "1"; } catch { return false; }
+  });
+  const toggleMineOnly = useCallback(() => {
+    setMineOnly((v) => {
+      const next = !v;
+      try { window.localStorage.setItem(MINE_ONLY_STORAGE_KEY, next ? "1" : "0"); } catch { /* 忽略 */ }
+      return next;
+    });
+  }, []);
 
   const handleRetry = useCallback(async (task: any) => {
     const id = task?.id;
@@ -300,8 +367,17 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
     }
   }, [apiToken, refreshQueue]);
 
-  const activeTasks = useMemo(() => asArray(payload?.active), [payload]);
-  const recentTasks = useMemo(() => asArray(payload?.recent), [payload]);
+  const rawActiveTasks = useMemo(() => asArray(payload?.active), [payload]);
+  const rawRecentTasks = useMemo(() => asArray(payload?.recent), [payload]);
+  // mineOnly 过滤;关着时自己的任务在泳道内置顶(排队区不动序——位次必须是真实执行序)。
+  const activeTasks = useMemo(
+    () => (mineOnly && me ? rawActiveTasks.filter((t: any) => taskIsMine(t, me)) : rawActiveTasks),
+    [rawActiveTasks, mineOnly, me],
+  );
+  const recentTasks = useMemo(
+    () => (mineOnly && me ? rawRecentTasks.filter((t: any) => taskIsMine(t, me)) : rawRecentTasks),
+    [rawRecentTasks, mineOnly, me],
+  );
   // 排队区按真实执行序排(后端 queue_position 按 claim 顺序;无该字段的按 created_at 升序垫后)——
   // 此前直接用合并列表(updated_at 倒序)切片,屏上 #1 可能是最后才跑的(2026-06-12 主管裁令)。
   const queuedTasks = useMemo(() => {
@@ -317,13 +393,18 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
   const laneTasks = useMemo(() => {
     const nonQueued = activeTasks.filter((task: any) => task?.status !== "queued");
     return {
-      search: nonQueued.filter((task: any) => task?.stage === "search"),
-      thinking: nonQueued.filter((task: any) => task?.stage === "thinking"),
-      summarizing: nonQueued.filter((task: any) => task?.stage === "summarizing"),
+      search: sortMineFirst(nonQueued.filter((task: any) => task?.stage === "search"), me),
+      thinking: sortMineFirst(nonQueued.filter((task: any) => task?.stage === "thinking"), me),
+      summarizing: sortMineFirst(nonQueued.filter((task: any) => task?.stage === "summarizing"), me),
     };
-  }, [activeTasks]);
-  const activeTotal = Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
-  const queueTotal = Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
+  }, [activeTasks, me]);
+  // mineOnly 开着时,headline 计数用本地过滤后的数(后端 counts 是全局口径,会对不上)。
+  const activeTotal = mineOnly && me
+    ? activeTasks.length
+    : Number(payload?.counts?.active_total ?? activeTasks.length) || 0;
+  const queueTotal = mineOnly && me
+    ? queuedTasks.length
+    : Number(payload?.counts?.queued ?? queuedTasks.length) || 0;
   // payload 现为强类型(TaskQueueResponse),其 speed_light 是 Row(unknown 值);此处局部松绑
   // 成 Record<string, any> 供 React 子节点直接渲染(level/policy 为后端动态字段,非编译期已知形状)。
   const speedLight = (payload?.speed_light || {}) as Record<string, any>;
@@ -354,6 +435,17 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
         e("span", { className: "truncate text-[13px] font-medium text-white/90" }, "任务进度")
       ),
       e("div", { className: "flex shrink-0 items-center gap-1.5" },
+        // 「只看我的」开关(身份拉到才显示;记忆到 localStorage)
+        me && e("button", {
+          type: "button",
+          onClick: toggleMineOnly,
+          title: mineOnly ? "当前只显示我发起的任务,点击看全部" : "只看我发起的任务",
+          className: `rounded border px-1.5 py-0.5 text-[9.5px] font-medium transition-colors ${
+            mineOnly
+              ? "border-amber-300/50 bg-amber-400/[0.12] text-amber-200"
+              : "border-white/[0.1] text-white/40 hover:text-white/70"
+          }`,
+        }, "只看我的"),
         e("span", { className: "text-[11px] text-white/40 tabular-nums" },
           loading && !payload ? "连接中" : `${activeTotal} 活跃`
         ),
@@ -378,7 +470,7 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
       "暂无运行中任务"
     ),
     e("div", { className: "flex flex-col gap-2.5" },
-      lanes.map((lane) => e(TaskLane, { key: lane.key, lane, tasks: lane.tasks }))
+      lanes.map((lane) => e(TaskLane, { key: lane.key, lane, tasks: lane.tasks, me }))
     ),
     e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
       e("div", { className: "flex items-center justify-between gap-2" },
@@ -399,11 +491,11 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
           },
             e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${Number.isFinite(Number(task?.queue_position)) ? Number(task.queue_position) : index + 1}`),
             e("span", { className: "min-w-0 flex-1" },
-              e("span", { className: "block truncate text-[11px] text-white/60" },
-                taskLabel(task),
-                taskInitiatorChip(task) && e("span", { className: "ml-1 text-[9px] text-white/30" }, taskInitiatorChip(task))
+              e("span", { className: "flex min-w-0 items-center gap-1" },
+                e("span", { className: "min-w-0 truncate text-[11px] text-white/60" }, taskLabel(task)),
+                initiatorChipNode(task, me)
               ),
-              taskEtaText(task) && e("span", { className: "block truncate text-[10px] text-emerald-300/70" }, taskEtaText(task)),
+              etaHumanText(task) && e("span", { className: "block truncate text-[10px] text-emerald-300/70" }, etaHumanText(task)),
               taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-white/30" }, taskRetryText(task))
             )
           ))

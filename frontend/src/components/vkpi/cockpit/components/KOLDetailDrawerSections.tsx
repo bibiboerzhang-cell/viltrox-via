@@ -23,11 +23,13 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
     e("div", { className: "flex items-start gap-3 mb-2" },
       e(KOLDetailAvatar, { item, size: 44 }),
       e("div", { className: "flex-1 min-w-0" },
+        // 标题优先人话显示名(2026-07-02:YT 频道 handle 是 UCxxxx 乱码串,顶成大标题很难看);
+        // handle 与显示名不同才降为副行,相同不重复渲染。
         e("div", { className: "flex items-center gap-1.5" },
-          e("h2", { className: "text-[14px] font-semibold text-white truncate" }, item.handle),
+          e("h2", { className: "text-[14px] font-semibold text-white truncate" }, item.display_name || item.handle),
           item.linked_main_kol_id && e(BadgeCheck, { size: 12, className: "text-emerald-400 shrink-0" }),
         ),
-        e("div", { className: "text-[11px] text-slate-400 truncate" }, item.display_name || ""),
+        item.handle && item.handle !== (item.display_name || item.handle) && e("div", { className: "text-[11px] text-slate-400 truncate" }, item.handle),
       ),
       // V6 Fit · 紧凑右上
       item.v6_fit != null && e("div", { className: "text-right shrink-0 px-2.5 py-1 rounded-md border border-white/[0.06] bg-white/[0.02]" },
