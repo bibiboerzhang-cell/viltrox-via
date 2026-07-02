@@ -370,9 +370,10 @@ export function normalizeCampaigns(rows: RawValue = []) {
       statusLabel: String(item.status_label || item.status || "进行中"),
       healthScore: healthScore ?? "待评估",
       healthColor: healthScore == null ? "#64748b" : healthScore >= 85 ? "#10b981" : "#f59e0b",
-      lastUpdate: "真实 API",
-      owner: "待接入",
-      startDate: "待接入",
+      lastUpdate: String(item.updated_at || item.last_update || "").slice(0, 10) || "—",
+      // 诚实化:owner/startDate 读 API 真值(多候选键),取不到显 — 而非误导性的「待接入」。
+      owner: String(item.owner || item.owner_name || item.assigned_staff_name || item.assignee || "") || "—",
+      startDate: String(item.start_date || item.started_at || item.created_at || "").slice(0, 10) || "—",
       stats: {
         kolCount: projectCount ?? DASH,
         published: published ?? DASH,

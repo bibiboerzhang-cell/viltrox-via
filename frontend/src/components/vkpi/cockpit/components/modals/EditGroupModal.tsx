@@ -167,7 +167,8 @@ export function EditGroupModal({ groupName = "KOL Operations", mode = "edit", st
       e("div", null,
         e("div", { className: "flex items-center justify-between mb-2" },
           e("label", { className: "text-[10px] text-slate-500" }, t("成员列表")),
-          e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200", onClick: () => document.getElementById("edit-group-member-list")?.scrollIntoView({ behavior: "smooth" }) }, "+ " + t("添加成员"))
+          // 诚实化:原「+ 添加成员」只是滚动锚点(不能真加新员工),改为说明文案。
+          e("span", { className: "text-[9px] text-slate-600" }, t("勾选下方成员即加入本组"))
         ),
         e("div", { id: "edit-group-member-list", className: "space-y-1" },
           staff.map((s: any) => {

@@ -219,6 +219,7 @@ export function CockpitOverlays(p: any) {
       onImpersonate: (s: any) => setViewingAs(s),
       onOpenEditGroup: (g: any) => openGroupEditor("edit", g || null),
       onOpenNewGroup: () => openGroupEditor("new"),
+      onRefreshGroups: refreshStaffGroups,
       t
     })),
     showSettingsModal && e("div", { key: "ov-settings", className: "cockpit-settings-dark fixed inset-0 z-[1000] bg-[#0a0a0d] overflow-auto" },
