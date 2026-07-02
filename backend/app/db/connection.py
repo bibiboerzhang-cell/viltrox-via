@@ -367,6 +367,12 @@ def _get_pg_pool():
     global _PG_POOL
     if not is_postgres_runtime():
         return None
+    # pool_selfheal(2026-07-02):deep_crawl 内核收尾会 close_db_runtime 关掉全局池,
+    # 同一 worker 进程的后续 job 全灭(PoolClosed/PoolTimeout)。已关就丢弃重建,自愈。
+    if _PG_POOL is not None and bool(getattr(_PG_POOL, "closed", False)):
+        with _POOL_LOCK:
+            if _PG_POOL is not None and bool(getattr(_PG_POOL, "closed", False)):
+                _PG_POOL = None
     if _PG_POOL is None:
         with _POOL_LOCK:
             if _PG_POOL is None:
