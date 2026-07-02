@@ -20,11 +20,19 @@ export function PublishPreviewModal({ item, onClose, apiToken = "" }: { item?: a
   const srcId = String(raw.source_id || "");
   const canAct = !!(apiToken && srcTable && srcId);
   const meta = { platform: (item && item.platform) || "", account_handle: (item && (item.kolName || item.label)) || "", title: (item && (item.title || item.label)) || "" };
+  // 报错人话化:线上发布审批接口(迁移 173)可能未部署 → 404/Not Found 时不甩原始报错,
+  // 直接告诉用户「发布审批后端未上线」。其他错误保留原文便于排查。
+  const friendlyErr = (err: any): string => {
+    const status = err && typeof err.status === "number" ? err.status : 0;
+    const raw = String(err && err.message ? err.message : err);
+    if (status === 404 || /404|not found/i.test(raw)) return "发布审批后端未上线(接口 404),操作未生效";
+    return raw;
+  };
   const doApprove = async () => {
     if (!canAct || busy) return;
     setBusy("approve"); setMsg(null);
     try { await approvePublish(apiToken, srcTable, srcId, meta); setMsg({ ok: true, text: "已通过审批" }); }
-    catch (err: any) { setMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    catch (err: any) { setMsg({ ok: false, text: friendlyErr(err) }); }
     finally { setBusy(""); }
   };
   const doReschedule = async () => {
@@ -35,14 +43,14 @@ export function PublishPreviewModal({ item, onClose, apiToken = "" }: { item?: a
     if (isNaN(d.getTime())) { setMsg({ ok: false, text: "时间格式无法解析" }); return; }
     setBusy("reschedule"); setMsg(null);
     try { await reschedulePublish(apiToken, srcTable, srcId, d.toISOString(), meta); setMsg({ ok: true, text: `发布时间已更新:${d.toLocaleString()}` }); }
-    catch (err: any) { setMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    catch (err: any) { setMsg({ ok: false, text: friendlyErr(err) }); }
     finally { setBusy(""); }
   };
   const doRemind = async () => {
     if (!canAct || busy) return;
     setBusy("remind"); setMsg(null);
     try { await remindPublishKol(apiToken, srcTable, srcId, meta); setMsg({ ok: true, text: "已记录提醒 KOL" }); }
-    catch (err: any) { setMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
+    catch (err: any) { setMsg({ ok: false, text: friendlyErr(err) }); }
     finally { setBusy(""); }
   };
   if (!item) return null;
@@ -92,20 +100,22 @@ export function PublishPreviewModal({ item, onClose, apiToken = "" }: { item?: a
           e("div", null,
             e("div", { className: "text-[9px] text-slate-500 mb-1" }, "内容预览"),
             e("div", { className: "text-[11px] font-medium text-white leading-relaxed mb-1" }, item.title || item.label),
-            e("div", { className: "text-[10px] text-slate-400 leading-relaxed" }, item.description || "12 分钟评测 · 涵盖画质 / 对焦 / 色彩表现")
+            // 诚实化:无真实简介时不再兜底编造「12 分钟评测…」
+            e("div", { className: "text-[10px] text-slate-400 leading-relaxed" }, item.description || "暂无内容简介(待接入)")
           )
         ),
-        // Stats prediction
+        // 预测指标(诚实化:原 ~12M / ~6.2% / ~340 是硬编码假数,预测后端未接入 → 统一「待接入」)
         e("div", { className: "grid grid-cols-3 gap-2" },
           [
-            { label: "预期曝光", value: "~12M" },
-            { label: "预期 ER",  value: "~6.2%" },
-            { label: "短链点击", value: "~340" },
+            { label: "预期曝光" },
+            { label: "预期 ER" },
+            { label: "短链点击" },
           ].map((s, i) => e("div", {
-            key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-center"
+            key: i, className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-center",
+            title: "预测指标后端未接入,接入后显示真实预估"
           },
             e("div", { className: "text-[9px] text-slate-500 mb-0.5" }, s.label),
-            e("div", { className: "text-[14px] font-semibold text-white" }, s.value)
+            e("div", { className: "text-[11px] font-medium text-slate-500" }, "待接入")
           ))
         ),
         // Actions(2026-06-12 死按钮诚实化:审批/编辑时间/提醒 KOL 无写接口 → disabled+待接入;取消 → 关闭弹窗)

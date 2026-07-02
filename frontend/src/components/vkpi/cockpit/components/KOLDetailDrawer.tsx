@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { Share2, Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { enqueueAllKolVideos, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
@@ -141,6 +141,38 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   React.useEffect(() => {
     return () => clearAudiencePoll();
   }, [item?.id, clearAudiencePoll]);
+  // 新发现 KOL 档案瘦(帖数/均播全空)→ 打开抽屉自动补:入队 profile 深爬(后端幂等,
+  // 已有 evidence/活跃 job 不重复烧 Apify),入队成功后 30s×10 静默重拉 detail_bundle 等档案落地。
+  const profileCrawlRef = React.useRef<any>({ firedId: null, timer: null });
+  React.useEffect(() => {
+    const id = item?.id;
+    const thin = !Number(item?.posts_count || 0) && !Number(item?.avg_views || 0);
+    if (!apiToken || !id || !thin || profileCrawlRef.current.firedId === id) return;
+    profileCrawlRef.current.firedId = id;
+    void enqueueKolProfileCrawl(apiToken, id)
+      .then((res: any) => {
+        if (res?.status === "queued" && typeof onReloadDetail === "function") {
+          let ticks = 0;
+          profileCrawlRef.current.timer = setInterval(() => {
+            ticks += 1;
+            if (ticks > 10) {
+              clearInterval(profileCrawlRef.current.timer);
+              profileCrawlRef.current.timer = null;
+              return;
+            }
+            void onReloadDetail();
+          }, 30000);
+        }
+      })
+      .catch(() => { /* 静默:自动补档失败不打扰,原有手动按钮仍可用 */ });
+    return () => {
+      if (profileCrawlRef.current.timer) {
+        clearInterval(profileCrawlRef.current.timer);
+        profileCrawlRef.current.timer = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiToken, item?.id]);
   // v2 证据下钻:面板内可展开块(intent/brands/fans)单开手风琴;state 在父层,子组件仍零 state。
   const [audienceExpand, setAudienceExpand] = React.useState<string | null>(null);
   const handleToggleAudienceBlock = React.useCallback((key: string) => {
@@ -283,7 +315,16 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           setBriefError(String(out.reason || "skill 未产出结果"));
         }
       })
-      .catch((err: any) => setBriefError(err?.message ? String(err.message) : "跑 Skill 失败,请稍后重试。"))
+      .catch((err: any) => {
+        // 人话化:/skills/{id}/run 是本地分支功能,线上后端多半没有该路由(404)→ 如实告知,不甩原始报错。
+        const status = err && typeof err.status === "number" ? err.status : 0;
+        const raw = err?.message ? String(err.message) : "";
+        setBriefError(
+          status === 404 || /404|not found/i.test(raw)
+            ? "Skill 后端未上线(本地分支功能),brief 草案暂不可用。"
+            : (raw || "跑 Skill 失败,请稍后重试。"),
+        );
+      })
       .finally(() => setBriefBusy(false));
   };
 

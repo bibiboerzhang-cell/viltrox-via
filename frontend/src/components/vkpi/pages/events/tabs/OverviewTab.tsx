@@ -3,23 +3,25 @@ import {
   AlertCircle, Briefcase, CircleDot, DollarSign, ExternalLink, MapPin, Plus,
   ShieldCheck, Users, X
 } from "lucide-react";
-import { TEAM } from "../data/team";
 import { daysUntil, fmtMoneyShort, healthColor, sum } from "../shared/helpers";
-import { ownerById, projectById } from "../shared/lookups";
-import type { EventVm, InvitedKolVm, TaskVm } from "../shared/types";
+import { memberFromStaff, projectById } from "../shared/lookups";
+import type { EventVm, InvitedKolVm, TaskVm, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface OverviewTabProps {
   ev: EventVm;
+  staff?: UiStaff[];
   tasks?: TaskVm[];
   onUpdateTeam: (teamIds: string[]) => void;
 }
 
 // tasks 由 EventDetailView 从真后端拉取后作 prop 传入(不在此独立再拉一次),
 // 概览的「任务进度 / 近期 ddl」全部基于真数据;无任务时安全降级为空。
-export default function OverviewTab({ ev, tasks = [], onUpdateTeam }: OverviewTabProps) {
+export default function OverviewTab({ ev, staff = [], tasks = [], onUpdateTeam }: OverviewTabProps) {
   const [addingTeam, setAddingTeam] = useState(false);
+  // 加成员候选 = 真实员工名单里还不在团队里的人(mock TEAM 退役,mock id 不再落库)。
+  const teamCandidates = (Array.isArray(staff) ? staff : []).filter(u => !ev.teamUserIds.includes(String(u.id)));
   const totalSpent = sum(ev.budgetByCategory, "spent");
   const days = daysUntil(ev.startDate);
   const isDone = ev.status === "done";
@@ -126,17 +128,19 @@ export default function OverviewTab({ ev, tasks = [], onUpdateTeam }: OverviewTa
                 onClick: () => setAddingTeam(!addingTeam),
                 className: "text-[10px] text-purple-300 hover:text-purple-200 px-1.5 py-0.5 rounded hover:bg-purple-500/10 flex items-center gap-0.5"
               }, e(Plus, { size: 9 }), addingTeam ? "取消" : "加成员"),
-              addingTeam && e("div", { className: "absolute right-0 top-full mt-1.5 w-48 rounded-lg border border-white/[0.08] bg-[#0b1220] shadow-2xl z-20 p-1.5" },
+              addingTeam && e("div", { className: "absolute right-0 top-full mt-1.5 w-48 rounded-lg border border-white/[0.08] bg-[#0b1220] shadow-2xl z-20 p-1.5 max-h-60 overflow-y-auto" },
                 e("div", { className: "text-[9.5px] text-slate-500 px-2 py-1 uppercase tracking-wider" }, "添加成员"),
-                TEAM.filter(u => !ev.teamUserIds.includes(String(u.id))).length === 0
+                staff.length === 0
+                  ? e("div", { className: "text-[10.5px] text-slate-400 px-2 py-2" }, "员工名单未加载,暂不能加人")
+                  : teamCandidates.length === 0
                   ? e("div", { className: "text-[10.5px] text-slate-400 px-2 py-2" }, "所有人都已加入")
-                  : TEAM.filter(u => !ev.teamUserIds.includes(String(u.id))).map(u =>
+                  : teamCandidates.map(u =>
                       e("button", {
                         key: u.id,
                         onClick: () => { onUpdateTeam([...ev.teamUserIds, String(u.id)]); setAddingTeam(false); },
                         className: "w-full px-2 py-1.5 rounded text-left hover:bg-white/[0.05] flex items-center gap-2"
                       },
-                        e("div", { className: "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white", style: { background: u.color } }, u.initial),
+                        e("div", { className: "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white", style: { background: u.color || "#94a3b8" } }, u.avatar || String(u.name || "?").slice(0, 1)),
                         e("span", { className: "text-[10.5px] text-slate-200" }, u.name)
                       )
                     )
@@ -145,7 +149,7 @@ export default function OverviewTab({ ev, tasks = [], onUpdateTeam }: OverviewTa
           ),
           e("div", { className: "space-y-1.5" },
             ev.teamUserIds.map(uid => {
-              const u = ownerById(uid);
+              const u = memberFromStaff(uid, staff); // 真人优先,兼容老 mock 字母 id
               const isOwner = uid === ev.ownerId;
               return e("div", { key: uid, className: "flex items-center gap-2 text-[10.5px] group" },
                 e("div", { className: "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white", style: { background: u.color } }, u.initial),

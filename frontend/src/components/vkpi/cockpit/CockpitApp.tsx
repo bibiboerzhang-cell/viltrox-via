@@ -169,15 +169,22 @@ export function CockpitApp(props: any = {}) {
     const handleOpenKolPoolItem = () => {
       setActiveNav("kol-pool");
     };
+    // 顶栏全局搜索(2026-07 P0 接真):关键词已写 localStorage,这里只负责切板块;
+    // KOLPoolPage 挂载/事件时消费 vkpi:pending-kolpool-search 并填入本地筛选。
+    const handleOpenKolPoolSearch = () => {
+      setActiveNav("kol-pool");
+    };
     window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
     window.addEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
     window.addEventListener("vkpi:open-project-task", handleOpenProjectTask);
     window.addEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
+    window.addEventListener("vkpi:open-kol-pool-search", handleOpenKolPoolSearch);
     return () => {
       window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
       window.removeEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
       window.removeEventListener("vkpi:open-project-task", handleOpenProjectTask);
       window.removeEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
+      window.removeEventListener("vkpi:open-kol-pool-search", handleOpenKolPoolSearch);
     };
   }, []);
   

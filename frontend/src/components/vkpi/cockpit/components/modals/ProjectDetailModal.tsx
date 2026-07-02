@@ -104,7 +104,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
             className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1",
             title: "分享给团队成员",
           }, e(Share2, { size: 10 }), "分享"),
-          e("button", { className: "rounded-md border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.08]" }, t("编辑")),
+          // 「编辑」死按钮已移除(无 onClick 装饰件);编辑走「打开完整页」里的真入口。
           e("button", { onClick: () => onOpenFullPage && onOpenFullPage(project), className: "rounded-md border border-purple-500/30 bg-purple-500/[0.08] px-2 py-1 text-[10px] text-purple-200 hover:bg-purple-500/[0.15] flex items-center gap-1" },
             "打开完整页 ", e(ArrowLeft, { size: 9, className: "rotate-180" })),
           e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white hover:bg-white/10" }, e(X, { size: 14 }))
@@ -214,7 +214,8 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
                   e("span", { className: "text-[10px] font-medium", style: { color: k.stageColor } }, t(k.stage)),
                   e("span", { className: "text-[10px] tabular-nums", style: { color: k.published > 0 ? "#fff" : "rgba(255,255,255,0.4)" } }, k.published),
                   e("span", { className: "text-[10px] tabular-nums", style: { color: k.reach !== "—" ? "#fff" : "rgba(255,255,255,0.4)" } }, k.reach),
-                  e("button", { className: "text-[10px] text-purple-300 hover:text-purple-200 text-right" }, t(k.action) + " →")
+                  // 原「跟进 →」是无 onClick 的装饰链接 → 降级为纯文本状态标签,不再伪装可点。
+                  e("span", { className: "text-[10px] text-slate-500 text-right" }, t(k.action))
                 ))
               )
         ),

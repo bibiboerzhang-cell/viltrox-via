@@ -1,23 +1,24 @@
 import React, { useState } from "react";
 import { Edit3, X } from "lucide-react";
-import { TEAM } from "../data/team";
 import { MATERIAL_CATEGORIES, MATERIAL_SOURCE } from "../shared/constants";
-import type { MaterialVm } from "../shared/types";
+import type { MaterialVm, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface AddMaterialModalProps {
+  staff?: UiStaff[];
   onClose: () => void;
   onSubmit: (m: MaterialVm) => void;
 }
 
-export default function AddMaterialModal({ onClose, onSubmit }: AddMaterialModalProps) {
+export default function AddMaterialModal({ staff = [], onClose, onSubmit }: AddMaterialModalProps) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("display");
   const [customLabel, setCustomLabel] = useState("");
   const [source, setSource] = useState("ship");
   const [qty, setQty] = useState(1);
-  const [owner, setOwner] = useState("M");
+  // 负责人 = 真实 staff id(mock 四人组退役);渲染层 ownerByInitial 按 id 解析真人,老 initial 数据原样兼容。
+  const [owner, setOwner] = useState(staff[0] ? String(staff[0].id) : "");
   const [note, setNote] = useState("");
 
   const isCustom = category === "custom";
@@ -96,9 +97,11 @@ export default function AddMaterialModal({ onClose, onSubmit }: AddMaterialModal
           ),
           e("div", null,
             e("label", { className: "text-[10.5px] text-slate-400 mb-1 block" }, "负责人"),
-            e("select", { value: owner, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setOwner(ev.target.value),
-              className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-purple-500/40" },
-              TEAM.map(u => e("option", { key: u.id, value: u.initial, style: { background: "#0a0a0d" } }, u.name))
+            e("select", { value: owner, disabled: staff.length === 0, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setOwner(ev.target.value),
+              className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-purple-500/40 disabled:opacity-60" },
+              staff.length === 0
+                ? e("option", { value: "", style: { background: "#0a0a0d" } }, "员工名单未加载")
+                : staff.map(u => e("option", { key: u.id, value: String(u.id), style: { background: "#0a0a0d" } }, u.name))
             )
           )
         ),

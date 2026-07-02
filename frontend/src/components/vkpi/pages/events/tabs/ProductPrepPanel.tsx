@@ -5,12 +5,13 @@ import AddProductPrepModal from "../modals/AddProductPrepModal";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal";
 import { ITEM_STATUS, PRODUCT_CATEGORIES, PRODUCT_SOURCES } from "../shared/constants";
 import { ownerByInitial } from "../shared/lookups";
-import type { EventVm, ProductVm, StockItem } from "../shared/types";
+import type { EventVm, ProductVm, StockItem, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface ProductPrepPanelProps {
   ev: EventVm;
+  staff?: UiStaff[];
   stock: StockItem[];
   token: string;
   products?: ProductVm[];
@@ -19,7 +20,7 @@ interface ProductPrepPanelProps {
   reload?: () => void;
 }
 
-export default function ProductPrepPanel({ ev, stock, token, products: productsProp = [], loading, error, reload }: ProductPrepPanelProps) {
+export default function ProductPrepPanel({ ev, staff = [], stock, token, products: productsProp = [], loading, error, reload }: ProductPrepPanelProps) {
   const [products, setProducts] = useState<ProductVm[]>(productsProp);
   const [addingSide, setAddingSide] = useState<"have" | "need" | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
@@ -168,6 +169,7 @@ export default function ProductPrepPanel({ ev, stock, token, products: productsP
     addingSide && e(AddProductPrepModal, {
       side: addingSide,
       stock,
+      staff,
       onClose: () => setAddingSide(null),
       onSubmit: (p: ProductVm) => {
         setAddingSide(null);

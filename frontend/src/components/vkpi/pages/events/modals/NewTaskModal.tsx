@@ -1,21 +1,26 @@
 import React, { useState } from "react";
 import { X } from "lucide-react";
-import { TEAM } from "../data/team";
 import { PHASE_LABELS } from "../shared/constants";
-import type { ChecklistItem, TaskVm } from "../shared/types";
+import type { ChecklistItem, TaskVm, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface NewTaskModalProps {
   phaseDefault?: string;
+  staff?: UiStaff[];
+  currentUserId?: string;
   onClose: () => void;
   onSubmit: (task: TaskVm) => void;
 }
 
-export default function NewTaskModal({ phaseDefault, onClose, onSubmit }: NewTaskModalProps) {
+export default function NewTaskModal({ phaseDefault, staff = [], currentUserId = "", onClose, onSubmit }: NewTaskModalProps) {
   const [phase, setPhase] = useState(phaseDefault || "2w");
   const [title, setTitle] = useState("");
-  const [owner, setOwner] = useState("J");
+  // 负责人 = 真实 staff id(mock 四人组退役);默认当前用户,名单未加载则留空(TasksTab 会改派创建人)。
+  const [owner, setOwner] = useState(() => {
+    if (currentUserId && staff.some(u => String(u.id) === String(currentUserId))) return String(currentUserId);
+    return staff[0] ? String(staff[0].id) : "";
+  });
   const [dueDate, setDueDate] = useState("");
   const [kind, setKind] = useState("");
   const [notes, setNotes] = useState("");
@@ -63,17 +68,20 @@ export default function NewTaskModal({ phaseDefault, onClose, onSubmit }: NewTas
         ),
         e("div", null,
           e("label", { className: "text-[10.5px] text-slate-400 mb-1.5 block" }, "负责人"),
-          e("div", { className: "flex flex-wrap gap-1.5" },
-            TEAM.map(u => {
-              const active = owner === u.initial;
-              return e("button", { key: u.id, onClick: () => setOwner(u.initial),
-                className: `px-2.5 py-1 rounded text-[10.5px] border flex items-center gap-1.5 ${active ? "border-purple-500/40 bg-purple-500/10 text-white" : "border-white/[0.06] bg-white/[0.02] text-slate-400 hover:bg-white/[0.04]"}`
-              },
-                e("div", { className: "w-4 h-4 rounded-full flex items-center justify-center text-[8.5px] font-bold text-white", style: { background: u.color } }, u.initial),
-                u.name
-              );
-            })
-          )
+          staff.length === 0
+            ? e("div", { className: "text-[10.5px] text-slate-500 px-2.5 py-1.5 rounded bg-white/[0.02] border border-white/[0.04]" },
+                "员工名单未加载 · 任务将分配给创建人")
+            : e("div", { className: "flex flex-wrap gap-1.5" },
+                staff.map(u => {
+                  const active = owner === String(u.id);
+                  return e("button", { key: u.id, onClick: () => setOwner(String(u.id)),
+                    className: `px-2.5 py-1 rounded text-[10.5px] border flex items-center gap-1.5 ${active ? "border-purple-500/40 bg-purple-500/10 text-white" : "border-white/[0.06] bg-white/[0.02] text-slate-400 hover:bg-white/[0.04]"}`
+                  },
+                    e("div", { className: "w-4 h-4 rounded-full flex items-center justify-center text-[8.5px] font-bold text-white", style: { background: u.color || "#94a3b8" } }, u.avatar || String(u.name || "?").slice(0, 1)),
+                    u.name
+                  );
+                })
+              )
         ),
         e("div", null,
           e("label", { className: "text-[10.5px] text-slate-400 mb-1.5 block" }, "任务类型 (可选)"),

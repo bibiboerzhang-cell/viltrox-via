@@ -1,19 +1,19 @@
 import React, { useState } from "react";
 import { Package, Search, X } from "lucide-react";
-import { TEAM } from "../data/team";
 import { PRODUCT_CATEGORIES, PRODUCT_SOURCES } from "../shared/constants";
-import type { ProductVm, StockItem } from "../shared/types";
+import type { ProductVm, StockItem, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface AddProductPrepModalProps {
   side: "have" | "need";
   stock?: StockItem[];
+  staff?: UiStaff[];
   onClose: () => void;
   onSubmit: (p: ProductVm) => void;
 }
 
-export default function AddProductPrepModal({ side, stock = [], onClose, onSubmit }: AddProductPrepModalProps) {
+export default function AddProductPrepModal({ side, stock = [], staff = [], onClose, onSubmit }: AddProductPrepModalProps) {
   const [mode, setMode] = useState(side === "have" && stock.length > 0 ? "from_stock" : "manual");  // from_stock | manual
   const [selectedStockId, setSelectedStockId] = useState<string | null>(null);
   const [stockSearch, setStockSearch] = useState("");
@@ -22,8 +22,17 @@ export default function AddProductPrepModal({ side, stock = [], onClose, onSubmi
   const [category, setCategory] = useState("lens");
   const [source, setSource] = useState(side === "have" ? "in_stock_sample" : "new_purchase");
   const [qty, setQty] = useState(1);
-  const [owner, setOwner] = useState("T");
+  // 负责人 = 真实 staff id(mock 四人组退役);渲染层 ownerByInitial 按 id 解析真人,老 initial 数据原样兼容。
+  const [owner, setOwner] = useState(staff[0] ? String(staff[0].id) : "");
   const [note, setNote] = useState("");
+
+  // 负责人选择器(两处共用):真实员工名单;名单未加载时禁用并如实说明。
+  const ownerSelect = e("select", { value: owner, disabled: staff.length === 0, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setOwner(ev.target.value),
+    className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-purple-500/40 disabled:opacity-60" },
+    staff.length === 0
+      ? e("option", { value: "", style: { background: "#0a0a0d" } }, "员工名单未加载")
+      : staff.map(u => e("option", { key: u.id, value: String(u.id), style: { background: "#0a0a0d" } }, u.name))
+  );
   const [arriveBy, setArriveBy] = useState("");
   const [returnAfter, setReturnAfter] = useState(side === "have");
 
@@ -95,10 +104,7 @@ export default function AddProductPrepModal({ side, stock = [], onClose, onSubmi
           ),
           e("div", null,
             e("label", { className: "text-[10.5px] text-slate-400 mb-1 block" }, "负责人"),
-            e("select", { value: owner, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setOwner(ev.target.value),
-              className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-emerald-500/40" },
-              TEAM.map(u => e("option", { key: u.id, value: u.initial, style: { background: "#0a0a0d" } }, u.name))
-            )
+            ownerSelect
           )
         ),
         selectedStockId && e("label", { className: "flex items-center gap-2 text-[10.5px] text-slate-300 cursor-pointer" },
@@ -151,10 +157,7 @@ export default function AddProductPrepModal({ side, stock = [], onClose, onSubmi
           ),
           e("div", null,
             e("label", { className: "text-[10.5px] text-slate-400 mb-1 block" }, "负责人"),
-            e("select", { value: owner, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setOwner(ev.target.value),
-              className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-purple-500/40" },
-              TEAM.map(u => e("option", { key: u.id, value: u.initial, style: { background: "#0a0a0d" } }, u.name))
-            )
+            ownerSelect
           )
         ),
         side === "need" && e("div", null,

@@ -1,5 +1,8 @@
 // Verbatim from CockpitApp.tsx — conservative leaf extraction (行为不变).
 // 纯展示顶栏:吃 props,不持有任何 state/effect。
+// 例外:全局搜索框接真(2026-07 P0)——回车把关键词写 localStorage 并派发
+// vkpi:open-kol-pool-search 事件(vkpi:open-kol-pool-item 同款管道):
+// CockpitApp 监听切到 KOL Pool,KOLPoolPage 挂载/事件时消费并填入本地筛选。
 
 import React from "react";
 import { Bell, ChevronDown, FileText, HelpCircle, MessageCircle, Search } from "lucide-react";
@@ -31,8 +34,18 @@ export function CockpitTopbar({
       e("div", { className: "relative" },
         e(Search, { size: 14, className: "absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" }),
         e("input", {
-          placeholder: "Search anything...",
-          className: "w-full rounded-lg border border-white/[0.08] bg-white/[0.03] py-1.5 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-blue-500/40 focus:outline-none"
+          placeholder: "搜索 KOL Pool(回车跳转)...",
+          title: "输入关键词回车 → 跳到 KOL Pool 并按关键词筛选",
+          className: "w-full rounded-lg border border-white/[0.08] bg-white/[0.03] py-1.5 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-blue-500/40 focus:outline-none",
+          onKeyDown: (ev: any) => {
+            if (ev.key !== "Enter") return;
+            const q = String(ev.currentTarget.value || "").trim();
+            if (!q) return;
+            try { window.localStorage.setItem("vkpi:pending-kolpool-search", q); } catch { /* localStorage 不可用忽略 */ }
+            window.dispatchEvent(new CustomEvent("vkpi:open-kol-pool-search"));
+            ev.currentTarget.value = "";
+            ev.currentTarget.blur();
+          },
         })
       )
     ),

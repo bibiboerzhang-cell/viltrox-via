@@ -278,6 +278,23 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiToken]);
 
+  // 顶栏全局搜索接真:消费 pending 关键词 → 填入本地筛选并展开表格视图
+  // (vkpi:open-kol-pool-item 同款 localStorage+event 管道)。挂载即消费一次 + 监听事件。
+  useEffect(() => {
+    const consumeSearch = () => {
+      try {
+        const pending = window.localStorage.getItem("vkpi:pending-kolpool-search");
+        if (!pending) return;
+        window.localStorage.removeItem("vkpi:pending-kolpool-search");
+        setSearch(pending);
+        setInlineListOpen(true);
+      } catch { /* localStorage 不可用忽略 */ }
+    };
+    consumeSearch();
+    window.addEventListener("vkpi:open-kol-pool-search", consumeSearch);
+    return () => window.removeEventListener("vkpi:open-kol-pool-search", consumeSearch);
+  }, []);
+
   const openRecallItem = useCallback((recallItem: any) => {
     if (!recallItem || typeof recallItem !== "object") return;
     const id = kolIdFrom(recallItem);
@@ -503,7 +520,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
               search, setSearch, country, setCountry, audienceType, setAudienceType,
               trendLevel, setTrendLevel, sortBy, setSortBy,
               hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor,
-              searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts,
+              searchMode, kindFilter, setKindFilter, kindCounts,
               myListFilter, setMyListFilter, myListCount: myList.size,
             }),
             (search || kindFilter || myListFilter) && e(SearchProgressBar, { items: filteredBase, searchActive: !!search }),

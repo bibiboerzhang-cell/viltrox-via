@@ -325,6 +325,16 @@ export async function translateBio(token: string, text: string) {
   );
 }
 
+// 新发现 KOL 档案瘦 → 抽屉打开自动补:入队 kol_profile_deep_crawl(后端幂等:
+// 已有 evidence/活跃 job 时跳过,不重复烧 Apify)。worker 级联补档案/评论/受众。
+export async function enqueueKolProfileCrawl(token: string, kolPoolId: number | string) {
+  return apiFetch<{ status?: string; job_id?: number }>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-profile-crawl`,
+    { method: "POST", timeoutMs: 8000 },
+    token,
+  );
+}
+
 // 受众画像 ensemble_v1(P0):评论者抽样→三层推断→聚合收缩,写 audience_estimated_json。
 // YouTube 走免费 Data API;IG/TT 复用已抓评论(不足则后端入队抓评论并返回 status=pending_comments)。
 export async function refreshAudienceStats(token: string, kolPoolId: number | string) {

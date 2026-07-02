@@ -3,13 +3,12 @@ import { AlertCircle, Check, ChevronRight, ListChecks, Plus, ShieldCheck, X } fr
 import {
   addEventTask, updateEventTask, deleteEventTask, fromUiTaskCreate,
 } from "../../../../../services/vkpi/events-api";
-import { TEAM } from "../data/team";
 import AiGenerateTasksModal from "../modals/AiGenerateTasksModal";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal";
 import NewTaskModal from "../modals/NewTaskModal";
 import { EQUIP_SOURCE, ITEM_STATUS, MAT_SOURCE, PHASE_LABELS, TASK_KINDS } from "../shared/constants";
 import { ownerByInitial } from "../shared/lookups";
-import type { CurrentUserVm, DetailItem, EventVm, TaskVm } from "../shared/types";
+import type { CurrentUserVm, DetailItem, EventVm, TaskVm, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
@@ -18,6 +17,7 @@ interface DeletingTask { type: string; id: string; title: string }
 interface TasksTabProps {
   ev: EventVm;
   currentUser: CurrentUserVm;
+  staff?: UiStaff[];
   token: string;
   tasks?: TaskVm[];
   loading?: boolean;
@@ -25,7 +25,7 @@ interface TasksTabProps {
   reload?: () => void;
 }
 
-export default function TasksTab({ ev, currentUser, token, tasks = [], loading, error, reload }: TasksTabProps) {
+export default function TasksTab({ ev, currentUser, staff = [], token, tasks = [], loading, error, reload }: TasksTabProps) {
   const phases = ["4w", "2w", "1w", "live", "after", "prep"];
   const [tasksState, setTasksState] = useState<TaskVm[]>(tasks);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -64,10 +64,10 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
       return {
         ...t, done: newDone,
         doneAt: newDone ? "今天" : undefined,
-        doneBy: newDone ? currentUser.initial : undefined,  // ★ 记录实际点的人
+        doneBy: newDone ? String(currentUser.id) : undefined,  // ★ 记录实际点的人(真 staff id,渲染时解析真人)
       };
     }));
-    updateEventTask(token, ev.id, id, { done: newDone, done_by: newDone ? currentUser.initial : "" })
+    updateEventTask(token, ev.id, id, { done: newDone, done_by: newDone ? String(currentUser.id) : "" })
       .then(() => reload && reload())
       .catch(onErr("更新任务失败"));
   }
@@ -84,13 +84,14 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
       .catch(onErr("更新 checklist 失败"));
   }
 
-  function addCollaborator(taskId: string, userInitial: string) {
+  function addCollaborator(taskId: string, userKey: string) {
+    // userKey = 真实 staff id(String);老数据里可能存的是 mock initial,渲染层 ownerByInitial 双向兼容。
     setAddCollabFor(null);
     const cur = tasksState.find(t => t.id === taskId);
     if (!cur) return;
     const existing = cur.collaborators || [];
-    if (existing.includes(userInitial)) return;
-    const next = [...existing, userInitial];
+    if (existing.includes(userKey)) return;
+    const next = [...existing, userKey];
     setTasksState(prev => prev.map(t => t.id === taskId ? { ...t, collaborators: next } : t));
     updateEventTask(token, ev.id, taskId, { collaborators: next })
       .then(() => reload && reload())
@@ -99,8 +100,8 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
 
   function createTask(t: TaskVm) {
     setShowNew(false);
-    // NewTaskModal owner 默认写死 "J"(占位,无对应真人)→ 归属错人。占位/空 → 改派当前用户。
-    const owned = { ...t, owner: (t.owner && t.owner !== "J") ? t.owner : ((currentUser && currentUser.initial) || "All") };
+    // NewTaskModal 现在给的是真 staff id;空/旧占位 "J"(名单未加载)→ 改派当前用户(真 id)。
+    const owned = { ...t, owner: (t.owner && t.owner !== "J") ? t.owner : (String(currentUser?.id || "") || "All") };
     addEventTask(token, ev.id, fromUiTaskCreate(owned))
       .then(() => reload && reload())
       .catch(onErr("新建任务失败"));
@@ -108,9 +109,9 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
 
   function createTasksBulk(list: TaskVm[]) {
     setShowAi(false);
-    // 模板任务默认 owner 写死占位 "J" → 任务列表按 owner 过滤,当前用户看不到(就是「没有显示」)。
-    // 改派给当前用户,导入者立刻看得到、可再分派。
-    const mine = (list || []).map(t => ({ ...t, owner: (currentUser && currentUser.initial) || t.owner }));
+    // 模板任务默认 owner 写死占位 "J"(mock,无对应真人)→ 全部改派当前用户(真 staff id),
+    // 导入者立刻看得到、可再分派。
+    const mine = (list || []).map(t => ({ ...t, owner: String(currentUser?.id || "") || t.owner }));
     Promise.all(mine.map(t => addEventTask(token, ev.id, fromUiTaskCreate(t))))
       .then(() => reload && reload())
       .catch(onErr("生成任务失败"));
@@ -237,7 +238,7 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
                   // collaborators avatars
                   collabs.length > 0 && e("div", { className: "flex items-center gap-0.5" },
                     collabs.map((u, i) => e("div", {
-                      key: u.initial,
+                      key: (t.collaborators || [])[i] ?? u.initial + i,
                       className: "w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white",
                       style: { background: u.color, opacity: 0.7, marginLeft: i > 0 ? "-3px" : 0 },
                       title: "协作 " + u.name
@@ -252,8 +253,8 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
                   }, owner.initial)
                   : e("div", { className: "text-[9px] text-slate-500 shrink-0 px-1.5 py-0.5 rounded bg-white/[0.04]" }, "All"),
 
-                  // doneBy badge (实际点的人,如果跟 owner 不一致)
-                  t.done && doneBy && doneBy.initial !== t.owner && e("div", { className: "flex items-center gap-0.5 text-[9px] text-slate-500" },
+                  // doneBy badge (实际点的人,如果跟 owner 不一致;raw 值比较,兼容真 id 与老 initial)
+                  t.done && doneBy && String(t.doneBy) !== String(t.owner) && e("div", { className: "flex items-center gap-0.5 text-[9px] text-slate-500" },
                     e("span", null, "→"),
                     e("div", {
                       className: "w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white",
@@ -334,24 +335,25 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
                     )
                   ),
 
-                  // 协作者管理 + add 按钮
-                  e("div", { className: "flex items-center gap-2 px-2.5" },
+                  // 协作者管理 + add 按钮(候选 = 真实员工名单;mock TEAM 退役)
+                  e("div", { className: "flex items-center gap-2 px-2.5 flex-wrap" },
                     e("span", { className: "text-[9.5px] text-slate-500" }, "协作者:"),
                     collabs.length === 0 && e("span", { className: "text-[10px] text-slate-500" }, "无"),
-                    collabs.map(u => e("div", { key: u.initial, className: "px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1", style: { background: u.color + "20", color: u.color } },
+                    collabs.map((u, i) => e("div", { key: (t.collaborators || [])[i] ?? u.initial + i, className: "px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1", style: { background: u.color + "20", color: u.color } },
                       e("div", { className: "w-3 h-3 rounded-full flex items-center justify-center text-[7.5px] font-bold text-white", style: { background: u.color } }, u.initial),
                       u.name
                     )),
                     addCollabFor === t.id
-                      ? e("div", { className: "flex items-center gap-1" },
-                          TEAM.filter(u => u.initial !== t.owner && !(t.collaborators || []).includes(u.initial)).map(u =>
+                      ? e("div", { className: "flex items-center gap-1 flex-wrap" },
+                          staff.length === 0 && e("span", { className: "text-[10px] text-slate-500" }, "员工名单未加载"),
+                          staff.filter(u => String(u.id) !== String(t.owner) && !(t.collaborators || []).includes(String(u.id))).map(u =>
                             e("button", {
                               key: u.id,
-                              onClick: () => addCollaborator(t.id, u.initial),
+                              onClick: () => addCollaborator(t.id, String(u.id)),
                               className: "w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white hover:scale-110 transition-transform",
-                              style: { background: u.color },
+                              style: { background: u.color || "#94a3b8" },
                               title: "+ " + u.name
-                            }, u.initial)
+                            }, u.avatar || String(u.name || "?").slice(0, 1))
                           ),
                           e("button", { onClick: () => setAddCollabFor(null), className: "text-[10px] text-slate-500 hover:text-white" }, "取消")
                         )
@@ -371,6 +373,8 @@ export default function TasksTab({ ev, currentUser, token, tasks = [], loading, 
 
     // Modals
     showNew && e(NewTaskModal, {
+      staff,
+      currentUserId: String(currentUser?.id || ""),
       onClose: () => setShowNew(false),
       onSubmit: createTask,
     }),

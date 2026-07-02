@@ -107,7 +107,16 @@ export function CampaignRetrospectiveTab({
           setRoiError(status === 'not_found' ? '未找到该项目的归因数据。' : '入参无效,无法运行 ROI 复盘。');
         }
       })
-      .catch((err: unknown) => setRoiError(err instanceof Error ? err.message : '跑 Skill 失败,请稍后重试。'))
+      .catch((err: unknown) => {
+        // 人话化:/skills/{id}/run 是本地分支功能,线上后端多半没有该路由(404)→ 如实告知,不甩原始报错。
+        const status = (err as any) && typeof (err as any).status === 'number' ? (err as any).status : 0;
+        const raw = err instanceof Error ? err.message : '';
+        setRoiError(
+          status === 404 || /404|not found/i.test(raw)
+            ? 'Skill 后端未上线(本地分支功能),ROI 复盘暂不可用。'
+            : (raw || '跑 Skill 失败,请稍后重试。'),
+        );
+      })
       .finally(() => setRoiBusy(false));
   }
 

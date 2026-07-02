@@ -2,12 +2,13 @@ import React, { useState } from "react";
 import { Camera, Package } from "lucide-react";
 import MarketingMaterialsPanel from "./MarketingMaterialsPanel";
 import ProductPrepPanel from "./ProductPrepPanel";
-import type { EventVm, MaterialVm, ProductVm, StockItem } from "../shared/types";
+import type { EventVm, MaterialVm, ProductVm, StockItem, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface MaterialsTabProps {
   ev: EventVm;
+  staff?: UiStaff[];
   stock: StockItem[];
   token: string;
   materials?: MaterialVm[];
@@ -17,7 +18,7 @@ interface MaterialsTabProps {
   reload?: () => void;
 }
 
-export default function MaterialsTab({ ev, stock, token, materials = [], products = [], loading, error, reload }: MaterialsTabProps) {
+export default function MaterialsTab({ ev, staff = [], stock, token, materials = [], products = [], loading, error, reload }: MaterialsTabProps) {
   const [sub, setSub] = useState("marketing");
 
   return e("div", null,
@@ -34,7 +35,7 @@ export default function MaterialsTab({ ev, stock, token, materials = [], product
         }, e(IS, { size: 11 }), s.l);
       })
     ),
-    sub === "marketing" && e(MarketingMaterialsPanel, { ev, token, materials, loading, error, reload }),
-    sub === "products"  && e(ProductPrepPanel, { ev, stock, token, products, loading, error, reload })
+    sub === "marketing" && e(MarketingMaterialsPanel, { ev, staff, token, materials, loading, error, reload }),
+    sub === "products"  && e(ProductPrepPanel, { ev, staff, stock, token, products, loading, error, reload })
   );
 }

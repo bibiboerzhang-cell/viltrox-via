@@ -3,8 +3,30 @@ import { PROJECTS } from "../data/projects";
 import { TEAM } from "../data/team";
 import type { KolPoolEntry, MemberLike, MemberVm, ProjectVm, UiStaff } from "./types";
 
-export function ownerById(id: string | number): MemberVm { return TEAM.find(t => t.id === id) || TEAM[0]; }
-export function ownerByInitial(i: string): MemberLike { return TEAM.find(t => t.initial === i) || { initial: i, color: "#94a3b8" }; }
+// 真实 staff 模块缓存(EventsPage 每次渲染同步喂入,与 setRealProjects 同款模式)。
+// 让 ownerById/ownerByInitial 在没有 staff prop 的深层组件(物料/产品面板等)也能解析真人。
+let _realStaff: UiStaff[] = [];
+export function setRealStaff(list: UiStaff[]): void {
+  _realStaff = Array.isArray(list) ? list : [];
+}
+function staffToMember(s: UiStaff): MemberVm {
+  return { id: s.id, name: s.name, color: s.color || "#94a3b8", initial: s.avatar || String(s.name || "?").slice(0, 1) };
+}
+// 真人优先(按 staff id 匹配)→ 旧 mock TEAM(兼容老数据字母 id)→ 诚实兜底(不再冒充 TEAM[0])。
+export function ownerById(id: string | number): MemberVm {
+  const real = _realStaff.find(s => String(s.id) === String(id));
+  if (real) return staffToMember(real);
+  const legacy = TEAM.find(t => String(t.id) === String(id));
+  if (legacy) return legacy;
+  return { id, name: String(id ?? ""), color: "#94a3b8", initial: String(id ?? "?").slice(0, 1).toUpperCase() };
+}
+// key 可能是:真 staff id(新数据)/ 真人姓名(费用 paidBy)/ 旧 mock initial(老数据,原样显示不崩)。
+export function ownerByInitial(i: string): MemberLike {
+  const key = String(i ?? "");
+  const real = _realStaff.find(s => String(s.id) === key) || _realStaff.find(s => String(s.name) === key);
+  if (real) return staffToMember(real);
+  return TEAM.find(t => t.initial === key) || { initial: key, color: "#94a3b8" };
+}
 // 真成员优先解析(teamUserIds 现在是真 staff id);命不中再回退旧 mock TEAM(兼容老 event 字母 id)。
 // staff 为 UiStaff[]({id,name,color,avatar});统一返回 {id,name,color,initial} 供卡片/详情渲染。
 export function memberFromStaff(id: string | number, staff: UiStaff[]): MemberVm {

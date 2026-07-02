@@ -5,12 +5,13 @@ import AddMaterialModal from "../modals/AddMaterialModal";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal";
 import { ITEM_STATUS, MATERIAL_CATEGORIES, MATERIAL_SOURCE } from "../shared/constants";
 import { ownerByInitial } from "../shared/lookups";
-import type { EventVm, MaterialVm } from "../shared/types";
+import type { EventVm, MaterialVm, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface MarketingMaterialsPanelProps {
   ev: EventVm;
+  staff?: UiStaff[];
   token: string;
   materials?: MaterialVm[];
   loading?: boolean;
@@ -18,7 +19,7 @@ interface MarketingMaterialsPanelProps {
   reload?: () => void;
 }
 
-export default function MarketingMaterialsPanel({ ev, token, materials: materialsProp = [], loading, error, reload }: MarketingMaterialsPanelProps) {
+export default function MarketingMaterialsPanel({ ev, staff = [], token, materials: materialsProp = [], loading, error, reload }: MarketingMaterialsPanelProps) {
   const [materials, setMaterials] = useState<MaterialVm[]>(materialsProp);
   const [filter, setFilter] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
@@ -186,6 +187,7 @@ export default function MarketingMaterialsPanel({ ev, token, materials: material
     ),
 
     showAdd && e(AddMaterialModal, {
+      staff,
       onClose: () => setShowAdd(false),
       onSubmit: (m: MaterialVm) => {
         setShowAdd(false);

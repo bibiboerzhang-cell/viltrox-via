@@ -64,9 +64,10 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
         e("span", { className: "shrink-0 rounded border border-emerald-500/20 bg-emerald-500/[0.06] px-1 py-px text-[8px] text-emerald-400/80" }, "实时")
       ),
       e("div", { className: "flex items-center gap-1 shrink-0" },
-        e("button", {
-          onClick: (ev: any) => { ev.stopPropagation(); },
-          title: "Add event",
+        // 加号接真:跳 Events 页(在那里新建活动);无 onViewAll 的老调用方直接隐藏,不留死按钮。
+        onViewAll && e("button", {
+          onClick: (ev: any) => { ev.stopPropagation(); onViewAll(); },
+          title: "去 Events 页新建活动",
           className: "rounded-md p-1 text-slate-400 hover:bg-white/[0.06] hover:text-white"
         }, e(Plus, { size: 10 })),
         e("button", {

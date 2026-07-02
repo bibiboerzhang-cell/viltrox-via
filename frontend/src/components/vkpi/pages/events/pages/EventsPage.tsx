@@ -8,7 +8,7 @@ import {
 } from "../../../../../services/vkpi/events-api";
 import { listInventory, toUiStock } from "../../../../../services/vkpi/inventory-api";
 import { apiFetch } from "../../../../../services/http";
-import { setRealProjects } from "../shared/lookups";
+import { setRealProjects, setRealStaff } from "../shared/lookups";
 import { useAuth } from "../../../../../hooks/useAuth";
 import DeleteConfirmModal from "../modals/DeleteConfirmModal";
 import NewEventModal, { type NewEventSubmit } from "../modals/NewEventModal";
@@ -35,6 +35,9 @@ interface EventsPageProps {
 
 export default function EventsPage({ currentUser, staff = [], initialEventId = null, onConsumeInitialEvent }: EventsPageProps) {
   const { token } = useAuth();
+  // 真实 staff 喂 lookups 模块缓存(渲染前同步设置,深层组件的 ownerById/ownerByInitial 才能解析真人;
+  // 幂等赋值,与 setRealProjects 同款模式)。
+  setRealStaff(staff);
   const [events, setEvents] = useState<EventVm[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");

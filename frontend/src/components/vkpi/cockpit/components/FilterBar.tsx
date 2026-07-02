@@ -7,7 +7,7 @@ import { COUNTRY_INFO } from "../data/countryInfo";
 
 const e = React.createElement;
 
-export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }: any) {
+export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }: any) {
   const [localApplying, setLocalApplying] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [examplesOpen, setExamplesOpen] = useState(false);
@@ -70,16 +70,18 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
             : e(ChevronRight, { size: 13 })
           )
         ),
-        // ── 搜索模式选择(老/新比例) ──
-          e("div", { className: "flex shrink-0 items-center overflow-hidden rounded-md border border-white/[0.075] bg-white/[0.018]" },
-            modeChips.map(m => e("button", {
+        // ── 搜索模式(诚实化:切换不改召回配额,后端未接 → 降级为非按钮的只读标签,避免误导)──
+          e("div", {
+            className: "flex shrink-0 items-center overflow-hidden rounded-md border border-dashed border-white/[0.06] bg-white/[0.012] opacity-60 cursor-default select-none",
+            title: "展示偏好·不改召回配额(接入中)"
+          },
+            modeChips.map(m => e("span", {
               key: m.key,
-              onClick: () => setSearchMode(m.key),
-              className: "px-2.5 py-1.5 text-[10px] transition-colors",
-              title: m.hint,
+              className: "px-2.5 py-1.5 text-[10px]",
+              title: "展示偏好·不改召回配额(接入中)",
               style: searchMode === m.key
                 ? { background: m.color, color: "#fff" }
-                : { color: "rgba(148,163,184,0.7)" }
+                : { color: "rgba(148,163,184,0.55)" }
           }, e("span", { className: "font-medium" }, m.label)))
         ),
         e("button", {

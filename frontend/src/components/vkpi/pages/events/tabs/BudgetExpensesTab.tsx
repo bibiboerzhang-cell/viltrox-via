@@ -8,13 +8,14 @@ import ExpenseEntryModal, { type ExpenseFormSubmit } from "../modals/ExpenseEntr
 import { EXPENSE_CATEGORIES } from "../shared/constants";
 import { fmtMoney, fmtMoneyShort, sum } from "../shared/helpers";
 import { ownerById } from "../shared/lookups";
-import type { BudgetCell, CurrentUserVm, EventVm, ExpenseVm } from "../shared/types";
+import type { BudgetCell, CurrentUserVm, EventVm, ExpenseVm, UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
 interface BudgetExpensesTabProps {
   ev: EventVm;
   currentUser: CurrentUserVm;
+  staff?: UiStaff[];
   token: string;
   expenses?: ExpenseVm[];
   loading?: boolean;
@@ -22,7 +23,7 @@ interface BudgetExpensesTabProps {
   reload?: () => void;
 }
 
-export default function BudgetExpensesTab({ ev, currentUser, token, expenses: rawExpenses = [], loading, error, reload }: BudgetExpensesTabProps) {
+export default function BudgetExpensesTab({ ev, currentUser, staff = [], token, expenses: rawExpenses = [], loading, error, reload }: BudgetExpensesTabProps) {
   const [showModal, setShowModal] = useState(false);
   const [scope, setScope] = useState("mine");  // mine | all (只 owner 能看 all)
   const [deleting, setDeleting] = useState<{ id: string; description: string } | null>(null);
@@ -217,6 +218,8 @@ export default function BudgetExpensesTab({ ev, currentUser, token, expenses: ra
     ),
 
     showModal && e(ExpenseEntryModal, {
+      staff,
+      defaultPaidBy: currentUser.name,
       onClose: () => setShowModal(false),
       onSubmit: addExpense,
     }),

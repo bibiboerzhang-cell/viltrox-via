@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { Camera, Sparkles, X } from "lucide-react";
-import { TEAM } from "../data/team";
+import { Camera, X } from "lucide-react";
 import { EXPENSE_CATEGORIES } from "../shared/constants";
+import type { UiStaff } from "../shared/types";
 
 const e = React.createElement;
 
@@ -16,59 +16,40 @@ export interface ExpenseFormSubmit {
 }
 
 interface ExpenseEntryModalProps {
+  staff?: UiStaff[];
+  defaultPaidBy?: string;
   onClose: () => void;
   onSubmit: (data: ExpenseFormSubmit) => void;
 }
 
-export default function ExpenseEntryModal({ onClose, onSubmit }: ExpenseEntryModalProps) {
+export default function ExpenseEntryModal({ staff = [], defaultPaidBy = "", onClose, onSubmit }: ExpenseEntryModalProps) {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("travel");
   const [date, setDate] = useState("");
   const [description, setDescription] = useState("");
-  const [paidBy, setPaidBy] = useState("Jianbo");
+  // 付款人 = 真实员工姓名(费用流水按 paidBy===currentUser.name 过滤,故存姓名);默认当前用户。
+  const [paidBy, setPaidBy] = useState(defaultPaidBy || (staff[0] ? String(staff[0].name) : ""));
   const [paymentMethod, setPaymentMethod] = useState("company_card");
   const [reimbursementStatus, setReimbursementStatus] = useState("n/a");
-  const [showAiPanel, setShowAiPanel] = useState(false);
-
-  function handleFakeAiUpload() {
-    // 假装 AI 识别
-    setShowAiPanel(true);
-    setTimeout(() => {
-      setAmount("485");
-      setCategory("food");
-      setDate("2026-05-26");
-      setDescription("Onsite catering · The Bowery NYC");
-      setPaidBy("Maya");
-      setShowAiPanel(false);
-    }, 1500);
-  }
 
   return e("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4", onClick: onClose },
     e("div", { className: "rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-lg p-5 max-h-[92vh] overflow-y-auto", onClick: (ev: React.MouseEvent) => ev.stopPropagation() },
       e("div", { className: "flex items-center justify-between mb-4" },
         e("div", null,
           e("h3", { className: "text-[14px] font-semibold text-white" }, "录入费用"),
-          e("p", { className: "text-[10.5px] text-slate-500 mt-0.5" }, "拍照上传发票, LLM 自动识别金额 / 商家 / 类目")
+          e("p", { className: "text-[10.5px] text-slate-500 mt-0.5" }, "手动填写金额 / 类目 / 付款人")
         ),
         e("button", { onClick: onClose, className: "text-slate-500 hover:text-white" }, e(X, { size: 16 }))
       ),
 
-      // AI 上传区
+      // 发票 AI 识别:后端尚未接入,诚实禁用(原假动画+硬编码 $485 已移除)。
       e("div", {
-        onClick: handleFakeAiUpload,
-        className: "mb-4 rounded-xl border-2 border-dashed border-purple-500/30 bg-purple-500/[0.04] hover:bg-purple-500/[0.08] hover:border-purple-500/50 transition-all cursor-pointer py-5 flex flex-col items-center gap-2"
+        "aria-disabled": true,
+        className: "mb-4 rounded-xl border-2 border-dashed border-white/[0.08] bg-white/[0.015] py-5 flex flex-col items-center gap-2 cursor-not-allowed select-none opacity-70"
       },
-        showAiPanel
-          ? e(React.Fragment, null,
-              e(Sparkles, { size: 18, className: "text-purple-300 animate-pulse" }),
-              e("div", { className: "text-[11.5px] text-purple-200" }, "AI 正在识别发票..."),
-              e("div", { className: "text-[9.5px] text-slate-400" }, "提取金额 / 商家 / 日期 / 类目")
-            )
-          : e(React.Fragment, null,
-              e(Camera, { size: 18, className: "text-purple-300" }),
-              e("div", { className: "text-[11.5px] text-white font-medium" }, "📷 拍照 / 上传发票"),
-              e("div", { className: "text-[9.5px] text-slate-400" }, "自动识别")
-            )
+        e(Camera, { size: 18, className: "text-slate-500" }),
+        e("div", { className: "text-[11.5px] text-slate-400 font-medium" }, "发票 AI 识别待接入 — 请手动填写"),
+        e("div", { className: "text-[9.5px] text-slate-600" }, "接入后支持拍照/上传发票自动提取金额、商家、日期、类目")
       ),
 
       e("div", { className: "space-y-3" },
@@ -115,10 +96,17 @@ export default function ExpenseEntryModal({ onClose, onSubmit }: ExpenseEntryMod
         e("div", { className: "grid grid-cols-2 gap-3" },
           e("div", null,
             e("label", { className: "text-[10.5px] text-slate-400 mb-1 block" }, "付款人"),
-            e("select", { value: paidBy, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setPaidBy(ev.target.value),
-              className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-purple-500/40" },
-              TEAM.map(u => e("option", { key: u.id, value: u.name, style: { background: "#0a0a0d" } }, u.name))
-            )
+            // 真实员工名单(mock 四人组退役);名单加载失败时退化为手输,不再提供假选项。
+            staff.length > 0
+              ? e("select", { value: paidBy, onChange: (ev: React.ChangeEvent<HTMLSelectElement>) => setPaidBy(ev.target.value),
+                  className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white focus:outline-none focus:border-purple-500/40" },
+                  // 兜底:默认值(当前用户)不在名单里也能显示/保留
+                  paidBy && !staff.some(u => String(u.name) === paidBy) && e("option", { value: paidBy, style: { background: "#0a0a0d" } }, paidBy),
+                  staff.map(u => e("option", { key: u.id, value: String(u.name), style: { background: "#0a0a0d" } }, u.name))
+                )
+              : e("input", { type: "text", value: paidBy, onChange: (ev: React.ChangeEvent<HTMLInputElement>) => setPaidBy(ev.target.value),
+                  placeholder: "员工名单未加载 · 手动输入姓名",
+                  className: "w-full px-3 py-2 rounded-md bg-white/[0.02] border border-white/[0.06] text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-purple-500/40" })
           ),
           e("div", null,
             e("label", { className: "text-[10.5px] text-slate-400 mb-1 block" }, "付款方式"),
