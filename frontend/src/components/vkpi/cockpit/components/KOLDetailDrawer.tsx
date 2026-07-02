@@ -93,6 +93,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       })
       .catch((error: any) => setAudienceState({ status: "error", message: error?.message ? String(error.message) : "刷新失败" }));
   }, [apiToken, item?.id, onReloadDetail]);
+  // v2 证据下钻:面板内可展开块(intent/brands/fans)单开手风琴;state 在父层,子组件仍零 state。
+  const [audienceExpand, setAudienceExpand] = React.useState<string | null>(null);
+  const handleToggleAudienceBlock = React.useCallback((key: string) => {
+    setAudienceExpand((prev) => (prev === key ? null : key));
+  }, []);
   // #1 入主表 promote:把候选写进 vkpi 主表(接已存在 /kol-pool/{id}/promote)。
   const [promoteMsg, setPromoteMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const onPromote = React.useCallback(async (it: any) => {
@@ -148,8 +153,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     setBriefResult(null);
     setBriefError("");
     setBriefBusy(false);
-    // 换 KOL 时受众刷新态归零,避免上一条的 loading/报错串号。
+    // 换 KOL 时受众刷新态/证据展开态归零,避免上一条的 loading/报错/展开串号。
     setAudienceState({ status: "idle", message: "" });
+    setAudienceExpand(null);
   }, [item?.id]);
 
   // 内容契合深析:开抽屉先只读已有缓存(不烧 LLM);无缓存则留待用户点击触发。
@@ -388,7 +394,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       e(KOLDrawerDevices, { item, devices }),
 
       // ── Audience Stats·估算 BETA + Geo distribution(组件内部自判空;无数据但可刷新时也渲染)──
-      e(KOLDrawerGeoDistribution, { item, geoDistribution, apiToken, audienceState, onRefreshAudience: handleRefreshAudience }),
+      e(KOLDrawerGeoDistribution, {
+        item, geoDistribution, apiToken, audienceState,
+        onRefreshAudience: handleRefreshAudience,
+        audienceExpand, onToggleAudienceBlock: handleToggleAudienceBlock,
+      }),
 
       // ── V6 Fit Breakdown ──
       e(KOLDrawerV6Breakdown, { item, v6Breakdown }),

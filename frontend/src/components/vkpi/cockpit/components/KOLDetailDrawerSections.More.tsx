@@ -73,13 +73,15 @@ const LANG_LABEL: Record<string, string> = {
   th: "泰语", hi: "印地语", he: "希伯来语",
 };
 
-// Audience Stats · 估算 BETA(ensemble_v1):性别环 + Top countries + 语言分布 + 样本量/覆盖率/置信度,
-// 数据源 item.audience_estimated(detail_bundle 透传的 audience_estimated_json)。刷新按钮的 state/handler
-// 由父层 KOLDetailDrawer 持有并经 props 注入(本文件保持零内部 state)。旧「受众语言估算·评论法」在
-// 无 ensemble 数据时作 fallback 展示。附 创作者所在地(诚实,非粉丝地理)。红线:纯展示,零触 fit。
+// Audience Stats · 估算 BETA(ensemble_v1 / 受众情报 v2):性别环(归一外推)+ Top countries + 语言 +
+// 年龄 4 桶 + 评论情报(购买意向/品牌提及/活跃时段/铁粉/互动质量)+ 共同粉丝 + 创作者浓度。
+// 数据源 item.audience_estimated(detail_bundle 透传的 audience_estimated_json)。刷新/展开的 state 与
+// handler 全部由父层 KOLDetailDrawer 持有并经 props 注入(本文件保持零内部 state)。旧「受众语言估算·
+// 评论法」在无 ensemble 数据时作 fallback 展示。附 创作者所在地(诚实,非粉丝地理)。红线:纯展示,零触 fit。
 const GENDER_COLORS = { male: "#3b82f6", female: "#ec4899", unknown: "#475569" };
+const AGE_BUCKET_ORDER = ["0-18", "19-29", "30-39", "40+"];
 
-export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audienceState = {}, onRefreshAudience }: any) {
+export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audienceState = {}, onRefreshAudience, audienceExpand = null, onToggleAudienceBlock }: any) {
   const aud = (item.audience_languages || {}) as any;
   const langs = Array.isArray(aud.languages) ? aud.languages : [];
   const hasLang = langs.length > 0 && Number(aud.sample_size || 0) > 0;
@@ -87,19 +89,70 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const est = (item.audience_estimated && typeof item.audience_estimated === "object") ? item.audience_estimated as any : null;
   const hasEst = Boolean(est && Number(est.sample_size || 0) > 0);
   const canRefresh = Boolean(apiToken && item?.id && typeof onRefreshAudience === "function");
+  const canExpand = typeof onToggleAudienceBlock === "function";
   if (!hasEst && !hasLang && !hasGeo && !canRefresh) return null;
 
-  const malePct = hasEst ? Math.min(100, Math.max(0, Number(est.gender?.male_pct) || 0)) : 0;
-  const femalePct = hasEst ? Math.min(100 - malePct, Math.max(0, Number(est.gender?.female_pct) || 0)) : 0;
-  const unknownPct = Math.max(0, Math.round((100 - malePct - femalePct) * 10) / 10);
+  // ── 性别归一(v2 发布口径):male/(male+female) 外推 100;v1 旧 JSON 无 gender_normalized 时客户端补算 ──
+  const sampleN = hasEst ? Number(est.sample_size || 0) : 0;
+  const gn = (hasEst && est.gender_normalized && typeof est.gender_normalized === "object") ? est.gender_normalized as any : null;
+  const rawMale = hasEst ? Math.max(0, Number(est.gender?.male_pct) || 0) : 0;
+  const rawFemale = hasEst ? Math.max(0, Number(est.gender?.female_pct) || 0) : 0;
+  let ringMale = 0;
+  let genderDeterminedN = 0;
+  let genderDeterminedPct = 0;
+  if (gn && Number(gn.determined_n || 0) > 0) {
+    ringMale = Math.min(100, Math.max(0, Number(gn.male_pct) || 0));
+    genderDeterminedN = Number(gn.determined_n || 0);
+    genderDeterminedPct = Number(gn.determined_pct || 0);
+  } else if (rawMale + rawFemale > 0) {
+    ringMale = Math.round(1000 * rawMale / (rawMale + rawFemale)) / 10;
+    genderDeterminedPct = Math.round((rawMale + rawFemale) * 10) / 10;
+    genderDeterminedN = Math.round(sampleN * (rawMale + rawFemale) / 100);
+  }
+  const ringFemale = genderDeterminedN > 0 ? Math.round((100 - ringMale) * 10) / 10 : 0;
+  const hasGenderRing = genderDeterminedN > 0;
+
   const estCountries = hasEst && Array.isArray(est.top_countries) ? est.top_countries.slice(0, 6) : [];
   const estLangs = hasEst && Array.isArray(est.languages) ? est.languages.slice(0, 6) : [];
-  const coverage = (hasEst && est.coverage && typeof est.coverage === "object") ? est.coverage : {};
+  // ── v2 各块数据(coverage/method 等实现细节留在 JSON 内部,不渲染)──
+  const ageMeta = (hasEst && est.age_bins && typeof est.age_bins === "object") ? est.age_bins as any : null;
+  const ageBins = ageMeta && Array.isArray(ageMeta.bins) ? ageMeta.bins : [];
+  const agePctByBucket: Record<string, number> = {};
+  for (const b of ageBins) agePctByBucket[String(b.bucket)] = Number(b.pct) || 0;
+  const ageMaxBucket = ageBins.length ? ageBins.reduce((m: any, b: any) => (Number(b.pct) > Number(m.pct) ? b : m), ageBins[0]).bucket : "";
+  const intel = (hasEst && est.comment_intel && typeof est.comment_intel === "object") ? est.comment_intel as any : null;
+  const intelN = intel ? Number(intel.sample_size || 0) : 0;
+  const pi = intelN > 0 && intel.purchase_intent && typeof intel.purchase_intent === "object" ? intel.purchase_intent : null;
+  const piSamples = pi && Array.isArray(pi.samples) ? pi.samples : [];
+  const brands = intelN > 0 && Array.isArray(intel.brand_mentions) ? intel.brand_mentions : [];
+  const brandSamples = brands.flatMap((b: any) => (Array.isArray(b.samples) ? b.samples.map((s: any) => ({ ...s, brand: b.brand })) : []));
+  const hours = intelN > 0 && intel.active_hours && Array.isArray(intel.active_hours?.hist) ? intel.active_hours : null;
+  const maxHist = hours ? Math.max(1, ...hours.hist.map((v: any) => Number(v) || 0)) : 1;
+  const engage = intelN > 0 && intel.engagement && typeof intel.engagement === "object" ? intel.engagement : null;
+  const fans = intelN > 0 && Array.isArray(intel.superfans) ? intel.superfans.slice(0, 5) : [];
+  const overlap = (hasEst && est.overlap && typeof est.overlap === "object") ? est.overlap as any : null;
+  const overlapItems = overlap && Array.isArray(overlap.items) ? overlap.items : [];
+  const density = (hasEst && est.creator_density && typeof est.creator_density === "object") ? est.creator_density as any : null;
+
   const refreshBusy = audienceState.status === "loading";
   const refreshLabel = refreshBusy ? "刷新中…"
     : audienceState.status === "pending" ? "抓取评论中…可稍后再刷新"
     : hasEst ? "刷新受众统计" : "生成受众统计";
   const generatedDate = hasEst && est.generated_at ? String(est.generated_at).slice(0, 10) : "";
+
+  const expandLink = (key: string, label: string) =>
+    canExpand && e("button", {
+      type: "button",
+      onClick: () => onToggleAudienceBlock(key),
+      className: "mt-1 text-[9px] text-cyan-300/80 hover:text-cyan-200 underline underline-offset-2",
+    }, audienceExpand === key ? "收起" : label);
+  const evidenceRow = (s: any, i: number, prefix?: string) =>
+    e("div", { key: i, className: "text-[9.5px] leading-snug" },
+      prefix && e("span", { className: "text-slate-500" }, prefix + " "),
+      e("span", { className: "text-slate-500" }, "@" + String(s.author_handle || s.author || "—") + " "),
+      e("span", { className: "text-white" }, String(s.text || s || "")),
+      s.created_at && e("span", { className: "text-slate-600" }, " · " + String(s.created_at).slice(0, 10))
+    );
 
   const bar = (label: React.ReactNode, pct: number, color: string, key: any) =>
     e("div", { key, className: "flex items-center gap-2 text-[11px]" },
@@ -118,13 +171,13 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
         e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Audience Stats · 估算"),
         e("span", { className: "px-1 py-px rounded text-[8px] font-semibold tracking-wider bg-amber-400/15 text-amber-300 border border-amber-400/25" }, "BETA")
       ),
-      // 性别环(两色 conic-gradient donut)+ 图例
-      hasEst && e("div", { className: "flex items-center gap-3 mb-2.5" },
+      // 性别环(归一发布口径:男/女两色补满 100,小字标外推基数;不可判定时诚实不画环)
+      hasEst && hasGenderRing && e("div", { className: "flex items-center gap-3 mb-1" },
         e("div", {
           className: "relative shrink-0",
           style: {
             width: 56, height: 56, borderRadius: "50%",
-            background: `conic-gradient(${GENDER_COLORS.male} 0% ${malePct}%, ${GENDER_COLORS.female} ${malePct}% ${malePct + femalePct}%, ${GENDER_COLORS.unknown} ${malePct + femalePct}% 100%)`,
+            background: `conic-gradient(${GENDER_COLORS.male} 0% ${ringMale}%, ${GENDER_COLORS.female} ${ringMale}% 100%)`,
           },
         },
           e("div", { className: "absolute inset-[10px] rounded-full bg-[#0a1020] flex items-center justify-center" },
@@ -135,20 +188,19 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
           e("div", { className: "flex items-center gap-1.5" },
             e("span", { className: "w-2 h-2 rounded-full", style: { background: GENDER_COLORS.male } }),
             e("span", { className: "text-slate-300" }, "男"),
-            e("span", { className: "text-white tabular-nums font-medium" }, malePct + "%")
+            e("span", { className: "text-white tabular-nums font-medium" }, ringMale + "%")
           ),
           e("div", { className: "flex items-center gap-1.5" },
             e("span", { className: "w-2 h-2 rounded-full", style: { background: GENDER_COLORS.female } }),
             e("span", { className: "text-slate-300" }, "女"),
-            e("span", { className: "text-white tabular-nums font-medium" }, femalePct + "%")
-          ),
-          e("div", { className: "flex items-center gap-1.5" },
-            e("span", { className: "w-2 h-2 rounded-full", style: { background: GENDER_COLORS.unknown } }),
-            e("span", { className: "text-slate-500" }, "未知"),
-            e("span", { className: "text-slate-400 tabular-nums" }, unknownPct + "%")
+            e("span", { className: "text-white tabular-nums font-medium" }, ringFemale + "%")
           )
         )
       ),
+      hasEst && hasGenderRing && e("div", { className: "text-[9px] text-slate-500 mb-2.5" },
+        `基于可判定样本 ${genderDeterminedN}(占 ${genderDeterminedPct}%)外推`
+      ),
+      hasEst && !hasGenderRing && e("div", { className: "text-[9.5px] text-slate-500 mb-2.5" }, "性别:样本内无可判定信号(诚实不外推)"),
       // Top countries(国旗 + 条)
       estCountries.length > 0 && e("div", { className: "mb-2.5" },
         e("div", { className: "text-[10px] text-slate-500 mb-1" }, "Top Countries"),
@@ -179,11 +231,120 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
           ))
         )
       ),
-      // 样本量 / 覆盖率 / 置信度 小字(诚实口径)
+      // 年龄 4 桶(BETA;只在已判定人群内归一)
+      ageBins.length > 0 && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "年龄段"),
+        e("div", { className: "space-y-1.5" },
+          AGE_BUCKET_ORDER.map((bucket: string, i: number) => bar(
+            e("span", { className: "text-white font-medium w-[52px]" }, bucket),
+            agePctByBucket[bucket] || 0,
+            bucket === ageMaxBucket ? "#a855f7" : "#64748b",
+            i,
+          ))
+        ),
+        e("div", { className: "text-[9px] text-slate-500 mt-1" },
+          `已判定 ${Number(ageMeta?.determined_n) || 0} 人(占 ${Number(ageMeta?.determined_pct) || 0}%)`
+        )
+      ),
+      // ── 评论情报(词表/直方统计,带证据可下钻)──
+      pi && e("div", { className: "mb-2.5 rounded-md border border-white/[0.05] bg-black/20 p-2" },
+        e("div", { className: "flex items-center justify-between" },
+          e("span", { className: "text-[10px] text-slate-400" }, "购买意向"),
+          e("span", { className: "text-[11px] text-white font-medium tabular-nums" }, `${Number(pi.count) || 0} 条 · ${Number(pi.pct) || 0}%`)
+        ),
+        piSamples.length > 0 && e("div", { className: "mt-1 text-[10px] text-slate-300 leading-snug" },
+          "“" + String(piSamples[0]?.text || piSamples[0] || "") + "”"
+        ),
+        piSamples.length > 0 && expandLink("intent", `查看评论 ${piSamples.length} 条`),
+        audienceExpand === "intent" && e("div", { className: "mt-1.5 space-y-1 border-t border-white/[0.05] pt-1.5" },
+          piSamples.map((s: any, i: number) => evidenceRow(s, i))
+        )
+      ),
+      brands.length > 0 && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "品牌提及"),
+        e("div", { className: "flex flex-wrap gap-1" },
+          brands.map((b: any, i: number) => e("span", {
+            key: i,
+            className: "px-1.5 py-0.5 rounded text-[9.5px] border",
+            style: /viltrox/i.test(String(b.brand)) ? {
+              background: "rgba(168,85,247,0.15)", borderColor: "rgba(168,85,247,0.3)", color: "#d8b4fe",
+            } : {
+              background: "rgba(248,113,113,0.08)", borderColor: "rgba(248,113,113,0.18)", color: "#cbd5e1",
+            },
+          }, `${b.brand} ×${Number(b.count) || 0}`))
+        ),
+        brandSamples.length > 0 && expandLink("brands", `查看评论 ${brandSamples.length} 条`),
+        audienceExpand === "brands" && e("div", { className: "mt-1.5 space-y-1" },
+          brandSamples.map((s: any, i: number) => evidenceRow(s, i, `[${s.brand}]`))
+        )
+      ),
+      hours && Number(hours.timed_n || 0) > 0 && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "评论活跃时段 · UTC"),
+        e("div", { className: "flex items-end gap-px h-[18px]" },
+          hours.hist.map((v: any, i: number) => e("div", {
+            key: i,
+            title: `UTC ${i}:00 · ${Number(v) || 0} 条`,
+            className: "flex-1 rounded-sm",
+            style: {
+              height: Math.max(2, Math.round(18 * (Number(v) || 0) / maxHist)) + "px",
+              background: (hours.top_hours || []).includes(i) ? "#06b6d4" : "rgba(100,116,139,0.4)",
+            },
+          }))
+        ),
+        hours.suggestion && e("div", { className: "text-[9px] text-slate-500 mt-1" },
+          `建议发帖 ${hours.suggestion}(峰值 ${Number(hours.peak_hour_comment_count) || 0} 条 · 样本 ${Number(hours.timed_n) || 0})`
+        )
+      ),
+      engage && e("div", { className: "mb-2.5 grid grid-cols-3 gap-1.5" },
+        [
+          { label: "评论/视频", value: engage.comments_per_video ?? "—" },
+          { label: "回复率", value: (Number(engage.reply_pct) || 0) + "%" },
+          { label: "赞中位", value: engage.likes_median ?? "—" },
+        ].map((m, i) => e("div", { key: i, className: "rounded-md border border-white/[0.05] bg-black/20 px-1.5 py-1 text-center" },
+          e("div", { className: "text-[8.5px] text-slate-500" }, m.label),
+          e("div", { className: "text-[11px] text-white font-medium tabular-nums" }, String(m.value))
+        ))
+      ),
+      fans.length > 0 && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "铁粉 Top" + fans.length),
+        e("div", { className: "space-y-1" },
+          fans.map((f: any, i: number) => e("div", { key: i, className: "flex items-center gap-2 text-[10.5px]" },
+            e("span", {
+              className: "w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-semibold shrink-0",
+              style: { background: "rgba(6,182,212,0.15)", color: "#67e8f9" },
+            }, String(f.handle || "?").charAt(0).toUpperCase()),
+            e("span", { className: "text-white truncate max-w-[180px]" }, "@" + String(f.handle || "—")),
+            e("span", { className: "text-slate-500 tabular-nums" }, "×" + (Number(f.count) || 0))
+          ))
+        ),
+        fans.some((f: any) => f.sample) && expandLink("fans", "查看代表评论"),
+        audienceExpand === "fans" && e("div", { className: "mt-1.5 space-y-1" },
+          fans.filter((f: any) => f.sample).map((f: any, i: number) =>
+            evidenceRow({ author_handle: f.handle, text: f.sample }, i)
+          )
+        )
+      ),
+      // 共同粉丝(矩阵投放去重参考:重叠高的 KOL 不必都投)
+      overlap && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "共同粉丝"),
+        overlapItems.length > 0
+          ? e("div", { className: "space-y-1" },
+              overlapItems.map((o: any, i: number) => e("div", { key: i, className: "flex items-center gap-1.5 text-[10.5px]" },
+                e("span", { className: "text-slate-300" }, "与"),
+                e("span", { className: "text-white font-medium truncate max-w-[160px]" }, "@" + String(o.handle || o.display_name || ("#" + o.peer_id))),
+                e("span", { className: "text-slate-300" }, `共享 ${Number(o.shared_count) || 0} 位评论者`),
+                e("span", { className: "text-slate-600 text-[9px] tabular-nums ml-auto" }, "jaccard " + (Number(o.jaccard) || 0).toFixed(3))
+              ))
+            )
+          : e("div", { className: "text-[9.5px] text-slate-500" }, "暂无重叠数据(库内同类 KOL 抓样越多越准)")
+      ),
+      // 受众创作者浓度(白捡指标)
+      density && density.pct !== null && density.pct !== undefined && e("div", { className: "text-[9px] text-slate-500 mb-1" },
+        `受众创作者浓度 ${density.pct}%(订阅数超 ${Number(density.min_subscribers) || 1000},已知 ${Number(density.known_n) || 0} 人)`
+      ),
+      // 底部小字:只留 样本/置信/日期(方法与覆盖细节留在 JSON 内部,不渲染)
       hasEst && e("div", { className: "text-[9px] text-slate-500 leading-relaxed" },
-        `样本 ${est.sample_size} 评论者 · 覆盖 自报${Number(coverage.declared_pct) || 0}% 人名${Number(coverage.name_pct) || 0}% 语言${Number(coverage.lang_pct) || 0}% · 置信 ${est.confidence ?? "—"}`
-        + (est.shrinkage?.applied ? " · 同垂类收缩" : "")
-        + (generatedDate ? ` · ${generatedDate}` : "")
+        `样本 ${est.sample_size} 评论者 · 置信 ${est.confidence ?? "—"}` + (generatedDate ? ` · ${generatedDate}` : "")
       ),
       hasEst && e("div", { className: "text-[9px] text-amber-400/70" }, est.note || "估算值,非平台官方粉丝数据"),
       !hasEst && e("div", { className: "text-[10px] text-slate-500" }, "暂无受众画像数据 — 点击下方生成(评论者抽样估算,非官方数据)"),
