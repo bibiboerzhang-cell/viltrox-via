@@ -83,7 +83,7 @@ PROVIDER_RETRY_MAX_DELAY_SECONDS = max(
 PROVIDER_RETRY_JITTER_RATIO = max(0.0, min(0.5, float(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_JITTER_RATIO", "0.20"))))
 PROVIDER_RETRY_ADOPT_WINDOW_MINUTES = max(0, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_ADOPT_WINDOW_MINUTES", "1440")))
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
-LLM_CONCURRENCY_LIMIT = max(1, min(2, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "1"))))
+LLM_CONCURRENCY_LIMIT = max(1, min(6, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "2"))))
 # 1200 太小:6 层 final_v1 JSON(含整条 scene_timeline)会被截断,分镜只剩前 ~35s。
 # 抬到 4096 容纳整段视频的分镜时间线(完整不截断);可经 env 覆盖。
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
