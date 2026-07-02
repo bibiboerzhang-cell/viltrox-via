@@ -706,6 +706,20 @@ def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -
             kol_pool_id, len(results), ok_count, new_total,
             [(r.get("evidence_id"), r.get("status"), (r.get("error") or "")[:60]) for r in skipped][:5],
         )
+    # 受众情报 v2:评论采集成功后 best-effort 刷新受众画像(新抓评论的 KOL 自动有全套画像)。
+    # enqueue_if_missing=False:此处已在评论任务尾部,评论仍不足时绝不递归再入队(防自触发环)。
+    # try/except 不阻断评论任务本身;失败只留日志。红线:零触 viltrox_fit_score。
+    if ok_count:
+        try:
+            from app.domains.kol.audience_stats import refresh_audience_stats
+
+            audience_result = refresh_audience_stats(kol_pool_id, enqueue_if_missing=False)
+            logger.info(
+                "audience_stats 自动刷新 | kol_pool #%s status=%s sample=%s",
+                kol_pool_id, audience_result.get("status"), audience_result.get("sample_size"),
+            )
+        except Exception:
+            logger.warning("audience_stats 自动刷新失败 kol_pool #%s(不阻断评论任务)", kol_pool_id, exc_info=True)
     return {
         "status": "ready" if ok_count or not results else "blocked:all_posts_failed",
         "kol_pool_id": kol_pool_id,

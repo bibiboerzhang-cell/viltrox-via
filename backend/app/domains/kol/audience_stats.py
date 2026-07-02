@@ -1,17 +1,23 @@
-"""受众画像 ensemble_v1(P0)—— 三平台评论者抽样 -> 推断 -> 聚合 -> audience_estimated_json。
+"""受众画像 ensemble_v1 —— 三平台评论者抽样 -> 推断 -> 聚合 -> audience_estimated_json。
 
-像 Modash / NanoInfluencer 的 Audience Stats:性别环 + Top countries + 语言分布,
+像 Modash / NanoInfluencer 的 Audience Stats:性别环 + Top countries + 语言 + 年龄桶 + 评论情报,
 带样本量/覆盖率/置信度,前端标 BETA。数据链路:
-  - YouTube:Data API(免费额度)抽 commentThreads 评论者 -> channels.list 批量拿自报 country。
+  - YouTube:Data API(免费额度)抽 commentThreads 评论者 -> channels.list 批量拿
+    自报 country + 白捡字段(bio/订阅数/视频数/频道创建时间,同批 API 零额外配额)。
   - Instagram / TikTok:复用库里已抓的 vkpi_comments(不新写抓取);评论不足则入队抓评论。
-推断三层信号(逐层降置信):自报国家 .9 > 人名词表国籍猜 .4 > 评论语言推市场 .3;
-性别用内置人名表(仅高辨识度常见名,conf .8,未知诚实留空,不猜)。
+国家三层信号(逐层降置信):自报 .9 > 人名词表国籍猜 .4 > 评论语言推市场 .3;
+性别人名表 conf .8(未知留空),发布口径另出 gender_normalized(按已判定样本外推 100)。
+年龄三路融合(v2,BETA):A=Gemini 批推(llm_gateway,批 50/调用,预算记账+代理)
+> B=M3(可选依赖,装了就用文本模式;安装法:.venv/bin/pip install m3inference,含 torch,默认不装)
+> C=频道注册年龄弱先验(注册越早年龄下界越高,conf .3)。按 conf 加权投票融合。
 聚合后做经验贝叶斯收缩:prior=同垂类已有 audience_estimated 的均值,tau=50,无先验跳过。
-身份推断结果落 vkpi_commenter_profiles 缓存(迁移 205),同评论者跨 KOL 复用。
+评论情报(comment_intel,纯词表/直方零成本)由 app.domains.kol.comment_intel 提供,并入同一 JSON。
+身份推断结果落 vkpi_commenter_profiles 缓存(迁移 205/206),同评论者跨 KOL 复用。
 
-红线:绝不写 viltrox_fit_score、不碰 rule_v0;全部估算值明示 method/置信度,不冒充官方数据。
-网络:本地网络到 googleapis 需代理 —— 读 env HTTPS_PROXY(runtime_env.sh 会从 YTDLP_PROXY 导出),
-没配则在错误里提示。
+红线:绝不写 viltrox_fit_score、不碰 rule_v0(LLM 走 llm_gateway,rule_v0 兜底文本不当真);
+全部估算值明示 method/置信度,不冒充官方数据。
+网络:本地网络到 googleapis / LLM 需代理 —— 读 env HTTPS_PROXY(runtime_env.sh 会从
+YTDLP_PROXY 导出),没配则在错误里提示。
 """
 from __future__ import annotations
 
@@ -35,6 +41,12 @@ METHOD = "ensemble_v1"
 _YT_API_BASE = "https://www.googleapis.com/youtube/v3"
 SHRINK_TAU = 50.0
 MIN_LOCAL_COMMENTS = 30  # IG/TT 本地评论少于此数 -> 先入队抓评论,不出低质画像
+
+# ── 年龄三路融合(v2)──
+AGE_BUCKETS = ("0-18", "19-29", "30-39", "40+")
+AGE_LLM_BATCH_SIZE = 50   # A 路(Gemini)每次调用批 50 评论者
+AGE_LLM_MAX_BATCHES = 3   # 单次刷新 A 路调用上限(成本闸;其余人走 C 路弱先验,下次刷新继续补)
+CREATOR_DENSITY_MIN_SUBS = 1000  # 受众创作者浓度口径:订阅数超过 1000
 
 # ── 人名词表(轻量,替代 m3inference 等重依赖;P0 只做西文名,未知留空不猜)──
 # 性别表:男/女各约 500 常见名(英语圈 + 欧洲 + 拉美 + 中东/南亚罗马化高频名)。
@@ -279,10 +291,13 @@ def _resolve_channel_id(channel_id_or_handle: str) -> str:
 
 
 def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400) -> dict[str, Any]:
-    """YouTube 免费 Data API 抽评论者:commentThreads(全频道) -> channels.list 批量拿自报 country。
+    """YouTube 免费 Data API 抽评论者:commentThreads(全频道) -> channels.list 批量补档案。
 
-    返回 {status, channel_id, commenters:[{platform,author_key,display_name,comment_text,declared_country}],
-    comments_scanned, api_calls}。网络/配置失败诚实返回 {status:..., reason:...}(不 raise)。
+    v2 白捡字段:同一批 channels.list 换 part=snippet,statistics,零额外配额顺手带回
+    bio(description)/channel_created_at(publishedAt)/subscriber_count/video_count。
+    同时带回原始评论列表 comments(text/created_at/like_count/video_key,给 comment_intel 用)。
+    返回 {status, channel_id, commenters:[...], comments:[...], comments_scanned, reply_total, api_calls}。
+    网络/配置失败诚实返回 {status:..., reason:...}(不 raise)。
     """
     started = time.time()
     if not _yt_api_key():
@@ -297,7 +312,9 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
         return {"status": "channel_not_found", "reason": f"cannot resolve channel from {channel_id_or_handle!r}"}
 
     by_author: dict[str, dict[str, Any]] = {}
+    comments: list[dict[str, Any]] = []
     comments_scanned = 0
+    reply_total = 0
     page_token = ""
     try:
         while comments_scanned < int(max_comments or 400):
@@ -314,10 +331,24 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
             api_calls += 1
             items = payload.get("items") or []
             for thread in items:
-                snippet = ((thread or {}).get("snippet") or {}).get("topLevelComment", {}).get("snippet", {})
+                thread_snippet = (thread or {}).get("snippet") or {}
+                snippet = (thread_snippet.get("topLevelComment") or {}).get("snippet", {})
                 if not isinstance(snippet, dict):
                     continue
                 comments_scanned += 1
+                reply_total += int(thread_snippet.get("totalReplyCount") or 0)
+                text = str(snippet.get("textOriginal") or snippet.get("textDisplay") or "")
+                display_name = str(snippet.get("authorDisplayName") or "").strip()
+                comments.append(
+                    {
+                        "text": text[:500],
+                        "author": display_name,
+                        "created_at": str(snippet.get("publishedAt") or ""),
+                        "like_count": int(snippet.get("likeCount") or 0),
+                        "is_reply": False,
+                        "video_key": str(snippet.get("videoId") or thread_snippet.get("videoId") or ""),
+                    }
+                )
                 author_id = str(((snippet.get("authorChannelId") or {}).get("value")) or "").strip()
                 if not author_id:
                     continue
@@ -326,13 +357,17 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
                     {
                         "platform": "youtube",
                         "author_key": author_id,
-                        "display_name": str(snippet.get("authorDisplayName") or "").strip(),
+                        "display_name": display_name,
                         "comment_text": "",
                         "declared_country": "",
+                        "bio": "",
+                        "channel_created_at": "",
+                        "subscriber_count": None,
+                        "video_count": None,
                     },
                 )
                 if not entry["comment_text"]:
-                    entry["comment_text"] = str(snippet.get("textOriginal") or snippet.get("textDisplay") or "")[:500]
+                    entry["comment_text"] = text[:500]
             page_token = str(payload.get("nextPageToken") or "")
             if not page_token or not items:
                 break
@@ -341,13 +376,15 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
             return {"status": "network_error", "reason": str(exc)[:400]}
         logger.warning("audience_stats yt comment paging partial: %s", exc)
 
-    # 批量 channels.list(part=snippet, 50/批)拿评论者自报 country(强信号,conf .9)。
+    # 批量 channels.list(part=snippet,statistics, 50/批):自报 country(强信号 .9)+ 白捡档案字段。
     author_ids = list(by_author.keys())
     declared_hits = 0
     for index in range(0, len(author_ids), 50):
         chunk = author_ids[index : index + 50]
         try:
-            payload = _yt_get("channels", {"part": "snippet", "id": ",".join(chunk), "maxResults": 50})
+            payload = _yt_get(
+                "channels", {"part": "snippet,statistics", "id": ",".join(chunk), "maxResults": 50}
+            )
             api_calls += 1
         except RuntimeError as exc:
             logger.warning("audience_stats yt channels.list batch failed: %s", exc)
@@ -356,15 +393,33 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
             if not isinstance(item, dict):
                 continue
             cid = str(item.get("id") or "")
-            country = str(((item.get("snippet") or {}).get("country")) or "").strip().upper()
-            if cid in by_author and country:
-                by_author[cid]["declared_country"] = country
+            if cid not in by_author:
+                continue
+            snippet = item.get("snippet") or {}
+            stats = item.get("statistics") or {}
+            entry = by_author[cid]
+            country = str(snippet.get("country") or "").strip().upper()
+            if country:
+                entry["declared_country"] = country
                 declared_hits += 1
+            entry["bio"] = str(snippet.get("description") or "").strip()[:500]
+            entry["channel_created_at"] = str(snippet.get("publishedAt") or "").strip()
+            try:
+                if not stats.get("hiddenSubscriberCount"):
+                    entry["subscriber_count"] = int(stats.get("subscriberCount"))
+            except (TypeError, ValueError):
+                pass
+            try:
+                entry["video_count"] = int(stats.get("videoCount"))
+            except (TypeError, ValueError):
+                pass
     return {
         "status": "ok",
         "channel_id": channel_id,
         "commenters": list(by_author.values()),
+        "comments": comments,
         "comments_scanned": comments_scanned,
+        "reply_total": reply_total,
         "declared_country_hits": declared_hits,
         "api_calls": api_calls,
         "elapsed_sec": round(time.time() - started, 2),
@@ -463,6 +518,13 @@ def infer_commenter(profile: dict[str, Any]) -> dict[str, Any]:
         "gender": gender,
         "gender_conf": round(gender_conf, 2),
         "language": language if language != "und" else "",
+        # v2 白捡字段直通(缺省 None/空,upsert 用 COALESCE 保旧值)
+        "bio": str(profile.get("bio") or "")[:500],
+        "channel_created_at": str(profile.get("channel_created_at") or ""),
+        "subscriber_count": profile.get("subscriber_count"),
+        "video_count": profile.get("video_count"),
+        "age_bucket": "",
+        "age_conf": None,
     }
 
 
@@ -474,7 +536,8 @@ def _load_cached_profiles(conn: Any, platform: str, author_keys: list[str]) -> d
         chunk = author_keys[index : index + 200]
         placeholders = ",".join(["?"] * len(chunk))
         rows = conn.execute(
-            "SELECT platform, author_key, display_name, country, country_source, country_conf, gender, gender_conf, language "
+            "SELECT platform, author_key, display_name, country, country_source, country_conf, gender, gender_conf, language, "
+            "age_bucket, age_conf, subscriber_count, video_count, channel_created_at, bio "
             f"FROM vkpi_commenter_profiles WHERE platform=? AND author_key IN ({placeholders})",
             (platform, *chunk),
         ).fetchall()
@@ -490,12 +553,17 @@ def _upsert_commenter_profiles(conn: Any, rows: list[dict[str, Any]]) -> int:
     for rec in rows:
         if not rec.get("platform") or not rec.get("author_key"):
             continue
+        subscriber_count = rec.get("subscriber_count")
+        video_count = rec.get("video_count")
+        age_conf = rec.get("age_conf")
         conn.execute(
             """
             INSERT INTO vkpi_commenter_profiles
                 (platform, author_key, display_name, country, country_source, country_conf,
-                 gender, gender_conf, language, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                 gender, gender_conf, language,
+                 age_bucket, age_conf, subscriber_count, video_count, channel_created_at, bio,
+                 updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(platform, author_key) DO UPDATE SET
                 display_name=excluded.display_name,
                 country=excluded.country,
@@ -504,17 +572,331 @@ def _upsert_commenter_profiles(conn: Any, rows: list[dict[str, Any]]) -> int:
                 gender=excluded.gender,
                 gender_conf=excluded.gender_conf,
                 language=excluded.language,
+                age_bucket=COALESCE(NULLIF(excluded.age_bucket,''), vkpi_commenter_profiles.age_bucket),
+                age_conf=COALESCE(excluded.age_conf, vkpi_commenter_profiles.age_conf),
+                subscriber_count=COALESCE(excluded.subscriber_count, vkpi_commenter_profiles.subscriber_count),
+                video_count=COALESCE(excluded.video_count, vkpi_commenter_profiles.video_count),
+                channel_created_at=COALESCE(NULLIF(excluded.channel_created_at,''), vkpi_commenter_profiles.channel_created_at),
+                bio=COALESCE(NULLIF(excluded.bio,''), vkpi_commenter_profiles.bio),
                 updated_at=excluded.updated_at
             """,
             (
                 rec["platform"], rec["author_key"], rec.get("display_name") or "",
                 rec.get("country") or "", rec.get("country_source") or "", float(rec.get("country_conf") or 0.0),
                 rec.get("gender") or "", float(rec.get("gender_conf") or 0.0),
-                rec.get("language") or "", now,
+                rec.get("language") or "",
+                rec.get("age_bucket") or "",
+                float(age_conf) if age_conf is not None else None,
+                int(subscriber_count) if subscriber_count is not None else None,
+                int(video_count) if video_count is not None else None,
+                rec.get("channel_created_at") or "", rec.get("bio") or "",
+                now,
             ),
         )
         written += 1
     return written
+
+
+# ── 年龄三路融合(v2)──
+
+_AGE_ALIAS = {
+    "0-18": "0-18", "under 18": "0-18", "13-18": "0-18", "<18": "0-18", "<=18": "0-18",
+    "19-29": "19-29", "20-29": "19-29", "18-29": "19-29",
+    "30-39": "30-39",
+    "40+": "40+", "40-49": "40+", "50+": "40+", ">=40": "40+", ">40": "40+",
+}
+
+
+def _normalize_age_bucket(value: Any) -> str:
+    return _AGE_ALIAS.get(str(value or "").strip().lower(), "")
+
+
+def _age_from_channel_created(created_at: Any) -> tuple[str, float]:
+    """C 路:注册年龄弱先验(conf .3)。YouTube 开户下限 13 岁 → 最小年龄 = 13 + 账号年龄。
+
+    只有老账号有信息量(新账号不代表年轻人):账号不满 8 年不出信号;
+    8 年以上按年龄下界落桶(如 2012 年注册 -> 下界约 27 -> '19-29'/'30-39' 权重上移)。
+    """
+    text = str(created_at or "").strip()
+    if not text:
+        return "", 0.0
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return "", 0.0
+    years = (datetime.now(timezone.utc) - dt).days / 365.25
+    if years < 8:
+        return "", 0.0
+    min_age = 13 + years
+    if min_age >= 40:
+        return "40+", 0.3
+    if min_age >= 30:
+        return "30-39", 0.3
+    return "19-29", 0.3
+
+
+def _fuse_age(signals: list[tuple[str, float]]) -> tuple[str, float]:
+    """按 conf 加权投票融合多路年龄信号。
+
+    赢家桶内多信号 noisy-or 合并(相互印证抬置信),再乘赢家得分份额(有分歧降置信)。
+    单信号 -> 原 conf;无有效信号 -> ('', 0)。"""
+    votes: dict[str, list[float]] = {}
+    for bucket, conf in signals or []:
+        normalized = _normalize_age_bucket(bucket)
+        if normalized and float(conf or 0) > 0:
+            votes.setdefault(normalized, []).append(min(0.95, float(conf)))
+    if not votes:
+        return "", 0.0
+    scores = {b: sum(cs) for b, cs in votes.items()}
+    winner = max(scores.items(), key=lambda kv: (kv[1], kv[0]))[0]
+    total = sum(scores.values())
+    disagreement_share = scores[winner] / total if total else 0.0
+    agree_miss = 1.0
+    for conf in votes[winner]:
+        agree_miss *= 1 - conf
+    fused = (1 - agree_miss) * disagreement_share
+    return winner, round(min(0.9, fused), 2)
+
+
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    """LLM 回复里抠 JSON 数组(容忍代码围栏/前后缀文本/被 max_tokens 截断的残缺数组)。
+
+    截断救援:整体 parse 失败时,逐个抢救完整的 {...} 对象(thinking 型模型的思考 token
+    会吃掉 maxOutputTokens,尾部截断是常态 —— 抢救到多少算多少,绝不编造)。
+    抠不到返回 []。"""
+    raw = str(text or "").strip()
+    if "```" in raw:
+        raw = raw.replace("```json", "```")
+        parts = raw.split("```")
+        raw = max(parts, key=len)
+    start = raw.find("[")
+    if start < 0:
+        return []
+    end = raw.rfind("]")
+    if end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+        except Exception:
+            pass
+    # 救援:截断/夹杂散文时逐对象抠(对象内不嵌套,够用)。
+    out: list[dict[str, Any]] = []
+    for match in re.finditer(r"\{[^{}]*\}", raw[start:]):
+        try:
+            obj = json.loads(match.group(0))
+            if isinstance(obj, dict):
+                out.append(obj)
+        except Exception:
+            continue
+    return out
+
+
+def _age_llm_batches(
+    commenters: list[dict[str, Any]],
+    *,
+    max_batches: int = AGE_LLM_MAX_BATCHES,
+    batch_size: int = AGE_LLM_BATCH_SIZE,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """A 路:Gemini 批推年龄/性别(llm_gateway:预算记账 + 代理 + 结果落 ledger)。
+
+    输入 显示名+bio(文本先行;头像视觉版留 P2),批 50 人/调用,单次刷新最多 max_batches 次。
+    红线:rule_v0 兜底文本不当真(model=rule_v0 一律丢弃);失败/超闸跳过不阻断主流程。
+    返回 (author_key -> {age_bucket, gender, conf}, stats)。
+    """
+    if max_batches <= 0 or not commenters:
+        return {}, {"status": "skipped", "calls": 0, "batches_ok": 0, "people_in": 0, "people_out": 0}
+    try:
+        from app.platform import llm_gateway
+    except Exception as exc:
+        return {}, {"status": f"gateway_unavailable: {exc}"[:120], "calls": 0, "batches_ok": 0, "people_in": 0, "people_out": 0}
+    out: dict[str, dict[str, Any]] = {}
+    calls = 0
+    batches_ok = 0
+    people_in = 0
+    batches = [commenters[i : i + batch_size] for i in range(0, len(commenters), batch_size)][:max_batches]
+    for batch in batches:
+        people_in += len(batch)
+        lines = []
+        for idx, c in enumerate(batch):
+            name = str(c.get("display_name") or "").replace('"', "'")[:60]
+            bio = str(c.get("bio") or "").replace("\n", " ").replace('"', "'")[:160]
+            lines.append(f'{idx + 1}. name="{name}" bio="{bio}"')
+        prompt = (
+            "Task: AGGREGATE audience statistics for a marketing dashboard. Below are PUBLIC display names "
+            "and public bios of anonymous social media commenters. Results are only used as aggregate "
+            "percentages (age buckets, gender split); nothing is attributed to any individual.\n"
+            "For EACH numbered entry, classify from TEXT STYLE ONLY (name style, emoji, wording, stated "
+            "roles like dad / retired / student / engineer):\n"
+            '  "i": entry number, "age": "0-18"|"19-29"|"30-39"|"40+" or "" when no signal,\n'
+            '  "gender": "male"|"female" or "" when no signal, "conf": 0.0-1.0.\n'
+            "Be conservative: empty string beats a wild guess. Output STRICTLY one JSON array, no prose, "
+            "no markdown fences. Your reply must start with the character [\n\n"
+            + "\n".join(lines)
+        )
+        resp = llm_gateway.invoke(
+            prompt,
+            purpose="vkpi_audience_age_v1",
+            preferred_provider="google",
+            # thinking 型模型的思考 token 计入 maxOutputTokens,给足余量;残缺数组有救援解析兜底。
+            max_output_tokens=4000,
+            cost_tag="audience_stats",
+        )
+        calls += 1
+        text = str(resp.get("text") or "")
+        if str(resp.get("model") or "") == "rule_v0" or str(resp.get("status") or "") != "success" or not text.strip():
+            logger.warning("audience age llm batch unusable: model=%s status=%s", resp.get("model"), resp.get("status"))
+            continue
+        parsed = _extract_json_array(text)
+        if not parsed:
+            # 诊断留痕:模型可能整段婉拒或输出散文;截前 200 字方便追查(不含个人数据以外内容)。
+            logger.warning("audience age llm batch parse failed, preview=%r", text[:200])
+            continue
+        batches_ok += 1
+        for item in parsed:
+            try:
+                idx = int(item.get("i")) - 1
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(batch)):
+                continue
+            key = str(batch[idx].get("author_key") or "")
+            bucket = _normalize_age_bucket(item.get("age"))
+            gender = str(item.get("gender") or "").strip().lower()
+            try:
+                conf = max(0.0, min(1.0, float(item.get("conf") or 0.0)))
+            except (TypeError, ValueError):
+                conf = 0.0
+            if key and (bucket or gender in ("male", "female")) and conf > 0:
+                out[key] = {"age_bucket": bucket, "gender": gender if gender in ("male", "female") else "", "conf": round(conf, 2)}
+    return out, {"status": "ok" if batches_ok else "failed", "calls": calls, "batches_ok": batches_ok,
+                 "people_in": people_in, "people_out": len(out)}
+
+
+def _m3_available() -> bool:
+    try:
+        import m3inference  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def _age_m3_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], str]:
+    """B 路:M3(可选依赖,文本模式)。未安装诚实返回 unavailable,绝不强装。
+
+    安装法(重依赖含 torch,默认不装):.venv/bin/pip install m3inference
+    """
+    if not _m3_available():
+        return {}, "unavailable"
+    try:
+        from m3inference import M3Inference  # type: ignore
+
+        m3 = M3Inference(use_full_model=False, use_cuda=False, parallel=False)
+        docs = [
+            {
+                "id": str(c.get("author_key") or ""),
+                "name": str(c.get("display_name") or "")[:60],
+                "screen_name": _first_name(str(c.get("display_name") or "")) or "user",
+                "description": str(c.get("bio") or "")[:200],
+                "lang": str(c.get("language") or "un") or "un",
+            }
+            for c in commenters
+            if c.get("author_key")
+        ]
+        preds = m3.infer(docs) or {}
+        bucket_map = {"<=18": "0-18", "19-29": "19-29", "30-39": "30-39", ">=40": "40+"}
+        out: dict[str, dict[str, Any]] = {}
+        for key, pred in preds.items():
+            age = (pred or {}).get("age") or {}
+            if not age:
+                continue
+            top_label, top_p = max(age.items(), key=lambda kv: kv[1])
+            bucket = bucket_map.get(str(top_label), "")
+            if bucket:
+                out[str(key)] = {"age_bucket": bucket, "conf": round(float(top_p), 2)}
+        return out, "ok"
+    except Exception as exc:
+        logger.warning("audience_stats m3 batch failed: %s", exc)
+        return {}, f"error: {exc}"[:120]
+
+
+def _update_age_cache(conn: Any, rows: list[dict[str, Any]]) -> int:
+    """把融合后的 age/gender 写回身份缓存(行已由 upsert 保证存在)。"""
+    now = _utcnow_iso()
+    written = 0
+    for rec in rows:
+        if not rec.get("platform") or not rec.get("author_key"):
+            continue
+        age_conf = rec.get("age_conf")
+        conn.execute(
+            "UPDATE vkpi_commenter_profiles SET age_bucket=?, age_conf=?, gender=?, gender_conf=?, updated_at=? "
+            "WHERE platform=? AND author_key=?",
+            (
+                rec.get("age_bucket") or "",
+                float(age_conf) if age_conf is not None else None,
+                rec.get("gender") or "",
+                float(rec.get("gender_conf") or 0.0),
+                now,
+                rec["platform"], rec["author_key"],
+            ),
+        )
+        written += 1
+    return written
+
+
+def _age_ensemble(
+    conn: Any,
+    platform: str,
+    profiles: list[dict[str, Any]],
+    *,
+    llm_max_batches: int = AGE_LLM_MAX_BATCHES,
+) -> dict[str, Any]:
+    """ABC 三路年龄融合,就地更新 profiles 的 age_bucket/age_conf(必要时 gender),写回缓存。
+
+    A=Gemini(只喂尚无缓存年龄、且有名字或 bio 的人;成本闸 llm_max_batches);
+    B=M3(装了就用,没装 coverage 标 unavailable);C=频道注册年龄弱先验。
+    gender:LLM 输出仅在新 conf 高于现有 gender_conf 时覆盖(人名表 .8 通常保留)。
+    """
+    need = [p for p in profiles if not p.get("age_bucket") and (p.get("display_name") or p.get("bio"))]
+    llm_pred, llm_stats = _age_llm_batches(need, max_batches=llm_max_batches)
+    m3_pred, m3_status = _age_m3_batch(need)
+    counts = {"cached": 0, "llm": 0, "m3": 0, "channel": 0, "fused": 0}
+    updates: list[dict[str, Any]] = []
+    for p in profiles:
+        if p.get("age_bucket"):
+            counts["cached"] += 1
+            continue
+        key = str(p.get("author_key") or "")
+        signals: list[tuple[str, float]] = []
+        lp = llm_pred.get(key)
+        if lp and lp.get("age_bucket"):
+            signals.append((lp["age_bucket"], float(lp.get("conf") or 0.55)))
+            counts["llm"] += 1
+        mp = m3_pred.get(key)
+        if mp and mp.get("age_bucket"):
+            signals.append((mp["age_bucket"], float(mp.get("conf") or 0.5)))
+            counts["m3"] += 1
+        c_bucket, c_conf = _age_from_channel_created(p.get("channel_created_at"))
+        if c_bucket:
+            signals.append((c_bucket, c_conf))
+            counts["channel"] += 1
+        changed = False
+        bucket, conf = _fuse_age(signals)
+        if bucket:
+            p["age_bucket"], p["age_conf"] = bucket, conf
+            counts["fused"] += 1
+            changed = True
+        # gender:LLM 仅在新 conf 更高时覆盖(写缓存同一条 UPDATE 顺带)。
+        if lp and lp.get("gender") in ("male", "female") and float(lp.get("conf") or 0) > float(p.get("gender_conf") or 0):
+            p["gender"], p["gender_conf"] = lp["gender"], round(float(lp.get("conf") or 0), 2)
+            changed = True
+        if changed:
+            updates.append(p)
+    written = _update_age_cache(conn, updates) if updates else 0
+    return {"llm": llm_stats, "m3": m3_status, "counts": counts, "cache_written": written}
 
 
 # ── 聚合 + 经验贝叶斯收缩 ──
@@ -659,6 +1041,32 @@ def aggregate_audience(
         "note": "估算值(评论者画像),非平台官方粉丝数据",
         "beta": True,
     }
+    # 性别归一(发布口径,v2):male/(male+female) 外推到 100;原始 coverage 与判定样本数照留。
+    determined = male + female
+    payload["gender_normalized"] = {
+        "male_pct": _pct(male, determined),
+        "female_pct": _pct(female, determined),
+        "determined_n": determined,
+        "determined_pct": _pct(determined, n),
+    }
+    # 年龄 4 桶(v2,BETA):ABC 融合后的 age_bucket 聚合;只在已判定人群内归一。
+    age_counter: Counter = Counter(
+        c.get("age_bucket") for c in commenters if c.get("age_bucket") in AGE_BUCKETS
+    )
+    age_known = sum(age_counter.values())
+    payload["age_bins"] = {
+        "bins": [{"bucket": b, "pct": _pct(age_counter.get(b, 0), age_known)} for b in AGE_BUCKETS] if age_known else [],
+        "determined_n": age_known,
+        "determined_pct": _pct(age_known, n),
+        "beta": True,
+    }
+    # 受众创作者浓度(v2):订阅数已知的评论者里,超过 CREATOR_DENSITY_MIN_SUBS 的占比。
+    known_subs = [int(c.get("subscriber_count") or 0) for c in commenters if c.get("subscriber_count") is not None]
+    payload["creator_density"] = {
+        "pct": _pct(sum(1 for s in known_subs if s > CREATOR_DENSITY_MIN_SUBS), len(known_subs)) if known_subs else None,
+        "known_n": len(known_subs),
+        "min_subscribers": CREATOR_DENSITY_MIN_SUBS,
+    }
     # 收缩 prior:同垂类均值(recommended_product_lines 首项当垂类键),tau=50;无先验跳过。
     try:
         db = conn or get_conn()
@@ -711,18 +1119,33 @@ def _infer_with_cache(conn: Any, platform: str, commenters: list[dict[str, Any]]
     cached = _load_cached_profiles(conn, platform, keys)
     inferred: list[dict[str, Any]] = []
     fresh: list[dict[str, Any]] = []
+    extras_keys = ("bio", "channel_created_at", "subscriber_count", "video_count")
+    cache_hits = 0
+    inferred_fresh = 0
     for c in commenters:
         key = str(c.get("author_key") or "")
         hit = cached.get(key)
         # 自报国家是最强信号:抽样带回了自报而缓存里不是 declared 口径时,重推断刷新缓存。
         if hit and not (c.get("declared_country") and hit.get("country_source") != "declared"):
-            inferred.append(dict(hit))
+            cache_hits += 1
+            merged = dict(hit)
+            # v2:抽样新带回的白捡字段(bio/订阅数/频道年龄)补进缓存命中行,并回写缓存。
+            extras_changed = False
+            for field in extras_keys:
+                value = c.get(field)
+                if value not in (None, "") and value != merged.get(field):
+                    merged[field] = value
+                    extras_changed = True
+            if extras_changed:
+                fresh.append(merged)
+            inferred.append(merged)
             continue
         rec = infer_commenter(c)
+        inferred_fresh += 1
         fresh.append(rec)
         inferred.append(rec)
     written = _upsert_commenter_profiles(conn, fresh) if fresh else 0
-    return inferred, {"cache_hits": len(inferred) - len(fresh), "inferred_fresh": len(fresh), "cache_written": written}
+    return inferred, {"cache_hits": cache_hits, "inferred_fresh": inferred_fresh, "cache_written": written}
 
 
 def refresh_audience_stats(
@@ -730,13 +1153,15 @@ def refresh_audience_stats(
     *,
     max_comments: int = 400,
     enqueue_if_missing: bool = True,
+    llm_max_batches: int = AGE_LLM_MAX_BATCHES,
 ) -> dict[str, Any]:
-    """入口:按平台分流抽样 -> 推断 -> 聚合 -> 写 audience_estimated_json。异常诚实返回 {status, reason}。
+    """入口:抽样 -> 推断(含 ABC 年龄融合)-> 聚合归一 -> comment_intel/overlap -> 一次写库。
 
     - youtube:Data API 全频道评论抽样(免费额度;本地被墙时报 network_error + 代理提示)。
     - instagram / tiktok:复用 vkpi_comments 已抓评论;不足 MIN_LOCAL_COMMENTS 条则入队抓评论
       (enqueue_kol_pool_comments_job,幂等),返回 pending_comments,下次刷新即有数据。
-    红线:只写 audience_estimated_json + updated_at,绝不触 viltrox_fit_score。
+    llm_max_batches=0 可整体关掉 A 路(Gemini)。异常诚实返回 {status, reason}。
+    红线:只写 audience_estimated_json + updated_at,绝不触 viltrox_fit_score、不碰 rule_v0。
     """
     from app.db.connection import get_conn
 
@@ -791,12 +1216,48 @@ def refresh_audience_stats(
         return {"status": "no_commenters", "kol_pool_id": int(kol_pool_id), "platform": platform,
                 "comments_scanned": int(sample.get("comments_scanned") or 0)}
     inferred, cache_stats = _infer_with_cache(conn, platform, commenters)
+    # v2:年龄 ABC 三路融合(失败不阻断主流程,coverage 里诚实标注)。
+    age_stats: dict[str, Any] = {"llm": {"status": "skipped", "calls": 0}, "m3": "unavailable", "counts": {}}
+    try:
+        age_stats = _age_ensemble(conn, platform, inferred, llm_max_batches=llm_max_batches)
+    except Exception as exc:
+        logger.warning("audience_stats age ensemble failed kol=%s: %s", kol_pool_id, exc)
+        age_stats["error"] = str(exc)[:200]
     payload = aggregate_audience(int(kol_pool_id), inferred, conn=conn, platform=platform)
     payload["generated_at"] = _utcnow_iso()
     payload["comments_scanned"] = int(sample.get("comments_scanned") or 0)
     payload["cache"] = cache_stats
+    payload["age_coverage"] = age_stats
     if platform == "youtube":
         payload["channel_id"] = str(sample.get("channel_id") or "")
+    # v2:评论情报(纯词表/直方零成本)。YT 用本次 API 抽样带回的评论;IG/TT 读 vkpi_comments。
+    try:
+        from app.domains.kol import comment_intel as ci
+
+        api_comments = list(sample.get("comments") or [])
+        if api_comments:
+            intel = ci.analyze_comments(api_comments)
+            intel["source"] = "youtube_api_sample"
+            reply_total = int(sample.get("reply_total") or 0)
+            if reply_total and isinstance(intel.get("engagement"), dict):
+                # API 只抓 top-level:回复占比按 thread 的 totalReplyCount 口径补算。
+                top_n = int(intel.get("sample_size") or 0)
+                intel["engagement"]["reply_pct"] = _pct(reply_total, top_n + reply_total)
+                intel["engagement"]["reply_basis"] = "thread_total_reply_count"
+        else:
+            intel = ci.comment_intel_for_kol(int(kol_pool_id), conn=conn)
+        payload["comment_intel"] = intel
+    except Exception as exc:
+        logger.warning("comment_intel failed kol=%s: %s", kol_pool_id, exc)
+        payload["comment_intel"] = {"sample_size": 0, "error": str(exc)[:200]}
+    # v2:共同粉丝(audience overlap)—— 矩阵投放去重用(重叠高的 KOL 不必都投)。
+    try:
+        from app.domains.kol.comment_intel import compute_audience_overlap
+
+        payload["overlap"] = compute_audience_overlap(int(kol_pool_id), conn=conn)
+    except Exception as exc:
+        logger.warning("audience overlap failed kol=%s: %s", kol_pool_id, exc)
+        payload["overlap"] = {"items": [], "error": str(exc)[:200]}
     conn.execute(
         "UPDATE vkpi_kol_pool SET audience_estimated_json=?, updated_at=? WHERE id=?",
         (json.dumps(payload, ensure_ascii=False), _utcnow_iso(), int(kol_pool_id)),
