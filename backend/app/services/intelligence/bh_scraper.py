@@ -49,10 +49,19 @@ BH_VILTROX_SEARCH_URL = BH_VILTROX_CATEGORIES[0][1]
 # Apify actor
 BH_ACTOR_PRIMARY = "powerai/bhphotovideo-product-search-scraper"  # ✅ 验证可用
 BH_ACTOR_BACKUP = "powerai/bhphotovideo-product-search-scraper"
+BH_REVIEWS_ACTOR = "powerai/bhphotovideo-product-reviews-scraper"
+
+# 单次评论抓取的产品数硬上限(每个产品 = 1 次付费 actor call,防烧钱)
+BH_REVIEWS_HARD_MAX_PRODUCTS = 20
 
 
 def _bh_available() -> bool:
     return _client is not None
+
+
+def _flag_on(name: str, default: str = "0") -> bool:
+    """env 布尔闸:烧钱动作默认关,手动开(和 config.py 同口径,读运行时 env)。"""
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ──────────────────────────────────────────────
@@ -77,7 +86,20 @@ async def fetch_bh_viltrox_products(
     if not _bh_available():
         logger.warning("bh_scraper.apify_unavailable")
         return []
-    
+
+    # 停用闸(用户令 2026-07-02):search actor 抓的产品列表与库内数据 100% 重复零增量,
+    # search 默认停。停用时零 actor 调用,只回库存快照(可能过期);force_refresh 也不越闸。
+    # 要恢复在 .env 设 BH_SNAPSHOT_ENABLED=1。函数与下方 TTL 闸都保留,可随时恢复。
+    if not _flag_on("BH_SNAPSHOT_ENABLED", "0"):
+        cached: list[dict] = []
+        try:
+            from app.services.intelligence.bh_repository import get_latest_bh_products
+            cached = get_latest_bh_products(limit=max(50, int(max_items)))
+        except Exception:
+            logger.warning("bh_scraper.disabled_cache_read_failed", exc_info=True)
+        logger.info("bh_scraper.search_disabled_cache_only", extra={"count": len(cached)})
+        return cached
+
     # 成本闸(2026-07-01):一次调用并行跑 6 个 category = 6 次付费 actor(约 $2/调用,
     # 本周期已烧 $68/204 跑)。新鲜度守卫:库里最新快照 < BH_SNAPSHOT_TTL_DAYS(默认 6)天
     # -> 直接回库存快照、零 actor;force_refresh=True 强刷。所有调用方一并受控。
@@ -252,14 +274,211 @@ def normalize_bh_product(item: dict) -> Optional[dict]:
 
 
 # ──────────────────────────────────────────────
-# 评论抓取 (占位, 未来扩展)
+# 评论抓取(2026-07-02 转正:替代已停的 search actor,喂竞品口碑)
 # ──────────────────────────────────────────────
 
+def normalize_bh_review(
+    item: dict,
+    *,
+    product_url: str,
+    product_name: str = "",
+    sku: str = "",
+) -> Optional[dict]:
+    """把 reviews actor 返回的原始字段标准化成 vkpi_bh_reviews 一行。
+
+    product_url 一律用请求时的库内 canonical URL(不信 item 里的 url,防重键要稳定)。
+    """
+    if not isinstance(item, dict):
+        return None
+
+    def _get_first(*keys, default=""):
+        for k in keys:
+            v = item.get(k)
+            if v not in (None, "", 0, []):
+                return v
+        return default
+
+    body = str(_get_first("content", "body", "text", "reviewText", "review_text", "description") or "")
+    title = str(_get_first("title", "headline", "summary") or "")
+    if not body.strip() and not title.strip():
+        return None
+
+    rating_raw = _get_first("rating", "stars", "score", "ratingValue", default=0)
+    try:
+        rating = float(rating_raw or 0)
+    except (ValueError, TypeError):
+        rating = 0.0
+
+    return {
+        "product_url":  str(product_url or "")[:500],
+        "product_name": str(product_name or _get_first("productName", "product_name") or "")[:300],
+        "sku":          str(sku or _get_first("sku", "SKU", "productId") or "")[:100],
+        "rating":       round(rating, 2),
+        "title":        title[:200],
+        "body":         body[:4000],
+        "author":       str(_get_first("author", "user", "nickname", "reviewer", "authorName") or "")[:100],
+        "review_date":  str(_get_first("date", "reviewDate", "review_date", "createdAt") or "")[:40],
+    }
+
+
+async def fetch_bh_reviews(
+    product_urls: Optional[list] = None,
+    limit_per_product: int = 30,
+    max_products: int = BH_REVIEWS_HARD_MAX_PRODUCTS,
+) -> dict:
+    """抓一批产品的用户评论并 upsert 进 vkpi_bh_reviews(竞品口碑数据源)。
+
+    照 search 同款调用模式:apify_client.actor().call() + record_apify_run_cost 记账 + 超时。
+    - 输入:产品 URL 列表;缺省时从 bh_products 表选 Viltrox 自家 + 竞品条目
+      (竞品口径 = app.domains.market.content_brain.COMPETITOR_BRANDS 标题匹配)。
+    - 单次上限 20 个产品(每个产品 = 1 次付费 actor call,防烧钱)。
+    - 闸:BH_REVIEWS_ENABLED 默认 "0"(烧钱动作默认关,手动开)。
+
+    Returns: 汇总 dict {ok, products_requested, reviews_fetched, reviews_upserted,
+             actor_cost_usd, per_product, [reason]}
+    """
+    summary: dict[str, Any] = {
+        "ok": False,
+        "products_requested": 0,
+        "reviews_fetched": 0,
+        "reviews_upserted": 0,
+        "actor_cost_usd": 0.0,
+        "per_product": [],
+    }
+    if not _flag_on("BH_REVIEWS_ENABLED", "0"):
+        summary["reason"] = "BH_REVIEWS_ENABLED is off (default; set env to 1 to run this paid action)"
+        logger.info("bh_reviews.disabled_by_env")
+        return summary
+    if not _bh_available():
+        summary["reason"] = "apify client unavailable (APIFY_TOKEN missing)"
+        logger.warning("bh_reviews.apify_unavailable")
+        return summary
+
+    # 选目标:显式传入 > 库内自选
+    targets: list[dict]
+    if product_urls:
+        targets = [
+            {"url": str(u or "").strip(), "title": "", "sku": ""}
+            for u in product_urls
+            if str(u or "").strip()
+        ]
+    else:
+        from app.services.intelligence.bh_repository import select_bh_review_targets
+        targets = select_bh_review_targets(limit=max_products)
+
+    # URL 去重 + 硬上限
+    seen: set[str] = set()
+    unique_targets: list[dict] = []
+    for t in targets:
+        url = t.get("url", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        unique_targets.append(t)
+    hard_cap = max(1, min(int(max_products or BH_REVIEWS_HARD_MAX_PRODUCTS), BH_REVIEWS_HARD_MAX_PRODUCTS))
+    if len(unique_targets) > hard_cap:
+        logger.warning(
+            "bh_reviews.targets_truncated",
+            extra={"requested": len(unique_targets), "hard_cap": hard_cap},
+        )
+        unique_targets = unique_targets[:hard_cap]
+    summary["products_requested"] = len(unique_targets)
+    if not unique_targets:
+        summary["reason"] = "no review targets (bh_products empty and no urls passed)"
+        logger.warning("bh_reviews.no_targets")
+        return summary
+
+    limit_per_product = max(1, min(int(limit_per_product or 30), 100))
+    logger.info(
+        "bh_reviews.fetch_started",
+        extra={"product_count": len(unique_targets), "limit_per_product": limit_per_product, "actor_id": BH_REVIEWS_ACTOR},
+    )
+    t0 = time.time()
+    sem = asyncio.Semaphore(4)
+
+    def _do_one(target: dict) -> tuple[dict, list[dict], float]:
+        """同步抓一个产品的评论;返回 (target, 标准化评论列表, 本次 actor 实际成本)。"""
+        url = target.get("url", "")
+        try:
+            # 输入 schema 沿用占位实现的 startUrls + maxItems 口径;
+            # 首次付费跑建议 scripts/run_bh_reviews_once.py --limit 1 先验证字段再放量。
+            run = _client.actor(BH_REVIEWS_ACTOR).call(
+                run_input={"startUrls": [{"url": url}], "maxItems": limit_per_product},
+                timeout_secs=300,
+            )
+            # 记账同 search 款:usageTotalUsd 落 vkpi_ai_cost_ledger(provider:apify)
+            try:
+                from app.platform.industry_crawlers import record_apify_run_cost
+                record_apify_run_cost(run, platform="bh", actor_id=BH_REVIEWS_ACTOR, operation="fetch_product_reviews")
+            except Exception:
+                logger.warning("bh_reviews.cost_record_failed", exc_info=True)
+            cost = 0.0
+            try:
+                cost = float((run or {}).get("usageTotalUsd") or 0)
+            except (TypeError, ValueError):
+                cost = 0.0
+            items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            reviews = [
+                r for r in (
+                    normalize_bh_review(
+                        item,
+                        product_url=url,
+                        product_name=str(target.get("title", "") or ""),
+                        sku=str(target.get("sku", "") or ""),
+                    )
+                    for item in items[: limit_per_product]
+                )
+                if r
+            ]
+            logger.info("bh_reviews.product_complete", extra={"url": url, "review_count": len(reviews)})
+            return target, reviews, cost
+        except Exception as e:
+            logger.warning("bh_reviews.product_failed", extra={"url": url, "error": str(e)})
+            return target, [], 0.0
+
+    async def _guarded(target: dict):
+        async with sem:
+            return await asyncio.to_thread(_do_one, target)
+
+    results = await asyncio.gather(*[_guarded(t) for t in unique_targets], return_exceptions=True)
+
+    all_reviews: list[dict] = []
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning("bh_reviews.task_failed", extra={"error": str(r)})
+            continue
+        target, reviews, cost = r
+        all_reviews.extend(reviews)
+        summary["actor_cost_usd"] = round(float(summary["actor_cost_usd"]) + cost, 4)
+        summary["per_product"].append({"url": target.get("url", ""), "fetched": len(reviews)})
+    summary["reviews_fetched"] = len(all_reviews)
+
+    if all_reviews:
+        from app.services.intelligence.bh_repository import upsert_bh_reviews
+        summary["reviews_upserted"] = await upsert_bh_reviews(all_reviews)
+
+    summary["ok"] = True
+    logger.info(
+        "bh_reviews.fetch_complete",
+        extra={
+            "products": len(unique_targets),
+            "reviews_fetched": summary["reviews_fetched"],
+            "reviews_upserted": summary["reviews_upserted"],
+            "actor_cost_usd": summary["actor_cost_usd"],
+            "elapsed_sec": round(time.time() - t0, 1),
+        },
+    )
+    return summary
+
+
 async def fetch_bh_product_reviews(product_url: str, max_reviews: int = 100) -> list[dict]:
-    """抓某个产品的评论. 用 powerai/bhphotovideo-product-reviews-scraper"""
+    """(旧占位签名,保留兼容)抓某个产品的评论. 新代码请用 fetch_bh_reviews(落库版)."""
+    if not _flag_on("BH_REVIEWS_ENABLED", "0"):
+        logger.info("bh_reviews.legacy_entry_disabled_by_env")
+        return []
     if not _bh_available():
         return []
-    
+
     if "/reviews" not in product_url:
         reviews_url = product_url.rstrip("/") + "/reviews"
     else:

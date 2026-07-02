@@ -857,8 +857,8 @@ def _age_llm_batches(
                  "people_in": people_in, "people_out": len(out)}
 
 
-AGE_AVATAR_MAX_IMAGES = 48  # E 路(头像视觉)单次刷新最多看多少张(小缩略图,Gemini 视觉便宜但设上限)
-AGE_AVATAR_BATCH = 24       # 多图单调用批量
+AGE_AVATAR_MAX_IMAGES = 120  # E 路(头像视觉)单次刷新最多看多少张(小缩略图,Gemini 视觉便宜但设上限)
+AGE_AVATAR_BATCH = 30        # 多图单调用批量
 
 
 def _age_avatar_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
@@ -872,33 +872,43 @@ def _age_avatar_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[
         if not c.get("age_bucket") and str(c.get("avatar_url") or "").startswith("http")
     ][:AGE_AVATAR_MAX_IMAGES]
     if not need:
-        return {}, {"status": "no_avatars", "calls": 0, "people_in": 0, "people_out": 0}
+        return {}, {"status": "no_avatars", "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
     try:
         from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client, genai_types
     except Exception as exc:
-        return {}, {"status": f"client_unavailable: {exc}"[:120], "calls": 0, "people_in": 0, "people_out": 0}
+        return {}, {"status": f"client_unavailable: {exc}"[:120], "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
     if not GEMINI_AVAILABLE or gemini_client is None:
-        return {}, {"status": "gemini_unavailable", "calls": 0, "people_in": 0, "people_out": 0}
+        return {}, {"status": "gemini_unavailable", "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
     model = os.environ.get("AUDIENCE_AVATAR_MODEL", "gemini-2.5-flash")
     out: dict[str, dict[str, Any]] = {}
     calls = 0
     people_in = 0
     fetched = 0
+    download_failed = 0
     for start in range(0, len(need), AGE_AVATAR_BATCH):
         batch = need[start : start + AGE_AVATAR_BATCH]
         contents: list[Any] = []
         keys: list[str] = []
         for c in batch:
-            try:
-                req = urllib.request.Request(
-                    str(c["avatar_url"]), headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"}
-                )
-                with urllib.request.urlopen(req, timeout=6) as resp:  # nosec B310 - 平台 CDN 头像缩略图
-                    data = resp.read(300_000)
-                    mime = str(resp.headers.get("Content-Type") or "image/jpeg").split(";")[0]
-            except Exception:
+            data = b""
+            mime = "image/jpeg"
+            # CDN 偶发抖动占下载失败大头:失败重试一次,第二次超时收紧到 4s。
+            for timeout_s in (6, 4):
+                try:
+                    req = urllib.request.Request(
+                        str(c["avatar_url"]), headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"}
+                    )
+                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # nosec B310 - 平台 CDN 头像缩略图
+                        data = resp.read(300_000)
+                        mime = str(resp.headers.get("Content-Type") or "image/jpeg").split(";")[0]
+                except Exception:
+                    continue
+                if data:
+                    break
+            if not data:
+                download_failed += 1
                 continue
-            if not data or len(data) < 300:
+            if len(data) < 300:
                 continue  # 空图/默认剪影占位常见极小,跳过
             contents.append(f"Image {len(keys) + 1}:")
             contents.append(genai_types.Part.from_bytes(data=data, mime_type=mime if mime.startswith("image/") else "image/jpeg"))
@@ -949,7 +959,7 @@ def _age_avatar_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[
                     "conf": round(conf, 2),
                 }
     return out, {"status": "ok" if calls else "no_images", "calls": calls, "people_in": people_in,
-                 "images_fetched": fetched, "people_out": len(out)}
+                 "images_fetched": fetched, "download_failed": download_failed, "people_out": len(out)}
 
 
 def _m3_available() -> bool:

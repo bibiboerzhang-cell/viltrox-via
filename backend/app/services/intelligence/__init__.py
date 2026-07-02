@@ -13,14 +13,19 @@ services/intelligence — 商品 / 竞品 / 市场情报系统
 from app.services.intelligence.bh_scraper import (
     fetch_bh_viltrox_products,
     fetch_bh_product_reviews,
+    fetch_bh_reviews,
     normalize_bh_product,
+    normalize_bh_review,
 )
 from app.services.intelligence.bh_repository import (
     save_bh_snapshot,
     get_latest_bh_products,
     get_bh_summary,
     get_bh_price_history,
+    get_bh_reviews_summary,
     get_bh_top_rated,
+    select_bh_review_targets,
+    upsert_bh_reviews,
 )
 from app.services.intelligence.viltrox_matrix import (
     build_viltrox_overview,
@@ -31,12 +36,17 @@ from app.services.intelligence.viltrox_matrix import (
 __all__ = [
     "fetch_bh_viltrox_products",
     "fetch_bh_product_reviews",
+    "fetch_bh_reviews",
     "normalize_bh_product",
+    "normalize_bh_review",
     "save_bh_snapshot",
     "get_latest_bh_products",
     "get_bh_summary",
     "get_bh_price_history",
+    "get_bh_reviews_summary",
     "get_bh_top_rated",
+    "select_bh_review_targets",
+    "upsert_bh_reviews",
     "build_viltrox_overview",
     "reset_viltrox_official_roster",
     "scan_viltrox_official_matrix_now",

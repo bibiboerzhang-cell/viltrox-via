@@ -198,7 +198,15 @@ def compute_market_insights(days: int = 90) -> dict:
             for k, v in comp_product_count.items()
         ], key=lambda x: -x["count"])[:10]
 
-        
+        # B&H 用户评论口碑(vkpi_bh_reviews,迁移 207;reviews actor 手动脚本喂数)
+        # 表未建或空时返回零值段,不影响其余洞察。
+        try:
+            from app.services.intelligence.bh_repository import get_bh_reviews_summary
+            bh_review_sentiment = get_bh_reviews_summary(top_products=10)
+        except Exception as exc:
+            logger.debug("insights bh review summary skipped: %s", exc)
+            bh_review_sentiment = {}
+
         result = {
             "period_days":          days,
             "genre_dist":           [dict(r) for r in genre_dist],
@@ -211,6 +219,7 @@ def compute_market_insights(days: int = 90) -> dict:
             "competitor_brands":    comp_leaderboard,
             "competitor_products":  comp_products_top,
             "competitor_contexts":  comp_context_count,
+            "bh_review_sentiment":  bh_review_sentiment,
             "benchmarks":           get_all_benchmarks(),
             "computed_at":          datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }

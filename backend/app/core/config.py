@@ -233,6 +233,14 @@ VIA_LEARNING_MAX_POSTS = int(os.environ.get("VIA_LEARNING_MAX_POSTS", "18"))
 VIA_LEARNING_COMMENT_LIMIT = int(os.environ.get("VIA_LEARNING_COMMENT_LIMIT", "40"))
 VIA_LEARNING_COMMENT_SAMPLE = int(os.environ.get("VIA_LEARNING_COMMENT_SAMPLE", "12"))
 VIA_LEARNING_BH_MAX_ITEMS = int(os.environ.get("VIA_LEARNING_BH_MAX_ITEMS", "120"))
+# ── B&H Apify 开关(烧钱动作默认关,手动开)──────────────────────────
+# 用户令 2026-07-02:search actor(产品列表)抓的数据与库内 100% 重复零增量,默认停;
+# 要恢复在 .env 设 BH_SNAPSHOT_ENABLED=1。函数与 TTL 闸都保留,可随时恢复。
+BH_SNAPSHOT_ENABLED = os.environ.get("BH_SNAPSHOT_ENABLED", "0").strip().lower() not in {"0", "false", "no", ""}
+# reviews actor(用户评论→竞品口碑)也是付费 actor,默认关;手动跑 scripts/run_bh_reviews_once.py 前设 1。
+BH_REVIEWS_ENABLED = os.environ.get("BH_REVIEWS_ENABLED", "0").strip().lower() not in {"0", "false", "no", ""}
+# 单次评论抓取的产品数硬上限(防烧钱,每个产品 = 1 次付费 actor call)。
+BH_REVIEWS_MAX_PRODUCTS = max(1, min(int(os.environ.get("BH_REVIEWS_MAX_PRODUCTS", "20")), 20))
 VIA_OFFICIAL_INSTAGRAM_HANDLE = os.environ.get("VIA_OFFICIAL_INSTAGRAM_HANDLE", "viltrox.official").strip()
 VIA_OFFICIAL_TIKTOK_HANDLE = os.environ.get("VIA_OFFICIAL_TIKTOK_HANDLE", "viltrox.global").strip()
 VIA_OFFICIAL_YOUTUBE_HANDLE = os.environ.get("VIA_OFFICIAL_YOUTUBE_HANDLE", "viltroxofficial").strip()

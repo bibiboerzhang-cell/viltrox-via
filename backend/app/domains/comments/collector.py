@@ -159,8 +159,10 @@ def _standardize_comment(
         "tiktok": {
             "external_comment_id": ["cid", "id"],
             "comment_text": ["text", "comment_text"],
-            "author_handle": ["author.uniqueId", "user.uniqueId"],
-            "author_id": ["author.id", "user.id"],
+            # TikTok 评论批次(Apify comment actor)raw 顶层是扁平 uid/uniqueId,
+            # 嵌套 author.*/user.* 形态并存 —— 两种都要认,否则 author_id 落空。
+            "author_handle": ["author.uniqueId", "user.uniqueId", "uniqueId"],
+            "author_id": ["author.id", "user.id", "uid"],
             "likes_count": ["diggCount", "digg_count"],
             "reply_count": ["replyCommentTotal"],
             "created_at": ["createTime", "create_time"],
@@ -181,8 +183,10 @@ def _standardize_comment(
         "facebook": {
             "external_comment_id": ["id", "commentId"],
             "comment_text": ["text", "message"],
-            "author_handle": ["from.name", "author"],
-            "author_id": ["from.id", "author_id"],
+            # Facebook 评论(Apify)raw 是 profileName/profileId/profileUrl,
+            # 不是 Graph API 的 from.*;profileUrl 尾段兜底见下方 facebook 特判。
+            "author_handle": ["from.name", "author", "profileName"],
+            "author_id": ["from.id", "author_id", "profileId"],
             "likes_count": ["likesCount", "likes_count", "reactionsCount"],
             "reply_count": ["repliesCount"],
             "created_at": ["createdTime", "created_at", "timestamp"],
@@ -251,6 +255,15 @@ def _standardize_comment(
                 return None
         return None
     
+    author_handle = _str_safe(_try_paths(fields.get("author_handle", [])), 200)
+    author_id = _str_safe(_try_paths(fields.get("author_id", [])), 200)
+    if platform == "facebook" and not author_handle:
+        # 无 profileName 时用 profileUrl 尾段兜底(去 query;profile.php 不是 handle)。
+        profile_url = str(_try_paths(["profileUrl"]) or "")
+        tail = profile_url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].strip()
+        if tail and tail.lower() != "profile.php":
+            author_handle = _str_safe(tail, 200)
+
     return {
         "account_id": account_id,
         "post_id": post_id,
@@ -260,8 +273,8 @@ def _standardize_comment(
         "external_comment_id": _str_safe(_try_paths(fields.get("external_comment_id", [])), 200),
         "comment_text": (str(_try_paths(fields.get("comment_text", []), "")) or "")[:5000],
         "language_detected": None,  # P1.4 sentiment 阶段 LLM 自动识别
-        "author_handle": _str_safe(_try_paths(fields.get("author_handle", [])), 200),
-        "author_id": _str_safe(_try_paths(fields.get("author_id", [])), 200),
+        "author_handle": author_handle,
+        "author_id": author_id,
         "is_op": bool(_try_paths(fields.get("is_op", []), False)),
         "parent_comment_id": _str_safe(_try_paths(fields.get("parent_comment_id", [])), 200),
         "depth": _int_keep_zero(_try_paths(fields.get("depth", []), 0)),

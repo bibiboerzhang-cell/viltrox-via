@@ -168,10 +168,12 @@ async def start_scheduler() -> None:
         coalesce=True,
     )
     
-    # ── Job 6: B&H daily snapshot ──
-    # 成本闸(2026-07-01):B&H 用按条计费的付费 actor(~$0.33/跑),周期额度耗尽前默认停;
-    # 要重开在 .env 设 BH_SNAPSHOT_ENABLED=1(建议 7/8 额度重置后再开,或改周频)。
-    if __import__("os").environ.get("BH_SNAPSHOT_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+    # ── Job 6: B&H weekly snapshot(默认停用)──
+    # 用户令 2026-07-02:search actor(powerai/bhphotovideo-product-search-scraper,~$2/次 x 6 类目)
+    # 抓的产品列表与库内数据 100% 重复零增量,search 停;竞品口碑改走 reviews actor
+    # (bh_scraper.fetch_bh_reviews,手动脚本触发,不接 cron)。
+    # 要恢复本 cron 在 .env 设 BH_SNAPSHOT_ENABLED=1;函数与 TTL 闸都保留,可随时恢复。
+    if __import__("os").environ.get("BH_SNAPSHOT_ENABLED", "0").strip().lower() not in {"0", "false", "no", ""}:
         _scheduler.add_job(
             job_bh_daily_snapshot,
             trigger=CronTrigger(day_of_week="mon", hour=3, minute=0),
