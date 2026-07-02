@@ -447,7 +447,7 @@ def plan_text_query(
         pass
     _plan = _plan_text_query_impl(query, body=body, staff=staff)
     try:
-        if isinstance(_plan, dict) and _plan.get("search_query") and not _plan.get("reason"):
+        if isinstance(_plan, dict) and _plan.get("search_query") and not _plan.get("fallback_used"):
             from app.db.connection import get_conn as _gcn
 
             _cc = _gcn()
