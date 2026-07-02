@@ -37,7 +37,9 @@ export async function fetchCockpitDashboardBundle(apiToken: string) {
     aiTodayHot,
     competitorRadar,
   ] = await Promise.all([
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 4000 }, apiToken), {}),
+    // 主 summary 是最重的一刀(KPI/漏斗/campaigns 全靠它):并发批里线上实测 ~4s+ 才完成,
+    // 4000ms 会静默超时回空 → 整排 KPI + KOL 漏斗显示"待接入/待后端"。放宽到 10s(2026-07-02)。
+    settle(apiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 10000 }, apiToken), {}),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500 }, apiToken), {}),
     settle(apiFetch<{ items?: Row[] }>("/api/admin/vkpi/dashboard/recent-content?limit=30", { timeoutMs: 4000 }, apiToken), { items: [] }),
     settle(apiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500 }, apiToken), {}),

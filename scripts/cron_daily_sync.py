@@ -142,6 +142,16 @@ async def main() -> int:
         )
         result = await run_job("daily_incremental_sync", payload)
         emit_event("cron_daily_sync_finished", summary=result_summary(result))
+        # 同步成功后重建 vkpi_channel_metrics_filled(公司账号 30d 成熟度依赖它;
+        # 无定时维护会掉回「累积中」)。只写隔离 filled 表,失败不影响同步退出码。
+        try:
+            from app.db.connection import get_conn
+            from app.domains.channels.metrics_gapfill import backfill_filled_table
+
+            _gap_res = backfill_filled_table(get_conn())
+            emit_event("cron_daily_sync_gapfill", summary=_gap_res)
+        except Exception as _gap_exc:
+            emit_event("cron_daily_sync_gapfill_failed", error=f"{type(_gap_exc).__name__}: {str(_gap_exc)[:200]}")
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         inner = result.get("result") if isinstance(result, dict) else {}
         if isinstance(inner, dict):
