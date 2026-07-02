@@ -749,3 +749,54 @@ def add_project_shipment(project_id: int, body: dict, staff=Depends(require_tab(
         raise _scope_403(exc) from exc
     except ValueError as exc:  # 含 ShipmentNotApproved:发货审批未通过 → 409
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/enqueue-profile-crawl")
+def enqueue_kol_profile_crawl(kol_pool_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """新发现 KOL 档案瘦(关注/帖数/均播空)→ 抽屉打开时自动补:入队 kol_profile_deep_crawl
+    (worker 级联:抓帖建 evidence → final_v1 followup 补档案/评论 → 受众自动链)。
+    幂等:已有 evidence 或活跃同类 job 直接跳过,不重复烧 Apify。红线:零触 fit。"""
+    del staff
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.db.connection import get_conn as _gc
+
+    conn = _gc()
+    row = conn.execute(
+        "SELECT id, handle, profile_url FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
+    ).fetchone()
+    if not row:
+        return {"status": "not_found"}
+    rec = dict(row)
+    url = str(rec.get("profile_url") or "")
+    if not url.startswith("http"):
+        return {"status": "no_profile_url"}
+    if conn.execute(
+        "SELECT 1 FROM vkpi_kol_video_evidence WHERE kol_pool_id=? LIMIT 1", (int(kol_pool_id),)
+    ).fetchone():
+        return {"status": "already_has_evidence"}
+    dup = conn.execute(
+        "SELECT id FROM apify_jobs WHERE job_type=? "
+        "AND status IN ('queued','running','retrying','processing') AND CAST(payload AS TEXT) LIKE ? LIMIT 1",
+        ("kol_profile_deep_crawl", "%" + '"kol_pool_id": ' + str(int(kol_pool_id)) + ",%"),
+    ).fetchone()
+    if dup:
+        return {"status": "already_queued", "job_id": int(dict(dup)["id"])}
+    now = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {
+        "url": url,
+        "staff_id": None,
+        "max_posts": 12,
+        "target_id": int(kol_pool_id),
+        "query_text": f"抽屉自动补档案 · {rec.get('handle')}",
+        "kol_pool_id": int(kol_pool_id),
+        "target_type": "kol_profile",
+        "source": "drawer_auto_enrich",
+    }
+    conn.execute(
+        "INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at) VALUES (?, ?::jsonb, ?, ?, ?)",
+        ("kol_profile_deep_crawl", _json.dumps(payload, ensure_ascii=False), "queued", now, now),
+    )
+    conn.commit()
+    return {"status": "queued"}

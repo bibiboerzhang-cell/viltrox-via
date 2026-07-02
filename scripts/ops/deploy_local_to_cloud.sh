@@ -97,6 +97,10 @@ path.write_text('\\n'.join(out) + '\\n', encoding='utf-8')
 PY
 sudo chown -R '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}' '${REMOTE_ROOT}'"
 
+# yt-dlp 固化(2026-07-02):历史上部署后二进制三次丢失(video download 失败桶 15%)。
+# 幂等:已装则秒过;装失败只警告不中止(worker 侧另有启动自检兜底)。
+ssh "${SSH_TARGET}" "'${REMOTE_ROOT}/.venv/bin/python' -m pip install --quiet --upgrade yt-dlp || echo 'WARN: yt-dlp install failed - video downloads may break'"
+
 ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && for attempt in \$(seq 1 30); do if curl -fsS '${HEALTH_URL}' >/tmp/vkpi-health.json; then cat /tmp/vkpi-health.json; exit 0; fi; sleep 1; done; echo 'health check failed: ${HEALTH_URL}' >&2; exit 1"
 
 if [ "${START_WORKER}" = "1" ]; then

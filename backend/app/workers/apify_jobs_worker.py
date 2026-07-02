@@ -750,6 +750,12 @@ from app.workers.apify_jobs_worker_maintenance import (  # noqa: E402
 def run_worker() -> None:
     if not DB_RUNTIME_URL:
         raise RuntimeError("DATABASE_URL is required for apify_jobs worker")
+    # ytdlp_startup_check(2026-07-02):yt-dlp 二进制部署后曾三次丢失(download 失败桶 15%),
+    # 启动时自检并大声报错 —— 不中止(其它 job 类型不依赖它),但日志可查。
+    import shutil as _sh
+
+    if not (_sh.which("yt-dlp") or os.path.exists(os.path.join(os.path.dirname(sys.executable), "yt-dlp"))):
+        logger.error("yt-dlp binary MISSING - video downloads will fail; run: .venv/bin/pip install yt-dlp")
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
     logger.info(
