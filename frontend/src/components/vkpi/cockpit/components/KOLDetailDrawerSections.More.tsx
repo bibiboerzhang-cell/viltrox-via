@@ -141,6 +141,8 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const fans = intelN > 0 && Array.isArray(intel.superfans) ? intel.superfans.slice(0, 5) : [];
   const overlap = (hasEst && est.overlap && typeof est.overlap === "object") ? est.overlap as any : null;
   const overlapItems = overlap && Array.isArray(overlap.items) ? overlap.items : [];
+  const affinity = (hasEst && est.audience_affinity && typeof est.audience_affinity === "object") ? est.audience_affinity as any : null;
+  const affinityItems = affinity && Array.isArray(affinity.items) ? affinity.items : [];
   const density = (hasEst && est.creator_density && typeof est.creator_density === "object") ? est.creator_density as any : null;
 
   const refreshBusy = audienceState.status === "loading";
@@ -358,6 +360,23 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
               ))
             )
           : e("div", { className: "text-[9.5px] text-slate-500" }, "暂无重叠数据(库内同类 KOL 抓样越多越准)")
+      ),
+      // 受众还关注(关注图谱 v0:YT 评论者公开订阅抽样,Modash「audience also follows」同款)
+      affinity && e("div", { className: "mb-2.5" },
+        e("div", { className: "text-[10px] text-slate-500 mb-1" }, "受众还关注 · YouTube"),
+        affinityItems.length > 0
+          ? e("div", { className: "flex flex-wrap gap-1" },
+              affinityItems.map((a: any, i: number) => e("a", {
+                key: i,
+                href: `https://www.youtube.com/channel/${String(a.channel_id || "")}`,
+                target: "_blank", rel: "noreferrer",
+                className: "px-1.5 py-0.5 rounded bg-white/[0.04] border border-white/[0.06] text-[10px] text-slate-200 hover:bg-white/[0.08]",
+                title: `${Number(a.shared) || 0} 位受众共同关注`,
+              }, `${String(a.title || a.channel_id)} ×${Number(a.shared) || 0}`))
+            )
+          : e("div", { className: "text-[9.5px] text-slate-500" },
+              `公开订阅样本不足(探 ${Number(affinity.sampled) || 0} 人,公开 ${Number(affinity.public_subs_found) || 0} 人)—— 属常态,多数用户订阅私密`
+            )
       ),
       // 受众创作者浓度(白捡指标)
       density && density.pct !== null && density.pct !== undefined && e("div", { className: "text-[9px] text-slate-500 mb-1" },

@@ -408,6 +408,14 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
                 declared_hits += 1
             entry["bio"] = str(snippet.get("description") or "").strip()[:500]
             entry["channel_created_at"] = str(snippet.get("publishedAt") or "").strip()
+            # E 路头像视觉用:同一批白捡头像缩略图 URL(不落库,仅本次刷新内存用)。
+            try:
+                thumbs = snippet.get("thumbnails") or {}
+                entry["avatar_url"] = str(
+                    (thumbs.get("default") or {}).get("url") or (thumbs.get("medium") or {}).get("url") or ""
+                ).strip()
+            except Exception:
+                entry["avatar_url"] = ""
             try:
                 if not stats.get("hiddenSubscriberCount"):
                     entry["subscriber_count"] = int(stats.get("subscriberCount"))
@@ -500,6 +508,24 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
             entry["comment_text"] = (
                 f"{entry['comment_text']} || {_txt[:160]}" if entry["comment_text"] else _txt[:200]
             )[:500]
+        # E 路头像视觉用:从 raw 白捡头像缩略图(Apify TikTok/IG 评论批次字段名不一,逐个兜)。
+        if not entry.get("avatar_url"):
+            try:
+                _raw = rec.get("raw_data_json")
+                _rd = json.loads(_raw) if isinstance(_raw, str) else (_raw or {})
+                if isinstance(_rd, dict):
+                    _av = (
+                        _rd.get("avatarThumbnail") or _rd.get("ownerProfilePicUrl")
+                        or _rd.get("profile_pic_url") or ""
+                    )
+                    if not _av and isinstance(_rd.get("user"), dict):
+                        _u = _rd["user"]
+                        _av = _u.get("avatarThumb") or _u.get("avatar_thumb") or ""
+                        if isinstance(_av, dict):
+                            _av = (_av.get("url_list") or [""])[0]
+                    entry["avatar_url"] = str(_av or "").strip()
+            except Exception:
+                entry["avatar_url"] = ""
     return {
         "status": "ok",
         "commenters": list(by_author.values()),
@@ -549,6 +575,8 @@ def infer_commenter(profile: dict[str, Any]) -> dict[str, Any]:
         "video_count": profile.get("video_count"),
         "age_bucket": "",
         "age_conf": None,
+        # 瞬态直通(不入缓存表):A 路年龄批要喂评论原文,丢了等于文本信号归零。
+        "comment_text": comment_text[:500],
     }
 
 
@@ -829,6 +857,101 @@ def _age_llm_batches(
                  "people_in": people_in, "people_out": len(out)}
 
 
+AGE_AVATAR_MAX_IMAGES = 48  # E 路(头像视觉)单次刷新最多看多少张(小缩略图,Gemini 视觉便宜但设上限)
+AGE_AVATAR_BATCH = 24       # 多图单调用批量
+
+
+def _age_avatar_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """E 路:头像视觉判龄/性别(Gemini 多图单调用;Modash 系年龄判定率高的主武器)。
+
+    只看仍无年龄、且带头像 URL 的评论者;下载缩略图(几 KB)内联进一次 generate_content。
+    结果只进聚合统计,不归因个人(与 A 路同口径);默认剪影/加载失败逐个跳过。
+    """
+    need = [
+        c for c in commenters
+        if not c.get("age_bucket") and str(c.get("avatar_url") or "").startswith("http")
+    ][:AGE_AVATAR_MAX_IMAGES]
+    if not need:
+        return {}, {"status": "no_avatars", "calls": 0, "people_in": 0, "people_out": 0}
+    try:
+        from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client, genai_types
+    except Exception as exc:
+        return {}, {"status": f"client_unavailable: {exc}"[:120], "calls": 0, "people_in": 0, "people_out": 0}
+    if not GEMINI_AVAILABLE or gemini_client is None:
+        return {}, {"status": "gemini_unavailable", "calls": 0, "people_in": 0, "people_out": 0}
+    model = os.environ.get("AUDIENCE_AVATAR_MODEL", "gemini-2.5-flash")
+    out: dict[str, dict[str, Any]] = {}
+    calls = 0
+    people_in = 0
+    fetched = 0
+    for start in range(0, len(need), AGE_AVATAR_BATCH):
+        batch = need[start : start + AGE_AVATAR_BATCH]
+        contents: list[Any] = []
+        keys: list[str] = []
+        for c in batch:
+            try:
+                req = urllib.request.Request(
+                    str(c["avatar_url"]), headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"}
+                )
+                with urllib.request.urlopen(req, timeout=6) as resp:  # nosec B310 - 平台 CDN 头像缩略图
+                    data = resp.read(300_000)
+                    mime = str(resp.headers.get("Content-Type") or "image/jpeg").split(";")[0]
+            except Exception:
+                continue
+            if not data or len(data) < 300:
+                continue  # 空图/默认剪影占位常见极小,跳过
+            contents.append(f"Image {len(keys) + 1}:")
+            contents.append(genai_types.Part.from_bytes(data=data, mime_type=mime if mime.startswith("image/") else "image/jpeg"))
+            keys.append(str(c.get("author_key") or ""))
+            fetched += 1
+        if not keys:
+            continue
+        people_in += len(keys)
+        contents.append(
+            "Task: AGGREGATE audience statistics for a marketing dashboard. The images above are public "
+            "profile avatars of anonymous commenters; results are used ONLY as aggregate percentages "
+            "(age buckets, gender split), never attributed to any individual.\n"
+            "For EACH numbered image output one object: "
+            '{"i": image number, "age": "0-18"|"19-29"|"30-39"|"40+" or "" , '
+            '"gender": "male"|"female" or "", "conf": 0.0-1.0}.\n'
+            "If the avatar is not a human face (logo, pet, cartoon, landscape, default silhouette) use empty "
+            "strings. Estimate from apparent age of the person; be reasonable, not paranoid. "
+            "Output STRICTLY one JSON array, no prose, no markdown fences; reply must start with ["
+        )
+        try:
+            resp = gemini_client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(max_output_tokens=4000),
+            )
+            calls += 1
+            text = str(getattr(resp, "text", "") or "")
+        except Exception as exc:
+            logger.warning("audience avatar batch failed: %s", str(exc)[:150])
+            continue
+        for item in _extract_json_array(text):
+            try:
+                idx = int(item.get("i")) - 1
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(keys)):
+                continue
+            bucket = _normalize_age_bucket(item.get("age"))
+            gender = str(item.get("gender") or "").strip().lower()
+            try:
+                conf = max(0.0, min(0.6, float(item.get("conf") or 0.0)))  # 视觉判龄封顶 .6
+            except (TypeError, ValueError):
+                conf = 0.0
+            if keys[idx] and (bucket or gender in ("male", "female")) and conf > 0:
+                out[keys[idx]] = {
+                    "age_bucket": bucket,
+                    "gender": gender if gender in ("male", "female") else "",
+                    "conf": round(conf, 2),
+                }
+    return out, {"status": "ok" if calls else "no_images", "calls": calls, "people_in": people_in,
+                 "images_fetched": fetched, "people_out": len(out)}
+
+
 def _m3_available() -> bool:
     try:
         import m3inference  # noqa: F401
@@ -921,7 +1044,11 @@ def _age_ensemble(
     ]
     llm_pred, llm_stats = _age_llm_batches(need, max_batches=llm_max_batches)
     m3_pred, m3_status = _age_m3_batch(need)
-    counts = {"cached": 0, "llm": 0, "m3": 0, "channel": 0, "handle_year": 0, "fused": 0}
+    # E 路:A/B 跑完仍无年龄的人再看头像(视觉最贵放最后,只补漏)。
+    still_need = [p for p in need if not llm_pred.get(str(p.get("author_key") or ""), {}).get("age_bucket")
+                  and not m3_pred.get(str(p.get("author_key") or ""), {}).get("age_bucket")]
+    avatar_pred, avatar_stats = _age_avatar_batch(still_need)
+    counts = {"cached": 0, "llm": 0, "m3": 0, "channel": 0, "handle_year": 0, "avatar": 0, "fused": 0}
     updates: list[dict[str, Any]] = []
     for p in profiles:
         if p.get("age_bucket"):
@@ -945,20 +1072,27 @@ def _age_ensemble(
         if h_bucket:
             signals.append((h_bucket, h_conf))
             counts["handle_year"] += 1
+        ap = avatar_pred.get(key)
+        if ap and ap.get("age_bucket"):
+            signals.append((ap["age_bucket"], float(ap.get("conf") or 0.5)))
+            counts["avatar"] += 1
         changed = False
         bucket, conf = _fuse_age(signals)
         if bucket:
             p["age_bucket"], p["age_conf"] = bucket, conf
             counts["fused"] += 1
             changed = True
-        # gender:LLM 仅在新 conf 更高时覆盖(写缓存同一条 UPDATE 顺带)。
+        # gender:LLM/头像 仅在新 conf 更高时覆盖(写缓存同一条 UPDATE 顺带)。
         if lp and lp.get("gender") in ("male", "female") and float(lp.get("conf") or 0) > float(p.get("gender_conf") or 0):
             p["gender"], p["gender_conf"] = lp["gender"], round(float(lp.get("conf") or 0), 2)
+            changed = True
+        if ap and ap.get("gender") in ("male", "female") and float(ap.get("conf") or 0) > float(p.get("gender_conf") or 0):
+            p["gender"], p["gender_conf"] = ap["gender"], round(float(ap.get("conf") or 0), 2)
             changed = True
         if changed:
             updates.append(p)
     written = _update_age_cache(conn, updates) if updates else 0
-    return {"llm": llm_stats, "m3": m3_status, "counts": counts, "cache_written": written}
+    return {"llm": llm_stats, "m3": m3_status, "avatar": avatar_stats, "counts": counts, "cache_written": written}
 
 
 # ── 聚合 + 经验贝叶斯收缩 ──
@@ -1207,14 +1341,74 @@ def _infer_with_cache(conn: Any, platform: str, commenters: list[dict[str, Any]]
                     extras_changed = True
             if extras_changed:
                 fresh.append(merged)
+            # 瞬态字段(不入缓存表)也要带上:缓存命中但仍无年龄的人要走 A 路(评论文本)
+            # 和 E 路(头像),丢了这俩字段等于把他们判成"无信号"。
+            for tfield in ("comment_text", "avatar_url"):
+                if c.get(tfield) and not merged.get(tfield):
+                    merged[tfield] = c[tfield]
             inferred.append(merged)
             continue
         rec = infer_commenter(c)
+        if c.get("avatar_url") and not rec.get("avatar_url"):
+            rec["avatar_url"] = c["avatar_url"]
         inferred_fresh += 1
         fresh.append(rec)
         inferred.append(rec)
     written = _upsert_commenter_profiles(conn, fresh) if fresh else 0
     return inferred, {"cache_hits": cache_hits, "inferred_fresh": inferred_fresh, "cache_written": written}
+
+
+AFFINITY_MAX_LOOKUPS = 80  # 关注图谱 v0:最多探多少个评论者的公开订阅(quota 1 单位/次,多数私密快速 403)
+AFFINITY_MIN_SHARED = 2    # 至少 2 人共同关注才上榜(单人无统计意义)
+
+
+def _yt_audience_affinity(commenter_channel_ids: list[str], self_channel_id: str) -> dict[str, Any]:
+    """关注图谱 v0(Modash「audience also follows」同款思路,只用免费 YT API):
+
+    抽样评论者 -> subscriptions.list(channelId=评论者)拿其公开订阅(约 2-3 成用户公开),
+    聚合成「这群受众还关注谁」Top 榜。私密订阅返回 403 属常态,逐个跳过;quota 打穿即止。
+    """
+    from collections import Counter as _Counter
+
+    sub_counter: _Counter = _Counter()
+    titles: dict[str, str] = {}
+    sampled = 0
+    public_hits = 0
+    for cid in commenter_channel_ids[:AFFINITY_MAX_LOOKUPS]:
+        if not str(cid or "").startswith("UC"):
+            continue
+        sampled += 1
+        try:
+            payload = _yt_get("subscriptions", {"part": "snippet", "channelId": cid, "maxResults": 50}, timeout=8)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "quota" in msg.lower():
+                logger.warning("audience affinity quota hit after %s lookups", sampled)
+                break
+            continue  # 403 subscriptionForbidden = 订阅私密,常态
+        items = payload.get("items") or []
+        if items:
+            public_hits += 1
+        for it in items:
+            sn = it.get("snippet") or {} if isinstance(it, dict) else {}
+            rid = str(((sn.get("resourceId") or {}).get("channelId")) or "")
+            if not rid or rid == self_channel_id:
+                continue
+            sub_counter[rid] += 1
+            if rid not in titles:
+                titles[rid] = str(sn.get("title") or "")[:60]
+    top = [
+        {"channel_id": k, "title": titles.get(k, ""), "shared": v}
+        for k, v in sub_counter.most_common(12)
+        if v >= AFFINITY_MIN_SHARED
+    ][:10]
+    return {
+        "items": top,
+        "sampled": sampled,
+        "public_subs_found": public_hits,
+        "method": "yt_public_subscriptions_v0",
+        "note": "受众公开订阅抽样(约两三成用户订阅公开);shared=共同关注人数",
+    }
 
 
 def refresh_audience_stats(
@@ -1348,6 +1542,14 @@ def refresh_audience_stats(
     except Exception as exc:
         logger.warning("audience overlap failed kol=%s: %s", kol_pool_id, exc)
         payload["overlap"] = {"items": [], "error": str(exc)[:200]}
+    # v3:关注图谱 v0(仅 YT;评论者=频道 id 可直接查公开订阅)。失败不阻断主流程。
+    if platform == "youtube":
+        try:
+            _cids = [str(c.get("author_key") or "") for c in (sample.get("commenters") or [])]
+            payload["audience_affinity"] = _yt_audience_affinity(_cids, str(sample.get("channel_id") or ""))
+        except Exception as exc:
+            logger.warning("audience affinity failed kol=%s: %s", kol_pool_id, exc)
+            payload["audience_affinity"] = {"items": [], "error": str(exc)[:200]}
     conn.execute(
         "UPDATE vkpi_kol_pool SET audience_estimated_json=?, updated_at=? WHERE id=?",
         (json.dumps(payload, ensure_ascii=False), _utcnow_iso(), int(kol_pool_id)),
