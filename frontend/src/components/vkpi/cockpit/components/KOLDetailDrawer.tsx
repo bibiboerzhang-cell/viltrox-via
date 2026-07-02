@@ -87,6 +87,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             status: "pending",
             message: payload?.enqueued ? "评论不足,已入队抓评论 — 可稍后再刷新" : String(payload?.reason || "评论不足,稍后再试"),
           });
+        } else if (status === "no_posts" || status === "no_commenters") {
+          // 数据前置条件缺失(无帖子记录/帖子无评论)—— 中性提示引导下一步,不按报错渲染。
+          setAudienceState({
+            status: "pending",
+            message: String(payload?.reason || (status === "no_posts" ? "暂无该 KOL 的帖子记录,先跑一次账号/视频分析" : "已收录帖子暂无可用评论")),
+          });
         } else {
           setAudienceState({ status: "error", message: String(payload?.reason || payload?.status || "刷新失败") });
         }

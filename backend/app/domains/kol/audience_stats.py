@@ -1202,6 +1202,27 @@ def refresh_audience_stats(
     elif platform in ("instagram", "tiktok"):
         sample = sample_local_commenters(int(kol_pool_id), conn=conn)
         if int(sample.get("comments_scanned") or 0) < MIN_LOCAL_COMMENTS:
+            # 无帖可采就别入队:evidence 为空时采集 job 会 1 秒空转"done",
+            # 用户按"已入队稍后刷新"的提示等不到任何结果 —— 诚实返回 no_posts 让 UI 引导先跑账号分析。
+            ev_n = 0
+            try:
+                ev_row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM vkpi_kol_video_evidence WHERE kol_pool_id=?",
+                    (int(kol_pool_id),),
+                ).fetchone()
+                ev_n = int(dict(ev_row).get("n") or 0) if ev_row else 0
+            except Exception:
+                ev_n = 0
+            if ev_n <= 0:
+                return {
+                    "status": "no_posts",
+                    "kol_pool_id": int(kol_pool_id),
+                    "platform": platform,
+                    "comments_found": int(sample.get("comments_scanned") or 0),
+                    "min_required": MIN_LOCAL_COMMENTS,
+                    "enqueued": False,
+                    "reason": "池内暂无该 KOL 的帖子记录,先对该 KOL 跑一次账号/视频分析再生成受众统计",
+                }
             enqueued = False
             enqueue_status = ""
             if enqueue_if_missing:
