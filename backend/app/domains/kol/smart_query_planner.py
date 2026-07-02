@@ -451,19 +451,19 @@ def plan_text_query(
             from app.db.connection import get_conn as _gcn
 
             _cc = _gcn()
-            _now = _dt.now(_tz.utc).isoformat()
-            _cc.execute(
-                "DELETE FROM vkpi_analysis_cache WHERE target_type=? AND target_id=? AND derive_method=?",
-                ("search_plan", _qkey, "smart_query_plan_v1"),
-            )
+            # result 列是 jsonb:compat 连接用 ?::jsonb(翻译层转 %s::jsonb);ON CONFLICT 幂等。
             _cc.execute(
                 """
-                INSERT INTO vkpi_analysis_cache
-                    (target_type, target_id, derive_method, model, cost, status, result, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                INSERT INTO vkpi_analysis_cache (
+                  target_type, target_id, model, derive_method, result, cost,
+                  status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?::jsonb, ?, 'ready', NOW(), NOW())
+                ON CONFLICT (target_type, target_id, derive_method)
+                DO UPDATE SET result = EXCLUDED.result, status = 'ready', updated_at = NOW()
                 """,
-                ("search_plan", _qkey, "smart_query_plan_v1", "plan_cache", 0, "ready",
-                 _pj.dumps(_plan, ensure_ascii=False), _now, _now),
+                ("search_plan", _qkey, "plan_cache", "smart_query_plan_v1",
+                 _pj.dumps(_plan, ensure_ascii=False), 0),
             )
             _cc.commit()
     except Exception:
