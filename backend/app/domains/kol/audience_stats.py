@@ -46,7 +46,7 @@ AGE_MIN_DETERMINED = 5  # 年龄分布最小判定人数:低于此不出 bins(�
 # ── 年龄三路融合(v2)──
 AGE_BUCKETS = ("0-18", "19-29", "30-39", "40+")
 AGE_LLM_BATCH_SIZE = 50   # A 路(Gemini)每次调用批 50 评论者
-AGE_LLM_MAX_BATCHES = 3   # 单次刷新 A 路调用上限(成本闸;其余人走 C 路弱先验,下次刷新继续补)
+AGE_LLM_MAX_BATCHES = 4   # 单次刷新 A 路调用上限(成本闸;其余人走 C 路弱先验,下次刷新继续补)
 CREATOR_DENSITY_MIN_SUBS = 1000  # 受众创作者浓度口径:订阅数超过 1000
 
 # ── 人名词表(轻量,替代 m3inference 等重依赖;P0 只做西文名,未知留空不猜)──
@@ -367,8 +367,11 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
                         "video_count": None,
                     },
                 )
-                if not entry["comment_text"]:
-                    entry["comment_text"] = text[:500]
+                # 同一评论者最多攒 3 条评论合喂(2026-07-02:单条判不出年龄,多条口吻/话题互证)。
+                if text and str(entry["comment_text"]).count(" || ") < 2:
+                    entry["comment_text"] = (
+                        f"{entry['comment_text']} || {text[:160]}" if entry["comment_text"] else text[:200]
+                    )[:500]
             page_token = str(payload.get("nextPageToken") or "")
             if not page_token or not items:
                 break
@@ -491,8 +494,12 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
                 "declared_country": "",
             },
         )
-        if not entry["comment_text"]:
-            entry["comment_text"] = str(rec.get("comment_text") or "")[:500]
+        _txt = str(rec.get("comment_text") or "").strip()
+        # 同一评论者最多攒 3 条评论合喂(多条口吻/话题互证,提年龄判定率)。
+        if _txt and str(entry["comment_text"]).count(" || ") < 2:
+            entry["comment_text"] = (
+                f"{entry['comment_text']} || {_txt[:160]}" if entry["comment_text"] else _txt[:200]
+            )[:500]
     return {
         "status": "ok",
         "commenters": list(by_author.values()),
@@ -776,8 +783,11 @@ def _age_llm_batches(
             "Comment language style (teen slang, professional jargon, dated phrasing) is the strongest cue:\n"
             '  "i": entry number, "age": "0-18"|"19-29"|"30-39"|"40+" or "" when no signal,\n'
             '  "gender": "male"|"female" or "" when no signal, "conf": 0.0-1.0.\n'
-            "Be conservative: empty string beats a wild guess. Output STRICTLY one JSON array, no prose, "
-            "no markdown fences. Your reply must start with the character [\n\n"
+            "AGE: when there is ANY weak cue (slang vs formal tone, emoji habits, life-stage hints, topics, "
+            "name style) give your best-supported bucket with a LOW conf (0.25-0.4) instead of empty — "
+            "empty only when truly nothing. Adults discussing pro gear/work are usually 19-29 or 30-39, "
+            "not 0-18. GENDER: stay conservative, empty beats a guess. Output STRICTLY one JSON array, "
+            "no prose, no markdown fences. Your reply must start with the character [\n\n"
             + "\n".join(lines)
         )
         resp = llm_gateway.invoke(
