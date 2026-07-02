@@ -224,6 +224,38 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
     return {int(row["kol_pool_id"]): dict(row) for row in rows}
 
 
+def _pool_rows_fallback(kol_pool_ids: list[int]) -> dict[int, dict]:
+    """硬兜底(2026-07-02):索引表缺行(新 KOL 未入索引/表漂移)时按 pool 行合成可展示候选。
+
+    背景:此前索引行缺失的命中被整批丢弃,索引表一旦空表整个文本搜索静默归零(本日事故)。
+    合成行 profile_type 留空 -> 展示为「未分类」,type 分 0,profile_text 用 bio 顶,绝不触碰 fit。
+    """
+    if not kol_pool_ids:
+        return {}
+    placeholders = ", ".join(["?"] * len(kol_pool_ids))
+    conn = get_conn()
+    rows = conn.execute(
+        f"""
+        SELECT p.id AS kol_pool_id, p.platform, p.handle, p.display_name, p.profile_url,
+               p.avatar_url, p.followers, p.bio, p.country, p.primary_topic, p.content_style,
+               p.secondary_topics_json, p.brand_collaborations_json
+        FROM vkpi_kol_pool p
+        WHERE p.duplicate_of_id IS NULL AND p.id IN ({placeholders})
+        """,
+        tuple(int(x) for x in kol_pool_ids),
+    ).fetchall()
+    out: dict[int, dict] = {}
+    for row in rows:
+        d = dict(row)
+        d.setdefault("profile_type", "")
+        d.setdefault("profile_text", str(d.get("bio") or "")[:600])
+        d.setdefault("type_reason", "索引未覆盖,按池内资料兜底展示")
+        d.setdefault("creator_type_score", 0.0)
+        d.setdefault("reviewer_type_score", 0.0)
+        out[int(d["kol_pool_id"])] = d
+    return out
+
+
 def _clean_text(value: Any, limit: int = 240) -> str:
     text = " ".join(str(value or "").replace("\x00", " ").split())
     return text[:limit]
@@ -689,13 +721,18 @@ def recall_kol_profiles(
     rows_by_id = _entry_rows([hit.kol_pool_id for hit in ordered_hits])
     evidence_by_id = _evidence_summaries([hit.kol_pool_id for hit in ordered_hits])
     buckets: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
+    fallback_rows = _pool_rows_fallback([h.kol_pool_id for h in ordered_hits if h.kol_pool_id not in rows_by_id])
+    fallback_used_count = 0
     missing_type_count = 0
     excluded_chinese_count = 0
     for hit in ordered_hits:
         row = rows_by_id.get(hit.kol_pool_id)
         if not row:
-            missing_type_count += 1
-            continue
+            row = fallback_rows.get(hit.kol_pool_id)
+            if not row:
+                missing_type_count += 1
+                continue
+            fallback_used_count += 1
         # P0-6:纯地区判据(CN/HK/TW),不再按汉字名排除;country 为空放行(预期)。
         if exclude_chinese and _country_in_excluded_region(row.get("country")):
             excluded_chinese_count += 1
@@ -774,6 +811,7 @@ def recall_kol_profiles(
             "duplicate_count": duplicate_count,
             "typed_candidate_count": len(buckets["creator"]) + len(buckets["reviewer"]),
             "missing_type_count": missing_type_count,
+            "fallback_pool_rows": fallback_used_count,
             "creator_candidate_count": len(buckets["creator"]),
             "reviewer_candidate_count": len(buckets["reviewer"]),
             "creator_returned": len(selected_creator),

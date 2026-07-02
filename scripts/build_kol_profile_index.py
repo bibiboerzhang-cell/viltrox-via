@@ -239,6 +239,7 @@ def fetch_profile_docs() -> list[ProfileDoc]:
         raise RuntimeError(f"missing KOL ids in vkpi_kol_pool: {missing}")
 
     docs: list[ProfileDoc] = []
+    thin_skipped: list[int] = []
     for row in kol_rows:
         kol_id = int(row["id"])
         if kol_id == 1525:
@@ -351,7 +352,10 @@ def fetch_profile_docs() -> list[ProfileDoc]:
 
         text = clean_text("\n".join(line for line in lines if line), 7000)
         if not text or len(text) < 120:
-            raise RuntimeError(f"profile text too thin for kol_pool_id={kol_id}")
+            # 2026-07-02:太薄的画像逐条跳过而非整体中止 —— 一条烂数据不该拖死全量索引;
+            # 薄的等 enrichment 补厚后下次重建自然纳入。
+            thin_skipped.append(int(kol_id))
+            continue
         semantic_signal_count = int(bool(clusters)) + int(bool(specialty_items)) + int(bool(product_items))
         sufficiency = "strong" if len(final_summaries) >= 2 and semantic_signal_count >= 1 else "adequate"
         source_fields["selection"] = {
@@ -372,8 +376,10 @@ def fetch_profile_docs() -> list[ProfileDoc]:
             )
         )
 
-    if len(docs) != len(TARGET_KOL_IDS):
-        raise RuntimeError(f"expected {len(TARGET_KOL_IDS)} docs, got {len(docs)}")
+    if len(docs) + len(thin_skipped) != len(TARGET_KOL_IDS):
+        raise RuntimeError(f"expected {len(TARGET_KOL_IDS)} docs, got {len(docs)} (+{len(thin_skipped)} thin-skipped)")
+    if thin_skipped:
+        print(f"skipped {len(thin_skipped)} thin profiles: {thin_skipped[:20]}...")
     return docs
 
 

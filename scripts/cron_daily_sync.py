@@ -152,6 +152,30 @@ async def main() -> int:
             emit_event("cron_daily_sync_gapfill", summary=_gap_res)
         except Exception as _gap_exc:
             emit_event("cron_daily_sync_gapfill_failed", error=f"{type(_gap_exc).__name__}: {str(_gap_exc)[:200]}")
+        # 同步成功后增量维护 KOL 向量召回索引(2026-07-02:索引表空表导致文本搜索
+        # 静默归零的事故复盘产物)。expand 只补未入索引的新 KOL(embedding 花费分级别),
+        # classify 补分型;子进程跑、双闸超时,失败只记事件不影响同步退出码。
+        try:
+            import subprocess
+            from pathlib import Path
+
+            _repo = str(Path(__file__).resolve().parents[1])
+            for _script, _cmd in (
+                ("scripts/expand_kol_profile_index.py", "write-and-validate"),
+                ("scripts/classify_kol_profile_type.py", "write"),
+            ):
+                _proc = subprocess.run(
+                    [sys.executable, str(Path(_repo) / _script), _cmd],
+                    cwd=_repo, capture_output=True, text=True, timeout=1800,
+                )
+                if _proc.returncode != 0:
+                    emit_event(
+                        "cron_daily_sync_index_maint_failed",
+                        script=_script, code=_proc.returncode, err=str(_proc.stderr)[-300:],
+                    )
+            emit_event("cron_daily_sync_index_maint_done")
+        except Exception as _idx_exc:
+            emit_event("cron_daily_sync_index_maint_failed", error=f"{type(_idx_exc).__name__}: {str(_idx_exc)[:200]}")
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         inner = result.get("result") if isinstance(result, dict) else {}
         if isinstance(inner, dict):
