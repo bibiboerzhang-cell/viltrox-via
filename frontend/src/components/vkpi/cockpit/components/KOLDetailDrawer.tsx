@@ -9,6 +9,7 @@ import { ShareKolModal } from "../../shared/ShareKolModal";
 import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
+import { candidateKindGroup } from "../lib/candidateKind";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import {
   asArray,
@@ -49,9 +50,35 @@ const e = React.createElement;
 
 // D2:CopyValueButton / GoaffproLinkCard / GoaffproLinkSection 已抽出至共享文件 ../../shared/GoaffproLinkSection(供 MY KOL 详情复用),渲染调用见下方。
 
+// 【C1 Tab 化】抽屉内容区四 tab:按「用户看数据的心智」把既有 section 分组渲染(零改各 section 内部)。
+// 概览=这人是谁/分数为何/内容速览;深度分析=LLM/视频深析产物;受众=粉丝画像;合作=推进合作的动作面。
+// 头部身份卡与底部粘性行动条在 tab 结构之外,全 tab 常驻。tab 选择记忆到 localStorage(跨 KOL/会话)。
+const DRAWER_TABS: Array<{ key: string; label: string }> = [
+  { key: "overview", label: "概览" },
+  { key: "deep", label: "深度分析" },
+  { key: "audience", label: "受众" },
+  { key: "coop", label: "合作" },
+];
+const DRAWER_TAB_STORAGE_KEY = "vkpi:drawer-active-tab";
+function readStoredDrawerTab(): string {
+  try {
+    const raw = window.localStorage.getItem(DRAWER_TAB_STORAGE_KEY);
+    if (raw && DRAWER_TABS.some((tab) => tab.key === raw)) return raw;
+  } catch { /* 隐私模式读失败按默认「概览」 */ }
+  return "overview";
+}
+
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
+  // 【C1】当前 tab:惰性读 localStorage(非法值回落「概览」);切换时写回记忆。
+  const [activeTab, setActiveTab] = React.useState<string>(() => readStoredDrawerTab());
+  const handleSelectTab = React.useCallback((key: string) => {
+    setActiveTab(key);
+    try {
+      window.localStorage.setItem(DRAWER_TAB_STORAGE_KEY, key);
+    } catch { /* 写失败不阻塞切换,本次会话内 state 仍生效 */ }
+  }, []);
   const [dimensions11, setDimensions11] = React.useState<any>(null);
   const [llmDeepAnalysis, setLlmDeepAnalysis] = React.useState<any>(null);
   const [preloadedVideoAnalysisBundles, setPreloadedVideoAnalysisBundles] = React.useState<any>(undefined);
@@ -141,30 +168,88 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   React.useEffect(() => {
     return () => clearAudiencePoll();
   }, [item?.id, clearAudiencePoll]);
-  // 新发现 KOL 档案瘦(帖数/均播全空)→ 打开抽屉自动补:入队 profile 深爬(后端幂等,
+  // 新发现 KOL 档案瘦/无视频证据 → 打开抽屉自动补:入队 profile 深爬(后端幂等,
   // 已有 evidence/活跃 job 不重复烧 Apify),入队成功后 30s×10 静默重拉 detail_bundle 等档案落地。
   const profileCrawlRef = React.useRef<any>({ firedId: null, timer: null });
-  React.useEffect(() => {
+  // 【A2/A3】抓取态(手动按钮 + 自动入队共用):idle/loading(入队请求中)/crawling(已入队,轮询等落地)/done/error。
+  const [profileCrawlState, setProfileCrawlState] = React.useState<any>({ status: "idle", message: "" });
+  // 30s×10 轮询 onReloadDetail 等抓取落地;已有表在跑就不叠表。返回是否真的起了轮询(无 onReloadDetail 时 false)。
+  const startCrawlPolling = React.useCallback(() => {
+    if (typeof onReloadDetail !== "function") return false;
+    if (profileCrawlRef.current.timer) return true;
+    let ticks = 0;
+    profileCrawlRef.current.timer = setInterval(() => {
+      ticks += 1;
+      if (ticks > 10) {
+        clearInterval(profileCrawlRef.current.timer);
+        profileCrawlRef.current.timer = null;
+        // 轮询到点还没等到证据:不装完成,如实告知后台仍在跑。
+        setProfileCrawlState((prev: any) => prev?.status === "crawling"
+          ? { status: "idle", message: "抓取仍在后台进行 — 几分钟后重开抽屉查看" }
+          : prev);
+        return;
+      }
+      void onReloadDetail();
+    }, 30000);
+    return true;
+  }, [onReloadDetail]);
+  // 【A1/A2 共用】入队 profile 深爬。auto=true 为抽屉自动补档路径(失败静默,不打扰);
+  // 手动路径把 already_queued/already_has_evidence/no_profile_url 等全部翻成人话反馈。
+  const startProfileCrawl = React.useCallback((auto: boolean = false) => {
     const id = item?.id;
-    const thin = !Number(item?.posts_count || 0) && !Number(item?.avg_views || 0);
-    if (!apiToken || !id || !thin || profileCrawlRef.current.firedId === id) return;
-    profileCrawlRef.current.firedId = id;
+    if (!apiToken || !id) return;
+    setProfileCrawlState({ status: "loading", message: "" });
     void enqueueKolProfileCrawl(apiToken, id)
       .then((res: any) => {
-        if (res?.status === "queued" && typeof onReloadDetail === "function") {
-          let ticks = 0;
-          profileCrawlRef.current.timer = setInterval(() => {
-            ticks += 1;
-            if (ticks > 10) {
-              clearInterval(profileCrawlRef.current.timer);
-              profileCrawlRef.current.timer = null;
-              return;
-            }
-            void onReloadDetail();
-          }, 30000);
+        const status = String(res?.status || "");
+        if (status === "queued" || status === "already_queued") {
+          const polling = startCrawlPolling();
+          setProfileCrawlState({
+            status: "crawling",
+            message: (status === "already_queued" ? "已在抓取队列中" : "已入队抓取(account_deep)")
+              + (polling ? " — 完成后本页自动出现(约几分钟)" : " — 几分钟后重开抽屉查看"),
+          });
+        } else if (status === "already_has_evidence") {
+          setProfileCrawlState({ status: "done", message: "该 KOL 已有视频证据 — 正在刷新详情" });
+          if (typeof onReloadDetail === "function") void onReloadDetail();
+        } else if (auto) {
+          // 自动补档路径:not_found/no_profile_url 等静默归位,原有手动按钮仍可用。
+          setProfileCrawlState({ status: "idle", message: "" });
+        } else {
+          setProfileCrawlState({
+            status: "error",
+            message: status === "no_profile_url" ? "该 KOL 缺主页链接(profile_url),无法抓取"
+              : status === "not_found" ? "该 KOL 在池内不存在(可能已被清理)"
+              : "抓取入队失败:" + (status || "未知返回"),
+          });
         }
       })
-      .catch(() => { /* 静默:自动补档失败不打扰,原有手动按钮仍可用 */ });
+      .catch((error: any) => {
+        if (auto) {
+          setProfileCrawlState({ status: "idle", message: "" });
+          return;
+        }
+        setProfileCrawlState({ status: "error", message: error?.message ? String(error.message) : "抓取入队失败" });
+      });
+  }, [apiToken, item?.id, onReloadDetail, startCrawlPolling]);
+  // 【A1 触发扩围】自动补档触发条件从「档案瘦(帖数/均播全空)」扩成:档案瘦 或
+  // 「detail_bundle 已到且该 KOL 没有任何视频证据」(item.video_evidence 空 + video_analysis.items 空)。
+  // detailBundle 异步到达,故必须进依赖;firedId 防重不变;enqueueKolProfileCrawl 后端幂等,多触发安全。
+  React.useEffect(() => {
+    const id = item?.id;
+    if (!apiToken || !id || profileCrawlRef.current.firedId === id) return;
+    const thin = !Number(item?.posts_count || 0) && !Number(item?.avg_views || 0);
+    const bundle = recordOr(detailBundle);
+    const bundleNoEvidence = bundle.status === "ready"
+      && asArray(recordOr(bundle.item).video_evidence).length === 0
+      && detailBundleAnalysisItems(bundle).length === 0;
+    if (!thin && !bundleNoEvidence) return;
+    profileCrawlRef.current.firedId = id;
+    startProfileCrawl(true);
+  }, [apiToken, item?.id, item?.posts_count, item?.avg_views, detailBundle, startProfileCrawl]);
+  // 抓取轮询清表独立成 effect(仅按 item.id 键控):触发 effect 依赖里有 detailBundle,
+  // 若把清表挂它的 cleanup,轮询每次重拉 bundle 都会误杀自己的 30s 计时器。
+  React.useEffect(() => {
     return () => {
       if (profileCrawlRef.current.timer) {
         clearInterval(profileCrawlRef.current.timer);
@@ -172,7 +257,21 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiToken, item?.id]);
+  }, [item?.id]);
+  // 轮询期间一旦 detail_bundle 带回视频证据 → 立刻停表 + 提示就绪(与受众轮询同款观察者)。
+  React.useEffect(() => {
+    const bundle = recordOr(detailBundle);
+    if (bundle.status !== "ready") return;
+    const hasEvidence = asArray(recordOr(bundle.item).video_evidence).length > 0
+      || detailBundleAnalysisItems(bundle).length > 0;
+    if (hasEvidence && profileCrawlRef.current.timer) {
+      clearInterval(profileCrawlRef.current.timer);
+      profileCrawlRef.current.timer = null;
+      setProfileCrawlState({ status: "done", message: "视频证据已就绪(后台抓取完成)" });
+      // 证据已到:清掉「无证据」残留态,深析按钮恢复为全视频入队入口。
+      setAllVideosState((prev: any) => (prev?.status === "no_evidence" ? { status: "idle", message: "" } : prev));
+    }
+  }, [detailBundle]);
   // v2 证据下钻:面板内可展开块(intent/brands/fans)单开手风琴;state 在父层,子组件仍零 state。
   const [audienceExpand, setAudienceExpand] = React.useState<string | null>(null);
   const handleToggleAudienceBlock = React.useCallback((key: string) => {
@@ -236,6 +335,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     // 换 KOL 时受众刷新态/证据展开态归零,避免上一条的 loading/报错/展开串号。
     setAudienceState({ status: "idle", message: "" });
     setAudienceExpand(null);
+    // 换 KOL 时抓取态归零(抽屉带 key 通常会整体重挂,这里兜底防串号)。
+    setProfileCrawlState({ status: "idle", message: "" });
   }, [item?.id]);
 
   // 内容契合深析:开抽屉先只读已有缓存(不烧 LLM);无缓存则留待用户点击触发。
@@ -382,6 +483,17 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       });
   };
   const allVideosBusy = allVideosState.status === "loading";
+  // 【A2】抓取按钮态:入队请求中/轮询中都算忙(按钮 disabled + 文案「抓取中…」)。
+  const crawlBusy = profileCrawlState.status === "loading" || profileCrawlState.status === "crawling";
+  // 「无视频证据」判定:detail_bundle 已到 → 以 item.video_evidence 与 video_analysis.items 双空为准;
+  // bundle 未到时以 enqueueAllKolVideos 返回过 no_evidence 兜底(后端查的是 vkpi_kol_video_evidence 真表)。
+  // bundle 就绪后不再信残留的 no_evidence 态(抓取落地/换水后按钮要能立即恢复全视频入队)。
+  const bundleRecordForEvidence = recordOr(detailBundle);
+  const bundleReadyForEvidence = bundleRecordForEvidence.status === "ready";
+  const bundleNoEvidence = bundleReadyForEvidence
+    && asArray(recordOr(bundleRecordForEvidence.item).video_evidence).length === 0
+    && detailBundleAnalysisItems(bundleRecordForEvidence).length === 0;
+  const noEvidenceKnown = bundleReadyForEvidence ? bundleNoEvidence : allVideosState.status === "no_evidence";
   const handleEnqueueAllVideos = () => {
     if (!apiToken || !item.id || allVideosBusy) return;
     setAllVideosState({ status: "loading", message: "正在把该 KOL 的全部视频证据加入深析队列…" });
@@ -389,7 +501,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       .then((payload: any) => {
         const status = String(payload?.status || "");
         if (status === "no_evidence") {
-          setAllVideosState({ status: "no_evidence", message: payload?.reason || "该 KOL 暂无视频证据,需先发现/抓取视频再全视频分析" });
+          // 【A2】后端确认无证据 → 自动转为抓取(account_deep),不让用户对着死路按钮干瞪眼。
+          setAllVideosState({ status: "no_evidence", message: "该 KOL 暂无视频证据 — 已自动转为抓取(account_deep 模式)" });
+          startProfileCrawl(false);
           return;
         }
         const queued = Number(payload?.queued || 0);
@@ -402,6 +516,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       });
   };
   const dimensions11Dims = dimensions11RadarDims(dimensions11);
+  // 【C4 新发现预设折叠】新发现/校验中候选(new_promoted/new_validated/new_discovered)默认收起
+  // V6 Breakdown/适配判断/产品线/风险/合作历史(这些块对新候选多为空占位);受众和设备保持展开。
+  // SectionFold 先读 localStorage,用户手动折叠过的记忆优先于该默认值。
+  const isNewCandidate = candidateKindGroup(item.candidate_kind) === "new";
+  const foldDefaultOpen = !isNewCandidate;
   const v6Breakdown = item.v6_breakdown && typeof item.v6_breakdown === "object"
     ? item.v6_breakdown
     : item.score_breakdown && typeof item.score_breakdown === "object"
@@ -419,84 +538,115 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose }),
 
     // ─── Scroll content ───
+    // 【C1 Tab 化】既有 section 一列不变,只按 activeTab 过滤渲染对应集合(不动各 section 内部);
+    // tab 条 sticky 钉在滚动区顶部;头部身份卡(上方)与底部行动条(下方)在滚动区之外全 tab 常驻。
     e("div", { className: "flex-1 overflow-y-auto" },
-      // ── Bio ──
-      item.bio && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
-        e("p", { className: "text-[11px] text-slate-300 leading-relaxed" }, item.bio)
-      ),
-      
-      // ── Why V6 Fit = N? · 速读 4 bullets(规则生成) ──
-      v6Breakdown && e(KOLDrawerWhyFitCard, { v6Breakdown, loyaltySignals, geoDistribution, trendHits, item, devices, competitorCollabs, potentialConcerns }),
-
-      // ── 4-card 2x2 grid: Real ER / Geo / Loyalty / Trend ──
-      e(KOLDrawerMetricGrid, { item, loyaltySignals, trendHits }),
-
-      // ── 11 维度雷达: persisted backend dimensions_11_json only ──
-      dimensions11Dims.length > 0 && e(KOLDrawerRadar11, { dims: dimensions11Dims, dimensions11 }),
-      e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
-
-      // ── item4 账号档案(本地聚合,零 LLM):覆盖度/缺口/账号级判断/最近事件 ──
-      e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
-      e(CooperationPanel, { apiToken, kolPoolId: item?.id }),
-
-      // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
-      // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
-      e(KOLDrawerMemorySection, { kolMemory }),
-
-      // ── 联系方式 & 代表视频 ──
-      e(KOLDrawerContactAndVideos, { item, representativeVideos, onOpenVideo: setActiveRepresentativeVideo }),
-      e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles, summary: videoAnalysisSummary }),
-      // ── 全视频跑:该 KOL 全部视频证据各入队一条 final_v1 → 发完综合评估 ──
-      apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
-        e("button", {
+      // ── Tab 条(sticky,不透明底遮住滚过的内容)──
+      e("div", { className: "sticky top-0 z-30 flex items-center gap-1 border-b border-white/[0.08] bg-[#0a1020] px-5 py-2" },
+        DRAWER_TABS.map((tab) => e("button", {
+          key: tab.key,
           type: "button",
-          disabled: allVideosBusy,
-          onClick: handleEnqueueAllVideos,
-          className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12] disabled:opacity-50",
-        },
-          e(Sparkles, { size: 12 }),
-          allVideosBusy ? "深度分析入队中…" : "KOL深度分析理解(最近20条)"
+          onClick: () => handleSelectTab(tab.key),
+          "aria-pressed": activeTab === tab.key,
+          className: "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors " + (
+            activeTab === tab.key
+              ? "bg-white/[0.10] text-white"
+              : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+          ),
+        }, tab.label))
+      ),
+
+      // ══ Tab「概览」:这人是谁 + 分数为何 + 内容/联系速览 ══
+      activeTab === "overview" && e(React.Fragment, null,
+        // ── Bio ──
+        item.bio && e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+          e("p", { className: "text-[11px] text-slate-300 leading-relaxed" }, item.bio)
         ),
-        allVideosState.message && e("div", {
-          className: "mt-1.5 text-[9.5px] leading-relaxed " + (allVideosState.status === "error" ? "text-rose-300" : allVideosState.status === "no_evidence" ? "text-amber-300" : "text-slate-500")
-        }, allVideosState.message)
+        // ── Why V6 Fit = N? · 速读 4 bullets(规则生成) ──
+        v6Breakdown && e(KOLDrawerWhyFitCard, { v6Breakdown, loyaltySignals, geoDistribution, trendHits, item, devices, competitorCollabs, potentialConcerns }),
+        // ── 3-card grid: Real ER / Geo / Loyalty(B6:Trend 卡已诚实摘除;C3:全空时组件内合并成一行淡字)──
+        e(KOLDrawerMetricGrid, { item, loyaltySignals }),
+        // ── 11 维度雷达: persisted backend dimensions_11_json only ──
+        dimensions11Dims.length > 0 && e(KOLDrawerRadar11, { dims: dimensions11Dims, dimensions11 }),
+        // ── V6 Fit Breakdown(与 why-fit 同属「分数为何」心智,归概览)──
+        e(KOLDrawerV6Breakdown, { item, v6Breakdown, foldDefaultOpen }),
+        // ── Trend hits(真实命中列表,非 B6 摘除的恒空评分卡)──
+        trendHits.length > 0 && e(KOLDrawerTrendHits, { trendHits }),
+        // ── 联系方式 & 代表视频(身份速览的一部分:是谁 + 内容长啥样)──
+        e(KOLDrawerContactAndVideos, { item, representativeVideos, onOpenVideo: setActiveRepresentativeVideo }),
+        // ── 推荐动作/文本区块: Viltrox 适配判断 / 推荐产品线 / 风险点 / 品牌合作历史 ──
+        e(KOLDrawerTextSections, { item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs, foldDefaultOpen }),
       ),
-      // ── P-GROUP-7 共享给成员:把这条 My KOL 显式共享给某成员(只读授予,落 vkpi_kol_pool_members)──
-      apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
-        e("button", {
-          type: "button",
-          onClick: () => setShareOpen(true),
-          className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-400/25 bg-purple-400/[0.06] px-3 py-2 text-[11px] font-medium text-purple-200 transition-colors hover:bg-purple-400/[0.12]",
-        },
-          e(Share2, { size: 12 }),
-          "共享给成员"
-        )
+
+      // ══ Tab「深度分析」:视频深析产物 + LLM 判断 + 档案 + 内容契合 ══
+      activeTab === "deep" && e(React.Fragment, null,
+        // 【A3】抓取中把轮询态透传给深析结果区标题旁的小徽标(复用组件内已有轮询态,零全局依赖)。
+        e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles, summary: videoAnalysisSummary, crawling: crawlBusy }),
+        // ── 全视频跑:该 KOL 全部视频证据各入队一条 final_v1 → 发完综合评估 ──
+        // 【A2】无 evidence 时本按钮变「一键抓取」:点击入队 profile 深爬(account_deep 级联),
+        // 按钮态「抓取中…」+ 30s×10 轮询 onReloadDetail 等证据落地;已入队/已有证据都给人话反馈。
+        apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+          e("button", {
+            type: "button",
+            disabled: allVideosBusy || (noEvidenceKnown && crawlBusy),
+            onClick: noEvidenceKnown ? () => startProfileCrawl(false) : handleEnqueueAllVideos,
+            className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12] disabled:opacity-50",
+          },
+            e(Sparkles, { size: 12 }),
+            noEvidenceKnown
+              ? (crawlBusy ? "抓取中…" : "KOL深度分析理解(最近20条)")
+              : (allVideosBusy ? "深度分析入队中…" : "KOL深度分析理解(最近20条)")
+          ),
+          allVideosState.message && e("div", {
+            className: "mt-1.5 text-[9.5px] leading-relaxed " + (allVideosState.status === "error" ? "text-rose-300" : allVideosState.status === "no_evidence" ? "text-amber-300" : "text-slate-500")
+          }, allVideosState.message),
+          // 抓取反馈行(A2):queued/already_queued/already_has_evidence/错误的人话文案。
+          profileCrawlState.message && e("div", {
+            className: "mt-1.5 text-[9.5px] leading-relaxed " + (profileCrawlState.status === "error" ? "text-rose-300" : profileCrawlState.status === "crawling" ? "text-amber-300" : "text-slate-400")
+          }, profileCrawlState.message)
+        ),
+        e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
+        // ── item4 账号档案(本地聚合,零 LLM):覆盖度/缺口/账号级判断/最近事件 ──
+        e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
+        // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
+        e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       ),
-      // ── D2 生成追踪链(GOAFFPRO):一键给该 KOL 建 affiliate + 追踪链 + 优惠码(KOL 零注册)──
-      e(GoaffproLinkSection, { apiToken, kolPoolId: item?.id }),
-      // ── N2 跑 Skill:brief_generate → 合作 brief 草案(默认走规则模板,不烧 LLM;红线零触 fit)──
-      apiToken && item?.id && e(KOLDrawerBriefSkill, {
-        result: briefResult, busy: briefBusy, error: briefError, onRun: handleRunBriefSkill,
-      }),
-      // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
-      e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
-      e(KOLDrawerDevices, { item, devices }),
 
-      // ── Audience Stats·估算 BETA + Geo distribution(组件内部自判空;无数据但可刷新时也渲染)──
-      e(KOLDrawerGeoDistribution, {
-        item, geoDistribution, apiToken, audienceState,
-        onRefreshAudience: handleRefreshAudience,
-        audienceExpand, onToggleAudienceBlock: handleToggleAudienceBlock,
-      }),
+      // ══ Tab「受众」:粉丝画像 + 设备 ══
+      activeTab === "audience" && e(React.Fragment, null,
+        // ── Audience Stats·估算 BETA + 受众语言 + 创作者所在地(组件内部自判空;无数据但可刷新时也渲染)──
+        e(KOLDrawerGeoDistribution, {
+          item, geoDistribution, apiToken, audienceState,
+          onRefreshAudience: handleRefreshAudience,
+          audienceExpand, onToggleAudienceBlock: handleToggleAudienceBlock,
+        }),
+        e(KOLDrawerDevices, { item, devices }),
+      ),
 
-      // ── V6 Fit Breakdown ──
-      e(KOLDrawerV6Breakdown, { item, v6Breakdown }),
-
-      // ── Trend hits ──
-      trendHits.length > 0 && e(KOLDrawerTrendHits, { trendHits }),
-
-      // ── Viltrox 适配判断 / 推荐产品线 / 风险点 / 品牌合作历史 ──
-      e(KOLDrawerTextSections, { item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs }),
+      // ══ Tab「合作」:推进合作的动作面 ══
+      activeTab === "coop" && e(React.Fragment, null,
+        e(CooperationPanel, { apiToken, kolPoolId: item?.id }),
+        // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
+        // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
+        e(KOLDrawerMemorySection, { kolMemory }),
+        // ── N2 跑 Skill:brief_generate → 合作 brief 草案(默认走规则模板,不烧 LLM;红线零触 fit)──
+        apiToken && item?.id && e(KOLDrawerBriefSkill, {
+          result: briefResult, busy: briefBusy, error: briefError, onRun: handleRunBriefSkill,
+        }),
+        // ── D2 生成追踪链(GOAFFPRO):一键给该 KOL 建 affiliate + 追踪链 + 优惠码(KOL 零注册)──
+        e(GoaffproLinkSection, { apiToken, kolPoolId: item?.id }),
+        // ── P-GROUP-7 共享给成员:把这条 My KOL 显式共享给某成员(只读授予,落 vkpi_kol_pool_members)──
+        apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+          e("button", {
+            type: "button",
+            onClick: () => setShareOpen(true),
+            className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-400/25 bg-purple-400/[0.06] px-3 py-2 text-[11px] font-medium text-purple-200 transition-colors hover:bg-purple-400/[0.12]",
+          },
+            e(Share2, { size: 12 }),
+            "共享给成员"
+          )
+        ),
+      ),
     ),
     
     // ─── Footer actions ───

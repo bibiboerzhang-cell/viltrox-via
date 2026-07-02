@@ -445,11 +445,14 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
 }
 
 // ── V6 Fit Breakdown ──
-export function KOLDrawerV6Breakdown({ item, v6Breakdown }: any) {
+// 【C4】foldDefaultOpen:新发现/校验中候选时父层传 false 默认收起;
+// SectionFold 的 localStorage 记忆优先于本默认值(用户手动折叠过以用户为准)。
+export function KOLDrawerV6Breakdown({ item, v6Breakdown, foldDefaultOpen = true }: any) {
   // 可收起:头部行进 SectionFold header,公式明细做 children(只读展示,红线不变)
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
     e(SectionFold, {
       id: "v6breakdown",
+      defaultOpen: foldDefaultOpen,
       header: e(React.Fragment, null,
         e(Layers, { size: 11, className: "text-purple-400" }),
         e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "V6 Fit 公式 Breakdown")

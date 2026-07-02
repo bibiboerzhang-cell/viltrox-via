@@ -186,9 +186,25 @@ export function KOLDrawerWhyFitCard({ v6Breakdown, loyaltySignals, geoDistributi
   );
 }
 
-// ── 4-card 2x2 grid: Real ER / Geo / Loyalty / Trend ──
-export function KOLDrawerMetricGrid({ item, loyaltySignals, trendHits }: any) {
-  return e("div", { className: "px-5 py-3 border-b border-white/[0.06] grid grid-cols-2 gap-2" },
+// ── 3-card grid: Real ER / Geo / Loyalty ──
+// 【B6 Trend 诚实摘除 2026-07】原第 4 张「TREND RESONANCE」卡已移除:后端根本没有 trend_score/
+// trend_resonance 数据源(列表映射恒 null → 卡片恒显示 —/100 · Trend数据待接入,纯占位噪音)。
+// 数据接入后恢复方式:在下方 grid 里补回 Flame 图标的 Trend Resonance 卡(实现见 git 历史
+// 2026-07-02 之前版本,值 pctOrZero(item.trend_resonance).toFixed(0) + trendHits 命中数 sub),
+// 并把 grid-cols-3 改回 grid-cols-2(2x2)。
+export function KOLDrawerMetricGrid({ item, loyaltySignals }: any) {
+  // 【C3 空态合并】三卡全空(Real ER / Audience·HHI / Loyalty 的值全是 —)时不摆三张空卡,
+  // 合并成一行淡字引导;有任一真值则照常渲染卡片。
+  const realErEmpty = numberOr(item.real_er_pct) == null;
+  const audienceEmpty = !item.audience_type && numberOr(item.hhi) == null;
+  const loyaltyEmpty = numberOr(item.loyalty_score) == null && loyaltySignals.old_fans_pct == null;
+  if (realErEmpty && audienceEmpty && loyaltyEmpty) {
+    return e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+      e("div", { className: "text-[10px] text-slate-500 leading-relaxed" },
+        "待补数据:互动 · 受众集中度 · 忠诚度 —— 视频/评论抓取后自动出现")
+    );
+  }
+  return e("div", { className: "px-5 py-3 border-b border-white/[0.06] grid grid-cols-3 gap-2" },
     // Real Engagement
     e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-2.5" },
       e("div", { className: "flex items-center gap-1.5 mb-1.5" },
@@ -231,21 +247,8 @@ export function KOLDrawerMetricGrid({ item, loyaltySignals, trendHits }: any) {
       e("div", { className: "text-[9px] text-slate-500" },
         loyaltySignals.old_fans_pct != null ? "老粉 " + loyaltySignals.old_fans_pct + "% · 回复率 " + loyaltySignals.creator_reply_pct + "%" : "—"
       )
-    ),
-    // Trend Resonance
-    e("div", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] p-2.5" },
-      e("div", { className: "flex items-center gap-1.5 mb-1.5" },
-        e(Flame, { size: 10, className: "text-rose-400" }),
-        e("span", { className: "text-[9px] uppercase tracking-wider text-slate-400" }, "Trend Resonance")
-      ),
-      e("div", { className: "flex items-baseline gap-1.5" },
-        e("span", { className: "text-xl font-light text-white tabular-nums" }, item.trend_resonance != null ? pctOrZero(item.trend_resonance).toFixed(0) : "—"),
-        e("span", { className: "text-[10px] text-slate-500" }, "/ 100")
-      ),
-      e("div", { className: "text-[9px] text-slate-500" },
-        item.trend_resonance == null ? "Trend 数据待接入" : trendHits.length > 0 ? "命中 " + trendHits.length + " 个真实 trend" : "无 trend 信号"
-      )
     )
+    // (B6)Trend Resonance 卡原位于此 —— 数据接入后按顶部注释恢复。
   );
 }
 
@@ -457,14 +460,17 @@ export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVi
       )
     ),
     // 代表作视频
+    // 【C5】三张大缩略图(grid-cols-3 + aspect-video + 标题块)改为一行紧凑小图(高约 56px 横排,
+    // hover 放大 + title 提示),省抽屉纵向空间;点击行为不变(仍走 onOpenVideo 开播放器)。
     representativeVideos.length > 0 && e("div", null,
       e("div", { className: "text-[10px] text-slate-500 mb-1.5" }, "代表作"),
-      e("div", { className: "grid grid-cols-3 gap-1.5" },
+      e("div", { className: "flex flex-wrap items-center gap-1.5" },
         representativeVideos.map((v: any, i: number) => e(RepresentativeVideoCard, {
           key: v.evidence_id || v.watch_url || v.url || v.title || i,
           video: v,
           index: i,
           onOpen: onOpenVideo,
+          compact: true,
         }))
       )
     )
@@ -545,12 +551,15 @@ export { KOLDrawerDevices, KOLDrawerGeoDistribution, KOLDrawerV6Breakdown, KOLDr
 
 // ── 文本区块合集: Viltrox 适配判断 / 推荐产品线 / 风险点 / 品牌合作历史 ──
 // 四小块逐块包 SectionFold(各自现有标题行原样进 header),内容做 children;纯包裹,行为零变。
-export function KOLDrawerTextSections({ item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs }: any) {
+// 【C4】foldDefaultOpen:新发现/校验中候选(candidateKindGroup === "new")时父层传 false,
+// 四块默认收起省屏;SectionFold 先读 localStorage(用户手动折叠记忆优先于本默认值)。
+export function KOLDrawerTextSections({ item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs, foldDefaultOpen = true }: any) {
   return e(React.Fragment, null,
     // ── Viltrox Fit reason ──
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
       e(SectionFold, {
         id: "fit-judgment",
+        defaultOpen: foldDefaultOpen,
         header: e(React.Fragment, null,
           e(Sparkles, { size: 11, className: "text-purple-400" }),
           e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Viltrox 适配判断")
@@ -565,6 +574,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
       e(SectionFold, {
         id: "product-lines",
+        defaultOpen: foldDefaultOpen,
         header: e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "推荐产品线"),
       },
       recommendedProductLines.length > 0
@@ -580,6 +590,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
       e(SectionFold, {
         id: "risks",
+        defaultOpen: foldDefaultOpen,
         // amber 色随原标题行走(lucide 图标吃 currentColor),整体包一个 span 保持配色不变
         header: e("span", { className: "flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-300" },
           e(AlertTriangle, { size: 10 }), "风险点"
@@ -597,6 +608,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
     e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
       e(SectionFold, {
         id: "coop-history",
+        defaultOpen: foldDefaultOpen,
         header: e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "品牌合作历史"),
       },
       brandCollaborations.length > 0
@@ -623,8 +635,12 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
 }
 
 // ─── Footer actions ───
+// 【C2 行动条粘性】主操作行(加入收藏/添加联系方式/入主表)必须始终钉在抽屉视口底部:
+// 抽屉本体是 flex-col(footer 在滚动区之外)天然不滚走,这里再加 sticky bottom-0 + 不透明背景
+// + z 提层做双保险 —— 未来若有人把 footer 挪进滚动区,主操作行也不会被内容顶走。
+// 次级行(AI深度分析/打开主页/更多)仍在本组件内原位跟随,不单独提层。
 export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis }: any) {
-  return e("div", { className: "px-5 py-3 border-t border-white/[0.06]" },
+  return e("div", { className: "sticky bottom-0 z-20 bg-[#0a1020] px-5 py-3 border-t border-white/[0.06]" },
     // 主操作 3 按钮
     e("div", { className: "flex items-center gap-2 mb-2" },
       e("button", {

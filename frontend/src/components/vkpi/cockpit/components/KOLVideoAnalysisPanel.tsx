@@ -439,11 +439,15 @@ export function KOLVideoAnalysisPanel({
   videos,
   preloadedBundles,
   summary,
+  crawling = false,
 }: {
   apiToken?: string;
   videos: VideoEvidence[];
   preloadedBundles?: AnalysisBundle[] | null;
   summary?: Record<string, unknown> | null;
+  // 【A3】抓取进度徽标:父层(KOLDetailDrawer)在 profile 深爬入队/轮询中时置 true,
+  // 标题旁显示「抓取中·完成自动出现」。纯 props 透传,本组件不新增任何全局依赖。
+  crawling?: boolean;
 }) {
   const evidenceVideos = useMemo(() => videos.filter((video) => videoEvidenceId(video)).slice(0, 3), [videos]);
   const summaryRecord = asRecord(summary);
@@ -508,6 +512,11 @@ export function KOLVideoAnalysisPanel({
         <div className="flex items-center gap-1.5">
           <Video size={11} className="text-cyan-400" />
           <span className="text-[10px] uppercase tracking-wider text-slate-500">视频深析结果</span>
+          {crawling ? (
+            <span className="rounded border border-amber-400/25 bg-amber-400/[0.10] px-1.5 py-0.5 text-[8.5px] font-medium text-amber-300">
+              抓取中 · 完成自动出现
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-1.5">
           {Number.isFinite(summaryReadyCount) && summaryReadyCount > 0 ? (

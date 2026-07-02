@@ -23,6 +23,8 @@ function readFoldState(id: string, defaultOpen: boolean): boolean {
 
 export function SectionFold({ id, header, defaultOpen = true, children }: any) {
   // 惰性初始化:只在首挂载读一次 localStorage(区块 id 是静态字面量,不会中途变)
+  // 【C4 契约确认】readFoldState 先读 localStorage 再回落 defaultOpen —— 用户手动折叠过的
+  // 记忆永远优先于父层传入的默认值(新发现候选传 defaultOpen:false 只影响没记忆的区块)。
   const [open, setOpen] = React.useState<boolean>(() => readFoldState(id, defaultOpen));
   const toggle = () => {
     setOpen((prev: boolean) => {

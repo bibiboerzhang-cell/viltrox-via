@@ -3,7 +3,7 @@
 
 import React from "react";
 import { motion } from "framer-motion";
-import { AlertCircle, Filter, Flame, Search, Sparkles, Target, TrendingUp, Users } from "lucide-react";
+import { AlertCircle, Filter, Search, Sparkles, Target, TrendingUp, Users } from "lucide-react";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber } from "../lib/format";
 
@@ -13,9 +13,6 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: a
   const total = items.length;
   const fits = items.filter((i: any) => i.v6_fit != null).map((i: any) => i.v6_fit);
   const avgFit = fits.length ? Math.round(fits.reduce((a: any, b: any) => a + b, 0) / fits.length) : "待评估";
-
-  const trendItems = items.filter((i: any) => i.trend_resonance != null);
-  const highTrend = trendItems.length ? items.filter((i: any) => (i.trend_resonance || 0) >= 0.5).length : "待评估";
 
   // Search v2 breakdown
   const existingCount = items.filter((i: any) => candidateKindGroup(i.candidate_kind) === "existing").length;
@@ -29,18 +26,21 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: a
   }, 0);
   
   // 诊断 P1-8/9/10 + P2-5 状态卡诚实化:candidate_kind 后端未供(前端按 linked_main_kol_id 推导,
-  // 全池仅 1 行有链接→新/已有拆分失真);trend_score 列不存在(本周Trend 恒空);月度Reach 实为
-  // avg_views 静态总和非去重触达;V6Fit 是旧静态分未含 RealER 影子。下方卡名/sub 如实标注。
+  // 全池仅 1 行有链接→新/已有拆分失真);月度Reach 实为 avg_views 静态总和非去重触达;
+  // V6Fit 是旧静态分未含 RealER 影子。下方卡名/sub 如实标注。
+  // 【B6 Trend 诚实摘除 2026-07】原「本周高 Trend」卡(Flame 图标)已移除:后端不存在 trend_score
+  // 列,trend_resonance 恒 null → 卡值恒「待评估」纯占位。数据接入后恢复:在下方数组补回
+  // { icon: Flame, label: "本周高 Trend", value: items.filter(i => (i.trend_resonance||0) >= 0.5).length,
+  //   color: "#ef4444", filterKey: null },并把外层 xl:grid-cols-5 改回 xl:grid-cols-6。
   const cards = [
     { icon: Users,       label: "Pool 总数",       value: total,                                    sub: existingCount + " 已链主表 · " + newCount + " 未链(≈新)",    color: "#a855f7", filterKey: "" },
     { icon: Sparkles,    label: "新发现 KOL",      value: newCount,                                  sub: "按未链主表推导 · candidate_kind 待后端", color: "#c4b5fd", filterKey: "new" },
     { icon: AlertCircle, label: "待补全",          value: lowConfCount,                              sub: "已链主表 · 数据不全(分类待后端)",                                  color: "#fdba74", filterKey: "existing_low_confidence" },
     { icon: Target,      label: "平均 V6 Fit",     value: avgFit,                                    sub: fits.length ? fits.length + " 个有效 · 旧V6分(未含RealER)" : "评分待生成", color: "#10b981", filterKey: null },
-    { icon: Flame,       label: "本周高 Trend",    value: highTrend,                                 sub: trendItems.length ? "真实 trend 字段" : "Trend 列待接入(恒空)", color: "#ef4444", filterKey: null },
     { icon: TrendingUp,  label: "播放量汇总",      value: totalReach ? formatNumber(totalReach) : "待评估", sub: totalReach ? "Σ avg_views · 非去重触达" : "reach 字段待接入", color: "#ec4899", filterKey: null },
   ];
-  
-  return e("div", { className: "grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-6" },
+
+  return e("div", { className: "grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-5" },
     cards.map((c: any, i: any) => {
       const isTotalCard = c.label === "Pool 总数";
       const clickable = c.filterKey !== null || (isTotalCard && onTotalClick);

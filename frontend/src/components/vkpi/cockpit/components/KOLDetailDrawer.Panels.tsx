@@ -64,7 +64,9 @@ export function KOLDetailAvatar({ item, size = 44 }: any) {
   );
 }
 
-export function RepresentativeVideoCard({ video, index, onOpen }: any) {
+// 【C5】compact:一行紧凑小图模式(高约 56px 横排,hover 放大 + title 提示),省抽屉纵向空间;
+// 点击行为与大卡完全一致(onOpen 同一回调)。默认 false 保持原大卡渲染,别处调用零影响。
+export function RepresentativeVideoCard({ video, index, onOpen, compact = false }: any) {
   const [thumbnailFailed, setThumbnailFailed] = React.useState(false);
   const title = videoString(video, ["title", "video_title"], `代表作 ${index + 1}`);
   const views = videoString(video, ["views", "view_count"], "—");
@@ -76,11 +78,46 @@ export function RepresentativeVideoCard({ video, index, onOpen }: any) {
   const platform = normalizedVideoPlatform(video);
   const canOpen = Boolean(cachedVideoUrl || youtubeVideoId || watchUrl || thumbnail);
   const showThumbnail = Boolean(thumbnail && !thumbnailFailed);
+  const platformLabel = platform === "instagram" ? "IG" : platform === "tiktok" ? "TT" : platform === "youtube" ? "YT" : "MEDIA";
 
   const handleClick = () => {
     if (!canOpen) return;
     onOpen?.(video);
   };
+
+  if (compact) {
+    return e("button", {
+      type: "button",
+      className: [
+        "group relative h-[56px] w-[100px] shrink-0 overflow-hidden rounded-md border border-white/[0.06] bg-white/[0.02] text-left transition-colors",
+        canOpen ? "cursor-pointer hover:border-cyan-300/30 focus:outline-none focus:ring-1 focus:ring-cyan-300/30" : "cursor-default",
+      ].join(" "),
+      onClick: handleClick,
+      // hover 提示:小图没地方放标题/播放数,全塞 title tooltip。
+      title: title + " · " + views + " 播放" + (canOpen ? " · 点击播放" : ""),
+    },
+      e("div", { className: "absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-700 to-slate-900" },
+        showThumbnail
+          ? e("img", {
+              src: thumbnail,
+              alt: title,
+              className: "h-full w-full object-cover transition-transform duration-150 group-hover:scale-110",
+              loading: "lazy",
+              referrerPolicy: "no-referrer",
+              onError: () => setThumbnailFailed(true),
+            })
+          : e(Video, { size: 14, className: "text-slate-500" })
+      ),
+      e("span", {
+        className: "absolute left-0.5 top-0.5 rounded px-1 py-px text-[7px] font-medium uppercase tracking-wide text-white/85",
+        style: { background: "rgba(0,0,0,0.62)" }
+      }, platformLabel),
+      e("span", {
+        className: "absolute bottom-0.5 right-0.5 rounded px-1 text-[7.5px] tabular-nums text-white",
+        style: { background: "rgba(0,0,0,0.7)" }
+      }, duration)
+    );
+  }
 
   const media = showThumbnail
     ? e("img", {
