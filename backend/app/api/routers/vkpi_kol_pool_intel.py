@@ -47,6 +47,28 @@ def add_kol_manual_contact(
         raise HTTPException(status_code=500, detail=f"save contact error: {exc}") from exc
 
 
+@router.post("/kol-pool/{kol_pool_id}/audience-stats/refresh")
+async def refresh_kol_audience_stats(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """受众画像 ensemble_v1(P0):评论者抽样 -> 三层推断 -> 聚合收缩 -> 写 audience_estimated_json。
+
+    YouTube 走免费 Data API;IG/TT 复用已抓评论(不足则入队抓评论,返回 pending_comments)。
+    网络/配置异常诚实返回 {status, reason},不 500。红线:零触 viltrox_fit_score、不碰 rule_v0。
+    """
+    del staff
+    from app.domains.kol import audience_stats
+
+    try:
+        # 网络抽样最长可到几十秒,走 threadpool 不阻塞事件循环。
+        return await run_in_threadpool(audience_stats.refresh_audience_stats, int(kol_pool_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — 估算功能失败不该炸接口,诚实回原因
+        return {"status": "error", "reason": str(exc)[:300], "kol_pool_id": int(kol_pool_id)}
+
+
 @router.get("/kol-pool/{kol_pool_id}/cooperation")
 def get_kol_cooperation(
     kol_pool_id: int,

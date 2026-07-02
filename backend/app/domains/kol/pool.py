@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.cache import cache_get
 from app.platform.industry_crawlers import get_crawler
@@ -74,6 +75,9 @@ from app.domains.kol.pool_enrich import (
     enrich_item,
     batch_enrich_items,
 )
+
+# detail_bundle 的 try/except 块此前引用 logger 却从未定义(潜伏 NameError);补齐模块级 logger。
+logger = get_logger(__name__)
 
 
 def _whitelisted_other_contacts(raw_payload: dict[str, Any]) -> str:
@@ -592,6 +596,18 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
         item["audience_languages"] = audience_language_for_kol(int(kol_pool_id))
     except Exception:
         logger.warning("audience_language failed kol=%s", kol_pool_id, exc_info=True)
+    # 受众画像 ensemble_v1(P0):pool 行 audience_estimated_json 解析后透传给前端 Audience Stats 面板。
+    # 只读透传(写入在 audience_stats.refresh_audience_stats);空/坏 JSON 诚实置 None。红线不触 fit。
+    try:
+        import json as _aud_json
+
+        _aud_raw = item.get("audience_estimated_json")
+        _aud = _aud_json.loads(_aud_raw) if isinstance(_aud_raw, str) and _aud_raw.strip() else (
+            _aud_raw if isinstance(_aud_raw, dict) else None
+        )
+        item["audience_estimated"] = _aud if isinstance(_aud, dict) and _aud else None
+    except Exception:
+        item["audience_estimated"] = None
     return {
         "status": "ready",
         "method": "kol_pool_detail_bundle_v1",

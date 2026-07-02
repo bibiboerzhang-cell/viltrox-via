@@ -263,6 +263,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "202_vkpi_market_observations.sql",
     "203_vkpi_llm_calls_cost_micro_usd.sql",
     "204_vkpi_kol_pool_contacts_confidence.sql",
+    "205_vkpi_commenter_profiles.sql",
 )
 
 try:
