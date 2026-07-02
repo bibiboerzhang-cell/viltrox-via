@@ -316,7 +316,7 @@ def _plan_from_product_persona(
     }
 
 
-def plan_text_query(
+def _plan_text_query_impl(
     query: str,
     *,
     body: dict[str, Any] | None = None,
@@ -412,3 +412,60 @@ Rules:
     )
     parsed = _extract_json(_text(response.get("text")))
     return _normalise_plan(query_text, parsed, response, resolved_product)
+
+
+# ── Wave2-#4 规划缓存(2026-07-02):同 query 7 天内直接回缓存,检索同步段 8s -> <0.1s。
+# 键=md5(归一化 query);存 vkpi_analysis_cache(search_plan/smart_query_plan_v1)。
+# fallback 计划(带 reason)不缓存;读写任何异常都静默回退真算。红线:不触 viltrox_fit_score。
+def plan_text_query(
+    query: str,
+    *,
+    body: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    import hashlib as _hl
+    import json as _pj
+    from datetime import datetime as _dt, timezone as _tz
+
+    _qkey = _hl.md5(_text(query).strip().lower().encode("utf-8")).hexdigest()
+    try:
+        from app.domains.analysis.cache_repo import get_analysis_cache_entry as _gc
+
+        _e = _gc("search_plan", _qkey, derive_method="smart_query_plan_v1")
+        if _e and _e.get("status") == "ready":
+            _u = str(_e.get("updated_at") or "")
+            _t = _dt.fromisoformat(_u.replace("Z", "+00:00")) if _u else None
+            if _t is not None and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=_tz.utc)
+            if _t and (_dt.now(_tz.utc) - _t).total_seconds() < 7 * 86400:
+                _res = _e.get("result")
+                _plan = _pj.loads(_res) if isinstance(_res, str) else _res
+                if isinstance(_plan, dict) and _plan.get("search_query"):
+                    _plan["plan_cache"] = "hit"
+                    return _plan
+    except Exception:
+        pass
+    _plan = _plan_text_query_impl(query, body=body, staff=staff)
+    try:
+        if isinstance(_plan, dict) and _plan.get("search_query") and not _plan.get("reason"):
+            from app.db.connection import get_conn as _gcn
+
+            _cc = _gcn()
+            _now = _dt.now(_tz.utc).isoformat()
+            _cc.execute(
+                "DELETE FROM vkpi_analysis_cache WHERE target_type=? AND target_id=? AND derive_method=?",
+                ("search_plan", _qkey, "smart_query_plan_v1"),
+            )
+            _cc.execute(
+                """
+                INSERT INTO vkpi_analysis_cache
+                    (target_type, target_id, derive_method, model, cost, status, result, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                ("search_plan", _qkey, "smart_query_plan_v1", "plan_cache", 0, "ready",
+                 _pj.dumps(_plan, ensure_ascii=False), _now, _now),
+            )
+            _cc.commit()
+    except Exception:
+        pass
+    return _plan
