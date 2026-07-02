@@ -15,7 +15,9 @@ from app.platform import llm_gateway
 
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
-LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "1200"))
+# 2026-07-02:默认 1200 会截断分镜 JSON(Extra data 解析失败占 unknown 失败桶大头),
+# 且本地靠 .env 覆盖 4096 而线上 .env 不随部署 → 代码默认直接提到 4096,env 仍可覆盖。
+LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
 ACTIVE_JOB_STATUSES = ("queued", "running", "retrying", "processing")
 
 

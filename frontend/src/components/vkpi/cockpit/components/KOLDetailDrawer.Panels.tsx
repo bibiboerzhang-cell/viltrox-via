@@ -545,7 +545,19 @@ function UserCircle2Icon() {
 }
 
 export function LlmDeepAnalysisPanel({ payload }: any) {
-  if (!payload || payload.status !== "ready" || !payload.primary_result) return null;
+  // 2026-07-02 诚实空态:此前无数据整块 return null,新发现 KOL 右侧"啥都没有"、
+  // 用户不知道该点什么 —— 现在给出引导(深析靠上方「AI深度分析/全部深析」按钮入队生成)。
+  if (!payload || payload.status !== "ready" || !payload.primary_result) {
+    return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+      e("div", { className: "flex items-center gap-1.5 mb-1" },
+        e(Sparkles, { size: 11, className: "text-slate-500" }),
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "LLM 深度判断")
+      ),
+      e("div", { className: "text-[10.5px] text-slate-500 leading-relaxed" },
+        "该 KOL 还没跑过深度分析 —— 点上方「AI深度分析」(单条代表作)或「全部深析」(全部视频)入队,几分钟后自动出现;进度见左下角任务板。"
+      )
+    );
+  }
   const primary = recordOr(payload.primary_result);
   const dimensions = recordOr(primary.llm_dimensions_11);
   const fitPayload = recordOr(dimensions.llm_v6_fit);

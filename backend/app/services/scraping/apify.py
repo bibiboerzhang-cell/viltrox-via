@@ -389,7 +389,20 @@ async def scrape_instagram(url: str) -> Dict[str, Any]:
             },
             "visible_comments": [],
             "published_at": item.get("timestamp") or None,
-            "video_url": item.get("videoUrl", "") or "",
+            # 2026-07-02 修 media_resolve 失败大头(62% 全是 IG /p/ 链接):轮播/sidecar 帖
+            # 顶层 videoUrl 为空,视频在 childPosts[].videoUrl —— 取第一个视频 child;
+            # 纯图帖仍为空,由上层按图文(media_kind)处理,不再一律报 media_resolve_failed。
+            "video_url": (
+                (item.get("videoUrl") or "")
+                or next(
+                    (
+                        str(child.get("videoUrl") or "")
+                        for child in (item.get("childPosts") or [])
+                        if isinstance(child, dict) and child.get("videoUrl")
+                    ),
+                    "",
+                )
+            ),
             "owner_username": item.get("ownerUsername", "") or "",
             "owner_full_name": item.get("ownerFullName", "") or "",
             "duration": item.get("videoDuration", 0),

@@ -59,6 +59,64 @@ def _query_tokens(query: str) -> list[str]:
     return [tok for tok in re.split(r"[^a-z0-9.]+", spaced) if tok]
 
 
+# ── 硬约束(2026-07-02):卡口/焦段是否决条件,不是加分项。
+# 事故:「90 evo XF 卡口」被 "evo" 一个词命中 EVO 系列 → 静默替身成 35mm FE(索尼),
+# planner 还写着 TRUST THIS over the raw text,搜出来全是索尼人。
+# 现在:query 明示卡口/焦段时,候选池先按硬约束过滤;滤空 = 诚实返回 None
+# (planner 退回按 query 字面推人群,不再张冠李戴)。
+_MOUNT_RULES: list[tuple[str, str]] = [
+    # 顺序敏感:EF 要在 FE/E 前(避免 "ef mount" 被吃成 e-mount);XF 最特异放最前。
+    ("X-mount", r"\bxf\b|x[- ]?mount|xf\s*卡口|x\s*卡口|富士|fuji"),
+    ("EF-mount", r"\bef[- ]?mount\b|ef\s*卡口|佳能|canon"),
+    ("FE-mount", r"\bfe[- ]?mount\b|fe\s*卡口|\be[- ]mount\b|e\s*卡口|索尼|sony"),
+    ("Z-mount", r"\bz[- ]?mount\b|z\s*卡口|尼康|nikon"),
+    ("L-mount", r"\bl[- ]?mount\b|l\s*卡口"),
+    ("M43", r"m4/?3|松下|panasonic|olympus"),
+]
+_LENS_CONTEXT_RE = re.compile(r"evo|lab|air|prime|卡口|镜头|定焦|mm", re.I)
+
+
+def _query_mount(text: str) -> str:
+    low = str(text or "").lower()
+    for mount, pattern in _MOUNT_RULES:
+        if re.search(pattern, low):
+            return mount
+    return ""
+
+
+def _query_focals(text: str) -> set[int]:
+    low = str(text or "").lower()
+    focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", low)}
+    # 裸数字("90 evo")只在镜头语境下当焦段;排除功率/尺寸类单位粘连。
+    # 注意不能用 \b:中文是 \w,「我们90」里 们/9 之间没有 word boundary,得用显式环视。
+    if _LENS_CONTEXT_RE.search(low):
+        for m in re.findall(r"(?<![0-9a-z.])(\d{2,3})(?![0-9])(?!\s*(?:ws|w\b|nit|寸|inch|mah|fps))", low):
+            focals.add(int(m))
+    return {f for f in focals if 8 <= f <= 800}
+
+
+def _apply_hard_constraints(text: str, pool: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    mount_req = _query_mount(text)
+    focals_req = _query_focals(text)
+    if not mount_req and not focals_req:
+        return pool
+    filtered: dict[str, dict[str, Any]] = {}
+    for key, prod in pool.items():
+        blob = f"{prod.get('sku') or ''} {prod.get('model_name') or ''}".lower()
+        # 焦段两种写法都认:「90mm」和「90/2.2」(AF 90/2.2 XF 这类目录行没有 mm)。
+        prod_focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", blob)}
+        prod_focals |= {int(m) for m in re.findall(r"(?<![0-9])(\d{2,3})\s*/(?=[0-9])", blob)}
+        is_lens_like = bool(prod_focals) or str(prod.get("category_main") or "").strip().lower() == "lens"
+        prod_mount = str(prod.get("mount") or "").strip()
+        if mount_req and is_lens_like and prod_mount and prod_mount != mount_req:
+            # 镜头类:标注了卡口且与约束冲突 → 否决;未标注(mount 空)不否决,交给焦段/评分。
+            continue
+        if focals_req and prod_focals and not (prod_focals & focals_req):
+            continue
+        filtered[key] = prod
+    return filtered
+
+
 def _nickname_probe_tokens(query: str) -> list[str]:
     raw = str(query or "").lower()
     keys = [_normkey(raw)] + [_normkey(tok) for tok in re.split(r"[^a-z0-9]+", raw) if tok]
@@ -151,6 +209,7 @@ def resolve_product(query: str) -> dict[str, Any] | None:
         return None
     probe_tokens = _nickname_probe_tokens(text)
     pool = _candidate_pool(text, probe_tokens)
+    pool = _apply_hard_constraints(text, pool)
     if not pool:
         return None
     base = _query_tokens(text)
