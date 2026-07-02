@@ -172,17 +172,11 @@ function taskProjectId(task: any) {
   return String(target.target_type || "") === "project" && Number.isFinite(projectId) && projectId > 0 ? projectId : undefined;
 }
 
-// 从哪发起回哪去(2026-06-12 裁令):账号分析(kol_profile)点开回 MY KOL 并定位该收藏行,
-// project 任务回项目详情,其余仍走 KOL Pool 查找会话。
+// 2026-07-02 裁令更新(推翻 06-12 的回 MY KOL):凡能定位到 KOL 的任务(评论采集/账号分析/video)
+// 一律直达 KOL Pool 完整详情抽屉 —— 池内必有该 KOL,不受是否收藏(watchlist)限制;
+// 之前 kol_profile 跳 MY KOL,未收藏的 KOL 会落空。project 任务仍回项目详情。
 function openTaskOrigin(task: any) {
-  const poolId = taskMyKolPoolId(task);
-  if (poolId && typeof window !== "undefined") {
-    window.localStorage.setItem("vkpi:pending-mykol-pool-id", String(poolId));
-    window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: poolId, task } }));
-    return;
-  }
-  // item1:video/账号任务 → KOL Pool 抽屉(target.kol_pool_id;池内必有,不依赖 watchlist)。
-  const kolPoolId = taskKolPoolId(task);
+  const kolPoolId = taskKolPoolId(task) || taskMyKolPoolId(task);
   if (kolPoolId && typeof window !== "undefined") {
     window.localStorage.setItem("vkpi:pending-kolpool-open-id", String(kolPoolId));
     window.dispatchEvent(new CustomEvent("vkpi:open-kol-pool-item", { detail: { kolPoolId, task } }));
@@ -223,7 +217,7 @@ function TaskRow({ task, color, showBar }: any) {
     onClick: canOpen ? () => openTaskOrigin(task) : undefined,
     disabled: !canOpen,
     className: `block w-full min-w-0 text-left ${canOpen ? "cursor-pointer rounded-md transition-colors hover:bg-white/[0.045]" : "cursor-default"} disabled:cursor-default`,
-    title: canOpen ? (taskMyKolPoolId(task) ? "回到 MY KOL 查看该 KOL" : "打开这次查找记录") : "",
+    title: canOpen ? ((taskKolPoolId(task) || taskMyKolPoolId(task)) ? "打开 KOL Pool 该 KOL 完整详情" : "打开这次查找记录") : "",
   },
     e("div", { className: "flex items-center gap-1.5 min-w-0" },
       e("span", {
