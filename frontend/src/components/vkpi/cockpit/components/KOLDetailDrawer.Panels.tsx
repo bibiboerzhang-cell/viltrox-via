@@ -10,6 +10,7 @@ import { AnalysisCard } from "./KOLVideoAnalysisPanel";
 import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 import { getKolCooperation, getKolPoolAccountDossier, recordKolCooperation } from "../../../../services/vkpi/kolPool-api";
 import { SectionFold } from "./SectionFold";
+import { KOLDrawerBrandExposure } from "./KOLDrawerBrandExposure";
 import {
   asArray,
   compactText,
@@ -515,7 +516,9 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
     return () => { cancelled = true; };
   }, [apiToken, kolPoolId]);
 
-  if (!dossier) return null;
+  // 【#51】品牌露出 · 百家饭指数借本面板接线(深度分析 tab):组件自拉取/自判空,
+  // 与 dossier 数据源完全独立 —— dossier 缺失时也要渲染,两条 return 路径都带上。
+  if (!dossier) return e(KOLDrawerBrandExposure, { apiToken, kolPoolId });
   const coverage = recordOr(dossier.coverage);
   const judgment = recordOr(dossier.judgment);
   const gaps = asArray(dossier.gaps).map((g: any) => compactText(typeof g === "string" ? g : (recordOr(g).label || recordOr(g).reason || ""), 60)).filter(Boolean);
@@ -540,7 +543,8 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
 
   // 可收起:整块折叠交给 SectionFold(chevron 由它出);原「展开 ▼」控件仍管内部详情(建议/风险/事件),
   // 保留在 header 内改为 span + stopPropagation(button 不能嵌 button,点它只切详情、不折叠整块)。
-  return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
+  return e(React.Fragment, null,
+    e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
     e(SectionFold, {
       id: "dossier",
       header: e(React.Fragment, null,
@@ -589,6 +593,9 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
         )
       )
     ))
+    ),
+    // 【#51】品牌露出小块紧随账号档案(同属 final_v1 深析产物的账号级读数)。
+    e(KOLDrawerBrandExposure, { apiToken, kolPoolId })
   );
 }
 

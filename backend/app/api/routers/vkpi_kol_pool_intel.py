@@ -265,6 +265,27 @@ def list_kol_pool_videos(
     return {"items": items, "total": len(items), "kol_pool_id": int(kol_pool_id)}
 
 
+@router.get("/kol-pool/{kol_pool_id}/competitor-exposure")
+def get_pool_item_competitor_exposure(
+    kol_pool_id: int,
+    force: bool = Query(default=False),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """#51 百家饭指数(竞品露出率):聚合该 KOL 已深析(final_v1)evidence 的品牌提及 →
+    Viltrox vs 竞品露出比 + 专情指数(0-100,带样本量置信折扣)。纯读已有深析产物,
+    零新分析/零 LLM;结果当日缓存(vkpi_analysis_cache),force=true 才重算。
+    红线:零触 viltrox_fit_score、不动 rule_v0、不碰 KOL 归属判定。"""
+    del staff
+    from app.domains.kol import competitor_exposure
+
+    try:
+        return competitor_exposure.get_competitor_exposure(int(kol_pool_id), force=bool(force))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — 聚合失败不该 500 裸炸,诚实回原因供前端展示
+        return {"status": "error", "reason": str(exc)[:300], "kol_pool_id": int(kol_pool_id)}
+
+
 @router.get("/kol-pool/{kol_pool_id}/evidence-summary")
 def get_pool_item_evidence_summary(
     kol_pool_id: int,
@@ -358,7 +379,7 @@ _BIO_ZH_CACHE: dict[str, str] = {}
 
 
 @router.post("/kol-pool/translate-bio")
-def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "read"))) -> dict:
+def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict:
     """#25 发现卡英文 bio → 简体中文(gpt-4o-mini,预算闸由 llm_gateway 内置)。
 
     进程内按原文缓存:同一 bio 第二次命中不再烧 LLM。失败/空/预算挡 → 诚实返回空译文(前端回退原文)。
