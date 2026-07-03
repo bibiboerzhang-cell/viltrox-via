@@ -2,6 +2,7 @@ import { frontendBuildInfo, shortBuildSha } from '../../../../lib/buildInfo';
 import { percentLabel, numberValue, timeLabel } from '../../../../domains/settings';
 import type { BackendBuildInfo } from '../../../../domains/settings';
 import { InfoBlock } from '../../shared/InfoBlock';
+import { SectionFold } from '../../cockpit/components/SectionFold';
 import { SettingsApiSkeletonGrid, SettingsProviderGrid } from './SettingsPage.fragments';
 
 type Row = Record<string, unknown>;
@@ -91,6 +92,26 @@ export function SettingsStatusPanel({
         <InfoBlock label="系统" value={systemHealth} />
       </div>
 
+      {/* T1:API 服务授权卡随状态摘要行常驻顶部;已配置在前、未配置降透明度排后(排序在 SettingsProviderGrid) */}
+      {settingsLoading && !providers.length ? (
+        <SettingsApiSkeletonGrid />
+      ) : (
+        <SettingsProviderGrid providers={providers} />
+      )}
+
+      {/* T1:「每日同步 Guard / KOL 刷新分层 / 版本状态」三大运维块收进默认折叠的「高级 · 运维」区。
+          复用 cockpit SectionFold,折叠记忆 localStorage 键 = vkpi:drawer-fold:settings-ops(组件自带前缀)。 */}
+      <div className="vkpi-settings-ops-fold">
+        <SectionFold
+          id="settings-ops"
+          defaultOpen={false}
+          header={(
+            <span className="vkpi-settings-ops-fold__title">
+              高级 · 运维
+              <em>每日同步 Guard / KOL 刷新分层 / 版本状态</em>
+            </span>
+          )}
+        >
       <section className="vkpi-settings-version-panel">
         <div className="vkpi-table-card__header">
           <div><h2>每日同步 Guard</h2><span>{syncLastRun ? `最近 ${timeLabel(syncLastRun.finished_at || syncLastRun.started_at)}` : '暂无运行记录'}</span></div>
@@ -142,12 +163,8 @@ export function SettingsStatusPanel({
           <InfoBlock label="检查时间" value={timeLabel(versionCheckedAt)} />
         </div>
       </section>
-
-      {settingsLoading && !providers.length ? (
-        <SettingsApiSkeletonGrid />
-      ) : (
-        <SettingsProviderGrid providers={providers} />
-      )}
+        </SectionFold>
+      </div>
     </>
   );
 }

@@ -29,7 +29,7 @@ export async function getOfficialChannelMatrix(
   const params = new URLSearchParams();
   params.set("limit", String(filters.limit ?? 20));
   if (filters.viewAsStaffId) params.set("view_as_staff_id", filters.viewAsStaffId);
-  return apiFetch<{ platforms?: Row[]; account_count?: number; post_count?: number; total_views?: number }>(
+  return apiFetch<{ platforms?: Row[]; account_count?: number; post_count?: number; total_views?: number; staff_managed?: Row[] }>(
     `/api/marketing/channels/official-matrix?${params.toString()}`,
     { timeoutMs: 7000 },
     token,

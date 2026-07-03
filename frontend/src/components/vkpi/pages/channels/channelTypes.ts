@@ -134,6 +134,24 @@ export interface OfficialChannelPlatform {
   accounts: OfficialChannelAccount[];
 }
 
+// A1:团队矩阵「管 KOL」精简名单条目(后端 staff_managed.managed_kols,cap 20,fit 只读展示)
+export interface ManagedKolLite {
+  kolPoolId: number;
+  handle: string;
+  platform: string;
+  displayName: string;
+  fit: number | null;
+}
+
+// A1/A2:每负责人分管 KOL 聚合(收藏∪认领∪项目在役 的 distinct kol_pool_id)
+export interface StaffManagedSummary {
+  staffId: number;
+  managedKolCount: number;
+  managedFollowers: number;
+  managedVideoCount: number;
+  managedKols: ManagedKolLite[];
+}
+
 export interface RedditAssessmentPost extends ChannelContentPost {
   assessmentScore: number;
   assessmentCategory: string;

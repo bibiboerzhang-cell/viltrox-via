@@ -144,6 +144,12 @@
 .vkpi-settings-tabs button.is-active { border-color: rgba(21,93,252,.42); background: linear-gradient(135deg, rgba(255,255,255,.78), rgba(220,234,255,.62)); color: var(--vkpi-blue); box-shadow: 0 0 0 4px rgba(21,93,252,.08), var(--vkpi-inner); }
 .vkpi-settings-api-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .vkpi-settings-api-card { border: 1px solid var(--vkpi-glass-border); border-radius: 14px; background: rgba(255,255,255,.52); padding: 12px; display: grid; gap: 8px; min-width: 0; box-shadow: var(--vkpi-inner); }
+/* T1:未配置服务卡降透明度排后(不删) */
+.vkpi-settings-api-card.is-empty { opacity: .55; }
+/* T1:「高级 · 运维」默认折叠区(每日同步 Guard / KOL 刷新分层 / 版本状态) */
+.vkpi-settings-ops-fold { margin-top: 14px; border-top: 1px dashed var(--vkpi-glass-border); padding-top: 12px; }
+.vkpi-settings-ops-fold__title { display: inline-flex; align-items: baseline; gap: 8px; color: var(--vkpi-text); font-size: 13px; font-weight: 950; }
+.vkpi-settings-ops-fold__title em { color: var(--vkpi-muted); font-size: 11px; font-weight: 800; font-style: normal; }
 .vkpi-settings-api-card header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .vkpi-settings-api-card strong { color: var(--vkpi-text); font-size: 13px; font-weight: 950; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vkpi-settings-api-card header span { flex: 0 0 auto; border-radius: 999px; padding: 4px 8px; background: #f2f4f7; color: #667085; font-size: 11px; font-weight: 950; }

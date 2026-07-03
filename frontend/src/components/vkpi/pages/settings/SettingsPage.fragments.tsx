@@ -38,9 +38,15 @@ export function SettingsApiSkeletonGrid() {
 }
 
 export function SettingsProviderGrid({ providers }: { providers: Array<Record<string, unknown>> }) {
+  // T1:已配置的服务卡排前,未配置的排后并降透明度(is-empty 样式),不删卡。
+  // 同组内保持后端原始顺序(稳定分组,不打乱既有阅读习惯)。
+  const ordered = [
+    ...providers.filter((row) => boolValue(row.configured, false)),
+    ...providers.filter((row) => !boolValue(row.configured, false)),
+  ];
   return (
     <div className="vkpi-settings-api-grid">
-      {providers.map((row) => {
+      {ordered.map((row) => {
         const configured = boolValue(row.configured, false);
         const ok = boolValue(row.ok, false);
         const keyMask = String(row.key_mask || '').trim();

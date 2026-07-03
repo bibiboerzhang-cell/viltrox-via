@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getOfficialChannelMatrix } from '../../../../domains/channels';
-import type { ChannelContentPost, OfficialChannelAccount, OfficialChannelPlatform } from './channelTypes';
+import type { ChannelContentPost, ManagedKolLite, OfficialChannelAccount, OfficialChannelPlatform, StaffManagedSummary } from './channelTypes';
 
 type Row = Record<string, unknown>;
 type MatrixSnapshot = {
@@ -8,13 +8,15 @@ type MatrixSnapshot = {
   accountCount: number;
   postCount: number;
   totalViews: number;
+  staffManaged: StaffManagedSummary[];
   fetchedAt: number;
 };
 
 const MATRIX_STALE_MS = 30_000;
 const MATRIX_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const MATRIX_POST_SAMPLE_LIMIT = 4;
-const MATRIX_STORAGE_PREFIX = 'vkpi:mykol:official-matrix:v2:';
+// v3:快照新增 staffManaged(团队矩阵管 KOL 接真),换前缀让旧 v2 缓存自然失效
+const MATRIX_STORAGE_PREFIX = 'vkpi:mykol:official-matrix:v3:';
 const MATRIX_CACHE = new Map<string, MatrixSnapshot>();
 
 function matrixCacheKey(apiToken?: string, viewAsStaffId?: string) {
@@ -172,6 +174,28 @@ function mapAccount(row: Row): OfficialChannelAccount {
   };
 }
 
+// A1/A2:后端 staff_managed(snake_case)→ 前端 StaffManagedSummary
+function mapManagedKol(row: Row): ManagedKolLite {
+  const fitRaw = row.fit;
+  return {
+    kolPoolId: numberValue(row.kol_pool_id ?? row.kolPoolId),
+    handle: text(row.handle),
+    platform: text(row.platform),
+    displayName: text(row.display_name || row.displayName || row.handle),
+    fit: fitRaw === null || fitRaw === undefined || fitRaw === '' ? null : numberValue(fitRaw),
+  };
+}
+
+function mapStaffManaged(row: Row): StaffManagedSummary {
+  return {
+    staffId: numberValue(row.staff_id ?? row.staffId),
+    managedKolCount: numberValue(row.managed_kol_count ?? row.managedKolCount),
+    managedFollowers: numberValue(row.managed_followers ?? row.managedFollowers),
+    managedVideoCount: numberValue(row.managed_video_count ?? row.managedVideoCount),
+    managedKols: rows(row.managed_kols ?? row.managedKols).map(mapManagedKol),
+  };
+}
+
 function mapPlatform(row: Row): OfficialChannelPlatform {
   const platform = text(row.platform, 'other');
   const accounts = rows(row.accounts).map(mapAccount);
@@ -213,6 +237,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
   const [accountCount, setAccountCount] = useState(initialSnapshot?.accountCount || 0);
   const [postCount, setPostCount] = useState(initialSnapshot?.postCount || 0);
   const [totalViews, setTotalViews] = useState(initialSnapshot?.totalViews || 0);
+  const [staffManaged, setStaffManaged] = useState<StaffManagedSummary[]>(initialSnapshot?.staffManaged || []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -222,6 +247,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setAccountCount(0);
       setPostCount(0);
       setTotalViews(0);
+      setStaffManaged([]);
       setError('');
       return;
     }
@@ -231,6 +257,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setAccountCount(cached.accountCount);
       setPostCount(cached.postCount);
       setTotalViews(cached.totalViews);
+      setStaffManaged(cached.staffManaged || []);
     }
     setLoading(!cached);
     setError('');
@@ -243,6 +270,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
         accountCount: numberValue(response.account_count),
         postCount: numberValue(response.post_count),
         totalViews: numberValue(response.total_views),
+        staffManaged: rows(response.staff_managed).map(mapStaffManaged),
         fetchedAt: Date.now(),
       };
       MATRIX_CACHE.set(cacheKey, nextSnapshot);
@@ -251,6 +279,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setAccountCount(nextSnapshot.accountCount);
       setPostCount(nextSnapshot.postCount);
       setTotalViews(nextSnapshot.totalViews);
+      setStaffManaged(nextSnapshot.staffManaged);
       const viteMeta = import.meta as unknown as { env?: { DEV?: boolean } };
       if (viteMeta.env?.DEV) {
         const elapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt);
@@ -266,6 +295,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
         setAccountCount(0);
         setPostCount(0);
         setTotalViews(0);
+        setStaffManaged([]);
         setError(requestError instanceof Error ? requestError.message : '官方账号矩阵加载失败');
       } else {
         // Stale-while-revalidate: keep cached data visible and avoid replacing a usable page with a transient timeout.
@@ -280,5 +310,5 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
     void refresh();
   }, [refresh]);
 
-  return { platforms, accountCount, postCount, totalViews, loading, error, refresh };
+  return { platforms, accountCount, postCount, totalViews, staffManaged, loading, error, refresh };
 }

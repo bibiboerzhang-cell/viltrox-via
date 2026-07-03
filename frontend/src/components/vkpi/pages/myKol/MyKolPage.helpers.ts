@@ -1,4 +1,4 @@
-import type { OfficialChannelAccount } from '../channels/channelTypes';
+import type { OfficialChannelAccount, StaffManagedSummary } from '../channels/channelTypes';
 import type { VkpiDashboardData, VkpiProjectRow } from '../../vkpiTypes';
 import { platformDisplay, safeNumber } from '../../shared/vkpiDataUtils';
 import { projectDate } from '../channels/myKolMatrixData';
@@ -13,6 +13,8 @@ export type StaffCard = {
   accent?: string;
   accounts: OfficialChannelAccount[];
   projects: VkpiProjectRow[];
+  // A1/A2:后端 staff_managed 接真——分管 KOL 数/粉丝合计/视频数 + 精简名单(cap 20)
+  managed?: StaffManagedSummary;
 };
 
 // 2026-06-16:仅保留能匹配真实 staff 的展示元数据。删掉 Kevin Chen / Maya Liu / Tom Chen
@@ -96,7 +98,9 @@ export function matchesKnownStaff(card: StaffCard, known: typeof knownStaffDispl
 
 export function isGenericStaffShell(card: StaffCard) {
   const name = staffIdentityKey(card.name);
-  return (name === 'admin' || name === 'staff' || name === 'staffuser') && !card.accounts.length && !card.projects.length;
+  // A1:分管 KOL 也算真实数据——有分管的 admin/staff 壳不再被当幻影滤掉
+  return (name === 'admin' || name === 'staff' || name === 'staffuser')
+    && !card.accounts.length && !card.projects.length && !(card.managed?.managedKolCount);
 }
 
 export function staffDisplayRole(actual: string, fallback: string) {

@@ -582,6 +582,99 @@ def _extract_posts(row: dict[str, Any], *, per_account_limit: int) -> list[dict[
     return posts[: max(1, min(50, int(per_account_limit or 10)))]
 
 
+def _staff_managed_summary(*, list_cap: int = 20) -> list[dict[str, Any]]:
+    """A1/A2 团队矩阵接真:每个负责人(staff)分管 KOL 的真实聚合。
+
+    「分管」口径 = 三源并集(distinct kol_pool_id):
+      ① 收藏:vkpi_kol_pool_favorites.staff_id;
+      ② 认领:vkpi_kol_claims(status=active)——其 kol_id 是主表 kols.id 维度,
+        经 vkpi_kol_pool.linked_main_kol_id 桥回 pool;未链接主表的认领无法归池,如实跳过;
+      ③ 项目在役:vkpi_project_kol_assignments(stage 非 churned/cancelled/lost),
+        经项目 assigned_staff_id / created_by_staff_id 双归属并入。
+    每人另附 managed_kols 精简名单(cap 20,按 fit 降序)与聚合:
+    粉丝合计 = pool.followers sum;视频数 = vkpi_kol_video_evidence count。
+    红线:纯 SELECT 零写;viltrox_fit_score 只读展示;? 占位零字面拼值。
+    表缺失/迁移未跑时诚实降级为空列表,不拖垮矩阵主体。
+    """
+    try:
+        rows = get_conn().execute(
+            """
+            WITH managed AS (
+                SELECT f.staff_id AS staff_id, f.kol_pool_id AS kol_pool_id
+                FROM vkpi_kol_pool_favorites f
+                UNION
+                SELECT cl.staff_id, kp2.id
+                FROM vkpi_kol_claims cl
+                JOIN vkpi_kol_pool kp2 ON kp2.linked_main_kol_id = cl.kol_id
+                WHERE cl.status = ?
+                UNION
+                SELECT p.assigned_staff_id, a.kol_pool_id
+                FROM vkpi_project_kol_assignments a
+                JOIN vkpi_projects p ON p.id = a.project_id
+                WHERE p.assigned_staff_id IS NOT NULL
+                  AND COALESCE(a.stage, '') NOT IN ('churned', 'cancelled', 'lost')
+                UNION
+                SELECT p.created_by_staff_id, a.kol_pool_id
+                FROM vkpi_project_kol_assignments a
+                JOIN vkpi_projects p ON p.id = a.project_id
+                WHERE p.created_by_staff_id IS NOT NULL
+                  AND COALESCE(a.stage, '') NOT IN ('churned', 'cancelled', 'lost')
+            )
+            SELECT m.staff_id, m.kol_pool_id,
+                   kp.handle, kp.platform, kp.display_name,
+                   kp.followers, kp.viltrox_fit_score,
+                   (
+                     SELECT COUNT(*) FROM vkpi_kol_video_evidence ve
+                     WHERE ve.kol_pool_id = m.kol_pool_id
+                   ) AS video_count
+            FROM managed m
+            JOIN vkpi_kol_pool kp ON kp.id = m.kol_pool_id
+            WHERE kp.duplicate_of_id IS NULL
+            ORDER BY m.staff_id ASC,
+                     COALESCE(kp.viltrox_fit_score, -1) DESC,
+                     COALESCE(kp.followers, 0) DESC,
+                     m.kol_pool_id ASC
+            """,
+            ("active",),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — 缺表等环境差异按空数据降级,矩阵主体照常返回
+        logger.warning("staff managed summary unavailable: %s", exc)
+        return []
+    cap = max(1, int(list_cap or 20))
+    staff_map: dict[int, dict[str, Any]] = {}
+    for raw in rows:
+        row = dict(raw)
+        sid = _int(row.get("staff_id"))
+        if not sid:
+            continue
+        entry = staff_map.setdefault(
+            sid,
+            {
+                "staff_id": sid,
+                "managed_kol_count": 0,
+                "managed_followers": 0,
+                "managed_video_count": 0,
+                "managed_kols": [],
+            },
+        )
+        entry["managed_kol_count"] += 1
+        entry["managed_followers"] += _int(row.get("followers"))
+        entry["managed_video_count"] += _int(row.get("video_count"))
+        if len(entry["managed_kols"]) < cap:
+            fit = row.get("viltrox_fit_score")
+            entry["managed_kols"].append(
+                {
+                    "kol_pool_id": _int(row.get("kol_pool_id")),
+                    "handle": _text(row.get("handle")),
+                    "platform": _text(row.get("platform")),
+                    "display_name": _text(row.get("display_name"), row.get("handle")),
+                    # Decimal → float,None 保留(前端显示 Fit —)
+                    "fit": _float(fit) if fit is not None else None,
+                }
+            )
+    return sorted(staff_map.values(), key=lambda item: -int(item["managed_kol_count"]))
+
+
 def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 50) -> dict[str, Any]:
     """Return the global official-account hierarchy for staff and managers."""
     from app.domains.channels.posts import _posts_from_package
@@ -691,6 +784,8 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         "post_count": total_posts,
         "total_views": total_views,
         "groups": group_counts,
+        # A1/A2:团队矩阵每负责人分管 KOL 真实聚合(收藏∪认领∪项目在役)
+        "staff_managed": _staff_managed_summary(),
     })
 
 

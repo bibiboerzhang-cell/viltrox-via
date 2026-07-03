@@ -57,6 +57,8 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
       if (!project.ownerId) return;
       projectsByOwner.set(project.ownerId, [...(projectsByOwner.get(project.ownerId) || []), project]);
     });
+    // A1:staff_managed 按 staff.id 桥接(后端 int → 前端 string,全仓惯例)
+    const managedByStaff = new Map(matrix.staffManaged.map((entry) => [String(entry.staffId), entry]));
     const staff = data.staffMembers.length ? data.staffMembers : accounts.map((account) => ({
       id: String(account.staffId || account.staffEmail || account.staffName),
       name: account.staffName || '未分配',
@@ -78,6 +80,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
       avatar: member.avatarUrl,
       accounts: accounts.filter((account) => String(account.staffId) === member.id || account.staffEmail === member.email),
       projects: projectsByOwner.get(member.id) || [],
+      managed: managedByStaff.get(member.id),
     }));
     const consumedBaseIds = new Set<string>();
     const orderedKnownCards = knownStaffDisplay.map((known) => {
@@ -100,7 +103,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
     });
     const remainingRealCards = baseCards.filter((card) => !consumedBaseIds.has(card.id) && !isGenericStaffShell(card));
     return [...orderedKnownCards, ...remainingRealCards];
-  }, [data.projects, data.staffMembers, matrix.platforms]);
+  }, [data.projects, data.staffMembers, matrix.platforms, matrix.staffManaged]);
 
   const pendingCount = matrix.platforms.flatMap((platform) => platform.accounts).filter((account) => (
     account.syncStatus !== 'synced' && account.syncStatus !== 'official_readonly'
@@ -128,7 +131,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
           ))}
         />
       ) : null}
-      {viewMode === 'employee' ? <EmployeeKolLibrary apiToken={apiToken} data={data} viewMode={viewMode} /> : null}
+      {viewMode === 'employee' ? <EmployeeKolLibrary apiToken={apiToken} data={data} viewMode={viewMode} onRefreshData={onRefreshData} /> : null}
       <OfficialMatrix
         apiToken={apiToken}
         matrix={matrix}
@@ -144,6 +147,7 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
           viewMode={viewMode}
           staffFilter={selectedStaff}
           onClearStaffFilter={() => setSelectedStaff(null)}
+          onRefreshData={onRefreshData}
         />
       ) : null}
       {viewMode === 'manager' ? <ContributionRollupPanel apiToken={apiToken || ''} viewMode={viewMode} /> : null}

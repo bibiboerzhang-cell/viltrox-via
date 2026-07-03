@@ -52,6 +52,13 @@ export function MyKolSkeleton() {
   );
 }
 
+// A1 直达 KOL Pool 抽屉:全仓同款 localStorage + window 事件管道(照抄 TaskProgressBoard)。
+function openManagedKol(kolPoolId: number) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem('vkpi:pending-kolpool-open-id', String(kolPoolId));
+  window.dispatchEvent(new CustomEvent('vkpi:open-kol-pool-item', { detail: { kolPoolId } }));
+}
+
 export function TeamMatrix({
   cards,
   pendingCount,
@@ -65,6 +72,9 @@ export function TeamMatrix({
 }) {
   const [page, setPage] = useState(0);
   const [collapsed, setCollapsed] = useState(() => readCollapse(COLLAPSE_KEY_TEAM, false));
+  // A1:管 KOL 数字点开的名单(每次只展开一张卡);A4:空卡折叠行的展开态
+  const [managedOpenId, setManagedOpenId] = useState<string | null>(null);
+  const [showFolded, setShowFolded] = useState(false);
   const toggleCollapsed = () => setCollapsed((value) => {
     const next = !value;
     writeCollapse(COLLAPSE_KEY_TEAM, next);
@@ -79,16 +89,19 @@ export function TeamMatrix({
   const totalViewsDelta = allAccounts.reduce((sum, account) => sum + safeNumber(account.viewsDelta), 0);
   const platformCount = new Set(allAccounts.map((account) => account.platform)).size;
   const contractCount = cards.reduce((sum, card) => sum + card.projects.length, 0);
+  // A4:默认只渲染「有账号或有分管 KOL」的负责人卡;其余折叠成一行,点开可看
+  const activeCards = cards.filter((card) => card.accounts.length > 0 || (card.managed?.managedKolCount || 0) > 0);
+  const foldedCards = cards.filter((card) => !(card.accounts.length > 0 || (card.managed?.managedKolCount || 0) > 0));
   const pageSize = 4;
-  const pageCount = Math.max(1, Math.ceil(cards.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(activeCards.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
-  const visibleCards = cards.slice(safePage * pageSize, safePage * pageSize + pageSize);
-  const rangeStart = cards.length ? safePage * pageSize + 1 : 0;
-  const rangeEnd = Math.min((safePage + 1) * pageSize, cards.length);
+  const visibleCards = activeCards.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  const rangeStart = activeCards.length ? safePage * pageSize + 1 : 0;
+  const rangeEnd = Math.min((safePage + 1) * pageSize, activeCards.length);
 
   useEffect(() => {
     setPage(0);
-  }, [cards.length]);
+  }, [activeCards.length]);
 
   return (
     <section className="mykol-panel mykol-team-panel">
@@ -107,9 +120,9 @@ export function TeamMatrix({
             <span><b>{contractCount || '暂无'}</b> 签约</span>
             <span><b>{pendingCount}</b> 待定</span>
           </div>
-          {cards.length && !collapsed ? (
+          {activeCards.length && !collapsed ? (
             <div className="mykol-team-page-mini" aria-label="团队矩阵分页">
-              <span>{rangeStart}-{rangeEnd} / {cards.length}</span>
+              <span>{rangeStart}-{rangeEnd} / {activeCards.length}</span>
               <button disabled={safePage === 0} type="button" onClick={() => setPage((current) => Math.max(0, current - 1))}>‹</button>
               <b>{safePage + 1}</b>
               <button disabled={safePage >= pageCount - 1} type="button" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>›</button>
@@ -139,6 +152,16 @@ export function TeamMatrix({
             const pending = card.accounts.filter((account) => account.syncStatus !== 'synced' && account.syncStatus !== 'official_readonly').length;
             const platformTags = Array.from(new Set(card.accounts.map((account) => account.platform))).slice(0, 4);
             const isSelected = selectedStaffId === card.id;
+            // A1/A2:管 KOL = 收藏∪认领∪项目在役 的真实分管数;
+            // 有官方账号的卡(Jianbo)粉丝/视频保持全局大数,员工卡显示自己分管 KOL 的聚合。
+            const managed = card.managed;
+            const managedCount = managed?.managedKolCount || 0;
+            const managedOpen = managedOpenId === card.id && Boolean(managed?.managedKols.length);
+            const staffFollowers = card.accounts.length ? followers : (managed?.managedFollowers || 0);
+            const staffFollowersDelta = card.accounts.length ? followersDelta : 0;
+            const videoLabel = card.accounts.length
+              ? (posts ? `${compactNumber(posts)} · ${compactNumber(views)}` : '暂无')
+              : (managed?.managedVideoCount ? `${compactNumber(managed.managedVideoCount)} 条` : '暂无');
             return (
               <article
                 className={`mykol-staff-card mykol-staff-card--clickable ${isSelected ? 'is-selected' : ''}`}
@@ -178,10 +201,53 @@ export function TeamMatrix({
                 </div>
                 <div className="mykol-staff-stats">
                   <span><em>账号</em><b>{card.accounts.length ? `${card.accounts.length} · ${platforms} 平台` : '暂无'}</b></span>
-                  <span><em>粉丝</em><b>{compactNumber(followers)}</b>{followersDelta ? <small>{signedNumber(followersDelta)}</small> : null}</span>
-                  <span><em>管 KOL</em><b>{card.projects.length ? `${card.projects.length} 人` : '暂无'}</b>{pending ? <small className="is-warn">{pending} 待定</small> : null}</span>
-                  <span><em>KOL 视频</em><b>{posts ? `${compactNumber(posts)} · ${compactNumber(views)}` : '暂无'}</b></span>
+                  <span><em>粉丝</em><b>{compactNumber(staffFollowers)}</b>{staffFollowersDelta ? <small>{signedNumber(staffFollowersDelta)}</small> : null}</span>
+                  <span>
+                    <em>管 KOL</em>
+                    {managedCount ? (
+                      <button
+                        className={`mykol-managed-toggle ${managedOpen ? 'is-open' : ''}`}
+                        type="button"
+                        aria-expanded={managedOpen}
+                        title="点击展开分管 KOL 名单"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setManagedOpenId((current) => (current === card.id ? null : card.id));
+                        }}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        {managedCount} 人 {managedOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                      </button>
+                    ) : (
+                      <b>暂无</b>
+                    )}
+                    {pending ? <small className="is-warn">{pending} 待定</small> : null}
+                  </span>
+                  <span><em>KOL 视频</em><b>{videoLabel}</b></span>
                 </div>
+                {managedOpen && managed ? (
+                  <div
+                    className="mykol-managed-list"
+                    aria-label={`${card.name} 分管 KOL 名单`}
+                    role="presentation"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    {managed.managedKols.map((kol) => (
+                      <button key={kol.kolPoolId} type="button" onClick={() => openManagedKol(kol.kolPoolId)}>
+                        <i>{initials(kol.displayName || kol.handle || 'K')}</i>
+                        <span>
+                          <b>{kol.handle || kol.displayName || '—'}</b>
+                          <em>{platformDisplay(kol.platform)}</em>
+                        </span>
+                        <strong>{kol.fit != null ? `Fit ${kol.fit.toFixed(1)}` : 'Fit —'}</strong>
+                      </button>
+                    ))}
+                    {managed.managedKolCount > managed.managedKols.length ? (
+                      <p>共 {managed.managedKolCount} 人 · 显示 fit 最高的前 {managed.managedKols.length} 位</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="mykol-platform-tags">
                   {platformTags.map((platform) => (
                     <span
@@ -197,14 +263,41 @@ export function TeamMatrix({
             );
           })}
           </div>
-          <footer className="mykol-team-pagination">
-            <span>显示 {rangeStart}-{rangeEnd} / {cards.length} 名负责人</span>
-            <div>
-              <button disabled={safePage === 0} type="button" onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button>
-              <b>{safePage + 1} / {pageCount}</b>
-              <button disabled={safePage >= pageCount - 1} type="button" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>下一页</button>
+          {activeCards.length ? (
+            <footer className="mykol-team-pagination">
+              <span>显示 {rangeStart}-{rangeEnd} / {activeCards.length} 名负责人</span>
+              <div>
+                <button disabled={safePage === 0} type="button" onClick={() => setPage((current) => Math.max(0, current - 1))}>上一页</button>
+                <b>{safePage + 1} / {pageCount}</b>
+                <button disabled={safePage >= pageCount - 1} type="button" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>下一页</button>
+              </div>
+            </footer>
+          ) : (
+            <div className="mykol-empty">负责人均暂无账号或分管 KOL。</div>
+          )}
+          {/* A4:无账号且无分管 KOL 的负责人默认折叠成一行,点开可见(不渲染成空幻影卡) */}
+          {foldedCards.length ? (
+            <div className="mykol-team-folded">
+              <button
+                type="button"
+                aria-expanded={showFolded}
+                onClick={() => setShowFolded((value) => !value)}
+              >
+                另 {foldedCards.length} 人暂无分管{showFolded ? '(收起)' : '(点开)'}
+              </button>
+              {showFolded ? (
+                <div className="mykol-team-folded__chips">
+                  {foldedCards.map((card) => (
+                    <span key={card.id}>
+                      <i>{initials(card.name)}</i>
+                      {card.name}
+                      <em>{card.role || 'KOL Manager'}</em>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          </footer>
+          ) : null}
         </>
       ) : !cards.length ? (
         <div className="mykol-empty">暂无团队账号矩阵。等待官方矩阵接口返回 staff 归属。</div>
@@ -361,12 +454,14 @@ export function EmployeeKolLibrary({
   viewMode,
   staffFilter,
   onClearStaffFilter,
+  onRefreshData,
 }: {
   apiToken?: string;
   data: VkpiDashboardData;
   viewMode: 'manager' | 'employee';
   staffFilter?: { id: string; name: string } | null;
   onClearStaffFilter?: () => void;
+  onRefreshData?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('all');
@@ -393,6 +488,11 @@ export function EmployeeKolLibrary({
   const [favError, setFavError] = useState('');
   const [favReloadTick, setFavReloadTick] = useState(0);
   const [exporting, setExporting] = useState(false);
+  // 【M3】认领可视化+释放:aggregate 同一响应就带本人 claims(vkpi_kol_claims,FK kols.id)——
+  // 顺手收下,行内据此显示到期时间;释放走 /api/marketing/claims/{id}/release(后端限本人/管理层)。
+  const [myClaims, setMyClaims] = useState<Array<Record<string, unknown>>>([]);
+  const [releasingId, setReleasingId] = useState('');
+  const [claimNote, setClaimNote] = useState('');
   useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
@@ -405,11 +505,43 @@ export function EmployeeKolLibrary({
           return row.projects_json != null ? row : { ...row, projects_json: row.projects ?? [] };
         });
         setPoolFavorites(favorites as Array<Record<string, unknown>>);
+        setMyClaims(Array.isArray(resp.claims) ? (resp.claims as Array<Record<string, unknown>>) : []);
         setFavError('');
       }),
     ).catch((err) => { if (!cancelled) setFavError(String((err as Error)?.message || '收藏读取失败').slice(0, 100)); });
     return () => { cancelled = true; };
   }, [apiToken, favReloadTick]);
+
+  // 【M3】本人 active 认领按 kol_id 建索引(claims FK 是 kols.id,与 kolOptions 行的 id 同源)。
+  const myClaimByKolId = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>();
+    myClaims.forEach((claim) => {
+      if (String(claim.status || '').toLowerCase() !== 'active') return;
+      const kolId = String(claim.kol_id ?? '');
+      if (kolId) map.set(kolId, claim);
+    });
+    return map;
+  }, [myClaims]);
+
+  // 【M3】释放认领:确认弹窗 → release 端点 → 重拉 aggregate(claims/收藏)+ 父级刷新(kolOptions 的
+  // activeClaimId 来自 dashboard 数据源)。失败把后端原因显示出来,不静默。
+  const releaseClaim = async (claimId: string, kolName: string) => {
+    if (!apiToken || !claimId || releasingId) return;
+    if (!window.confirm(`确认释放对「${kolName}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
+    setReleasingId(claimId);
+    setClaimNote('');
+    try {
+      const { releaseKolClaim } = await import('../../../../services/vkpi/kol-api');
+      await releaseKolClaim(apiToken, claimId);
+      setClaimNote(`已释放「${kolName}」的认领`);
+      setFavReloadTick((tick) => tick + 1);
+      onRefreshData?.();
+    } catch (err) {
+      setClaimNote(`释放失败:${String((err as Error)?.message || '请重试').slice(0, 80)}`);
+    } finally {
+      setReleasingId('');
+    }
+  };
 
   // P5:收藏在 KOL Pool 页切换,本页重获焦点/可见时重拉,保证收藏即时进库。
   useEffect(() => {
@@ -427,7 +559,7 @@ export function EmployeeKolLibrary({
   const items = useMemo(() => {
     const base = data.kolOptions.filter((kol) => !isOwnedMatrixLike(kol)).map((kol) => {
       const projects = projectByKol.get(kol.id) || projectByKol.get(`${kol.platform}:${kol.handle}`) || [];
-      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: null as number | null, poolFit: null as number | null };
+      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: null as number | null, poolFit: null as number | null, isShared: false };
     });
     const seen = new Set(base.map((item) => `${String(item.kol.platform).toLowerCase()}:${String(item.kol.handle || '').toLowerCase()}`));
     const projectByKeyLower = new Map<string, VkpiProjectRow[]>();
@@ -465,7 +597,9 @@ export function EmployeeKolLibrary({
         } as unknown as VkpiProjectRow);
       });
       const projects = synth.length ? synth : enriched;
-      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: Number(fav.kol_pool_id), poolFit: fav.viltrox_fit_score == null ? null : Number(fav.viltrox_fit_score) };
+      // 【M5】共享来源:aggregate 的 is_shared=true 表示这行不是本人收藏,而是经 P-GROUP-7 共享池
+      // (vkpi_kol_pool_members)共享给我的只读可见行。共享人姓名(shared_by)端点未回传,如实只标记来源。
+      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: Number(fav.kol_pool_id), poolFit: fav.viltrox_fit_score == null ? null : Number(fav.viltrox_fit_score), isShared: Boolean(fav.is_shared) };
     }).filter((item) => !seen.has(`${String(item.kol.platform).toLowerCase()}:${String(item.kol.handle || '').toLowerCase()}`));
     return [...base, ...pool].sort((left, right) => {
       const leftProjectScore = left.projects.length + (left.kol.activeClaimId ? 1 : 0);
@@ -684,16 +818,50 @@ export function EmployeeKolLibrary({
                 收藏读取失败:{favError} —— 列表可能缺收藏项,请刷新或报值班。
               </div>
             ) : null}
-            {filteredItems.map(({ kol, projects, poolId, poolFit }) => (
-              <button className={`mykol-kol-row ${selectedItem?.kol.id === kol.id ? 'is-active' : ''}`} key={kol.id} type="button" onClick={() => setSelectedKolId(kol.id)}>
-                <span className="mykol-avatar">{kol.avatar ? <img src={proxiedImageUrl(kol.avatar)} alt="" /> : initials(kol.name)}</span>
-                <div>
-                  <h3>{kol.name}</h3>
-                  <p>{kol.handle || 'handle 暂无'} · {platformDisplay(kol.platform)} · {kol.followerLabel || '粉丝暂无'} · {poolId ? `${poolFit != null ? `Fit ${poolFit.toFixed(1)}` : 'Fit —'}${projects.length ? ` · ${projects.length} 项目` : ''}` : `${projects.length} 项目`}</p>
-                </div>
-                <strong>{poolId ? '收藏' : kol.activeClaimId ? '长期合作' : projects.length ? '进行中' : '待定'}</strong>
-              </button>
-            ))}
+            {claimNote ? (
+              <div style={{ border: '1px solid rgba(34,211,238,0.3)', background: 'rgba(34,211,238,0.07)', borderRadius: 8, padding: '5px 10px', fontSize: 10.5, color: '#a5f3fc', marginBottom: 6 }}>
+                {claimNote}
+              </div>
+            ) : null}
+            {filteredItems.map(({ kol, projects, poolId, poolFit, isShared }) => {
+              // 【M3】认领状态:kolOptions 行自带 active_claim_id(claim_listing LEFT JOIN active 认领);
+              // 到期时间只在 aggregate 的本人 claims 里有 → 有则补进 title。释放按钮对有认领的行显示,
+              // 权限由后端把关(本人或管理层可释放,否则 403 → claimNote 展示原因)。
+              const claimId = String(kol.activeClaimId || (myClaimByKolId.get(String(kol.id))?.id ?? '')).trim();
+              const myClaim = myClaimByKolId.get(String(kol.id));
+              const claimExpires = myClaim && myClaim.expires_at ? String(myClaim.expires_at).slice(0, 10) : '';
+              const claimTip = claimId
+                ? `已认领${kol.claimOwner && kol.claimOwner !== '-' ? ` · 认领人 ${kol.claimOwner}` : ''}${claimExpires ? ` · 到期 ${claimExpires}` : ''}`
+                : '';
+              return (
+                <button className={`mykol-kol-row ${selectedItem?.kol.id === kol.id ? 'is-active' : ''}`} key={kol.id} type="button" onClick={() => setSelectedKolId(kol.id)}>
+                  <span className="mykol-avatar">{kol.avatar ? <img src={proxiedImageUrl(kol.avatar)} alt="" /> : initials(kol.name)}</span>
+                  <div>
+                    <h3>{kol.name}</h3>
+                    <p>{kol.handle || 'handle 暂无'} · {platformDisplay(kol.platform)} · {kol.followerLabel || '粉丝暂无'} · {poolId ? `${poolFit != null ? `Fit ${poolFit.toFixed(1)}` : 'Fit —'}${projects.length ? ` · ${projects.length} 项目` : ''}` : `${projects.length} 项目`}</p>
+                  </div>
+                  {/* 【M5】经共享获得的行标「共享」(P-GROUP-7 只读可见;shared_by 端点未回传,无法显示共享人姓名) */}
+                  <strong title={poolId ? (isShared ? '经共享池共享给我的 KOL(只读可见,非本人收藏)' : '本人收藏') : claimTip || undefined}
+                    style={isShared ? { borderColor: 'rgba(139,92,246,0.45)', color: '#c4b5fd' } : undefined}
+                  >{poolId ? (isShared ? '共享' : '收藏') : claimId ? '已认领' : projects.length ? '进行中' : '待定'}</strong>
+                  {/* 【M3】释放小按钮:行本体是 <button>,内嵌交互用 span+role 阻断冒泡 */}
+                  {!poolId && claimId ? (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      title={`释放认领${claimTip ? `(${claimTip})` : ''}`}
+                      onClick={(event) => { event.stopPropagation(); void releaseClaim(claimId, kol.name || kol.handle || 'KOL'); }}
+                      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); void releaseClaim(claimId, kol.name || kol.handle || 'KOL'); } }}
+                      style={{
+                        flex: '0 0 auto', marginLeft: 4, padding: '2px 5px', borderRadius: 7, fontSize: 9, whiteSpace: 'nowrap',
+                        border: '1px solid rgba(251,191,36,0.4)', color: releasingId === claimId ? '#94a3b8' : '#fbbf24',
+                        cursor: releasingId === claimId ? 'wait' : 'pointer',
+                      }}
+                    >{releasingId === claimId ? '释放中…' : '释放'}</span>
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
           {selectedItem && (selectedItem as { poolId?: number | null }).poolId ? (
             <PoolEvidenceContent
