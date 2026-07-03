@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { VkpiProjectRow, VkpiProjectStage } from '../../vkpiTypes';
 import { Avatar } from '../../shared/Avatar';
+import { stageLabels } from '../../shared/vkpiConstants';
 import { nextProjectStage, shortDateTime } from '../../shared/vkpiDataUtils';
 import { formatLargeNum, formatMoneyShort, PROJECT_STAGE_COLOR, PROJECT_STAGE_FLOW } from './projectDeliverableStyle';
 import { stageIndex, type ScreenshotTarget, type TrackingState } from '../../../../domains/projects';
@@ -104,7 +105,10 @@ export function KolStageTimeline({
   const currentIdx = Math.max(0, Math.min(stageIndex(row.stage), PROJECT_STAGE_FLOW.length - 1));
   const currentStage = PROJECT_STAGE_FLOW[currentIdx];
   const headerColor = PROJECT_STAGE_COLOR[currentStage.key] || '#94a3b8';
-  const canAdvance = Boolean(nextProjectStage(row.stage));
+  // P4:推进按钮显式化——把下一阶段名直接写在按钮上,推进去哪一目了然。
+  const nextStage = nextProjectStage(row.stage);
+  const nextStageLabel = nextStage ? stageLabels[nextStage] : '';
+  const canAdvance = Boolean(nextStage);
   const profileUrl = kolProfileUrl(row);
 
   return (
@@ -149,10 +153,11 @@ export function KolStageTimeline({
             className="text-[10px] text-purple-200 hover:text-white px-2.5 py-1 rounded bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 flex items-center gap-1 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={!canAdvance || movingRowId === row.id}
             onClick={() => void onMoveRowStage(row)}
+            title={canAdvance ? `推进到下一阶段:${currentStage.label} → ${nextStageLabel}` : '已在最终阶段'}
             type="button"
           >
             <Upload size={10} />
-            {movingRowId === row.id ? '推进中' : '推进'}
+            {movingRowId === row.id ? '推进中' : canAdvance ? `推进到「${nextStageLabel}」` : '已到最终阶段'}
           </button>
           <button
             className="text-[10px] text-amber-200 hover:text-white px-2.5 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 flex items-center gap-1 font-medium"
@@ -227,10 +232,11 @@ export function KolStageTimeline({
                     <button
                       className="text-[10px] text-emerald-200 hover:text-white px-2.5 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 flex items-center gap-1 font-medium disabled:opacity-50"
                       onClick={() => void onMoveRowStage(row)}
-                      disabled={movingRowId === row.id}
+                      disabled={movingRowId === row.id || !canAdvance}
+                      title={canAdvance ? `推进到下一阶段:${nextStageLabel}` : '已在最终阶段'}
                       type="button"
                     >
-                      {movingRowId === row.id ? '推进中…' : '推进 →'}
+                      {movingRowId === row.id ? '推进中…' : canAdvance ? `推进到「${nextStageLabel}」→` : '已到最终阶段'}
                     </button>
                   ) : null}
                   {isCurrent && stage.key === 'measured' ? (

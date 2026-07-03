@@ -344,6 +344,7 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
         />
       ) : activeTab === '物料' ? (
         <CampaignMaterialsTab
+          apiToken={apiToken}
           project={project}
           rows={rows}
           stats={stats}

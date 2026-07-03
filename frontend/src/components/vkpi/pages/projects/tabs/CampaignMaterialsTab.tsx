@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Boxes, ExternalLink, FileText, Package } from 'lucide-react';
 import { ProjectEvidenceForms } from '../../../drawers/ProjectEvidenceForms';
+import { ProjectMaterialsLibrary } from '../ProjectMaterialsLibrary';
 import { formatLargeNum, formatMoneyShort } from '../projectDeliverableStyle';
 import type { VkpiProjectRow } from '../../../vkpiTypes';
 import { stageIndex, type ProjectStatsSummary } from '../../../../../domains/projects';
@@ -47,6 +48,7 @@ function deliveredByStageOrStatus(row: VkpiProjectRow) {
 }
 
 export function CampaignMaterialsTab({
+  apiToken,
   project,
   rows,
   stats,
@@ -59,6 +61,7 @@ export function CampaignMaterialsTab({
   onAddShipment,
   onUploadEvidenceFile,
 }: {
+  apiToken?: string;
   project?: VkpiProjectRow;
   rows: VkpiProjectRow[];
   stats?: ProjectStatsSummary;
@@ -103,7 +106,7 @@ export function CampaignMaterialsTab({
           <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 flex items-start gap-2.5">
             <FileText size={13} className="text-slate-300 mt-0.5 shrink-0" />
             <div className="text-[10.5px] text-slate-300 flex-1">
-              项目 Brief 汇总当前项目的产品 / SKU / 平台 / KOL / 曝光,供对外沟通使用。物料库（产品图、参数手册、脚本等）管理尚未接入。
+              项目 Brief 汇总当前项目的产品 / SKU / 平台 / KOL / 曝光,供对外沟通使用。物料文件(产品图、参数手册、脚本等)在下方物料库上传归档。
             </div>
             <button
               className="px-2.5 py-1 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-200 text-[10.5px] font-medium flex items-center gap-1"
@@ -113,6 +116,21 @@ export function CampaignMaterialsTab({
               <FileText size={10} />复制 Brief
             </button>
           </div>
+
+          {/* P1 物料库(2026-07-03):上传 + 列表 + 下载,复用 evidence uploads 落盘 + 按 project_id 归档。 */}
+          {projectId ? (
+            <ProjectMaterialsLibrary
+              apiToken={apiToken}
+              projectId={projectId}
+              onUploadEvidenceFile={onUploadEvidenceFile}
+            />
+          ) : (
+            <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
+              <Boxes size={24} className="text-slate-600 mx-auto mb-2" />
+              <div className="text-[11.5px] text-slate-400 mb-1">物料库需要项目上下文</div>
+              <div className="text-[10.5px] text-slate-500">当前视图缺少项目 ID,进入具体项目详情后可上传 / 下载物料</div>
+            </div>
+          )}
 
           {projectId && (onUpsertTerms || onAddShipment) ? (
             <div className="vkpi-campaign-evidence-forms rounded-lg border border-white/[0.06] bg-white/[0.015] p-4">
@@ -126,13 +144,7 @@ export function CampaignMaterialsTab({
                 条款附件 / 物流凭证支持真实文件上传(落 evidence 存储)。消息记录与发布内容两个表单的写入接口未开放,按钮已禁用。
               </div>
             </div>
-          ) : (
-            <div className="rounded-lg border border-white/[0.06] bg-white/[0.01] p-8 text-center">
-              <Boxes size={24} className="text-slate-600 mx-auto mb-2" />
-              <div className="text-[11.5px] text-slate-400 mb-1">物料库尚未接入</div>
-              <div className="text-[10.5px] text-slate-500">产品图 / 参数手册 / 脚本等物料管理与 LLM 起草将在后续版本上线</div>
-            </div>
-          )}
+          ) : null}
         </div>
       ) : (
         <div className="p-4 space-y-3">

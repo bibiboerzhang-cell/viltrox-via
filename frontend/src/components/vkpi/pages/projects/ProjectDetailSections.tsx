@@ -36,6 +36,30 @@ interface BottleneckState {
   text: string;
 }
 
+// P6:健康分 hover 解释——静态映射后端 workflow_projects_cards 的两因子口径
+// (output_score 产出 60 分 + progress_score 推进 40 分),读项目行已带回的
+// health_breakdown,不新调接口。缺 breakdown 时只显示公式,不编数。
+function healthHoverText(project: VkpiProjectRow) {
+  const breakdown = (project.healthBreakdown || {}) as Record<string, number>;
+  const hasBreakdown =
+    Number.isFinite(Number(breakdown.output_score)) && Number.isFinite(Number(breakdown.progress_score));
+  const outputDetail = hasBreakdown
+    ? `,当前 ${Number(breakdown.output_score) || 0} 分(占比 ${Math.round((Number(breakdown.output_rate) || 0) * 100)}%)`
+    : '';
+  const progressDetail = hasBreakdown
+    ? `,当前 ${Number(breakdown.progress_score) || 0} 分(平均进度 ${Number(breakdown.avg_stage_index) || 0}/8)`
+    : '';
+  return [
+    '健康分构成(后端口径,满分 100):',
+    `· 产出分(满 60)= 有视频证据的 KOL 占比 × 60${outputDetail}`,
+    `· 推进分(满 40)= KOL 平均阶段进度 ÷ 8 × 40${progressDetail}`,
+    '分档:≥85 健康 · 70-84 关注 · <70 风险',
+    project.healthBasis ? `口径标记:${project.healthBasis}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 // A. 返回栏 + 编辑按钮 + 大头部卡(健康度/负责人/操作按钮组/导出)
 export function ProjectDetailHeaderCard({
   project,
@@ -57,6 +81,7 @@ export function ProjectDetailHeaderCard({
   onDeleteProject,
   onAddKol,
   onGenerateContract,
+  onOpenCostEntry,
   onOpenStaffProfile,
   onExportKols,
   canExport,
@@ -81,6 +106,7 @@ export function ProjectDetailHeaderCard({
   onDeleteProject: () => void;
   onAddKol: () => void;
   onGenerateContract: () => void;
+  onOpenCostEntry?: () => void;
   onOpenStaffProfile: () => void;
   onExportKols: () => void;
   canExport: boolean;
@@ -129,6 +155,15 @@ export function ProjectDetailHeaderCard({
             {showDelete ? <button className="px-3 py-1.5 rounded-md border border-red-500/30 bg-red-500/10 text-[11px] text-red-300 hover:bg-red-500/15" type="button" onClick={onDeleteProject}>删除</button> : null}
             <button className="px-3 py-1.5 rounded-md bg-purple-500/90 hover:bg-purple-500 text-white text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={onAddKol}>+ 添加 KOL</button>
             <button className="px-3 py-1.5 rounded-md border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 text-purple-200 text-[11px] font-medium" type="button" onClick={onGenerateContract}>生成合同</button>
+            {/* P5:成本录入入口直给——不用再钻进「费用」tab 找按钮,走同一个 CostEntryModal + 既有成本端点。 */}
+            {onOpenCostEntry ? (
+              <button
+                className="px-3 py-1.5 rounded-md border border-emerald-500/35 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-200 text-[11px] font-medium"
+                type="button"
+                onClick={onOpenCostEntry}
+                title="登记合同费 / 快递费 / 产品成本到项目成本账本"
+              >录入成本</button>
+            ) : null}
             {onShare ? <button className="px-3 py-1.5 rounded-md border border-cyan-400/30 bg-cyan-400/10 hover:bg-cyan-400/20 text-cyan-200 text-[11px] font-medium flex items-center gap-1.5" type="button" onClick={onShare}>👥 协作者</button> : null}
             <button
               className="px-3 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white"
@@ -138,7 +173,8 @@ export function ProjectDetailHeaderCard({
             >导出 KOL 名单</button>
           </div>
         </div>
-        <div className="text-right shrink-0">
+        {/* P6:hover 显示健康分构成(title 原生浮层,零新依赖、零新请求)。 */}
+        <div className="text-right shrink-0 cursor-help" title={healthHoverText(project)}>
           <div className="text-[10px] text-slate-500 mb-0.5">健康度</div>
           <div className="text-[40px] font-bold leading-none tabular-nums" style={{ color: currentHealthColor }}>{health.score}</div>
           <div className="mt-2 text-[10.5px] px-2 py-0.5 rounded font-medium inline-flex" style={{ background: healthBg(health.score), color: currentHealthColor }}>{health.label}</div>

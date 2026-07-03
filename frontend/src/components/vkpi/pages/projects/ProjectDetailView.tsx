@@ -606,6 +606,9 @@ export function ProjectDetailView({
         onDeleteProject={deleteProject}
         onAddKol={() => void openAddKolModal()}
         onGenerateContract={() => void openGenerateContract()}
+        // P5:成本录入入口直给——头部直开既有 CostEntryModal(挂首个 KOL 行、默认签约费,弹窗内可切费用类型;
+        // 指定其他 KOL 仍走「费用」tab 行级「录入费用」)。
+        onOpenCostEntry={rows.length ? () => setActionModal({ kind: 'cost', row: rows[0], costType: 'cash_fee' }) : undefined}
         onShare={() => setShareOpen(true)}
         onOpenStaffProfile={() => project.ownerId && onOpenStaffProfile?.(project.ownerId, ownerFallback)}
         onExportKols={async () => {

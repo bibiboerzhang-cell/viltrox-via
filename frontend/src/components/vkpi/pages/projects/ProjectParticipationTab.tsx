@@ -138,6 +138,8 @@ export function ProjectParticipationTab({
               const rowStageNumber = stageIndex(row.stage) + 1;
               const rowEvidenceCount = evidenceCountForRow(row);
               const profileUrl = kolProfileUrl(row);
+              // P4:阶段推进按钮显式化——直接把下一阶段名写在按钮上,不再只给一个含糊的「推进」。
+              const rowNextStage = nextProjectStage(row.stage);
               return (
                 <Fragment key={row.id}>
                   <tr className="vkpi-campaign-kol-row" id={`vkpi-project-row-${row.id}`} onClick={() => onToggleRow(row.id)}>
@@ -193,7 +195,8 @@ export function ProjectParticipationTab({
                       <button
                         className="vkpi-campaign-small-button is-primary"
                         type="button"
-                        disabled={movingRowId === row.id || !nextProjectStage(row.stage)}
+                        disabled={movingRowId === row.id || !rowNextStage}
+                        title={rowNextStage ? `推进到下一阶段:${stageLabels[row.stage]} → ${stageLabels[rowNextStage]}` : undefined}
                         onClick={(event) => {
                           event.stopPropagation();
                           void onMoveRowStage(row);
@@ -202,8 +205,8 @@ export function ProjectParticipationTab({
                         {/* 流失/停滞/取消是终止态不是完成态:按 stageLabels 如实显示,不冒充"已完成"。 */}
                         {movingRowId === row.id
                           ? '推进中'
-                          : nextProjectStage(row.stage)
-                            ? '推进'
+                          : rowNextStage
+                            ? `推进到「${stageLabels[rowNextStage]}」`
                             : ['lost', 'stalled', 'cancelled'].includes(row.stage)
                               ? (stageLabels[row.stage] || '已终止')
                               : '已完成'}
