@@ -1,0 +1,51 @@
+/* C7-A3 官方账号分配控件(矩阵页内容层头部一行) */
+.mykol-assignment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.mykol-assignment__label {
+  color: #8fa0bd;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.mykol-assignment__select {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 720;
+  min-width: 132px;
+  outline: none;
+}
+
+.mykol-assignment__value {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.mykol-assignment__value.is-assigned {
+  color: #60a5fa;
+}
+
+.mykol-assignment em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.mykol-assignment__error {
+  color: #f59e0b;
+  font-size: 11px;
+  font-style: normal;
+}

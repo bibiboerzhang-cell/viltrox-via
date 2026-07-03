@@ -22,6 +22,8 @@ import {
 } from '../channels/ChannelContentList.helpers';
 import { platformDisplay } from '../../shared/vkpiDataUtils';
 import { platformExternalUrl, useCachedVideoUrl } from '../../shared/mediaProxy';
+// C7-A3:官方账号分配控件(负责成员下拉;owner/管理层可改,成员只读)
+import { ChannelAssignmentControl } from '../channels/ChannelAssignmentControl';
 import './myKolContentLayer.css';
 
 type ContentSnapshot = {
@@ -350,6 +352,8 @@ export function OfficialContentLayer({ account, apiToken }: { account?: Official
           {account.accountUrl ? <a href={account.accountUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /></a> : null}
         </div>
       </header>
+      {/* C7-A3 分配行:该官号的负责成员(吃 vkpi_channel_assignments) */}
+      <ChannelAssignmentControl account={account} apiToken={apiToken} />
       <div className="mykol-content-toolbar">
         <div className="mykol-content-tabs">
           {METRIC_TABS.map((tab) => (

@@ -13,6 +13,8 @@ import {
   readTaskBridgeFocus,
   type IntelligenceTaskFocusPayload,
 } from '../intelligence/intelligenceTaskDraft';
+// C7-B1 成员个人工作台:员工视图工作页顶部的个人四卡(我的 KOL/项目/官号/提醒)
+import { MemberWorkbench } from './MemberWorkbench';
 
 const AttributionPage = lazy(() => import('./AttributionPage').then((module) => ({ default: module.AttributionPage })));
 const AgentsPage = lazy(() => import('./AgentsPage').then((module) => ({ default: module.AgentsPage })));
@@ -110,6 +112,9 @@ function WorkspaceLoadingFallback() {
   );
 }
 
+// C7-B1:成员工作台只出现在成员日常工作页(不打扰报表/设置等全屏页)
+const MEMBER_WORKBENCH_PAGES = new Set<VkpiPageKey>(['channels', 'projects', 'discover', 'links', 'attribution']);
+
 const workstreamLabels: Record<string, string> = {
   recommendation_review: '推荐复核',
   market_watch: '市场跟进',
@@ -192,6 +197,14 @@ export function WorkspacePage(props: WorkspacePageProps) {
   return (
     <Suspense fallback={<WorkspaceLoadingFallback />}>
       {taskFocus ? <WorkspaceTaskFocusBanner focus={taskFocus} onDismiss={() => setTaskFocus(null)} /> : null}
+      {props.viewMode === 'employee' && MEMBER_WORKBENCH_PAGES.has(props.page) ? (
+        <MemberWorkbench
+          data={props.data}
+          apiToken={props.apiToken}
+          userName={props.userName}
+          onSelectPage={props.onSelectPage}
+        />
+      ) : null}
       {page}
     </Suspense>
   );

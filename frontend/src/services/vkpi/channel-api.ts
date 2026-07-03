@@ -159,3 +159,57 @@ export async function enqueueVideoCacheTask(
   );
   return { task_id: String(response.task_id || "") };
 }
+
+// C7-A3 官方账号分配表:GET 全量分配 + 成员下拉选项;PUT 指派/清除。
+// 后端 /api/admin/vkpi/channels/assignments(读全员开放,can_manage 标记写权限);
+// PUT 仅 owner/管理层可用(403 由后端硬拦),staff_id 传 null/0 = 清除分配。
+export interface VkpiChannelAssignmentRow {
+  id?: number;
+  channel_id?: number;
+  staff_id?: number;
+  role?: string;
+  assigned_at?: string;
+  assigned_by_staff_id?: number | null;
+  staff_name?: string;
+  staff_email?: string;
+  platform?: string;
+  handle?: string;
+  display_name?: string;
+  official?: boolean;
+}
+
+export interface VkpiChannelAssignmentStaffOption {
+  id?: number;
+  name?: string;
+  email?: string;
+  role?: string;
+}
+
+export interface VkpiChannelAssignmentsResponse {
+  available?: boolean;
+  can_manage?: boolean;
+  me_staff_id?: number | null;
+  assignments?: VkpiChannelAssignmentRow[];
+  staff_options?: VkpiChannelAssignmentStaffOption[];
+}
+
+export async function getChannelAssignments(token: string) {
+  return apiFetch<VkpiChannelAssignmentsResponse>(
+    "/api/admin/vkpi/channels/assignments",
+    { timeoutMs: 8000 },
+    token,
+  );
+}
+
+export async function putChannelAssignment(
+  token: string,
+  channelId: number | string,
+  staffId: number | null,
+  role = "owner",
+) {
+  return apiFetch<{ ok?: boolean; channel_id?: number; role?: string; staff_id?: number | null; assigned_at?: string; cleared?: boolean }>(
+    `/api/admin/vkpi/channels/${encodeURIComponent(String(channelId))}/assignment`,
+    { method: "PUT", body: jsonBody({ staff_id: staffId, role }) },
+    token,
+  );
+}

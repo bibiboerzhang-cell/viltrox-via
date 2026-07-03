@@ -214,6 +214,33 @@ def official_channel_matrix(
     return channels.official_account_matrix(staff=staff, view_as_staff_id=view_as_staff_id, limit=limit)
 
 
+@router.get("/channels/assignments")
+def channel_assignments_list(staff=Depends(require_tab("vkpi", "read"))):
+    """C7-A3 官方账号分配读端:全量分配 + 成员下拉选项;can_manage 决定前端是否放开下拉。"""
+    # 懒 import + try/except:线上旧布局没有该模块时诚实降级,不炸整站(部署陷阱口诀)
+    try:
+        from app.domains.channels import assignments as channel_assignments
+    except Exception:  # noqa: BLE001
+        return {"available": False, "can_manage": False, "me_staff_id": None, "assignments": [], "staff_options": []}
+    return channel_assignments.list_assignments(staff=staff, can_manage=_is_manager_staff(staff))
+
+
+@router.put("/channels/{channel_id}/assignment")
+def channel_assignment_put(channel_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    """C7-A3 分配写端:owner/管理层指派或清除(staff_id 传 0/null=清除);成员只读 403。"""
+    _require_manager_staff(staff)
+    try:
+        from app.domains.channels import assignments as channel_assignments
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="channel assignments module unavailable") from exc
+    try:
+        return channel_assignments.set_assignment(channel_id, body or {}, staff=staff)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/channels/official-daily-report")
 def official_channel_daily_report(
     channel_id: int,

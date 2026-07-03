@@ -267,6 +267,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "206_vkpi_commenter_profiles_age_channel.sql",
     "207_vkpi_bh_reviews.sql",
     "208_vkpi_raw_extraction_columns.sql",
+    "209_vkpi_channel_assignments.sql",
 )
 
 try:
