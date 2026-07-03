@@ -16,7 +16,7 @@ import {
   listSchedulerTasks,
   listApiKeyPool,
 } from '../../../domains/settings';
-import { getStaffInviteCapabilities } from '../../../domains/settings';
+import { buildStaffMembers, getStaffInviteCapabilities } from '../../../domains/settings';
 import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from '../../../domains/settings';
 import { listProductCatalog } from '../../../domains/products';
 import { getSyncOverview, type VkpiSyncOverview } from '../../../domains/settings';
@@ -344,7 +344,18 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       .then((res) => {
         if (!alive) return;
         const list = (res?.staff || res?.members || []) as any[];
-        if (list.length) setStaffDirect(list);
+        // 2026-07-03 整页炸根治:直拉端点回的是原始行(staff_name/permissions_json 等
+        // snake_case),必须过 buildStaffMembers 归一化成 VkpiStaffMember(name/avatarUrl/
+        // vkpiPermission…),否则 StaffTable 的 Avatar 对 undefined name 做字符串操作直接
+        // 抛错 → 整页落 RouteErrorBoundary「页面加载失败」。归一化失败也兜底不炸。
+        if (list.length) {
+          try {
+            const normalized = buildStaffMembers(list as never[]);
+            if (normalized.length) setStaffDirect(normalized as unknown as any[]);
+          } catch {
+            /* 归一化异常:保留 props 名单兜底,绝不让设置页整页炸 */
+          }
+        }
       })
       .catch(() => { /* 静默:props 名单兜底 */ });
     return () => { alive = false; };
