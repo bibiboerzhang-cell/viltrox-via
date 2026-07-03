@@ -7,12 +7,119 @@
 //   4) 员工视角去硬编码 —— 「直属上级:Kevin Chen」删;「我所在的分组」按 member_ids 算真值。
 
 import React from "react";
-import { Bell, Plus, Target, Trash2, TrendingUp, Users, X } from "lucide-react";
+import { Bell, Plus, Share2, Target, Trash2, TrendingUp, Users, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
 import { apiFetch } from "../../../../../services/http";
 import { deleteStaffGroup } from "../../../../../services/vkpi/groups-api";
+import {
+  listTeamKolShares,
+  revokeTeamKolShare,
+  type VkpiTeamKolShare,
+} from "../../../../../services/vkpi/team-share-api";
+import { formatLocal } from "../../../lib/timeLocal";
 
 const e = React.createElement;
+
+// C2 共享管理:KOL 共享关系集中视图(谁 → 谁 → KOL → 时间)+ 撤销。
+// 行来源 GET /my-kol/shares:管理层看全部,普通成员只看自己发出+收到(后端按 scope 过滤,
+// 前端不再二次筛)。撤销走 DELETE /my-kol/shares/{id},乐观移除 + 失败回滚。
+function ShareAdminSection({ apiToken, t }: any) {
+  const [shares, setShares] = React.useState<VkpiTeamKolShare[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+  const [revokingId, setRevokingId] = React.useState<any>(null);
+
+  const load = React.useCallback(async () => {
+    if (!apiToken) {
+      setShares([]);
+      setLoading(false);
+      setError("缺少 API token,无法读取共享关系。");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const res: any = await listTeamKolShares(apiToken);
+      setShares(Array.isArray(res && res.items) ? res.items : []);
+    } catch (err: any) {
+      setError(String(err && err.message ? err.message : err));
+    } finally {
+      setLoading(false);
+    }
+  }, [apiToken]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  // 撤销:先乐观移除本行,失败回滚原列表(诚实 surface 后端报错,不假装成功)。
+  const revoke = async (row: any) => {
+    if (!apiToken || revokingId) return;
+    const viaGroup = row.shared_via_group_id != null;
+    const msg = `确认撤销「${row.from_name || t("未知")} → ${row.to_name}」对 KOL「${row.kol_name || row.handle || row.kol_pool_id}」的共享?`
+      + (viaGroup ? "\n注意:该行由分组共享产生,分组重算后可能恢复;永久移除请编辑分组共享配置。" : "");
+    if (!window.confirm(msg)) return;
+    setRevokingId(row.id);
+    const prev = shares;
+    setShares(prev.filter((x: any) => x.id !== row.id)); // 乐观更新
+    try {
+      await revokeTeamKolShare(apiToken, row.id);
+    } catch (err: any) {
+      setShares(prev); // 失败回滚
+      window.alert("撤销失败:" + String(err && err.message ? err.message : err));
+    } finally {
+      setRevokingId(null);
+    }
+  };
+
+  return e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 mt-3" },
+    e("div", { className: "flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-slate-500 mb-2" },
+      e(Share2, { size: 10, className: "text-purple-300" }),
+      e("span", null, t("共享管理") + " · KOL" + (!loading && !error ? ` · ${shares.length}` : ""))
+    ),
+    loading
+      ? e("div", { className: "py-3 text-center text-[10px] text-slate-500" }, "加载共享关系…")
+      : error
+        ? e("div", { className: "rounded-md border border-red-500/20 bg-red-500/[0.05] px-2 py-2 text-[10px] text-red-300" }, error)
+        : shares.length === 0
+          ? e("div", { className: "py-3 text-center text-[10px] text-slate-500" }, t("暂无 KOL 共享记录"))
+          : e("div", { className: "space-y-0.5" },
+              shares.map((row: any) => e("div", {
+                key: row.id,
+                className: "flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-white/[0.04]"
+              },
+                e("div", { className: "flex-1 min-w-0" },
+                  e("div", { className: "flex items-center gap-1.5 text-[11px] min-w-0" },
+                    e("span", { className: "text-white truncate" }, row.from_name || t("未知")),
+                    e("span", { className: "text-slate-600 shrink-0" }, "→"),
+                    e("span", { className: "text-white truncate" }, row.to_name || String(row.to_staff_id ?? "")),
+                    row.shared_via_group_id != null && e("span", {
+                      className: "text-[8px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300 shrink-0",
+                      title: "由分组共享展开产生,分组重算后可能恢复"
+                    }, t("分组共享"))
+                  ),
+                  e("div", { className: "text-[10px] text-slate-500 truncate" },
+                    `${row.kol_name || row.handle || `#${row.kol_pool_id}`}`
+                    + (row.platform ? ` · ${row.platform}` : "")
+                    + (row.handle ? ` @${row.handle}` : "")
+                    + ` · ${formatLocal(row.created_at)}`
+                  ),
+                  // 协作设置(kind='kol' 的 collab-settings):没设过诚实不显示。
+                  (row.shared_goal || row.reminder_rule) && e("div", { className: "text-[10px] text-slate-500 truncate" },
+                    [
+                      row.shared_goal && `${t("共同目标")}:${row.shared_goal}`,
+                      row.reminder_rule && `${t("提醒规则")}:${row.reminder_rule}`,
+                    ].filter(Boolean).join(" · ")
+                  )
+                ),
+                row.can_revoke && e("button", {
+                  onClick: () => revoke(row),
+                  disabled: !apiToken || revokingId === row.id,
+                  title: t("撤销共享"),
+                  className: "shrink-0 flex items-center gap-0.5 text-[10px] text-rose-300/80 hover:text-rose-300 disabled:text-white/25"
+                }, e(Trash2, { size: 10 }), revokingId === row.id ? "…" : t("撤销"))
+              ))
+            )
+  );
+}
 
 export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup, onRefreshGroups, apiToken = "" }: any) {
   const isAdmin = user.role === "admin";
@@ -197,7 +304,9 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
                 e("button", { onClick: () => mentionMember(s), disabled: !apiToken || mentioning === s.id, title: "给该成员发提及通知", className: "text-[10px] text-purple-300 hover:text-purple-200 disabled:text-white/25" }, mentioning === s.id ? "…" : t("@ 提及"))
               ))
             )
-          )
+          ),
+      // C2 共享管理区:admin/staff 两种视角都渲染(后端按 scope 过滤:管理层全量,成员只见自己相关)。
+      e(ShareAdminSection, { apiToken, t })
     )
   );
 }

@@ -307,6 +307,157 @@ def my_kol_unshare_endpoint(
     return {"status": "removed", "kol_pool_id": pid, "staff_id": target_staff_id}
 
 
+# ---------------------------------------------------------------------------
+# C2 团队共享管理(集中管控,2026-07-02):看全部共享关系 + 按 share id 撤销。
+# 与上面的 per-KOL 弹窗端点(/{kol_pool_id}/share*)互补:那组按单个 KOL 增删,
+# 这组给 TeamModal「共享管理」区一个全局视图(谁把哪个 KOL 分享给了谁)。
+# 红线:只触 vkpi_kol_pool_members / vkpi_collab_settings(读)两张隔离表;
+# 绝不读写 viltrox_fit_score / rule_v0 / 归属。全程 '?' 占位(方言层翻译)。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/my-kol/shares")
+def my_kol_shares_list_endpoint(
+    limit: int = Query(default=200, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """团队 KOL 共享关系总列表(集中管控)。
+
+    - 管理层(can_view_all)看全部;普通成员只看「自己发出 + 自己收到」的行。
+    - JOIN staff→users 两次取 分享人/接收人 展示名(与 share/members 同口径);
+      JOIN vkpi_kol_pool 取 KOL 展示名/平台/handle(display_name 空串回落 handle)。
+    - 协作设置:LEFT JOIN vkpi_collab_settings(kind='kol',target_id=kol_pool_id 文本),
+      未设过诚实回空串(不伪造)。
+    - shared_via_group_id 非 NULL = 该行由分组共享展开产生(迁移 161;改组即重算,
+      单行撤销后组重算可能恢复,前端据此提示)。
+    - can_revoke:管理层恒可撤;普通成员仅可撤自己发出的行(与 DELETE 权限同口径)。
+    纯 SELECT,无副作用。
+    """
+    conn = get_conn()
+    view_all = scope.can_view_all(staff)
+    actor = scope.actor_staff_id(staff)
+    if not view_all and not actor:
+        raise HTTPException(status_code=403, detail="no staff identity in scope")
+
+    base_sql = """
+        SELECT m.id,
+               m.kol_pool_id,
+               m.staff_id AS to_staff_id,
+               m.shared_by AS from_staff_id,
+               m.shared_via_group_id,
+               m.created_at,
+               COALESCE(ut.name, ut.email, 'Staff') AS to_name,
+               COALESCE(ut.email, '') AS to_email,
+               COALESCE(uf.name, uf.email, '') AS from_name,
+               COALESCE(uf.email, '') AS from_email,
+               COALESCE(NULLIF(p.display_name, ''), p.handle, '') AS kol_name,
+               COALESCE(p.platform, '') AS platform,
+               COALESCE(p.handle, '') AS handle,
+               COALESCE(cs.shared_goal, '') AS shared_goal,
+               COALESCE(cs.reminder_rule, '') AS reminder_rule
+        FROM vkpi_kol_pool_members m
+        LEFT JOIN staff st_to ON st_to.id = m.staff_id
+        LEFT JOIN users ut ON ut.id = st_to.user_id
+        LEFT JOIN staff st_from ON st_from.id = m.shared_by
+        LEFT JOIN users uf ON uf.id = st_from.user_id
+        LEFT JOIN vkpi_kol_pool p ON p.id = m.kol_pool_id
+        LEFT JOIN vkpi_collab_settings cs
+            ON cs.kind = 'kol' AND cs.target_id = CAST(m.kol_pool_id AS TEXT)
+    """
+    if view_all:
+        rows = conn.execute(
+            base_sql + " ORDER BY m.created_at DESC, m.id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            base_sql
+            + " WHERE m.shared_by = ? OR m.staff_id = ?"
+            + " ORDER BY m.created_at DESC, m.id DESC LIMIT ?",
+            (int(actor), int(actor), int(limit)),
+        ).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        created_at = item.get("created_at")
+        if created_at is not None and not isinstance(created_at, str):
+            created_at = str(created_at)
+        from_staff_id = _int(item.get("from_staff_id")) or None
+        items.append(
+            {
+                "id": _int(item.get("id")) or None,
+                "kol_pool_id": _int(item.get("kol_pool_id")) or None,
+                "to_staff_id": _int(item.get("to_staff_id")) or None,
+                "to_name": item.get("to_name") or "",
+                "to_email": item.get("to_email") or "",
+                "from_staff_id": from_staff_id,
+                # shared_by 可空容旧(159 注释):空时诚实回空串,前端显「未知」。
+                "from_name": item.get("from_name") or "",
+                "from_email": item.get("from_email") or "",
+                "kol_name": item.get("kol_name") or "",
+                "platform": item.get("platform") or "",
+                "handle": item.get("handle") or "",
+                "created_at": created_at,
+                "shared_via_group_id": _int(item.get("shared_via_group_id")) or None,
+                "shared_goal": item.get("shared_goal") or "",
+                "reminder_rule": item.get("reminder_rule") or "",
+                "can_revoke": bool(view_all or (actor and from_staff_id == actor)),
+            }
+        )
+
+    return {"items": items, "count": len(items), "scope_all": bool(view_all)}
+
+
+@router.delete("/my-kol/shares/{share_id}")
+def my_kol_share_revoke_endpoint(
+    share_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """按 share id 撤销一条共享(集中管控用)。权限=分享人本人 或 管理层(can_view_all)。
+
+    与 per-KOL 的 DELETE /{kol_pool_id}/share/{staff_id}(负责人口径)互补:这里按行 id 删,
+    供「共享管理」列表一键撤销。只删 vkpi_kol_pool_members 一行,不改归属/收藏/认领。
+    读路径(my_kol_aggregate / scope.member_shared_kol_ids)均为实时 SELECT 无缓存层,
+    删后无需失效缓存。
+    """
+    sid = _int(share_id)
+    if sid <= 0:
+        raise HTTPException(status_code=400, detail="share_id required")
+
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT id, kol_pool_id, staff_id, shared_by, shared_via_group_id
+        FROM vkpi_kol_pool_members
+        WHERE id = ?
+        """,
+        (sid,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="share not found")
+    item = dict(row)
+
+    if not scope.can_view_all(staff):
+        actor = scope.actor_staff_id(staff)
+        if not actor or _int(item.get("shared_by")) != actor:
+            raise HTTPException(status_code=403, detail="仅分享人本人或管理层可撤销该共享")
+
+    conn.execute("DELETE FROM vkpi_kol_pool_members WHERE id = ?", (sid,))
+    conn.commit()
+
+    via_group = _int(item.get("shared_via_group_id")) or None
+    return {
+        "status": "revoked",
+        "id": sid,
+        "kol_pool_id": _int(item.get("kol_pool_id")) or None,
+        "staff_id": _int(item.get("staff_id")) or None,
+        "shared_via_group_id": via_group,
+        # 诚实提示:分组展开行删掉后,该分组下次重算(编辑组/共享配置)会重建此行。
+        "note": "该行由分组共享产生,分组重算后可能恢复;永久移除请编辑分组共享配置。" if via_group else "",
+    }
+
+
 @router.get("/my-kol/{kol_pool_id}/share/members")
 def my_kol_share_members_endpoint(
     kol_pool_id: int,
