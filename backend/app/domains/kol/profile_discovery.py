@@ -89,6 +89,8 @@ def _profile_url_from_kol_pool_id(kol_pool_id: Any) -> str:
         return f"https://www.instagram.com/{handle}/"
     if platform == "tiktok":
         return f"https://www.tiktok.com/@{handle}"
+    if platform == "facebook":
+        return f"https://www.facebook.com/{handle}"
     return ""
 
 
@@ -109,6 +111,8 @@ def _profile_url_from_item(item: dict[str, Any]) -> str:
         return f"https://www.instagram.com/{handle}/"
     if platform == "tiktok":
         return f"https://www.tiktok.com/@{handle}"
+    if platform == "facebook":
+        return f"https://www.facebook.com/{handle}"
     if platform == "douyin":
         return _profile_url_from_kol_pool_id(item.get("kol_pool_id"))
     return _profile_url_from_kol_pool_id(item.get("kol_pool_id"))

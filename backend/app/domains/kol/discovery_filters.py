@@ -180,7 +180,9 @@ def _is_hard_avoid(item: dict[str, Any], neg_terms: list[str]) -> bool:
     return any(t and t in blob for t in neg_terms)
 
 
-SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok"}
+# facebook 为 opt-in 平台:用户显式选择才参与发现(FB 流量/召回质量一般,做够用的即可),
+# 不进 _platforms() 的默认三平台兜底,避免稀释默认轮转结果。
+SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook"}
 
 
 def _is_discovery_garbage(item: dict[str, Any]) -> bool:
@@ -300,6 +302,8 @@ def _platforms(value: Any, fallback: str = "") -> list[str]:
         out.append(fallback_text)
     # 2026-07-02 用户令:未显式选平台时默认三平台齐搜(此前只兜 youtube,
     # 异步 job 路径用户没选就单平台,YT/IG/TT 均匀分布无从谈起)。
+    # 注意:facebook 已在 SUPPORTED 集合里但**故意不进默认兜底**——只在用户显式传
+    # platforms=["facebook",...] 时参与(FB 质量一般,不稀释默认结果)。
     return out or ["youtube", "instagram", "tiktok"]
 
 

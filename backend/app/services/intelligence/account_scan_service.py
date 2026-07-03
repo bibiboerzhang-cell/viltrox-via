@@ -581,6 +581,20 @@ async def search_platform_content(
             "resultsType": "posts",
         }
         timeout = 300
+    elif normalized_platform == "facebook":
+        # Facebook 发现(用户口径:FB 流量一般般,做够用的就行,别过度设计)。
+        # actor 选择说明:仓库既有 apify/facebook-posts-scraper 只吃 startUrls(页面 URL)+
+        # resultsLimit(见本文件 scan_facebook_account 与 facebook_crawler.py),不支持关键词
+        # 搜索,做不了「检索词 → 发现新创作者」。故此分支换官方 apify/facebook-search-scraper:
+        # 关键词搜公开帖文,帖文项自带发帖主页名/URL,可映射成统一候选结构。
+        # env 可换 actor(与 douyin 分支同模式);resultsLimit 沿用仓库 FB 调用的封顶口径。
+        actor_id = (os.getenv("APIFY_FACEBOOK_SEARCH_ACTOR_ID") or "apify/facebook-search-scraper").strip()
+        payload = {
+            "searchQueries": [search_query],
+            "searchType": "posts",
+            "resultsLimit": safe_limit,
+        }
+        timeout = 300
     elif normalized_platform == "douyin":
         actor_id = _douyin_actor_id("search")
         if not actor_id:
@@ -606,6 +620,7 @@ async def search_platform_content(
         handle = ""
         avatar_url = ""
         thumbnail_url = ""
+        followers = 0  # 仅 facebook 分支可能填上;>0 才随 item 透出,其余平台输出不变
         if normalized_platform == "youtube":
             channel_name = _source_key(item, "channelName", "channelTitle", "author")
             channel_url = _source_key(item, "channelUrl", "channelURL")
@@ -630,6 +645,29 @@ async def search_platform_content(
             views = _normalize_int(item.get("playCount") or stats.get("playCount"))
             likes = _normalize_int(item.get("diggCount") or stats.get("diggCount"))
             comments = _normalize_int(item.get("commentCount") or stats.get("commentCount"))
+        elif normalized_platform == "facebook":
+            # facebook-search-scraper 帖文项映射:发帖主页名→channel_name/display_name,
+            # 主页 URL→channel_url,帖文文本→sample_title。字段名多版本防御,
+            # 数字口径与本文件 scan_facebook_account 对齐(text/message、likesCount/reactionsCount)。
+            channel_name = _source_key(item, "pageName", "user.name", "authorName", "pageTitle", "name")
+            channel_url = _clean_url(_source_key(item, "pageUrl", "user.profileUrl", "facebookUrl", "topLevelUrl"))
+            handle = _source_key(item, "pageHandle", "username", "user.username", "pageUsername")
+            if not handle and "facebook.com/" in channel_url:
+                # 主页 URL 的 vanity slug 当 handle(facebook.com/<slug>);系统路径不算 handle。
+                _slug = channel_url.split("facebook.com/", 1)[1].strip("/").split("/", 1)[0].split("?", 1)[0]
+                if _slug and _slug.lower() not in {"profile.php", "people", "pages", "groups", "watch", "reel", "reels", "search"}:
+                    handle = _slug
+            if not channel_url and handle:
+                channel_url = f"https://www.facebook.com/{handle}"
+            avatar_url = _clean_url(_source_key(item, "user.profilePic", "pageProfilePic", "profilePic", "avatar"))
+            thumbnail_url = _clean_url(_source_key(item, "thumbnail", "imageUrl", "image"))
+            source_url = _source_key(item, "url", "postUrl", "topLevelUrl")
+            title = _source_key(item, "text", "message", "title")
+            views = _normalize_int(item.get("viewsCount") or item.get("views"))
+            likes = _normalize_int(item.get("likesCount") or item.get("reactionsCount") or item.get("likes"))
+            comments = _normalize_int(item.get("commentsCount") or item.get("comments"))
+            # 粉丝数:posts 搜索项通常不带;字段有就带上,没有保持 0(不杜撰)。
+            followers = _normalize_int(_source_key(item, "followers", "followersCount", "pageFollowers", "user.followers") or 0)
         elif normalized_platform == "douyin":
             post = _normalize_douyin_item(item)
             channel_name = str(post.get("channel") or "Unknown creator")
@@ -675,6 +713,8 @@ async def search_platform_content(
                 "market": (market or "").strip().upper(),
                 "search_query": normalized_query,
                 "provider_actor": actor_id,
+                # followers 仅在真有值时透出(目前只有 facebook 分支可能填),其余平台 item 结构不变。
+                **({"followers": followers} if followers > 0 else {}),
             }
         )
 
