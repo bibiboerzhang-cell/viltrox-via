@@ -81,6 +81,38 @@ def get_kol_cooperation(
     return cooperation.get_cooperation(int(kol_pool_id))
 
 
+def _assert_not_others_claim(staff: dict, kol_pool_id: int) -> None:
+    """X4-LOW(2026-07-03):他人认领中的 KOL,非管理层不得改合作状态/生成外联
+    (与 my_kol._assert_can_share_kol 归属口径对齐;无人认领或本人认领照常,
+    不挡日常发现/外联流)。表缺失等异常按旧行为放行,绝不误伤。"""
+    role = str((staff or {}).get("role") or "").strip().lower()
+    if int((staff or {}).get("is_owner") or 0) == 1 or role in {
+        "admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"
+    }:
+        return
+    try:
+        from app.db.connection import get_conn
+
+        row = get_conn().execute(
+            """
+            SELECT c.staff_id AS sid
+            FROM vkpi_kol_pool p
+            JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
+            WHERE p.id = ?
+            LIMIT 1
+            """,
+            (int(kol_pool_id),),
+        ).fetchone()
+    except Exception:
+        return
+    if not row:
+        return
+    owner = int(dict(row).get("sid") or 0)
+    me = int((staff or {}).get("staff_id") or 0)
+    if owner and owner != me:
+        raise HTTPException(status_code=403, detail="该 KOL 由他人认领中,仅负责人或管理层可执行此操作")
+
+
 @router.post("/kol-pool/{kol_pool_id}/cooperation")
 def record_kol_cooperation(
     kol_pool_id: int,
@@ -89,6 +121,7 @@ def record_kol_cooperation(
 ) -> dict:
     """KOL 合作动作(续约/加大投入/退出合作/评估/备注)→ 平台为基准的状态时间线。
     action ∈ renew|scale_up|exit|evaluate|note。零触 viltrox_fit_score。"""
+    _assert_not_others_claim(staff if isinstance(staff, dict) else {}, kol_pool_id)
     from app.domains.kol import cooperation
 
     try:
@@ -142,6 +175,7 @@ async def generate_kol_outreach_pack(
     llm_gateway(预算闸+兜底链内置,失败回落双语模板),邮箱缺失复用既有富化管线补抓。
     同 KOL 当日幂等(body.force=true 才重生成)。LLM/富化可达数十秒 → threadpool 不阻塞事件循环。
     红线:零写 viltrox_fit_score、不动 rule_v0、不碰归属判定。"""
+    _assert_not_others_claim(staff if isinstance(staff, dict) else {}, kol_pool_id)
     from app.domains.kol import outreach_pack as kol_outreach_pack
 
     staff_dict = staff if isinstance(staff, dict) else None

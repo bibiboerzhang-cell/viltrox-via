@@ -122,7 +122,10 @@ function ShareAdminSection({ apiToken, t }: any) {
 }
 
 export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOpenEditGroup, onOpenNewGroup, onRefreshGroups, apiToken = "" }: any) {
-  const isAdmin = user.role === "admin";
+  // X4-LOW(2026-07-03):分组管理按钮按管理层口径显示(原来只认 "admin",manager/lead 被误挡);
+  // 前端隐藏只作体验,真安全边界在后端 staff-groups 的管理层闸(X4-HIGH 已补)。
+  const roleRaw = String(user?.role || "").toLowerCase();
+  const isAdmin = ["admin", "owner", "manager", "lead", "marketing_lead", "marketing_manager"].includes(roleRaw) || String(user?.role || "") === "管理层";
   // #19 @提及:输入一条消息 → POST /team/mention → 目标成员通知流出现一条(后端复用 vkpi_alerts)。
   const [mentioning, setMentioning] = React.useState<any>(null);
   const [deleting, setDeleting] = React.useState<any>(null);

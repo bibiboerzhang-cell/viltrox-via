@@ -239,14 +239,26 @@ def _recompute_group_shared_kols(
 
 # ── Staff Groups ────────────────────────────────────────────────────────────
 def list_groups(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, Any]:
-    """列分组:全部可见(分组是协作单元,不按员工 scope 收窄)。"""
+    """列分组:管理层全量;X4-LOW(2026-07-03)非管理层只见自己所在的分组
+    (组织架构/团队构成不向普通成员全量外泄)。"""
     conn = get_conn()
     safe_limit = max(1, min(int(limit or 200), 500))
     rows = conn.execute(
         "SELECT * FROM vkpi_staff_groups ORDER BY updated_at DESC, created_at DESC LIMIT ?",
         (safe_limit,),
     ).fetchall()
-    return {"items": [_group_row(r) for r in rows]}
+    items = [_group_row(r) for r in rows]
+    role = str((staff or {}).get("role") or "").strip().lower()
+    is_manager = int((staff or {}).get("is_owner") or 0) == 1 or role in {
+        "admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"
+    }
+    if not is_manager:
+        me = str((staff or {}).get("staff_id") or "")
+        items = [
+            g for g in items
+            if me and any(str(x) == me for x in (g.get("member_ids") or []))
+        ]
+    return {"items": items}
 
 
 def get_group(group_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
