@@ -385,7 +385,7 @@ class _ReportAnalysisBody(BaseModel):
 @router.post("/dashboard/report-analysis")
 def dashboard_report_analysis(
     body: _ReportAnalysisBody,
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """按需:把「生成报告」拼好的全量真实数据喂 LLM,整理成经营深度分析(预算闸硬限 + 当天缓存)。"""
     del staff

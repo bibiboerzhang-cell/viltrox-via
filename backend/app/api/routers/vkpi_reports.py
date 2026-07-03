@@ -21,7 +21,7 @@ def _scope_403(exc: Exception) -> HTTPException:
 
 
 @router.post("/reports/weekly/generate")
-def generate_weekly_report(body: dict | None = None, staff=Depends(require_tab("vkpi", "read"))):
+def generate_weekly_report(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     payload = body or {}
     try:
         result = reports.generate_weekly_report(

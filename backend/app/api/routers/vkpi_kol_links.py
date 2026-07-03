@@ -323,7 +323,7 @@ def archive_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
 
 
 @router.post("/links/{link_id}/health-check")
-def check_link(link_id: int, staff=Depends(require_tab("vkpi", "read"))):
+def check_link(link_id: int, staff=Depends(require_tab("vkpi", "write"))):
     try:
         return attribution_domain.health_check(link_id, staff=staff)
     except LookupError as exc:

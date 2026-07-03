@@ -88,7 +88,7 @@ def organizations_list(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, 
 
 
 @router.post("/evals/run")
-def evals_run(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+def evals_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
     """P4 · 跑业务评测套件(推荐不碰fit/召回/权重有界/事件总线/预测诚实),持久化结果。"""
     from app.domains.platform import evals
 

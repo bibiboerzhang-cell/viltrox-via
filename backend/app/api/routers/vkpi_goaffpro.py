@@ -378,7 +378,7 @@ def get_kol_affiliate_link(
 @router.post("/sync-metrics")
 def sync_goaffpro_metrics(
     limit: int | None = Query(default=None, ge=1, le=500),
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab("vkpi", "write")),
 ):
     """手动刷新 GOAFFPRO 指标缓存(点击/订单/GMV/佣金)→ vkpi_goaffpro_kol_metrics。
 

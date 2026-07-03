@@ -13,7 +13,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
+
+logger = get_logger(__name__)
 
 # Re-export pure serde/normalization helpers (behavior-preserving move).
 from app.domains.kol.search_sessions_serde import (
@@ -249,6 +252,34 @@ def get_session(session_id: int) -> dict[str, Any]:
     ).fetchall()
     session = _row_to_session(row)
     items = [_row_to_item(item) for item in item_rows]
+    # 名字全局一致(2026-07-03 用户点名):部分物化路径的 item payload 不带 display_name,
+    # 前端只好显示 handle(YT 时是一串频道 ID)。读端统一回填:凡带 kol_pool_id 且 payload
+    # 缺名字的,批量查池表补 display_name —— 一处修好,校验中/已有库/新发现全部受益。
+    _need_name_ids = sorted({
+        int(it["kol_pool_id"]) for it in items
+        if it.get("kol_pool_id")
+        and isinstance(it.get("payload"), dict)
+        and not str(it["payload"].get("display_name") or it["payload"].get("channel_name") or "").strip()
+    })
+    if _need_name_ids:
+        try:
+            _ph = ",".join(["?"] * len(_need_name_ids))
+            _name_rows = conn.execute(
+                f"SELECT id, display_name FROM vkpi_kol_pool WHERE id IN ({_ph})",
+                tuple(_need_name_ids),
+            ).fetchall()
+            _names = {
+                int(dict(r)["id"]): str(dict(r)["display_name"] or "").strip()
+                for r in _name_rows
+            }
+            for it in items:
+                _kid = it.get("kol_pool_id")
+                if _kid and isinstance(it.get("payload"), dict):
+                    _nm = _names.get(int(_kid), "")
+                    if _nm and not str(it["payload"].get("display_name") or "").strip():
+                        it["payload"]["display_name"] = _nm
+        except Exception:
+            logger.warning("search_sessions.display_name_backfill_failed", exc_info=True)
     session["items"] = items
     session["count"] = len(items)
     session["counts"] = _item_counts(items)

@@ -35,7 +35,7 @@ router = APIRouter(tags=["vkpi-kol-pool"])
 @router.post("/kol-search-sessions")
 def create_kol_search_session(
     body: dict = Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Create a unified KOL search session; orchestration state only."""
     try:
@@ -314,7 +314,7 @@ def cancel_kol_search_session_advance(
 @router.post("/kol-smart-search")
 async def smart_kol_search(
     body: dict = Body(...),
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Unified smart input endpoint.
 
@@ -632,7 +632,7 @@ def recall_kol_profiles(
 @router.post("/kol-url-deep-crawl")
 def dry_run_kol_url_deep_crawl(
     body: dict = Body(...),
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Classify a pasted URL and optionally execute the resolved URL workflow."""
     try:
