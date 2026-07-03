@@ -5,6 +5,7 @@
 import React from "react";
 import { motion } from "framer-motion";
 import { Filter } from "lucide-react";
+import { SectionFold } from "./SectionFold";
 
 const e = React.createElement;
 
@@ -14,10 +15,10 @@ function staffLabel(row: any) {
   return String(row.staff_name || row.name || (row.staff_id != null ? `Staff ${row.staff_id}` : "未知成员"));
 }
 
-function staffCount(row: any) {
-  const value = Number(
-    row.favorites_total ?? row.favorites ?? row.count ?? row.total ?? NaN,
-  );
+function staffCount(row: any, key: "favorites" | "in_project") {
+  const value = key === "favorites"
+    ? Number(row.favorites_total ?? row.favorites ?? row.count ?? row.total ?? NaN)
+    : Number(row.in_project ?? row.in_project_total ?? NaN);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -72,19 +73,33 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
               )
             );
           }),
-          // by_staff 摘要(前 3 名)
-          byStaff.length > 0 && e("div", { className: "mt-2 border-t border-white/[0.06] pt-2 space-y-1" },
-            e("div", { className: "text-[9px] uppercase tracking-wider text-slate-500" }, "我的漏斗"),
-            byStaff.slice(0, 3).map((row: any, index: any) => e("div", {
-              key: row.staff_id ?? index,
-              className: "flex items-center justify-between text-[10px]"
+          // D8(2026-07-02):by_staff 已回传 {staff_id, name, favorites, in_project} →
+          // 可展开「按成员」小节(SectionFold,折叠态跨会话记忆),列 top5 成员的 收藏/入项目。
+          // 旧块误标「我的漏斗」且只显收藏数,一并修正;数据仍全部来自后端 summary.funnel.by_staff。
+          byStaff.length > 0 && e("div", { className: "mt-2 border-t border-white/[0.06] pt-2" },
+            e(SectionFold, {
+              id: "kol-funnel-by-staff",
+              defaultOpen: false,
+              header: e("span", { className: "text-[9px] uppercase tracking-wider text-slate-500" }, `按成员(${byStaff.length} 人)`),
             },
-              e("span", { className: "min-w-0 truncate text-slate-300" }, staffLabel(row)),
-              e("span", { className: "shrink-0 tabular-nums text-slate-400" },
-                staffCount(row) == null ? "--" : staffCount(row)!.toLocaleString()
+              e("div", { className: "space-y-1" },
+                e("div", { className: "flex items-center justify-between text-[9px] text-slate-600" },
+                  e("span", null, "成员"),
+                  e("span", { className: "flex gap-3" }, e("span", null, "收藏"), e("span", null, "入项目"))
+                ),
+                byStaff.slice(0, 5).map((row: any, index: any) => e("div", {
+                  key: row.staff_id ?? index,
+                  className: "flex items-center justify-between text-[10px]"
+                },
+                  e("span", { className: "min-w-0 truncate text-slate-300" }, staffLabel(row)),
+                  e("span", { className: "shrink-0 flex gap-3 tabular-nums text-slate-400" },
+                    e("span", { className: "w-8 text-right" }, staffCount(row, "favorites") == null ? "--" : staffCount(row, "favorites")!.toLocaleString()),
+                    e("span", { className: "w-8 text-right" }, staffCount(row, "in_project") == null ? "--" : staffCount(row, "in_project")!.toLocaleString())
+                  )
+                )),
+                byStaff.length > 5 && e("div", { className: "text-[9px] text-slate-500" }, `+${byStaff.length - 5} 人`)
               )
-            )),
-            byStaff.length > 3 && e("div", { className: "text-[9px] text-slate-500" }, `+${byStaff.length - 3} 人`)
+            )
           )
         ),
     // Footer

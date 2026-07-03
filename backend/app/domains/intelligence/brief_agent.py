@@ -235,22 +235,31 @@ def _next_action(candidate: dict[str, Any], *, max_refs: int) -> dict[str, Any] 
         return None
     ident = _identity(candidate)
     decision = text(candidate.get("suggested_decision"), 80)
+    # D2 真标题(2026-07-02):next_actions 此前只有 text 无 title,前端 AI Today 卡的
+    # title||label||action 兜底全落空 → 只能显示编号「建议 N」。纯规则拼装,直接在拼装处
+    # 按 decision 分支给每条造一个简短中文标题(带 @handle 可辨识),不引入任何 LLM 调用。
+    handle_label = ident.get("handle") or ident.get("display_name") or str(ident.get("kol_pool_id"))
     if decision == "contact_candidate":
         action_text = "Human reviewer: verify Product Fit, competitor risk, and missing sections before choosing contact."
+        action_title = f"联系前人工复核 @{handle_label}"
         priority = "high"
     elif decision == "watch_candidate":
         action_text = "Human reviewer: keep this KOL on watch until stronger evidence appears."
+        action_title = f"持续观察 @{handle_label}"
         priority = "medium"
     elif decision in {"caution_candidate", "avoid_candidate"}:
         action_text = "Human reviewer: inspect risk evidence before any outreach decision."
+        action_title = f"风险证据复核 @{handle_label}"
         priority = "high"
     else:
         action_text = "Human reviewer: inspect the evidence chain before assigning a decision."
+        action_title = f"证据链复核 @{handle_label}"
         priority = "medium"
     return {
         "action_uid": f"p7-83:action:{ident['kol_pool_id']}:{_hash_key(decision, action_text)}",
         "action_type": "human_review",
         "priority": priority,
+        "title": action_title,
         "text": action_text,
         "identity": ident,
         "suggested_decision": decision,

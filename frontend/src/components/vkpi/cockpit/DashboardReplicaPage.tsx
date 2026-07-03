@@ -205,7 +205,9 @@ export function DashboardReplicaPage(props: any) {
                     ),
                     e("div", { className: "flex flex-wrap justify-center gap-2 text-xs text-slate-500" },
                       e("span", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-1.5" }, "KOL 分布读取真实 API"),
-                      e("span", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-1.5" }, "Dealer locations 待接入"),
+                      // D6(2026-07-02):/dealers/locations 已接线(有经纬度的经销商自动点亮 Dealers 视图),
+                      // 旧「待接入」文案过时 → 改为如实指路。
+                      e("span", { className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-3 py-1.5" }, "Dealer locations 已接入 · 选 Dealers 视图查看"),
                       e("span", { className: "rounded-md border border-yellow-500/20 bg-yellow-500/[0.04] px-3 py-1.5 text-yellow-400/80" },
                         e(Loader2, { size: 11, className: "mr-1 inline-block animate-spin" }),
                         "Customer data pending"

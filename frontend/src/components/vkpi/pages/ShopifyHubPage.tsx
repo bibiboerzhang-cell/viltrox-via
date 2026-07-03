@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { getShopifyStatus, type ShopifyProviderStatus } from "../../../domains/attribution";
+import { ApiResponseError } from "../../../services/http";
 import {
   generatePromoLink,
   listPromoKols,
@@ -319,7 +320,13 @@ export function ShopifyHubPage({ apiToken = "" }: { apiToken?: string } = {}) {
       });
       setGenResult(res);
     } catch (err) {
-      setGenErr(err instanceof Error ? err.message : "生成推广链接失败（后端可能尚未接入）");
+      // S1 人话化(2026-07-02):/vkpi/shopify/promo-links 线上 404(短链管理是本地分支功能,
+      // 后端端点未上线)。此前把裸 "404 Not Found" 直接甩给用户 → 分不清是自己操作错还是功能没上。
+      if (err instanceof ApiResponseError && err.status === 404) {
+        setGenErr("短链管理后端未上线（本地分支功能）—— 该生成接口尚未部署，非操作问题。");
+      } else {
+        setGenErr(err instanceof Error ? `生成推广链接失败：${err.message}` : "生成推广链接失败（后端可能尚未接入）");
+      }
     } finally {
       setGenerating(false);
     }

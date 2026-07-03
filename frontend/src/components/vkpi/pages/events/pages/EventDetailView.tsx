@@ -214,7 +214,8 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
     tab === "tasks"     && e(TasksTab, { ev, currentUser, staff, token, tasks: detail.tasks, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "kols"      && e(KolsTab, { ev, token, invites: detail.invites, loading: detailLoading, error: detailError, reload: reloadDetail }),
     tab === "materials" && e(MaterialsTab, { ev, staff, stock, token, materials: detail.materials, products: detail.products, loading: detailLoading, error: detailError, reload: reloadDetail }),
-    tab === "onsite"    && e(PlaceholderTab, { icon: Activity, title: "现场数据 (Event 进行中才激活)", message: "到场人数 / Lead 收集 / 现场销售 / 媒体到访 / KOL 内容产出 · 真接入时实时同步现场签到 iPad" }),
+    // E1 诚实化(2026-07-02):旧文案暗示「Event 进行中就会激活」,实际功能根本未排期 → 如实说明;tab 不藏。
+    tab === "onsite"    && e(PlaceholderTab, { icon: Activity, title: "现场签到功能未排期", message: "现场签到功能未排期 —— 需要 iPad 签到硬件流程确定后接入(到场人数 / Lead 收集 / 现场销售等现场数据同批)" }),
     tab === "retro"     && e(RetroTab, { ev, token, reload: reloadDetail, onEventPatched }),
 
     // 分享 modal(成员管理走真后端 share-members)

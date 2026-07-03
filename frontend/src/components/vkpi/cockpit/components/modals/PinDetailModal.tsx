@@ -116,9 +116,25 @@ export function PinDetailModal({ pin, mode, onClose }: any) {
             e("div", { className: "mt-1 text-sm text-white" }, pin.type)
           )
         ),
-        e("button", { key: "ss2", disabled: true, title: "待接入",
-          className: pendingBtnFull
-        }, "View dealer details →")
+        // DL1(2026-07-02):删掉「View dealer details 待接入」死按钮,改为直接展示 pin 自带字段
+        // (名称/地址/城市/州省/国家,有什么显什么;字段来自 /dealers/locations pin 或层级 raw)。
+        (() => {
+          const raw = (pin.raw && typeof pin.raw === "object") ? pin.raw : {};
+          const fields = [
+            ["名称", pin.name || pin.label || raw.name],
+            ["地址", pin.address || raw.address],
+            ["城市", pin.city || raw.city],
+            ["州/省", pin.state || raw.state],
+            ["国家", pin.country || raw.country],
+          ].filter(([, v]) => v);
+          return fields.length > 0 && e("div", { key: "ss2", className: "rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 space-y-1.5" },
+            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Dealer info"),
+            fields.map(([label, value]: any) => e("div", { key: label, className: "flex items-start justify-between gap-3 text-xs" },
+              e("span", { className: "shrink-0 text-slate-500" }, label),
+              e("span", { className: "min-w-0 text-right text-white break-words" }, String(value))
+            ))
+          );
+        })()
       ]
     )
   );

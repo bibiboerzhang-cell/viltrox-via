@@ -26,8 +26,25 @@ def _proxy_host_port(proxy_url: str) -> str:
     return f"{host}:{parsed.port}" if parsed.port else host
 
 
-def _load_env(env_file: str = ".env", *, override: bool = False):
+# X2(2026-07-02 cwd 连错库事故):此前 _load_env 用 Path(env_file) 相对路径,完全依赖进程 cwd —
+# 从 backend/ 或任意别的目录起服务时静默读不到仓库根 .env(根下 87 行真配置;backend/.env 只剩
+# JWT_SECRET 残留),DATABASE_URL 等缺省 → 连错库。修复:相对路径先锚定仓库根(本文件上溯 3 级:
+# core→app→backend→根)的绝对路径;根下不存在该文件时兜底原 cwd 相对行为(兼容不同部署布局)。
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_env_path(env_file: str) -> Path:
     p = Path(env_file)
+    if p.is_absolute():
+        return p
+    anchored = _REPO_ROOT / env_file
+    if anchored.exists():
+        return anchored
+    return p
+
+
+def _load_env(env_file: str = ".env", *, override: bool = False):
+    p = _resolve_env_path(env_file)
     if p.exists():
         for line in p.read_text().splitlines():
             line = line.strip()

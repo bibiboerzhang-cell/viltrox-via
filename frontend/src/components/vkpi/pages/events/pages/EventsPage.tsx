@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Activity, CircleDot, DollarSign, Package, Plus, Search, Target, TrendingUp } from "lucide-react";
+import { Activity, CircleDot, DollarSign, Package, Plus, Search, Target } from "lucide-react";
 import EventCard from "../components/EventCard";
 import {
   listEvents, createEvent, updateEvent, deleteEvent,
@@ -196,8 +196,8 @@ export default function EventsPage({ currentUser, staff = [], initialEventId = n
       e("div", { className: "rounded-xl border border-white/[0.06] bg-white/[0.012] p-3.5" },
         e("div", { className: "flex items-center gap-1.5 text-[10.5px] text-slate-400 mb-2" }, e(DollarSign, { size: 11, className: "text-emerald-400" }), "我参与的已花"),
         e("div", { className: "flex items-baseline gap-1.5" },
-          e("div", { className: "text-[22px] font-bold text-white tabular-nums" }, fmtMoneyShort(totalSpentThisMonth)),
-          e("div", { className: "text-[11px] text-emerald-300 flex items-center gap-0.5" }, e(TrendingUp, { size: 10 }), "+12%")
+          // E3(2026-07-02):删除写死的「+12%」假环比徽标 —— 页面没有上月支出数据可算真环比,不造数据。
+          e("div", { className: "text-[22px] font-bold text-white tabular-nums" }, fmtMoneyShort(totalSpentThisMonth))
         )
       ),
       e("div", { className: "rounded-xl border border-white/[0.06] bg-white/[0.012] p-3.5" },

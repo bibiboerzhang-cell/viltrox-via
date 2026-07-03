@@ -6,13 +6,46 @@ import { Check, Search, Target, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
 import { useT } from "../../lib/i18n";
 import { REMINDER_ICON_MAP } from "../../data/reminderIconMap";
+import { resolveCockpitAlert } from "../../api";
 
 const e = React.createElement;
 
-export function AllRemindersModal({ reminders, onClose, viewingAs }: any) {
+// T3 提醒持久化(2026-07-02):此前「完成/忽略」只改本地 state,重开全丢。
+// 现状接法:
+// - 完成 → 真后端 POST /api/admin/vkpi/alerts/{id}/resolve(提醒本就来自 /alerts?status=open,
+//   resolve 后下次拉取自然不再出现);调用失败不阻塞本地标记。
+// - 忽略 → 后端没有 ignore/dismiss 端点,用 localStorage("vkpi:reminder-done:{id}")做客户端持久化
+//   (重开保持);后端忽略端点待建,建好后此键可迁移退役。
+// - 完成同样写 localStorage:兜住 resolve 请求失败/无 token 的场景,重开不回弹。
+const REMINDER_DONE_PREFIX = "vkpi:reminder-done:";
+
+function readStoredStatus(id: any): string | null {
+  try {
+    const raw = window.localStorage.getItem(REMINDER_DONE_PREFIX + String(id));
+    return raw === "done" || raw === "ignored" ? raw : null;
+  } catch {
+    return null; // 隐私模式等 localStorage 不可用:持久化是增益,失败不阻塞
+  }
+}
+
+function writeStoredStatus(id: any, status: "done" | "ignored") {
+  try {
+    window.localStorage.setItem(REMINDER_DONE_PREFIX + String(id), status);
+  } catch {
+    // 写失败不阻塞交互,本次会话内 state 仍生效
+  }
+}
+
+export function AllRemindersModal({ reminders, onClose, viewingAs, apiToken }: any) {
   const { t } = useT();
   const [tab, setTab] = useState("todo");
-  const [items, setItems] = useState(reminders);
+  // 初始化时合并 localStorage 里的已处理状态(客户端持久化,见文件头注释)。
+  const [items, setItems] = useState(() =>
+    (Array.isArray(reminders) ? reminders : []).map((r: any) => {
+      const stored = readStoredStatus(r.id);
+      return stored && r.status === "todo" ? { ...r, status: stored } : r;
+    })
+  );
   const [search, setSearch] = useState("");
 
   const filtered = items.filter((r: any) =>
@@ -20,8 +53,15 @@ export function AllRemindersModal({ reminders, onClose, viewingAs }: any) {
     (!search || r.title.toLowerCase().includes(search.toLowerCase()) || r.desc.toLowerCase().includes(search.toLowerCase()))
   );
   const todoCount = items.filter((r: any) => r.status === "todo").length;
-  const markDone    = (id: any) => setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "done" } : r));
-  const markIgnored = (id: any) => setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "ignored" } : r));
+  const markDone = (id: any) => {
+    if (apiToken) resolveCockpitAlert(apiToken, id).catch(() => null); // 真后端 resolve,失败不阻塞
+    writeStoredStatus(id, "done");
+    setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "done" } : r));
+  };
+  const markIgnored = (id: any) => {
+    writeStoredStatus(id, "ignored"); // 无后端 ignore 端点 → 仅客户端持久化(端点待建)
+    setItems((prev: any) => prev.map((r: any) => r.id === id ? { ...r, status: "ignored" } : r));
+  };
 
   const prioColor: any = { high: "#ef4444", medium: "#f59e0b", low: "#64748b" };
   const sourceLabels: any = {

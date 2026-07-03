@@ -63,12 +63,28 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll, freshnessAt
           e("span", { className: "text-[9px] text-slate-500 shrink-0" }, a.time)
         ),
         e("div", { className: "text-[10px] text-slate-400 line-clamp-2 mb-1" }, a.desc),
+        // D3(2026-07-02):品牌名可点 chip —— 点击在 setSelectedSignal 原逻辑之外带上品牌(不造数据,
+        // brands 只来自后端已有 entityId/brand 字段);stopPropagation 避免和整卡点击叠加。
+        Array.isArray(a.brands) && a.brands.length > 0 && e("div", { className: "flex flex-wrap items-center gap-1 mb-1" },
+          a.brands.slice(0, 4).map((brand: string) => e("button", {
+            key: brand,
+            type: "button",
+            title: `查看 ${brand} 相关信号`,
+            onClick: (ev: any) => { ev.stopPropagation(); onAlertClick && onAlertClick({ ...a, brand }); },
+            className: "rounded border border-white/[0.1] bg-white/[0.05] px-1.5 py-0.5 text-[9px] font-semibold text-slate-200 hover:bg-white/[0.12] transition-colors"
+          }, brand))
+        ),
         // Sources + mentions
         e("div", { className: "flex items-center justify-between text-[9px]" },
-          e("div", { className: "flex items-center gap-1 text-slate-500" },
+          // D3 人话来源行:卡面显 sourceLine(如「市场信号 · 本轮证据 N 条」);evidence 键名细节
+          // (summary.run_id · hot_brands.count)挪到 title tooltip,弹窗内仍有完整查看源。
+          e("div", {
+            className: "flex items-center gap-1 text-slate-500",
+            title: a.sourceDetail || (Array.isArray(a.sources) ? a.sources : []).map((s: any) => (typeof s === "string" ? s : s && s.name)).filter(Boolean).join(" · ")
+          },
             // 防御:sources 缺失/非数组时不再 .slice/.length 崩页。
-            e("span", null, (Array.isArray(a.sources) ? a.sources : []).slice(0, 3).map((s: any) => (typeof s === "string" ? s : s && s.name)).filter(Boolean).join(" · ")),
-            (Array.isArray(a.sources) ? a.sources.length : 0) > 3 && e("span", null, ` +${a.sources.length - 3}`)
+            e("span", null, a.sourceLine || (Array.isArray(a.sources) ? a.sources : []).slice(0, 3).map((s: any) => (typeof s === "string" ? s : s && s.name)).filter(Boolean).join(" · ")),
+            !a.sourceLine && (Array.isArray(a.sources) ? a.sources.length : 0) > 3 && e("span", null, ` +${a.sources.length - 3}`)
           ),
           e("div", { className: "flex items-center gap-1.5" },
             e("span", { className: "rounded bg-white/[0.05] px-1 py-0.5 text-slate-400" }, `${a.totalMentions} mentions`),

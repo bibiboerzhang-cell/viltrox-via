@@ -247,6 +247,25 @@ def build_dashboard_agents_status(ops_dir: str = "runtime/ops") -> dict[str, Any
     return _build_dashboard_agents_status(ops_dir=ops_dir, kol_pool_total=kol_pool_total)
 
 
+def _backfill_entry_titles(rows: list[Any]) -> list[Any]:
+    """D2 真标题(2026-07-02):旧 brief 工件的 next_actions 只有 text 无 title,前端
+    AI Today 卡 title||label||action 兜底全落空只能显「建议 N」。读取侧对缺 title 的条目
+    取内容前 20 字造真标题(不改盘上工件;新生成的工件已在 brief_agent._next_action 带 title)。"""
+    out: list[Any] = []
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("title") or "").strip():
+            out.append(row)
+            continue
+        source_text = next(
+            (str(row.get(key) or "").strip() for key in ("text", "label", "action", "body", "reason", "summary") if str(row.get(key) or "").strip()),
+            "",
+        )
+        if source_text:
+            row = {**row, "title": source_text[:20]}
+        out.append(row)
+    return out
+
+
 def _build_dashboard_copilot_brief(ops_dir: str = "runtime/ops") -> dict[str, Any]:
     path = _latest_dashboard_agent_artifact(ops_dir, "*p7-83-brief-agent-v0.json")
     payload = _load_dashboard_agent_json(path)
@@ -257,8 +276,8 @@ def _build_dashboard_copilot_brief(ops_dir: str = "runtime/ops") -> dict[str, An
     return {
         "headline": headline,
         "summary": summary,
-        "items": items[:5],
-        "actions": actions[:5],
+        "items": _backfill_entry_titles(items[:5]),
+        "actions": _backfill_entry_titles(actions[:5]),
         "last_output": path.name if path else "",
         "last_run_at": _artifact_mtime_iso(path),
         "mode": payload.get("mode") or "",

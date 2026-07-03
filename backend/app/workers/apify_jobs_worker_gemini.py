@@ -500,9 +500,16 @@ def _process_gemini_video(
             _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
             return
         if not resolved.get("ok"):
+            resolve_reason = str(resolved.get("reason") or "")
+            # X6(2026-07-02 对齐 prod 热修):IG 图文帖 —— 抓取本身成功(scraped_ok)但没有可下载
+            # 视频 URL(scraped_no_downloadable_url)= 这条内容就是图文没有视频,重试多少次也长不出
+            # 视频。裸 raise 会进 retry/triage 白耗预算 → 直接转 blocked(image_post_no_video)。
+            if platform == "instagram" and resolved.get("scraped_ok") and resolve_reason.endswith("scraped_no_downloadable_url"):
+                _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
+                return
             # reason 已含 media_resolve_failed:<platform>:<真因>(见 _resolve_video_media 诚实化),
             # 不再二次包装成 "media_resolve_failed: media_resolve_failed",保留可诊断真因。
-            raise RuntimeError(str(resolved.get("reason") or f"media_resolve_failed:{platform}"))
+            raise RuntimeError(resolve_reason or f"media_resolve_failed:{platform}")
         with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
             download = download_direct_video_url(
                 str(resolved.get("direct_video_url") or ""),

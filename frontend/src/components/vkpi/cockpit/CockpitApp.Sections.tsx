@@ -256,7 +256,9 @@ export function CockpitOverlays(p: any) {
     e(AnimatePresence, { key: "ov-allreminders" }, showAllReminders && e(AllRemindersModal, {
       reminders: activeReminders,
       onClose: () => setShowAllReminders(false),
-      viewingAs
+      viewingAs,
+      // T3(2026-07-02):传 token 让「完成」走真后端 /alerts/{id}/resolve(「忽略」暂 localStorage)。
+      apiToken
     })),
     e(AnimatePresence, { key: "ov-allnotifs" }, showAllNotifs && e(AllNotificationsModal, {
       notifications: runtimeNotifications,

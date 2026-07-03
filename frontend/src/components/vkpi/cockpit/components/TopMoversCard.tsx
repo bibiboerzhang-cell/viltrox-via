@@ -25,7 +25,12 @@ export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
     ),
     e("div", { className: "flex-1 space-y-2" },
       movers.length === 0
-        ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" }, "暂无真实 Top Movers")
+        // D7 空态诚实化(2026-07-02):后端 /dashboard/fit-movers 不足两天会回落「当前 Fit 最高」
+        // (top_fit,仍是真数据),所以走到空卡 = fit 每日快照还一份都没有、Pool 里也没有已评分行。
+        ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" },
+            "fit 快照累积中(每日快照;movers 需≥2天)",
+            e("div", { className: "mt-1 text-[9px] text-slate-600" }, "暂无已评分 KOL 可显示")
+          )
         : movers.map((m: any, i: any) => e("div", {
         key: m.handle,
         onClick: () => onMoverClick && onMoverClick(m),
