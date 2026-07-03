@@ -97,6 +97,21 @@ def _valid_email(m: str) -> bool:
     return tld in _VALID_MULTICHAR_TLDS
 
 
+def _author_nested_blobs(container: dict[str, Any]) -> list[str]:
+    """TT/IG raw 的 bio 常嵌在 authorMeta/author/owner/user 里(TT=authorMeta.signature)。
+    C6 零新抓提列:结构化提出来走正常置信度分级,不再只靠低置信 full_raw 兜底扫。"""
+    found: list[str] = []
+    for ak in ("authorMeta", "author", "owner", "user"):
+        av = container.get(ak)
+        if not isinstance(av, dict):
+            continue
+        for fk in ("signature", "bio", "biography", "description"):
+            fv = av.get(fk)
+            if isinstance(fv, str) and fv:
+                found.append(fv)
+    return found
+
+
 def _text_blobs(profile: dict[str, Any]) -> list[str]:
     """汇总 raw 里可能含联系方式的公开文本字段(bio/about/描述/文案/签名)。"""
     blobs: list[str] = []
@@ -109,11 +124,13 @@ def _text_blobs(profile: dict[str, Any]) -> list[str]:
     snip = profile.get("snippet")
     if isinstance(snip, dict) and isinstance(snip.get("description"), str):
         blobs.append(snip["description"])
+    blobs.extend(_author_nested_blobs(profile))
     items = profile.get("items")
     if isinstance(items, list) and items and isinstance(items[0], dict):
         sn = items[0].get("snippet") or {}
         if isinstance(sn, dict) and isinstance(sn.get("description"), str):
             blobs.append(sn["description"])
+        blobs.extend(_author_nested_blobs(items[0]))
     return [b for b in blobs if b]
 
 

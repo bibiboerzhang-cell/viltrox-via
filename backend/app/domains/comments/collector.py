@@ -75,10 +75,13 @@ def ensure_vkpi_comments_schema() -> None:
           sentiment_id BIGINT,
           pillar_id INT,
           raw_data_json TEXT,
+          author_avatar_url TEXT,
           CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
         )
         """
     )
+    # C6 零新抓提列(migration 208):评论者头像 URL 列。旧库自愈补列,保证下方 INSERT 不因缺列崩。
+    conn.execute("ALTER TABLE vkpi_comments ADD COLUMN IF NOT EXISTS author_avatar_url TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_account ON vkpi_comments(account_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_post ON vkpi_comments(post_id, post_table)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_platform ON vkpi_comments(platform)")
@@ -145,6 +148,7 @@ def _standardize_comment(
             "is_op": [],
             "parent_comment_id": ["snippet.parentId"],
             "depth": ["depth"],
+            "author_avatar_url": ["snippet.topLevelComment.snippet.authorProfileImageUrl", "snippet.authorProfileImageUrl"],
         },
         "instagram": {
             "external_comment_id": ["id"],
@@ -155,6 +159,7 @@ def _standardize_comment(
             "reply_count": ["repliesCount", "reply_count"],
             "created_at": ["timestamp", "created_at"],
             "is_op": [],
+            "author_avatar_url": ["ownerProfilePicUrl", "owner.profile_pic_url", "owner.profilePicUrl"],
         },
         "tiktok": {
             "external_comment_id": ["cid", "id"],
@@ -167,6 +172,7 @@ def _standardize_comment(
             "reply_count": ["replyCommentTotal"],
             "created_at": ["createTime", "create_time"],
             "is_op": [],
+            "author_avatar_url": ["avatarThumbnail", "author.avatarThumb", "user.avatarThumb", "author.avatarThumbnail"],
         },
         "reddit": {
             "external_comment_id": ["id", "parsedId", "url"],
@@ -191,6 +197,7 @@ def _standardize_comment(
             "reply_count": ["repliesCount"],
             "created_at": ["createdTime", "created_at", "timestamp"],
             "is_op": [],
+            "author_avatar_url": ["profilePicture", "from.picture.data.url"],
         },
         "x": {
             "external_comment_id": ["id", "replyId", "tweetId"],
@@ -203,6 +210,7 @@ def _standardize_comment(
             "is_op": [],
             "parent_comment_id": ["in_reply_to_user_id", "parent_id", "parentId"],
             "depth": ["depth"],
+            "author_avatar_url": ["author.profilePicture", "user.profile_image_url"],
         },
     }
     
@@ -255,6 +263,17 @@ def _standardize_comment(
                 return None
         return None
     
+    def _avatar_url(value):
+        # C6 零新抓提列:评论者头像只存 URL,不下载文件。TT user.avatarThumb 可能是
+        # {"url_list": [...]} 结构 —— 拆出首个;非 http 的一律弃(防把 dict/占位符串进列)。
+        if isinstance(value, dict):
+            url_list = value.get("url_list")
+            value = url_list[0] if isinstance(url_list, list) and url_list else ""
+        text = str(value or "").strip()
+        if not text.lower().startswith("http"):
+            return None
+        return text[:500]
+
     author_handle = _str_safe(_try_paths(fields.get("author_handle", [])), 200)
     author_id = _str_safe(_try_paths(fields.get("author_id", [])), 200)
     if platform == "facebook" and not author_handle:
@@ -281,6 +300,7 @@ def _standardize_comment(
         "likes_count": _int_keep_zero(_try_paths(fields.get("likes_count", []))),
         "reply_count": _int_keep_zero(_try_paths(fields.get("reply_count", []))),
         "created_at": _ts_iso(_try_paths(fields.get("created_at", []))),
+        "author_avatar_url": _avatar_url(_try_paths(fields.get("author_avatar_url", []))),
         "raw_data_json": json.dumps(raw, default=str, ensure_ascii=False)[:20000],
     }
 
@@ -433,14 +453,16 @@ def collect_post_comments(
                   author_handle, author_id, is_op,
                   parent_comment_id, depth,
                   likes_count, reply_count,
-                  created_at, fetched_at, raw_data_json
+                  created_at, fetched_at, raw_data_json,
+                  author_avatar_url
                 ) VALUES (
                   ?, ?, ?, ?,
                   ?, ?, ?, ?,
                   ?, ?, ?,
                   ?, ?,
                   ?, ?,
-                  ?, ?, ?
+                  ?, ?, ?,
+                  ?
                 )
                 ON CONFLICT (platform, external_comment_id) DO NOTHING
                 """,
@@ -453,6 +475,7 @@ def collect_post_comments(
                     std["parent_comment_id"], std["depth"],
                     std["likes_count"], std["reply_count"],
                     std["created_at"], _now_iso(), std["raw_data_json"],
+                    std.get("author_avatar_url"),
                 ),
             )
             # Note: rowcount may be 0 on conflict (dedup); we estimate via

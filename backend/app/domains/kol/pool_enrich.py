@@ -11,6 +11,7 @@ from app.domains.kol.pool_common import (
     _average_from_total,
     _bio,
     _clear_kol_pool_read_cache,
+    _commerce_flags,
     _content_items_from_payload,
     _display_name,
     _first_present,
@@ -24,11 +25,16 @@ from app.domains.kol.pool_common import (
     _profile_item,
     _profile_stats,
     _profile_url,
+    _table_columns,
     _thumb_url,
     _utcnow,
 )
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def enrich_item(
@@ -199,6 +205,26 @@ def enrich_item(
         ),
     )
     conn.commit()
+    # C6 零新抓提列:K8 商单/认证标记从同一份 raw 顺手提列(authorMeta.verified/ttSeller/
+    # commerceUserInfo.commerceUser)。独立 UPDATE + 独立提交:列未迁移(旧布局)或解析异常
+    # 一律静默跳过,绝不影响主富化。红线:只写 3 个标记列,不触 viltrox_fit_score / rule_v0。
+    try:
+        flags = _commerce_flags(raw_data)
+        pool_columns = _table_columns(conn, "vkpi_kol_pool")
+        writable = {key: value for key, value in flags.items() if value is not None and key in pool_columns}
+        if writable:
+            assignments = ", ".join(f"{key}=?" for key in writable)
+            conn.execute(
+                f"UPDATE vkpi_kol_pool SET {assignments} WHERE id=?",  # noqa: S608 — 列名来自固定白名单 dict key
+                (*writable.values(), int(kol_pool_id)),
+            )
+            conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.warning("commerce flags extract skipped kol=%s", kol_pool_id, exc_info=True)
     _clear_kol_pool_read_cache()
     updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     return {

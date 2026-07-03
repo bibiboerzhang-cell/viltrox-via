@@ -178,6 +178,14 @@ def _evidence_values(
         _text(metadata.get("scrape_source")) or SOURCE_URL_METADATA,
     )
     metrics_source = validate_source_value("metrics_source", scrape_source)
+    # C6 零新抓提列:媒体种类细分列 video / image / carousel(migration 208)。
+    # metadata.media_kind 语义保持 video/image 二值不动(evidence_type 分流继续照旧);
+    # 本列在 image 基础上按多图 URL 数再细分出 carousel。metadata 无信号时留空串,
+    # 由 _should_write_value 过滤不写 -> 列保持 NULL,交给回填脚本兜底。
+    media_kind = _text(metadata.get("media_kind")).lower()
+    image_urls_meta = metadata.get("image_urls") if isinstance(metadata.get("image_urls"), list) else []
+    if media_kind == "image" and len(image_urls_meta) > 1:
+        media_kind = "carousel"
     values = {
         "kol_pool_id": int(kol_pool_id),
         "content_url": _text(metadata.get("content_url")) or video_url,
@@ -193,6 +201,8 @@ def _evidence_values(
         # 识别分流:抓取层标 media_kind=image(IG 图文/轮播)→ 存成 image 证据,不进视频深析;
         # 缺省/video → 仍按 video。只动类型标签,不碰 viltrox_fit_score。
         "evidence_type": "image" if _text(metadata.get("media_kind")) == "image" else "video",
+        # 细分媒体种类列(空串会被 _should_write_value 过滤;列未迁移时被 columns 过滤,双保险)。
+        "media_kind": media_kind,
         # 轮播多图 URL 列表(TEXT 存 json 串;无则不写,由 _should_write_value 过滤)。供前端图片轮播展示。
         "image_urls": (json.dumps(metadata.get("image_urls"), ensure_ascii=False) if metadata.get("image_urls") else None),
         "source": source,

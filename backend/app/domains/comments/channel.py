@@ -415,12 +415,14 @@ def _save_channel_comments(
               author_handle, author_id, is_op,
               parent_comment_id, depth,
               likes_count, reply_count,
-              created_at, fetched_at, raw_data_json
+              created_at, fetched_at, raw_data_json,
+              author_avatar_url
             ) VALUES (
               ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?
+              ?, ?, ?, ?, ?,
+              ?
             )
             ON CONFLICT (platform, external_comment_id) DO UPDATE SET
               account_id = EXCLUDED.account_id,
@@ -428,7 +430,8 @@ def _save_channel_comments(
               post_table = EXCLUDED.post_table,
               external_post_id = EXCLUDED.external_post_id,
               fetched_at = EXCLUDED.fetched_at,
-              raw_data_json = EXCLUDED.raw_data_json
+              raw_data_json = EXCLUDED.raw_data_json,
+              author_avatar_url = COALESCE(EXCLUDED.author_avatar_url, vkpi_comments.author_avatar_url)
             """,
             (
                 int(channel_id),
@@ -449,6 +452,7 @@ def _save_channel_comments(
                 channels._text(standardized.get("created_at")) or None,
                 channels._utcnow(),
                 channels._json(raw),
+                standardized.get("author_avatar_url"),
             ),
         )
     conn.commit()

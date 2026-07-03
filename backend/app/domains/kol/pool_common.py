@@ -593,6 +593,60 @@ def _bio(profile: dict[str, Any]) -> str:
     )
 
 
+def _bool_signal(value: Any) -> bool | None:
+    """raw 布尔信号容错:bool 直取;compat/JSON 里的 0/1、"true"/"false" 也认;其它=None(无信号)。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in {"true", "1", "yes"}:
+            return True
+        if low in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def _commerce_flags(raw_data: dict[str, Any]) -> dict[str, bool | None]:
+    """K8 商单/认证标记提列(零新抓:纯读已落库 raw)。
+
+    信号口径(docs/vkpi_Apify资产盘点_2026-07-02.md):TT authorMeta.verified /
+    authorMeta.ttSeller / authorMeta.commerceUserInfo.commerceUser;IG 等平台顶层
+    verified 兜底。None=raw 无该信号(调用方不写列,保持 NULL 与 FALSE 区分)。
+    红线:纯读标记,绝不触 viltrox_fit_score、不碰 rule_v0 评分。
+    """
+    if not isinstance(raw_data, dict) or not raw_data:
+        return {"is_verified": None, "is_tt_seller": None, "is_commerce_user": None}
+    candidates: list[dict[str, Any]] = []
+    profile = _profile_item(raw_data)
+    if isinstance(profile, dict) and profile:
+        candidates.append(profile)
+    videos = raw_data.get("videos")
+    if isinstance(videos, list) and videos and isinstance(videos[0], dict):
+        # TT 档案 raw 常是视频条目列表,authorMeta 挂在每条视频上 —— 拿首条兜底。
+        candidates.append(videos[0])
+    verified: bool | None = None
+    tt_seller: bool | None = None
+    commerce_user: bool | None = None
+    for container in candidates:
+        author = _nested_dict(container, "authorMeta", "author", "owner", "user")
+        if verified is None:
+            verified = _bool_signal(author.get("verified"))
+        if verified is None:
+            verified = _bool_signal(container.get("verified"))
+        if tt_seller is None:
+            tt_seller = _bool_signal(author.get("ttSeller"))
+        if tt_seller is None:
+            tt_seller = _bool_signal(container.get("ttSeller"))
+        info = author.get("commerceUserInfo")
+        if not isinstance(info, dict):
+            info = container.get("commerceUserInfo") if isinstance(container.get("commerceUserInfo"), dict) else {}
+        if commerce_user is None:
+            commerce_user = _bool_signal(info.get("commerceUser"))
+    return {"is_verified": verified, "is_tt_seller": tt_seller, "is_commerce_user": commerce_user}
+
+
 def _profile_url(platform: str, profile: dict[str, Any], handle: str, existing: str = "") -> str:
     author = _nested_dict(profile, "authorMeta", "author", "owner", "user")
     direct = str(
