@@ -116,6 +116,48 @@ def get_kol_outreach_draft(
     return kol_outreach_draft.get_outreach_draft(int(kol_pool_id))
 
 
+@router.get("/kol-pool/{kol_pool_id}/outreach-pack")
+def get_kol_outreach_pack(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """C4:读最新外联包(brief + 双语邮件草稿,cache kol_outreach_pack_v1)+ 实时邮箱状态;
+    无则 state=missing。零 LLM/零外调,零触 viltrox_fit_score。"""
+    del staff
+    from app.domains.kol import outreach_pack as kol_outreach_pack
+
+    try:
+        return kol_outreach_pack.get_outreach_pack(int(kol_pool_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/outreach-pack")
+async def generate_kol_outreach_pack(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """C4:一键生成外联包——brief 复用已有 why-fit/内容契合产物(零新分析),邮件草稿走
+    llm_gateway(预算闸+兜底链内置,失败回落双语模板),邮箱缺失复用既有富化管线补抓。
+    同 KOL 当日幂等(body.force=true 才重生成)。LLM/富化可达数十秒 → threadpool 不阻塞事件循环。
+    红线:零写 viltrox_fit_score、不动 rule_v0、不碰归属判定。"""
+    from app.domains.kol import outreach_pack as kol_outreach_pack
+
+    staff_dict = staff if isinstance(staff, dict) else None
+    try:
+        return await run_in_threadpool(
+            kol_outreach_pack.generate_outreach_pack,
+            int(kol_pool_id),
+            force=bool((body or {}).get("force")),
+            staff=staff_dict,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — 生成失败不该 500 裸炸,诚实回原因供前端展示
+        return {"state": "error", "kol_pool_id": int(kol_pool_id), "reason": str(exc)[:300]}
+
+
 @router.get("/kol-pool/{kol_pool_id}/dimensions11")
 def get_pool_item_dimensions11(
     kol_pool_id: int,
