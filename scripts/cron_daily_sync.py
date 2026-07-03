@@ -179,6 +179,21 @@ async def main() -> int:
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         inner = result.get("result") if isinstance(result, dict) else {}
         if isinstance(inner, dict):
+            # 退出码与 health 阈值对齐(2026-07-03):此前「任意 1 个官号失败就 exit 2」,
+            # 18 官号里 1 个 Apify actor 偶发超时(失败率 0.9%,远低于 10% 阈值)也会把
+            # systemd 服务打成 failed 并触发 OnFailure 告警,狼来了掩盖真故障。
+            # 现在:blocked_next_run 或失败率超过 health 自己的阈值才 exit 2;
+            # 低于阈值的零星失败已在 health/failures 字段里如实记录,退出 0。
+            health = inner.get("health") if isinstance(inner.get("health"), dict) else {}
+            if bool(health.get("blocked_next_run")):
+                return 2
+            rate = health.get("failure_rate")
+            threshold = health.get("failure_rate_threshold")
+            if isinstance(rate, (int, float)) and isinstance(threshold, (int, float)):
+                if float(rate) > float(threshold):
+                    return 2
+                return 0
+            # health 块缺失时回退旧口径(任何失败即 2),不放过未知状态
             official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
             kol = inner.get("kol_pool_light") if isinstance(inner.get("kol_pool_light"), dict) else {}
             if int(official.get("failed") or 0) or int(kol.get("errors") or 0):
