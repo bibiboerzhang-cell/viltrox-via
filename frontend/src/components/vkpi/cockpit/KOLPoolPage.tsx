@@ -464,7 +464,8 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             onTotalClick: () => setPoolModalOpen(true),
           }),
           e("div", { className: "mt-2.5 space-y-2" },
-            e(SmartKolInputPanel, { apiToken, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem, onOpenProfile: openProfileItem })
+            // K1:searchMode 接通传递——三档(平衡/精准/探索)真实改变 smart 搜索请求参数(映射表见 SmartKolInputPanel)。
+            e(SmartKolInputPanel, { apiToken, searchMode, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem, onOpenProfile: openProfileItem })
           ),
           // 待分析:库内有视频证据但还没深析的 KOL → 批量入队
           e("div", { className: "mt-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015]" },
@@ -520,7 +521,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
               search, setSearch, country, setCountry, audienceType, setAudienceType,
               trendLevel, setTrendLevel, sortBy, setSortBy,
               hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor,
-              searchMode, kindFilter, setKindFilter, kindCounts,
+              searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts,
               myListFilter, setMyListFilter, myListCount: myList.size,
             }),
             (search || kindFilter || myListFilter) && e(SearchProgressBar, { items: filteredBase, searchActive: !!search }),
@@ -532,8 +533,12 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
                   e("span", { className: "text-white font-medium tabular-nums" }, items.length),
                   e("span", { className: "text-slate-600" }, "/" + poolItems.length)
                 ),
-                e("span", { className: "rounded border border-white/[0.06] px-1.5 py-0.5 text-[9.5px] text-slate-500" },
-                  searchMode === "balanced" ? "平衡 15+15" : searchMode === "precision" ? "精准 20+10" : "探索 10+20"
+                // K1:与真实映射表对齐(库内召回 创作者+测评 · 全网发现条数),不再显示旧占位数字。
+                e("span", {
+                  className: "rounded border border-white/[0.06] px-1.5 py-0.5 text-[9.5px] text-slate-500",
+                  title: "当前搜索模式的真实配额:库内召回(创作者+测评)· 全网发现条数"
+                },
+                  searchMode === "balanced" ? "平衡 8+7·发现30" : searchMode === "precision" ? "精准 10+5·发现20" : "探索 5+5·发现40"
                 ),
                 kindFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-purple-500/25 bg-purple-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-purple-200" },
                   kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : ((CANDIDATE_KIND_INFO as any)[kindFilter]?.short || kindFilter),

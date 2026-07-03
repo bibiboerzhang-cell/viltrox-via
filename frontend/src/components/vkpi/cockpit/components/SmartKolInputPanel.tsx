@@ -49,13 +49,33 @@ import {
 import { TextResultSection } from "./SmartKolInputPanel.TextResult";
 
 type State = "idle" | "loading" | "ready" | "executing" | "error";
+
+// 【K1 搜索模式映射表 2026-07-02】FilterBar 三档(平衡/精准/探索)→ 全网查找请求参数。
+// 只改参数映射,不动召回算法;数字与 FilterBar 的 hint/title 一致:
+//   balanced  平衡: 库内召回 创作者8+测评7 / 全网发现 30 / 每平台 12(=原默认值)
+//   precision 精准: 库内召回 创作者10+测评5 / 全网发现 20 / 每平台 8(收窄)
+//   discovery 探索: 库内召回 创作者5+测评5  / 全网发现 40 / 每平台 15(放宽)
+const SEARCH_MODE_QUOTAS: Record<string, { creatorQuota: number; reviewerQuota: number; newDiscoveryLimit: number; perPlatformLimit: number }> = {
+  balanced:  { creatorQuota: 8,  reviewerQuota: 7, newDiscoveryLimit: 30, perPlatformLimit: 12 },
+  precision: { creatorQuota: 10, reviewerQuota: 5, newDiscoveryLimit: 20, perPlatformLimit: 8 },
+  discovery: { creatorQuota: 5,  reviewerQuota: 5, newDiscoveryLimit: 40, perPlatformLimit: 15 },
+};
+
+// 【K7】URL 多行批量:一次输入里抠出全部 http(s) URL(空格/换行分隔);上限 10 条防误粘。
+const URL_BATCH_MAX = 10;
+function extractUrls(raw: string): string[] {
+  return String(raw || "").match(/https?:\/\/[^\s]+/g) || [];
+}
+
 export function SmartKolInputPanel({
   apiToken = "",
+  searchMode = "balanced",
   onRecallItems,
   onOpenRecallItem,
   onOpenProfile,
 }: {
   apiToken?: string;
+  searchMode?: string;
   onRecallItems?: (items: VkpiKolRecallItem[]) => void;
   onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
   onOpenProfile?: (result: VkpiKolUrlDeepCrawlResponse) => void;
@@ -91,6 +111,9 @@ export function SmartKolInputPanel({
   // 否则会话项交集会误杀这些真候选)。所以勾选时按 handle resolve 出真池 id 再收藏 —— 不回戳、无副作用。
   const [resolvedPids, setResolvedPids] = useState<Map<string, number>>(() => new Map());
   const [resolvingKeys, setResolvingKeys] = useState<Set<string>>(() => new Set());
+  // 【K7】URL 多行批量:输入含 ≥2 个 http(s) URL 时逐条排队分析(串行,间隔 500ms,上限 10)。
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchNote, setBatchNote] = useState("");
   // R4 找人闭合:批准锁定 → 建项目草案(带预算/风险)→ 话术草案。仅草案,绝不外发/承诺价格。
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftNote, setDraftNote] = useState("");
@@ -195,7 +218,7 @@ export function SmartKolInputPanel({
   }
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
-  const isBusy = state === "loading" || state === "executing";
+  const isBusy = state === "loading" || state === "executing" || batchBusy;
   const profileFlow = asRecord(urlResult?.profile_flow);
   const videoFlow = asRecord(urlResult?.video_flow);
   const videoCreator = asRecord(urlResult?.creator_identity || videoFlow.creator_identity);
@@ -240,6 +263,9 @@ export function SmartKolInputPanel({
       return !p || discoveryPlatforms.includes(p);
     });
   }, [activeSearchSession, discoveryPlatforms]);
+  // 【K3】入库反馈:本次会话全网新发现总数(未经平台筛选)——后端 _auto_enroll_discoveries 已把
+  // new_creator 自动落 Pool(会话项 kol_pool_id 保持 NULL 是不变式),故「发现数=已自动入库数」。
+  const discoveryTotal = useMemo(() => discoveryItemsFromSession(activeSearchSession).length, [activeSearchSession]);
   // 三框·框1:LLM 人群理解可编辑(防 LLM 理解偏)——编辑后「用此重搜」。
   const [personaEditing, setPersonaEditing] = useState(false);
   const [personaDraft, setPersonaDraft] = useState("");
@@ -562,6 +588,28 @@ export function SmartKolInputPanel({
     }
   };
 
+  // 【K7】URL 多行批量:复用现有单 URL 通道(run → smartKolSearch → 自动 execute),串行 await
+  // 保证面板状态不打架;每条之间停 500ms 不打爆后端。面板结果区显示的是最后一条的详情,
+  // 批量进度/入队数以 batchNote 为准;各条的分析进度照常进「最近历史 / 任务板」。上限 10 条防误粘。
+  const runUrlBatch = async (urls: string[]) => {
+    if (!apiToken || batchBusy) return;
+    const capped = urls.slice(0, URL_BATCH_MAX);
+    setBatchBusy(true);
+    setBatchNote(`已入队 ${capped.length} 条${urls.length > capped.length ? `(共检测到 ${urls.length} 条,超出上限 ${URL_BATCH_MAX} 的已忽略)` : ""} · 逐条排队分析中…`);
+    try {
+      for (let i = 0; i < capped.length; i += 1) {
+        setBatchNote(`批量分析中 ${i + 1}/${capped.length} · ${capped[i].slice(0, 64)}`);
+        // eslint-disable-next-line no-await-in-loop
+        await run(capped[i]);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+      }
+      setBatchNote(`已入队 ${capped.length} 条 · 后台逐条分析,进度见「最近历史」或左侧任务板`);
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
   // URL 执行核心:source 显式传当次结果(避免 setUrlResult 后读到旧 state),auto=true 为自动跑。
   // 刀2·流2 路A(2026-06-16):profile 改用 mode "profile_with_video"(原 profile_basics)——抓基础资料 +
   // 入库 + 自动跑 PROFILE_REP_VIDEO_LIMIT 条代表视频 final_v1,dossier 才出真 LLM 账号分(原 profile_basics
@@ -615,17 +663,21 @@ export function SmartKolInputPanel({
     try {
       // 2026-07-02 用户令:库内推荐 15(创作者8+测评7)/ 云端新发现 30(三平台轮转均匀,
       // 每平台候选上限 12 留补位余量)。地区由 discoveryRegion 控制(非英语区按当地语言搜)。
+      // 【K1 接真】上述数字即「平衡」档;精准/探索按 SEARCH_MODE_QUOTAS 映射表收窄/放宽,
+      // 只改参数不改算法。limit/advanceLimit = 创作者+测评之和,保持召回总量与配额一致。
+      const quotas = SEARCH_MODE_QUOTAS[searchMode] || SEARCH_MODE_QUOTAS.balanced;
+      const recallLimit = quotas.creatorQuota + quotas.reviewerQuota;
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
         candidateLimit: 100,
-        limit: 15,
-        creatorQuota: 8,
-        reviewerQuota: 7,
-        advanceLimit: 15,
+        limit: recallLimit,
+        creatorQuota: quotas.creatorQuota,
+        reviewerQuota: quotas.reviewerQuota,
+        advanceLimit: recallLimit,
         maxPosts: 12,
         representativeVideoLimit: 1,
         includeNewDiscovery: true,
-        newDiscoveryLimit: 30,
-        newDiscoveryPerPlatformLimit: 12,
+        newDiscoveryLimit: quotas.newDiscoveryLimit,
+        newDiscoveryPerPlatformLimit: quotas.perPlatformLimit,
         newDiscoveryPlatforms: discoveryPlatforms,
         excludeChinese,
         market: discoveryRegion,
@@ -689,6 +741,9 @@ export function SmartKolInputPanel({
         onSubmit={(event) => {
           event.preventDefault();
           if (isBusy || !apiToken || !cleanText(input)) return;
+          // 【K7】多行/多 URL(≥2 个 http)→ 逐条排队分析;单条照旧走 run()。
+          const urls = extractUrls(input);
+          if (urls.length >= 2) { void runUrlBatch(urls); return; }
           void run();
         }}
       >
@@ -697,7 +752,11 @@ export function SmartKolInputPanel({
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !isBusy) void run();
+            if (event.key === "Enter" && !isBusy) {
+              const urls = extractUrls(input);
+              if (urls.length >= 2) { void runUrlBatch(urls); return; }
+              void run();
+            }
           }}
           placeholder="粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师"
           className="min-h-[40px] rounded-md border border-white/[0.075] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
@@ -712,6 +771,16 @@ export function SmartKolInputPanel({
           {inferredMode === "url" ? "查看" : "查找"}
         </button>
       </form>
+
+      {batchNote ? (
+        <div className="mt-1.5 flex items-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[10px] text-cyan-100">
+          {batchBusy ? <Loader2 size={11} className="animate-spin" /> : null}
+          <span>{batchNote}</span>
+          {!batchBusy ? (
+            <button type="button" onClick={() => setBatchNote("")} className="ml-auto text-slate-500 hover:text-slate-300">收起</button>
+          ) : null}
+        </div>
+      ) : null}
 
       {state === "idle" && !input ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9.5px] text-slate-600">
@@ -750,6 +819,7 @@ export function SmartKolInputPanel({
           llmPlan={llmPlan}
           recallItems={recallItems}
           discoveryItems={discoveryItems}
+          discoveryTotal={discoveryTotal}
           input={input}
           apiToken={apiToken}
           isBusy={isBusy}

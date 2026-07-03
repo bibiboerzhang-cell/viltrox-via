@@ -7,7 +7,7 @@ import { COUNTRY_INFO } from "../data/countryInfo";
 
 const e = React.createElement;
 
-export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }: any) {
+export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }: any) {
   const [localApplying, setLocalApplying] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [examplesOpen, setExamplesOpen] = useState(false);
@@ -24,10 +24,15 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
     setTimeout(() => setLocalApplying(false), 300);
   };
   
+  // 【K1 接真 2026-07-02】三档不再是展示占位:切换会真实改变「找达人」smart 搜索请求参数
+  // (SmartKolInputPanel.queueTextAdvance 的映射表,数字与此处 hint/title 一致):
+  //   balanced  平衡: 库内召回 创作者8+测评7 / 全网发现 30(每平台 12)
+  //   precision 精准: 库内召回 创作者10+测评5 / 全网发现 20(每平台 8,收窄)
+  //   discovery 探索: 库内召回 创作者5+测评5  / 全网发现 40(每平台 15,放宽)
   const modeChips = [
-    { key: "balanced",  label: "平衡",  hint: "老 15 · 新 15",  color: "rgba(168,85,247,0.30)" },
-    { key: "precision", label: "精准",  hint: "老 20 · 新 10",  color: "rgba(34,197,94,0.30)" },
-    { key: "discovery", label: "探索",  hint: "老 10 · 新 20",  color: "rgba(6,182,212,0.30)" },
+    { key: "balanced",  label: "平衡",  hint: "库内 8+7 · 发现 30",  color: "rgba(168,85,247,0.30)", tip: "平衡:库内召回 创作者8+测评7 · 全网发现 30(每平台 12)。下次「找达人」文字搜索生效。" },
+    { key: "precision", label: "精准",  hint: "库内 10+5 · 发现 20", color: "rgba(34,197,94,0.30)",  tip: "精准:库内召回 创作者10+测评5 · 全网发现 20(每平台 8,收窄)。下次「找达人」文字搜索生效。" },
+    { key: "discovery", label: "探索",  hint: "库内 5+5 · 发现 40",  color: "rgba(6,182,212,0.30)",  tip: "探索:库内召回 创作者5+测评5 · 全网发现 40(每平台 15,放宽)。下次「找达人」文字搜索生效。" },
   ];
   
   const kindChips = [
@@ -70,19 +75,24 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
             : e(ChevronRight, { size: 13 })
           )
         ),
-        // ── 搜索模式(诚实化:切换不改召回配额,后端未接 → 降级为非按钮的只读标签,避免误导)──
+        // ── 搜索模式(K1 已接真:切换真实改变 smart 搜索的召回/发现配额,按钮恢复可点)──
           e("div", {
-            className: "flex shrink-0 items-center overflow-hidden rounded-md border border-dashed border-white/[0.06] bg-white/[0.012] opacity-60 cursor-default select-none",
-            title: "展示偏好·不改召回配额(接入中)"
+            className: "flex shrink-0 items-center overflow-hidden rounded-md border border-white/[0.08] bg-white/[0.015]",
+            title: "搜索模式:改变下次「找达人」文字搜索的库内召回配额与全网发现数量"
           },
-            modeChips.map(m => e("span", {
+            modeChips.map(m => e("button", {
               key: m.key,
-              className: "px-2.5 py-1.5 text-[10px]",
-              title: "展示偏好·不改召回配额(接入中)",
+              type: "button",
+              onClick: () => setSearchMode && setSearchMode(m.key),
+              className: "px-2.5 py-1.5 text-[10px] transition-colors",
+              title: m.tip,
               style: searchMode === m.key
                 ? { background: m.color, color: "#fff" }
-                : { color: "rgba(148,163,184,0.55)" }
-          }, e("span", { className: "font-medium" }, m.label)))
+                : { color: "rgba(148,163,184,0.75)" }
+          },
+            e("span", { className: "font-medium" }, m.label),
+            searchMode === m.key && e("span", { className: "ml-1 text-[8.5px] opacity-80" }, m.hint)
+          ))
         ),
         e("button", {
           disabled: true,

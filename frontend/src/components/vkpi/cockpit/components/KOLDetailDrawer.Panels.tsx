@@ -18,6 +18,7 @@ import {
   fixedOrDash,
   flexibleTextList,
   matchAnalysisBundle,
+  mediaKindBadge,
   normalizedVideoPlatform,
   numberOr,
   recordOr,
@@ -79,6 +80,8 @@ export function RepresentativeVideoCard({ video, index, onOpen, compact = false 
   const canOpen = Boolean(cachedVideoUrl || youtubeVideoId || watchUrl || thumbnail);
   const showThumbnail = Boolean(thumbnail && !thumbnailFailed);
   const platformLabel = platform === "instagram" ? "IG" : platform === "tiktok" ? "TT" : platform === "youtube" ? "YT" : "MEDIA";
+  // 【K4】媒体种类小徽章(图/组图/视频):读 evidence 真实字段 media_kind/evidence_type,缺失不显示。
+  const kindBadge = mediaKindBadge(video);
 
   const handleClick = () => {
     if (!canOpen) return;
@@ -112,6 +115,12 @@ export function RepresentativeVideoCard({ video, index, onOpen, compact = false 
         className: "absolute left-0.5 top-0.5 rounded px-1 py-px text-[7px] font-medium uppercase tracking-wide text-white/85",
         style: { background: "rgba(0,0,0,0.62)" }
       }, platformLabel),
+      // 【K4】媒体种类徽章(紧凑模式:平台标右侧)
+      kindBadge && e("span", {
+        className: "absolute left-0.5 top-4 rounded px-1 py-px text-[7px] font-medium text-cyan-100/90",
+        style: { background: "rgba(8,51,68,0.78)" },
+        title: kindBadge.title,
+      }, kindBadge.label),
       e("span", {
         className: "absolute bottom-0.5 right-0.5 rounded px-1 text-[7.5px] tabular-nums text-white",
         style: { background: "rgba(0,0,0,0.7)" }
@@ -147,6 +156,12 @@ export function RepresentativeVideoCard({ video, index, onOpen, compact = false 
         className: "absolute left-1 top-1 rounded px-1 py-0.5 text-[7.5px] font-medium uppercase tracking-wide text-white/85",
         style: { background: "rgba(0,0,0,0.62)" }
       }, platform === "instagram" ? "IG" : platform === "tiktok" ? "TT" : platform === "youtube" ? "YT" : "MEDIA"),
+      // 【K4】媒体种类徽章(大卡:平台标下方),字段缺失时 kindBadge=null 不渲染
+      kindBadge && e("span", {
+        className: "absolute left-1 top-6 rounded px-1 py-0.5 text-[7.5px] font-medium text-cyan-100/90",
+        style: { background: "rgba(8,51,68,0.78)" },
+        title: kindBadge.title,
+      }, kindBadge.label),
       platform !== "youtube" && e("span", {
         className: "absolute right-1 top-1 rounded px-1 py-0.5 text-[7.5px] font-medium text-white/80",
         style: { background: cachedVideoUrl ? "rgba(16,185,129,0.58)" : "rgba(15,23,42,0.72)" }

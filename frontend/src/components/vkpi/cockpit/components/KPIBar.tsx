@@ -32,18 +32,23 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: a
   // 列,trend_resonance 恒 null → 卡值恒「待评估」纯占位。数据接入后恢复:在下方数组补回
   // { icon: Flame, label: "本周高 Trend", value: items.filter(i => (i.trend_resonance||0) >= 0.5).length,
   //   color: "#ef4444", filterKey: null },并把外层 xl:grid-cols-5 改回 xl:grid-cols-6。
+  // 【K6 待补全卡诚实降级 2026-07-02】自查结论:vkpi_kol_pool 无 candidate_kind 列(grep 迁移 + 本地库
+  // information_schema 均无),前端只能按 linked_main_kol_id 推导,而全池仅 1 行有链接 → 「待补全」
+  // (existing_low_confidence)计数失真无意义。故本卡降级为灰态「数据不足(分类待后端)」:不可点、
+  // 排末位、字号缩小,不再占一等位;等后端真出 candidate_kind 列再接真计数(lowConfCount 保留在此)。
+  void lowConfCount; // 保留推导逻辑不删,接真时直接换回 value
   const cards = [
     { icon: Users,       label: "Pool 总数",       value: total,                                    sub: existingCount + " 已链主表 · " + newCount + " 未链(≈新)",    color: "#a855f7", filterKey: "" },
     { icon: Sparkles,    label: "新发现 KOL",      value: newCount,                                  sub: "按未链主表推导 · candidate_kind 待后端", color: "#c4b5fd", filterKey: "new" },
-    { icon: AlertCircle, label: "待补全",          value: lowConfCount,                              sub: "已链主表 · 数据不全(分类待后端)",                                  color: "#fdba74", filterKey: "existing_low_confidence" },
     { icon: Target,      label: "平均 V6 Fit",     value: avgFit,                                    sub: fits.length ? fits.length + " 个有效 · 旧V6分(未含RealER)" : "评分待生成", color: "#10b981", filterKey: null },
     { icon: TrendingUp,  label: "播放量汇总",      value: totalReach ? formatNumber(totalReach) : "待评估", sub: totalReach ? "Σ avg_views · 非去重触达" : "reach 字段待接入", color: "#ec4899", filterKey: null },
+    { icon: AlertCircle, label: "待补全",          value: "数据不足",                                sub: "candidate_kind 列缺失 · 分类待后端",                                color: "#64748b", filterKey: null, degraded: true },
   ];
 
   return e("div", { className: "grid grid-cols-2 gap-1.5 md:grid-cols-3 xl:grid-cols-5" },
     cards.map((c: any, i: any) => {
       const isTotalCard = c.label === "Pool 总数";
-      const clickable = c.filterKey !== null || (isTotalCard && onTotalClick);
+      const clickable = !c.degraded && (c.filterKey !== null || (isTotalCard && onTotalClick));
       const isActive  = clickable && activeKindFilter === c.filterKey && c.filterKey !== "";
       const Card = clickable ? motion.button : motion.div;
       const cardProps: any = {
@@ -60,8 +65,10 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: a
         } : undefined,
         className: "rounded-md border px-2.5 py-1.5 text-left transition-colors " +
           (clickable ? "cursor-pointer hover:border-white/[0.14] hover:bg-white/[0.03] " : "") +
+          (c.degraded ? "opacity-55 " : "") +
           (isActive ? "border-white/[0.20]" : "border-white/[0.055]"),
-        style: { background: isActive ? c.color + "0F" : "rgba(255,255,255,0.014)" }
+        style: { background: isActive ? c.color + "0F" : "rgba(255,255,255,0.014)" },
+        title: c.degraded ? "candidate_kind 列后端尚未落库,「待补全」暂无可信计数;接真后恢复" : undefined
       };
       if (clickable) cardProps.type = "button";
       return e(Card as any, cardProps,
@@ -70,7 +77,8 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: a
           e("span", { className: "min-w-0 flex-1 truncate text-[9px] text-slate-500" }, c.label),
           clickable && e(Filter, { size: 8, className: "text-slate-700", title: isTotalCard ? "查看全部 KOL" : "点击筛选" } as any)
         ),
-        e("div", { className: "mt-1 text-[15px] font-medium leading-none text-white tabular-nums" }, c.value),
+        // 【K6】灰态卡字号缩小(15px→11px),灰色而非白色,视觉上退出一等位
+        e("div", { className: "mt-1 font-medium leading-none tabular-nums " + (c.degraded ? "text-[11px] text-slate-500" : "text-[15px] text-white") }, c.value),
         e("div", { className: "mt-0.5 truncate text-[8px] text-slate-600" }, c.sub)
       );
     })

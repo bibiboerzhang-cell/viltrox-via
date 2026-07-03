@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ShieldCheck, Video } from "lucide-react";
 import { getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+// 【K4】媒体种类徽章(图/组图/视频):helpers 只从本文件 import 类型(编译期擦除),无运行时环。
+import { mediaKindBadge } from "./KOLDetailDrawer.helpers";
 
 type VideoEvidence = Record<string, unknown>;
 
@@ -337,7 +339,18 @@ export function AnalysisCard({ bundle }: { bundle: AnalysisBundle }) {
     <div className="rounded-lg border border-cyan-400/15 bg-cyan-400/[0.035] p-3">
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[11px] font-semibold text-white">{videoTitle(bundle.video)}</div>
+          <div className="flex items-center gap-1.5">
+            <div className="truncate text-[11px] font-semibold text-white">{videoTitle(bundle.video)}</div>
+            {/* 【K4】媒体种类徽章:evidence 带 media_kind/evidence_type 才显示,缺失静默 */}
+            {(() => {
+              const badge = mediaKindBadge(bundle.video);
+              return badge ? (
+                <span className="shrink-0 rounded border border-cyan-300/25 bg-cyan-400/[0.08] px-1 py-px text-[8.5px] font-medium text-cyan-100/90" title={badge.title}>
+                  {badge.label}
+                </span>
+              ) : null;
+            })()}
+          </div>
           <div className="mt-0.5 text-[9.5px] text-slate-500">
             evidence #{videoEvidenceId(bundle.video)} · 播放 {formatLargeNum(bundle.video.view_count ?? bundle.video.views)}
           </div>

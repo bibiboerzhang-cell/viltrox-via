@@ -72,6 +72,19 @@ export { UrlSummary } from "./SmartKolInputPanel.UrlSummary";
 
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 
+// 【K2】契合命中 chip 点击 → 写入 KOL Pool 本地筛选词。复用顶栏全局搜索同款 localStorage+event
+// 管道(KOLPoolPage.consumeSearch 监听 vkpi:open-kol-pool-search → setSearch + 展开表格视图)。
+// 筛选词用原文(英文命中词)而非中文映射——本地筛选 hay(handle/bio/设备)是英文,原文才命中。
+function applyPoolLocalFilter(tag: string, ev?: { stopPropagation?: () => void }) {
+  if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
+  const q = String(tag || "").trim();
+  if (!q) return;
+  try {
+    window.localStorage.setItem("vkpi:pending-kolpool-search", q);
+    window.dispatchEvent(new Event("vkpi:open-kol-pool-search"));
+  } catch { /* localStorage 不可用忽略 */ }
+}
+
 export function HistoryStrip({
   items,
   loading,
@@ -221,7 +234,7 @@ export function RecallMiniItem({
               <span className="rounded border border-cyan-300/25 bg-cyan-400/[0.08] px-1 text-[8.5px] font-medium text-cyan-100/90" title="近 90 天有新作">新鲜</span>
             ) : null}
             {marks.lowCollab && !marks.newcomer ? (
-              <span className="rounded border border-violet-300/25 bg-violet-400/[0.08] px-1 text-[8.5px] font-medium text-violet-100/90" title="历史无合作记录 · 成长空间">低合作</span>
+              <span className="rounded border border-violet-300/25 bg-violet-400/[0.08] px-1 text-[8.5px] font-medium text-violet-100/90" title="低合作 = 历史合作少(库内无合作记录),越新鲜越好 · 成长空间大">低合作</span>
             ) : null}
           </span>
         ) : null}
@@ -229,10 +242,19 @@ export function RecallMiniItem({
           <span className="mt-1 line-clamp-2 block text-[10px] leading-snug text-cyan-200/85">{whyFit}</span>
         ) : null}
         {Array.isArray(fitSrc.relevance_hits) && (fitSrc.relevance_hits as unknown[]).length ? (
-          <span className="mt-1 inline-flex flex-wrap items-center gap-1" title="persona 相关度命中词(为何契合,纯展示)">
+          <span className="mt-1 inline-flex flex-wrap items-center gap-1" title="persona 相关度命中词(为何契合)">
             <span className="text-[8.5px] text-slate-500">契合命中</span>
+            {/* 【K2】chip 可点:点击把命中词写入 KOL Pool 本地筛选(卡片本体是 button,故用 span+role 阻断冒泡) */}
             {(fitSrc.relevance_hits as unknown[]).slice(0, 4).map((h, i) => (
-              <span key={`${cleanText(h)}-${i}`} className="rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90">
+              <span
+                key={`${cleanText(h)}-${i}`}
+                role="button"
+                tabIndex={0}
+                onClick={(ev) => applyPoolLocalFilter(cleanText(h), ev)}
+                onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); applyPoolLocalFilter(cleanText(h), ev); } }}
+                title={`点击 → 以「${cleanText(h)}」筛选本地 KOL Pool 列表`}
+                className="cursor-pointer rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90 transition-colors hover:border-sky-300/50 hover:bg-sky-400/[0.18]"
+              >
                 {zhTag(cleanText(h))}
               </span>
             ))}
@@ -248,7 +270,17 @@ export function RecallMiniItem({
           </span>
         ) : null}
       </span>
-      <span className={`mt-1 flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}>
+      {/* 【K2】徽章解释:title 说明分档口径(高相关=向量相似度头部),附本条裸相似度供细看 */}
+      <span
+        className={`mt-1 flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}
+        title={
+          tier.label === "高相关"
+            ? `高相关 = 向量相似度头部(≥0.6)· 本条相似度 ${score.toFixed(3)}`
+            : tier.label === "中相关"
+              ? `中相关 = 向量相似度中段(0.3–0.6)· 本条相似度 ${score.toFixed(3)}`
+              : `相关 = 向量相似度 <0.3 · 本条相似度 ${score.toFixed(3)}`
+        }
+      >
         <span className="h-1 w-1 rounded-full" style={{ background: tier.dot }} />
         {tier.label}
       </span>

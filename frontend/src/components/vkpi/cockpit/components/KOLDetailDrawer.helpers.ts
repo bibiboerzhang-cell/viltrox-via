@@ -57,6 +57,33 @@ export function concernLabel(value: any) {
   return (labels as any)[text] || text.replace(/_/g, " ");
 }
 
+// 【K4】媒体种类徽章:读 evidence 行真实字段 media_kind / evidence_type(image|carousel|video)
+// + image_urls(≥2 张 → 组图)。字段缺失(当前 detail_bundle 的 _video_evidence_for_kol SELECT
+// 未回传这两列,且 WHERE 已滤成纯 video)→ 返回 null 不显示,graceful absence 不编造。
+export function mediaKindBadge(video: any): { label: string; title: string } | null {
+  if (!video || typeof video !== "object") return null;
+  const kind = String(video.media_kind ?? video.evidence_type ?? "").trim().toLowerCase();
+  if (!kind) return null;
+  // image_urls 可能是 JSON 数组串(migration 200 用 TEXT 存)或已解析数组,两者都容。
+  let imageCount = 0;
+  const rawImages = video.image_urls;
+  if (Array.isArray(rawImages)) imageCount = rawImages.length;
+  else if (typeof rawImages === "string" && rawImages.trim()) {
+    try {
+      const parsed = JSON.parse(rawImages);
+      if (Array.isArray(parsed)) imageCount = parsed.length;
+    } catch { /* 非 JSON 串忽略 */ }
+  }
+  if (kind === "carousel") return { label: "组图", title: "媒体种类:多图轮播(carousel)" };
+  if (kind === "image") {
+    return imageCount >= 2
+      ? { label: "组图", title: `媒体种类:图文/多图轮播(${imageCount} 张)` }
+      : { label: "图", title: "媒体种类:图片(image)" };
+  }
+  if (kind === "video") return { label: "视频", title: "媒体种类:视频(video)" };
+  return null; // 其余种类(如 media_article)不在 图/组图/视频 徽章口径内,不显示
+}
+
 // ─── 以下为从 KOLDetailDrawer.tsx 行为不变搬入的纯 helper(无 React/JSX)。 ───
 
 export function detailAvatarUrl(item: any) {

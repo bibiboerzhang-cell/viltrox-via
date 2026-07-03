@@ -150,6 +150,15 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
     : audienceState.status === "pending" ? "抓取评论中…可稍后再刷新"
     : hasEst ? "刷新受众统计" : "生成受众统计";
   const generatedDate = hasEst && est.generated_at ? String(est.generated_at).slice(0, 10) : "";
+  // 【K5】受众保鲜:est.generated_at 距今天数;>30 天在样本行旁亮琥珀小字提醒重新生成。
+  const generatedAgeDays = (() => {
+    if (!hasEst || !est.generated_at) return null;
+    const ts = Date.parse(String(est.generated_at));
+    if (!Number.isFinite(ts)) return null;
+    const days = Math.floor((Date.now() - ts) / 86400000);
+    return days >= 0 ? days : null;
+  })();
+  const estStale = generatedAgeDays != null && generatedAgeDays > 30;
 
   const expandLink = (key: string, label: string) =>
     canExpand && e("button", {
@@ -383,8 +392,13 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
         `受众创作者浓度 ${density.pct}%(订阅数超 ${Number(density.min_subscribers) || 1000},已知 ${Number(density.known_n) || 0} 人)`
       ),
       // 底部小字:只留 样本/置信/日期(方法与覆盖细节留在 JSON 内部,不渲染)
+      // 【K5】受众保鲜:生成时间距今 >30 天 → 样本行旁琥珀小字提醒(点下方按钮即可重新生成)。
       hasEst && e("div", { className: "text-[9px] text-slate-500 leading-relaxed" },
-        `样本 ${est.sample_size} 评论者 · 置信 ${est.confidence ?? "—"}` + (generatedDate ? ` · ${generatedDate}` : "")
+        `样本 ${est.sample_size} 评论者 · 置信 ${est.confidence ?? "—"}` + (generatedDate ? ` · ${generatedDate}` : ""),
+        estStale && e("span", {
+          className: "ml-1.5 text-amber-300/90",
+          title: `受众画像生成于 ${generatedDate || "未知日期"},已超过 30 天,评论者构成可能已变化`,
+        }, `数据 ${generatedAgeDays} 天前 · 建议重新生成`)
       ),
       hasEst && e("div", { className: "text-[9px] text-amber-400/70" }, est.note || "估算值,非平台官方粉丝数据"),
       !hasEst && e("div", { className: "text-[10px] text-slate-500" }, "暂无受众画像数据 — 点击下方生成(评论者抽样估算,非官方数据)"),

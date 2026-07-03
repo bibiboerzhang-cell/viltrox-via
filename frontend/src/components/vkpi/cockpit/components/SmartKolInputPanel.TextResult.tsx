@@ -20,6 +20,7 @@ export function TextResultSection({
   llmPlan,
   recallItems,
   discoveryItems,
+  discoveryTotal = 0,
   input,
   apiToken,
   isBusy,
@@ -65,6 +66,7 @@ export function TextResultSection({
   llmPlan: Row;
   recallItems: VkpiKolRecallItem[];
   discoveryItems: any[];
+  discoveryTotal?: number;
   input: string;
   apiToken: string;
   isBusy: boolean;
@@ -185,6 +187,12 @@ export function TextResultSection({
             <Sparkles size={9} /> 自动·恒开
           </span>
         </div>
+        {/* 【K3】入库反馈:发现即自动落 Pool(后端 _auto_enroll_discoveries),下次同类搜索会出现在「库内已有的人」 */}
+        {discoveryTotal > 0 ? (
+          <div className="mb-2 rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-1.5 text-[10px] text-emerald-100/90">
+            本次新发现已自动入库 {discoveryTotal} 人(下次同类搜索归库内)
+          </div>
+        ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-slate-500">发现平台</span>
           {[{ k: "youtube", t: "YouTube" }, { k: "instagram", t: "Instagram" }, { k: "tiktok", t: "TikTok" }].map((p) => {
