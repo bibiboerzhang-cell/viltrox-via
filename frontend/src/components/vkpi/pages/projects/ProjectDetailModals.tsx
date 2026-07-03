@@ -556,12 +556,17 @@ export function GenerateContractModal({
   };
 
   const applyInvoiceResult = (result: Record<string, unknown>) => {
+    // 后端 cache 产物把字段嵌在 result.extracted 下(invoice_extract_v1 schema);容错兼取顶层,
+    // 防未来读端拍平后这里读空。
+    const extracted = (result.extracted && typeof result.extracted === 'object' && !Array.isArray(result.extracted)
+      ? result.extracted
+      : result) as Record<string, unknown>;
     const slotKeys = new Set((template?.slots || []).map((slot) => slot.key));
     const filled = new Set<string>();
     setFields((current) => {
       const next = { ...current };
       INVOICE_SLOT_MAP.forEach(([source, targets]) => {
-        const value = String(result[source] ?? '').trim();
+        const value = String(extracted[source] ?? '').trim();
         if (!value) return;
         targets.forEach((target) => {
           if (!slotKeys.has(target)) return;
@@ -569,7 +574,7 @@ export function GenerateContractModal({
           filled.add(target);
         });
       });
-      const amount = String(result.amount ?? '').trim();
+      const amount = String(extracted.amount ?? '').trim();
       if (amount) {
         const feeSlot = INVOICE_FEE_SLOTS.find((key) => slotKeys.has(key));
         if (feeSlot && !String(next[feeSlot] || '').trim()) {
