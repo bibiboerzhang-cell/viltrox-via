@@ -80,6 +80,8 @@ export function CockpitApp(props: any = {}) {
     userName,
     userRole,
     userAvatar,
+    userEmail = "",
+    userAuthRole = "",
     data: dashboardData = emptyDashboardData,
     viewMode: appViewMode = "manager",
     onRefreshData,
@@ -206,6 +208,9 @@ export function CockpitApp(props: any = {}) {
   // 2026-06-14 诚实化:Upcoming Events 卡接真实 /api/admin/vkpi/events,不再传空数组。
   const [eventRows, setEventRows] = useState<any[]>([]);
   const [dealerPins, setDealerPins] = useState<any[]>([]);
+  // D4 核对(2026-07-02):KPI scope(All/KOL/公司)已有持久化 —— 初始化读 loadStoredState().kpiScope,
+  // 变更由下方 saveStoredState effect 写进 localStorage["vkpi-dashboard-state-v1"] 统一状态包;
+  // 无需再开独立的 "vkpi:kpi-scope" 键(避免双份来源打架)。
   const [kpiScope, setKpiScope] = useState(stored.kpiScope || "all");
   const [reportOpen, setReportOpen] = useState(urlReport === "1"); // V6.10: Report Panel
   const [selectedSignal, setSelectedSignal] = useState<any>(null); // V6.11: Signal detail modal
@@ -241,7 +246,7 @@ export function CockpitApp(props: any = {}) {
     dashboardRuntime,
     dashboardLoading,
     dashboardError,
-  } = useCockpitRuntime({ apiToken, userName, userRole, userAvatar, starredProjects: dashboardData.starredProjects || [] });
+  } = useCockpitRuntime({ apiToken, userName, userRole, userAvatar, userEmail, userAuthRole, starredProjects: dashboardData.starredProjects || [] });
   // 10C 状态同源:在 App 层持有唯一的 workflow_runs 轮询流(5s 间隔 + 可见性节流 + 卸载清理),
   // 作为任务进度的统一数据源向下透传。后台任务推进/完成时该流自动刷新 → TaskProgressBoard 自动重渲染,
   // 无需手动刷新。CockpitSidebar 把 taskStream 透传给 TaskProgressBoard(未拿到时该板内部自起兜底实例)。

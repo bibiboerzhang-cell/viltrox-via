@@ -65,7 +65,7 @@ export interface VkpiExportPayload extends VkpiDashboardFilters {
 }
 
 type OptionalResult<T> = { data: T; failed?: string };
-const DASHBOARD_SLICE_TIMEOUT_MS = 5000;
+const DASHBOARD_SLICE_TIMEOUT_MS = 10000; // 2026-07-03:头像图片挤占同域并发,5s 会静默丢成员目录等切片
 
 function emptyDashboardData(filters: VkpiDashboardFilters = {}): VkpiDashboardData {
   return {

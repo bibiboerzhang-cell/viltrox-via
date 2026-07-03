@@ -27,6 +27,7 @@ import type {
 } from '../vkpiTypes';
 import { PageShell } from './PageShell';
 import { StaffPermissionDrawer } from './settings/StaffPermissionDrawer';
+import { apiFetch } from '../../../services/http';
 import { vkpiPermissionFromTemplate, type StaffPermissionMap } from './settings/staffPermissionTemplates';
 import { type SettingsRulesTab } from './settings/SettingsRulesPanel';
 import {
@@ -89,6 +90,22 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification' | null>('status');
+
+  // 2026-07-03 账号授权空白根治:成员名单此前只搭启动大批量(5s 静默超时+缓存投毒)。
+  // 现打开设置页即直拉一次 staff-directory,拉到就覆盖 props 里的名单;失败保留 props(不降级)。
+  const [staffDirect, setStaffDirect] = useState<any[] | null>(null);
+  useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    apiFetch<{ staff?: any[]; members?: any[] }>("/api/admin/vkpi/staff-directory", { timeoutMs: 10000 }, apiToken)
+      .then((res) => {
+        if (!alive) return;
+        const list = (res?.staff || res?.members || []) as any[];
+        if (list.length) setStaffDirect(list);
+      })
+      .catch(() => { /* 静默:props 名单兜底 */ });
+    return () => { alive = false; };
+  }, [apiToken]);
   const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -413,7 +430,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           onProductSearchChange={setProductSearch}
           onSelectProduct={selectCatalogProduct}
           onSubmitProductCost={submitProductCost}
-          members={data.staffMembers}
+          members={(staffDirect && staffDirect.length ? staffDirect : data.staffMembers) as any}
           email={email}
           name={name}
           role={role}

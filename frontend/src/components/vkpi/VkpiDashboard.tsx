@@ -95,6 +95,8 @@ export interface VkpiDashboardProps {
   apiToken?: string;
   userName?: string;
   userRole?: string;
+  userEmail?: string;
+  userAuthRole?: string;
   userAvatar?: string;
   avatarRequired?: boolean;
   onSignOut?: () => Promise<void> | void;
@@ -149,6 +151,8 @@ export function VkpiDashboard({
   apiToken,
   userName = 'Viltrox 成员',
   userRole = '营销运营',
+  userEmail = '',
+  userAuthRole = '',
   userAvatar,
   avatarRequired = false,
   onSignOut,
@@ -410,6 +414,8 @@ export function VkpiDashboard({
           apiToken={apiToken}
           userName={userName}
           userRole={userRole}
+          userEmail={userEmail}
+          userAuthRole={userAuthRole}
           userAvatar={userAvatar}
           data={data}
           viewMode={viewMode}

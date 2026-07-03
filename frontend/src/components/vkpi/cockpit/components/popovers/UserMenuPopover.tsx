@@ -8,7 +8,9 @@ import { PopoverWrapper } from "./PopoverWrapper";
 const e = React.createElement;
 
 export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, user, staff, lang, onToggleLang, viewingAs, onResetView, onImpersonate, onOpenProfile, onOpenTeam, onOpenSettings, onLogout }: any) {
-  const isAdmin = user.role === "admin";
+  // 2026-07-03:role 可能是裸值(admin/owner)也可能是历史显示标签(管理层),都认。
+  const roleRaw = String(user.role || "");
+  const isAdmin = ["admin", "owner"].includes(roleRaw.toLowerCase()) || roleRaw === "管理层";
   const staffList = Array.isArray(staff) ? staff : [];
   const openMenuItem = (handler: any) => {
     onClose();

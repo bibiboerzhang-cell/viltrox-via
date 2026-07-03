@@ -189,6 +189,7 @@ interface CurrentUserFallback {
   userName?: string;
   userRole?: string;
   userAvatar?: string;
+  userEmail?: string;
 }
 
 export function normalizeCurrentUser(apiUser: RawValue, fallback: CurrentUserFallback = {}) {
@@ -207,7 +208,7 @@ export function normalizeCurrentUser(apiUser: RawValue, fallback: CurrentUserFal
     id: Number(user.id || user.staff_id || CURRENT_USER.id),
     name,
     role,
-    email: String(user.email || CURRENT_USER.email),
+    email: String(user.email || fallback.userEmail || ""),  // 2026-07-03:退役 kevin mock,宁空不假
     avatar: initials,
     avatarUrl: String(user.avatar_url || fallback.userAvatar || ""),
     avatarGradient: CURRENT_USER.avatarGradient,
@@ -627,6 +628,24 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
   };
 }
 
+// D3 人话化(2026-07-02):卡面来源行不再堆 evidence 键名(summary.run_id · hot_brands.count),
+// 已知技术源名 → 中文人话;键名细节挪去 sourceDetail(卡面 title/tooltip),弹窗仍有原始 sources 可查。
+const SIGNAL_SOURCE_HUMAN: Record<string, string> = {
+  vkpi_competitor_signals: "市场信号",
+  "Market Intelligence v0": "市场情报",
+  market_external_signal_smoke_v0: "外部信号",
+  google_news: "Google 新闻",
+  rss: "RSS 订阅",
+};
+
+function humanSignalSource(label: RawValue) {
+  const raw = String(label || "").trim();
+  if (!raw) return "市场信号";
+  if (SIGNAL_SOURCE_HUMAN[raw]) return SIGNAL_SOURCE_HUMAN[raw];
+  // provider/model 形态(如 gemini/gemini-2.5-flash)或普通词直接保留,不硬翻。
+  return raw;
+}
+
 export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: RawValue = null) {
   // 2026-06-15:竞品新品雷达(Gemini+Google 接地)置顶,后接 market-intelligence 信号。
   const radar = record(competitorRadar);
@@ -634,13 +653,18 @@ export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: Ra
     ? list(record(radar.content).items).slice(0, 5).map((it, i) => {
         const d = record(it);
         const isThreat = String(d.impact || "").includes("威胁");
+        const brand = String(d.brand || "").trim();
         return {
           id: `radar-${i}`,
           severity: isThreat ? "high" : "medium",
-          title: `🛰 ${String(d.brand || "竞品")}:${String(d.title || "")}`,
+          title: `🛰 ${brand || "竞品"}:${String(d.title || "")}`,
           desc: `${String(d.summary || "")}${d.impact ? " · 对我们:" + String(d.impact) : ""}`,
           time: "今日",
           sources: [{ name: "竞品雷达", url: "" }],
+          // D3:雷达来源本就是人话;品牌做成可点 chip(点击带上品牌进弹窗)。
+          sourceLine: "竞品雷达 · 今日",
+          sourceDetail: "competitor-radar (Gemini+Google 接地)",
+          brands: brand ? [brand.toUpperCase()] : [],
           totalMentions: 0,
           trendPct: isThreat ? "威胁" : "机会",
           raw: d,
@@ -652,6 +676,13 @@ export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: Ra
     const item = record(card);
     const evidence = list(item.evidence);
     const priority = String(item.priority || "info").toLowerCase();
+    // 键名细节(summary.run_id 之类)如实保留在 sourceDetail(tooltip)与 sources(弹窗查看源),不上卡面。
+    const evidenceKeys = evidence.map((source) => String(record(source).source || record(source).label || "evidence")).filter(Boolean);
+    const sourceHuman = humanSignalSource(item.sourceLabel);
+    // 竞品品牌卡(entityType=competitor_brand)的品牌名做成可点 chip;诚实:只用后端已有字段,不造数据。
+    const brands = String(item.entityType || "") === "competitor_brand" && String(item.entityId || "").trim()
+      ? [String(item.entityId).trim().toUpperCase()]
+      : [];
     return {
       id: item.id || `signal-${index}`,
       severity: priority === "high" ? "high" : priority === "medium" ? "medium" : "info",
@@ -661,6 +692,9 @@ export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: Ra
       sources: evidence.length
         ? evidence.map((source) => ({ name: String(record(source).source || record(source).label || "evidence"), url: record(source).url || "" }))
         : [{ name: String(item.sourceLabel || "market-intelligence"), url: "" }],
+      sourceLine: evidence.length ? `${sourceHuman} · 本轮证据 ${evidence.length} 条` : sourceHuman,
+      sourceDetail: evidenceKeys.join(" · ") || String(item.sourceLabel || "market-intelligence"),
+      brands,
       totalMentions: evidence.length,
       trendPct: item.confidence != null ? `${Math.round(Number(item.confidence) * 100)}%` : "证据可查",
       raw: item,

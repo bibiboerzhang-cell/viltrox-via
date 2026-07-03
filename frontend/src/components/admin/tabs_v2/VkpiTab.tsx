@@ -50,7 +50,7 @@ import { uploadMyAvatar } from "../../../services/auth.service";
 import { useAuth } from "../../../hooks/useAuth";
 
 type VkpiRangeKey = "today" | "7d" | "30d" | "mtd" | "qtd";
-const VKPI_DASHBOARD_CACHE_VERSION = "v3";
+const VKPI_DASHBOARD_CACHE_VERSION = "v4"; // 2026-07-03:空成员名单投毒事故,bump 一次全员自愈
 const VKPI_DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface Props {
@@ -110,7 +110,8 @@ function canUseManagerView(user: Props["user"]): boolean {
   const role = String(user?.staff_role || user?.role || "").toLowerCase();
   return Boolean(
     user?.is_owner ||
-      ["manager", "lead", "marketing_lead", "marketing_manager"].includes(role) ||
+      ["admin", "manager", "lead", "marketing_lead", "marketing_manager"].includes(role) || // 2026-07-03:补 admin,此前主管全靠 is_owner 兜底,降级即跌员工视角
+      
       permissionLevel(user, "vkpi") === "admin" ||
       permissionLevel(user, "system.members") === "admin",
   );
@@ -162,6 +163,11 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         scope,
         staffId: user?.staff_id ? String(user.staff_id) : undefined,
       });
+      // 2026-07-03 缓存防毒:成员名单切片是静默超时型(optionalFetch 回空),
+      // 空结果不得覆盖缓存里已有的真名单 —— 否则一次超时把「账号授权/分组成员」钉死为空。
+      if (!nextData.staffMembers?.length && cached?.data?.staffMembers?.length) {
+        nextData.staffMembers = cached.data.staffMembers;
+      }
       setData(nextData);
       setLastSyncedAt(nextData.lastSyncedAt || new Date().toISOString());
       writeVkpiDashboardCache(cacheKey, nextData);
@@ -507,6 +513,8 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         apiToken={token}
         userName={user?.name || user?.email || "Viltrox 成员"}
         userRole={userRoleLabel}
+        userEmail={user?.email || ""}
+        userAuthRole={String(user?.staff_role || user?.role || "")}
         userAvatar={avatarUrl || user?.avatar_url || ""}
         avatarRequired={Boolean(user?.avatar_required || !(avatarUrl || user?.avatar_url))}
         viewMode={effectiveViewMode}

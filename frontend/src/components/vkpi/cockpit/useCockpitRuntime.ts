@@ -57,8 +57,8 @@ async function loadKolPoolWorkspaceRows(apiToken: any) {
   return items;
 }
 
-export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, starredProjects }: any) {
-  const [currentUser, setCurrentUser] = useState(() => normalizeCurrentUser(null, { userName, userRole, userAvatar }));
+export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, userEmail = "", userAuthRole = "", starredProjects }: any) {
+  const [currentUser, setCurrentUser] = useState(() => normalizeCurrentUser(null, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
   const [runtimeNotifications, setRuntimeNotifications] = useState<any[]>([]);
   const [runtimeReminders, setRuntimeReminders] = useState<any[]>([]);
   const [kolPoolRows, setKolPoolRows] = useState<any[]>([]);
@@ -69,8 +69,8 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, st
   const [dashboardError, setDashboardError] = useState("");
 
   useEffect(() => {
-    setCurrentUser(normalizeCurrentUser(null, { userName, userRole, userAvatar }));
-  }, [userName, userRole, userAvatar]);
+    setCurrentUser(normalizeCurrentUser(null, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
+  }, [userName, userRole, userAvatar, userEmail, userAuthRole]);
 
   useEffect(() => {
     if (!apiToken) {
@@ -82,7 +82,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, st
     fetchCockpitShellBundle(apiToken)
       .then((bundle) => {
         if (cancelled) return;
-        if (bundle.user) setCurrentUser(normalizeCurrentUser(bundle.user, { userName, userRole, userAvatar }));
+        if (bundle.user) setCurrentUser(normalizeCurrentUser(bundle.user, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
         const normalized = normalizeAlerts((bundle.alerts || []) as any);
         setRuntimeNotifications(normalized.notifications);
         setRuntimeReminders(normalized.reminders);
@@ -96,7 +96,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, st
     return () => {
       cancelled = true;
     };
-  }, [apiToken, userName, userRole, userAvatar]);
+  }, [apiToken, userName, userRole, userAvatar, userEmail, userAuthRole]);
 
   useEffect(() => {
     if (!apiToken) {
