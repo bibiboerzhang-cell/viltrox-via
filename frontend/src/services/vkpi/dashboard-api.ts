@@ -116,18 +116,21 @@ export async function fetchVkpiDashboardData(
   const windowKey = staffWindow(filters);
   const selfMode = filters.scope === "self";
   const staffQuery = filters.staffId ? `&staff_id=${encodeURIComponent(filters.staffId)}` : "";
-  const dashboardPath = selfMode
-    ? `/api/marketing/dashboard/view/employee?window_days=${days}${staffQuery}`
-    : `/api/marketing/dashboard?window_days=${days}${staffQuery}`;
+  // C3 员工轻隔离(2026-07-03):scope=self 不再走阉割版 /dashboard/view/employee ——
+  // 全员统一打主 summary 端点,页面区块同款;数据隔离由后端 scope.effective_staff_id
+  // 服务端推导(员工强制 own-only,owner/管理层全局),前端传参只是查询提示、不决定权限。
+  const dashboardPath = `/api/marketing/dashboard?window_days=${days}${staffQuery}`;
+  // 成员目录 / SKU 成本是管理层专属端点(后端 _require_manager_staff 硬闸,员工请求必 403):
+  // selfMode 下跳过请求是避免噪音,不是前端权限判断;真正的门禁在后端。
   const staffMembersRequest: Promise<OptionalResult<{ members?: Row[]; staff?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { members: [] } })
     : optionalFetch<{ members?: Row[]; staff?: Row[] }>("成员目录", "/api/admin/vkpi/staff-directory", token, { members: [], staff: [] });
   const productCostsRequest: Promise<OptionalResult<{ product_costs?: Row[] }>> = selfMode
     ? Promise.resolve({ data: { product_costs: [] } })
     : optionalFetch<{ product_costs?: Row[] }>("SKU 成本", "/api/marketing/product-costs?limit=200", token, { product_costs: [] });
-  const productLaunchesRequest: Promise<OptionalResult<{ launches?: Row[] }>> = selfMode
-    ? Promise.resolve({ data: { launches: [] } })
-    : optionalFetch<{ launches?: Row[] }>("产品发布", "/api/admin/vkpi/product-analysis/launches?limit=200", token, { launches: [] });
+  // 产品发布是大盘共享内容(vkpi read 即可见),成员视角照常请求,不做阉割。
+  const productLaunchesRequest: Promise<OptionalResult<{ launches?: Row[] }>> =
+    optionalFetch<{ launches?: Row[] }>("产品发布", "/api/admin/vkpi/product-analysis/launches?limit=200", token, { launches: [] });
   const [
     dashboardResult,
     trendResult,

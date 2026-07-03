@@ -79,7 +79,8 @@ def test_dashboard_kol_distribution_includes_platforms_and_exposure(monkeypatch)
     monkeypatch.setattr(
         dashboard_kol_distribution.kol_pool,
         "_country_distribution",
-        lambda conn, limit: [
+        # C3 员工轻隔离:签名新增 kol_ids_sql(staff={} 走全局,值恒 None)
+        lambda conn, limit, kol_ids_sql=None: [
             {
                 "country_code": "US",
                 "country_name": "United States",

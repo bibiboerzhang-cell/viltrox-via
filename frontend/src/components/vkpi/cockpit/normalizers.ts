@@ -783,6 +783,12 @@ export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
   const realCampaigns = activeCampaignsMeta.isReal ? normalizeActiveCampaigns(activeCampaignsBlock) : null;
   // 2026-06-12 波3 R7:无 starred 时回退到后端真实 active_campaigns 块,不再整块丢弃。
   const campaigns = starredCampaigns.length ? starredCampaigns : (realCampaigns || []);
+  // C3 员工轻隔离(2026-07-03):distribution-pack 声明 scope.mode==="staff"(后端按登录人
+  // 服务端推导,员工=只含自己的 KOL)时,地图只画后端算好的分布,不再把全量 Pool 行合并成
+  // pins —— Pool 是公共资产别处照常可看,但 Dashboard 地图口径 = 自己的 KOL 分布。
+  // owner/管理层的 pack 是 global 口径(scope.mode==="global"),合并行为不变。
+  const distributionScopeMode = String(record(record(bundle.distribution).scope).mode || "");
+  const mapKolRows = distributionScopeMode === "staff" ? [] : kolRows;
   return {
     metrics: normalizeDashboardMetrics(bundle, kolRows),
     campaigns,
@@ -798,7 +804,7 @@ export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks, bundle.aiTodayHot),
     signals: normalizeSignals(bundle.marketCards, bundle.competitorRadar),
     topMovers: normalizeTopMovers(kolRows, bundle.fitMovers),
-    mapHierarchy: normalizeMapHierarchy(bundle.distribution, kolRows),
+    mapHierarchy: normalizeMapHierarchy(bundle.distribution, mapKolRows),
     kolFunnel: normalizeKolFunnel(summary),
   };
 }

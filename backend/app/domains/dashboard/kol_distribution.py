@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import get_conn, table_exists
 from app.domains.dashboard.recent_content import _dashboard_int
+from app.domains.dashboard.summary_scope import _actor_kols_sql
 from app.domains.kol import pool as kol_pool
 from app.domains.dashboard.country_coords import country_geo, resolve_country_code
 from app.domains.dashboard.city_coords import country_city_centroids, resolve_city
@@ -20,7 +21,32 @@ logger = get_logger(__name__)
 
 MAP_PACK_SCHEMA_VERSION = 1
 MAP_PACK_TTL_SECONDS = 3600
-_MAP_PACK_CACHE: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
+# C3 员工轻隔离:cache key 带 staff_scope_id(0=全局),员工与 owner 各自缓存,绝不互相串包。
+_MAP_PACK_CACHE: dict[tuple[int, int, int], tuple[float, dict[str, Any]]] = {}
+
+
+def _staff_visible_kols_sql(staff_scope_id: int) -> str:
+    """C3 员工轻隔离:某 staff 在地图上可见的 KOL(kol_pool_id)子查询 SQL。
+
+    口径 = 本人收藏 ∪ 本人项目里合作的 KOL(_actor_kols_sql,与 Dashboard 漏斗同源)
+         ∪ 显式/分组共享给本人(vkpi_kol_pool_members,迁移 159)
+         ∪ 本人活跃认领(vkpi_kol_claims 经 linked_main_kol_id 映射回 pool 行)。
+    staff_scope_id 已是 scope.effective_staff_id 出来的可信 int(服务端推导,绝不来自
+    客户端传参),内联整数安全,与 summary_scope 既有口径一致。表缺失(迁移未跑)时
+    对应分支诚实跳过,绝不假装可见。
+    """
+    sid = int(staff_scope_id)
+    parts = [_actor_kols_sql(sid)]
+    if table_exists("vkpi_kol_pool_members"):
+        parts.append(f"SELECT kol_pool_id FROM vkpi_kol_pool_members WHERE staff_id={sid}")
+    if table_exists("vkpi_kol_claims"):
+        parts.append(
+            "SELECT p2.id FROM vkpi_kol_pool p2 "
+            "JOIN vkpi_kol_claims c2 ON c2.kol_id = p2.linked_main_kol_id "
+            f"WHERE c2.staff_id={sid} AND c2.status='active'"
+        )
+    return " UNION ".join(parts)
+
 
 CITY_FIELD_KEYS = {
     "city",
@@ -126,7 +152,9 @@ def _stable_index(row: dict[str, Any], modulo: int) -> int:
     return value % modulo
 
 
-def _attach_city_distribution(conn, countries_by_code: dict[str, dict]) -> dict[str, int]:
+def _attach_city_distribution(
+    conn, countries_by_code: dict[str, dict], *, kol_ids_sql: str | None = None
+) -> dict[str, int]:
     columns = _table_columns(conn, "vkpi_kol_pool")
     wanted = [
         "id",
@@ -148,9 +176,11 @@ def _attach_city_distribution(conn, countries_by_code: dict[str, dict]) -> dict[
     select_columns = [column for column in wanted if column in columns]
     if not select_columns:
         return {"city_count": 0, "city_mapped_kol_count": 0}
+    # C3 员工轻隔离:kol_ids_sql 由服务端 _staff_visible_kols_sql 构造(内联 int),无客户端输入。
+    scope_clause = f"WHERE id IN ({kol_ids_sql})" if kol_ids_sql else ""
     try:
         rows = conn.execute(
-            f"SELECT {', '.join(select_columns)} FROM vkpi_kol_pool LIMIT 10000"
+            f"SELECT {', '.join(select_columns)} FROM vkpi_kol_pool {scope_clause} LIMIT 10000"  # noqa: S608
         ).fetchall()
     except Exception:
         return {"city_count": 0, "city_mapped_kol_count": 0}
@@ -256,9 +286,15 @@ def _attach_city_distribution(conn, countries_by_code: dict[str, dict]) -> dict[
     return {"city_count": city_count, "city_mapped_kol_count": mapped_rows}
 
 
-def build_dashboard_kol_distribution(limit: int = 200) -> dict:
+def build_dashboard_kol_distribution(limit: int = 200, *, staff_scope_id: int | None = None) -> dict:
+    """C3 员工轻隔离:staff_scope_id 为 None=owner/管理层(全局地图,行为不变),
+
+    否则=该员工(地图只画「自己的 KOL」= 收藏/项目合作/共享/认领,页面区块不变、数据变少)。
+    身份由路由层用 scope.effective_staff_id 服务端推导,绝不信客户端传参。
+    """
     conn = get_conn()
-    distribution = kol_pool._country_distribution(conn, limit=limit)
+    kol_ids_sql = _staff_visible_kols_sql(staff_scope_id) if staff_scope_id else None
+    distribution = kol_pool._country_distribution(conn, limit=limit, kol_ids_sql=kol_ids_sql)
     countries_by_code: dict[str, dict] = {}
     unmapped: list[dict] = []
     for row in distribution:
@@ -284,14 +320,16 @@ def build_dashboard_kol_distribution(limit: int = 200) -> dict:
             if raw not in item["raw_values"]:
                 item["raw_values"].append(raw)
 
+    scope_clause = f"AND id IN ({kol_ids_sql})" if kol_ids_sql else ""
     try:
         platform_rows = conn.execute(
-            """
+            f"""
             SELECT country, platform, COUNT(*) AS n, COALESCE(SUM(avg_views), 0) AS exposure
             FROM vkpi_kol_pool
             WHERE country IS NOT NULL AND TRIM(country) != ''
+              {scope_clause}
             GROUP BY country, platform
-            """
+            """  # noqa: S608 — scope_clause 由服务端 _staff_visible_kols_sql 构造(内联 int),无客户端输入
         ).fetchall()
     except Exception:
         platform_rows = []
@@ -319,11 +357,18 @@ def build_dashboard_kol_distribution(limit: int = 200) -> dict:
         country_item["platforms"] = platforms
         country_item["exposure"] = sum(int(item["exposure"] or 0) for item in platforms)
 
-    city_stats = _attach_city_distribution(conn, countries_by_code)
+    city_stats = _attach_city_distribution(conn, countries_by_code, kol_ids_sql=kol_ids_sql)
     mapped_kol_count = sum(int(item["count"] or 0) for item in countries_by_code.values())
     source_country_kol_count = mapped_kol_count + sum(int(item.get("kol_count") or 0) for item in unmapped)
+    total_clause = f"WHERE id IN ({kol_ids_sql})" if kol_ids_sql else ""
     try:
-        total_pool_rows = int((conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool").fetchone() or {})["n"] or 0)
+        total_pool_rows = int(
+            (
+                conn.execute(f"SELECT COUNT(*) AS n FROM vkpi_kol_pool {total_clause}").fetchone()  # noqa: S608
+                or {}
+            )["n"]
+            or 0
+        )
     except Exception:
         total_pool_rows = 0
     countries = sorted(countries_by_code.values(), key=lambda item: (-int(item["count"] or 0), str(item["code"])))
@@ -345,6 +390,11 @@ def build_dashboard_kol_distribution(limit: int = 200) -> dict:
         "unmapped_sample": unmapped[:10],
         "data_source": "vkpi_kol_pool.country + stored_location/country_scatter map buckets",
         "is_real": True,
+        # C3 员工轻隔离:诚实回显本次分布的口径(global=全池;staff=该员工自己的 KOL)。
+        "scope": {
+            "mode": "staff" if staff_scope_id else "global",
+            "staff_scope_id": int(staff_scope_id) if staff_scope_id else None,
+        },
     }
 
 
@@ -363,10 +413,15 @@ def _with_cache_meta(payload: dict[str, Any], *, hit: bool, age_seconds: int = 0
     return result
 
 
-def build_dashboard_kol_distribution_pack(limit: int = 250) -> dict:
-    """Return a versioned map data pack intended for frontend cache-first use."""
+def build_dashboard_kol_distribution_pack(limit: int = 250, *, staff_scope_id: int | None = None) -> dict:
+    """Return a versioned map data pack intended for frontend cache-first use.
+
+    C3 员工轻隔离:staff_scope_id 为 None=全局包(owner/管理层,行为不变),否则=该员工
+    自己的 KOL 包;cache key / snapshot_id 都带上 scope,员工与 owner 的包互不串缓存。
+    """
     normalized_limit = max(1, min(int(limit or 250), 1000))
-    cache_key = (MAP_PACK_SCHEMA_VERSION, normalized_limit)
+    scope_key = int(staff_scope_id or 0)
+    cache_key = (MAP_PACK_SCHEMA_VERSION, normalized_limit, scope_key)
     now = time.time()
     cached = _MAP_PACK_CACHE.get(cache_key)
     if cached:
@@ -375,17 +430,19 @@ def build_dashboard_kol_distribution_pack(limit: int = 250) -> dict:
         if age < MAP_PACK_TTL_SECONDS:
             return _with_cache_meta(payload, hit=True, age_seconds=age)
 
-    distribution = build_dashboard_kol_distribution(limit=normalized_limit)
+    distribution = build_dashboard_kol_distribution(limit=normalized_limit, staff_scope_id=staff_scope_id)
     countries = distribution.get("countries") if isinstance(distribution.get("countries"), list) else []
     generated_at = _utc_now_iso()
     total_kol = _dashboard_int(distribution.get("mapped_kol_count") or distribution.get("total_kol"))
+    scope_suffix = f"-s{scope_key}" if scope_key else ""
     payload: dict[str, Any] = {
         "schema_version": MAP_PACK_SCHEMA_VERSION,
         "resource": "dashboard.kol_distribution_pack",
         "generated_at": generated_at,
-        "snapshot_id": f"kol-map-v{MAP_PACK_SCHEMA_VERSION}-{generated_at[:10]}-{len(countries)}-{total_kol}",
+        "snapshot_id": f"kol-map-v{MAP_PACK_SCHEMA_VERSION}-{generated_at[:10]}-{len(countries)}-{total_kol}{scope_suffix}",
         "ttl_seconds": MAP_PACK_TTL_SECONDS,
         "countries": countries,
+        "scope": distribution.get("scope") or {"mode": "global", "staff_scope_id": None},
         "stats": {
             "total_kol": total_kol,
             "mapped_kol_count": _dashboard_int(distribution.get("mapped_kol_count")),

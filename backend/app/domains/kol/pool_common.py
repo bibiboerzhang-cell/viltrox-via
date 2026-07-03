@@ -294,17 +294,24 @@ def _country_filter_variants(value: Any) -> list[str]:
     return sorted({item for item in variants if item})
 
 
-def _country_distribution(conn, *, limit: int = 30) -> list[dict[str, Any]]:
+def _country_distribution(conn, *, limit: int = 30, kol_ids_sql: str | None = None) -> list[dict[str, Any]]:
+    """国家分布聚合。kol_ids_sql(C3 员工轻隔离,ADDITIVE):可选的 kol_pool_id 子查询 SQL,
+
+    由服务端可信构造(见 dashboard.kol_distribution._staff_visible_kols_sql,纯内联 int,
+    绝不含客户端输入);传入时只统计该可见集,不传=既有全局口径,零行为变化。
+    """
     if "country" not in _table_columns(conn, "vkpi_kol_pool"):
         return []
+    scope_clause = f"AND id IN ({kol_ids_sql})" if kol_ids_sql else ""
     rows = conn.execute(
-        """
+        f"""
         SELECT country, COUNT(*) AS n
         FROM vkpi_kol_pool
         WHERE country IS NOT NULL AND TRIM(country) != ''
+          {scope_clause}
         GROUP BY country
         ORDER BY n DESC, country ASC
-        """
+        """  # noqa: S608 — scope_clause 由服务端 _staff_visible_kols_sql 构造(内联 int),无客户端输入
     ).fetchall()
     buckets: dict[str, dict[str, Any]] = {}
     total = 0

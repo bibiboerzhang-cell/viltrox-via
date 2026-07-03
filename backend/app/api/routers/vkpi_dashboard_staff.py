@@ -191,7 +191,8 @@ def get_collab_settings(
 
     k = (kind or "").strip()
     tid = (target_id or "").strip()
-    if k not in {"project", "event"} or not tid:
+    # C2 共享管理:kind 增补 'kol'(target_id=kol_pool_id 文本),供 KOL 共享行挂协作设置。
+    if k not in {"project", "event", "kol"} or not tid:
         return {"shared_goal": "", "reminder_rule": ""}
     row = get_conn().execute(
         "SELECT shared_goal, reminder_rule FROM vkpi_collab_settings WHERE kind=? AND target_id=?", (k, tid)
@@ -209,8 +210,9 @@ def patch_collab_settings(body: _CollabBody, staff=Depends(require_tab("vkpi", "
 
     k = (body.kind or "").strip()
     tid = (body.target_id or "").strip()
-    if k not in {"project", "event"} or not tid:
-        raise HTTPException(status_code=400, detail="kind(project|event)+target_id required")
+    # C2 共享管理:kind 增补 'kol'(与 GET 同口径),仅放宽白名单,upsert 逻辑不变。
+    if k not in {"project", "event", "kol"} or not tid:
+        raise HTTPException(status_code=400, detail="kind(project|event|kol)+target_id required")
     goal = (body.shared_goal or "").strip()[:500]
     rule = (body.reminder_rule or "").strip()[:500]
     sid = _staff_pk(staff)
@@ -291,14 +293,24 @@ def dashboard_product_performance(
         raise _scope_403(exc) from exc
 
 
+def _map_staff_scope_id(staff: dict) -> int | None:
+    """C3 员工轻隔离:地图分布的 staff scope 全靠服务端从鉴权 staff 推导。
+
+    owner/管理层(can_view_all)→ None=全局地图;其余员工 → 强制只看自己的 KOL。
+    不接受任何客户端 staff_id/scope 传参决定权限(与 Dashboard summary 的 P1 口径一致)。
+    """
+    return scope.effective_staff_id(staff, None)
+
+
 @router.get("/dashboard/kol-distribution")
 def dashboard_kol_distribution(
     limit: int = Query(default=200, ge=1, le=250),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return real KOL country distribution for the premium dashboard map."""
-    del staff
-    return dashboard_domain.build_dashboard_kol_distribution(limit=limit)
+    return dashboard_domain.build_dashboard_kol_distribution(
+        limit=limit, staff_scope_id=_map_staff_scope_id(staff)
+    )
 
 
 @router.get("/dashboard/kol-distribution-pack")
@@ -307,8 +319,9 @@ def dashboard_kol_distribution_pack(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return a versioned KOL map pack for cache-first dashboard rendering."""
-    del staff
-    return dashboard_domain.build_dashboard_kol_distribution_pack(limit=limit)
+    return dashboard_domain.build_dashboard_kol_distribution_pack(
+        limit=limit, staff_scope_id=_map_staff_scope_id(staff)
+    )
 
 
 @router.get("/dashboard/agents-status")
