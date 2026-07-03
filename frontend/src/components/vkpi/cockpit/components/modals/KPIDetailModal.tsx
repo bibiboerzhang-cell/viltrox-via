@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { BarChart3, Database, Download, ExternalLink, Loader2, X } from "lucide-react";
 import { useT } from "../../lib/i18n";
-import { loadStoredState, saveStoredState } from "../../lib/storage";
+import { saveKpiScopeForStaff } from "../../lib/kpiScopeStorage";
+import { saveStoredState } from "../../lib/storage";
 
 const e = React.createElement;
 
@@ -119,19 +120,19 @@ function downloadCsv(filename: any, rows: any) {
   window.URL.revokeObjectURL(url);
 }
 
-export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onDrillToKolPool }: any) {
+export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [], onClose, onDrillToKolPool }: any) {
   const { t } = useT();
-  const stored = loadStoredState();
-  const [timeRange, setTimeRange] = useState(stored.kpiTimeRange || "30d");
-  const [scope, setScope] = useState(initialScope || stored.kpiScope || "all");
+  // 【D1】诚实化(2026-07-03):原 7D/30D/90D timeRange state 已摘除——后端数据是固定窗口
+  // (bundle 统一 window_days=30;roster company trend 固定近 7 天 channel_metrics),
+  // 切换钮从不改变数字=假交互。改为下方单一口径标签,如实标窗口。
+  const [scope, setScope] = useState(initialScope || "all");
   const [moverTab, setMoverTab] = useState("by_views");
 
   useEffect(() => {
-    saveStoredState({ kpiTimeRange: timeRange });
-  }, [timeRange]);
-  useEffect(() => {
+    // 【D4】scope 记忆:共享键(legacy,身份未知时的兜底初值)+ per-staff 键(带 staff id 防串号)双写。
     saveStoredState({ kpiScope: scope });
-  }, [scope]);
+    saveKpiScopeForStaff(staffId, scope);
+  }, [scope, staffId]);
 
   const metric = useMemo(() => (metrics || []).find((item: any) => item.id === kpiId), [metrics, kpiId]);
   if (!kpiId || !metric) return null;
@@ -318,14 +319,14 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
                 e("h3", { className: "text-sm font-semibold text-white" }, "Trend"),
                 e("p", { className: "text-[10px] text-slate-500" }, scope === "company" ? "官方账号 7 天真实 channel_metrics" : `累积中 ${trend.snapshot_days || 7}/${trend.required_days || 30}`)
               ),
-              e("div", { className: "flex rounded-lg border border-white/[0.07] bg-white/[0.02] p-0.5" },
-                ["7d", "30d", "90d"].map((range) => e("button", {
-                  key: range,
-                  onClick: () => setTimeRange(range),
-                  disabled: scope !== "company" || range !== "7d",
-                  className: `rounded-md px-2 py-1 text-[10px] ${timeRange === range && scope === "company" ? "bg-cyan-500/[0.2] text-white" : "text-slate-500"} disabled:cursor-not-allowed disabled:opacity-50`,
-                }, range.toUpperCase()))
-              )
+              // 【D1】诚实化:原 7D/30D/90D 切换钮是假交互(后端 company trend 固定近 7 天,
+              // 其余 scope 尚在累积)→ 摘掉,换单一口径标签如实标窗口。
+              e("span", {
+                className: "rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-400",
+                title: scope === "company"
+                  ? "固定窗口:vkpi_channel_metrics 最近 7 天快照;后端暂不支持 30/90 天切换"
+                  : "KOL daily snapshot 未满 30 天,趋势窗口暂不可选",
+              }, scope === "company" ? "7D · 固定窗口" : "窗口累积中")
             ),
             trendPath
               ? e("svg", { viewBox: "0 0 560 128", className: "h-32 w-full overflow-visible" },
@@ -503,14 +504,12 @@ export function KPIDetailModal({ kpiId, initialScope, metrics = [], onClose, onD
               e("h3", { className: "text-sm font-semibold text-white" }, "Trend"),
               e("p", { className: "text-[10px] text-slate-500" }, path ? "来自真实趋势点" : "趋势需要 snapshot / revenue-trend 成熟后显示")
             ),
-            e("div", { className: "flex rounded-lg border border-white/[0.07] bg-white/[0.02] p-0.5" },
-              ["7d", "30d", "90d"].map((range) => e("button", {
-                key: range,
-                onClick: () => setTimeRange(range),
-                disabled: !path,
-                className: `rounded-md px-2 py-1 text-[10px] ${timeRange === range && path ? "bg-purple-500/[0.2] text-white" : "text-slate-500"} disabled:cursor-not-allowed disabled:opacity-50`,
-              }, range.toUpperCase()))
-            )
+            // 【D1】诚实化:原 7D/30D/90D 切换钮是假交互(弹窗数据来自 dashboard bundle 的固定
+            // window_days=30 快照,切换从不改数字)→ 摘掉,换单一口径标签如实标窗口。
+            e("span", {
+              className: "rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-400",
+              title: "固定窗口:dashboard 汇总按 window_days=30 拉取;后端暂不支持 7/90 天切换",
+            }, "30D · 固定窗口")
           ),
           path
             ? e("svg", { viewBox: "0 0 560 128", className: "h-32 w-full overflow-visible" },

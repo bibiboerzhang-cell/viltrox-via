@@ -798,8 +798,11 @@ async def discover_new_creators(
 
     # B 去重根治:把本次全网新发现即时轻量入库,下次同/近似搜索归「库内已有」、不再重复
     # (用户口径:「抓到自动入库就不会再出现这个状况」)。best-effort 同步小写,失败不阻断发现。
+    # K3 正账(2026-07-03):接住返回值(此前被丢弃)记进 counts.auto_enrolled,
+    # attach_new_discovery_result 会把 counts 原样透传进会话 result_summary → 前端显示真实入库数。
+    auto_enrolled_count = 0
     try:
-        _auto_enroll_discoveries(new_creators)
+        auto_enrolled_count = _auto_enroll_discoveries(new_creators)
     except Exception as exc:
         logger.info("auto_enroll_discovery batch skipped: %s", str(exc)[:200])
 
@@ -821,6 +824,9 @@ async def discover_new_creators(
         "counts": {
             "new_creators": len(new_creators),
             "existing_matches": len(existing_matches),
+            # K3:本次真实自动入库条数(_auto_enroll_discoveries 逐条 upsert 的成功数;
+            # 缺 handle/入库失败/已在库的项不计)。前端据此显示真数,不再拿发现数冒充入库数。
+            "auto_enrolled": auto_enrolled_count,
             "platforms": len(resolved_platforms),
             "errors": len(errors),
         },

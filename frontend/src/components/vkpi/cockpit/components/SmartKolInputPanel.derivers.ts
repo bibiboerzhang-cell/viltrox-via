@@ -91,6 +91,16 @@ export function sessionAdvanceCounts(session: VkpiKolSearchHistoryItem | null): 
   return asRecord(batch.counts || smartJob.advance_counts);
 }
 
+// 【K3 正账】本次发现的真实自动入库数:后端 discover_new_creators 把 _auto_enroll_discoveries
+// 的返回值记进 counts.auto_enrolled,attach_new_discovery_result 原样透传进会话
+// result_summary.new_discovery.counts。旧会话/旧后端没有该键 → 返回 null(前端回退到概述文案)。
+export function discoveryAutoEnrolledFromSession(session: VkpiKolSearchHistoryItem | null): number | null {
+  const summary = asRecord(session?.result_summary);
+  const counts = asRecord(asRecord(summary.new_discovery).counts);
+  const value = counts.auto_enrolled;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
   if (terminalSessionStatus(session.status)) return true;
   const summary = asRecord(session.result_summary);

@@ -220,6 +220,9 @@ export default function BudgetExpensesTab({ ev, currentUser, staff = [], token, 
     showModal && e(ExpenseEntryModal, {
       staff,
       defaultPaidBy: currentUser.name,
+      // 【E2】发票 AI 识别真接线:传 token+eventId 启用上传→队列 LLM 提取→回填金额/日期。
+      token,
+      eventId: ev.id,
       onClose: () => setShowModal(false),
       onSubmit: addExpense,
     }),

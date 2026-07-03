@@ -25,6 +25,7 @@ import {
   PENDING_SEARCH_SESSION_KEY,
   PROFILE_REP_VIDEO_LIMIT,
   contentFitBadge,
+  discoveryAutoEnrolledFromSession,
   discoveryItemsFromSession,
   exposureLabel,
   freshnessMarks,
@@ -52,6 +53,7 @@ import {
 export {
   PENDING_SEARCH_SESSION_KEY,
   PROFILE_REP_VIDEO_LIMIT,
+  discoveryAutoEnrolledFromSession,
   discoveryItemsFromSession,
   historySessionId,
   isSearchSessionTerminal,

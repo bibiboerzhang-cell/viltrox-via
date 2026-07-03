@@ -422,6 +422,21 @@ export async function deleteEventExpense(
   );
 }
 
+// ---- 报销发票 AI 识别(E2):复用项目侧 invoice-extract 管线(LLM 经 apify_jobs 队列),
+// 文件先经 /evidence/uploads 落盘;轮询读端复用 projects-api 的 getInvoiceExtract。 ----
+export async function enqueueEventInvoiceExtract(
+  token: string,
+  eventId: string,
+  fileUrl: string,
+  fileName = "",
+): Promise<{ status?: string; extract_key?: string; job_id?: number; message?: string }> {
+  return apiFetch<{ status?: string; extract_key?: string; job_id?: number; message?: string }>(
+    `/api/admin/vkpi/events/${encodeURIComponent(eventId)}/invoice-extract/enqueue`,
+    { method: "POST", body: jsonBody({ file_url: fileUrl, file_name: fileName }) },
+    token,
+  );
+}
+
 export async function inviteKolToEvent(
   token: string,
   eventId: string,

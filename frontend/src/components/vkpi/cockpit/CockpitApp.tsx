@@ -34,6 +34,7 @@ import { listEvents } from "../../../services/vkpi/events-api";
 import { getDealerLocations } from "../../../services/vkpi/dealers-api";
 import { normalizeEventsHierarchy, normalizeDealersHierarchy } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
+import { loadKpiScopeForStaff, saveKpiScopeForStaff } from "./lib/kpiScopeStorage";
 import { loadStoredState, saveStoredState } from "./lib/storage";
 import { useCockpitRuntime } from "./useCockpitRuntime";
 import { createProject, deleteProject, updateProject } from "../../../services/vkpi/projects-api";
@@ -252,6 +253,20 @@ export function CockpitApp(props: any = {}) {
   // 无需手动刷新。CockpitSidebar 把 taskStream 透传给 TaskProgressBoard(未拿到时该板内部自起兜底实例)。
   const taskStream = useWorkflowRunsStream(apiToken, { intervalMs: 5000, limit: 30, recentMinutes: 5 });
   const activeStaffId = viewingAs ? viewingAs.id : currentUser.id;
+  // 【D4】KPI scope 记忆(per-staff):身份就绪(真实 staff id 从 shell bundle 回来,>0)后,
+  // 读回该员工上次选择的 scope(键带 staff id 防同浏览器多账号串号);此后变更同步写 per-staff 键。
+  // 挂载初值仍走旧共享键 stored.kpiScope(身份未知时的兜底),per-staff 值就绪后覆盖之。
+  // 注意用 currentUser.id(真实登录人)而非 viewingAs——管理员「以他人视角查看」不该改写别人的记忆。
+  const kpiScopeStaffId = Number(currentUser?.id) || 0;
+  useEffect(() => {
+    if (!kpiScopeStaffId) return;
+    const remembered = loadKpiScopeForStaff(kpiScopeStaffId);
+    if (remembered) setKpiScope(remembered);
+  }, [kpiScopeStaffId]);
+  useEffect(() => {
+    if (!kpiScopeStaffId) return;
+    saveKpiScopeForStaff(kpiScopeStaffId, kpiScope);
+  }, [kpiScopeStaffId, kpiScope]);
   const activeReminders = useMemo(() => viewingAs ? [] : runtimeReminders, [viewingAs, runtimeReminders]);
   // Real staff (17) adapted to the UI shape the team/group/events modals expect.
   const uiStaff = useMemo(() => toUiStaffList(dashboardData.staffMembers || []), [dashboardData.staffMembers]);

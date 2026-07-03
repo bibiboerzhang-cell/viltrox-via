@@ -21,6 +21,7 @@ export function TextResultSection({
   recallItems,
   discoveryItems,
   discoveryTotal = 0,
+  discoveryAutoEnrolled = null,
   input,
   apiToken,
   isBusy,
@@ -67,6 +68,7 @@ export function TextResultSection({
   recallItems: VkpiKolRecallItem[];
   discoveryItems: any[];
   discoveryTotal?: number;
+  discoveryAutoEnrolled?: number | null;
   input: string;
   apiToken: string;
   isBusy: boolean;
@@ -187,15 +189,17 @@ export function TextResultSection({
             <Sparkles size={9} /> 自动·恒开
           </span>
         </div>
-        {/* 【K3】入库反馈:发现即自动落 Pool(后端 _auto_enroll_discoveries),下次同类搜索会出现在「库内已有的人」。
-            数字口径诚实化:discoveryTotal 是本次发现项数;后端逐条 upsert 时会跳过缺 handle/入库失败的个别项,
-            故文案不宣称「已入库 N 人」的精确数,只说发现 N 人 + 已自动登记(异常项除外)。 */}
+        {/* 【K3 正账】入库反馈:发现即自动落 Pool(后端 _auto_enroll_discoveries)。后端现把真实入库数
+            记进 result_summary.new_discovery.counts.auto_enrolled(仅计本次成功 upsert 的新行;
+            已在库/缺 handle/入库失败的不计)→ 有真数就显示真数;旧会话无该键则回退到概述文案,不编数字。 */}
         {discoveryTotal > 0 ? (
           <div
             className="mb-2 rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-1.5 text-[10px] text-emerald-100/90"
-            title="全网新发现会即时轻量入库(仅基础资料,不触评分);个别缺 handle 或入库失败的项会跳过"
+            title="全网新发现会即时轻量入库(仅基础资料,不触评分);已在库/缺 handle/入库失败的项不计入入库数"
           >
-            本次全网新发现 {discoveryTotal} 人,已自动登记入库(个别缺 handle/入库失败的除外)· 下次同类搜索归「库内已有的人」
+            {typeof discoveryAutoEnrolled === "number"
+              ? `本次全网新发现 ${discoveryTotal} 人,其中 ${discoveryAutoEnrolled} 人已自动入库(其余已在库或入库失败)· 下次同类搜索归「库内已有的人」`
+              : `本次全网新发现 ${discoveryTotal} 人,已自动登记入库(个别缺 handle/入库失败的除外)· 下次同类搜索归「库内已有的人」`}
           </div>
         ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">

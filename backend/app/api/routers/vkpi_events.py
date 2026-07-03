@@ -244,6 +244,40 @@ def delete_expense(event_id: str, expense_id: str, staff=Depends(require_tab("vk
     return _guard(service.delete_expense, event_id, expense_id, staff)
 
 
+@router.post("/{event_id}/invoice-extract/enqueue")
+def enqueue_event_invoice_extract(event_id: str, body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))):
+    """报销发票 AI 识别入队(E2,2026-07-03):复用项目侧 contract_assist 发票提取管线。
+
+    文件已由 /evidence/uploads 落盘,这里只收 file_url;LLM 经 apify_jobs 队列,产物
+    落 vkpi_analysis_cache,前端轮询 GET /projects/invoice-extract/{extract_key} 读回填。
+    """
+    _assert_write(event_id, staff)
+    # 部署陷阱:函数内懒 import + try/except —— 线上旧布局的 contract_assist 可能还没有
+    # enqueue_event_invoice_extract_job,顶层 import/getattr 失败不能炸整站,这里如实 503。
+    try:
+        from app.domains.projects import contract_assist
+
+        enqueue_fn = contract_assist.enqueue_event_invoice_extract_job
+    except (ImportError, AttributeError) as exc:
+        raise HTTPException(status_code=503, detail=f"invoice extract unavailable: {exc}") from exc
+    try:
+        return enqueue_fn(
+            str(event_id),
+            str((body or {}).get("file_url") or ""),
+            file_name=str((body or {}).get("file_name") or ""),
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        # budget_guard_blocked 等前置失败按 400 如实返回(与项目侧口径一致)。
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
 # ── KOL invites ───────────────────────────────────────────────────────────
 @router.post("/{event_id}/kols")
 def invite_kol(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):

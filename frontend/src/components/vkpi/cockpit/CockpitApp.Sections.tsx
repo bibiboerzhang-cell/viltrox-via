@@ -102,6 +102,8 @@ export function CockpitOverlays(p: any) {
     e(AnimatePresence, { key: "ov-kpi" }, selectedKpi && e(KPIDetailModal, {
       kpiId: selectedKpi,
       initialScope: kpiScope,
+      // 【D4】per-staff scope 记忆:弹窗内切 scope 也按 staff id 存,防同浏览器多账号串号。
+      staffId: currentUser?.id,
       metrics: dashboardRuntime.metrics,
       onClose: () => setSelectedKpi(null),
       onDrillToKolPool: () => {

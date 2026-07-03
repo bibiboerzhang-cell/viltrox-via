@@ -31,6 +31,7 @@ import {
   PENDING_SEARCH_SESSION_KEY,
   PROFILE_REP_VIDEO_LIMIT,
   UrlSummary,
+  discoveryAutoEnrolledFromSession,
   discoveryItemsFromSession,
   historySessionId,
   isSearchSessionTerminal,
@@ -270,6 +271,9 @@ export function SmartKolInputPanel({
   // 【K3】入库反馈:本次会话全网新发现总数(未经平台筛选)——后端 _auto_enroll_discoveries 已把
   // new_creator 自动落 Pool(会话项 kol_pool_id 保持 NULL 是不变式),故「发现数=已自动入库数」。
   const discoveryTotal = useMemo(() => discoveryItemsFromSession(activeSearchSession).length, [activeSearchSession]);
+  // 【K3 正账】真实自动入库数(result_summary.new_discovery.counts.auto_enrolled);旧会话无该键 → null,
+  // TextResultSection 回退到概述文案,不编数字。
+  const discoveryAutoEnrolled = useMemo(() => discoveryAutoEnrolledFromSession(activeSearchSession), [activeSearchSession]);
   // 三框·框1:LLM 人群理解可编辑(防 LLM 理解偏)——编辑后「用此重搜」。
   const [personaEditing, setPersonaEditing] = useState(false);
   const [personaDraft, setPersonaDraft] = useState("");
@@ -824,6 +828,7 @@ export function SmartKolInputPanel({
           recallItems={recallItems}
           discoveryItems={discoveryItems}
           discoveryTotal={discoveryTotal}
+          discoveryAutoEnrolled={discoveryAutoEnrolled}
           input={input}
           apiToken={apiToken}
           isBusy={isBusy}

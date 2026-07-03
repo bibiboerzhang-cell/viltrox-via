@@ -59,6 +59,8 @@ INVOICE_FIELDS = (
     "bank_address",
     "amount",
     "currency",
+    # E2(2026-07-03)Events 报销回填需要日期:additive 追加,旧缓存产物无该键、消费方需容缺。
+    "invoice_date",
 )
 
 CONTRACT_POLISH_JOB_TYPE = "contract_polish"
@@ -115,13 +117,15 @@ Required JSON shape:
   "bank_name": "",
   "bank_address": "",
   "amount": null,
-  "currency": ""
+  "currency": "",
+  "invoice_date": ""
 }
 
 Rules:
 - If a field is not in the document, use "" for text fields and null for amount.
 - Never guess or infer bank details; copy them exactly as written.
 - amount is a plain number (no thousands separators); currency is the ISO-like code or symbol as written (e.g. USD, EUR).
+- invoice_date is the invoice/receipt issue date printed on the document, formatted YYYY-MM-DD; leave "" when no date is printed or the date is ambiguous.
 """
 
 
@@ -332,12 +336,124 @@ def enqueue_invoice_extract_job(
     }
 
 
+def enqueue_event_invoice_extract_job(
+    event_id: str,
+    file_url: str,
+    *,
+    file_name: str = "",
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Events 报销发票提取入队(E2,2026-07-03):镜像项目版,scope 换活动级、payload 带 event_id。
+
+    复用同一 job_type(contract_invoice_extract)与 cache 形状 → worker 零改动;
+    幂等口径与项目版一致(同 file_url 的 ready 产物直接复用、活跃任务返回其 extract_key)。
+    读端复用 GET /projects/invoice-extract/{extract_key}(event 产物 result 无 project_id,
+    不触发项目 scope 检查)。红线:与评分域无关,绝不写 viltrox_fit_score。"""
+    event_key = str(event_id or "").strip()
+    if not event_key:
+        raise ValueError("event_id required")
+    scope.assert_event_access(event_key, staff, write=True)
+    path = _evidence_path_from_url(file_url)
+    if path.suffix.lower() not in INVOICE_ALLOWED_EXTENSIONS:
+        raise ValueError("unsupported invoice file type")
+    if not path.exists() or path.stat().st_size <= 0:
+        raise ValueError("invoice file missing on disk")
+    conn = get_conn()
+    clean_url = str(file_url or "").strip().split("?", 1)[0]
+    name = str(file_name or "").strip() or path.name
+    # 幂等 1:同 file_url 已有 ready 产物,直接复用(同一份发票不重复付费)。
+    cached = conn.execute(
+        """
+        SELECT target_id FROM vkpi_analysis_cache
+        WHERE target_type='invoice' AND derive_method=? AND status='ready'
+          AND result->>'file_url'=?
+        ORDER BY updated_at DESC LIMIT 1
+        """,
+        (INVOICE_EXTRACT_DERIVE_METHOD, clean_url),
+    ).fetchone()
+    if cached:
+        return {"status": "already_extracted", "extract_key": str(dict(cached)["target_id"]), "file_url": clean_url}
+    # 幂等 2:同 file_url 已有活跃任务,返回其 extract_key。
+    active = conn.execute(
+        """
+        SELECT id, payload FROM apify_jobs
+        WHERE job_type=? AND status IN ('queued','running')
+          AND payload->>'file_url'=?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (INVOICE_EXTRACT_JOB_TYPE, clean_url),
+    ).fetchone()
+    if active:
+        item = dict(active)
+        existing_payload = item.get("payload")
+        if isinstance(existing_payload, str):
+            try:
+                existing_payload = json.loads(existing_payload)
+            except Exception:
+                existing_payload = {}
+        existing_payload = existing_payload if isinstance(existing_payload, dict) else {}
+        return {
+            "status": "already_queued",
+            "job_id": int(item["id"]),
+            "extract_key": str(existing_payload.get("extract_key") or ""),
+            "file_url": clean_url,
+        }
+    budget = contracts_domain._budget_preflight(int(path.stat().st_size))
+    if not budget.get("allowed"):
+        raise RuntimeError("budget_guard_blocked")
+    extract_key = uuid.uuid4().hex
+    payload = {
+        "target_type": "event",
+        "target_id": event_key,
+        "event_id": event_key,
+        "extract_key": extract_key,
+        "file_url": clean_url,
+        "file_name": name,
+        "derive_method": INVOICE_EXTRACT_DERIVE_METHOD,
+        "query_text": f"活动报销发票提取 · {name}"[:96],
+        "triggered_by_user_id": contracts_domain._triggered_by_user_id(staff),
+        "staff_id": contracts_domain._ledger_staff_id(staff),
+    }
+    job = conn.execute(
+        """
+        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
+        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
+        RETURNING id
+        """,
+        (INVOICE_EXTRACT_JOB_TYPE, json.dumps(payload, ensure_ascii=False)),
+    ).fetchone()
+    conn.commit()
+    job_id = int(dict(job)["id"]) if job else None
+    audit.log_business_event(
+        staff_id=staff_id(staff) or None,
+        action_type="invoice_extract_enqueued",
+        target_type="event",
+        target_id=event_key,
+        detail=f"活动报销发票提取入队 · {name}",
+        metadata={"event_id": event_key, "file_url": clean_url, "extract_key": extract_key, "job_id": job_id},
+    )
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "extract_key": extract_key,
+        "file_url": clean_url,
+        "budget": budget,
+        "diagnostics": {"provider_calls": False, "llm_calls": False, "worker_touched": False},
+    }
+
+
 def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """worker 入口:读本地文件 → Claude 提取 → 成功写 cache;失败不写(状态回 apify_jobs)。"""
+    """worker 入口:读本地文件 → Claude 提取 → 成功写 cache;失败不写(状态回 apify_jobs)。
+
+    E2(2026-07-03):同时支持项目发票(payload 带 project_id)与活动报销发票(payload 带
+    event_id,无 project_id)。两者共用 job_type/cache 形状;event 产物 result 不写 project_id,
+    读端 GET /projects/invoice-extract/{key} 因此不会触发项目 scope 误判。"""
     extract_key = str(payload.get("extract_key") or "").strip()
-    project_id = _int(payload.get("project_id") or payload.get("target_id")) or 0
+    event_id = str(payload.get("event_id") or "").strip()
+    # event payload 绝不从 target_id 反推 project_id(防御:万一 event id 是纯数字串也不会误挂项目)。
+    project_id = _int(payload.get("project_id") or (None if event_id else payload.get("target_id"))) or 0
     file_url = str(payload.get("file_url") or "").strip()
-    if not extract_key or not project_id or not file_url:
+    if not extract_key or not file_url or (not project_id and not event_id):
         return {"status": "failed", "reason": "payload_missing_fields"}
     try:
         path = _evidence_path_from_url(file_url)
@@ -369,6 +485,16 @@ def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any
         return {"status": "failed", "reason": "llm_empty_extraction"}
     try:
         usage = extraction.get("usage_metadata") if isinstance(extraction.get("usage_metadata"), dict) else {}
+        cost_metadata: dict[str, Any] = {
+            "extract_key": extract_key,
+            "derive_method": INVOICE_EXTRACT_DERIVE_METHOD,
+            "triggered_by_user_id": contracts_domain._triggered_by_user_id(staff),
+        }
+        # 项目/活动二选一:只写真实存在的归属键,不给 event 产物记 project_id=0 的假账。
+        if project_id:
+            cost_metadata["project_id"] = int(project_id)
+        if event_id:
+            cost_metadata["event_id"] = event_id
         budget_guard.record_cost(
             scope=contracts_domain.CONTRACT_BUDGET_SCOPE,
             cron_task="vkpi_invoice_extract",
@@ -378,12 +504,7 @@ def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any
             tokens_in=int(usage.get("input_tokens") or 0),
             tokens_out=int(usage.get("output_tokens") or 0),
             staff_id=contracts_domain._ledger_staff_id(staff),
-            metadata={
-                "project_id": int(project_id),
-                "extract_key": extract_key,
-                "derive_method": INVOICE_EXTRACT_DERIVE_METHOD,
-                "triggered_by_user_id": contracts_domain._triggered_by_user_id(staff),
-            },
+            metadata=cost_metadata,
             triggered_by=None,
             extra_scopes=["monthly_total", "provider:claude"],
         )
@@ -396,11 +517,16 @@ def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any
         "llm_model": extraction.get("model"),
         "llm_provider": "anthropic",
         "llm_latency_ms": extraction.get("latency_ms"),
-        "project_id": int(project_id),
         "file_url": file_url,
         "file_name": str(payload.get("file_name") or path.name),
         "generated_at": now,
     }
+    # project 产物保持原形状(读端按 result.project_id 做项目 scope 把关);
+    # event 产物写 event_id、不写 project_id(避免 require_project_read(0) 误拒)。
+    if project_id:
+        result["project_id"] = int(project_id)
+    if event_id:
+        result["event_id"] = event_id
     conn = get_conn()
     conn.execute(
         """
@@ -424,7 +550,12 @@ def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any
         ),
     )
     conn.commit()
-    return {"status": "ready", "extract_key": extract_key, "project_id": int(project_id)}
+    done: dict[str, Any] = {"status": "ready", "extract_key": extract_key}
+    if project_id:
+        done["project_id"] = int(project_id)
+    if event_id:
+        done["event_id"] = event_id
+    return done
 
 
 def get_invoice_extract(extract_key: str) -> dict[str, Any]:
