@@ -145,6 +145,21 @@ async def fetch_bh_viltrox_products(
                 timeout_secs=300,
             )
             items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            # C5 成本记账收口:search actor 每类目一跑都是真钱(~$2/次),统一记账
+            # (幂等 by run_id;失败绝不影响抓取)。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
+
+                record_apify_run(
+                    run,
+                    actor_id=actor_id,
+                    platform="bh",
+                    operation="fetch_bh_products",
+                    source="intelligence.bh_scraper",
+                    dataset_item_count=len(items),
+                )
+            except Exception:
+                logger.warning("bh_scraper.cost_record_failed", exc_info=True)
             logger.info("bh_scraper.category_complete", extra={"category_name": category_name, "item_count": len(items)})
             return items
         except Exception as e:
@@ -490,7 +505,22 @@ async def fetch_bh_product_reviews(product_url: str, max_reviews: int = 100) -> 
                 run_input={"startUrls": [{"url": reviews_url}], "maxItems": max_reviews},
                 timeout_secs=180,
             )
-            return list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            found = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            # C5 成本记账收口:legacy reviews 入口也统一记账(幂等 by run_id;失败绝不影响抓取)。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
+
+                record_apify_run(
+                    run,
+                    actor_id="powerai/bhphotovideo-product-reviews-scraper",
+                    platform="bh",
+                    operation="fetch_product_reviews_legacy",
+                    source="intelligence.bh_scraper",
+                    dataset_item_count=len(found),
+                )
+            except Exception:
+                logger.warning("bh_scraper.legacy_reviews_cost_record_failed", exc_info=True)
+            return found
         
         items = await asyncio.to_thread(_do)
         return [

@@ -775,6 +775,29 @@ async def job_vkpi_health_sentinel():
         logger.exception("scheduler.vkpi_health_sentinel_failed")
 
 
+async def job_vkpi_cost_snapshot():
+    """C5 成本记账收口:每日把昨日(UTC)vkpi_ai_cost_ledger 按 provider/actor 聚合成
+    快照落 persistent_cache(health_sentinel 同款模式,零新表零迁移)。
+
+    常开(轻量只读聚合 + 写缓存,空库安全空跑);同日重跑 delete+insert 幂等。
+    只记账可见,绝不预检拦截、绝不改预算闸/actor 调用行为。
+    """
+    try:
+        from app.domains.costs import budget_guard
+
+        result = await asyncio.to_thread(budget_guard.snapshot_daily_costs)
+        logger.info(
+            "scheduler.vkpi_cost_snapshot",
+            extra={
+                "snapshot_date": result.get("date"),
+                "snapshot_total_usd": (result.get("totals") or {}).get("total_usd"),
+                "snapshot_persisted": result.get("persisted"),
+            },
+        )
+    except Exception:
+        logger.exception("scheduler.vkpi_cost_snapshot_failed")
+
+
 # ──────────────────────────────────────────────
 # 市场情报 / AI Today / 官号日报 任务簇 → jobs_tasks_intel.py(行为不变搬出)
 # 原文件 re-export 兜住所有调用点(含私有 _run_brief_agent_daily)。

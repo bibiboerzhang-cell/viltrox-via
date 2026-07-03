@@ -57,6 +57,34 @@ def _apify_available() -> bool:
     return _client is not None
 
 
+def _record_run_cost(
+    run: Any,
+    *,
+    actor_id: str,
+    platform: str,
+    operation: str,
+    item_count: int | None = None,
+) -> None:
+    """C5 成本记账收口:每次 actor run 后统一记账(幂等 by run_id)。
+
+    统一口 budget_guard.record_apify_run 自带估算价目表(pay-per-result 费不在
+    usageTotalUsd 里)+ 同 run_id 去重;本 helper 全程吞异常,记账绝不影响抓取。
+    """
+    try:
+        from app.domains.costs.budget_guard import record_apify_run
+
+        record_apify_run(
+            run,
+            actor_id=actor_id,
+            platform=platform,
+            operation=operation,
+            source="services.scraping.apify",
+            dataset_item_count=item_count,
+        )
+    except Exception:
+        logger.warning("apify.cost_record_failed | actor=%s | op=%s", actor_id, operation, exc_info=True)
+
+
 def _int(value: Any) -> int:
     try:
         return int(float(str(value or "0").replace(",", "")))
@@ -225,6 +253,7 @@ async def _fetch_douyin_comments(url: str, max_comments: int = 20) -> list[dict]
         run_input = _douyin_comments_payload(actor_id, url, max_comments)
         run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="douyin_comments", item_count=len(items))
         return _normalize_douyin_comments(items)
     except Exception as e:
         logger.warning("apify.scrape_douyin.comments_failed | url=%s | actor=%s | error=%s", url, actor_id, e)
@@ -239,6 +268,7 @@ async def _fetch_douyin_metrics(url: str) -> dict[str, int]:
         run_input = _douyin_metrics_payload(actor_id, url)
         run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="douyin_metrics", item_count=len(items))
         if not items:
             return {}
         item = items[0]
@@ -276,6 +306,7 @@ async def scrape_youtube(url: str) -> Dict[str, Any]:
         )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        _record_run_cost(run, actor_id="streamers/youtube-scraper", platform="youtube", operation="scrape_youtube", item_count=len(items))
         if not items:
             return _empty_result("apify returned no items")
 
@@ -358,6 +389,7 @@ async def scrape_instagram(url: str) -> Dict[str, Any]:
         )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        _record_run_cost(run, actor_id="apify/instagram-scraper", platform="instagram", operation="scrape_instagram", item_count=len(items))
         if not items:
             return _empty_result("apify returned no items")
 
@@ -441,6 +473,7 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
         run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        _record_run_cost(run, actor_id=actor_id, platform="tiktok", operation="scrape_tiktok", item_count=len(items))
         if not items:
             return _empty_result("apify returned no items")
 
@@ -512,6 +545,7 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
         run_input = _douyin_video_payload(actor_id, url)
         run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+        _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="scrape_douyin", item_count=len(items))
         if not items:
             return _empty_result("apify returned no items")
         item = items[0]

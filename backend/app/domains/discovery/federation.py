@@ -81,6 +81,19 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
     for platform, actor in actors.items():
         try:
             run = apify_svc._client.actor(actor).call(run_input={"searchQueries": [query], "maxResults": per})
+            # C5 成本记账收口:联邦搜索 run 统一记账(幂等 by run_id;失败绝不影响搜索)。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
+
+                record_apify_run(
+                    run,
+                    actor_id=str(actor),
+                    platform=str(platform),
+                    operation="federation_search",
+                    source="discovery.federation",
+                )
+            except Exception:
+                logger.warning("federation.apify_cost_record_failed", exc_info=True)
             taken = 0
             for x in apify_svc._client.dataset(run["defaultDatasetId"]).iterate_items():
                 out.append({

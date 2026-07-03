@@ -576,7 +576,29 @@ def run_apify_batch(
             wait_secs=max(30, min(1800, _int(timeout_secs, DEFAULT_RUN_TIMEOUT_SECONDS))),
         )
         status = str((run or {}).get("status") or "").upper()
+
+        def _record_batch_cost(item_count: int | None) -> None:
+            # C5 成本记账收口:批量刷新每个 run(含失败 run,平台用量照收)统一记账。
+            # 幂等 by run_id;记账失败绝不影响批量刷新本身。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
+
+                record_apify_run(
+                    run,
+                    actor_id=actor_id,
+                    platform=str(batch.get("platform") or ""),
+                    operation="apify_batch_refresh",
+                    source="sync.apify_batch_refresh",
+                    dataset_item_count=item_count,
+                )
+            except Exception:
+                # 本模块无模块级 logger → 就地取 stdlib logger;记账失败绝不冒泡成批次失败。
+                import logging
+
+                logging.getLogger(__name__).warning("apify batch refresh cost record failed", exc_info=True)
+
         if not run or status != "SUCCEEDED":
+            _record_batch_cost(0)
             return {
                 "batch_key": batch.get("batch_key"),
                 "platform": batch.get("platform"),
@@ -591,6 +613,7 @@ def run_apify_batch(
         dataset_id = run.get("defaultDatasetId")
         items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
         dict_items = [item for item in items if isinstance(item, dict)]
+        _record_batch_cost(len(items))
         mapped = map_dataset_items_to_targets(dict_items, targets)
         sync_status = "synced" if mapped.get("matched_count") else "no_results"
         return {

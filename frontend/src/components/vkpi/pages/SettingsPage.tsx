@@ -165,6 +165,131 @@ function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
   );
 }
 
+// ── C5 成本记账(内部口径)──────────────────────────────────
+// 今日/本月 Apify+LLM 消耗 + top actor + 记账覆盖盲区提示。
+// 后端 /ops/cost-ledger 只读聚合 vkpi_ai_cost_ledger;精确=usageTotalUsd(平台用量),
+// 付费 actor 费按内部价目表估算(estimated);权威账单以 Apify console 为准。
+interface CostBucket {
+  apify_usd?: number;
+  apify_calls?: number;
+  llm_usd?: number;
+  llm_calls?: number;
+  total_usd?: number;
+}
+
+interface CostActorRow {
+  actor_id?: string;
+  runs?: number;
+  cost_usd?: number;
+}
+
+interface CostCoverage {
+  apify_runs?: number;
+  unified_entries?: number;
+  estimated_entries?: number;
+  zero_cost_entries?: number;
+  unified_ratio?: number | null;
+}
+
+interface CostOverview {
+  generated_at?: string;
+  today?: CostBucket;
+  month?: CostBucket;
+  top_actors_today?: CostActorRow[];
+  top_actors_month?: CostActorRow[];
+  coverage?: CostCoverage;
+  note?: string;
+}
+
+const usd = (value?: number) => `$${Number(value ?? 0).toFixed(2)}`;
+
+function CostLedgerCard({ apiToken }: { apiToken?: string }) {
+  const [overview, setOverview] = useState<CostOverview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setLoading(true);
+    apiFetch<CostOverview>('/api/admin/vkpi/ops/cost-ledger', { timeoutMs: 15000 }, apiToken)
+      .then((res) => {
+        if (alive) setOverview(res || null);
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : '成本记账读取失败');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => { alive = false; };
+  }, [apiToken]);
+
+  const today = overview?.today || {};
+  const month = overview?.month || {};
+  const coverage = overview?.coverage || {};
+  const topActors = (overview?.top_actors_month || []).slice(0, 5);
+  const apifyRuns = coverage.apify_runs ?? 0;
+  const unified = coverage.unified_entries ?? 0;
+  const stats: Array<{ label: string; value: string; sub: string }> = [
+    { label: '今日 Apify', value: usd(today.apify_usd), sub: `${today.apify_calls ?? 0} 次调用` },
+    { label: '今日 LLM', value: usd(today.llm_usd), sub: `${today.llm_calls ?? 0} 次调用` },
+    { label: '本月 Apify', value: usd(month.apify_usd), sub: `${month.apify_calls ?? 0} 次调用` },
+    { label: '本月 LLM', value: usd(month.llm_usd), sub: `${month.llm_calls ?? 0} 次调用` },
+  ];
+
+  return (
+    <section className="vkpi-card" style={{ marginBottom: 16, padding: '14px 16px' }}>
+      <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <strong style={{ fontSize: 14 }}>成本记账(内部口径)</strong>
+          <span className="text-slate-400" style={{ marginLeft: 10, fontSize: 12 }}>
+            {overview
+              ? `本月合计 ${usd(month.total_usd)} · 统计时间 ${formatLocal(overview.generated_at)}`
+              : loading
+                ? '读取中…'
+                : '暂无记账数据'}
+          </span>
+        </div>
+      </div>
+      {error ? <div className="vkpi-inline-message is-error" style={{ marginTop: 8 }}>{error}</div> : null}
+      {overview ? (
+        <>
+          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
+            {stats.map((item) => (
+              <div key={item.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(148,163,184,0.08)' }}>
+                <div className="text-slate-400" style={{ fontSize: 11 }}>{item.label}</div>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>{item.value}</div>
+                <div className="text-slate-500" style={{ fontSize: 11 }}>{item.sub}</div>
+              </div>
+            ))}
+          </div>
+          {topActors.length ? (
+            <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
+              <div className="text-slate-400" style={{ fontSize: 11, fontWeight: 500 }}>本月 Top Actor</div>
+              {topActors.map((actor) => (
+                <div key={actor.actor_id} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {actor.actor_id}
+                  </span>
+                  <span className="text-slate-400" style={{ flex: '0 0 auto' }}>{actor.runs ?? 0} 次</span>
+                  <span style={{ flex: '0 0 auto', fontWeight: 500 }}>{usd(actor.cost_usd)}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="text-slate-500" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+            记账收口覆盖(本月):{unified}/{apifyRuns} 笔 Apify run 走统一记账口
+            {coverage.estimated_entries ? ` · 估算 ${coverage.estimated_entries} 笔` : ''}
+            {coverage.zero_cost_entries ? ` · 零成本盲区 ${coverage.zero_cost_entries} 笔` : ''}
+            。{overview.note || '内部口径,权威账单以 Apify console 为准。'}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 interface SettingsPageProps {
   data: VkpiDashboardData;
   viewMode: 'manager' | 'employee';
@@ -488,6 +613,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <HealthSentinelCard apiToken={apiToken} />
+      <CostLedgerCard apiToken={apiToken} />
       <div className="vkpi-settings-clean">
         <SettingsCompanyZone
           renderModule={renderSettingsModule}

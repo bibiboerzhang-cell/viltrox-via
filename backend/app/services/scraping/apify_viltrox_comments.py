@@ -15,6 +15,23 @@ from app.services.scraping.apify import _apify_available, _client
 logger = get_logger(__name__)
 
 
+def _record_cost(run: Any, actor_id: str, platform: str, operation: str, item_count: int) -> None:
+    """C5 成本记账收口:官号评论抓取也统一记账(幂等 by run_id;失败绝不影响抓取)。"""
+    try:
+        from app.domains.costs.budget_guard import record_apify_run
+
+        record_apify_run(
+            run,
+            actor_id=actor_id,
+            platform=platform,
+            operation=operation,
+            source="services.scraping.apify_viltrox_comments",
+            dataset_item_count=item_count,
+        )
+    except Exception:
+        logger.warning("apify.viltrox.cost_record_failed | actor=%s | op=%s", actor_id, operation, exc_info=True)
+
+
 async def fetch_viltrox_youtube_comments(
     max_videos: int = 30,
     max_comments_per_video: int = 50,
@@ -39,7 +56,9 @@ async def fetch_viltrox_youtube_comments(
                 "startUrls": [{"url": f"https://www.youtube.com/@{channel_handle}/videos"}],
                 "maxResults": max_videos,
             })
-            return list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            _record_cost(run, "streamers/youtube-channel-scraper", "youtube", "viltrox_channel_videos", len(items))
+            return items
 
         videos = await asyncio.to_thread(_fetch_videos)
         logger.info("apify.viltrox.youtube.videos_loaded | count=%s", len(videos))
@@ -59,7 +78,9 @@ async def fetch_viltrox_youtube_comments(
                 "startUrls": video_urls,
                 "maxComments": max_comments_per_video,
             })
-            return list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            _record_cost(run, "streamers/youtube-comments-scraper", "youtube", "viltrox_video_comments", len(items))
+            return items
 
         comments = await asyncio.to_thread(_fetch_comments)
         logger.info("apify.viltrox.youtube.comments_loaded | comments=%s | videos=%s", len(comments), len(videos))
@@ -87,7 +108,9 @@ async def fetch_viltrox_instagram_comments(
                 "resultsType": "posts",
                 "resultsLimit": max_posts,
             })
-            return list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            _record_cost(run, "apify/instagram-scraper", "instagram", "viltrox_posts", len(items))
+            return items
 
         posts = await asyncio.to_thread(_fetch_posts)
         logger.info("apify.viltrox.instagram.posts_loaded | count=%s", len(posts))
@@ -103,7 +126,9 @@ async def fetch_viltrox_instagram_comments(
                 "directUrls": post_urls,
                 "resultsLimit": max_comments_per_post,
             })
-            return list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            _record_cost(run, "apify/instagram-comment-scraper", "instagram", "viltrox_post_comments", len(items))
+            return items
 
         comments = await asyncio.to_thread(_fetch_comments)
         logger.info("apify.viltrox.instagram.comments_loaded | count=%s", len(comments))
@@ -132,7 +157,9 @@ async def fetch_viltrox_tiktok_comments(
                 "shouldDownloadVideos": False,
                 "shouldDownloadCovers": False,
             })
-            return list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
+            _record_cost(run, "clockworks/free-tiktok-scraper", "tiktok", "viltrox_videos", len(items))
+            return items
 
         videos = await asyncio.to_thread(_fetch_videos)
         logger.info("apify.viltrox.tiktok.videos_loaded | count=%s", len(videos))

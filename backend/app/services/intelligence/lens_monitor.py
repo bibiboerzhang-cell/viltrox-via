@@ -91,7 +91,22 @@ async def search_youtube(query: str, max_results: int = 50) -> list[dict]:
                 run_input=run_input,
                 timeout_secs=240,
             )
-            return list(_apify.dataset(run["defaultDatasetId"]).iterate_items())
+            found = list(_apify.dataset(run["defaultDatasetId"]).iterate_items())
+            # C5 成本记账收口:镜头监控搜索 run 统一记账(幂等 by run_id;失败绝不影响搜索)。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
+
+                record_apify_run(
+                    run,
+                    actor_id="streamers/youtube-scraper",
+                    platform="youtube",
+                    operation="lens_monitor_search",
+                    source="intelligence.lens_monitor",
+                    dataset_item_count=len(found),
+                )
+            except Exception:
+                logger.warning("lens_monitor.cost_record_failed", exc_info=True)
+            return found
         
         items = await asyncio.to_thread(_do)
         elapsed = time.time() - t0

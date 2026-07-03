@@ -51,11 +51,27 @@ def record_apify_run_cost(
     actor_id: str = "",
     operation: str = "",
 ) -> None:
-    """护栏④ 记账可见(第一步):从 Apify run 对象取 usageTotalUsd 落 vkpi_ai_cost_ledger。
+    """护栏④ 记账可见:Apify run 记账,C5 起统一走 budget_guard.record_apify_run 收口。
 
-    纯记账 / 不预检 / 不拦截(spend 累积后第二批再加 check_budget 预检)。
-    记账异常绝不打断爬取(第一步只求可见不求强一致)。
+    收口后本函数只是薄转发(保留旧签名兜住全部既有调用点):幂等(同 run_id 不双记)、
+    usageTotalUsd + 付费 actor 估算费都在统一口里。统一口不可用(极端部署错位)时
+    回退旧的 usageTotalUsd 直记,保证记账能力不倒退。
+    纯记账 / 不预检 / 不拦截;记账异常绝不打断爬取。
     """
+    try:
+        from app.domains.costs.budget_guard import record_apify_run
+
+        record_apify_run(
+            run,
+            actor_id=str(actor_id or ""),
+            platform=str(platform or ""),
+            operation=str(operation or ""),
+            source="industry_crawlers",
+        )
+        return
+    except Exception:
+        logger.warning("unified apify cost entry unavailable, falling back to legacy record", exc_info=True)
+    # ── 旧路径回退(与收口前逐字同款):只取 usageTotalUsd 直落账本。──
     try:
         if not isinstance(run, dict):
             return

@@ -36,6 +36,21 @@ async def _run_actor(actor_id: str, payload: Dict[str, Any], timeout: int = 600)
         run = client.actor(actor_id).call(run_input=payload, timeout_secs=timeout)
         items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
         logger.info("scanner.actor_complete", extra={"actor_id": actor_id, "item_count": len(items)})
+        # C5 成本记账收口:矩阵扫描全部 actor run 走此共用 runner,统一记账
+        # (幂等 by run_id;失败绝不影响扫描)。
+        try:
+            from app.domains.costs.budget_guard import record_apify_run
+
+            record_apify_run(
+                run,
+                actor_id=actor_id,
+                platform="",
+                operation="account_scan",
+                source="intelligence.account_scan_service",
+                dataset_item_count=len(items),
+            )
+        except Exception:
+            logger.warning("scanner.cost_record_failed", extra={"actor_id": actor_id}, exc_info=True)
         return items
 
     try:

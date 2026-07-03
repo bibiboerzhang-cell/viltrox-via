@@ -168,6 +168,19 @@ def health_sentinel_run(staff=Depends(require_tab("vkpi", "admin"))):
     return health_sentinel.run_health_sentinel(trigger="manual", staff=staff)
 
 
+# ---------------------------------------------------------------------------
+# C5 成本记账收口 — 今日/本月 Apify+LLM 消耗、top actor、记账覆盖口径(只读)。
+# 内部口径:精确=usageTotalUsd;付费 actor 费按内部价目表估算(estimated 标记);
+# 权威账单以 Apify console 为准(无法程序化比对,如实标注)。
+# ---------------------------------------------------------------------------
+@router.get("/ops/cost-ledger")
+def cost_ledger_overview(staff=Depends(require_tab("vkpi", "read"))):
+    _require_manager_staff(staff)
+    from app.domains.costs import budget_guard
+
+    return budget_guard.cost_overview()
+
+
 @router.get("/settings/api-key-pool")
 def api_key_pool_list(staff=Depends(require_tab("vkpi", "read"))):
     """多账号 API key 池(设置位,7月手动填轮转)。响应只回 key_prefix 掩码,绝不回明文 key。"""

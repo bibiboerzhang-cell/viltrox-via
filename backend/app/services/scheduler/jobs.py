@@ -81,6 +81,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_comment_sentiment_refresh,
     job_vkpi_competitor_radar,
     job_vkpi_content_fit_batch_refresh,
+    job_vkpi_cost_snapshot,
     job_vkpi_fit_snapshot,
     job_vkpi_fulfillment_sweep,
     job_vkpi_goaffpro_metrics_sync,
@@ -545,6 +546,19 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=9, minute=30, timezone=CHINA_TZ),
         id="vkpi_health_sentinel",
         name="Data health sentinel: 10 golden-link daily checks (read-only)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    # ── C5 每日成本快照(每日 08:20 中国 = 00:20 UTC,UTC 昨日账刚关账)──
+    # vkpi_ai_cost_ledger 按 provider/actor 聚合 → persistent_cache(同日幂等)。常开、只读+写缓存,
+    # 只记账可见,绝不预检拦截、绝不改预算闸/actor 调用行为。
+    _scheduler.add_job(
+        job_vkpi_cost_snapshot,
+        trigger=CronTrigger(hour=8, minute=20, timezone=CHINA_TZ),
+        id="vkpi_cost_snapshot",
+        name="Daily AI/Apify cost snapshot (read-only aggregate to persistent_cache)",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,

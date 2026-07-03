@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, is_postgres_runtime
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)
@@ -427,3 +428,362 @@ def usage_by_cron(limit: int = 50) -> dict[str, Any]:
         (max(1, min(200, int(limit or 50))),),
     ).fetchall()
     return {"rows": [_clean_row(row) for row in rows]}
+
+
+# ──────────────────────────────────────────────
+# C5 成本记账收口(2026-07-03)
+# 背景:Apify 单号 $199 只剩 $3.4,内部记账只见 $26/$195 = 巨大盲区。
+# 根因:run.usageTotalUsd 只覆盖「平台用量」(compute/代理),pay-per-result /
+# 付费 actor 的 actor 费不在里面 → 散点埋点全部系统性低记。
+# 本段只做三件事:统一记账口(幂等)/ 总览聚合 / 每日快照。
+# 红线:只记账,绝不预检拦截、绝不改 actor 调用行为、绝不碰预算闸逻辑。
+# ──────────────────────────────────────────────
+
+_APIFY_PRICING_ENV = "APIFY_ACTOR_PRICING_JSON"
+
+# 内部估算价目表(USD)——只为「记账可见」服务的保守口径,非权威账单(权威以 Apify console 为准)。
+# key=actor_id(斜杠形式,小写);per_1000_items=按结果计费单价,per_run=每次固定费。
+# env APIFY_ACTOR_PRICING_JSON 可覆盖/扩充,如:
+#   {"clockworks/tiktok-scraper": {"per_1000_items": 4.0}, "some/actor": 2.5}(裸数字=per_1000_items)。
+_APIFY_DEFAULT_PRICING: dict[str, dict[str, float]] = {
+    "apify/instagram-scraper": {"per_1000_items": 2.3},
+    "apify/instagram-comment-scraper": {"per_1000_items": 2.3},
+    "streamers/youtube-scraper": {"per_1000_items": 5.0},
+    "streamers/youtube-channel-scraper": {"per_1000_items": 5.0},
+    "streamers/youtube-comments-scraper": {"per_1000_items": 5.0},
+    # B&H 付费 actor(预算烧穿大头;search 实测 ~$2/次,reviews 同门保守同价)。
+    "powerai/bhphotovideo-product-search-scraper": {"per_run": 2.0},
+    "powerai/bhphotovideo-product-reviews-scraper": {"per_run": 2.0},
+}
+
+# 快照键(persistent_cache,003 baseline 表;health_sentinel 同款模式,零新表零迁移)。
+_COST_SNAPSHOT_LATEST_KEY = "vkpi:cost_snapshot:latest"
+_COST_SNAPSHOT_DAY_PREFIX = "vkpi:cost_snapshot:day:"
+_COST_SNAPSHOT_KEEP_DAYS = 62
+
+
+def _apify_actor_pricing(actor_id: str) -> dict[str, float]:
+    """查内部估算价目表(env 覆盖优先);查不到返回 {}(= 只记 usageTotalUsd 口径)。"""
+    key = str(actor_id or "").strip().replace("~", "/").lower()
+    if not key:
+        return {}
+    table: dict[str, dict[str, float]] = dict(_APIFY_DEFAULT_PRICING)
+    raw = os.getenv(_APIFY_PRICING_ENV, "").strip()
+    if raw:
+        try:
+            overrides = json.loads(raw)
+            if isinstance(overrides, dict):
+                for k, v in overrides.items():
+                    kk = str(k).strip().replace("~", "/").lower()
+                    if isinstance(v, dict):
+                        table[kk] = {str(sk): _float(sv) for sk, sv in v.items()}
+                    else:
+                        table[kk] = {"per_1000_items": _float(v)}
+        except Exception:
+            logger.warning("apify pricing env parse failed", exc_info=True)
+    return table.get(key) or {}
+
+
+def _apify_run_already_recorded(conn: Any, run_id: str) -> bool:
+    """幂等去重:同 apify_run_id 是否已有记账行(只回看近 14 天,吃 occurred_at 索引)。
+
+    metadata_json 里旧散点埋点也写 "apify_run_id" 同款键 → 新旧埋点互不双记。
+    LIKE 模式走绑定参数(health_sentinel 同款先例,compat 层安全)。
+    """
+    clean = str(run_id or "").strip()
+    if not clean or not clean.replace("-", "").isalnum():
+        # run_id 含 LIKE 通配符(%/_)等异常字符 → 放弃去重(宁可重记一笔,不做半吊子匹配)。
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pattern = '%"apify_run_id": "' + clean + '"%'
+    try:
+        row = conn.execute(
+            """
+            SELECT id FROM vkpi_ai_cost_ledger
+            WHERE ai_provider='apify' AND occurred_at >= ? AND metadata_json LIKE ?
+            LIMIT 1
+            """,
+            (cutoff, pattern),
+        ).fetchone()
+    except Exception:
+        logger.warning("apify run dedupe lookup failed", exc_info=True)
+        return False
+    return row is not None
+
+
+def record_apify_run(
+    run: Any = None,
+    *,
+    actor_id: str = "",
+    platform: str = "",
+    operation: str = "",
+    source: str = "",
+    dataset_item_count: int | None = None,
+) -> dict[str, Any]:
+    """C5 统一记账口:所有 Apify actor run 结束后走这里落 vkpi_ai_cost_ledger。
+
+    - 幂等:同 apify_run_id 近 14 天只记一笔(散点埋点/重试不会双记);
+    - 成本口径:精确的 run.usageTotalUsd(平台用量)+ 内部价目表估算的 actor 费
+      (pay-per-result / 付费 actor 费不在 usageTotalUsd 里 → metadata.estimated=true);
+    - run-sync HTTP 调用拿不到 run 对象时允许 run=None(pricing_basis=no_run_object);
+    - 只记账不拦截:绝不做预算预检、绝不改调用行为;任何异常吞掉返回 recorded=False。
+    """
+    try:
+        run_obj = run if isinstance(run, dict) else {}
+        actor_key = str(actor_id or "").strip().replace("~", "/")
+        run_id = str(run_obj.get("id") or "").strip()
+        run_status = str(run_obj.get("status") or "")
+        usage = run_obj.get("usageTotalUsd")
+        if usage is None and isinstance(run_obj.get("usageUsd"), dict):
+            usage = sum(
+                float(value or 0)
+                for value in run_obj["usageUsd"].values()
+                if isinstance(value, (int, float))
+            )
+        try:
+            usage_usd: float | None = float(usage) if usage is not None else None
+        except (TypeError, ValueError):
+            usage_usd = None
+        items: int | None = None
+        if dataset_item_count is not None:
+            try:
+                items = max(0, int(dataset_item_count))
+            except (TypeError, ValueError):
+                items = None
+        pricing = _apify_actor_pricing(actor_key)
+        fee = 0.0
+        if pricing:
+            fee += max(0.0, _float(pricing.get("per_run")))
+            per_k = _float(pricing.get("per_1000_items"))
+            if per_k > 0 and items:
+                fee += per_k * items / 1000.0
+        if pricing:
+            pricing_basis = "priced_table"
+        elif usage_usd is not None:
+            pricing_basis = "usage_only"
+        else:
+            pricing_basis = "no_run_object"
+        estimated = bool(pricing) or usage_usd is None
+        cost_usd = max(0.0, usage_usd or 0.0) + max(0.0, fee)
+        ensure_budget_schema()
+        if run_id and _apify_run_already_recorded(get_conn(), run_id):
+            return {"recorded": False, "reason": "duplicate_run", "apify_run_id": run_id}
+        return record_cost(
+            scope="provider:apify",
+            ai_provider="apify",
+            model_name=actor_key,
+            cost_usd=cost_usd,
+            extra_scopes=["monthly_total"],
+            metadata={
+                "platform": str(platform or ""),
+                "actor_id": actor_key,
+                "operation": str(operation or ""),
+                "source": str(source or ""),
+                "apify_run_id": run_id,
+                "run_status": run_status,
+                "usage_total_usd": usage_usd if usage_usd is not None else 0.0,
+                "estimated_fee_usd": round(max(0.0, fee), 6),
+                "dataset_item_count": items,
+                "estimated": estimated,
+                "pricing_basis": pricing_basis,
+                "unified_entry": True,
+            },
+        )
+    except Exception:
+        # 记账失败绝不打断业务调用(与旧散点埋点同约定)。
+        logger.warning("record_apify_run failed (accounting must never break scraping)", exc_info=True)
+        return {"recorded": False, "reason": "error"}
+
+
+def _cost_bucket_rows(conn: Any, since_iso: str, until_iso: str | None = None) -> dict[str, Any]:
+    """按 apify / llm 两桶聚合一个时间窗(llm 桶=非 apify 的全部 provider)。"""
+    clause = "occurred_at >= ?"
+    params: list[Any] = [since_iso]
+    if until_iso:
+        clause += " AND occurred_at < ?"
+        params.append(until_iso)
+    rows = conn.execute(
+        f"""
+        SELECT CASE WHEN COALESCE(ai_provider, '')='apify' THEN 'apify' ELSE 'llm' END AS bucket,
+               COUNT(*) AS calls,
+               COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM vkpi_ai_cost_ledger
+        WHERE {clause}
+        GROUP BY CASE WHEN COALESCE(ai_provider, '')='apify' THEN 'apify' ELSE 'llm' END
+        """,
+        tuple(params),
+    ).fetchall()
+    out = {"apify_usd": 0.0, "apify_calls": 0, "llm_usd": 0.0, "llm_calls": 0}
+    for raw in rows:
+        row = _clean_row(raw)
+        bucket = str(row.get("bucket") or "")
+        if bucket == "apify":
+            out["apify_usd"] = round(_float(row.get("cost_usd")), 4)
+            out["apify_calls"] = int(row.get("calls") or 0)
+        else:
+            out["llm_usd"] = round(_float(row.get("cost_usd")), 4)
+            out["llm_calls"] = int(row.get("calls") or 0)
+    out["total_usd"] = round(out["apify_usd"] + out["llm_usd"], 4)
+    return out
+
+
+def _top_apify_actors(conn: Any, since_iso: str, until_iso: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
+    clause = "ai_provider='apify' AND occurred_at >= ?"
+    params: list[Any] = [since_iso]
+    if until_iso:
+        clause += " AND occurred_at < ?"
+        params.append(until_iso)
+    params.append(max(1, min(20, int(limit or 5))))
+    rows = conn.execute(
+        f"""
+        SELECT COALESCE(NULLIF(model_name, ''), 'unknown') AS actor_id,
+               COUNT(*) AS runs,
+               COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM vkpi_ai_cost_ledger
+        WHERE {clause}
+        GROUP BY COALESCE(NULLIF(model_name, ''), 'unknown')
+        ORDER BY cost_usd DESC, runs DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+    return [
+        {
+            "actor_id": str(row.get("actor_id") or "unknown"),
+            "runs": int(row.get("runs") or 0),
+            "cost_usd": round(_float(row.get("cost_usd")), 4),
+        }
+        for row in (_clean_row(r) for r in rows)
+    ]
+
+
+def _apify_coverage(conn: Any, since_iso: str, until_iso: str | None = None) -> dict[str, Any]:
+    """记账覆盖口径:总 run 数 / 收口(unified)笔数 / 估算笔数 / 零成本笔数。
+
+    Apify console 无法程序化比对 → 覆盖率只能是内部口径:统一记账口经手的比例,
+    以及仍然记 0 成本(既无 usage 又无价目表)的盲区笔数,如实标注。
+    """
+    clause = "ai_provider='apify' AND occurred_at >= ?"
+    params: list[Any] = [since_iso]
+    if until_iso:
+        clause += " AND occurred_at < ?"
+        params.append(until_iso)
+
+    def _count(extra_sql: str, extra_params: tuple = ()) -> int:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger WHERE {clause}{extra_sql}",
+            tuple(params) + extra_params,
+        ).fetchone()
+        return int((dict(row) if row else {}).get("n") or 0)
+
+    total = _count("")
+    unified = _count(" AND metadata_json LIKE ?", ('%"unified_entry": true%',))
+    estimated = _count(" AND metadata_json LIKE ?", ('%"estimated": true%',))
+    zero_cost = _count(" AND COALESCE(cost_usd, 0) <= 0")
+    return {
+        "apify_runs": total,
+        "unified_entries": unified,
+        "estimated_entries": estimated,
+        "zero_cost_entries": zero_cost,
+        "unified_ratio": round(unified / total, 4) if total else None,
+    }
+
+
+_COST_NOTE = (
+    "内部记账口径:精确部分=Apify usageTotalUsd(平台用量);付费 actor 费按内部价目表估算"
+    "(estimated 标记)。Apify console 无法程序化比对,权威账单以 console 为准。"
+)
+
+
+def cost_overview() -> dict[str, Any]:
+    """成本记账总览(设置页成本卡):今日/本月 Apify+LLM 消耗、top actor、覆盖口径。只读。"""
+    ensure_budget_schema()
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    day_start = now.strftime("%Y-%m-%dT00:00:00Z")
+    month_start = now.strftime("%Y-%m-01T00:00:00Z")
+    overview: dict[str, Any] = {
+        "generated_at": _utcnow(),
+        "today": _cost_bucket_rows(conn, day_start),
+        "month": _cost_bucket_rows(conn, month_start),
+        "top_actors_today": _top_apify_actors(conn, day_start),
+        "top_actors_month": _top_apify_actors(conn, month_start),
+        "coverage": _apify_coverage(conn, month_start),
+        "note": _COST_NOTE,
+    }
+    try:
+        overview["budgets"] = {
+            "provider_apify": get_budget_status("provider:apify"),
+            "monthly_total": get_budget_status("monthly_total"),
+        }
+    except Exception:
+        logger.warning("cost_overview budget status failed", exc_info=True)
+    return overview
+
+
+def snapshot_daily_costs(day: str | None = None) -> dict[str, Any]:
+    """每日成本快照:把指定 UTC 日(默认昨日)的 vkpi_ai_cost_ledger 按 provider/actor
+    聚合写入 persistent_cache(day 键 62 天过期 + latest 键;同日重跑 delete+insert 幂等)。
+
+    复用 003 baseline 的 persistent_cache(health_sentinel 同款模式)→ 零新表零迁移。
+    只读账本 + 写缓存;绝不改预算闸/调用行为。
+    """
+    ensure_budget_schema()
+    conn = get_conn()
+    now = datetime.now(timezone.utc)
+    if day:
+        target = str(day).strip()[:10]
+        target_dt = datetime.strptime(target, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        target_dt = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        target = target_dt.strftime("%Y-%m-%d")
+    since_iso = target + "T00:00:00Z"
+    until_iso = (target_dt + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+
+    provider_rows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(ai_provider, ''), 'unknown') AS ai_provider,
+               COUNT(*) AS calls,
+               COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM vkpi_ai_cost_ledger
+        WHERE occurred_at >= ? AND occurred_at < ?
+        GROUP BY COALESCE(NULLIF(ai_provider, ''), 'unknown')
+        ORDER BY cost_usd DESC, calls DESC
+        """,
+        (since_iso, until_iso),
+    ).fetchall()
+    providers = [
+        {
+            "ai_provider": str(row.get("ai_provider") or "unknown"),
+            "calls": int(row.get("calls") or 0),
+            "cost_usd": round(_float(row.get("cost_usd")), 4),
+        }
+        for row in (_clean_row(r) for r in provider_rows)
+    ]
+    payload: dict[str, Any] = {
+        "date": target,
+        "generated_at": _utcnow(),
+        "providers": providers,
+        "apify_actors": _top_apify_actors(conn, since_iso, until_iso, limit=20),
+        "totals": _cost_bucket_rows(conn, since_iso, until_iso),
+        "coverage": _apify_coverage(conn, since_iso, until_iso),
+        "note": _COST_NOTE,
+    }
+    if not table_exists("persistent_cache"):
+        logger.warning("cost snapshot: persistent_cache table missing, snapshot not persisted")
+        return {**payload, "persisted": False}
+    try:
+        expires = (now + timedelta(days=_COST_SNAPSHOT_KEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        text = json.dumps(payload, ensure_ascii=False, default=str)
+        day_key = _COST_SNAPSHOT_DAY_PREFIX + target
+        for cache_key in (day_key, _COST_SNAPSHOT_LATEST_KEY):
+            conn.execute("DELETE FROM persistent_cache WHERE cache_key=?", (cache_key,))
+            conn.execute(
+                "INSERT INTO persistent_cache (cache_key, value_json, expires_at, created_at) VALUES (?,?,?,?)",
+                (cache_key, text, expires, _utcnow()),
+            )
+        conn.commit()
+    except Exception:
+        logger.warning("cost snapshot persist failed", exc_info=True)
+        return {**payload, "persisted": False}
+    return {**payload, "persisted": True}

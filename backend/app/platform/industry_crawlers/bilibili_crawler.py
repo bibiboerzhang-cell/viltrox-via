@@ -98,6 +98,21 @@ class BilibiliCrawler:
                 body = response.read().decode("utf-8")
             payload = json.loads(body or "[]")
             items = payload if isinstance(payload, list) else (payload.get("items") or [])
+            # C5 成本记账收口:run-sync HTTP 拿不到 run 对象 → run=None 口径记账
+            # (pricing_basis=no_run_object,盲区在成本卡如实可见;失败绝不影响抓取)。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
+
+                record_apify_run(
+                    None,
+                    actor_id=self.actor_id,
+                    platform="bilibili",
+                    operation="run_sync_dataset_items",
+                    source="industry_crawlers.bilibili",
+                    dataset_item_count=len(items),
+                )
+            except Exception:
+                pass  # 记账失败绝不阻断爬取
             return {
                 "provider": "bilibili",
                 "provider_status": "ok",

@@ -233,6 +233,8 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
         published_at, posted_at = _published_pair(_first(item, "date", "publishedAt", "publishDate"))
         return {
             "platform": "youtube",
+            # YT 视频 actor 只回视频条目,媒体种类恒为 video(C6 提列:供 evidence.media_kind 落列)。
+            "media_kind": "video",
             "content_url": _text(_first(item, "url", "input")) or video_url,
             "title": _text(_first(item, "title")),
             "description": _text(_first(item, "description", "text")),
@@ -308,6 +310,8 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
         published_at, posted_at = _published_pair(_first(item, "createTimeISO", "createTime", "timestamp"))
         return {
             "platform": "tiktok",
+            # TT 视频 actor 只回视频条目,媒体种类恒为 video(C6 提列:供 evidence.media_kind 落列)。
+            "media_kind": "video",
             "content_url": _text(_first(item, "webVideoUrl", "submittedVideoUrl")) or video_url,
             "title": title[:500],
             "description": title,
@@ -387,6 +391,23 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
         run = client.actor(actor_id).call(run_input=run_input, timeout_secs=300)
         dataset_id = run.get("defaultDatasetId")
         items = client.dataset(dataset_id).list_items(limit=5).items if dataset_id else []
+        # C5 成本记账收口:重试每一跑都计费,逐 run 记账(幂等 by run_id;失败绝不影响抓取)。
+        try:
+            from app.domains.costs.budget_guard import record_apify_run
+
+            record_apify_run(
+                run,
+                actor_id=actor_id,
+                platform=platform,
+                operation="evidence_video_metadata",
+                source="workflow_evidence_video_metadata",
+                dataset_item_count=len(items),
+            )
+        except Exception:
+            # 本模块按设计只依赖标准库(无模块级 logger)→ 就地取 stdlib logger,不破坏搬迁约定。
+            import logging
+
+            logging.getLogger(__name__).warning("evidence video metadata cost record failed", exc_info=True)
         if not items:
             last_reason = "Apify returned no items"
             continue
