@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.domains import settings as settings_domain
 from app.domains.access import scope
-from app.domains.ops import scheduler_registry
+from app.domains.ops import health_sentinel, scheduler_registry
 from app.domains.settings import api_key_pool
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-settings"])
@@ -151,6 +151,21 @@ def update_scheduler_task(task_key: str, body: dict, staff=Depends(require_tab("
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "invalid scheduler task request") from exc
     return {"task": task, "status": scheduler_registry.scheduler_status()}
+
+
+# ---------------------------------------------------------------------------
+# C1 数据健康哨兵 — 10 项黄金链路日检(只读检查;结果落 persistent_cache)。
+# GET 读最新一次结果;POST 手动跑一轮(admin/owner)。检查绝不修数据、不触发同步。
+# ---------------------------------------------------------------------------
+@router.get("/ops/health-sentinel")
+def health_sentinel_latest(staff=Depends(require_tab("vkpi", "read"))):
+    _require_manager_staff(staff)
+    return health_sentinel.get_latest()
+
+
+@router.post("/ops/health-sentinel/run")
+def health_sentinel_run(staff=Depends(require_tab("vkpi", "admin"))):
+    return health_sentinel.run_health_sentinel(trigger="manual", staff=staff)
 
 
 @router.get("/settings/api-key-pool")

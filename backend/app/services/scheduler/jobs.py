@@ -84,6 +84,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_fit_snapshot,
     job_vkpi_fulfillment_sweep,
     job_vkpi_goaffpro_metrics_sync,
+    job_vkpi_health_sentinel,
     job_vkpi_kpi_rollup,
     job_vkpi_lineage_snapshot,
     job_vkpi_market_intelligence_refresh,
@@ -535,6 +536,18 @@ async def start_scheduler() -> None:
         name="Ops: budget/queue/worker/failure-rate threshold alerts (read-only)",
         max_instances=1,
         coalesce=True,
+    )
+
+    # ── C1 数据健康哨兵(每日 09:30 中国,排在 morning_sync 08:00 / 官号日报 08:30 之后)──
+    # 10 项黄金链路只读日检 → persistent_cache + fail 汇总进 vkpi_alerts(当天幂等)。常开、纯 SELECT。
+    _scheduler.add_job(
+        job_vkpi_health_sentinel,
+        trigger=CronTrigger(hour=9, minute=30, timezone=CHINA_TZ),
+        id="vkpi_health_sentinel",
+        name="Data health sentinel: 10 golden-link daily checks (read-only)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
 
     # ── GOAFFPRO 指标缓存刷新(每 5 分钟)── 读 GOAFFPRO 点击/订单/GMV/佣金 → 缓存表,

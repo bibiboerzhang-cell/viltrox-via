@@ -46,6 +46,124 @@ import {
   rowEnabled,
 } from '../../../domains/settings';
 import type { BackendBuildInfo } from '../../../domains/settings';
+import { formatLocal } from '../lib/timeLocal';
+
+// ── C1 数据健康哨兵 ──────────────────────────────────────────
+// 10 项黄金链路日检:绿/黄/红点 + label + detail + 检查时间 + 手动运行。
+// 只读展示 + 手动触发;后端 /ops/health-sentinel 落 persistent_cache,调度每日 09:30 自动跑。
+interface SentinelCheck {
+  key: string;
+  label: string;
+  status: 'ok' | 'warn' | 'fail' | string;
+  detail: string;
+  checked_at?: string;
+}
+
+interface SentinelResult {
+  available?: boolean;
+  reason?: string;
+  ran_at?: string;
+  trigger?: string;
+  summary?: { ok?: number; warn?: number; fail?: number; total?: number };
+  checks?: SentinelCheck[];
+}
+
+const SENTINEL_DOT_COLOR: Record<string, string> = {
+  ok: '#22c55e',
+  warn: '#eab308',
+  fail: '#ef4444',
+};
+
+function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
+  const [result, setResult] = useState<SentinelResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setLoading(true);
+    apiFetch<SentinelResult>('/api/admin/vkpi/ops/health-sentinel', { timeoutMs: 15000 }, apiToken)
+      .then((res) => {
+        if (alive) setResult(res || null);
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : '哨兵结果读取失败');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => { alive = false; };
+  }, [apiToken]);
+
+  const runNow = async () => {
+    if (!apiToken || running) return;
+    setRunning(true);
+    setError('');
+    try {
+      // 手动跑一轮(10 项纯 SELECT 检查,通常几秒;留足超时)。
+      const res = await apiFetch<SentinelResult>(
+        '/api/admin/vkpi/ops/health-sentinel/run',
+        { method: 'POST', timeoutMs: 60000 },
+        apiToken,
+      );
+      setResult({ available: true, ...res });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '哨兵运行失败');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const checks = (result?.checks || []) as SentinelCheck[];
+  const summary = result?.summary || {};
+  const hasData = Boolean(result?.available !== false && checks.length);
+
+  return (
+    <section className="vkpi-card" style={{ marginBottom: 16, padding: '14px 16px' }}>
+      <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <strong style={{ fontSize: 14 }}>数据健康哨兵</strong>
+          <span className="text-slate-400" style={{ marginLeft: 10, fontSize: 12 }}>
+            {hasData
+              ? `10 项黄金链路 · 正常 ${summary.ok ?? 0} / 留意 ${summary.warn ?? 0} / 失败 ${summary.fail ?? 0} · 上次运行 ${formatLocal(result?.ran_at)}`
+              : loading
+                ? '读取中…'
+                : '尚未运行过(每日 09:30 自动跑,或手动运行一次)'}
+          </span>
+        </div>
+        <button type="button" className="vkpi-btn" disabled={running || !apiToken} onClick={() => void runNow()}>
+          {running ? '检查中…' : '手动运行'}
+        </button>
+      </div>
+      {error ? <div className="vkpi-inline-message is-error" style={{ marginTop: 8 }}>{error}</div> : null}
+      {hasData ? (
+        <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
+          {checks.map((check) => (
+            <div key={check.key} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
+              <span
+                aria-label={check.status}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  flex: '0 0 auto',
+                  background: SENTINEL_DOT_COLOR[check.status] || '#94a3b8',
+                }}
+              />
+              <span style={{ minWidth: 170, fontWeight: 500 }}>{check.label}</span>
+              <span className="text-slate-400" style={{ flex: 1 }}>{check.detail}</span>
+              <span className="text-slate-500" style={{ flex: '0 0 auto', fontSize: 11 }}>
+                {formatLocal(check.checked_at)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 interface SettingsPageProps {
   data: VkpiDashboardData;
@@ -369,6 +487,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       {message ? <div className="vkpi-inline-message">{message}</div> : null}
       {settingsError ? <div className="vkpi-inline-message">{settingsError}</div> : null}
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
+      <HealthSentinelCard apiToken={apiToken} />
       <div className="vkpi-settings-clean">
         <SettingsCompanyZone
           renderModule={renderSettingsModule}

@@ -760,6 +760,21 @@ async def job_ops_threshold_alerts():
         logger.exception("scheduler.ops_threshold_alerts_failed")
 
 
+async def job_vkpi_health_sentinel():
+    """C1 数据健康哨兵:每日 10 项黄金链路只读检查 → persistent_cache 落库 + fail 汇总告警。
+
+    常开(轻量纯 SELECT,空库也安全空跑);fail 项经既有 vkpi_alerts 通知 owner,
+    alert_key 带 UTC 日期 → 同天重复跑 upsert 同一行,当天幂等不重复发。零触 fit/rule_v0。
+    """
+    try:
+        from app.domains.ops import health_sentinel
+
+        result = await asyncio.to_thread(health_sentinel.run_health_sentinel, "scheduled")
+        logger.info("scheduler.vkpi_health_sentinel", extra={"sentinel_summary": result.get("summary")})
+    except Exception:
+        logger.exception("scheduler.vkpi_health_sentinel_failed")
+
+
 # ──────────────────────────────────────────────
 # 市场情报 / AI Today / 官号日报 任务簇 → jobs_tasks_intel.py(行为不变搬出)
 # 原文件 re-export 兜住所有调用点(含私有 _run_brief_agent_daily)。
