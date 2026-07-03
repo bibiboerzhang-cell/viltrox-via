@@ -585,7 +585,18 @@ def list_recommendations(launch_id: int | None = None, run_id: int | None = None
         f"SELECT * FROM vkpi_kol_recommendations {clause} ORDER BY run_id DESC, rank ASC LIMIT ?",
         (*params, max(1, min(500, int(limit or 100)))),
     ).fetchall()
-    return {"recommendations": [dict(row) for row in rows]}
+    recs = [dict(row) for row in rows]
+    # 学习闭环·结果段接线:每条被展示的推荐幂等落一行 outcome 底座(按 recommendation_id
+    # 一行,先批量查缺只补缺失行 → 反复展示/刷新绝不刷屏落行)。helper 内部全量吞错并告警;
+    # 这里再包一层双保险,挂钩任何失败都不影响推荐展示主流程。零触 viltrox_fit_score。
+    try:
+        outcome_collector.ensure_outcomes_for_display(
+            recs,
+            display_context={"source": "product_analysis.list_recommendations"},
+        )
+    except Exception:
+        pass  # 双保险:helper 已自吞并告警,展示可用性优先
+    return {"recommendations": recs}
 
 
 def list_recommendation_runs(

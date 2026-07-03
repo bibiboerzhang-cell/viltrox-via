@@ -96,6 +96,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_fulfillment_window_backfill,
     job_vkpi_recommendation_refresh,
     job_vkpi_recommendation_outcomes,
+    job_vkpi_outcomes_refresh,
     job_vkpi_weekly_report,
     job_worker_lease_expire_stale,
 )
@@ -243,6 +244,18 @@ async def start_scheduler() -> None:
         name="Refresh recommendation outcome business labels daily",
         max_instances=1,
         coalesce=True,
+    )
+
+    # ── Job 7b2: 学习闭环·outcomes 表自身遍历刷新(每日 10:00 中国,避开 04:40 按推荐行遍历的 7b)──
+    # 遍历未 finalize 且 recommendation_id 非空的 outcome 行回流业务事件,并严格回填老行连接键。
+    _scheduler.add_job(
+        job_vkpi_outcomes_refresh,
+        trigger=CronTrigger(hour=10, minute=0, timezone=CHINA_TZ),
+        id="vkpi_outcomes_refresh",
+        name="Refresh unfinalized recommendation outcomes daily (outcomes-table sweep)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
 
     # ── Job 7c: workflow_runs 事实源·每日自动起 durable 履约 sweep + Agent 建议链 ──

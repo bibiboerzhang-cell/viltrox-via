@@ -451,6 +451,220 @@ def refresh_open_outcomes(limit: int = 200, *, persist_linked_kol: bool = False)
                     "只读真实业务行促升,零伪造、零触 viltrox_fit_score。"}
 
 
+def ensure_outcomes_for_display(recs: list[dict[str, Any]], *, display_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """展示路径挂钩:为每条被展示的推荐幂等落一行 outcome 底座(学习闭环·结果段接线)。
+
+    幂等口径:outcomes 按 recommendation_id 一行 —— 先批量查缺,只对缺失行补底座,
+    同一推荐反复展示/同日多次刷新绝不刷屏落行。全函数自吞异常(单条也各自吞),
+    任何失败只告警,绝不影响推荐展示主流程。红线:零触 viltrox_fit_score / rule_v0 评分。
+    """
+    ensured = 0
+    skipped_existing = 0
+    try:
+        ids = [int(rec.get("id") or 0) for rec in (recs or []) if int(rec.get("id") or 0) > 0]
+        if not ids:
+            return {"ensured": 0, "existing": 0}
+        ensure_vkpi_product_industry_schema()
+        conn = get_conn()
+        clause, params = _ids_clause("recommendation_id", ids)
+        existing_rows = conn.execute(
+            f"SELECT recommendation_id FROM vkpi_recommendation_outcomes WHERE {clause}",
+            tuple(params),
+        ).fetchall()
+        existing = {int(_row_get(row, "recommendation_id", 0) or 0) for row in existing_rows}
+        for rec in recs or []:
+            rec_id = int(rec.get("id") or 0)
+            if rec_id <= 0:
+                continue
+            if rec_id in existing:
+                skipped_existing += 1
+                continue
+            try:
+                breakdown = _loads_safe(rec.get("scoring_breakdown_json"))
+                context = dict(display_context or {})
+                context.setdefault("run_id", rec.get("run_id"))
+                context.setdefault("rank", rec.get("rank"))
+                context.setdefault("score", rec.get("score"))
+                context.setdefault("status", rec.get("status"))
+                ensure_outcome(
+                    rec_id,
+                    kol_pool_id=rec.get("kol_pool_id"),
+                    launch_id=rec.get("launch_id"),
+                    feature_snapshot=_loads_safe(rec.get("feature_snapshot_json")),
+                    scoring_breakdown=breakdown,
+                    model_version=str(breakdown.get("strategy_version") or "rule_v0"),
+                    display_position=rec.get("rank"),
+                    display_context=context,
+                )
+                existing.add(rec_id)
+                ensured += 1
+            except Exception:
+                logger.warning("ensure_outcomes_for_display.one_failed rec_id=%s", rec_id, exc_info=True)
+    except Exception:
+        logger.warning("ensure_outcomes_for_display.failed", exc_info=True)
+    return {"ensured": ensured, "existing": skipped_existing}
+
+
+def refresh_unfinalized_outcomes(limit: int = 500) -> dict[str, Any]:
+    """每日刷新:遍历未 finalize 且 recommendation_id 非空的 outcome 行,逐条从真实业务行回流。
+
+    与 refresh_open_outcomes(按最近 N 条推荐行遍历)互补:本函数按 outcomes 表自身遍历,
+    覆盖「展示路径落了底座、但推荐行较老不在最近 N 条里」的行,保证已展示的推荐都有结果回流。
+    单条失败吞掉不拖垮整批。红线同 refresh_business_outcome:只读真实业务行促升,零伪造。
+    """
+    ensure_vkpi_product_industry_schema()
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT recommendation_id
+        FROM vkpi_recommendation_outcomes
+        WHERE outcome_finalized_at IS NULL
+          AND recommendation_id IS NOT NULL
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (int(max(1, min(int(limit or 500), 2000))),),
+    ).fetchall()
+    refreshed = 0
+    failed = 0
+    for row in rows:
+        rec_id = int(_row_get(row, "recommendation_id", 0) or 0)
+        if rec_id <= 0:
+            continue
+        try:
+            refresh_business_outcome(rec_id)
+            refreshed += 1
+        except Exception:
+            failed += 1
+            logger.debug("refresh_unfinalized_outcomes.one_failed rec_id=%s", rec_id, exc_info=True)
+    return {"status": "ok", "scanned": len(rows), "refreshed": refreshed, "failed": failed,
+            "note": "按 outcomes 表遍历未 finalize 行回流业务事件(与 refresh_open_outcomes 按推荐行遍历互补)。"}
+
+
+def _resolve_missing_recommendation_id(conn: Any, out_row: dict[str, Any]) -> tuple[int, str]:
+    """对无 recommendation_id 的老 outcome 行做严格反推。返回 (rec_id, rule);推不出返回 (0, 原因)。
+
+    只认唯一匹配(exactly-one),宁缺勿错:
+      规则1: display_context_json / feature_snapshot_json 里带显式 recommendation_id 且该推荐行存在;
+      规则2: display_context 里 run_id + rank 在 vkpi_kol_recommendations 恰好命中 1 行;
+      规则3: kol_pool_id + 同日 created_at(+launch_id/display_position 若有)恰好命中 1 行。
+    """
+    context = _loads_safe(out_row.get("display_context_json"))
+    snapshot = _loads_safe(out_row.get("feature_snapshot_json"))
+    # 规则1:显式 id(历史写入方若带过)。
+    try:
+        explicit = int(context.get("recommendation_id") or snapshot.get("recommendation_id") or 0)
+    except Exception:
+        explicit = 0
+    if explicit > 0:
+        hit = conn.execute("SELECT id FROM vkpi_kol_recommendations WHERE id=?", (explicit,)).fetchone()
+        if hit:
+            return explicit, "explicit_id"
+    # 规则2:run_id + rank 唯一命中。
+    try:
+        run_id = int(context.get("run_id") or 0)
+    except Exception:
+        run_id = 0
+    rank = context.get("rank")
+    if rank is None:
+        rank = out_row.get("display_position")
+    if run_id > 0 and rank is not None:
+        try:
+            hits = conn.execute(
+                "SELECT id FROM vkpi_kol_recommendations WHERE run_id=? AND rank=?",
+                (run_id, int(rank)),
+            ).fetchall()
+            if len(hits) == 1:
+                return int(_row_get(hits[0], "id", 0) or 0), "run_id_rank"
+        except Exception:
+            logger.debug("backfill.resolve_run_rank_failed", exc_info=True)
+    # 规则3:kol_pool_id + 同日(recommended_at vs created_at 前 10 位日期)唯一命中。
+    pool_id = int(out_row.get("kol_pool_id") or 0)
+    day = str(out_row.get("recommended_at") or "")[:10]
+    if pool_id > 0 and day:
+        try:
+            candidates = conn.execute(
+                "SELECT id, launch_id, rank, created_at FROM vkpi_kol_recommendations WHERE kol_pool_id=? ORDER BY id DESC LIMIT 100",
+                (pool_id,),
+            ).fetchall()
+        except Exception:
+            logger.debug("backfill.resolve_pool_candidates_failed", exc_info=True)
+            candidates = []
+        launch_id = int(out_row.get("launch_id") or 0)
+        display_position = out_row.get("display_position")
+        matches: list[int] = []
+        for cand in candidates:
+            cand_dict = dict(cand)
+            if str(cand_dict.get("created_at") or "")[:10] != day:
+                continue
+            if launch_id and int(cand_dict.get("launch_id") or 0) != launch_id:
+                continue
+            if display_position is not None and cand_dict.get("rank") is not None and int(cand_dict.get("rank") or -1) != int(display_position):
+                continue
+            matches.append(int(cand_dict.get("id") or 0))
+        if len(matches) == 1 and matches[0] > 0:
+            return matches[0], "pool_day"
+        if len(matches) > 1:
+            return 0, "ambiguous"
+    return 0, "no_match"
+
+
+def backfill_missing_recommendation_ids(limit: int = 200, *, dry_run: bool = True) -> dict[str, Any]:
+    """老行修复:对 recommendation_id 为空的 outcome 行做严格反推回填(反推不出保持原样,绝不删行)。
+
+    幂等 + 保守:只在唯一匹配且目标 id 未被其他 outcome 行占用(一行一推荐的不变量)时才回填;
+    UPDATE 带 `recommendation_id IS NULL` 守卫,重复跑安全。dry_run=True 只报告不写。
+    红线:只补连接键,零触业务标签 / viltrox_fit_score。
+    """
+    ensure_vkpi_product_industry_schema()
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT * FROM vkpi_recommendation_outcomes
+        WHERE recommendation_id IS NULL
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (int(max(1, min(int(limit or 200), 1000))),),
+    ).fetchall()
+    claimed_rows = conn.execute(
+        "SELECT recommendation_id FROM vkpi_recommendation_outcomes WHERE recommendation_id IS NOT NULL"
+    ).fetchall()
+    claimed = {int(_row_get(row, "recommendation_id", 0) or 0) for row in claimed_rows}
+    backfilled: list[dict[str, Any]] = []
+    conflicts = 0
+    unresolved = 0
+    for raw in rows:
+        out_row = dict(raw)
+        try:
+            rec_id, rule = _resolve_missing_recommendation_id(conn, out_row)
+        except Exception:
+            logger.debug("backfill.resolve_one_failed outcome_id=%s", out_row.get("id"), exc_info=True)
+            unresolved += 1
+            continue
+        if rec_id <= 0:
+            unresolved += 1
+            continue
+        if rec_id in claimed:
+            # 目标推荐已有 outcome 行(一行一推荐不变量)→ 不回填、不合并、不删,保持原样。
+            conflicts += 1
+            continue
+        if not dry_run:
+            conn.execute(
+                "UPDATE vkpi_recommendation_outcomes SET recommendation_id=? WHERE id=? AND recommendation_id IS NULL",
+                (rec_id, int(out_row.get("id") or 0)),
+            )
+            conn.commit()
+        claimed.add(rec_id)
+        backfilled.append({"outcome_id": out_row.get("id"), "recommendation_id": rec_id, "rule": rule})
+    if backfilled and not dry_run:
+        logger.info("outcomes.backfill_missing_recommendation_ids", extra={"backfilled_count": len(backfilled)})
+    return {"status": "ok", "dry_run": bool(dry_run), "scanned": len(rows),
+            "backfilled": len(backfilled), "conflicts": conflicts, "unresolved": unresolved,
+            "details": backfilled[:50],
+            "note": "只回填唯一匹配的连接键;ambiguous/no_match 保持原样(诚实不猜),绝不删行。"}
+
+
 def _loads_safe(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value

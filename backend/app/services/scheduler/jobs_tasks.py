@@ -198,6 +198,34 @@ async def job_vkpi_recommendation_outcomes():
         logger.exception("scheduler.vkpi_recommendation_outcomes_failed")
 
 
+async def job_vkpi_outcomes_refresh():
+    """学习闭环·结果段(按 outcomes 表自身遍历):每日回流未 finalize 行的真实业务事件。
+
+    与 job_vkpi_recommendation_outcomes(按最近 500 条推荐行遍历)互补:本 job 遍历
+    outcome_finalized_at IS NULL 且 recommendation_id 非空的 outcome 行调 refresh_business_outcome,
+    覆盖「展示路径落了底座、但推荐行较老不在最近 N 条里」的行;单条异常吞掉不拖垮整批。
+    顺带把无 recommendation_id 的老行按严格唯一匹配回填连接键(反推不出保持原样,绝不删行)。
+    红线:只读真实业务行促升标签,绝不伪造平台数据,零触 viltrox_fit_score。
+    """
+    try:
+        from app.domains.recommendations import outcomes
+
+        backfill = await asyncio.to_thread(outcomes.backfill_missing_recommendation_ids, 200, dry_run=False)
+        result = await asyncio.to_thread(outcomes.refresh_unfinalized_outcomes, 500)
+        logger.info(
+            "scheduler.vkpi_outcomes_refresh",
+            extra={
+                "refreshed": result.get("refreshed"),
+                "failed": result.get("failed"),
+                "scanned": result.get("scanned"),
+                "backfilled": backfill.get("backfilled"),
+                "backfill_unresolved": backfill.get("unresolved"),
+            },
+        )
+    except Exception:
+        logger.exception("scheduler.vkpi_outcomes_refresh_failed")
+
+
 async def job_vkpi_lineage_snapshot():
     """V-KPI metric lineage snapshot for dashboard drilldown evidence."""
     try:

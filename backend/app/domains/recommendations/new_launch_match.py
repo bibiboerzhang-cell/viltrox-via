@@ -102,6 +102,7 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
         run = _last_by_uid("vkpi_kol_recommendation_runs", "run_uid", run_uid)
         run_id = int(run.get("id") or 0)
         recommendation_ids: list[int] = []
+        outcome_seeds: list[tuple[int, dict[str, Any], dict[str, Any]]] = []  # (rec_id, feature_snapshot, item) 供整批 commit 后落 outcome 底座
         for item in items:
             rec_uid = f"p4nlm-rec-{secrets.token_hex(8)}"
             reason = item.get("recommendation_reason") or {}
@@ -151,6 +152,7 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
             rec = _last_by_uid("vkpi_kol_recommendations", "recommendation_uid", rec_uid)
             rec_id = int(rec.get("id") or 0)
             recommendation_ids.append(rec_id)
+            outcome_seeds.append((rec_id, feature_snapshot, item))
             conn.execute(
                 """
                 INSERT INTO vkpi_recommendation_explanations
@@ -169,6 +171,40 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         conn.commit()
+        # 学习闭环·结果段接线:每条持久化的推荐幂等落一行 outcome 底座(ensure_outcome 有行
+        # 即跳过 → 同日重复刷新不刷屏落行)。此前这条每日 04:00 recommendation_refresh 真跑的
+        # 持久化路径从不落 outcomes,是 5/22 起零新行的根因。必须放在整批 commit 之后:
+        # ensure_outcome 内部会 commit,若在上面循环里调用会把半截 run 提前落库,破坏整批回滚语义。
+        # 懒 import + 双层 try/except:失败只告警,绝不阻断推荐持久化主流程。零触 viltrox_fit_score。
+        try:
+            from app.domains.recommendations import outcomes as outcome_collector  # 懒 import:线上旧布局兼容
+
+            for out_rec_id, out_snapshot, out_item in outcome_seeds:
+                if int(out_rec_id or 0) <= 0:
+                    continue
+                try:
+                    outcome_collector.ensure_outcome(
+                        int(out_rec_id),
+                        kol_pool_id=out_item.get("kol_pool_id"),
+                        launch_id=None,
+                        feature_snapshot=out_snapshot,
+                        scoring_breakdown=out_item.get("score_breakdown") or {},
+                        model_version="new_launch_match_v1",
+                        display_position=out_item.get("rank"),
+                        display_context={
+                            "source": "new_launch_match_preview",
+                            "run_id": run_id,
+                            "run_uid": run_uid,
+                            "rank": out_item.get("rank"),
+                            "score": out_item.get("score"),
+                            "product_query": payload.get("product_query"),
+                            "target_family_name": payload.get("target_family_name"),
+                        },
+                    )
+                except Exception:
+                    logger.warning("new_launch_match outcome hook failed rec_id=%s", out_rec_id, exc_info=True)
+        except Exception:
+            logger.warning("new_launch_match outcome hook unavailable", exc_info=True)
         return {
             "enabled": True,
             "run_uid": run_uid,
