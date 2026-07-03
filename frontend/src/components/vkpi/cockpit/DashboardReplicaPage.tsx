@@ -20,6 +20,7 @@ import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { KPI_SCOPES } from "./data/kpiScopes";
 import { VIEW_MODES } from "./data/viewModes";
+import { useAuth } from "../../../hooks/useAuth";
 
 const e = React.createElement;
 // 与 CockpitSidebar 同一开关:实验模块仅在构建时 VITE_EXPERIMENTAL_NAV=1 显示。
@@ -40,6 +41,53 @@ const EMPTY_AI_INSIGHT = {
   poweredBy: "真实 API / 无信号",
 };
 
+// ─── D5 员工首屏个性化(2026-07-03)──────────────────────────────────────────
+// C3 轻隔离(scope 由后端从鉴权 staff 推导,地图/KPI/漏斗已按人过滤)的前端续刀:
+// 员工登录后的默认排布聚焦「我的工作」——我的提醒/我的项目/我的 KOL 排前,大盘/运维类靠后;
+// owner/管理层维持 v615 原排布完全不动。只调排序,不隐藏任何区块(用户裁令:员工全都能看)。
+// 扩展方式:新卡先在组件内 renderer 注册表登记 key,再把 key 插进下面的顺序数组;禁止 if-else 散写。
+type DashboardTier = "management" | "member";
+
+// 底部洞察三卡顺序(key 对应组件内 insightRowRenderers)
+const INSIGHT_ROW_ORDER: Record<DashboardTier, readonly string[]> = {
+  management: ["signals", "aiToday", "topMovers"],
+  // 员工:AI Today 是全员共享大盘(C3 口径)→ 靠后;信号/与我相关提醒保持最前
+  member: ["signals", "topMovers", "aiToday"],
+};
+
+// 右栏卡片顺序(key 对应组件内 rightRailRenderers)
+const RIGHT_RAIL_ORDER: Record<DashboardTier, readonly string[]> = {
+  management: ["actionInbox", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
+  // 员工:今日建议/我的项目/我的 KOL 漏斗(C3 已按人过滤)排前;运维健康大盘殿后
+  member: ["actionInbox", "activeCampaigns", "kolFunnel", "contentCalendar", "opsHealth"],
+};
+
+// 身份档位:口径与 VkpiTab.canUseManagerView 完全一致(owner / admin / manager / lead /
+// marketing_lead / marketing_manager 或 vkpi、system.members=admin 均视为管理层)。
+// 3f022f72 身份链已修,/api/auth/me 的 is_owner / staff_role 可直接信。
+function resolveDashboardTier(user: any): DashboardTier {
+  if (!user) return "management"; // 身份未就绪/未登录 → 维持既有排布,避免加载完成后闪跳
+  if (user.is_owner) return "management";
+  const role = String(user.staff_role || user.role || "").toLowerCase().trim();
+  if (["admin", "manager", "lead", "marketing_lead", "marketing_manager"].includes(role)) return "management";
+  const perms = user.permissions || {};
+  if (String(perms["vkpi"] || "").toLowerCase() === "admin") return "management";
+  if (String(perms["system.members"] || "").toLowerCase() === "admin") return "management";
+  return "member";
+}
+
+function useDashboardTier(): DashboardTier {
+  // useAuth 必须在 AuthProvider 内;单测直挂本组件时无 Provider → 兜底 management
+  // (排布与既有渲染逐字一致,render smoke 不受影响)。try/catch 不改变 hook 调用
+  // 次序(useContext 每次渲染都会执行),不违反 rules-of-hooks。
+  try {
+    const { user } = useAuth();
+    return resolveDashboardTier(user);
+  } catch {
+    return "management";
+  }
+}
+
 export function DashboardReplicaPage(props: any) {
   const {
     kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,
@@ -54,6 +102,97 @@ export function DashboardReplicaPage(props: any) {
     upcomingEvents = [], revenueBySource = [], dashboardLoading = false, dashboardError = "",
     apiToken = "",
   } = props;
+
+  // D5:身份档位决定默认排布(员工「我的工作」优先;owner/管理层维持 v615 原排布)。
+  const dashboardTier = useDashboardTier();
+
+  // ── D5 卡片渲染器注册表:卡片内容与原 JSX 逐字一致,只是改由顺序数组决定先后。
+  // 每个渲染器自带稳定 key(数组渲染需要);加新卡 → 这里登记 + 顺序数组插 key。
+
+  // 底部洞察三卡(Signals / AI Today / Top Movers)
+  const insightRowRenderers: Record<string, () => React.ReactNode> = {
+    // Signals & Alerts (from right rail)
+    // 诚实化:绝不回退到 data/signalsAlerts.ts 的假 Sony/CineGear 信号。
+    // 信号源异常 → 显式「信号源异常」错误态;真实 API 无数据 → 卡内「暂无信号」空态。
+    signals: () => e("div", { key: "insight-signals", className: "h-full" },
+      dashboardError
+        ? e("div", {
+            className: "h-full rounded-xl border border-red-500/20 bg-red-500/[0.04] p-4 backdrop-blur-xl flex flex-col",
+          },
+            e("div", { className: "mb-3 flex items-center justify-between" },
+              e("div", { className: "flex items-center gap-2" },
+                e(AlertTriangle, { size: 14, className: "text-red-300" }),
+                e("h3", { className: "text-sm font-semibold text-white" }, "Signals & Alerts")
+              ),
+              e("span", { className: "text-[9px] text-red-300/80" }, "信号源异常")
+            ),
+            e("div", { className: "flex-1 flex items-center justify-center" },
+              e("div", { className: "rounded-md border border-dashed border-red-500/20 px-3 py-8 text-center text-[11px] text-red-300/70" },
+                "信号源异常 · 暂不可用"
+              )
+            )
+          )
+        : e(SignalsAlertsCard, {
+            alerts: signals,
+            onAlertClick: (a: any) => setSelectedSignal(a),
+            onViewAll: () => setShowAllSignals(true)
+          })
+    ),
+    // AI Today (from right rail;C3 口径:全员共享大盘 → 员工档位靠后)
+    aiToday: () => e("div", { key: "insight-ai-today", className: "h-full" },
+      e(AIIntelligenceCard, {
+        insight: aiInsight,
+        onApprove: () => setShowAIConfirm(true),
+        // 2026-06-12 死按钮诚实化:提醒写入接口未接,不再 alert 假动作 → 卡内按钮禁用+title 待接入
+        onLater: null,
+        regenerating: aiRegenerating
+      })
+    ),
+    // 本周 Top Movers (从 Top KOL Performance 改造)
+    topMovers: () => e("div", { key: "insight-top-movers", className: "h-full" },
+      e(TopMoversCard, {
+        movers: topMovers,
+        onMoverClick: (m: any) => setSelectedMover(m),
+        onViewAll: () => setShowAllMovers(true)
+      })
+    ),
+  };
+
+  // 右栏卡片(实验闸内的今日建议/运维健康 + KOL 漏斗 + Active Campaigns + 7 天日历)
+  const rightRailRenderers: Record<string, () => React.ReactNode> = {
+    // 生产收敛(2026-07-02):Action Inbox 首屏卡 + 运维健康小卡是 v615 之后加的运维模块,
+    // 随导航一起收进 VITE_EXPERIMENTAL_NAV 闸 —— 线上 Dashboard 保持 v615 组装,
+    // 今日建议仍可从顶栏「工作提醒」popover 进入(同一面板未删)。
+    actionInbox: () => SHOW_EXPERIMENTAL && apiToken
+      ? e(ActionInboxPanel, { key: "rail-action-inbox", apiToken, heading: "今日该做什么", limit: 8 })
+      : null,
+    opsHealth: () => SHOW_EXPERIMENTAL && apiToken
+      ? e(OpsHealthCard, { key: "rail-ops-health", apiToken, onOpenTriage })
+      : null,
+    // KOL 漏斗(收藏→认领→入项目→已发布)
+    kolFunnel: () => e(KolFunnelCard, {
+      key: "rail-kol-funnel",
+      funnel: kolFunnel,
+      onOpenMyKol,
+    }),
+    // Active Campaigns(在推什么)
+    activeCampaigns: () => e(ActiveCampaignsCard, {
+      key: "rail-active-campaigns",
+      campaigns,
+      campaignsMeta,
+      onCampaignClick: (c: any) => setSelectedProject(c),
+      onViewAll: () => onOpenProjectsList ? onOpenProjectsList() : setShowAllProjects(true)
+    }),
+    // 7 天推广日历
+    contentCalendar: () => e(ContentCalendarCard, {
+      key: "rail-content-calendar",
+      days: calendarDays,
+      latestDate: calendarMeta?.latestDate,
+      onItemClick: (item: any) => setSelectedPublish(item),
+      onViewAll: () => setShowFullCalendar(true)
+    }),
+  };
+
   return e("div", { className: "p-4 md:p-6" },
 
           // 系统健康条:2026-06-15 迁移至「系统设置」页(仅主管可见),主界面保持干净。
@@ -332,85 +471,20 @@ export function DashboardReplicaPage(props: any) {
               ),
 
               // V6.12: Bottom row 重构 — Signals + AI Today + Top Movers(三卡持平)
+              // D5:先后顺序按身份档位查 INSIGHT_ROW_ORDER(员工档位共享大盘 AI Today 靠后)。
               e("div", { className: "grid grid-cols-1 gap-4 lg:grid-cols-3 items-stretch" },
-                // 1. Signals & Alerts (from right rail)
-                // 诚实化:绝不回退到 data/signalsAlerts.ts 的假 Sony/CineGear 信号。
-                // 信号源异常 → 显式「信号源异常」错误态;真实 API 无数据 → 卡内「暂无信号」空态。
-                e("div", { className: "h-full" },
-                  dashboardError
-                    ? e("div", {
-                        className: "h-full rounded-xl border border-red-500/20 bg-red-500/[0.04] p-4 backdrop-blur-xl flex flex-col",
-                      },
-                        e("div", { className: "mb-3 flex items-center justify-between" },
-                          e("div", { className: "flex items-center gap-2" },
-                            e(AlertTriangle, { size: 14, className: "text-red-300" }),
-                            e("h3", { className: "text-sm font-semibold text-white" }, "Signals & Alerts")
-                          ),
-                          e("span", { className: "text-[9px] text-red-300/80" }, "信号源异常")
-                        ),
-                        e("div", { className: "flex-1 flex items-center justify-center" },
-                          e("div", { className: "rounded-md border border-dashed border-red-500/20 px-3 py-8 text-center text-[11px] text-red-300/70" },
-                            "信号源异常 · 暂不可用"
-                          )
-                        )
-                      )
-                    : e(SignalsAlertsCard, {
-                        alerts: signals,
-                        onAlertClick: (a: any) => setSelectedSignal(a),
-                        onViewAll: () => setShowAllSignals(true)
-                      })
-                ),
-                // 2. AI Today (from right rail)
-                e("div", { className: "h-full" },
-                  e(AIIntelligenceCard, {
-                    insight: aiInsight,
-                    onApprove: () => setShowAIConfirm(true),
-                    // 2026-06-12 死按钮诚实化:提醒写入接口未接,不再 alert 假动作 → 卡内按钮禁用+title 待接入
-                    onLater: null,
-                    regenerating: aiRegenerating
-                  })
-                ),
-                // 3. 本周 Top Movers (从 Top KOL Performance 改造)
-                e("div", { className: "h-full" },
-                  e(TopMoversCard, { 
-                    movers: topMovers,
-                    onMoverClick: (m: any) => setSelectedMover(m),
-                    onViewAll: () => setShowAllMovers(true)
-                  })
+                INSIGHT_ROW_ORDER[dashboardTier].map((key) =>
+                  insightRowRenderers[key] ? insightRowRenderers[key]() : null
                 )
               )
             ),
 
             // ─── RIGHT RAIL (KOL 漏斗 + Active Campaigns + 7 天日历) ───
+            // D5:先后顺序按身份档位查 RIGHT_RAIL_ORDER(员工档位「我的项目/我的 KOL」排前)。
             e("div", { className: "space-y-4" },
-              // 生产收敛(2026-07-02):Action Inbox 首屏卡 + 运维健康小卡是 v615 之后加的运维模块,
-              // 随导航一起收进 VITE_EXPERIMENTAL_NAV 闸 —— 线上 Dashboard 保持 v615 组装,
-              // 今日建议仍可从顶栏「工作提醒」popover 进入(同一面板未删)。
-              SHOW_EXPERIMENTAL && apiToken
-                ? e(ActionInboxPanel, { apiToken, heading: "今日该做什么", limit: 8 })
-                : null,
-              SHOW_EXPERIMENTAL && apiToken
-                ? e(OpsHealthCard, { apiToken, onOpenTriage })
-                : null,
-              // 1. KOL 漏斗(收藏→认领→入项目→已发布)
-              e(KolFunnelCard, {
-                funnel: kolFunnel,
-                onOpenMyKol,
-              }),
-              // 1. Active Campaigns(在推什么)
-              e(ActiveCampaignsCard, {
-                campaigns,
-                campaignsMeta,
-                onCampaignClick: (c: any) => setSelectedProject(c),
-                onViewAll: () => onOpenProjectsList ? onOpenProjectsList() : setShowAllProjects(true)
-              }),
-              // 2. 7 天推广日历
-              e(ContentCalendarCard, {
-                days: calendarDays,
-                latestDate: calendarMeta?.latestDate,
-                onItemClick: (item: any) => setSelectedPublish(item),
-                onViewAll: () => setShowFullCalendar(true)
-              })
+              RIGHT_RAIL_ORDER[dashboardTier].map((key) =>
+                rightRailRenderers[key] ? rightRailRenderers[key]() : null
+              )
             )
           )
         );
