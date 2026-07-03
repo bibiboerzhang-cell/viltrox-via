@@ -110,6 +110,8 @@ export async function collectChannelPostComments(
     `/api/marketing/channels/${encodeURIComponent(String(channelId))}/post-comments/collect`,
     {
       method: "POST",
+      // 同步现场采集(actor 30-60 秒):默认超时会腰斩,与同文件其他长 POST 同款 120s。
+      timeoutMs: 120000,
       body: jsonBody({
         post_id: payload.postId || "",
         url: payload.url || "",

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, ImageIcon, MessageCircle, Play, RefreshCw, X } from 'lucide-react';
-import { getChannelPostComments, getOfficialChannelPosts } from '../../../../domains/channels';
+import { collectChannelPostComments, getChannelPostComments, getOfficialChannelPosts } from '../../../../domains/channels';
 import type { ChannelContentPost, ChannelCommentsResponse, ChannelPostPagination, OfficialChannelAccount } from '../channels/channelTypes';
 import {
   compact,
@@ -163,6 +163,7 @@ function CommentsModal({
   const [payload, setPayload] = useState<ChannelCommentsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [collecting, setCollecting] = useState(false);
 
   useEffect(() => {
     if (!apiToken) {
@@ -217,7 +218,29 @@ function CommentsModal({
               <span>{compact(comment.likes)} 赞 · {comment.replyCount || 0} 回复 · {compactDate(comment.createdAt)}</span>
             </article>
           )) : null}
-          {!loading && !error && !comments.length ? <div className="mykol-empty">暂无评论缓存。</div> : null}
+          {!loading && !error && !comments.length ? (
+            <div className="mykol-empty">
+              {/* 评论区不能用根因(2026-07-03):官号帖评论从未有人采集,弹窗只读缓存是死路。
+                  后端 collect 端点是同步现场采集(约30-60秒一次 Apify 调用),点按钮即出数据。 */}
+              <div>暂无评论缓存 — 官号帖评论按需采集(点一次约 30-60 秒,消耗一次采集额度)。</div>
+              {(payload as any)?.collect_supported !== false ? (
+                <button
+                  type="button"
+                  disabled={collecting || !apiToken}
+                  style={{ marginTop: 8 }}
+                  onClick={() => {
+                    if (!apiToken) return;
+                    setCollecting(true);
+                    setError('');
+                    collectChannelPostComments(apiToken, account.id, { postId: post.sourceId || post.id, url: post.url, limit: 80 })
+                      .then((response) => setPayload(commentsResponse(response as Row) as ChannelCommentsResponse))
+                      .catch((requestError) => setError(requestError instanceof Error ? requestError.message : '评论采集失败'))
+                      .finally(() => setCollecting(false));
+                  }}
+                >{collecting ? '采集中…(约30-60秒,别关窗)' : '采集评论'}</button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
     </div>
