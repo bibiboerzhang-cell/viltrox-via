@@ -113,6 +113,12 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   };
 
   const totalViews = videos.reduce((sum, v) => sum + safeNumber(v.view_count as number), 0);
+  // 【K4】/videos 现在也回带 image 类 evidence(IG 图文/轮播,media_kind=image|carousel):
+  // 展示照常(轮播图走 imageUrls),但视频深析批次必须剔除——图文帖没视频可下,入队必空跑。
+  const isImageKind = (v: Record<string, unknown>) => {
+    const kind = String((v.media_kind ?? v.evidence_type ?? '') as string).trim().toLowerCase();
+    return kind === 'image' || kind === 'carousel';
+  };
   const poolPosts = useMemo<PostPreview[]>(() => videos.map((v, i) => {
     const title = String(v.title || v.video_title || '').trim();
     const analyzed = Boolean(v.has_final_v1_cache);
@@ -130,14 +136,16 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
       mediaUrl: '',
       videoUrl: String(v.cached_video_url || ''),
       imageUrl: String(v.cached_thumbnail_url || v.best_thumbnail || v.thumbnail_url || ''),
-      imageUrls: [],
+      // 【K4】图文/轮播帖带整组轮播图(迁移 200 image_urls,后端已解析成数组)。
+      imageUrls: Array.isArray(v.image_urls) ? (v.image_urls as string[]).filter(Boolean) : [],
       mediaUrls: [],
       views: safeNumber(v.view_count as number),
       likes: safeNumber(v.like_count as number),
       comments: safeNumber(v.comment_count as number),
       shares: safeNumber(v.share_count as number),
       publishedAt: String(v.publish_date || v.posted_at || ''),
-      contentType: 'video',
+      // 【K4】按 evidence 真实媒体种类标注(video / image / carousel),不再一律当 video。
+      contentType: String(v.media_kind || 'video') || 'video',
       brandMentions: isViltrox ? ['viltrox'] : [],
       competitorMentions: competitors,
       gearMentions: gear,
@@ -146,7 +154,8 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   }), [videos]);
   const anyViltrox = poolPosts.some((p) => p.brandMentions.length > 0);
   const analyzedCount = videos.filter((v) => Boolean(v.has_final_v1_cache)).length;
-  const unanalyzed = videos.filter((v) => !v.has_final_v1_cache);
+  // 【K4】深析批次只排真视频:image/carousel 行剔除(后端 enqueue 也有 skipped_non_video 闸兜底)。
+  const unanalyzed = videos.filter((v) => !v.has_final_v1_cache && !isImageKind(v));
 
   // ② Gemini 深析:限批 5 条/次(复审令:200 条一键全入会放大配额与队列压力)。
   const DEEP_BATCH = 5;
@@ -239,8 +248,8 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
               style={{ fontSize: 10, color: deepState === 'queued' ? '#86efac' : '#fbcfe8', background: 'rgba(236,72,153,0.10)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {deepState === 'busy' ? '入队中…' : deepState === 'queued' ? `深析中 ${analyzedCount}/${videos.length}` : `视频深析 · 前 ${Math.min(DEEP_BATCH, unanalyzed.length)}/${unanalyzed.length} 条`}
             </button>
-          ) : videos.length ? (
-            <span style={{ fontSize: 10, color: '#86efac' }}>✓ 全部已深析</span>
+          ) : videos.length && analyzedCount ? (
+            <span style={{ fontSize: 10, color: '#86efac' }}>✓ 可析视频已全深析</span>
           ) : null}
           {videos.length ? (
             <button type="button" onClick={startCommentsCollect} disabled={commentsState !== 'idle'}

@@ -493,6 +493,9 @@ export function EmployeeKolLibrary({
   const [myClaims, setMyClaims] = useState<Array<Record<string, unknown>>>([]);
   const [releasingId, setReleasingId] = useState('');
   const [claimNote, setClaimNote] = useState('');
+  // 【M3】乐观更新:点「释放」立即按已释放渲染(不等 aggregate/父级数据回流),失败回滚。
+  // kolOptions 的 activeClaimId 来自 dashboard 数据源,刷新有延迟——本地集合先行遮蔽。
+  const [releasedClaimIds, setReleasedClaimIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
@@ -523,13 +526,15 @@ export function EmployeeKolLibrary({
     return map;
   }, [myClaims]);
 
-  // 【M3】释放认领:确认弹窗 → release 端点 → 重拉 aggregate(claims/收藏)+ 父级刷新(kolOptions 的
-  // activeClaimId 来自 dashboard 数据源)。失败把后端原因显示出来,不静默。
+  // 【M3】释放认领:确认弹窗 → 乐观按已释放渲染 → release 端点 → 重拉 aggregate(claims/收藏)
+  // + 父级刷新(kolOptions 的 activeClaimId 来自 dashboard 数据源)。失败回滚乐观态并显示后端原因。
   const releaseClaim = async (claimId: string, kolName: string) => {
     if (!apiToken || !claimId || releasingId) return;
     if (!window.confirm(`确认释放对「${kolName}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
     setReleasingId(claimId);
     setClaimNote('');
+    // 乐观更新:先把这条认领在本地遮蔽掉(行内状态/释放按钮立即消失)。
+    setReleasedClaimIds((prev) => { const next = new Set(prev); next.add(claimId); return next; });
     try {
       const { releaseKolClaim } = await import('../../../../services/vkpi/kol-api');
       await releaseKolClaim(apiToken, claimId);
@@ -537,6 +542,8 @@ export function EmployeeKolLibrary({
       setFavReloadTick((tick) => tick + 1);
       onRefreshData?.();
     } catch (err) {
+      // 回滚乐观态:释放失败,认领状态复原。
+      setReleasedClaimIds((prev) => { const next = new Set(prev); next.delete(claimId); return next; });
       setClaimNote(`释放失败:${String((err as Error)?.message || '请重试').slice(0, 80)}`);
     } finally {
       setReleasingId('');
@@ -559,7 +566,7 @@ export function EmployeeKolLibrary({
   const items = useMemo(() => {
     const base = data.kolOptions.filter((kol) => !isOwnedMatrixLike(kol)).map((kol) => {
       const projects = projectByKol.get(kol.id) || projectByKol.get(`${kol.platform}:${kol.handle}`) || [];
-      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: null as number | null, poolFit: null as number | null, isShared: false };
+      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: null as number | null, poolFit: null as number | null, isShared: false, sharedByName: '' };
     });
     const seen = new Set(base.map((item) => `${String(item.kol.platform).toLowerCase()}:${String(item.kol.handle || '').toLowerCase()}`));
     const projectByKeyLower = new Map<string, VkpiProjectRow[]>();
@@ -598,8 +605,9 @@ export function EmployeeKolLibrary({
       });
       const projects = synth.length ? synth : enriched;
       // 【M5】共享来源:aggregate 的 is_shared=true 表示这行不是本人收藏,而是经 P-GROUP-7 共享池
-      // (vkpi_kol_pool_members)共享给我的只读可见行。共享人姓名(shared_by)端点未回传,如实只标记来源。
-      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: Number(fav.kol_pool_id), poolFit: fav.viltrox_fit_score == null ? null : Number(fav.viltrox_fit_score), isShared: Boolean(fav.is_shared) };
+      // (vkpi_kol_pool_members)共享给我的只读可见行。shared_by_name = 共享人展示名
+      // (aggregate 已 JOIN staff→users 回传;空 = 旧共享行 shared_by 可空容旧,如实只标来源)。
+      return { kol, projects, funnelStage: employeeFunnelStage(projects), poolId: Number(fav.kol_pool_id), poolFit: fav.viltrox_fit_score == null ? null : Number(fav.viltrox_fit_score), isShared: Boolean(fav.is_shared), sharedByName: String(fav.shared_by_name || '') };
     }).filter((item) => !seen.has(`${String(item.kol.platform).toLowerCase()}:${String(item.kol.handle || '').toLowerCase()}`));
     return [...base, ...pool].sort((left, right) => {
       const leftProjectScore = left.projects.length + (left.kol.activeClaimId ? 1 : 0);
@@ -823,11 +831,13 @@ export function EmployeeKolLibrary({
                 {claimNote}
               </div>
             ) : null}
-            {filteredItems.map(({ kol, projects, poolId, poolFit, isShared }) => {
+            {filteredItems.map(({ kol, projects, poolId, poolFit, isShared, sharedByName }) => {
               // 【M3】认领状态:kolOptions 行自带 active_claim_id(claim_listing LEFT JOIN active 认领);
               // 到期时间只在 aggregate 的本人 claims 里有 → 有则补进 title。释放按钮对有认领的行显示,
               // 权限由后端把关(本人或管理层可释放,否则 403 → claimNote 展示原因)。
-              const claimId = String(kol.activeClaimId || (myClaimByKolId.get(String(kol.id))?.id ?? '')).trim();
+              const claimIdRaw = String(kol.activeClaimId || (myClaimByKolId.get(String(kol.id))?.id ?? '')).trim();
+              // 【M3】乐观遮蔽:本会话刚释放的认领立即按「无认领」渲染(父级数据回流前不闪回)。
+              const claimId = claimIdRaw && releasedClaimIds.has(claimIdRaw) ? '' : claimIdRaw;
               const myClaim = myClaimByKolId.get(String(kol.id));
               const claimExpires = myClaim && myClaim.expires_at ? String(myClaim.expires_at).slice(0, 10) : '';
               const claimTip = claimId
@@ -840,10 +850,10 @@ export function EmployeeKolLibrary({
                     <h3>{kol.name}</h3>
                     <p>{kol.handle || 'handle 暂无'} · {platformDisplay(kol.platform)} · {kol.followerLabel || '粉丝暂无'} · {poolId ? `${poolFit != null ? `Fit ${poolFit.toFixed(1)}` : 'Fit —'}${projects.length ? ` · ${projects.length} 项目` : ''}` : `${projects.length} 项目`}</p>
                   </div>
-                  {/* 【M5】经共享获得的行标「共享」(P-GROUP-7 只读可见;shared_by 端点未回传,无法显示共享人姓名) */}
-                  <strong title={poolId ? (isShared ? '经共享池共享给我的 KOL(只读可见,非本人收藏)' : '本人收藏') : claimTip || undefined}
+                  {/* 【M5】经共享获得的行标「来自 XX 的共享」(P-GROUP-7 只读可见;共享人名来自 aggregate 的 shared_by_name,旧行可空回落「共享」) */}
+                  <strong title={poolId ? (isShared ? `经共享池共享给我的 KOL(只读可见,非本人收藏)${sharedByName ? ` · 共享人 ${sharedByName}` : ''}` : '本人收藏') : claimTip || undefined}
                     style={isShared ? { borderColor: 'rgba(139,92,246,0.45)', color: '#c4b5fd' } : undefined}
-                  >{poolId ? (isShared ? '共享' : '收藏') : claimId ? '已认领' : projects.length ? '进行中' : '待定'}</strong>
+                  >{poolId ? (isShared ? (sharedByName ? `来自 ${sharedByName} 的共享` : '共享') : '收藏') : claimId ? '已认领' : projects.length ? '进行中' : '待定'}</strong>
                   {/* 【M3】释放小按钮:行本体是 <button>,内嵌交互用 span+role 阻断冒泡 */}
                   {!poolId && claimId ? (
                     <span

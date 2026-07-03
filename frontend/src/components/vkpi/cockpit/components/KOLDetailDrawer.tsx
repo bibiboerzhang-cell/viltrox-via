@@ -8,6 +8,7 @@ import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
 import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
+import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
@@ -17,6 +18,7 @@ import {
   detailBundleAnalysisSummary,
   dimensions11RadarDims,
   evidenceIdOf,
+  isImageEvidence,
   recordOr,
   videoAnalysisSources,
 } from "./KOLDetailDrawer.helpers";
@@ -71,6 +73,46 @@ function readStoredDrawerTab(): string {
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
+  // 【M3/M5】观看者上下文:共享来源(来自谁的共享)+ active 认领(本人/管理层可释放)。
+  // 开抽屉只读拉取(动态 import 保持 mock seam 不变),失败静默 → 不渲染徽标(graceful absence)。
+  const [viewerCtx, setViewerCtx] = React.useState<any>(null);
+  const [releaseBusy, setReleaseBusy] = React.useState(false);
+  const [releaseMsg, setReleaseMsg] = React.useState("");
+  React.useEffect(() => {
+    setViewerCtx(null);
+    setReleaseBusy(false);
+    setReleaseMsg("");
+    if (!apiToken || !item?.id) return;
+    let cancelled = false;
+    void import("../../../../services/vkpi/kol-api")
+      .then(({ getMyKolViewerContext }) => getMyKolViewerContext(apiToken, item.id))
+      .then((payload: any) => {
+        if (!cancelled) setViewerCtx(payload && typeof payload === "object" ? payload : null);
+      })
+      .catch(() => { if (!cancelled) setViewerCtx(null); });
+    return () => { cancelled = true; };
+  }, [apiToken, item?.id]);
+  // 【M3】释放认领:确认 → 乐观摘掉认领条 → POST /claims/{id}/release;失败回滚 + 显示原因。
+  // 权限由后端把关(认领人本人或管理层),按钮只在 can_release=true 时出现。
+  const handleReleaseClaim = React.useCallback(() => {
+    const claim = viewerCtx?.claim;
+    const claimId = claim?.id;
+    if (!apiToken || !claimId || releaseBusy) return;
+    const kolLabel = String(item?.display_name || item?.handle || "该 KOL");
+    if (!window.confirm(`确认释放对「${kolLabel}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
+    setReleaseBusy(true);
+    setReleaseMsg("");
+    const snapshot = viewerCtx;
+    setViewerCtx((prev: any) => (prev ? { ...prev, claim: null } : prev));
+    void import("../../../../services/vkpi/kol-api")
+      .then(({ releaseKolClaim }) => releaseKolClaim(apiToken, String(claimId)))
+      .then(() => setReleaseMsg("已释放认领"))
+      .catch((error: any) => {
+        setViewerCtx(snapshot);
+        setReleaseMsg("释放失败:" + String(error?.message || "请重试").slice(0, 80));
+      })
+      .finally(() => setReleaseBusy(false));
+  }, [apiToken, viewerCtx, releaseBusy, item?.display_name, item?.handle]);
   // 【C1】当前 tab:惰性读 localStorage(非法值回落「概览」);切换时写回记忆。
   const [activeTab, setActiveTab] = React.useState<string>(() => readStoredDrawerTab());
   const handleSelectTab = React.useCallback((key: string) => {
@@ -444,7 +486,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const competitorCollabs = asArray(item.competitor_collabs);
   const loyaltySignals = item.loyalty_signals || {};
   const videoAnalysisVideos = videoAnalysisSources(item, representativeVideos);
-  const primaryVideoEvidence = videoAnalysisVideos[0] || null;
+  // 【K4】主代表作跳过 image 类 evidence(IG 图文/轮播):detail_bundle 现在会回带 image 行,
+  // 但视频深析只能吃 video——若首条是 image,取第一条非 image 的做「AI深度分析」入队目标,
+  // 避免把图文帖排进视频分析(后端另有 skipped_non_video 闸兜底)。
+  const primaryVideoEvidence = videoAnalysisVideos.find((video: any) => !isImageEvidence(video)) || null;
   const primaryVideoEvidenceId = evidenceIdOf(primaryVideoEvidence);
   const videoEnqueueBusy = videoEnqueueState.status === "loading" || videoEnqueueState.status === "queued" || videoEnqueueState.status === "already_queued";
   const canEnqueueVideoAnalysis = Boolean(apiToken && item.id && primaryVideoEvidenceId && !videoEnqueueBusy);
@@ -537,6 +582,32 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     // ─── Header ───
     e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose }),
 
+    // ── 【M3/M5】观看者上下文条:来自谁的共享 + 认领状态/释放(有数据才渲染,全 tab 常驻)──
+    (viewerCtx?.share_origin || viewerCtx?.claim || releaseMsg) && e("div", {
+      className: "flex flex-wrap items-center gap-1.5 border-b border-white/[0.06] px-5 py-1.5",
+    },
+      viewerCtx?.share_origin && e("span", {
+        className: "rounded border border-purple-400/30 bg-purple-400/[0.08] px-1.5 py-0.5 text-[9px] font-medium text-purple-200",
+        title: "该 KOL 经共享池(P-GROUP-7)共享给你 · 只读可见,非本人收藏"
+          + (viewerCtx.share_origin.created_at ? " · " + String(viewerCtx.share_origin.created_at).slice(0, 10) : ""),
+      }, "来自 " + (viewerCtx.share_origin.shared_by_name || "未知成员") + " 的共享"),
+      viewerCtx?.claim && e("span", {
+        className: "rounded border border-amber-400/25 bg-amber-400/[0.06] px-1.5 py-0.5 text-[9px] text-amber-200",
+        title: "active 认领(vkpi_kol_claims)"
+          + (viewerCtx.claim.expires_at ? " · 到期 " + String(viewerCtx.claim.expires_at).slice(0, 10) : ""),
+      }, "已认领 · " + (viewerCtx.claim.staff_name || ("成员 " + (viewerCtx.claim.staff_id ?? "—")))),
+      viewerCtx?.claim?.can_release && e("button", {
+        type: "button",
+        disabled: releaseBusy,
+        onClick: handleReleaseClaim,
+        className: "rounded border border-amber-400/40 px-1.5 py-0.5 text-[9px] font-medium text-amber-300 transition-colors hover:bg-amber-400/[0.10] disabled:opacity-50",
+        title: "释放认领:取消认领回池,他人可再认领(认领人本人或管理层可操作)",
+      }, releaseBusy ? "释放中…" : "释放"),
+      releaseMsg && e("span", {
+        className: "text-[9px] " + (releaseMsg.startsWith("释放失败") ? "text-rose-300" : "text-emerald-300"),
+      }, releaseMsg)
+    ),
+
     // ─── Scroll content ───
     // 【C1 Tab 化】既有 section 一列不变,只按 activeTab 过滤渲染对应集合(不动各 section 内部);
     // tab 条 sticky 钉在滚动区顶部;头部身份卡(上方)与底部行动条(下方)在滚动区之外全 tab 常驻。
@@ -626,6 +697,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       // ══ Tab「合作」:推进合作的动作面 ══
       activeTab === "coop" && e(React.Fragment, null,
         e(CooperationPanel, { apiToken, kolPoolId: item?.id }),
+        // ── C4 外联区:一键生成 brief + 中英双语邮件草稿 + 邮箱补抓状态(复制不外发)──
+        e(KOLDrawerOutreachSection, { apiToken, kolPoolId: item?.id }),
         // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
         // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
         e(KOLDrawerMemorySection, { kolMemory }),

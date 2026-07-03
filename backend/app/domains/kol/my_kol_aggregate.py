@@ -153,6 +153,11 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
     for those rows (no ownership/claim is created). Mirrors
     pool_favorites.list_favorites field names; viltrox_fit_score is read only;
     projects_json comes back as jsonb (string or list) — parsed defensively.
+
+    【M5】共享来源:shared_by(迁移 159,可空容旧)经 staff→users(sst/su)取共享人展示名
+    shared_by_name,前端 MY KOL 卡片据此标「来自 XX 的共享」。sm 行按
+    UNIQUE(kol_pool_id, staff_id) 至多一条,新增两个 LEFT JOIN 不会放大行数;
+    纯读,零触归属/收藏/认领。
     """
     rows = conn.execute(
         """
@@ -160,6 +165,8 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
                COALESCE(f.note, '') AS note,
                COALESCE(f.created_at, sm.created_at) AS created_at,
                (f.id IS NULL) AS is_shared,
+               sm.shared_by AS shared_by_staff_id,
+               COALESCE(su.name, su.email, '') AS shared_by_name,
                kp.platform, kp.handle, kp.display_name, kp.followers,
                kp.viltrox_fit_score, kp.profile_url, kp.avatar_url, kp.country,
                (
@@ -184,6 +191,8 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
                ON f.kol_pool_id = kp.id AND f.staff_id = ?
         LEFT JOIN vkpi_kol_pool_members sm
                ON sm.kol_pool_id = kp.id AND sm.staff_id = ?
+        LEFT JOIN staff sst ON sst.id = sm.shared_by
+        LEFT JOIN users su ON su.id = sst.user_id
         WHERE (f.id IS NOT NULL OR sm.id IS NOT NULL)
           AND kp.duplicate_of_id IS NULL
         ORDER BY COALESCE(f.created_at, sm.created_at) DESC, kp.id DESC

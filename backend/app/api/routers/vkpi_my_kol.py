@@ -509,3 +509,87 @@ def my_kol_share_members_endpoint(
         )
 
     return {"kol_pool_id": pid, "count": len(items), "items": items}
+
+
+@router.get("/my-kol/{kol_pool_id}/viewer-context")
+def my_kol_viewer_context_endpoint(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """【M3/M5】KOL 详情抽屉的观看者上下文(纯 SELECT,零副作用)。
+
+    - share_origin:该 kol_pool_id 是否经 vkpi_kol_pool_members(迁移 159)共享给「当前操作者」,
+      带共享人展示名(staff→users,与 shares 列表同口径)——前端据此标「来自 XX 的共享」。
+    - claim:该 KOL(经 linked_main_kol_id)当前 active 认领 + 认领人展示名;can_release =
+      本人认领 或 管理层(can_view_all)——与 claims release 端点(claim_lifecycle.release)
+      的放行口径一致,前端据此显示「释放」按钮。
+    红线:只读 vkpi_kol_pool_members / vkpi_kol_claims / vkpi_kol_pool / staff / users;
+    绝不读写 viltrox_fit_score / rule_v0,绝不改归属。全程 '?' 占位(方言层翻译)。
+    """
+    pid = _int(kol_pool_id)
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    conn = get_conn()
+    actor = scope.actor_staff_id(staff)
+
+    share_origin: dict[str, Any] | None = None
+    if actor:
+        row = conn.execute(
+            """
+            SELECT m.shared_by, m.created_at,
+                   COALESCE(u.name, u.email, '') AS shared_by_name
+            FROM vkpi_kol_pool_members m
+            LEFT JOIN staff st ON st.id = m.shared_by
+            LEFT JOIN users u ON u.id = st.user_id
+            WHERE m.kol_pool_id = ? AND m.staff_id = ?
+            LIMIT 1
+            """,
+            (pid, int(actor)),
+        ).fetchone()
+        if row:
+            item = dict(row)
+            created_at = item.get("created_at")
+            if created_at is not None and not isinstance(created_at, str):
+                created_at = str(created_at)
+            share_origin = {
+                "shared_by": _int(item.get("shared_by")) or None,
+                # shared_by 可空容旧(159 注释):空时诚实回空串,前端显「未知成员」。
+                "shared_by_name": item.get("shared_by_name") or "",
+                "created_at": created_at,
+            }
+
+    claim: dict[str, Any] | None = None
+    claim_row = conn.execute(
+        """
+        SELECT c.id, c.staff_id, c.claimed_at, c.expires_at,
+               COALESCE(u.name, u.email, '') AS staff_name
+        FROM vkpi_kol_pool p
+        JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
+        LEFT JOIN staff st ON st.id = c.staff_id
+        LEFT JOIN users u ON u.id = st.user_id
+        WHERE p.id = ?
+        LIMIT 1
+        """,
+        (pid,),
+    ).fetchone()
+    if claim_row:
+        item = dict(claim_row)
+        owner = _int(item.get("staff_id")) or None
+        is_mine = bool(actor and owner and int(actor) == owner)
+        claimed_at = item.get("claimed_at")
+        expires_at = item.get("expires_at")
+        if claimed_at is not None and not isinstance(claimed_at, str):
+            claimed_at = str(claimed_at)
+        if expires_at is not None and not isinstance(expires_at, str):
+            expires_at = str(expires_at)
+        claim = {
+            "id": _int(item.get("id")) or None,
+            "staff_id": owner,
+            "staff_name": item.get("staff_name") or "",
+            "claimed_at": claimed_at,
+            "expires_at": expires_at,
+            "is_mine": is_mine,
+            "can_release": bool(is_mine or scope.can_view_all(staff)),
+        }
+
+    return {"kol_pool_id": pid, "share_origin": share_origin, "claim": claim}

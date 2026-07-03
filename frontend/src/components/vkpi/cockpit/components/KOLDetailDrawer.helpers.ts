@@ -84,6 +84,15 @@ export function mediaKindBadge(video: any): { label: string; title: string } | n
   return null; // 其余种类(如 media_article)不在 图/组图/视频 徽章口径内,不显示
 }
 
+// 【K4】image 类 evidence(IG 图文/轮播)没视频可下,不可跑视频深析——前端选主代表作
+// / 入队前先挡(后端 enqueue 也有 skipped_non_video 闸,这里是省一次无效请求的第一道)。
+// 字段缺失(老数据没回传 media_kind/evidence_type)按 video 放行,行为与放开前一致。
+export function isImageEvidence(video: any): boolean {
+  if (!video || typeof video !== "object") return false;
+  const kind = String(video.media_kind ?? video.evidence_type ?? "").trim().toLowerCase();
+  return kind === "image" || kind === "carousel";
+}
+
 // ─── 以下为从 KOLDetailDrawer.tsx 行为不变搬入的纯 helper(无 React/JSX)。 ───
 
 export function detailAvatarUrl(item: any) {

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import urllib.parse
 from typing import Any
@@ -123,6 +124,9 @@ def _video_evidence_for_kol(
     #   与展示用 videos 限 3 解耦,修「已找到 N 条 evidence 但 video_analysis 未命中」)。
     # include_inactive: 放宽 is_active(回挂已有分析——有 cache 的 inactive evidence 也回带,
     #   纯只读 SELECT,不复活、不改 is_active、不触 viltrox_fit_score 写点)。
+    # 【K4】WHERE 从纯 video 放开为 IN ('video','image'):image 类 evidence(IG 图文/轮播,
+    #   迁移 087/200)此前被滤掉,前端媒体种类徽章永不点亮;media_article 等其余种类仍挡在外。
+    #   only_with_cache=True 的分析路径不受影响(image 行无 final_v1 cache,天然被 EXISTS 过滤)。
     rows = get_conn().execute(
         """
         SELECT
@@ -144,6 +148,8 @@ def _video_evidence_for_kol(
             e.duration_seconds,
             e.publish_date,
             e.posted_at,
+            e.evidence_type,
+            e.image_urls,
             EXISTS(
                 SELECT 1
                 FROM vkpi_analysis_cache c
@@ -206,7 +212,7 @@ def _video_evidence_for_kol(
         ) m ON TRUE
         WHERE e.kol_pool_id=?
           AND (? OR e.is_active IS NOT FALSE)
-          AND COALESCE(e.evidence_type, 'video')='video'
+          AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
           AND (
               NOT ?
               OR EXISTS(
@@ -243,6 +249,23 @@ def _video_evidence_for_kol(
     for row in rows:
         item = dict(row)
         platform = _platform(item.get("platform") or "")
+        # 【K4】媒体种类点亮:evidence_type(迁移 087)+ image_urls(迁移 200,TEXT 存 JSON 数组串)
+        # 回传前端;这里解析出 media_kind(video / image / carousel≥2 张)供徽章直读。
+        # 纯查询回传变宽——evidence 归属 / viltrox_fit_score / rule_v0 零触碰。
+        evidence_kind = str(item.get("evidence_type") or "video").strip().lower() or "video"
+        image_urls: list[str] = []
+        raw_images = item.get("image_urls")
+        if isinstance(raw_images, str) and raw_images.strip():
+            try:
+                parsed_images = json.loads(raw_images)
+                if isinstance(parsed_images, list):
+                    image_urls = [str(u) for u in parsed_images if u]
+            except Exception:
+                image_urls = []
+        elif isinstance(raw_images, list):
+            image_urls = [str(u) for u in raw_images if u]
+        item["image_urls"] = image_urls
+        item["media_kind"] = ("carousel" if len(image_urls) >= 2 else "image") if evidence_kind == "image" else "video"
         # Viltrox 识别以 Gemini 深析为准(2026-06-12 裁令"视频分析要给 gemini 不然区分不出"):
         # llm_ 前缀=LLM 产物;未深析行三键为 None,前端按"未析"诚实处理。
         detected_text = str(item.pop("llm_viltrox_detected_text", None) or "").strip().lower()
@@ -278,6 +301,9 @@ def _video_evidence_for_kol(
             or str(item.get("thumbnail_url") or "").strip()
             or youtube_thumb
         )
+        if not item["best_thumbnail"] and image_urls:
+            # 【K4】image 证据行常无 thumbnail_url:回落第一张轮播图,卡片不至于空占位(纯展示)。
+            item["best_thumbnail"] = image_urls[0]
         item["watch_url"] = (
             f"https://www.youtube.com/watch?v={youtube_id}"
             if youtube_id

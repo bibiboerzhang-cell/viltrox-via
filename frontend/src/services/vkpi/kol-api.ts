@@ -54,10 +54,39 @@ export interface VkpiMyKolAggregateResponse {
   official_matrix?: Row;
   // pool_favorites mirrors pool_favorites.list_favorites field names; the
   // aggregate hands `projects` (already-parsed) rather than `projects_json`.
+  // 【M5】共享行(is_shared=true)另带 shared_by_staff_id / shared_by_name(共享人展示名)。
   pool_favorites?: Row[];
   projects?: Row[];
   claims?: Row[];
   kpi_summary?: Record<string, number>;
+}
+
+// 【M3/M5】KOL 详情抽屉的观看者上下文:该 KOL 是否共享给我(来自谁)+ active 认领(可否释放)。
+//   GET /api/admin/vkpi/my-kol/{kol_pool_id}/viewer-context(纯只读)
+export interface VkpiMyKolViewerContext {
+  kol_pool_id?: number;
+  share_origin?: {
+    shared_by?: number | null;
+    shared_by_name?: string | null;
+    created_at?: string | null;
+  } | null;
+  claim?: {
+    id?: number | null;
+    staff_id?: number | null;
+    staff_name?: string | null;
+    claimed_at?: string | null;
+    expires_at?: string | null;
+    is_mine?: boolean;
+    can_release?: boolean;
+  } | null;
+}
+
+export async function getMyKolViewerContext(token: string, kolPoolId: string | number) {
+  return apiFetch<VkpiMyKolViewerContext>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/viewer-context`,
+    { cache: "no-store" },
+    token,
+  );
 }
 
 export interface VkpiKolContactsResponse {
