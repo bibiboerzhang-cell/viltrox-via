@@ -552,3 +552,16 @@ def list_history(days: int = _HISTORY_DAYS) -> dict[str, Any]:
         if isinstance(payload, dict) and payload.get("checks"):
             history.append({"date": str(item.get("cache_key") or "")[len(_DAY_KEY_PREFIX):], "summary": payload.get("summary"), "ran_at": payload.get("ran_at")})
     return {"history": history}
+
+
+if __name__ == "__main__":
+    # systemd timer 入口(镜像 vkpi-sync-daily 模式):
+    # cd /opt/viltrox-2.0 && PYTHONPATH=backend .venv/bin/python -m app.domains.ops.health_sentinel
+    # 线上 jobs.py 已分叉,APScheduler 注册只在本地/收敛后生效,线上日跑靠这个入口。
+    import json as _json
+
+    from app.db.connection import db_connection_sync_scope as _db_scope
+
+    with _db_scope():
+        _result = run_health_sentinel(trigger="cron")
+    print(_json.dumps(_result, ensure_ascii=False, default=str, indent=2))
