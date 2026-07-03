@@ -62,9 +62,13 @@ const SEARCH_MODE_QUOTAS: Record<string, { creatorQuota: number; reviewerQuota: 
 };
 
 // 【K7】URL 多行批量:一次输入里抠出全部 http(s) URL(空格/换行分隔);上限 10 条防误粘。
+// 验收补强(2026-07-02):①去掉粘贴常见的尾缀标点(逗号/分号/引号/右括号),避免「url1, url2」把
+// 逗号带进后端解析;②去重(同链接粘两遍只分析一次)。社媒链接不含括号,尾缀剥离安全。
 const URL_BATCH_MAX = 10;
 function extractUrls(raw: string): string[] {
-  return String(raw || "").match(/https?:\/\/[^\s]+/g) || [];
+  const matched = String(raw || "").match(/https?:\/\/[^\s]+/g) || [];
+  const cleaned = matched.map((u) => u.replace(/[),;'"\]]+$/, "")).filter(Boolean);
+  return Array.from(new Set(cleaned));
 }
 
 export function SmartKolInputPanel({

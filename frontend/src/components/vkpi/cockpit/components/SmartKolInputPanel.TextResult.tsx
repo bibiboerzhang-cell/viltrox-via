@@ -187,26 +187,39 @@ export function TextResultSection({
             <Sparkles size={9} /> 自动·恒开
           </span>
         </div>
-        {/* 【K3】入库反馈:发现即自动落 Pool(后端 _auto_enroll_discoveries),下次同类搜索会出现在「库内已有的人」 */}
+        {/* 【K3】入库反馈:发现即自动落 Pool(后端 _auto_enroll_discoveries),下次同类搜索会出现在「库内已有的人」。
+            数字口径诚实化:discoveryTotal 是本次发现项数;后端逐条 upsert 时会跳过缺 handle/入库失败的个别项,
+            故文案不宣称「已入库 N 人」的精确数,只说发现 N 人 + 已自动登记(异常项除外)。 */}
         {discoveryTotal > 0 ? (
-          <div className="mb-2 rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-1.5 text-[10px] text-emerald-100/90">
-            本次新发现已自动入库 {discoveryTotal} 人(下次同类搜索归库内)
+          <div
+            className="mb-2 rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-1.5 text-[10px] text-emerald-100/90"
+            title="全网新发现会即时轻量入库(仅基础资料,不触评分);个别缺 handle 或入库失败的项会跳过"
+          >
+            本次全网新发现 {discoveryTotal} 人,已自动登记入库(个别缺 handle/入库失败的除外)· 下次同类搜索归「库内已有的人」
           </div>
         ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-slate-500">发现平台</span>
-          {[{ k: "youtube", t: "YouTube" }, { k: "instagram", t: "Instagram" }, { k: "tiktok", t: "TikTok" }].map((p) => {
+          {/* 【B5】Facebook 解锁为可选平台:后端 SUPPORTED_DISCOVERY_PLATFORMS 已含 facebook
+              (apify/facebook-search-scraper,discovery_filters.py);opt-in 设计——不进默认三平台兜底,
+              显式勾选后请求 new_discovery_platforms 数组才带 "facebook"。 */}
+          {([
+            { k: "youtube", t: "YouTube" },
+            { k: "instagram", t: "Instagram" },
+            { k: "tiktok", t: "TikTok" },
+            { k: "facebook", t: "Facebook", tip: "Facebook 发现(可选):勾选后下次查找才参与,不勾选不搜(不进默认平台轮转)" },
+          ] as { k: string; t: string; tip?: string }[]).map((p) => {
             const on = discoveryPlatforms.includes(p.k);
             return (
               <button
                 key={p.k}
                 type="button"
+                title={p.tip}
                 onClick={() => setDiscoveryPlatforms((cur) => (on ? cur.filter((x) => x !== p.k) : [...cur, p.k]))}
                 className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on ? "border-cyan-300/40 bg-cyan-400/[0.12] text-cyan-100" : "border-white/[0.08] text-slate-500 hover:border-white/[0.16]"}`}
               >{p.t}</button>
             );
           })}
-          <span className="rounded-full border border-white/[0.06] px-2 py-0.5 text-[10px] text-slate-600" title="Facebook 发现即将支持">Facebook · 即将</span>
           <span className="ml-1 text-[10px] text-slate-500">区域</span>
           <select
             value={discoveryRegion}

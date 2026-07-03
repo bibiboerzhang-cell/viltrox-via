@@ -168,7 +168,8 @@ export function RecallMiniItem({
   const followers = numberLabel(item.followers);
   const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
   const relevanceFlags = Array.isArray(item.relevance_flags) ? item.relevance_flags.map(cleanText).filter(Boolean) : [];
-  const tier = relevanceTier(score, cleanText(item.relevance_tier_hint) === "demote");
+  const tierDemoted = cleanText(item.relevance_tier_hint) === "demote";
+  const tier = relevanceTier(score, tierDemoted);
   const showImg = Boolean(avatar) && !imgError;
   const whyFit = cleanText(item.why_fit);
   // 三引擎产出·候选卡展示信号(全部纯只读透传,绝不触评分):
@@ -270,14 +271,17 @@ export function RecallMiniItem({
           </span>
         ) : null}
       </span>
-      {/* 【K2】徽章解释:title 说明分档口径(高相关=向量相似度头部),附本条裸相似度供细看 */}
+      {/* 【K2】徽章解释:title 说明分档口径(高相关=向量相似度头部),附本条裸相似度供细看;
+          demote 降档时(相似度达高档但后端标记降位)如实说明,不套用「中段 0.3–0.6」口径。 */}
       <span
         className={`mt-1 flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}
         title={
           tier.label === "高相关"
             ? `高相关 = 向量相似度头部(≥0.6)· 本条相似度 ${score.toFixed(3)}`
             : tier.label === "中相关"
-              ? `中相关 = 向量相似度中段(0.3–0.6)· 本条相似度 ${score.toFixed(3)}`
+              ? (tierDemoted && score >= 0.6
+                  ? `中相关(降档):相似度 ${score.toFixed(3)} 达高档,但后端按内容形态错配标记降位,封顶中相关`
+                  : `中相关 = 向量相似度中段(0.3–0.6)· 本条相似度 ${score.toFixed(3)}`)
               : `相关 = 向量相似度 <0.3 · 本条相似度 ${score.toFixed(3)}`
         }
       >

@@ -299,6 +299,10 @@ def enqueue_smart_search_profile_advance(
         "vector_weight": body.get("vector_weight") if body.get("vector_weight") is not None else 0.7,
         "type_weight": body.get("type_weight") if body.get("type_weight") is not None else 0.3,
         "type_boost_enabled": bool(body.get("type_boost_enabled", True)),
+        # 接线补漏(2026-07-02 验收):前端「排除 中国/港/台 地区」开关一直随 body 传到这里,但此前
+        # payload 漏透传 → worker 的 execute_smart_search_profile_advance_pipeline 只能吃默认 True,
+        # 用户取消勾选形同虚设。补上后与同步(非队列)路径的 recall exclude_chinese 语义一致。
+        "exclude_chinese": bool(body.get("exclude_chinese", True)),
         "include_new_discovery": bool(body.get("include_new_discovery", True)),
         # 收口路①-2:内容契合入队控量旋钮(默认开,top N=6);worker→pipeline 透传。
         "include_content_fit": bool(body.get("include_content_fit", True)),
