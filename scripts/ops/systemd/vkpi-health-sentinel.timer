@@ -1,0 +1,9 @@
+[Unit]
+Description=Run V-KPI health sentinel daily at 01:30 UTC (09:30 China)
+
+[Timer]
+OnCalendar=*-*-* 01:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

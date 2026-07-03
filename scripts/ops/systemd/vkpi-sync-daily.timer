@@ -1,0 +1,11 @@
+[Unit]
+Description=Run V-KPI daily official sync at 04:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=vkpi-sync-daily.service
+
+[Install]
+WantedBy=timers.target

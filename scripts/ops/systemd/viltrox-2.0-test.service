@@ -1,0 +1,23 @@
+[Unit]
+Description=V-KPI / Viltrox 2.0 Test App
+After=network.target
+
+[Service]
+Type=simple
+User=viltrox
+Group=viltrox
+WorkingDirectory=/opt/viltrox-2.0
+EnvironmentFile=/opt/viltrox-2.0/.env
+Environment=PYTHONPATH=/opt/viltrox-2.0/backend
+ExecStart=/opt/viltrox-2.0/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viltrox-2.0-test
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=V-KPI data health sentinel daily check
+Wants=network-online.target
+After=network-online.target viltrox-2.0-test.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/viltrox-2.0
+Environment=PYTHONPATH=backend
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python -m app.domains.ops.health_sentinel >> /var/log/vkpi/health_sentinel_$(date -u +%%Y%%m%%d).log 2>&1'
+TimeoutStartSec=15m
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
