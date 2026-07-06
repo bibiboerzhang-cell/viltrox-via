@@ -159,10 +159,13 @@ export function RecallMiniItem({
   item,
   index,
   onOpen,
+  className = "",
 }: {
   item: VkpiKolRecallItem;
   index: number;
   onOpen?: (item: VkpiKolRecallItem) => void;
+  // 发现网格用:右上角有绝对定位勾选框时传 pr-6 留槽,徽章不再被压在勾选框下(UI 红圈①)。
+  className?: string;
 }) {
   const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(item.avatar_url);
@@ -185,7 +188,7 @@ export function RecallMiniItem({
     <button
       type="button"
       onClick={() => onOpen?.(item)}
-      className="group flex min-w-0 items-start gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30"
+      className={`group flex h-full min-w-0 items-start gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30 ${className}`}
       title={whyFit ? `${whyFit} · 相关度 ${score.toFixed(3)}` : `打开 KOL 详情 · 相关度 ${score.toFixed(3)}`}
     >
       <span className="mt-1 w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>

@@ -340,8 +340,8 @@ export function TextResultSection({
               const picked = effPid > 0 && pickedIds.has(effPid);
               const resolving = resolvingKeys.has(key);
               return (
-                <div key={`d-${item.kol_pool_id || item.handle || index}`} className="relative">
-                  <RecallMiniItem item={item} index={index + 1} onOpen={onOpenRecallItem} />
+                <div key={`d-${item.kol_pool_id || item.handle || index}`} className="relative h-full">
+                  <RecallMiniItem item={item} index={index + 1} onOpen={onOpenRecallItem} className="pr-6" />
                   <button
                     type="button"
                     disabled={resolving}
