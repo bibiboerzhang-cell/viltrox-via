@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 from datetime import datetime, timedelta, timezone
 
@@ -570,6 +571,49 @@ def generate_budget_guard_alerts() -> dict[str, Any]:
     }
 
 
+def generate_monthly_spend_alert() -> dict[str, Any]:
+    """月度总花费提醒线:本月台账合计(Apify+LLM,内部记账口径)越过阈值即出 warning,回落自动清除。
+    默认 $2000,env VKPI_MONTHLY_SPEND_ALERT_USD 可调;只提醒不拦截——硬闸另在 budget_guard。"""
+    ensure_vkpi_schema()
+    conn = get_conn()
+    try:
+        threshold = max(0.0, float(os.environ.get("VKPI_MONTHLY_SPEND_ALERT_USD", "2000")))
+    except (TypeError, ValueError):
+        threshold = 2000.0
+    now = datetime.now(timezone.utc)
+    month_start = now.strftime("%Y-%m-01T00:00:00Z")
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM vkpi_ai_cost_ledger WHERE occurred_at >= ?",
+        (month_start,),
+    ).fetchone()
+    total = float(dict(row).get("total") or 0) if row else 0.0
+    alert_key = f"monthly-spend-{now.strftime('%Y-%m')}"
+    if threshold <= 0 or total < threshold:
+        cleared: list[str] = []
+        if _resolve_open_alert(conn, alert_key):
+            cleared.append(alert_key)
+        conn.commit()
+        return {"alerts": [], "count": 0, "cleared": cleared, "total_usd": total, "threshold_usd": threshold}
+    created = upsert_alert(
+        alert_key=alert_key,
+        severity="warning",
+        target_type="budget_scope",
+        target_id=None,
+        title=f"本月总花费已超 ${threshold:.0f} 提醒线",
+        body=(
+            f"本月台账合计 ${total:.2f}(Apify+LLM,内部记账口径,Apify 为估算价存在盲区)。"
+            f"提醒线 ${threshold:.0f} 只提醒不拦截;硬停由 budget_guard 各 scope 决定。"
+        ),
+        rule_key="monthly_spend.reminder",
+        metadata_json=json.dumps(
+            {"total_usd": total, "threshold_usd": threshold, "month": now.strftime("%Y-%m")},
+            ensure_ascii=False,
+        ),
+    )
+    conn.commit()
+    return {"alerts": [created], "count": 1, "cleared": [], "total_usd": total, "threshold_usd": threshold}
+
+
 def generate_alerts() -> dict[str, Any]:
     """Run all currently enabled alert rules."""
     stalled = generate_stalled_project_alerts()
@@ -577,12 +621,14 @@ def generate_alerts() -> dict[str, Any]:
     content_brain = generate_content_brain_backlog_alerts()
     recommendation_review = generate_recommendation_review_gap_alerts()
     budget_guard = generate_budget_guard_alerts()
+    monthly_spend = generate_monthly_spend_alert()
     alerts = (
         (stalled.get("alerts") or [])
         + (comment_intelligence.get("alerts") or [])
         + (content_brain.get("alerts") or [])
         + (recommendation_review.get("alerts") or [])
         + (budget_guard.get("alerts") or [])
+        + (monthly_spend.get("alerts") or [])
     )
     return {
         "alerts": alerts,
@@ -592,4 +638,5 @@ def generate_alerts() -> dict[str, Any]:
         "content_brain": content_brain,
         "recommendation_review": recommendation_review,
         "budget_guard": budget_guard,
+        "monthly_spend": monthly_spend,
     }

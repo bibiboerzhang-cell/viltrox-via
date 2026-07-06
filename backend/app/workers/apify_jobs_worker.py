@@ -7,6 +7,7 @@ import os
 import random
 import re
 import signal
+import socket
 import sys
 import threading
 import time
@@ -71,8 +72,18 @@ RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEA
 # DB 连接瞬断后重连前等待秒数。治 6/23 那次:连接丢失 → 未捕获 → worker 永久死 3.5 天。
 WORKER_DB_RECONNECT_SECONDS = max(2, int(os.environ.get("APIFY_WORKER_DB_RECONNECT_SECONDS", "5")))
 # T5 真实存活:每轮 poll(含空闲)向 vkpi_worker_heartbeat UPSERT 一行,
-# system_health._worker_online 据此判在线;逻辑 worker 名可经 env 覆盖。
-WORKER_HEARTBEAT_NAME = os.environ.get("APIFY_WORKER_HEARTBEAT_NAME", "apify_jobs_worker").strip() or "apify_jobs_worker"
+# system_health._worker_online 据此判在线(MAX 全表聚合,与名字无关);逻辑 worker 名可经 env 覆盖。
+# 默认带主机名:多机/多车道认领时心跳行与 lease_owner 可辨,不再互相覆盖。
+_DEFAULT_WORKER_NAME = f"apify_jobs_worker-{socket.gethostname()}"
+WORKER_HEARTBEAT_NAME = os.environ.get("APIFY_WORKER_HEARTBEAT_NAME", _DEFAULT_WORKER_NAME).strip() or _DEFAULT_WORKER_NAME
+# 车道过滤:interactive=只认领交互档(无 batch 标记);all=全量(默认,行为不变)。
+# 值域是代码内白名单,拼接进 SQL 的片段为常量,无注入面。
+CLAIM_LANE = os.environ.get("APIFY_WORKER_CLAIM_LANE", "all").strip().lower()
+CLAIM_LANE_SQL = (
+    "AND COALESCE(payload->>'batch', '') NOT IN ('on_demand_batch', 'recent', 'remaining')"
+    if CLAIM_LANE == "interactive"
+    else ""
+)
 MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
 PROVIDER_RETRY_MAX_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_ATTEMPTS", "5")))
 PROVIDER_RETRY_BASE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_BASE_SECONDS", "60")))
@@ -83,7 +94,8 @@ PROVIDER_RETRY_MAX_DELAY_SECONDS = max(
 PROVIDER_RETRY_JITTER_RATIO = max(0.0, min(0.5, float(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_JITTER_RATIO", "0.20"))))
 PROVIDER_RETRY_ADOPT_WINDOW_MINUTES = max(0, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_ADOPT_WINDOW_MINUTES", "1440")))
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
-LLM_CONCURRENCY_LIMIT = max(1, min(6, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "2"))))
+# 旧 min(6) 硬钳是预算安全时代产物;预算闸/台账已成熟,上限交给 env(全 fleet 同值,advisory lock 库级全局)。
+LLM_CONCURRENCY_LIMIT = max(1, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "2")))
 # 1200 太小:6 层 final_v1 JSON(含整条 scene_timeline)会被截断,分镜只剩前 ~35s。
 # 抬到 4096 容纳整段视频的分镜时间线(完整不截断);可经 env 覆盖。
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
@@ -383,11 +395,12 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                """
+                f"""
                 SELECT id, job_type, payload, attempts, next_retry_at, last_error_category
                 FROM apify_jobs
                 WHERE status = 'queued'
                   AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                  {CLAIM_LANE_SQL}
                 ORDER BY
                   CASE
                     WHEN payload->>'batch' = 'on_demand_batch' THEN 1
