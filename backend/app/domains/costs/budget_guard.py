@@ -339,6 +339,9 @@ def record_cost(
     actor_staff_id = staff_id or _resolve_staff(triggered_by)
     cost = max(0.0, float(cost_usd or 0))
     provider = str(ai_provider or "unknown").strip().lower() or "unknown"
+    # 供应商标签归一:llm_gateway 侧叫 google、视频侧叫 gemini,台账统一 gemini 防汇总分裂。
+    if provider == "google":
+        provider = "gemini"
     now = _utcnow()
     conn = get_conn()
     conn.execute(
@@ -445,15 +448,26 @@ _APIFY_PRICING_ENV = "APIFY_ACTOR_PRICING_JSON"
 # key=actor_id(斜杠形式,小写);per_1000_items=按结果计费单价,per_run=每次固定费。
 # env APIFY_ACTOR_PRICING_JSON 可覆盖/扩充,如:
 #   {"clockworks/tiktok-scraper": {"per_1000_items": 4.0}, "some/actor": 2.5}(裸数字=per_1000_items)。
+# 2026-07-06 全表按线上 run pricingInfo 实测校准(旧值高估 2-6.3x);
+# 该表只在 usage 未结算时作先记估算,结算现值由 reconcile_apify_costs 覆盖。
 _APIFY_DEFAULT_PRICING: dict[str, dict[str, float]] = {
-    "apify/instagram-scraper": {"per_1000_items": 2.3},
-    "apify/instagram-comment-scraper": {"per_1000_items": 2.3},
-    "streamers/youtube-scraper": {"per_1000_items": 5.0},
-    "streamers/youtube-channel-scraper": {"per_1000_items": 5.0},
-    "streamers/youtube-comments-scraper": {"per_1000_items": 5.0},
-    # B&H 付费 actor(预算烧穿大头;search 实测 ~$2/次,reviews 同门保守同价)。
-    "powerai/bhphotovideo-product-search-scraper": {"per_run": 2.0},
-    "powerai/bhphotovideo-product-reviews-scraper": {"per_run": 2.0},
+    "apify/instagram-scraper": {"per_1000_items": 1.9},
+    "apify/instagram-comment-scraper": {"per_1000_items": 2.1},
+    "apify/instagram-profile-scraper": {"per_1000_items": 2.0},
+    "apify/instagram-hashtag-scraper": {"per_1000_items": 2.1},
+    "streamers/youtube-scraper": {"per_1000_items": 2.6},
+    "streamers/youtube-channel-scraper": {"per_1000_items": 0.8},
+    "streamers/youtube-comments-scraper": {"per_1000_items": 1.2},
+    # tiktok-scraper 2.3/1000 结果 + 0.8/1000 视频下载,合并口径 3.1
+    "clockworks/tiktok-scraper": {"per_1000_items": 3.1},
+    "clockworks/free-tiktok-scraper": {"per_1000_items": 3.1},
+    "clockworks/tiktok-comments-scraper": {"per_1000_items": 0.75},
+    "apify/facebook-posts-scraper": {"per_run": 0.001, "per_1000_items": 2.5},
+    "apify/facebook-pages-scraper": {"per_1000_items": 6.5},
+    "trudax/reddit-scraper-lite": {"per_run": 0.02, "per_1000_items": 3.6},
+    # B&H 付费 actor:实测 $0.09/start + $0.005/item ≈ $0.29-0.34/run
+    "powerai/bhphotovideo-product-search-scraper": {"per_run": 0.32},
+    "powerai/bhphotovideo-product-reviews-scraper": {"per_run": 0.32},
 }
 
 # 快照键(persistent_cache,003 baseline 表;health_sentinel 同款模式,零新表零迁移)。
@@ -557,14 +571,22 @@ def record_apify_run(
             per_k = _float(pricing.get("per_1000_items"))
             if per_k > 0 and items:
                 fee += per_k * items / 1000.0
-        if pricing:
-            pricing_basis = "priced_table"
+        # PPE 计费结算后 usageTotalUsd 已含事件费(实测 IG 50 条结算 $0.0950=50×$0.0019 分毫不差)——
+        # usage 有值时绝不再叠价目表费(旧口径会双记 ~2x);usage 缺/为 0(.call() 返回瞬间事件费未结算)
+        # 才用表估先记,留待 reconcile_apify_costs 用 API 结算现值覆盖。
+        if usage_usd is not None and usage_usd > 0:
+            cost_usd = usage_usd
+            pricing_basis = "usage_settled"
+        elif pricing:
+            cost_usd = max(0.0, fee)
+            pricing_basis = "priced_table_estimate"
         elif usage_usd is not None:
-            pricing_basis = "usage_only"
+            cost_usd = 0.0
+            pricing_basis = "usage_zero_pending"
         else:
+            cost_usd = 0.0
             pricing_basis = "no_run_object"
-        estimated = bool(pricing) or usage_usd is None
-        cost_usd = max(0.0, usage_usd or 0.0) + max(0.0, fee)
+        estimated = pricing_basis != "usage_settled"
         ensure_budget_schema()
         if run_id and _apify_run_already_recorded(get_conn(), run_id):
             return {"recorded": False, "reason": "duplicate_run", "apify_run_id": run_id}
@@ -593,6 +615,74 @@ def record_apify_run(
         # 记账失败绝不打断业务调用(与旧散点埋点同约定)。
         logger.warning("record_apify_run failed (accounting must never break scraping)", exc_info=True)
         return {"recorded": False, "reason": "error"}
+
+
+def reconcile_apify_costs(hours: int = 48, max_rows: int = 300) -> dict[str, Any]:
+    """Apify 记账对账:PPE 事件费在 .call() 返回瞬间常未结算(实测低记 ~6x),
+    用 API 结算现值覆盖近 N 小时的 apify 台账行,并把差额补进预算 scope 的 current_spend。
+    只对账不拦截;单行失败跳过不断批;无 token/网络失败整体温和返回。"""
+    import os as _os
+
+    token = str(_os.environ.get("APIFY_TOKEN") or "").strip()
+    if not token:
+        return {"reconciled": 0, "checked": 0, "reason": "no_token"}
+    ensure_budget_schema()
+    conn = get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = conn.execute(
+        """
+        SELECT id, cost_usd, metadata_json FROM vkpi_ai_cost_ledger
+        WHERE ai_provider = 'apify' AND occurred_at >= ?
+        ORDER BY id DESC LIMIT ?
+        """,
+        (cutoff, max(1, int(max_rows))),
+    ).fetchall()
+    import httpx
+
+    checked = 0
+    reconciled = 0
+    delta_total = 0.0
+    with httpx.Client(timeout=15.0) as client:
+        for row in rows:
+            data = dict(row)
+            try:
+                meta = json.loads(data.get("metadata_json") or "{}")
+            except (TypeError, ValueError):
+                continue
+            run_id = str(meta.get("apify_run_id") or "").strip()
+            if not run_id or meta.get("reconciled"):
+                continue
+            checked += 1
+            try:
+                resp = client.get(
+                    f"https://api.apify.com/v2/actor-runs/{run_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if resp.status_code != 200:
+                    continue
+                settled = float(((resp.json().get("data") or {}).get("usageTotalUsd")) or 0.0)
+            except Exception:
+                continue
+            recorded = float(data.get("cost_usd") or 0.0)
+            delta = settled - recorded
+            if settled <= 0 or abs(delta) < 0.001:
+                continue
+            meta.update({"reconciled": True, "settled_usd": round(settled, 6), "recorded_before_reconcile": round(recorded, 6)})
+            conn.execute(
+                "UPDATE vkpi_ai_cost_ledger SET cost_usd = ?, metadata_json = ? WHERE id = ?",
+                (round(settled, 6), json.dumps(meta, ensure_ascii=False), int(data["id"])),
+            )
+            for scope_key in ("provider:apify", "monthly_total"):
+                conn.execute(
+                    "UPDATE vkpi_provider_budget_caps SET current_spend = current_spend + ? WHERE scope = ?",
+                    (round(delta, 6), scope_key),
+                )
+            reconciled += 1
+            delta_total += delta
+    conn.commit()
+    if reconciled:
+        logger.info("apify cost reconcile | rows=%s delta_usd=%.4f", reconciled, delta_total)
+    return {"reconciled": reconciled, "checked": checked, "delta_usd": round(delta_total, 4)}
 
 
 def _cost_bucket_rows(conn: Any, since_iso: str, until_iso: str | None = None) -> dict[str, Any]:

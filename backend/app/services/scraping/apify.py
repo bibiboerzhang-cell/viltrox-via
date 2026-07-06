@@ -24,6 +24,9 @@ except ImportError:
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 logger = get_logger(__name__)
 
+# 无超时的 .call() 会吃 actor 默认(tiktok=无限、youtube 系 7 天)——统一栅栏,env 可调。
+_APIFY_CALL_TIMEOUT_SECS = max(60, int(os.environ.get("APIFY_CALL_TIMEOUT_SECS", "900")))
+
 if APIFY_AVAILABLE and APIFY_TOKEN:
     _client = ApifyClient(APIFY_TOKEN)
     logger.info("apify.client_initialized")
@@ -251,7 +254,7 @@ async def _fetch_douyin_comments(url: str, max_comments: int = 20) -> list[dict]
         return []
     try:
         run_input = _douyin_comments_payload(actor_id, url, max_comments)
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="douyin_comments", item_count=len(items))
         return _normalize_douyin_comments(items)
@@ -266,7 +269,7 @@ async def _fetch_douyin_metrics(url: str) -> dict[str, int]:
         return {}
     try:
         run_input = _douyin_metrics_payload(actor_id, url)
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="douyin_metrics", item_count=len(items))
         if not items:
@@ -302,7 +305,7 @@ async def scrape_youtube(url: str) -> Dict[str, Any]:
         }
 
         run = await asyncio.to_thread(
-            lambda: _client.actor("streamers/youtube-scraper").call(run_input=run_input)
+            lambda: _client.actor("streamers/youtube-scraper").call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS)
         )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
@@ -385,7 +388,7 @@ async def scrape_instagram(url: str) -> Dict[str, Any]:
             run_input["proxyConfiguration"] = _proxy
 
         run = await asyncio.to_thread(
-            lambda: _client.actor("apify/instagram-scraper").call(run_input=run_input)
+            lambda: _client.actor("apify/instagram-scraper").call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS)
         )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
@@ -470,7 +473,7 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
             run_input["proxyConfiguration"] = _proxy
 
         actor_id = _tiktok_actor_id()
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="tiktok", operation="scrape_tiktok", item_count=len(items))
@@ -543,7 +546,7 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
     logger.info("apify.scrape_douyin.start | url=%s | actor=%s", url, actor_id)
     try:
         run_input = _douyin_video_payload(actor_id, url)
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input))
+        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="scrape_douyin", item_count=len(items))
         if not items:

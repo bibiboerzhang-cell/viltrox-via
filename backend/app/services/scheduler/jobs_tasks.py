@@ -803,6 +803,18 @@ async def job_vkpi_health_sentinel():
         logger.exception("scheduler.vkpi_health_sentinel_failed")
 
 
+async def job_vkpi_apify_reconcile():
+    """Apify 记账对账:PPE 事件费结算滞后导致低记(实测 ~6x),每日用 API 结算现值
+    覆盖近 48h 台账行并回补预算 scope。只对账不拦截;无 token 温和空跑。"""
+    try:
+        from app.domains.costs import budget_guard
+
+        result = await asyncio.to_thread(budget_guard.reconcile_apify_costs, 48)
+        logger.info("scheduler.vkpi_apify_reconcile", extra={"result": result})
+    except Exception:
+        logger.exception("scheduler.vkpi_apify_reconcile_failed")
+
+
 async def job_vkpi_cost_snapshot():
     """C5 成本记账收口:每日把昨日(UTC)vkpi_ai_cost_ledger 按 provider/actor 聚合成
     快照落 persistent_cache(health_sentinel 同款模式,零新表零迁移)。

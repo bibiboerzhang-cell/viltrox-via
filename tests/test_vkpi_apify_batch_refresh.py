@@ -21,7 +21,7 @@ def test_plan_apify_batches_uses_platform_chunk_sizes_and_bounded_concurrency(mo
     plan = apify_batch_refresh.plan_apify_batches(rows, max_posts=1, max_concurrent=99)
 
     assert plan["strategy"] == "apify_batch_first"
-    assert plan["max_concurrent_runs"] == 3
+    assert plan["max_concurrent_runs"] == 16  # Scale 档硬顶(旧 Starter 时代为 3)
     assert plan["total_targets"] == 77
     assert plan["batch_count"] == 4
     assert plan["platforms"] == {"instagram": 51, "tiktok": 26}

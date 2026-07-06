@@ -81,6 +81,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_comment_sentiment_refresh,
     job_vkpi_competitor_radar,
     job_vkpi_content_fit_batch_refresh,
+    job_vkpi_apify_reconcile,
     job_vkpi_cost_snapshot,
     job_vkpi_fit_snapshot,
     job_vkpi_fulfillment_sweep,
@@ -567,6 +568,18 @@ async def start_scheduler() -> None:
     # ── C5 每日成本快照(每日 08:20 中国 = 00:20 UTC,UTC 昨日账刚关账)──
     # vkpi_ai_cost_ledger 按 provider/actor 聚合 → persistent_cache(同日幂等)。常开、只读+写缓存,
     # 只记账可见,绝不预检拦截、绝不改预算闸/actor 调用行为。
+    # ── Apify 记账对账(每日 08:40 中国)── PPE 事件费结算滞后导致低记(实测 ~6x),
+    # 用 API 结算现值覆盖近 48h 台账并回补预算 scope。只对账不拦截,无 token 空跑。
+    _scheduler.add_job(
+        job_vkpi_apify_reconcile,
+        trigger=CronTrigger(hour=8, minute=40, timezone=CHINA_TZ),
+        id="vkpi_apify_reconcile",
+        name="Daily Apify cost reconcile (settle PPE usage into ledger)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
     _scheduler.add_job(
         job_vkpi_cost_snapshot,
         trigger=CronTrigger(hour=8, minute=20, timezone=CHINA_TZ),

@@ -14,6 +14,10 @@ from app.services.scraping.apify import _apify_available, _client
 
 logger = get_logger(__name__)
 
+# 官号评论 actor 默认超时长达 7 天——统一栅栏,env 可调。
+import os as _os
+_APIFY_CALL_TIMEOUT_SECS = max(60, int(_os.environ.get("APIFY_CALL_TIMEOUT_SECS", "600")))
+
 
 def _record_cost(run: Any, actor_id: str, platform: str, operation: str, item_count: int) -> None:
     """C5 成本记账收口:官号评论抓取也统一记账(幂等 by run_id;失败绝不影响抓取)。"""
@@ -52,7 +56,7 @@ async def fetch_viltrox_youtube_comments(
 
     try:
         def _fetch_videos():
-            run = _client.actor("streamers/youtube-channel-scraper").call(run_input={
+            run = _client.actor("streamers/youtube-channel-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "startUrls": [{"url": f"https://www.youtube.com/@{channel_handle}/videos"}],
                 "maxResults": max_videos,
             })
@@ -74,7 +78,7 @@ async def fetch_viltrox_youtube_comments(
 
     try:
         def _fetch_comments():
-            run = _client.actor("streamers/youtube-comments-scraper").call(run_input={
+            run = _client.actor("streamers/youtube-comments-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "startUrls": video_urls,
                 "maxComments": max_comments_per_video,
             })
@@ -103,7 +107,7 @@ async def fetch_viltrox_instagram_comments(
 
     try:
         def _fetch_posts():
-            run = _client.actor("apify/instagram-scraper").call(run_input={
+            run = _client.actor("apify/instagram-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "directUrls": [f"https://www.instagram.com/{account_handle}/"],
                 "resultsType": "posts",
                 "resultsLimit": max_posts,
@@ -122,7 +126,7 @@ async def fetch_viltrox_instagram_comments(
             return []
 
         def _fetch_comments():
-            run = _client.actor("apify/instagram-comment-scraper").call(run_input={
+            run = _client.actor("apify/instagram-comment-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "directUrls": post_urls,
                 "resultsLimit": max_comments_per_post,
             })
@@ -151,7 +155,7 @@ async def fetch_viltrox_tiktok_comments(
 
     try:
         def _fetch_videos():
-            run = _client.actor("clockworks/free-tiktok-scraper").call(run_input={
+            run = _client.actor("clockworks/free-tiktok-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "profiles": [profile_handle],
                 "resultsPerPage": max_videos,
                 "shouldDownloadVideos": False,

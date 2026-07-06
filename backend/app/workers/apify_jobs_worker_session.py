@@ -481,14 +481,19 @@ def _enqueue_account_dossier_extract_after_final_v1(
         return None
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
+            # 幂等补 done 判断:同 KOL 多条视频接连触发 followup 时,前一条 dossier 秒级 done 后
+            # 第二条照旧入队(E2E 实测重复 2 对)——1 小时内已 done 的直接复用,不重跑。
             cur.execute(
                 """
                 SELECT id, status, created_at, updated_at
                 FROM apify_jobs
                 WHERE job_type='account_dossier_extract'
-                  AND status IN ('queued', 'running')
                   AND payload->>'target_type'='kol_pool'
                   AND payload->>'target_id'=%s
+                  AND (
+                        status IN ('queued', 'running')
+                        OR (status = 'done' AND updated_at >= NOW() - make_interval(hours => 1))
+                      )
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
                 """,
@@ -496,8 +501,9 @@ def _enqueue_account_dossier_extract_after_final_v1(
             )
             existing = cur.fetchone()
             if existing:
+                _status = str(existing["status"])
                 return {
-                    "status": "already_queued" if existing["status"] == "queued" else "already_running",
+                    "status": "recently_done" if _status == "done" else ("already_queued" if _status == "queued" else "already_running"),
                     "job_id": int(existing["id"]),
                     "kol_pool_id": kol_pool_id,
                 }
