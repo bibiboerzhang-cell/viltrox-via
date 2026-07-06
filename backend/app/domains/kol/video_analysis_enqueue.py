@@ -84,7 +84,7 @@ def _load_owned_evidence(conn: Any, *, kol_pool_id: int, evidence_id: int) -> di
             e.duration_seconds,
             COALESCE(kp.handle, kp.display_name, '') AS kol_handle,
             e.evidence_type,
-            e.metadata_json,
+            to_jsonb(e.*)->>'media_kind' AS media_kind,
             kp.viltrox_fit_score
         FROM vkpi_kol_video_evidence e
         LEFT JOIN vkpi_kol_pool kp ON kp.id=e.kol_pool_id
@@ -158,13 +158,10 @@ def _enqueue_final_v1_video_analysis(
     # 识别闸:图文/轮播帖没视频可下,排了必 media_resolve_failed。
     # 这里统一拦下(批量/URL/手动所有入队路径都过这条),不入队、不当失败。缺省/video 放行。
     # 修复:此前 SELECT 没查 evidence_type,闸恒空转(全盘测速 IG /p/ 帖 3/3 白跑实锤);
-    # 现补列并加 metadata.media_kind 第二判据(0703 排水同款口径)。
+    # 现补列并加 media_kind 第二判据(0703 排水同款口径)。media_kind 列存在双向 schema 漂移
+    # (线上有列/本地没有),SELECT 用 to_jsonb(e.*)->>'media_kind' 通吃:有列取值、无列得 NULL 不炸。
     _etype = _text(evidence.get("evidence_type")).lower()
-    _mkind = ""
-    try:
-        _mkind = _text((json.loads(_text(evidence.get("metadata_json")) or "{}") or {}).get("media_kind")).lower()
-    except (TypeError, ValueError):
-        _mkind = ""
+    _mkind = _text(evidence.get("media_kind")).lower()
     _non_video = (_etype and _etype != "video") or (_mkind and _mkind not in ("video", "reel", "clip", "igtv"))
     if _non_video:
         return {
