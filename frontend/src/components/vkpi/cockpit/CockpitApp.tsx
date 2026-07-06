@@ -73,13 +73,15 @@ const ReplyQueuePage = React.lazy(() => import("../pages/ReplyQueuePage").then((
 // 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
 const Sku360Page = React.lazy(() => import("./pages/Sku360Page").then((module) => ({ default: module.Sku360Page })));
 const KolProfilePage = React.lazy(() => import("./pages/KolProfilePage").then((module) => ({ default: module.KolProfilePage })));
+// 第4轮 发射台:新品 SKU 一键六输出全案
+const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadPage").then((module) => ({ default: module.LaunchPadPage })));
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
   "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
   "triage", "dataQuery", "marketTrends", "skillStudio",
   "intelligent", "replyQueue",
-  "sku360", "kolProfile",
+  "sku360", "kolProfile", "launchpad",
 ] as const;
 
 export function CockpitApp(props: any = {}) {
@@ -770,6 +772,14 @@ export function CockpitApp(props: any = {}) {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "KOL 档案加载中...")
               },
                 e(KolProfilePage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
+              )
+            ),
+            // 第4轮 发射台
+            activeNav === "launchpad" && e(LazyErrorBoundary, { name: "LaunchPad" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "发射台加载中...")
+              },
+                e(LaunchPadPage as React.ComponentType<any>, { apiToken })
               )
             ),
 

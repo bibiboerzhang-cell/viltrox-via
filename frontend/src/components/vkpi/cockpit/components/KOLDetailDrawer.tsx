@@ -32,6 +32,8 @@ import { SignaturePanel } from "./SignaturePanel";
 import { FocalMatrixPanel } from "./FocalMatrixPanel";
 import { QualityCompliancePanel } from "./QualityCompliancePanel";
 import { SimilarVideosPanel } from "./SimilarVideosPanel";
+import { ForecastPanel } from "./ForecastPanel";
+import { RateCardPanel } from "./RateCardPanel";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -702,6 +704,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         e(FocalMatrixPanel, { apiToken, kolPoolId: item?.id }),
         e(QualityCompliancePanel, { apiToken, kolPoolId: item?.id }),
         e(SimilarVideosPanel, { apiToken, evidenceId: primaryVideoEvidenceId }),
+        // ── 第4轮 商业档案:预测战绩(分位数区间+置信度)/ 报价卡(估价+录入) ──
+        e(ForecastPanel, { apiToken, kolPoolId: item?.id }),
+        e(RateCardPanel, { apiToken, kolPoolId: item?.id }),
         // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
         e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       ),

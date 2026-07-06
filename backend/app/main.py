@@ -33,6 +33,11 @@ from app.api.routers import vkpi_focal_matrix
 from app.api.routers import vkpi_brand_pulse
 from app.api.routers import vkpi_quality_compliance
 from app.api.routers import vkpi_video_similar
+# 第4轮 预测+发射台:预测战绩 / 报价库 / 六输出全案组装 / 覆盖最大化组合
+from app.api.routers import vkpi_forecast
+from app.api.routers import vkpi_rates
+from app.api.routers import vkpi_launch_assembly
+from app.api.routers import vkpi_roster
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -809,6 +814,11 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_brand_pulse.router)
     app.include_router(vkpi_quality_compliance.router)
     app.include_router(vkpi_video_similar.router)
+    # 第4轮 预测+发射台:预测战绩 / 报价库 / 全案组装 / 覆盖组合
+    app.include_router(vkpi_forecast.router)
+    app.include_router(vkpi_rates.router)
+    app.include_router(vkpi_launch_assembly.router)
+    app.include_router(vkpi_roster.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

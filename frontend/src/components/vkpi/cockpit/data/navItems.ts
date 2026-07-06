@@ -1,6 +1,6 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
-import { BarChart3, Bot, Boxes, Briefcase, Calendar, Contact, Database, Heart, LayoutDashboard, LineChart, MapPin, MessageSquare, PackageCheck, RadioTower, ShieldCheck, Sparkles, Target, TrendingUp, Users } from "lucide-react";
+import { BarChart3, Bot, Boxes, Briefcase, Calendar, Contact, Database, Heart, LayoutDashboard, LineChart, MapPin, MessageSquare, PackageCheck, RadioTower, Rocket, ShieldCheck, Sparkles, Target, TrendingUp, Users } from "lucide-react";
 
 // B1 减法仪式:GEN2/Beta 徽章全挂在『此页面尚未接入』占位页上=假徽章,删。
 // 真数据徽章(Discover/Signals/Agents 计数)是想要项,等数据侧支撑后挂回(总册 D6)。
@@ -22,6 +22,8 @@ export const NAV_ITEMS = [
   // 第2轮 档案工程:SKU 360°(产品视角反查内容/人)+ KOL 完整档案(八层组装页)。
   { key: "sku360",       icon: Boxes,           label: "SKU 360°",        badge: "New" },
   { key: "kolProfile",   icon: Contact,         label: "KOL 档案",         badge: "New" },
+  // 第4轮 发射台:新品 SKU 一键出六输出全案(名单/预算/排期/打法/官号协同/覆盖组合)。
+  { key: "launchpad",    icon: Rocket,          label: "发射台",           badge: "New" },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },
