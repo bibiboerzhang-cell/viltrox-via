@@ -268,6 +268,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "207_vkpi_bh_reviews.sql",
     "208_vkpi_raw_extraction_columns.sql",
     "209_vkpi_channel_assignments.sql",
+    "210_vkpi_reply_queue.sql",
 )
 
 try:

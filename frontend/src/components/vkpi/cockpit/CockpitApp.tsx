@@ -68,11 +68,14 @@ const DataQualityPage = React.lazy(() => import("../pages/DataQualityPage").then
 const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((module) => ({ default: module.DataQueryPage })));
 const MarketTrendsPage = React.lazy(() => import("../pages/MarketTrendsPage").then((module) => ({ default: module.MarketTrendsPage })));
 const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then((module) => ({ default: module.SkillStudioPage })));
+const IntelligentPage = React.lazy(() => import("./pages/IntelligentPage").then((module) => ({ default: module.IntelligentPage })));
+const ReplyQueuePage = React.lazy(() => import("../pages/ReplyQueuePage").then((module) => ({ default: module.ReplyQueuePage })));
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
   "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
   "triage", "dataQuery", "marketTrends", "skillStudio",
+  "intelligent", "replyQueue",
 ] as const;
 
 export function CockpitApp(props: any = {}) {
@@ -727,6 +730,21 @@ export function CockpitApp(props: any = {}) {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Skill Studio 加载中...")
               },
                 e(SkillStudioPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            // P1 智能可见周:Intelligent 问答(三车道)+ 回复队列(评论区销售员 v0 半自动)
+            activeNav === "intelligent" && e(LazyErrorBoundary, { name: "Intelligent" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Intelligent 问答加载中...")
+              },
+                e(IntelligentPage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
+              )
+            ),
+            activeNav === "replyQueue" && e(LazyErrorBoundary, { name: "ReplyQueue" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "回复队列加载中...")
+              },
+                e(ReplyQueuePage as React.ComponentType<any>, { apiToken })
               )
             ),
 

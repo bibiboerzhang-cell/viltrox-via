@@ -15,6 +15,7 @@ import { MetricCard } from "./components/MetricCard";
 import { OpsHealthCard } from "./components/OpsHealthCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
+import { ActivityFeed } from "./components/ActivityFeed";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
@@ -57,9 +58,9 @@ const INSIGHT_ROW_ORDER: Record<DashboardTier, readonly string[]> = {
 
 // 右栏卡片顺序(key 对应组件内 rightRailRenderers)
 const RIGHT_RAIL_ORDER: Record<DashboardTier, readonly string[]> = {
-  management: ["actionInbox", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
+  management: ["actionInbox", "activityFeed", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
   // 员工:今日建议/我的项目/我的 KOL 漏斗(C3 已按人过滤)排前;运维健康大盘殿后
-  member: ["actionInbox", "activeCampaigns", "kolFunnel", "contentCalendar", "opsHealth"],
+  member: ["actionInbox", "activityFeed", "activeCampaigns", "kolFunnel", "contentCalendar", "opsHealth"],
 };
 
 // 身份档位:口径与 VkpiTab.canUseManagerView 完全一致(owner / admin / manager / lead /
@@ -163,6 +164,10 @@ export function DashboardReplicaPage(props: any) {
     // 生产收敛(2026-07-02):Action Inbox 首屏卡 + 运维健康小卡是 v615 之后加的运维模块,
     // 随导航一起收进 VITE_EXPERIMENTAL_NAV 闸 —— 线上 Dashboard 保持 v615 组装,
     // 今日建议仍可从顶栏「工作提醒」popover 进入(同一面板未删)。
+    // P1 思考流:系统在想什么(聚合任务完成/告警/会话推进,10s 轮询,组件自取数)
+    activityFeed: () => apiToken
+      ? e(ActivityFeed, { key: "rail-activity-feed", apiToken })
+      : null,
     actionInbox: () => SHOW_EXPERIMENTAL && apiToken
       ? e(ActionInboxPanel, { key: "rail-action-inbox", apiToken, heading: "今日该做什么", limit: 8 })
       : null,

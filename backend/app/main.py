@@ -21,6 +21,9 @@ from app.api.routers import dashboard_account_picker
 from app.api.routers import vkpi_kol_portal
 from app.api.routers import vkpi_skills
 from app.api.routers import vkpi_analytics_export
+from app.api.routers import vkpi_activity
+from app.api.routers import vkpi_intelligent
+from app.api.routers import vkpi_reply_queue
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -784,6 +787,10 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_agents.router)
     app.include_router(vkpi_skills.router)
     app.include_router(vkpi_analytics_export.router)
+    # P1 智能可见周:Intelligent 问答三车道 / 思考流 / 评论区销售员(路由自带 prefix)
+    app.include_router(vkpi_intelligent.router)
+    app.include_router(vkpi_activity.router)
+    app.include_router(vkpi_reply_queue.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

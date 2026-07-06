@@ -16,6 +16,9 @@ export const NAV_ITEMS = [
   { key: "events",       icon: Calendar,        label: "Events",          badge: "New" },
   { key: "shopify",      icon: PackageCheck,    label: "Shopify",         badge: null },
   { key: "dealers",      icon: MapPin,          label: "Dealers",         badge: null },
+  // P1 智能可见周(拍定默认:入口全员可见)——Intelligent 问答 + 评论区销售员回复队列。
+  { key: "intelligent",  icon: Sparkles,        label: "Intelligent 问答", badge: "New" },
+  { key: "replyQueue",   icon: MessageSquare,   label: "回复队列",         badge: "New" },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },
