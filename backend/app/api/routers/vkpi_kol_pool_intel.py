@@ -447,3 +447,16 @@ def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require
         return {"translated": "", "lang": "zh", "cached": False, "skipped": str(resp.get("status") or "unavailable")}
     except Exception as exc:  # noqa: BLE001 — 翻译失败不阻断,前端回退原文
         return {"translated": "", "lang": "zh", "cached": False, "error": str(exc)}
+
+
+@router.post("/kol-pool/{kol_pool_id}/build-full-profile")
+def build_full_profile_endpoint(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+):
+    """一键补全档案:强制 full 档点火(深爬 3 帖 + 评论采集;深析/受众/契合链自动跟进)。
+    幂等(下游入队各自去重),约 3-5 分钟数据陆续点亮,抽屉既有轮询自动接住。零触 fit。"""
+    del staff
+    from app.domains.discovery.buildout import build_full_profile
+
+    return build_full_profile(int(kol_pool_id))

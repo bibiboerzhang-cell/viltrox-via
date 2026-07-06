@@ -41,6 +41,17 @@ def enroll_candidates(candidates: list[dict[str, Any]], *, staff: dict[str, Any]
             if new_id:
                 enrolled += 1
                 ids.append(new_id)
+                # 发现即建档:联邦路径多无相关度分数 → 按分数分档(无分即 light);best-effort。
+                try:
+                    from app.domains.discovery.buildout import ignite_profile_buildout
+
+                    ignite_profile_buildout(
+                        int(new_id),
+                        score=float(c.get("score") or c.get("relevance_score") or 0),
+                        source="federated_enroll",
+                    )
+                except Exception:
+                    logger.warning("federated buildout ignite skip", exc_info=True)
                 try:  # P1 事件总线:新人被发现入流(best-effort)
                     from app.domains.platform import event_ledger
 

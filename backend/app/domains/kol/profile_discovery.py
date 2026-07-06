@@ -601,6 +601,8 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
     except Exception:
         return 0
     enrolled = 0
+    full_ignited = 0  # full 档单次入库封顶(防一次大搜索烧穿;超出者降 light,预算闸另兜底)
+    _FULL_CAP = 10
     for item in new_creators:
         if item.get("history_kol_pool_id") or item.get("kol_pool_id"):
             continue  # 已是库内行 → 不重复入库
@@ -625,6 +627,32 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             # L6 去重 hook:落库后立即为该行找跨平台同一人。email 强信号自动合并、模糊只进人工清单。
             # 最佳努力:apply_merge 自带 fit 守卫;任何异常吞掉只记日志,绝不阻断 enroll 主流程。
             _dedupe_enrolled_row_best_effort(_enroll_res)
+            # 发现即建档(B+A 合体):按相关度分档自动点火完整档案——高相关 full(深爬3帖+评论,
+            # 受众/契合链自动跟),其余 light(深爬1帖)。best-effort 绝不阻断 enroll。
+            try:
+                _pid = (_enroll_res or {}).get("kol_pool_id") if isinstance(_enroll_res, dict) else None
+                if _pid:
+                    from app.domains.discovery.buildout import ignite_profile_buildout
+
+                    _score = 0.0
+                    for _k in ("recall_rank_score", "relevance_score", "score", "vector_score"):
+                        try:
+                            _score = float(item.get(_k) or 0)
+                        except (TypeError, ValueError):
+                            _score = 0.0
+                        if _score:
+                            break
+                    _demoted = _text(item.get("relevance_tier_hint")) == "demote" or _text(item.get("relevance_tier")) == "demote"
+                    _res = ignite_profile_buildout(
+                        int(_pid),
+                        score=_score,
+                        demoted=_demoted or full_ignited >= _FULL_CAP,
+                        source="smart_search_discovery",
+                    )
+                    if _res.get("tier") == "full":
+                        full_ignited += 1
+            except Exception:
+                logger.info("discovery buildout ignite skip(不阻断 enroll)", exc_info=True)
         except Exception as exc:
             logger.info("auto_enroll_discovery skip handle=%r: %s", handle, str(exc)[:200])
     if enrolled:

@@ -438,3 +438,13 @@ export async function listKolPoolVideoComments(token: string, kolPoolId: number,
     token,
   );
 }
+
+// 发现即建档 · 手动升级:一键补全档案(强制 full 档:深爬3帖+评论采集;深析/受众/契合链自动跟)。
+// 幂等,约 3-5 分钟数据陆续点亮,抽屉既有轮询自动接住。
+export async function buildFullKolProfile(token: string, kolPoolId: number) {
+  return apiFetch<{ tier?: string; reason?: string; deep_crawl?: { status?: string }; comments?: { status?: string } }>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/build-full-profile`,
+    { method: "POST", timeoutMs: 30000 },
+    token,
+  );
+}

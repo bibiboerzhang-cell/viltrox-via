@@ -641,7 +641,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
 // 抽屉本体是 flex-col(footer 在滚动区之外)天然不滚走,这里再加 sticky bottom-0 + 不透明背景
 // + z 提层做双保险 —— 未来若有人把 footer 挪进滚动区,主操作行也不会被内容顶走。
 // 次级行(AI深度分析/打开主页/更多)仍在本组件内原位跟随,不单独提层。
-export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis }: any) {
+export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis, buildFullState = "idle", onBuildFullProfile }: any) {
   return e("div", { className: "sticky bottom-0 z-20 bg-[#0a1020] px-5 py-3 border-t border-white/[0.06]" },
     // 主操作 3 按钮
     e("div", { className: "flex items-center gap-2 mb-2" },
@@ -678,6 +678,19 @@ export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onP
         ),
         title: videoEnqueueTitle
       }, e(RefreshCw, { size: 10, className: videoEnqueueState.status === "loading" ? "animate-spin" : "" }), videoEnqueueLabel),
+      onBuildFullProfile && e("button", {
+        disabled: buildFullState === "loading" || buildFullState === "done",
+        onClick: onBuildFullProfile,
+        className: "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors " + (
+          buildFullState === "done"
+            ? "border-emerald-400/25 bg-emerald-400/[0.07] text-emerald-200"
+            : buildFullState === "error"
+              ? "border-rose-400/25 bg-rose-400/[0.07] text-rose-200 hover:bg-rose-400/[0.12]"
+              : "border-violet-400/25 bg-violet-400/[0.07] text-violet-200 hover:bg-violet-400/[0.12]"
+        ),
+        title: "一键补全档案:深爬+代表作深析+评论采集+受众画像全链点火(约3-5分钟陆续点亮,幂等可重点)"
+      }, e(RefreshCw, { size: 10, className: buildFullState === "loading" ? "animate-spin" : "" }),
+        buildFullState === "done" ? "已点火·陆续点亮" : buildFullState === "loading" ? "点火中" : buildFullState === "error" ? "失败·重试" : "补全档案"),
       item.profile_url && e("a", {
         href: item.profile_url, target: "_blank", rel: "noreferrer",
         className: "flex items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-400 hover:bg-white/[0.04] hover:text-white"

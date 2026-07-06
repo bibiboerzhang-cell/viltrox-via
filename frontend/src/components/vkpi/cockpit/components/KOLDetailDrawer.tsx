@@ -319,6 +319,19 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const handleToggleAudienceBlock = React.useCallback((key: string) => {
     setAudienceExpand((prev) => (prev === key ? null : key));
   }, []);
+  // 发现即建档·手动升级:一键补全档案(强制 full 档:深爬+评论,深析/受众链自动跟;幂等)。
+  const [buildFullState, setBuildFullState] = React.useState<"idle" | "loading" | "done" | "error">("idle");
+  const onBuildFullProfile = React.useCallback(async () => {
+    if (!apiToken || !item?.id || buildFullState === "loading") return;
+    setBuildFullState("loading");
+    try {
+      const { buildFullKolProfile } = await import("../../../../services/vkpi/kolPool-api");
+      await buildFullKolProfile(apiToken, Number(item.id));
+      setBuildFullState("done");
+    } catch {
+      setBuildFullState("error");
+    }
+  }, [apiToken, item?.id, buildFullState]);
   // #1 入主表 promote:把候选写进 vkpi 主表(接已存在 /kol-pool/{id}/promote)。
   const [promoteMsg, setPromoteMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const onPromote = React.useCallback(async (it: any) => {
@@ -727,6 +740,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg,
       canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState,
       onEnqueueVideoAnalysis: handleVideoAnalysisEnqueue,
+      buildFullState, onBuildFullProfile,
     })
   ),
     activeRepresentativeVideo && e(RepresentativeVideoPlayerModal, {
