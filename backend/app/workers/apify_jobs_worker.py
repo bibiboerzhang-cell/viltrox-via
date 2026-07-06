@@ -87,7 +87,8 @@ LLM_CONCURRENCY_LIMIT = max(1, min(6, int(os.environ.get("APIFY_WORKER_LLM_CONCU
 # 1200 太小:6 层 final_v1 JSON(含整条 scene_timeline)会被截断,分镜只剩前 ~35s。
 # 抬到 4096 容纳整段视频的分镜时间线(完整不截断);可经 env 覆盖。
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
-GEMINI_QPS_LIMIT = max(0.0, float(os.environ.get("APIFY_WORKER_GEMINI_QPS", "0.05")))
+# 0.05 是免费层口径(每条 job 前最多干等 20s,250 条批量净耗 ~83 分钟);付费层 RPM 数百,0.5 仍留 60 倍余量。
+GEMINI_QPS_LIMIT = max(0.0, float(os.environ.get("APIFY_WORKER_GEMINI_QPS", "0.5")))
 GEMINI_MIN_INTERVAL_SECONDS = max(
     0.0,
     float(os.environ.get("APIFY_WORKER_GEMINI_MIN_INTERVAL_SEC", str((1.0 / GEMINI_QPS_LIMIT) if GEMINI_QPS_LIMIT > 0 else 0.0))),

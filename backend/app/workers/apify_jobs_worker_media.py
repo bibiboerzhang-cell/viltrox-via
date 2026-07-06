@@ -143,6 +143,10 @@ from unittest.mock import patch
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 
 
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _apply_worker_overrides(payload):
     stack = ExitStack()
     model_override = str(payload.get("gemini_model") or "").strip()

@@ -68,6 +68,7 @@ async def analyze_youtube_with_gemini(
         ProviderPressureExhausted,
         _final_v1_cache_config,
         _is_provider_pressure_error,
+        _video_generate_config,
         final_v1_gemini_models,
     )
 
@@ -188,6 +189,7 @@ async def analyze_youtube_with_gemini(
                         cache_config, cache_info = _final_v1_cache_config(model_name)
                         if not cache_config:
                             request_prompt = final_full_prompt
+                    request_config = _video_generate_config(model_name, cache_config)
                     def _analyze_direct(m=model_name, u=url):
                         kwargs: dict[str, Any] = {
                             "model": m,
@@ -200,8 +202,8 @@ async def analyze_youtube_with_gemini(
                                 request_prompt
                             ],
                         }
-                        if cache_config:
-                            kwargs["config"] = cache_config
+                        if request_config:
+                            kwargs["config"] = request_config
                         return gemini_client.models.generate_content(**kwargs)
                     resp = await asyncio.to_thread(_analyze_direct)
                     usage_metadata = _response_usage_metadata(resp)
@@ -458,6 +460,7 @@ async def analyze_youtube_with_gemini(
                         cache_config, cache_info = _final_v1_cache_config(model_name)
                         if not cache_config:
                             request_prompt = final_full_prompt
+                    request_config = _video_generate_config(model_name, cache_config)
                     def _analyze(m=model_name, f=gemini_file):
                         kwargs: dict[str, Any] = {
                             "model": m,
@@ -469,8 +472,8 @@ async def analyze_youtube_with_gemini(
                                 request_prompt
                             ],
                         }
-                        if cache_config:
-                            kwargs["config"] = cache_config
+                        if request_config:
+                            kwargs["config"] = request_config
                         return gemini_client.models.generate_content(**kwargs)
                     resp = await asyncio.to_thread(_analyze)
                     usage_metadata = _response_usage_metadata(resp)

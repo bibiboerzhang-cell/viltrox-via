@@ -28,7 +28,9 @@ from app.platform import llm_gateway
 from app.services.media.video_keyframes import build_anthropic_multimodal_content, build_openai_multimodal_content
 
 logger = get_logger(__name__)
-_FINAL_V1_CONTEXT_CACHES: dict[str, str] = {}
+# 值=(cache_name, created_monotonic);TTL 3600s,55 分钟后主动弃用重建——过期的 cache_name 会让主模型整链报错降级。
+_FINAL_V1_CONTEXT_CACHES: dict[str, tuple[str, float]] = {}
+_FINAL_V1_CACHE_REUSE_SECONDS = 3300.0
 DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
 GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
     60,
@@ -125,7 +127,14 @@ def _final_v1_cache_config(model_name: str) -> tuple[Any | None, dict[str, Any]]
         return None, info
     static_prompt = _video_final_v1_static_prompt()
     cache_key = f"{model_name}:video_analysis_final_v1:{hash(static_prompt)}"
-    cache_name = _FINAL_V1_CONTEXT_CACHES.get(cache_key)
+    cache_name = ""
+    cached_entry = _FINAL_V1_CONTEXT_CACHES.get(cache_key)
+    if cached_entry:
+        entry_name, created_at = cached_entry
+        if (time.monotonic() - created_at) < _FINAL_V1_CACHE_REUSE_SECONDS:
+            cache_name = entry_name
+        else:
+            _FINAL_V1_CONTEXT_CACHES.pop(cache_key, None)
     try:
         if not cache_name:
             def _create_cache():
@@ -141,7 +150,7 @@ def _final_v1_cache_config(model_name: str) -> tuple[Any | None, dict[str, Any]]
             cache = _create_cache()
             cache_name = str(getattr(cache, "name", "") or "")
             if cache_name:
-                _FINAL_V1_CONTEXT_CACHES[cache_key] = cache_name
+                _FINAL_V1_CONTEXT_CACHES[cache_key] = (cache_name, time.monotonic())
         if not cache_name:
             info["error"] = "empty cache name"
             return None, info
@@ -151,6 +160,20 @@ def _final_v1_cache_config(model_name: str) -> tuple[Any | None, dict[str, Any]]
         info["error"] = str(exc)[:300]
         logger.warning("gemini_final_v1_context_cache_failed", extra={"error": info["error"]})
         return None, info
+
+
+def _video_generate_config(model_name: str, cache_config: Any = None) -> Any:
+    """Gemini 2.5 系视频帧 token 固定 258/帧;显式压 LOW(66/帧)对齐 Gemini 3 默认口径(~70/帧)。
+    Gemini 3 系保持默认不动;SDK 不支持该字段时原样回退,绝不阻断调用。"""
+    if not str(model_name or "").startswith("gemini-2.5"):
+        return cache_config
+    try:
+        resolution = getattr(getattr(genai_types, "MediaResolution", None), "MEDIA_RESOLUTION_LOW", "MEDIA_RESOLUTION_LOW")
+        if cache_config is not None:
+            return cache_config.model_copy(update={"media_resolution": resolution})
+        return genai_types.GenerateContentConfig(media_resolution=resolution)
+    except Exception:
+        return cache_config
 
 
 async def analyze_local_video_with_gemini(
@@ -298,6 +321,7 @@ async def analyze_local_video_with_gemini(
                     cache_config, cache_info = _final_v1_cache_config(model_name)
                     if not cache_config:
                         request_prompt = final_full_prompt
+                request_config = _video_generate_config(model_name, cache_config)
                 def _analyze(m=model_name, f=gemini_file):
                     kwargs: dict[str, Any] = {
                         "model": m,
@@ -306,8 +330,8 @@ async def analyze_local_video_with_gemini(
                             request_prompt,
                         ],
                     }
-                    if cache_config:
-                        kwargs["config"] = cache_config
+                    if request_config:
+                        kwargs["config"] = request_config
                     return gemini_client.models.generate_content(**kwargs)
 
                 resp = await asyncio.to_thread(_analyze)
