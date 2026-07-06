@@ -24,6 +24,10 @@ from app.api.routers import vkpi_analytics_export
 from app.api.routers import vkpi_activity
 from app.api.routers import vkpi_intelligent
 from app.api.routers import vkpi_reply_queue
+# 第2轮 档案工程:招牌内容画像 / 制作周期+竞争活跃 / SKU 360°(路由自带 prefix)
+from app.api.routers import vkpi_signature
+from app.api.routers import vkpi_leadtime
+from app.api.routers import vkpi_sku360
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -791,6 +795,10 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_intelligent.router)
     app.include_router(vkpi_activity.router)
     app.include_router(vkpi_reply_queue.router)
+    # 第2轮 档案工程:招牌画像 / 周期+竞争 / SKU 360°
+    app.include_router(vkpi_signature.router)
+    app.include_router(vkpi_leadtime.router)
+    app.include_router(vkpi_sku360.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

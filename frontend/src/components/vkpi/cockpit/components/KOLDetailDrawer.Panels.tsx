@@ -11,6 +11,7 @@ import { proxiedImageUrl, proxiedVideoUrl } from "../../shared/mediaProxy";
 import { getKolCooperation, getKolPoolAccountDossier, recordKolCooperation } from "../../../../services/vkpi/kolPool-api";
 import { SectionFold } from "./SectionFold";
 import { KOLDrawerBrandExposure } from "./KOLDrawerBrandExposure";
+import { CommerceSignalsPanel } from "./CommerceSignalsPanel";
 import {
   asArray,
   compactText,
@@ -518,7 +519,11 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
 
   // 【#51】品牌露出 · 百家饭指数借本面板接线(深度分析 tab):组件自拉取/自判空,
   // 与 dossier 数据源完全独立 —— dossier 缺失时也要渲染,两条 return 路径都带上。
-  if (!dossier) return e(KOLDrawerBrandExposure, { apiToken, kolPoolId });
+  // 第2轮 商业信号(制作周期+竞争活跃)与 dossier 数据源独立 —— dossier 缺失时也渲染,两条路径都带。
+  if (!dossier) return e(React.Fragment, null,
+    e(KOLDrawerBrandExposure, { apiToken, kolPoolId }),
+    e(CommerceSignalsPanel, { apiToken, kolPoolId })
+  );
   const coverage = recordOr(dossier.coverage);
   const judgment = recordOr(dossier.judgment);
   const gaps = asArray(dossier.gaps).map((g: any) => compactText(typeof g === "string" ? g : (recordOr(g).label || recordOr(g).reason || ""), 60)).filter(Boolean);
@@ -595,7 +600,9 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
     ))
     ),
     // 【#51】品牌露出小块紧随账号档案(同属 final_v1 深析产物的账号级读数)。
-    e(KOLDrawerBrandExposure, { apiToken, kolPoolId })
+    e(KOLDrawerBrandExposure, { apiToken, kolPoolId }),
+    // 第2轮 商业信号:制作周期(接单→发布 lead time)+ 竞争活跃(近期品牌合作密度)。
+    e(CommerceSignalsPanel, { apiToken, kolPoolId })
   );
 }
 

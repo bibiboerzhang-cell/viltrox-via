@@ -28,6 +28,7 @@ import {
   LlmDeepAnalysisPanel,
   RepresentativeVideoPlayerModal,
 } from "./KOLDetailDrawer.Panels";
+import { SignaturePanel } from "./SignaturePanel";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -692,6 +693,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
         // ── item4 账号档案(本地聚合,零 LLM):覆盖度/缺口/账号级判断/最近事件 ──
         e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
+        // ── 第2轮 招牌内容画像(零 LLM 纯聚合):擅长拍法 / 最爆 TOP3 / 最引反馈 ──
+        e(SignaturePanel, { apiToken, kolPoolId: item?.id }),
         // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
         e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       ),
@@ -730,6 +733,20 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           },
             e(Share2, { size: 12 }),
             "共享给成员"
+          )
+        ),
+        // ── 第2轮 查看完整档案:跳八层组装页(id 走 sessionStorage,CockpitApp 监听切板块)──
+        item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+          e("button", {
+            type: "button",
+            onClick: () => {
+              window.sessionStorage.setItem("vkpi:kol-profile-id", String(item.id));
+              window.dispatchEvent(new CustomEvent("vkpi:open-kol-profile"));
+            },
+            className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12]",
+          },
+            e(Sparkles, { size: 12 }),
+            "查看完整档案"
           )
         ),
       ),

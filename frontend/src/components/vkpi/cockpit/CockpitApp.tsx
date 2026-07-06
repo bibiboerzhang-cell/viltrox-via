@@ -70,12 +70,16 @@ const MarketTrendsPage = React.lazy(() => import("../pages/MarketTrendsPage").th
 const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then((module) => ({ default: module.SkillStudioPage })));
 const IntelligentPage = React.lazy(() => import("./pages/IntelligentPage").then((module) => ({ default: module.IntelligentPage })));
 const ReplyQueuePage = React.lazy(() => import("../pages/ReplyQueuePage").then((module) => ({ default: module.ReplyQueuePage })));
+// 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
+const Sku360Page = React.lazy(() => import("./pages/Sku360Page").then((module) => ({ default: module.Sku360Page })));
+const KolProfilePage = React.lazy(() => import("./pages/KolProfilePage").then((module) => ({ default: module.KolProfilePage })));
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
   "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
   "triage", "dataQuery", "marketTrends", "skillStudio",
   "intelligent", "replyQueue",
+  "sku360", "kolProfile",
 ] as const;
 
 export function CockpitApp(props: any = {}) {
@@ -180,12 +184,18 @@ export function CockpitApp(props: any = {}) {
     const handleOpenKolPoolSearch = () => {
       setActiveNav("kol-pool");
     };
+    // 第2轮 档案工程:任意处派发 vkpi:open-kol-profile(id 先写 sessionStorage vkpi:kol-profile-id)→ 切档案页。
+    const handleOpenKolProfile = () => {
+      setActiveNav("kolProfile");
+    };
+    window.addEventListener("vkpi:open-kol-profile", handleOpenKolProfile);
     window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
     window.addEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
     window.addEventListener("vkpi:open-project-task", handleOpenProjectTask);
     window.addEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
     window.addEventListener("vkpi:open-kol-pool-search", handleOpenKolPoolSearch);
     return () => {
+      window.removeEventListener("vkpi:open-kol-profile", handleOpenKolProfile);
       window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
       window.removeEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
       window.removeEventListener("vkpi:open-project-task", handleOpenProjectTask);
@@ -745,6 +755,21 @@ export function CockpitApp(props: any = {}) {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "回复队列加载中...")
               },
                 e(ReplyQueuePage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            // 第2轮 档案工程:SKU 360° + KOL 完整档案
+            activeNav === "sku360" && e(LazyErrorBoundary, { name: "Sku360" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "SKU 360° 加载中...")
+              },
+                e(Sku360Page as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            activeNav === "kolProfile" && e(LazyErrorBoundary, { name: "KolProfile" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "KOL 档案加载中...")
+              },
+                e(KolProfilePage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
 
