@@ -83,6 +83,8 @@ def _load_owned_evidence(conn: Any, *, kol_pool_id: int, evidence_id: int) -> di
             e.view_count,
             e.duration_seconds,
             COALESCE(kp.handle, kp.display_name, '') AS kol_handle,
+            e.evidence_type,
+            e.metadata_json,
             kp.viltrox_fit_score
         FROM vkpi_kol_video_evidence e
         LEFT JOIN vkpi_kol_pool kp ON kp.id=e.kol_pool_id
@@ -153,10 +155,18 @@ def _enqueue_final_v1_video_analysis(
     if not evidence:
         raise LookupError("video evidence not found for this KOL")
 
-    # 识别闸:图文/轮播帖(evidence_type=image)没视频可下,排了必 media_resolve_failed。
+    # 识别闸:图文/轮播帖没视频可下,排了必 media_resolve_failed。
     # 这里统一拦下(批量/URL/手动所有入队路径都过这条),不入队、不当失败。缺省/video 放行。
+    # 修复:此前 SELECT 没查 evidence_type,闸恒空转(全盘测速 IG /p/ 帖 3/3 白跑实锤);
+    # 现补列并加 metadata.media_kind 第二判据(0703 排水同款口径)。
     _etype = _text(evidence.get("evidence_type")).lower()
-    if _etype and _etype != "video":
+    _mkind = ""
+    try:
+        _mkind = _text((json.loads(_text(evidence.get("metadata_json")) or "{}") or {}).get("media_kind")).lower()
+    except (TypeError, ValueError):
+        _mkind = ""
+    _non_video = (_etype and _etype != "video") or (_mkind and _mkind not in ("video", "reel", "clip", "igtv"))
+    if _non_video:
         return {
             "status": "skipped_non_video",
             "kol_pool_id": kol_pool_id,
@@ -164,7 +174,7 @@ def _enqueue_final_v1_video_analysis(
             "derive_method": FINAL_V1_DERIVE_METHOD,
             "provider_calls": False,
             "write_db": False,
-            "reason": f"evidence_type={_etype}(图文/轮播,不跑视频深析)",
+            "reason": f"evidence_type={_etype or '-'} media_kind={_mkind or '-'}(图文/轮播,不跑视频深析)",
         }
 
     platform = _platform_from_url(_text(evidence.get("content_url")))

@@ -370,9 +370,34 @@ def _check_recommendation_outcomes() -> dict[str, Any]:
     return _check(key, label, "ok", f"共 {total} 行,近 7 日新增 {recent},有动作 {acted} 行")
 
 
+def _check_queue_inflow() -> dict[str, Any]:
+    """第 11 检:自动入队任务已启用却 24h 零新增 → warn。
+    疫苗:2026-07 队列断流三天,旧口径只看积压(空=绿)——断流和健康不可区分。"""
+    label = "队列 24h 入队量"
+    if not table_exists("apify_jobs"):
+        return _missing("queue_inflow", label, "apify_jobs", "095")
+    if not table_exists("scheduler_tasks"):
+        return _check("queue_inflow", label, "ok", "scheduler_tasks 表缺失,无自动入队方,零新增属合规")
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM scheduler_tasks WHERE enabled = TRUE AND task_key IN (?, ?, ?)",
+        ("kol_auto_poll", "vkpi_comment_sentiment_refresh", "vkpi_content_fit_batch"),
+    ).fetchone()
+    n_auto = int(dict(row).get("n") or 0) if row else 0
+    if n_auto == 0:
+        return _check("queue_inflow", label, "ok", "无自动入队任务启用,零新增属合规空跑")
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    row = conn.execute("SELECT COUNT(*) AS n FROM apify_jobs WHERE created_at >= ?", (cutoff,)).fetchone()
+    n_new = int(dict(row).get("n") or 0) if row else 0
+    if n_new == 0:
+        return _check("queue_inflow", label, "warn", f"{n_auto} 个自动入队任务已启用但 24h 零新增——入队链疑似断流")
+    return _check("queue_inflow", label, "ok", f"24h 新增 {n_new} 条(自动任务 {n_auto} 个在岗)")
+
+
 _CHECKS: tuple[tuple[str, Callable[[], dict[str, Any]]], ...] = (
     ("daily_sync", _check_daily_sync),
     ("apify_queue", _check_apify_queue),
+    ("queue_inflow", _check_queue_inflow),
     ("kol_hot_refresh", _check_kol_hot_refresh),
     ("official_metrics", _check_official_metrics),
     ("search_entries", _check_search_entries),
@@ -387,6 +412,7 @@ _CHECKS: tuple[tuple[str, Callable[[], dict[str, Any]]], ...] = (
 _LABELS = {
     "daily_sync": "每日同步 24h 内成功",
     "apify_queue": "Apify 队列堆积",
+    "queue_inflow": "队列 24h 入队量",
     "kol_hot_refresh": "KOL hot 层 24h 刷新增量",
     "official_metrics": "官号当日指标快照",
     "search_entries": "文本搜索索引行数",

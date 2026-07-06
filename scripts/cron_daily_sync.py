@@ -45,7 +45,9 @@ def compute_kol_stale_before(raw_value: str = "", stale_days: int = 0, *, now: d
     anchor = now or datetime.now(timezone.utc)
     if anchor.tzinfo is None:
         anchor = anchor.replace(tzinfo=timezone.utc)
-    return (anchor.astimezone(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # +2h 宽限:timer 04:00 开跑、上一轮 04:2x 才刷完,严格 N×24h 会让昨日刷新行今天永不到期
+    # → hot 层 92/0 隔日空转 + 哨兵隔日误报断流(2026-07 实测)。宽限吃掉运行时长漂移。
+    return (anchor.astimezone(timezone.utc) - timedelta(days=days) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def emit_event(event: str, **payload: object) -> None:

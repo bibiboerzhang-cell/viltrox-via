@@ -27,5 +27,5 @@ def test_compute_kol_stale_before_from_days() -> None:
             2,
             now=datetime(2026, 5, 24, 3, 4, 5, tzinfo=timezone.utc),
         )
-        == "2026-05-22T03:04:05Z"
+        == "2026-05-22T05:04:05Z"  # N×24h - 2h 宽限(吃掉上一轮运行时长漂移,修 hot 层隔日空转)
     )

@@ -211,14 +211,15 @@ def _failure_disposition(category: str) -> str:
     「这一类失败本质上能不能靠再跑一次恢复」:
       - 'retry'  → 可重试类(timeout/proxy/限流/媒体解析/被回收),重新 queued 由 worker 再跑;
       - 'triage' → 不可重试类(no_data/auth/下架/代码错),标 status='triage' 待人工;
-      - 'failed' → unknown / 不认识的类别,保守落 failed(不重试也不三角)。
+      - unknown / 不认识的类别 → 也给 'retry'(实测大半是瞬时环境问题,如并发死锁重跑即过);
+        预算仍由 _fail_job 把守,耗尽走 retry 类既有归宿(triage 可见池),不再死在无人排水的 failed 池。
     """
     cat = str(category or "").strip().lower()
     if cat in _RETRYABLE_CATEGORIES:
         return "retry"
     if cat in _TRIAGE_CATEGORIES:
         return "triage"
-    return "failed"
+    return "retry"
 
 
 def _derive_method(payload: dict[str, Any]) -> str:

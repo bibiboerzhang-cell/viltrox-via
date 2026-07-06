@@ -298,7 +298,10 @@ def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: 
     _sync_search_session_job(conn, job_id, raw_status="blocked", reason=_json(payload))
 
 
-def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> None:
+def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str, *, retry_delay_seconds: float = 0.0) -> None:
+    # 原因同步落 journal(此前只存在于会被下次 claim 清掉的 last_error,排障只能靠猜);
+    # retry_delay_seconds>0 时写 next_retry_at 退避——根治槽满时空闲车道每 2s 集体抢-退(实测 435 次/5min)。
+    logger.info("job requeued | id=%s delay=%.1fs reason=%s", job_id, float(retry_delay_seconds or 0.0), reason[:120])
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -307,11 +310,11 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str) -> Non
                 SET status='queued',
                     last_error=%s,
                     last_error_category=NULL,
-                    next_retry_at=NULL,
+                    next_retry_at=CASE WHEN %s::float8 > 0 THEN NOW() + make_interval(secs => %s) ELSE NULL END,
                     updated_at=NOW()
                 WHERE id=%s
                 """,
-                (reason[:2000], job_id),
+                (reason[:2000], float(retry_delay_seconds or 0.0), float(retry_delay_seconds or 0.0), job_id),
             )
     _sync_search_session_job(conn, job_id, raw_status="queued", reason=reason)
 
@@ -488,12 +491,12 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
             return
         target_lock = f"{target_type}:{target_id}:{derive_method}"
         if not _advisory_lock(conn, "vkpi_analysis_worker_target", target_lock):
-            _requeue_job(conn, int(job["id"]), "analysis target already in progress")
+            _requeue_job(conn, int(job["id"]), "analysis target already in progress", retry_delay_seconds=random.uniform(2.0, 5.0))
             return
         slot = _acquire_llm_slot(conn)
         try:
             if slot is None:
-                _requeue_job(conn, int(job["id"]), "llm concurrency limit reached")
+                _requeue_job(conn, int(job["id"]), "llm concurrency limit reached", retry_delay_seconds=random.uniform(5.0, 10.0))
                 return
             if _analysis_cache_exists(conn, target_type, target_id, derive_method):
                 _finish_skipped(conn, int(job["id"]), "skipped_existing_analysis_cache")

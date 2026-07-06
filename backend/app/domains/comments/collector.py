@@ -453,10 +453,20 @@ def collect_post_comments(
     duplicate_count = 0
     conn = get_conn()
     
+    # 并发时代:多车道同时写 vkpi_comments 会死锁(全盘测速实锤 DeadlockDetected 2 例)。
+    # 事务级 advisory 锁串行化同表写;写入本身毫秒级互斥代价≈0,锁随 commit 自动释放。
+    try:
+        from app.db.connection import is_postgres_runtime
+
+        if is_postgres_runtime():
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext('vkpi_comments_write'))")
+    except Exception:
+        logger.warning("comments advisory lock failed (continuing without)", exc_info=True)
+
     for raw in raw_comments:
         if not isinstance(raw, dict):
             continue
-        
+
         std = _standardize_comment(
             raw,
             platform=platform,
