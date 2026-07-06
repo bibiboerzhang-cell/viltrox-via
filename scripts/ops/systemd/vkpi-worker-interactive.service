@@ -8,14 +8,10 @@ Type=simple
 User=root
 WorkingDirectory=/opt/viltrox-2.0
 EnvironmentFile=/opt/viltrox-2.0/.env
+EnvironmentFile=-/etc/vkpi/vkpi-lane-overrides.env
 Environment=PYTHONPATH=/opt/viltrox-2.0/backend
 Environment=APIFY_WORKER_CLAIM_LANE=interactive
 Environment=APIFY_WORKER_HEARTBEAT_NAME=apify-worker-interactive
-Environment=APIFY_WORKER_GEMINI_QPS=0.25
-Environment=APIFY_WORKER_LLM_CONCURRENCY=4
-Environment=LLM_MONTHLY_BUDGET_USD=3000
-Environment=POSTGRES_POOL_MIN_SIZE=2
-Environment=POSTGRES_POOL_MAX_SIZE=12
 ExecStart=/opt/viltrox-2.0/.venv/bin/python -m app.workers.apify_jobs_worker
 Restart=always
 RestartSec=5
