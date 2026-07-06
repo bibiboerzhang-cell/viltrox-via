@@ -47,9 +47,10 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
   return e("div", { className: "mb-3 space-y-2 rounded-lg border border-white/[0.065] bg-white/[0.018] p-2.5" },
     // ── 本地搜索行 ──
     e("div", { className: "space-y-2" },
-      e("div", { className: "flex items-center gap-2" },
-        e("div", { 
-          className: "relative flex-1 transition-all duration-200",
+      // flex-wrap + min-w-0:窄屏时模式档位换行而非被挤出视口右侧(UI 红圈:箭头+平衡档溢出屏幕)。
+      e("div", { className: "flex items-center gap-2 flex-wrap" },
+        e("div", {
+          className: "relative min-w-0 flex-1 basis-64 transition-all duration-200",
           style: localApplying 
             ? { boxShadow: "0 0 0 1px rgba(168,85,247,0.5), 0 0 16px rgba(168,85,247,0.25)" }
             : {}

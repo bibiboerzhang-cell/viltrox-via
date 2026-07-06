@@ -51,10 +51,19 @@ async function listAllKolPoolPages(apiToken: any) {
 }
 
 async function loadKolPoolWorkspaceRows(apiToken: any) {
-  const response = await getKolPoolWorkspace(apiToken, { limit: 1200, offset: 0, sortBy: "fit" });
-  const items = response?.list?.items || [];
-  if (!Array.isArray(items)) return [];
-  return items;
+  // 分页拉全量:此前固定 limit=1200 < 池实际行数(1353)→ 尾部约 150 条历史 KOL 永不显示
+  // (用户「过往搜索的人没加进来」的真因之一)。逐页拉到取尽为止,硬上限 8000 防跑飞。
+  const pageSize = 1000;
+  const hardCap = 8000;
+  const rows: any[] = [];
+  for (let offset = 0; offset < hardCap; offset += pageSize) {
+    const response = await getKolPoolWorkspace(apiToken, { limit: pageSize, offset, sortBy: "fit" });
+    const items = response?.list?.items || [];
+    if (!Array.isArray(items) || items.length === 0) break;
+    rows.push(...items);
+    if (items.length < pageSize) break;
+  }
+  return rows;
 }
 
 export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, userEmail = "", userAuthRole = "", starredProjects }: any) {

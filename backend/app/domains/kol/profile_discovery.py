@@ -58,6 +58,28 @@ from app.domains.kol.profile_discovery_localize import (  # noqa: E402,F401
 )
 
 
+# Viltrox 品牌自营账号:handle/URL 归一后以 viltrox 打头(viltrox.official/viltrox_id/
+# viltrox.global/viltrox.usa/viltrox.cee 等)。官号走专线,不当外部 KOL 发现。env 可扩关键词。
+import os as _os  # noqa: E402 — 模块级 os 未导入(散点函数内 import);此处只读 env
+
+_OWN_BRAND_PREFIXES = tuple(
+    p.strip().lower()
+    for p in str(_os.environ.get("VKPI_OWN_BRAND_HANDLE_PREFIXES", "viltrox")).split(",")
+    if p.strip()
+)
+
+
+def _is_own_brand_account(item: dict[str, Any]) -> bool:
+    for field in ("handle", "channel_handle", "username", "display_name", "profile_url", "channel_url", "url"):
+        raw = str(item.get(field) or "")
+        # 从 URL 尾段/@handle 里提取账号名,再剥非字母数字。
+        tail = re.split(r"[/@]", raw)[-1] if raw else ""
+        norm = re.sub(r"[^a-z0-9]", "", tail.lower())
+        if norm and any(norm.startswith(p) for p in _OWN_BRAND_PREFIXES):
+            return True
+    return False
+
+
 def _profile_url_from_kol_pool_id(kol_pool_id: Any) -> str:
     parsed = _int(kol_pool_id)
     if parsed <= 0:
@@ -775,6 +797,12 @@ async def discover_new_creators(
             # 口径保留海外华人(马六甲=马来西亚/新加坡/海外华人摄影师不排,只排 CN大陆/HK/TW 强信号)。
             _region = _detect_excluded_region(item)
             if _is_discovery_garbage(item) or _region:
+                continue
+            # 品牌自有账号闸(用户硬要求:Viltrox 官方号不进发现结果)——handle 归一后以 viltrox 打头
+            # 即 Viltrox 品牌自营(viltrox.official/viltrox_id/viltrox.global/viltrox.usa/viltrox.cee 等),
+            # 官号数据另有专线(vkpi_employee_channels),绝不当外部 KOL 发现。只丢,不入池、不杜撰。
+            if _is_own_brand_account(item):
+                _gate_dropped["own_brand"] = _gate_dropped.get("own_brand", 0) + 1
                 continue
             # 相机/视觉创作者闸门(用户硬要求:得有相机、得需要拍摄)。全新发现(无库内历史匹配,
             # 上方 existing_matches 已先行 continue)零相机信号 → 真丢弃。red line:只丢,绝不杜撰分。

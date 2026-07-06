@@ -154,7 +154,17 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
     );
     const stale = ["stale", "needs_refresh", "missing", "partial"].includes(String(item.sync_status || "").toLowerCase());
     const missingCore = !followers || !country || realEr == null || fit == null;
-    const candidateKind = item.linked_main_kol_id
+    // 修复:此前 existing 只认 linked_main_kol_id → 1000+ 条历史导入/手动 KOL(过往搜索加入的人)
+    // 全被误标「校验中」。真判据是「是否已是库内正式成员」:source_type 非 discovered(历史 excel/
+    // 手动/promo 导入)或已评分/已建档 = 库内已有;只有 discovered 且未建档才是「校验中」。
+    const srcType = String((item as any).source_type || "").toLowerCase();
+    const isEstablished = Boolean(
+      item.linked_main_kol_id ||
+      (srcType && srcType !== "discovered") ||
+      fit != null ||
+      followers != null,
+    );
+    const candidateKind = isEstablished
       ? missingCore || stale ? "existing_low_confidence" : "existing_fresh"
       : fit != null && fit >= 80 ? "new_promoted" : "new_discovered";
     const avgViews = numberOrNull(item.avg_views);
