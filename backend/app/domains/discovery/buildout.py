@@ -52,8 +52,10 @@ def _enqueue_comments_collect(kol_pool_id: int, *, source: str) -> dict[str, Any
     if existing:
         d = dict(existing)
         return {"status": "already_queued", "job_id": int(d["id"])}
+    # 90s 延迟:评论必须等深爬把 evidence 落地(掐表实测 race——同时入队时评论 job 早 1-7 秒
+    # 空转 done,0 评论 → refresh_audience_stats 永不触发,受众页签永不亮)。深爬实测 5-17s,90s 稳。
     conn.execute(
-        "INSERT INTO apify_jobs (job_type, payload) VALUES (?, ?)",
+        "INSERT INTO apify_jobs (job_type, payload, next_retry_at) VALUES (?, ?, NOW() + make_interval(secs => 90))",
         (
             "kol_pool_comments_collect",
             json.dumps(

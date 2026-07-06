@@ -781,7 +781,9 @@ def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -
     # 受众情报 v2:评论采集成功后 best-effort 刷新受众画像(新抓评论的 KOL 自动有全套画像)。
     # enqueue_if_missing=False:此处已在评论任务尾部,评论仍不足时绝不递归再入队(防自触发环)。
     # try/except 不阻断评论任务本身;失败只留日志。红线:零触 viltrox_fit_score。
-    if ok_count:
+    # 守卫放宽:只要有帖可看(results 非空)就尝试刷新——YouTube 走 Data API 采样,
+    # 本地评论 0 新增也能出画像;旧守卫 ok_count>0 让 0 新评论的 YT 号受众永不刷新。
+    if ok_count or results:
         try:
             from app.domains.kol.audience_stats import refresh_audience_stats
 
