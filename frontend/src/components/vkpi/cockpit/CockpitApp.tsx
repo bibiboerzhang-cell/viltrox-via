@@ -75,13 +75,16 @@ const Sku360Page = React.lazy(() => import("./pages/Sku360Page").then((module) =
 const KolProfilePage = React.lazy(() => import("./pages/KolProfilePage").then((module) => ({ default: module.KolProfilePage })));
 // 第4轮 发射台:新品 SKU 一键六输出全案
 const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadPage").then((module) => ({ default: module.LaunchPadPage })));
+// 第5轮 自治层:驾照板 + 市场之声月报
+const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyBoardPage").then((module) => ({ default: module.AutonomyBoardPage })));
+const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
   "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
   "triage", "dataQuery", "marketTrends", "skillStudio",
   "intelligent", "replyQueue",
-  "sku360", "kolProfile", "launchpad",
+  "sku360", "kolProfile", "launchpad", "autonomy", "marketVoice",
 ] as const;
 
 export function CockpitApp(props: any = {}) {
@@ -780,6 +783,21 @@ export function CockpitApp(props: any = {}) {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "发射台加载中...")
               },
                 e(LaunchPadPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            // 第5轮 自治层:驾照板 + 市场之声
+            activeNav === "autonomy" && e(LazyErrorBoundary, { name: "Autonomy" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "自治驾照加载中...")
+              },
+                e(AutonomyBoardPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            activeNav === "marketVoice" && e(LazyErrorBoundary, { name: "MarketVoice" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "市场之声加载中...")
+              },
+                e(MarketVoicePage as React.ComponentType<any>, { apiToken })
               )
             ),
 

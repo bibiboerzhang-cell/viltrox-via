@@ -24,6 +24,9 @@ export const NAV_ITEMS = [
   { key: "kolProfile",   icon: Contact,         label: "KOL 档案",         badge: "New" },
   // 第4轮 发射台:新品 SKU 一键出六输出全案(名单/预算/排期/打法/官号协同/覆盖组合)。
   { key: "launchpad",    icon: Rocket,          label: "发射台",           badge: "New" },
+  // 第5轮 自治层:驾照板(挣来的自治 L0-L4)+ 市场之声(用户反馈反哺产品部)。
+  { key: "autonomy",     icon: ShieldCheck,     label: "自治驾照",         badge: "New" },
+  { key: "marketVoice",  icon: RadioTower,      label: "市场之声",         badge: "New" },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },

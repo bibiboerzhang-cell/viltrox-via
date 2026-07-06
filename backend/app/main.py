@@ -38,6 +38,11 @@ from app.api.routers import vkpi_forecast
 from app.api.routers import vkpi_rates
 from app.api.routers import vkpi_launch_assembly
 from app.api.routers import vkpi_roster
+# 第5轮 自治层:预测台账 / 驾照L0-L4 / 夜班晨报 / 市场之声月报
+from app.api.routers import vkpi_prediction_ledger
+from app.api.routers import vkpi_autonomy
+from app.api.routers import vkpi_morning_brief
+from app.api.routers import vkpi_market_voice
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -819,6 +824,11 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_rates.router)
     app.include_router(vkpi_launch_assembly.router)
     app.include_router(vkpi_roster.router)
+    # 第5轮 自治层:预测台账 / 驾照 / 晨报 / 市场之声
+    app.include_router(vkpi_prediction_ledger.router)
+    app.include_router(vkpi_autonomy.router)
+    app.include_router(vkpi_morning_brief.router)
+    app.include_router(vkpi_market_voice.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)
