@@ -561,7 +561,11 @@ def analyze_content_fit(
         kid,
         result,
         model=str(resp.get("model") or "llm_gateway"),
-        cost_usd=float(resp.get("cost_cents") or 0) / 100.0,
+        cost_usd=(
+            float(resp.get("cost_micro_usd")) / 1_000_000.0
+            if resp.get("cost_micro_usd") is not None
+            else float(resp.get("cost_cents") or 0) / 100.0
+        ),
         triggered_by_user_id=int(triggered_by_user_id) if triggered_by_user_id else None,
     )
 

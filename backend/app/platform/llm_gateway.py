@@ -564,6 +564,8 @@ def invoke(
             )
             result["fallback_used"] = bool(errors)
             result["purpose"] = purpose
+            # 精度透出:调用方(content_fit 等)据此记账,不再吃 cost_cents 整数归零(小调用恒 $0 的根因)。
+            result["cost_micro_usd"] = result_micro
             return result
         errors.append({"provider": provider, "status": status or "failed", "error": str(result.get("error") or "")[:300]})
 

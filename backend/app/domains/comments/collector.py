@@ -121,6 +121,30 @@ def _resolve_post(post_id: int, post_table: str) -> dict | None:
     return resolve_post_for_comments(post_id, post_table)
 
 
+def _detect_comment_language(text: str) -> str | None:
+    """单条评论语言判别:优先 langdetect(拉丁语系精判,seed 固定保证可复现),
+    缺库/判失败退 audience_language 的零成本启发式;都不中返回 None(诚实未知)。"""
+    t = str(text or "").strip()
+    if len(t) < 3:
+        return None
+    try:
+        from langdetect import DetectorFactory, detect  # type: ignore
+
+        DetectorFactory.seed = 0
+        code = str(detect(t) or "").strip().lower()
+        if code and code != "unknown":
+            return code[:10]
+    except Exception:
+        pass
+    try:
+        from app.domains.kol.audience_language import detect_lang
+
+        code = detect_lang(t)
+        return code if code and code != "und" else None
+    except Exception:
+        return None
+
+
 def _standardize_comment(
     raw: dict,
     *,
@@ -283,6 +307,7 @@ def _standardize_comment(
         if tail and tail.lower() != "profile.php":
             author_handle = _str_safe(tail, 200)
 
+    comment_text = (str(_try_paths(fields.get("comment_text", []), "")) or "")[:5000]
     return {
         "account_id": account_id,
         "post_id": post_id,
@@ -290,8 +315,9 @@ def _standardize_comment(
         "external_post_id": external_post_id,
         "platform": platform,
         "external_comment_id": _str_safe(_try_paths(fields.get("external_comment_id", [])), 200),
-        "comment_text": (str(_try_paths(fields.get("comment_text", []), "")) or "")[:5000],
-        "language_detected": None,  # P1.4 sentiment 阶段 LLM 自动识别
+        "comment_text": comment_text,
+        # 采集时即填(旧设计等 sentiment 阶段 LLM 填,但该 cron 默认关 → 列恒空);零 LLM 成本。
+        "language_detected": _detect_comment_language(comment_text),
         "author_handle": author_handle,
         "author_id": author_id,
         "is_op": bool(_try_paths(fields.get("is_op", []), False)),
