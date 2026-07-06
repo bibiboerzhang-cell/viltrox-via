@@ -1,6 +1,9 @@
 import React from "react";
 import { apiFetch, jsonBody } from "../../../../services/http";
 import { PredictionLedgerPanel } from "../components/PredictionLedgerPanel";
+import { WeeklyScorecardPanel } from "../components/WeeklyScorecardPanel";
+import { MissReviewPanel } from "../components/MissReviewPanel";
+import { ShadowEvalPanel } from "../components/ShadowEvalPanel";
 
 // 件A · 自治驾照面板(作战地图廿一节「挣来的自治」L0-L4)。
 //   每类 agent 动作一张驾照卡:当前级 / 五维能力 / 命中率 / 最近升降 / 人工调级。
@@ -363,6 +366,10 @@ export function AutonomyBoardPage({ apiToken = "" }: { apiToken?: string; onNavi
 
       {/* 第5轮收口:预测台账与驾照板同屏——升降的证据底座 */}
       <PredictionLedgerPanel apiToken={apiToken} />
+      {/* 第6轮 L轨道:周度命中率曲线+积压催办 / 低命中复盘入记忆 / 影子评测(赢旧版才上线) */}
+      <WeeklyScorecardPanel apiToken={apiToken} />
+      <MissReviewPanel apiToken={apiToken} />
+      <ShadowEvalPanel apiToken={apiToken} />
 
       <div className="text-right text-[10px] text-slate-600">升降判定纯规则零 LLM · 台账数据来自 prediction_ledger(缺席诚实 hold)</div>
     </div>

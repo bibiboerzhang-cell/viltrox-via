@@ -43,6 +43,11 @@ from app.api.routers import vkpi_prediction_ledger
 from app.api.routers import vkpi_autonomy
 from app.api.routers import vkpi_morning_brief
 from app.api.routers import vkpi_market_voice
+# 第6轮 L轨道+P6:周度记分卡 / 低命中复盘入记忆 / 影子评测 / 段级创意资产库
+from app.api.routers import vkpi_weekly_scorecard
+from app.api.routers import vkpi_miss_review
+from app.api.routers import vkpi_shadow_eval
+from app.api.routers import vkpi_creative_segments
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -829,6 +834,11 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_autonomy.router)
     app.include_router(vkpi_morning_brief.router)
     app.include_router(vkpi_market_voice.router)
+    # 第6轮 L轨道+P6:记分卡 / 复盘 / 影子评测 / 创意资产库
+    app.include_router(vkpi_weekly_scorecard.router)
+    app.include_router(vkpi_miss_review.router)
+    app.include_router(vkpi_shadow_eval.router)
+    app.include_router(vkpi_creative_segments.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)
