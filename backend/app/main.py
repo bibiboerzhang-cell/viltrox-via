@@ -28,6 +28,11 @@ from app.api.routers import vkpi_reply_queue
 from app.api.routers import vkpi_signature
 from app.api.routers import vkpi_leadtime
 from app.api.routers import vkpi_sku360
+# 第3轮 信号聚合层:焦段矩阵 / 品牌脉搏 / 质量分+FTC披露 / 以视频找相似
+from app.api.routers import vkpi_focal_matrix
+from app.api.routers import vkpi_brand_pulse
+from app.api.routers import vkpi_quality_compliance
+from app.api.routers import vkpi_video_similar
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -799,6 +804,11 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_signature.router)
     app.include_router(vkpi_leadtime.router)
     app.include_router(vkpi_sku360.router)
+    # 第3轮 信号聚合层:焦段矩阵 / 品牌脉搏 / 质量分+FTC / 以视频找相似
+    app.include_router(vkpi_focal_matrix.router)
+    app.include_router(vkpi_brand_pulse.router)
+    app.include_router(vkpi_quality_compliance.router)
+    app.include_router(vkpi_video_similar.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

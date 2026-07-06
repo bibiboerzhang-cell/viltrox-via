@@ -29,6 +29,9 @@ import {
   RepresentativeVideoPlayerModal,
 } from "./KOLDetailDrawer.Panels";
 import { SignaturePanel } from "./SignaturePanel";
+import { FocalMatrixPanel } from "./FocalMatrixPanel";
+import { QualityCompliancePanel } from "./QualityCompliancePanel";
+import { SimilarVideosPanel } from "./SimilarVideosPanel";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -695,6 +698,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
         // ── 第2轮 招牌内容画像(零 LLM 纯聚合):擅长拍法 / 最爆 TOP3 / 最引反馈 ──
         e(SignaturePanel, { apiToken, kolPoolId: item?.id }),
+        // ── 第3轮 信号聚合:焦段矩阵(覆盖+空白可切入)/ 质量分+FTC披露 / 以主代表作找相似 ──
+        e(FocalMatrixPanel, { apiToken, kolPoolId: item?.id }),
+        e(QualityCompliancePanel, { apiToken, kolPoolId: item?.id }),
+        e(SimilarVideosPanel, { apiToken, evidenceId: primaryVideoEvidenceId }),
         // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
         e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
       ),

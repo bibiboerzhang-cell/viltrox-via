@@ -13,6 +13,7 @@ import { HierarchyDropdown } from "./components/HierarchyDropdown";
 import { KolFunnelCard } from "./components/KolFunnelCard";
 import { MetricCard } from "./components/MetricCard";
 import { OpsHealthCard } from "./components/OpsHealthCard";
+import { BrandPulsePanel } from "./components/BrandPulsePanel";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
 import { ActivityFeed } from "./components/ActivityFeed";
@@ -58,9 +59,9 @@ const INSIGHT_ROW_ORDER: Record<DashboardTier, readonly string[]> = {
 
 // 右栏卡片顺序(key 对应组件内 rightRailRenderers)
 const RIGHT_RAIL_ORDER: Record<DashboardTier, readonly string[]> = {
-  management: ["actionInbox", "activityFeed", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
+  management: ["actionInbox", "activityFeed", "brandPulse", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
   // 员工:今日建议/我的项目/我的 KOL 漏斗(C3 已按人过滤)排前;运维健康大盘殿后
-  member: ["actionInbox", "activityFeed", "activeCampaigns", "kolFunnel", "contentCalendar", "opsHealth"],
+  member: ["actionInbox", "activityFeed", "activeCampaigns", "brandPulse", "kolFunnel", "contentCalendar", "opsHealth"],
 };
 
 // 身份档位:口径与 VkpiTab.canUseManagerView 完全一致(owner / admin / manager / lead /
@@ -167,6 +168,10 @@ export function DashboardReplicaPage(props: any) {
     // P1 思考流:系统在想什么(聚合任务完成/告警/会话推进,10s 轮询,组件自取数)
     activityFeed: () => apiToken
       ? e(ActivityFeed, { key: "rail-activity-feed", apiToken })
+      : null,
+    // 第3轮 品牌脉搏:90天全池品牌升温/降温 + Viltrox 声量(组件自取数自判空)
+    brandPulse: () => apiToken
+      ? e(BrandPulsePanel, { key: "rail-brand-pulse", apiToken })
       : null,
     actionInbox: () => SHOW_EXPERIMENTAL && apiToken
       ? e(ActionInboxPanel, { key: "rail-action-inbox", apiToken, heading: "今日该做什么", limit: 8 })
