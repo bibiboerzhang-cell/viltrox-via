@@ -125,7 +125,7 @@ def audience_language_for_kol(kol_pool_id: int, *, conn: Any = None, limit: int 
         if eids:
             placeholders = ",".join(["?"] * len(eids))
             rows = db.execute(
-                f"SELECT comment_text FROM vkpi_comments WHERE post_table='evidence' AND post_id IN ({placeholders}) LIMIT ?",
+                f"SELECT comment_text FROM vkpi_comments WHERE post_table IN ('evidence', 'vkpi_kol_video_evidence') AND post_id IN ({placeholders}) LIMIT ?",
                 (*eids, int(limit)),
             ).fetchall()
             texts = [str(dict(r).get("comment_text") or "") for r in rows]

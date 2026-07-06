@@ -85,9 +85,11 @@ def resolve_post_for_comments(post_id: int, post_table: str = "industry_posts") 
     if table_key in {"vkpi_kol_video_evidence", "kol_video_evidence"}:
         # KOL Pool evidence 钩(2026-06-12 裁令"评论的展示也要有"):
         # external_post_id = YT 取视频 id(Data API 要求),IG/TT 取帖子 URL(Apify actor 吃 URL)。
+        # account_id=kol_pool_id:受众画像读路径按 account_id 命中(E2E 实测曾断链——
+        # 写 NULL 导致评论采到但 audience_stats/audience_language 永远 sample_size=0)。
         row = conn.execute(
             """
-            SELECT id, NULL AS account_id, LOWER(COALESCE(platform,'')) AS platform,
+            SELECT id, kol_pool_id AS account_id, LOWER(COALESCE(platform,'')) AS platform,
                    COALESCE(content_url,'') AS content_url
             FROM vkpi_kol_video_evidence
             WHERE id = ?
@@ -113,7 +115,7 @@ def resolve_post_for_comments(post_id: int, post_table: str = "industry_posts") 
             external_post_id = _youtube_video_id(external_post_id) or external_post_id
         return {
             "id": data.get("id"),
-            "account_id": None,
+            "account_id": data.get("account_id"),
             "platform": platform,
             "external_post_id": external_post_id,
             "raw_data_json": "{}",
