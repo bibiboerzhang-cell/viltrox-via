@@ -144,8 +144,24 @@ async def job_vkpi_official_daily_report(round_key: str = "daily"):
             "scheduler.vkpi_official_daily_report",
             extra={"round": round_key, **{k: result.get(k) for k in ("ok", "skipped", "blocked", "failed")}},
         )
+        # 消盲区:回写注册表 last_run_at——此前不回写,停摆 17 天时注册表谎报"从未跑过",排查被带偏。
+        from .jobs_tasks import _record_scheduler_run
+
+        _ok = int(result.get("ok") or 0)
+        _blocked = int(result.get("blocked") or 0)
+        _record_scheduler_run(
+            "vkpi_official_daily_report",
+            ok=_ok > 0,
+            error="" if _ok > 0 else f"ok=0 blocked={_blocked}(预算闸?)",
+        )
     except Exception:
         logger.exception("scheduler.vkpi_official_daily_report_failed")
+        try:
+            from .jobs_tasks import _record_scheduler_run
+
+            _record_scheduler_run("vkpi_official_daily_report", ok=False, error="exception(见日志)")
+        except Exception:
+            pass
 
 
 async def job_vkpi_official_visual_scan():

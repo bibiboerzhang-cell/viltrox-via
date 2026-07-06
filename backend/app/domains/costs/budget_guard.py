@@ -179,6 +179,38 @@ def _budget_payload(row: dict[str, Any], *, estimated_cost: float = 0.0) -> dict
     }
 
 
+def _maybe_roll_cron_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
+    """cron:* 池按日惰性滚动:reset_at 过期(或从未设置)即清零并推进到下一个 UTC 零点。
+    根因修复:官号日报『$4/日』被实现成『$4/终身』——39 笔后永久 hard stop(06-19 停摆悬案);
+    全库原本无任何重置写方。惰性重置不依赖调度器;非 cron:* scope 原样返回。"""
+    scope_key = str(row.get("scope") or "")
+    if not scope_key.startswith("cron:"):
+        return row
+    now = datetime.now(timezone.utc)
+    reset_raw = str(row.get("reset_at") or "").strip()
+    due = True
+    if reset_raw:
+        try:
+            due = now >= datetime.fromisoformat(reset_raw.replace("Z", "+00:00"))
+        except ValueError:
+            due = True
+    if not due:
+        return row
+    next_reset = (now + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+    try:
+        conn.execute(
+            "UPDATE vkpi_provider_budget_caps SET current_spend = 0, reset_at = ? WHERE scope = ?",
+            (next_reset, scope_key),
+        )
+        conn.commit()
+        row = dict(row)
+        row["current_spend"] = 0
+        row["reset_at"] = next_reset
+    except Exception:
+        logger.warning("cron budget window roll failed scope=%s", scope_key, exc_info=True)
+    return row
+
+
 def check_budget(scope: str, estimated_cost: float, *, require_configured: bool = False) -> bool:
     """Return whether a call can proceed for the given budget scope."""
     scope_key = _normalize_scope(scope)
@@ -188,7 +220,7 @@ def check_budget(scope: str, estimated_cost: float, *, require_configured: bool 
     row = get_conn().execute("SELECT * FROM vkpi_provider_budget_caps WHERE scope=?", (scope_key,)).fetchone()
     if not row:
         return not require_configured
-    payload = _budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0))
+    payload = _budget_payload(_maybe_roll_cron_window(get_conn(), _clean_row(row)), estimated_cost=float(estimated_cost or 0))
     if _is_single_call_ceiling_scope(scope_key):
         # Per-request ceiling: compare estimated_cost to cap, ignore current_spend.
         return _single_call_ceiling_allowed(_float(payload.get("cap_usd")), float(estimated_cost or 0))
@@ -253,7 +285,7 @@ def get_budget_status(scope: str | None = None, *, estimated_cost: float = 0.0) 
                 "allowed": True,
                 "estimated_cost_usd": max(0.0, float(estimated_cost or 0)),
             }
-        payload = _budget_payload(_clean_row(row), estimated_cost=float(estimated_cost or 0))
+        payload = _budget_payload(_maybe_roll_cron_window(conn, _clean_row(row)), estimated_cost=float(estimated_cost or 0))
         if _is_single_call_ceiling_scope(scope_key):
             # Per-request ceiling: allowed reflects estimated_cost<=cap, not current_spend.
             ceiling_allowed = _single_call_ceiling_allowed(_float(payload.get("cap_usd")), float(estimated_cost or 0))
