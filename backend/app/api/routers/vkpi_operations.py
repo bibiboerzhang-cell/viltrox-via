@@ -5,6 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import app.domains.tasks.enqueue as task_enqueue
 from app.core.config import VKPI_ASYNC_ENABLED
+from app.api.dependencies.manager_guard import (
+    is_manager_staff as _is_manager_staff,
+    require_manager_staff as _require_manager_staff,
+)
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.domains.comments import channel as channel_comments
@@ -18,18 +22,6 @@ from app.domains.channels import reddit_insights as reddit_channel_insights
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-operations"])
-
-
-def _is_manager_staff(staff: dict) -> bool:
-    role = str(staff.get("role") or "").strip().lower()
-    if int(staff.get("is_owner") or 0) == 1:
-        return True
-    return role in {"admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}
-
-
-def _require_manager_staff(staff: dict) -> None:
-    if not _is_manager_staff(staff):
-        raise HTTPException(status_code=403, detail="management permission required")
 
 
 def _scope_403(exc: Exception) -> HTTPException:

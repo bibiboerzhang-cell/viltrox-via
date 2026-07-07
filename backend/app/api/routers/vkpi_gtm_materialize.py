@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -35,9 +36,15 @@ def post_gtm_plan_materialize(
     dry_run: bool = Body(True, description="默认 True 只出 bet 预览零落库;显式 false 才真落库"),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """GTM Plan → bet 落库(dry_run 双态;每条 requires_approval=True 走人审)。"""
+    """GTM Plan → bet 落库(dry_run 双态;每条 requires_approval=True 走人审)。
+
+    条件管理层闸:dry_run=True 员工可模拟(零落库);dry_run=False 真落库
+    仅 owner/管理岗 → 否则 403。
+    """
     from app.domains.market_brain import gtm_plan_preview, materialize
 
+    if not dry_run:
+        require_manager_staff(staff)
     goal_clean = (goal or "").strip().lower()
     if goal_clean not in gtm_plan_preview.GOALS:
         raise HTTPException(

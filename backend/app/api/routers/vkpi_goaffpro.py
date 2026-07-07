@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.domains.integrations import goaffpro_connect
@@ -391,12 +392,13 @@ def sync_goaffpro_metrics(
 def update_kol_commission(
     kol_pool_id: int,
     body: dict = Body(default={}),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ):
     """调整该 KOL affiliate 的佣金比例 → PATCH 推回 GOAFFPRO 总台。
 
     body {rate:number(整数), type?:'percentage'|'fixed_amount', on?:'product'|'order'}。
     改完回读 GOAFFPRO 确认(总台与 V-KPI 一致)。返回 {ok, commission_rate}。
+    管理层闸(owner+manager):改佣金是钱口,员工 vkpi:write 不够 → 403。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
@@ -425,11 +427,12 @@ def update_kol_commission(
 def update_kol_coupon(
     kol_pool_id: int,
     body: dict = Body(default={}),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ):
     """设/改该 KOL 的专属优惠码 → PATCH 推回 GOAFFPRO 总台 + 更新本地映射。
 
     body {code, discount_value?, discount_type?}。code 顾客结账用即归因该 KOL。
+    管理层闸(owner+manager):优惠码直接动折扣,员工 vkpi:write 不够 → 403。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()

@@ -1,25 +1,14 @@
 """Market intelligence routes for V-KPI industry automation."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.api.dependencies.manager_guard import require_manager_staff as _require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.domains import market as market_domain
 
 
 router = APIRouter()
-
-
-def _is_manager_staff(staff: dict) -> bool:
-    role = str(staff.get("role") or "").strip().lower()
-    if int(staff.get("is_owner") or 0) == 1:
-        return True
-    return role in {"admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}
-
-
-def _require_manager_staff(staff: dict) -> None:
-    if not _is_manager_staff(staff):
-        raise HTTPException(status_code=403, detail="management permission required")
 
 
 @router.get("/industry-data/market-intelligence/v0")

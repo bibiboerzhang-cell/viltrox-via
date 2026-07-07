@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.api.dependencies.manager_guard import require_manager_staff as _require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
 from app.domains import staff as staff_domain
@@ -11,11 +12,6 @@ from app.domains.access import scope
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
-
-
-def _require_manager_staff(staff: dict) -> None:
-    if not staff_domain.is_manager_staff(staff):
-        raise HTTPException(status_code=403, detail="management permission required")
 
 
 def _scope_403(exc: Exception) -> HTTPException:
