@@ -1,0 +1,60 @@
+# promptfooconfig.yaml — V-KPI creator_match skill 黄金用例(hermetic,零 LLM / 零 DB)。
+#
+# 骨架用途:把 promptfoo 接进本仓评估在线余量(W9)。这里的 provider 不打真 LLM,而是
+# 包装本项目确定性 skill(creator_match + 注入桩 preview),先证「评估管线接得通」;
+# 后续把 provider 换成真 LLM 端点即成 prompt 回归护栏。
+#
+# 运行(需先装 promptfoo,见 README;本仓当前未装,故为就位骨架不实跑):
+#   cd evals && npx promptfoo@latest eval -c promptfooconfig.yaml
+#   npx promptfoo@latest view      # 看结果面板
+#
+# 断言口径:provider 输出是 creator_match 结果的 JSON 串;golden 用例断言其中应含/不含
+# 某 handle(fixture preview 下确定性可复现)。
+description: "V-KPI creator_match skill golden-case eval (hermetic, no LLM, no DB)"
+
+prompts:
+  - "{{input_json}}"
+
+providers:
+  - id: "file://providers/creator_match_provider.py"
+    label: creator_match_v1_fixture
+
+defaultTest:
+  assert:
+    - type: is-json
+
+tests:
+  - description: "camera prime US -> alice_lens 命中"
+    vars:
+      input_json: '{"product": "viltrox af 85mm", "market": "US"}'
+    assert:
+      - type: contains
+        value: "alice_lens"
+
+  - description: "sku 形态 drone -> bob_outdoor 命中"
+    vars:
+      input_json: '{"sku": "viltrox-drone-gimbal", "market": ""}'
+    assert:
+      - type: contains
+        value: "bob_outdoor"
+
+  - description: "portrait lifestyle HK -> carol_portrait 命中"
+    vars:
+      input_json: '{"product": "viltrox af 35mm", "market": "HK"}'
+    assert:
+      - type: contains
+        value: "carol_portrait"
+
+  - description: "vlog compact prime -> dave_vlog 命中"
+    vars:
+      input_json: '{"product": "viltrox af 27mm", "market": "US"}'
+    assert:
+      - type: contains
+        value: "dave_vlog"
+
+  - description: "无解产品 -> 诚实空返(recommendations 为空,不炸)"
+    vars:
+      input_json: '{"product": "totally-unknown-widget-xyz", "market": "US"}'
+    assert:
+      - type: contains
+        value: "\"recommendations\": []"

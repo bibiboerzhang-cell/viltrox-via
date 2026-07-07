@@ -225,3 +225,129 @@ def test_record_eval_run_not_found(monkeypatch):
     _patch_db(monkeypatch, exists=True, rows=[])  # runs 表在但查无此 run
     out = prediction_ledger.record_eval("run-ghost", 110)
     assert out == {"ok": False, "id": None, "deduped": False, "reason": "run_not_found"}
+
+
+# ── FVA:weekly_rollup 的模型相对基线增益段(纯函数) ────────────────
+
+
+def test_weekly_rollup_fva_empty_when_no_source_step():
+    # 行不带 source_step → fva 段诚实空(不虚构增益),既有指标不受影响。
+    rows = [{"actual_value": 100, "error_abs": 10, "interval_hit": 1, "direction_hit": 0}]
+    out = prediction_ledger.weekly_rollup(rows)
+    assert out["fva"] == {"n_groups": 0, "mean_delta": None,
+                          "model_better_share": None, "groups": []}
+
+
+def test_weekly_rollup_empty_has_fva():
+    out = prediction_ledger.weekly_rollup([])
+    assert out["fva"]["n_groups"] == 0
+    assert out["fva"]["groups"] == []
+
+
+def test_weekly_rollup_fva_delta_model_better():
+    # 同 (sku, market, channel):baseline wape=0.20,model wape=0.10 → delta=-0.10(模型更好)。
+    rows = [
+        {"product_sku": "AF-85", "market": "US", "channel": "yt",
+         "source_step": "baseline", "actual_value": 100, "error_abs": 20},
+        {"product_sku": "AF-85", "market": "US", "channel": "yt",
+         "source_step": "model", "actual_value": 100, "error_abs": 10},
+    ]
+    fva = prediction_ledger.weekly_rollup(rows)["fva"]
+    assert fva["n_groups"] == 1
+    g = fva["groups"][0]
+    assert g["baseline_wape"] == 0.2
+    assert g["model_wape"] == 0.1
+    assert g["delta"] == -0.1
+    assert g["baseline_n"] == 1 and g["model_n"] == 1
+    assert fva["mean_delta"] == -0.1
+    assert fva["model_better_share"] == 1.0
+
+
+def test_weekly_rollup_fva_single_version_group_excluded():
+    # 只有 model 没有 baseline 的组不出对照(诚实:无基线不可算增益)。
+    rows = [
+        {"product_sku": "AF-85", "market": "US", "channel": "yt",
+         "source_step": "model", "actual_value": 100, "error_abs": 10},
+        {"product_sku": "AF-35", "market": "US", "channel": "yt",
+         "source_step": "baseline", "actual_value": 100, "error_abs": 30},
+    ]
+    fva = prediction_ledger.weekly_rollup(rows)["fva"]
+    assert fva["n_groups"] == 0
+    assert fva["mean_delta"] is None
+
+
+def test_weekly_rollup_fva_two_groups_share_and_sort():
+    rows = [
+        # 组1:模型更好(delta 负)
+        {"product_sku": "A", "market": "US", "channel": "yt",
+         "source_step": "baseline", "actual_value": 100, "error_abs": 20},
+        {"product_sku": "A", "market": "US", "channel": "yt",
+         "source_step": "model", "actual_value": 100, "error_abs": 5},
+        # 组2:模型更差(delta 正)
+        {"product_sku": "B", "market": "US", "channel": "yt",
+         "source_step": "baseline", "actual_value": 100, "error_abs": 10},
+        {"product_sku": "B", "market": "US", "channel": "yt",
+         "source_step": "model", "actual_value": 100, "error_abs": 40},
+    ]
+    fva = prediction_ledger.weekly_rollup(rows)["fva"]
+    assert fva["n_groups"] == 2
+    assert fva["model_better_share"] == 0.5
+    # groups 按 delta 升序:最优(负)在前
+    assert fva["groups"][0]["sku"] == "A"
+    assert fva["groups"][0]["delta"] < 0
+    assert fva["groups"][1]["sku"] == "B"
+    assert fva["groups"][1]["delta"] > 0
+
+
+# ── record_prediction_run:FVA 两字段透传进 INSERT 参数 ───────────────
+
+
+class _CaptureConn:
+    """记录每次 execute 的 (sql, params);fetchone 回给定行(验参数透传用)。"""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+        self.calls: list[tuple[str, tuple]] = []
+
+    def execute(self, sql: str, params: tuple = ()):
+        self.calls.append((sql, params))
+        return _FakeCursor(self._rows)
+
+    def commit(self) -> None:
+        return None
+
+
+def test_record_prediction_run_threads_baseline_and_source_step(monkeypatch):
+    import app.db.connection as connection
+
+    conn = _CaptureConn([{"id": 5}])
+    monkeypatch.setattr(connection, "table_exists", lambda name: True)
+    monkeypatch.setattr(connection, "get_conn", lambda: conn)
+
+    out = prediction_ledger.record_prediction_run(
+        "run-fva", "gtm_model", "v2", "launch_forecast", {"p50": 100},
+        baseline_value=1234.5, source_step="model",
+    )
+    assert out["ok"] is True
+    insert_sql, insert_params = conn.calls[-1]
+    assert "baseline_value" in insert_sql and "source_step" in insert_sql
+    assert 1234.5 in insert_params
+    assert "model" in insert_params
+
+
+def test_record_prediction_run_baseline_value_non_numeric_tolerated(monkeypatch):
+    import app.db.connection as connection
+
+    conn = _CaptureConn([{"id": 6}])
+    monkeypatch.setattr(connection, "table_exists", lambda name: True)
+    monkeypatch.setattr(connection, "get_conn", lambda: conn)
+
+    out = prediction_ledger.record_prediction_run(
+        "run-fva2", "gtm_model", "v2", "launch_forecast", {"p50": 100},
+        baseline_value="not-a-number", source_step="baseline",
+    )
+    assert out["ok"] is True
+    _, insert_params = conn.calls[-1]
+    # 非数值 baseline_value → None(compat 宽容),source_step 原样透传。
+    assert None in insert_params
+    assert "baseline" in insert_params

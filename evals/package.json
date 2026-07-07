@@ -1,0 +1,12 @@
+{
+  "name": "vkpi-evals",
+  "private": true,
+  "description": "Isolated devDependencies for V-KPI prompt/skill evals (promptfoo). NOT part of the main app build.",
+  "devDependencies": {
+    "promptfoo": "^0.100.0"
+  },
+  "scripts": {
+    "eval": "promptfoo eval -c promptfooconfig.yaml",
+    "view": "promptfoo view"
+  }
+}

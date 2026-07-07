@@ -42,11 +42,15 @@ DEFAULT_ORG = "viltrox"
 # 置信度档位(DDL 口径 low / medium / high);未申报按最保守档,绝不虚标。
 DEFAULT_CONFIDENCE = "low"
 
+# source_step 口径(FVA 用):产生该预测的步骤;'baseline' 与 'model' 两版可对账。
+_SOURCE_STEPS = ("rule", "model", "human_override", "baseline")
+
 # record_prediction_run 认识的可选列(未知 kw 只 debug 留痕,绝不静默进库)。
 _RUN_OPTIONAL_KEYS = (
     "organization_id", "sku", "product_sku", "market", "channel", "horizon_days",
     "input_fingerprint", "input_summary", "p10", "p50", "p90",
     "confidence", "confidence_score", "missing_data", "basis",
+    "baseline_value", "source_step",
 )
 _EVAL_OPTIONAL_KEYS = (
     "organization_id", "prev_actual", "actual_json", "calibrated_bucket", "notes",
@@ -130,6 +134,12 @@ def record_prediction_run(
     重跑语义:同 run_id 再来 → 预测正文/分位/置信度以最新为准,created_at 保留
     首次落账时刻(对答案窗口锚点不漂移)。返回 {ok, id|None, deduped: bool};
     表未建 → {ok: False, reason: 'table_missing'}。
+
+    FVA 两字段(迁移 223,可选 kw):
+      - baseline_value:naive / seasonal-naive 基线预测值(与本预测同口径,做 FVA 分母参照)。
+      - source_step:产生该预测的步骤(rule / model / human_override / baseline);
+        weekly_rollup 的 fva 段据此把同 (sku, market, channel) 的 baseline 与 model
+        两版预测对齐算误差增量。缺省 None,COALESCE 保底(重跑不给不清空)。
     """
     required = {
         "run_id": _text_or_none(run_id, 200),
@@ -175,8 +185,9 @@ def record_prediction_run(
                 organization_id, run_id, model_name, model_version, task_type,
                 product_sku, market, channel, horizon_days,
                 input_fingerprint, input_summary, prediction,
-                p10, p50, p90, confidence, confidence_score, missing_data, basis
-            ) VALUES (?,?,?,?,?, ?,?,?,?, ?, ?::jsonb, ?::jsonb, ?,?,?, ?,?, ?::jsonb, ?::jsonb)
+                p10, p50, p90, confidence, confidence_score, missing_data, basis,
+                baseline_value, source_step
+            ) VALUES (?,?,?,?,?, ?,?,?,?, ?, ?::jsonb, ?::jsonb, ?,?,?, ?,?, ?::jsonb, ?::jsonb, ?, ?)
             ON CONFLICT (organization_id, run_id) DO UPDATE SET
                 model_name = excluded.model_name,
                 model_version = excluded.model_version,
@@ -194,7 +205,9 @@ def record_prediction_run(
                 confidence = excluded.confidence,
                 confidence_score = excluded.confidence_score,
                 missing_data = excluded.missing_data,
-                basis = excluded.basis
+                basis = excluded.basis,
+                baseline_value = COALESCE(excluded.baseline_value, {RUNS_TABLE}.baseline_value),
+                source_step = COALESCE(excluded.source_step, {RUNS_TABLE}.source_step)
             RETURNING id
             """,
             (
@@ -211,6 +224,8 @@ def record_prediction_run(
                 _float_or_none(kw.get("confidence_score")),
                 _dumps(kw.get("missing_data"), empty=[]),
                 _dumps(kw.get("basis"), empty=[]),
+                _float_or_none(kw.get("baseline_value")),
+                _text_or_none(kw.get("source_step"), 40),
             ),
         ).fetchone()
         conn.commit()
@@ -360,6 +375,77 @@ def record_eval(
         return {"ok": False, "id": None, "deduped": False, "reason": "db_error"}
 
 
+# ── 纯函数:WAPE 与 FVA(预测相对基线的增益) ────────────────────────
+
+
+def _wape_of(rows: list[dict[str, Any]]) -> tuple[float | None, int]:
+    """一批行的 WAPE = sum(error_abs) / sum(abs(actual_value));返回 (wape, 合格样本数)。
+
+    只算 error_abs 与 actual_value 双双齐全的行;分母 0 或无合格行 → wape None(分母 0 安全)。
+    """
+    err_sum = 0.0
+    act_sum = 0.0
+    n = 0
+    for row in rows:
+        err = _float_or_none(row.get("error_abs"))
+        act = _float_or_none(row.get("actual_value"))
+        if err is not None and act is not None:
+            err_sum += abs(err)
+            act_sum += abs(act)
+            n += 1
+    wape = round(err_sum / act_sum, 6) if n > 0 and act_sum > 0 else None
+    return wape, n
+
+
+def _fva_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """FVA(Forecast Value Add)段:同 (sku, market, channel) 有 baseline 与 model
+    两版预测的,算 model 相对 baseline 的 WAPE 增量(delta = model_wape - baseline_wape,
+    负 = 模型更好)。
+
+    只认 source_step ∈ {'baseline', 'model'} 的行;缺 source_step / 只有单版的组不出
+    对照(诚实态,不虚构增益)。返回 {n_groups, mean_delta, model_better_share, groups};
+    无合格组 → n_groups 0、mean_delta/model_better_share None、groups []。
+    """
+    grouped: dict[tuple[Any, Any, Any], dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        step = _text_or_none(row.get("source_step"), 40)
+        if step not in ("baseline", "model"):
+            continue
+        key = (
+            _text_or_none(row.get("product_sku") or row.get("sku"), 120),
+            _text_or_none(row.get("market"), 40),
+            _text_or_none(row.get("channel"), 60),
+        )
+        bucket = grouped.setdefault(key, {"baseline": [], "model": []})
+        bucket[step].append(row)
+
+    groups: list[dict[str, Any]] = []
+    deltas: list[float] = []
+    better = 0
+    for key, bucket in grouped.items():
+        baseline_wape, baseline_n = _wape_of(bucket["baseline"])
+        model_wape, model_n = _wape_of(bucket["model"])
+        if baseline_wape is None or model_wape is None:
+            continue
+        delta = round(model_wape - baseline_wape, 6)
+        deltas.append(delta)
+        if delta < 0:
+            better += 1
+        groups.append({
+            "sku": key[0], "market": key[1], "channel": key[2],
+            "baseline_wape": baseline_wape, "model_wape": model_wape,
+            "delta": delta, "baseline_n": baseline_n, "model_n": model_n,
+        })
+    groups.sort(key=lambda g: g["delta"])  # 最优(delta 最负)在前
+    n_groups = len(groups)
+    return {
+        "n_groups": n_groups,
+        "mean_delta": round(sum(deltas) / n_groups, 6) if n_groups else None,
+        "model_better_share": round(better / n_groups, 4) if n_groups else None,
+        "groups": groups,
+    }
+
+
 # ── 纯函数:周评估汇总 ───────────────────────────────────────────────
 
 
@@ -370,13 +456,15 @@ def weekly_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
       分母 0 或无合格行 → None(分母 0 安全)。
     - interval_coverage / direction_hit_rate:只算命中位非 None 的行
       (BOOLEAN 读回 int 1/0 宽容);无已知行 → None。
+    - fva:同 (sku, market, channel) 有 baseline 与 model 两版预测的误差增量对照
+      (需行带 source_step + sku/market/channel;缺则该段 n_groups=0 诚实空)。
     - n 为总行数;各指标另带样本数(wape_n / interval_n / direction_n)诚实可查。
     """
     rows = rows or []
     n = len(rows)
     if n == 0:
         return {"n": 0, "wape": None, "interval_coverage": None, "direction_hit_rate": None,
-                "wape_n": 0, "interval_n": 0, "direction_n": 0}
+                "wape_n": 0, "interval_n": 0, "direction_n": 0, "fva": _fva_rollup([])}
 
     err_sum = 0.0
     act_sum = 0.0
@@ -407,6 +495,7 @@ def weekly_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "wape_n": wape_n,
         "interval_n": len(interval_known),
         "direction_n": len(direction_known),
+        "fva": _fva_rollup(rows),
     }
 
 
