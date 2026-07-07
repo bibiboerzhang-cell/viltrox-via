@@ -1,6 +1,6 @@
 """KOL 预测战绩(performance_forecast v1)—— 「找他合作,大概能跑出什么数」。
 
-口径(决定性分位数法,零 LLM、零新采集、零写库):
+口径(决定性分位数法,零 LLM、零新采集):
   基线      该 KOL 全部有效视频证据的播放分布 → p10/p50/p90 期望播放
             (线性插值分位数,可复算);互动率取逐视频 (赞+评)/播放 的中位数;
   SKU 调整  带 sku 参数时,用焦段矩阵词表/正则(复用 focal_matrix 的既有提取器)
@@ -19,9 +19,15 @@
 数据源(全只读):vkpi_kol_pool / vkpi_kol_video_evidence / vkpi_analysis_cache
 (derive_method='video_analysis_final_v1', status='ready') / vkpi_products(SKU 校验)。
 
+预测流水(B3 学习闭环通电 · 刀1):ready 预测出结果处 best-effort 追加一行
+vkpi_forecast_log(迁移215,唯一可写表;p10/p50/p90/er/confidence/method/context),
+供 30 天后 learning.forecast_feedback 回查实际播放对答案出带内率;落库失败只警告
+绝不影响返回,dry_run=True 可关;empty/error 态无数字可验,不落流水。
+
 compat 约定:SQL 占位符用 ?;SQL 字符串零字面 percent(不用 LIKE);BOOLEAN 读回
 可能是 int 1/0,判断走 _truthy;JSONB 双态走 focal_matrix._loads。函数内懒 import get_conn。
-红线:纯读聚合,绝不写库;零触 fit 评分存储列、不碰 rule_v0;零 LLM 调用。
+红线:业务/评分表纯读聚合,唯一写入是 vkpi_forecast_log 预测流水(追加式);
+零触 fit 评分存储列、不碰 rule_v0;零 LLM 调用。
 """
 from __future__ import annotations
 
@@ -35,6 +41,9 @@ logger = get_logger(__name__)
 
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 METHOD = "evidence_quantile_v1"
+
+# 预测流水语境白名单(迁移215 vkpi_forecast_log.context);未知语境收敛回 drawer,不脏枚举。
+LOG_CONTEXTS: tuple[str, ...] = ("launchpad", "drawer", "sim")
 
 # 调整系数护栏(全部可追溯进 basis)
 _RATIO_CLAMP = (0.75, 1.30)     # 覆盖史数据驱动因子的夹取范围
@@ -394,6 +403,38 @@ def _track_record_block(videos: list[dict[str, Any]], fm: Any) -> dict[str, Any]
     }
 
 
+# ── 预测流水落库钩子(B3 · 刀1;唯一写入点,best-effort)──────────────
+
+
+def _log_forecast(db: Any, payload: dict[str, Any], context: str) -> None:
+    """ready 预测追加一行 vkpi_forecast_log(outcome='pending',30 天后对答案)。
+
+    调用方包 try/except:表未建(迁移215未 apply)/写失败只警告,绝不影响预测返回。
+    只写流水表明确列,绝不触任何评分列。
+    """
+    basis = payload.get("basis") or {}
+    db.execute(
+        """
+        INSERT INTO vkpi_forecast_log
+            (kol_pool_id, sku, p10, p50, p90, engagement_rate,
+             confidence, method, context, outcome)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        """,
+        (
+            int(payload["kol_pool_id"]),
+            _text(payload.get("sku"), 120),
+            _int_or_none(payload.get("expected_views_p10")),
+            _int_or_none(payload.get("expected_views_p50")),
+            _int_or_none(payload.get("expected_views_p90")),
+            payload.get("engagement_rate"),
+            _text(payload.get("confidence"), 20),
+            _text(basis.get("method"), 60) or METHOD,
+            context if context in LOG_CONTEXTS else "drawer",
+        ),
+    )
+    db.commit()
+
+
 # ── 置信度(规则进 basis,可追溯)─────────────────────────────────────
 
 
@@ -411,11 +452,21 @@ def _confidence(views_sample: list[float], p10: float | None, p90: float | None)
 # ── 主入口(契约签名,兄弟件依赖)─────────────────────────────────────
 
 
-def forecast_for_kol(kol_pool_id: int, sku: str | None = None, *, conn: Any = None) -> dict[str, Any]:
+def forecast_for_kol(
+    kol_pool_id: int,
+    sku: str | None = None,
+    *,
+    conn: Any = None,
+    context: str = "drawer",
+    dry_run: bool = False,
+) -> dict[str, Any]:
     """KOL 预测战绩;KOL 不存在抛 LookupError(路由转 404)。
 
     返回键含契约字段:status / expected_views_p50 / expected_views_p10 /
     expected_views_p90 / engagement_rate / confidence / basis。
+    ready 结果 best-effort 落一行 vkpi_forecast_log 预测流水(学习闭环对答案原料);
+    context 标调用语境(launchpad / drawer / sim),dry_run=True 跳过落库,
+    落库失败只警告绝不影响返回(既有调用方行为零变化)。
     """
     from app.db.connection import get_conn
 
@@ -508,7 +559,7 @@ def forecast_for_kol(kol_pool_id: int, sku: str | None = None, *, conn: Any = No
     if low_sample:
         summary_parts.append("样本不足(<3),仅供参考")
 
-    return {
+    result = {
         **common,
         "status": "ready",
         "expected_views_p10": expected_p10,
@@ -531,3 +582,16 @@ def forecast_for_kol(kol_pool_id: int, sku: str | None = None, *, conn: Any = No
         "sku_adjustment": adjustment,
         "track_record": _track_record_block(videos, fm),
     }
+
+    # B3 · 刀1:ready 预测落流水(best-effort;失败只警告,预测照常返回)。
+    if not dry_run:
+        try:
+            _log_forecast(db, result, _text(context, 20).lower())
+        except Exception as exc:  # noqa: BLE001 — 表未建/写失败均不拖垮预测本体
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001 — 回滚失败不掩盖原始告警
+                pass
+            logger.warning("forecast log write skipped (kol=%s): %s", kol_pool_id, exc)
+
+    return result

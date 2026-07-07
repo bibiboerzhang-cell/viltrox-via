@@ -34,6 +34,7 @@ import { QualityCompliancePanel } from "./QualityCompliancePanel";
 import { SimilarVideosPanel } from "./SimilarVideosPanel";
 import { ForecastPanel } from "./ForecastPanel";
 import { RateCardPanel } from "./RateCardPanel";
+import { AudienceGeoPanel } from "./AudienceGeoPanel";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -719,6 +720,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           onRefreshAudience: handleRefreshAudience,
           audienceExpand, onToggleAudienceBlock: handleToggleAudienceBlock,
         }),
+        // B2 受众地图 v1:多信号融合(评论语言/文字系统/档案国别/创作者国弱先验)+代理口径角标
+        e(AudienceGeoPanel, { apiToken, kolPoolId: item?.id }),
         e(KOLDrawerDevices, { item, devices }),
       ),
 

@@ -60,6 +60,12 @@ from app.api.routers import vkpi_industry_benchmark
 from app.api.routers import vkpi_category_tracks
 from app.api.routers import vkpi_strategy_sim
 from app.api.routers import vkpi_strategy_performance
+# B+波 数据地基:联系方式 / 受众地图 / 预测对答案 / 闭环串跑 / 客户挖KOL
+from app.api.routers import vkpi_contact_system
+from app.api.routers import vkpi_audience_geo
+from app.api.routers import vkpi_forecast_feedback
+from app.api.routers import vkpi_agent_loop
+from app.api.routers import vkpi_customer_mining
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -863,6 +869,12 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_category_tracks.router)
     app.include_router(vkpi_strategy_sim.router)
     app.include_router(vkpi_strategy_performance.router)
+    # B+波 数据地基
+    app.include_router(vkpi_contact_system.router)
+    app.include_router(vkpi_audience_geo.router)
+    app.include_router(vkpi_forecast_feedback.router)
+    app.include_router(vkpi_agent_loop.router)
+    app.include_router(vkpi_customer_mining.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

@@ -4,6 +4,7 @@ import { PredictionLedgerPanel } from "../components/PredictionLedgerPanel";
 import { WeeklyScorecardPanel } from "../components/WeeklyScorecardPanel";
 import { MissReviewPanel } from "../components/MissReviewPanel";
 import { ShadowEvalPanel } from "../components/ShadowEvalPanel";
+import { AgentLoopPanel } from "../components/AgentLoopPanel";
 
 // 件A · 自治驾照面板(作战地图廿一节「挣来的自治」L0-L4)。
 //   每类 agent 动作一张驾照卡:当前级 / 五维能力 / 命中率 / 最近升降 / 人工调级。
@@ -370,6 +371,8 @@ export function AutonomyBoardPage({ apiToken = "" }: { apiToken?: string; onNavi
       <WeeklyScorecardPanel apiToken={apiToken} />
       <MissReviewPanel apiToken={apiToken} />
       <ShadowEvalPanel apiToken={apiToken} />
+      {/* B4 智能体闭环:六步链路真串跑留痕(建议→驾照→批准→执行→结果→入记忆) */}
+      <AgentLoopPanel apiToken={apiToken} />
 
       <div className="text-right text-[10px] text-slate-600">升降判定纯规则零 LLM · 台账数据来自 prediction_ledger(缺席诚实 hold)</div>
     </div>

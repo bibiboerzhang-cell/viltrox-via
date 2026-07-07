@@ -4,6 +4,9 @@ assemble_launch_plan(sku, max_roster) 六段编排,全部复用已有件 + 守�
   ① roster            KOL 名单:new_launch_match dry-run 候选(只读、不落库)
                        + 每人招牌拍法(signature_profile)+ 该 SKU 焦段覆盖(focal_matrix);
   ② budgets           每人报价:守卫 import kol.rate_card.estimate_rate(B件契约);
+                       护栏:有价成员全员 method=cpm_benchmark_v0(纯行业基准折算、
+                       零真实报价背书)时 status 降为 estimate_only + warning 明示
+                       「预算只是谈判锚点」,绝不让拍脑袋常数冒充可决策预算;
   ③ schedule          排期:leadtime_competing.production_leadtime 个人中位周期倒排发布周,
                        无历史样本诚实用默认周期(basis=default_no_history, confidence=low),
                        同 ISO 周 >2 人时顺延一周;
@@ -331,8 +334,18 @@ def _budgets_block(members: list[dict[str, Any]]) -> dict[str, Any]:
             if high is not None:
                 high_values.append(high)
 
-    return {
-        "status": "ready",
+    # 护栏(B3):有价成员全员 method=cpm_benchmark_v0 → 预算无任何真实报价背书,
+    # status 降 estimate_only + warning 明示,防拍脑袋常数被当可决策预算。
+    priced_methods = [
+        _text((it.get("estimate") or {}).get("method"), 60)
+        for it in items
+        if (it.get("estimate") or {}).get("status") in ("ok", "ready")
+        and _float_or_none((it.get("estimate") or {}).get("estimated_usd_p50")) is not None
+    ]
+    all_benchmark = bool(priced_methods) and all(m == "cpm_benchmark_v0" for m in priced_methods)
+
+    block: dict[str, Any] = {
+        "status": "estimate_only" if all_benchmark else "ready",
         "items": items,
         "total": {
             "estimated_usd_p50": round(sum(p50_values), 2) if p50_values else None,
@@ -344,8 +357,16 @@ def _budgets_block(members: list[dict[str, Any]]) -> dict[str, Any]:
         "basis": {
             "method": "sum of rate_card.estimate_rate per member(B件契约,数字与置信度以其 payload 为准)",
             "note": "总额只加有 p50 的成员;unpriced_members 是诚实缺口,不用均值硬补。",
+            "priced_methods": sorted(set(priced_methods)),
         },
     }
+    if all_benchmark:
+        block["warning"] = (
+            f"全部 {len(priced_methods)} 名有价成员的报价均为 CPM 行业基准折算(cpm_benchmark_v0),"
+            "没有任何真实报价背书 — 预算总额只是谈判锚点,不可当决策预算;"
+            "先在报价卡录入合同价/外联回复价(vkpi_kol_rates),估价会自动切换为真报价中位数。"
+        )
+    return block
 
 
 # ── ③ 排期(leadtime_competing 个人中位周期倒排 + 同周去重) ─────────
@@ -733,7 +754,8 @@ def _forecast_block(members: list[dict[str, Any]], sku: str) -> dict[str, Any]:
     for member in members:
         kid = member.get("kol_pool_id")
         try:
-            fc = performance_forecast.forecast_for_kol(int(kid), sku=sku)
+            # context=launchpad:预测流水(vkpi_forecast_log)按语境分桶,发射台调用如实标注。
+            fc = performance_forecast.forecast_for_kol(int(kid), sku=sku, context="launchpad")
         except Exception as exc:  # noqa: BLE001
             fc = {"status": "error", "reason": _text(str(exc), 200)}
         items.append(
