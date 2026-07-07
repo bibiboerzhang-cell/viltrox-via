@@ -223,7 +223,7 @@ def enrich_item(
         try:
             conn.rollback()
         except Exception:
-            pass
+            logger.debug("回滚失败(best-effort)", exc_info=True)
         logger.warning("commerce flags extract skipped kol=%s", kol_pool_id, exc_info=True)
     _clear_kol_pool_read_cache()
     updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()

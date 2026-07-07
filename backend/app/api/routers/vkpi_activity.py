@@ -20,8 +20,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 
 router = APIRouter(prefix="/api/admin/vkpi/activity", tags=["vkpi-activity"])
+
+logger = get_logger(__name__)
 
 
 # ── 内部工具 ───────────────────────────────────────────────────────────────
@@ -44,6 +47,7 @@ def _loads(value: Any) -> dict:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
+        logger.debug("detail JSON 解析失败,降级空 dict(best-effort)", exc_info=True)
         return {}
 
 

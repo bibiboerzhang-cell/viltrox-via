@@ -756,7 +756,7 @@ def _extract_json_array(text: str) -> list[dict[str, Any]]:
             if isinstance(data, list):
                 return [item for item in data if isinstance(item, dict)]
         except Exception:
-            pass
+            logger.debug("JSON 数组整体解析失败,退逐对象抠取(best-effort)", exc_info=True)
     # 救援:截断/夹杂散文时逐对象抠(对象内不嵌套,够用)。
     out: list[dict[str, Any]] = []
     for match in re.finditer(r"\{[^{}]*\}", raw[start:]):
@@ -1120,7 +1120,7 @@ def _vertical_key(recommended_product_lines_json: Any) -> str:
         if isinstance(data, list) and data:
             return str(data[0] or "").strip().lower()
     except Exception:
-        pass
+        logger.debug("recommended_product_lines_json 解析失败,垂类键留空(best-effort)", exc_info=True)
     return ""
 
 
@@ -1316,7 +1316,7 @@ def _youtube_channel_ref(row: dict[str, Any]) -> str:
         if value.startswith("UC"):
             return value
     except Exception:
-        pass
+        logger.debug("payload 提取 channel_id 失败,退 profile_url 正则(best-effort)", exc_info=True)
     profile_url = str(row.get("profile_url") or "")
     match = re.search(r"/channel/(UC[0-9A-Za-z_-]{10,})", profile_url)
     if match:

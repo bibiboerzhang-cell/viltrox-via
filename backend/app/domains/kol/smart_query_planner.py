@@ -444,7 +444,7 @@ def plan_text_query(
                     _plan["plan_cache"] = "hit"
                     return _plan
     except Exception:
-        pass
+        logger.debug("plan 缓存读取失败,走实时规划(best-effort)", exc_info=True)
     _plan = _plan_text_query_impl(query, body=body, staff=staff)
     try:
         if isinstance(_plan, dict) and _plan.get("search_query") and not _plan.get("fallback_used"):
@@ -467,5 +467,5 @@ def plan_text_query(
             )
             _cc.commit()
     except Exception:
-        pass
+        logger.debug("plan 缓存写入失败(best-effort,不影响返回)", exc_info=True)
     return _plan

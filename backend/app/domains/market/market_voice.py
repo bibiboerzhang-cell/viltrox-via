@@ -183,7 +183,7 @@ def _extract_focals(blob: str) -> set[str]:
         try:
             return set(_fm_extract_focals(blob))
         except Exception:  # noqa: BLE001 - 复用失败退降级正则,不炸报告
-            pass
+            logger.debug("focal_matrix 定焦提取失败,退降级正则(best-effort)", exc_info=True)
     return {d for m in _FALLBACK_FOCAL_RE.findall(blob) if (d := _focal_display(m))}
 
 
@@ -192,7 +192,7 @@ def _extract_zooms(blob: str) -> set[str]:
         try:
             return set(_fm_extract_zooms(blob))
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("focal_matrix 变焦提取失败,退降级正则(best-effort)", exc_info=True)
     out: set[str] = set()
     for lo, hi in _FALLBACK_ZOOM_RE.findall(blob):
         a, b = _focal_display(lo), _focal_display(hi)

@@ -17,6 +17,7 @@ if str(BACKEND) not in sys.path:
 
 import psycopg  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
+from stdout_utils import out  # noqa: E402
 
 from app.core.config import DB_RUNTIME_URL  # noqa: E402
 
@@ -124,14 +125,14 @@ def main() -> None:
                             """,
                             (f"requeued_retryable_final_v1:{item['reason']}", item["id"], max(1, int(args.max_attempts))),
                         )
-    print(f"mode: {'commit' if args.commit else 'dry-run'}")
-    print(f"max_attempts: {max(1, int(args.max_attempts))}")
-    print(f"requeue_candidates: {len(candidates)}")
+    out(f"mode: {'commit' if args.commit else 'dry-run'}")
+    out(f"max_attempts: {max(1, int(args.max_attempts))}")
+    out(f"requeue_candidates: {len(candidates)}")
     for item in candidates:
-        print(f"REQUEUE\t{item['id']}\t{item['target_id']}\t{item['platform']}\tattempts={item['attempts']}\t{item['reason']}")
-    print(f"skipped_failed: {len(skipped)}")
+        out(f"REQUEUE\t{item['id']}\t{item['target_id']}\t{item['platform']}\tattempts={item['attempts']}\t{item['reason']}")
+    out(f"skipped_failed: {len(skipped)}")
     for item in skipped:
-        print(f"SKIP\t{item['id']}\t{item['target_id']}\t{item['platform']}\tattempts={item['attempts']}\t{item['reason']}")
+        out(f"SKIP\t{item['id']}\t{item['target_id']}\t{item['platform']}\tattempts={item['attempts']}\t{item['reason']}")
 
 
 if __name__ == "__main__":

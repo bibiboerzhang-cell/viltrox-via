@@ -410,7 +410,7 @@ def add_rate(
         try:
             db.rollback()
         except Exception:  # noqa: BLE001 — 回滚失败不掩盖原始错误
-            pass
+            logger.debug("回滚失败(best-effort,不掩盖原始错误)", exc_info=True)
         raise RuntimeError(
             f"报价写入失败(vkpi_kol_rates 表可能未建,先 apply 迁移211):{str(exc)[:200]}"
         ) from exc

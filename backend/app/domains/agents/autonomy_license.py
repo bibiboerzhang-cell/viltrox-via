@@ -136,7 +136,7 @@ def _safe_rollback(conn: Any) -> None:
     try:
         conn.rollback()
     except Exception:  # noqa: BLE001 — 回滚失败不再连环炸
-        pass
+        logger.debug("回滚失败(best-effort)", exc_info=True)
 
 
 def _dimensions_for_level(level: int) -> dict[str, bool]:
@@ -192,7 +192,7 @@ def _consecutive_miss_streak(action_type: str, ledger: dict[str, Any]) -> tuple[
                     if streak is not None and streak >= 0:
                         return streak, f"ledger_api:{name}"
                 except Exception:  # noqa: BLE001 — 可选接口炸则退推断路径
-                    pass
+                    logger.debug("ledger 可选接口读取失败,退推断路径(best-effort)", exc_info=True)
     except ImportError:
         pass
     # 安全推断:窗口内命中率为 0 且有样本 → 窗口内全 miss → 最近 sample 次必为连续 miss。

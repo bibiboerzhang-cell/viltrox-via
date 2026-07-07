@@ -207,7 +207,7 @@ def _extract_focals(blob: str) -> set[str]:
         try:
             return set(_fm_extract_focals(blob))
         except Exception:  # noqa: BLE001 - 复用失败退降级正则,不炸报告
-            pass
+            logger.debug("focal_matrix 提取失败,退降级正则(best-effort)", exc_info=True)
     return {d for m in _FALLBACK_FOCAL_RE.findall(blob) if (d := _focal_display(m))}
 
 
@@ -258,7 +258,7 @@ def _top_quotes(docs: list[dict[str, Any]], n: int = QUOTES_PER_TRACK) -> list[d
         try:
             return _mv_top_quotes(docs, n)
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("market_voice top_quotes 复用失败,退本地排序(best-effort)", exc_info=True)
     ranked = sorted(docs, key=lambda d: (_int0(d.get("likes")), str(d.get("at") or "")), reverse=True)
     return [_quote(d) for d in ranked[:n]]
 
@@ -370,7 +370,7 @@ def _competitor_vocab() -> dict[str, dict[str, Any]]:
         try:
             return _bp_competitor_vocab()
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("brand_pulse 竞品词表读取失败,退空表(best-effort)", exc_info=True)
     return {}
 
 
@@ -379,7 +379,7 @@ def _viltrox_terms() -> list[str]:
         try:
             return list(_bp_viltrox_terms())
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("brand_pulse viltrox 词表读取失败,退默认词(best-effort)", exc_info=True)
     return ["viltrox"]
 
 
@@ -388,7 +388,7 @@ def _matcher():
         try:
             return _bp_matcher()
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("brand_pulse matcher 构造失败,退子串匹配(best-effort)", exc_info=True)
     return lambda text, kw: str(kw or "").lower() in str(text or "").lower()
 
 

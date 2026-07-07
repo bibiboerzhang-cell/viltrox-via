@@ -270,6 +270,7 @@ def _adoption_profile() -> dict:
             """
         ).fetchall()
     except Exception:
+        logger.debug("偏好画像读取失败,返回空画像(best-effort)", exc_info=True)
         return {}
     platforms: dict[str, int] = {}
     topic_words: dict[str, int] = {}

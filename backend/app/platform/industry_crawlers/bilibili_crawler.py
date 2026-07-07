@@ -23,6 +23,10 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 APIFY_API_BASE = "https://api.apify.com/v2"
 DEFAULT_ACTOR_ID = "zhorex~bilibili-scraper"
@@ -112,7 +116,7 @@ class BilibiliCrawler:
                     dataset_item_count=len(items),
                 )
             except Exception:
-                pass  # 记账失败绝不阻断爬取
+                logger.debug("apify 记账失败,不阻断爬取(best-effort)", exc_info=True)
             return {
                 "provider": "bilibili",
                 "provider_status": "ok",

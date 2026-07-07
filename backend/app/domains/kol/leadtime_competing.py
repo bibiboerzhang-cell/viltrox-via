@@ -34,6 +34,10 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 # 有效制作周期上限:签收后超过这个天数才发布,视为与该次履约无关(不算样本)。
 MAX_LEADTIME_DAYS = 180
 # 展示样本条数上限(median 用全量样本算,列表只回给前端前 N 条)。
@@ -496,7 +500,7 @@ def competing_activity(kol_pool_id: int, window_days: int = 90) -> dict[str, Any
                     "brand_signal",
                 )
     except Exception:  # noqa: BLE001 — 副源挂了不拖垮主源结果(增益信号,非阻塞)
-        pass
+        logger.debug("brand_signal 副源读取失败,跳过增益信号(best-effort)", exc_info=True)
 
     items.sort(key=lambda it: str(it.get("when") or ""), reverse=True)
     brands = sorted(

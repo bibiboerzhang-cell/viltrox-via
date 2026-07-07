@@ -90,7 +90,7 @@ def _safe_rollback(conn: Any) -> None:
     try:
         conn.rollback()
     except Exception:  # noqa: BLE001 — 回滚失败不再连环炸
-        pass
+        logger.debug("回滚失败(best-effort)", exc_info=True)
 
 
 def _step(

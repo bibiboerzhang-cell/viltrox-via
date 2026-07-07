@@ -7,6 +7,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import actions as product_analysis_actions
@@ -17,6 +18,8 @@ from app.domains import audit
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+
+logger = get_logger(__name__)
 
 COMPETITOR_SCORE_ADJUSTMENTS = {
     "avoid": -999.0,
@@ -595,7 +598,7 @@ def list_recommendations(launch_id: int | None = None, run_id: int | None = None
             display_context={"source": "product_analysis.list_recommendations"},
         )
     except Exception:
-        pass  # 双保险:helper 已自吞并告警,展示可用性优先
+        logger.debug("outcome 底座落行失败(双保险:helper 已自吞并告警,展示可用性优先)", exc_info=True)
     return {"recommendations": recs}
 
 

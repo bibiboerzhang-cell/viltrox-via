@@ -4,10 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.domains.search import natural_search
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-search"])
+
+logger = get_logger(__name__)
 
 
 @router.get("/search")
@@ -54,12 +57,7 @@ def vkpi_global_search(
         try:
             return [dict(r) for r in conn.execute(sql, params).fetchall()]
         except Exception:
-            try:
-                from app.core.logging import get_logger
-
-                get_logger(__name__).warning("global_search 子查询失败", exc_info=True)
-            except Exception:
-                pass
+            logger.warning("global_search 子查询失败", exc_info=True)
             return []
 
     # 非管理层的可见集 SQL(服务端从鉴权 staff 推导,绝不信客户端;识别不出身份=只回空,诚实)。

@@ -161,7 +161,7 @@ async def job_vkpi_official_daily_report(round_key: str = "daily"):
 
             _record_scheduler_run("vkpi_official_daily_report", ok=False, error="exception(见日志)")
         except Exception:
-            pass
+            logger.debug("scheduler run 兜底记录失败(best-effort)", exc_info=True)
 
 
 async def job_vkpi_official_visual_scan():

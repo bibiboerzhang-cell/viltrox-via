@@ -591,7 +591,7 @@ def forecast_for_kol(
             try:
                 db.rollback()
             except Exception:  # noqa: BLE001 — 回滚失败不掩盖原始告警
-                pass
+                logger.debug("回滚失败(best-effort,不掩盖原始告警)", exc_info=True)
             logger.warning("forecast log write skipped (kol=%s): %s", kol_pool_id, exc)
 
     return result

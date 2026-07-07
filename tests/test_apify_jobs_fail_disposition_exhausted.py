@@ -111,10 +111,19 @@ class FailJobExhaustedRoutingTests(unittest.TestCase):
         conn = self._run(exc_message="precheck: youtube oEmbed 404 deleted", attempts=0)
         self.assertEqual(conn.status_writes(), ["triage"])
 
-    def test_unknown_still_falls_to_failed(self) -> None:
-        # unknown(不认识的类别)仍保守落 failed(行为不变,可能藏永久错)。
+    def test_unknown_requeues_with_backoff_when_budget_left(self) -> None:
+        # 90106365a 起 unknown 归入 retry 类(实测大半是瞬时环境问题,重跑即过):
+        # attempts=0 → next_attempt=1 < 2(有预算)→ 重新 queued(带退避),不再直落 failed。
         conn = self._run(exc_message="something weird with no recognizable signal", attempts=0)
-        self.assertEqual(conn.status_writes(), ["failed"])
+        self.assertEqual(conn.status_writes(), ["queued"])
+
+    def test_unknown_exhausted_goes_to_triage(self) -> None:
+        # unknown 走 retry 类既有归宿:预算耗尽(attempts=1 → next_attempt=2 >= 2)
+        # 汇入 triage 可见池待人工,不再死在无人排水的 failed 池。
+        conn = self._run(exc_message="something weird with no recognizable signal", attempts=1)
+        writes = conn.status_writes()
+        self.assertIn("triage", writes)
+        self.assertNotIn("failed", writes)
 
 
 if __name__ == "__main__":

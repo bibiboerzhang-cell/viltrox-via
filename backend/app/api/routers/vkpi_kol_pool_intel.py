@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
@@ -20,6 +21,8 @@ import app.domains.evidence.summary as evidence_summary
 from app.domains.intelligence import gemini_single_kol_preflight
 
 router = APIRouter(tags=["vkpi-kol-pool"])
+
+logger = get_logger(__name__)
 
 
 @router.post("/kol-pool/{kol_pool_id}/contacts")
@@ -104,6 +107,7 @@ def _assert_not_others_claim(staff: dict, kol_pool_id: int) -> None:
             (int(kol_pool_id),),
         ).fetchone()
     except Exception:
+        logger.debug("claims 关联读取失败,跳过自动带出(best-effort)", exc_info=True)
         return
     if not row:
         return

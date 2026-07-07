@@ -110,7 +110,7 @@ def _row_strength(confidence: Any, source: str) -> float:
         if confidence is not None and str(confidence) != "":
             return max(0.0, min(1.0, float(confidence)))
     except Exception:
-        pass
+        logger.debug("confidence 数值化失败,按来源可信度兜底(best-effort)", exc_info=True)
     return float(SOURCE_TRUST.get(source, DEFAULT_SOURCE_TRUST))
 
 

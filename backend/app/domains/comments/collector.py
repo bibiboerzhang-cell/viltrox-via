@@ -135,7 +135,7 @@ def _detect_comment_language(text: str) -> str | None:
         if code and code != "unknown":
             return code[:10]
     except Exception:
-        pass
+        logger.debug("langdetect 探测失败,退下一级语言检测(best-effort)", exc_info=True)
     try:
         from app.domains.kol.audience_language import detect_lang
 

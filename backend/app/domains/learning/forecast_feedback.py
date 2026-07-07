@@ -239,7 +239,7 @@ def refresh_forecast_outcomes(
 
                 get_conn().rollback()
         except Exception:  # noqa: BLE001 — 回滚失败不掩盖原始错误
-            pass
+            logger.debug("回滚失败(best-effort,不掩盖原始告警)", exc_info=True)
         result["status"] = "error"
         result["reason"] = str(exc)[:300]
         return result

@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.core.security import get_current_user
 from app.domains import costs
 from app.domains.access import policy, scope
@@ -18,6 +19,8 @@ from app.domains.projects import retrospective_aggregate
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
+
+logger = get_logger(__name__)
 
 # 行为不变搬迁:收款遮蔽簇 + _scope_403 + MAX_CONTRACT_UPLOAD_BYTES 已整体 move 到
 # vkpi_projects_masking.py;此处显式 re-export(含下划线私有名)兜住所有调用点。
@@ -861,7 +864,7 @@ def add_project_material(project_id: int, body: dict, staff=Depends(require_tab(
             metadata={"asset_id": item.get("id"), "file_name": meta["file_name"]},
         )
     except Exception:
-        pass
+        logger.debug("项目素材活动流记录失败(best-effort,不影响入库结果)", exc_info=True)
     return {"status": "stored", "item": item}
 
 
