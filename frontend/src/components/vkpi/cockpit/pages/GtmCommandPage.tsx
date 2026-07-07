@@ -3,14 +3,22 @@ import { Compass } from "lucide-react";
 import { StrategySimPanel } from "../components/StrategySimPanel";
 import { NorthStarGauges } from "../components/NorthStarGauges";
 import { ThresholdBar } from "../components/ThresholdBar";
+// W4 · 渠道四面板孤儿布线(均自取数自判空,失败安静缺席)。
+import { DealerFitPanel } from "../components/DealerFitPanel";
+import { OfficialPlannerPanel } from "../components/OfficialPlannerPanel";
+import { IndieSitePanel } from "../components/IndieSitePanel";
+import { ChannelMixPanel } from "../components/ChannelMixPanel";
+import { usePermissions } from "../../../../hooks/usePermissions";
 import {
   getGtmPlanPreview,
   getMarketBrainSummary,
   listSkuOptions,
+  materializeGtmPlan,
 } from "../../../../services/vkpi/gtmCommand-api";
 import type {
   GtmActionItem,
   GtmGoal,
+  GtmMaterializeResult,
   GtmPlanPreview,
   GtmPlanSection,
   LearningDigest,
@@ -25,7 +33,9 @@ import type {
 //   与各卡的显式字段);score_details / raw_* / competitor_notes / 黑名单等 private 字段
 //   即使后端多给,也已在 gtmCommand-api 的 stripPrivateFields 深度剥除,页面代码零引用。
 //   KOL 风险只出标签(risk_labels);预判强制条件化四段式(预判/依据+置信/触发加码/撤退条件)。
-//   人审执行按钮 v1 占位 disabled(title「GTM-3 接线」)。失败安静:每卡自判空,单卡错不拖垮整页。
+//   逐条人审执行按钮 v1 仍占位 disabled(title「GTM-3 接线」,per-item 执行在 Action Inbox 做);
+//   ④ 今日行动已接「生成行动」流:dry-run 预演(零写库)→ 确认落库(materialize,逐条
+//   requires_approval 进 Action Inbox 人审)。失败安静:每卡自判空,单卡错不拖垮整页。
 
 const e = React.createElement;
 
@@ -256,7 +266,7 @@ function LearningBlock({ digest, footnote }: { digest: LearningDigest; footnote:
   );
 }
 
-export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
+export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
   // 全局五卡
   const [summary, setSummary] = React.useState<MarketBrainSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = React.useState(false);
@@ -276,6 +286,21 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
   const [plan, setPlan] = React.useState<GtmPlanPreview | null>(null);
   const [planLoading, setPlanLoading] = React.useState(false);
   const [planError, setPlanError] = React.useState("");
+  // ④ 今日行动 · 生成行动流(materialize:dry-run 预演 → 确认落库)
+  const [matPreview, setMatPreview] = React.useState<GtmMaterializeResult | null>(null);
+  const [matDone, setMatDone] = React.useState<GtmMaterializeResult | null>(null);
+  const [matBusy, setMatBusy] = React.useState<"" | "dry" | "persist">("");
+  const [matError, setMatError] = React.useState("");
+
+  // 真落库按钮可见性:用现成 manager/owner 判定(usePermissions.isManager,不自造权限体系)。
+  // 独立挂载 / 单测无 AuthProvider 时 useAuth 会抛 —— 兜底放行按钮,由后端 vkpi:write 403 把关
+  // 并走 matError 提示。usePermissions 内部仅 useContext,每次渲染同序调用,try 包裹不破坏 hook 顺序。
+  let canPersistBets = true;
+  try {
+    canPersistBets = usePermissions().isManager();
+  } catch {
+    canPersistBets = true; // 无 Auth 上下文 → 后端 403 兜底
+  }
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -309,6 +334,10 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
       setPlanLoading(true);
       setPlanError("");
       setPlan(null);
+      // 换 plan 即作废旧的生成行动预演/回执(对账跟着 plan 走)。
+      setMatPreview(null);
+      setMatDone(null);
+      setMatError("");
       const budget = Number(budgetText);
       getGtmPlanPreview(apiToken, {
         sku,
@@ -322,6 +351,46 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
         .finally(() => setPlanLoading(false));
     },
     [apiToken, budgetText, country, goal, windowDays],
+  );
+
+  // 生成行动流:dryRun=true 预演(零写库,幂等对账);dryRun=false 真落库(bet 进
+  // Action Inbox 逐条 requires_approval 人审)。失败只写 matError 小条,不拖垮整页。
+  const runMaterialize = React.useCallback(
+    (dryRun: boolean) => {
+      if (!apiToken || !selectedSku || matBusy) return;
+      setMatBusy(dryRun ? "dry" : "persist");
+      setMatError("");
+      const budget = Number(budgetText);
+      materializeGtmPlan(
+        apiToken,
+        {
+          sku: selectedSku,
+          country,
+          budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 3000,
+          goal,
+          windowDays,
+        },
+        dryRun,
+      )
+        .then((res) => {
+          if (res.status === "error" || (!dryRun && !res.ok)) {
+            setMatError(res.reason || "生成行动失败");
+            return;
+          }
+          if (dryRun) {
+            setMatPreview(res);
+            setMatDone(null);
+          } else {
+            setMatDone(res);
+            setMatPreview(null);
+          }
+        })
+        .catch((err: any) =>
+          setMatError(String(err?.detail || err?.message || (dryRun ? "行动预演失败" : "行动落库失败"))),
+        )
+        .finally(() => setMatBusy(""));
+    },
+    [apiToken, selectedSku, matBusy, budgetText, country, goal, windowDays],
   );
 
   const p = plan?.public_plan;
@@ -436,7 +505,7 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
       e(
         "button",
         {
-          onClick: () => { setPlan(null); setPlanError(""); setSelectedSku(""); },
+          onClick: () => { setPlan(null); setPlanError(""); setSelectedSku(""); setMatPreview(null); setMatDone(null); setMatError(""); },
           className: "rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-slate-300 hover:bg-white/[0.06]",
         },
         "返回全局",
@@ -716,10 +785,116 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
           ),
         ),
       ),
+      // ③.5 · W4 渠道四面板(Dealer 适配 / 官号计划器 / 独立站承接 / 渠道组合)。
+      // 四组件全部自取数自判空(诚实空态),接口失败安静缺席 —— 单卡错不拖垮整页宪法。
+      e(
+        "div",
+        { className: "grid grid-cols-1 gap-4 xl:grid-cols-2" },
+        e(DealerFitPanel, { apiToken, sku: selectedSku }),
+        e(OfficialPlannerPanel, { apiToken, sku: selectedSku }),
+        e(IndieSitePanel, { apiToken, sku: selectedSku }),
+        e(ChannelMixPanel, {
+          apiToken,
+          sku: selectedSku,
+          budget: Number(budgetText) > 0 ? Number(budgetText) : 3000,
+          goal,
+        }),
+      ),
       // ④ 今日行动
       e(
         Card,
-        { title: "④ 今日行动", hint: "materialize 预览,不落库;每条带六要素,人审执行按钮 GTM-3 接线" },
+        { title: "④ 今日行动", hint: "「生成行动」两步:预演(dry-run 零写库,幂等对账)→ 确认落库(bet 进 Action Inbox 逐条人审);逐条人审执行按钮 GTM-3 接线" },
+        // 生成行动流:按钮① dry-run 预演 → 摘要 + 条目预览;按钮② 确认落库(manager/owner 可见,
+        // 后端 vkpi:write 403 兜底);失败只出本块小条(单卡错不拖垮整页)。
+        e(
+          "div",
+          { className: "mb-3 rounded-xl border border-sky-300/15 bg-sky-500/[0.04] p-3" },
+          e(
+            "div",
+            { className: "flex flex-wrap items-center gap-2" },
+            e(
+              "button",
+              {
+                onClick: () => runMaterialize(true),
+                disabled: !selectedSku || matBusy !== "",
+                title: "dry-run:只出 bet 预览与幂等对账,零写库",
+                className:
+                  "rounded-lg border border-sky-300/30 bg-sky-500/[0.12] px-2.5 py-1.5 text-[11px] text-sky-100 hover:bg-sky-500/[0.2] disabled:cursor-not-allowed disabled:opacity-40",
+              },
+              matBusy === "dry" ? "预演中…" : "生成行动(预演)",
+            ),
+            matPreview && canPersistBets
+              ? e(
+                  "button",
+                  {
+                    onClick: () => runMaterialize(false),
+                    disabled: matBusy !== "" || (matPreview.would_insert ?? 0) === 0,
+                    title:
+                      (matPreview.would_insert ?? 0) === 0
+                        ? "本次无可新增 bet(已存在的幂等不重插)"
+                        : "真落库:bet 进 Action Inbox(status=suggested),逐条 requires_approval 人审;幂等不重插",
+                    className:
+                      "rounded-lg border border-emerald-300/30 bg-emerald-500/[0.12] px-2.5 py-1.5 text-[11px] text-emerald-100 hover:bg-emerald-500/[0.2] disabled:cursor-not-allowed disabled:opacity-40",
+                  },
+                  matBusy === "persist" ? "落库中…" : `确认落库(新增 ${matPreview.would_insert ?? 0} 条)`,
+                )
+              : null,
+            e(
+              "span",
+              { className: "text-[9.5px] text-slate-500" },
+              "预演零写库 · 落库后逐条进 Action Inbox 人审,无自动执行",
+            ),
+          ),
+          matError
+            ? e(
+                "div",
+                { className: "mt-2 rounded-lg border border-rose-300/25 bg-rose-500/[0.06] px-2.5 py-1.5 text-[10.5px] text-rose-200" },
+                `生成行动未生效 · ${matError}`,
+              )
+            : null,
+          matPreview
+            ? e(
+                "div",
+                { className: "mt-2" },
+                e(
+                  "div",
+                  { className: "text-[10.5px] text-slate-300" },
+                  `预演对账:共 ${matPreview.bets_total} 条 bet · 可新增 ${matPreview.would_insert ?? 0} 条 · 已存在 ${matPreview.already_present} 条(幂等不重插)` +
+                    (matPreview.skipped_incomplete > 0 ? ` · 跳过不完整 ${matPreview.skipped_incomplete} 条` : ""),
+                ),
+                matPreview.bets.length > 0
+                  ? e(
+                      "ul",
+                      { className: "mt-1.5 list-disc space-y-0.5 pl-4 text-[10px] leading-relaxed text-slate-400" },
+                      matPreview.bets.slice(0, 6).map((b, i) => e("li", { key: i }, b.title || b.dedupe_key || "—")),
+                      matPreview.bets.length > 6
+                        ? e("li", { key: "more", className: "list-none text-slate-600" }, `… 共 ${matPreview.bets.length} 条`)
+                        : null,
+                    )
+                  : e("div", { className: "mt-1.5 text-[10px] text-slate-500" }, "本次 plan 无完整七要素 bet 可落(诚实空态)。"),
+              )
+            : null,
+          matDone
+            ? e(
+                "div",
+                { className: "mt-2 rounded-lg border border-emerald-300/25 bg-emerald-500/[0.07] px-2.5 py-1.5" },
+                e(
+                  "div",
+                  { className: "text-[10.5px] text-emerald-200" },
+                  `已落库:新增 ${matDone.inserted_new ?? 0} 条 · 已存在 ${matDone.already_present} 条未重插 · 逐条 requires_approval 待人审`,
+                ),
+                e(
+                  "button",
+                  {
+                    onClick: () => onNavigate?.("dashboard"),
+                    className:
+                      "mt-1.5 rounded-lg border border-emerald-300/30 bg-emerald-500/[0.12] px-2.5 py-1 text-[10px] text-emerald-100 hover:bg-emerald-500/[0.2]",
+                  },
+                  "去 Action Inbox 人审 →",
+                ),
+              )
+            : null,
+        ),
         e(
           "div",
           { className: "grid grid-cols-1 gap-3 xl:grid-cols-2" },

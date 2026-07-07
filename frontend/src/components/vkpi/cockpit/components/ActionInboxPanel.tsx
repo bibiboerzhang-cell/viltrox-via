@@ -21,11 +21,14 @@ import {
   RefreshCw,
   Share2,
   Sparkles,
+  Target,
   UserPlus,
   X,
 } from "lucide-react";
 // 闭环波 L4:gtm_verdict 条目内嵌裁决一屏(去裁决 → 展开 VerdictPanel)。
 import { VerdictPanel } from "./VerdictPanel";
+// GTM-Loop:gtm_bet「标记已执行」直打 mark-done 端点(并行车道在建,前端按合约先行)。
+import { apiFetch } from "../../../../services/http";
 import {
   approveAction,
   dismissAction,
@@ -68,6 +71,8 @@ const CATEGORY_META = {
   project_shared_to_you: { label: "项目共享", Icon: Share2, color: "text-sky-300" },
   // 闭环波 L4:到期强制裁决任务(L2 produce)。不可跳过,内嵌裁决一屏。
   gtm_verdict: { label: "裁决对答案", Icon: Gavel, color: "text-fuchsia-300" },
+  // GTM-Loop L1:GTM Plan materialize 落库的押注(无自动执行体,人做业务动作后标记已执行)。
+  gtm_bet: { label: "GTM押注", Icon: Target, color: "text-sky-300" },
 };
 
 // 闭环波 L4:gtm_verdict 条目定位结果账本行,id 口径与 L2 decide 端点对齐:
@@ -283,6 +288,41 @@ export function ActionInboxPanel({
     [apiToken, busy, removeItem, setItemStatus, bumpToday, ledgerOpen, loadLedger],
   );
 
+  // GTM-Loop:gtm_bet 无自动执行器 —— approved 后人在线下做完业务动作,在此「标记已执行」。
+  // POST /api/admin/vkpi/actions/{id}/mark-done(端点并行车道在建,前端按此合约先行);
+  // 成功后刷新列表让后端真值校正(status → executed,离开 suggested/approved 视图)。
+  const markBetDone = React.useCallback(
+    (it: any) => {
+      if (!apiToken || !it || busy[it.id]) return;
+      setBusy((b) => ({ ...b, [it.id]: "markdone" }));
+      setActionError("");
+      apiFetch<{ ok?: boolean; reason?: string }>(
+        `/api/admin/vkpi/actions/${it.id}/mark-done`,
+        { method: "POST", cache: "no-store" },
+        apiToken,
+      )
+        .then((res) => {
+          if (res && res.ok === false) {
+            setActionError(res.reason || "标记未生效");
+            return;
+          }
+          setOkNote(`已标记执行 · ${it.title || "GTM押注"}`);
+          removeItem(it.id);
+          bumpToday("today_executed_count"); // 当天「已执行」+1(即时增长)
+          load(); // 成功后刷新,后端真值校正
+        })
+        .catch((err: any) => setActionError(err?.message || "标记失败"))
+        .finally(() =>
+          setBusy((b) => {
+            const next = { ...b };
+            delete next[it.id];
+            return next;
+          }),
+        );
+    },
+    [apiToken, busy, removeItem, bumpToday, load],
+  );
+
   const headerRight = loading
     ? e(Loader2, { size: 12, className: "animate-spin text-slate-400" })
     : e(
@@ -323,6 +363,30 @@ export function ActionInboxPanel({
           open ? "收起裁决" : "去裁决",
         ),
         e("span", { key: "tag", className: "text-[8px] text-slate-500" }, "不可跳过 · 人工裁决"),
+      );
+    }
+
+    // GTM-Loop:gtm_bet 已审批 → 「标记已执行」(人做完业务动作后回来点;无自动执行体,
+    // 不给通用「执行」钮免得打到无执行器的 execute)。其余 status(suggested 等)走通用流。
+    if (it.category === "gtm_bet" && it.status === "approved") {
+      return e(
+        "div",
+        { className: "mt-1.5 flex items-center gap-1.5" },
+        e(
+          "button",
+          {
+            key: "markdone",
+            type: "button",
+            disabled: Boolean(b),
+            onClick: () => markBetDone(it),
+            title: "业务动作已在线下完成 → 标记执行(复盘日三窗对答案)",
+            className:
+              "flex items-center gap-1 rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-40",
+          },
+          spin("markdone") || e(Check, { size: 9 }),
+          "标记已执行",
+        ),
+        e("span", { key: "tag", className: "text-[8px] text-emerald-300/70" }, "已审批 · 人工执行"),
       );
     }
 

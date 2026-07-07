@@ -1,12 +1,16 @@
-import { apiFetch } from "../http";
+import { apiFetch, jsonBody } from "../http";
 
-// GTM-1 · W3 · GTM Command 页专属 API 层(纯读)。
-//   两端点(W1/W2 并行在建,本层按规格合约先行,键缺失全兜底):
+// GTM-1 · W3 · GTM Command 页专属 API 层。
+//   读端点(W1/W2 并行在建,本层按规格合约先行,键缺失全兜底):
 //     A. GET /api/admin/vkpi/market-brain/summary            —— 全局五卡
 //     B. GET /api/admin/vkpi/market-brain/gtm-plan/preview   —— SKU 作战预览(public_plan 11 段)
 //   另复用既有纯读端点 /api/admin/vkpi/sku/list 做顶部 SKU 选择器(与 SKU 360°/模拟器同源)。
-//   【红线】零写库零 LLM 零采集;绝不调用 marketing-brain/daily 与 market/trends 的 GET
-//   (两者有隐藏写入,GTM-1 规格明令禁碰)。本层只 GET 上述三条纯读路径。
+//   写端点(GTM-Loop L1,本层唯一写路径):
+//     C. POST /api/admin/vkpi/market-brain/gtm-plan/materialize —— bet 落 Action Inbox。
+//        dry_run 默认 true(零写库,只出幂等对账);真落库必须显式 dry_run=false,
+//        且落库的每条 bet requires_approval=True 走人审,前端不绕审批不自动执行。
+//   【红线】零 LLM 零采集;绝不调用 marketing-brain/daily 与 market/trends 的 GET
+//   (两者有隐藏写入,GTM-1 规格明令禁碰)。除 C 之外全为纯读 GET。
 //   【显示层宪法】页面只吃 public_plan;本层对响应做深度剥私:private_evidence /
 //   score_details / raw_* / competitor_notes / model_features / debug_trace / 黑名单类
 //   字段即使后端多给也在进入组件树之前整体剔除,页面永远拿不到。
@@ -484,4 +488,87 @@ export async function getGtmPlanPreview(token: string, opts: GtmPlanPreviewParam
     token,
   );
   return normalizeGtmPlanPreview(res);
+}
+
+// ---------------------------------------------------------------------------
+// C. /market-brain/gtm-plan/materialize —— bet 落库(GTM-Loop L1,本层唯一写端点)
+//    dry_run=true:零写库,只回 bet 预览 + 幂等对账(would_insert / already_present);
+//    dry_run=false:经 persist_suggestions 落 vkpi_action_inbox,逐条 requires_approval。
+// ---------------------------------------------------------------------------
+
+export interface GtmMaterializeBetPreview {
+  dedupe_key: string;
+  title: string;
+  requires_approval: boolean;
+}
+
+export interface GtmMaterializeResult {
+  ok: boolean;
+  status: string;
+  reason: string;
+  dry_run: boolean;
+  gtm_plan_id: string;
+  sku: string;
+  goal: string;
+  bets_total: number;
+  already_present: number;
+  // dry-run 才有 would_insert;真落库才有 persisted / inserted_new(缺失 → null,页面判空)。
+  would_insert: number | null;
+  persisted: number | null;
+  inserted_new: number | null;
+  skipped_incomplete: number;
+  requires_approval_all: boolean;
+  note: string;
+  bets: GtmMaterializeBetPreview[];
+}
+
+export function normalizeGtmMaterializeResult(raw: unknown): GtmMaterializeResult {
+  const data = stripPrivateFields(asRow(raw));
+  return {
+    // 后端内部异常回 {status:"error",reason}(无 ok 键)→ ok 按严格 true 判,页面走错误提示。
+    ok: data.ok === true,
+    status: asStr(data.status),
+    reason: asStr(data.reason),
+    // 缺失时按 dry_run 处理(保守:绝不把未知响应误报成"已落库")。
+    dry_run: data.dry_run !== false,
+    gtm_plan_id: asStr(data.gtm_plan_id),
+    sku: asStr(data.sku),
+    goal: asStr(data.goal),
+    bets_total: asNum(data.bets_total) ?? 0,
+    already_present: asNum(data.already_present) ?? 0,
+    would_insert: asNum(data.would_insert),
+    persisted: asNum(data.persisted),
+    inserted_new: asNum(data.inserted_new),
+    skipped_incomplete: Array.isArray(data.skipped_incomplete) ? data.skipped_incomplete.length : 0,
+    requires_approval_all: data.requires_approval_all === true,
+    note: asStr(data.note),
+    bets: sectionItems(data.bets).map((r) => ({
+      dedupe_key: asStr(r.dedupe_key),
+      title: asStr(r.title),
+      requires_approval: r.requires_approval === true,
+    })),
+  };
+}
+
+export async function materializeGtmPlan(
+  token: string,
+  opts: GtmPlanPreviewParams,
+  dryRun = true,
+): Promise<GtmMaterializeResult> {
+  const budget = opts.budgetUsd && opts.budgetUsd > 0 ? opts.budgetUsd : 3000;
+  const body: Row = {
+    sku: opts.sku,
+    budget_usd: budget,
+    goal: opts.goal || "exposure",
+    window_days: opts.windowDays && opts.windowDays > 0 ? opts.windowDays : 30,
+    // 人审红线同向:默认 dry-run 零写库,真落库必须显式传 false。
+    dry_run: dryRun !== false,
+  };
+  if (opts.country && opts.country.trim()) body.country = opts.country.trim().toUpperCase();
+  const res = await apiFetch<Row>(
+    "/api/admin/vkpi/market-brain/gtm-plan/materialize",
+    { method: "POST", body: jsonBody(body), timeoutMs: 60000 },
+    token,
+  );
+  return normalizeGtmMaterializeResult(res);
 }
