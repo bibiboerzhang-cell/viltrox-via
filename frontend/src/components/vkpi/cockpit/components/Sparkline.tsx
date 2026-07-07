@@ -1,9 +1,7 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useMemo } from "react";
-
-const e = React.createElement;
+import { useMemo } from "react";
 
 export function Sparkline({ color, data, height = 36, width = 84 }: any) {
   const path = useMemo(() => {
@@ -18,14 +16,16 @@ export function Sparkline({ color, data, height = 36, width = 84 }: any) {
     return { line: `M${points.join(" L")}`, area: `M${points.join(" L")} L${width - 2},${height} L2,${height} Z` };
   }, [data, height, width]);
   const gradId = `g-${(color ?? "").replace("#", "")}-${data?.[0] ?? 0}`;
-  return e("svg", { viewBox: `0 0 ${width} ${height}`, style: { width, height } },
-    e("defs", null,
-      e("linearGradient", { id: gradId, x1: "0", y1: "0", x2: "0", y2: "1" },
-        e("stop", { offset: "0", stopColor: color, stopOpacity: "0.42" }),
-        e("stop", { offset: "1", stopColor: color, stopOpacity: "0" })
-      )
-    ),
-    e("path", { d: path.area, fill: `url(#${gradId})` }),
-    e("path", { d: path.line, fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" })
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width, height }}>
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={color} stopOpacity="0.42" />
+          <stop offset="1" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={path.area} fill={`url(#${gradId})`} />
+      <path d={path.line} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

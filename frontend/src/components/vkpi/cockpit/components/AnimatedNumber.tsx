@@ -12,8 +12,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { animate } from "framer-motion";
 
-const e = React.createElement;
-
 const REDUCED_MQ = "(prefers-reduced-motion: reduce)";
 
 // 读 prefers-reduced-motion(CSS media query),SSR / 无 matchMedia 环境安全回退 false。
@@ -96,7 +94,7 @@ export function AnimatedNumber({
     return () => controls.stop();
   }, [target, still, durationMs, delayMs]);
 
-  return e("span", { "data-animated-number": "" }, format(display));
+  return <span data-animated-number="">{format(display)}</span>;
 }
 
 export default AnimatedNumber;

@@ -1,11 +1,9 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 // @ts-ignore - 'three' ships no type declarations and @types/three is not installed; treat as any.
 import * as THREE from "three";
-
-const e = React.createElement;
 
 export function Globe({ pins, accentColor, onPinClick, focusTarget }: any) {
   const containerRef = useRef<any>(null);
@@ -341,5 +339,5 @@ export function Globe({ pins, accentColor, onPinClick, focusTarget }: any) {
     }
   }, [focusTarget]);
 
-  return e("div", { ref: containerRef, className: "absolute inset-0", style: { touchAction: "none" } });
+  return <div ref={containerRef} className="absolute inset-0" style={{ touchAction: "none" }} />;
 }

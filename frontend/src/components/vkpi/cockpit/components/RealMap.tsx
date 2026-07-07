@@ -1,11 +1,9 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-
-const e = React.createElement;
 
 export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoom = 12 }: any) {
   const containerRef = useRef<any>(null);
@@ -123,9 +121,11 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     });
   }, [pins, accentColor]);
   
-  return e("div", { 
-    ref: containerRef, 
-    className: "absolute inset-0 vkpi-map-wrapper",
-    style: { background: "#02060f" }
-  });
+  return (
+    <div
+      ref={containerRef}
+      className="absolute inset-0 vkpi-map-wrapper"
+      style={{ background: "#02060f" }}
+    />
+  );
 }

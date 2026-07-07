@@ -6,8 +6,6 @@
 import React from "react";
 import { ChevronDown } from "lucide-react";
 
-const e = React.createElement;
-
 const STORAGE_PREFIX = "vkpi:drawer-fold:";
 
 function readFoldState(id: string, defaultOpen: boolean): boolean {
@@ -37,20 +35,22 @@ export function SectionFold({ id, header, defaultOpen = true, children }: any) {
       return next;
     });
   };
-  return e(React.Fragment, null,
-    e("button", {
-      type: "button",
-      onClick: toggle,
-      "aria-expanded": open,
-      className: "flex w-full items-center gap-1.5 mb-2 text-left",
-    },
-      header,
-      // 收起时 chevron 转 -90°(指向右),与常见折叠面板方向语义一致
-      e(ChevronDown, {
-        size: 12,
-        className: "ml-auto shrink-0 text-slate-500 transition-transform" + (open ? "" : " -rotate-90"),
-      })
-    ),
-    open ? children : null
+  return (
+    <>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 mb-2 text-left"
+      >
+        {header}
+        {/* 收起时 chevron 转 -90°(指向右),与常见折叠面板方向语义一致 */}
+        <ChevronDown
+          size={12}
+          className={"ml-auto shrink-0 text-slate-500 transition-transform" + (open ? "" : " -rotate-90")}
+        />
+      </button>
+      {open ? children : null}
+    </>
   );
 }

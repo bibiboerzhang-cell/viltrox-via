@@ -1,10 +1,8 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { m } from "framer-motion";
-
-const e = React.createElement;
 
 export function MiniTrend({ series }: any) {
   const w = 240, h = 110, padding = 6;
@@ -23,13 +21,21 @@ export function MiniTrend({ series }: any) {
       return { ...s, d, points: pts };
     });
   }, [series]);
-  return e("svg", { viewBox: `0 0 ${w} ${h}`, className: "h-full w-full" },
-    [20,40,60,80,100].map((y) => e("line", { key: y, x1: 0, y1: y, x2: w, y2: y, stroke: "rgba(148,163,184,.08)", strokeWidth: 0.5 })),
-    paths.map((s: any, i: any) => e(m.path, {
-      key: s.name, d: s.d, fill: "none", stroke: s.color, strokeWidth: 2, strokeLinecap: "round",
-      initial: { pathLength: 0, opacity: 0 }, animate: { pathLength: 1, opacity: 1 },
-      transition: { duration: 1.2, delay: 0.3 + i * 0.15, ease: "easeOut" },
-    })),
-    paths[0]?.points.map((p: any, i: any) => e("circle", { key: i, cx: p.x, cy: p.y, r: 2, fill: "#fff", opacity: i === paths[0].points.length - 1 ? 1 : 0.4 }))
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-full w-full">
+      {[20,40,60,80,100].map((y) => (
+        <line key={y} x1={0} y1={y} x2={w} y2={y} stroke="rgba(148,163,184,.08)" strokeWidth={0.5} />
+      ))}
+      {paths.map((s: any, i: any) => (
+        <m.path
+          key={s.name} d={s.d} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round"
+          initial={{ pathLength: 0, opacity: 0 }} animate={{ pathLength: 1, opacity: 1 }}
+          transition={{ duration: 1.2, delay: 0.3 + i * 0.15, ease: "easeOut" }}
+        />
+      ))}
+      {paths[0]?.points.map((p: any, i: any) => (
+        <circle key={i} cx={p.x} cy={p.y} r={2} fill="#fff" opacity={i === paths[0].points.length - 1 ? 1 : 0.4} />
+      ))}
+    </svg>
   );
 }
