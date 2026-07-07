@@ -51,6 +51,10 @@ from app.api.routers import vkpi_creative_segments
 # A波 四主线:MY KOL 每日学习 / 问数预设问题库
 from app.api.routers import vkpi_daily_digest
 from app.api.routers import vkpi_canned_queries
+# C8 Local Worker MVP:设备注册+租约 / 校验桥+策略 / 节点看板
+from app.api.routers import vkpi_local_workers
+from app.api.routers import vkpi_local_worker_admin
+from app.api.routers import vkpi_local_worker_board
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -845,6 +849,10 @@ if IS_ADMIN_APP:
     # A波 四主线:每日学习 / 预设问题库
     app.include_router(vkpi_daily_digest.router)
     app.include_router(vkpi_canned_queries.router)
+    # C8 Local Worker:注册/租约/校验/看板
+    app.include_router(vkpi_local_workers.router)
+    app.include_router(vkpi_local_worker_admin.router)
+    app.include_router(vkpi_local_worker_board.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)
