@@ -93,7 +93,7 @@ function gtmVerdictIdsOf(it: any): { id: number; idType: "inbox" | "outcome" } {
 
 // 车道B row-flash:条目行外壳 —— status 变化(如 通过 → approved)soft pulse 一次
 // (首帧不闪;reduced-motion 在 hook 内降级为静态)。纯展示包装,零业务逻辑。
-function InboxRowShell({
+const InboxRowShell = React.memo(function InboxRowShell({
   status,
   className,
   children,
@@ -104,7 +104,7 @@ function InboxRowShell({
 }) {
   const flashRef = useRowFlash<HTMLDivElement>(status);
   return e("div", { ref: flashRef, className }, children);
-}
+});
 
 const PRIORITY_META = {
   high: { label: "高", cls: "bg-red-500/15 text-red-300 border-red-500/25" },
