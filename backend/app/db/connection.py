@@ -277,6 +277,9 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "216_vkpi_evidence_publish_date.sql",
     "217_vkpi_gtm_outcomes.sql",
     "218_scheduler_task_gtm_loop.sql",
+    "219_vkpi_signal_ledger.sql",
+    "220_vkpi_prediction_runs.sql",
+    "221_vkpi_prediction_evals.sql",
 )
 
 try:

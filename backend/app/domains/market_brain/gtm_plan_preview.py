@@ -377,7 +377,26 @@ def _build_forecast(*, window_days: int, sku: str, country: str | None,
     return entries
 
 
-def _build_market_opportunity(*, tracks_payload: dict[str, Any], bench: dict[str, Any], focal: str) -> dict[str, Any]:
+def _signal_ledger_summary(sku: str, country: str | None) -> dict[str, Any] | None:
+    """信号台账纯读兜底:summarize_for_preview status=='ready' 才返回摘要。
+
+    data_missing / 表缺席 / 任何异常一律返回 None(本页失败安静宪法,绝不拖垮 preview);
+    import 放函数内 lazy,避免与并行在建的 signal_ledger 模块循环依赖。零写库。
+    """
+    try:
+        from app.domains.market_brain import signal_ledger
+
+        summary = signal_ledger.summarize_for_preview(sku, market=country)
+    except Exception as exc:  # noqa: BLE001 — 台账缺席/异常不拖垮本段
+        logger.warning("gtm_preview signal_ledger fallback failed for %s: %s", sku, exc)
+        return None
+    if isinstance(summary, dict) and _text(summary.get("status"), 20) == "ready":
+        return summary
+    return None
+
+
+def _build_market_opportunity(*, tracks_payload: dict[str, Any], bench: dict[str, Any], focal: str,
+                              sku: str, country: str | None = None) -> dict[str, Any]:
     focal_id = f"focal:{focal}mm" if focal else ""
     opportunities = tracks_payload.get("opportunities") or []
     track = next((o for o in opportunities if o.get("track_id") == focal_id), None)
@@ -388,6 +407,17 @@ def _build_market_opportunity(*, tracks_payload: dict[str, Any], bench: dict[str
                      if _text(c.get("focal"), 20) == f"{focal}mm"), None)
 
     if not track and not cell:
+        ledger = _signal_ledger_summary(sku, country)
+        if ledger is not None:
+            return {
+                "status": "ready",
+                "focal": f"{focal}mm" if focal else None,
+                "items": ledger.get("items") or [],
+                "sources_count": _int0(ledger.get("sources_count")),
+                "sample_size": _int0(ledger.get("sample_size")),
+                "freshest_at": _text(ledger.get("freshest_at"), 40) or None,
+                "basis": "signal_ledger.summarize_for_preview(信号台账纯读兜底;赛道矩阵/焦段格局零行时启用,只给归纳信号)。",
+            }
         return {"status": "empty",
                 "reason": f"赛道矩阵与焦段格局都没有 {focal or '?'}mm 的行——窗口内该焦段零信号,诚实空态。"}
     return {
@@ -839,7 +869,8 @@ def build_preview(
 
     market_opportunity = _guard("market_opportunity", lambda: _build_market_opportunity(
         tracks_payload=tracks_payload if isinstance(tracks_payload, dict) else {},
-        bench=bench if isinstance(bench, dict) else {}, focal=focal))
+        bench=bench if isinstance(bench, dict) else {}, focal=focal,
+        sku=sku_code, country=country_clean))
     kol_candidates = _guard("kol_candidates", lambda: _build_kol_candidates(
         pool=pool, cands=cands, country=country_clean, focal=focal))
     dealer_targets = _guard("dealer_targets", lambda: _build_dealer_targets(country_clean))
