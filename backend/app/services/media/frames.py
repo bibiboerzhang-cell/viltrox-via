@@ -1,5 +1,11 @@
 """
 services/media/frames.py — 视频帧提取（ffmpeg）
+
+抽帧策略走一个可插拔接口：
+  1. PySceneDetect 场景切分（首选，若已安装 scenedetect）——按镜头取关键帧，
+     喂给 LLM 的是「互不重复的内容帧」而非等间隔的近似重复帧，直接省视觉 token。
+  2. ffmpeg 盲采样（保底，等间隔取帧 + 体积去重）——scenedetect 未装/检测失败时回退。
+opencv-python-headless 已在依赖里；scenedetect 是可选增量包，缺席时优雅降级并 logger.info。
 """
 from __future__ import annotations
 
@@ -18,6 +24,22 @@ from app.services.ai.analyzers.claude_text import analyze_text_content
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 logger = get_logger(__name__)
 
+# PySceneDetect 插槽：装了就走场景切分，没装就把符号置空并在回退时降级到盲采样。
+try:
+    from scenedetect import ContentDetector, detect as scene_detect
+    PYSCENEDETECT_AVAILABLE = True
+except Exception:
+    ContentDetector = None
+    scene_detect = None
+    PYSCENEDETECT_AVAILABLE = False
+
+# 场景帧上限：与盲采样保底同量级(<=20)，避免镜头极多时把视觉 payload 撑爆。
+_MAX_SCENE_FRAMES = 20
+
+if not PYSCENEDETECT_AVAILABLE:
+    logger.info("media.pyscenedetect_unavailable_blind_sampling_fallback")
+
+
 def extract_video_frames(video_path: str, max_frames: int = 6) -> list[str]:
     """
     Extract key frames from video with smart sampling strategy.
@@ -31,30 +53,118 @@ def extract_video_frames_with_ts(video_path: str, max_frames: int = 6) -> list[t
     Extract key frames AND their timestamps from video.
     Returns list of (base64_str, timestamp_seconds) tuples.
     Strategy:
-    - High density in first 12s (gear b-roll usually appears here)
-    - Scene-change detection for unique content frames
-    - Evenly spread remaining frames
+    - PySceneDetect scene-cut keyframes when available (one frame per shot =
+      unique content, fewer vision tokens).
+    - Otherwise blind ffmpeg sampling: high density in first 3 min, sparse after,
+      with per-frame size de-duplication to drop near-identical frames.
     """
     if not FFMPEG_AVAILABLE:
         return []
-    frames_with_ts: list[tuple] = []
+
+    duration = _probe_duration(video_path)
+
+    scene_timestamps = _detect_scene_timestamps(video_path, duration)
+    if scene_timestamps:
+        scene_frames = _extract_frames_at_timestamps(video_path, scene_timestamps, duration)
+        if scene_frames:
+            logger.info(
+                "media.frame_scene_detect_used",
+                extra={"video_path": video_path, "frame_count": len(scene_frames)},
+            )
+            return scene_frames
+        logger.info(
+            "media.frame_scene_detect_empty_fallback_blind",
+            extra={"video_path": video_path},
+        )
+
+    return _extract_frames_blind(video_path, duration)
+
+
+def _probe_duration(video_path: str) -> float:
+    """Best-effort video duration in seconds; defaults to 60 on probe failure."""
+    duration = 60.0
     try:
-        # Probe duration
         probe = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json",
              "-show_format", video_path],
             capture_output=True, text=True, timeout=15
         )
-        duration = 60
-        try:
-            duration = float(json.loads(probe.stdout)["format"]["duration"])
-        except Exception:
-            logger.warning(
-                "media.frame_probe_duration_parse_failed",
-                extra={"video_path": video_path},
-                exc_info=True,
-            )
+        duration = float(json.loads(probe.stdout)["format"]["duration"])
+    except Exception:
+        logger.warning(
+            "media.frame_probe_duration_parse_failed",
+            extra={"video_path": video_path},
+            exc_info=True,
+        )
+    return duration
 
+
+def _detect_scene_timestamps(video_path: str, duration: float) -> list[float] | None:
+    """
+    Scene-cut start timestamps via PySceneDetect, or None to fall back to blind sampling.
+
+    Returns None when scenedetect is not installed or detection raises, so the
+    caller keeps the proven ffmpeg blind-sampling path. On success the list is
+    sorted, de-duplicated and capped at _MAX_SCENE_FRAMES.
+    """
+    if not PYSCENEDETECT_AVAILABLE:
+        return None
+    try:
+        scenes = scene_detect(video_path, ContentDetector())
+        timestamps = sorted(
+            {min(max(0.0, float(start.get_seconds())), duration) for start, _end in scenes}
+        )
+    except Exception:
+        logger.warning(
+            "media.scene_detect_failed",
+            extra={"video_path": video_path},
+            exc_info=True,
+        )
+        return None
+    if not timestamps:
+        return None
+    if len(timestamps) > _MAX_SCENE_FRAMES:
+        step = len(timestamps) / _MAX_SCENE_FRAMES
+        timestamps = [timestamps[int(i * step)] for i in range(_MAX_SCENE_FRAMES)]
+    return timestamps
+
+
+def _extract_frames_at_timestamps(
+    video_path: str, timestamps: list[float], duration: float
+) -> list[tuple]:
+    """Extract one JPG per requested timestamp; skip any frame ffmpeg cannot render."""
+    frames_with_ts: list[tuple] = []
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for idx, ts in enumerate(timestamps):
+                seek = max(0.0, float(ts))
+                out_path = os.path.join(tmpdir, f"scene_{idx:04d}.jpg")
+                proc = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                     "-ss", f"{seek:.3f}", "-i", video_path,
+                     "-frames:v", "1", "-vf", "scale=960:-1", "-q:v", "4",
+                     out_path],
+                    capture_output=True, timeout=30
+                )
+                if (proc.returncode != 0 or not os.path.exists(out_path)
+                        or os.path.getsize(out_path) <= 0):
+                    continue
+                with open(out_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                frames_with_ts.append((b64, min(seek, duration)))
+                if len(frames_with_ts) >= _MAX_SCENE_FRAMES:
+                    break
+    except Exception:
+        logger.exception(
+            "media.scene_frame_extraction_failed", extra={"video_path": video_path}
+        )
+    return frames_with_ts
+
+
+def _extract_frames_blind(video_path: str, duration: float) -> list[tuple]:
+    """Fallback: evenly-spaced ffmpeg sampling with size-based de-duplication."""
+    frames_with_ts: list[tuple] = []
+    try:
         with tempfile.TemporaryDirectory() as tmpdir:
 
             # Strategy 1: 1 frame per 5 seconds for first 3 minutes
