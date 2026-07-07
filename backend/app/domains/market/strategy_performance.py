@@ -49,15 +49,7 @@ _RETRO_METHOD = "project_retrospective_v1"
 # ── 小工具(与 prediction_ledger / miss_review 同款容错约定)──────────────
 
 
-def _truthy(value: Any) -> bool:
-    """compat 层 BOOLEAN 读回可能是 int 1/0 / 't' / 'true',统一容错。"""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "t", "true", "yes", "y")
+from app.core.coerce import _truthy
 
 
 def _iso(value: Any) -> str | None:

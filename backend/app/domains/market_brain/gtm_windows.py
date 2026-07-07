@@ -59,24 +59,7 @@ DEFAULT_LIMIT = 500
 # ── 小工具(compat 宽容层,与 gifted_funnel 同款口径) ────────────────
 
 
-def _truthy(value: Any) -> bool:
-    """compat 层 BOOLEAN 读回可能是 int 1/0 / 't',统一容错。"""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "t", "true", "yes", "y")
-
-
-def _int0(value: Any) -> int:
-    try:
-        if value is None or value == "":
-            return 0
-        return int(value)
-    except Exception:
-        return 0
+from app.core.coerce import _int0, _truthy
 
 
 def _text(value: Any, limit: int = 160) -> str:

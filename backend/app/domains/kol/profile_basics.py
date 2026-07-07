@@ -368,8 +368,7 @@ def _normalise_handle(platform: str, value: Any) -> str:
     return text
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _int_or_none(value: Any) -> int | None:

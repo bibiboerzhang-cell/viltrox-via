@@ -46,8 +46,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _row_dict(row: Any) -> dict[str, Any]:

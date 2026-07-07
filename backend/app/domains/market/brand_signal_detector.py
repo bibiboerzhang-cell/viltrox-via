@@ -54,18 +54,7 @@ PRODUCT_TERMS: dict[str, tuple[str, ...]] = {
 COMMENT_KEYS = ("comments", "latestComments", "topComments", "latest_comments", "comment_items")
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _loads(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed if parsed is not None else default
+from app.core.coerce import _loads, _text
 
 
 def _json(value: Any) -> str:

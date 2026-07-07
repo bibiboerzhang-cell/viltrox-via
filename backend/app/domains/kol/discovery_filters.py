@@ -192,8 +192,7 @@ def _is_discovery_garbage(item: dict[str, Any]) -> bool:
     return not handle and name.lower() in ("", "unknown creator")
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _int(value: Any, default: int = 0) -> int:

@@ -29,8 +29,7 @@ def _safe_limit(value: int | None) -> int:
     return max(1, min(500, parsed))
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _loads(value: Any, default: Any = None) -> Any:

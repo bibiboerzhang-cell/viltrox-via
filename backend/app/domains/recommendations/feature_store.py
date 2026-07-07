@@ -23,8 +23,7 @@ def _loads(value: Any, default: Any = None) -> Any:
         return default
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _catalog_key(value: Any) -> str:

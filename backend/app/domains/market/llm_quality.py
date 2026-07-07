@@ -13,8 +13,7 @@ REQUIRED_LABELS = ("判断", "量化依据", "限制")
 TRAILING_FRAGMENT_RE = re.compile(r"(；|：|,|，|、|/|\\|-|=)$")
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _line_count(text: str) -> int:

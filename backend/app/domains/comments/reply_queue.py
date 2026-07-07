@@ -22,8 +22,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 # ── 多语种购买意向关键词(复用 intelligence_rules 的 OPPORTUNITY 词表,再补齐若干语种)──

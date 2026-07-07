@@ -15,14 +15,7 @@ from typing import Any
 from app.db.connection import get_conn
 
 
-def _loads(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed if parsed is not None else default
+from app.core.coerce import _loads
 
 
 def _jsonable(value: Any) -> Any:

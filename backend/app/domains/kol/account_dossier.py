@@ -22,14 +22,7 @@ FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
 
 
-def _loads(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed if parsed is not None else default
+from app.core.coerce import _loads, _text
 
 
 def _jsonable(value: Any) -> Any:
@@ -42,10 +35,6 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
 
 
 def _int(value: Any, default: int = 0) -> int:

@@ -89,8 +89,7 @@ IMAGE_KEYS = {
 }
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _json(value: Any) -> str:
@@ -650,8 +649,6 @@ def _public_video_page_url(value: Any, platform_key: str) -> str:
     if platform_key == "instagram" and host.endswith("instagram.com") and ("/reel/" in parsed.path or "/p/" in parsed.path):
         return url
     return ""
-
-
 
 
 def run_video_cache_gc(target_free_bytes: int | None = None) -> dict[str, Any]:

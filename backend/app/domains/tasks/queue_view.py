@@ -77,8 +77,7 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _normal_status(value: Any) -> str:

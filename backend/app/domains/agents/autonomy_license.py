@@ -75,15 +75,7 @@ _LEVEL_GRANTS: dict[int, tuple[str, ...]] = {
 # ── 小工具(容错解析,与 signature_profile 同款口径)─────────────────
 
 
-def _truthy(value: Any) -> bool:
-    """compat 层 BOOLEAN 读回可能是 int 1/0 / 't' / 'true',统一容错。"""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "t", "true", "yes", "y")
+from app.core.coerce import _truthy
 
 
 def _loads(value: Any) -> Any:

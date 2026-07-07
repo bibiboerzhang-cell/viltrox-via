@@ -68,8 +68,7 @@ def _loads(raw: Any) -> Any:
         return None
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _lease_effective_status(status: Any, expires_at: Any, result_validated: Any, now: datetime) -> str:

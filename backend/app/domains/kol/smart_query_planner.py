@@ -28,8 +28,7 @@ SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
 DEFAULT_PLANNER_PROVIDER = "google"
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _as_int(value: Any, default: int, *, min_value: int = 0, max_value: int = 50) -> int:

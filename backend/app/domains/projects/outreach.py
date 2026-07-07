@@ -24,8 +24,7 @@ logger = get_logger(__name__)
 _MAX_CREATORS = 8  # 单次话术生成上限(控 token 成本);超出截断并记录。
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _int_or_none(value: Any) -> int | None:

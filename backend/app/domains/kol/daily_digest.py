@@ -53,15 +53,7 @@ _MYSET_SUBQUERY = """
 # ── 小工具(容错;compat 读回宽容)────────────────────────────────────
 
 
-def _truthy(value: Any) -> bool:
-    """compat 层 BOOLEAN 读回可能是 int 1/0 / 't' / 'true',统一容错;NULL 当 True 之外由调用方决定。"""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "t", "true", "yes", "y")
+from app.core.coerce import _truthy
 
 
 def _active(value: Any) -> bool:

@@ -28,8 +28,7 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _platform_from_url(url: str) -> str:

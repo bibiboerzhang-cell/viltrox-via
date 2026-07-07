@@ -26,8 +26,7 @@ ISSUE_TERMS = (
 )
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _table_exists(table_name: str) -> bool:

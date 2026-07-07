@@ -107,13 +107,7 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _int0(value: Any) -> int:
-    try:
-        if value is None or value == "":
-            return 0
-        return int(value)
-    except Exception:
-        return 0
+from app.core.coerce import _int0
 
 
 def _num(value: Any) -> float:

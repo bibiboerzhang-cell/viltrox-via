@@ -50,18 +50,7 @@ POSITIVE_PATTERNS = ("best", "love", "amazing", "excellent", "great", "10/10", "
 NEGATIVE_PATTERNS = ("disappointed", "poor", "issue", "issues", "bad", "worst", "broken", "terrible")
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _loads(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed if parsed is not None else default
+from app.core.coerce import _loads, _text
 
 
 def load_competitor_brands() -> dict[str, dict[str, Any]]:

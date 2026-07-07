@@ -73,13 +73,7 @@ _DIGIT_RE = re.compile(r"\d")
 # ── 小工具(读回宽容) ────────────────────────────────────────────────
 
 
-def _int0(value: Any) -> int:
-    try:
-        if value is None or value == "":
-            return 0
-        return int(value)
-    except Exception:
-        return 0
+from app.core.coerce import _int0
 
 
 def _text(value: Any, limit: int = 200) -> str:

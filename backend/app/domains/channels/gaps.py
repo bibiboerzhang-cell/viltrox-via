@@ -36,8 +36,7 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _is_renderable_media(url: str) -> bool:

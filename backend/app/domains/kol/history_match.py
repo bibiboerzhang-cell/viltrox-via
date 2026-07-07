@@ -9,8 +9,7 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _int(value: Any, default: int = 0) -> int:

@@ -118,15 +118,7 @@ def _text(value: Any, limit: int = 300) -> str:
     return text[:limit]
 
 
-def _truthy(value: Any) -> bool:
-    """compat 层 BOOLEAN 读回可能是 int 1/0 / 't' / 'true',统一容错。"""
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in ("1", "t", "true", "yes", "y")
+from app.core.coerce import _truthy
 
 
 def _int_or_none(value: Any) -> int | None:

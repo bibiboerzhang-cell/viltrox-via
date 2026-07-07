@@ -61,8 +61,7 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def normalize_platform(value: Any) -> str:

@@ -33,8 +33,7 @@ ITEM_STATUSES = {
 }
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _loads, _text
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -71,16 +70,6 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
-
-
-def _loads(value: Any, default: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        parsed = json.loads(value or "")
-    except Exception:
-        return default
-    return parsed if parsed is not None else default
 
 
 def _json_dumps(value: Any) -> str:

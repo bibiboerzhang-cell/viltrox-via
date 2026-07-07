@@ -53,8 +53,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default or 0.0)
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _loads(value: Any, fallback: Any) -> Any:

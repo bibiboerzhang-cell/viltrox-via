@@ -86,8 +86,7 @@ def _loads(value: Any, default: Any) -> Any:
         return default
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _safe_int(value: Any) -> int:

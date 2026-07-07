@@ -16,8 +16,7 @@ import urllib.request
 from typing import Any
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+from app.core.coerce import _text
 
 
 def _compact_int(value: Any) -> int | None:
