@@ -36,6 +36,7 @@ vi.mock("../components/vkpi/cockpit/components/RealMap", () => ({
 const apiFetch = vi.fn();
 vi.mock("../services/http", () => ({
   apiFetch: (...a: unknown[]) => apiFetch(...a),
+  buildApiUrl: (p: string) => p,
 }));
 
 const listActionInbox = vi.fn();

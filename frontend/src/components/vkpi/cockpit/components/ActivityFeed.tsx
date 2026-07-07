@@ -30,15 +30,15 @@ import {
   Search,
   Video,
 } from "lucide-react";
-import { apiFetch } from "../../../../services/http";
+import { apiFetch, buildApiUrl } from "../../../../services/http";
 import { formatLocal } from "../../lib/timeLocal";
 
 const e = React.createElement;
 
 const REFRESH_MS = 10000;
-// 后端 activity 维度的聚合事件流尚未上线 → 传 null 走轮询兜底;
-// 上线后改成 buildApiUrl('/api/admin/vkpi/activity/stream') 即自动切 SSE。
-const ACTIVITY_STREAM_URL: string | null = null;
+// A4 后端聚合事件流已上线:server 端轮询转推(每数秒重算投影,diff 才推一帧 snapshot),
+// 前端自动切 SSE。SSE 不可用 / 断线 → useEventStreamOrPoll 无感回退固定间隔轮询。
+const ACTIVITY_STREAM_URL: string | null = buildApiUrl("/api/admin/vkpi/activity/stream");
 
 // 后端 icon 名 → lucide 组件。未命中回退 Activity(通用脉冲)。
 const ICON_MAP: Record<string, any> = {

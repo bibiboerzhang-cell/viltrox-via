@@ -6,6 +6,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 const apiFetch = vi.fn();
 vi.mock("../../../../services/http", () => ({
   apiFetch: (...a: unknown[]) => apiFetch(...a),
+  buildApiUrl: (p: string) => p,
 }));
 
 import { ActivityFeed } from "./ActivityFeed";

@@ -15,16 +15,32 @@ GET /api/admin/vkpi/activity/recent?limit=30
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
+try:
+    from sse_starlette.sse import EventSourceResponse
+
+    _SSE_AVAILABLE = True
+except ImportError:
+    _SSE_AVAILABLE = False
+    EventSourceResponse = None
+
 router = APIRouter(prefix="/api/admin/vkpi/activity", tags=["vkpi-activity"])
 
 logger = get_logger(__name__)
+
+# A4 聚合事件流:server 端每 _STREAM_INTERVAL_SEC 重算同源思考流投影,diff 变化才 push
+# 一帧 snapshot。不减后端查询但减前端连接数 + 近实时;SSE 缺失 / 断线优雅收尾,前端
+# useEventStreamOrPoll 自动回退固定间隔轮询(行为与切换前一致)。
+_STREAM_INTERVAL_SEC = 5.0
 
 
 # ── 内部工具 ───────────────────────────────────────────────────────────────
@@ -259,15 +275,12 @@ _SOURCES = (
 )
 
 
-@router.get("/recent")
-def recent_activity(
-    limit: int = Query(default=30, ge=1, le=100),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict[str, Any]:
+def _build_activity_payload(limit: int) -> dict[str, Any]:
     """聚合多源真实事件成统一「思考流」,按 ts 倒序合并截 limit。
 
     每源多取一些(limit 条),合并后统一排序再截断,保证跨源的时间顺序正确。
     任一源缺表 / 报错自动跳过(降级),永不因单源失败而整体 500。
+    轮询端点与聚合流端点同源复用此投影。
     """
     merged: list[dict[str, Any]] = []
     for source in _SOURCES:
@@ -280,3 +293,49 @@ def recent_activity(
     # ts 是 "...Z" 字符串,字典序即时间序;缺 ts 的行排最后。
     merged.sort(key=lambda item: item.get("ts") or "", reverse=True)
     return {"items": merged[:limit], "count": min(len(merged), limit)}
+
+
+@router.get("/recent")
+def recent_activity(
+    limit: int = Query(default=30, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """聚合多源真实事件成统一「思考流」(纯读)。10s 轮询友好。"""
+    del staff  # 权限已由 require_tab 校验;本端点无 scope 二次过滤需求。
+    return _build_activity_payload(int(limit))
+
+
+@router.get("/stream")
+async def stream_activity(
+    request: Request,
+    limit: int = Query(default=30, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """A4 思考流聚合事件流:与 GET /recent 同源同投影,仅传输形态不同。
+
+    server 端每 _STREAM_INTERVAL_SEC 重算投影,diff 变化才 push 一帧 `snapshot` 事件;
+    首拍必推(播首屏)。客户端断开 / 聚合异常一律优雅收尾断流,前端自动回退轮询。
+    SSE 依赖缺失 → 503 JSON(前端同样回退轮询,骨架不炸)。
+    """
+    if not _SSE_AVAILABLE:
+        return JSONResponse(status_code=503, content={"error": "SSE not available. Install sse-starlette."})
+    del staff  # 权限已由 require_tab 校验。
+    lim = int(limit)
+
+    async def event_generator():
+        last_signature: str | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                payload = await asyncio.to_thread(_build_activity_payload, lim)
+            except Exception:
+                logger.warning("activity/stream 聚合失败,优雅收尾断流(前端回退轮询)", exc_info=True)
+                break
+            signature = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+            if signature != last_signature:
+                last_signature = signature
+                yield {"event": "snapshot", "data": json.dumps(payload, ensure_ascii=False, default=str)}
+            await asyncio.sleep(_STREAM_INTERVAL_SEC)
+
+    return EventSourceResponse(event_generator())

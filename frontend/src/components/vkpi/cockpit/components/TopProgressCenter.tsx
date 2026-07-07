@@ -19,15 +19,17 @@ import {
   type ProgressRecentDone,
   type ProgressTask,
 } from "../../../../services/vkpi/progressCenter-api";
+import { buildApiUrl } from "../../../../services/http";
 import { relativeFromNow } from "../../lib/timeLocal";
 import { useEventStreamOrPoll } from "../useEventStreamOrPoll";
 
 const e = React.createElement;
 
 const POLL_MS = 10000;
-// 后端 progress-center 维度的聚合事件流尚未上线(job_queue 仅 per-task 订阅)→ 传 null
-// 走轮询兜底;后端上线后改成 buildApiUrl('/api/admin/vkpi/progress/center/stream') 即自动切 SSE。
-const PROGRESS_STREAM_URL: string | null = null;
+// A4 后端聚合事件流已上线:server 端轮询转推(每数秒重算投影,diff 才推一帧 snapshot),
+// 前端自动切 SSE(近实时、少连接)。SSE 不可用 / 断线 → useEventStreamOrPoll 无感回退
+// 固定间隔轮询(行为与轮询版完全一致)。
+const PROGRESS_STREAM_URL: string | null = buildApiUrl("/api/admin/vkpi/progress/center/stream");
 
 // 呼吸动画:唯一的循环动画,幅度克制(opacity .45↔.9)。reduced-motion 下降级为静态。
 const BREATH_CSS = `

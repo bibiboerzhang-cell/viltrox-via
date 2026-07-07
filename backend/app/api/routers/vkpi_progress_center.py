@@ -16,19 +16,36 @@ app.domains.tasks.queue_view(侧栏任务板同款):
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 import app.domains.tasks.queue_view as task_queue_view
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 
+try:
+    from sse_starlette.sse import EventSourceResponse
+
+    _SSE_AVAILABLE = True
+except ImportError:
+    _SSE_AVAILABLE = False
+    EventSourceResponse = None
+
 router = APIRouter(prefix="/api/admin/vkpi/progress", tags=["vkpi-progress-center"])
 
 logger = get_logger(__name__)
+
+# A4 聚合事件流:server 端轻量轮询转推 —— 每 _STREAM_INTERVAL_SEC 重算同源投影,
+# 仅当投影 diff(排除易变的 generated_at)才 push 一帧 snapshot。不减后端查询,但减
+# 前端连接数 + 让前端近实时;SSE 依赖缺失 / 断线一律优雅收尾,前端 useEventStreamOrPoll
+# 自动无感回退固定间隔轮询(行为与切换前完全一致)。
+_STREAM_INTERVAL_SEC = 4.0
 
 # 跑中/排队之外不进 tasks 列表(recent 单列)。与 queue_view ACTIVE_STATUSES 对齐,
 # 但本端点 tasks 只分两桶:running(含 processing/retrying 归并)与 queued。
@@ -131,15 +148,8 @@ def _project_recent(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@router.get("/center")
-def get_progress_center(
-    limit: int = Query(default=20, ge=1, le=50),
-    # 默认取 queue_view 上限 120 分钟:「最近完成」流水尽量有料(闲时队列常整点空窗)。
-    recent_minutes: int = Query(default=120, ge=1, le=120),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """顶栏进度中心一次性聚合(纯读)。10s 轮询友好:单请求 ≤3 个只读查询。"""
-    viewer = staff if isinstance(staff, dict) else None
+def _build_center_payload(viewer: dict | None, limit: int, recent_minutes: int) -> dict:
+    """顶栏进度中心一次性聚合(纯读)。轮询端点与聚合流端点同源复用此投影。"""
     snapshot = task_queue_view.get_task_queue(
         limit=int(limit),
         recent_minutes=int(recent_minutes),
@@ -199,3 +209,63 @@ def get_progress_center(
             "worker_touched": False,
         },
     }
+
+
+def _center_signature(payload: dict) -> str:
+    """diff 指纹:排除每拍必变的 generated_at,只在真实投影变化时才推。"""
+    return json.dumps(
+        {k: v for k, v in payload.items() if k != "generated_at"},
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+@router.get("/center")
+def get_progress_center(
+    limit: int = Query(default=20, ge=1, le=50),
+    # 默认取 queue_view 上限 120 分钟:「最近完成」流水尽量有料(闲时队列常整点空窗)。
+    recent_minutes: int = Query(default=120, ge=1, le=120),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """顶栏进度中心一次性聚合(纯读)。10s 轮询友好:单请求 ≤3 个只读查询。"""
+    viewer = staff if isinstance(staff, dict) else None
+    return _build_center_payload(viewer, int(limit), int(recent_minutes))
+
+
+@router.get("/center/stream")
+async def stream_progress_center(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=50),
+    recent_minutes: int = Query(default=120, ge=1, le=120),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """A4 顶栏进度中心聚合事件流:与 GET /center 同源同投影,仅传输形态不同。
+
+    server 端每 _STREAM_INTERVAL_SEC 重算投影,diff 变化才 push 一帧 `snapshot` 事件;
+    首拍必推(播首屏)。客户端断开 / 聚合异常一律优雅收尾断流,前端自动回退轮询。
+    SSE 依赖缺失 → 503 JSON(前端同样回退轮询,骨架不炸)。
+    """
+    if not _SSE_AVAILABLE:
+        return JSONResponse(status_code=503, content={"error": "SSE not available. Install sse-starlette."})
+    viewer = staff if isinstance(staff, dict) else None
+    lim = int(limit)
+    rec = int(recent_minutes)
+
+    async def event_generator():
+        last_signature: str | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                payload = await asyncio.to_thread(_build_center_payload, viewer, lim, rec)
+            except Exception:
+                logger.warning("progress_center/stream 聚合失败,优雅收尾断流(前端回退轮询)", exc_info=True)
+                break
+            signature = _center_signature(payload)
+            if signature != last_signature:
+                last_signature = signature
+                yield {"event": "snapshot", "data": json.dumps(payload, ensure_ascii=False, default=str)}
+            await asyncio.sleep(_STREAM_INTERVAL_SEC)
+
+    return EventSourceResponse(event_generator())
