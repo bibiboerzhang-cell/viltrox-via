@@ -31,7 +31,10 @@ ADMIN_ROUTER_MODULES: list[str] = [
     # 第3轮 信号聚合层:焦段矩阵 / 品牌脉搏 / 质量分+FTC / 以视频找相似
     "vkpi_focal_matrix",
     "vkpi_brand_pulse",
+    "vkpi_brand_safety",  # G4 品牌安全 v0(库内信号)
+    "vkpi_authenticity",  # G4 受众真实性信号
     "vkpi_quality_compliance",
+    "vkpi_outreach_signals",  # G1 外联三承诺+敢给差评信号
     "vkpi_video_similar",
     # 第4轮 预测+发射台:预测战绩 / 报价库 / 全案组装 / 覆盖组合
     "vkpi_forecast",
@@ -68,6 +71,11 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_customer_mining",
     # F4 召回三段式:语义召回(embedding→粗排→LLM重排)
     "vkpi_recall",
+    # G波 弹药:战绩卡 / 履约漏斗 / 评论区机会 / 长尾波次
+    "vkpi_performance_card",
+    "vkpi_gifted_funnel",
+    "vkpi_comment_opportunities",
+    "vkpi_longtail_wave",
     "vkpi_kol_portal",
     "vkpi_dashboard_staff",
     "dashboard_account_picker",

@@ -15,7 +15,12 @@ assemble_launch_plan(sku, max_roster) 六段编排,全部复用已有件 + 守�
                        该品类表现最好的形式/平台/时段 → 3 条协同建议;
                        样本不足诚实降级通用清单并标 generated=generic(generic=true);
   ⑥ coverage          覆盖最大化:守卫 import kol.roster_optimizer.optimize_roster(D件契约);
-  ＋ forecast          每人预测战绩:守卫 import kol.performance_forecast.forecast_for_kol(A件契约)。
+  ＋ forecast          每人预测战绩:守卫 import kol.performance_forecast.forecast_for_kol(A件契约);
+  ＋ sop_timeline      发布 SOP 时间线(G4):同行标杆节奏 T-30(rumor 投料)/T-21(embargo
+                       brief)/T-14(批量寄样,吃③排期段个人制作周期数据)/T-7(素材包+LUT
+                       短链)/T0(多评测人同日解禁)/T+3(数据首查)/T+7(差评聚类→固件
+                       工单→复测邀约,吃 miss_review 思路)七节点倒排真日期;每节点=任务
+                       模板(标题/负责人角色/依赖),纯模板生成不真建任务,payload 带 basis。
 
 跨代理契约:A/B/D 三件本轮并行施工,import 失败 → 该段 status="module_pending"
 诚实占位(收口后自然变活),绝不杜撰数字。每段带 basis 可追溯到证据。
@@ -773,6 +778,20 @@ def _forecast_block(members: list[dict[str, Any]], sku: str) -> dict[str, Any]:
     }
 
 
+# ── ＋ 发布 SOP 时间线(G4:实现在同域 launch_sop.py,守卫调用不拖垮整案)──
+
+
+def _sop_timeline_block(schedule: dict[str, Any]) -> dict[str, Any]:
+    """发布 SOP 七节点(T-30→T+7)任务模板时间线;实现细节见 launch_sop.build_sop_timeline。"""
+    try:
+        from app.domains.projects.launch_sop import build_sop_timeline
+
+        return build_sop_timeline(schedule)
+    except Exception as exc:  # noqa: BLE001 — SOP 段失败诚实降级,不拖垮其余段
+        logger.warning("sop_timeline block failed: %s", exc)
+        return {"status": "error", "reason": _text(str(exc), 300)}
+
+
 # ── 主入口 ──────────────────────────────────────────────────────────
 
 
@@ -831,6 +850,7 @@ def assemble_launch_plan(sku: str, max_roster: int = 8) -> dict[str, Any]:
     playbooks = _playbooks_block(members)
     synergy = _official_synergy_block(product, focal)
     forecast = _forecast_block(members, _text(product.get("sku"), 120) or sku)
+    sop_timeline = _sop_timeline_block(schedule)
 
     return {
         "status": "ready",
@@ -846,6 +866,7 @@ def assemble_launch_plan(sku: str, max_roster: int = 8) -> dict[str, Any]:
         "official_synergy": synergy,          # ⑤
         "coverage": coverage,                 # ⑥
         "forecast": forecast,                 # ＋ A件
+        "sop_timeline": sop_timeline,         # ＋ G4 发布 SOP 七节点(纯模板)
         "generated_at": _utcnow_iso(),
         "provider_calls": False,
         "llm_calls": False,

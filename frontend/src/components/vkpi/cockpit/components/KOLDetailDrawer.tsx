@@ -35,6 +35,8 @@ import { SimilarVideosPanel } from "./SimilarVideosPanel";
 import { ForecastPanel } from "./ForecastPanel";
 import { RateCardPanel } from "./RateCardPanel";
 import { AudienceGeoPanel } from "./AudienceGeoPanel";
+import { OutreachCriticSignalCard } from "./OutreachCriticSignalCard";
+import { SafetyAuthenticityPanel } from "./SafetyAuthenticityPanel";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -704,6 +706,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         // ── 第3轮 信号聚合:焦段矩阵(覆盖+空白可切入)/ 质量分+FTC披露 / 以主代表作找相似 ──
         e(FocalMatrixPanel, { apiToken, kolPoolId: item?.id }),
         e(QualityCompliancePanel, { apiToken, kolPoolId: item?.id }),
+        // G4 品牌安全 v0 + 受众真实性(库内信号,诚实标外网扫描待接)
+        e(SafetyAuthenticityPanel, { apiToken, kolPoolId: item?.id }),
         e(SimilarVideosPanel, { apiToken, evidenceId: primaryVideoEvidenceId }),
         // ── 第4轮 商业档案:预测战绩(分位数区间+置信度)/ 报价卡(估价+录入) ──
         e(ForecastPanel, { apiToken, kolPoolId: item?.id }),
@@ -730,6 +734,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         e(CooperationPanel, { apiToken, kolPoolId: item?.id }),
         // ── C4 外联区:一键生成 brief + 中英双语邮件草稿 + 邮箱补抓状态(复制不外发)──
         e(KOLDrawerOutreachSection, { apiToken, kolPoolId: item?.id }),
+        // G1 敢给差评信号 + 三承诺卡(打行业拖款/借测/黑名单三大怨气)
+        e(OutreachCriticSignalCard, { apiToken, kolPoolId: item?.id }),
         // ── 长期记忆(W3)· 显式独立于 V6 Fit · 不影响排序 ──
         // 红线:本区块纯渲染聚合记忆,绝不渲染任何 viltrox/v6_fit 数值。
         e(KOLDrawerMemorySection, { kolMemory }),

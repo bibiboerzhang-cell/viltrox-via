@@ -13,6 +13,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol import outreach_promises
 from app.platform import llm_gateway
 
 logger = get_logger("viltrox.domains.kol.outreach_draft")
@@ -92,7 +93,56 @@ def _project_context(conn: Any, project_id: int | None) -> dict[str, Any]:
     return dict(row) if row else {}
 
 
-def _build_prompt(kol: dict[str, Any], project: dict[str, Any]) -> str:
+def _personalization_lines(kol_pool_id: int, conn: Any) -> tuple[list[str], dict[str, Any]]:
+    """G1 真个性化:招牌拍法 top1 + 最爆代表作(signature_profile 守卫 import,
+    零新采集/零 LLM);读不出来诚实空列表,草稿链不因此阻断。"""
+    try:
+        from app.domains.kol import signature_profile
+
+        sig = signature_profile.signature_profile(int(kol_pool_id), conn=conn)
+    except Exception:
+        logger.debug("outreach_draft.signature_read_failed (non-fatal)", exc_info=True)
+        return [], {"available": False}
+    styles = sig.get("shooting_styles") if isinstance(sig, dict) else {}
+    styles = styles if isinstance(styles, dict) else {}
+    modes = styles.get("modes") if styles.get("status") == "ready" else []
+    top_mode = modes[0] if isinstance(modes, list) and modes else {}
+    tops = sig.get("top_videos") if isinstance(sig, dict) else {}
+    tops = tops if isinstance(tops, dict) else {}
+    items = tops.get("items") if tops.get("status") == "ready" else []
+    top_video = items[0] if isinstance(items, list) and items else {}
+    if not top_mode and not top_video:
+        return [], {"available": False}
+
+    style_label = str((top_mode or {}).get("label") or "")[:40]
+    video_title = str((top_video or {}).get("title") or "")[:140]
+    lines: list[str] = []
+    if style_label:
+        lines.append(f"- 招牌拍法 TOP1: {style_label}")
+    if video_title:
+        lines.append(f"- 最爆代表作: 《{video_title}》(播放 {(top_video or {}).get('view_count') or '-'})")
+    quote_line = ""
+    if video_title:
+        quote_line = f"就按你最爆的那条《{video_title}》的" + (f"{style_label}拍法来" if style_label else "拍法来")
+        lines.append(
+            f"- 正文必须自然引用上面的代表作标题,表达「内容按 TA 最擅长的拍法来,我们不干预创意」"
+            f"(中文版可用「{quote_line}」的语气,英文版意译)。"
+        )
+    meta = {
+        "available": True,
+        "source": "signature_profile_v1",
+        "top_style": style_label or None,
+        "top_video_title": video_title or None,
+        "quote_line": quote_line or None,
+    }
+    return lines, meta
+
+
+def _build_prompt(
+    kol: dict[str, Any],
+    project: dict[str, Any],
+    personalization_lines: list[str] | None = None,
+) -> str:
     kol_lines = [
         f"- 平台/Platform: {kol.get('platform') or '-'}",
         f"- Handle: {kol.get('handle') or '-'}",
@@ -106,14 +156,28 @@ def _build_prompt(kol: dict[str, Any], project: dict[str, Any]) -> str:
         f"- 产品/Product: {project.get('product_name') or '-'}",
         f"- SKU: {project.get('product_sku') or '-'}",
     ]
+    persona_block = (
+        "该 KOL 的招牌打法(来自我方真实聚合读数,个性化必用、只准引用不得杜撰):\n"
+        + "\n".join(personalization_lines) + "\n\n"
+        if personalization_lines
+        else ""
+    )
+    promises_requirement = outreach_promises.prompt_requirement()
+    promises_block = (
+        promises_requirement.replace("email_en", "message_en").replace("email_zh", "message_cn") + "\n"
+        if promises_requirement
+        else ""
+    )
     return (
         "你是 VILTROX(唯卓仕,相机镜头品牌)的 KOL 合作拓展专家。"
         "基于以下 KOL 资料与项目背景,写一份首次联系的外联草稿。\n\n"
         "KOL 资料:\n" + "\n".join(kol_lines) + "\n\n项目背景:\n" + "\n".join(project_lines) + "\n\n"
-        "合规硬要求(不可省):message_en 正文末尾必须含:(a) 发件人身份披露——明确写出是 VILTROX/唯卓仕品牌方及其拓展代表;(b) 退订选项——一句说明若不愿再收到此类邮件可回复 unsubscribe / 注明拒绝即不再联系。此为全球最严合规基线,任何辖区都适用。\n"
+        + persona_block
+        + promises_block
+        + "合规硬要求(不可省):message_en 正文末尾必须含:(a) 发件人身份披露——明确写出是 VILTROX/唯卓仕品牌方及其拓展代表;(b) 退订选项——一句说明若不愿再收到此类邮件可回复 unsubscribe / 注明拒绝即不再联系。此为全球最严合规基线,任何辖区都适用。\n"
         "要求:\n"
-        "1. message_en:英文私信/邮件正文(120-180 词,提及 TA 的内容方向,说明合作形式=寄送镜头测评,语气专业友好,不卑不亢;末尾含上述身份披露+退订选项)。\n"
-        "2. message_cn:同一内容的中文版(供团队内部审阅,同样含身份披露+退订说明)。\n"
+        "1. message_en:英文私信/邮件正文(140-220 词,提及 TA 的内容方向/最爆代表作,说明合作形式=寄送镜头测评,语气专业友好,不卑不亢;含三承诺块;末尾含上述身份披露+退订选项)。\n"
+        "2. message_cn:同一内容的中文版(供团队内部审阅,同样含三承诺块+身份披露+退订说明)。\n"
         "3. subject:英文邮件主题(<=60 字符)。\n"
         "4. talking_points:3-4 条后续沟通要点(中文)。\n"
         "5. channel_suggestion:建议的首选触达渠道(中文一句,基于平台特性)。\n"
@@ -131,8 +195,9 @@ def run_outreach_draft_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
     if not kol:
         return {"status": "failed", "reason": "kol_not_found"}
     project = _project_context(conn, payload.get("project_id"))
+    persona_lines, persona_meta = _personalization_lines(kol_pool_id, conn)
     resp = llm_gateway.invoke(
-        _build_prompt(kol, project),
+        _build_prompt(kol, project, persona_lines),
         purpose="vkpi_kol_outreach_draft",
         max_output_tokens=MAX_OUTPUT_TOKENS,
         preferred_provider="openai",
@@ -154,13 +219,23 @@ def run_outreach_draft_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
     message_en = str(parsed.get("message_en") or "").strip()
     if not message_en:
         return {"status": "failed", "reason": "llm_missing_message"}
+    # G1 三承诺幂等兜底:LLM 漏写也保证承诺块在(开关关则原样返回)。
+    message_en = outreach_promises.ensure_promises(message_en[:3200], "en")
+    message_cn = outreach_promises.ensure_promises(str(parsed.get("message_cn") or "")[:3200], "zh")
     result = {
         "schema_version": DERIVE_METHOD,
         "subject": str(parsed.get("subject") or "")[:120],
-        "message_en": message_en[:2400],
-        "message_cn": str(parsed.get("message_cn") or "")[:2400],
+        "message_en": message_en[:4000],
+        "message_cn": message_cn[:4000],
         "talking_points": [str(x) for x in (parsed.get("talking_points") or []) if str(x).strip()][:5],
         "channel_suggestion": str(parsed.get("channel_suggestion") or "")[:200],
+        # G1:个性化引用来源 + 三承诺态(审计留痕;available=False = signature 无读数)。
+        "personalization": persona_meta,
+        "promises": {
+            "version": outreach_promises.PROMISES_VERSION,
+            "enabled": outreach_promises.promises_enabled(),
+            "included": outreach_promises.has_promises(message_en, "en") or outreach_promises.has_promises(message_cn, "zh"),
+        },
         "provenance": {
             "model": resp.get("model"),
             "provider": resp.get("provider"),
