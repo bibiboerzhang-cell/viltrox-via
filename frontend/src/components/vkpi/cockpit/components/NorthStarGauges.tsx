@@ -8,7 +8,7 @@
 // 深色 slate/白 6% 透明度体系;sky/emerald/purple 均为页面既有语义色,不引新色板。
 
 import React, { useEffect, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { m, useReducedMotion } from "framer-motion";
 import { Target } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
 
@@ -90,7 +90,7 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
       e("circle", { cx: 32, cy: 32, r: R, fill: "none", stroke: "rgba(255,255,255,0.06)", strokeWidth: 5 }),
       reduced
         ? e("circle", { ...ringProps, strokeDashoffset: dashTarget })
-        : e(motion.circle, {
+        : e(m.circle, {
             ...ringProps,
             initial: { strokeDashoffset: C },
             animate: { strokeDashoffset: dashTarget },

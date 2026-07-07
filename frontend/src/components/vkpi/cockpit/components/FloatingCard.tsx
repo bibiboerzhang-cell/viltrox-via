@@ -2,7 +2,7 @@
 
 
 import React, { useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { X } from "lucide-react";
 
 const e = React.createElement;
@@ -46,7 +46,7 @@ export function FloatingCard({
   
   // 折叠态:小 chip
   if (collapsed) {
-    return e(motion.div, {
+    return e(m.div, {
       drag: true,
       dragConstraints: dragConstraintsRef,
       dragMomentum: false,
@@ -71,9 +71,9 @@ export function FloatingCard({
     );
   }
   
-  // V6.13.1: motion.div 处理 drag,但 size 通过 inline style + isResizing 状态保护
+  // V6.13.1: m.div 处理 drag,但 size 通过 inline style + isResizing 状态保护
   // 关键修复:resize 期间禁用 drag,且用 isResizing state 触发 re-render 确保 drag prop 同步
-  return e(motion.div, {
+  return e(m.div, {
     ref: cardRef,
     drag: !isResizing,
     dragConstraints: dragConstraintsRef,

@@ -2,7 +2,7 @@
 
 
 import React, { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Edit, Filter, X } from "lucide-react";
 import { loadStoredState, saveStoredState } from "../../lib/storage";
 import { TIMELINE_CATEGORIES } from "../../data/timelineCategories";
@@ -35,13 +35,13 @@ export function EventDetailModal({ event, onClose, onOpenFullEvent }: any) {
   const overallDone = timeline.filter((t: any) => t.status === "done").length;
   const overallPct = timeline.length ? Math.round((overallDone / timeline.length) * 100) : 0;
   
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "cockpit-modal fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
       onClick: (ev) => ev.stopPropagation(),
       className: "relative w-full max-w-3xl my-8 rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
@@ -94,7 +94,7 @@ export function EventDetailModal({ event, onClose, onOpenFullEvent }: any) {
             e("span", { className: "text-sm font-medium tabular-nums", style: { color: event.color } }, `${overallPct}% · ${overallDone}/${timeline.length}`)
           ),
           e("div", { className: "h-1.5 overflow-hidden rounded-full bg-white/[0.06]" },
-            e(motion.div, {
+            e(m.div, {
               initial: { width: 0 },
               animate: { width: `${overallPct}%` },
               transition: { duration: 0.8, ease: [0.16, 1, 0.3, 1] },
@@ -155,7 +155,7 @@ export function EventDetailModal({ event, onClose, onOpenFullEvent }: any) {
           filtered.map((item: any, i: number) => {
             const cat = (TIMELINE_CATEGORIES as any)[item.category];
             const st = (TIMELINE_STATUS as any)[item.status];
-            return e(motion.div, {
+            return e(m.div, {
               key: item.id,
               initial: { opacity: 0, x: -8 },
               animate: { opacity: 1, x: 0 },

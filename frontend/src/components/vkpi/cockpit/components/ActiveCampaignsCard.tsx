@@ -2,7 +2,7 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Plus, Zap } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { useT } from "../lib/i18n";
@@ -16,7 +16,7 @@ export function ActiveCampaignsCard({ campaigns, campaignsMeta, onCampaignClick,
   const activeCount = realCount ?? campaigns.filter((c: any) => c.status !== "done").length;
   const windowDays = Number(campaignsMeta?.windowDays || 30);
   const isStarredSource = campaignsMeta?.source === "starred_projects";
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
     transition: { delay: 0.12 },

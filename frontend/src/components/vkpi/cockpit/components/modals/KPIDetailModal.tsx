@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { BarChart3, Database, Download, ExternalLink, Loader2, X } from "lucide-react";
 import { useT } from "../../lib/i18n";
 import { saveKpiScopeForStaff } from "../../lib/kpiScopeStorage";
@@ -236,7 +236,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
       onDrillToKolPool?.();
     };
 
-    return e(motion.div, {
+    return e(m.div, {
       initial: { opacity: 0 },
       animate: { opacity: 1 },
       exit: { opacity: 0 },
@@ -244,7 +244,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
       style: { zIndex: 9999 },
       onClick: onClose,
     },
-      e(motion.div, {
+      e(m.div, {
         initial: { scale: 0.96, opacity: 0, y: 18 },
         animate: { scale: 1, opacity: 1, y: 0 },
         exit: { scale: 0.96, opacity: 0 },
@@ -438,7 +438,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
     );
   }
 
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0 },
     animate: { opacity: 1 },
     exit: { opacity: 0 },
@@ -446,7 +446,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.96, opacity: 0, y: 18 },
       animate: { scale: 1, opacity: 1, y: 0 },
       exit: { scale: 0.96, opacity: 0 },

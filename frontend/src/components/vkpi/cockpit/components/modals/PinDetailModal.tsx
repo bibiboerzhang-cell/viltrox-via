@@ -2,7 +2,7 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { X } from "lucide-react";
 
 const e = React.createElement;
@@ -11,13 +11,13 @@ export function PinDetailModal({ pin, mode, onClose }: any) {
   if (!pin) return null;
   // 2026-06-12 死按钮诚实化:无后端/路由的 CTA 一律 disabled+待接入;Open in maps 接真 Google Maps 查询
   const pendingBtnFull = "w-full rounded-lg border border-white/[0.1] bg-white/[0.03] py-2 text-sm text-slate-500 opacity-60 cursor-not-allowed";
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "cockpit-modal fixed inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.9, opacity: 0 }, animate: { scale: 1, opacity: 1 }, exit: { scale: 0.9, opacity: 0 },
       onClick: (ev) => ev.stopPropagation(),
       className: "relative w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1220] p-6 shadow-2xl",

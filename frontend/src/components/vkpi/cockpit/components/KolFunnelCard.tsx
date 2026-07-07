@@ -6,7 +6,7 @@
 // prefers-reduced-motion 降级为静态直显。数据契约零改。
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Filter } from "lucide-react";
 import { SectionFold } from "./SectionFold";
 import { AnimatedNumber, usePrefersReducedMotion } from "./AnimatedNumber";
@@ -34,7 +34,7 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
   // reduced-motion:入场/填充全部降级为静态直显(读 prefers-reduced-motion)。
   const reduced = usePrefersReducedMotion();
 
-  return e(motion.div, {
+  return e(m.div, {
     initial: reduced ? false : { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
     transition: reduced ? { duration: 0 } : { delay: 0.1, duration: 0.3 },
@@ -70,7 +70,7 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
                 )
               ),
               e("div", { className: "h-1.5 overflow-hidden rounded-full bg-white/[0.06]" },
-                e(motion.div, {
+                e(m.div, {
                   "data-stage": String(stage.key || index),
                   initial: reduced ? false : { width: 0 },
                   animate: { width: `${width}%` },

@@ -2,7 +2,10 @@
 
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+// 车道B LazyMotion 瘦身:全 cockpit 树只用 m.*(motion.* 已全量替换),features 在此顶层
+// 注入一次。选 domMax 而非 domAnimation:FloatingCard 的 drag 与 ActivityFeed 的 layout
+// 动画都要 domMax 才生效(domAnimation 会静默砍掉拖拽 = 功能回退,不只是动效)。
+import { AnimatePresence, LazyMotion, domMax, m } from "framer-motion";
 import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User, X } from "lucide-react";
 import "./styles/mockup.css";
 import "../styles/vkpi-settings-dark.css";
@@ -583,7 +586,8 @@ export function CockpitApp(props: any = {}) {
     setActiveNav("events");
   }, []);
 
-  return e(I18nContext.Provider, { value: { t, lang, setLang } },
+  return e(LazyMotion, { features: domMax },
+   e(I18nContext.Provider, { value: { t, lang, setLang } },
    e("div", { className: "relative min-h-screen bg-[#050810] text-slate-200" },
     e("div", {
       className: "pointer-events-none fixed inset-0",
@@ -642,7 +646,7 @@ export function CockpitApp(props: any = {}) {
 
         // ─── ROUTING ───
         e(AnimatePresence, { mode: "wait", initial: false },
-          e(motion.div, {
+          e(m.div, {
             key: activeNav,
             className: "min-h-[calc(100vh-4rem)]",
             initial: { opacity: 0, y: 14 },
@@ -893,6 +897,7 @@ export function CockpitApp(props: any = {}) {
           )
         )
     )
+  )
   )
   )
   );

@@ -10,19 +10,25 @@ vi.mock("framer-motion", () => {
   // 组件身份必须按 tag 缓存:原实现每次访问 motion.div 都造新函数 → React 视为不同组件类型,
   // 每次重渲染整树卸载重挂,任何异步 setState 都会让刚 findBy 到的节点脱离 document(假红)。
   const cache: Record<string, unknown> = {};
-  return {
-    motion: new Proxy(
-      {},
-      {
-        get: (_target, key: string) => {
-          if (!cache[key]) {
-            cache[key] = (props: Record<string, unknown>) =>
-              React.createElement("div", props, props.children as React.ReactNode);
-          }
-          return cache[key];
-        },
+  const motionProxy = new Proxy(
+    {},
+    {
+      get: (_target, key: string) => {
+        if (!cache[key]) {
+          cache[key] = (props: Record<string, unknown>) =>
+            React.createElement("div", props, props.children as React.ReactNode);
+        }
+        return cache[key];
       },
-    ),
+    },
+  );
+  // LazyMotion 迁移:代码用 m.*(等价 motion.*,共享同一 tag 缓存)+ LazyMotion/domMax。
+  return {
+    motion: motionProxy,
+    m: motionProxy,
+    LazyMotion: ({ children }: { children: React.ReactNode }) => children,
+    domMax: {},
+    domAnimation: {},
     AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
   };
 });

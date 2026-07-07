@@ -10,7 +10,7 @@
 // count-up。prefers-reduced-motion 全部降级为静态直显(useReducedMotion 读
 // 同名 CSS media query)。数据契约零改,仍纯读后端聚合。
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { AlertTriangle, PackageCheck, Send } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
 import { AnimatedNumber, usePrefersReducedMotion } from "./AnimatedNumber";
@@ -58,7 +58,7 @@ function FunnelBar({ stage, total, index, reduced }: {
   return e("div", { className: "flex items-center gap-2 text-[10px]" },
     e("span", { className: "w-[104px] shrink-0 truncate text-slate-300", title: stage.label }, stage.label || stage.key || "—"),
     e("div", { className: "relative h-[9px] flex-1 overflow-hidden rounded-full bg-white/[0.05]" },
-      e(motion.div, {
+      e(m.div, {
         "data-stage": String(stage.key || ""),
         "data-pulse-once": isOverdue ? "true" : undefined,
         initial: reduced ? false : { width: 0 },

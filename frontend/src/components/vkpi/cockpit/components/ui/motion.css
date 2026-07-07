@@ -32,6 +32,16 @@
   animation: vk-delta-flash 300ms ease-out 1;
 }
 
+/* ── 行级一次性变更高亮(soft pulse,400ms 一次;rowFlash.ts 在 animationend 摘 class)── */
+@keyframes vk-row-flash {
+  0% { background-color: transparent; }
+  30% { background-color: rgba(255, 255, 255, 0.1); }
+  100% { background-color: transparent; }
+}
+.vk-row-flash {
+  animation: vk-row-flash 400ms ease-out 1;
+}
+
 /* ── 骨架屏 shimmer(仅加载期渲染;沿用 slate/白低透明度体系,不引新色板)── */
 @keyframes vk-shimmer {
   from { background-position: 200% 0; }
@@ -53,6 +63,7 @@
   .vk-spark-path,
   .vk-breathe,
   .vk-delta-flash,
+  .vk-row-flash,
   .vk-shimmer {
     animation: none !important;
   }

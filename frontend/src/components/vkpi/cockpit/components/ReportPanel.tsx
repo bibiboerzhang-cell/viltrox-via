@@ -2,7 +2,7 @@
 
 
 import React, { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Check, Copy, Download, FileText, Loader2, Printer, Wand2, X } from "lucide-react";
 import { markdownToHtml } from "../lib/markdown";
 import { generateRuntimeReportMarkdown, generateRuntimeVisualHtml } from "../lib/reportRuntime";
@@ -319,13 +319,13 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
     aiInsights:     { label: "Intelligence",        desc: "Real-time aggregation" },
   };
   
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
       onClick: (ev) => ev.stopPropagation(),
       className: "relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",

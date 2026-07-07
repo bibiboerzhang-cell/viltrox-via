@@ -6,9 +6,9 @@ import { render, screen } from "@testing-library/react";
 // mock seam:framer-motion(含 AnimatePresence)、RealMap(→null,隔离 leaflet)、
 // services/http(apiFetch,SystemHealthBar 用)、actionInbox-api(listActionInbox,ActionInboxPanel 用)。
 
-vi.mock("framer-motion", () => ({
+vi.mock("framer-motion", () => {
   // forwardRef stub:吞掉 motion 组件传入的 ref,消除良性 ref 警告。
-  motion: new Proxy(
+  const motionProxy = new Proxy(
     {},
     {
       get: () => {
@@ -18,9 +18,17 @@ vi.mock("framer-motion", () => ({
         );
       },
     },
-  ),
-  AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
-}));
+  );
+  // LazyMotion 迁移:代码用 m.*(等价 motion.*)+ LazyMotion/domMax,mock 全部补齐。
+  return {
+    motion: motionProxy,
+    m: motionProxy,
+    LazyMotion: ({ children }: { children: React.ReactNode }) => children,
+    domMax: {},
+    domAnimation: {},
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+  };
+});
 
 vi.mock("./components/RealMap", () => ({ RealMap: () => null }));
 

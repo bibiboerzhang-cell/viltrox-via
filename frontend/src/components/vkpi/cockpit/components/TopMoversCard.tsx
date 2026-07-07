@@ -2,7 +2,7 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { TrendingUp } from "lucide-react";
 import { useT } from "../lib/i18n";
 
@@ -10,7 +10,7 @@ const e = React.createElement;
 
 export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
   const { t } = useT();
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
     transition: { delay: 0.24 },

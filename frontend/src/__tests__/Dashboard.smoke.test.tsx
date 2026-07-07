@@ -6,8 +6,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 
-vi.mock("framer-motion", () => ({
-  motion: new Proxy(
+vi.mock("framer-motion", () => {
+  const motionProxy = new Proxy(
     {},
     {
       get: () => {
@@ -17,9 +17,17 @@ vi.mock("framer-motion", () => ({
         );
       },
     },
-  ),
-  AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
-}));
+  );
+  // LazyMotion 迁移:代码用 m.*(等价 motion.*)+ LazyMotion/domMax,mock 全部补齐。
+  return {
+    motion: motionProxy,
+    m: motionProxy,
+    LazyMotion: ({ children }: { children: React.ReactNode }) => children,
+    domMax: {},
+    domAnimation: {},
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
+  };
+});
 
 vi.mock("../components/vkpi/cockpit/components/RealMap", () => ({
   RealMap: () => null,

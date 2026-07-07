@@ -5,7 +5,7 @@
 // 红线:纯只读,不触发任何写;与 viltrox_fit_score 无关。
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import {
   AlertCircle,
   Check,
@@ -157,7 +157,7 @@ export function ProjectTimeline({ apiToken = "", projectId = "" }) {
   }
 
   return e(
-    motion.div,
+    m.div,
     {
       initial: { opacity: 0, y: 6 },
       animate: { opacity: 1, y: 0 },

@@ -13,8 +13,9 @@
 // (静默缓冲,移开后一次性追平)。prefers-reduced-motion 全部降级为静态直显。
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { usePrefersReducedMotion } from "./AnimatedNumber";
+import { useRowFlash } from "./ui/rowFlash";
 import {
   Activity,
   AlertTriangle,
@@ -65,7 +66,10 @@ type FeedItem = {
   link?: string | null;
 };
 
-function FeedRow({ item, reduced }: { item: FeedItem; reduced: boolean }) {
+function FeedRow({ item, reduced, flash }: { item: FeedItem; reduced: boolean; flash: boolean }) {
+  // 车道B row-flash:增量新条目挂载时 soft pulse 一次(首屏整批 flash=false 不齐闪);
+  // 值恒定 0 = 只走 flashOnMount 分支;reduced-motion 在 hook 内直接不挂 class。
+  const flashRef = useRowFlash<HTMLDivElement>(0, { flashOnMount: flash });
   const Icon = ICON_MAP[String(item.icon || "")] || Activity;
   const accent = KIND_ACCENT[String(item.kind || "")] || "#64748b";
   const clickable = typeof item.link === "string" && item.link.length > 0;
@@ -79,8 +83,9 @@ function FeedRow({ item, reduced }: { item: FeedItem; reduced: boolean }) {
   // 入场:从顶部滑入 + 淡入,一次 300ms;退场(被挤出列表)淡出。
   // reduced-motion:initial=false + duration 0 → 静态直显,无位移。
   return e(
-    motion.div,
+    m.div,
     {
+      ref: flashRef,
       layout: !reduced,
       initial: reduced ? false : { opacity: 0, y: -10 },
       animate: { opacity: 1, y: 0 },
@@ -185,6 +190,20 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
     });
   }, [items]);
 
+  // 车道B row-flash:对比上一轮 key 集合找「增量新条目」;首轮(prev=null)整批不闪。
+  const prevKeysRef = useRef<Set<string> | null>(null);
+  const freshKeys = useMemo(() => {
+    const prev = prevKeysRef.current;
+    const fresh = new Set<string>();
+    if (prev) {
+      for (const { key } of keyed) if (!prev.has(key)) fresh.add(key);
+    }
+    return fresh;
+  }, [keyed]);
+  useEffect(() => {
+    prevKeysRef.current = new Set(keyed.map(({ key }) => key));
+  }, [keyed]);
+
   // 新条目滚入时自动回到顶部,保持最新可见(hover 阅读中不打扰)。
   const topKey = keyed.length ? keyed[0].key : "";
   useEffect(() => {
@@ -237,7 +256,7 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
       e(
         AnimatePresence,
         { initial: false },
-        keyed.map(({ item, key }) => e(FeedRow, { key, item, reduced })),
+        keyed.map(({ item, key }) => e(FeedRow, { key, item, reduced, flash: freshKeys.has(key) })),
       ),
     );
   }

@@ -3,7 +3,7 @@
 // #5 合作按钮:匹配主池后「加大投入/续约/评估/退出合作」接真 /cooperation 登记;未匹配则提示先入库。
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { ImageIcon, X } from "lucide-react";
 import { useT } from "../../lib/i18n";
 import { formatNumber } from "../../lib/format";
@@ -72,13 +72,13 @@ export function KOLDetailModal({ mover, onClose, onOpenKolPool, apiToken = "" }:
       ? `${resolved.platform || mover.platform || ""}${resolved.followers ? " · " + formatNumber(resolved.followers) + " followers" : ""}${resolved.avg_views ? " · 均播 " + formatNumber(resolved.avg_views) : ""}`.replace(/^ · /, "")
       : `${mover.type === "matrix" ? "公司矩阵" : "榜单动量"} · 未匹配主池(指标以榜单为准)`;
 
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "cockpit-modal fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
       onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",

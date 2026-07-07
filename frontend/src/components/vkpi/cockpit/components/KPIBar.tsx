@@ -2,7 +2,7 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { AlertCircle, Filter, Search, Sparkles, Target, TrendingUp, Users } from "lucide-react";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatNumber } from "../lib/format";
@@ -50,7 +50,7 @@ export function KPIBar({ items, onCardClick, activeKindFilter, onTotalClick }: a
       const isTotalCard = c.label === "Pool 总数";
       const clickable = !c.degraded && (c.filterKey !== null || (isTotalCard && onTotalClick));
       const isActive  = clickable && activeKindFilter === c.filterKey && c.filterKey !== "";
-      const Card = clickable ? motion.button : motion.div;
+      const Card = clickable ? m.button : m.div;
       const cardProps: any = {
         key: c.label,
         initial: { opacity: 0, y: 8 },

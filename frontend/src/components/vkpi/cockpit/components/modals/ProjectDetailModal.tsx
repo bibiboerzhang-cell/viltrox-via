@@ -2,7 +2,7 @@
 
 
 import React, { useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { AlertTriangle, ArrowLeft, Package, Search, Send, Share2, Target, UserPlus, Users, X } from "lucide-react";
 import { useT } from "../../lib/i18n";
 import { CAMPAIGN_ICONS } from "../../data/campaignIcons";
@@ -59,13 +59,13 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
     apiToken,
     onClose: () => setShareOpen(false),
    }),
-   e(motion.div, {
+   e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "cockpit-modal fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 overflow-y-auto",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
       onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-3xl max-h-[92vh] flex flex-col rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",

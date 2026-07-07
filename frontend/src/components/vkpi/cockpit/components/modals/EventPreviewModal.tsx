@@ -2,7 +2,7 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { ChevronRight, X } from "lucide-react";
 import { Breadcrumb } from "../Breadcrumb";
 
@@ -17,13 +17,13 @@ export function EventPreviewModal({ event, allEvents, onClose, onViewDetails }: 
     e.id !== event.id && (e.country === event.country || e.city === event.city)
   );
   
-  return e(motion.div, {
+  return e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
     className: "cockpit-modal fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-md p-4",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { scale: 0.95, opacity: 0 }, animate: { scale: 1, opacity: 1 }, exit: { scale: 0.95, opacity: 0 },
       onClick: (ev: any) => ev.stopPropagation(),
       className: "relative w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
@@ -69,7 +69,7 @@ export function EventPreviewModal({ event, allEvents, onClose, onViewDetails }: 
             )
           ),
           e("div", { className: "h-1 overflow-hidden rounded-full bg-white/[0.06]" },
-            e(motion.div, {
+            e(m.div, {
               initial: { width: 0 },
               animate: { width: `${event.materialProgress}%` },
               transition: { duration: 0.8, ease: [0.16, 1, 0.3, 1] },

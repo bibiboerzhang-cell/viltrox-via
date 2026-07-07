@@ -2,7 +2,7 @@
 
 
 import React, { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion";
 import { Check, ChevronDown } from "lucide-react";
 
 const e = React.createElement;
@@ -37,7 +37,7 @@ export function HierarchyDropdown({ label, value, placeholder, options, onChange
       ),
       e(ChevronDown, { size: 12, className: `shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}` })
     ),
-    e(AnimatePresence, null, open && e(motion.div, {
+    e(AnimatePresence, null, open && e(m.div, {
       initial: { opacity: 0, y: -6, scale: 0.96 },
       animate: { opacity: 1, y: 0, scale: 1 },
       exit: { opacity: 0, y: -6, scale: 0.96 },

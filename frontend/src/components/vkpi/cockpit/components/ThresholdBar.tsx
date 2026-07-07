@@ -10,7 +10,7 @@
 // 显示层宪法:只消费 public_plan 已给的条件文本,不渲染任何内部评分。
 
 import React from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { m, useReducedMotion } from "framer-motion";
 
 const e = React.createElement;
 
@@ -56,7 +56,7 @@ function fmt(v: number, unit: string): string {
 function Zone({ left, width, color, reduced, delay }: { left: number; width: number; color: string; reduced: boolean; delay: number }) {
   const style = { left: `${left}%`, background: color };
   if (reduced) return e("div", { className: "absolute top-0 h-full", style: { ...style, width: `${width}%` } });
-  return e(motion.div, {
+  return e(m.div, {
     className: "absolute top-0 h-full",
     style,
     initial: { width: 0 },

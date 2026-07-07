@@ -4,7 +4,8 @@
 // 后端已按 scope 过滤(管理层全局 / 成员仅自己 owner 的)。
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
+import { useRowFlash } from "./ui/rowFlash";
 import {
   Brain,
   CalendarClock,
@@ -88,6 +89,21 @@ function gtmVerdictIdsOf(it: any): { id: number; idType: "inbox" | "outcome" } {
         (String(it?.entity_type || "").toLowerCase() === "action_inbox" ? it?.entity_id : 0),
     ) || 0;
   return { id: betId, idType: "inbox" };
+}
+
+// 车道B row-flash:条目行外壳 —— status 变化(如 通过 → approved)soft pulse 一次
+// (首帧不闪;reduced-motion 在 hook 内降级为静态)。纯展示包装,零业务逻辑。
+function InboxRowShell({
+  status,
+  className,
+  children,
+}: {
+  status: string;
+  className: string;
+  children?: React.ReactNode;
+}) {
+  const flashRef = useRowFlash<HTMLDivElement>(status);
+  return e("div", { ref: flashRef, className }, children);
 }
 
 const PRIORITY_META = {
@@ -518,9 +534,10 @@ export function ActionInboxPanel({
         const ck = (it.result_checklist_json && typeof it.result_checklist_json === "object") ? it.result_checklist_json : null;
         const costCents = Number(it.estimated_cost_cents || 0) || 0;
         return e(
-          "div",
+          InboxRowShell,
           {
             key: it.id,
+            status: String(it.status || ""),
             className: "rounded-md border border-white/[0.05] bg-white/[0.015] px-2.5 py-2",
           },
           e(
@@ -644,7 +661,7 @@ export function ActionInboxPanel({
       : null;
 
   return e(
-    motion.div,
+    m.div,
     {
       initial: { opacity: 0, y: 8 },
       animate: { opacity: 1, y: 0 },

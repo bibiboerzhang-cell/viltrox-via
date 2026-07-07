@@ -12,7 +12,7 @@
 
 import React from "react";
 import { Activity, ChevronDown } from "lucide-react";
-import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, m } from "framer-motion";
 import {
   fetchProgressCenter,
   type ProgressCenterData,
@@ -237,7 +237,7 @@ export function TopProgressCenter() {
       ),
       // ── 下拉抽屉:入场动画一次(220ms),无循环 ────────────────────────────
       e(AnimatePresence, null,
-        open && e(motion.div, {
+        open && e(m.div, {
           key: "tpc-drawer",
           initial: { opacity: 0, y: -6 },
           animate: { opacity: 1, y: 0 },

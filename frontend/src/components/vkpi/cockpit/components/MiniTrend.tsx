@@ -2,7 +2,7 @@
 
 
 import React, { useMemo } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 
 const e = React.createElement;
 
@@ -25,7 +25,7 @@ export function MiniTrend({ series }: any) {
   }, [series]);
   return e("svg", { viewBox: `0 0 ${w} ${h}`, className: "h-full w-full" },
     [20,40,60,80,100].map((y) => e("line", { key: y, x1: 0, y1: y, x2: w, y2: y, stroke: "rgba(148,163,184,.08)", strokeWidth: 0.5 })),
-    paths.map((s: any, i: any) => e(motion.path, {
+    paths.map((s: any, i: any) => e(m.path, {
       key: s.name, d: s.d, fill: "none", stroke: s.color, strokeWidth: 2, strokeLinecap: "round",
       initial: { pathLength: 0, opacity: 0 }, animate: { pathLength: 1, opacity: 1 },
       transition: { duration: 1.2, delay: 0.3 + i * 0.15, ease: "easeOut" },

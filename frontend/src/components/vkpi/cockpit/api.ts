@@ -1,4 +1,8 @@
 import { apiFetch, jsonBody, type AuthUser, type MeResponse } from "../../../services/http";
+// 车道A(2026-07-07):shell/dashboard 两个 GET bundle 走内存缓存层(45s TTL + 并发去重 +
+// stale-while-revalidate)。cockpit 按 activeNav 条件渲染,切 tab=卸载重挂=此前全量重拉;
+// 现在重挂命中缓存立即回上次数据,后台静默刷新。POST 写路径一律仍走 apiFetch,不缓存。
+import { cachedApiFetch, clearApiCache } from "../../../lib/apiCache";
 
 type Row = Record<string, unknown>;
 
@@ -12,8 +16,8 @@ async function settle<T>(request: Promise<T>, fallback: T): Promise<T> {
 
 export async function fetchCockpitShellBundle(apiToken: string) {
   const [me, alerts] = await Promise.all([
-    settle(apiFetch<MeResponse>("/api/auth/me", { timeoutMs: 3000 }, apiToken), { status: "error" }),
-    settle(apiFetch<{ alerts?: Row[]; items?: Row[]; count?: number }>("/api/admin/vkpi/alerts?status=open&limit=80", { timeoutMs: 3500 }, apiToken), { alerts: [] }),
+    settle(cachedApiFetch<MeResponse>("/api/auth/me", { timeoutMs: 3000 }, apiToken), { status: "error" }),
+    settle(cachedApiFetch<{ alerts?: Row[]; items?: Row[]; count?: number }>("/api/admin/vkpi/alerts?status=open&limit=80", { timeoutMs: 3500 }, apiToken), { alerts: [] }),
   ]);
 
   return {
@@ -39,16 +43,16 @@ export async function fetchCockpitDashboardBundle(apiToken: string) {
   ] = await Promise.all([
     // 主 summary 是最重的一刀(KPI/漏斗/campaigns 全靠它):并发批里线上实测 ~4s+ 才完成,
     // 4000ms 会静默超时回空 → 整排 KPI + KOL 漏斗显示"待接入/待后端"。放宽到 10s(2026-07-02)。
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 10000 }, apiToken), {}),
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500 }, apiToken), {}),
-    settle(apiFetch<{ items?: Row[] }>("/api/admin/vkpi/dashboard/recent-content?limit=30", { timeoutMs: 4000 }, apiToken), { items: [] }),
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500 }, apiToken), {}),
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/tasks?limit=8", { timeoutMs: 2500 }, apiToken), {}),
-    settle(apiFetch<Row>("/api/admin/vkpi/industry-data/market-intelligence/cards/v0?limit=120&brand_limit=5&include_latest_llm_artifact=false&include_latest_external_smoke=false", { timeoutMs: 2500 }, apiToken), {}),
-    settle(apiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500 }, apiToken), { projects: [] }),
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/fit-movers?limit=8", { timeoutMs: 2500 }, apiToken), {}),
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 2500 }, apiToken), {}),
-    settle(apiFetch<Row>("/api/admin/vkpi/dashboard/competitor-radar", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 10000 }, apiToken), {}),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<{ items?: Row[] }>("/api/admin/vkpi/dashboard/recent-content?limit=30", { timeoutMs: 4000 }, apiToken), { items: [] }),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/tasks?limit=8", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/industry-data/market-intelligence/cards/v0?limit=120&brand_limit=5&include_latest_llm_artifact=false&include_latest_external_smoke=false", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500 }, apiToken), { projects: [] }),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/fit-movers?limit=8", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 2500 }, apiToken), {}),
+    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/competitor-radar", { timeoutMs: 2500 }, apiToken), {}),
   ]);
 
   return {
@@ -138,6 +142,8 @@ export async function submitCockpitFeedback(
 }
 
 export async function logoutCockpit() {
+  // 车道A:登出即清 GET 内存缓存,防止切身份后读到上一个账号的数据。
+  clearApiCache();
   return apiFetch<Row>("/api/auth/logout", { method: "POST" });
 }
 

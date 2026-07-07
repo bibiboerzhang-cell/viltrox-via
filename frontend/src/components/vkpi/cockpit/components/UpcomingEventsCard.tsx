@@ -2,7 +2,7 @@
 
 
 import React, { useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Calendar, Minimize, Plus, X } from "lucide-react";
 
 const e = React.createElement;
@@ -13,7 +13,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
 
   // 折叠态:只显示一个 chip(像 iOS app icon)
   if (collapsed) {
-    return e(motion.div, {
+    return e(m.div, {
       drag: true,
       dragConstraints: dragConstraintsRef,
       dragMomentum: false,
@@ -38,7 +38,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
     );
   }
 
-  return e(motion.div, {
+  return e(m.div, {
     drag: true,
     dragConstraints: dragConstraintsRef,
     dragMomentum: false,
@@ -106,7 +106,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
           // Material progress(精简)
           e("div", { className: "flex items-center gap-2" },
             e("div", { className: "flex-1 h-0.5 overflow-hidden rounded-full bg-white/[0.05]" },
-              e(motion.div, {
+              e(m.div, {
                 initial: { width: 0 },
                 animate: { width: `${evt.materialProgress}%` },
                 transition: { delay: 0.5, duration: 0.8, ease: [0.16, 1, 0.3, 1] },

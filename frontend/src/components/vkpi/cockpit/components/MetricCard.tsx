@@ -2,8 +2,9 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Sparkline } from "./Sparkline";
+import { useRowFlash } from "./ui/rowFlash";
 import { useT } from "../lib/i18n";
 
 const e = React.createElement;
@@ -13,6 +14,8 @@ export function MetricCard({ item, i, scope, onClick }: any) {
   const { label, sub, icon: Icon, format } = item;
   const scopeData = item.data[scope] || item.data.all;
   const { value, trend, source, sourceLabel, color, spark, waiting, anomaly } = scopeData;
+  // 车道B row-flash:数值变化(轮询刷出新值/切 scope)soft pulse 一次;首帧不闪。
+  const flashRef = useRowFlash<HTMLDivElement>(value);
   
   const isAccumulating = source === "accumulating";
   const hasNoValue = value === null || value === undefined;
@@ -39,7 +42,8 @@ export function MetricCard({ item, i, scope, onClick }: any) {
     return String(v);
   };
   
-  return e(motion.div, {
+  return e(m.div, {
+    ref: flashRef,
     initial: { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
     transition: { delay: i * 0.04, duration: 0.5, ease: [0.16, 1, 0.3, 1] },

@@ -2,7 +2,7 @@
 
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Share2, Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
@@ -595,7 +595,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       : null;
   
   return e(React.Fragment, null,
-  e(motion.div, {
+  e(m.div, {
     initial: { x: "100%" }, animate: { x: 0 }, exit: { x: "100%" },
     transition: { type: "spring", damping: 28, stiffness: 240 },
     "aria-label": "KOL Pool 详情",

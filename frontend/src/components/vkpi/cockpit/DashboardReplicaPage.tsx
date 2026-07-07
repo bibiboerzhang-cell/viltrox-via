@@ -1,7 +1,7 @@
 // Dashboard slice from vkpi_v6.15.7_integrated.html
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { AlertTriangle, DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActionInboxPanel } from "./components/ActionInboxPanel";
@@ -304,7 +304,7 @@ export function DashboardReplicaPage(props: any) {
             // ─── LEFT ───
             e("div", { className: "space-y-4" },
 
-              e(motion.div, {
+              e(m.div, {
                 ref: globeContainerRef,
                 initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { delay: 0.2 },
                 className: "relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#040712]",
@@ -468,7 +468,7 @@ export function DashboardReplicaPage(props: any) {
                       e("span", { className: "rounded border border-emerald-500/20 bg-emerald-500/[0.06] px-1 py-px text-emerald-400/80" }, "实时"),
                       e("span", null, "KOL Pool 分布")
                     ),
-                    topListData.items.slice(0, 7).map((row: any, i: any) => e(motion.div, {
+                    topListData.items.slice(0, 7).map((row: any, i: any) => e(m.div, {
                       key: row.label,
                       initial: { opacity: 0, x: -8 }, animate: { opacity: 1, x: 0 },
                       transition: { delay: 0.3 + i * 0.04 },
@@ -486,7 +486,7 @@ export function DashboardReplicaPage(props: any) {
                         e("span", { className: "shrink-0 tabular-nums text-slate-400" }, row.value)
                       ),
                       e("div", { className: "h-0.5 overflow-hidden rounded-full bg-white/[0.06]" },
-                        e(motion.div, {
+                        e(m.div, {
                           initial: { width: 0 },
                           animate: { width: `${row.barWidth}%` },
                           transition: { delay: 0.4 + i * 0.04, duration: 0.8, ease: [0.16, 1, 0.3, 1] },

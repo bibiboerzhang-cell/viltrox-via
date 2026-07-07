@@ -3,7 +3,7 @@
 // 红线:零触 viltrox_fit_score 写,纯渲染。
 
 import React from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { AlertTriangle, Check, Link2, Shield, Sparkles, Video } from "lucide-react";
 import { KPAvatar } from "./KPAvatar";
 import { AnalysisCard } from "./KOLVideoAnalysisPanel";
@@ -267,7 +267,7 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
     "aria-label": "代表作视频播放器",
     onClick: onClose,
   },
-    e(motion.div, {
+    e(m.div, {
       initial: { opacity: 0, scale: 0.96, y: 16 },
       animate: { opacity: 1, scale: 1, y: 0 },
       exit: { opacity: 0, scale: 0.96, y: 16 },
