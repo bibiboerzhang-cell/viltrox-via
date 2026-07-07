@@ -1,14 +1,34 @@
 """Dashboard and chart aggregate services for V-KPI."""
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn
+from app.services.cache.memory_cache import cache_get, cache_set
 from app.shared.vkpi_decision_common import _active_project_filter, _safe_rows, _summary
 from app.platform.db.schema import ensure_vkpi_schema
 
+# 大聚合读缓存(60-300s)。dashboard() 是全局口径(无 staff 过滤),键只含窗口;
+# dashboard_view() 的 staff 视角键含 staff_id → 绝不跨用户串(dashboard-scope-isolation)。
+# 调用方(build_dashboard_summary)会就地改写返回 dict,故命中/落库都走 deepcopy,
+# 缓存对象与交给调用方的对象互不污染。
+_DECISION_CACHE_TTL = 120
+
+
 def dashboard(window_days: int = 30) -> dict[str, Any]:
+    days = max(1, min(180, int(window_days or 30)))
+    cache_key = f"dash_decision:base:window={days}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return copy.deepcopy(hit)
+    result = _dashboard_impl(days)
+    cache_set(cache_key, copy.deepcopy(result), _DECISION_CACHE_TTL)
+    return result
+
+
+def _dashboard_impl(window_days: int = 30) -> dict[str, Any]:
     ensure_vkpi_schema()
     days = max(1, min(180, int(window_days or 30)))
     conn = get_conn()
@@ -353,6 +373,18 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
 
 
 def dashboard_view(view: str, *, window_days: int = 30, staff_id: int | None = None) -> dict[str, Any]:
+    clean = str(view or "owner").strip().lower()
+    days = max(1, min(180, int(window_days or 30)))
+    cache_key = f"dash_decision:view={clean}:window={days}:staff={int(staff_id) if staff_id else 'global'}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return copy.deepcopy(hit)
+    result = _dashboard_view_impl(view, window_days=window_days, staff_id=staff_id)
+    cache_set(cache_key, copy.deepcopy(result), _DECISION_CACHE_TTL)
+    return result
+
+
+def _dashboard_view_impl(view: str, *, window_days: int = 30, staff_id: int | None = None) -> dict[str, Any]:
     base = dashboard(window_days=window_days)
     clean = str(view or "owner").strip().lower()
     conn = get_conn()

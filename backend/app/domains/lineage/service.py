@@ -19,9 +19,14 @@ from app.domains.lineage.store import (
     get_run,
     latest_dashboard_run,
     list_runs,
+    recent_dashboard_run_id,
 )
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.lineage.schema import ensure_vkpi_lineage_schema
+
+# GET /dashboard 幂等门:同 scope+窗口的 ready run 若在此秒数内已生成,直接复用不重算,
+# 把 generate_run 的写入收敛到「过期才刷」而非每次页面加载(去写化)。
+_DASHBOARD_RUN_REUSE_SEC = 300
 
 def _existing_staff_id(conn: Any, value: Any) -> int | None:
     sid = _int(value)
@@ -156,24 +161,35 @@ def dashboard_metrics(
     staff_id: int | None = None,
     generated_by_staff_id: int | None = None,
 ) -> dict[str, Any]:
-    """Generate a current dashboard snapshot and return UI-ready metric values.
+    """Generate (or reuse) a current dashboard snapshot and return UI-ready values.
 
-    Dashboard reads should be lineage-first: every visible metric carries the
-    metric_value_id used by the Evidence Drawer. We intentionally generate a
-    fresh run for the selected window so deleted projects / voided costs do not
-    leak from old snapshots into the current operational view.
+    Dashboard reads are lineage-first: every visible metric carries the
+    metric_value_id used by the Evidence Drawer. To keep GET /dashboard read-mostly
+    we apply an idempotency gate — if a ``ready`` run for the same scope and window
+    was generated within ``_DASHBOARD_RUN_REUSE_SEC`` we reuse it instead of writing
+    a fresh run on every page load. Only when no fresh run exists do we compute one,
+    which still keeps deleted projects / voided costs from leaking beyond the window.
     """
     scoped_staff_id = scope_service.effective_staff_id(staff, staff_id)
     scope_type = "staff" if scoped_staff_id else "all"
-    run_meta = generate_run(
-        period_days=max(1, min(180, int(period_days or 7))),
+    period = max(1, min(180, int(period_days or 7)))
+    run_id = recent_dashboard_run_id(
         scope_type=scope_type,
         scope_id=scoped_staff_id,
-        trigger_source="dashboard",
-        generated_by_staff_id=generated_by_staff_id,
-        metadata={"lineage_first": True},
+        period_days=period,
+        max_age_seconds=_DASHBOARD_RUN_REUSE_SEC,
     )
-    run = get_run(int(run_meta["run_id"]), staff=staff)
+    if not run_id:
+        run_meta = generate_run(
+            period_days=period,
+            scope_type=scope_type,
+            scope_id=scoped_staff_id,
+            trigger_source="dashboard",
+            generated_by_staff_id=generated_by_staff_id,
+            metadata={"lineage_first": True},
+        )
+        run_id = int(run_meta["run_id"])
+    run = get_run(run_id, staff=staff)
     values = []
     for row in run.get("values") or []:
         item = dict(row)

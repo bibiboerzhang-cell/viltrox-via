@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request
 from app.core.security import require_admin_async
 from app.db.connection import get_db_actor_stats, probe_postgres_connectivity
 from app.services.ai.runtime_guards import list_provider_guard_stats
-from app.services.monitoring.runtime import get_request_metrics_snapshot
+from app.services.monitoring.runtime import get_persisted_request_metrics, get_request_metrics_snapshot
 from app.services.security.rate_limiter import get_rate_limit_stats
 
 router = APIRouter(prefix="/api/admin/runtime", tags=["ops"])
@@ -25,10 +25,13 @@ async def get_runtime_metrics(request: Request):
     queue_stats = await queue.runtime_stats() if queue is not None else {"backend": "none"}
     via_stats = await via_event_bus.runtime_stats() if via_event_bus is not None else {"backend": "none"}
     postgres = await asyncio.to_thread(probe_postgres_connectivity)
+    # 进程内实时快照 + 最近一次落库快照(重启后仍可见,由 5 分钟后台任务写入)。
+    persisted_requests = await asyncio.to_thread(get_persisted_request_metrics)
     return {
         "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "requested_by": admin.get("email", ""),
         "requests": get_request_metrics_snapshot(),
+        "requests_persisted": persisted_requests,
         "rate_limit": get_rate_limit_stats(),
         "db_actor": get_db_actor_stats(),
         "queue": queue_stats,

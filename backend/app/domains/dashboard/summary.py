@@ -11,6 +11,7 @@ from app.domains.dashboard.metric_maturity import (
 )
 from app.domains.dashboard.account_picker import build_dashboard_kpi
 from app.db.connection import get_conn, table_exists
+from app.services.cache.memory_cache import cache_get, cache_set
 from app.domains.dashboard.recent_content import _dashboard_official_matrix_summary
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
@@ -48,6 +49,32 @@ from app.domains.dashboard.summary_company import (  # noqa: E402,F401
     _build_company_roster_detail,
     _build_company_window_metrics,
 )
+
+
+# 大聚合读缓存(60-300s)。键必含 staff_scope_id(=effective_staff_id)→ 绝不把 A 的
+# 聚合喂给 B(dashboard-scope-isolation 在缓存层延续)。None=owner/admin 全局桶。
+# 只在 GET /dashboard 汇总路径(build_dashboard_summary)对聚合结果套缓存;各 _build_*
+# 原函数保持无缓存,直连单测(如 authz 隔离用例)照旧命中真 SQL 分支。
+_SUMMARY_CACHE_TTL = 120
+
+
+def _summary_cache_key(name: str, staff_scope_id: int | None, **parts: Any) -> str:
+    sid = str(staff_scope_id) if staff_scope_id else "global"
+    kp = ":".join(f"{k}={parts[k]}" for k in sorted(parts))
+    return f"dash_summary:{name}:scope={sid}:{kp}"
+
+
+def _cached_summary_block(name: str, staff_scope_id: int | None, builder, **key_parts: Any) -> dict[str, Any]:
+    """Read-through cache for one summary aggregate. ``builder`` is a 0-arg callable
+    invoked only on a miss; the returned block is assigned (never mutated) by the
+    caller, so sharing the cached dict across requests is safe."""
+    cache_key = _summary_cache_key(name, staff_scope_id, **key_parts)
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return hit
+    result = builder()
+    cache_set(cache_key, result, _SUMMARY_CACHE_TTL)
+    return result
 
 
 def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, Any]:
@@ -635,10 +662,22 @@ def build_dashboard_summary(
     # P1 隔离:effective_staff_id 为 None=owner/admin(全局),否则=该员工(own-only)。
     # 四聚合统一吃这把 scope —— 此前它们各自全局口径,导致小号也看到全公司数据。
     summary["active_roster"] = int(build_dashboard_kpi(account_type="all", staff_scope_id=effective_staff_id).get("active_roster") or 0)
-    summary["evidence_metrics"] = _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id)
-    summary["active_campaigns"] = _build_active_campaigns_summary(window_days=window_days, staff_scope_id=effective_staff_id)
+    win = int(window_days or 30)
+    summary["evidence_metrics"] = _cached_summary_block(
+        "evidence_metrics", effective_staff_id,
+        lambda: _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id),
+        window=win,
+    )
+    summary["active_campaigns"] = _cached_summary_block(
+        "active_campaigns", effective_staff_id,
+        lambda: _build_active_campaigns_summary(window_days=window_days, staff_scope_id=effective_staff_id),
+        window=win,
+    )
     # 波3 R1 / C9(2026-06-12):四环漏斗块(收藏→认领→进项目→已发布),shape 契约见 _build_funnel_summary docstring。
-    summary["funnel"] = _build_funnel_summary(staff_scope_id=effective_staff_id)
+    summary["funnel"] = _cached_summary_block(
+        "funnel", effective_staff_id,
+        lambda: _build_funnel_summary(staff_scope_id=effective_staff_id),
+    )
     summary["metric_scope"] = normalized_scope
     summary["scope_label"] = scope_maturity["scope_label"]
     summary["snapshot_days"] = scope_maturity["snapshot_days"]

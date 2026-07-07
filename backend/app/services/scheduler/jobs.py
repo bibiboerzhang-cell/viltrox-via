@@ -107,6 +107,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_worker_lease_expire_stale,
 )
 from app.services.scheduler.jobs_pool_dedupe import job_kol_pool_dedupe_reconcile  # noqa: F401
+from app.services.monitoring.runtime import job_runtime_metrics_snapshot  # noqa: F401
 
 
 # ──────────────────────────────────────────────
@@ -658,8 +659,19 @@ async def start_scheduler() -> None:
         coalesce=True,
     )
 
+    # ── 可观测性:进程内请求指标每 5 分钟快照落库(persistent_cache,重启不丢)──
+    # 常开、轻量(读进程内计数器 + 两行 cache upsert),空库安全空跑;只读端点见 ops.py。
+    _scheduler.add_job(
+        job_runtime_metrics_snapshot,
+        trigger=IntervalTrigger(minutes=5),
+        id="runtime_metrics_snapshot",
+        name="Persist in-process request metrics snapshot every 5 min",
+        max_instances=1,
+        coalesce=True,
+    )
+
     _scheduler.start()
-    
+
     job_count = len(_scheduler.get_jobs())
     logger.info("scheduler.started", extra={"job_count": job_count})
     if VIA_ENABLE_DAILY_LEARNING:

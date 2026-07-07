@@ -1,6 +1,7 @@
 """Persistence and read helpers for V-KPI metric lineage snapshots."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
@@ -34,21 +35,22 @@ def _persist_value(conn: Any, *, run_id: int, metric_key: str, result: dict[str,
     ).fetchone()
     return int(row["id"]) if row else 0
 
+# vkpi_metric_sources 每行 13 列;单行占位符组供批量多值 INSERT 复用。
+_SOURCE_COLUMNS = 13
+_SOURCE_ROW_PLACEHOLDER = "(" + ",".join(["?"] * _SOURCE_COLUMNS) + ")"
+
+
 def _persist_sources(conn: Any, *, value_id: int, sources: list[dict[str, Any]], total: float, now: str) -> None:
     if not value_id or not sources:
         return
     total_f = _float(total) or 0.0
+    # N+1 收口:此前每个 source 一条 INSERT(一个 metric 动辄几十上百条 → 页面加载多次往返)。
+    # compat 连接不暴露 executemany,故合并成单条多值 INSERT(product_specs.py 同款批量口径)。
+    params: list[Any] = []
     for src in sources:
         amount = _float(src.get("contribution_amount"))
         percent = round((amount / total_f) * 100, 4) if total_f else 0.0
-        conn.execute(
-            """
-            INSERT INTO vkpi_metric_sources (
-                metric_value_id, source_type, source_id, contribution_amount,
-                contribution_percent, evidence_type, evidence_ref, project_id,
-                kol_id, staff_id, occurred_at, snapshot_json, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
+        params.extend(
             (
                 int(value_id),
                 str(src.get("source_type") or ""),
@@ -63,8 +65,19 @@ def _persist_sources(conn: Any, *, value_id: int, sources: list[dict[str, Any]],
                 src.get("occurred_at"),
                 _json(src.get("snapshot")),
                 now,
-            ),
+            )
         )
+    values_clause = ",".join([_SOURCE_ROW_PLACEHOLDER] * len(sources))
+    conn.execute(
+        """
+        INSERT INTO vkpi_metric_sources (
+            metric_value_id, source_type, source_id, contribution_amount,
+            contribution_percent, evidence_type, evidence_ref, project_id,
+            kol_id, staff_id, occurred_at, snapshot_json, created_at
+        ) VALUES """
+        + values_clause,
+        params,
+    )
 
 def _persist_derived_sources(
     conn: Any, *, value_id: int, computed: dict[str, dict[str, Any]], metric_key: str, now: str
@@ -165,6 +178,68 @@ def latest_dashboard_run(scope_type: str = "all", scope_id: int | None = None) -
     if not row:
         return {}
     return get_run(int(row["id"]))
+
+
+def _parse_run_ts(value: Any) -> datetime | None:
+    """Parse a lineage timestamp (``_utcnow`` / ``_window_bounds`` Z-format) → aware UTC dt."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def recent_dashboard_run_id(
+    *,
+    scope_type: str = "all",
+    scope_id: int | None = None,
+    period_days: int,
+    max_age_seconds: int,
+) -> int | None:
+    """Return a reusable ready dashboard-run id for the scope+window, or None.
+
+    Read-only idempotency gate for the GET /dashboard path: when a ``ready`` run for
+    the same scope and rolling-window length was generated within ``max_age_seconds``
+    we reuse it instead of recomputing + writing a fresh run on every page load. The
+    rolling-window length must match (a 7-day view never reuses a 30-day run); recency
+    is filtered in SQL (Z-format timestamps sort lexicographically), window length is
+    verified in Python.
+    """
+    ensure_vkpi_lineage_schema()
+    conn = get_conn()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=max(1, int(max_age_seconds)))
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    where = "trigger_source='dashboard' AND status='ready' AND generated_at >= ? AND scope_type=?"
+    params: list[Any] = [cutoff, scope_type or "all"]
+    if scope_id is not None:
+        where += " AND scope_id=?"
+        params.append(int(scope_id))
+    else:
+        where += " AND scope_id IS NULL"
+    rows = conn.execute(
+        f"""
+        SELECT id, period_start, period_end
+        FROM vkpi_metric_runs
+        WHERE {where}
+        ORDER BY generated_at DESC
+        LIMIT 5
+        """,
+        tuple(params),
+    ).fetchall()
+    target_days = max(1, int(period_days))
+    for row in rows:
+        item = dict(row)
+        start = _parse_run_ts(item.get("period_start"))
+        end = _parse_run_ts(item.get("period_end"))
+        if not start or not end:
+            continue
+        window_days = round((end - start).total_seconds() / 86400.0)
+        if window_days == target_days:
+            return int(item["id"])
+    return None
 
 def list_runs(
     *,
