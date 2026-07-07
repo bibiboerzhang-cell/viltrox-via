@@ -138,4 +138,12 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_rule_validation",
     # GTM-2 E1:情绪标签体系——词表回打 emotion_tags_v1 + KOL 情绪画像(零 LLM 零重析,append-only)
     "vkpi_emotion_tags",
+    # CB4 Channel Brain:Dealer geo/category 适配评分 v0(纯读 vkpi_dealers,0 行诚实 data_missing,append-only,2026-07-07)
+    "vkpi_dealer_scoring",
+    # CB3 Channel Brain:独立站/Shopify 承接建议 Conversion Readiness Actions(纯读 checklist,本地 0 订单诚实 data_missing,append-only,2026-07-07)
+    "vkpi_indie_site",
+    # CB1 Channel Brain:官号内容计划器 Owned Media Planner(纯读 vkpi_channel_post_metrics,词表法零 LLM,append-only,2026-07-07)
+    "vkpi_official_planner",
+    # CB2 Channel Brain:渠道组合器 Channel Mix Optimizer(Binet-Field 60/40 跨渠道预算分配,KOL 复用 strategy_sim,Dealer 0 行诚实 data_missing,纯读,append-only,2026-07-07)
+    "vkpi_channel_mix",
 ]
