@@ -48,6 +48,9 @@ from app.api.routers import vkpi_weekly_scorecard
 from app.api.routers import vkpi_miss_review
 from app.api.routers import vkpi_shadow_eval
 from app.api.routers import vkpi_creative_segments
+# A波 四主线:MY KOL 每日学习 / 问数预设问题库
+from app.api.routers import vkpi_daily_digest
+from app.api.routers import vkpi_canned_queries
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -839,6 +842,9 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_miss_review.router)
     app.include_router(vkpi_shadow_eval.router)
     app.include_router(vkpi_creative_segments.router)
+    # A波 四主线:每日学习 / 预设问题库
+    app.include_router(vkpi_daily_digest.router)
+    app.include_router(vkpi_canned_queries.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

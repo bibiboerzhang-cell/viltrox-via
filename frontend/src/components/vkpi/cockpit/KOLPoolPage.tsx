@@ -3,10 +3,11 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { ChevronDown, Info, Search, Star, X } from "lucide-react";
+import { ChevronDown, Info, LayoutGrid, Search, SlidersHorizontal, Star, X } from "lucide-react";
 import { FilterBar } from "./components/FilterBar";
 import { KOLDetailDrawer } from "./components/KOLDetailDrawer";
 import { KOLTable } from "./components/KOLTable";
+import { KolRecommendationCards } from "./components/KolRecommendationCards";
 import { KPIBar } from "./components/KPIBar";
 import { MarketCoverageCard } from "./components/MarketCoverageCard";
 import { SearchProgressBar } from "./components/SearchProgressBar";
@@ -58,6 +59,8 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
   const [contactItem, setContactItem] = useState<any>(null);
   const [poolModalOpen, setPoolModalOpen] = useState(false);
   const [inlineListOpen, setInlineListOpen] = useState(false);
+  // A1 收口:筛选条收敛为次级展开(默认收起;展开后同时作用于推荐卡片流与表格视图)。
+  const [filtersOpen, setFiltersOpen] = useState(false);
   // Search v2 state
   const [searchMode, setSearchMode] = useState("balanced"); // balanced | precision | discovery
   const [kindFilter, setKindFilter] = useState("");          // "" | "existing" | "new" | specific kind
@@ -287,6 +290,7 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
         if (!pending) return;
         window.localStorage.removeItem("vkpi:pending-kolpool-search");
         setSearch(pending);
+        setFiltersOpen(true);
         setInlineListOpen(true);
       } catch { /* localStorage 不可用忽略 */ }
     };
@@ -463,7 +467,13 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             activeKindFilter: kindFilter,
             onTotalClick: () => setPoolModalOpen(true),
           }),
-          e("div", { className: "mt-2.5 space-y-2" },
+          // A1 收口:唯一智能入口放大加持(大号容器 + 高亮描边),入口本体复用既有 SmartKolInputPanel/搜索管线,不重造。
+          e("div", { className: "mt-2.5 rounded-xl border border-purple-400/20 bg-purple-500/[0.045] p-2.5 shadow-[0_0_28px_rgba(124,58,237,0.10)]" },
+            e("div", { className: "mb-1.5 flex items-center gap-1.5 px-0.5" },
+              e(Search, { size: 12, className: "text-purple-300" }),
+              e("span", { className: "text-[11px] font-semibold text-purple-100" }, "智能入口"),
+              e("span", { className: "text-[9.5px] text-slate-500" }, "URL · 建档 · 视频分析 · 语义召回,一个框全搞定")
+            ),
             // K1:searchMode 接通传递——三档(平衡/精准/探索)真实改变 smart 搜索请求参数(映射表见 SmartKolInputPanel)。
             e(SmartKolInputPanel, { apiToken, searchMode, onRecallItems: rememberRecallItems, onOpenRecallItem: openRecallItem, onOpenProfile: openProfileItem })
           ),
@@ -499,6 +509,68 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             e(MarketCoverageCard, { items: poolItems, onGoDiscover: (c: string) => { setCountry(c); setSearchMode("discovery"); } })
           )
         ),
+        // ── A1 收口:默认视图 = 推荐卡片流(与表格视图共用同一份筛选+排序结果 items)──
+        e("section", { className: "mb-4 rounded-lg border border-white/[0.055] bg-white/[0.014] p-3" },
+          e("div", { className: "mb-2.5 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between" },
+            e("div", { className: "flex min-w-0 flex-wrap items-center gap-2 text-[10.5px] text-slate-500" },
+              e("span", { className: "inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-200" },
+                e(LayoutGrid, { size: 12, className: "text-purple-300" }),
+                "推荐 · 卡片流"
+              ),
+              e("span", { className: "inline-flex items-center gap-1.5 text-slate-400" },
+                e(Search, { size: 10, className: "text-purple-300" }),
+                e("span", null, "结果"),
+                e("span", { className: "text-white font-medium tabular-nums" }, items.length),
+                e("span", { className: "text-slate-600" }, "/" + poolItems.length)
+              ),
+              // K1:与真实映射表对齐(库内召回 创作者+测评 · 全网发现条数),不再显示旧占位数字。
+              e("span", {
+                className: "rounded border border-white/[0.06] px-1.5 py-0.5 text-[9.5px] text-slate-500",
+                title: "当前搜索模式的真实配额:库内召回(创作者+测评)· 全网发现条数"
+              },
+                searchMode === "balanced" ? "平衡 8+7·发现30" : searchMode === "precision" ? "精准 10+5·发现20" : "探索 5+5·发现40"
+              ),
+              kindFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-purple-500/25 bg-purple-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-purple-200" },
+                kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : ((CANDIDATE_KIND_INFO as any)[kindFilter]?.short || kindFilter),
+                e("button", { onClick: () => setKindFilter(""), className: "hover:text-white" }, e(X, { size: 9 }))
+              ),
+              myListFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-amber-300" },
+                e(Star, { size: 9, style: { fill: "#fbbf24" } }), "我的列表",
+                e("button", { onClick: () => setMyListFilter(false), className: "hover:text-white" }, e(X, { size: 9 }))
+              )
+            ),
+            // 筛选条收敛为次级展开:一键展开完整 FilterBar(功能原样保留,同时作用于卡片流与表格)。
+            e("button", {
+              type: "button",
+              onClick: () => setFiltersOpen((open) => !open),
+              className: "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.02] px-2.5 py-1.5 text-[10.5px] text-slate-400 transition-colors hover:border-white/[0.16] hover:text-white"
+            },
+              e(SlidersHorizontal, { size: 11 }),
+              e("span", null, filtersOpen ? "收起筛选 · 排序" : "筛选 · 排序"),
+              (search || country || audienceType || trendLevel || hasViltrox || hasCompetitor || kindFilter || myListFilter || sortBy !== "v6_fit") &&
+                e("span", { className: "h-1.5 w-1.5 rounded-full bg-purple-400", title: "有筛选/排序生效中" }),
+              e(ChevronDown, { size: 12, className: "transition-transform " + (filtersOpen ? "rotate-180" : "") })
+            )
+          ),
+          filtersOpen && e("div", null,
+            e(FilterBar, {
+              search, setSearch, country, setCountry, audienceType, setAudienceType,
+              trendLevel, setTrendLevel, sortBy, setSortBy,
+              hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor,
+              searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts,
+              myListFilter, setMyListFilter, myListCount: myList.size,
+            }),
+            (search || kindFilter || myListFilter) && e(SearchProgressBar, { items: filteredBase, searchActive: !!search })
+          ),
+          e(KolRecommendationCards, {
+            items,
+            apiToken,
+            myList,
+            onOpenItem: openItem,
+            avatarFor: avatarForItem,
+          })
+        ),
+        // ── 表格视图:原表格全功能收进折叠(默认收起,一键展开;筛选在上方次级展开里共用)──
         e("section", { className: "mb-4 rounded-lg border border-white/[0.055] bg-white/[0.014]" },
           e("button", {
             type: "button",
@@ -508,51 +580,19 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
             e("span", { className: "min-w-0" },
               e("span", { className: "block text-[11px] font-medium text-slate-300" }, "表格视图"),
               e("span", { className: "block truncate text-[10px] text-slate-600" },
-                "默认收起；Pool 总数大窗已覆盖全量查看、搜索和打开详情。"
+                "默认收起；与卡片流共用同一份筛选和排序,Pool 总数大窗仍覆盖全量查看。"
               )
             ),
             e("span", { className: "flex shrink-0 items-center gap-2 text-[10px] text-slate-500" },
+              e("span", { className: "tabular-nums" }, items.length + " 行"),
               e("span", null, inlineListOpen ? "收起" : "展开"),
               e(ChevronDown, { size: 13, className: "transition-transform " + (inlineListOpen ? "rotate-180" : "") })
             )
           ),
           inlineListOpen && e("div", { className: "border-t border-white/[0.045] px-3 pb-3 pt-3" },
-            e(FilterBar, {
-              search, setSearch, country, setCountry, audienceType, setAudienceType,
-              trendLevel, setTrendLevel, sortBy, setSortBy,
-              hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor,
-              searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts,
-              myListFilter, setMyListFilter, myListCount: myList.size,
-            }),
-            (search || kindFilter || myListFilter) && e(SearchProgressBar, { items: filteredBase, searchActive: !!search }),
-            e("div", { className: "mb-3 flex flex-col gap-2 rounded-lg border border-white/[0.055] bg-white/[0.015] px-3 py-2 lg:flex-row lg:items-center lg:justify-between" },
-              e("div", { className: "flex flex-wrap items-center gap-2 text-[10.5px] text-slate-500" },
-                e("span", { className: "inline-flex items-center gap-1.5 text-slate-300" },
-                  e(Search, { size: 10, className: "text-purple-300" }),
-                  e("span", null, "结果"),
-                  e("span", { className: "text-white font-medium tabular-nums" }, items.length),
-                  e("span", { className: "text-slate-600" }, "/" + poolItems.length)
-                ),
-                // K1:与真实映射表对齐(库内召回 创作者+测评 · 全网发现条数),不再显示旧占位数字。
-                e("span", {
-                  className: "rounded border border-white/[0.06] px-1.5 py-0.5 text-[9.5px] text-slate-500",
-                  title: "当前搜索模式的真实配额:库内召回(创作者+测评)· 全网发现条数"
-                },
-                  searchMode === "balanced" ? "平衡 8+7·发现30" : searchMode === "precision" ? "精准 10+5·发现20" : "探索 5+5·发现40"
-                ),
-                kindFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-purple-500/25 bg-purple-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-purple-200" },
-                  kindFilter === "existing" ? "已有库" : kindFilter === "new" ? "新发现" : ((CANDIDATE_KIND_INFO as any)[kindFilter]?.short || kindFilter),
-                  e("button", { onClick: () => setKindFilter(""), className: "hover:text-white" }, e(X, { size: 9 }))
-                ),
-                myListFilter && e("span", { className: "inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/[0.07] px-1.5 py-0.5 text-[9.5px] text-amber-300" },
-                  e(Star, { size: 9, style: { fill: "#fbbf24" } }), "我的列表",
-                  e("button", { onClick: () => setMyListFilter(false), className: "hover:text-white" }, e(X, { size: 9 }))
-                )
-              ),
-              e("div", { className: "flex items-center gap-1.5 text-[9.5px] text-slate-600" },
-                e(Info, { size: 10 }),
-                e("span", null, "点行打开详情抽屉")
-              )
+            e("div", { className: "mb-2 flex items-center gap-1.5 text-[9.5px] text-slate-600" },
+              e(Info, { size: 10 }),
+              e("span", null, "点行打开详情抽屉;筛选 · 排序在上方卡片流区展开,对表格同步生效")
             ),
             e(KOLTable, {
               items,

@@ -18,6 +18,7 @@ import { MorningBriefCard } from "./components/MorningBriefCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
 import { ActivityFeed } from "./components/ActivityFeed";
+import { TodayFocusStrip } from "./components/TodayFocusStrip";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
@@ -59,11 +60,26 @@ const INSIGHT_ROW_ORDER: Record<DashboardTier, readonly string[]> = {
 };
 
 // 右栏卡片顺序(key 对应组件内 rightRailRenderers)
+// A2 Action Inbox 首页化(2026-07-07):actionInbox 提到右栏首位(两档同)——
+// 登录后先看到「今天该做什么」;晨报紧随其后,其余卡片相对顺序不变。
 const RIGHT_RAIL_ORDER: Record<DashboardTier, readonly string[]> = {
-  management: ["morningBrief", "actionInbox", "activityFeed", "brandPulse", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
+  management: ["actionInbox", "morningBrief", "activityFeed", "brandPulse", "opsHealth", "kolFunnel", "activeCampaigns", "contentCalendar"],
   // 员工:今日建议/我的项目/我的 KOL 漏斗(C3 已按人过滤)排前;运维健康大盘殿后
-  member: ["morningBrief", "actionInbox", "activityFeed", "activeCampaigns", "brandPulse", "kolFunnel", "contentCalendar", "opsHealth"],
+  member: ["actionInbox", "morningBrief", "activityFeed", "activeCampaigns", "brandPulse", "kolFunnel", "contentCalendar", "opsHealth"],
 };
+
+// A2:今日焦点横条「一行可点直达」的落点锚(右栏对应卡片包一层带 id 的 div)。
+const RAIL_ACTION_INBOX_DOM_ID = "vkpi-rail-action-inbox";
+const RAIL_MORNING_BRIEF_DOM_ID = "vkpi-rail-morning-brief";
+
+// A2:平滑滚动到右栏锚点(jsdom 无 scrollIntoView → 全程防御,单测安全)。
+function jumpToRailCard(domId: string) {
+  if (typeof document === "undefined") return;
+  const el = document.getElementById(domId);
+  if (el && typeof el.scrollIntoView === "function") {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
 
 // 身份档位:口径与 VkpiTab.canUseManagerView 完全一致(owner / admin / manager / lead /
 // marketing_lead / marketing_manager 或 vkpi、system.members=admin 均视为管理层)。
@@ -163,9 +179,8 @@ export function DashboardReplicaPage(props: any) {
 
   // 右栏卡片(实验闸内的今日建议/运维健康 + KOL 漏斗 + Active Campaigns + 7 天日历)
   const rightRailRenderers: Record<string, () => React.ReactNode> = {
-    // 生产收敛(2026-07-02):Action Inbox 首屏卡 + 运维健康小卡是 v615 之后加的运维模块,
-    // 随导航一起收进 VITE_EXPERIMENTAL_NAV 闸 —— 线上 Dashboard 保持 v615 组装,
-    // 今日建议仍可从顶栏「工作提醒」popover 进入(同一面板未删)。
+    // 生产收敛(2026-07-02):v615 之后加的运维模块曾随导航一起收进 VITE_EXPERIMENTAL_NAV 闸。
+    // A2(2026-07-07)把 Action Inbox 放出闸(见下方 actionInbox 注释);运维健康小卡仍留闸内。
     // P1 思考流:系统在想什么(聚合任务完成/告警/会话推进,10s 轮询,组件自取数)
     activityFeed: () => apiToken
       ? e(ActivityFeed, { key: "rail-activity-feed", apiToken })
@@ -175,11 +190,18 @@ export function DashboardReplicaPage(props: any) {
       ? e(BrandPulsePanel, { key: "rail-brand-pulse", apiToken })
       : null,
     // 第5轮 夜班晨报:「昨晚系统完成了 X 件」(组件自取数,窗口默认 16h)
+    // A2:包一层锚点 div,供顶部「今日焦点」横条点击直达。
     morningBrief: () => apiToken
-      ? e(MorningBriefCard, { key: "rail-morning-brief", apiToken })
+      ? e("div", { key: "rail-morning-brief", id: RAIL_MORNING_BRIEF_DOM_ID, className: "scroll-mt-4" },
+          e(MorningBriefCard, { apiToken }))
       : null,
-    actionInbox: () => SHOW_EXPERIMENTAL && apiToken
-      ? e(ActionInboxPanel, { key: "rail-action-inbox", apiToken, heading: "今日该做什么", limit: 8 })
+    // A2 Action Inbox 首页化(2026-07-07):脱离 SHOW_EXPERIMENTAL 闸恒显——
+    // 「今天该做什么」升级为首页第一入口(本地版裁令),不再只给实验构建;
+    // SHOW_EXPERIMENTAL 变量保留不删(opsHealth 等其余实验模块仍走该闸)。
+    // 顶栏「工作提醒」popover 的同一面板入口不受影响(未删)。
+    actionInbox: () => apiToken
+      ? e("div", { key: "rail-action-inbox", id: RAIL_ACTION_INBOX_DOM_ID, className: "scroll-mt-4" },
+          e(ActionInboxPanel, { apiToken, heading: "今日该做什么", limit: 8 }))
       : null,
     opsHealth: () => SHOW_EXPERIMENTAL && apiToken
       ? e(OpsHealthCard, { key: "rail-ops-health", apiToken, onOpenTriage })
@@ -209,6 +231,17 @@ export function DashboardReplicaPage(props: any) {
   };
 
   return e("div", { className: "p-4 md:p-6" },
+
+          // A2 今日焦点(2026-07-07):登录后先看到「今天该做什么」——主栏最顶部一条横条,
+          // 聚合 Action Inbox top3 + 晨报 headline + 待办计数,点击直达右栏对应卡片(锚点滚动)。
+          // 无 token(未登录/单测)组件自身返回 null,此处再包一层 mb-4 也只在有 token 时渲染。
+          apiToken && e("div", { className: "mb-4" },
+            e(TodayFocusStrip, {
+              apiToken,
+              onJumpToInbox: () => jumpToRailCard(RAIL_ACTION_INBOX_DOM_ID),
+              onJumpToBrief: () => jumpToRailCard(RAIL_MORNING_BRIEF_DOM_ID),
+            })
+          ),
 
           // 系统健康条:2026-06-15 迁移至「系统设置」页(仅主管可见),主界面保持干净。
           // 数据新鲜度:按用户要求(2026-06-14)从 dashboard 收起,仅保留后台端点

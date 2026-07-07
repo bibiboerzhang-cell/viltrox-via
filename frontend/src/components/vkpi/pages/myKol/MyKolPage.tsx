@@ -4,6 +4,7 @@ import type { OfficialChannelAccount } from '../channels/channelTypes';
 import { useOfficialChannelMatrix } from '../channels/useOfficialChannelMatrix';
 import type { VkpiDashboardData, VkpiPageKey, VkpiProjectRow } from '../../vkpiTypes';
 import { ContributionRollupPanel } from './ContributionRollupPanel';
+import { DailyDigestCard } from './DailyDigestCard';
 import { RiskIndexPanel } from './RiskIndexPanel';
 import type { StaffCard } from './MyKolPage.helpers';
 import {
@@ -121,6 +122,8 @@ export function MyKolPage({ apiToken, viewMode, data, userName, onRefreshData }:
           <button type="button" onClick={onRefreshData}><CheckCircle2 size={14} /> 刷新数据</button>
         </div>
       </header>
+      {/* A3 每日学习:收藏 KOL + 官号昨日变化摘要(自拉取自判空;接口失败安静缺席,不阻塞下方任何板块) */}
+      <DailyDigestCard apiToken={apiToken} />
       {viewMode === 'manager' ? (
         <TeamMatrix
           cards={staffCards}
