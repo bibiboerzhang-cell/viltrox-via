@@ -1,9 +1,44 @@
+import type { ReactNode } from 'react';
 import type { VkpiAttributionRow } from '../vkpiTypes';
 import { currencyFormatter } from '../shared/vkpiFormatters';
+import { TableShell, type TableShellColumn } from '../cockpit/components/ui/TableShell';
 
-export function AttributionTable({ rows }: { rows: VkpiAttributionRow[] }) {
-  return (
-    <div className="vkpi-table-wrap"><table className="vkpi-table"><thead><tr><th>来源</th><th>Source Ref</th><th>项目</th><th>KOL</th><th>成员</th><th>收入</th><th>置信度</th><th>时间</th></tr></thead><tbody>{rows.length ? rows.map((row) => <tr key={row.id}><td>{row.source}</td><td>{row.sourceRef || '-'}</td><td>{row.projectId || '-'}</td><td>{row.kolId || '-'}</td><td>{row.staffId || '-'}</td><td>{currencyFormatter.format(row.revenue)}</td><td>{row.confidence || '-'}</td><td>{row.occurredAt}</td></tr>) : <tr><td className="vkpi-table-empty" colSpan={8}>暂无真实归因记录。</td></tr>}</tbody></table></div>
-  );
+// 列定义模块常量:引用稳定,配合 TableShell 行 memo 生效(payload 未变则跳过重渲)。
+const COLUMNS: TableShellColumn[] = [
+  { key: 'source', header: '来源' },
+  { key: 'sourceRef', header: 'Source Ref' },
+  { key: 'projectId', header: '项目' },
+  { key: 'kolId', header: 'KOL' },
+  { key: 'staffId', header: '成员' },
+  { key: 'revenue', header: '收入' },
+  { key: 'confidence', header: '置信度' },
+  { key: 'occurredAt', header: '时间' },
+];
+
+function renderCell(row: VkpiAttributionRow, col: TableShellColumn): ReactNode {
+  switch (col.key) {
+    case 'source': return row.source;
+    case 'sourceRef': return row.sourceRef || '-';
+    case 'projectId': return row.projectId || '-';
+    case 'kolId': return row.kolId || '-';
+    case 'staffId': return row.staffId || '-';
+    case 'revenue': return currencyFormatter.format(row.revenue);
+    case 'confidence': return row.confidence || '-';
+    case 'occurredAt': return row.occurredAt;
+    default: return null;
+  }
 }
 
+export function AttributionTable({ rows, loading, error }: { rows: VkpiAttributionRow[]; loading?: boolean; error?: ReactNode }) {
+  return (
+    <TableShell<VkpiAttributionRow>
+      columns={COLUMNS}
+      rows={rows}
+      loading={loading}
+      error={error}
+      emptyText="暂无真实归因记录。"
+      rowKey={(row) => row.id}
+      renderCell={renderCell}
+    />
+  );
+}

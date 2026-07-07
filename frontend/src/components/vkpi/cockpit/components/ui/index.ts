@@ -9,3 +9,5 @@ export { DeltaBadge } from "./DeltaBadge";
 export type { DeltaBadgeProps } from "./DeltaBadge";
 export { SkeletonBlock } from "./SkeletonBlock";
 export type { SkeletonBlockProps } from "./SkeletonBlock";
+export { TableShell } from "./TableShell";
+export type { TableShellProps, TableShellColumn } from "./TableShell";

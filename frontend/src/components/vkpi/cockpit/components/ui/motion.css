@@ -42,6 +42,15 @@
   animation: vk-row-flash 400ms ease-out 1;
 }
 
+/* ── 表格行 stagger 入场(一次,260ms;调用方按行序传 animation-delay,封顶防长瀑布)── */
+@keyframes vk-row-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.vk-row-enter {
+  animation: vk-row-enter 260ms ease-out 1 both;
+}
+
 /* ── 骨架屏 shimmer(仅加载期渲染;沿用 slate/白低透明度体系,不引新色板)── */
 @keyframes vk-shimmer {
   from { background-position: 200% 0; }
@@ -64,6 +73,7 @@
   .vk-breathe,
   .vk-delta-flash,
   .vk-row-flash,
+  .vk-row-enter,
   .vk-shimmer {
     animation: none !important;
   }
