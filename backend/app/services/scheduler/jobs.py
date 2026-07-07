@@ -86,6 +86,8 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_fit_snapshot,
     job_vkpi_fulfillment_sweep,
     job_vkpi_goaffpro_metrics_sync,
+    job_vkpi_gtm_spawn_verdicts,
+    job_vkpi_gtm_windows_refresh,
     job_vkpi_health_sentinel,
     job_vkpi_kpi_rollup,
     job_vkpi_lineage_snapshot,
@@ -286,6 +288,26 @@ async def start_scheduler() -> None:
         name="Scan due bets and emit review-due events",
         max_instances=1,
         coalesce=True,
+    )
+
+    # ── Job 7e: GTM 裁决闭环(config-gate 默认 OFF;迁移 218 种子)──
+    _scheduler.add_job(
+        job_vkpi_gtm_spawn_verdicts,
+        trigger=CronTrigger(hour=6, minute=10, timezone=CHINA_TZ),
+        id="vkpi_gtm_spawn_verdicts",
+        name="Spawn due GTM bet verdict tasks (idempotent, human-decided)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    _scheduler.add_job(
+        job_vkpi_gtm_windows_refresh,
+        trigger=CronTrigger(hour=6, minute=20, timezone=CHINA_TZ),
+        id="vkpi_gtm_windows_refresh",
+        name="Refresh GTM outcome evidence windows (7/14/28)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
 
     # ── Job 8: confirm partial awards (三阶段发放) ──

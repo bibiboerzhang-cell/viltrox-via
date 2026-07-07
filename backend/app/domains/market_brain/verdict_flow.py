@@ -219,7 +219,9 @@ def _bet_context(row: dict[str, Any]) -> dict[str, Any]:
         return ""
 
     kol_pool_id = _int_or_none(pick("kol_pool_id"))
-    if kol_pool_id in (None, 0) and _text(row.get("entity_type"), 40) == "kol_pool":
+    # 兜底放宽:L1 materialize 落的行 entity_type='kol'(subject 契约),旧口径 'kol_pool' 一并认;
+    # entity_id 经 _int_or_none 容错(非数字 → None,不炸)。
+    if kol_pool_id in (None, 0) and _text(row.get("entity_type"), 40) in ("kol", "kol_pool"):
         kol_pool_id = _int_or_none(row.get("entity_id"))
     kol_pool_id = kol_pool_id or None
 

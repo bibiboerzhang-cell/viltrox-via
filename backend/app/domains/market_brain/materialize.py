@@ -36,6 +36,15 @@ def _text(value: Any, limit: int = 300) -> str:
     return str(value).strip()[:limit]
 
 
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _existing_dedupe_keys(conn: Any, keys: list[str]) -> set[str]:
     """既有 dedupe_key 集合(幂等对账用;compat:? 占位,无字面 %)。"""
     if not keys:
@@ -82,6 +91,12 @@ def _suggestion_for_bet(
         "verdict": None,  # 裁决占位:只由 L2 人工 POST 写,materialize 永不自裁
         "requested_by_staff_id": int(actor_staff_id) if actor_staff_id else None,
     }
+    # KOL 桥:subject 指向 kol 时把 kol_pool_id 提到 payload 顶层(int 化,失败不加不炸),
+    # 供 L2 verdict_flow._bet_context 直取 → vkpi_gtm_outcomes.kol_pool_id 不再落 NULL(三窗不饿死)。
+    if _text(subject.get("entity_type"), 40) == "kol":
+        kol_pool_id = _int_or_none(subject.get("entity_id"))
+        if kol_pool_id:
+            payload["kol_pool_id"] = kol_pool_id
     suggestion = make_suggestion(
         category=CATEGORY,
         dedupe_key=dedupe_key,

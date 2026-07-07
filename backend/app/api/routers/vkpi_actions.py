@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains.actions import executors, inbox
@@ -63,6 +63,23 @@ def snooze(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     return inbox.snooze_action(action_id, staff, minutes)
+
+
+@router.post("/{action_id}/mark-done")
+def mark_done(
+    action_id: int,
+    note: str = Body(default="", embed=True),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    # 人工已执行:仅 approved 可转 executed(suggested_endpoint 为空的动作在系统外做完后收口)。
+    # 越权/不存在 → 404(scope 不泄漏存在性);非法源态 → 409。落 manual_execution 台账。
+    res = inbox.mark_done_action(action_id, staff, note=(str(note or "").strip() or None))
+    if not res.get("ok"):
+        reason = str(res.get("reason") or "")
+        if reason == "not_found_or_out_of_scope":
+            raise HTTPException(status_code=404, detail=reason)
+        raise HTTPException(status_code=409, detail=reason)
+    return res
 
 
 @router.post("/{action_id}/execute")

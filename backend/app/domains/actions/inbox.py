@@ -570,6 +570,69 @@ def snooze_action(
     return _transition(action_id, "snoozed", staff, snooze_until=snooze_until)
 
 
+def mark_done_action(
+    action_id: int, staff: dict[str, Any] | None = None, note: str | None = None
+) -> dict[str, Any]:
+    """人工已执行 → status=executed(仅 approved 可转)。
+
+    场景:suggested_endpoint 为空的动作(如 gtm_bet)走 /execute 只会 skipped,
+    行永远停在 approved —— 本函数给「人在系统外做完了」一个诚实终态。
+    落一条 manual_execution 台账:ledger CHECK 限 mode IN ('dry_run','executed'),
+    人工语义放 detail_json.kind='manual_execution' + endpoint='manual:mark-done'。
+    红线:只动 vkpi_action_inbox 自己这一行 + 追加自身台账,绝不碰 viltrox_fit_score / rule_v0。
+    """
+    current = get_action(action_id, staff)
+    if current is None:
+        return {"ok": False, "reason": "not_found_or_out_of_scope", "action_id": int(action_id)}
+    if str(current.get("status") or "") != "approved":
+        return {
+            "ok": False,
+            "reason": "illegal_state_transition",
+            "action_id": int(action_id),
+            "from_status": current.get("status"),
+            "to_status": "executed",
+        }
+
+    conn = get_conn()
+    cursor = conn.execute(
+        f"UPDATE {_TABLE} SET status = 'executed', updated_at = NOW() "
+        f"WHERE id = ? AND status = 'approved'",
+        (int(action_id),),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
+        # 并发竞态:行已被别处改走 approved → 诚实回 illegal(不落台账)。
+        conn.commit()
+        return {"ok": False, "reason": "illegal_state_transition", "action_id": int(action_id)}
+
+    ledger_id: int | None = None
+    if table_exists(_LEDGER):
+        try:
+            row = conn.execute(
+                f"""
+                INSERT INTO {_LEDGER}
+                  (action_id, category, dedupe_key, actor_staff_id, mode, outcome, endpoint, cost_cents, error, detail_json, created_at)
+                VALUES (?,?,?,?,'executed','success','manual:mark-done',0,'',?::jsonb,NOW())
+                RETURNING id
+                """,
+                (
+                    int(action_id),
+                    str(current.get("category") or ""),
+                    str(current.get("dedupe_key") or ""),
+                    int(scope.actor_staff_id(staff)) or None,
+                    _dumps({"kind": "manual_execution", "note": str(note or "")[:2000]}),
+                ),
+            ).fetchone()
+            ledger_id = int(dict(row)["id"]) if row else None
+        except Exception:
+            logger.warning("action_inbox.mark_done_ledger_failed", extra={"action_id": action_id}, exc_info=True)
+    conn.commit()
+
+    result: dict[str, Any] = {"ok": True, "status": "executed", "action_id": int(action_id)}
+    if ledger_id is not None:
+        result["ledger_id"] = ledger_id
+    return result
+
+
 def set_status(action_id: int, status: str) -> None:
     """内部可信状态置位(executor 用,不做 scope)。只动本行 status + updated_at。
 
