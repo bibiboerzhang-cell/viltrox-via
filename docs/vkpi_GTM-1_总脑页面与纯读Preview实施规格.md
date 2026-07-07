@@ -67,3 +67,15 @@
 ## 七、开发顺序
 
 ①gtm_plan_preview 域(纯聚合)→ ②summary 域 → ③两路由 → ④GtmCommandPage 五卡 → ⑤strategy_sim 补参 → ⑥收口接线+零副作用冒烟+提交。预计一个施工波(4 代理:域×2/页/补参+规则库表)。
+
+---
+
+## 附录 A:优势放大裁决带来的增量要求(2026-07-07,收口时执行)
+
+依据《vkpi_优势放大与竞品缺口分析_2026-07-07.md》,对本规格三处增量(在建波收口时由主循环吸收,不推翻既有 11 段):
+
+1. **public_plan 增加 8 段强制排序视图**:`ordered_view = [go_nogo, market_thesis, channel_mix, content_proof, conversion_readiness, action_roadmap, escalate_retreat_lines, learning_plan]`——11 段字段不变,新增该排序索引供页面按"先做什么"呈现;GTM Command 页第 1 卡按此序渲染。
+2. **新增第 12 段 `conversion_readiness`(承接层就绪度)**:检查项=产品页 review 数/落地页样片与 FAQ/价格与库存可见性/短链就绪/购买路径;本地无 Shopify 订单数据时诚实输出 checklist+data_missing;规则:承接层弱时主判断必须降级为「先补承接再放大流量」(Reddit 4.4 信号)。
+3. **Killer Demo 即验收**:`AF-85MM-F14-PRO-FE + US + $3000 + conversion + 30d` 的输出必须逼近裁决文档第 10 章样板结构(主判断含"先验证后付费"逻辑/渠道配比带低置信标注/今日行动可执行/加码撤退线量化)。
+
+后续波映射:SKU GTM Profile 与 content_pattern_memory → GTM-2;materialize 六要素+实体绑定 → GTM-3;90 天阶段 3 数据债(brief→30/Dealer→100-300/outcome→30%)→ GTM-2~4 各波验收线。
