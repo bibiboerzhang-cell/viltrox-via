@@ -26,7 +26,7 @@ _ENTITY_TABLES: dict[str, tuple[str, bool]] = {
     "project": ("vkpi_projects", False),
     "job": ("apify_jobs", False),
     "event": ("vkpi_events", True),       # vkpi_events.id 为 VARCHAR/TEXT
-    "inventory": ("vkpi_inventory", False),
+    "inventory": ("vkpi_inventory", True),  # vkpi_inventory.id 为 VARCHAR(64)(如 s_135lab_sample)
 }
 
 
