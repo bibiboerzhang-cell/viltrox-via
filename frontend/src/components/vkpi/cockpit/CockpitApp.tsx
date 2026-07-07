@@ -17,6 +17,7 @@ import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { CockpitSidebar } from "./CockpitSidebar";
 import { CockpitTopbar } from "./CockpitTopbar";
 import { usePermissions } from "../../../hooks/usePermissions";
+import { useBrowserAssist, isBrowserAssistEnabled } from "../../../lib/browserAssist/enable";
 import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
 import { Avatar } from "./components/Avatar";
@@ -133,6 +134,10 @@ export function CockpitApp(props: any = {}) {
   useEffect(() => {
     if (!boardPerms.canViewBoard(activeNav)) setActiveNav("dashboard");
   }, [activeNav]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 浏览器内本地协助:员工开着页面时后台领「安全轻活」(评论清洗等)在本机算,分担服务器算力。
+  // 默认关(deploy dark),localStorage/构建期开关开启;只领纯计算任务、只在页面可见时跑、失败静默。
+  useBrowserAssist(isBrowserAssistEnabled());
 
   // 版本徽标:启动时拉一次 /health,展示 server 短 sha 与前后端同步状态(纯只读,失败静默)
   const [versionBadge, setVersionBadge] = useState<any>(null);
