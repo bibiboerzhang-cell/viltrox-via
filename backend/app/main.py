@@ -55,6 +55,11 @@ from app.api.routers import vkpi_canned_queries
 from app.api.routers import vkpi_local_workers
 from app.api.routers import vkpi_local_worker_admin
 from app.api.routers import vkpi_local_worker_board
+# 战略大脑波:行业对照 / 新赛道机会 / 策略模拟 / 战略表现
+from app.api.routers import vkpi_industry_benchmark
+from app.api.routers import vkpi_category_tracks
+from app.api.routers import vkpi_strategy_sim
+from app.api.routers import vkpi_strategy_performance
 from app.api.routers import vkpi_launch
 from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
@@ -853,6 +858,11 @@ if IS_ADMIN_APP:
     app.include_router(vkpi_local_workers.router)
     app.include_router(vkpi_local_worker_admin.router)
     app.include_router(vkpi_local_worker_board.router)
+    # 战略大脑:对照/赛道/模拟/表现
+    app.include_router(vkpi_industry_benchmark.router)
+    app.include_router(vkpi_category_tracks.router)
+    app.include_router(vkpi_strategy_sim.router)
+    app.include_router(vkpi_strategy_performance.router)
     app.include_router(vkpi_kol_portal.router)
     app.include_router(vkpi_dashboard_staff.router)
     app.include_router(dashboard_account_picker.router)

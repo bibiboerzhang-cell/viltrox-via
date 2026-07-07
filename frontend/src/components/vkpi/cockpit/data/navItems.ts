@@ -29,6 +29,8 @@ export const NAV_ITEMS = [
   { key: "marketVoice",  icon: RadioTower,      label: "市场之声",         badge: "New" },
   // 第6轮 P6 飞轮:段级创意资产库(哪个开头/哪种画面最灵,可检索;白名单请求=后续刀)。
   { key: "creativeLibrary", icon: Clapperboard, label: "创意资产库",       badge: "New" },
+  // 战略大脑波:行业对照/新赛道/策略模拟/战略表现 四块合屏。
+  { key: "strategyBoard", icon: Target,          label: "战略台",           badge: "New" },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },

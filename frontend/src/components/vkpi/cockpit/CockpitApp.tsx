@@ -80,13 +80,15 @@ const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyBoardPage").t
 const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
 // 第6轮 P6 飞轮:段级创意资产库
 const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryPage").then((module) => ({ default: module.CreativeLibraryPage })));
+// 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
+const StrategyBoardPage = React.lazy(() => import("./pages/StrategyBoardPage").then((module) => ({ default: module.StrategyBoardPage })));
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
   "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
   "triage", "dataQuery", "marketTrends", "skillStudio",
   "intelligent", "replyQueue",
-  "sku360", "kolProfile", "launchpad", "autonomy", "marketVoice", "creativeLibrary",
+  "sku360", "kolProfile", "launchpad", "autonomy", "marketVoice", "creativeLibrary", "strategyBoard",
 ] as const;
 
 export function CockpitApp(props: any = {}) {
@@ -808,6 +810,14 @@ export function CockpitApp(props: any = {}) {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "创意资产库加载中...")
               },
                 e(CreativeLibraryPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            // 战略大脑波:战略台
+            activeNav === "strategyBoard" && e(LazyErrorBoundary, { name: "StrategyBoard" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "战略台加载中...")
+              },
+                e(StrategyBoardPage as React.ComponentType<any>, { apiToken })
               )
             ),
 
