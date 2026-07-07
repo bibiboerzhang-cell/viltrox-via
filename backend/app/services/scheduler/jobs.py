@@ -98,6 +98,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_morning_sync,
     job_vkpi_official_daily_report,
     job_vkpi_official_visual_scan,
+    job_vkpi_drift_monitor,
     job_vkpi_prediction_weekly_rollup,
     job_fulfillment_window_backfill,
     job_vkpi_recommendation_refresh,
@@ -321,6 +322,16 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(day_of_week="mon", hour=7, minute=10, timezone=CHINA_TZ),
         id="vkpi_prediction_weekly_rollup",
         name="Weekly prediction ledger rollup (backfill evals + wape/coverage/direction)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # ④ 漂移哨兵(每周一 07:20 中国):近两窗残差漂移落信号账本(config-gate 默认 OFF;迁移 224 种子)。
+    _scheduler.add_job(
+        job_vkpi_drift_monitor,
+        trigger=CronTrigger(day_of_week="mon", hour=7, minute=20, timezone=CHINA_TZ),
+        id="vkpi_drift_monitor",
+        name="Weekly prediction residual drift sentinel (PSI/residual, evidently optional)",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,

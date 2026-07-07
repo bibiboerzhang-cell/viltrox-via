@@ -402,6 +402,7 @@ from .jobs_tasks_batch import (  # noqa: E402,F401
 # ──────────────────────────────────────────────
 from .jobs_tasks_gtm import (  # noqa: E402,F401
     job_vkpi_baseline_forecast_daily,
+    job_vkpi_drift_monitor,
     job_vkpi_forecast_outcomes_refresh,
     job_vkpi_gtm_spawn_verdicts,
     job_vkpi_gtm_windows_refresh,

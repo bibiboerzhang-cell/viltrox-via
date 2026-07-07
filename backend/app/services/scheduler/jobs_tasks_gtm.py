@@ -278,3 +278,32 @@ async def job_vkpi_baseline_forecast_daily():
     except Exception as exc:
         logger.exception("scheduler.vkpi_baseline_forecast_daily_failed")
         _record_scheduler_run("vkpi_baseline_forecast_daily", ok=False, error=str(exc)[:240])
+
+
+async def job_vkpi_drift_monitor():
+    """W9 漂移哨兵:每周从 vkpi_prediction_evals 近两窗残差算漂移并落信号账本。
+
+    走 market_brain.drift_monitor.run_drift_monitor(window_days=7):参照期 vs 当前期
+    残差(error_abs)漂移;表未建/样本荒 → status='empty' 诚实态永不抛。evidently 装了
+    走库漂移否则 builtin PSI。config-gate:scheduler_tasks.vkpi_drift_monitor
+    (默认 OFF,迁移 224 种子)。纯读评估账本 + 写信号账本;零 LLM;零触 viltrox_fit_score。
+    """
+    if not _scheduler_task_enabled("vkpi_drift_monitor"):
+        return
+    try:
+        from app.domains.market_brain import drift_monitor
+
+        result = await asyncio.to_thread(drift_monitor.run_drift_monitor, 7)
+        logger.info(
+            "scheduler.vkpi_drift_monitor",
+            extra={
+                "drift_status": str(result.get("status")),
+                "recorded": result.get("recorded"),
+                "engine": result.get("engine"),
+                "residual_drift": result.get("residual_drift"),
+            },
+        )
+        _record_scheduler_run("vkpi_drift_monitor", ok=True)
+    except Exception as exc:
+        logger.exception("scheduler.vkpi_drift_monitor_failed")
+        _record_scheduler_run("vkpi_drift_monitor", ok=False, error=str(exc)[:240])
