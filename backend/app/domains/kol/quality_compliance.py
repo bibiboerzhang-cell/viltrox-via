@@ -5,6 +5,9 @@
                     (llm_dimensions_11.scores 六维)→ 0-100 综合分 + 分项条,
                     含样本数与置信度诚实标注。asset_reuse_score 语义方向未经线上
                     抽样确认(口径同 risk_index.py),**不进综合分**,仅作分项展示。
+                    composite.provenance 透出打分模型/prompt 版本痕迹
+                    (source.final_model / schema_version;缺痕迹计 unknown,
+                    漂移哨兵待人工抽检)—— 分数是 LLM 读数,跨版本不可直接对比。
   🛡️ ftc_scan      FTC 披露扫描:词表法扫视频标题/描述(创作者文本)里的披露标记
                     (#ad / #sponsored / sponsored by / paid partnership / affiliate
                     links / 中文披露语)+ 品牌合作迹象(品牌提及/折扣码/深析文本合作
@@ -318,11 +321,20 @@ def quality_score(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
     per_dim: dict[str, list[float]] = {}
     per_video: list[dict[str, Any]] = []
     llm_confidences: list[float] = []
+    # 版本痕迹(漂移哨兵素材):llm_dimensions_11 自带 source.final_model(打分模型)
+    # 与顶层 schema_version(prompt/schema 版本);没有痕迹的行如实计 unknown。
+    model_counts: dict[str, int] = {}
+    prompt_version_counts: dict[str, int] = {}
     for row in deep_rows:
         dims = _as_dict(_loads(row.get("dims")))
         scores = _video_scores(dims)
         if not scores:
             continue
+        source_meta = _as_dict(dims.get("source"))
+        model = _text(source_meta.get("final_model"), 80) or "unknown"
+        prompt_version = _text(dims.get("schema_version"), 120) or "unknown"
+        model_counts[model] = model_counts.get(model, 0) + 1
+        prompt_version_counts[prompt_version] = prompt_version_counts.get(prompt_version, 0) + 1
         for key, val in scores.items():
             per_dim.setdefault(key, []).append(val)
         conf = _float_or_none(row.get("confidence"))
@@ -380,7 +392,18 @@ def quality_score(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
             "score": round(composite, 1) if composite is not None else None,
             "method": "final_v1_scores_weighted_mean_v1",
             "weights": {key: weight for key, _label, weight in QUALITY_DIMENSIONS if weight is not None},
-            "basis": "按可得维度归一化加权;asset_reuse 不进综合分(方向未确认)。",
+            "basis": "按可得维度归一化加权;asset_reuse 不进综合分(方向未确认);打分模型/prompt 版本痕迹见 provenance。",
+            "provenance": {
+                "llm_models": dict(sorted(model_counts.items(), key=lambda kv: kv[1], reverse=True)),
+                "prompt_versions": dict(sorted(prompt_version_counts.items(), key=lambda kv: kv[1], reverse=True)),
+                "unknown_model_count": model_counts.get("unknown", 0),
+                "unknown_prompt_version_count": prompt_version_counts.get("unknown", 0),
+                "note": (
+                    "版本痕迹取自 llm_dimensions_11 自带字段(source.final_model / schema_version),"
+                    "本模块只转述不新采集;unknown = 该行无版本痕迹,分数可能随模型/prompt 漂移,"
+                    "漂移哨兵待人工抽检;多模型混跑时综合分是跨版本混合读数,对比前先看本表。"
+                ),
+            },
         },
         "dimensions": dimensions,
         "confidence": {

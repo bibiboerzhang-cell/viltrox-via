@@ -4,10 +4,14 @@
 
 向量库侦察结论(2026-07 本轮):本地 runtime/vkpi_qdrant 只有 KOL 档案级索引
 (vkpi_kol_profile_index_v1,粒度=KOL 非视频,且查询需 OpenAI embedding 调用),
-不存在视频级向量库 → 走决定性降级,method 诚实标 dimensions_cosine_v0:
-  ① 数值向量余弦:llm_dimensions_11 的数值维(scores 六维 + llm_v6_fit)做余弦相似;
+不存在视频级向量库 → 走决定性降级,method 诚实标 dimensions_centered_cosine_v1:
+  ① 数值向量中心化余弦:llm_dimensions_11 的数值维(scores 六维 + llm_v6_fit)
+     先逐维减去全库语料均值再做余弦(变相 Pearson),线性映射回 [0,1]。
+     v0→v1 的理由:全库分数同向偏高,未中心化时任意两片余弦都≈1,
+     排序被「质量都不错」淹没(质量相似冒充内容相似);中心化后比的是维度形状
+     (相对语料的强弱侧写),质量水平被均值吸走;
   ② 词表标签 Jaccard:layer1_summary 文本 + 标题 → 拍法(复用 signature_profile
-     的 SHOOTING_MODES 词表)/ 品类 / 焦段(正则)/ 平台 标签集合的 Jaccard;
+     的 SHOOTING_MODES 词表 + 词边界匹配)/ 品类 / 焦段(正则)/ 平台 标签集合的 Jaccard;
   ③ 混合打分 similarity = 0.6 × cosine + 0.4 × jaccard(某一半缺失时诚实退单半)。
 全程纯 SQL + 词表/算术,零 LLM、零新采集、决定性可复算。
 
@@ -34,7 +38,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-METHOD = "dimensions_cosine_v0"
+METHOD = "dimensions_centered_cosine_v1"
 
 # 数值向量的固定维(canonical 顺序;缺哪维就跳哪维,只在双方共有维上做余弦)。
 SCORE_KEYS: tuple[str, ...] = (
@@ -161,18 +165,43 @@ def _numeric_vector(dims: dict[str, Any]) -> dict[str, float]:
     return vector
 
 
-def _cosine(vec_a: dict[str, float], vec_b: dict[str, float]) -> float | None:
-    """共有维上的余弦;共有维不足或任一侧零向量时诚实 None,不硬给分。"""
+def _dim_means(vectors: list[dict[str, float]]) -> dict[str, float]:
+    """全库语料的逐维均值(只在真有该维的向量上取均值,缺维不当 0 拉均值)。"""
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for vec in vectors:
+        for key, value in vec.items():
+            sums[key] = sums.get(key, 0.0) + value
+            counts[key] = counts.get(key, 0) + 1
+    return {key: sums[key] / counts[key] for key in sums if counts.get(key)}
+
+
+def _cosine(
+    vec_a: dict[str, float],
+    vec_b: dict[str, float],
+    means: dict[str, float] | None = None,
+) -> float | None:
+    """共有维上的中心化余弦(v1):先逐维减语料均值(变相 Pearson)再做余弦。
+
+    理由:0-100 分数全向量同向为正,未中心化时任意两片余弦都≈1,
+    「质量相似」冒充「内容相似」;减去语料均值后比的是相对形状。
+    中心化余弦落 [-1,1],线性映射 (c+1)/2 回 [0,1] 供混权。
+    共有维不足、或某侧恰好落在语料均值上(零向量,形状无从比较)诚实 None,
+    不硬给分(混分侧自动退 jaccard_only)。
+    """
     shared = [k for k in vec_a if k in vec_b]
     if len(shared) < MIN_SHARED_DIMS:
         return None
-    dot = sum(vec_a[k] * vec_b[k] for k in shared)
-    norm_a = math.sqrt(sum(vec_a[k] * vec_a[k] for k in shared))
-    norm_b = math.sqrt(sum(vec_b[k] * vec_b[k] for k in shared))
-    if norm_a <= 0 or norm_b <= 0:
+    mean_of = (means or {}).get
+    ca = [vec_a[k] - mean_of(k, 0.0) for k in shared]
+    cb = [vec_b[k] - mean_of(k, 0.0) for k in shared]
+    dot = sum(x * y for x, y in zip(ca, cb))
+    norm_a = math.sqrt(sum(x * x for x in ca))
+    norm_b = math.sqrt(sum(y * y for y in cb))
+    if norm_a <= 1e-9 or norm_b <= 1e-9:
         return None
-    value = dot / (norm_a * norm_b)
-    return max(0.0, min(1.0, value))  # 全维非负,理论已在 [0,1],夹一道保险
+    value = dot / (norm_a * norm_b)  # [-1, 1]
+    return max(0.0, min(1.0, (value + 1.0) / 2.0))
 
 
 def _content_blob(dims: dict[str, Any], title: str) -> str:
@@ -189,8 +218,9 @@ def _content_blob(dims: dict[str, Any], title: str) -> str:
 
 
 def _extract_tags(dims: dict[str, Any], title: str, platform: str) -> tuple[set[str], dict[str, str]]:
-    """词表标签集合 + {tag: 中文label}。拍法复用 signature_profile 词表,零重复维护。"""
-    from app.domains.kol.signature_profile import SHOOTING_MODES
+    """词表标签集合 + {tag: 中文label}。拍法复用 signature_profile 词表 + 词边界匹配
+    (_match_terms:英文词边界 / 中文子串,camera 不再误命中 camcorder),零重复维护。"""
+    from app.domains.kol.signature_profile import SHOOTING_MODES, _match_terms
 
     blob = _content_blob(dims, title)
     tags: set[str] = set()
@@ -199,12 +229,12 @@ def _extract_tags(dims: dict[str, Any], title: str, platform: str) -> tuple[set[
         return tags, labels
 
     for key, label, terms in SHOOTING_MODES:
-        if any(term in blob for term in terms):
+        if _match_terms(blob, terms):
             tag = "mode:" + key
             tags.add(tag)
             labels[tag] = "拍法·" + label
     for key, label, terms in CATEGORY_TERMS:
-        if any(term in blob for term in terms):
+        if _match_terms(blob, terms):
             tag = "cat:" + key
             tags.add(tag)
             labels[tag] = "品类·" + label
@@ -346,6 +376,8 @@ def similar_videos(
     corpus_rows = _load_corpus(db)
     prepared = [p for p in (_prepare(r) for r in corpus_rows) if p is not None]
     seed = next((p for p in prepared if p["evidence_id"] == int(evidence_id)), None)
+    # v1:全库语料逐维均值,供中心化余弦(减掉共同的质量基线,只比相对形状)。
+    corpus_means = _dim_means([p["vector"] for p in prepared])
 
     base = {
         "evidence_id": int(evidence_id),
@@ -385,7 +417,7 @@ def similar_videos(
         if exclude_same_kol and cand["kol_pool_id"] is not None and cand["kol_pool_id"] == seed["kol_pool_id"]:
             excluded_same_kol += 1
             continue
-        cosine = _cosine(seed["vector"], cand["vector"])
+        cosine = _cosine(seed["vector"], cand["vector"], corpus_means)
         jaccard = _jaccard(seed["tags"], cand["tags"])
         similarity, basis = _blend(cosine, jaccard)
         if similarity is None:
@@ -441,7 +473,9 @@ def similar_videos(
         "items": scored[:limit],
         "weights": {"cosine": W_COSINE, "tag_jaccard": W_JACCARD},
         "note": (
-            "决定性降级检索(无视频级向量库):final_v1 数值维余弦 + 词表标签 Jaccard 混合;"
+            "决定性降级检索(无视频级向量库):final_v1 数值维中心化余弦(v1:逐维减语料均值,"
+            "变相 Pearson —— 未中心化时全库分数同向偏高、任意两片余弦≈1,质量相似冒充内容相似;"
+            "中心化后比相对形状,映射回 [0,1])+ 词表标签 Jaccard 混合;"
             "零 LLM、可复算;独立展示信号,不参与 V6 Fit 评分。"
         ),
     }

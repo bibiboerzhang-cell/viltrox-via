@@ -4,6 +4,8 @@
 
 数据源(零新采集 / 零 LLM / 零写库,读端聚合):
 - vkpi_kol_video_evidence:全池视频证据(标题 + 发布日期 + 播放数),标题词表扫描;
+  发布日期主走真列 published_at_norm(迁移 216 把 to_jsonb 挖 publish_date 的口径转正:
+  COALESCE(posted_at, publish_date) 回填 + 索引),列空的新行保底 COALESCE 落回旧路径;
 - vkpi_analysis_cache 已 ready 的 video_analysis_final_v1:layer1 的 competitor_presence /
   content_summary 文本作为深析补充信号(brand_exposure 字段刻意排除 —— 该字段是分析员
   对 Viltrox 露出的点评,不管有没有露出都会写到 Viltrox,拿来匹配会系统性虚增自家声量)。
@@ -137,8 +139,9 @@ def _matcher():
 def _evidence_rows(conn: Any, start_day: str) -> list[dict[str, Any]]:
     """窗口内全池 active 证据行:标题 + 日期 + 例证所需字段。
 
-    日期取 COALESCE(posted_at, publish_date::date);publish_date 是后加列,
-    用 to_jsonb 防跨环境列漂移炸 SQL。占位符全 ?,SQL 里零字面 %。
+    日期主走真列 published_at_norm(迁移 216 转正:COALESCE(posted_at, publish_date)
+    回填 + 索引);列为空的新行保底 COALESCE 落回旧路径
+    (posted_at → to_jsonb 挖 publish_date),绝不漏行。占位符全 ?,SQL 里零字面 %。
     """
     rows = conn.execute(
         """
@@ -150,12 +153,12 @@ def _evidence_rows(conn: Any, start_day: str) -> list[dict[str, Any]]:
             e.view_count,
             COALESCE(e.video_title, '') AS video_title,
             to_jsonb(e.*)->>'title' AS title_alt,
-            CAST(COALESCE(e.posted_at, CAST(to_jsonb(e.*)->>'publish_date' AS DATE)) AS TEXT) AS pub_day,
+            CAST(COALESCE(e.published_at_norm, e.posted_at, CAST(to_jsonb(e.*)->>'publish_date' AS DATE)) AS TEXT) AS pub_day,
             COALESCE(p.display_name, '') AS kol_name
         FROM vkpi_kol_video_evidence e
         LEFT JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
         WHERE e.is_active IS NOT FALSE
-          AND COALESCE(e.posted_at, CAST(to_jsonb(e.*)->>'publish_date' AS DATE)) >= ?
+          AND COALESCE(e.published_at_norm, e.posted_at, CAST(to_jsonb(e.*)->>'publish_date' AS DATE)) >= ?
         ORDER BY e.id DESC
         LIMIT ?
         """,
@@ -183,7 +186,7 @@ def _deep_texts(conn: Any, start_day: str) -> dict[int, str]:
               AND ac.derive_method = 'video_analysis_final_v1'
               AND ac.status = 'ready'
               AND e.is_active IS NOT FALSE
-              AND COALESCE(e.posted_at, CAST(to_jsonb(e.*)->>'publish_date' AS DATE)) >= ?
+              AND COALESCE(e.published_at_norm, e.posted_at, CAST(to_jsonb(e.*)->>'publish_date' AS DATE)) >= ?
             LIMIT ?
             """,
             (start_day, int(MAX_VIDEOS)),

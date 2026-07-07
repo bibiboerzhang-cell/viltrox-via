@@ -55,15 +55,20 @@ frontend_tsc() {
 }
 run_step "frontend tsc --noEmit" frontend_tsc
 
-# ---- STEP 3: 前端 npm run build ----
+# ---- STEP 3: 前端 npm run build + dist 分包护栏 ----
+# F2 分包后教训:「grep 入口=假阴性」,验证必须扫全部 chunk。
+# check_chunk_graph.py 对 dist/assets 做两道硬校验:
+#   a) 任一 JS chunk > 600KB → fail(F2 分包目标线)
+#   b) chunk 间静态 import 成环 → fail(R3 级运行时「页面加载失败」的前置条件)
 frontend_build() {
   if [ ! -d "$ROOT/frontend" ]; then
     echo "[verify] 缺 frontend/ 目录"
     return 1
   fi
-  ( cd "$ROOT/frontend" && npm run build )
+  ( cd "$ROOT/frontend" && npm run build ) || return 1
+  python3 "$ROOT/scripts/check_chunk_graph.py" "$ROOT/frontend/dist/assets" 600
 }
-run_step "frontend npm run build" frontend_build
+run_step "frontend npm run build + chunk graph guard" frontend_build
 
 # ---- STEP 4: 仓库硬化检查(strict 模式才在错误时非 0)----
 repo_hardening() {
@@ -105,6 +110,62 @@ redline_fit_score() {
   return 0
 }
 run_step "redline grep (viltrox_fit_score write)" redline_fit_score
+
+# ---- STEP 5.5: 千行卫兵 —— 源码文件 >1000 行即 fail(F2 发布门)----
+# 复用 scripts/check_line_guard.py 的扫描口径(backend/app frontend/src scripts tests,
+# 含 .py/.ts/.tsx/.css,剔除 node_modules/dist/.venv 等)。
+# 白名单 = 2026-07-07 立门时既有的 5 个巨文件(任务书预估 4 个,实测 5 个;
+# 第 6 个 backend/app/main.py 已在 F2 路由注册收敛中降到 1000 行内,不再豁免)。
+# 【还债计划】白名单只出不进,新文件零豁免;按体量从大到小逐个拆(与 god-object
+# 瘦身同套路:AST 对照保行为不变),拆完一个就从名单删一行:
+#   1576 backend/app/domains/kol/audience_stats.py          (受众链主模块,拆 stats/geo/rollup 三层)
+#   1232 frontend/src/components/vkpi/pages/projects/styles/project-detail-drawer.css (按抽屉分区拆分文件)
+#   1186 backend/app/domains/projects/observation_windows.py (开窗/匹配/复盘三段拆)
+#   1115 frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx (按 Section 组件拆)
+#   1110 scripts/etl_excel_to_vkpi.py                        (历史一次性 ETL,择机归档或拆 reader/writer)
+line_guard_1000() {
+  if [ ! -x "$VENV_PY" ]; then
+    echo "[verify] .venv 解释器缺失:$VENV_PY"
+    return 1
+  fi
+  PYTHONPATH="$ROOT/scripts" "$VENV_PY" - "$ROOT" <<'PY'
+import json
+import subprocess
+import sys
+
+root = sys.argv[1]
+allow = {
+    "backend/app/domains/kol/audience_stats.py",
+    "frontend/src/components/vkpi/pages/projects/styles/project-detail-drawer.css",
+    "backend/app/domains/projects/observation_windows.py",
+    "frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx",
+    "scripts/etl_excel_to_vkpi.py",
+}
+proc = subprocess.run(
+    [sys.executable, f"{root}/scripts/check_line_guard.py", "--limit", "1000", "--json"],
+    cwd=root,
+    capture_output=True,
+    text=True,
+)
+if proc.returncode != 0 or not proc.stdout.strip():
+    print("[verify] check_line_guard.py 执行失败:")
+    print(proc.stdout)
+    print(proc.stderr)
+    raise SystemExit(1)
+payload = json.loads(proc.stdout)
+violations = [v for v in payload.get("violations", []) if v["path"] not in allow]
+exempted = [v for v in payload.get("violations", []) if v["path"] in allow]
+for item in exempted:
+    print(f"[verify] 千行卫兵(白名单豁免,待还债): {item['lines']:>5} {item['path']}")
+if violations:
+    print("[verify] 千行卫兵 FAIL:以下文件 >1000 行且不在既有债白名单(新文件零豁免):")
+    for item in violations:
+        print(f"[verify]   {item['lines']:>5} {item['path']}")
+    raise SystemExit(1)
+print(f"[verify] 千行卫兵 OK:无新增 >1000 行文件(白名单剩余 {len(exempted)} 个待还)。")
+PY
+}
+run_step "line guard >1000 (whitelist=legacy 5)" line_guard_1000
 
 # ---- STEP 6: 运行态 sha 对齐(8001 起着才校验;没起则跳过,静态 CI 不破)----
 # 根治"HEAD 领先运行态 / client 停在旧 sha"反复:服务在跑就强校验

@@ -274,6 +274,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "213_vkpi_worker_devices.sql",
     "214_vkpi_contact_columns.sql",
     "215_vkpi_forecast_log.sql",
+    "216_vkpi_evidence_publish_date.sql",
 )
 
 try:

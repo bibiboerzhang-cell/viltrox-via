@@ -5,6 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
+# ---- F2 发布门:verify 全绿才允许出海(强制,非零即中止,无跳过开关)----
+# 覆盖:后端 pytest + 前端 tsc/build + dist 分包护栏 + 仓库硬化 + 红线 grep
+#       + 千行卫兵 + 运行态 sha 对齐。任何一步失败都不允许 rsync 上云。
+echo "[deploy] gate: bash scripts/verify.sh(全绿才继续)..."
+if ! bash "${PROJECT_ROOT}/scripts/verify.sh"; then
+  echo "[deploy] verify.sh 非零退出 —— 部署中止。先把 verify 修绿再出海。" >&2
+  exit 1
+fi
+
 SSH_TARGET="${SSH_TARGET:-viltrox}"
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 SERVICE_NAME="${SERVICE_NAME:-viltrox-2.0-test.service}"

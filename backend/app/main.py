@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import subprocess
@@ -16,58 +17,11 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi, vkpi_access, vkpi_actions, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_budgets, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_dealers, vkpi_evidence_assets, vkpi_events, vkpi_inventory, vkpi_shopify, vkpi_staff_groups, vkpi_feedback, vkpi_firewall, vkpi_goaffpro, vkpi_industry_automation, vkpi_kol_decisions, vkpi_kol_links, vkpi_kol_memory, vkpi_kol_pool, vkpi_agents, vkpi_learning, vkpi_memory, vkpi_metrics, vkpi_my_kol, vkpi_operating_review, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_search, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_tasks, vkpi_weekly_reports, vkpi_workflow_assets
-from app.api.routers import dashboard_account_picker
+from app.api.routers import ADMIN_ROUTER_MODULES
+from app.api.routers import activities, auth, admin, audit, creator, jobs, leaderboard, media, ops, platform_ingest, sse, student_identity, uploads, verify, via, vkpi
+# vkpi_kol_portal 在 admin 挂载区之外还有 portal_public_router(公开门户),需显式引用;
+# 其余 vkpi_* 模块统一由 ADMIN_ROUTER_MODULES 注册表(routers/__init__.py)循环挂载。
 from app.api.routers import vkpi_kol_portal
-from app.api.routers import vkpi_skills
-from app.api.routers import vkpi_analytics_export
-from app.api.routers import vkpi_activity
-from app.api.routers import vkpi_intelligent
-from app.api.routers import vkpi_reply_queue
-# 第2轮 档案工程:招牌内容画像 / 制作周期+竞争活跃 / SKU 360°(路由自带 prefix)
-from app.api.routers import vkpi_signature
-from app.api.routers import vkpi_leadtime
-from app.api.routers import vkpi_sku360
-# 第3轮 信号聚合层:焦段矩阵 / 品牌脉搏 / 质量分+FTC披露 / 以视频找相似
-from app.api.routers import vkpi_focal_matrix
-from app.api.routers import vkpi_brand_pulse
-from app.api.routers import vkpi_quality_compliance
-from app.api.routers import vkpi_video_similar
-# 第4轮 预测+发射台:预测战绩 / 报价库 / 六输出全案组装 / 覆盖最大化组合
-from app.api.routers import vkpi_forecast
-from app.api.routers import vkpi_rates
-from app.api.routers import vkpi_launch_assembly
-from app.api.routers import vkpi_roster
-# 第5轮 自治层:预测台账 / 驾照L0-L4 / 夜班晨报 / 市场之声月报
-from app.api.routers import vkpi_prediction_ledger
-from app.api.routers import vkpi_autonomy
-from app.api.routers import vkpi_morning_brief
-from app.api.routers import vkpi_market_voice
-# 第6轮 L轨道+P6:周度记分卡 / 低命中复盘入记忆 / 影子评测 / 段级创意资产库
-from app.api.routers import vkpi_weekly_scorecard
-from app.api.routers import vkpi_miss_review
-from app.api.routers import vkpi_shadow_eval
-from app.api.routers import vkpi_creative_segments
-# A波 四主线:MY KOL 每日学习 / 问数预设问题库
-from app.api.routers import vkpi_daily_digest
-from app.api.routers import vkpi_canned_queries
-# C8 Local Worker MVP:设备注册+租约 / 校验桥+策略 / 节点看板
-from app.api.routers import vkpi_local_workers
-from app.api.routers import vkpi_local_worker_admin
-from app.api.routers import vkpi_local_worker_board
-# 战略大脑波:行业对照 / 新赛道机会 / 策略模拟 / 战略表现
-from app.api.routers import vkpi_industry_benchmark
-from app.api.routers import vkpi_category_tracks
-from app.api.routers import vkpi_strategy_sim
-from app.api.routers import vkpi_strategy_performance
-# B+波 数据地基:联系方式 / 受众地图 / 预测对答案 / 闭环串跑 / 客户挖KOL
-from app.api.routers import vkpi_contact_system
-from app.api.routers import vkpi_audience_geo
-from app.api.routers import vkpi_forecast_feedback
-from app.api.routers import vkpi_agent_loop
-from app.api.routers import vkpi_customer_mining
-from app.api.routers import vkpi_launch
-from app.api.routers import vkpi_triage
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
 from app.core.config import (
     APP_ROLE,
@@ -823,100 +777,12 @@ if IS_ADMIN_APP:
     app.include_router(account_scanner.router)
     app.include_router(kol_ops.router)
     # P2:vkpi.router 为零路由空壳(vkpi.py 仅 public_router/webhook_router 挂路由),不再 include。
-    app.include_router(vkpi_access.router)
-    app.include_router(vkpi_actions.router)
-    app.include_router(vkpi_metrics.router)
-    app.include_router(vkpi_agents.router)
-    app.include_router(vkpi_skills.router)
-    app.include_router(vkpi_analytics_export.router)
-    # P1 智能可见周:Intelligent 问答三车道 / 思考流 / 评论区销售员(路由自带 prefix)
-    app.include_router(vkpi_intelligent.router)
-    app.include_router(vkpi_activity.router)
-    app.include_router(vkpi_reply_queue.router)
-    # 第2轮 档案工程:招牌画像 / 周期+竞争 / SKU 360°
-    app.include_router(vkpi_signature.router)
-    app.include_router(vkpi_leadtime.router)
-    app.include_router(vkpi_sku360.router)
-    # 第3轮 信号聚合层:焦段矩阵 / 品牌脉搏 / 质量分+FTC / 以视频找相似
-    app.include_router(vkpi_focal_matrix.router)
-    app.include_router(vkpi_brand_pulse.router)
-    app.include_router(vkpi_quality_compliance.router)
-    app.include_router(vkpi_video_similar.router)
-    # 第4轮 预测+发射台:预测战绩 / 报价库 / 全案组装 / 覆盖组合
-    app.include_router(vkpi_forecast.router)
-    app.include_router(vkpi_rates.router)
-    app.include_router(vkpi_launch_assembly.router)
-    app.include_router(vkpi_roster.router)
-    # 第5轮 自治层:预测台账 / 驾照 / 晨报 / 市场之声
-    app.include_router(vkpi_prediction_ledger.router)
-    app.include_router(vkpi_autonomy.router)
-    app.include_router(vkpi_morning_brief.router)
-    app.include_router(vkpi_market_voice.router)
-    # 第6轮 L轨道+P6:记分卡 / 复盘 / 影子评测 / 创意资产库
-    app.include_router(vkpi_weekly_scorecard.router)
-    app.include_router(vkpi_miss_review.router)
-    app.include_router(vkpi_shadow_eval.router)
-    app.include_router(vkpi_creative_segments.router)
-    # A波 四主线:每日学习 / 预设问题库
-    app.include_router(vkpi_daily_digest.router)
-    app.include_router(vkpi_canned_queries.router)
-    # C8 Local Worker:注册/租约/校验/看板
-    app.include_router(vkpi_local_workers.router)
-    app.include_router(vkpi_local_worker_admin.router)
-    app.include_router(vkpi_local_worker_board.router)
-    # 战略大脑:对照/赛道/模拟/表现
-    app.include_router(vkpi_industry_benchmark.router)
-    app.include_router(vkpi_category_tracks.router)
-    app.include_router(vkpi_strategy_sim.router)
-    app.include_router(vkpi_strategy_performance.router)
-    # B+波 数据地基
-    app.include_router(vkpi_contact_system.router)
-    app.include_router(vkpi_audience_geo.router)
-    app.include_router(vkpi_forecast_feedback.router)
-    app.include_router(vkpi_agent_loop.router)
-    app.include_router(vkpi_customer_mining.router)
-    app.include_router(vkpi_kol_portal.router)
-    app.include_router(vkpi_dashboard_staff.router)
-    app.include_router(dashboard_account_picker.router)
-    app.include_router(vkpi_attribution_metrics.router)
-    app.include_router(vkpi_audit.router)
-    app.include_router(vkpi_budgets.router)
-    app.include_router(vkpi_launch.router)
-    app.include_router(vkpi_triage.router)
-    app.include_router(vkpi_comments.router)
-    app.include_router(vkpi_comment_intelligence.router)
-    app.include_router(vkpi_costs.router)
-    app.include_router(vkpi_data_quality.router)
-    app.include_router(vkpi_evidence_assets.router)
-    app.include_router(vkpi_events.router)
-    app.include_router(vkpi_inventory.router)
-    app.include_router(vkpi_dealers.router)
-    app.include_router(vkpi_shopify.router)
-    app.include_router(vkpi_goaffpro.router)
-    app.include_router(vkpi_staff_groups.router)
-    app.include_router(vkpi_feedback.router)
-    app.include_router(vkpi_firewall.router)
-    app.include_router(vkpi_industry_automation.router)
-    app.include_router(vkpi_kol_decisions.router)
-    app.include_router(vkpi_kol_links.router)
-    app.include_router(vkpi_kol_pool.router)
-    app.include_router(vkpi_learning.router)
-    app.include_router(vkpi_memory.router)
-    app.include_router(vkpi_kol_memory.router)
-    app.include_router(vkpi_my_kol.router)
-    app.include_router(vkpi_operating_review.router)
-    app.include_router(vkpi_operations.router)
-    app.include_router(vkpi_pillars.router)
-    app.include_router(vkpi_product_analysis.router)
-    app.include_router(vkpi_projects.router)
-    app.include_router(vkpi_reconciliation.router)
-    app.include_router(vkpi_reports.router)
-    app.include_router(vkpi_search.router)
-    app.include_router(vkpi_settings.router)
-    app.include_router(vkpi_sentiment.router)
-    app.include_router(vkpi_sync.router)
-    app.include_router(vkpi_tasks.router)
-    app.include_router(vkpi_weekly_reports.router)
+    # F2 工程税①:vkpi_* 挂载区收敛为注册表循环。顺序=ADMIN_ROUTER_MODULES
+    # (app/api/routers/__init__.py)即历史手写顺序;改造验收=前后 app.routes
+    # (type, path, methods, name) 有序全量对比逐字一致。
+    for _module_name in ADMIN_ROUTER_MODULES:
+        _module = importlib.import_module(f"app.api.routers.{_module_name}")
+        app.include_router(_module.router)
     app.include_router(ops.router)
     app.include_router(system_admin.router)
 

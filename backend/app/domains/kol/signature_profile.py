@@ -8,7 +8,9 @@
                       (vkpi_comments 词表聚合,零 LLM)。
 
 诚实态:每块缺数据返回 {status:"empty", reason:...},绝不杜撰;拍摄模式是
-词表规则分类(method=lexicon_v1),识别不了的落 unclassified,不硬贴标签。
+词表规则分类(method=lexicon_v1;英文词按词边界正则、中文保持子串,camera 不再
+误命中 camcorder),识别不了的落 unclassified,不硬贴标签。样本口径:多标签 ——
+一片可同时属多个拍摄模式,各模式 video_count 之和可大于 sample_size(非互斥分类)。
 
 数据源(全只读):vkpi_kol_pool / vkpi_kol_video_evidence / vkpi_analysis_cache
 (derive_method='video_analysis_final_v1', status='ready') / vkpi_comments(evidence 桥)。
@@ -20,6 +22,7 @@ int 1/0,判断走 _truthy。函数内懒 import get_conn。
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -29,7 +32,9 @@ logger = get_logger(__name__)
 
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 
-# ── 拍摄模式词表(小写子串匹配;中英双语;宁缺毋滥,识别不了归 unclassified)──
+# ── 拍摄模式词表(英文词按词边界正则、中文保持子串;中英双语;宁缺毋滥,识别不了归
+#    unclassified)。样本口径:多标签 —— 一片可同时属多个拍摄模式(教程里穿插 B-roll
+#    就两个模式都记),各模式 video_count 之和可以大于深析样本数,不是互斥分类。──
 SHOOTING_MODES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("cinematic_broll", "电影感B-roll", (
         "b-roll", "b roll", "broll", "cinematic", "电影感", "电影级", "电影质感",
@@ -158,8 +163,41 @@ def _engagement_rate(views: int | None, likes: int | None, comments: int | None)
     return round(inter / views, 5)
 
 
+# 词表命中缓存:英文词 → 词边界正则;中文/无字母数字词 → None(走子串)。
+# None 是合法缓存值,用 False 作缺席哨兵。
+_TERM_PATTERN_CACHE: dict[str, re.Pattern[str] | None] = {}
+
+
+def _term_pattern(term: str) -> re.Pattern[str] | None:
+    """英文词表词 → 词边界正则(camera 不再命中 camcorder、review 不再命中 previews)。
+
+    边界用 [a-z0-9] 而非 \\w:blob 里中英混排时,\\b 会把紧邻的汉字当词字符
+    导致 "review中文" 匹配不上;与 competitor_text._keyword_match 同款口径。
+    词首/词尾本身不是字母数字的(如 "b-roll" 的尾、"how " 的尾空格)只在
+    字母数字一侧加边界。中文/符号词(不含 ASCII 字母数字)回 None,保持子串匹配。
+    """
+    cached = _TERM_PATTERN_CACHE.get(term, False)
+    if cached is not False:
+        return cached
+    pattern: re.Pattern[str] | None = None
+    if term and term.isascii() and any(ch.isalnum() for ch in term):
+        prefix = r"(?<![a-z0-9])" if term[0].isalnum() else ""
+        suffix = r"(?![a-z0-9])" if term[-1].isalnum() else ""
+        pattern = re.compile(prefix + re.escape(term) + suffix)
+    _TERM_PATTERN_CACHE[term] = pattern
+    return pattern
+
+
 def _match_terms(blob: str, terms: tuple[str, ...]) -> bool:
-    return any(term in blob for term in terms)
+    """词表命中:英文词走词边界正则,中文词保持子串(中文无空格分词,子串即口径)。"""
+    for term in terms:
+        pattern = _term_pattern(term)
+        if pattern is not None:
+            if pattern.search(blob):
+                return True
+        elif term in blob:
+            return True
+    return False
 
 
 # ── 数据装载(全只读)────────────────────────────────────────────────
@@ -344,7 +382,11 @@ def _shooting_styles_block(final_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "status": "ready",
         "sample_size": len(final_rows),
         "method": "final_v1_layer1_lexicon_v1",
-        "note": "拍法/开头为词表规则分类(零 LLM);均播放只计有播放数的深析视频。",
+        "note": (
+            "拍法/开头为词表规则分类(零 LLM;英文词按词边界、中文按子串);"
+            "多标签口径:一片可同时属多个拍摄模式,各模式 video_count 之和可大于 sample_size;"
+            "均播放只计有播放数的深析视频。"
+        ),
         "modes": modes[:6],
         "unclassified_count": unclassified,
         "openings": openings[:5],

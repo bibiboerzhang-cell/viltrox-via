@@ -16,6 +16,7 @@ import { OpsHealthCard } from "./components/OpsHealthCard";
 import { BrandPulsePanel } from "./components/BrandPulsePanel";
 import { MorningBriefCard } from "./components/MorningBriefCard";
 import { WorkerDevicesPanel } from "./components/WorkerDevicesPanel";
+import { SemanticRecallCard } from "./components/SemanticRecallCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
 import { ActivityFeed } from "./components/ActivityFeed";
@@ -64,9 +65,9 @@ const INSIGHT_ROW_ORDER: Record<DashboardTier, readonly string[]> = {
 // A2 Action Inbox 首页化(2026-07-07):actionInbox 提到右栏首位(两档同)——
 // 登录后先看到「今天该做什么」;晨报紧随其后,其余卡片相对顺序不变。
 const RIGHT_RAIL_ORDER: Record<DashboardTier, readonly string[]> = {
-  management: ["actionInbox", "morningBrief", "activityFeed", "brandPulse", "opsHealth", "workerDevices", "kolFunnel", "activeCampaigns", "contentCalendar"],
+  management: ["actionInbox", "morningBrief", "activityFeed", "semanticRecall", "brandPulse", "opsHealth", "workerDevices", "kolFunnel", "activeCampaigns", "contentCalendar"],
   // 员工:今日建议/我的项目/我的 KOL 漏斗(C3 已按人过滤)排前;运维健康大盘殿后
-  member: ["actionInbox", "morningBrief", "activityFeed", "activeCampaigns", "brandPulse", "kolFunnel", "contentCalendar", "opsHealth", "workerDevices"],
+  member: ["actionInbox", "morningBrief", "activityFeed", "semanticRecall", "activeCampaigns", "brandPulse", "kolFunnel", "contentCalendar", "opsHealth", "workerDevices"],
 };
 
 // A2:今日焦点横条「一行可点直达」的落点锚(右栏对应卡片包一层带 id 的 div)。
@@ -210,6 +211,10 @@ export function DashboardReplicaPage(props: any) {
     // C8 本地算力节点看板:哪台机在跑/在线态/租约状态(组件自取数 30s 轮询,自带空态)
     workerDevices: () => apiToken
       ? e(WorkerDevicesPanel, { key: "rail-worker-devices", apiToken })
+      : null,
+    // F4 语义召回:embedding→粗排→LLM重排三段式(降级/跳过全程诚实标注)
+    semanticRecall: () => apiToken
+      ? e(SemanticRecallCard, { key: "rail-semantic-recall", apiToken })
       : null,
     // KOL 漏斗(收藏→认领→入项目→已发布)
     kolFunnel: () => e(KolFunnelCard, {

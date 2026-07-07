@@ -6,7 +6,8 @@
      - 触达基数:followers(首选)→ avg_views(降级,单视频口径)→ 0(诚实无基数);
      - 地理桶:audience_estimated_json(ensemble_v1 top_countries,真实受众地理)
        → 创作者国别 country 列代理(creator_country_proxy,创作者国 ≠ 受众地理,诚实降档)
-       → UNKNOWN 桶(缺数据不丢弃候选,诚实归桶)。
+       → 每 KOL 独立 unknown:{kol_id} 桶(缺数据不丢弃候选;独立成桶=缺地理的
+         两人不共享覆盖单元、不互相折减,展示层统一折回 UNKNOWN)。
   2. 贪心逐个选边际增益最大者;同单元已被已选成员覆盖时,按 pairwise 重叠分折减:
      - 有实测重叠(评论者集合 jaccard:audience_estimated_json.overlap 存量 + vkpi_comments
        现算,取大)→ method=commenter_jaccard_v0(jaccard 是抽样下界,乘校准系数放大);
@@ -45,6 +46,9 @@ PROXY_CROSS_PLATFORM = 0.10  # 代理折减:跨平台封顶 10 个点(同一人�
 
 UNKNOWN_BUCKET = "UNKNOWN"
 OTHER_BUCKET = "OTHER"
+# 缺地理的候选按 KOL 独立成桶(unknown:{kol_id}):两个「都不知道在哪」的人
+# 不该共享覆盖单元互相折减 —— 缺数据不等于同受众。展示层统一折回 UNKNOWN。
+UNKNOWN_BUCKET_PREFIX = "unknown:"
 
 # ── 创作者国别列 → 地理桶(库内实际值:中文国名 + 少量 ISO/别名混写)──
 COUNTRY_CODE_MAP: dict[str, str] = {
@@ -92,8 +96,24 @@ def _parse_json_dict(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def _geo_distribution(audience: dict[str, Any], country_col: Any) -> tuple[dict[str, float], str]:
-    """候选的地理桶分布(桶→占比 0..100)+ 来源标签(三档诚实降级)。"""
+def _unknown_bucket(kol_id: int) -> str:
+    """缺地理候选的专属桶:每 KOL 独立(unknown:{kol_id}),互相不共享覆盖单元。"""
+    return UNKNOWN_BUCKET_PREFIX + str(int(kol_id))
+
+
+def _display_bucket(bucket: Any) -> str:
+    """展示口径:内部的 unknown:{kol_id} 独立桶统一折回 UNKNOWN,不外漏内部编号。"""
+    text = str(bucket or "")
+    return UNKNOWN_BUCKET if text.startswith(UNKNOWN_BUCKET_PREFIX) else text
+
+
+def _geo_distribution(audience: dict[str, Any], country_col: Any, kol_id: int) -> tuple[dict[str, float], str]:
+    """候选的地理桶分布(桶→占比 0..100)+ 来源标签(三档诚实降级)。
+
+    UNKNOWN 一律换成该 KOL 的独立桶(unknown:{kol_id}):缺数据不等于同受众,
+    两个缺地理的候选不再共享单元互相折减(修复前二人同落 UNKNOWN 桶按同平台
+    30 个点互扣,凭空砍掉边际触达)。
+    """
     top_countries = audience.get("top_countries") or []
     sample_size = int(audience.get("sample_size") or 0)
     if isinstance(top_countries, list) and top_countries and sample_size > 0:
@@ -102,6 +122,8 @@ def _geo_distribution(audience: dict[str, Any], country_col: Any) -> tuple[dict[
             if not isinstance(item, dict):
                 continue
             bucket = _normalize_country(item.get("code"))
+            if bucket == UNKNOWN_BUCKET:
+                bucket = _unknown_bucket(kol_id)
             try:
                 pct = float(item.get("pct") or 0.0)
             except (TypeError, ValueError):
@@ -118,7 +140,7 @@ def _geo_distribution(audience: dict[str, Any], country_col: Any) -> tuple[dict[
     bucket = _normalize_country(country_col)
     if bucket != UNKNOWN_BUCKET:
         return {bucket: 100.0}, "creator_country_proxy"
-    return {UNKNOWN_BUCKET: 100.0}, "none"
+    return {_unknown_bucket(kol_id): 100.0}, "none"
 
 
 def _reach_weight(rec: dict[str, Any]) -> tuple[float, str]:
@@ -151,7 +173,7 @@ def _load_profiles(db: Any, candidate_ids: list[int]) -> tuple[dict[int, dict[st
         rec = dict(row)
         kid = int(rec["id"])
         audience = _parse_json_dict(rec.get("audience_estimated_json"))
-        geo, geo_source = _geo_distribution(audience, rec.get("country"))
+        geo, geo_source = _geo_distribution(audience, rec.get("country"), kid)
         weight, reach_basis = _reach_weight(rec)
         platform = str(rec.get("platform") or "").strip().lower() or "unknown"
         units = {
@@ -281,7 +303,7 @@ def _marginal_gain(
         if discount > worst_discount:
             worst_discount, worst_against, worst_method = discount, against, method
         if against is None and reach > 0:
-            new_units.append((reach, f"{unit[0]}×{unit[1]}"))
+            new_units.append((reach, f"{unit[0]}×{_display_bucket(unit[1])}"))
     new_units.sort(key=lambda x: (-x[0], x[1]))
     return round(gain, 2), {
         "worst_discount": round(worst_discount, 4),
@@ -410,7 +432,10 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
             "base_reach": round(prof["reach_weight"], 2),
             "reach_basis": prof["reach_basis"],
             "geo_source": prof["geo_source"],
-            "geo_top": sorted(prof["geo"].items(), key=lambda x: (-x[1], x[0]))[:3],
+            "geo_top": [
+                (_display_bucket(bucket), pct)
+                for bucket, pct in sorted(prof["geo"].items(), key=lambda x: (-x[1], x[0]))[:3]
+            ],
             "reason": _selection_reason(prof, rank, best_gain, best_detail),
         })
 
@@ -448,11 +473,12 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         })
     dropped.sort(key=lambda x: (-x["marginal_reach_if_added"], x["kol_pool_id"]))
 
-    # ── 覆盖汇总(地理桶 / 平台)──
+    # ── 覆盖汇总(地理桶 / 平台;unknown:{kol_id} 独立桶展示层折回 UNKNOWN)──
     by_geo_map: dict[str, float] = {}
     by_platform_map: dict[str, float] = {}
     for (platform, bucket), reach in covered_units.items():
-        by_geo_map[bucket] = by_geo_map.get(bucket, 0.0) + reach
+        display = _display_bucket(bucket)
+        by_geo_map[display] = by_geo_map.get(display, 0.0) + reach
         by_platform_map[platform] = by_platform_map.get(platform, 0.0) + reach
     total = sum(covered_units.values())
     raw_total = sum(profiles[sid]["reach_weight"] for sid in selected_ids)
@@ -521,7 +547,9 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         "confidence": confidence,
         "note": (
             "去重触达为估算:折减用实测评论者 jaccard(commenter_jaccard_v0)优先、"
-            "地理×平台相似度(geo_proxy_v0)兜底;创作者国别代理 ≠ 实测受众地理,诚实降档。"
+            "地理×平台相似度(geo_proxy_v0)兜底;创作者国别代理 ≠ 实测受众地理,诚实降档;"
+            "受众地理缺失的候选按 KOL 独立 unknown 桶计,彼此不折减(缺数据不等于同受众),"
+            "展示层统一折回 UNKNOWN。"
         ),
     }
     if not selected_entries:

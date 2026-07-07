@@ -14,6 +14,8 @@
 
 诚实态:每块缺数据返回 {status:"empty", reason:...},识别是词表/正则规则
 (method=lexicon_focal_v1),识别不了就不算,绝不杜撰;目录价值是代理指标,注明口径。
+负语境剔除:焦段词命中但邻近是胶片/等效语境("shot on 35mm film"、"35mm 胶片"、
+"50mm equivalent"、"等效50mm")时不算覆盖 —— 那说的是底片规格或换算视角,不是这支镜头。
 
 数据源(全只读):vkpi_kol_pool / vkpi_kol_video_evidence / vkpi_analysis_cache
 (derive_method='video_analysis_final_v1', status='ready') / vkpi_products。
@@ -37,6 +39,13 @@ FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 
 # 焦段提取:'85mm' / '85 mm' / '85.5mm';前置负回顾避免 '85.5mm' 里再抠出 '5mm'。
 _FOCAL_MM_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d)?)\s*mm", re.IGNORECASE)
+# 负语境剔除:焦段数字命中但邻近是胶片规格/等效换算语境时,说的不是这支镜头的焦段,
+# 不算覆盖 —— "shot on 35mm film" / "35mm 胶片" 是底片规格,"50mm equivalent" /
+# "等效50mm" 是换算视角。film/胶片 只认紧跟焦段词之后的规格式写法(避免误伤
+# "short film with 85mm" 这类前文提 film 的正常镜头内容);equivalent/等效 前后都查。
+_FILM_AFTER_RE = re.compile(r"^[\s\-]*(?:film(?![a-z0-9])|胶片)", re.IGNORECASE)
+_EQUIV_RE = re.compile(r"(?<![a-z0-9])equiv(?:alents?)?(?![a-z0-9])|等效", re.IGNORECASE)
+_NEG_BEFORE, _NEG_AFTER = 16, 24
 # 变焦段:'24-70mm'(目录暂无变焦 SKU,只如实记录提及,不进焦段格子)。
 _ZOOM_RE = re.compile(r"(?<![\d.])(\d{1,3})\s*-\s*(\d{1,3})\s*mm", re.IGNORECASE)
 # 型号斜杠写法:'AF 135/1.8 FE' → 135(只用于产品目录解析,不用于视频文本)。
@@ -152,8 +161,23 @@ def _focal_sort_mm(display: str) -> float:
     return _float_or_none(display[:-2]) or 0.0
 
 
+def _film_context(blob: str, start: int, end: int) -> bool:
+    """该处焦段命中是否落在胶片/等效负语境:紧跟 film/胶片,或邻近窗口有 equivalent/等效。"""
+    after = blob[end:end + _NEG_AFTER]
+    if _FILM_AFTER_RE.search(after):
+        return True
+    before = blob[max(0, start - _NEG_BEFORE):start]
+    return bool(_EQUIV_RE.search(before + " " + after))
+
+
 def _extract_focals(blob: str) -> set[str]:
-    return {d for m in _FOCAL_MM_RE.findall(blob) if (d := _focal_display(m))}
+    """焦段集合(负语境感知):同一焦段只要有一处非胶片/等效语境的命中即算。"""
+    out: set[str] = set()
+    for m in _FOCAL_MM_RE.finditer(blob):
+        display = _focal_display(m.group(1))
+        if display and not _film_context(blob, m.start(), m.end()):
+            out.add(display)
+    return out
 
 
 def _extract_zooms(blob: str) -> set[str]:
@@ -439,15 +463,18 @@ def _detect_coverage(videos: list[dict[str, Any]]) -> tuple[dict[str, Any], dict
         if not blob:
             continue
         views = video.get("view_count")
+        # 每视频焦段集合各算一次并缓存(标题 / 全文各一),消掉逐焦段重复跑正则。
+        title_focals = _extract_focals(video["title_blob"])
+        blob_focals = _extract_focals(blob)
 
-        for focal in _extract_focals(blob):
+        for focal in blob_focals:
             slot = focal_hits.setdefault(focal, {
                 "video_count": 0, "views": [], "title_hits": 0, "deep_hits": 0, "top": None,
             })
             slot["video_count"] += 1
             if isinstance(views, int):
                 slot["views"].append(views)
-            if _extract_focals(video["title_blob"]) and focal in _extract_focals(video["title_blob"]):
+            if focal in title_focals:
                 slot["title_hits"] += 1
             elif video["has_deep"]:
                 slot["deep_hits"] += 1
@@ -460,7 +487,7 @@ def _detect_coverage(videos: list[dict[str, Any]]) -> tuple[dict[str, Any], dict
         for key, _label, terms in PRODUCT_LINES:
             hit = any(term in blob for term in terms)
             if key == "af_lens" and not hit:
-                hit = bool(_extract_focals(blob))  # 提到具体焦段即视作镜头内容
+                hit = bool(blob_focals)  # 提到具体焦段即视作镜头内容
             if not hit:
                 continue
             slot = line_hits.setdefault(key, {"video_count": 0, "views": [], "example": ""})
@@ -482,12 +509,17 @@ def _match_families(
     families: dict[tuple[str, str, str], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """我方 SKU 家族命中:焦段 + (系列词|光圈词) + viltrox 语境,三条都要,宁缺毋滥。"""
+    # 每视频焦段集合只算一次(消掉逐家族×逐视频的重复正则)。
+    prepared: list[tuple[dict[str, Any], str, set[str]]] = []
+    for video in videos:
+        blob = (video["title_blob"] + " " + video["deep_blob"]).strip()
+        if blob:
+            prepared.append((video, blob, _extract_focals(blob)))
     items: list[dict[str, Any]] = []
     for fam in families.values():
         matched: list[dict[str, Any]] = []
-        for video in videos:
-            blob = (video["title_blob"] + " " + video["deep_blob"]).strip()
-            if not blob or fam["focal"] not in _extract_focals(blob):
+        for video, blob, blob_focals in prepared:
+            if fam["focal"] not in blob_focals:
                 continue
             if "viltrox" not in blob and not video["viltrox_flag"]:
                 continue
@@ -674,6 +706,8 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "note": (
             "口径:焦段/产品线为词表+正则提取(evidence 标题 + final_v1 深析文本,零 LLM);"
+            "胶片/等效负语境剔除:35mm film、35mm 胶片、50mm equivalent、等效50mm 这类"
+            "底片规格/换算视角写法不算焦段覆盖;"
             "覆盖=拍过该类内容,不代表用的是我方产品(我方命中看 matched_products);"
             "空白价值=该焦段官方 SKU 数×价格合计的目录代理,非真实销量。独立展示信号,不参与 V6 Fit 评分。"
         ),

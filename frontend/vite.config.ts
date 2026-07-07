@@ -97,7 +97,63 @@ export default defineConfig(({ command }) => {
             }
             // 红线(R3 修):绝不给 src 页面目录加 manualChunks 规则 —— 这些是 React.lazy() 异步路由模块,
             // 强行塞进具名 chunk 会打乱 lazy chunk 加载图 → 运行时 RouteErrorBoundary「页面加载失败」
-            // (build 静态不报、tsc/vitest 抓不到)。只对 node_modules 分包,源码页面交给 lazy 自动分。
+            // (build 静态不报、tsc/vitest 抓不到)。页面(路由)模块永远交给 lazy 自动分。
+            //
+            // F2 分包(2026-07-07):cockpit 装配主 chunk 曾达 ~1.15MB → 按「共享层」拆,不按页面拆。
+            // 以下规则只圈非路由的共享层,import 方向已逐边核对成 DAG:
+            //   主chunk → vkpi-cockpit-widgets → vkpi-cockpit-core / vkpi-foundation → app-data → vendor-*
+            // 若新增规则造成 chunk 间静态 import 成环 = R3 级运行时炸(TDZ「页面加载失败」)。
+            // 护栏:scripts/check_chunk_graph.py 在 verify STEP 3 里对 dist 做「无环 + <600KB」硬校验。
+            //
+            // ① 数据/领域层:services + domains。已核对:对 components 只有 import type(打包后零回边);
+            //    含少量 import() 数据预取目标(kolPool-api / domains/kol 等)—— 不是 React.lazy 路由模块,安全。
+            //    countryInfo 是零依赖纯数据叶子,但被 domains/dashboard/geo.ts 运行时引用 ——
+            //    留在 cockpit-core 会形成 core↔app-data 双向边(check_chunk_graph 实测抓到),归位到这层。
+            if (
+              id.includes("/src/services/") ||
+              id.includes("/src/domains/") ||
+              id.includes("/src/components/vkpi/cockpit/data/countryInfo")
+            ) {
+              return "app-data";
+            }
+            // ② cockpit 基础件层:被 widgets 与主 chunk 共用的工具/图标映射/api 桥(仅依赖 ①/vendor)。
+            if (
+              id.includes("/src/components/vkpi/cockpit/lib/") ||
+              id.includes("/src/components/vkpi/cockpit/data/") ||
+              id.includes("/src/components/vkpi/cockpit/api.ts") ||
+              id.includes("/src/components/vkpi/cockpit/useWorkflowRunsStream.ts")
+            ) {
+              return "vkpi-cockpit-core";
+            }
+            // ③ cockpit 部件层(原主 chunk 近半体量):components/ 全目录 + 它运行时 import 的
+            //    4 个 vkpi/shared 叶子件(不带走它们会形成 主chunk↔widgets 双向边 = 成环)。
+            //    豁免三件重货(ReportPanel / TaskProgressBoard / SmartKolInputPanel 家族):
+            //    它们只被装配区(CockpitApp*/KOLPoolPage/CockpitSidebar)import,widgets 内部零引用,
+            //    留给 rollup 自动归位(跟随装配 chunk)—— 既控 widgets 体量,又不可能成环。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/ReportPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/TaskProgressBoard") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel")
+            ) {
+              return undefined;
+            }
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/") ||
+              id.includes("/src/components/vkpi/shared/GoaffproLinkSection") ||
+              id.includes("/src/components/vkpi/shared/ShareModal") ||
+              id.includes("/src/components/vkpi/shared/ShareKolModal") ||
+              id.includes("/src/components/vkpi/shared/mediaProxy")
+            ) {
+              return "vkpi-cockpit-widgets";
+            }
+            // ④ vkpi 基础层:i18n/format/图标数据/api 桥 —— 零向上依赖的叶子层。
+            if (
+              id.includes("/src/components/vkpi/lib/") ||
+              id.includes("/src/components/vkpi/data/") ||
+              id.includes("/src/components/vkpi/api.ts")
+            ) {
+              return "vkpi-foundation";
+            }
           },
         },
       },
