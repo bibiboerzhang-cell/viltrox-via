@@ -20,10 +20,14 @@ import {
   type ProgressTask,
 } from "../../../../services/vkpi/progressCenter-api";
 import { relativeFromNow } from "../../lib/timeLocal";
+import { useEventStreamOrPoll } from "../useEventStreamOrPoll";
 
 const e = React.createElement;
 
 const POLL_MS = 10000;
+// 后端 progress-center 维度的聚合事件流尚未上线(job_queue 仅 per-task 订阅)→ 传 null
+// 走轮询兜底;后端上线后改成 buildApiUrl('/api/admin/vkpi/progress/center/stream') 即自动切 SSE。
+const PROGRESS_STREAM_URL: string | null = null;
 
 // 呼吸动画:唯一的循环动画,幅度克制(opacity .45↔.9)。reduced-motion 下降级为静态。
 const BREATH_CSS = `
@@ -156,21 +160,19 @@ export function TopProgressCenter() {
   const boxRef = React.useRef<HTMLDivElement | null>(null);
   const aliveRef = React.useRef(true);
 
+  React.useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
   const load = React.useCallback(() => {
     fetchProgressCenter()
       .then((res) => { if (aliveRef.current) setData(res); })
       .catch(() => { /* 拉取失败保留上次快照,静默;首拉失败=闲态图标 */ });
   }, []);
 
-  // 10s 轮询;标签页不可见时跳过该拍(省请求,回来下一拍自然刷新)。
-  React.useEffect(() => {
-    aliveRef.current = true;
-    load();
-    const timer = window.setInterval(() => {
-      if (typeof document === "undefined" || document.visibilityState !== "hidden") load();
-    }, POLL_MS);
-    return () => { aliveRef.current = false; window.clearInterval(timer); };
-  }, [load]);
+  // SSE 优先 + 轮询兜底(归一定时器):有事件流走 SSE,否则 10s 轮询 + 可见性暂停。
+  useEventStreamOrPoll({ pollFn: load, interval: POLL_MS, streamUrl: PROGRESS_STREAM_URL });
 
   // 点开立即刷一次(不等下一拍)。
   React.useEffect(() => { if (open) load(); }, [open, load]);

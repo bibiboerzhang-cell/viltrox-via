@@ -12,10 +12,11 @@
 // 新数据到达时自动滚回顶部保持最新可见;鼠标悬停 = 阅读中 → 暂停应用新数据
 // (静默缓冲,移开后一次性追平)。prefers-reduced-motion 全部降级为静态直显。
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, m } from "framer-motion";
 import { usePrefersReducedMotion } from "./AnimatedNumber";
 import { useRowFlash } from "./ui/rowFlash";
+import { useEventStreamOrPoll } from "../useEventStreamOrPoll";
 import {
   Activity,
   AlertTriangle,
@@ -35,6 +36,9 @@ import { formatLocal } from "../../lib/timeLocal";
 const e = React.createElement;
 
 const REFRESH_MS = 10000;
+// 后端 activity 维度的聚合事件流尚未上线 → 传 null 走轮询兜底;
+// 上线后改成 buildApiUrl('/api/admin/vkpi/activity/stream') 即自动切 SSE。
+const ACTIVITY_STREAM_URL: string | null = null;
 
 // 后端 icon 名 → lucide 组件。未命中回退 Activity(通用脉冲)。
 const ICON_MAP: Record<string, any> = {
@@ -66,7 +70,7 @@ type FeedItem = {
   link?: string | null;
 };
 
-function FeedRow({ item, reduced, flash }: { item: FeedItem; reduced: boolean; flash: boolean }) {
+const FeedRow = React.memo(function FeedRow({ item, reduced, flash }: { item: FeedItem; reduced: boolean; flash: boolean }) {
   // 车道B row-flash:增量新条目挂载时 soft pulse 一次(首屏整批 flash=false 不齐闪);
   // 值恒定 0 = 只走 flashOnMount 分支;reduced-motion 在 hook 内直接不挂 class。
   const flashRef = useRowFlash<HTMLDivElement>(0, { flashOnMount: flash });
@@ -124,7 +128,16 @@ function FeedRow({ item, reduced, flash }: { item: FeedItem; reduced: boolean; f
       ),
     ),
   );
-}
+}, (prev, next) =>
+  // 轮询每 10s 重建 items 数组(item 引用必变)→ 默认浅比较必重渲;改按 payload 字段比较,
+  // 内容未变则跳过本行重渲(只有真新/真变的条目才重画,配合 row-flash / 滑入)。
+  prev.reduced === next.reduced &&
+  prev.flash === next.flash &&
+  prev.item.ts === next.item.ts &&
+  prev.item.kind === next.item.kind &&
+  prev.item.icon === next.item.icon &&
+  prev.item.text === next.item.text &&
+  prev.item.link === next.item.link);
 
 export function ActivityFeed({ apiToken }: { apiToken?: string }) {
   const [items, setItems] = useState<FeedItem[]>([]);
@@ -138,46 +151,49 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
   const loadedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // aliveRef 生命周期 + 无 token 诚实态(不发请求,直显「待接入」)。
   useEffect(() => {
     aliveRef.current = true;
-    if (!apiToken) {
-      setError("未登录 / 无 token");
-      return () => {
-        aliveRef.current = false;
-      };
-    }
-    const load = async () => {
-      try {
-        const data: any = await apiFetch(
-          "/api/admin/vkpi/activity/recent?limit=30",
-          { timeoutMs: 4000 },
-          apiToken,
-        );
-        if (!aliveRef.current) return;
-        const next: FeedItem[] = Array.isArray(data?.items) ? data.items : [];
-        if (hoverRef.current && loadedRef.current) {
-          // 阅读中:先缓冲,不打断视线;mouseleave 时一次性应用。
-          pendingRef.current = next;
-        } else {
-          pendingRef.current = null;
-          setItems(next);
-        }
-        loadedRef.current = true;
-        setLoaded(true);
-        setError("");
-      } catch {
-        if (!aliveRef.current) return;
-        // 轮询失败保留上一轮内容,只在从未加载成功时提示「待接入」。
-        setError("真实 API 无信号");
-      }
-    };
-    load();
-    const timer = globalThis.setInterval(load, REFRESH_MS);
+    if (!apiToken) setError("未登录 / 无 token");
     return () => {
       aliveRef.current = false;
-      globalThis.clearInterval(timer);
     };
   }, [apiToken]);
+
+  const load = useCallback(async () => {
+    if (!apiToken) return;
+    try {
+      const data: any = await apiFetch(
+        "/api/admin/vkpi/activity/recent?limit=30",
+        { timeoutMs: 4000 },
+        apiToken,
+      );
+      if (!aliveRef.current) return;
+      const next: FeedItem[] = Array.isArray(data?.items) ? data.items : [];
+      if (hoverRef.current && loadedRef.current) {
+        // 阅读中:先缓冲,不打断视线;mouseleave 时一次性应用。
+        pendingRef.current = next;
+      } else {
+        pendingRef.current = null;
+        setItems(next);
+      }
+      loadedRef.current = true;
+      setLoaded(true);
+      setError("");
+    } catch {
+      if (!aliveRef.current) return;
+      // 轮询失败保留上一轮内容,只在从未加载成功时提示「待接入」。
+      setError("真实 API 无信号");
+    }
+  }, [apiToken]);
+
+  // SSE 优先 + 轮询兜底(归一定时器);无 token 时既不订阅也不轮询。
+  useEventStreamOrPoll({
+    pollFn: load,
+    interval: REFRESH_MS,
+    streamUrl: ACTIVITY_STREAM_URL,
+    enabled: Boolean(apiToken),
+  });
 
   // 稳定 key(AnimatePresence 需要):ts+kind+text 指纹,重复条目加序号后缀。
   const keyed = useMemo(() => {
