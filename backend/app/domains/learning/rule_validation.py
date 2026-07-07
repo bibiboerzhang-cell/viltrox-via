@@ -181,8 +181,8 @@ def _collect_videos() -> list[dict[str, Any]]:
     ).fetchall()]
     try:
         conn.commit()  # 读后即 commit,防 idle-in-transaction
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("rule_validation post-read commit failed analysis_kind=%s: %s", ANALYSIS_KIND, exc)
 
     videos: list[dict[str, Any]] = []
     for r in rows:

@@ -29,7 +29,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
+
+logger = get_logger(__name__)
 
 
 READY = "ready"
@@ -92,8 +95,8 @@ def _shopify_readiness() -> dict[str, Any]:
         status = shopify_connect.connection_status()
         conn_status = str(status.get("status") or "not_configured")
         shop_domain = str(status.get("shop_domain") or "")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("indie_site_actions shopify connection_status failed (conn_status=%s): %s", conn_status, exc)
 
     order_count = _count("SELECT COUNT(*) AS n FROM vkpi_shopify_orders")
     if order_count is None:
@@ -127,8 +130,8 @@ def _affiliate_readiness() -> dict[str, Any]:
 
         status = goaffpro_connect.connection_status()
         conn_status = str(status.get("status") or "not_configured")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("indie_site_actions goaffpro connection_status failed (conn_status=%s): %s", conn_status, exc)
 
     coupon_count = _count("SELECT COUNT(*) AS n FROM vkpi_goaffpro_kol_links WHERE coupon <> ''")
     link_count = _count("SELECT COUNT(*) AS n FROM vkpi_goaffpro_kol_links WHERE tracking_url <> ''")

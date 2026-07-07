@@ -8,7 +8,7 @@ from app.api.dependencies.manager_guard import require_manager_staff as _require
 from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
 from app.domains import staff as staff_domain
-from app.domains.access import scope
+from app.domains.access import scope as access_scope
 from app.domains.projects import workflow
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
@@ -250,7 +250,7 @@ def dashboard(
             staff_id=staff_id,
             staff=staff,
         )
-    except scope.ScopeDenied as exc:
+    except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     return result
 
@@ -267,7 +267,7 @@ def dashboard_revenue_trend(
             staff_id=staff_id,
             staff=staff,
         )
-    except scope.ScopeDenied as exc:
+    except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
@@ -285,7 +285,7 @@ def dashboard_product_performance(
             limit=limit,
             staff=staff,
         )
-    except scope.ScopeDenied as exc:
+    except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
@@ -295,7 +295,7 @@ def _map_staff_scope_id(staff: dict) -> int | None:
     owner/管理层(can_view_all)→ None=全局地图;其余员工 → 强制只看自己的 KOL。
     不接受任何客户端 staff_id/scope 传参决定权限(与 Dashboard summary 的 P1 口径一致)。
     """
-    return scope.effective_staff_id(staff, None)
+    return access_scope.effective_staff_id(staff, None)
 
 
 @router.get("/dashboard/kol-distribution")
@@ -470,7 +470,7 @@ def staff_profile(
         return staff_domain.build_staff_profile(staff_id, staff=staff, window=window, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except scope.ScopeDenied as exc:
+    except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
@@ -482,7 +482,7 @@ def staff_kpi(
 ):
     try:
         return staff_domain.build_staff_kpi(window=window, staff_id=staff_id, staff=staff)
-    except scope.ScopeDenied as exc:
+    except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
@@ -510,7 +510,7 @@ def dashboard_view(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except scope.ScopeDenied as exc:
+    except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 

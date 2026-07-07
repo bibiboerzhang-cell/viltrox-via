@@ -206,8 +206,8 @@ def _normalize_country(raw: Any) -> tuple[str, str | None]:
         code = str(geo_ensemble._country_code(text) or text)
     except ImportError:
         pass
-    except Exception:  # noqa: BLE001 — 归一化失败按原文匹配,不拦主流程
-        pass
+    except Exception as exc:  # noqa: BLE001 — 归一化失败按原文匹配,不拦主流程
+        logger.warning("strategy_sim country normalize failed text=%s: %s", text, exc)
     code = code.strip().upper()
     if len(code) == 2 and code.isascii() and code.isalpha():
         return code, None
