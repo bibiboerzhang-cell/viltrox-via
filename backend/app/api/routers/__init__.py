@@ -130,4 +130,12 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_gtm_verdicts",
     "vkpi_gtm_windows",
     "vkpi_gtm_weights",
+    # GTM-2 E3:评论细粒度情绪+渴望密度 KPI(纯词表零 LLM,append-only,2026-07-07)
+    "vkpi_fine_emotion",
+    # GTM-2 E2:内容记分卡三平台北极星换轴判档(growth_playbook 消费,纯读,append-only)
+    "vkpi_content_scorecard",
+    # GTM-2 E4:规则库回归验证+校准报告(growth_playbook×自有已析视频,纯读,append-only)
+    "vkpi_rule_validation",
+    # GTM-2 E1:情绪标签体系——词表回打 emotion_tags_v1 + KOL 情绪画像(零 LLM 零重析,append-only)
+    "vkpi_emotion_tags",
 ]
