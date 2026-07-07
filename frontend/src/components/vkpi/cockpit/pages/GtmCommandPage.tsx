@@ -22,6 +22,8 @@ import {
   SectionList,
   confBadge,
 } from "./GtmCommandPage.Sections";
+// Gate D · 增长指挥台四层(健康条 + 路线/执行/学习/Bet 生命周期);全部纯读、失败安静。
+import { CommandDeck, HealthStrip } from "./GtmCommandPage.Command";
 import {
   getGtmPlanPreview,
   getMarketBrainSummary,
@@ -557,9 +559,35 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
     { className: "mx-auto max-w-6xl space-y-4 p-4 md:p-6" },
     header,
     controls,
+    // Gate D · 顶部健康条(SHA/迁移/Worker/调度/留痕 五点;纯读失败安静)。
+    apiToken ? e(HealthStrip, { apiToken }) : null,
     // U3 · 90 天北极星三表盘(自拉取自判空;全局/预览两模式都挂顶部)
     apiToken ? e(NorthStarGauges, { apiToken }) : null,
+    // Gate D · 增长指挥台(路线/执行/学习/Bet):界面只展示决策与状态,聪明藏系统内。
+    //   全局态吃 summary,preview 态吃 plan;深度分析卡片仍在下方(既有能力零回退)。
+    apiToken
+      ? e(CommandDeck, {
+          apiToken,
+          summary,
+          plan,
+          selectedSku,
+          budgetText,
+          goal,
+          digest,
+          onPickSku: loadPreview,
+          onNavigate,
+        })
+      : null,
     !apiToken && e(Empty, { text: "未登录 / 无 token,无法加载数据。" }),
+    // ↓↓↓ 深度分析(既有五卡 / 五区块保留为下钻层)↓↓↓
+    apiToken
+      ? e(
+          "div",
+          { className: "flex items-center gap-2 pt-1" },
+          e("span", { className: "text-[11px] font-medium text-slate-500" }, "深度分析"),
+          e("span", { className: "h-px flex-1 bg-white/[0.06]" }),
+        )
+      : null,
     planError && e("div", { className: "rounded-lg border border-rose-300/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-200" }, planError),
     planLoading && e(PreviewSkeleton),
     // 预览模式:五区块
