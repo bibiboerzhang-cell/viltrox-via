@@ -1,0 +1,15 @@
+# Coverage config for the backend test suite.
+# Enable with: pytest tests/ --cov=backend/app --cov-report=term-missing
+# (requires pytest-cov, present in .venv but not forced as a hard dependency).
+[run]
+source = backend/app
+branch = True
+omit =
+    */__pycache__/*
+    */tests/*
+    */migrations/*
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 1
