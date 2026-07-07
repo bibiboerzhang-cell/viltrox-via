@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "V-KPI Runner 最小权限:仅本地 IPC(调用自有命令)与事件监听;不开放任何网络/文件系统/shell 插件。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

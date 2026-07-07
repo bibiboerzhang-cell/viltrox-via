@@ -1,0 +1,14 @@
+{
+  "name": "vkpi-desktop-runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "V-KPI 本地算力 Worker 桌面外壳(Tauri v2 壳 + vanilla 前端)",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
