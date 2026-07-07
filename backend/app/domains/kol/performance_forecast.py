@@ -410,15 +410,18 @@ def _log_forecast(db: Any, payload: dict[str, Any], context: str) -> None:
     """ready 预测追加一行 vkpi_forecast_log(outcome='pending',30 天后对答案)。
 
     调用方包 try/except:表未建(迁移215未 apply)/写失败只警告,绝不影响预测返回。
-    只写流水表明确列,绝不触任何评分列。
+    只写流水表明确列,绝不触任何评分列。落库成功后 best-effort 镜像一份进
+    W6 预测账本(vkpi_prediction_runs,run_id=fclog_<流水行id>,周评估靠它对账);
+    镜像失败只警告,流水本体与预测返回零影响。
     """
     basis = payload.get("basis") or {}
-    db.execute(
+    row = db.execute(
         """
         INSERT INTO vkpi_forecast_log
             (kol_pool_id, sku, p10, p50, p90, engagement_rate,
              confidence, method, context, outcome)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        RETURNING id
         """,
         (
             int(payload["kol_pool_id"]),
@@ -431,8 +434,57 @@ def _log_forecast(db: Any, payload: dict[str, Any], context: str) -> None:
             _text(basis.get("method"), 60) or METHOD,
             context if context in LOG_CONTEXTS else "drawer",
         ),
-    )
+    ).fetchone()
     db.commit()
+    log_id = _int_or_none(dict(row).get("id")) if row else None
+    _mirror_forecast_to_prediction_ledger(payload, log_id, context)
+
+
+def _mirror_forecast_to_prediction_ledger(
+    payload: dict[str, Any], log_id: int | None, context: str
+) -> None:
+    """W6 预测账本双写(best-effort):同一 ready 预测镜像进 vkpi_prediction_runs。
+
+    run_id 首选 fclog_<vkpi_forecast_log 行id>(与流水一一对应,周评估
+    job_vkpi_prediction_weekly_rollup 靠它对账);拿不到行 id 时退化为
+    kol+语境+UTC日 的幂等键(同日重跑 UPSERT 不重复落账)。lazy import,
+    任何异常只 logger.warning,绝不影响预测主流程与流水本体。
+    """
+    try:
+        from app.domains.market_brain import prediction_ledger
+
+        if log_id is not None:
+            run_id = f"fclog_{int(log_id)}"
+        else:
+            day = datetime.now(timezone.utc).strftime("%Y%m%d")
+            run_id = f"fclog_k{int(payload['kol_pool_id'])}_{context}_{day}"
+        basis = payload.get("basis") or {}
+        prediction_ledger.record_prediction_run(
+            run_id=run_id,
+            model_name=_text(basis.get("method"), 60) or METHOD,
+            model_version="v1",
+            task_type="kol_views",
+            prediction={
+                "expected_views_p10": payload.get("expected_views_p10"),
+                "expected_views_p50": payload.get("expected_views_p50"),
+                "expected_views_p90": payload.get("expected_views_p90"),
+                "engagement_rate": payload.get("engagement_rate"),
+                "kol_pool_id": payload.get("kol_pool_id"),
+                "context": context,
+            },
+            sku=payload.get("sku"),
+            horizon_days=30,
+            p10=payload.get("expected_views_p10"),
+            p50=payload.get("expected_views_p50"),
+            p90=payload.get("expected_views_p90"),
+            confidence=payload.get("confidence"),
+            basis=basis,
+        )
+    except Exception as exc:  # noqa: BLE001 — 双写是增益件,绝不拖垮预测主流程
+        logger.warning(
+            "forecast prediction-ledger mirror skipped (kol=%s): %s",
+            payload.get("kol_pool_id"), exc,
+        )
 
 
 # ── 置信度(规则进 basis,可追溯)─────────────────────────────────────

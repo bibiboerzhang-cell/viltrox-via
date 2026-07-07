@@ -75,6 +75,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_agent_cycle,
     job_vkpi_ai_today_hot,
     job_vkpi_alerts,
+    job_vkpi_baseline_forecast_daily,
     job_vkpi_bet_review_due,
     job_vkpi_brief_agent,
     job_vkpi_channels_sync,
@@ -84,6 +85,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_apify_reconcile,
     job_vkpi_cost_snapshot,
     job_vkpi_fit_snapshot,
+    job_vkpi_forecast_outcomes_refresh,
     job_vkpi_fulfillment_sweep,
     job_vkpi_goaffpro_metrics_sync,
     job_vkpi_gtm_spawn_verdicts,
@@ -96,6 +98,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_morning_sync,
     job_vkpi_official_daily_report,
     job_vkpi_official_visual_scan,
+    job_vkpi_prediction_weekly_rollup,
     job_fulfillment_window_backfill,
     job_vkpi_recommendation_refresh,
     job_vkpi_recommendation_outcomes,
@@ -280,14 +283,46 @@ async def start_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
-    # ── Job 7d: Bet Ledger 到期复盘催办(每日) ──
+    # ── Job 7d: Bet Ledger 到期复盘催办(每日;06:00 中国,对齐同文件其他 job 的时区口径) ──
     _scheduler.add_job(
         job_vkpi_bet_review_due,
-        trigger=CronTrigger(hour=6, minute=0),
+        trigger=CronTrigger(hour=6, minute=0, timezone=CHINA_TZ),
         id="vkpi_bet_review_due",
         name="Scan due bets and emit review-due events",
         max_instances=1,
         coalesce=True,
+    )
+
+    # ── 推论点火:预测闭环三件套(config-gate 默认 OFF,迁移 222 种子)──
+    # ① 预测流水对答案(每日 04:50 中国,排在推荐 outcome 04:40 后):满窗 pending 行回查实际判带内。
+    _scheduler.add_job(
+        job_vkpi_forecast_outcomes_refresh,
+        trigger=CronTrigger(hour=4, minute=50, timezone=CHINA_TZ),
+        id="vkpi_forecast_outcomes_refresh",
+        name="Refresh forecast-log outcomes daily (fill actuals, judge in-band)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # ② 经验分位数日基线(每日 05:00 中国):每渠道日播放增量分位数 → prediction_runs(样本不足不落账)。
+    _scheduler.add_job(
+        job_vkpi_baseline_forecast_daily,
+        trigger=CronTrigger(hour=5, minute=0, timezone=CHINA_TZ),
+        id="vkpi_baseline_forecast_daily",
+        name="Daily empirical-quantile channel views baseline into prediction ledger",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # ③ 预测账本周评估(每周一 07:10 中国):已裁决流水补账进 evals + wape/带内率/方向命中落信号账本。
+    _scheduler.add_job(
+        job_vkpi_prediction_weekly_rollup,
+        trigger=CronTrigger(day_of_week="mon", hour=7, minute=10, timezone=CHINA_TZ),
+        id="vkpi_prediction_weekly_rollup",
+        name="Weekly prediction ledger rollup (backfill evals + wape/coverage/direction)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
 
     # ── Job 7e: GTM 裁决闭环(config-gate 默认 OFF;迁移 218 种子)──

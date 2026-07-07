@@ -385,59 +385,6 @@ async def job_vkpi_comment_sentiment_refresh():
         logger.exception("scheduler.comment_sentiment_refresh_failed")
 
 
-async def job_vkpi_gtm_spawn_verdicts():
-    """GTM 裁决闭环·链头:每日扫到期未裁决 bet → 生成 gtm_verdict 置顶裁决任务(幂等)。
-
-    走 verdict_flow.spawn_due_verdicts(dry_run=False, limit=100):只生成待人裁决任务,
-    绝不写 decision(自动裁决路径不存在);同 dedupe_key 已存在即跳过,复跑零新增。
-    config-gate:scheduler_tasks.vkpi_gtm_spawn_verdicts(默认 OFF,迁移 218 种子)。零触 viltrox_fit_score。
-    """
-    if not _scheduler_task_enabled("vkpi_gtm_spawn_verdicts"):
-        return
-    try:
-        from app.domains.market_brain import verdict_flow
-
-        result = await asyncio.to_thread(verdict_flow.spawn_due_verdicts, False, limit=100)
-        logger.info(
-            "scheduler.vkpi_gtm_spawn_verdicts",
-            extra={
-                "due_count": result.get("due_count"),
-                # 'created' 是 logging 保留字段(见 fulfillment_due_scan 同类修复),改 created_count。
-                "created_count": result.get("created"),
-                "skipped_existing": result.get("skipped_existing"),
-            },
-        )
-        _record_scheduler_run("vkpi_gtm_spawn_verdicts", ok=True)
-    except Exception as exc:
-        logger.exception("scheduler.vkpi_gtm_spawn_verdicts_failed")
-        _record_scheduler_run("vkpi_gtm_spawn_verdicts", ok=False, error=str(exc)[:240])
-
-
-async def job_vkpi_gtm_windows_refresh():
-    """GTM 裁决闭环·证据段:每日对未裁决 gtm_outcomes 行按账龄回填 7/14/28 三窗证据。
-
-    走 gtm_windows.refresh_gtm_windows(dry_run=False):幂等覆盖未裁决行三窗(filled_at 刷新);
-    已裁决行冻结绝不再刷,只写 window_* 三列绝不触 decision。
-    config-gate:scheduler_tasks.vkpi_gtm_windows_refresh(默认 OFF,迁移 218 种子)。零触 viltrox_fit_score。
-    """
-    if not _scheduler_task_enabled("vkpi_gtm_windows_refresh"):
-        return
-    try:
-        from app.domains.market_brain import gtm_windows
-
-        result = await asyncio.to_thread(gtm_windows.refresh_gtm_windows, dry_run=False)
-        logger.info(
-            "scheduler.vkpi_gtm_windows_refresh",
-            extra={
-                "refresh_status": str(result.get("status")),
-                "scanned": result.get("scanned"),
-                "updated_rows": result.get("updated_rows"),
-            },
-        )
-        _record_scheduler_run("vkpi_gtm_windows_refresh", ok=True)
-    except Exception as exc:
-        logger.exception("scheduler.vkpi_gtm_windows_refresh_failed")
-        _record_scheduler_run("vkpi_gtm_windows_refresh", ok=False, error=str(exc)[:240])
 
 
 # ──────────────────────────────────────────────
@@ -447,6 +394,18 @@ async def job_vkpi_gtm_windows_refresh():
 from .jobs_tasks_batch import (  # noqa: E402,F401
     job_llm_batch_poll,
     job_vkpi_content_fit_batch_refresh,
+)
+
+# ──────────────────────────────────────────────
+# GTM 闭环 + 推论点火任务簇 → jobs_tasks_gtm.py(行为不变搬出,治千行卫兵)
+# 原文件 re-export 兜住所有调用点。
+# ──────────────────────────────────────────────
+from .jobs_tasks_gtm import (  # noqa: E402,F401
+    job_vkpi_baseline_forecast_daily,
+    job_vkpi_forecast_outcomes_refresh,
+    job_vkpi_gtm_spawn_verdicts,
+    job_vkpi_gtm_windows_refresh,
+    job_vkpi_prediction_weekly_rollup,
 )
 
 

@@ -280,6 +280,7 @@ _POSTGRES_MIGRATION_SEQUENCE = (
     "219_vkpi_signal_ledger.sql",
     "220_vkpi_prediction_runs.sql",
     "221_vkpi_prediction_evals.sql",
+    "222_scheduler_task_inference_loop.sql",
 )
 
 try:
