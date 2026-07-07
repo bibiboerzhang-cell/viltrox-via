@@ -15,6 +15,15 @@
 cpm_benchmark_v0 行业基准兜底、无一条真实报价)的方案降级 estimate_only 后置并警示 ——
 对齐第4轮护栏精神:基准折算只是谈判锚点,不能当真实成交价拿去排兵布阵。
 
+GTM-1 补参(向后兼容,默认 None=旧行为逐字不变):
+  - country:候选池按受众地域轻过滤 —— audience_geo(守卫 import)逐候选读受众分布,
+    三档降序(命中该国 > 无地理数据 > 有数据但不含该国),档内维持原策略排序键;
+    无数据的候选不淘汰只降序(参数不假装比数据聪明)。
+  - goal:推荐排序权重切换 —— exposure=去重触达优先 / conversion=每千播成本优先(现状默认)
+    / content=成员人数(内容产能代理)优先;estimate_only 后置护栏不因 goal 放松。
+  两参如何影响排序全部写进 basis(candidate_pool.audience_geo_filter /
+  plans[].basis.country_filter / recommendation.basis.goal_weighting)可追溯。
+
 红线:一切数字带 basis/method/confidence 可追溯;数据不足诚实空态/低置信,绝不编造;
 只用库内真数据(不联网不引外部行情);零触 viltrox_fit_score / rule_v0。
 compat 约定:SQL 占位符 ?;无字面 percent;函数内懒 import get_conn。
@@ -54,6 +63,34 @@ RISK_LOW_SHARE_MEDIUM = 0.2
 RISK_RULE_TEXT = (
     "成员预测置信度聚合:forecast confidence 非 high/medium 的成员占比 "
     ">=50% 评 high,>=20% 评 medium,否则 low;无成员评 unknown。"
+)
+
+# GTM-1 补参:goal 推荐排序口径(conversion=现状默认;None=旧行为逐字不变)。
+GOALS = ("exposure", "conversion", "content")
+GOAL_RULES = {
+    "exposure": (
+        "goal=exposure:按方案去重触达 total_dedup_reach 降序推荐(触达缺席退 "
+        "views_p50 总和降序);「全员 CPM 兜底价」方案降级 estimate_only 一律后置"
+        "(护栏不因 goal 放松)。"
+    ),
+    "conversion": (
+        "goal=conversion(与默认口径一致):按 p50 成本效率(每千播放成本)升序推荐;"
+        "「全员 CPM 兜底价」方案降级 estimate_only 一律后置(对齐第4轮护栏精神:基准折算非成交价)。"
+    ),
+    "content": (
+        "goal=content:按方案成员人数降序推荐(内容产能代理:人越多可产出内容越多),"
+        "人数并列按每千播成本升序;「全员 CPM 兜底价」方案降级 estimate_only 一律后置。"
+    ),
+}
+
+# GTM-1 补参:country 受众地域三档(0 命中 > 1 无数据 > 2 有数据不含该国)。
+GEO_TIER_MATCHED = 0
+GEO_TIER_NO_DATA = 1
+GEO_TIER_UNMATCHED = 2
+COUNTRY_RULE_TEXT = (
+    "country 补参:候选按受众地域三档排序(0=audience_geo 命中该国,按档优先;"
+    "1=无地理数据;2=有数据但不含该国),档内维持原策略排序键(头部仍按预测播放、"
+    "长尾仍按报价);无数据候选不淘汰只降序 —— 轻影响,参数不假装比数据聪明。"
 )
 
 
@@ -157,6 +194,88 @@ def _tier_for(rate_card: Any, followers: int | None) -> str | None:
         return None
 
 
+def _normalize_country(raw: Any) -> tuple[str, str | None]:
+    """country 参数 → ISO2 大写码;复用 geo_ensemble._country_code(守卫 import)查中文名。
+    识别不了不硬编:按原文大写匹配 + note 诚实说明(结果=全员不命中,只降序不淘汰)。"""
+    text = " ".join(str(raw or "").split()).strip()
+    if not text:
+        return "", None
+    code = text
+    try:
+        from app.domains.audience import geo_ensemble
+        code = str(geo_ensemble._country_code(text) or text)
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 — 归一化失败按原文匹配,不拦主流程
+        pass
+    code = code.strip().upper()
+    if len(code) == 2 and code.isascii() and code.isalpha():
+        return code, None
+    return code, (
+        f"country={_text(text, 60)} 未识别为 ISO2 码,按原文大写匹配"
+        "(大概率全员不命中:仅降序不淘汰,排序近似无参)。"
+    )
+
+
+def _annotate_audience_geo(
+    cands: list[dict[str, Any]], country_code: str, db: Any,
+) -> dict[str, Any]:
+    """country 补参:逐候选读 audience_geo(守卫 import,纯读),标三档 _geo_tier。
+    无数据的候选不淘汰只降序(tier 1);模块缺席全员 tier 1 = 排序退化为无参,诚实报因。"""
+    try:
+        from app.domains.audience import geo_ensemble
+    except ImportError as exc:
+        for c in cands:
+            c["_geo_tier"] = GEO_TIER_NO_DATA
+            c["_geo_status"] = "module_missing"
+            c["_geo_match_pct"] = None
+        return {
+            "status": "unavailable",
+            "country": country_code,
+            "reason": f"audience geo 读端缺席,country 过滤未生效(排序同无参):{_text(str(exc), 160)}",
+            "rule": COUNTRY_RULE_TEXT,
+        }
+    matched = no_data = unmatched = 0
+    for c in cands:
+        pct: float | None = None
+        try:
+            geo = geo_ensemble.audience_geo(int(c["kol_pool_id"]), conn=db)
+            countries = geo.get("countries") or []
+        except Exception as exc:  # noqa: BLE001 — 单人地理读挂不拖垮,按无数据降序
+            logger.warning(
+                "strategy_sim audience_geo failed for kol=%s: %s", c.get("kol_pool_id"), exc
+            )
+            geo, countries = {}, []
+        if not countries:
+            tier, status = GEO_TIER_NO_DATA, "no_data"
+            no_data += 1
+        else:
+            pct = 0.0
+            for item in countries:
+                if str(item.get("code") or "").strip().upper() == country_code:
+                    pct = _float_or_none(item.get("pct")) or 0.0
+                    break
+            if pct > 0:
+                tier, status = GEO_TIER_MATCHED, "matched"
+                matched += 1
+            else:
+                tier, status = GEO_TIER_UNMATCHED, "not_matched"
+                unmatched += 1
+        c["_geo_tier"] = tier
+        c["_geo_status"] = status
+        c["_geo_match_pct"] = pct
+        c["_geo_confidence"] = _text(geo.get("confidence"), 20) or None
+    return {
+        "status": "applied",
+        "country": country_code,
+        "matched": matched,
+        "no_data": no_data,
+        "unmatched": unmatched,
+        "rule": COUNTRY_RULE_TEXT,
+        "source": "audience.geo_ensemble.audience_geo(多信号估算口径,纯读守卫 import)",
+    }
+
+
 def _build_candidates(
     sku: str, pool_items: list[dict[str, Any]], rate_card: Any, forecast_mod: Any, db: Any,
 ) -> list[dict[str, Any]]:
@@ -244,10 +363,11 @@ def _greedy_pick(
 
 
 def _pick_head(cands: list[dict[str, Any]], budget: float, max_people: int) -> tuple[list[dict[str, Any]], float, str]:
-    """A 头部集中:预测战绩 p50 降序(tie 小 id 先),取 3~5 人。"""
+    """A 头部集中:预测战绩 p50 降序(tie 小 id 先),取 3~5 人。
+    country 补参时受众地域三档(_geo_tier)为首键;无参时全员同档=旧序逐字不变。"""
     ranked = sorted(
         (c for c in cands if c["cost_ready"] and c["forecast_ready"]),
-        key=lambda c: (-(c["views_p50"] or 0.0), c["kol_pool_id"]),
+        key=lambda c: (c.get("_geo_tier", GEO_TIER_NO_DATA), -(c["views_p50"] or 0.0), c["kol_pool_id"]),
     )
     picked, spent = _greedy_pick(ranked, budget, max_people)
     note = f"按预测播放 p50 降序取 top(可估价且可预测的候选 {len(ranked)} 人中选出 {len(picked)} 人)"
@@ -257,10 +377,11 @@ def _pick_head(cands: list[dict[str, Any]], budget: float, max_people: int) -> t
 
 
 def _pick_longtail(cands: list[dict[str, Any]], budget: float, max_people: int) -> tuple[list[dict[str, Any]], float, str]:
-    """B 长尾铺量:nano/micro 报价 p50 升序(tie 小 id 先),目标 15~20 人。"""
+    """B 长尾铺量:nano/micro 报价 p50 升序(tie 小 id 先),目标 15~20 人。
+    country 补参时受众地域三档(_geo_tier)为首键;无参时全员同档=旧序逐字不变。"""
     ranked = sorted(
         (c for c in cands if c["cost_ready"] and c.get("tier") in LONGTAIL_TIERS),
-        key=lambda c: (c["cost_p50"] or 0.0, c["kol_pool_id"]),
+        key=lambda c: (c.get("_geo_tier", GEO_TIER_NO_DATA), c["cost_p50"] or 0.0, c["kol_pool_id"]),
     )
     picked, spent = _greedy_pick(ranked, budget, max_people)
     note = f"nano/micro 池 {len(ranked)} 人按报价 p50 升序小额铺量,选出 {len(picked)} 人"
@@ -275,7 +396,7 @@ def _pick_hybrid(cands: list[dict[str, Any]], budget: float, max_people: int) ->
     tail_budget = budget - head_budget
     head_ranked = sorted(
         (c for c in cands if c["cost_ready"] and c["forecast_ready"]),
-        key=lambda c: (-(c["views_p50"] or 0.0), c["kol_pool_id"]),
+        key=lambda c: (c.get("_geo_tier", GEO_TIER_NO_DATA), -(c["views_p50"] or 0.0), c["kol_pool_id"]),
     )
     heads, head_spent = _greedy_pick(head_ranked, head_budget, HYBRID_HEAD_MAX)
     head_ids = {c["kol_pool_id"] for c in heads}
@@ -284,7 +405,7 @@ def _pick_hybrid(cands: list[dict[str, Any]], budget: float, max_people: int) ->
             c for c in cands
             if c["cost_ready"] and c.get("tier") in LONGTAIL_TIERS and c["kol_pool_id"] not in head_ids
         ),
-        key=lambda c: (c["cost_p50"] or 0.0, c["kol_pool_id"]),
+        key=lambda c: (c.get("_geo_tier", GEO_TIER_NO_DATA), c["cost_p50"] or 0.0, c["kol_pool_id"]),
     )
     tail_cap = max(0, max_people - len(heads))
     tails, tail_spent = _greedy_pick(tail_ranked, tail_budget, tail_cap)
@@ -351,7 +472,7 @@ def _risk_rating(picked: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _member_out(c: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out = {
         "kol_pool_id": c["kol_pool_id"],
         "handle": c["handle"],
         "display_name": c["display_name"],
@@ -371,6 +492,14 @@ def _member_out(c: dict[str, Any]) -> dict[str, Any]:
         "forecast_confidence": c.get("forecast_confidence") if c.get("forecast_ready") else None,
         "forecast_note": None if c.get("forecast_ready") else (c.get("forecast_reason") or "预测缺席(无播放样本)"),
     }
+    if "_geo_tier" in c:  # 仅 country 补参时出现;无参输出逐字同旧
+        out["audience_geo_match"] = {
+            "tier": c["_geo_tier"],
+            "status": c.get("_geo_status"),
+            "match_pct": c.get("_geo_match_pct"),
+            "confidence": c.get("_geo_confidence"),
+        }
+    return out
 
 
 def _plan_payload(
@@ -445,10 +574,107 @@ def _plan_payload(
     }
 
 
-# ── 推荐(p50 成本效率排序 + estimate_only 降级后置) ─────────────────
+# ── 推荐(p50 成本效率排序 + estimate_only 降级后置;goal 补参切换权重) ──
 
 
-def _recommendation(plans: list[dict[str, Any]]) -> dict[str, Any]:
+def _rec_confidence(best: dict[str, Any]) -> str:
+    if best.get("estimate_only"):
+        return "low"        # 全员基准兜底价:排序可用,绝对数不可信
+    if (best.get("risk") or {}).get("level") == "low":
+        return "medium"     # 预测样本置信可控,但仍是估算非实测
+    return "low"
+
+
+def _goal_metric(plan: dict[str, Any], goal: str) -> tuple[float | None, str]:
+    """goal 排序度量(越小越好,降序度量取负);返回 (metric, 度量说明)。"""
+    if goal == "exposure":
+        reach = _float_or_none((plan.get("dedup_reach") or {}).get("total_dedup_reach"))
+        if reach is not None:
+            return -reach, f"total_dedup_reach={round(reach)}(降序)"
+        views = _float_or_none((plan.get("expected_views") or {}).get("p50_total"))
+        if views is not None and views > 0:
+            return -views, f"触达缺席退 views_p50_total={round(views)}(降序)"
+        return None, "触达与预测播放全缺,不可比"
+    if goal == "content":
+        members = int(plan.get("member_count") or 0)
+        return -float(members), f"member_count={members}(内容产能代理,降序)"
+    cpm = _float_or_none(plan.get("cost_per_1k_views_p50"))
+    if cpm is not None:
+        return cpm, f"cost_per_1k_views_p50={cpm}(升序)"
+    return None, "无可比的 p50 成本效率"
+
+
+def _recommendation_for_goal(plans: list[dict[str, Any]], goal: str) -> dict[str, Any]:
+    """goal 补参版推荐:排序主键随 goal 切换;estimate_only 后置护栏与 tie-break 决定性不变。"""
+    measured: list[tuple[dict[str, Any], float, str]] = []
+    unrankable: list[tuple[dict[str, Any], str | None]] = []
+    for p in plans:
+        if p.get("status") != "ready":
+            unrankable.append((p, None))  # 非 ready:沿用方案自身 reason
+            continue
+        metric, metric_note = _goal_metric(p, goal)
+        if metric is None:
+            unrankable.append((p, metric_note))
+        else:
+            measured.append((p, metric, metric_note))
+    ranked = sorted(
+        measured,
+        key=lambda t: (
+            1 if t[0].get("estimate_only") else 0,   # 全员 CPM 兜底价 → 后置(护栏不因 goal 放松)
+            t[1],                                    # goal 主度量
+            _float_or_none(t[0].get("cost_per_1k_views_p50")) if _float_or_none(t[0].get("cost_per_1k_views_p50")) is not None else float("inf"),
+            str(t[0]["key"]),                        # 决定性 tie-break
+        ),
+    )
+    if not ranked:
+        return {
+            "status": "empty",
+            "goal": goal,
+            "reason": f"goal={goal} 口径下三方案均无可比度量(无人可选或度量全缺),不硬荐。",
+            "ranking": [],
+        }
+    best = ranked[0][0]
+    ranking = [
+        {
+            "rank": i + 1,
+            "key": p["key"],
+            "name": p["name"],
+            "goal_metric": metric_note,
+            "cost_per_1k_views_p50": p.get("cost_per_1k_views_p50"),
+            "estimate_only": bool(p.get("estimate_only")),
+            "risk_level": (p.get("risk") or {}).get("level"),
+        }
+        for i, (p, _m, metric_note) in enumerate(ranked)
+    ] + [
+        {"rank": None, "key": p["key"], "name": p["name"],
+         "cost_per_1k_views_p50": None, "estimate_only": bool(p.get("estimate_only")),
+         "unrankable_reason": _text(note or p.get("reason") or "无可比度量", 200)}
+        for p, note in unrankable
+    ]
+    payload: dict[str, Any] = {
+        "status": "ready",
+        "goal": goal,
+        "recommended_key": best["key"],
+        "recommended_name": best["name"],
+        "rule": GOAL_RULES[goal],
+        "ranking": ranking,
+        "confidence": _rec_confidence(best),
+        "basis": {
+            "goal_weighting": GOAL_RULES[goal],
+            "note": "goal 只切换推荐排序主键,不改三方案选人;estimate_only 后置与字典序 tie-break 决定性不变。",
+        },
+    }
+    if best.get("estimate_only"):
+        payload["warning"] = (
+            "推荐方案本身也是 estimate_only(全员 CPM 兜底价):当前无任何真实报价可用,"
+            "该推荐只是基准折算下的相对排序,签约前务必录入真实报价复算。"
+        )
+    return payload
+
+
+def _recommendation(plans: list[dict[str, Any]], goal: str | None = None) -> dict[str, Any]:
+    if goal is not None:
+        return _recommendation_for_goal(plans, goal)
     rankable = [
         p for p in plans
         if p.get("status") == "ready" and p.get("cost_per_1k_views_p50") is not None
@@ -513,8 +739,20 @@ def _recommendation(plans: list[dict[str, Any]]) -> dict[str, Any]:
 # ── 主入口 ──────────────────────────────────────────────────────────
 
 
-def simulate(sku: str, budget_usd: float, max_roster: int = 20) -> dict[str, Any]:
-    """三策略 what-if 并排模拟;SKU 不存在抛 LookupError(路由转 404)。决定性:同输入同输出。"""
+def simulate(
+    sku: str,
+    budget_usd: float,
+    max_roster: int = 20,
+    country: str | None = None,
+    goal: str | None = None,
+) -> dict[str, Any]:
+    """三策略 what-if 并排模拟;SKU 不存在抛 LookupError(路由转 404)。决定性:同输入同输出。
+
+    GTM-1 补参(默认 None=旧行为逐字不变):
+      country → 候选池按受众地域三档降序(audience_geo 守卫 import;无数据不淘汰只降序);
+      goal ∈ exposure|conversion|content → 推荐排序权重切换(conversion=现状默认口径);
+      未知 goal 值按默认口径排序并在 goal_note 诚实说明。参数影响全部写进 basis。
+    """
     sku = _text(sku, 200)
     if not sku:
         raise LookupError("sku is required")
@@ -528,6 +766,11 @@ def simulate(sku: str, budget_usd: float, max_roster: int = 20) -> dict[str, Any
             "generated_at": _utcnow_iso(),
         }
     max_roster = max(1, min(TAIL_MAX, int(max_roster or TAIL_MAX)))
+
+    # GTM-1 补参归一化(None=旧行为逐字不变)
+    country_code, country_note = _normalize_country(country)
+    goal_norm = _text(goal, 30).lower()
+    effective_goal = goal_norm if goal_norm in GOALS else None
 
     # SKU 解析(与发射台同一真源 resolve_sku;守卫 import)
     try:
@@ -568,6 +811,17 @@ def simulate(sku: str, budget_usd: float, max_roster: int = 20) -> dict[str, Any
             "每个数字带 basis/method/confidence 可追溯,缺数据诚实空态,绝不编造市场数据。"
         ),
     }
+    # 补参回显(仅提供时出现;无参输出逐字同旧)
+    if country_code:
+        base["country"] = country_code
+        if country_note:
+            base["country_note"] = country_note
+    if goal_norm:
+        base["goal"] = goal_norm
+        if effective_goal is None:
+            base["goal_note"] = (
+                f"goal={goal_norm} 不在支持集 {'/'.join(GOALS)},推荐排序按默认 conversion 口径,不假装懂。"
+            )
     candidate_pool_block = {
         "status": _text(pool.get("status"), 30),
         "reason": _text(pool.get("reason"), 300),
@@ -581,6 +835,18 @@ def simulate(sku: str, budget_usd: float, max_roster: int = 20) -> dict[str, Any
     }
     if engines_missing:
         candidate_pool_block["engines_missing"] = engines_missing
+
+    # country 补参:受众地域三档标注(只标 priceable —— 只有他们参与装包)
+    geo_summary: dict[str, Any] | None = None
+    if country_code and priceable:
+        geo_summary = _annotate_audience_geo(priceable, country_code, db)
+        candidate_pool_block["audience_geo_filter"] = geo_summary
+    elif country_code:
+        candidate_pool_block["audience_geo_filter"] = {
+            "status": "skipped",
+            "country": country_code,
+            "reason": "无可估价候选,country 过滤无从谈起。",
+        }
 
     if not priceable:
         return {
@@ -614,9 +880,25 @@ def simulate(sku: str, budget_usd: float, max_roster: int = 20) -> dict[str, Any
         ),
     ]
 
+    # country 补参:排序影响写进每方案 basis(仅参数生效时出现)
+    if geo_summary is not None:
+        for plan in plans:
+            basis = plan.get("basis")
+            if isinstance(basis, dict):
+                basis["country_filter"] = {
+                    "country": country_code,
+                    "rule": COUNTRY_RULE_TEXT,
+                    "counts": {
+                        "matched": geo_summary.get("matched"),
+                        "no_data": geo_summary.get("no_data"),
+                        "unmatched": geo_summary.get("unmatched"),
+                    },
+                    "status": geo_summary.get("status"),
+                }
+
     return {
         **base,
         "candidate_pool": candidate_pool_block,
         "plans": plans,
-        "recommendation": _recommendation(plans),
+        "recommendation": _recommendation(plans, goal=effective_goal),
     }

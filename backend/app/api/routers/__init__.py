@@ -76,6 +76,9 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_gifted_funnel",
     "vkpi_comment_opportunities",
     "vkpi_longtail_wave",
+    # GTM-1 总脑:纯读 GTM Plan Preview / summary+规则库
+    "vkpi_market_brain",
+    "vkpi_market_brain_summary",
     "vkpi_kol_portal",
     "vkpi_dashboard_staff",
     "dashboard_account_picker",

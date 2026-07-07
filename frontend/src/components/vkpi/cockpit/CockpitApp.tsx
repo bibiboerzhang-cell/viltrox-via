@@ -82,13 +82,15 @@ const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then(
 const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryPage").then((module) => ({ default: module.CreativeLibraryPage })));
 // 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
 const StrategyBoardPage = React.lazy(() => import("./pages/StrategyBoardPage").then((module) => ({ default: module.StrategyBoardPage })));
+// GTM-1 总脑:上市增长指挥图
+const GtmCommandPage = React.lazy(() => import("./pages/GtmCommandPage").then((module) => ({ default: module.GtmCommandPage })));
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
   "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
   "triage", "dataQuery", "marketTrends", "skillStudio",
   "intelligent", "replyQueue",
-  "sku360", "kolProfile", "launchpad", "autonomy", "marketVoice", "creativeLibrary", "strategyBoard",
+  "sku360", "kolProfile", "launchpad", "autonomy", "marketVoice", "creativeLibrary", "strategyBoard", "gtmCommand",
 ] as const;
 
 export function CockpitApp(props: any = {}) {
@@ -818,6 +820,14 @@ export function CockpitApp(props: any = {}) {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "战略台加载中...")
               },
                 e(StrategyBoardPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            // GTM-1 总脑:上市增长指挥图
+            activeNav === "gtmCommand" && e(LazyErrorBoundary, { name: "GtmCommand" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "GTM Command 加载中...")
+              },
+                e(GtmCommandPage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
 

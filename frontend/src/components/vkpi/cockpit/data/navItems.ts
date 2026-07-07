@@ -1,6 +1,6 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
-import { BarChart3, Bot, Boxes, Briefcase, Calendar, Clapperboard, Contact, Database, Heart, LayoutDashboard, LineChart, MapPin, MessageSquare, PackageCheck, RadioTower, Rocket, ShieldCheck, Sparkles, Target, TrendingUp, Users } from "lucide-react";
+import { BarChart3, Bot, Boxes, Briefcase, Calendar, Clapperboard, Compass, Contact, Database, Heart, LayoutDashboard, LineChart, MapPin, MessageSquare, PackageCheck, RadioTower, Rocket, ShieldCheck, Sparkles, Target, TrendingUp, Users } from "lucide-react";
 
 // B1 减法仪式:GEN2/Beta 徽章全挂在『此页面尚未接入』占位页上=假徽章,删。
 // 真数据徽章(Discover/Signals/Agents 计数)是想要项,等数据侧支撑后挂回(总册 D6)。
@@ -31,6 +31,8 @@ export const NAV_ITEMS = [
   { key: "creativeLibrary", icon: Clapperboard, label: "创意资产库",       badge: "New" },
   // 战略大脑波:行业对照/新赛道/策略模拟/战略表现 四块合屏。
   { key: "strategyBoard", icon: Target,          label: "战略台",           badge: "New" },
+  // GTM-1 总脑:上市增长指挥图(纯读 GTM Plan Preview+五卡 summary,显示层宪法)。
+  { key: "gtmCommand",   icon: Compass,          label: "GTM Command",      badge: "New" },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },
