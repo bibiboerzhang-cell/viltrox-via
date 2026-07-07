@@ -29,6 +29,7 @@ from app.domains.projects import retrospective_aggregate as project_retrospectiv
 from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
+from app.domains.local_workers.registry import SAFE_TASK_TYPES as LOCAL_EXCLUSIVE_JOB_TYPES
 from app.platform import llm_gateway
 from app.services.media.video_download import download_direct_video_url
 from app.domains.media.cache import cache_local_video_file
@@ -84,6 +85,37 @@ CLAIM_LANE_SQL = (
     if CLAIM_LANE == "interactive"
     else ""
 )
+# 双认领毒化防护(2026-07-07):本地算力 worker 领活只打 payload.local_lease_id 标记
+# (见 domains/local_workers/registry.py,绝不动 status),主 worker 若无视该标记
+# 会把同一行抢去双跑。两道过滤:
+# ① payload 带 local_lease_id 的行不抢(jsonb ->> 对缺键 / payload 为 NULL 均返 SQL NULL);
+# ② job_type 属本地算力专属类型集合的不抢(集合单一真源 = registry.SAFE_TASK_TYPES,
+#    dispatch_policy 同源 import,此处 import 别名 LOCAL_EXCLUSIVE_JOB_TYPES 防复制漂移)。
+# 类型集合为代码内常量白名单,拼进 SQL 的均为固定字面量,无注入面。
+_LOCAL_EXCLUSIVE_TYPES_SQL = ", ".join(f"'{t}'" for t in LOCAL_EXCLUSIVE_JOB_TYPES)
+CLAIM_LOCAL_GUARD_SQL = (
+    "AND (payload->>'local_lease_id') IS NULL "
+    f"AND job_type NOT IN ({_LOCAL_EXCLUSIVE_TYPES_SQL})"
+)
+# 认领 SELECT 抽成模块常量:_claim_job 原地引用,单测可对同一份 SQL 直接跑断言。
+# CLAIM_LANE_SQL 由 env 在 import 时定死,提前拼接与原 _claim_job 内 f-string 行为一致。
+CLAIM_SELECT_SQL = f"""
+    SELECT id, job_type, payload, attempts, next_retry_at, last_error_category
+    FROM apify_jobs
+    WHERE status = 'queued'
+      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+      {CLAIM_LANE_SQL}
+      {CLAIM_LOCAL_GUARD_SQL}
+    ORDER BY
+      CASE
+        WHEN payload->>'batch' = 'on_demand_batch' THEN 1
+        WHEN payload->>'batch' IN ('recent', 'remaining') THEN 2
+        ELSE 0
+      END,
+      COALESCE(next_retry_at, created_at), created_at, id
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+"""
 MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
 PROVIDER_RETRY_MAX_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_ATTEMPTS", "5")))
 PROVIDER_RETRY_BASE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_BASE_SECONDS", "60")))
@@ -397,24 +429,7 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                f"""
-                SELECT id, job_type, payload, attempts, next_retry_at, last_error_category
-                FROM apify_jobs
-                WHERE status = 'queued'
-                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-                  {CLAIM_LANE_SQL}
-                ORDER BY
-                  CASE
-                    WHEN payload->>'batch' = 'on_demand_batch' THEN 1
-                    WHEN payload->>'batch' IN ('recent', 'remaining') THEN 2
-                    ELSE 0
-                  END,
-                  COALESCE(next_retry_at, created_at), created_at, id
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-                """
-            )
+            cur.execute(CLAIM_SELECT_SQL)
             job = cur.fetchone()
             if not job:
                 return None

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from app.core.logging import get_logger
@@ -190,6 +191,15 @@ def record_skill_run(*, skill_name: str, skill_version: str = "v1",
     name = str(skill_name or "").strip()
     if not name:
         return {"status": "error", "error": "skill_name required"}
+    # 防污染(2026-07-07):pytest 进程内的落账(PYTEST_CURRENT_TEST 由 pytest 自动注入)
+    # 且调用方未显式给 business_result 时,落 'pytest' 来源标记。表无 org 列,
+    # business_result 是唯一自由文本结果列(存量真实行全 NULL),借它当 org 标记:
+    # 查询方(list_skill_runs / skill_acceptance_stats)零查询改动、既有断言零破坏,
+    # 新增的测试行从此可被正面识别与批量清理(WHERE business_result = 'pytest')。
+    # 编排器/direct skill run/API 全部经本函数落账,此处是唯一 choke point。
+    business_result_value = str(business_result) if business_result is not None else None
+    if business_result_value is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        business_result_value = "pytest"
     conn = get_conn()
     row = conn.execute(
         f"INSERT INTO {_TABLE} (skill_name, skill_version, input_schema, model_used, "
@@ -207,7 +217,7 @@ def record_skill_run(*, skill_name: str, skill_version: str = "v1",
             _clean_int(cost_cents, 0),
             _clean_int(latency_ms, 0),
             _clean_float(human_score),
-            (str(business_result) if business_result is not None else None),
+            business_result_value,
             (None if accepted is None else bool(accepted)),
         ),
     ).fetchone()

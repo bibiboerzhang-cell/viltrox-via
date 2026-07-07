@@ -8,24 +8,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+# X4-HIGH 根治(2026-07-03):分组的 shared_projects/shared_kol_pool_ids 会被
+# _recompute_group_shared_* 展开成 vkpi_project_members/vkpi_kol_pool_members 真访问行,
+# 仅 write 级即可写 = 任何员工可把任意项目/KOL「自助授权」给自己,绕过 my_kol/events
+# 的共享归属校验 —— 分组全部写操作收到管理层。闸收编(2026-07-07):本地复制体
+# 退役,改用共享 manager_guard.require_manager_staff(同判定同 403 文案,alias 保调用点不变)。
+from app.api.dependencies.manager_guard import require_manager_staff as _require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.domains.staff_groups import service
 
 
 router = APIRouter(prefix="/api/admin/vkpi/staff-groups", tags=["vkpi-staff-groups"])
-
-
-def _require_manager_staff(staff: dict) -> None:
-    # X4-HIGH 根治(2026-07-03):分组的 shared_projects/shared_kol_pool_ids 会被
-    # _recompute_group_shared_* 展开成 vkpi_project_members/vkpi_kol_pool_members 真访问行,
-    # 仅 write 级即可写 = 任何员工可把任意项目/KOL「自助授权」给自己,绕过 my_kol/events
-    # 的共享归属校验 —— 分组全部写操作收到管理层(与 vkpi_operations._is_manager_staff 同口径)。
-    role = str(staff.get("role") or "").strip().lower()
-    if int(staff.get("is_owner") or 0) == 1:
-        return
-    if role in {"admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}:
-        return
-    raise HTTPException(status_code=403, detail="management permission required")
 
 
 def _guard(fn, *args, **kwargs):
