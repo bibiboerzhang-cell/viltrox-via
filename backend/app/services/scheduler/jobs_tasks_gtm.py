@@ -167,13 +167,20 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
             result["evals_skipped_no_run"] += 1
 
     # ② 近 7 天评估行 → 周指标(纯函数;空样本 n=0 全 None,诚实态)。
+    #    LEFT JOIN runs 按 (org, run_id) 取 source_step/product_sku/market/channel/
+    #    baseline_value 一并喂进 weekly_rollup:fva 段据此按 (sku, market, channel) 分组
+    #    算 model vs baseline 误差增量。LEFT JOIN 保 run 缺席(理论不该有)也不掉 eval 行,
+    #    wape/interval_coverage/direction_hit_rate 口径原样不变。
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     eval_rows = conn.execute(
         f"""
-        SELECT actual_value, error_abs, interval_hit, direction_hit
-        FROM {prediction_ledger.EVALS_TABLE}
-        WHERE evaluated_at >= ?
-        ORDER BY id DESC
+        SELECT e.actual_value, e.error_abs, e.interval_hit, e.direction_hit,
+               r.source_step, r.product_sku, r.market, r.channel, r.baseline_value
+        FROM {prediction_ledger.EVALS_TABLE} e
+        LEFT JOIN {prediction_ledger.RUNS_TABLE} r
+            ON r.organization_id = e.organization_id AND r.run_id = e.run_id
+        WHERE e.evaluated_at >= ?
+        ORDER BY e.id DESC
         LIMIT ?
         """,
         (cutoff, 2000),
@@ -182,8 +189,10 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
     result["rollup"] = rollup
 
     # ③ 周汇总信号落账(dedupe_key 带 ISO 周号,同周重跑幂等覆盖)。
+    #    fva 段(model vs baseline 增量)摘要一并进 normalized,供大脑读增益不必展开 rollup。
     iso = datetime.now(timezone.utc).isocalendar()
     week_key = f"{iso[0]}W{int(iso[1]):02d}"
+    fva = rollup.get("fva") or {}
     signal = signal_ledger.record_signal(
         "internal_eval",
         "prediction_weekly_rollup",
@@ -196,7 +205,15 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
         f"prediction_weekly_rollup_{week_key}",
         signal_value=rollup.get("wape"),
         sample_size=rollup.get("n"),
-        normalized={"rollup": rollup, "week": week_key},
+        normalized={
+            "rollup": rollup,
+            "week": week_key,
+            "fva": {
+                "n_groups": fva.get("n_groups"),
+                "mean_delta": fva.get("mean_delta"),
+                "model_better_share": fva.get("model_better_share"),
+            },
+        },
     )
     result["signal_id"] = signal.get("id")
     if not signal.get("ok"):
