@@ -13,6 +13,7 @@ import {
   Clock,
   Eye,
   FileCheck,
+  Gavel,
   ListChecks,
   Loader2,
   PackageOpen,
@@ -23,6 +24,8 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
+// 闭环波 L4:gtm_verdict 条目内嵌裁决一屏(去裁决 → 展开 VerdictPanel)。
+import { VerdictPanel } from "./VerdictPanel";
 import {
   approveAction,
   dismissAction,
@@ -63,7 +66,24 @@ const CATEGORY_META = {
   inventory_low: { label: "库存预警", Icon: PackageOpen, color: "text-yellow-300" },
   // W4 produce,meta 在此补全:项目共享给你(sky 色)。
   project_shared_to_you: { label: "项目共享", Icon: Share2, color: "text-sky-300" },
+  // 闭环波 L4:到期强制裁决任务(L2 produce)。不可跳过,内嵌裁决一屏。
+  gtm_verdict: { label: "裁决对答案", Icon: Gavel, color: "text-fuchsia-300" },
 };
+
+// 闭环波 L4:gtm_verdict 条目定位结果账本行,id 口径与 L2 decide 端点对齐:
+// 有 gtm_outcome_id 直查 outcome;否则用 bet 的 action_inbox id(payload.verdict_for_inbox_id,
+// entity_id 兜底 —— L2 的裁决任务 entity_type='action_inbox'、entity_id=bet 行 id)。
+function gtmVerdictIdsOf(it: any): { id: number; idType: "inbox" | "outcome" } {
+  const p = it && typeof it.payload_json === "object" && it.payload_json ? it.payload_json : {};
+  const outcomeId = Number((p as any).gtm_outcome_id ?? (p as any).outcome_id ?? 0) || 0;
+  if (outcomeId) return { id: outcomeId, idType: "outcome" };
+  const betId =
+    Number(
+      (p as any).verdict_for_inbox_id ??
+        (String(it?.entity_type || "").toLowerCase() === "action_inbox" ? it?.entity_id : 0),
+    ) || 0;
+  return { id: betId, idType: "inbox" };
+}
 
 const PRIORITY_META = {
   high: { label: "高", cls: "bg-red-500/15 text-red-300 border-red-500/25" },
@@ -105,6 +125,8 @@ export function ActionInboxPanel({
   // 默认只显 3 条(避免顶掉下方 KOL 漏斗 / Active Campaigns);可展开看全部(抓取仍 limit 条)。
   const [expanded, setExpanded] = React.useState(false);
   const COLLAPSED_COUNT = 3;
+  // 闭环波 L4:gtm_verdict 条目「去裁决」展开态(per-id;内嵌 VerdictPanel)。
+  const [verdictOpen, setVerdictOpen] = React.useState<Record<string, boolean>>({});
 
   const load = React.useCallback(() => {
     if (!apiToken) {
@@ -132,6 +154,11 @@ export function ActionInboxPanel({
             merged.push(it);
           }
         }
+        // 闭环波 L4:到期裁决任务置顶(规格第四章「裁决任务置顶,不可跳过」;稳定排序,其余顺序不动)。
+        merged.sort(
+          (a: any, b: any) =>
+            (b?.category === "gtm_verdict" ? 1 : 0) - (a?.category === "gtm_verdict" ? 1 : 0),
+        );
         setItems(merged);
         setScope(sug?.scope || appr?.scope || "");
         setAvailable(sug?.available !== false);
@@ -274,6 +301,30 @@ export function ActionInboxPanel({
     const b = busy[it.id];
     const spin = (k: string) =>
       b === k ? e(Loader2, { size: 9, className: "animate-spin" }) : null;
+
+    // 闭环波 L4:裁决任务不可跳过 —— 不给忽略/稍后,只给「去裁决」(展开内嵌裁决一屏)。
+    if (it.category === "gtm_verdict") {
+      const open = Boolean(verdictOpen[it.id]);
+      return e(
+        "div",
+        { className: "mt-1.5 flex items-center gap-1.5" },
+        e(
+          "button",
+          {
+            key: "verdict",
+            type: "button",
+            onClick: () =>
+              setVerdictOpen((prev: Record<string, boolean>) => ({ ...prev, [it.id]: !prev[it.id] })),
+            title: "展开裁决一屏:当时预期 vs 三窗实际,一键 decision + lesson",
+            className:
+              "flex items-center gap-1 rounded border border-fuchsia-500/30 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] text-fuchsia-300 transition-colors hover:bg-fuchsia-500/20",
+          },
+          e(Gavel, { size: 9 }),
+          open ? "收起裁决" : "去裁决",
+        ),
+        e("span", { key: "tag", className: "text-[8px] text-slate-500" }, "不可跳过 · 人工裁决"),
+      );
+    }
 
     const snoozeBtn = e(
       "button",
@@ -467,6 +518,20 @@ export function ActionInboxPanel({
             : null,
           // 操作区:suggested → 通过/稍后/忽略(提醒类只「知道了/稍后」);approved → 执行。
           renderActions(it),
+          // 闭环波 L4:gtm_verdict 展开 → 内嵌裁决一屏(裁决成功后移出列表 + 绿条回执)。
+          it.category === "gtm_verdict" && verdictOpen[it.id]
+            ? e(VerdictPanel, {
+                key: `verdict-${it.id}`,
+                apiToken,
+                verdictId: gtmVerdictIdsOf(it).id,
+                idType: gtmVerdictIdsOf(it).idType,
+                fallback: it.payload_json && typeof it.payload_json === "object" ? it.payload_json : null,
+                onDecided: (decision: string) => {
+                  setOkNote(`已裁决 · ${it.title} → ${decision}`);
+                  removeItem(it.id);
+                },
+              })
+            : null,
         );
       }),
       items.length > COLLAPSED_COUNT

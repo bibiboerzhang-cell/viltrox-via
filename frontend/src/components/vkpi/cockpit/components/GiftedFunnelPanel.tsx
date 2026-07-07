@@ -5,9 +5,15 @@
 // 「写入 Action Inbox」走 dry_run=false(幂等落台账,仍需人工审批,绝不自动外发)。
 // 诚实态:status==="empty" 如实展示 reason;接口失败整块安静缺席(非阻塞增益块)。
 // 红线:纯展示 + 台账建议;绝不渲染/触碰 viltrox_fit_score 与 rule_v0。
+// U4 会呼吸的指挥室:四段漏斗条入场动态填充(逐段 stagger 100ms,各一次);
+// 「超期未发」红段填充后脉冲一次提醒(仅入场,不循环);数字走 AnimatedNumber
+// count-up。prefers-reduced-motion 全部降级为静态直显(useReducedMotion 读
+// 同名 CSS media query)。数据契约零改,仍纯读后端聚合。
 import React from "react";
+import { motion } from "framer-motion";
 import { AlertTriangle, PackageCheck, Send } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { AnimatedNumber, usePrefersReducedMotion } from "./AnimatedNumber";
 
 const e = React.createElement;
 
@@ -38,24 +44,47 @@ const STAGE_COLORS: Record<string, string> = {
   overdue: "linear-gradient(90deg, rgba(244,63,94,0.35), rgba(244,63,94,0.80))",
 };
 
-function fmtNum(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(Number(n))) return "—";
-  return String(Number(n));
-}
-
-// 漏斗单条:标签 + 比例条(按已送样总数归一)+ 数字。
-function FunnelBar(s: StageItem, total: number) {
-  const n = Number(s.n) || 0;
+// 漏斗单条:标签 + 比例条(按已送样总数归一)+ count-up 数字。
+// 入场:宽度 0 → 目标比例(逐段 stagger 100ms,一次 350ms);「超期未发」红段
+// 填充完成后红光脉冲一次(keyframes 走完即止,绝无循环)。reduced-motion 直显。
+function FunnelBar({ stage, total, index, reduced }: {
+  stage: StageItem; total: number; index: number; reduced: boolean;
+}) {
+  const raw = Number(stage.n);
+  const n = Number.isFinite(raw) ? raw : 0;
   const widthPct = total > 0 ? Math.max(n > 0 ? 6 : 0, Math.round((n / total) * 100)) : 0;
-  return e("div", { key: s.key, className: "flex items-center gap-2 text-[10px]" },
-    e("span", { className: "w-[104px] shrink-0 truncate text-slate-300", title: s.label }, s.label || s.key || "—"),
+  const isOverdue = String(stage.key) === "overdue" && n > 0;
+  const fillDelay = index * 0.1;
+  return e("div", { className: "flex items-center gap-2 text-[10px]" },
+    e("span", { className: "w-[104px] shrink-0 truncate text-slate-300", title: stage.label }, stage.label || stage.key || "—"),
     e("div", { className: "relative h-[9px] flex-1 overflow-hidden rounded-full bg-white/[0.05]" },
-      e("div", {
+      e(motion.div, {
+        "data-stage": String(stage.key || ""),
+        "data-pulse-once": isOverdue ? "true" : undefined,
+        initial: reduced ? false : { width: 0 },
+        animate: {
+          width: widthPct + "%",
+          // 超期红段:入场后单次脉冲(红光起 → 灭),times 走完即静止。
+          ...(isOverdue && !reduced
+            ? { boxShadow: [
+                "0 0 0px rgba(244,63,94,0)",
+                "0 0 10px rgba(244,63,94,0.75)",
+                "0 0 0px rgba(244,63,94,0)",
+              ] }
+            : {}),
+        },
+        transition: reduced
+          ? { duration: 0 }
+          : {
+              width: { delay: fillDelay, duration: 0.35, ease: [0.16, 1, 0.3, 1] },
+              boxShadow: { delay: fillDelay + 0.4, duration: 0.6, times: [0, 0.35, 1] },
+            },
         className: "absolute inset-y-0 left-0 rounded-full",
-        style: { width: widthPct + "%", background: STAGE_COLORS[String(s.key)] || STAGE_COLORS.gifted },
-      }),
+        style: { background: STAGE_COLORS[String(stage.key)] || STAGE_COLORS.gifted },
+      } as any),
     ),
-    e("span", { className: "w-[44px] shrink-0 text-right tabular-nums text-slate-300 font-medium" }, fmtNum(n)),
+    e("span", { className: "w-[44px] shrink-0 text-right tabular-nums text-slate-300 font-medium" },
+      Number.isFinite(raw) ? e(AnimatedNumber, { value: raw, delayMs: index * 100 }) : "—"),
   );
 }
 
@@ -83,6 +112,7 @@ export function GiftedFunnelPanel({ apiToken }: any) {
   const [data, setData] = React.useState<FunnelResp | null>(null);
   const [catchUp, setCatchUp] = React.useState<CatchUpResp | null>(null);
   const [busy, setBusy] = React.useState<boolean>(false);
+  const reduced = usePrefersReducedMotion();
 
   React.useEffect(() => {
     setData(null);
@@ -130,8 +160,9 @@ export function GiftedFunnelPanel({ apiToken }: any) {
     data.status === "empty"
       ? e("div", { className: "mt-2 text-[10px] leading-relaxed text-amber-300/90" }, String(data.reason || "暂无送样数据"))
       : e(React.Fragment, null,
-          // ── 漏斗条 ──
-          e("div", { className: "mt-2 space-y-1" }, stages.map((s) => FunnelBar(s, gifted))),
+          // ── 漏斗条(入场逐段 stagger 填充)──
+          e("div", { className: "mt-2 space-y-1" },
+            stages.map((s, i) => e(FunnelBar, { key: s.key || i, stage: s, total: gifted, index: i, reduced }))),
 
           // ── 超期红名单 ──
           overdueItems.length > 0 && e(React.Fragment, null,

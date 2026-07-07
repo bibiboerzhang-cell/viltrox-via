@@ -12,6 +12,9 @@ morning_brief(window_hours=16) 聚合「昨天 16:00 → 今晨 8:00」(本地�
     budget         预算消耗:vkpi_ai_cost_ledger 按 provider 汇总 + vkpi_cost_ledger 业务成本
     anomalies      异常:窗口内失败任务 TOP3(带 last_error 原因)+ danger 告警数
     agents         (可选)兄弟件 D 预测台账摘要,import 失败安静缺席
+    gtm_verdicts   (闭环波 L4)逾期未裁决点名:vkpi_gtm_outcomes 复盘到期超 7 天
+                   仍未人工裁决的 bet,升级到 headline 头条点名;表缺(迁移 217
+                   未 apply)安静缺席。纯读点名,绝无自动裁决路径。
 
   headline:「昨晚完成 X 件:抓取 a/深析 b/评论 c/新KOL d」;全零时诚实说静默。
 
@@ -29,6 +32,7 @@ compat 约定:SQL 占位符用 ?;SQL 全文零 percent 字符(不用 LIKE);BOOLE
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -39,6 +43,11 @@ logger = get_logger(__name__)
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 DEFAULT_WINDOW_HOURS = 16
 MAX_WINDOW_HOURS = 168  # 一周封顶,防止误传大数扫全表
+
+# 闭环波 L4:GTM 裁决点名口径(规格第四章:七天不裁决 → 晨报头条点名)。
+GTM_VERDICT_TABLE = "vkpi_gtm_outcomes"
+GTM_VERDICT_ESCALATE_DAYS = 7   # 复盘期限过后再宽限 7 天,仍未裁决 = 点名
+GTM_VERDICT_DEFAULT_REVIEW_DAYS = 7  # bet 合约默认复盘周期(review_at 缺失时的回退)
 
 
 # ── 小工具 ──────────────────────────────────────────────────────────
@@ -75,6 +84,36 @@ def _iso(value: Any) -> str | None:
         return value.isoformat()
     text = str(value).strip()
     return text or None
+
+
+def _loads_json(value: Any, default: Any = None) -> Any:
+    """jsonb 读回双态容错(compat 层可能回 dict 也可能回 str)。"""
+    if isinstance(value, (dict, list)):
+        return value
+    if value in (None, ""):
+        return default
+    try:
+        return json.loads(str(value))
+    except Exception:
+        return default
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    """datetime / ISO 字符串容错解析;naive 一律按 UTC 补时区(数据 UTC 存储)。"""
+    if value is None or value == "":
+        return None
+    dt: datetime | None = None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip().replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(text)
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _clamp_hours(window_hours: Any) -> int:
@@ -441,6 +480,87 @@ def _agents_section() -> dict[str, Any]:
         return {"status": "error", "reason": _text(str(exc), 200)}
 
 
+def _gtm_verdicts_section(conn: Any) -> dict[str, Any]:
+    """闭环波 L4 逾期未裁决点名:复盘到期超 7 天仍未人工裁决的 GTM bet(快照,不限窗)。
+
+    数据源:vkpi_gtm_outcomes(L2 件,迁移 217);表缺诚实缺席不炸报。
+    复盘期限三级回退:review_at 列 → expected_result.review_at → created_at + 默认 7 天。
+    红线:纯读点名,绝无自动裁决——裁决只能人工在 Action Inbox 裁决一屏 POST。
+    """
+    from app.db.connection import table_exists  # noqa: PLC0415 — 兄弟件表可能尚未落地
+
+    if not table_exists(GTM_VERDICT_TABLE):
+        return {
+            "status": "empty",
+            "reason": "GTM 结果账本(vkpi_gtm_outcomes,迁移 217)尚未落地,本段安静缺席。",
+            "open_count": 0,
+            "overdue_count": 0,
+        }
+
+    rows = conn.execute(
+        """
+        SELECT * FROM vkpi_gtm_outcomes
+        WHERE decided_at IS NULL
+        ORDER BY created_at ASC
+        LIMIT 300
+        """,
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    decided_texts = {"validated", "failed", "partial", "retry", "escalate", "retreat"}
+    open_count = 0
+    overdue: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        decision = _text(row.get("decision"), 30).lower()
+        if decision in decided_texts:
+            continue  # decision 已是终态(decided_at 漂移)不点名,诚实按已裁处理
+        open_count += 1
+        review_at = _parse_dt(row.get("review_at"))
+        if review_at is None:
+            expected = _loads_json(row.get("expected_result"), {})
+            if isinstance(expected, dict):
+                review_at = _parse_dt(expected.get("review_at") or expected.get("review_date"))
+        if review_at is None:
+            created = _parse_dt(row.get("created_at"))
+            review_at = created + timedelta(days=GTM_VERDICT_DEFAULT_REVIEW_DAYS) if created else None
+        if review_at is None:
+            continue  # 连 created_at 都解析不出:无法判逾期,不硬点名
+        overdue_days = (now - review_at).days
+        if overdue_days > GTM_VERDICT_ESCALATE_DAYS:
+            overdue.append({
+                "gtm_outcome_id": _int(row.get("id")),
+                "gtm_plan_id": _text(row.get("gtm_plan_id"), 80) or None,
+                "product_sku": _text(row.get("product_sku"), 60) or None,
+                "market": _text(row.get("market"), 40) or None,
+                "channel": _text(row.get("channel"), 40) or None,
+                "action_type": _text(row.get("action_type"), 60) or None,
+                "review_deadline": _iso(review_at),
+                "overdue_days": overdue_days,
+            })
+
+    overdue.sort(key=lambda item: -_int(item.get("overdue_days")))
+    if open_count == 0:
+        return {"status": "empty", "reason": "无未裁决 GTM bet — 对答案账本干净。",
+                "open_count": 0, "overdue_count": 0}
+    if not overdue:
+        return {
+            "status": "ready",
+            "open_count": open_count,
+            "overdue_count": 0,
+            "escalate_after_days": GTM_VERDICT_ESCALATE_DAYS,
+            "note": f"有 {open_count} 条待裁决但均未超期({GTM_VERDICT_ESCALATE_DAYS} 天宽限内)。",
+            "examples": [],
+        }
+    return {
+        "status": "ready",
+        "open_count": open_count,
+        "overdue_count": len(overdue),
+        "escalate_after_days": GTM_VERDICT_ESCALATE_DAYS,
+        "examples": overdue[:5],
+        "note": "裁决只能人工完成:去 Action Inbox 的裁决一屏对答案(decision + lesson)。",
+    }
+
+
 # ── headline 组装 ────────────────────────────────────────────────────
 
 
@@ -504,9 +624,20 @@ def morning_brief(window_hours: int = DEFAULT_WINDOW_HOURS, *, conn: Any = None)
         _safe_section("budget", "预算消耗", lambda: _budget_section(db, start, end)),
         _safe_section("anomalies", "异常", lambda: _anomalies_section(db, start, end)),
         _safe_section("agents", "代理台账", _agents_section),
+        # 闭环波 L4:逾期未裁决点名(快照,不限窗;表缺安静缺席)。
+        _safe_section("gtm_verdicts", "GTM 裁决点名", lambda: _gtm_verdicts_section(db)),
     ]
     sections_by_key = {s["key"]: s for s in sections}
     headline, totals = _build_headline(sections_by_key)
+
+    # 闭环波 L4 头条点名:复盘到期超 7 天未裁决 → 升级到 headline(规格第四章「不可跳过」)。
+    verdict_overdue = _int(sections_by_key.get("gtm_verdicts", {}).get("overdue_count"))
+    totals["gtm_verdicts_overdue"] = verdict_overdue
+    if verdict_overdue > 0:
+        headline = (
+            f"【裁决点名】{verdict_overdue} 条 GTM bet 复盘到期超 "
+            f"{GTM_VERDICT_ESCALATE_DAYS} 天未裁决,去 Action Inbox 对答案;" + headline
+        )
 
     return {
         "status": "ready",

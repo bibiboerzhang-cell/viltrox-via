@@ -5,9 +5,14 @@
 //      + 异常红条(窗口内失败任务 TOP3 带原因 + danger 告警)。
 // 诚实态:各段 status==="empty" 如实展示 0/reason;接口失败整卡降级为「--」,绝不编造数字。
 // 红线:纯展示,零外部动作;绝不渲染/触碰 viltrox_fit_score 与 rule_v0。
+// U2:卡头加新鲜度呼吸灯(generated_at,title 给具体时间)+ 计数 chips 旁挂 DeltaBadge
+//     (较上次访问 ↑↓,localStorage 基线,变化时 300ms 高亮一次)+ 加载态换骨架屏。
 import React from "react";
 import { AlertTriangle, Loader2, Sunrise } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { DeltaBadge } from "./ui/DeltaBadge";
+import { FreshnessDot } from "./ui/FreshnessDot";
+import { SkeletonBlock } from "./ui/SkeletonBlock";
 
 const e = React.createElement;
 
@@ -146,29 +151,43 @@ export function MorningBriefCard({ apiToken = "" }: MorningBriefCardProps) {
         { className: "flex items-center gap-2" },
         e(Sunrise, { size: 14, className: hasAnomaly ? "text-amber-300" : "text-emerald-300" }),
         e("h3", { className: "text-sm font-semibold text-white" }, "夜班晨报"),
+        // U2 新鲜度呼吸灯:这份晨报算出来的时刻(绿≤24h/黄≤72h/红=stale)
+        data && data.generated_at
+          ? e(FreshnessDot, { key: "fresh", ts: data.generated_at, label: "晨报数据" })
+          : null,
       ),
       loading ? e(Loader2, { size: 12, className: "animate-spin text-slate-500" }) : null,
     ),
 
     // ── headline:昨晚完成 X 件(接口失败/未回来 → 「--」,绝不编造)──
+    // U2:加载期用骨架屏替代「…」文字(shimmer,reduced-motion 降级静态)
     errored || (!loading && !data)
       ? e("p", { className: "text-[11px] text-slate-500" }, "-- 晨报读取失败,稍后重试")
-      : e(
-          "p",
-          { className: "text-[11.5px] font-medium leading-relaxed text-slate-100" },
-          data?.headline || (loading ? "…" : "--"),
-        ),
+      : loading && !data
+        ? e(SkeletonBlock, { className: "h-3.5 w-3/4 rounded" })
+        : e(
+            "p",
+            { className: "text-[11.5px] font-medium leading-relaxed text-slate-100" },
+            data?.headline || "--",
+          ),
 
     // ── 分组小计 chips(真实计数,0 也如实显示)──
+    // U2:每个计数 chip 旁挂 DeltaBadge(较上次访问 ↑↓;无基线/持平安静缺席;
+    //     基线存 localStorage,变化时 300ms 高亮一次;告警以「降」为好消息)
     data &&
       e(
         "div",
-        { className: "mt-2 flex flex-wrap gap-1" },
+        { className: "mt-2 flex flex-wrap items-center gap-1" },
         StatChip("抓取", Number(totals.scrape_done) || 0, (Number(totals.scrape_done) || 0) > 0 ? "ok" : "muted", "c-scrape"),
+        e(DeltaBadge, { key: "d-scrape", id: "brief.scrape", value: Number(totals.scrape_done) || 0 }),
         StatChip("深析", Number(totals.deep_done) || 0, (Number(totals.deep_done) || 0) > 0 ? "ok" : "muted", "c-deep"),
+        e(DeltaBadge, { key: "d-deep", id: "brief.deep", value: Number(totals.deep_done) || 0 }),
         StatChip("评论", Number(totals.comments_new) || 0, (Number(totals.comments_new) || 0) > 0 ? "ok" : "muted", "c-comments"),
+        e(DeltaBadge, { key: "d-comments", id: "brief.comments", value: Number(totals.comments_new) || 0 }),
         StatChip("新KOL", Number(totals.kol_new) || 0, (Number(totals.kol_new) || 0) > 0 ? "ok" : "muted", "c-kol"),
+        e(DeltaBadge, { key: "d-kol", id: "brief.kol", value: Number(totals.kol_new) || 0 }),
         StatChip("新告警", Number(totals.alerts_new) || 0, (Number(totals.alerts_new) || 0) > 0 ? "warn" : "muted", "c-alerts"),
+        e(DeltaBadge, { key: "d-alerts", id: "brief.alerts", value: Number(totals.alerts_new) || 0, good: "down" }),
         budget && budget.status === "ready"
           ? StatChip("AI花费", fmtUsd(budget.ai_total_usd), "ok", "c-budget")
           : StatChip("AI花费", "$0", "muted", "c-budget"),

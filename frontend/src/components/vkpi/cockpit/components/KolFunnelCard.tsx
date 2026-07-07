@@ -1,11 +1,15 @@
 // 2026-06-12 C10(波3 R1):KOL 漏斗卡 — 消费后端 GET /api/admin/vkpi/dashboard → summary.funnel
 // shape = { favorites_total, claimed_total, in_project_total, published_total, by_staff[] }
 // 后端块未上线前显示空态「漏斗数据待后端」,绝不硬编码假数。
+// U4 会呼吸的指挥室:漏斗条入场逐段 stagger 100ms 填充(与 GiftedFunnelPanel 同款,
+// 各一次不循环);阶段数字走 AnimatedNumber count-up(300ms 一次)。
+// prefers-reduced-motion 降级为静态直显。数据契约零改。
 
 import React from "react";
 import { motion } from "framer-motion";
 import { Filter } from "lucide-react";
 import { SectionFold } from "./SectionFold";
+import { AnimatedNumber, usePrefersReducedMotion } from "./AnimatedNumber";
 
 const e = React.createElement;
 
@@ -27,11 +31,13 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
   const isReal = Boolean(funnel?.isReal);
   const byStaff = Array.isArray(funnel?.byStaff) ? funnel.byStaff : [];
   const maxCount = Math.max(1, ...stages.map((stage: any) => Number(stage.count) || 0));
+  // reduced-motion:入场/填充全部降级为静态直显(读 prefers-reduced-motion)。
+  const reduced = usePrefersReducedMotion();
 
   return e(motion.div, {
-    initial: { opacity: 0, y: 8 },
+    initial: reduced ? false : { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
-    transition: { delay: 0.1 },
+    transition: reduced ? { duration: 0 } : { delay: 0.1, duration: 0.3 },
     className: "rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 backdrop-blur-xl",
   },
     // Header
@@ -59,17 +65,21 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
               e("div", { className: "mb-0.5 flex items-center justify-between text-[10px]" },
                 e("span", { className: "text-slate-300" }, `${index + 1}.${stage.label}`),
                 e("span", { className: "tabular-nums text-slate-400" },
-                  stage.count == null ? "--" : count.toLocaleString()
+                  // 数字 count-up:入场/变化各一次(AnimatedNumber 自带 reduced 直显)。
+                  stage.count == null ? "--" : e(AnimatedNumber, { value: count, delayMs: index * 100 })
                 )
               ),
               e("div", { className: "h-1.5 overflow-hidden rounded-full bg-white/[0.06]" },
                 e(motion.div, {
-                  initial: { width: 0 },
+                  "data-stage": String(stage.key || index),
+                  initial: reduced ? false : { width: 0 },
                   animate: { width: `${width}%` },
-                  transition: { delay: 0.2 + index * 0.06, duration: 0.6, ease: [0.16, 1, 0.3, 1] },
+                  transition: reduced
+                    ? { duration: 0 }
+                    : { delay: 0.15 + index * 0.1, duration: 0.35, ease: [0.16, 1, 0.3, 1] },
                   className: "h-full rounded-full",
                   style: { background: `linear-gradient(90deg, ${color}, ${color}80)` }
-                })
+                } as any)
               )
             );
           }),

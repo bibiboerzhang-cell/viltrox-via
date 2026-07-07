@@ -687,76 +687,25 @@ def _build_data_gaps(section_status: dict[str, str], *, persona_missing: bool) -
     return gaps
 
 
-def _build_action_inbox_items(*, sku: str, kol_section: dict[str, Any], official_section: dict[str, Any],
-                              budget_section: dict[str, Any], content_section: dict[str, Any]) -> dict[str, Any]:
-    """materialize 预览:GTM-3 将把这些条目落 vkpi_action_inbox;此处零落库只演示。"""
-    review_stub = {"enabled": False, "note": "人审按钮 GTM-3 接线"}
-    items: list[dict[str, Any]] = []
+def _build_action_inbox_items(*, sku: str, goal: str, country: str | None, budget_usd: float,
+                              kol_section: dict[str, Any], official_section: dict[str, Any],
+                              budget_section: dict[str, Any], content_section: dict[str, Any],
+                              shopify_section: dict[str, Any], forecast: Any) -> dict[str, Any]:
+    """materialize 预览(GTM-Loop L1 bet 合约版):零落库红线不变。
 
-    for cand in (kol_section.get("items") or [])[:3]:
-        cost = cand.get("cost_usd_p50")
-        views = cand.get("expected_views_p50")
-        items.append({
-            "action": f"外联候选 KOL {cand.get('handle') or cand.get('display_name')}({cand.get('platform')})并寄样 {sku}",
-            "reason": "new_launch_match 候选池排名靠前且可估价,进入首批外联窗口。",
-            "evidence_summary": (
-                f"匹配分 {cand.get('match_score')};预估报价 p50 ${cost if cost is not None else '未知'};"
-                f"预测播放 p50 {_fmt_int(views) if views is not None else '缺样本'};"
-                f"招牌拍法 {(cand.get('signature') or {}).get('top_style') or '未析'}。"
-            ),
-            "cost_note": f"报价口径 {cand.get('cost_confidence') or '未知'} 置信;基准锚点价仅供谈判参考。",
-            "risk": ";".join(cand.get("risk_labels") or []) or "无标签",
-            "expected_gain": (f"单人播放 p50 约 {_fmt_int(views)}(逐人口径,非承诺)" if views is not None
-                              else "预测缺样本,收益待首条内容验证"),
-            "review": dict(review_stub),
-        })
+    每条条目在既有六要素之上并列 bet 七要素(why 带 gtm_plan_id/forecast 段落锚、
+    expected 量化指标、escalate_if/retreat_if、review_at 按 action_type 默认复盘天数);
+    构建实现在 gtm_bets.build_action_inbox_items(纯函数);真落库走
+    materialize.materialize_plan(dry_run=False),每条 requires_approval=True 人审。
+    """
+    from app.domains.market_brain import gtm_bets
 
-    top_suggestion = (official_section.get("suggestions") or [{}])[0]
-    if top_suggestion.get("line"):
-        items.append({
-            "action": "官号协同首发:按历史最优形式/平台/时段排一条同 SKU 内容",
-            "reason": _text(top_suggestion.get("line"), 240),
-            "evidence_summary": (
-                f"vkpi_channel_post_metrics 聚合;官号 {official_section.get('official_count')} 个、"
-                f"指标 {official_section.get('metrics_rows')} 行真读。"
-            ),
-            "cost_note": "自有渠道,零现金成本(人力排期)。",
-            "risk": "官号受众与 KOL 受众重叠度未测",
-            "expected_gain": "官号协同位为 KOL 内容提供二次曝光,幅度待账本验证",
-            "review": dict(review_stub),
-        })
-
-    items.append({
-        "action": f"确认预算档:{budget_section.get('recommended_tier')}(${_usd(budget_section.get('budget_usd'))})",
-        "reason": "goal 默认档;升/降档由 forecast 段触发/撤退线裁决。",
-        "evidence_summary": f"三方案模拟状态 {(budget_section.get('sim_summary') or {}).get('status')};明细见 budget_mix 段。",
-        "cost_note": f"总预算 ${_usd(budget_section.get('budget_usd'))}。",
-        "risk": "报价多为基准锚点,总成本区间偏软",
-        "expected_gain": "锁档后可发首批外联与官号排期",
-        "review": dict(review_stub),
-    })
-
-    angles = content_section.get("persona_angles") or []
-    if angles:
-        items.append({
-            "action": f"内容 brief 起草:主推角度「{_text(angles[0], 80)}」",
-            "reason": "persona 推广角度 top1 + 规则库开场模板可直接进 brief。",
-            "evidence_summary": (
-                f"persona 角度 {len(angles)} 条;高表现段 "
-                f"{len(content_section.get('high_performing_segments') or [])} 条可引用。"
-            ),
-            "cost_note": "brief 起草为内部人力。",
-            "risk": "角度为 persona 推断,未经本 SKU 实测",
-            "expected_gain": "每变体按曝光门槛裁决后沉淀可复用素材",
-            "review": dict(review_stub),
-        })
-
-    return {
-        "status": "preview",
-        "persisted": False,
-        "items": items[:6],
-        "note": "materialize 预览:零落库;GTM-3 接线后这些条目才进 vkpi_action_inbox 走人审。",
-    }
+    return gtm_bets.build_action_inbox_items(
+        sku=sku, goal=goal, country=country, budget_usd=budget_usd,
+        kol_section=kol_section, official_section=official_section,
+        budget_section=budget_section, content_section=content_section,
+        shopify_section=shopify_section, forecast=forecast,
+    )
 
 
 def _stage(stage: str, label: str, metric: str, threshold: str, confidence: str,
@@ -902,10 +851,15 @@ def build_preview(
     risks = _guard("risks", lambda: _build_risks(cands=cands, country=country_clean, persona=persona))
     action_inbox_items = _guard("action_inbox_items", lambda: _build_action_inbox_items(
         sku=sku_code,
+        goal=goal,
+        country=country_clean,
+        budget_usd=budget,
         kol_section=kol_candidates if isinstance(kol_candidates, dict) else {},
         official_section=official_section if isinstance(official_section, dict) else {},
         budget_section=budget_mix if isinstance(budget_mix, dict) else {},
-        content_section=content_angles if isinstance(content_angles, dict) else {}))
+        content_section=content_angles if isinstance(content_angles, dict) else {},
+        shopify_section=shopify_actions if isinstance(shopify_actions, dict) else {},
+        forecast=forecast if isinstance(forecast, list) else []))
     success_metrics = _guard("success_metrics", lambda: _build_success_metrics(goal))
     conversion_readiness = _guard("conversion_readiness", lambda: _build_conversion_readiness(
         sku=sku_code, product=product_basic))

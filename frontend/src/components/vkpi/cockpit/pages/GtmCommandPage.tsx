@@ -1,6 +1,8 @@
 import React from "react";
 import { Compass } from "lucide-react";
 import { StrategySimPanel } from "../components/StrategySimPanel";
+import { NorthStarGauges } from "../components/NorthStarGauges";
+import { ThresholdBar } from "../components/ThresholdBar";
 import {
   getGtmPlanPreview,
   getMarketBrainSummary,
@@ -74,6 +76,26 @@ function Empty({ text }: { text: string }) {
     "div",
     { className: "rounded-lg border border-dashed border-white/[0.08] px-3 py-3 text-center text-[11px] text-slate-500" },
     text,
+  );
+}
+
+// U3 · preview 加载骨架屏(U2 骨架基元未就绪 → 本页极简版,收口时统一替换)。
+// 五卡轮廓 + animate-pulse;motion-reduce:animate-none 尊重 prefers-reduced-motion;
+// 加载态短暂脉动非常驻循环,结束即卸载。诚实脚注保留原文案。
+function PreviewSkeleton() {
+  return e(
+    "div",
+    { className: "space-y-4", role: "status", "aria-label": "作战预览聚合中", "data-testid": "preview-skeleton" },
+    [0, 1, 2, 3, 4].map((i) =>
+      e(
+        "div",
+        { key: i, className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4 animate-pulse motion-reduce:animate-none" },
+        e("div", { className: "h-3 w-40 rounded bg-white/[0.06]" }),
+        e("div", { className: "mt-3 h-2.5 w-full rounded bg-white/[0.04]" }),
+        e("div", { className: "mt-2 h-2.5 w-2/3 rounded bg-white/[0.04]" }),
+      ),
+    ),
+    e("div", { className: "text-center text-[11px] text-slate-500" }, "作战预览聚合中(纯读,零写库)…"),
   );
 }
 
@@ -623,6 +645,8 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
                         : e("span", { className: "text-rose-300" }, "条件缺失(不合规,待后端补齐)"),
                     ),
                   ),
+                  // U3 阈值进度条:文本里解析得出量化值才出条(解析不出保持纯文本卡,不硬编)。
+                  e(ThresholdBar, { escalateIf: f.escalate_if, retreatIf: f.retreat_if }),
                 ),
               ),
             ),
@@ -782,9 +806,11 @@ export function GtmCommandPage({ apiToken = "" }: { apiToken?: string; onNavigat
     { className: "mx-auto max-w-6xl space-y-4 p-4 md:p-6" },
     header,
     controls,
+    // U3 · 90 天北极星三表盘(自拉取自判空;全局/预览两模式都挂顶部)
+    apiToken ? e(NorthStarGauges, { apiToken }) : null,
     !apiToken && e(Empty, { text: "未登录 / 无 token,无法加载数据。" }),
     planError && e("div", { className: "rounded-lg border border-rose-300/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-200" }, planError),
-    planLoading && e("div", { className: "py-10 text-center text-[12px] text-slate-400" }, "作战预览聚合中(纯读,零写库)…"),
+    planLoading && e(PreviewSkeleton),
     // 预览模式:五区块
     !planLoading && planCards,
     // 全局模式:五卡

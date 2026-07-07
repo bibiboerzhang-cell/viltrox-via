@@ -4,10 +4,13 @@
 //      board 不可用时回退 GET /api/admin/vkpi/local-workers/devices(W1 端点,租约表安静缺席)。
 // 诚实态:表未建/无节点 → 空态「尚无本地节点,启动方式见 tools/local_worker/README」;
 //        接口失败 → 显示「读取失败」不编数字。红线:纯展示,零触 viltrox_fit_score/rule_v0。
+// U2:在线小点改为 FreshnessDot 呼吸灯(在线=绿轻呼吸/离线=灰静态,语义与 title 零变;
+//     reduced-motion 降级为静态,见 ui/motion.css)。
 import React from "react";
 import { AlertTriangle, Cpu, Loader2 } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
 import { relativeFromNow } from "../../lib/timeLocal";
+import { FreshnessDot } from "./ui/FreshnessDot";
 
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 30 * 1000;
@@ -133,10 +136,11 @@ function DeviceCard({ device }: { device: BoardDevice }) {
   return (
     <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2.5 py-2">
       <div className="flex items-center gap-1.5">
-        <span
-          className={
-            "h-1.5 w-1.5 shrink-0 rounded-full " + (online ? "bg-emerald-400" : "bg-slate-600")
-          }
+        {/* U2 呼吸灯:在线=绿轻呼吸(调用方 5min 心跳判定,state 显式覆盖);离线=灰静态(常态非事故) */}
+        <FreshnessDot
+          state={online ? "fresh" : "stale"}
+          staleTone="muted"
+          ts={device.last_seen_at}
           title={online ? "在线(5 分钟内有心跳)" : "离线(5 分钟内无心跳)"}
         />
         <span className="truncate text-[11px] font-medium text-slate-200" title={device.device_id || ""}>

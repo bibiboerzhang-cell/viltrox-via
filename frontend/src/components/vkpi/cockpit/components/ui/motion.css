@@ -1,0 +1,63 @@
+/* U2 动效基元共享样式(全库通用,供 W3-W6 复用)。
+   审美纪律:入场/变化各一次(200-400ms);仅两类克制循环——新鲜度呼吸灯(慢、微幅)
+   与加载骨架 shimmer(仅加载期存在);无闪烁。
+   prefers-reduced-motion: reduce 时全部降级为静态(信息不丢,动画消失)。 */
+
+/* ── Sparkline 入场描线(一次,400ms)── */
+@keyframes vk-spark-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+.vk-spark-path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: vk-spark-draw 400ms ease-out 1 both;
+}
+
+/* ── 新鲜度/在线 呼吸灯(慢 2.6s,微幅透明度,不闪烁)── */
+@keyframes vk-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.vk-breathe {
+  animation: vk-breathe 2.6s ease-in-out infinite;
+}
+
+/* ── DeltaBadge 变化时高亮一次(300ms)── */
+@keyframes vk-delta-flash {
+  0% { background-color: rgba(255, 255, 255, 0.22); }
+  100% { background-color: transparent; }
+}
+.vk-delta-flash {
+  animation: vk-delta-flash 300ms ease-out 1;
+}
+
+/* ── 骨架屏 shimmer(仅加载期渲染;沿用 slate/白低透明度体系,不引新色板)── */
+@keyframes vk-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.vk-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.11) 50%,
+    rgba(255, 255, 255, 0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: vk-shimmer 1.6s linear infinite;
+}
+
+/* ── reduced-motion:全部动画降级为静态,信息层照常 ── */
+@media (prefers-reduced-motion: reduce) {
+  .vk-spark-path,
+  .vk-breathe,
+  .vk-delta-flash,
+  .vk-shimmer {
+    animation: none !important;
+  }
+  .vk-spark-path {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}

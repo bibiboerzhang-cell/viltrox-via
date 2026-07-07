@@ -121,4 +121,13 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_sync",
     "vkpi_tasks",
     "vkpi_weekly_reports",
+    # U1 会呼吸的指挥室:顶栏全局任务进度中心(纯读聚合,2026-07-07,append-only)
+    "vkpi_progress_center",
+    # U3 会呼吸的指挥室:GTM 90 天北极星三表盘(纯读真库现查,表缺诚实 0,append-only)
+    "vkpi_northstar",
+    # W1 闭环波:bet materialize / 裁决流 / 三窗对答案 / 权重回流(append-only)
+    "vkpi_gtm_materialize",
+    "vkpi_gtm_verdicts",
+    "vkpi_gtm_windows",
+    "vkpi_gtm_weights",
 ]

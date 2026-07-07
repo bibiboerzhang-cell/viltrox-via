@@ -10,6 +10,10 @@
 import React from "react";
 import { Bell, Briefcase, Calendar, ChevronDown, FileText, HelpCircle, MessageCircle, Search, Users } from "lucide-react";
 import { Avatar } from "./components/Avatar";
+// U1 全局任务进度中心(2026-07):同 GlobalSearchBox 定位——自持 state 的自拉取
+// 组件,不吃 props;10s 轮询 /api/admin/vkpi/progress/center。忙时药丸+呼吸细条,
+// 闲时安静收起成图标;点开抽屉看逐任务进度/ETA/阶段流/最近完成。
+import { TopProgressCenter } from "./components/TopProgressCenter";
 import { NAV_ITEMS } from "./data/navItems";
 import { globalSearch } from "../../../services/vkpi/globalSearch-api";
 import type {
@@ -194,6 +198,8 @@ export function CockpitTopbar({
       e(GlobalSearchBox)
     ),
     e("div", { className: "flex items-center gap-2 md:gap-3" },
+      // U1 全局任务进度中心:右侧按钮群首位(搜索框之后、Help 之前),窄屏隐藏。
+      e("div", { className: "hidden md:block" }, e(TopProgressCenter)),
       // V6.14: Help & Messages 按钮(加 onClick + ref)
       e("button", {
         ref: helpBtnRef,

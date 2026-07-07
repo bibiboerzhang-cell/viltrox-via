@@ -4,9 +4,13 @@
 // 展示:Viltrox 自身曲线(SoV/排名)置顶 + 竞品迷你趋势条 + 升降箭头 + top 例证视频(悬停)。
 // 诚实态:接口失败/空数据整块安静缺席或一行灰字;空桶周如实标注,绝不编数。
 // 红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0。
+// U2:卡头加 SoV 周曲线 Sparkline(客户端派生,零契约改动)+ 新鲜度呼吸灯
+//     (最新入库证据 posted_at;绿≤24h/黄≤72h/红=stale,title 给具体时间)。
 import React from "react";
 import { Activity, Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { FreshnessDot } from "./ui/FreshnessDot";
+import { Sparkline } from "./ui/Sparkline";
 
 const e = React.createElement;
 
@@ -117,6 +121,34 @@ export function BrandPulsePanel({ apiToken }: any) {
     return () => { cancelled = true; };
   }, [apiToken]);
 
+  // U2 派生量(零契约改动,纯客户端):
+  //   sovWeekly:第 i 周 SoV = Viltrox 提及 ÷ 全部品牌提及(无品牌提及的周 → null,不编 0%);
+  //   latestEvidence:所有 top_examples posted_at 的最大值(数据新鲜度的诚实近似)。
+  const derived = React.useMemo(() => {
+    const v = data?.viltrox;
+    const bs = Array.isArray(data?.brands) ? data!.brands! : [];
+    const vw: number[] = Array.isArray(v?.weekly) ? (v!.weekly as number[]) : [];
+    const sovWeekly: Array<number | null> = [];
+    for (let i = 0; i < vw.length; i++) {
+      let total = Number(vw[i]) || 0;
+      for (const b of bs) total += Number(b.weekly?.[i]) || 0;
+      sovWeekly.push(total > 0 ? ((Number(vw[i]) || 0) / total) * 100 : null);
+    }
+    let latestMs = 0;
+    let latestEvidence: string | null = null;
+    const scan = (items?: ExampleItem[]) => {
+      for (const ex of items || []) {
+        const raw = ex && ex.posted_at ? String(ex.posted_at) : "";
+        const t = raw ? new Date(raw).getTime() : NaN;
+        if (Number.isFinite(t) && t > latestMs) { latestMs = t; latestEvidence = raw; }
+      }
+    };
+    scan(v?.top_examples);
+    for (const b of bs) scan(b.top_examples);
+    const validWeeks = sovWeekly.filter((x) => x != null).length;
+    return { sovWeekly, latestEvidence: latestEvidence as string | null, hasSov: validWeeks >= 2 };
+  }, [data]);
+
   if (!apiToken || !data) return null;
   if (String(data.status || "") === "error") return null; // 聚合失败:安静缺席,不甩后端报错
 
@@ -135,8 +167,19 @@ export function BrandPulsePanel({ apiToken }: any) {
       e("div", { className: "flex items-center gap-2" },
         e(Activity, { size: 13, className: "text-cyan-400", strokeWidth: 2 }),
         e("span", { className: "text-[11px] font-medium text-slate-300" }, `品牌脉搏 · ${Number(data.window_days) || 90}天`),
+        // U2 新鲜度呼吸灯:最新入库证据的发布时间(无证据 → 空心灰圈,诚实「不知道」)
+        !noSignal && e(FreshnessDot, { key: "fresh", ts: derived.latestEvidence, label: "最新证据" }),
       ),
       !noSignal && e("div", { className: "flex items-center gap-1.5" },
+        // U2 SoV 周曲线:只看形状(客户端派生);无品牌提及的周跳过,绝不编 0%
+        derived.hasSov && e("span", {
+          key: "sov-spark",
+          className: "inline-flex h-[16px] w-[64px] items-center text-cyan-300/80",
+        }, e(Sparkline, {
+          data: derived.sovWeekly, width: 64, height: 16, fill: true,
+          className: "block h-full w-full",
+          title: "SoV 周走势:Viltrox 提及 ÷ 全部品牌提及(按周,客户端派生;无品牌提及的周跳过)",
+        })),
         sov != null && e("span", { className: "rounded bg-cyan-400/10 px-1.5 py-0.5 text-[9px] tabular-nums text-cyan-200", title: "Viltrox 声量占比(视频×品牌口径)" }, `SoV ${sov}%`),
         viltrox.rank != null && e("span", { className: "text-[9px] tabular-nums text-slate-500" }, `#${viltrox.rank}/${Number(viltrox.brand_count_ranked) || "—"}`),
       ),

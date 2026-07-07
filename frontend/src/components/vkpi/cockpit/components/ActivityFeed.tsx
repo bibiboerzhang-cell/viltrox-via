@@ -7,8 +7,14 @@
 // 时间:后端透传 UTC("...Z" 字符串),这里用 formatLocal 按观看者浏览器时区显示,
 // 绝不硬编码「刚刚 / 实时 / live」这类假新鲜度。无数据显「暂无思考流」,不装 live。
 // 数据全部真实只读(某源缺表后端已跳过),前端零编造。
+//
+// U4 会呼吸的指挥室:新条目从顶部滑入(AnimatePresence,300ms 一次,无循环);
+// 新数据到达时自动滚回顶部保持最新可见;鼠标悬停 = 阅读中 → 暂停应用新数据
+// (静默缓冲,移开后一次性追平)。prefers-reduced-motion 全部降级为静态直显。
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { usePrefersReducedMotion } from "./AnimatedNumber";
 import {
   Activity,
   AlertTriangle,
@@ -59,21 +65,10 @@ type FeedItem = {
   link?: string | null;
 };
 
-function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
+function FeedRow({ item, reduced }: { item: FeedItem; reduced: boolean }) {
   const Icon = ICON_MAP[String(item.icon || "")] || Activity;
   const accent = KIND_ACCENT[String(item.kind || "")] || "#64748b";
   const clickable = typeof item.link === "string" && item.link.length > 0;
-
-  // 淡入观感(自包含,不依赖全局 keyframe):新条目挂载时先 0.35 透明,
-  // 下一帧切到 1 触发 CSS transition;非新条目直接满不透明。
-  const [entered, setEntered] = useState(!isNew);
-  useEffect(() => {
-    if (isNew && !entered) {
-      const raf = globalThis.requestAnimationFrame(() => setEntered(true));
-      return () => globalThis.cancelAnimationFrame(raf);
-    }
-    return undefined;
-  }, [isNew, entered]);
 
   const onClick = () => {
     if (!clickable || typeof window === "undefined") return;
@@ -81,17 +76,23 @@ function FeedRow({ item, isNew }: { item: FeedItem; isNew: boolean }) {
     window.location.assign(item.link as string);
   };
 
+  // 入场:从顶部滑入 + 淡入,一次 300ms;退场(被挤出列表)淡出。
+  // reduced-motion:initial=false + duration 0 → 静态直显,无位移。
   return e(
-    "div",
+    motion.div,
     {
+      layout: !reduced,
+      initial: reduced ? false : { opacity: 0, y: -10 },
+      animate: { opacity: 1, y: 0 },
+      exit: { opacity: 0 },
+      transition: reduced
+        ? { duration: 0 }
+        : { duration: 0.3, ease: [0.16, 1, 0.3, 1] },
       onClick: clickable ? onClick : undefined,
       className:
-        "group flex items-start gap-2 rounded-md px-2.5 py-2 transition-all duration-500 " +
+        "group flex items-start gap-2 rounded-md px-2.5 py-2 " +
         (clickable ? "cursor-pointer hover:bg-white/[0.04] " : ""),
-      style: {
-        borderLeft: `2px solid ${accent}`,
-        opacity: entered ? 1 : 0.35,
-      },
+      style: { borderLeft: `2px solid ${accent}` },
     },
     e(Icon, {
       size: 12,
@@ -124,9 +125,13 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
-  // 记住上一轮首条 ts,用来给新到达的条目打「淡入」标记(打字机滚动观感)。
-  const prevTopTsRef = useRef<string>("");
+  const reduced = usePrefersReducedMotion();
   const aliveRef = useRef(true);
+  // hover = 用户阅读中:暂停应用新数据(静默缓冲到 pendingRef),移开后追平。
+  const hoverRef = useRef(false);
+  const pendingRef = useRef<FeedItem[] | null>(null);
+  const loadedRef = useRef(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -145,7 +150,14 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
         );
         if (!aliveRef.current) return;
         const next: FeedItem[] = Array.isArray(data?.items) ? data.items : [];
-        setItems(next);
+        if (hoverRef.current && loadedRef.current) {
+          // 阅读中:先缓冲,不打断视线;mouseleave 时一次性应用。
+          pendingRef.current = next;
+        } else {
+          pendingRef.current = null;
+          setItems(next);
+        }
+        loadedRef.current = true;
         setLoaded(true);
         setError("");
       } catch {
@@ -162,12 +174,37 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
     };
   }, [apiToken]);
 
-  const topTs = items.length ? String(items[0].ts || "") : "";
-  const hasNewTop = topTs !== "" && topTs !== prevTopTsRef.current;
-  // 渲染后记录本轮 topTs(下一轮用来判定是否有新条目滚入)。
+  // 稳定 key(AnimatePresence 需要):ts+kind+text 指纹,重复条目加序号后缀。
+  const keyed = useMemo(() => {
+    const seen = new Map<string, number>();
+    return items.map((item) => {
+      const base = `${item.ts || ""}|${item.kind || ""}|${item.text || ""}`;
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      return { item, key: n > 1 ? `${base}#${n}` : base };
+    });
+  }, [items]);
+
+  // 新条目滚入时自动回到顶部,保持最新可见(hover 阅读中不打扰)。
+  const topKey = keyed.length ? keyed[0].key : "";
   useEffect(() => {
-    prevTopTsRef.current = topTs;
-  }, [topTs]);
+    if (!topKey || hoverRef.current) return;
+    const el = scrollRef.current;
+    if (el && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+    }
+  }, [topKey, reduced]);
+
+  const onMouseEnter = () => {
+    hoverRef.current = true;
+  };
+  const onMouseLeave = () => {
+    hoverRef.current = false;
+    if (pendingRef.current) {
+      setItems(pendingRef.current);
+      pendingRef.current = null;
+    }
+  };
 
   let body: any;
   if (!loaded && !error) {
@@ -188,13 +225,19 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
   } else {
     body = e(
       "div",
-      { className: "space-y-1 overflow-y-auto pr-1", style: { maxHeight: 340 } },
-      items.map((item, idx) =>
-        e(FeedRow, {
-          key: `${item.kind || "x"}-${item.ts || idx}-${idx}`,
-          item,
-          isNew: idx === 0 && hasNewTop,
-        }),
+      {
+        ref: scrollRef,
+        onMouseEnter,
+        onMouseLeave,
+        "data-testid": "activity-scroll",
+        className: "space-y-1 overflow-y-auto pr-1",
+        style: { maxHeight: 340 },
+      },
+      // initial=false:首屏整批不做滑入(避免 30 条齐舞);只有后续新条目滑入。
+      e(
+        AnimatePresence,
+        { initial: false },
+        keyed.map(({ item, key }) => e(FeedRow, { key, item, reduced })),
       ),
     );
   }

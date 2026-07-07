@@ -6,9 +6,12 @@
 //   (why_fit 一句话优先,无 LLM 时如实显示召回/粗排依据)。
 // 诚实态:降级醒目标注「降级召回」;rerank=skipped 如实标注原因;接口失败一行灰字;
 //   空结果如实说,绝不编人。红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0。
+// U2:召回中的加载态换骨架屏(三段 chips + 4 行候选形状的 shimmer,替代白屏;
+//     reduced-motion 降级为静态,见 ui/motion.css)。
 import React from "react";
 import { AlertTriangle, ExternalLink, Search, Sparkles } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { SkeletonBlock } from "./ui/SkeletonBlock";
 
 const e = React.createElement;
 
@@ -155,6 +158,21 @@ export function SemanticRecallCard({ apiToken }: any) {
         disabled: loading || !query.trim(),
         className: "flex shrink-0 items-center gap-1 rounded-md bg-cyan-400/15 px-2 py-1 text-[10px] text-cyan-200 hover:bg-cyan-400/25 disabled:opacity-40",
       }, e(Search, { size: 11, strokeWidth: 2 }), loading ? "召回中…" : "找人"),
+    ),
+    // U2 加载骨架:召回最长可到 60s(LLM 重排),用三段 chips + 4 行候选形状占位,不再白屏
+    loading && e(React.Fragment, { key: "loading-skeleton" },
+      e("div", { className: "flex items-center gap-1.5 border-t border-white/[0.05] px-3 py-1.5" },
+        e(SkeletonBlock, { key: "st1", className: "h-4 w-24 rounded" }),
+        e(SkeletonBlock, { key: "st2", className: "h-4 w-14 rounded" }),
+        e(SkeletonBlock, { key: "st3", className: "h-4 w-16 rounded" }),
+      ),
+      e("div", { className: "divide-y divide-white/[0.04]" },
+        [0, 1, 2, 3].map((i) =>
+          e("div", { key: i, className: "flex items-center gap-2 px-3 py-2" },
+            e(SkeletonBlock, { className: "h-5 w-5 shrink-0 rounded-full" }),
+            e("div", { className: "min-w-0 flex-1" }, e(SkeletonBlock, { lines: 2 })),
+          )),
+      ),
     ),
     error && e("div", { className: "px-3 pb-2 text-[10px] text-slate-500" }, error),
     data && String(data.status || "") === "error" &&
