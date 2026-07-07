@@ -21,13 +21,30 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
-from app.api.dependencies.manager_guard import require_manager_tab
+from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.domains.integrations import goaffpro_connect
 
 
 router = APIRouter(prefix="/api/admin/vkpi/goaffpro", tags=["vkpi-goaffpro"])
+
+# 员工基础权限可自改的佣金/折扣上限(百分比);超过或非百分比(固定金额)需管理层授权。
+# 读裁决 2026-07-07:0-15% 员工基础可改,>15% 升级 owner+manager。
+EMPLOYEE_PCT_CAP = 15.0
+
+
+def _pct_within_employee_cap(value, kind: str) -> bool:
+    """判定该笔佣金/折扣是否落在员工基础可改区间(仅 percentage 且 0-15%)。
+
+    非 percentage(固定金额无 % 概念、更烧钱)或数值非法一律 False → 升级管理层。
+    """
+    if str(kind or "percentage").strip().lower() != "percentage":
+        return False
+    try:
+        return 0.0 <= float(value) <= EMPLOYEE_PCT_CAP
+    except (TypeError, ValueError):
+        return False
 
 
 def _utcnow() -> str:
@@ -392,13 +409,14 @@ def sync_goaffpro_metrics(
 def update_kol_commission(
     kol_pool_id: int,
     body: dict = Body(default={}),
-    staff=Depends(require_manager_tab("vkpi", "write")),
+    staff=Depends(require_tab("vkpi", "write")),
 ):
     """调整该 KOL affiliate 的佣金比例 → PATCH 推回 GOAFFPRO 总台。
 
     body {rate:number(整数), type?:'percentage'|'fixed_amount', on?:'product'|'order'}。
     改完回读 GOAFFPRO 确认(总台与 V-KPI 一致)。返回 {ok, commission_rate}。
-    管理层闸(owner+manager):改佣金是钱口,员工 vkpi:write 不够 → 403。
+    分档闸(读裁决 2026-07-07):percentage 且 0-15% → 员工基础可改;
+    >15% 或 fixed_amount(固定金额)→ 升级 owner+manager,员工得 403。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
@@ -408,6 +426,9 @@ def update_kol_commission(
         raise HTTPException(status_code=400, detail="该 KOL 还没生成追踪链(无 affiliate),先生成再调佣金")
     if not isinstance(body, dict) or body.get("rate") is None:
         raise HTTPException(status_code=400, detail="rate is required")
+    # 分档授权:超出员工佣金区间(>15% 或固定金额)先过管理层闸再落总台。
+    if not _pct_within_employee_cap(body.get("rate"), body.get("type") or "percentage"):
+        require_manager_staff(staff)
     res = goaffpro_connect.update_affiliate_commission(
         affiliate_id,
         body.get("rate"),
@@ -427,12 +448,13 @@ def update_kol_commission(
 def update_kol_coupon(
     kol_pool_id: int,
     body: dict = Body(default={}),
-    staff=Depends(require_manager_tab("vkpi", "write")),
+    staff=Depends(require_tab("vkpi", "write")),
 ):
     """设/改该 KOL 的专属优惠码 → PATCH 推回 GOAFFPRO 总台 + 更新本地映射。
 
     body {code, discount_value?, discount_type?}。code 顾客结账用即归因该 KOL。
-    管理层闸(owner+manager):优惠码直接动折扣,员工 vkpi:write 不够 → 403。
+    分档闸(读裁决 2026-07-07):percentage 折扣且 0-15% → 员工基础可设;
+    >15% 或 fixed_amount(固定金额折扣)→ 升级 owner+manager,员工得 403。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
@@ -443,6 +465,11 @@ def update_kol_coupon(
     code = str((body or {}).get("code") or "").strip()
     if not code:
         raise HTTPException(status_code=400, detail="code is required")
+    # 分档授权:超出员工折扣区间(>15% 或固定金额)先过管理层闸再落总台。
+    if not _pct_within_employee_cap(
+        (body or {}).get("discount_value", 10), (body or {}).get("discount_type") or "percentage"
+    ):
+        require_manager_staff(staff)
     res = goaffpro_connect.update_affiliate_coupon(
         affiliate_id,
         code,

@@ -162,15 +162,31 @@ def _post_materialize_real(client):
     )
 
 
+# 高档(>15% 或固定金额):敏感操作,员工被拦、管理层放行。
 def _post_commission(client):
     return client.post(
-        "/api/admin/vkpi/goaffpro/kol/1/commission", json={"rate": 15}, headers=_BEARER
+        "/api/admin/vkpi/goaffpro/kol/1/commission", json={"rate": 30}, headers=_BEARER
     )
 
 
 def _post_coupon(client):
     return client.post(
-        "/api/admin/vkpi/goaffpro/kol/1/coupon", json={"code": "MGTEST10"}, headers=_BEARER
+        "/api/admin/vkpi/goaffpro/kol/1/coupon",
+        json={"code": "MGTEST30", "discount_value": 30}, headers=_BEARER
+    )
+
+
+# 低档(percentage 且 0-15%):员工基础权限可自改(读裁决 2026-07-07 分档闸)。
+def _post_commission_low(client):
+    return client.post(
+        "/api/admin/vkpi/goaffpro/kol/1/commission", json={"rate": 15}, headers=_BEARER
+    )
+
+
+def _post_coupon_low(client):
+    return client.post(
+        "/api/admin/vkpi/goaffpro/kol/1/coupon",
+        json={"code": "MGTEST10", "discount_value": 10}, headers=_BEARER
     )
 
 
@@ -179,6 +195,12 @@ _WRITE_ENDPOINTS = {
     "materialize_write": _post_materialize_real,
     "goaffpro_commission": _post_commission,
     "goaffpro_coupon": _post_coupon,
+}
+
+# 员工基础可改的低档(≤15%)口子:不受管理层闸拦。
+_EMPLOYEE_LOW_TIER_ENDPOINTS = {
+    "goaffpro_commission_low": _post_commission_low,
+    "goaffpro_coupon_low": _post_coupon_low,
 }
 
 
@@ -210,6 +232,18 @@ def test_employee_blocked_on_sensitive_writes(domain_calls, endpoint):
     assert resp.json()["detail"] == "management permission required"
     # 闸在写路径之前生效:域层一次都没被调到。
     assert domain_calls == []
+
+
+# ── (2b) employee 对佣金/优惠码低档(≤15%)可自改:非 403,域层被调到 ──────────
+@pytest.mark.parametrize(
+    "endpoint", list(_EMPLOYEE_LOW_TIER_ENDPOINTS), ids=list(_EMPLOYEE_LOW_TIER_ENDPOINTS)
+)
+def test_employee_can_low_tier_commission_coupon(domain_calls, endpoint):
+    resp = _request_as("employee", _EMPLOYEE_LOW_TIER_ENDPOINTS[endpoint])
+    assert resp.status_code != 403, f"employee 低档不应被拦:{resp.status_code} {resp.text[:300]}"
+    assert resp.status_code == 200, resp.text[:300]
+    # 分档闸放行后走到域层写函数(证明 ≤15% 员工真能改)。
+    assert len(domain_calls) == 1
 
 
 # ── (3) employee 对 materialize dry_run=true 非 403(员工可模拟)──────────────
