@@ -44,9 +44,11 @@ def test_kol_claim_lifecycle_rejects_missing_kol(monkeypatch):
 
 
 def test_kol_claim_lifecycle_creates_claim_and_audits(monkeypatch):
+    # SELECT 顺序:kol 存在 → 无既有认领 → project 存在(写前校验,防 FK 冒 500)→ 认领回读。
     conn = _Conn([
         {"id": 9},
         None,
+        {"id": 12},
         {"id": 4, "kol_id": 9, "staff_id": 7, "status": "active"},
     ])
     audit_calls = []
@@ -61,8 +63,11 @@ def test_kol_claim_lifecycle_creates_claim_and_audits(monkeypatch):
         staff={"id": 7},
     )
 
-    insert_sql, insert_params = conn.calls[2]
-    update_sql, update_params = conn.calls[3]
+    project_sql, project_params = conn.calls[2]
+    insert_sql, insert_params = conn.calls[3]
+    update_sql, update_params = conn.calls[4]
+    assert "SELECT id FROM vkpi_projects" in project_sql
+    assert project_params == (12,)
     assert payload["claim"]["id"] == 4
     assert payload["claim"]["is_active"] is True
     assert "INSERT INTO vkpi_kol_claims" in insert_sql
@@ -73,6 +78,17 @@ def test_kol_claim_lifecycle_creates_claim_and_audits(monkeypatch):
     assert conn.committed is True
     assert audit_calls[0]["action_type"] == "kol_claim_create"
     assert audit_calls[0]["metadata"]["claim_id"] == 4
+
+
+def test_kol_claim_lifecycle_rejects_missing_project(monkeypatch):
+    # kol 存在 → 无既有认领 → project 不存在(None):写前校验应抛 LookupError(路由映 404),
+    # 不再让 project_id FK 违约冒 500。
+    conn = _Conn([{"id": 9}, None, None])
+    monkeypatch.setattr(claim_lifecycle, "get_conn", lambda: conn)
+    monkeypatch.setattr(claim_lifecycle, "ensure_vkpi_schema", lambda: None)
+
+    with pytest.raises(LookupError, match="project not found"):
+        claim_lifecycle.claim(9, {"project_id": 999999}, staff={"id": 7})
 
 
 def test_kol_claim_lifecycle_release_requires_claim(monkeypatch):
