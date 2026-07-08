@@ -125,6 +125,53 @@ def _can_view_all(staff: dict[str, Any] | None) -> bool:
         return False
 
 
+# 数值列范围:越界会直撞 INTEGER / NUMERIC(p,s) 列上限触发 PG 原生 500(并把整行/DETAIL
+# 泄露给客户端),故写前先把越界收敛成 ValueError → 路由 _guard 映射 400。
+_INT32_MAX = 2_147_483_647
+_EVENT_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    "health_score": (0, 100),
+    "budget_total": (0, _INT32_MAX),
+    "leads": (0, _INT32_MAX),
+    "videos": (0, _INT32_MAX),
+}
+_EVENT_FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
+    "roi": (-99_999_999.99, 99_999_999.99),  # NUMERIC(10,2)
+    "location_lat": (-90.0, 90.0),           # NUMERIC(10,6),纬度物理界
+    "location_lng": (-180.0, 180.0),         # NUMERIC(10,6),经度物理界
+}
+
+
+def _validate_event_numeric(payload: dict[str, Any]) -> None:
+    """写前校验数值列范围;越界抛 ValueError(→ 400),不让坏值撞列上限触发 PG 500。
+    只校验 payload 显式给了且非 None 的键(None = 置空,可空列放行)。"""
+    for key, (lo, hi) in _EVENT_INT_BOUNDS.items():
+        if key not in payload or payload[key] is None:
+            continue
+        try:
+            v = int(payload[key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer") from exc
+        if v < lo or v > hi:
+            raise ValueError(f"{key} out of range [{lo}, {hi}]")
+    for key, (flo, fhi) in _EVENT_FLOAT_BOUNDS.items():
+        if key not in payload or payload[key] is None:
+            continue
+        try:
+            fv = float(payload[key])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be a number") from exc
+        if fv < flo or fv > fhi:
+            raise ValueError(f"{key} out of range [{flo}, {fhi}]")
+
+
+def _assert_event_exists(conn: Any, event_id: str) -> None:
+    """子资源(task/expense/kol/material/product)写前校验父活动存在:不存在则 LookupError
+    (路由 _guard 映射 404),避免直撞外键违约的 500 + PG DETAIL 泄露。"""
+    row = conn.execute("SELECT id FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+    if row is None:
+        raise LookupError("event not found")
+
+
 # ── Events ────────────────────────────────────────────────────────────────
 def _merge_invited_kols(conn: Any, event_id: Any, stored_json: Any) -> list[dict[str, Any]]:
     """回填 invited_kols_json:它建时只初始化、邀请后不更新 → KOL 计数长期偏低/为 0。
@@ -268,6 +315,7 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
 
 
 def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    _validate_event_numeric(payload)  # health_score/budget_total/location_lat/lng 越界 → 400,不撞列上限 500
     conn = get_conn()
     eid = str(payload.get("id") or _gen_id("evt"))
     owner_id = payload.get("owner_id") or _staff_id(staff)
@@ -321,17 +369,26 @@ _EVENT_JSON_FIELDS = {"budget_json", "team_ids", "related_project_ids", "invited
 
 
 def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    _validate_event_numeric(payload)  # 数值越界 → 400,不撞 INTEGER/NUMERIC 列上限触发 500
     conn = get_conn()
     sets: list[str] = []
     vals: list[Any] = []
     for key, caster in _EVENT_UPDATABLE.items():
-        if key in payload:
-            v = payload[key]
+        if key not in payload:
+            continue
+        v = payload[key]
+        if key in ("start_date", "end_date"):
+            # start_date/end_date 是 NOT NULL DATE 列。坏/空日期经 _normalize_due_date 归一为
+            # None 后绝不能 SET NULL —— 那会违反 NOT NULL 触发 PG 500 且 DETAIL 泄露整行。
+            # 显式给了却解析不出 → 400(而非静默跳过,避免「以为改了其实没改」)。
+            normalized = _normalize_due_date(v)
+            if normalized is None:
+                raise ValueError(f"{key} must be a valid date (YYYY-MM-DD)")
             sets.append(f"{key} = ?")
-            if key in ("start_date", "end_date"):
-                vals.append(_normalize_due_date(v))  # 同 due_date:坏日期归一/置空,不塞坏值进 DATE 列
-            else:
-                vals.append(caster(v) if (caster and v is not None) else v)
+            vals.append(normalized)
+        else:
+            sets.append(f"{key} = ?")
+            vals.append(caster(v) if (caster and v is not None) else v)
     for key in _EVENT_JSON_FIELDS:
         if key in payload:
             sets.append(f"{key} = ?::jsonb")
@@ -409,6 +466,7 @@ def _normalize_due_date(raw: Any) -> str | None:
 
 def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
     tid = str(payload.get("id") or _gen_id("tsk"))
     conn.execute(
         """
@@ -468,6 +526,7 @@ def delete_task(event_id: str, task_id: str, staff: dict[str, Any] | None) -> di
 # ── Expenses ────────────────────────────────────────────────────────────────
 def add_expense(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
     xid = str(payload.get("id") or _gen_id("exp"))
     conn.execute(
         """
@@ -496,6 +555,7 @@ def delete_expense(event_id: str, expense_id: str, staff: dict[str, Any] | None)
 # ── KOL invites ─────────────────────────────────────────────────────────────
 def invite_kol(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
     iid = str(payload.get("id") or _gen_id("inv"))
     conn.execute(
         """
@@ -523,6 +583,7 @@ def remove_kol(event_id: str, invite_id: str, staff: dict[str, Any] | None) -> d
 # ── Materials(活动营销物料,逐项落库)──────────────────────────────────────────
 def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
     mid = str(payload.get("id") or _gen_id("mat"))
     conn.execute(
         """
@@ -583,6 +644,7 @@ def delete_material(event_id: str, material_id: str, staff: dict[str, Any] | Non
 # ── Products(活动产品准备,逐项落库)──────────────────────────────────────────
 def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
     pid = str(payload.get("id") or _gen_id("pp"))
     ra = payload.get("returnAfter")
     if ra is None:

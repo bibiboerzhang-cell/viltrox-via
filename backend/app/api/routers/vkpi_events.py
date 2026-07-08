@@ -11,9 +11,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.domains.access import policy, scope
 from app.domains.events import event_members, service
 
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin/vkpi/events", tags=["vkpi-events"])
 
@@ -23,10 +26,17 @@ def _guard(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except HTTPException:
         raise
+    except LookupError as exc:
+        # 子资源写到不存在的活动等 → 404(而非直撞 FK 违约的 500)。消息是我方常量
+        # ("event not found"),不透传 DB 细节。
+        raise HTTPException(status_code=404, detail=str(exc) or "not found") from exc
     except ValueError as exc:
+        # 入参校验失败(坏日期/数值越界等)→ 400。消息是我方 ValueError 文案,不含 PG DETAIL。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 — surface DB/serialize errors as 500 with msg
-        raise HTTPException(status_code=500, detail=f"events error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — DB/序列化等意外 → 500
+        # 绝不把 exc 原文(可能含整行数据 / PG DETAIL)透传给客户端;真因写服务端日志。
+        logger.error("events endpoint error", exc_info=True)
+        raise HTTPException(status_code=500, detail="internal events error") from exc
 
 
 def _scope_403(exc: Exception) -> HTTPException:
@@ -54,6 +64,16 @@ def _assert_read(event_id: str, staff) -> None:
     try:
         policy.require_event_read(str(event_id), staff)
     except policy.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+def _assert_manage_team(event_id: str, staff) -> None:
+    """team_ids 成员名单管理是「转授」动作,只有活动 owner / can_view_all 可为之
+    —— 比内容编辑高一级(镜像 share-members 的 owner-only 闸)。共享 editor / team 成员
+    能写活动内容,但不能再把别人加进 team 拿完整读写,否则 = 提权绕过 share-members。"""
+    try:
+        event_members.assert_can_manage_members(str(event_id), staff)
+    except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
 
@@ -144,7 +164,7 @@ def event_evidence_list(event_id: str, staff=Depends(require_tab("vkpi", "read")
 @router.post("/{event_id}/evidence")
 def event_evidence_add(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     """F3 · 记录活动证据元数据(二进制走 R2/本地;DB 仅存元数据 + storage_ref)。"""
-    _assert_read(event_id, staff)
+    _assert_write(event_id, staff)  # 写证据(发票金额进汇总)必须写权限,不能只读放行
     from app.domains.events import evidence_upload
 
     b = body or {}
@@ -158,7 +178,7 @@ def event_evidence_add(event_id: str, body: dict, staff=Depends(require_tab("vkp
 @router.post("/{event_id}/geocode")
 def event_geocode(event_id: str, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     """F2 · 活动地址地理编码(免 key,OSM Nominatim)→ 写回经纬度;失败提示手动填。"""
-    _assert_read(event_id, staff)
+    _assert_write(event_id, staff)  # 写回经纬度是写操作,不能只读放行
     from app.domains.events import geocode
 
     return _guard(geocode.geocode_and_update_event, event_id, str((body or {}).get("address") or ""), staff)
@@ -167,7 +187,7 @@ def event_geocode(event_id: str, body: dict | None = None, staff=Depends(require
 @router.post("/{event_id}/retrospective/finalize")
 def event_retrospective_finalize(event_id: str, staff=Depends(require_tab("vkpi", "write"))):
     """F4 · 定格复盘:把当前复盘聚合落库一行快照(vkpi_event_retrospectives)。"""
-    _assert_read(event_id, staff)
+    _assert_write(event_id, staff)  # 落库快照是写操作,不能只读放行
     from app.domains.events import retrospective
 
     return _guard(retrospective.finalize_event_retrospective, event_id, staff)
@@ -190,6 +210,11 @@ def create_event(body: dict, staff=Depends(require_tab("vkpi", "write"))):
 @router.patch("/{event_id}")
 def update_event(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     _assert_write(event_id, staff)
+    # 提权闸:team_ids 改的是「谁在 team(=完整读写)」,是 owner-only 转授动作。若允许
+    # 共享 editor 经通用 PATCH 写 team_ids,就能把自己/任意 staff 加进 team 拿完整读写,
+    # 绕过 share-members 的 owner-only 闸。故 payload 含 team_ids 时额外要求 owner/admin。
+    if "team_ids" in (body or {}):
+        _assert_manage_team(event_id, staff)
     return _guard(service.update_event, event_id, body or {}, staff)
 
 
@@ -200,15 +225,16 @@ def delete_event(event_id: str, staff=Depends(require_tab("vkpi", "write"))):
 
 
 # ── Members(多人协作:team_ids)─────────────────────────────────────────────
+# team_ids 增删 = 成员名单管理(owner-only 转授),与通用内容编辑分级 —— 见 _assert_manage_team。
 @router.post("/{event_id}/members")
 def add_member(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    _assert_write(event_id, staff)
+    _assert_manage_team(event_id, staff)
     return _guard(service.add_member, event_id, (body or {}).get("user_id"), staff)
 
 
 @router.delete("/{event_id}/members/{user_id}")
 def remove_member(event_id: str, user_id: str, staff=Depends(require_tab("vkpi", "write"))):
-    _assert_write(event_id, staff)
+    _assert_manage_team(event_id, staff)
     return _guard(service.remove_member, event_id, user_id, staff)
 
 
