@@ -327,13 +327,18 @@ def _ensure_open_outcomes(
         ctx = _bet_context(row)
         created_at = _parse_dt(row.get("created_at")) or _utcnow()
         try:
-            conn.execute(
+            # 兄弟并发防线(类E):两个并发 spawn 可能双双读到 open_map 无此 bet 而双双 INSERT。
+            # ON CONFLICT + 迁移 233 部分唯一索引让第二插撞索引退让(不落第二行、不抛裸库错);
+            # RETURNING 无行=被并发抢先,只把真落行计入 created(退让不计数)。
+            seeded = conn.execute(
                 f"""
                 INSERT INTO {_OUTCOMES}
                   (gtm_plan_id, product_sku, market, segment, channel, action_type,
                    content_angle, expected_result, decision, action_inbox_id, kol_pool_id,
                    created_at)
                 VALUES (?,?,?,?,?,?,?,?::jsonb,'open',?,?,?)
+                ON CONFLICT (action_inbox_id) WHERE action_inbox_id IS NOT NULL DO NOTHING
+                RETURNING id
                 """,
                 (
                     ctx["gtm_plan_id"], ctx["product_sku"], ctx["market"], ctx["segment"],
@@ -341,9 +346,10 @@ def _ensure_open_outcomes(
                     _dumps(ctx["expected_result"]) if ctx["expected_result"] is not None else None,
                     bet_id, ctx["kol_pool_id"], created_at,
                 ),
-            )
+            ).fetchone()
             conn.commit()
-            created += 1
+            if seeded is not None:
+                created += 1
         except Exception:
             logger.warning("verdict_flow.ensure_open_outcome_failed",
                            extra={"bet_inbox_id": bet_id}, exc_info=True)
@@ -566,6 +572,10 @@ def record_verdict(
         final_id = target_outcome_id
     else:
         ctx = _bet_context(inbox_row or {})
+        # 并发双裁决防线(类E):两个并发裁决同一 bet(库里尚无结果行)会双双读到零行、双双走到此
+        # INSERT。ON CONFLICT + 迁移 233 的部分唯一索引(action_inbox_id 非空)让第二个 INSERT 撞索引
+        # 退让(不落第二行);RETURNING 无行即输者 —— 诚实回 already_decided,绝不静默假成功、绝不落两条
+        # 互相矛盾的 finalized 行污染学习闭环账本。
         row = conn.execute(
             f"""
             INSERT INTO {_OUTCOMES}
@@ -573,6 +583,7 @@ def record_verdict(
                expected_result, decision, lesson, next_weight_change, action_inbox_id, kol_pool_id,
                created_at, decided_at, decided_by)
             VALUES (?,?,?,?,?,?,?,?::jsonb,?,?,?::jsonb,?,?,NOW(),NOW(),?)
+            ON CONFLICT (action_inbox_id) WHERE action_inbox_id IS NOT NULL DO NOTHING
             RETURNING id
             """,
             (
@@ -583,7 +594,24 @@ def record_verdict(
                 bet_inbox_id, ctx["kol_pool_id"], actor,
             ),
         ).fetchone()
-        final_id = int(dict(row)["id"]) if row else 0
+        if row is None:
+            # 唯一索引挡下并发第二插:另一裁决已抢先为该 bet 落 finalized 结果行,如实回退。
+            conn.commit()
+            existing = conn.execute(
+                f"""
+                SELECT id, decision FROM {_OUTCOMES}
+                WHERE action_inbox_id = ? AND decision <> 'open'
+                ORDER BY id LIMIT 1
+                """,
+                (bet_inbox_id,),
+            ).fetchone()
+            if existing is not None:
+                ed = dict(existing)
+                return {"ok": False, "reason": "already_decided",
+                        "outcome_id": int(ed["id"]), "decision": _text(ed.get("decision"), 20),
+                        "bet_inbox_id": bet_inbox_id}
+            return {"ok": False, "reason": "already_decided", "bet_inbox_id": bet_inbox_id}
+        final_id = int(dict(row)["id"])
 
     conn.commit()  # 结果行先落定,再 best-effort 关任务(关任务失败不影响 finalized)
     task_closed = _close_verdict_task(conn, bet_inbox_id) if bet_inbox_id else False

@@ -373,8 +373,9 @@ def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[s
     """为队列里一条 pending/drafted 项生成品牌口吻草稿。
 
     状态机(缺陷③):仅 pending/drafted 可起草;replied/dismissed 终态拒绝(不回炉、不覆盖已完成项/人工草稿)。
-    认领闸(缺陷①④):起草前先原子认领(仅未认领或本人已认领时占用),抢占失败→claimed_by_other,
-      绝不并发重复烧 LLM。check_budget 先行:预算不足直接降级模板;LLM 失败也降级模板。写 draft_reply + status=drafted。
+    认领闸(缺陷①④·类E 并发):起草前真原子认领(WHERE claimed_by IS NULL,唯一次性占用;去掉旧
+      「OR claimed_by = 本人」re-entry 缝 —— 该缝让同人两并发双击都过门双烧 LLM),行锁串行下恰一个抢到,
+      抢占失败→claimed_by_other 绝不烧 LLM。check_budget 先行:预算不足直接降级模板;LLM 失败也降级模板。写 draft_reply + status=drafted。
     """
     conn = get_conn()
     if not _table_exists("vkpi_reply_queue"):
@@ -394,8 +395,10 @@ def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[s
     if cur_status not in ("pending", "drafted"):
         return {"ok": False, "reason": "already_finalized", "id": int(reply_id), "status": cur_status}
 
-    # 认领 + 状态机原子闸:只在(未认领 或 本人已认领)且状态仍是 pending/drafted 时占用并起草。
-    # 先提交认领(释放行锁+持久化占用),并发的第二个请求随后拿到已认领现状 → claimed_by_other,不双烧。
+    # 认领 + 状态机原子闸(类E 并发):只在「未认领(claimed_by IS NULL)」且状态仍是 pending/drafted 时
+    # 占用并起草 —— 同行 UPDATE 由 Postgres 行锁串行,输者在赢者提交后 re-check WHERE 已不满足(claimed_by
+    # 非空)→ 认领失败不起草不烧 LLM。去掉旧「OR claimed_by = ?」本人 re-entry 缝:该缝让同人两并发双击
+    # 都过门、都调 LLM 双烧。先提交认领(释放行锁+持久化占用),并发第二个请求随后拿到已认领现状 → claimed_by_other。
     claimed = conn.execute(
         """
         UPDATE vkpi_reply_queue
@@ -404,10 +407,10 @@ def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[s
                updated_at = ?
          WHERE id = ?
            AND status IN ('pending', 'drafted')
-           AND (claimed_by IS NULL OR claimed_by = ?)
+           AND claimed_by IS NULL
         RETURNING id, comment_text, intent_tag, lang, status
         """,
-        (actor, _now_iso(), _now_iso(), int(reply_id), actor),
+        (actor, _now_iso(), _now_iso(), int(reply_id)),
     ).fetchone()
     if not claimed:
         latest = conn.execute(

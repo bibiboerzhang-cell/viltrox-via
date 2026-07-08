@@ -39,26 +39,35 @@ def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, A
     now = utcnow()
     expires_days = max(1, min(90, _int(payload.get("expires_days"), 14)))
     expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    conn.execute(
-        """
-        INSERT INTO vkpi_kol_claims (
-            kol_id, staff_id, project_id, status, claimed_at, expires_at,
-            last_effective_touch_at, metadata_json, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            _int(kol_id),
-            actor_staff_id,
-            project_id,
-            "active",
-            now,
-            expires_at,
-            now,
-            json_object(payload.get("metadata")),
-            now,
-            now,
-        ),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO vkpi_kol_claims (
+                kol_id, staff_id, project_id, status, claimed_at, expires_at,
+                last_effective_touch_at, metadata_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                _int(kol_id),
+                actor_staff_id,
+                project_id,
+                "active",
+                now,
+                expires_at,
+                now,
+                json_object(payload.get("metadata")),
+                now,
+                now,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        # 并发兜底:SELECT-then-INSERT 有 TOCTOU 窗口,输的一方撞 idx_vkpi_kol_claims_one_active
+        # 部分唯一索引(每 KOL 只允许一条 active);把裸 UniqueViolation 归一为干净 ValueError,
+        # 避免 poisoned txn → 500。非唯一违约(真错)照旧上抛。
+        conn.rollback()
+        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower() or "one_active" in str(exc).lower():
+            raise ValueError("kol already claimed") from exc
+        raise
     conn.execute("UPDATE kols SET assigned_staff_id=?, updated_at=? WHERE id=?", (actor_staff_id, now, _int(kol_id)))
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_kol_claims WHERE kol_id=? AND status='active'", (_int(kol_id),)).fetchone()
