@@ -71,12 +71,13 @@ STAGE_ALIASES = {
     "confirmed": "agreed",
     "delivered": "received",
     "posted": "published",
-    # 双词表案(2026-06-12 全盘扫描 P0):前端推进/合同自动推进发项目词表,
-    # assignment 聚合只认 assignment 词表——写侧统一归一,读侧另有兼容。
-    "shipped": "device_sent",
-    "received": "arrived",
-    "published": "content_posted",
-    "measured": "reviewed",
+    # 注(2026-07-08 P0 履约推进断裂修复):shipped/received/published/measured 曾在此
+    # 误归一到 assignment 词表(device_sent/arrived/content_posted/reviewed),导致项目层
+    # normalize_stage 把 canonical 项目词打成非项目值 —— transition_project(/stage、/ship、
+    # /publish)与 create_project 遂对这些到期阶段一律抛 "unsupported stage"。项目层
+    # normalize_stage 必须留在项目词表;assignment 层的读归一另在
+    # ASSIGNMENT_STAGE_READ_NORMALIZATION 与 workflow_evidence._ASSIGNMENT_STAGE_FALLBACK_ALIASES
+    # (advance_project_kol_assignment / record_delivered_signal 各自二跳归一),勿再塞回本表。
 }
 
 ALLOWED_TRANSITIONS = {
