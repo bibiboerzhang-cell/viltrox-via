@@ -5,7 +5,7 @@ import copy
 from datetime import datetime, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.services.cache.memory_cache import cache_get, cache_set
 from app.shared.vkpi_decision_common import _active_project_filter, _safe_rows, _summary
 from app.platform.db.schema import ensure_vkpi_schema
@@ -15,6 +15,25 @@ from app.platform.db.schema import ensure_vkpi_schema
 # 调用方(build_dashboard_summary)会就地改写返回 dict,故命中/落库都走 deepcopy,
 # 缓存对象与交给调用方的对象互不污染。
 _DECISION_CACHE_TTL = 120
+
+
+def _day_bucket(*columns: str) -> str:
+    """UTC 'YYYY-MM-DD' day string over the first present timestamp column.
+
+    occurred_at/imported_at/incurred_at/clicked_at/published_at 在 Postgres 里是
+    timestamptz;旧写法 substr()/NULLIF(col, '') 把它当文本,PG 抛
+    "invalid input syntax for type timestamp with time zone" 被 _safe_rows 吞掉——
+    每日销售趋势静默为空、员工销售额恒 $0。PG 用 to_char(... AT TIME ZONE 'UTC') 取
+    UTC 自然日,SQLite 测试路径仍走 ISO 文本 substr;两侧产出同一 UTC 日,可安全用于
+    GROUP BY 与 ">= start" 比较(照 kpi_ledger._day_where 既有范式)。
+    """
+    if is_postgres_runtime():
+        ts = columns[0] if len(columns) == 1 else f"COALESCE({', '.join(columns)})"
+        return f"to_char({ts} AT TIME ZONE 'UTC', 'YYYY-MM-DD')"
+    if len(columns) == 1:
+        return f"substr({columns[0]}, 1, 10)"
+    ts = f"COALESCE(NULLIF({columns[0]}, ''), {', '.join(columns[1:])})"
+    return f"substr({ts}, 1, 10)"
 
 
 def dashboard(window_days: int = 30) -> dict[str, Any]:
@@ -160,14 +179,15 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
     conn = get_conn()
     sales_staff_clause = "AND sa.staff_id=?" if staff_id else ""
     sales_params: tuple[Any, ...] = (start, int(staff_id)) if staff_id else (start,)
+    sales_day = _day_bucket('sa.occurred_at', 'sa.imported_at', 'sa.created_at')
     sales_rows = _safe_rows(
         conn,
         f"""
-        SELECT substr(COALESCE(NULLIF(sa.occurred_at, ''), sa.imported_at, sa.created_at), 1, 10) AS day,
+        SELECT {sales_day} AS day,
                COALESCE(SUM(sa.revenue_cents), 0) AS gmv_cents,
                COUNT(*) AS orders
         FROM vkpi_sales_attributions sa
-        WHERE substr(COALESCE(NULLIF(sa.occurred_at, ''), sa.imported_at, sa.created_at), 1, 10) >= ?
+        WHERE {sales_day} >= ?
           AND {_active_project_filter('sa')}
           {sales_staff_clause}
         GROUP BY day
@@ -176,14 +196,15 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
     )
     cost_staff_clause = "AND c.staff_id=?" if staff_id else ""
     cost_params: tuple[Any, ...] = (start, int(staff_id)) if staff_id else (start,)
+    cost_day = _day_bucket('c.incurred_at')
     cost_rows = _safe_rows(
         conn,
         f"""
-        SELECT substr(c.incurred_at, 1, 10) AS day,
+        SELECT {cost_day} AS day,
                COALESCE(SUM(c.amount_cents), 0) AS cost_cents
         FROM vkpi_cost_ledger c
         WHERE c.status!='void'
-          AND substr(c.incurred_at, 1, 10) >= ?
+          AND {cost_day} >= ?
           AND {_active_project_filter('c')}
           {cost_staff_clause}
         GROUP BY day
@@ -192,15 +213,16 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
     )
     click_staff_clause = "AND l.staff_id=?" if staff_id else ""
     click_params: tuple[Any, ...] = (start, int(staff_id)) if staff_id else (start,)
+    click_day = _day_bucket('c.clicked_at')
     click_rows = _safe_rows(
         conn,
         f"""
-        SELECT substr(c.clicked_at, 1, 10) AS day,
+        SELECT {click_day} AS day,
                COUNT(*) AS valid_clicks
         FROM vkpi_link_clicks c
         INNER JOIN vkpi_links l ON l.id = c.link_id
         WHERE COALESCE(c.is_bot, 0) = 0
-          AND substr(c.clicked_at, 1, 10) >= ?
+          AND {click_day} >= ?
           {click_staff_clause}
         GROUP BY day
         """,
@@ -208,17 +230,18 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
     )
     view_staff_clause = "AND p.assigned_staff_id=?" if staff_id else ""
     view_params: tuple[Any, ...] = (start, int(staff_id)) if staff_id else (start,)
+    view_day = _day_bucket('cp.published_at', 'cp.created_at')
     view_rows = _safe_rows(
         conn,
         f"""
-        SELECT substr(COALESCE(NULLIF(cp.published_at, ''), cp.created_at), 1, 10) AS day,
+        SELECT {view_day} AS day,
                COALESCE(SUM(cp.views), 0) AS views,
                COALESCE(SUM(cp.likes), 0) AS likes,
                COALESCE(SUM(cp.comments), 0) AS comments,
                COUNT(*) AS published_content
         FROM vkpi_content_posts cp
         LEFT JOIN vkpi_projects p ON p.id = cp.project_id
-        WHERE substr(COALESCE(NULLIF(cp.published_at, ''), cp.created_at), 1, 10) >= ?
+        WHERE {view_day} >= ?
           AND (cp.project_id IS NULL OR COALESCE(p.stage_status, '') != 'deleted')
           {view_staff_clause}
         GROUP BY day
@@ -299,6 +322,10 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
         start,
         limit,
     )
+    sales_day = _day_bucket('occurred_at', 'imported_at', 'created_at')
+    cost_day = _day_bucket('incurred_at', 'created_at')
+    content_day = _day_bucket('published_at', 'created_at')
+    project_day = _day_bucket('p.created_at', 'p.updated_at')
     rows = _safe_rows(
         conn,
         f"""
@@ -307,14 +334,14 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
                    COALESCE(SUM(revenue_cents), 0) AS sales_cents,
                    COUNT(*) AS orders
             FROM vkpi_sales_attributions
-            WHERE substr(COALESCE(NULLIF(occurred_at, ''), imported_at, created_at), 1, 10) >= ?
+            WHERE {sales_day} >= ?
             GROUP BY project_id
         ),
         costs AS (
             SELECT project_id,
                    COALESCE(SUM(amount_cents), 0) AS cost_cents
             FROM vkpi_cost_ledger
-            WHERE status!='void' AND substr(COALESCE(NULLIF(incurred_at, ''), created_at), 1, 10) >= ?
+            WHERE status!='void' AND {cost_day} >= ?
             GROUP BY project_id
         ),
         content AS (
@@ -324,7 +351,7 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
                    COALESCE(SUM(comments), 0) AS comments,
                    COUNT(*) AS published_content
             FROM vkpi_content_posts
-            WHERE substr(COALESCE(NULLIF(published_at, ''), created_at), 1, 10) >= ?
+            WHERE {content_day} >= ?
             GROUP BY project_id
         )
         SELECT COALESCE(NULLIF(p.product_sku, ''), 'unknown') AS product_sku,
@@ -346,7 +373,7 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
             COALESCE(s.sales_cents, 0) != 0
             OR COALESCE(c.cost_cents, 0) != 0
             OR COALESCE(ct.views, 0) != 0
-            OR substr(COALESCE(NULLIF(p.created_at, ''), p.updated_at), 1, 10) >= ?
+            OR {project_day} >= ?
           )
           {staff_clause}
         GROUP BY product_sku, product_name

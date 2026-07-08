@@ -5,6 +5,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.access import scope
+from app.domains.dashboard.decision_dashboard import _day_bucket
 from app.shared.vkpi_decision_common import (
     _KPI_LABELS,
     _active_project_filter,
@@ -203,7 +204,7 @@ def staff_kpi(window: str = "month", staff_id: int | None = None) -> dict[str, A
         f"""
         SELECT sa.staff_id, COALESCE(SUM(sa.revenue_cents), 0) AS value
         FROM vkpi_sales_attributions sa
-        WHERE COALESCE(NULLIF(sa.occurred_at, ''), sa.imported_at, sa.created_at) >= ?{staff_filter.replace('staff_id', 'sa.staff_id')}
+        WHERE {_day_bucket('sa.occurred_at', 'sa.imported_at', 'sa.created_at')} >= ?{staff_filter.replace('staff_id', 'sa.staff_id')}
           AND {_active_project_filter('sa')}
         GROUP BY sa.staff_id
         """,
