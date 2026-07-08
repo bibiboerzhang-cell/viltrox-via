@@ -435,6 +435,12 @@ def invoke(
     Budget checks are telemetry-only: they are recorded with the call but no longer
     prevent an explicitly triggered provider call.
     """
+    # Clamp floor to the strictest provider minimum (openai /v1/responses requires
+    # max_output_tokens >= 16). Callers passing <16 previously slipped through the
+    # provider adapters' `max(1, ...)` floor and made openai return http_400, which
+    # then silently fell back down the chain (or to rule_v0). Floor here so every
+    # provider gets a valid budget; ceiling stays with the adapters (min(4000, ...)).
+    max_output_tokens = max(16, int(max_output_tokens or 0))
     safe_prompt = str(prompt or "")
     if not safe_prompt.strip():
         result = _rule_fallback(safe_prompt, purpose=purpose, reason="empty_prompt")

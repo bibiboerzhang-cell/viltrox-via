@@ -27,6 +27,7 @@ export interface CommentCleanResult {
   input_count: number;
   cleaned_count: number;
   duplicates_removed: number;
+  empty_removed: number;
   comments: CleanComment[];
 }
 
@@ -42,24 +43,35 @@ export function execCommentClean(payload: Record<string, unknown>): CommentClean
       : [];
   const seen = new Set<string>();
   const cleaned: CleanComment[] = [];
+  let emptyRemoved = 0;
+  let duplicatesRemoved = 0;
   for (const raw of rawList) {
     const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
     const rawText = source ? source.text : raw;
     const text = String(rawText ?? "").replace(/\s+/g, " ").trim();
-    if (!text) continue;
+    if (!text) {
+      emptyRemoved += 1;
+      continue;
+    }
     const key = text.toLowerCase();
-    if (seen.has(key)) continue;
+    if (seen.has(key)) {
+      duplicatesRemoved += 1;
+      continue;
+    }
     seen.add(key);
     const providedLang = source ? source.lang ?? source.language : null;
     cleaned.push({ text, lang: providedLang ? String(providedLang) : guessLang(text) });
   }
+  const comments = cleaned.slice(0, 500);
   return {
     task: "comment_clean",
     url: String(payload?.url ?? ""),
     input_count: rawList.length,
-    cleaned_count: cleaned.length,
-    duplicates_removed: rawList.length - cleaned.length,
-    comments: cleaned.slice(0, 500),
+    // cleaned_count 与实际发出的 comments 一致(封顶 500 后的数),避免两者不等。
+    cleaned_count: comments.length,
+    duplicates_removed: duplicatesRemoved, // 只算真重复,不含空文本
+    empty_removed: emptyRemoved,
+    comments,
   };
 }
 

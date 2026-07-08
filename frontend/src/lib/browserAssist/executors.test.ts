@@ -26,7 +26,9 @@ describe("browserAssist executors", () => {
     expect(r.url).toBe("https://youtu.be/x");
     expect(r.input_count).toBe(5);
     expect(r.cleaned_count).toBe(2);
-    expect(r.duplicates_removed).toBe(3);
+    // 5 条:2 保留 + 2 真重复 + 1 空 → 重复只算 2,空单独算 1(不再混为一谈)。
+    expect(r.duplicates_removed).toBe(2);
+    expect(r.empty_removed).toBe(1);
     // 契约:comments 为对象数组,每项带非空 text + lang。
     expect(r.comments).toEqual([
       { text: "great lens", lang: "en" },

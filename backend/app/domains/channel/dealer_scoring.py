@@ -197,10 +197,12 @@ def _enrichment_component(
 
     fam_fit_map = enrichment.get("product_family_fit")
     if family and isinstance(fam_fit_map, dict):
+        # family 大小写不敏感匹配:两侧都归一小写再比,避免上游给 'Lens' 时子信号被静默丢弃。
+        family_norm = str(family).strip().lower()
         raw = fam_fit_map.get(family)
         if raw is None:
             for key, val in fam_fit_map.items():
-                if str(key).strip().lower() == family:
+                if str(key).strip().lower() == family_norm:
                     raw = val
                     break
         fv = _clamp01(raw)
