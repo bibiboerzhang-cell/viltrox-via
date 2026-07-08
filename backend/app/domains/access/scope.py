@@ -208,13 +208,23 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
     if not write and bool(item.get("is_public")) and not bool(item.get("restricted")):
         return
     # T2 写侧收紧(2026-06-14,推翻 PV-3 写放行):非 restricted 项目此前「读写均放行」
-    # ——任何持 vkpi:write 的员工都能改任意非受限项目,等于公共写。现只保留「读放行」:
-    #   - read(not write):非 restricted 项目对员工放行(存量 75% 双归属 NULL,只开读
-    #     不会让看板/详情全盘 403;且 list 侧 project_filter 已 own-only,这里是详情读兜底)。
-    #   - write:非 owner/creator/editor-member/admin 一律拒(上方 own/member/can_view_all
-    #     已先行放行,走到这里的写一定是无授权路径)。restricted 项目读写均只认
-    #     assigned/creator/全可见角色(先遮后开铁则不破)。
-    if not write and not bool(item.get("restricted")):
+    # ——任何持 vkpi:write 的员工都能改任意非受限项目,等于公共写。写只认 own/creator/
+    # editor-member/admin(上方已先行放行,走到这里的写一定是无授权路径)。
+    #
+    # 读兜底收紧(defect②,2026-07-08,IDOR 修复):非 restricted 项目此前「读一律放行」
+    # ——员工按 ID 直读别人独占项目的详情+子资源(快递单号/收款等暴露),list 侧
+    # project_filter 已 own-only 遮蔽却在详情兜底放行,等于绕过。现读兜底仅对「真无归属
+    # 历史行」(assigned_staff_id 与 created_by_staff_id 双 NULL)放行——这批存量占多数,
+    # 只开它们的读不会让看板/详情全盘 403;已归属别人的非 restricted 项目详情读复用
+    # project_filter 的 own/assigned/creator/member/public 口径(上方已逐条放行,走到这里
+    # 说明 actor 都不符合)→ 拒。restricted 项目读写均只认 assigned/creator/全可见角色
+    # (先遮后开铁则不破)。
+    if (
+        not write
+        and not bool(item.get("restricted"))
+        and not _int(item.get("assigned_staff_id"))
+        and not _int(item.get("created_by_staff_id"))
+    ):
         return
     raise ScopeDenied("project scope denied")
 

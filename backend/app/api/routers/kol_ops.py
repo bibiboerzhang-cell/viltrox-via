@@ -41,8 +41,10 @@ from app.services.kol.account_dossier import (
 )
 from app.services.kol.content_analyzer import analyze_kol_url_standalone
 from app.services.kol.metrics import cpv, engagement_rate, roi
+from app.domains.access import scope
 from app.domains.kol import history_match as kol_history_match
 from app.domains.kol import profile_discovery as _kol_discovery  # P0-6 地区排除判据复用
+from app.domains.kol.claim_access import assert_kol_access
 
 from app.api.routers.kol_ops_schema import ensure_kol_schema
 from app.api.routers.kol_ops_dashboard import router as dashboard_router
@@ -496,6 +498,12 @@ def fetch_kol_dossier(kol_id: int, staff=Depends(require_tab("kol_ops", "read"))
 
 @router.get("/kols/{kol_id}/posts")
 def fetch_kol_posts(kol_id: int, limit: int = 25, offset: int = 0, staff=Depends(require_tab("kol_ops", "read"))):
+    try:
+        assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "KOL not found") from exc
+    except scope.ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
     return list_kol_posts(int(kol_id), limit=limit, offset=offset, prefer_main_id=True)
 
 
@@ -507,6 +515,12 @@ def fetch_kol_comments(
     post_url: str = "",
     staff=Depends(require_tab("kol_ops", "read")),
 ):
+    try:
+        assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "KOL not found") from exc
+    except scope.ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
     return list_kol_comments(int(kol_id), limit=limit, offset=offset, post_url=post_url, prefer_main_id=True)
 
 

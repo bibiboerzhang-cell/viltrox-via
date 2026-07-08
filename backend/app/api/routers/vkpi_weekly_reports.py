@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_permission
 from app.domains.access import scope
 from app.domains.comments.compat import admin_router_prefix
@@ -28,9 +29,17 @@ def _scope_403(exc: Exception) -> HTTPException:
 def api_generate_for_staff(
     staff_id: int,
     period_end: date | None = Query(None),
-    staff: dict = Depends(require_permission("vkpi.weekly_reports.generate")),
+    staff: dict = Depends(require_manager_tab("vkpi", "write")),
 ) -> dict[str, Any]:
-    """Generate weekly reports for one staff member."""
+    """Generate weekly reports for one staff member.
+
+    权限收口(defect③,2026-07-08):此前依赖 ``vkpi.weekly_reports.generate`` →
+    映射 vkpi:write,而 permissions.py 给全员默认 vkpi=write,故任意员工都能为任意
+    staff_id 跑周报(烧 LLM 预算 + 落到别人名下)。现改 ``require_manager_tab``
+    (owner + 管理岗双闸,与 generate-all 的管理层口径对齐):非管理层一律 403,
+    管理层可为任意下属生成。防御纵深:非管理层无法到达处理体,故无需再在体内夹逼
+    staff_id(manager-only 已严于「非管理层只能对自身」)。
+    """
     if period_end is None:
         period_end = date.today()
     from datetime import timedelta
