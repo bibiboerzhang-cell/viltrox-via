@@ -226,19 +226,30 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
         ).fetchone()
     )
     sales_staff_clause = "AND sa.staff_id=?" if staff_id else ""
-    sales = _row(
-        conn.execute(
+    # 按 currency 分组取主币种(revenue 最大,并列比佣金),绝不把不同币种 cents 相加(无 FX 表);
+    # confirmed + active 过滤不变,照 account_picker._build_attributed_gmv_roi 口径。
+    # NULLIF 施于 TEXT 的 currency 列(非 timestamptz)。
+    sales_rows = [
+        dict(r)
+        for r in conn.execute(
             f"""
-            SELECT COALESCE(SUM(revenue_cents), 0) AS revenue_cents,
+            SELECT COALESCE(NULLIF(sa.currency, ''), 'USD') AS currency,
+                   COALESCE(SUM(revenue_cents), 0) AS revenue_cents,
                    COALESCE(SUM(commission_cents), 0) AS commission_cents
             FROM vkpi_sales_attributions sa
             WHERE {_active_project_filter('sa')}
               AND {_confirmed_revenue_filter('sa')}
             {sales_staff_clause}
+            GROUP BY COALESCE(NULLIF(sa.currency, ''), 'USD')
+            ORDER BY revenue_cents DESC
             """,
             sales_params,
-        ).fetchone()
-    )
+        ).fetchall()
+    ]
+    sales = max(
+        sales_rows,
+        key=lambda r: (int(r.get("revenue_cents") or 0), int(r.get("commission_cents") or 0)),
+    ) if sales_rows else {}
     cost_staff_clause = "AND c.staff_id=?" if staff_id else ""
     costs = _row(
         conn.execute(

@@ -37,22 +37,43 @@ def _sum_revenue(project_clause: str, params: list[Any]) -> dict[str, Any]:
     try:
         # 只算确认态收入(排除 unmatched/refund/estimated/manual),与归因页/dashboard 口径统一;
         # 否则未确认收入会灌进 ROI 分子,虚高项目/组合 ROI。
-        row = get_conn().execute(
+        # 按 currency 分组取主币种(revenue 最大,并列比单量),绝不把不同币种 cents 相加(无 FX 表);
+        # 照 account_picker._build_attributed_gmv_roi / goaffpro._aggregate_confirmed_sales 口径。
+        # NULLIF 施于 TEXT 的 currency 列(非 timestamptz)。
+        rows = get_conn().execute(
             f"""
-            SELECT COALESCE(SUM(revenue_cents), 0) AS rev,
+            SELECT COALESCE(NULLIF(currency, ''), 'USD') AS currency,
+                   COALESCE(SUM(revenue_cents), 0) AS rev,
                    COALESCE(SUM(commission_cents), 0) AS com,
                    COUNT(*) AS n
             FROM vkpi_sales_attributions
             WHERE 1=1 {project_clause}
               AND {_confirmed_revenue_filter()}
+            GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
+            ORDER BY rev DESC
             """,
             tuple(params),
-        ).fetchone()
-        d = dict(row)
+        ).fetchall()
+        by_currency = [
+            {
+                "currency": str(dict(r).get("currency") or "USD"),
+                "revenue_cents": int(dict(r).get("rev") or 0),
+                "commission_cents": int(dict(r).get("com") or 0),
+                "orders": int(dict(r).get("n") or 0),
+            }
+            for r in rows
+        ]
+        if by_currency:
+            primary = max(by_currency, key=lambda b: (b["revenue_cents"], b["orders"]))
+        else:
+            primary = {"currency": "USD", "revenue_cents": 0, "commission_cents": 0, "orders": 0}
         return {
-            "revenue_cents": int(d.get("rev") or 0),
-            "commission_cents": int(d.get("com") or 0),
-            "orders": int(d.get("n") or 0),
+            "revenue_cents": primary["revenue_cents"],
+            "commission_cents": primary["commission_cents"],
+            "orders": primary["orders"],
+            "currency": primary["currency"],
+            "by_currency": by_currency,
+            "mixed_currency": len(by_currency) > 1,
         }
     except Exception:
         logger.debug("metrics.revenue_read_failed", exc_info=True)
@@ -93,6 +114,8 @@ def _shape(*, window_days: int, scope_label: str, cost_cents: int | None, revenu
         "cost_cents": cost_cents,
         "commission_cents": revenue.get("commission_cents"),
         "orders": revenue.get("orders"),
+        "currency": revenue.get("currency"),
+        "mixed_currency": bool(revenue.get("mixed_currency")),
         "exposure_count": exposure_count,
         "conversion_rate": None,          # 需点击数据(R15 归因链/M5 接入后填),现诚实留空
         "data_window_days": int(window_days),

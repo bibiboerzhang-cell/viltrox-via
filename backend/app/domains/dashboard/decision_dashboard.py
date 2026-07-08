@@ -187,10 +187,15 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
     sales_staff_clause = "AND sa.staff_id=?" if staff_id else ""
     sales_params: tuple[Any, ...] = (start, int(staff_id)) if staff_id else (start,)
     sales_day = _day_bucket('sa.occurred_at', 'sa.imported_at', 'sa.created_at')
+    # 按 (day, currency) 分组;同一天多币种时下方按币种取主币种(gmv 最大,并列比单量),
+    # 绝不把不同币种 cents 相加(无 FX 表)。confirmed + active 过滤不变。
+    # NULLIF 施于 TEXT 的 currency 列(非 timestamptz)。
+    sales_currency = "COALESCE(NULLIF(sa.currency, ''), 'USD')"
     sales_rows = _safe_rows(
         conn,
         f"""
         SELECT {sales_day} AS day,
+               {sales_currency} AS currency,
                COALESCE(SUM(sa.revenue_cents), 0) AS gmv_cents,
                COUNT(*) AS orders
         FROM vkpi_sales_attributions sa
@@ -198,7 +203,7 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
           AND {_active_project_filter('sa')}
           AND {_confirmed_revenue_filter('sa')}
           {sales_staff_clause}
-        GROUP BY day
+        GROUP BY day, {sales_currency}
         """,
         sales_params,
     )
@@ -272,12 +277,21 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
         }
         for day in dates
     }
+    # 每天可能落多币种行;按币种取主币种(gmv 最大,并列比单量),不跨币相加(无 FX 表)。
+    sales_by_day: dict[str, dict[str, int]] = {}
     for row in sales_rows:
         day = str(row.get("day") or "")
+        if not day:
+            continue
+        cand = {"gmv_cents": int(row.get("gmv_cents") or 0), "orders": int(row.get("orders") or 0)}
+        prev = sales_by_day.get(day)
+        if prev is None or (cand["gmv_cents"], cand["orders"]) > (prev["gmv_cents"], prev["orders"]):
+            sales_by_day[day] = cand
+    for day, agg in sales_by_day.items():
         if day in by_day:
-            by_day[day]["gmv_cents"] = int(row.get("gmv_cents") or 0)
-            by_day[day]["sales_cents"] = int(row.get("gmv_cents") or 0)
-            by_day[day]["orders"] = int(row.get("orders") or 0)
+            by_day[day]["gmv_cents"] = agg["gmv_cents"]
+            by_day[day]["sales_cents"] = agg["gmv_cents"]
+            by_day[day]["orders"] = agg["orders"]
     for row in cost_rows:
         day = str(row.get("day") or "")
         if day in by_day:
