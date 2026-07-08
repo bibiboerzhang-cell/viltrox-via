@@ -2,8 +2,10 @@
 
 三件事:
 - spawn_due_verdicts(dry_run=True):扫 vkpi_action_inbox 里带 bet 且 review_at 到期
-  未裁决的条目 → 经既有 inbox 写入链(producers.make_suggestion + inbox.persist_suggestions)
-  生成 gtm_verdict 类型置顶裁决任务(priority=high;dedupe_key 幂等,复跑零新增)。
+  未裁决的条目 →(1)播种 decision='open' 的 vkpi_gtm_outcomes 结果行(created_at 沿用 bet
+  建立时刻,供 L3 refresh_gtm_windows 三窗回填有行可填;已有 open 行则跳过,幂等);
+  (2)经既有 inbox 写入链(producers.make_suggestion + inbox.persist_suggestions)生成
+  gtm_verdict 类型置顶裁决任务(priority=high;dedupe_key 幂等,复跑零新增)。
 - record_verdict(outcome_id 或 inbox_id, decision, lesson, ...):人工裁决唯一落点 ——
   写 vkpi_gtm_outcomes 的 decision + lesson + next_weight_change + decided_at + decided_by;
   decided 即 finalized,已裁决行拒绝二次改判(诚实回 already_decided)。
@@ -11,7 +13,8 @@
 
 红线(规格 + 用户点名「保证审」):
 - 裁决只能人工 POST:record_verdict 要求真实 staff id(无 staff 直接拒绝),
-  本模块绝无自动裁决路径 —— spawn 只生成任务,永远不写 decision。
+  本模块绝无自动裁决路径 —— spawn 只播种 open(未裁决)结果行 + 生成裁决任务,
+  永远不写 finalized decision(validated/failed/... 后六种只经人工 record_verdict 落)。
 - next_weight_change 在 L2 只做结构化记录;权重真回流由 L4 走既有
   recommendation_feedback 生效链且带样本闸(样本小于 5 不改权重),这里不抢跑。
 - 绝不写 viltrox_fit_score、不碰 rule_v0;唯一写入面 = vkpi_gtm_outcomes 自身行 +
@@ -299,10 +302,63 @@ def _build_verdict_suggestion(row: dict[str, Any], ctx: dict[str, Any]) -> dict[
     )
 
 
-def spawn_due_verdicts(dry_run: bool = True, *, limit: int = 100) -> dict[str, Any]:
-    """扫到期未裁决 bet → 生成 gtm_verdict 置顶裁决任务(幂等;dry_run 零落库)。
+def _ensure_open_outcomes(
+    conn: Any, due_rows: list[dict[str, Any]], *, dry_run: bool
+) -> tuple[int, int]:
+    """为到期 bet 播种 decision='open' 的结果行 —— L3 三窗回填的落脚点(refresh_gtm_windows
+    只认 open 行,record_verdict 一律建 finalized,故裁决前三窗永无行可填)。
 
-    只生成任务,绝不写 decision(自动裁决路径不存在)。
+    幂等:已有该 bet 的 open 结果行则跳过(已 finalized 的 bet 早被 _due_bets 排除);
+    created_at 沿用 bet 建立时刻(窗起点=行动起点而非裁决时刻),三窗才能按真实账龄回填;
+    绝不写 decision 后六种(仍无自动裁决路径)。返回 (would_create, created)。单行失败不拖垮整批。
+    """
+    if not table_exists(_OUTCOMES):
+        return 0, 0
+    open_map = _open_outcome_by_inbox(conn)
+    would = 0
+    created = 0
+    for row in due_rows:
+        bet_id = int(row["id"])
+        if bet_id in open_map:
+            continue
+        would += 1
+        if dry_run:
+            continue
+        ctx = _bet_context(row)
+        created_at = _parse_dt(row.get("created_at")) or _utcnow()
+        try:
+            conn.execute(
+                f"""
+                INSERT INTO {_OUTCOMES}
+                  (gtm_plan_id, product_sku, market, segment, channel, action_type,
+                   content_angle, expected_result, decision, action_inbox_id, kol_pool_id,
+                   created_at)
+                VALUES (?,?,?,?,?,?,?,?::jsonb,'open',?,?,?)
+                """,
+                (
+                    ctx["gtm_plan_id"], ctx["product_sku"], ctx["market"], ctx["segment"],
+                    ctx["channel"], ctx["action_type"], ctx["content_angle"],
+                    _dumps(ctx["expected_result"]) if ctx["expected_result"] is not None else None,
+                    bet_id, ctx["kol_pool_id"], created_at,
+                ),
+            )
+            conn.commit()
+            created += 1
+        except Exception:
+            logger.warning("verdict_flow.ensure_open_outcome_failed",
+                           extra={"bet_inbox_id": bet_id}, exc_info=True)
+            try:
+                conn.rollback()
+            except Exception:
+                logger.warning("verdict_flow.ensure_open_outcome_rollback_failed", exc_info=True)
+    return would, created
+
+
+def spawn_due_verdicts(dry_run: bool = True, *, limit: int = 100) -> dict[str, Any]:
+    """扫到期未裁决 bet → 播种 open 结果行(供 L3 三窗回填)+ 生成 gtm_verdict 置顶裁决任务
+    (双幂等;dry_run 零落库)。
+
+    绝不写 finalized decision(只播种 open 未裁决行,自动裁决路径不存在)。
     """
     if not table_exists(_INBOX):
         return {"status": "empty", "reason": "migration_141_not_applied", "dry_run": bool(dry_run)}
@@ -311,10 +367,14 @@ def spawn_due_verdicts(dry_run: bool = True, *, limit: int = 100) -> dict[str, A
     due, malformed = _due_bets(conn, now)
     existing = _verdict_tasks(conn)
 
+    limited = due[: max(1, int(limit or 100))]
+    # 先播种 open 结果行:refresh_gtm_windows 才有行可填(裁决前也能看见三窗证据)。
+    would_open, open_created = _ensure_open_outcomes(conn, limited, dry_run=dry_run)
+
     to_create: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
     skipped_existing = 0
-    for row in due[: max(1, int(limit or 100))]:
+    for row in limited:
         bet_id = int(row["id"])
         key = f"{_VERDICT_KEY_PREFIX}{bet_id}"
         if key in existing:
@@ -342,11 +402,14 @@ def spawn_due_verdicts(dry_run: bool = True, *, limit: int = 100) -> dict[str, A
         "due_count": len(due),
         "would_create": len(to_create),
         "created": created,
+        "would_open_outcomes": would_open,
+        "open_outcomes_created": open_created,
         "skipped_existing": skipped_existing,
         "malformed_review_at": malformed,
         "items": items[:50],
         "generated_at": now.isoformat(),
-        "note": "幂等:已有同 dedupe_key 裁决任务(任意状态)或 bet 已 finalized 的一律跳过;dry_run 零落库。",
+        "note": "双幂等:已有同 dedupe_key 裁决任务(任意状态)跳建任务、已有 open 结果行跳播种、"
+                "bet 已 finalized 的一律排除;dry_run 零落库。",
     }
 
 
@@ -465,6 +528,11 @@ def record_verdict(
                 return {"ok": False, "reason": "bet_inbox_not_found", "inbox_id": int(ref)}
             inbox_row = dict(bet_row)
         bet_inbox_id = int(inbox_row["id"])
+        # 人工否决(dismissed)的 bet 拒绝裁决:与 spawn/list_pending(_scan_bet_rows 排除
+        # status='dismissed')同口径,不给已撤下的 bet 补记 finalized 结果行。
+        if _text(inbox_row.get("status"), 20) == "dismissed":
+            return {"ok": False, "reason": "bet_dismissed", "inbox_id": bet_inbox_id,
+                    "note": "该 bet 已人工否决(dismissed),spawn/list_pending 同口径排除,拒绝裁决。"}
         # 该 bet 的既有结果行:先拒已 finalized,再复用 open 行
         rows = conn.execute(
             f"SELECT id, decision FROM {_OUTCOMES} WHERE action_inbox_id = ? ORDER BY id",
