@@ -11,12 +11,17 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, table_exists
 from app.services.cache import cache_get, cache_set
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# worker 真存活窗口:vkpi_worker_heartbeat 最近心跳在此秒数内 → 在线(与 system_health 同源 2 分钟)。
+_WORKER_HEARTBEAT_WINDOW_SEC = 120
+# worker 离线时 queued 任务的诚实 stage 标签(不谎报 ETA)。
+_WORKER_OFFLINE_LABEL = "worker离线"
 
 
 ACTIVE_STATUSES = {"queued", "retrying", "processing", "running", "in_progress", "started"}
@@ -316,7 +321,29 @@ def _avg_duration_by_job_type(conn: Any) -> dict[str, float]:
         return {}
 
 
-def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _worker_online(conn: Any) -> bool:
+    """worker 真存活闸:vkpi_worker_heartbeat 最近心跳在窗内 → 在线。
+
+    worker 每轮 poll(含空闲)都写心跳,故空闲但活着的 worker 也判在线;
+    表缺失/无心跳/读失败/心跳超窗 → 离线。与 system_health._worker_online 同源。
+    离线时上层不再据串行 ETA 谎报 eta_seconds:300(死队列没人处理)。
+    """
+    if not table_exists("vkpi_worker_heartbeat"):
+        return False
+    try:
+        row = conn.execute("SELECT MAX(last_heartbeat_at) AS latest FROM vkpi_worker_heartbeat").fetchone()
+    except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
+        return False
+    latest = row["latest"] if row is not None else None
+    latest_dt = _as_datetime(latest)
+    if latest_dt is None:
+        return False
+    age = (datetime.now(timezone.utc) - latest_dt).total_seconds()
+    return age <= _WORKER_HEARTBEAT_WINDOW_SEC
+
+
+def _query_apify_jobs(cutoff: datetime, limit: int, worker_online: bool = True) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     conn = get_conn()
     active_rows = conn.execute(
         """
@@ -352,23 +379,26 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
     eta_info: dict[Any, dict[str, Any]] = {}
     running_remaining = 0.0
     ahead = 0
-    for row in active_rows:  # 已按 claim 顺序排序
-        data = dict(row)
-        jt = _text(data.get("job_type"))
-        status = _text(data.get("status"))
-        if status in ("running", "processing"):
-            running_remaining += _dur(jt) / 2  # 在跑任务按半程估
-            ahead += 1
-        elif status in ("queued", "retrying"):
-            eta_info[data.get("id")] = {
-                "queue_position": sum(1 for v in eta_info.values()) + 1,
-                "ahead_count": ahead,
-                "eta_seconds": int(running_remaining + sum(x["_q"] for x in eta_info.values())),
-                "_q": _dur(jt),
-            }
-            ahead += 1
-    for v in eta_info.values():
-        v.pop("_q", None)
+    # worker 离线时不算串行 ETA:死队列没人处理,谎报 eta_seconds:300 是欺骗。
+    # 离线分支下 eta_info 保持空,convert() 会把 queued 任务标为 worker离线 + eta_seconds=None。
+    if worker_online:
+        for row in active_rows:  # 已按 claim 顺序排序
+            data = dict(row)
+            jt = _text(data.get("job_type"))
+            status = _text(data.get("status"))
+            if status in ("running", "processing"):
+                running_remaining += _dur(jt) / 2  # 在跑任务按半程估
+                ahead += 1
+            elif status in ("queued", "retrying"):
+                eta_info[data.get("id")] = {
+                    "queue_position": sum(1 for v in eta_info.values()) + 1,
+                    "ahead_count": ahead,
+                    "eta_seconds": int(running_remaining + sum(x["_q"] for x in eta_info.values())),
+                    "_q": _dur(jt),
+                }
+                ahead += 1
+        for v in eta_info.values():
+            v.pop("_q", None)
 
     def convert(row: Any) -> dict[str, Any]:
         data = dict(row)
@@ -383,7 +413,7 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
         }
         if data.get("id") in eta_info:
             extra.update(eta_info[data.get("id")])
-        return _make_item(
+        item = _make_item(
             source="apify_jobs",
             row_id=data.get("id"),
             raw_status=data.get("status"),
@@ -393,6 +423,12 @@ def _query_apify_jobs(cutoff: datetime, limit: int) -> tuple[list[dict[str, Any]
             updated_at=data.get("updated_at"),
             extra=extra,
         )
+        # worker 离线:排队/重试任务不谎报 ETA。eta_seconds=None + stage_label 标注 worker离线。
+        if not worker_online and item.get("status") in ("queued", "retrying"):
+            item["eta_seconds"] = None
+            item["stage_label"] = _WORKER_OFFLINE_LABEL
+            item["worker_online"] = False
+        return item
 
     return [convert(row) for row in active_rows], [convert(row) for row in recent_rows]
 
@@ -592,7 +628,8 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
     recent: list[dict[str, Any]] = []
     sources = ["apify_jobs", "job_execution_ledger"]
 
-    apify_active, apify_recent = _query_apify_jobs(cutoff, safe_limit)
+    worker_online = _worker_online(get_conn())
+    apify_active, apify_recent = _query_apify_jobs(cutoff, safe_limit, worker_online=worker_online)
     ledger_active, ledger_recent = _query_job_execution_ledger(cutoff, safe_limit)
     active.extend(apify_active)
     active.extend(ledger_active)
@@ -664,6 +701,8 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
             "write_db": False,
             "llm_calls": False,
             "worker_touched": False,
+            # worker 心跳存活:false 时 apify queued 任务的 eta_seconds=None(不谎报死队列 ETA)。
+            "worker_online": worker_online,
         },
     }
     # 波2 R1(2026-06-12 体检):重型端点同样按观看者遮蔽,杜绝绕过 compact 隐私

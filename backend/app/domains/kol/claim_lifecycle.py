@@ -30,6 +30,12 @@ def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, A
     ).fetchone()
     if existing:
         raise ValueError("kol already claimed")
+    # 写前校验 project 存在:不存在则 404(LookupError),别让 project_id FK 违约冒 500。
+    project_id = _int(payload.get("project_id")) or None
+    if project_id:
+        project = conn.execute("SELECT id FROM vkpi_projects WHERE id=?", (project_id,)).fetchone()
+        if not project:
+            raise LookupError("project not found")
     now = utcnow()
     expires_days = max(1, min(90, _int(payload.get("expires_days"), 14)))
     expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -43,7 +49,7 @@ def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, A
         (
             _int(kol_id),
             actor_staff_id,
-            _int(payload.get("project_id")) or None,
+            project_id,
             "active",
             now,
             expires_at,
@@ -64,7 +70,7 @@ def claim(kol_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, A
         detail=f"claim_id={claim_id}",
         metadata={
             "claim_id": claim_id,
-            "project_id": _int(payload.get("project_id")) or None,
+            "project_id": project_id,
             "expires_at": expires_at,
         },
     )

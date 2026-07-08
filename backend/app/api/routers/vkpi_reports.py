@@ -132,6 +132,8 @@ def download_export(request: Request, export_id: int, staff=Depends(require_tab(
         file_info = exports.export_file(export_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except exports.ExportExpired as exc:
+        raise HTTPException(status_code=410, detail=str(exc) or "export link expired") from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     path = Path(str(file_info.get("file_path") or ""))

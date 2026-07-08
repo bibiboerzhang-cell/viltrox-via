@@ -6,7 +6,18 @@ from typing import Any
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
 from app.domains.access import scope
-from app.domains.costs.common import TYPE_ALIASES, VALID_COST_TYPES, _amount_cents, _int, _json, _sku, utcnow
+from app.domains.costs.common import (
+    MAX_AMOUNT_CENTS,
+    TYPE_ALIASES,
+    VALID_COST_TYPES,
+    _amount_cents,
+    _int,
+    _json,
+    _sku,
+    normalize_cost_status,
+    normalize_currency,
+    utcnow,
+)
 from app.domains.costs.product_catalog import ensure_product_catalog_schema, list_product_catalog
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
@@ -275,6 +286,11 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
     amount_cents = _amount_cents(body)
     if amount_cents < 0:
         raise ValueError("amount must be non-negative")
+    # 写前硬校验(路由映 400):金额上界防 BIGINT 溢出 500;币种/状态白名单防任意值混入。
+    if amount_cents > MAX_AMOUNT_CENTS:
+        raise ValueError("amount exceeds maximum allowed")
+    currency = normalize_currency(body.get("currency"))
+    status = normalize_cost_status(body.get("status"))
     conn = get_conn()
     project = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (project_id,)).fetchone()
     if not project:
@@ -311,8 +327,8 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
                 """,
                 (
                     amount_cents,
-                    str(body.get("currency") or old.get("currency") or "USD"),
-                    str(body.get("status") or old.get("status") or "actual"),
+                    currency or old.get("currency") or "USD",
+                    status or old.get("status") or "actual",
                     str(body.get("incurred_at") or old.get("incurred_at") or now),
                     str(body.get("note") or old.get("note") or ""),
                     metadata_value,
@@ -356,8 +372,8 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
             project["assigned_staff_id"],
             cost_type,
             amount_cents,
-            str(body.get("currency") or "USD"),
-            str(body.get("status") or "actual"),
+            currency or "USD",
+            status or "actual",
             str(body.get("incurred_at") or now),
             source_ref,
             str(body.get("note") or ""),
@@ -651,15 +667,40 @@ def void_cost(cost_id: int, body: dict[str, Any] | None = None, *, staff: dict[s
 
 def summarize_project(project_id: int) -> dict[str, Any]:
     ensure_vkpi_schema()
+    # 汇总只计已确认的实际成本(status='actual'):estimate/pending 不冒充实际支出。
+    # 按 currency 分组:异币种绝不直加(无汇率),单币种给标量 total_cost_cents,
+    # 多币种置 None 并以 totals_by_currency 明细呈现(mixed_currency=True 提示调用方)。
     rows = get_conn().execute(
         """
-        SELECT cost_type, COALESCE(SUM(amount_cents), 0) AS amount_cents
+        SELECT cost_type, currency, COALESCE(SUM(amount_cents), 0) AS amount_cents
         FROM vkpi_cost_ledger
-        WHERE project_id=? AND status!='void'
-        GROUP BY cost_type
+        WHERE project_id=? AND status='actual'
+        GROUP BY cost_type, currency
         ORDER BY amount_cents DESC
         """,
         (int(project_id),),
     ).fetchall()
-    total = sum(int(row["amount_cents"] or 0) for row in rows)
-    return {"project_id": int(project_id), "total_cost_cents": total, "by_type": [dict(row) for row in rows]}
+    by_type = [dict(row) for row in rows]
+    totals_by_currency: dict[str, int] = {}
+    for row in by_type:
+        cur = str(row.get("currency") or "USD")
+        totals_by_currency[cur] = totals_by_currency.get(cur, 0) + int(row.get("amount_cents") or 0)
+    currencies = list(totals_by_currency.keys())
+    mixed = len(currencies) > 1
+    if not currencies:
+        total: int | None = 0
+        single_currency: str | None = None
+    elif len(currencies) == 1:
+        single_currency = currencies[0]
+        total = totals_by_currency[single_currency]
+    else:
+        single_currency = None
+        total = None
+    return {
+        "project_id": int(project_id),
+        "total_cost_cents": total,
+        "currency": single_currency,
+        "mixed_currency": mixed,
+        "totals_by_currency": totals_by_currency,
+        "by_type": by_type,
+    }

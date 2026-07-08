@@ -37,6 +37,15 @@ def generate_daily(
 
 
 # ── W2 状态流转 + 执行(write tab;execute 仍需 validators 双闸) ──────────
+def _raise_transition_error(res: dict[str, Any]) -> None:
+    """状态流转失败统一映 HTTP:不存在/越权 → 404(不泄漏存在性),非法源态 → 409。
+    与 mark-done 对齐,只看 HTTP 码的调用方不再把失败当成功(此前恒 200 体内 ok:false)。"""
+    reason = str(res.get("reason") or "")
+    if reason == "not_found_or_out_of_scope":
+        raise HTTPException(status_code=404, detail=reason)
+    raise HTTPException(status_code=409, detail=reason)
+
+
 @router.post("/{action_id}/approve")
 def approve(
     action_id: int,
@@ -45,7 +54,10 @@ def approve(
 ) -> dict[str, Any]:
     # 人审通过 → status=approved;真执行走 /execute,仍受后端 validators 双闸约束。
     # reason 落 approval_reason(批准理由,此前死列)。
-    return inbox.approve_action(action_id, staff, reason=str(reason or ""))
+    res = inbox.approve_action(action_id, staff, reason=str(reason or ""))
+    if not res.get("ok"):
+        _raise_transition_error(res)
+    return res
 
 
 @router.post("/{action_id}/dismiss")
@@ -53,7 +65,10 @@ def dismiss(
     action_id: int,
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
-    return inbox.dismiss_action(action_id, staff)
+    res = inbox.dismiss_action(action_id, staff)
+    if not res.get("ok"):
+        _raise_transition_error(res)
+    return res
 
 
 @router.post("/{action_id}/snooze")
@@ -62,7 +77,10 @@ def snooze(
     minutes: int = Body(default=1440, embed=True, ge=1, le=60 * 24 * 30),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
-    return inbox.snooze_action(action_id, staff, minutes)
+    res = inbox.snooze_action(action_id, staff, minutes)
+    if not res.get("ok"):
+        _raise_transition_error(res)
+    return res
 
 
 @router.post("/{action_id}/mark-done")

@@ -17,6 +17,16 @@ TYPE_ALIASES = {
     "cash": "cash_fee",
 }
 
+# 成本币种白名单(照 contract_generator._CURRENCY_RE 口径 + CN/HK/TW 常用币种)。add_cost
+# 写前校验:非法币种 → ValueError(路由映 400),杜绝任意币种混入后被汇总直加(无换算)。
+VALID_CURRENCIES = {"USD", "CNY", "RMB", "EUR", "GBP", "JPY", "AUD", "CAD", "HKD", "TWD", "SGD", "KRW"}
+# 成本状态白名单:允许成本生命周期已知状态,拒绝任意串(注入/错拼)→ 400。
+# 汇总口径仅计 status='actual'(见 ledger.summarize_project),estimate/pending 不再冒充实际成本。
+VALID_COST_STATUSES = {"actual", "estimate", "estimated", "pending", "void"}
+# amount_cents 落 BIGINT(±9.22e18)。留头寸取 9e18 为写入上界,超出即 400,
+# 杜绝 amount_usd=1e17 → cents 1e19 溢出 BIGINT 触发 500。
+MAX_AMOUNT_CENTS = 9_000_000_000_000_000_000
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -45,3 +55,23 @@ def _amount_cents(body: dict[str, Any]) -> int:
 
 def _sku(value: Any) -> str:
     return str(value or "").strip().upper()
+
+
+def normalize_currency(value: Any) -> str | None:
+    """校验币种在白名单并归一化为大写码;未提供(None/空串)→ None(保留调用方回退语义)。"""
+    if value is None or not str(value).strip():
+        return None
+    code = str(value).strip().upper()
+    if code not in VALID_CURRENCIES:
+        raise ValueError("unsupported currency")
+    return code
+
+
+def normalize_cost_status(value: Any) -> str | None:
+    """校验成本状态在白名单并归一化为小写;未提供 → None(保留调用方回退语义)。"""
+    if value is None or not str(value).strip():
+        return None
+    status = str(value).strip().lower()
+    if status not in VALID_COST_STATUSES:
+        raise ValueError("unsupported cost status")
+    return status

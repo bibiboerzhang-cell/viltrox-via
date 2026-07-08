@@ -12,6 +12,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import reports
 from app.domains import audit
@@ -21,8 +22,48 @@ from app.domains.projects import workflow
 from app.domains.reports.pdf_renderer import store_bytes
 from app.domains.reports import ensure_vkpi_reports_schema
 
+logger = get_logger(__name__)
+
 # 单次导出硬上限。查询按 +1 取,溢出即截断并回报 truncated,避免拉爆内存/文件。
 _EXPORT_ROW_LIMIT = 50000
+
+
+class ExportExpired(Exception):
+    """导出已过期(expires_at < now):下载端点据此返回 410 Gone,不再泄漏过期 PII/财务内容。"""
+
+
+def _parse_expiry(value: Any) -> datetime | None:
+    """expires_at 为 timestamptz;compat 读回可能是 datetime 或 ISO 串。解析为 UTC-aware;不可解析 → None。"""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _is_expired(expires_at: Any) -> bool:
+    """expires_at 缺失/不可解析 → 视为未过期(不误杀);否则 now > expires_at 即过期。"""
+    if expires_at in (None, ""):
+        return False
+    dt = _parse_expiry(expires_at)
+    if dt is None:
+        return False
+    return datetime.now(timezone.utc) > dt
+
+
+def _cleanup_expired_file(file_path: Any) -> None:
+    """惰性清理:过期导出文件 unlink(best-effort,不影响主流程);失败记日志,不静默吞。"""
+    path = str(file_path or "").strip()
+    if not path:
+        return
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        logger.warning("export expired-file cleanup failed", extra={"file_path": path}, exc_info=True)
 # 电子表格公式注入前缀:以此开头的字符串单元格前置单引号,阻止 =CMD()/DDE 等被求值。
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -433,6 +474,11 @@ def export_file(export_id: int, *, staff: dict[str, Any] | None = None) -> dict[
         scope.assert_staff_access(requested_by, staff, domain="export")
     elif not scope.can_view_all(staff, domain="export"):
         raise scope.ScopeDenied("export scope denied")
+    # 过期闸:expires_at < now → 410 Gone(路由映射),同时惰性清理落盘文件,
+    # 杜绝过期导出仍可下载含 PII/财务的旧文件、以及文件无界增长。
+    if _is_expired(item.get("expires_at")):
+        _cleanup_expired_file(item.get("file_path"))
+        raise ExportExpired("export link expired")
     return item
 
 
@@ -442,4 +488,12 @@ def list_exports(limit: int = 50, staff_id: int | None = None, *, staff: dict[st
     where = "WHERE requested_by_staff_id=?" if scoped_staff_id else ""
     params: tuple[Any, ...] = (int(scoped_staff_id), max(1, min(200, int(limit or 50)))) if scoped_staff_id else (max(1, min(200, int(limit or 50))),)
     rows = get_conn().execute(f"SELECT * FROM vkpi_export_jobs {where} ORDER BY triggered_at DESC, id DESC LIMIT ?", params).fetchall()
-    return {"exports": [dict(row) for row in rows]}
+    # 隐藏过期行(不给前端死链)并顺手惰性清理其落盘文件(被动 GC,控文件增长)。
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        if _is_expired(item.get("expires_at")):
+            _cleanup_expired_file(item.get("file_path"))
+            continue
+        items.append(item)
+    return {"exports": items}
