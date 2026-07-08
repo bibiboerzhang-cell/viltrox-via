@@ -9,14 +9,19 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_permission
+from app.domains.access import scope
 from app.domains.comments.compat import admin_router_prefix
 from app.domains.reports import weekly_generator as weekly_report_generator
 
 
 router = APIRouter(prefix=admin_router_prefix("weekly-reports"), tags=["vkpi-weekly-reports"])
+
+
+def _scope_403(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=403, detail=str(exc) or "scope denied")
 
 
 @router.post("/generate-for-staff/{staff_id}")
@@ -51,10 +56,11 @@ def api_list(
     limit: int = Query(100, ge=1, le=500),
     staff: dict = Depends(require_permission("vkpi.weekly_reports.read")),
 ) -> dict[str, Any]:
-    """List recent weekly reports."""
+    """List recent weekly reports, scoped to the caller."""
     return weekly_report_generator.list_reports(
         staff_id=staff_id,
         limit=limit,
+        staff=staff,
     )
 
 
@@ -63,17 +69,8 @@ def api_get_report(
     report_id: int,
     staff: dict = Depends(require_permission("vkpi.weekly_reports.read")),
 ) -> dict[str, Any]:
-    """Get full report by ID."""
-    from app.db.connection import get_conn
-    conn = get_conn()
-    row = conn.execute(
-        """
-        SELECT id, staff_id, layer, template_key, period_start, period_end,
-               title, body_md, llm_provider, status, cost_cents, generated_at
-        FROM vkpi_weekly_reports WHERE id = ?
-        """,
-        (report_id,),
-    ).fetchone()
-    if not row:
-        return {"status": "fail", "error": "report not found"}
-    return dict(row)
+    """Get full report by ID, scoped to the caller."""
+    try:
+        return weekly_report_generator.get_report(report_id, staff=staff)
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc

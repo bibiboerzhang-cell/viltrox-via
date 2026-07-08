@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.access import scope
 from app.platform import llm_gateway
 from app.domains.reports.weekly_templates import (
     PROMPT_VERSION,
@@ -581,25 +582,80 @@ def generate_for_all_staff(
     return summary
 
 
+# Leader-layer templates carry company-wide budget / AI spend (see weekly_templates
+# layer2_leader → budget_status). Per the read ruling employees may not see AI spend,
+# so these reports are readable by management only.
+_LEADER_TEMPLATE_KEYS = ("layer2_leader",)
+
+
+def _report_readable(report: dict, staff: dict[str, Any] | None) -> bool:
+    """Weekly-report read ruling (mirrors reports.report_file / scope.assert_staff_access).
+
+    Management (can_view_all) reads everything. Non-management may only read reports
+    filed under their own staff_id, and never the company budget / AI-spend leader
+    reports nor company-level (unowned) reports.
+    """
+    if scope.can_view_all(staff, domain="export"):
+        return True
+    try:
+        report_staff_id = int(report.get("staff_id") or 0)
+    except (TypeError, ValueError):
+        report_staff_id = 0
+    if not report_staff_id:
+        return False
+    if str(report.get("template_key") or "") in _LEADER_TEMPLATE_KEYS:
+        return False
+    return report_staff_id == scope.actor_staff_id(staff)
+
+
+def get_report(report_id: int, *, staff: dict[str, Any] | None = None) -> dict:
+    """Get full report by ID, enforcing the weekly-report read ruling."""
+    ensure_vkpi_weekly_reports_schema()
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT id, staff_id, layer, template_key, period_start, period_end,
+               title, body_md, llm_provider, status, cost_cents, generated_at
+        FROM vkpi_weekly_reports WHERE id = ?
+        """,
+        (report_id,),
+    ).fetchone()
+    if not row:
+        return {"status": "fail", "error": "report not found"}
+    report = dict(row)
+    if not _report_readable(report, staff):
+        raise scope.ScopeDenied("weekly report scope denied")
+    return report
+
+
 def list_reports(
     *,
     staff_id: int | None = None,
     period_start: date | None = None,
     limit: int = 100,
+    staff: dict[str, Any] | None = None,
 ) -> dict:
-    """List weekly reports."""
+    """List weekly reports, scoped to the caller's read permissions."""
     ensure_vkpi_weekly_reports_schema()
     conn = get_conn()
-    
+
     where = ["1=1"]
     params: list = []
-    if staff_id is not None:
+    if scope.can_view_all(staff, domain="export"):
+        if staff_id is not None:
+            where.append("staff_id = ?")
+            params.append(staff_id)
+    else:
+        # Non-management: own reports only, and never the leader budget/AI-spend reports.
         where.append("staff_id = ?")
-        params.append(staff_id)
+        params.append(scope.actor_staff_id(staff))
+        placeholders = ", ".join("?" for _ in _LEADER_TEMPLATE_KEYS)
+        where.append(f"template_key NOT IN ({placeholders})")
+        params.extend(_LEADER_TEMPLATE_KEYS)
     if period_start:
         where.append("period_start >= ?")
         params.append(period_start)
-    
+
     where_sql = " AND ".join(where)
     rows = conn.execute(
         f"""
@@ -612,7 +668,7 @@ def list_reports(
         """,
         (*params, limit),
     ).fetchall()
-    
+
     return {
         "count": len(rows),
         "reports": [dict(r) for r in rows],

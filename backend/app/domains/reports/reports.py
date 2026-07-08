@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -444,6 +444,39 @@ def _period(period_days: int) -> tuple[str, str]:
     return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _parse_moment(value: Any) -> datetime | None:
+    """Best-effort parse of a DB timestamp/date into an aware UTC datetime."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, date):
+        moment = datetime(value.year, value.month, value.day)
+    else:
+        text = str(value).strip().replace("Z", "+00:00").replace(" ", "T", 1)
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            try:
+                moment = datetime.fromisoformat(text[:10])
+            except ValueError:
+                return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
+def _in_window(value: Any, start: datetime | None, end: datetime | None) -> bool:
+    """True when value falls inside [start, end]. Undatable rows are excluded so the
+    weekly KPI cards match the reported period instead of counting all history."""
+    if start is None or end is None:
+        return True
+    moment = _parse_moment(value)
+    if moment is None:
+        return False
+    return start <= moment <= end
+
+
 def _maybe_metric_run(period_days: int, staff: dict[str, Any] | None, scoped_staff_id: int | None) -> int | None:
     try:
         ensure_vkpi_lineage_schema()
@@ -464,13 +497,23 @@ def build_weekly_context(period_days: int = 7, *, staff: dict[str, Any] | None =
     ensure_vkpi_schema()
     filters = filters or {}
     start, end = _period(period_days)
+    window_start = _parse_moment(start)
+    window_end = _parse_moment(end)
     scoped_staff_id = scope.effective_staff_id(staff, filters.get("staff_id"))
     dashboard = decision_dashboard.dashboard(window_days=period_days) if not scoped_staff_id else {"summary": {}}
     summary = dashboard.get("summary") or {}
     staff_kpi = decision_staff.staff_kpi(window="week", staff_id=scoped_staff_id)
     project_rows = workflow.list_projects(limit=200, staff=staff, staff_id_filter=scoped_staff_id).get("projects") or []
-    attr_rows = attribution.list_attributions(limit=500, staff_id=scoped_staff_id, staff=staff).get("attributions") or []
-    cost_rows = costs.list_costs(limit=500, staff_id=scoped_staff_id, staff=staff).get("costs") or []
+    # list_attributions/list_costs are period-agnostic; clamp to the report window so the
+    # "本周" KPI cards and the metric-lineage appendix speak the same period (P1 fix).
+    attr_rows = [
+        row for row in (attribution.list_attributions(limit=500, staff_id=scoped_staff_id, staff=staff).get("attributions") or [])
+        if _in_window(row.get("occurred_at"), window_start, window_end)
+    ]
+    cost_rows = [
+        row for row in (costs.list_costs(limit=500, staff_id=scoped_staff_id, staff=staff).get("costs") or [])
+        if _in_window(row.get("incurred_at"), window_start, window_end)
+    ]
     alert_rows = alerts.list_alerts(status="open", limit=100, staff=staff, staff_id=scoped_staff_id).get("alerts") or []
     sales_by_project: dict[int, int] = {}
     for row in attr_rows:
