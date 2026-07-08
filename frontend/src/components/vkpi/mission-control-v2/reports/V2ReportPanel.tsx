@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { exportVkpiReport, generateWeeklyReport, type DashboardScope, type KpiCard, type Row, type Snapshot } from '../../../../domains/dashboard';
+import { exportVkpiReport, generateWeeklyReport, rows, type DashboardScope, type KpiCard, type Row, type Snapshot } from '../../../../domains/dashboard';
 import { buildMissionReportHtml, buildMissionReportMarkdown } from './reportBuilder';
 
 interface V2ReportPanelProps {
@@ -29,6 +29,7 @@ export function V2ReportPanel({
 }: V2ReportPanelProps) {
   const [status, setStatus] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
+  const [exporting, setExporting] = useState<'weekly' | 'pdf' | 'csv' | null>(null);
   const input = useMemo(() => ({
     snapshot,
     alerts,
@@ -48,12 +49,20 @@ export function V2ReportPanel({
     window.setTimeout(() => setStatus(''), 1800);
   };
 
+  const reportRowCount = kpis.length + alerts.length + rows(snapshot.tasksStatus.tasks).length;
+
   const downloadHtml = () => {
+    if (reportRowCount === 0) {
+      setStatus('本次筛选无数据');
+      window.setTimeout(() => setStatus(''), 1800);
+      return;
+    }
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = 'vkpi-mission-control-report.html';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+    anchor.download = `vkpi-mission-control-${scope}-${windowDays}d-${stamp}.html`;
     anchor.click();
     URL.revokeObjectURL(url);
     setStatus('已生成 HTML');
@@ -77,6 +86,8 @@ export function V2ReportPanel({
       setStatus('未登录，不能调用后端周报');
       return;
     }
+    if (exporting !== null) return;
+    setExporting('weekly');
     setStatus('后端生成中...');
     setDownloadUrl('');
     try {
@@ -86,6 +97,8 @@ export function V2ReportPanel({
       setStatus(result.status ? `后端状态：${result.status}` : '后端周报已生成');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '后端周报生成失败');
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -94,6 +107,8 @@ export function V2ReportPanel({
       setStatus('未登录，不能调用后端导出');
       return;
     }
+    if (exporting !== null) return;
+    setExporting(format);
     setStatus(`${format.toUpperCase()} 导出中...`);
     setDownloadUrl('');
     try {
@@ -103,6 +118,8 @@ export function V2ReportPanel({
       setStatus(result.status ? `导出状态：${result.status}` : `${format.toUpperCase()} 已生成`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : `${format.toUpperCase()} 导出失败`);
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -122,9 +139,9 @@ export function V2ReportPanel({
           <button type="button" onClick={copyReport}>复制 Markdown</button>
           <button type="button" onClick={downloadHtml}>导出 HTML</button>
           <button type="button" onClick={printReport}>打印 / PDF</button>
-          <button type="button" onClick={generateBackendWeekly} disabled={!apiToken}>后端生成周报</button>
-          <button type="button" onClick={() => void exportBackend('pdf')} disabled={!apiToken}>后端 PDF</button>
-          <button type="button" onClick={() => void exportBackend('csv')} disabled={!apiToken}>后端 CSV</button>
+          <button type="button" onClick={() => void generateBackendWeekly()} disabled={!apiToken || exporting !== null}>{exporting === 'weekly' ? '生成中...' : '后端生成周报'}</button>
+          <button type="button" onClick={() => void exportBackend('pdf')} disabled={!apiToken || exporting !== null}>{exporting === 'pdf' ? 'PDF 导出中...' : '后端 PDF'}</button>
+          <button type="button" onClick={() => void exportBackend('csv')} disabled={!apiToken || exporting !== null}>{exporting === 'csv' ? 'CSV 导出中...' : '后端 CSV'}</button>
           {status ? <span>{status}</span> : null}
           {downloadUrl ? <a href={downloadUrl} target="_blank" rel="noreferrer">打开文件</a> : null}
         </div>

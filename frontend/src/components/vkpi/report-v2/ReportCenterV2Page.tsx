@@ -197,6 +197,7 @@ export function ReportCenterV2Page({
   const [sections, setSections] = useState<Record<ReportSectionKey, boolean>>(DEFAULT_REPORT_SECTIONS);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState<'pdf' | 'csv' | 'weekly' | null>(null);
   const reportText = useMemo(() => buildReportText(data, viewMode, { language, period, sections }), [data, language, period, sections, viewMode]);
   const gmv = metricByKey(data.metrics, 'gmv');
   const roi = metricByKey(data.metrics, 'roi');
@@ -222,6 +223,16 @@ export function ReportCenterV2Page({
     await navigator.clipboard.writeText(reportText);
     setMessage('报告文本已复制');
     window.setTimeout(() => setMessage(''), 1800);
+  };
+
+  const runExport = async (kind: 'pdf' | 'csv' | 'weekly', handler?: () => void) => {
+    if (!handler || exporting !== null) return;
+    setExporting(kind);
+    try {
+      await handler();
+    } finally {
+      setExporting(null);
+    }
   };
 
   const toggleSection = (key: ReportSectionKey) => {
@@ -296,10 +307,10 @@ export function ReportCenterV2Page({
             ))}
           </div>
           <div className="report-v2-output">
-            <button type="button" onClick={onGenerateWeeklyReport} disabled={!onGenerateWeeklyReport}><Icon name="spark" />生成周报</button>
+            <button type="button" onClick={() => void runExport('weekly', onGenerateWeeklyReport)} disabled={!onGenerateWeeklyReport || exporting !== null}><Icon name="spark" />{exporting === 'weekly' ? '生成中...' : '生成周报'}</button>
             <button type="button" onClick={copyReport}><Icon name="file" />复制报告</button>
-            <button type="button" onClick={onExportPDF} disabled={!onExportPDF}><Icon name="download" />导出 PDF</button>
-            <button type="button" onClick={onExportCSV} disabled={!onExportCSV}><Icon name="download" />导出 CSV</button>
+            <button type="button" onClick={() => void runExport('pdf', onExportPDF)} disabled={!onExportPDF || exporting !== null}><Icon name="download" />{exporting === 'pdf' ? '导出中...' : '导出 PDF'}</button>
+            <button type="button" onClick={() => void runExport('csv', onExportCSV)} disabled={!onExportCSV || exporting !== null}><Icon name="download" />{exporting === 'csv' ? '导出中...' : '导出 CSV'}</button>
           </div>
           <div className="report-v2-evidence-actions">
             <button type="button" onClick={() => onOpenEvidence('gmv')}><Icon name="info" />GMV 证据</button>
