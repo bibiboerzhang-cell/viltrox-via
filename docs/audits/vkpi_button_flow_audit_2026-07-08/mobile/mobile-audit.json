@@ -1,0 +1,80 @@
+{
+  "capturedAt": "2026-07-08T16:53:08.066Z",
+  "steps": [
+    {
+      "name": "dashboard",
+      "label": "Dashboard",
+      "state": {
+        "url": "http://127.0.0.1:8102/#cockpit",
+        "text": "Dashboard\nA\n今日焦点\n待办 20+\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n昨晚完成 1 件:深析 1\nPerformance Overview\n\nReal-time KPIs · Last 30 days\n\nAll\nKOL\n公司账号\nActive Roster\n实时\n525\n签约 / 矩阵 总数\n↑ 实时 · evidence active roster\nActive 30D\n实时\n133\n本月有发帖\n↑ 实时 · 近 30 天发布/同步\nTotal Exposure\n实时\n2.05B\n实时 · evidence 覆盖 77%\n↑ 实时 · evidence 覆盖 77%\nEngagement Rate\n实时\n1.71%\n实时 · 基于 2,104 条已抓视频\n↑ 实时 · 基于 2,104 条已抓视频\nAttributed GMV\n待接入\n--\n待 Shopify 订单接入\nAvg ROI\n待接入\n--\n待成本与订单接入\n近期市场热词\n暂无行业帖热词\n等更多行业帖入库后自动出热词\nMarketing Command Center\n\nChoose a view to explore real-time activity across the globe\n\nVIEWING\nSelect\nChoose what to map\n\nSelect a data type above to populate the globe with KOLs, dealer locations, or customer activity.\n\nKOL 分布读取真实 API\nDealer locations 已接入 · 选 Dealers 视图查看\nCustomer data pending\nSignals & Alerts\n7月8日 12:53 EDT\n🛰 Tamron:腾龙发布适用于佳能 RF",
+        "width": 390,
+        "height": 900,
+        "scrollW": 390,
+        "errors": []
+      },
+      "screenshot": "/Users/bibiboer/Documents/V-KPI——marketing/docs/audits/vkpi_button_flow_audit_2026-07-08/mobile/dashboard.png"
+    },
+    {
+      "name": "kolpool",
+      "label": "KOL Pool",
+      "state": {
+        "url": "http://127.0.0.1:8102/#cockpit",
+        "text": "Dashboard\nA\n今日焦点\n待办 20+\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n昨晚完成 1 件:深析 1\nPerformance Overview\n\nReal-time KPIs · Last 30 days\n\nAll\nKOL\n公司账号\nActive Roster\n实时\n525\n签约 / 矩阵 总数\n↑ 实时 · evidence active roster\nActive 30D\n实时\n133\n本月有发帖\n↑ 实时 · 近 30 天发布/同步\nTotal Exposure\n实时\n2.05B\n实时 · evidence 覆盖 77%\n↑ 实时 · evidence 覆盖 77%\nEngagement Rate\n实时\n1.71%\n实时 · 基于 2,104 条已抓视频\n↑ 实时 · 基于 2,104 条已抓视频\nAttributed GMV\n待接入\n--\n待 Shopify 订单接入\nAvg ROI\n待接入\n--\n待成本与订单接入\n近期市场热词\n暂无行业帖热词\n等更多行业帖入库后自动出热词\nMarketing Command Center\n\nChoose a view to explore real-time activity across the globe\n\nVIEWING\nSelect\nChoose what to map\n\nSelect a data type above to populate the globe with KOLs, dealer locations, or customer activity.\n\nKOL 分布读取真实 API\nDealer locations 已接入 · 选 Dealers 视图查看\nCustomer data pending\nSignals & Alerts\n7月8日 12:53 EDT\n🛰 Tamron:腾龙发布适用于佳能 RF",
+        "width": 390,
+        "height": 900,
+        "scrollW": 390,
+        "errors": []
+      },
+      "screenshot": "/Users/bibiboer/Documents/V-KPI——marketing/docs/audits/vkpi_button_flow_audit_2026-07-08/mobile/kolpool.png"
+    },
+    {
+      "name": "projects",
+      "label": "Projects",
+      "state": {
+        "url": "http://127.0.0.1:8102/#cockpit",
+        "text": "Dashboard\nA\n今日焦点\n待办 20+\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n昨晚完成 1 件:深析 1\nPerformance Overview\n\nReal-time KPIs · Last 30 days\n\nAll\nKOL\n公司账号\nActive Roster\n实时\n525\n签约 / 矩阵 总数\n↑ 实时 · evidence active roster\nActive 30D\n实时\n133\n本月有发帖\n↑ 实时 · 近 30 天发布/同步\nTotal Exposure\n实时\n2.05B\n实时 · evidence 覆盖 77%\n↑ 实时 · evidence 覆盖 77%\nEngagement Rate\n实时\n1.71%\n实时 · 基于 2,104 条已抓视频\n↑ 实时 · 基于 2,104 条已抓视频\nAttributed GMV\n待接入\n--\n待 Shopify 订单接入\nAvg ROI\n待接入\n--\n待成本与订单接入\n近期市场热词\n暂无行业帖热词\n等更多行业帖入库后自动出热词\nMarketing Command Center\n\nChoose a view to explore real-time activity across the globe\n\nVIEWING\nSelect\nChoose what to map\n\nSelect a data type above to populate the globe with KOLs, dealer locations, or customer activity.\n\nKOL 分布读取真实 API\nDealer locations 已接入 · 选 Dealers 视图查看\nCustomer data pending\nSignals & Alerts\n7月8日 12:53 EDT\n🛰 Tamron:腾龙发布适用于佳能 RF",
+        "width": 390,
+        "height": 900,
+        "scrollW": 390,
+        "errors": []
+      },
+      "screenshot": "/Users/bibiboer/Documents/V-KPI——marketing/docs/audits/vkpi_button_flow_audit_2026-07-08/mobile/projects.png"
+    },
+    {
+      "name": "gtm",
+      "label": "GTM Command",
+      "state": {
+        "url": "http://127.0.0.1:8102/#cockpit",
+        "text": "Dashboard\nA\n今日焦点\n待办 20+\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n失败重试\n失败任务待重试 · kol_profile_deep_crawl\n昨晚完成 1 件:深析 1\nPerformance Overview\n\nReal-time KPIs · Last 30 days\n\nAll\nKOL\n公司账号\nActive Roster\n实时\n525\n签约 / 矩阵 总数\n↑ 实时 · evidence active roster\nActive 30D\n实时\n133\n本月有发帖\n↑ 实时 · 近 30 天发布/同步\nTotal Exposure\n实时\n2.05B\n实时 · evidence 覆盖 77%\n↑ 实时 · evidence 覆盖 77%\nEngagement Rate\n实时\n1.71%\n实时 · 基于 2,104 条已抓视频\n↑ 实时 · 基于 2,104 条已抓视频\nAttributed GMV\n待接入\n--\n待 Shopify 订单接入\nAvg ROI\n待接入\n--\n待成本与订单接入\n近期市场热词\n暂无行业帖热词\n等更多行业帖入库后自动出热词\nMarketing Command Center\n\nChoose a view to explore real-time activity across the globe\n\nVIEWING\nSelect\nChoose what to map\n\nSelect a data type above to populate the globe with KOLs, dealer locations, or customer activity.\n\nKOL 分布读取真实 API\nDealer locations 已接入 · 选 Dealers 视图查看\nCustomer data pending\nSignals & Alerts\n7月8日 12:53 EDT\n🛰 Tamron:腾龙发布适用于佳能 RF",
+        "width": 390,
+        "height": 900,
+        "scrollW": 390,
+        "errors": []
+      },
+      "screenshot": "/Users/bibiboer/Documents/V-KPI——marketing/docs/audits/vkpi_button_flow_audit_2026-07-08/mobile/gtm.png"
+    }
+  ],
+  "networkErrors": [
+    {
+      "url": "http://127.0.0.1:8102/favicon.svg",
+      "status": 404,
+      "type": "Other"
+    },
+    {
+      "url": "http://127.0.0.1:8102/favicon.svg",
+      "status": 404,
+      "type": "Other"
+    },
+    {
+      "url": "http://127.0.0.1:8102/api/admin/vkpi/progress/center/stream",
+      "status": 403,
+      "type": "EventSource"
+    },
+    {
+      "url": "http://127.0.0.1:8102/api/admin/vkpi/activity/stream",
+      "status": 403,
+      "type": "EventSource"
+    }
+  ],
+  "consoleErrors": []
+}

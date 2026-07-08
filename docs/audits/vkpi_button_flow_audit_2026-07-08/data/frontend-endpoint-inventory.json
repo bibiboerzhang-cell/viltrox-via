@@ -1,0 +1,602 @@
+[
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 49,
+    "expr": "`/api/admin/vkpi/dashboard?window_days=${windowDays}`"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 50,
+    "expr": "'/api/admin/vkpi/dashboard/revenue-trend?window_days=7'"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 52,
+    "expr": "'/api/admin/vkpi/dashboard/kol-distribution?limit=200'"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 56,
+    "expr": "'/api/admin/vkpi/dashboard/recent-content?limit=12'"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 57,
+    "expr": "'/api/admin/vkpi/dashboard/agents-status'"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 58,
+    "expr": "'/api/admin/vkpi/dashboard/copilot-brief'"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 59,
+    "expr": "'/api/admin/vkpi/dashboard/tasks?limit=8'"
+  },
+  {
+    "file": "frontend/src/domains/dashboard/missionControlV2.ts",
+    "line": 61,
+    "expr": "'/api/admin/vkpi/alerts?status=open&limit=20'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/VersionBanner.tsx",
+    "line": 29,
+    "expr": "`/?vb=${Date.now()}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/v2-shell/V2ShellTopbar.tsx",
+    "line": 64,
+    "expr": "'/api/admin/vkpi/dashboard/tasks?limit=6'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/v2-shell/V2ShellTopbar.tsx",
+    "line": 65,
+    "expr": "'/api/admin/vkpi/alerts?status=open&limit=8'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/api.ts",
+    "line": 147,
+    "expr": "\"/api/auth/logout\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/StrategyPerformancePanel.tsx",
+    "line": 248,
+    "expr": "\"/api/admin/vkpi/strategy/performance\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/MissReviewPanel.tsx",
+    "line": 102,
+    "expr": "\"/api/admin/vkpi/learning/miss-review\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/AgentLoopPanel.tsx",
+    "line": 111,
+    "expr": "\"/api/admin/vkpi/agents/loop/trace?limit=5\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/AgentLoopPanel.tsx",
+    "line": 123,
+    "expr": "\"/api/admin/vkpi/agents/loop/run-demo?dry_run=true\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/OfficialPlannerPanel.tsx",
+    "line": 134,
+    "expr": "`/api/admin/vkpi/channel/official-plan${suffix}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/WeeklyScorecardPanel.tsx",
+    "line": 114,
+    "expr": "\"/api/admin/vkpi/learning/weekly-scorecard?weeks=8\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/CommerceSignalsPanel.tsx",
+    "line": 67,
+    "expr": "`/api/admin/vkpi/kol-pool/${idPath}/production-leadtime`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/CommerceSignalsPanel.tsx",
+    "line": 70,
+    "expr": "`/api/admin/vkpi/kol-pool/${idPath}/competing-activity`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ChannelMixPanel.tsx",
+    "line": 140,
+    "expr": "`/api/admin/vkpi/channel/mix?${q.toString()}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/CategoryTracksPanel.tsx",
+    "line": 168,
+    "expr": "\"/api/admin/vkpi/strategy/category-tracks\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/PredictionLedgerPanel.tsx",
+    "line": 132,
+    "expr": "\"/api/admin/vkpi/prediction-ledger/summary\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/NorthStarGauges.tsx",
+    "line": 139,
+    "expr": "\"/api/admin/vkpi/gtm/northstar\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SafetyAuthenticityPanel.tsx",
+    "line": 74,
+    "expr": "`/api/admin/vkpi/kol-pool/${id}/brand-safety`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SafetyAuthenticityPanel.tsx",
+    "line": 77,
+    "expr": "`/api/admin/vkpi/kol-pool/${id}/authenticity`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/IndustryBenchmarkPanel.tsx",
+    "line": 153,
+    "expr": "\"/api/admin/vkpi/strategy/industry-benchmark?window_days=90\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/TrendPulseBar.tsx",
+    "line": 15,
+    "expr": "\"/api/admin/vkpi/industry-data/hashtag-trends/v0?limit=12&days=14\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/MorningBriefCard.tsx",
+    "line": 101,
+    "expr": "\"/api/admin/vkpi/morning-brief\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/RateCardPanel.tsx",
+    "line": 98,
+    "expr": "`${base}/rate-estimate`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/RateCardPanel.tsx",
+    "line": 101,
+    "expr": "`${base}/rates`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/TodayFocusStrip.tsx",
+    "line": 67,
+    "expr": "\"/api/admin/vkpi/morning-brief\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ShadowEvalPanel.tsx",
+    "line": 162,
+    "expr": "\"/api/admin/vkpi/learning/shadow-evals\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/BrandPulsePanel.tsx",
+    "line": 118,
+    "expr": "\"/api/admin/vkpi/market/brand-pulse?window_days=90\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/GiftedFunnelPanel.tsx",
+    "line": 121,
+    "expr": "\"/api/admin/vkpi/gifted/funnel\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/QualityCompliancePanel.tsx",
+    "line": 135,
+    "expr": "`${base}/quality-score`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/QualityCompliancePanel.tsx",
+    "line": 138,
+    "expr": "`${base}/ftc-scan`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/EditGroupModal.tsx",
+    "line": 86,
+    "expr": "\"/api/admin/vkpi/projects?limit=200\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/EditGroupModal.tsx",
+    "line": 110,
+    "expr": "\"/api/admin/vkpi/kol-pool?limit=200\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/AutonomyBoardPage.tsx",
+    "line": 108,
+    "expr": "\"/api/admin/vkpi/autonomy/licenses\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/AutonomyBoardPage.tsx",
+    "line": 127,
+    "expr": "`/api/admin/vkpi/autonomy/evaluate?dry_run=${dryRun ? \"true\" : \"false\"}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/Sku360Page.tsx",
+    "line": 116,
+    "expr": "`/api/admin/vkpi/sku/${encodeURIComponent(sku)}/profile`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/CreativeLibraryPage.tsx",
+    "line": 76,
+    "expr": "`/api/admin/vkpi/creative-segments/search?${qs.toString()}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass-future/RealWorldMap.tsx",
+    "line": 27,
+    "expr": "'/data/world-110m.json'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/SettingsPage.tsx",
+    "line": 87,
+    "expr": "'/api/admin/vkpi/ops/health-sentinel'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/SettingsPage.tsx",
+    "line": 215,
+    "expr": "'/api/admin/vkpi/ops/cost-ledger'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/SettingsPage.tsx",
+    "line": 343,
+    "expr": "\"/api/admin/vkpi/staff-directory\""
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 95,
+    "expr": "`/api/admin/vkpi/dashboard?window_days=${windowDays}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 96,
+    "expr": "`/api/admin/vkpi/dashboard/revenue-trend?window_days=7`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 98,
+    "expr": "'/api/admin/vkpi/dashboard/kol-distribution?limit=200'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 102,
+    "expr": "'/api/admin/vkpi/dashboard/recent-content?limit=12'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 103,
+    "expr": "'/api/admin/vkpi/dashboard/agents-status'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 104,
+    "expr": "'/api/admin/vkpi/dashboard/copilot-brief'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "line": 105,
+    "expr": "'/api/admin/vkpi/dashboard/tasks?limit=6'"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/DailyDigestCard.tsx",
+    "line": 126,
+    "expr": "`/api/admin/vkpi/my-kol/daily-digest?days=${encodeURIComponent(String(days))}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/RiskIndexPanel.tsx",
+    "line": 215,
+    "expr": "`/api/admin/vkpi/my-kol/risk-index${query}`"
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectMaterialsLibrary.tsx",
+    "line": 75,
+    "expr": "`/api/marketing/projects/${projectId}/materials`"
+  },
+  {
+    "file": "frontend/src/lib/browserAssist/useBrowserAssist.ts",
+    "line": 100,
+    "expr": "`${BASE}/devices/register`"
+  },
+  {
+    "file": "frontend/src/services/auth.service.ts",
+    "line": 5,
+    "expr": "\"/api/auth/login\""
+  },
+  {
+    "file": "frontend/src/services/auth.service.ts",
+    "line": 12,
+    "expr": "\"/api/auth/logout\""
+  },
+  {
+    "file": "frontend/src/services/auth.service.ts",
+    "line": 18,
+    "expr": "\"/api/auth/me\""
+  },
+  {
+    "file": "frontend/src/services/auth.service.ts",
+    "line": 24,
+    "expr": "\"/api/auth/me/avatar\""
+  },
+  {
+    "file": "frontend/src/services/auth.service.ts",
+    "line": 31,
+    "expr": "\"/api/auth/me/profile\""
+  },
+  {
+    "file": "frontend/src/services/vkpi.lineage-api.ts",
+    "line": 249,
+    "expr": "`${API_PREFIX}/runs?${qs.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi.lineage-api.ts",
+    "line": 253,
+    "expr": "`${API_PREFIX}/runs/${encodeURIComponent(String(runId))}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/links-api.ts",
+    "line": 44,
+    "expr": "`/api/marketing/links/${encodeURIComponent(linkId)}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/cost-api.ts",
+    "line": 25,
+    "expr": "`/api/marketing/costs/${encodeURIComponent(costId)}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/cost-api.ts",
+    "line": 97,
+    "expr": "\"/api/admin/vkpi/budgets\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/audit-api.ts",
+    "line": 21,
+    "expr": "`/api/admin/vkpi/audit/overview?${params.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/gtmCommand-api.ts",
+    "line": 467,
+    "expr": "\"/api/admin/vkpi/market-brain/summary\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/inventory-api.ts",
+    "line": 147,
+    "expr": "\"/api/admin/vkpi/inventory/groups\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/attribution-api.ts",
+    "line": 78,
+    "expr": "\"/api/marketing/attribution/amazon/upload\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/attribution-api.ts",
+    "line": 82,
+    "expr": "\"/api/marketing/shopify/sync\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/attribution-api.ts",
+    "line": 86,
+    "expr": "\"/api/marketing/shopify/backfill\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/market-api.ts",
+    "line": 43,
+    "expr": "\"/api/admin/vkpi/industry-data/competitor-brain/status\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/market-api.ts",
+    "line": 47,
+    "expr": "\"/api/admin/vkpi/industry-data/content-brain/status\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/market-api.ts",
+    "line": 147,
+    "expr": "`/api/admin/vkpi/brand-signals/preview?${params.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/agentOps-api.ts",
+    "line": 7,
+    "expr": "\"/api/admin/vkpi/agents/capabilities\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/agentOps-api.ts",
+    "line": 19,
+    "expr": "\"/api/admin/vkpi/agents/learning-status\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/agentOps-api.ts",
+    "line": 47,
+    "expr": "\"/api/admin/vkpi/kol-pool/discovery/providers\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/agentOps-api.ts",
+    "line": 67,
+    "expr": "\"/api/admin/vkpi/metrics/report-types\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/industry-api.ts",
+    "line": 18,
+    "expr": "\"/api/admin/vkpi/industry-data/projects\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 48,
+    "expr": "`/api/admin/vkpi/access/rbac-status${suffix}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 52,
+    "expr": "\"/api/marketing/settings/providers\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 64,
+    "expr": "\"/api/admin/vkpi/settings/feature-flags\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 76,
+    "expr": "\"/api/admin/vkpi/settings/platform-crawl\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 88,
+    "expr": "\"/api/admin/vkpi/settings/budgets\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 101,
+    "expr": "\"/api/admin/vkpi/settings/api-key-pool\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 121,
+    "expr": "\"/api/admin/vkpi/settings/control-status\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/settings-api.ts",
+    "line": 142,
+    "expr": "\"/api/admin/vkpi/settings/comment-alerts\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/kolPool-api.ts",
+    "line": 316,
+    "expr": "\"/api/admin/vkpi/kol-pool/summary\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/channel-api.ts",
+    "line": 7,
+    "expr": "`/api/marketing/channels${suffix}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/channel-api.ts",
+    "line": 12,
+    "expr": "`/api/marketing/channels${suffix}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/skills-api.ts",
+    "line": 53,
+    "expr": "\"/api/admin/vkpi/skills\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/collab-api.ts",
+    "line": 8,
+    "expr": "`${BASE}?${p.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/evidence-api.ts",
+    "line": 15,
+    "expr": "\"/api/marketing/evidence/uploads\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/shopifyHub-api.ts",
+    "line": 61,
+    "expr": "\"/api/marketing/projects?limit=100\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/shopifyHub-api.ts",
+    "line": 62,
+    "expr": "\"/api/admin/vkpi/events?limit=100\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/shopifyHub-api.ts",
+    "line": 71,
+    "expr": "\"/api/marketing/kols?limit=300\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/shopifyHub-api.ts",
+    "line": 75,
+    "expr": "\"/api/marketing/product-catalog?limit=300\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/tasks-api.ts",
+    "line": 142,
+    "expr": "\"/api/admin/vkpi/tasks/realtime-status\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/tasks-api.ts",
+    "line": 153,
+    "expr": "`/api/admin/vkpi/task-queue?${params.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/tasks-api.ts",
+    "line": 163,
+    "expr": "`/api/admin/vkpi/task-queue/compact?${params.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/kol-api.ts",
+    "line": 154,
+    "expr": "`/api/marketing/kols/${encodeURIComponent(kolId)}/profile`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/kol-api.ts",
+    "line": 237,
+    "expr": "`/api/marketing/kols?${query.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/alert-api.ts",
+    "line": 7,
+    "expr": "`/api/marketing/alerts/${encodeURIComponent(alertId)}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/product-api.ts",
+    "line": 69,
+    "expr": "\"/api/admin/vkpi/analytics/products?limit=100\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/product-api.ts",
+    "line": 93,
+    "expr": "\"/api/admin/vkpi/analytics/products\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/product-api.ts",
+    "line": 117,
+    "expr": "`/api/admin/vkpi/analytics/daily-digest/status?${params.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/product-api.ts",
+    "line": 165,
+    "expr": "\"/api/admin/vkpi/product-analysis/launches\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/staff-api.ts",
+    "line": 76,
+    "expr": "\"/api/admin/staff/invite/capabilities\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 142,
+    "expr": "`/api/marketing/projects/${encodeURIComponent(projectId)}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 291,
+    "expr": "`/api/marketing/kol-pool/available?${params.toString()}`"
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 454,
+    "expr": "\"/api/marketing/campaigns?limit=100\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 458,
+    "expr": "\"/api/marketing/campaigns\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 470,
+    "expr": "\"/api/marketing/budget-pools?limit=100\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 474,
+    "expr": "\"/api/marketing/budget-pools\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/projects-api.ts",
+    "line": 505,
+    "expr": "\"/api/marketing/messages\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/sync-api.ts",
+    "line": 87,
+    "expr": "\"/api/admin/vkpi/sync/overview\""
+  },
+  {
+    "file": "frontend/src/services/vkpi/dashboard-api.ts",
+    "line": 284,
+    "expr": "`/api/admin/dashboard/kols?${params.toString()}`"
+  }
+]

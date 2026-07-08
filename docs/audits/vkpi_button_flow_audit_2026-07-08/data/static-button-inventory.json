@@ -1,0 +1,2387 @@
+[
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectDetailModals.Sections.tsx",
+    "buttons": 27,
+    "onclick": 38,
+    "<button\\b": 25,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 2
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx",
+    "buttons": 31,
+    "onclick": 31,
+    "<button\\b": 29,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 2
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/StockManagerModal.tsx",
+    "buttons": 19,
+    "onclick": 22,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 19,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DashboardPremium.tsx",
+    "buttons": 16,
+    "onclick": 23,
+    "<button\\b": 16,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectDetailModals.tsx",
+    "buttons": 15,
+    "onclick": 22,
+    "<button\\b": 15,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectDetailSections.tsx",
+    "buttons": 18,
+    "onclick": 18,
+    "<button\\b": 18,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/channels/ChannelContentList.tsx",
+    "buttons": 16,
+    "onclick": 20,
+    "<button\\b": 15,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/report-v2/ReportCenterV2Page.tsx",
+    "buttons": 16,
+    "onclick": 16,
+    "<button\\b": 16,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DataQualityPage.tsx",
+    "buttons": 13,
+    "onclick": 13,
+    "<button\\b": 13,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ReportPanel.tsx",
+    "buttons": 11,
+    "onclick": 13,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 11,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/ContactModal.tsx",
+    "buttons": 11,
+    "onclick": 13,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 11,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/panels/KolPoolPanel.tsx",
+    "buttons": 10,
+    "onclick": 13,
+    "<button\\b": 10,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/kol-pool-v2/KolPoolV2Page.tsx",
+    "buttons": 13,
+    "onclick": 10,
+    "<button\\b": 13,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/OfficialContentLayer.tsx",
+    "buttons": 9,
+    "onclick": 14,
+    "<button\\b": 9,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/v2-shell/V2ShellTopbar.tsx",
+    "buttons": 11,
+    "onclick": 11,
+    "<button\\b": 11,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/GoaffproLinkSection.tsx",
+    "buttons": 11,
+    "onclick": 11,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 11,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SmartKolInputPanel.TextResult.tsx",
+    "buttons": 11,
+    "onclick": 11,
+    "<button\\b": 11,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/FilterBar.tsx",
+    "buttons": 11,
+    "onclick": 10,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 11,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/KPIDetailModal.tsx",
+    "buttons": 8,
+    "onclick": 12,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 8,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLDetailDrawer.Panels.tsx",
+    "buttons": 8,
+    "onclick": 11,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 8,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ActionInboxPanel.tsx",
+    "buttons": 9,
+    "onclick": 9,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 9,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/EmployeeKolContentLayer.tsx",
+    "buttons": 9,
+    "onclick": 9,
+    "<button\\b": 8,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectDetailView.Sections.tsx",
+    "buttons": 6,
+    "onclick": 12,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/tabs/CampaignContractsTab.tsx",
+    "buttons": 9,
+    "onclick": 9,
+    "<button\\b": 9,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLDetailDrawerSections.tsx",
+    "buttons": 9,
+    "onclick": 8,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 9,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/discover/DiscoverPageLayout.tsx",
+    "buttons": 9,
+    "onclick": 8,
+    "<button\\b": 9,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/KolStageTimeline.tsx",
+    "buttons": 9,
+    "onclick": 8,
+    "<button\\b": 9,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/TasksTab.tsx",
+    "buttons": 8,
+    "onclick": 9,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 8,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/CockpitTopbar.tsx",
+    "buttons": 8,
+    "onclick": 8,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 8,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/ProjectDetailModal.tsx",
+    "buttons": 7,
+    "onclick": 9,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 7,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectCampaignBoard.tsx",
+    "buttons": 7,
+    "onclick": 9,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/CrossPlatformPanel.tsx",
+    "buttons": 9,
+    "onclick": 7,
+    "<button\\b": 9,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/AddProductPrepModal.tsx",
+    "buttons": 7,
+    "onclick": 9,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 7,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/NewTaskModal.tsx",
+    "buttons": 7,
+    "onclick": 9,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 7,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SmartKolInputPanel.Sections.tsx",
+    "buttons": 7,
+    "onclick": 8,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/mission-control-v2/reports/V2ReportPanel.tsx",
+    "buttons": 7,
+    "onclick": 8,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/panels/KolPoolPanel.parts.tsx",
+    "buttons": 7,
+    "onclick": 7,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/TeamModal.tsx",
+    "buttons": 7,
+    "onclick": 7,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 7,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ReplyQueuePage.tsx",
+    "buttons": 7,
+    "onclick": 7,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsAdminCards.tsx",
+    "buttons": 8,
+    "onclick": 6,
+    "<button\\b": 8,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/StaffPermissionDrawer.tsx",
+    "buttons": 7,
+    "onclick": 7,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/discover/DiscoverQueuePanels.tsx",
+    "buttons": 7,
+    "onclick": 7,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/AddMaterialModal.tsx",
+    "buttons": 6,
+    "onclick": 8,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/NewEventModal.tsx",
+    "buttons": 6,
+    "onclick": 8,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/pages/EventDetailView.tsx",
+    "buttons": 7,
+    "onclick": 7,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 7,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/popovers/UserMenuPopover.tsx",
+    "buttons": 5,
+    "onclick": 8,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/discover/DiscoverRecommendationPanel.tsx",
+    "buttons": 6,
+    "onclick": 7,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/NaturalSearchPanel.tsx",
+    "buttons": 7,
+    "onclick": 6,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/ExpenseEntryModal.tsx",
+    "buttons": 5,
+    "onclick": 8,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/tasks/TaskCenter.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/ShareModal.tsx",
+    "buttons": 5,
+    "onclick": 7,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/KOLPoolPage.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLDetailDrawer.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/TaskProgressBoard.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/FeedbackModal.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/EventDetailModal.tsx",
+    "buttons": 5,
+    "onclick": 7,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/PublishPreviewModal.tsx",
+    "buttons": 5,
+    "onclick": 7,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/ProfileModal.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/popovers/WorkRemindersPopover.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/GtmCommandPage.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/MissionControlV2Page.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ShopifyHubPage.Parts.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 6,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/AttributionPage.tsx",
+    "buttons": 7,
+    "onclick": 5,
+    "<button\\b": 7,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/drawers/tabs/index.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/AiGenerateTasksModal.tsx",
+    "buttons": 5,
+    "onclick": 7,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/analytics/OutreachTables.tsx",
+    "buttons": 6,
+    "onclick": 6,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/channels/MyKolMedia.tsx",
+    "buttons": 5,
+    "onclick": 7,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ProjectsPage.Sections.tsx",
+    "buttons": 6,
+    "onclick": 5,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectParticipationTab.tsx",
+    "buttons": 4,
+    "onclick": 7,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/CompetitorBrainPanel.tsx",
+    "buttons": 6,
+    "onclick": 5,
+    "<button\\b": 6,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/tabs/HomeTab.tsx",
+    "buttons": 5,
+    "onclick": 6,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/tables/ProjectTable.tsx",
+    "buttons": 4,
+    "onclick": 6,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/tables/LinkTable.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/ShareKolModal.tsx",
+    "buttons": 4,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 4,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/CockpitSidebar.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/EventPreviewModal.tsx",
+    "buttons": 4,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 4,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/MemberWorkbench.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsOperatingReviewPanel.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/discover/DiscoverProfilePanel.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/MarketingMaterialsPanel.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 5,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/analytics/RecommendationCandidateTable.tsx",
+    "buttons": 5,
+    "onclick": 5,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/KOLDetailModal.tsx",
+    "buttons": 4,
+    "onclick": 5,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 4,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/SignalsAllModal.tsx",
+    "buttons": 3,
+    "onclick": 6,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/layout/VkpiTopbar.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/charts/AlertsPanel.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/UpcomingEventsCard.tsx",
+    "buttons": 3,
+    "onclick": 5,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SmartKolInputPanel.UrlSummary.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/SignalDetailModal.tsx",
+    "buttons": 3,
+    "onclick": 5,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/AllRemindersModal.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 4,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/AutonomyBoardPage.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/IntelligentPage.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/KolProfilePage.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DataQueryPage.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DataExportPage.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsControlPanels.tsx",
+    "buttons": 5,
+    "onclick": 3,
+    "<button\\b": 5,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/discover/DiscoverSearchPanel.tsx",
+    "buttons": 3,
+    "onclick": 5,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/FulfillmentObservationPanel.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/profile/ProfileDashboard.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/drawers/AccountDrawer.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/OverviewTab.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 4,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/InviteKolModal.tsx",
+    "buttons": 3,
+    "onclick": 5,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/pages/EventsPage.tsx",
+    "buttons": 4,
+    "onclick": 4,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 4,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/PinDetailModal.tsx",
+    "buttons": 3,
+    "onclick": 4,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/CostsPage.tsx",
+    "buttons": 4,
+    "onclick": 3,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/ShopifyConnectPage.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/MissReviewPanel.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/StrategySimPanel.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/AIIntelligenceCard.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/CategoryTracksPanel.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/TodayFocusStrip.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/MarketCoverageCard.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/AIDecisionConfirmModal.tsx",
+    "buttons": 2,
+    "onclick": 4,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/AllMoversModal.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/AllNotificationsModal.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/EditGroupModal.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/NotificationDetailModal.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/KolPoolAllModal.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/AllProjectsModal.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/GtmCommandPage.Command.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/MarketTrendsPage.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/CampaignsPage.tsx",
+    "buttons": 4,
+    "onclick": 2,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DealerMapPage.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ShopifyHubPage.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ShopifyHubPage.legacy.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/SkillStudioPage.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/GoaffproConnectCard.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsFeedbackPanel.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/PoolEvidenceContent.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/tabs/CampaignFinanceTab.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/tabs/CampaignRetrospectiveTab.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/tabs/BenchmarksTab.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/KolsTab.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/ProductPrepPanel.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/BudgetExpensesTab.tsx",
+    "buttons": 3,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 3,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/modals/DeleteConfirmModal.tsx",
+    "buttons": 2,
+    "onclick": 4,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/analytics/RecommendationSetupForms.tsx",
+    "buttons": 4,
+    "onclick": 2,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/analytics/AnalyticsMonitorPanel.tsx",
+    "buttons": 4,
+    "onclick": 2,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/tables/StaffTable.tsx",
+    "buttons": 2,
+    "onclick": 3,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SignalsAlertsCard.tsx",
+    "buttons": 2,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/popovers/NotificationsPopover.tsx",
+    "buttons": 2,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/popovers/HelpPopover.tsx",
+    "buttons": 1,
+    "onclick": 4,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ProjectsPage.tsx",
+    "buttons": 3,
+    "onclick": 2,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/costs/BudgetMonitorPanel.tsx",
+    "buttons": 3,
+    "onclick": 2,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/shared/PostCard.tsx",
+    "buttons": 3,
+    "onclick": 2,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/drawers/PostDetailDrawer.tsx",
+    "buttons": 3,
+    "onclick": 2,
+    "<button\\b": 3,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/layout/VkpiSidebar.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/DashboardReplicaPage.tsx",
+    "buttons": 1,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLTable.tsx",
+    "buttons": 1,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/HierarchyDropdown.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLDrawerOutreachSection.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/GiftedFunnelPanel.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLVideoAnalysisPanel.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KOLDetailDrawerSections.More.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/FullCalendarModal.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass/AIBriefCard.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/ProjectEvidenceForms.tsx",
+    "buttons": 4,
+    "onclick": 0,
+    "<button\\b": 4,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/ProjectDetailDrawer.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/StaffProfileDrawer.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/KolProfileDrawer.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/AgentsPage.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DiscoveryPage.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsPage.Sections.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsRulesPanel.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectMaterialsLibrary.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/tabs/CampaignMaterialsTab.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/drawers/FilterDrawer.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/RetroTab.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 2,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/analytics/RecommendationRunReviewPanel.tsx",
+    "buttons": 2,
+    "onclick": 2,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/FeedbackWidget.tsx",
+    "buttons": 2,
+    "onclick": 1,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ContentCalendarCard.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/TopMoversCard.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KolRecommendationCards.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SmartKolInputPanel.tsx",
+    "buttons": 2,
+    "onclick": 1,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/FloatingCard.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ActiveCampaignsCard.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ActivityFeed.tsx",
+    "buttons": 0,
+    "onclick": 3,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KPAvatar.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/dashboard/CommandCenter.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/ProjectDueListCard.tsx",
+    "buttons": 1,
+    "onclick": 2,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/ContentBrainPanel.tsx",
+    "buttons": 2,
+    "onclick": 1,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/routes/admin/StaffActivateRoute.tsx",
+    "buttons": 2,
+    "onclick": 1,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/routes/admin/ResetPasswordRoute.tsx",
+    "buttons": 2,
+    "onclick": 1,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/domains/data-quality/components/DataQualitySummaryCards.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/admin/tabs_v2/VkpiTab.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/VersionBanner.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/tables/CostLedgerTable.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/tables/ProviderStatusTable.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/intelligence/IntelligenceEvidenceDrawer.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/intelligence/IntelligenceActionStrip.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/intelligence/IntelligenceDetailPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/intelligence/IntelligenceCard.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/panels/KolDetailPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/panels/AmazonAttributionLivePanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/charts/Leaderboard.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/ExportWidget.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/DetailSection.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/CardHeader.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/DataStatusBadge.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/CockpitApp.Sections.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/CockpitApp.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SectionFold.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/TopProgressCenter.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/AgentLoopPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/OfficialPlannerPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/SemanticRecallCard.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/VerdictPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/DealerFitPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/Breadcrumb.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/IndustryBenchmarkPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/RateCardPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/LazyErrorBoundary.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 1,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/OpsHealthCard.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ShadowEvalPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/ContentScorecardPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KolFunnelCard.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/ShortcutsModal.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/SettingsModal.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/popovers/PopoverWrapper.tsx",
+    "buttons": 0,
+    "onclick": 2,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/LaunchPadPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/Sku360Page.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/MarketVoicePage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/dashboard/AccountTypeTabs.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass-future/RealWorldMap.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 1
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/LinkDetailDrawer.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/AlertDetailDrawer.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/drawers/EvidenceDrawer.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/DataAnalysisPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/ShopifyHubPage.Sections.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/WorkspacePage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/SettingsPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/AuditPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/IntelligenceCenterPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/IndustryBoardPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsSchedulerPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsPage.fragments.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsPreferencePanels.tsx",
+    "buttons": 2,
+    "onclick": 0,
+    "<button\\b": 2,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/settings/SettingsStatusPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/DailyDigestCard.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/ContributionRollupPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/MyKolPage.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/myKol/RiskIndexPanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/LiveLogisticsBanner.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/projects/tabs/CampaignAnalyticsTab.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/MarketIntelligencePanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/tabs/PostsTab.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/shared/SourceTooltip.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/data-analysis/shared/CommentIntelligencePanel.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/tabs/MaterialsTab.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/analytics/RecommendationDetailDrawer.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/routes/admin/AdminRoute.tsx",
+    "buttons": 1,
+    "onclick": 1,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/intelligence/IntelligenceTaskDraftPanel.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/shared/MetricCard.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/CommerceSignalsPanel.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/Globe.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/MetricCard.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/KPIBar.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/components/modals/CenterModal.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/cockpit/pages/GtmCommandPage.Sections.tsx",
+    "buttons": 1,
+    "onclick": 0,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 1,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass/GlassTopBar.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass/GlassNav.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass/GlassFAB.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/glass/GlassButton.tsx",
+    "buttons": 1,
+    "onclick": 0,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/LinksPage.tsx",
+    "buttons": 1,
+    "onclick": 0,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/components/vkpi/pages/events/components/EventCard.tsx",
+    "buttons": 0,
+    "onclick": 1,
+    "<button\\b": 0,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  },
+  {
+    "file": "frontend/src/routes/admin/AdminLoginRoute.tsx",
+    "buttons": 1,
+    "onclick": 0,
+    "<button\\b": 1,
+    "React\\.createElement\\(\\s*[\"\\']button[\"\\']": 0,
+    "\\be\\(\\s*[\"\\']button[\"\\']": 0,
+    "role=[\"\\']button[\"\\']": 0
+  }
+]

@@ -1,0 +1,2412 @@
+[
+  {
+    "page": "initial",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "今日焦点 待办 20+",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "失败重试 失败任务待重试 · kol_profile_deep_crawl",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "昨晚完成 2 件:深析 2",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "All",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "KOL",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "公司账号",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "VIEWING Select",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "TAMRON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "SONY",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "CANON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "LEICA",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View All →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看证据",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后处理",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新建议",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "通过",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "忽略",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 13 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "执行台账",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "预览催更建议(dry-run)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "描述你要找的创作者,如 cinematic wedding videographer",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "找人",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Grandeur Portrait Photography Workshop featuring @mia elisse ◡̈ using Fujifilm X-T2 w/ Viltrox 75mm 1.2 Pro & Viltrox 35mm 1.7 air Photo: KMD Portraits HMUA: Shamae Avanzado x Kiano Delos Santos Location: Bukid Amara Worshop Organizer: Marcus Daniel Angay #photography #bts #kmdph #viltroxph #fujifil",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Viltrox EVO 55mm f/1.8 Review: Better Than Nikon's 50mm f/1.8?",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Fujifilm XA20 with 15-45mm Kitlens P19,000 In very good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Box - Manuals - 15-45mm Kitlens - 1 Battery - Neckstrap - Lens Cap - Body cap - Charger Location: Taguig Meet Up in BGC/ Lalamove",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Lensa canon EF 70-200mm f4 L USM 🔥🔥🔥 #canonlens #lensazoom #canon #telephoto #lensa",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Sony A6000 with E PZ 16-50mm Kitlens P26,000 Good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Camera - Neckstrap - Battery - Charger - Lens front cap 📍Taguig Meet Up in BGC or Bicutan/ Lalamove or GrabExpress/ COD or COP thru LBC",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "按成员(16 人)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "去 MY KOL →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View Full →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "Dashboard",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "今日焦点 待办 20+",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "失败重试 失败任务待重试 · kol_profile_deep_crawl",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "昨晚完成 2 件:深析 2",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "All",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "KOL",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "公司账号",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "VIEWING Select",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "TAMRON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "SONY",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "CANON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "LEICA",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View All →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看证据",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后处理",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新建议",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "通过",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "忽略",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 13 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "执行台账",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "预览催更建议(dry-run)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "描述你要找的创作者,如 cinematic wedding videographer",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "找人",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Grandeur Portrait Photography Workshop featuring @mia elisse ◡̈ using Fujifilm X-T2 w/ Viltrox 75mm 1.2 Pro & Viltrox 35mm 1.7 air Photo: KMD Portraits HMUA: Shamae Avanzado x Kiano Delos Santos Location: Bukid Amara Worshop Organizer: Marcus Daniel Angay #photography #bts #kmdph #viltroxph #fujifil",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Viltrox EVO 55mm f/1.8 Review: Better Than Nikon's 50mm f/1.8?",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Fujifilm XA20 with 15-45mm Kitlens P19,000 In very good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Box - Manuals - 15-45mm Kitlens - 1 Battery - Neckstrap - Lens Cap - Body cap - Charger Location: Taguig Meet Up in BGC/ Lalamove",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Lensa canon EF 70-200mm f4 L USM 🔥🔥🔥 #canonlens #lensazoom #canon #telephoto #lensa",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Sony A6000 with E PZ 16-50mm Kitlens P26,000 Good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Camera - Neckstrap - Battery - Charger - Lens front cap 📍Taguig Meet Up in BGC or Bicutan/ Lalamove or GrabExpress/ COD or COP thru LBC",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "按成员(16 人)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "去 MY KOL →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View Full →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "MY KOL",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新数据",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "昨天",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "近7天",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "近30天",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "‹",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "›",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "收起矩阵",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Jianbo Z ADMIN Founder 焦点: 全局 + 战略 369.9M +1.4M 播放 账号 18 · 6 平台 粉丝 1.2M +788 管 KOL 85 人 KOL 视频 12.6K · 369.9M Facebook Instagram Reddit TikTok",
+        "tag": "article",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "85 人",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "2 2076310654 employee 焦点: 暂无 — 账号 暂无 粉丝 1M 管 KOL 1 人 KOL 视频 8 条 账号暂无",
+        "tag": "article",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "1 人",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin ADMIN admin 焦点: 全局 — 账号 暂无 粉丝 500.4K 管 KOL 3 人 KOL 视频 3 条 账号暂无",
+        "tag": "article",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "3 人",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "周 周敏华 employee 焦点: 暂无 — 账号 暂无 粉丝 77.8K 管 KOL 1 人 KOL 视频 暂无 账号暂无",
+        "tag": "article",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "上一页",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "下一页",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "另 1 人暂无分管(点开)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Facebook 4 账号 · 932 内容 2.2M 248K 粉丝 基线保护",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Instagram 6 账号 · 6.8K 内容 79.3M 745.8K 粉丝 基线保护",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Reddit 1 账号 · 1K 内容 — Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。 基线保护",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "TikTok 5 账号 · 2.2K 内容 266.2M 169K 粉丝 基线保护",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "X 1 账号 · 847 内容 680.9K 3.6K 粉丝 基线保护",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "YouTube 1 账号 · 834 内容 21.5M 34K 粉丝 基线保护",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Viltrox.Official viltrox.official · 已同步 · 251 内容 1.5M",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "Viltrox.Cine viltrox.cine · 已同步 · 251 内容 15.7K",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "Viltrox.Flash viltrox.flash · 已同步 · 250 内容 750.8K",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "Viltrox.us viltrox.usa · 已同步 · 180 内容 1.6K",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "未分配 Admin Jianbo 周敏华 方子聪 李梦茹 李琴 汪晨 温俊义 王俊强 王华杰 王少元 苏淑云 蔡倩颖 陈宇标 陈晓彤 黄启婷 bibiboer 2076310654",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "最新",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "播放",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "点赞",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "评论",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "分享",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "今年分析 近 7 天 近 30 天 近 90 天 近 180 天 近 1 年 全部记录",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "最新优先 播放优先 点赞优先 评论优先 分享优先",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "已缓存",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "评论 0",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "评论明细",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "原帖",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "评论 1",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "关注列表 0",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "合作漏斗 0",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "搜索 KOL / handle",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "展开漏斗",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Viltrox 相关",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "导出收藏名单",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "批量操作",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部 0 KOL · — 播放",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "YouTube 0 KOL · 0 项目 · —",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Instagram 0 KOL · 0 项目 · —",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "TikTok 0 KOL · 0 项目 · —",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Facebook 0 KOL · 0 项目 · —",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Reddit 0 KOL · 0 项目 · —",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "X 0 KOL · 0 项目 · —",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "30 天 90 天 180 天 365 天",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      }
+    ]
+  },
+  {
+    "page": "KOL Pool",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Pool 总数 1222 1222 已链主表 · 0 未链(≈新)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "新发现 KOL 0 按未链主表推导 · candidate_kind 待后端",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查找",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "最近历史 · 20",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "展开 20 条",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "待分析 · 库内有视频未深析",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "筛选 · 排序",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "F frank_of_all_trades TT 待补全 补全中 🏆 代表作:📸🤯 Probé una de las funciones más sorprendentes de iOS 27… y honestamente no esperaba que funcionara tan bien. La nueva herramienta de encuadre inteligente en F · 73.7K播放 粉丝 1.00M 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "J josiahlebante14 TT 待补全 补全中 🏆 代表作:Chasing sunsets with the DJI Osmo Pocket 4🎥🌅 @DJI Philippines @DJI Official @DJI Osmo #dji #djiosmopocket4 #cinematic #palawan · 534.4K播放 粉丝 516.0K 🇵🇭 PH 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "Z zahidangeless TT 待补全 补全中 🏆 代表作:Clutch plays and impossible shots. ⚡️🔥 Got a crazier play than this? Drop it below! 👇 @brawlstars #inbrawlyoucan · 329播放 粉丝 2.20M 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "S swetih TT 待补全 补全中 招牌拍法待深析(暂无深析样本) 粉丝 162.0K 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "K kai_hussin TT 待补全 补全中 招牌拍法待深析(暂无深析样本) 粉丝 117.8K 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "N n4te TT 待补全 补全中 招牌拍法待深析(暂无深析样本) 粉丝 210.7K 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "T trutech TT 待补全 补全中 招牌拍法待深析(暂无深析样本) 粉丝 479.3K 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "D danieljm.visuals TT 待补全 补全中 🏆 代表作:Absolutely love Spain! #photography #cinematic #cinematicphotography #aesthetic #photographer · 1.6K播放 粉丝 179.8K 🇬🇧 UK 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "M matthewjgl TT 待补全 补全中 🏆 代表作:It's also wireless; no need to plug it into the wall #rowingmachine #workout #gym · 341播放 粉丝 2.30M 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "C caleb.takes.photos TT 待补全 补全中 招牌拍法待深析(暂无深析样本) 粉丝 158.6K 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "S segsanfilm TT 待补全 补全中 招牌拍法待深析(暂无深析样本) 粉丝 32.0K 🇬🇧 UK 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "P potatojet YT 待补全 补全中 🎬 口播评测 ×1 · 均77.8K播放 粉丝 1.05M 🇺🇸 US 点开详情 →",
+        "tag": "div",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "加载更多(还有 1210 位)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "表格视图 默认收起；与卡片流共用同一份筛选和排序,Pool 总数大窗仍覆盖全量查看。 1222 行 展开",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "Projects",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "查看当前重点项目 2",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "导入 KOL 名单",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部34",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "规划中3",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "进行中26",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "收尾中3",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "已暂停2",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "已结束0",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "已取消0",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "搜索项目 / KOL / handle / 负责人",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部平台 Instagram Other",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "排序：最后活动 排序：创建时间 排序：健康度 排序：曝光量",
+        "tag": "select",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "时间顺序：新到旧 时间顺序：旧到新",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "✦ 新建推广",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "重点",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "暂停本轮跟进",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "蔡",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "王",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "重新开启",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "未",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "J",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "Events",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "我参与的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "搜索 event / 城市",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部 筹备中 物料就绪 进行中 复盘中 已完成",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部类型 线下展会 媒体活动 线上 Webinar KOL 聚会 内部团建 其他活动",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "公司库存 (383)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "新建 Event",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      }
+    ]
+  },
+  {
+    "page": "Shopify",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "连接",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "数据追踪",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "自建 Shopify（旧 · 待退役） Legacy 展开 ▼",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "Dealers",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "预检(record-only)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "有界抓取(≤20)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "名称*",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "地址*",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "城市",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "州",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "添加",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "Intelligent 问答",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "问点什么…(如:为什么最近转化率下降,给点建议)",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "提问",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "最近哪些 KOL 值得优先跟进?",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "近30天各地区的表现怎么样?",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "有哪些待处理的告警?",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "本周有哪些新达人进池?",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "回复队列",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "扫描新意向",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "待起草",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "待回复",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "已回复",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "已忽略",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "生成草稿",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "复制草稿",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "标记已回",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "忽略",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "SKU 360°",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "搜索 SKU / 型号,如 85mm、AF-85MM-F14-PRO-FE…",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "KOL 档案",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "kol_pool_id,如 42",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "打开档案",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "发射台",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "搜索新品 SKU / 型号,如 85mm、AF-85MM-F14-PRO-FE…",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "4 人 6 人 8 人 10 人 12 人",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "自治驾照",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "评估升降(演练 dry-run)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "执行升降(写库)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "刷新",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "目标级别… L0 观察 L1 建议 L2 内部执行 L3 半自主 L4 全自主(仅人工可授)",
+        "tag": "select",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "调级理由(必填)",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "确认调级",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "预测台账 · 系统的预测有多准 6/10 组有样本",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "周度记分卡 · 命中率自动出 2026-W21 → 2026-W28 777 待对答案",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "预览入记忆",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "入记忆",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "跑一轮",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "智能体闭环 · 整链串跑 已串 ×1",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "串跑一遍(dry-run)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      }
+    ]
+  },
+  {
+    "page": "市场之声",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "近30天",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "创意资产库",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "自由词,如 悬念 / 对比 / bokeh / 夜景…",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "全部拍法 口播评测(3426 段) 样片展示(1783 段) 电影感B-roll(1776 段) 街拍实测(1234 段) 开箱上手(786 段) 教程演示(493 段) POV第一视角(337 段)",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "焦段,如 85mm · 库里最多:85mm / 35mm / 50mm",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster) ↗",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "NYC street shots with @colby.minifie 🙌 . . . @theboystv #nyc #ashleylookatme #theboys #portrait #fyp #sonyalpha #presets #streetphotography ↗",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "https://www.instagram.com/andre.scoelho/reel/DXaQ2zpkrb_/ ↗",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "حركة بسيطة بالذكاء الاصطناعي تساعدك في انتشار فيديوهاتك 😁🚀 ↗",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "https://www.youtube.com/shorts/WUYCAChBZHM ↗",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Why I Stopped Buying These Lenses ↗",
+        "tag": "a",
+        "disabled": false,
+        "class": "mutation_or_external"
+      }
+    ]
+  },
+  {
+    "page": "战略台",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "搜索 SKU / 型号,如 AF-85MM-F14-PRO-FE…",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "3000",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "模拟",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "战略表现 · 我们的判断准不准 1 注已结算 · 10 loop",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "内容链接",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "GTM Command",
+    "buttons": [
+      {
+        "text": "只看我的",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "搜索 SKU / 型号,如 AF-85MM-F14-PRO-FE…",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "US",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "3000",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "曝光 转化 素材 渠道铺货",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "7 天 14 天 30 天",
+        "tag": "select",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "生成作战预览",
+        "tag": "button",
+        "disabled": true,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "失败重试 29",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "库存预警 21",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "去 Action Inbox 人审",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "shell:Collapse",
+    "buttons": [
+      {
+        "text": "Events",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Intelligent 问答",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "回复队列",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "SKU 360°",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "KOL 档案",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "发射台",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "自治驾照",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "市场之声",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "创意资产库",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "战略台",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "GTM Command",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "今日焦点 待办 20+",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "失败重试 失败任务待重试 · kol_profile_deep_crawl",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "昨晚完成 2 件:深析 2",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "All",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "KOL",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "公司账号",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "VIEWING Select",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "TAMRON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "SONY",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "CANON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "LEICA",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View All →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看证据",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后处理",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新建议",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "通过",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "忽略",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 13 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "执行台账",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "预览催更建议(dry-run)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "描述你要找的创作者,如 cinematic wedding videographer",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "找人",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Grandeur Portrait Photography Workshop featuring @mia elisse ◡̈ using Fujifilm X-T2 w/ Viltrox 75mm 1.2 Pro & Viltrox 35mm 1.7 air Photo: KMD Portraits HMUA: Shamae Avanzado x Kiano Delos Santos Location: Bukid Amara Worshop Organizer: Marcus Daniel Angay #photography #bts #kmdph #viltroxph #fujifil",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Viltrox EVO 55mm f/1.8 Review: Better Than Nikon's 50mm f/1.8?",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Fujifilm XA20 with 15-45mm Kitlens P19,000 In very good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Box - Manuals - 15-45mm Kitlens - 1 Battery - Neckstrap - Lens Cap - Body cap - Charger Location: Taguig Meet Up in BGC/ Lalamove",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Lensa canon EF 70-200mm f4 L USM 🔥🔥🔥 #canonlens #lensazoom #canon #telephoto #lensa",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Sony A6000 with E PZ 16-50mm Kitlens P26,000 Good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Camera - Neckstrap - Battery - Charger - Lens front cap 📍Taguig Meet Up in BGC or Bicutan/ Lalamove or GrabExpress/ COD or COP thru LBC",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "按成员(16 人)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "去 MY KOL →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View Full →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  },
+  {
+    "page": "shell:Dark",
+    "buttons": [
+      {
+        "text": "Events",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Intelligent 问答",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "回复队列",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "SKU 360°",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "KOL 档案",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "发射台",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "自治驾照",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "市场之声",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "创意资产库",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "战略台",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "GTM Command",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "0 跑中 · 2 排队",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "A Admin Admin",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "今日焦点 待办 20+",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "失败重试 失败任务待重试 · kol_profile_deep_crawl",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "昨晚完成 2 件:深析 2",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "All",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "KOL",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "公司账号",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "VIEWING Select",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "TAMRON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "SONY",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "CANON",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "LEICA",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View All →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看证据",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后处理",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "刷新建议",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "通过",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "稍后",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "忽略",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 13 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "执行台账",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "预览催更建议(dry-run)",
+        "tag": "button",
+        "disabled": false,
+        "class": "mutation_or_external"
+      },
+      {
+        "text": "描述你要找的创作者,如 cinematic wedding videographer",
+        "tag": "input",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "找人",
+        "tag": "button",
+        "disabled": true,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Grandeur Portrait Photography Workshop featuring @mia elisse ◡̈ using Fujifilm X-T2 w/ Viltrox 75mm 1.2 Pro & Viltrox 35mm 1.7 air Photo: KMD Portraits HMUA: Shamae Avanzado x Kiano Delos Santos Location: Bukid Amara Worshop Organizer: Marcus Daniel Angay #photography #bts #kmdph #viltroxph #fujifil",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Viltrox EVO 55mm f/1.8 Review: Better Than Nikon's 50mm f/1.8?",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Fujifilm XA20 with 15-45mm Kitlens P19,000 In very good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Box - Manuals - 15-45mm Kitlens - 1 Battery - Neckstrap - Lens Cap - Body cap - Charger Location: Taguig Meet Up in BGC/ Lalamove",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Lensa canon EF 70-200mm f4 L USM 🔥🔥🔥 #canonlens #lensazoom #canon #telephoto #lensa",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "Sony A6000 with E PZ 16-50mm Kitlens P26,000 Good condition! 10/10 Performance (No issue) 10/10 Sensor (Clean) 9/10 Cosmetics (Minimal signs of usage) Inclusions: - Camera - Neckstrap - Battery - Charger - Lens front cap 📍Taguig Meet Up in BGC or Bicutan/ Lalamove or GrabExpress/ COD or COP thru LBC",
+        "tag": "a",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "按成员(16 人)",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "去 MY KOL →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "查看全部 →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      },
+      {
+        "text": "View Full →",
+        "tag": "button",
+        "disabled": false,
+        "class": "safe_or_navigation"
+      }
+    ]
+  }
+]
