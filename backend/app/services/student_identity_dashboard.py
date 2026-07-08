@@ -290,7 +290,7 @@ def build_student_detail(user_id: int) -> dict[str, Any]:
         """
         SELECT COUNT(*) AS total,
                SUM(CASE WHEN detection_status='confirmed' THEN 1 ELSE 0 END) AS confirmed,
-               AVG(campaign_score) AS avg_campaign_score
+               AVG(final_score) AS avg_campaign_score
         FROM submissions
         WHERE user_id=?
         """,

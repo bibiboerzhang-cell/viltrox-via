@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
+from app.api.dependencies.manager_guard import require_manager_tab as _require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 from app.core.security import get_current_user
@@ -318,8 +319,14 @@ def project_video_analysis_cache(
 
 
 @router.post("/projects/{project_id}/retrospective/generate")
-def generate_project_retrospective(project_id: int, staff=Depends(require_tab("vkpi", "write"))):
+def generate_project_retrospective(project_id: int, staff=Depends(_require_manager_tab("vkpi", "write"))):
+    # 权限收口(2026-07-08):此前只挂 require_tab(vkpi,write) → permissions.py 给全员默认
+    # vkpi=write,故任意员工都能对任意项目手动触发复盘 LLM 聚合作业(enqueue apify_jobs
+    # job_type=project_retrospective_aggregate,烧预算)。enqueue 本身不做项目级 scope,
+    # 故双闸收口:①require_manager_tab(owner+管理岗,与周报/官号 generate 同口径)非管理层 403;
+    # ②require_project_write 项目级 scope,员工不能对别人项目触发(与 GET retrospective 同口径的写模式)。
     try:
+        policy.require_project_write(int(project_id), staff)
         return retrospective_aggregate.enqueue_project_retrospective(project_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
