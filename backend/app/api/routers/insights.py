@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/admin/insights", tags=["insights"])
@@ -51,7 +51,7 @@ def _scalar(conn, sql: str, params: tuple[Any, ...] = (), default: int | float =
         value = row[0] if not hasattr(row, "keys") else row[0]
         return value if value is not None else default
     except Exception:
-        logger.debug("insights.scalar_failed", extra={"sql": sql[:120]}, exc_info=True)
+        logger.warning("insights.scalar_failed", extra={"sql": sql[:120]}, exc_info=True)
         return default
 
 
@@ -59,22 +59,37 @@ def _rows(conn, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
     except Exception:
-        logger.debug("insights.rows_failed", extra={"sql": sql[:120]}, exc_info=True)
+        logger.warning("insights.rows_failed", extra={"sql": sql[:120]}, exc_info=True)
         return []
+
+
+def _day_bucket(date_col: str) -> str:
+    """UTC 'YYYY-MM-DD' day string over a timestamp column.
+
+    PG 里 created_at/placed_at 等是 timestamptz;旧写法 substr(COALESCE(col, ''), 1, 10)
+    把它当文本 —— COALESCE(timestamptz, '') 直接抛 InvalidDatetimeFormat,被 _rows 吞成
+    空 → 时序图/cohorts 静默空。PG 用 to_char(col AT TIME ZONE 'UTC', 'YYYY-MM-DD') 取
+    UTC 自然日(照 kpi_ledger._day_where / decision_dashboard._day_bucket 既有范式),
+    SQLite 测试路径仍走 substr 文本;两侧产出同一 UTC 日,可安全用于 GROUP BY / HAVING。
+    """
+    if is_postgres_runtime():
+        return f"to_char({date_col} AT TIME ZONE 'UTC', 'YYYY-MM-DD')"
+    return f"substr(COALESCE({date_col}, ''), 1, 10)"
 
 
 def _date_series(conn, table: str, date_col: str, value_sql: str = "COUNT(*)", where: str = "", params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     if not _table_exists(conn, table) or date_col not in _columns(conn, table):
         return []
     where_sql = f"WHERE {where}" if where else ""
+    day = _day_bucket(date_col)
     return _rows(
         conn,
         f"""
-        SELECT substr(COALESCE({date_col}, ''), 1, 10) AS d, {value_sql} AS n
+        SELECT {day} AS d, {value_sql} AS n
         FROM {table}
         {where_sql}
-        GROUP BY substr(COALESCE({date_col}, ''), 1, 10)
-        HAVING d != ''
+        GROUP BY {day}
+        HAVING {day} != ''
         ORDER BY d ASC
         """,
         params,
@@ -331,13 +346,14 @@ def cohorts(weeks: int = Query(default=12, ge=4, le=52), _staff=Depends(require_
     conn = get_conn()
     if not _table_exists(conn, "users"):
         return {"weeks": weeks, "cohorts": []}
+    day = _day_bucket("created_at")
     rows = _rows(
         conn,
-        """
-        SELECT substr(COALESCE(created_at, ''), 1, 10) AS d, COUNT(*) AS users
+        f"""
+        SELECT {day} AS d, COUNT(*) AS users
         FROM users
-        WHERE COALESCE(created_at, '') != ''
-        GROUP BY substr(COALESCE(created_at, ''), 1, 10)
+        GROUP BY {day}
+        HAVING {day} != ''
         ORDER BY d DESC
         LIMIT ?
         """,
@@ -381,8 +397,8 @@ def staff_kpi(window: str = "30d", _staff=Depends(require_tab("insights", "read"
             SELECT actor_id AS staff_id,
                    COALESCE(actor_name, CAST(actor_id AS TEXT), 'unknown') AS staff_name,
                    COUNT(*) AS action_count,
-                   SUM(CASE WHEN action LIKE 'redemption_%' THEN 1 ELSE 0 END) AS redemption_actions,
-                   SUM(CASE WHEN action LIKE '%staff%' THEN 1 ELSE 0 END) AS staff_actions
+                   SUM(CASE WHEN action LIKE 'redemption_%%' THEN 1 ELSE 0 END) AS redemption_actions,
+                   SUM(CASE WHEN action LIKE '%%staff%%' THEN 1 ELSE 0 END) AS staff_actions
             FROM admin_audit_log
             WHERE occurred_at >= ?
             GROUP BY actor_id, COALESCE(actor_name, CAST(actor_id AS TEXT), 'unknown')

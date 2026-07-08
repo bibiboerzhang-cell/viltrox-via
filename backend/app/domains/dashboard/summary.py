@@ -423,6 +423,10 @@ def _build_funnel_summary(staff_scope_id: int | None = None) -> dict[str, Any]:
     fav_where = f"WHERE staff_id={int(staff_scope_id)}" if staff_scope_id else ""
     fav_where_f = f"WHERE f.staff_id={int(staff_scope_id)}" if staff_scope_id else ""  # by_staff 多表 join 需限定别名
     assign_where = f"WHERE project_id IN ({_actor_projects_sql(staff_scope_id)})" if staff_scope_id else ""
+    # P1 隔离:by_staff 的 in_project 此前把 assignment 无 scope 地 JOIN 到收藏,
+    # 员工视角会把他人项目里也合作过同一 KOL 的 assignment 计入(单行 in_project 81 >> 顶层 in_project_total 1,且泄漏他人项目)。
+    # 给 JOIN 追加与顶层 assign_where 同源的项目 scope,员工视角只算本人项目的 assignment;owner/admin(None)保持全局。
+    assign_join_scope = f"AND a.project_id IN ({_actor_projects_sql(staff_scope_id)})" if staff_scope_id else ""
 
     favorites_row = conn.execute(
         f"""
@@ -468,6 +472,7 @@ def _build_funnel_summary(staff_scope_id: int | None = None) -> dict[str, Any]:
         LEFT JOIN vkpi_project_kol_assignments a
                ON a.kol_pool_id = f.kol_pool_id
               AND COALESCE(a.stage, '') NOT IN {_FUNNEL_EXCLUDED_STAGES_SQL}
+              {assign_join_scope}
         {fav_where_f}
         GROUP BY f.staff_id
         ORDER BY COUNT(DISTINCT f.id) DESC, f.staff_id
