@@ -345,6 +345,32 @@ def list_kol_pool_needs_analysis(
         raise HTTPException(status_code=500, detail=f"needs-analysis error: {exc}") from exc
 
 
+@router.get("/kol-pool/resolve")
+def resolve_kol_pool(
+    handle: str = Query(default=""),
+    platform: str = Query(default=""),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """#17 按 handle(可选 platform)解析到 vkpi 主池记录。
+
+    供 mover 预览弹窗(#5)/ KOLDetailModal 真指标(#22):用 handle 拿真 kol_pool_id +
+    真 followers/avg_views/合作摘要。命中返回 history_match 全量 payload;未命中诚实
+    返回 matched=False(前端据此走「先入库」或显空,不再编造假指标)。
+
+    注册在 /{kol_pool_id} 动态路由之前:FastAPI 按声明顺序匹配,静态 /resolve 若排在
+    /{kol_pool_id} 之后会被当 int 解析 → 永久 422(与 needs-analysis 同款吞路由陷阱)。
+    """
+    h = (handle or "").strip()
+    plat = (platform or "").strip()
+    if not h:
+        return {"matched": False, "reason": "handle required"}
+    item = {"handle": h, "display_name": h, "platform": plat}
+    payload = kol_history_match.find_history_match(item, platform=plat)
+    if not payload:
+        return {"matched": False, "handle": h, "platform": plat}
+    return payload
+
+
 @router.get("/kol-pool/{kol_pool_id}")
 async def get_item(
     request: Request,
@@ -548,29 +574,6 @@ from app.api.routers.vkpi_kol_pool_intel import (  # noqa: E402
 )
 
 router.include_router(_kol_pool_intel_router)
-
-
-@router.get("/kol-pool/resolve")
-def resolve_kol_pool(
-    handle: str = Query(default=""),
-    platform: str = Query(default=""),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """#17 按 handle(可选 platform)解析到 vkpi 主池记录。
-
-    供 mover 预览弹窗(#5)/ KOLDetailModal 真指标(#22):用 handle 拿真 kol_pool_id +
-    真 followers/avg_views/合作摘要。命中返回 history_match 全量 payload;未命中诚实
-    返回 matched=False(前端据此走「先入库」或显空,不再编造假指标)。
-    """
-    h = (handle or "").strip()
-    plat = (platform or "").strip()
-    if not h:
-        return {"matched": False, "reason": "handle required"}
-    item = {"handle": h, "display_name": h, "platform": plat}
-    payload = kol_history_match.find_history_match(item, platform=plat)
-    if not payload:
-        return {"matched": False, "handle": h, "platform": plat}
-    return payload
 
 
 @router.post("/kol-pool/{kol_pool_id}/promote")

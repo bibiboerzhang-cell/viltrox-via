@@ -256,6 +256,72 @@ def _pool_rows_fallback(kol_pool_ids: list[int]) -> dict[int, dict]:
     return out
 
 
+def _pool_text_fallback_hits(query_text: str, candidate_limit: int) -> list[RecallHit]:
+    """召回永不零红线兜底(记忆 vkpi-text-search-resurrection「recall 加 pool 兜底永不零结果」)。
+
+    向量召回不可用时——本地内嵌 Qdrant 单实例文件锁被并发召回撞锁(实测 6 并发下有请求返
+    'Storage folder ... already accessed by another instance')、库缺失、embedding 失败/预算
+    超限,或该 query 向量库零命中——按 pool 文本(handle/display_name/bio/primary_topic/
+    content_style)直接召回可展示候选,保证并发/降级下召回不返 0。
+
+    兜底 hit vector_score=0(排在真向量命中之后),进与向量命中同一展示管线(索引缺行由
+    _pool_rows_fallback 合成);绝不触 viltrox_fit_score。文本无命中(空 query / 生僻词)时退到
+    池内头部行,红线永不零。
+    """
+    limit = max(1, min(MAX_CANDIDATE_LIMIT, int(candidate_limit or 50)))
+    conn = get_conn()
+    hits: list[RecallHit] = []
+    seen: set[int] = set()
+
+    def _collect(rows: list[Any]) -> None:
+        for row in rows:
+            try:
+                kid = int(dict(row).get("kol_pool_id") or 0)
+            except (TypeError, ValueError):
+                kid = 0
+            if kid > 0 and kid not in seen:
+                seen.add(kid)
+                hits.append(RecallHit(kol_pool_id=kid, vector_score=0.0, qdrant_point_id="pool_text_fallback"))
+
+    text = " ".join(str(query_text or "").split()).strip()
+    if text:
+        like = f"%{text}%"
+        _collect(
+            conn.execute(
+                """
+                SELECT p.id AS kol_pool_id
+                FROM vkpi_kol_pool p
+                WHERE p.duplicate_of_id IS NULL
+                  AND (
+                        LOWER(COALESCE(p.handle, '')) LIKE LOWER(?)
+                     OR LOWER(COALESCE(p.display_name, '')) LIKE LOWER(?)
+                     OR LOWER(COALESCE(p.bio, '')) LIKE LOWER(?)
+                     OR LOWER(COALESCE(p.primary_topic, '')) LIKE LOWER(?)
+                     OR LOWER(COALESCE(p.content_style, '')) LIKE LOWER(?)
+                  )
+                ORDER BY COALESCE(p.followers, 0) DESC, p.id DESC
+                LIMIT ?
+                """,
+                (like, like, like, like, like, limit),
+            ).fetchall()
+        )
+    if hits:
+        return hits
+    _collect(
+        conn.execute(
+            """
+            SELECT p.id AS kol_pool_id
+            FROM vkpi_kol_pool p
+            WHERE p.duplicate_of_id IS NULL
+            ORDER BY COALESCE(p.followers, 0) DESC, p.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    )
+    return hits
+
+
 def _adoption_profile() -> dict:
     """采纳回流(2026-07-02 用户令):收藏/入项目 KOL 的 platform 与主题词分布。
     行数极小(收藏12+分配5级别),每次召回一小查;采纳样本 <5 不学,防两三条记录带偏。"""
@@ -817,6 +883,14 @@ def recall_kol_profiles(
             pass
         query_vector, embedding_meta, hits = [], {}, []
 
+    # 红线「召回永不零」(记忆 vkpi-text-search-resurrection):向量命中为空——无论是并发撞
+    # Qdrant 文件锁 / 库缺失 / embedding 失败 / 预算超限(recall_degraded 已置),还是该 query
+    # 向量库零命中——都回退到 pool 文本兜底,确保并发/降级下召回不返 0。兜底候选进同一展示管线。
+    pool_text_fallback_count = 0
+    if not hits:
+        hits = _pool_text_fallback_hits(resolved_text, safe_candidate_limit)
+        pool_text_fallback_count = len(hits)
+
     ordered_hits: list[RecallHit] = []
     seen: set[int] = set()
     duplicate_count = 0
@@ -951,6 +1025,7 @@ def recall_kol_profiles(
             "typed_candidate_count": len(buckets["creator"]) + len(buckets["reviewer"]),
             "missing_type_count": missing_type_count,
             "fallback_pool_rows": fallback_used_count,
+            "pool_text_fallback_count": pool_text_fallback_count,
             "display_rerank": _rerank_note,
             "creator_candidate_count": len(buckets["creator"]),
             "reviewer_candidate_count": len(buckets["reviewer"]),
