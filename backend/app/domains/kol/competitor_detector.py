@@ -216,18 +216,25 @@ def _kol_pool_row(kol_pool_id: int) -> dict[str, Any]:
     return dict(row)
 
 
-def evaluate_kol_competitor_relation(kol_pool_id: int, brand: str) -> dict[str, Any]:
-    row = _kol_pool_row(kol_pool_id)
+def _row_all_mentions(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """一遍解析该行的所有帖子 → 全竞品 mention(detect 内部已扫全品牌)。
+
+    行级共享:同一行对 N 个品牌评估时,帖子解析 + mention 检测只做一次,
+    由 batch/单 KOL 两条路径复用,避免 O(rows×brands) 的重复取行与重复解析。
+    """
     platform = _text(row.get("platform")).lower()
     raw = _loads(row.get("raw_platform_data"), {})
     posts = [_row_profile_post(row), *_extract_posts(raw if isinstance(raw, dict) else {})]
-    target = _text(brand).lower()
-    mentions = [
+    return [
         mention
         for post in posts
         for mention in detect_competitor_mentions(post, platform=platform)
-        if mention.get("brand") == target
     ]
+
+
+def _relation_from_mentions(row: dict[str, Any], target: str, mentions: list[dict[str, Any]]) -> dict[str, Any]:
+    kol_pool_id = int(row.get("id") or 0)
+    platform = _text(row.get("platform")).lower()
     mention_dates = [_days_since(item.get("published_at")) for item in mentions]
     mention_dates = [days for days in mention_dates if days is not None]
     recency_days = min(mention_dates) if mention_dates else None
@@ -236,7 +243,7 @@ def evaluate_kol_competitor_relation(kol_pool_id: int, brand: str) -> dict[str, 
     sentiment = _dominant_sentiment(mentions)
     score = _risk_score(depth, recency_days, count_90d, len(mentions), sentiment)
     return {
-        "kol_pool_id": int(kol_pool_id),
+        "kol_pool_id": kol_pool_id,
         "kol_entity_uid": _first_text(row.get("pool_uid"), f"kol_pool:{kol_pool_id}"),
         "platform": platform,
         "handle": _text(row.get("handle")),
@@ -255,6 +262,21 @@ def evaluate_kol_competitor_relation(kol_pool_id: int, brand: str) -> dict[str, 
         "source": "vkpi_kol_pool.raw_platform_data",
         "provider_calls": False,
     }
+
+
+def _evaluate_row_for_brands(row: dict[str, Any], brands: list[str]) -> list[dict[str, Any]]:
+    """行级一遍解析 → 按品牌分组 → 每品牌一条 relation(输出与逐品牌评估逐字一致)。"""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for mention in _row_all_mentions(row):
+        grouped.setdefault(str(mention.get("brand") or ""), []).append(mention)
+    return [_relation_from_mentions(row, target, grouped.get(target, [])) for target in brands]
+
+
+def evaluate_kol_competitor_relation(kol_pool_id: int, brand: str) -> dict[str, Any]:
+    row = _kol_pool_row(kol_pool_id)
+    target = _text(brand).lower()
+    mentions = [mention for mention in _row_all_mentions(row) if mention.get("brand") == target]
+    return _relation_from_mentions(row, target, mentions)
 
 
 def persist_competitor_relations(relations: list[dict[str, Any]]) -> int:
@@ -377,7 +399,7 @@ def evaluate_kol_competitors(kol_pool_id: int, *, write_db: bool = False, prefer
         if persisted.get("persisted"):
             return persisted
     brands = sorted(load_competitor_brands())
-    relations = [evaluate_kol_competitor_relation(kol_pool_id, brand) for brand in brands]
+    relations = _evaluate_row_for_brands(_kol_pool_row(kol_pool_id), brands)
     committed = persist_competitor_relations(relations) if write_db else 0
     strongest = max(relations, key=lambda item: float(item.get("risk_score") or 0), default=None)
     return {
@@ -560,9 +582,23 @@ def batch_evaluate_kol_pool(
             return persisted
     safe_limit = max(1, min(1200, int(limit or 100)))
     brands = [brand.strip().lower()] if brand.strip() else sorted(load_competitor_brands())
+    # 只读兜底(无快照):行级单遍评估已把 O(rows×brands) 压回 O(rows),
+    # 再叠一层结果缓存,复用竞品面板同前缀(persist_competitor_relations
+    # 落库后 cache_clear(前缀) 会一并失效本条),避免每次面板轮询都重扫。
+    cache_key = (
+        f"{CACHE_PREFIX_COMPETITOR_DASHBOARD}computed:{source_type or 'all'}:"
+        f"{(brand.strip().lower() or 'all')}:limit:{safe_limit}"
+    )
+    if not write_db:
+        cached = cache_get(cache_key)
+        if isinstance(cached, dict):
+            return {
+                **cached,
+                "cache": {"hit": True, "ttl_sec": COMPETITOR_DASHBOARD_CACHE_TTL_SEC},
+            }
     rows = get_conn().execute(
         """
-        SELECT id
+        SELECT *
         FROM vkpi_kol_pool
         WHERE COALESCE(raw_platform_data, '') <> ''
           AND (? = '' OR source_type = ?)
@@ -577,12 +613,11 @@ def batch_evaluate_kol_pool(
     relations_to_write: list[dict[str, Any]] = []
     evaluated = 0
     for row in rows:
-        kol_id = int(row["id"])
-        for target_brand in brands:
-            relation = evaluate_kol_competitor_relation(kol_id, target_brand)
+        for relation in _evaluate_row_for_brands(dict(row), brands):
             if write_db:
                 relations_to_write.append(relation)
             evaluated += 1
+            target_brand = str(relation.get("competitor_brand") or "")
             tier = str(relation.get("risk_tier") or "opportunity")
             brand_counts.setdefault(target_brand, dict(tier_counts))
             brand_counts[target_brand][tier] = brand_counts[target_brand].get(tier, 0) + 1
@@ -590,7 +625,7 @@ def batch_evaluate_kol_pool(
             if relation.get("risk_score") and len(samples) < 20:
                 samples.append(relation)
     committed = persist_competitor_relations(relations_to_write) if write_db else 0
-    return {
+    result = {
         "provider_calls": False,
         "write_db": bool(write_db),
         "committed_relations": committed,
@@ -602,3 +637,7 @@ def batch_evaluate_kol_pool(
         "brand_counts": brand_counts,
         "samples": samples,
     }
+    if not write_db:
+        result["cache"] = {"hit": False, "ttl_sec": COMPETITOR_DASHBOARD_CACHE_TTL_SEC}
+        cache_set(cache_key, result, ttl=COMPETITOR_DASHBOARD_CACHE_TTL_SEC)
+    return result
