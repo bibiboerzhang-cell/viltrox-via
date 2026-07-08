@@ -8,6 +8,7 @@ from app.core.config import VKPI_ASYNC_ENABLED
 from app.api.dependencies.manager_guard import (
     is_manager_staff as _is_manager_staff,
     require_manager_staff as _require_manager_staff,
+    require_manager_tab as _require_manager_tab,
 )
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
@@ -250,9 +251,14 @@ def official_channel_daily_report(
 @router.post("/channels/official-daily-report/run")
 def official_channel_daily_report_run(
     channel_id: int | None = None,
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(_require_manager_tab("vkpi", "write")),
 ):
-    """手动触发:不传 channel_id 跑全部 18 官号;传则只跑该号(运营「立即生成今日报告」)。预算闸硬限。"""
+    """手动触发:不传 channel_id 跑全部 18 官号;传则只跑该号(运营「立即生成今日报告」)。预算闸硬限。
+
+    权限收口(2026-07-08):此前只挂 ``require_tab(vkpi,write)`` → permissions.py 给全员默认
+    vkpi=write,故任意员工都能手动触发全 18 官号 LLM 报告生成(烧预算)。现改
+    ``require_manager_tab``(owner+管理岗双闸,与周报 generate 同口径):非管理层一律 403。
+    """
     from datetime import date as _date
 
     from app.domains.channels import official_daily_report
@@ -273,10 +279,14 @@ def official_channel_daily_report_run(
 @router.post("/channels/official-visual/scan")
 def official_visual_scan(
     max_total: int = Query(default=5, ge=1, le=30),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(_require_manager_tab("vkpi", "write")),
 ):
     """手动触发官号视频画质增量分析(Gemini final_v1,fit-safe 落 vkpi_official_post_visual)。
-    每次限量(默认5,上限30)防超时;预算闸硬限。"""
+    每次限量(默认5,上限30)防超时;预算闸硬限。
+
+    权限收口(2026-07-08):Gemini 视频画质分析烧 LLM 预算,此前只挂 ``require_tab(vkpi,write)``
+    对全员恒真。现改 ``require_manager_tab``(owner+管理岗双闸):非管理层一律 403。
+    """
     from app.domains.channels import official_visual_analysis
 
     return {"ok": True, "result": official_visual_analysis.process_pending_official_visuals(max_total=int(max_total))}

@@ -282,21 +282,36 @@ def _load_existing_evidence(conn: Any, video_url: str, *, kol_pool_id: int) -> d
     identity = _video_identity(video_url)
     if not identity:
         return None
+    _platform, video_id = identity
+    if not video_id:
+        return None
+    # 跨 KOL 视频身份判定:同一视频带追踪参数/不同 URL 形态(youtu.be↔watch?v=、TikTok
+    # ?is_from_webapp= 等)被别的 KOL 认领时,精确 content_url 串比不上,必须按「平台+去追踪
+    # 参数的 video_id」这个视频身份跨 KOL 找。此前候选只在本 KOL 内(WHERE kol_pool_id=?)→
+    # 别的 KOL 已占的同视频查不到 → 上层错判 would_create 造成跨 KOL 错归属。
+    # 用 POSITION 按 video_id 包含收窄候选(无字面 %,compat 安全),再用 _video_identity 精确
+    # 核对身份相等;同 KOL 命中优先返回(→ 上层 reuse),否则返回别的 KOL 命中(→ 上层判
+    # conflict_existing_other_kol)。
     candidates = conn.execute(
         """
         SELECT *
         FROM vkpi_kol_video_evidence
-        WHERE kol_pool_id=? AND content_url IS NOT NULL
+        WHERE content_url IS NOT NULL AND POSITION(? IN content_url) > 0
         ORDER BY id DESC
         LIMIT 200
         """,
-        (int(kol_pool_id),),
+        (str(video_id),),
     ).fetchall()
+    other_kol_match: dict[str, Any] | None = None
     for candidate in candidates:
         item = dict(candidate)
-        if _video_identity(str(item.get("content_url") or "")) == identity:
+        if _video_identity(str(item.get("content_url") or "")) != identity:
+            continue
+        if int(item.get("kol_pool_id") or 0) == int(kol_pool_id):
             return item
-    return None
+        if other_kol_match is None:
+            other_kol_match = item
+    return other_kol_match
 
 
 def _score_snapshot(conn: Any, ids: list[int]) -> dict[int, dict[str, Any]]:

@@ -274,9 +274,20 @@ def _extract_tokens(*sources: str) -> set[str]:
     tokens: set[str] = set()
     for src in sources:
         low = str(src or "").lower()
-        # 焦段:75mm / 135mm
+        # 焦段:75mm / 135mm(标题常写法)
         for m in re.findall(r"\d{1,3}mm", low):
             tokens.add(m)
+        # 型号焦段/光圈写法「35/1.2」「135/1.8」(SKU/型号名无 mm 字面):抽两三位焦段补
+        # '35' 与 '35mm' 双形 + 紧凑形 '351.2' + 光圈 'f1.2'/'f12',让聚焦命中标题里的
+        # 35mm/f1.2 写法。此前只认带 mm 字面的源,而 vkpi_products.model_name 普遍是
+        # 'AF 35/1.2 FE' 斜杠写法(marketing_name 常空)→ 焦段一律落空,match_tokens 只剩
+        # 永不命中的 SKU 码片段(如 len072),18 官号 relevance_hits 恒 0。
+        for focal, ap in re.findall(r"(?<!\d)(\d{2,3})\s*/\s*(\d+(?:\.\d+)?)", low):
+            tokens.add(focal)
+            tokens.add(focal + "mm")
+            tokens.add(focal + ap)              # 35/1.2 → 351.2(去斜杠紧凑形)
+            tokens.add("f" + ap)                # 光圈有点形 f1.2
+            tokens.add("f" + ap.replace(".", ""))  # 光圈无点形 f12
         # 光圈:f1.8 / f1.2 / f18(sku 无点写法)→ 同时登记有点与无点两形,兼容标题写法
         for m in re.findall(r"f/?\d+(?:\.\d+)?", low):
             ap = m.replace("f/", "f")
