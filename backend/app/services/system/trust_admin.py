@@ -268,7 +268,7 @@ def distribution() -> dict:
         ).fetchone()
         out.append({"range": bucket["range"], "count": int(row["n"] or 0)})
     summary = conn.execute(
-        "SELECT COUNT(*) AS total_users, ROUND(AVG(trust_score), 2) AS avg_score FROM users"
+        "SELECT COUNT(*) AS total_users, ROUND(CAST(AVG(trust_score) AS numeric), 2) AS avg_score FROM users"
     ).fetchone()
     return {
         "buckets": out,

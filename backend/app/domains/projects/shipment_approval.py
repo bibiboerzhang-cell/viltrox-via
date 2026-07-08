@@ -78,6 +78,11 @@ def request_approval(project_id: int, kol_pool_id: int, *, staff: dict[str, Any]
     if pid <= 0 or kid <= 0:
         return {"ok": False, "reason": "project_id + kol_pool_id required"}
     conn = get_conn()
+    # 校验 project/kol 真实存在,不存在则拒绝——否则会落孤儿 approval 行(指向不存在项目)。
+    if conn.execute("SELECT 1 FROM vkpi_projects WHERE id = ?", (pid,)).fetchone() is None:
+        return {"ok": False, "reason": "project_not_found", "project_id": pid}
+    if conn.execute("SELECT 1 FROM vkpi_kol_pool WHERE id = ?", (kid,)).fetchone() is None:
+        return {"ok": False, "reason": "kol_not_found", "kol_pool_id": kid}
     conn.execute(
         f"""
         INSERT INTO {_TABLE} (project_id, kol_pool_id, status, requested_by, reason)

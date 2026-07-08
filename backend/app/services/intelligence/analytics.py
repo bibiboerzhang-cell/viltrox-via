@@ -249,8 +249,24 @@ def product_series_performance() -> dict:
 def cohort_retention(*, cohort_type: str = "signup_month") -> dict:
     """Signup month → 30d/60d/90d retention (% of cohort that submitted within that window)."""
     conn = get_conn()
+    # 月份分桶:PG 用 to_char(...AT TIME ZONE 'UTC') 避开 strftime('%Y-%m') 的 % 占位符炸;
+    # SQLite 测试路径保留 strftime。datetime('now',...) 由 compat 翻译,无需改。
+    from app.db.connection import is_postgres_runtime
+    month_bucket = (
+        "to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM')"
+        if is_postgres_runtime() else "strftime('%Y-%m', created_at)"
+    )
+    u_month_bucket = (
+        "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM')"
+        if is_postgres_runtime() else "strftime('%Y-%m', u.created_at)"
+    )
+    # datetime(<列>, '+30 days') 是列+间隔形式,compat 只翻译 datetime('now',...) 不翻译列形式。
+    u_created_plus_30 = (
+        "u.created_at + INTERVAL '30 days'"
+        if is_postgres_runtime() else "datetime(u.created_at, '+30 days')"
+    )
     cohorts = conn.execute(
-        """SELECT strftime('%Y-%m', created_at) AS cohort, COUNT(*) AS size
+        f"""SELECT {month_bucket} AS cohort, COUNT(*) AS size
            FROM users WHERE created_at > datetime('now','-6 months')
            GROUP BY cohort ORDER BY cohort"""
     ).fetchall()
@@ -260,12 +276,12 @@ def cohort_retention(*, cohort_type: str = "signup_month") -> dict:
         cohort = c["cohort"]
         size = c["size"]
         active_30 = conn.execute(
-            """SELECT COUNT(DISTINCT u.id) AS n FROM users u
-               WHERE strftime('%Y-%m', u.created_at) = ?
+            f"""SELECT COUNT(DISTINCT u.id) AS n FROM users u
+               WHERE {u_month_bucket} = ?
                  AND EXISTS (SELECT 1 FROM submissions s
                              WHERE s.extracted_handle = u.creator_code
                                AND s.created_at BETWEEN u.created_at
-                               AND datetime(u.created_at, '+30 days'))""",
+                               AND {u_created_plus_30})""",
             (cohort,),
         ).fetchone()["n"]
         results.append({

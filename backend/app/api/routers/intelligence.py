@@ -721,7 +721,11 @@ def student_roster_view(
 @router.get("/student/detail/{user_id}")
 def student_detail(request: Request, user_id: int):
     require_admin(request)
-    return build_student_detail(user_id)
+    try:
+        return build_student_detail(user_id)
+    except ValueError as exc:
+        # 无此学生/用户 → 404,不让 not-found 冒 500(与 KOL/settings/group 端点同口径)。
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/student/cards/{qr_id}/revoke")
