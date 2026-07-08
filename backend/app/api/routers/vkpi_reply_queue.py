@@ -26,9 +26,9 @@ def api_list(
     limit: int = Query(default=100, ge=1, le=500),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
-    """列出评论区销售员待办队列。只读。"""
+    """列出评论区销售员待办队列。只读(按 staff 认领可见性收敛,防撞车)。"""
     from app.domains.comments import reply_queue
-    return reply_queue.list_queue(status=status, platform=platform, limit=limit)
+    return reply_queue.list_queue(status=status, platform=platform, limit=limit, staff=staff)
 
 
 @router.post("/reply-queue/screen")
@@ -47,13 +47,19 @@ def api_draft(
     reply_id: int,
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
-    """为一条队列项生成品牌口吻草稿(RAG over SKU + LLM,预算闸先行降级模板)。"""
+    """为一条队列项生成品牌口吻草稿(RAG over SKU + LLM,预算闸先行降级模板)。
+
+    起草前按 staff 原子认领:抢占失败(claimed_by_other)或已终态(already_finalized)/并发改状态
+    (status_conflict)→ 409,绝不并发重复烧 LLM。
+    """
     from app.domains.comments import reply_queue
-    result = reply_queue.draft_reply(reply_id)
+    result = reply_queue.draft_reply(reply_id, staff=staff)
     if not result.get("ok"):
         reason = str(result.get("reason") or "draft_failed")
         if reason == "not_found":
             raise HTTPException(status_code=404, detail=reason)
+        if reason in ("claimed_by_other", "already_finalized", "status_conflict"):
+            raise HTTPException(status_code=409, detail=reason)
         raise HTTPException(status_code=400, detail=reason)
     return result
 
@@ -62,14 +68,23 @@ def api_draft(
 def api_mark(
     reply_id: int,
     status: str = Query(..., description="replied / dismissed / pending / drafted"),
+    expected_status: str = Query(
+        default="",
+        description="乐观锁:前端最后看到的状态;不匹配则 409(防并发丢更新)",
+    ),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
-    """人工标记队列项状态(v0 不自动发帖,仅落状态)。"""
+    """人工标记队列项状态(v0 不自动发帖,仅落状态)。
+
+    乐观锁:带 expected_status 时,若行的当前状态已被他人改动则返回 409 status_conflict。
+    """
     from app.domains.comments import reply_queue
-    result = reply_queue.mark(reply_id, status)
+    result = reply_queue.mark(reply_id, status, expected_status=expected_status)
     if not result.get("ok"):
         reason = str(result.get("reason") or "mark_failed")
         if reason == "not_found":
             raise HTTPException(status_code=404, detail=reason)
+        if reason == "status_conflict":
+            raise HTTPException(status_code=409, detail=reason)
         raise HTTPException(status_code=400, detail=reason)
     return result

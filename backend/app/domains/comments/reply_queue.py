@@ -141,13 +141,32 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
             return default
 
 
+def _valid_kol_pool_ids(candidate_ids: set[int]) -> set[int]:
+    """返回 candidate_ids 中真实存在于 vkpi_kol_pool 的子集。
+
+    缺陷⑤ 根治:vkpi_comments.account_id 不是 kol_pool_id(多为工业账号 id),入队写 kol_pool_id
+    前用它过滤,不在池里的一律置 NULL(无效归属线索绝不落库)。vkpi_kol_pool 缺失 → 整体视为无效。
+    """
+    ids = sorted({int(i) for i in candidate_ids if i})
+    if not ids or not _table_exists("vkpi_kol_pool"):
+        return set()
+    conn = get_conn()
+    placeholders = ",".join(["?"] * len(ids))
+    rows = conn.execute(
+        f"SELECT id FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+        tuple(ids),
+    ).fetchall()
+    return {int(_row_get(r, "id")) for r in rows if _row_get(r, "id") is not None}
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # screen_intents:从 vkpi_comments 扫购买意向 -> 入队 pending(幂等)
 # ══════════════════════════════════════════════════════════════════════════
 def screen_intents(*, limit: int = 500, platform: str = "") -> dict[str, Any]:
     """扫 vkpi_comments 找购买意向评论,入 vkpi_reply_queue(status=pending)。
 
-    幂等:comment_external_id 唯一约束 + ON CONFLICT DO NOTHING;重复筛不会重复入队。
+    幂等:(platform, comment_external_id) 复合唯一约束 + ON CONFLICT DO NOTHING;重复筛不会重复入队,
+    且与源表 vkpi_comments 的 UNIQUE(platform, external_comment_id) 口径一致(跨平台同 id 不再互相顶掉)。
     只读 vkpi_comments,只写 vkpi_reply_queue,红线零触。
     """
     conn = get_conn()
@@ -174,6 +193,18 @@ def screen_intents(*, limit: int = 500, platform: str = "") -> dict[str, Any]:
         tuple(params),
     ).fetchall()
 
+    # 缺陷⑤:account_id 并非 kol_pool_id;写 kol_pool_id 前先批量取一次真实存在于 vkpi_kol_pool 的有效集,
+    # 只有命中的 account_id 才落 kol_pool_id,其余置 NULL(防再生无效归属线索)。
+    candidate_accounts: set[int] = set()
+    for row in rows:
+        try:
+            acct = int(_row_get(row, "account_id") or 0)
+        except (TypeError, ValueError):
+            acct = 0
+        if acct:
+            candidate_accounts.add(acct)
+    valid_pool_ids = _valid_kol_pool_ids(candidate_accounts)
+
     scanned = 0
     enqueued = 0
     matched = 0
@@ -189,16 +220,17 @@ def screen_intents(*, limit: int = 500, platform: str = "") -> dict[str, Any]:
         matched += 1
         lang = _guess_lang(text, _text(_row_get(row, "language_detected")))
         try:
-            kol_pool_id = int(_row_get(row, "account_id") or 0) or None
-        except Exception:
-            kol_pool_id = None
+            acct = int(_row_get(row, "account_id") or 0)
+        except (TypeError, ValueError):
+            acct = 0
+        kol_pool_id = acct if acct in valid_pool_ids else None
         cur = conn.execute(
             """
             INSERT INTO vkpi_reply_queue (
               platform, kol_pool_id, comment_external_id, comment_text,
               intent_tag, lang, status, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-            ON CONFLICT (comment_external_id) DO NOTHING
+            ON CONFLICT (platform, comment_external_id) DO NOTHING
             """,
             (
                 _text(_row_get(row, "platform")),
@@ -337,22 +369,64 @@ def _build_prompt(text: str, intent: str, skus: list[dict[str, Any]], lang: str)
     )
 
 
-def draft_reply(reply_id: int) -> dict[str, Any]:
-    """为队列里一条 pending/replied 项生成品牌口吻草稿。
+def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """为队列里一条 pending/drafted 项生成品牌口吻草稿。
 
-    check_budget 先行:预算不足直接降级模板;LLM 失败也降级模板。写 draft_reply + status=drafted。
+    状态机(缺陷③):仅 pending/drafted 可起草;replied/dismissed 终态拒绝(不回炉、不覆盖已完成项/人工草稿)。
+    认领闸(缺陷①④):起草前先原子认领(仅未认领或本人已认领时占用),抢占失败→claimed_by_other,
+      绝不并发重复烧 LLM。check_budget 先行:预算不足直接降级模板;LLM 失败也降级模板。写 draft_reply + status=drafted。
     """
     conn = get_conn()
     if not _table_exists("vkpi_reply_queue"):
         return {"ok": False, "reason": "reply_queue_table_missing"}
 
-    row = conn.execute(
-        "SELECT id, comment_text, intent_tag, lang, status FROM vkpi_reply_queue WHERE id=?",
+    from app.domains.access import scope as access_scope
+    actor = access_scope.actor_staff_id(staff) or None
+
+    existing = conn.execute(
+        "SELECT id, status, claimed_by FROM vkpi_reply_queue WHERE id=?",
         (int(reply_id),),
     ).fetchone()
-    if not row:
+    if not existing:
         return {"ok": False, "reason": "not_found", "id": int(reply_id)}
+    cur_status = _text(_row_get(existing, "status")).lower()
+    # 状态机:终态(replied/dismissed)拒绝,不回炉已完成项。
+    if cur_status not in ("pending", "drafted"):
+        return {"ok": False, "reason": "already_finalized", "id": int(reply_id), "status": cur_status}
 
+    # 认领 + 状态机原子闸:只在(未认领 或 本人已认领)且状态仍是 pending/drafted 时占用并起草。
+    # 先提交认领(释放行锁+持久化占用),并发的第二个请求随后拿到已认领现状 → claimed_by_other,不双烧。
+    claimed = conn.execute(
+        """
+        UPDATE vkpi_reply_queue
+           SET claimed_by = COALESCE(claimed_by, ?),
+               claimed_at = COALESCE(claimed_at, ?),
+               updated_at = ?
+         WHERE id = ?
+           AND status IN ('pending', 'drafted')
+           AND (claimed_by IS NULL OR claimed_by = ?)
+        RETURNING id, comment_text, intent_tag, lang, status
+        """,
+        (actor, _now_iso(), _now_iso(), int(reply_id), actor),
+    ).fetchone()
+    if not claimed:
+        latest = conn.execute(
+            "SELECT status, claimed_by FROM vkpi_reply_queue WHERE id=?",
+            (int(reply_id),),
+        ).fetchone()
+        latest_status = _text(_row_get(latest, "status")).lower()
+        if latest_status not in ("pending", "drafted"):
+            return {"ok": False, "reason": "already_finalized", "id": int(reply_id), "status": latest_status}
+        return {
+            "ok": False,
+            "reason": "claimed_by_other",
+            "id": int(reply_id),
+            "claimed_by": _row_get(latest, "claimed_by"),
+            "status": latest_status,
+        }
+    conn.commit()
+
+    row = claimed
     text = _text(_row_get(row, "comment_text"))
     intent = _text(_row_get(row, "intent_tag")) or "question"
     lang = _text(_row_get(row, "lang")) or _guess_lang(text)
@@ -389,11 +463,19 @@ def draft_reply(reply_id: int) -> dict[str, Any]:
         draft = _template_reply(text, intent, skus, lang)
         provider = "template"
 
-    conn.execute(
-        "UPDATE vkpi_reply_queue SET draft_reply=?, status='drafted', updated_at=? WHERE id=?",
+    # 终态 guard:起草期间若被并发 mark 成 replied/dismissed,不复活(rowcount=0 → 冲突,诚实返回)。
+    updated = conn.execute(
+        """
+        UPDATE vkpi_reply_queue
+           SET draft_reply=?, status='drafted', updated_at=?
+         WHERE id=? AND status IN ('pending', 'drafted')
+        RETURNING id
+        """,
         (draft[:4000], _now_iso(), int(reply_id)),
-    )
+    ).fetchone()
     conn.commit()
+    if not updated:
+        return {"ok": False, "reason": "status_conflict", "id": int(reply_id)}
     return {
         "ok": True,
         "id": int(reply_id),
@@ -410,8 +492,18 @@ def draft_reply(reply_id: int) -> dict[str, Any]:
 _VALID_STATUS = ("pending", "drafted", "replied", "dismissed")
 
 
-def list_queue(*, status: str = "", platform: str = "", limit: int = 100) -> dict[str, Any]:
-    """列出队列项;可按 status / platform 过滤。只读。"""
+def list_queue(
+    *,
+    status: str = "",
+    platform: str = "",
+    limit: int = 100,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """列出队列项;可按 status / platform 过滤,并按 staff 认领可见性收敛。只读。
+
+    可见性(缺陷①):管理层(can_view_all)看全量;普通员工只看「未认领的池 + 自己认领的」,
+    别人正在跟进(claimed_by=他人)的行不进自己列表,避免 8 员工撞车。
+    """
     conn = get_conn()
     if not _table_exists("vkpi_reply_queue"):
         return {"items": [], "count": 0}
@@ -426,11 +518,23 @@ def list_queue(*, status: str = "", platform: str = "", limit: int = 100) -> dic
     if plat:
         where += " AND LOWER(COALESCE(platform,'')) = ?"
         params.append(plat)
+
+    from app.domains.access import scope as access_scope
+    if not access_scope.can_view_all(staff):
+        actor = access_scope.actor_staff_id(staff)
+        if actor:
+            where += " AND (claimed_by IS NULL OR claimed_by = ?)"
+            params.append(int(actor))
+        else:
+            # 取不到登录人:保守只给未认领的池(不暴露他人在跟进的行)。
+            where += " AND claimed_by IS NULL"
+
     params.append(safe_limit)
     rows = conn.execute(
         f"""
         SELECT id, platform, kol_pool_id, comment_external_id, comment_text,
-               intent_tag, lang, draft_reply, status, created_at, updated_at
+               intent_tag, lang, draft_reply, status, claimed_by, claimed_at,
+               created_at, updated_at
         FROM vkpi_reply_queue
         {where}
         ORDER BY
@@ -453,6 +557,8 @@ def list_queue(*, status: str = "", platform: str = "", limit: int = 100) -> dic
                 "lang": _text(_row_get(row, "lang")),
                 "draft_reply": _text(_row_get(row, "draft_reply")),
                 "status": _text(_row_get(row, "status")),
+                "claimed_by": _row_get(row, "claimed_by"),
+                "claimed_at": _text(_row_get(row, "claimed_at")),
                 "created_at": _text(_row_get(row, "created_at")),
                 "updated_at": _text(_row_get(row, "updated_at")),
             }
@@ -460,20 +566,55 @@ def list_queue(*, status: str = "", platform: str = "", limit: int = 100) -> dic
     return {"items": items, "count": len(items)}
 
 
-def mark(reply_id: int, status: str) -> dict[str, Any]:
-    """人工标记一条队列项状态(replied / dismissed;也允许回退 pending / drafted)。"""
+def mark(reply_id: int, status: str, *, expected_status: str = "") -> dict[str, Any]:
+    """人工标记一条队列项状态(replied / dismissed;也允许回退 pending / drafted)。
+
+    乐观锁(缺陷②):UPDATE ... WHERE id=? AND status=? RETURNING —— guard 用调用方给的
+    expected_status(前端最后看到的状态),没给则退回刚读到的当前值。并发两人标同一条时,
+    后到者 rowcount=0 → 返回 status_conflict(不静默成功、不丢更新)。
+    """
     st = _text(status).lower()
     if st not in _VALID_STATUS:
         return {"ok": False, "reason": "invalid_status", "allowed": list(_VALID_STATUS)}
+    exp = _text(expected_status).lower()
+    if exp and exp not in _VALID_STATUS:
+        return {"ok": False, "reason": "invalid_expected_status", "allowed": list(_VALID_STATUS)}
     conn = get_conn()
     if not _table_exists("vkpi_reply_queue"):
         return {"ok": False, "reason": "reply_queue_table_missing"}
-    row = conn.execute("SELECT id FROM vkpi_reply_queue WHERE id=?", (int(reply_id),)).fetchone()
+    row = conn.execute(
+        "SELECT id, status FROM vkpi_reply_queue WHERE id=?", (int(reply_id),)
+    ).fetchone()
     if not row:
         return {"ok": False, "reason": "not_found", "id": int(reply_id)}
-    conn.execute(
-        "UPDATE vkpi_reply_queue SET status=?, updated_at=? WHERE id=?",
-        (st, _now_iso(), int(reply_id)),
-    )
+    cur_status = _text(_row_get(row, "status")).lower()
+    if exp and cur_status != exp:
+        return {
+            "ok": False,
+            "reason": "status_conflict",
+            "id": int(reply_id),
+            "current_status": cur_status,
+            "expected_status": exp,
+        }
+    guard_status = exp or cur_status
+    updated = conn.execute(
+        """
+        UPDATE vkpi_reply_queue SET status=?, updated_at=?
+         WHERE id=? AND status=?
+        RETURNING id
+        """,
+        (st, _now_iso(), int(reply_id), guard_status),
+    ).fetchone()
     conn.commit()
+    if not updated:
+        latest = conn.execute(
+            "SELECT status FROM vkpi_reply_queue WHERE id=?", (int(reply_id),)
+        ).fetchone()
+        return {
+            "ok": False,
+            "reason": "status_conflict",
+            "id": int(reply_id),
+            "current_status": _text(_row_get(latest, "status")),
+            "expected_status": guard_status,
+        }
     return {"ok": True, "id": int(reply_id), "status": st}
