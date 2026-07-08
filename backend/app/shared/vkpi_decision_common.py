@@ -96,6 +96,18 @@ def _active_project_filter(alias: str) -> str:
     )
 
 
+def _confirmed_revenue_filter(alias: str = "") -> str:
+    """确认态收入口径:只算 vkpi_sales_attributions.confidence='confirmed'。
+
+    与归因页 account_picker._build_attributed_gmv_roi(confidence='confirmed')同口径,排除
+    unmatched(未匹配,实测 131199 分混入)/refund(退款)/estimated/manual 等非确认行,避免把
+    未确认收入灌进 revenue/GMV 头条数。alias = vkpi_sales_attributions 的表别名(如 'sa'),
+    空则不带前缀。字面量无 ASCII 问号/百分号,compat 占位层安全。
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}confidence = 'confirmed'"
+
+
 def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 80) -> dict[str, Any]:
     """Grouped KPI source rows for staff profile drilldown.
 
@@ -221,6 +233,7 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
                    COALESCE(SUM(commission_cents), 0) AS commission_cents
             FROM vkpi_sales_attributions sa
             WHERE {_active_project_filter('sa')}
+              AND {_confirmed_revenue_filter('sa')}
             {sales_staff_clause}
             """,
             sales_params,
@@ -250,9 +263,14 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
         FROM vkpi_sales_attributions sa
         WHERE COALESCE(occurred_at, imported_at, created_at) >= ?
           AND ({active_filter})
+          AND {confirmed_filter}
           AND LOWER(COALESCE(evidence_json, '')) NOT LIKE ?
           {staff_clause}
-        """.format(active_filter=_active_project_filter('sa'), staff_clause=today_sa_clause),
+        """.format(
+            active_filter=_active_project_filter('sa'),
+            confirmed_filter=_confirmed_revenue_filter('sa'),
+            staff_clause=today_sa_clause,
+        ),
         (today, "%company_account%", staff_id) if staff_id else (today, "%company_account%"),
     ) or 0)
     today_likes = int(_safe_scalar(
@@ -271,8 +289,13 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
         FROM vkpi_sales_attributions sa
         WHERE COALESCE(occurred_at, imported_at, created_at) >= ?
           AND ({active_filter})
+          AND {confirmed_filter}
           {staff_clause}
-        """.format(active_filter=_active_project_filter('sa'), staff_clause=today_sa_clause),
+        """.format(
+            active_filter=_active_project_filter('sa'),
+            confirmed_filter=_confirmed_revenue_filter('sa'),
+            staff_clause=today_sa_clause,
+        ),
         (today, staff_id) if staff_id else (today,),
     ) or 0)
     today_clicks_clause = "AND link_id IN (SELECT id FROM vkpi_links WHERE staff_id=?)" if staff_id else ""

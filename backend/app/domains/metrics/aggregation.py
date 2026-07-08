@@ -12,6 +12,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
 from app.domains.access import scope
+from app.shared.vkpi_decision_common import _confirmed_revenue_filter
 
 logger = get_logger(__name__)
 
@@ -34,12 +35,16 @@ def _sum_revenue(project_clause: str, params: list[Any]) -> dict[str, Any]:
     if not table_exists("vkpi_sales_attributions"):
         return {"revenue_cents": None, "commission_cents": None, "orders": None}
     try:
+        # 只算确认态收入(排除 unmatched/refund/estimated/manual),与归因页/dashboard 口径统一;
+        # 否则未确认收入会灌进 ROI 分子,虚高项目/组合 ROI。
         row = get_conn().execute(
             f"""
             SELECT COALESCE(SUM(revenue_cents), 0) AS rev,
                    COALESCE(SUM(commission_cents), 0) AS com,
                    COUNT(*) AS n
-            FROM vkpi_sales_attributions WHERE 1=1 {project_clause}
+            FROM vkpi_sales_attributions
+            WHERE 1=1 {project_clause}
+              AND {_confirmed_revenue_filter()}
             """,
             tuple(params),
         ).fetchone()

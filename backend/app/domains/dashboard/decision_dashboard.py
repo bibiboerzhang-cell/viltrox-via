@@ -7,7 +7,12 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.cache.memory_cache import cache_get, cache_set
-from app.shared.vkpi_decision_common import _active_project_filter, _safe_rows, _summary
+from app.shared.vkpi_decision_common import (
+    _active_project_filter,
+    _confirmed_revenue_filter,
+    _safe_rows,
+    _summary,
+)
 from app.platform.db.schema import ensure_vkpi_schema
 
 # 大聚合读缓存(60-300s)。dashboard() 是全局口径(无 staff 过滤),键只含窗口;
@@ -89,13 +94,14 @@ def _dashboard_impl(window_days: int = 30) -> dict[str, Any]:
         LEFT JOIN staff st ON st.id = sa.staff_id
         LEFT JOIN users u ON u.id = st.user_id
         WHERE {_active_project_filter('sa')}
+          AND {_confirmed_revenue_filter('sa')}
         GROUP BY sa.staff_id, u.name, u.email
         ORDER BY revenue_cents DESC
         LIMIT 12
         """
     ).fetchall()]
     roi_by_project = [dict(row) for row in conn.execute(
-        """
+        f"""
         SELECT p.id,
                p.project_name,
                p.stage,
@@ -106,7 +112,8 @@ def _dashboard_impl(window_days: int = 30) -> dict[str, Any]:
                    WHERE c.project_id = p.id AND c.status!='void'
                ), 0) AS cost_cents
         FROM vkpi_projects p
-        LEFT JOIN vkpi_sales_attributions sa ON sa.project_id = p.id
+        LEFT JOIN vkpi_sales_attributions sa
+            ON sa.project_id = p.id AND {_confirmed_revenue_filter('sa')}
         GROUP BY p.id, p.project_name, p.stage
         ORDER BY revenue_cents DESC
         LIMIT 20
@@ -189,6 +196,7 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
         FROM vkpi_sales_attributions sa
         WHERE {sales_day} >= ?
           AND {_active_project_filter('sa')}
+          AND {_confirmed_revenue_filter('sa')}
           {sales_staff_clause}
         GROUP BY day
         """,
@@ -335,6 +343,7 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
                    COUNT(*) AS orders
             FROM vkpi_sales_attributions
             WHERE {sales_day} >= ?
+              AND {_confirmed_revenue_filter()}
             GROUP BY project_id
         ),
         costs AS (

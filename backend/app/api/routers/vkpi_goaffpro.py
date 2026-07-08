@@ -33,6 +33,11 @@ router = APIRouter(prefix="/api/admin/vkpi/goaffpro", tags=["vkpi-goaffpro"])
 # 读裁决 2026-07-07:0-15% 员工基础可改,>15% 升级 owner+manager。
 EMPLOYEE_PCT_CAP = 15.0
 
+# 确认态销售口径(与 goaffpro_connect._CONFIRMED_SALE_STATUSES 同白名单):归因 GMV/佣金 SUM
+# 只算 approved/paid/confirmed/completed,排除 refund/cancelled/declined/pending/void/空;
+# 且先按币种分组绝不把 EUR cents 加进 USD(无 FX 表)。真 key 到后按 GoAffPro 实际 status 校准。
+_CONFIRMED_SALE_STATUSES = ("approved", "paid", "confirmed", "completed")
+
 
 def _pct_within_employee_cap(value, kind: str) -> bool:
     """判定该笔佣金/折扣是否落在员工基础可改区间(仅 percentage 且 0-15%)。
@@ -567,6 +572,55 @@ def sync_goaffpro_sales(
     return {"ok": True, "synced": synced, "matched": matched, "unmatched": unmatched}
 
 
+def _aggregate_confirmed_sales(conn, where_sql: str, where_params: tuple) -> dict:
+    """按确认态 + 按币种聚合 vkpi_goaffpro_sales,返回主币种口径 + by_currency 明细 + mixed_currency。
+
+    where_sql = 行选择条件(如 'kol_pool_id = ?' / 'kol_pool_id IN (?, ?)'),where_params = 其绑定值。
+    只算确认态(status 白名单,大小写/空白不敏感),GROUP BY currency 后取主币种(GMV 最大,并列比
+    单量)上报标量;绝不把不同币种 cents 相加(无 FX 表)。返回
+    {sales_count, total_cents, commission_cents, currency, by_currency, mixed_currency}——
+    标量三件套均为主币种口径。NULLIF/TRIM 施于 TEXT 的 currency/status 列(非 timestamptz)。
+    """
+    status_ph = ",".join(["?"] * len(_CONFIRMED_SALE_STATUSES))
+    rows = conn.execute(
+        f"""
+        SELECT COALESCE(NULLIF(TRIM(currency), ''), '') AS currency,
+               COUNT(*) AS sales_count,
+               COALESCE(SUM(total_cents), 0) AS total_cents,
+               COALESCE(SUM(commission_cents), 0) AS commission_cents
+        FROM vkpi_goaffpro_sales
+        WHERE {where_sql}
+          AND LOWER(TRIM(COALESCE(status, ''))) IN ({status_ph})
+        GROUP BY COALESCE(NULLIF(TRIM(currency), ''), '')
+        ORDER BY total_cents DESC
+        """,
+        (*where_params, *_CONFIRMED_SALE_STATUSES),
+    ).fetchall()
+    by_currency: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        by_currency.append(
+            {
+                "currency": str(d.get("currency") or ""),
+                "sales_count": int(d.get("sales_count") or 0),
+                "total_cents": int(d.get("total_cents") or 0),
+                "commission_cents": int(d.get("commission_cents") or 0),
+            }
+        )
+    if by_currency:
+        primary = max(by_currency, key=lambda b: (b["total_cents"], b["sales_count"]))
+    else:
+        primary = {"currency": "", "sales_count": 0, "total_cents": 0, "commission_cents": 0}
+    return {
+        "sales_count": primary["sales_count"],
+        "total_cents": primary["total_cents"],
+        "commission_cents": primary["commission_cents"],
+        "currency": primary["currency"],
+        "by_currency": by_currency,
+        "mixed_currency": len(by_currency) > 1,
+    }
+
+
 @router.get("/attribution")
 def goaffpro_attribution(
     kol_pool_id: int | None = Query(default=None, ge=1),
@@ -583,25 +637,24 @@ def goaffpro_attribution(
     conn = get_conn()
 
     if kol_pool_id is not None:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS sales_count,
-                   COALESCE(SUM(total_cents), 0) AS total_cents,
-                   COALESCE(SUM(commission_cents), 0) AS commission_cents
-            FROM vkpi_goaffpro_sales
-            WHERE kol_pool_id = ?
-            """,
-            (kol_pool_id,),
-        ).fetchone()
-        d = dict(row) if row else {}
-        count = int(d.get("sales_count") or 0)
+        agg = _aggregate_confirmed_sales(conn, "kol_pool_id = ?", (kol_pool_id,))
+        count = int(agg.get("sales_count") or 0)
+        if not agg.get("by_currency"):
+            note = "no confirmed GOAFFPRO sales for this KOL yet"
+        elif agg.get("mixed_currency"):
+            note = "multiple currencies present; totals are the dominant currency only (no FX conversion)"
+        else:
+            note = None
         return {
             "scope": "kol",
             "kol_pool_id": kol_pool_id,
             "sales_count": count,
-            "total_cents": int(d.get("total_cents") or 0),
-            "commission_cents": int(d.get("commission_cents") or 0),
-            "note": None if count else "no synced GOAFFPRO sales for this KOL yet",
+            "total_cents": int(agg.get("total_cents") or 0),
+            "commission_cents": int(agg.get("commission_cents") or 0),
+            "currency": agg.get("currency") or "",
+            "by_currency": agg.get("by_currency") or [],
+            "mixed_currency": bool(agg.get("mixed_currency")),
+            "note": note,
         }
 
     if project_id is not None:
@@ -625,26 +678,25 @@ def goaffpro_attribution(
                 "note": "no KOLs assigned to this project (vkpi_project_kol_assignments)",
             }
         placeholders = ",".join(["?"] * len(kol_ids))
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS sales_count,
-                   COALESCE(SUM(total_cents), 0) AS total_cents,
-                   COALESCE(SUM(commission_cents), 0) AS commission_cents
-            FROM vkpi_goaffpro_sales
-            WHERE kol_pool_id IN ({placeholders})
-            """,
-            tuple(kol_ids),
-        ).fetchone()
-        d = dict(row) if row else {}
-        count = int(d.get("sales_count") or 0)
+        agg = _aggregate_confirmed_sales(conn, f"kol_pool_id IN ({placeholders})", tuple(kol_ids))
+        count = int(agg.get("sales_count") or 0)
+        if not agg.get("by_currency"):
+            note = "project has KOLs but no confirmed GOAFFPRO sales yet"
+        elif agg.get("mixed_currency"):
+            note = "multiple currencies present; totals are the dominant currency only (no FX conversion)"
+        else:
+            note = None
         return {
             "scope": "project",
             "project_id": project_id,
             "kol_count": len(kol_ids),
             "sales_count": count,
-            "total_cents": int(d.get("total_cents") or 0),
-            "commission_cents": int(d.get("commission_cents") or 0),
-            "note": None if count else "project has KOLs but no synced GOAFFPRO sales yet",
+            "total_cents": int(agg.get("total_cents") or 0),
+            "commission_cents": int(agg.get("commission_cents") or 0),
+            "currency": agg.get("currency") or "",
+            "by_currency": agg.get("by_currency") or [],
+            "mixed_currency": bool(agg.get("mixed_currency")),
+            "note": note,
         }
 
     raise HTTPException(status_code=400, detail="kol_pool_id or project_id is required")

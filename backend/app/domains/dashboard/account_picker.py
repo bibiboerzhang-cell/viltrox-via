@@ -212,17 +212,21 @@ def _shopify_configured() -> bool:
 
 
 def _shopify_orders_gmv_cents(conn: Any) -> int:
-    """Real GMV (cents) from the ingested Shopify order ledger, or 0.
+    """Real GMV (cents) from the *ingested* Shopify order ledger only, or 0.
 
-    A7 / migration 138. Returns 0 when the table is absent (migration not yet run)
-    or empty (no live creds yet) so the honest 待接入 path stays unchanged. Uses
-    the commerce domain's summarize_gmv() — single source of truth for the sum.
+    A7 / migration 138. Reads summarize_gmv().order_ledger_gmv_cents — NOT the reconciled
+    gmv_cents. summarize_gmv() folds the attribution ledger in as a fallback when no orders
+    are ingested, so returning its reconciled gmv_cents here made the caller mislabel
+    attribution-sourced GMV as "[ingested]" (gmv_is_from_orders=True) with zero real orders.
+    order_ledger_gmv_cents stays 0 while the order table is empty, so the honest
+    待接入 / confirmed-attribution branch below reports its true source. Table absent /
+    serialization error -> 0 (honest, behaves as no orders).
     """
     try:
         from app.domains.commerce import shopify_orders
 
         summary = shopify_orders.summarize_gmv()
-        return _as_int(summary.get("gmv_cents"))
+        return _as_int(summary.get("order_ledger_gmv_cents"))
     except Exception:
         # Table missing / serialization error -> behave as if no orders (honest).
         return 0
@@ -251,14 +255,20 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
     # branch is skipped and the EXACT honest 待接入 path below runs unchanged.
     shopify_gmv_cents = _shopify_orders_gmv_cents(conn)
 
-    gmv_row = conn.execute(
+    # Group by currency so mixed-currency confirmed rows are not added together (no FX table);
+    # report the dominant currency only. NULLIF on the TEXT currency column (not a timestamptz).
+    gmv_rows = conn.execute(
         """
-        SELECT COALESCE(SUM(revenue_cents), 0) AS gmv_cents
+        SELECT COALESCE(NULLIF(currency, ''), 'USD') AS currency,
+               COALESCE(SUM(revenue_cents), 0) AS gmv_cents,
+               COUNT(*) AS order_count
         FROM vkpi_sales_attributions
         WHERE source_platform = 'shopify'
           AND confidence = 'confirmed'
+        GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
+        ORDER BY gmv_cents DESC
         """
-    ).fetchone()
+    ).fetchall()
     cost_row = conn.execute(
         """
         SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents
@@ -267,7 +277,20 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
         """
     ).fetchone()
 
-    attribution_gmv_cents = _as_int(_row_value(gmv_row, "gmv_cents"))
+    attr_by_currency = [
+        {
+            "currency": str(_row_value(r, "currency", "USD") or "USD"),
+            "gmv_cents": _as_int(_row_value(r, "gmv_cents")),
+            "order_count": _as_int(_row_value(r, "order_count")),
+        }
+        for r in gmv_rows
+    ]
+    attr_primary = max(
+        attr_by_currency, key=lambda b: (b["gmv_cents"], b["order_count"]), default=None
+    )
+    attribution_gmv_cents = _as_int((attr_primary or {}).get("gmv_cents"))
+    attribution_currency = (attr_primary or {}).get("currency")
+    attribution_mixed_currency = len(attr_by_currency) > 1
     cost_cents = _as_int(_row_value(cost_row, "cost_cents"))
 
     # Prefer the real ingested-order ledger when it has data; otherwise fall back
@@ -303,6 +326,10 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
     else:
         roi_source = "not_connected"
 
+    # Currency is known for the confirmed-attribution branch (grouped above). The ingested-order
+    # branch surfaces its own currency via summarize_gmv; not re-reported here.
+    gmv_currency = None if gmv_is_from_orders else attribution_currency
+    gmv_mixed_currency = False if gmv_is_from_orders else attribution_mixed_currency
     return {
         "attributed_gmv": gmv,
         "attributed_gmv_cents": gmv_cents,
@@ -310,6 +337,8 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
         "cost_cents": cost_cents,
         "avg_roi": avg_roi,
         "gmv_source": gmv_source,
+        "gmv_currency": gmv_currency,
+        "gmv_mixed_currency": gmv_mixed_currency,
         "roi_source": roi_source,
     }
 

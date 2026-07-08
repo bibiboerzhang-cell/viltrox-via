@@ -55,6 +55,16 @@ _AFFILIATE_FIELDS = "id,name,email,ref_code,coupon,status,commission,total_sales
 # 实测:/admin/orders 返回 {error};GOAFFPRO 销售端点是 /admin/sales。
 _SALE_FIELDS = "id,affiliate_id,order_id,number,total,commission,currency,status,date,coupon,ref_code"
 
+# GoAffPro 销售确认态口径:只算已确认/已批准/已付/完成的单,排除退款/取消/拒绝/待定/空。
+# 与 routers/vkpi_goaffpro.py 的 _CONFIRMED_SALE_STATUSES 同白名单;GMV/佣金 SUM 只计确认态,
+# 且按币种分组绝不把 EUR cents 加进 USD。真 key 到后按 GoAffPro 实际 status 值校准(待 key 校准)。
+_CONFIRMED_SALE_STATUSES = frozenset({"approved", "paid", "confirmed", "completed"})
+
+
+def _is_confirmed_sale(status: Any) -> bool:
+    """该销售是否落在确认态白名单(大小写/空白不敏感)。空/pending/refund/cancelled → False。"""
+    return str(status or "").strip().lower() in _CONFIRMED_SALE_STATUSES
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -524,12 +534,24 @@ def list_traffic(
 def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
     """单 affiliate 的归因汇总:点击数 + 订单数 + GMV + 佣金(实时查 traffic + orders)。
 
-    点击数取 traffic 的 total_results(便宜,limit=1);订单/GMV/佣金拉该 affiliate 的订单求和。
-    返回 {ok, clicks, orders, gmv_cents, commission_cents, currency, partial?, error?}。绝不抛。
+    点击数取 traffic 的 total_results(便宜,limit=1);订单/GMV/佣金只对**确认态**订单求和
+    (_is_confirmed_sale:approved/paid/confirmed/completed,排除 refund/cancelled/pending/空),
+    且按币种分组只上报主币种(无 FX 表,绝不跨币混加)。
+    返回 {ok, clicks, orders, gmv_cents, commission_cents, currency, by_currency, mixed_currency,
+    partial?, error?}。orders/gmv/commission 均为主币种确认态口径。绝不抛。
     任一子查询失败 → partial=True + error(让调用方/前端能区分「真零」与「查询失败」,不污染汇总)。
     """
     aid = str(affiliate_id or "").strip()
-    base = {"ok": False, "clicks": 0, "orders": 0, "gmv_cents": 0, "commission_cents": 0, "currency": ""}
+    base = {
+        "ok": False,
+        "clicks": 0,
+        "orders": 0,
+        "gmv_cents": 0,
+        "commission_cents": 0,
+        "currency": "",
+        "by_currency": [],
+        "mixed_currency": False,
+    }
     if not aid:
         return {**base, "reason": "missing_id"}
     tr = list_traffic(affiliate_id=aid, limit=1)
@@ -539,21 +561,44 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
     op = _paginate_rows("admin/orders", {"fields": _SALE_FIELDS, "affiliate_id": aid}, ("orders", "sales", "data", "results"))
     od_ok = bool(op.get("ok"))
     orders_list = op.get("rows") or []
-    gmv = sum(to_cents(o.get("total") or o.get("order_total")) for o in orders_list)
-    commission = sum(to_cents(o.get("commission")) for o in orders_list)
-    currency = ""
+    # 只算确认态订单(排除 refund/cancelled/declined/pending/空),并按币种分组——无 FX 表,绝不把
+    # EUR cents 加进 USD。取主币种(GMV 最大)上报 gmv/commission/orders,by_currency 留全量供审计,
+    # mixed_currency 标记多币种。之前无 status 过滤 + currency 取首单 → 退款/待定单虚增 GMV、跨币混加。
+    by_currency: dict[str, dict[str, int]] = {}
     for o in orders_list:
-        if o.get("currency"):
-            currency = str(o["currency"])
-            break
+        if not _is_confirmed_sale(o.get("status")):
+            continue
+        cur = str(o.get("currency") or "").strip().upper() or "UNKNOWN"
+        bucket = by_currency.setdefault(cur, {"gmv_cents": 0, "commission_cents": 0, "orders": 0})
+        bucket["gmv_cents"] += to_cents(o.get("total") or o.get("order_total"))
+        bucket["commission_cents"] += to_cents(o.get("commission"))
+        bucket["orders"] += 1
+    if by_currency:
+        primary_cur = max(by_currency.items(), key=lambda kv: (kv[1]["gmv_cents"], kv[1]["orders"]))[0]
+        pb = by_currency[primary_cur]
+        gmv = pb["gmv_cents"]
+        commission = pb["commission_cents"]
+        confirmed_orders = pb["orders"]
+        currency = "" if primary_cur == "UNKNOWN" else primary_cur
+    else:
+        gmv = 0
+        commission = 0
+        confirmed_orders = 0
+        currency = ""
+    by_currency_list = [
+        {"currency": ("" if k == "UNKNOWN" else k), **v}
+        for k, v in sorted(by_currency.items(), key=lambda kv: (-kv[1]["gmv_cents"], kv[0]))
+    ]
     partial = (not tr_ok) or (not od_ok) or bool(op.get("partial"))
     out = {
         "ok": not partial,
         "clicks": clicks,
-        "orders": len(orders_list),
+        "orders": confirmed_orders,
         "gmv_cents": gmv,
         "commission_cents": commission,
         "currency": currency,
+        "by_currency": by_currency_list,
+        "mixed_currency": len(by_currency) > 1,
         "partial": partial,
     }
     if partial:

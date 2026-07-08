@@ -102,6 +102,28 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
         return default
 
 
+def _primary_currency(by_currency: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collapse a per-currency GMV breakdown to one reportable figure WITHOUT cross-currency
+    addition. There is no FX table, so summing EUR cents onto USD cents would fabricate money;
+    instead we pick the dominant currency (largest gross GMV, tie-break by order_count) and
+    report only its sum, while carrying the full by_currency breakdown and a mixed_currency flag
+    so callers can annotate that other currencies exist rather than silently folding them in.
+    Empty / all-zero-row breakdown -> {0, 0, None}. Returns
+    {gmv_cents, order_count, currency, by_currency, mixed_currency}.
+    """
+    clean = [b for b in by_currency if _as_int(b.get("order_count")) > 0]
+    if not clean:
+        return {"gmv_cents": 0, "order_count": 0, "currency": None, "by_currency": [], "mixed_currency": False}
+    primary = max(clean, key=lambda b: (_as_int(b.get("gmv_cents")), _as_int(b.get("order_count"))))
+    return {
+        "gmv_cents": _as_int(primary.get("gmv_cents")),
+        "order_count": _as_int(primary.get("order_count")),
+        "currency": _str_or_none(primary.get("currency")),
+        "by_currency": clean,
+        "mixed_currency": len(clean) > 1,
+    }
+
+
 def ingest_order(payload: dict[str, Any]) -> dict[str, Any]:
     """Idempotent upsert of one Shopify order, keyed on (shop_domain, order_id).
 
@@ -210,7 +232,8 @@ def _attribution_gmv_cents(
       - window_days -> COALESCE(occurred_at, created_at) >= cutoff
       - discount_codes -> only rows whose evidence_json carries one of the codes
         (matched with a compat-safe LIKE per code; '%' literals stay inside the bind value).
-    Returns {gmv_cents, order_count, currency}. Empty ledger -> {0, 0, None}.
+    Returns {gmv_cents, order_count, currency, by_currency, mixed_currency} for the dominant
+    currency (no cross-currency addition). Empty ledger -> {0, 0, None, [], False}.
     """
     where: list[str] = ["source_platform = 'shopify'", "confidence IN ('confirmed','refund')"]
     params: list[Any] = []
@@ -238,22 +261,32 @@ def _attribution_gmv_cents(
 
     where_sql = " WHERE " + " AND ".join(where)
     conn = get_conn()
-    row = conn.execute(
+    # Group by currency so refund rows net against same-currency confirmed rows and no
+    # cross-currency addition happens (MAX(currency) + SUM over all currencies used to add
+    # EUR cents onto USD). _primary_currency picks the dominant currency; by_currency carries
+    # the rest for auditability. NULLIF on the TEXT currency column (not a timestamptz).
+    rows = conn.execute(
         f"""
         SELECT
+            COALESCE(NULLIF(currency, ''), 'USD') AS currency,
             COALESCE(SUM(revenue_cents), 0) AS gmv_cents,
-            COUNT(*) AS order_count,
-            MAX(currency) AS currency
+            COUNT(*) AS order_count
         FROM vkpi_sales_attributions
         {where_sql}
+        GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
+        ORDER BY gmv_cents DESC
         """,
         params,
-    ).fetchone()
-    return {
-        "gmv_cents": _as_int(_row_get(row, "gmv_cents")),
-        "order_count": _as_int(_row_get(row, "order_count")),
-        "currency": _str_or_none(_row_get(row, "currency")),
-    }
+    ).fetchall()
+    by_currency = [
+        {
+            "currency": _str_or_none(_row_get(r, "currency")) or "USD",
+            "gmv_cents": _as_int(_row_get(r, "gmv_cents")),
+            "order_count": _as_int(_row_get(r, "order_count")),
+        }
+        for r in rows
+    ]
+    return _primary_currency(by_currency)
 
 
 def summarize_gmv(
@@ -277,8 +310,10 @@ def summarize_gmv(
 
     - window_days: when set (>0), restricts by ordered_at (orders) / occurred_at (attributions).
     - discount_codes: when non-empty, restricts to KOL-coupon orders / attributions.
-    Returns {gmv_cents, order_count, currency, gmv_source, attribution_gmv_cents,
-    order_ledger_gmv_cents}. Both ledgers empty -> all 0 so the dashboard stays honest 待接入.
+    Returns {gmv_cents, order_count, currency, mixed_currency, gmv_source, attribution_gmv_cents,
+    order_ledger_gmv_cents}. GMV is the dominant currency's sum only (no cross-currency addition);
+    mixed_currency flags that other currencies exist. Both ledgers empty -> all 0 so the dashboard
+    stays honest 待接入.
     """
     where: list[str] = []
     params: list[Any] = []
@@ -301,21 +336,35 @@ def summarize_gmv(
 
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     conn = get_conn()
-    row = conn.execute(
+    # Group by currency so mixed-currency order ledgers do not add EUR cents onto USD (the old
+    # MAX(currency) + SUM over all rows did exactly that). _primary_currency reports the dominant
+    # currency only; order_by_currency carries the rest. NULLIF on the TEXT currency column.
+    order_rows = conn.execute(
         f"""
         SELECT
+            COALESCE(NULLIF(currency, ''), 'USD') AS currency,
             COALESCE(SUM(total_price_cents), 0) AS gmv_cents,
-            COUNT(*) AS order_count,
-            MAX(currency) AS currency
+            COUNT(*) AS order_count
         FROM vkpi_shopify_orders
         {where_sql}
+        GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
+        ORDER BY gmv_cents DESC
         """,
         params,
-    ).fetchone()
-
-    order_gmv_cents = _as_int(_row_get(row, "gmv_cents"))
-    order_count = _as_int(_row_get(row, "order_count"))
-    order_currency = _str_or_none(_row_get(row, "currency"))
+    ).fetchall()
+    order_by_currency = [
+        {
+            "currency": _str_or_none(_row_get(r, "currency")) or "USD",
+            "gmv_cents": _as_int(_row_get(r, "gmv_cents")),
+            "order_count": _as_int(_row_get(r, "order_count")),
+        }
+        for r in order_rows
+    ]
+    order_primary = _primary_currency(order_by_currency)
+    order_gmv_cents = _as_int(order_primary.get("gmv_cents"))
+    order_count = _as_int(order_primary.get("order_count"))
+    order_currency = _str_or_none(order_primary.get("currency"))
+    order_mixed_currency = bool(order_primary.get("mixed_currency"))
 
     # Net-attribution figure (refund-inclusive) under the same window/discount caliber. Always
     # computed so it can be returned for cross-check; degrade to zeros on any read error so the
@@ -323,14 +372,15 @@ def summarize_gmv(
     try:
         attr = _attribution_gmv_cents(window_days=window_days, discount_codes=discount_codes)
     except Exception:
-        attr = {"gmv_cents": 0, "order_count": 0, "currency": None}
+        attr = {"gmv_cents": 0, "order_count": 0, "currency": None, "mixed_currency": False}
     attribution_gmv_cents = _as_int(attr.get("gmv_cents"))
 
     if order_count > 0:
-        # Order ledger has rows -> it is the granular source of truth.
+        # Order ledger has rows -> it is the granular source of truth (dominant currency).
         gmv_cents = order_gmv_cents
         out_count = order_count
         out_currency = order_currency
+        mixed_currency = order_mixed_currency
         gmv_source = "vkpi_shopify_orders.total_price_cents[ingested]"
     elif attribution_gmv_cents != 0 or _as_int(attr.get("order_count")) > 0:
         # Order ledger empty but the live attribution ledger has data -> reconcile onto it
@@ -338,18 +388,21 @@ def summarize_gmv(
         gmv_cents = attribution_gmv_cents
         out_count = _as_int(attr.get("order_count"))
         out_currency = _str_or_none(attr.get("currency"))
+        mixed_currency = bool(attr.get("mixed_currency"))
         gmv_source = "vkpi_sales_attributions.revenue_cents[shopify,confirmed+refund,net]"
     else:
         # Both empty -> honest 待接入.
         gmv_cents = 0
         out_count = 0
         out_currency = None
+        mixed_currency = False
         gmv_source = "awaiting_data"
 
     return {
         "gmv_cents": gmv_cents,
         "order_count": out_count,
         "currency": out_currency,
+        "mixed_currency": mixed_currency,
         "gmv_source": gmv_source,
         "attribution_gmv_cents": attribution_gmv_cents,
         "order_ledger_gmv_cents": order_gmv_cents,
