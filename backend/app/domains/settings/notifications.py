@@ -78,15 +78,24 @@ def _clean_time(value: Any, default: str) -> str:
     return text if _TIME_PATTERN.match(text) else default
 
 
+def _staff_exists(staff_id: int) -> bool:
+    return bool(get_conn().execute("SELECT 1 FROM staff WHERE id = ?", (int(staff_id),)).fetchone())
+
+
 def _target_staff_id(staff: dict[str, Any] | None, requested_staff_id: int | None = None) -> int:
     actor = resolve_staff_id(staff)
     requested = _int(requested_staff_id, 0)
     if requested and requested != actor and not scope.can_view_all(staff):
         raise scope.ScopeDenied("notification settings scope denied")
-    target = requested or actor
+    target = int(requested or actor)
     if not target:
         raise scope.ScopeDenied("missing staff context")
-    return int(target)
+    # vkpi_notification_settings.staff_id 无 FK:写不存在的 staff 会静默落孤儿行(200 假成功)。
+    # 目标是他人(管理层显式指定)时先校验存在;不存在 → 404(LookupError),绝不落孤儿行。
+    # 目标是本人(actor,已鉴权)恒存在,免一次查询。
+    if target != actor and not _staff_exists(target):
+        raise LookupError("staff not found")
+    return target
 
 
 def _normalize(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:

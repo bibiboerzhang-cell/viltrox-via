@@ -56,6 +56,10 @@ from app.services.system.staff_roles import ROLES, list_roles, permission_matrix
 logger = get_logger(__name__)
 
 
+class StaffDeleteBlockedError(Exception):
+    """删员工时仍被其它记录引用(残留 FK)—— 路由映射 409,给可读文案,不透传 PG 原文。"""
+
+
 ALLOWED_STAFF_EMAIL_DOMAINS = _load_allowed_domains()
 
 
@@ -658,6 +662,18 @@ def delete_member(staff_id: int) -> None:
         raise ValueError("staff not found")
     if int(row["is_owner"] or 0) == 1:
         raise PermissionError("owner staff cannot be deleted")
-    conn.execute("DELETE FROM staff WHERE id = ?", (int(staff_id),))
-    conn.commit()
+    # vkpi_kol_pool_favorites / vkpi_kol_pool_members 的 staff_id FK 是 ON DELETE NO ACTION
+    # (其余引用 staff.id 的表都是 CASCADE/SET NULL)。有收藏 / 被共享 KOL 的员工若直接
+    # DELETE FROM staff 会触 FK 违约 → 500 且把 PG 原文(表名/整行)泄露给客户端。删员工前
+    # 先清掉「其个人收藏」与「共享给该员工的授予行」,对齐其余 staff FK 的 CASCADE 语义。
+    conn.execute("DELETE FROM vkpi_kol_pool_favorites WHERE staff_id = ?", (int(staff_id),))
+    conn.execute("DELETE FROM vkpi_kol_pool_members WHERE staff_id = ?", (int(staff_id),))
+    try:
+        conn.execute("DELETE FROM staff WHERE id = ?", (int(staff_id),))
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 — 仍撞 FK(未来新增引用表)时给可读错误,绝不透传 PG 原文
+        logger.warning("delete_member staff=%s blocked by residual reference: %s", staff_id, exc)
+        raise StaffDeleteBlockedError(
+            "cannot delete staff: still referenced by other records"
+        ) from exc
 

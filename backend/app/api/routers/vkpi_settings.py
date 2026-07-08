@@ -86,6 +86,8 @@ def preference_settings(staff_id: int | None = Query(default=None), staff=Depend
         return settings_domain.preference_settings(staff=staff, staff_id=staff_id)
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "preference scope denied") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "staff not found") from exc
 
 
 @router.patch("/settings/preferences")
@@ -94,6 +96,8 @@ def update_preference_settings(body: dict, staff=Depends(require_tab("vkpi", "wr
         return settings_domain.update_preference_settings(body, staff=staff)
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "preference scope denied") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "staff not found") from exc
 
 
 @router.get("/settings/preferences/list")
@@ -109,6 +113,8 @@ def notifications(staff_id: int | None = Query(default=None), staff=Depends(requ
         return settings_domain.notifications(staff=staff, staff_id=staff_id)
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "notification settings scope denied") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "staff not found") from exc
 
 
 @router.patch("/settings/notifications")
@@ -117,6 +123,8 @@ def update_notifications(body: dict, staff=Depends(require_tab("vkpi", "write"))
         return settings_domain.update_notifications(body, staff=staff)
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "notification settings scope denied") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "staff not found") from exc
 
 
 @router.get("/settings/notifications/list")

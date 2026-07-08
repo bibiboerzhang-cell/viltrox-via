@@ -15,10 +15,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 # 退役,改用共享 manager_guard.require_manager_staff(同判定同 403 文案,alias 保调用点不变)。
 from app.api.dependencies.manager_guard import require_manager_staff as _require_manager_staff
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.domains.staff_groups import service
 
 
 router = APIRouter(prefix="/api/admin/vkpi/staff-groups", tags=["vkpi-staff-groups"])
+logger = get_logger(__name__)
 
 
 def _guard(fn, *args, **kwargs):
@@ -28,8 +30,10 @@ def _guard(fn, *args, **kwargs):
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 — surface DB/serialize errors as 500 with msg
-        raise HTTPException(status_code=500, detail=f"staff-groups error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — DB/序列化错误落服务端日志,客户端只回通用文案
+        # 绝不把 exc 原文(可能含 PG 表结构/整行 DETAIL)透传给客户端,避免信息泄露。
+        logger.exception("staff-groups operation failed: %s", getattr(fn, "__name__", fn))
+        raise HTTPException(status_code=500, detail="staff-groups operation failed") from exc
 
 
 # ── Groups ──────────────────────────────────────────────────────────────────

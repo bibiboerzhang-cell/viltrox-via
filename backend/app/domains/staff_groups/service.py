@@ -118,6 +118,24 @@ def _int_or_none(value: Any) -> int | None:
     return iv or None
 
 
+def _existing_ids(conn: Any, table: str, ids: list[int]) -> set[int]:
+    """回读 table 中真实存在的 id 子集(用于展开前过滤陈旧 id)。
+
+    分组的 member_ids / shared_projects / shared_kol_pool_ids 可能含已删的 staff/project/kol id;
+    直接展开 INSERT 会撞 FK 违约 → 500 且泄露 PG 原文。展开前用本函数只留存在的 id。
+    table 为域内硬编码常量('vkpi_projects'/'vkpi_kol_pool'/'staff'),非用户输入,拼接安全。
+    """
+    ids = [int(i) for i in ids if i is not None]
+    if not ids:
+        return set()
+    placeholders = ", ".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT id FROM {table} WHERE id IN ({placeholders})",
+        tuple(ids),
+    ).fetchall()
+    return {int(dict(r)["id"]) for r in rows}
+
+
 def _shared_project_ids(permissions: dict[str, Any] | None) -> list[int]:
     """从 permissions.shared_projects 取「真项目 id」列表(去重、丢非数字)。
 
@@ -159,8 +177,17 @@ def _recompute_group_shared_projects(
     )
     project_ids = _shared_project_ids(permissions)
     staff_ids = [sid for sid in (_int_or_none(m) for m in (member_ids or [])) if sid]
+    # 展开前过滤陈旧 id:分组存的 shared_projects/member_ids 可能含已删 project/staff,
+    # 直接 INSERT 会撞 vkpi_project_members 的 FK(project_id/staff_id)→ 500 且泄露 PG 原文。
+    # 只留真实存在的 id;被过滤掉的陈旧 id 诚实降级(不展开,不阻断分组本身保存)。
+    if project_ids:
+        live_projects = _existing_ids(conn, "vkpi_projects", project_ids)
+        project_ids = [pid for pid in project_ids if pid in live_projects]
+    if staff_ids:
+        live_staff = _existing_ids(conn, "staff", staff_ids)
+        staff_ids = [sid for sid in staff_ids if sid in live_staff]
     if not project_ids or not staff_ids:
-        # 无共享项目或无成员 → 上面 DELETE 已清空本组行,直接收尾(空集即「无共享」)。
+        # 无(存在的)共享项目或成员 → 上面 DELETE 已清空本组行,直接收尾(空集即「无共享」)。
         return
     for pid in project_ids:
         for sid in staff_ids:
@@ -221,8 +248,17 @@ def _recompute_group_shared_kols(
     )
     kol_ids = _shared_kol_ids(permissions)
     staff_ids = [sid for sid in (_int_or_none(m) for m in (member_ids or [])) if sid]
+    # 展开前过滤陈旧 id:分组存的 shared_kol_pool_ids/member_ids 可能含已删 kol/staff,
+    # 直接 INSERT 会撞 vkpi_kol_pool_members 的 FK(kol_pool_id/staff_id)→ 500 且泄露 PG 原文。
+    # 只留真实存在的 id;被过滤掉的陈旧 id 诚实降级(不展开,不阻断分组本身保存)。
+    if kol_ids:
+        live_kols = _existing_ids(conn, "vkpi_kol_pool", kol_ids)
+        kol_ids = [kid for kid in kol_ids if kid in live_kols]
+    if staff_ids:
+        live_staff = _existing_ids(conn, "staff", staff_ids)
+        staff_ids = [sid for sid in staff_ids if sid in live_staff]
     if not kol_ids or not staff_ids:
-        # 无共享 KOL 或无成员 → 上面 DELETE 已清空本组行,直接收尾(空集即「无共享」)。
+        # 无(存在的)共享 KOL 或成员 → 上面 DELETE 已清空本组行,直接收尾(空集即「无共享」)。
         return
     for kid in kol_ids:
         for sid in staff_ids:

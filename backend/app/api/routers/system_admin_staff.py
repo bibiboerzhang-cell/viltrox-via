@@ -292,6 +292,8 @@ def delete_staff_member(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except staff_svc.StaffDeleteBlockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     record_admin_action(
         actor=admin,
         action="delete_staff",
