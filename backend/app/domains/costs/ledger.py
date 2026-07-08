@@ -7,7 +7,6 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.costs.common import (
-    MAX_AMOUNT_CENTS,
     TYPE_ALIASES,
     VALID_COST_TYPES,
     _amount_cents,
@@ -17,6 +16,7 @@ from app.domains.costs.common import (
     normalize_cost_status,
     normalize_currency,
     utcnow,
+    validate_amount_cents,
 )
 from app.domains.costs.product_catalog import ensure_product_catalog_schema, list_product_catalog
 from app.platform.db.schema import ensure_vkpi_schema
@@ -100,8 +100,10 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
     unit_cost_cents = _amount_cents({"amount_usd": body.get("unit_cost_usd", body.get("amount_usd", body.get("unit_cost", 0)))})
     if "unit_cost_cents" in body:
         unit_cost_cents = _int(body.get("unit_cost_cents"))
-    if unit_cost_cents < 0:
-        raise ValueError("unit cost must be non-negative")
+    # 兄弟对齐 add_cost:非负 + BIGINT 上界越界 → ValueError(→400),不撞 BIGINT 溢出 500。
+    unit_cost_cents = validate_amount_cents(unit_cost_cents)
+    # 币种过白名单归一(与成本台账同口径),非法 → ValueError(→400);空值回退 USD。
+    currency = normalize_currency(body.get("currency")) or "USD"
     actor_staff_id = staff_id(staff)
     now = utcnow()
     active = 0 if str(body.get("active")).strip().lower() in {"0", "false", "no", "inactive"} else 1
@@ -126,7 +128,7 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
             sku,
             str(body.get("product_name") or body.get("name") or ""),
             unit_cost_cents,
-            str(body.get("currency") or "USD"),
+            currency,
             active_value,
             str(body.get("note") or ""),
             actor_staff_id or None,
@@ -148,7 +150,7 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
             "product_cost_id": product_cost.get("id"),
             "product_sku": sku,
             "unit_cost_cents": unit_cost_cents,
-            "currency": product_cost.get("currency") or str(body.get("currency") or "USD"),
+            "currency": product_cost.get("currency") or currency,
             "active": bool(active),
             "note": product_cost.get("note") or str(body.get("note") or ""),
         },
@@ -283,12 +285,8 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
     scope.assert_project_access(project_id, staff, write=True)
     if cost_type not in VALID_COST_TYPES:
         raise ValueError("unsupported cost_type")
-    amount_cents = _amount_cents(body)
-    if amount_cents < 0:
-        raise ValueError("amount must be non-negative")
-    # 写前硬校验(路由映 400):金额上界防 BIGINT 溢出 500;币种/状态白名单防任意值混入。
-    if amount_cents > MAX_AMOUNT_CENTS:
-        raise ValueError("amount exceeds maximum allowed")
+    # 写前硬校验(路由映 400):金额非负 + 上界防 BIGINT 溢出 500;币种/状态白名单防任意值混入。
+    amount_cents = validate_amount_cents(_amount_cents(body))
     currency = normalize_currency(body.get("currency"))
     status = normalize_cost_status(body.get("status"))
     conn = get_conn()
@@ -546,12 +544,17 @@ def update_cost(cost_id: int, body: dict[str, Any], *, staff: dict[str, Any] | N
         updates.append("cost_type=?")
         params.append(cost_type)
     if "amount_cents" in body or "amount_usd" in body or "amount" in body:
-        amount_cents = _amount_cents(body)
-        if amount_cents < 0:
-            raise ValueError("amount must be non-negative")
+        # 兄弟对齐 add_cost:非负 + BIGINT 上界越界 → ValueError(→400),不脏落库/溢出 500。
+        amount_cents = validate_amount_cents(_amount_cents(body))
         updates.append("amount_cents=?")
         params.append(amount_cents)
-    for key in ("currency", "incurred_at", "source_ref", "note"):
+    if "currency" in body:
+        # 兄弟对齐 add_cost:币种过白名单归一;非法 → ValueError(→400),空值跳过(保留原币不置空)。
+        currency = normalize_currency(body.get("currency"))
+        if currency is not None:
+            updates.append("currency=?")
+            params.append(currency)
+    for key in ("incurred_at", "source_ref", "note"):
         if key in body:
             updates.append(f"{key}=?")
             params.append(str(body.get(key) or ""))

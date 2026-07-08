@@ -103,7 +103,15 @@ def _decide(project_id: int, kol_pool_id: int, to_status: str, staff: dict[str, 
     if not scope.can_view_all(staff):
         return {"ok": False, "reason": "admin_only"}
     pid, kid = int(project_id or 0), int(kol_pool_id or 0)
+    if pid <= 0 or kid <= 0:
+        return {"ok": False, "reason": "project_id + kol_pool_id required"}
     conn = get_conn()
+    # 兄弟对齐 request_approval:校验 project/kol 真实存在,不存在则拒绝——否则 UPDATE 无命中
+    # 会走下方 INSERT 落孤儿 approval 行(本表无 FK,指向不存在的 project/kol)。
+    if conn.execute("SELECT 1 FROM vkpi_projects WHERE id = ?", (pid,)).fetchone() is None:
+        return {"ok": False, "reason": "project_not_found", "project_id": pid}
+    if conn.execute("SELECT 1 FROM vkpi_kol_pool WHERE id = ?", (kid,)).fetchone() is None:
+        return {"ok": False, "reason": "kol_not_found", "kol_pool_id": kid}
     cur = conn.execute(
         f"""
         UPDATE {_TABLE}

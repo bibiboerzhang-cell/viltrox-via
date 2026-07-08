@@ -57,6 +57,19 @@ def _sku(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def validate_amount_cents(amount_cents: int) -> int:
+    """金额分值写前硬校验(路由映 400):非负 + 不超 BIGINT 写入上界。
+
+    统一收口 add_cost / update_cost / upsert_product_cost 三兄弟的越界闸:金额直入
+    BIGINT 列,负数或 >9e18 会触发 PG 溢出 500(并泄露 DETAIL)。写前收敛成 ValueError。
+    """
+    if amount_cents < 0:
+        raise ValueError("amount must be non-negative")
+    if amount_cents > MAX_AMOUNT_CENTS:
+        raise ValueError("amount exceeds maximum allowed")
+    return amount_cents
+
+
 def normalize_currency(value: Any) -> str | None:
     """校验币种在白名单并归一化为大写码;未提供(None/空串)→ None(保留调用方回退语义)。"""
     if value is None or not str(value).strip():

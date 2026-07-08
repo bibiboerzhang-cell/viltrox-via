@@ -133,7 +133,14 @@ _EVENT_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "budget_total": (0, _INT32_MAX),
     "leads": (0, _INT32_MAX),
     "videos": (0, _INT32_MAX),
+    # 子资源 INTEGER 列:expense.amount / material.qty / product.qty(均 int32),
+    # 越界直入撞列上限触发 PG 500,故收敛成 400。事件主体 payload 不带这些键 → 校验时跳过。
+    "amount": (0, _INT32_MAX),
+    "qty": (0, _INT32_MAX),
 }
+# 子资源(task/expense/kol/material/product)主键 id 列为 VARCHAR(64)。超长 id 直入会触发
+# StringDataRightTruncation 500,写前校验长度收敛成 400。自动生成 id(_gen_id)远短于此界。
+_MAX_ID_LEN = 64
 _EVENT_FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
     "roi": (-99_999_999.99, 99_999_999.99),  # NUMERIC(10,2)
     "location_lat": (-90.0, 90.0),           # NUMERIC(10,6),纬度物理界
@@ -170,6 +177,13 @@ def _assert_event_exists(conn: Any, event_id: str) -> None:
     row = conn.execute("SELECT id FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
     if row is None:
         raise LookupError("event not found")
+
+
+def _validate_id_len(value: str) -> str:
+    """VARCHAR(64) 主键写前校验:超长 id → ValueError(→ 400),不撞列宽触发 PG 500。"""
+    if len(value) > _MAX_ID_LEN:
+        raise ValueError(f"id exceeds max length {_MAX_ID_LEN}")
+    return value
 
 
 # ── Events ────────────────────────────────────────────────────────────────
@@ -317,8 +331,18 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
 def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     _validate_event_numeric(payload)  # health_score/budget_total/location_lat/lng 越界 → 400,不撞列上限 500
     conn = get_conn()
-    eid = str(payload.get("id") or _gen_id("evt"))
+    eid = _validate_id_len(str(payload.get("id") or _gen_id("evt")))  # VARCHAR(64) 超长 → 400
     owner_id = payload.get("owner_id") or _staff_id(staff)
+    # owner_id → staff(id) 外键。给了却不存在会撞 FK 违约 500 + DETAIL 泄露;写前校验 → 400。
+    # None 放行(列可空 ON DELETE SET NULL);非数字/不存在 → ValueError(→400)。
+    if owner_id is not None:
+        try:
+            owner_id_int = int(owner_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("owner_id must be an integer") from exc
+        if conn.execute("SELECT 1 FROM staff WHERE id = ?", (owner_id_int,)).fetchone() is None:
+            raise ValueError("owner_id not found")
+        owner_id = owner_id_int
     conn.execute(
         """
         INSERT INTO vkpi_events
@@ -467,7 +491,7 @@ def _normalize_due_date(raw: Any) -> str | None:
 def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
-    tid = str(payload.get("id") or _gen_id("tsk"))
+    tid = _validate_id_len(str(payload.get("id") or _gen_id("tsk")))  # VARCHAR(64) 超长 → 400
     conn.execute(
         """
         INSERT INTO vkpi_event_tasks
@@ -527,7 +551,8 @@ def delete_task(event_id: str, task_id: str, staff: dict[str, Any] | None) -> di
 def add_expense(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
-    xid = str(payload.get("id") or _gen_id("exp"))
+    _validate_event_numeric(payload)  # amount 越界 → 400,不撞 int32 列上限 500
+    xid = _validate_id_len(str(payload.get("id") or _gen_id("exp")))  # VARCHAR(64) 超长 → 400
     conn.execute(
         """
         INSERT INTO vkpi_event_expenses
@@ -556,7 +581,7 @@ def delete_expense(event_id: str, expense_id: str, staff: dict[str, Any] | None)
 def invite_kol(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
-    iid = str(payload.get("id") or _gen_id("inv"))
+    iid = _validate_id_len(str(payload.get("id") or _gen_id("inv")))  # VARCHAR(64) 超长 → 400
     conn.execute(
         """
         INSERT INTO vkpi_event_kol_invites
@@ -584,7 +609,8 @@ def remove_kol(event_id: str, invite_id: str, staff: dict[str, Any] | None) -> d
 def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
-    mid = str(payload.get("id") or _gen_id("mat"))
+    _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
+    mid = _validate_id_len(str(payload.get("id") or _gen_id("mat")))  # VARCHAR(64) 超长 → 400
     conn.execute(
         """
         INSERT INTO vkpi_event_materials
@@ -605,6 +631,7 @@ def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
 
 
 def update_material(event_id: str, material_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     conn = get_conn()
     sets: list[str] = []
     vals: list[Any] = []
@@ -645,7 +672,8 @@ def delete_material(event_id: str, material_id: str, staff: dict[str, Any] | Non
 def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
-    pid = str(payload.get("id") or _gen_id("pp"))
+    _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
+    pid = _validate_id_len(str(payload.get("id") or _gen_id("pp")))  # VARCHAR(64) 超长 → 400
     ra = payload.get("returnAfter")
     if ra is None:
         ra = payload.get("return_after")
@@ -669,6 +697,7 @@ def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | 
 
 
 def update_product(event_id: str, product_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     conn = get_conn()
     sets: list[str] = []
     vals: list[Any] = []
