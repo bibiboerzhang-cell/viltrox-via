@@ -22,7 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
-from app.api.dependencies.perms import require_tab
+from app.api.dependencies.perms import require_tab, require_tab_stream
 from app.core.logging import get_logger
 
 try:
@@ -309,7 +309,7 @@ def recent_activity(
 async def stream_activity(
     request: Request,
     limit: int = Query(default=30, ge=1, le=100),
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab_stream("vkpi", "read")),
 ):
     """A4 思考流聚合事件流:与 GET /recent 同源同投影,仅传输形态不同。
 

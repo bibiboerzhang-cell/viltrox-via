@@ -32,6 +32,12 @@ export interface EventStreamOrPollOptions {
    * 后端聚合事件流未上线)。后端上线后传入 url 即自动切 SSE,无需改消费方其余代码。
    */
   streamUrl?: string | null;
+  /**
+   * 认证 token。浏览器原生 EventSource 无法带 Authorization header,故 token 走
+   * ?access_token= 查询参数(后端 stream 端点用 require_tab_stream 认这条路)。
+   * 不传则不附加(依赖 cookie / 同源);传了才追加到 streamUrl。
+   */
+  streamToken?: string | null;
   /** 要监听的 SSE 事件名;缺省用 DEFAULT_SSE_EVENTS。 */
   events?: readonly string[];
   /** 收到 SSE 事件时的自定义处理;不传则默认调用 pollFn 重拉一次。 */
@@ -52,10 +58,17 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
   const {
     interval,
     streamUrl,
+    streamToken,
     withCredentials = true,
     enabled = true,
   } = options;
   const intervalMs = interval && interval > 0 ? interval : DEFAULT_INTERVAL_MS;
+  // EventSource 不能带 Authorization header,把 token 作为 access_token 追加到 URL。
+  const effectiveStreamUrl = streamUrl
+    ? (streamToken
+        ? streamUrl + (streamUrl.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(streamToken)
+        : streamUrl)
+    : streamUrl;
 
   const pollRef = useRef(options.pollFn);
   const eventsRef = useRef(options.events);
@@ -89,7 +102,7 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
       else startPolling();
     };
 
-    const canSse = Boolean(streamUrl) && typeof EventSource !== "undefined";
+    const canSse = Boolean(effectiveStreamUrl) && typeof EventSource !== "undefined";
 
     if (canSse) {
       // SSE 优先:订阅成功即事件驱动(仍先播种一次首屏快照);任一错误无感回退轮询。
@@ -108,7 +121,7 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
       };
       try {
         runPoll(); // 播种首屏,不等第一条事件
-        source = new EventSource(streamUrl as string, { withCredentials });
+        source = new EventSource(effectiveStreamUrl as string, { withCredentials });
         const names = eventsRef.current && eventsRef.current.length ? eventsRef.current : DEFAULT_SSE_EVENTS;
         names.forEach((name) => source?.addEventListener(name, onSseMessage));
         source.onerror = () => {
@@ -152,5 +165,5 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
       stopPolling();
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [enabled, streamUrl, intervalMs, withCredentials]);
+  }, [enabled, effectiveStreamUrl, intervalMs, withCredentials]);
 }

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException
 
-from app.api.dependencies.auth import get_user_required
+from app.api.dependencies.auth import get_user_required, get_user_required_stream
 from app.core.permissions import check_system_permission, check_tab_permission, staff_context_for_user
 
 
@@ -56,6 +56,21 @@ def _permission_to_tab_level(permission_key: str) -> tuple[str, str]:
 
 def require_tab(tab_key: str, level: str = "read"):
     async def dep(user=Depends(get_user_required)):
+        staff = staff_context_for_user(user)
+        if not check_tab_permission(staff, tab_key, level):
+            raise HTTPException(status_code=403, detail=f"No permission for {tab_key}:{level}")
+        return staff
+
+    return dep
+
+
+def require_tab_stream(tab_key: str, level: str = "read"):
+    """require_tab 的 SSE/EventSource 变体:token 可走 ?access_token= 查询参数。
+
+    与 require_tab 权限判定完全一致,只是取 token 时多认 URL 参数一条路
+    (浏览器 EventSource 不能带 Bearer header)。仅用于 stream 端点。
+    """
+    async def dep(user=Depends(get_user_required_stream)):
         staff = staff_context_for_user(user)
         if not check_tab_permission(staff, tab_key, level):
             raise HTTPException(status_code=403, detail=f"No permission for {tab_key}:{level}")

@@ -45,7 +45,9 @@ def http_json(
     token: str | None = None,
 ) -> dict[str, Any]:
     body = None
-    headers = {"Accept": "application/json"}
+    # X-Requested-With 让 CSRF 中间件按同源 XHR 放行(真实前端 fetch/XHR 都带此头)。
+    # 不给 register 开 CSRF 豁免,只让 smoke 像真客户端一样发请求,避免误报 403。
+    headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"

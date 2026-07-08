@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.domains import reports
 from app.domains import audit
@@ -21,7 +22,7 @@ def _scope_403(exc: Exception) -> HTTPException:
 
 
 @router.post("/reports/weekly/generate")
-def generate_weekly_report(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+def generate_weekly_report(body: dict | None = None, staff=Depends(require_manager_tab("vkpi", "write"))):
     payload = body or {}
     try:
         result = reports.generate_weekly_report(

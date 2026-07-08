@@ -18,6 +18,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -61,7 +62,7 @@ def evaluate_autonomy(
 def override_autonomy_license(
     action_type: str,
     body: dict[str, Any],
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     """人工调级(唯一能到 L4 的路径):body 必须带 level(0-4)与 reason;
     「影响评分」维度不在可调范围,永久 False。"""

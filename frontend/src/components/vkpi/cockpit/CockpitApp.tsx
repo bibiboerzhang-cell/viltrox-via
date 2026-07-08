@@ -15,6 +15,7 @@ import { ShopifyHubPage } from "../pages/ShopifyHubPage";
 import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { CockpitSidebar } from "./CockpitSidebar";
+import { CockpitMobileNav } from "./CockpitMobileNav";
 import { CockpitTopbar } from "./CockpitTopbar";
 import { usePermissions } from "../../../hooks/usePermissions";
 import { useBrowserAssist, isBrowserAssistEnabled } from "../../../lib/browserAssist/enable";
@@ -632,6 +633,9 @@ export function CockpitApp(props: any = {}) {
     }),
 
     e("div", { className: "cockpit-shell relative mx-auto flex min-h-screen max-w-[1920px]" },
+
+      // ─── 移动端导航 ───(< md:桌面侧边栏隐藏,此处补汉堡+滑出抽屉;≥ md 不渲染)
+      e(CockpitMobileNav, { activeNav, setActiveNav }),
 
       // ─── Sidebar ───(保守拆:纯展示叶子区块抽到 CockpitSidebar,props 显式传递,行为不变)
       e(CockpitSidebar, {

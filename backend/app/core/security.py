@@ -157,10 +157,23 @@ def invalidate_user_cache(user_id: int = None):
     cache_clear(prefix=f"auth:user:{int(user_id)}:")
 
 
-def get_current_user(request: Request):
+def _resolve_request_token(request: Request, *, allow_query_token: bool = False) -> str:
+    """解析认证 token:Authorization header → auth cookie →(仅 stream)access_token 查询参数。
+
+    查询参数这条路只为浏览器原生 EventSource 存在 —— 它无法设置 Authorization header。
+    刻意做成 opt-in(allow_query_token=True 才启用),普通端点绝不从 URL 取 token,
+    避免 token 落进 access log / Referer,泄露面扩大。
+    """
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     if not token:
         token = request.cookies.get(AUTH_COOKIE_NAME, "")
+    if not token and allow_query_token:
+        token = (request.query_params.get("access_token") or "").strip()
+    return token
+
+
+def get_current_user(request: Request, *, allow_query_token: bool = False):
+    token = _resolve_request_token(request, allow_query_token=allow_query_token)
     if not token:
         return None
 
@@ -213,8 +226,10 @@ def get_current_user(request: Request):
     return user_dict
 
 
-async def get_current_user_async(request: Request):
-    return await asyncio.to_thread(get_current_user, request)
+async def get_current_user_async(request: Request, *, allow_query_token: bool = False):
+    return await asyncio.to_thread(
+        get_current_user, request, allow_query_token=allow_query_token
+    )
 
 
 def require_admin(request: Request):

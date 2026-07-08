@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.domains import settings as settings_domain
 from app.domains.access import scope
@@ -149,7 +150,7 @@ def scheduler_tasks(staff=Depends(require_tab("vkpi", "read"))):
 
 
 @router.patch("/settings/scheduler-tasks/{task_key}")
-def update_scheduler_task(task_key: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def update_scheduler_task(task_key: str, body: dict, staff=Depends(require_manager_tab("vkpi", "write"))):
     if "enabled" not in (body or {}):
         raise HTTPException(status_code=400, detail="enabled (bool) required")
     try:

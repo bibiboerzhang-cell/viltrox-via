@@ -192,6 +192,7 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
     pollFn: load,
     interval: REFRESH_MS,
     streamUrl: ACTIVITY_STREAM_URL,
+    streamToken: apiToken,
     enabled: Boolean(apiToken),
   });
 

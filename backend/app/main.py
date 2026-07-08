@@ -419,7 +419,13 @@ def _admin_rbac_allowed(request) -> bool:
     if requirement is None:
         return True
     permission_key, level, is_system = requirement
-    user = get_current_user(request)
+    # SSE / EventSource 端点(/stream)允许 token 走 ?access_token= 查询参数:浏览器原生
+    # EventSource 无法带 Authorization header。与端点级 require_tab_stream 口径一致,仅限 /stream。
+    # 非 stream 路径按原样调用(不传 kwarg),对既有调用方 / 测试桩保持字节级兼容。
+    if path.endswith("/stream"):
+        user = get_current_user(request, allow_query_token=True)
+    else:
+        user = get_current_user(request)
     if not user:
         return False
     staff = staff_context_for_user(user)

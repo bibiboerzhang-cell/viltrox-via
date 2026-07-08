@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.domains.agents import orchestrator, tool_registry
 
@@ -128,7 +129,7 @@ def bet_create(body: dict = Body(default_factory=dict), staff=Depends(require_ta
 def bet_approve_from_inbox(
     action_id: int,
     body: dict = Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     """闭环C 收尾 · approve→真下注:把一条 inbox 'bet' 草案 approve 后真落 bet_ledger.create_bet。
 
@@ -194,7 +195,7 @@ def bet_list(outcome: str = "", limit: int = 50, staff=Depends(require_tab("vkpi
 
 
 @router.post("/bets/{bet_id}/resolve")
-def bet_resolve(bet_id: int, body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+def bet_resolve(bet_id: int, body: dict = Body(default_factory=dict), staff=Depends(require_manager_tab("vkpi", "write"))) -> dict[str, Any]:
     """cut5 · 到期复盘:结算押注 won/lost/void + 写 lesson。body:{outcome(必填), realized_gain_cents?, lesson?}。"""
     from app.domains.market import bet_ledger
 

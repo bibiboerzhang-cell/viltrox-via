@@ -25,7 +25,7 @@ import app.domains.tasks.queue_view as task_queue_view
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
-from app.api.dependencies.perms import require_tab
+from app.api.dependencies.perms import require_tab, require_tab_stream
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 
@@ -238,7 +238,7 @@ async def stream_progress_center(
     request: Request,
     limit: int = Query(default=20, ge=1, le=50),
     recent_minutes: int = Query(default=120, ge=1, le=120),
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_tab_stream("vkpi", "read")),
 ):
     """A4 顶栏进度中心聚合事件流:与 GET /center 同源同投影,仅传输形态不同。
 

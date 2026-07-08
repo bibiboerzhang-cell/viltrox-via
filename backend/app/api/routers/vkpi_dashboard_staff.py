@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.dependencies.manager_guard import require_manager_staff as _require_manager_staff
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.domains import dashboard as dashboard_domain
 from app.domains import staff as staff_domain
@@ -112,7 +113,7 @@ def _publish_upsert(body, *, status=None, approved_by=None, scheduled=None, remi
 
 
 @router.post("/publish/approve")
-def publish_approve(body: _PublishActionBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+def publish_approve(body: _PublishActionBody, staff=Depends(require_manager_tab("vkpi", "write"))) -> dict:
     """#18 审批通过:把该日历内容条目标记 approved(按真 source_table+source_id 落库)。"""
     aid = _publish_upsert(body, status="approved", approved_by=_staff_pk(staff))
     return {"status": "success", "approval_id": aid, "state": "approved"}
@@ -199,7 +200,7 @@ def get_collab_settings(
 
 
 @router.patch("/collab-settings")
-def patch_collab_settings(body: _CollabBody, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+def patch_collab_settings(body: _CollabBody, staff=Depends(require_manager_tab("vkpi", "write"))) -> dict:
     """写某 project/event 的协作设置(upsert by kind+target_id);只动本隔离表。"""
     from app.db.connection import get_conn
     from app.domains.alerts.common import utcnow
@@ -381,7 +382,7 @@ class _ReportAnalysisBody(BaseModel):
 @router.post("/dashboard/report-analysis")
 def dashboard_report_analysis(
     body: _ReportAnalysisBody,
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict:
     """按需:把「生成报告」拼好的全量真实数据喂 LLM,整理成经营深度分析(预算闸硬限 + 当天缓存)。"""
     del staff

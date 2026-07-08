@@ -20,6 +20,7 @@ import {
   type ProgressTask,
 } from "../../../../services/vkpi/progressCenter-api";
 import { buildApiUrl } from "../../../../services/http";
+import { readStoredApiToken } from "../../../../services/vkpi/globalSearch-api";
 import { relativeFromNow } from "../../lib/timeLocal";
 import { useEventStreamOrPoll } from "../useEventStreamOrPoll";
 
@@ -174,7 +175,16 @@ export function TopProgressCenter() {
   }, []);
 
   // SSE 优先 + 轮询兜底(归一定时器):有事件流走 SSE,否则 10s 轮询 + 可见性暂停。
-  useEventStreamOrPoll({ pollFn: load, interval: POLL_MS, streamUrl: PROGRESS_STREAM_URL });
+  // EventSource 不能带 Authorization header,把存储的 token 走 access_token 查询参数
+  // (后端 progress/center/stream 已用 require_tab_stream 认这条路)。无 token 时不附加,
+  // SSE 照常尝试→失败→无感回退轮询(与改动前行为一致,不额外 gate 轮询)。
+  const streamToken = readStoredApiToken();
+  useEventStreamOrPoll({
+    pollFn: load,
+    interval: POLL_MS,
+    streamUrl: PROGRESS_STREAM_URL,
+    streamToken: streamToken || undefined,
+  });
 
   // 点开立即刷一次(不等下一拍)。
   React.useEffect(() => { if (open) load(); }, [open, load]);
