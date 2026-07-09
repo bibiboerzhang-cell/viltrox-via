@@ -67,10 +67,10 @@ function fmtUsd(n: number | null | undefined): string {
 function StatChip(label: string, value: string | number, tone: "ok" | "muted" | "warn", key: string) {
   const toneCls =
     tone === "warn"
-      ? "border-rose-400/20 bg-rose-500/10 text-rose-200"
+      ? "border-rose-400/20 bg-crit-soft text-crit"
       : tone === "ok"
-        ? "border-white/[0.08] bg-white/[0.04] text-slate-200"
-        : "border-white/[0.05] bg-black/20 text-slate-500";
+        ? "border-line bg-panel text-ink-2"
+        : "border-line bg-black/20 text-muted";
   return e(
     "span",
     { key, className: "rounded border px-1.5 py-0.5 text-[9.5px] tabular-nums " + toneCls },
@@ -141,7 +141,7 @@ export function MorningBriefCard({ apiToken = "" }: MorningBriefCardProps) {
 
   return e(
     "div",
-    { className: "rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-xl" },
+    { className: "rounded-xl border border-line bg-panel p-4 backdrop-blur-xl" },
     // ── 卡头 ──
     e(
       "div",
@@ -149,25 +149,25 @@ export function MorningBriefCard({ apiToken = "" }: MorningBriefCardProps) {
       e(
         "div",
         { className: "flex items-center gap-2" },
-        e(Sunrise, { size: 14, className: hasAnomaly ? "text-amber-300" : "text-emerald-300" }),
-        e("h3", { className: "text-sm font-semibold text-white" }, "夜班晨报"),
+        e(Sunrise, { size: 14, className: hasAnomaly ? "text-warn" : "text-good" }),
+        e("h3", { className: "text-sm font-semibold text-ink" }, "夜班晨报"),
         // U2 新鲜度呼吸灯:这份晨报算出来的时刻(绿≤24h/黄≤72h/红=stale)
         data && data.generated_at
           ? e(FreshnessDot, { key: "fresh", ts: data.generated_at, label: "晨报数据" })
           : null,
       ),
-      loading ? e(Loader2, { size: 12, className: "animate-spin text-slate-500" }) : null,
+      loading ? e(Loader2, { size: 12, className: "animate-spin text-muted" }) : null,
     ),
 
     // ── headline:昨晚完成 X 件(接口失败/未回来 → 「--」,绝不编造)──
     // U2:加载期用骨架屏替代「…」文字(shimmer,reduced-motion 降级静态)
     errored || (!loading && !data)
-      ? e("p", { className: "text-[11px] text-slate-500" }, "-- 晨报读取失败,稍后重试")
+      ? e("p", { className: "text-[11px] text-muted" }, "-- 晨报读取失败,稍后重试")
       : loading && !data
         ? e(SkeletonBlock, { className: "h-3.5 w-3/4 rounded" })
         : e(
             "p",
-            { className: "text-[11.5px] font-medium leading-relaxed text-slate-100" },
+            { className: "text-[11.5px] font-medium leading-relaxed text-ink-2" },
             data?.headline || "--",
           ),
 
@@ -195,21 +195,21 @@ export function MorningBriefCard({ apiToken = "" }: MorningBriefCardProps) {
 
     // ── 告警快照小注(open 为当前快照,不限窗)──
     data && alerts && typeof alerts.open_now === "number"
-      ? e("div", { className: "mt-1 text-[9px] text-slate-600" }, `当前未解决告警 ${alerts.open_now} 条(快照,不限窗口)`)
+      ? e("div", { className: "mt-1 text-[9px] text-muted" }, `当前未解决告警 ${alerts.open_now} 条(快照,不限窗口)`)
       : null,
 
     // ── 异常红条:失败任务 TOP3 带原因 + danger 告警(纯展示,不提供任何执行按钮)──
     data && hasAnomaly
       ? e(
           "div",
-          { className: "mt-2 rounded border border-rose-400/20 bg-rose-500/[0.07] px-2 py-1.5" },
+          { className: "mt-2 rounded border border-rose-400/20 bg-crit-soft px-2 py-1.5" },
           e(
             "div",
             { className: "flex items-center gap-1.5" },
-            e(AlertTriangle, { size: 11, className: "text-rose-300" }),
+            e(AlertTriangle, { size: 11, className: "text-crit" }),
             e(
               "span",
-              { className: "text-[10px] font-medium text-rose-200" },
+              { className: "text-[10px] font-medium text-crit" },
               `异常:失败任务 ${failedTotal} 个` + (dangerAlerts > 0 ? ` · danger 告警 ${dangerAlerts} 条` : ""),
             ),
           ),
@@ -219,21 +219,21 @@ export function MorningBriefCard({ apiToken = "" }: MorningBriefCardProps) {
             failedTop.slice(0, 3).map((f, i) =>
               e(
                 "div",
-                { key: f.job_id || i, className: "truncate text-[9px] leading-relaxed text-rose-200/80", title: f.reason || "" },
+                { key: f.job_id || i, className: "truncate text-[9px] leading-relaxed text-crit", title: f.reason || "" },
                 `#${f.job_id ?? "?"} ${f.job_type || "job"}` + (f.category ? `[${f.category}]` : "") + ":" + (f.reason || "(无错误文本)"),
               ),
             ),
           ),
         )
       : data && anomalies && anomalies.status === "empty"
-        ? e("div", { className: "mt-2 text-[9px] text-emerald-300/70" }, "窗口内无失败任务、无 danger 告警")
+        ? e("div", { className: "mt-2 text-[9px] text-good" }, "窗口内无失败任务、无 danger 告警")
         : null,
 
     // ── 脚注:窗口与口径 ──
     data &&
       e(
         "p",
-        { className: "mt-2 text-[9px] leading-relaxed text-slate-600" },
+        { className: "mt-2 text-[9px] leading-relaxed text-muted" },
         (windowLabel ? windowLabel + " · " : "") + "纯读聚合已有数据,按需计算;不参与任何评分",
       ),
   );

@@ -16,6 +16,7 @@ interface NavItem {
   icon: React.ComponentType<{ size?: number; className?: string }>;
   label: string;
   badge?: string | null;
+  group?: string | null;
   v2?: boolean;
   ops?: boolean;
 }
@@ -72,7 +73,23 @@ export function CockpitSidebar({
         e("div", { className: "text-2xl font-black tracking-[.18em] text-ink" }, collapsed ? "V" : "VILTROX")
       ),
       e("nav", { className: `space-y-1 ${collapsed ? "px-2" : "px-3"}` },
-        primaryItems.map(navButton),
+        // 分组渲染:按 group 连续分区,每区一个小标题(折叠态用细分隔线替代)。
+        ...(() => {
+          const out: any[] = [];
+          let last: string | undefined;
+          primaryItems.forEach((it) => {
+            const g = it.group || undefined;
+            if (g && g !== last) {
+              const firstCap = last === undefined;
+              last = g;
+              out.push(!collapsed
+                ? e("div", { key: `cap-${g}`, className: `px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[.14em] text-muted ${firstCap ? "pt-1" : "pt-4"}` }, g)
+                : e("div", { key: `cap-${g}`, className: `mx-2 h-px bg-line ${firstCap ? "mb-2" : "my-2"}` }));
+            }
+            out.push(navButton(it));
+          });
+          return out;
+        })(),
         // 智能运维:Wave1-4 已建可达页(triage / 问数 / 市场趋势 / Skill Studio),默认展开。
         opsItems.length > 0 && e("div", { key: "opsgroup", className: "mt-2 pt-2 border-t border-line" },
           e("button", {

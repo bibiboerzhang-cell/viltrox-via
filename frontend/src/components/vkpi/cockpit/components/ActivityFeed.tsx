@@ -100,7 +100,7 @@ const FeedRow = React.memo(function FeedRow({ item, reduced, flash }: { item: Fe
       onClick: clickable ? onClick : undefined,
       className:
         "group flex items-start gap-2 rounded-md px-2.5 py-2 " +
-        (clickable ? "cursor-pointer hover:bg-white/[0.04] " : ""),
+        (clickable ? "cursor-pointer hover:bg-accent-soft " : ""),
       style: { borderLeft: `2px solid ${accent}` },
     },
     e(Icon, {
@@ -116,14 +116,14 @@ const FeedRow = React.memo(function FeedRow({ item, reduced, flash }: { item: Fe
         "div",
         {
           className:
-            "text-[11px] leading-snug text-slate-200 " +
-            (clickable ? "group-hover:text-white" : ""),
+            "text-[11px] leading-snug text-ink-2 " +
+            (clickable ? "group-hover:text-ink" : ""),
         },
         item.text || "—",
       ),
       e(
         "div",
-        { className: "mt-0.5 text-[9px] text-slate-500", title: item.ts || "" },
+        { className: "mt-0.5 text-[9px] text-muted", title: item.ts || "" },
         item.ts ? formatLocal(item.ts) : "—",
       ),
     ),
@@ -246,7 +246,7 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
   if (!loaded && !error) {
     body = e(
       "div",
-      { className: "px-3 py-8 text-center text-[11px] text-slate-500" },
+      { className: "px-3 py-8 text-center text-[11px] text-muted" },
       "读取中…",
     );
   } else if (items.length === 0) {
@@ -254,7 +254,7 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
       "div",
       {
         className:
-          "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500",
+          "rounded-md border border-dashed border-line px-3 py-8 text-center text-[11px] text-muted",
       },
       error ? "待接入" : "暂无思考流",
     );
@@ -282,7 +282,7 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
     "div",
     {
       className:
-        "h-full rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 backdrop-blur-xl flex flex-col",
+        "h-full rounded-xl border border-line bg-panel p-4 backdrop-blur-xl flex flex-col",
     },
     e(
       "div",
@@ -290,12 +290,12 @@ export function ActivityFeed({ apiToken }: { apiToken?: string }) {
       e(
         "div",
         { className: "flex items-center gap-2" },
-        e(Activity, { size: 14, className: "text-violet-300", strokeWidth: 2 }),
-        e("h3", { className: "text-sm font-semibold text-white" }, "思考流"),
+        e(Activity, { size: 14, className: "text-accent", strokeWidth: 2 }),
+        e("h3", { className: "text-sm font-semibold text-ink" }, "思考流"),
       ),
       e(
         "span",
-        { className: "text-[9px] text-slate-500" },
+        { className: "text-[9px] text-muted" },
         loaded && items.length ? `${items.length} 条` : "",
       ),
     ),

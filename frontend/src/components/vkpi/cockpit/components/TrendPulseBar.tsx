@@ -21,12 +21,12 @@ export function TrendPulseBar({ apiToken = "" }: { apiToken?: string }) {
 
   const trends: any[] = data && Array.isArray(data.trends) ? data.trends : [];
   const total = (data && data.summary && data.summary.total_hashtags) || trends.length;
-  return e("div", { className: "rounded-xl border border-white/[0.07] bg-white/[0.018] p-3 flex items-center gap-3 backdrop-blur-xl" },
+  return e("div", { className: "rounded-xl border border-line bg-panel p-3 flex items-center gap-3 backdrop-blur-xl" },
     e("div", { className: "flex items-center gap-2 shrink-0" },
       e("div", { className: "rounded-md p-1.5", style: { background: "rgba(239,68,68,0.18)" } }, e(Flame, { size: 12, className: "text-rose-400" })),
       e("div", null,
-        e("div", { className: "text-[11px] font-semibold text-white" }, "近期市场热词"),
-        e("div", { className: "text-[9px] text-slate-500" }, loading ? "聚合中…" : trends.length ? `${total} 个 · 近 14 天行业帖` : "暂无行业帖热词")
+        e("div", { className: "text-[11px] font-semibold text-ink" }, "近期市场热词"),
+        e("div", { className: "text-[9px] text-muted" }, loading ? "聚合中…" : trends.length ? `${total} 个 · 近 14 天行业帖` : "暂无行业帖热词")
       )
     ),
     e("div", { className: "flex-1 flex flex-wrap gap-1.5" },
@@ -37,7 +37,7 @@ export function TrendPulseBar({ apiToken = "" }: { apiToken?: string }) {
             style: { background: "rgba(239,68,68,0.06)", borderColor: "rgba(239,68,68,0.2)", color: "#fda4af" },
             title: `${t.post_count || 0} 帖${t.platform ? " · " + t.platform : ""}`,
           }, `#${t.hashtag}${t.post_count ? ` ·${t.post_count}` : ""}`))
-        : e("span", { className: "text-[10px] text-slate-500" }, loading ? "…" : "等更多行业帖入库后自动出热词")
+        : e("span", { className: "text-[10px] text-muted" }, loading ? "…" : "等更多行业帖入库后自动出热词")
     )
   );
 }

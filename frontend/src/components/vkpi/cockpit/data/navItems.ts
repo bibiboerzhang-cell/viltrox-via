@@ -9,30 +9,30 @@ import { BarChart3, Bot, Boxes, Briefcase, Calendar, Clapperboard, Compass, Cont
 //   (triage / 问数 / 市场趋势 / Skill Studio),默认展开,与「V2 待开发」占位组区分。
 export const NAV_ITEMS = [
   // ── 主导航(常用,常驻顶部)──
-  { key: "dashboard",    icon: LayoutDashboard, label: "Dashboard",       badge: null },
-  { key: "my-kol",       icon: Heart,           label: "MY KOL",          badge: null },
-  { key: "kol-pool",     icon: Users,           label: "KOL Pool",        badge: null },
-  { key: "projects",     icon: Briefcase,       label: "Projects",        badge: null },
-  { key: "events",       icon: Calendar,        label: "Events",          badge: null },
-  { key: "shopify",      icon: PackageCheck,    label: "Shopify",         badge: null },
-  { key: "dealers",      icon: MapPin,          label: "Dealers",         badge: null },
-  // P1 智能可见周(拍定默认:入口全员可见)——Intelligent 问答 + 评论区销售员回复队列。
-  { key: "intelligent",  icon: Sparkles,        label: "Intelligent 问答", badge: null },
-  { key: "replyQueue",   icon: MessageSquare,   label: "回复队列",         badge: null },
-  // 第2轮 档案工程:SKU 360°(产品视角反查内容/人)+ KOL 完整档案(八层组装页)。
-  { key: "sku360",       icon: Boxes,           label: "SKU 360°",        badge: null },
-  { key: "kolProfile",   icon: Contact,         label: "KOL 档案",         badge: null },
-  // 第4轮 发射台:新品 SKU 一键出六输出全案(名单/预算/排期/打法/官号协同/覆盖组合)。
-  { key: "launchpad",    icon: Rocket,          label: "发射台",           badge: null },
-  // 第5轮 自治层:驾照板(挣来的自治 L0-L4)+ 市场之声(用户反馈反哺产品部)。
-  { key: "autonomy",     icon: ShieldCheck,     label: "自治驾照",         badge: null },
-  { key: "marketVoice",  icon: RadioTower,      label: "市场之声",         badge: null },
-  // 第6轮 P6 飞轮:段级创意资产库(哪个开头/哪种画面最灵,可检索;白名单请求=后续刀)。
-  { key: "creativeLibrary", icon: Clapperboard, label: "创意资产库",       badge: null },
-  // 战略大脑波:行业对照/新赛道/策略模拟/战略表现 四块合屏。
-  { key: "strategyBoard", icon: Target,          label: "战略台",           badge: null },
-  // GTM-1 总脑:上市增长指挥图(纯读 GTM Plan Preview+五卡 summary,显示层宪法)。
-  { key: "gtmCommand",   icon: Compass,          label: "GTM Command",      badge: null },
+  // 分组(group)= 侧边栏分区标题(2026-07 门面对齐 mockup)。group 为附加字段,
+  // 顶栏标题 / 移动端导航只读 key/label/icon,不受影响。项按 group 连续排列。
+  // 总览
+  { key: "dashboard",    icon: LayoutDashboard, label: "Dashboard",       badge: null, group: "总览" },
+  // 达人运营
+  { key: "my-kol",       icon: Heart,           label: "MY KOL",          badge: null, group: "达人运营" },
+  { key: "kol-pool",     icon: Users,           label: "KOL Pool",        badge: null, group: "达人运营" },
+  { key: "kolProfile",   icon: Contact,         label: "KOL 档案",         badge: null, group: "达人运营" },
+  // 增长渠道
+  { key: "projects",     icon: Briefcase,       label: "Projects",        badge: null, group: "增长渠道" },
+  { key: "events",       icon: Calendar,        label: "Events",          badge: null, group: "增长渠道" },
+  { key: "shopify",      icon: PackageCheck,    label: "Shopify",         badge: null, group: "增长渠道" },
+  { key: "dealers",      icon: MapPin,          label: "Dealers",         badge: null, group: "增长渠道" },
+  // 智能中枢
+  { key: "intelligent",  icon: Sparkles,        label: "Intelligent 问答", badge: null, group: "智能中枢" },
+  { key: "marketVoice",  icon: RadioTower,      label: "市场之声",         badge: null, group: "智能中枢" },
+  { key: "sku360",       icon: Boxes,           label: "SKU 360°",        badge: null, group: "智能中枢" },
+  { key: "creativeLibrary", icon: Clapperboard, label: "创意资产库",       badge: null, group: "智能中枢" },
+  // 自动化
+  { key: "replyQueue",   icon: MessageSquare,   label: "回复队列",         badge: null, group: "自动化" },
+  { key: "launchpad",    icon: Rocket,          label: "发射台",           badge: null, group: "自动化" },
+  { key: "autonomy",     icon: ShieldCheck,     label: "自治驾照",         badge: null, group: "自动化" },
+  { key: "strategyBoard", icon: Target,          label: "战略台",           badge: null, group: "自动化" },
+  { key: "gtmCommand",   icon: Compass,          label: "GTM Command",      badge: null, group: "自动化" },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },

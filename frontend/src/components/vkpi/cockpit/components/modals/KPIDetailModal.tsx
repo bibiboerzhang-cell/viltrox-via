@@ -43,9 +43,9 @@ function formatValue(metric: any, value: any) {
 }
 
 function statusTone(source: any) {
-  if (source === "real") return { text: "text-emerald-200", bg: "bg-emerald-500/[0.12]", border: "border-emerald-400/20" };
+  if (source === "real") return { text: "text-good", bg: "bg-good-soft", border: "border-emerald-400/20" };
   if (source === "accumulating") return { text: "text-cyan-200", bg: "bg-cyan-500/[0.10]", border: "border-cyan-400/20" };
-  return { text: "text-amber-200", bg: "bg-amber-500/[0.10]", border: "border-amber-400/20" };
+  return { text: "text-warn", bg: "bg-warn-soft", border: "border-amber-400/20" };
 }
 
 function sparkPath(points: any, width = 560, height = 128) {
@@ -249,80 +249,80 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
         animate: { scale: 1, opacity: 1, y: 0 },
         exit: { scale: 0.96, opacity: 0 },
         onClick: (ev) => ev.stopPropagation(),
-        className: "relative max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl",
+        className: "relative max-h-[92vh] w-full max-w-6xl overflow-y-auto rounded-2xl border border-line bg-card shadow-2xl",
       },
         e("div", { className: "pointer-events-none absolute inset-0 opacity-60", style: { background: "radial-gradient(circle at 20% -10%, rgba(168,85,247,0.24), transparent 36%), radial-gradient(circle at 90% 0%, rgba(6,182,212,0.16), transparent 35%)" } }),
-        e("div", { className: "relative border-b border-white/[0.07] px-5 py-4" },
+        e("div", { className: "relative border-b border-line px-5 py-4" },
           e("div", { className: "flex items-start gap-3" },
-            e("div", { className: "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-purple-300/20 bg-purple-500/[0.16] text-purple-200" }, e(Icon, { size: 19 })),
+            e("div", { className: "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-accent bg-accent-soft text-accent" }, e(Icon, { size: 19 })),
             e("div", { className: "min-w-0 flex-1" },
               e("div", { className: "flex flex-wrap items-center gap-2" },
-                e("h2", { className: "text-lg font-semibold text-white" }, "Active Roster 详情"),
-                e("span", { className: "rounded-md border border-emerald-400/20 bg-emerald-500/[0.12] px-2 py-0.5 text-[10px] text-emerald-200" }, "真实 · evidence + assignment")
+                e("h2", { className: "text-lg font-semibold text-ink" }, "Active Roster 详情"),
+                e("span", { className: "rounded-md border border-emerald-400/20 bg-good-soft px-2 py-0.5 text-[10px] text-good" }, "真实 · evidence + assignment")
               ),
-              e("p", { className: "mt-1 text-[11px] text-slate-400" }, "现役名单全景、合作关系、平台分布与真实内容榜单。KOL Trend 未满 30 天时只显示累积状态。")
+              e("p", { className: "mt-1 text-[11px] text-muted" }, "现役名单全景、合作关系、平台分布与真实内容榜单。KOL Trend 未满 30 天时只显示累积状态。")
             ),
-            e("button", { onClick: onClose, className: "shrink-0 rounded-lg border border-white/10 bg-white/[0.04] p-2 text-slate-400 hover:bg-white/[0.08] hover:text-white" }, e(X, { size: 15 }))
+            e("button", { onClick: onClose, className: "shrink-0 rounded-lg border border-line bg-panel p-2 text-muted hover:bg-accent-soft hover:text-ink" }, e(X, { size: 15 }))
           ),
           e("div", { className: "mt-3 flex flex-wrap gap-1.5" },
             SCOPE_OPTIONS.map((option) => e("button", {
               key: option.id,
               onClick: () => setScope(option.id),
-              className: `rounded-lg border px-3 py-1.5 text-[11px] transition ${scope === option.id ? "border-purple-400/40 bg-purple-500/[0.18] text-white" : "border-white/[0.08] bg-white/[0.02] text-slate-400 hover:text-white"}`,
-            }, option.label, e("span", { className: "ml-1 text-[9px] text-slate-500" }, option.desc)))
+              className: `rounded-lg border px-3 py-1.5 text-[11px] transition ${scope === option.id ? "border-accent bg-accent-soft text-ink" : "border-line bg-panel text-muted hover:text-ink"}`,
+            }, option.label, e("span", { className: "ml-1 text-[9px] text-muted" }, option.desc)))
           )
         ),
         e("div", { className: "relative grid gap-4 p-5 lg:grid-cols-[320px_minmax(0,1fr)]" },
-          e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
-            e("div", { className: "text-[10px] uppercase tracking-[0.18em] text-slate-500" }, isCompany ? "官方账号" : "现役名单"),
-            e("div", { className: "mt-2 text-5xl font-light tracking-tight text-white tabular-nums" }, isCompany ? `${totalPool.toLocaleString()}` : totalPool.toLocaleString()),
-            e("div", { className: "mt-2 text-sm text-slate-300" }, isCompany ? "官方在役账号" : "精准 active ", isCompany ? e("span", { className: "font-semibold text-emerald-300 tabular-nums" }, `${active.toLocaleString()} 个`) : e("span", { className: "font-semibold text-emerald-300 tabular-nums" }, active.toLocaleString())),
+          e("section", { className: "rounded-xl border border-line bg-panel p-4" },
+            e("div", { className: "text-[10px] uppercase tracking-[0.18em] text-muted" }, isCompany ? "官方账号" : "现役名单"),
+            e("div", { className: "mt-2 text-5xl font-light tracking-tight text-ink tabular-nums" }, isCompany ? `${totalPool.toLocaleString()}` : totalPool.toLocaleString()),
+            e("div", { className: "mt-2 text-sm text-ink-2" }, isCompany ? "官方在役账号" : "精准 active ", isCompany ? e("span", { className: "font-semibold text-good tabular-nums" }, `${active.toLocaleString()} 个`) : e("span", { className: "font-semibold text-good tabular-nums" }, active.toLocaleString())),
             isCompany
               ? e("div", { className: "mt-4 grid grid-cols-2 gap-2" },
                   e("div", { className: "rounded-lg border border-cyan-400/15 bg-cyan-500/[0.08] p-3" },
                     e("div", { className: "text-[10px] text-cyan-200" }, "粉丝总数"),
-                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(companyFollowers))
+                    e("div", { className: "mt-1 text-2xl font-semibold text-ink" }, compact(companyFollowers))
                   ),
-                  e("div", { className: "rounded-lg border border-purple-400/15 bg-purple-500/[0.08] p-3" },
-                    e("div", { className: "text-[10px] text-purple-200" }, "总播放"),
-                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(companyViews))
+                  e("div", { className: "rounded-lg border border-accent bg-accent-soft p-3" },
+                    e("div", { className: "text-[10px] text-accent" }, "总播放"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-ink" }, compact(companyViews))
                   )
                 )
               : e("div", { className: "mt-4 grid grid-cols-2 gap-2" },
-                  e("div", { className: "rounded-lg border border-emerald-400/15 bg-emerald-500/[0.08] p-3" },
-                    e("div", { className: "text-[10px] text-emerald-200" }, "已签约"),
-                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(composition.signed))
+                  e("div", { className: "rounded-lg border border-emerald-400/15 bg-good-soft p-3" },
+                    e("div", { className: "text-[10px] text-good" }, "已签约"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-ink" }, compact(composition.signed))
                   ),
-                  e("div", { className: "rounded-lg border border-purple-400/15 bg-purple-500/[0.08] p-3" },
-                    e("div", { className: "text-[10px] text-purple-200" }, "待签"),
-                    e("div", { className: "mt-1 text-2xl font-semibold text-white" }, compact(composition.pending))
+                  e("div", { className: "rounded-lg border border-accent bg-accent-soft p-3" },
+                    e("div", { className: "text-[10px] text-accent" }, "待签"),
+                    e("div", { className: "mt-1 text-2xl font-semibold text-ink" }, compact(composition.pending))
                   )
                 ),
-            e("div", { className: "mt-4 rounded-lg border border-white/[0.06] bg-black/20 p-3 text-[10px] leading-relaxed text-slate-400" },
-              e("div", { className: "mb-1 flex items-center gap-1.5 text-slate-300" }, e(Database, { size: 11 }), "数据契约"),
+            e("div", { className: "mt-4 rounded-lg border border-line bg-black/20 p-3 text-[10px] leading-relaxed text-muted" },
+              e("div", { className: "mb-1 flex items-center gap-1.5 text-ink-2" }, e(Database, { size: 11 }), "数据契约"),
               isCompany
                 ? e(React.Fragment, null,
-                    e("div", null, "accounts: ", e("span", { className: "text-slate-200" }, "vkpi_employee_channels (official active)")),
-                    e("div", null, "metrics: ", e("span", { className: "text-slate-200" }, "vkpi_channel_metrics")),
-                    e("div", null, "movers: ", e("span", { className: "text-slate-200" }, "vkpi_channel_post_metrics"))
+                    e("div", null, "accounts: ", e("span", { className: "text-ink-2" }, "vkpi_employee_channels (official active)")),
+                    e("div", null, "metrics: ", e("span", { className: "text-ink-2" }, "vkpi_channel_metrics")),
+                    e("div", null, "movers: ", e("span", { className: "text-ink-2" }, "vkpi_channel_post_metrics"))
                   )
                 : e(React.Fragment, null,
-                    e("div", null, "active: ", e("span", { className: "text-slate-200" }, "has_video_evidence / official active")),
-                    e("div", null, "partnership: ", e("span", { className: "text-slate-200" }, "vkpi_project_kol_assignments")),
-                    e("div", null, "movers: ", e("span", { className: "text-slate-200" }, "vkpi_kol_video_evidence"))
+                    e("div", null, "active: ", e("span", { className: "text-ink-2" }, "has_video_evidence / official active")),
+                    e("div", null, "partnership: ", e("span", { className: "text-ink-2" }, "vkpi_project_kol_assignments")),
+                    e("div", null, "movers: ", e("span", { className: "text-ink-2" }, "vkpi_kol_video_evidence"))
                   )
             )
           ),
-          e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
+          e("section", { className: "rounded-xl border border-line bg-panel p-4" },
             e("div", { className: "mb-3 flex items-center justify-between" },
               e("div", null,
-                e("h3", { className: "text-sm font-semibold text-white" }, "Trend"),
-                e("p", { className: "text-[10px] text-slate-500" }, scope === "company" ? "官方账号 7 天真实 channel_metrics" : `累积中 ${trend.snapshot_days || 7}/${trend.required_days || 30}`)
+                e("h3", { className: "text-sm font-semibold text-ink" }, "Trend"),
+                e("p", { className: "text-[10px] text-muted" }, scope === "company" ? "官方账号 7 天真实 channel_metrics" : `累积中 ${trend.snapshot_days || 7}/${trend.required_days || 30}`)
               ),
               // 【D1】诚实化:原 7D/30D/90D 切换钮是假交互(后端 company trend 固定近 7 天,
               // 其余 scope 尚在累积)→ 摘掉,换单一口径标签如实标窗口。
               e("span", {
-                className: "rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-400",
+                className: "rounded-lg border border-line bg-panel px-2.5 py-1 text-[10px] text-muted",
                 title: scope === "company"
                   ? "固定窗口:vkpi_channel_metrics 最近 7 天快照;后端暂不支持 30/90 天切换"
                   : "KOL daily snapshot 未满 30 天,趋势窗口暂不可选",
@@ -333,7 +333,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
                   e("path", { d: trendPath, fill: "none", stroke: "#06b6d4", strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }),
                   e("path", { d: `${trendPath} L560,128 L0,128 Z`, fill: "#06b6d4", opacity: 0.12 })
                 )
-              : e("div", { className: "flex h-32 items-center justify-center rounded-lg border border-dashed border-white/[0.08] text-[11px] text-slate-500" },
+              : e("div", { className: "flex h-32 items-center justify-center rounded-lg border border-dashed border-line text-[11px] text-muted" },
                   e(Loader2, { size: 13, className: "mr-2 animate-spin text-cyan-300" }),
                   `真实 snapshot 累积中 ${trend.snapshot_days || 7}/${trend.required_days || 30}`
                 )
@@ -341,44 +341,44 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
         ),
         e("div", { className: "relative grid gap-4 px-5 pb-5 lg:grid-cols-[1fr_1fr]" },
           isCompany
-            ? e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
-                e("h3", { className: "text-sm font-semibold text-white" }, "账号分组"),
+            ? e("section", { className: "rounded-xl border border-line bg-panel p-4" },
+                e("h3", { className: "text-sm font-semibold text-ink" }, "账号分组"),
                 e("div", { className: "mt-3 grid grid-cols-3 gap-2" },
                   ["main_brand", "product_line", "regional"].map((key) => {
                     const cfg = (COMPANY_GROUP_LABELS as any)[key];
                     const count = number((companyGroups as any)[key]) || 0;
                     const groupPct = totalPool > 0 ? count / totalPool : 0;
-                    return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
+                    return e("div", { key, className: "rounded-lg border border-line bg-black/20 p-3" },
                       e("div", { className: "flex items-center justify-between gap-2" },
-                        e("span", { className: "text-[11px] font-medium text-slate-200" }, cfg.label),
-                        e("span", { className: "text-[10px] text-slate-500" }, pct(groupPct))
+                        e("span", { className: "text-[11px] font-medium text-ink-2" }, cfg.label),
+                        e("span", { className: "text-[10px] text-muted" }, pct(groupPct))
                       ),
-                      e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact(count)),
-                      e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct(groupPct), background: cfg.color } })),
-                      e("p", { className: "mt-2 text-[10px] leading-snug text-slate-500" }, cfg.desc)
+                      e("div", { className: "mt-1 text-2xl font-semibold text-ink tabular-nums" }, compact(count)),
+                      e("div", { className: "mt-1 h-1.5 rounded-full bg-card" }, e("div", { className: "h-full rounded-full", style: { width: pct(groupPct), background: cfg.color } })),
+                      e("p", { className: "mt-2 text-[10px] leading-snug text-muted" }, cfg.desc)
                     );
                   })
                 )
               )
-            : e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
-                e("h3", { className: "text-sm font-semibold text-white" }, "合作关系"),
+            : e("section", { className: "rounded-xl border border-line bg-panel p-4" },
+                e("h3", { className: "text-sm font-semibold text-ink" }, "合作关系"),
                 e("div", { className: "mt-3 grid grid-cols-2 gap-2" },
                   ["long_term", "in_production", "one_off", "pending"].map((key) => {
                     const cfg = (PARTNERSHIP_LABELS as any)[key];
-                    return e("div", { key, className: "rounded-lg border border-white/[0.07] bg-black/20 p-3" },
+                    return e("div", { key, className: "rounded-lg border border-line bg-black/20 p-3" },
                       e("div", { className: "flex items-center justify-between gap-2" },
-                        e("span", { className: "text-[11px] font-medium text-slate-200" }, cfg.label),
-                        e("span", { className: "text-[10px] text-slate-500" }, pct((tierPct as any)[key]))
+                        e("span", { className: "text-[11px] font-medium text-ink-2" }, cfg.label),
+                        e("span", { className: "text-[10px] text-muted" }, pct((tierPct as any)[key]))
                       ),
-                      e("div", { className: "mt-1 text-2xl font-semibold text-white tabular-nums" }, compact((tiers as any)[key])),
-                      e("div", { className: "mt-1 h-1.5 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full", style: { width: pct((tierPct as any)[key]), background: cfg.color } })),
-                      e("p", { className: "mt-2 text-[10px] leading-snug text-slate-500" }, cfg.desc)
+                      e("div", { className: "mt-1 text-2xl font-semibold text-ink tabular-nums" }, compact((tiers as any)[key])),
+                      e("div", { className: "mt-1 h-1.5 rounded-full bg-card" }, e("div", { className: "h-full rounded-full", style: { width: pct((tierPct as any)[key]), background: cfg.color } })),
+                      e("p", { className: "mt-2 text-[10px] leading-snug text-muted" }, cfg.desc)
                     );
                   })
                 )
               ),
-          e("section", { className: "rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
-            e("h3", { className: "text-sm font-semibold text-white" }, "按平台"),
+          e("section", { className: "rounded-xl border border-line bg-panel p-4" },
+            e("h3", { className: "text-sm font-semibold text-ink" }, "按平台"),
             e("div", { className: "mt-3 space-y-2" },
               platformRows.map((raw: any) => {
                 const row = record(raw);
@@ -386,52 +386,52 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
                 const width = `${Math.max(4, (count / maxPlatform) * 100).toFixed(1)}%`;
                 return e("div", { key: row.platform, className: "space-y-1" },
                   e("div", { className: "flex items-center justify-between text-[11px]" },
-                    e("span", { className: "capitalize text-slate-300" }, row.platform),
-                    e("span", { className: "text-slate-500" }, count.toLocaleString(), " · ", pct(row.pct))
+                    e("span", { className: "capitalize text-ink-2" }, row.platform),
+                    e("span", { className: "text-muted" }, count.toLocaleString(), " · ", pct(row.pct))
                   ),
-                  e("div", { className: "h-2 rounded-full bg-white/[0.06]" }, e("div", { className: "h-full rounded-full bg-cyan-400/80", style: { width } }))
+                  e("div", { className: "h-2 rounded-full bg-card" }, e("div", { className: "h-full rounded-full bg-cyan-400/80", style: { width } }))
                 );
               })
             )
           )
         ),
-        e("section", { className: "relative mx-5 mb-5 rounded-xl border border-white/[0.08] bg-white/[0.03] p-4" },
+        e("section", { className: "relative mx-5 mb-5 rounded-xl border border-line bg-panel p-4" },
           e("div", { className: "flex flex-wrap items-center justify-between gap-3" },
             e("div", null,
-              e("h3", { className: "text-sm font-semibold text-white" }, isCompany ? "官方账号榜单" : "KOL 榜单"),
-              e("p", { className: "text-[10px] text-slate-500" }, isCompany ? "官方账号真实帖子,按播放量排序(vkpi_channel_post_metrics)" : "只收 Viltrox 相关视频(深析 final_v1 判定 + 关键词兜底)·用真实播放、内容数、近 30 天爆款和互动替代粉丝涨幅 mock")
+              e("h3", { className: "text-sm font-semibold text-ink" }, isCompany ? "官方账号榜单" : "KOL 榜单"),
+              e("p", { className: "text-[10px] text-muted" }, isCompany ? "官方账号真实帖子,按播放量排序(vkpi_channel_post_metrics)" : "只收 Viltrox 相关视频(深析 final_v1 判定 + 关键词兜底)·用真实播放、内容数、近 30 天爆款和互动替代粉丝涨幅 mock")
             ),
             isCompany
               ? null
-              : e("div", { className: "flex rounded-lg border border-white/[0.07] bg-white/[0.02] p-0.5" },
+              : e("div", { className: "flex rounded-lg border border-line bg-panel p-0.5" },
                   MOVER_TABS.map((tab) => e("button", {
                     key: tab.id,
                     onClick: () => setMoverTab(tab.id),
-                    className: `rounded-md px-3 py-1.5 text-[11px] ${moverTab === tab.id ? "bg-purple-500/[0.24] text-white" : "text-slate-400 hover:text-white"}`,
+                    className: `rounded-md px-3 py-1.5 text-[11px] ${moverTab === tab.id ? "bg-accent-soft text-ink" : "text-muted hover:text-ink"}`,
                   }, tab.label))
                 )
           ),
           e("div", { className: "mt-3 grid gap-2 md:grid-cols-2" },
             movers.slice(0, 10).map((raw: any, index: number) => {
               const row = record(raw);
-              return e("div", { key: `${isCompany ? "company" : moverTab}-${row.kol_id || row.handle || index}-${index}`, className: "flex items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2" },
+              return e("div", { key: `${isCompany ? "company" : moverTab}-${row.kol_id || row.handle || index}-${index}`, className: "flex items-center justify-between gap-3 rounded-lg border border-line bg-black/20 px-3 py-2" },
                 e("div", { className: "min-w-0" },
-                  e("div", { className: "truncate text-[12px] font-medium text-slate-100" }, index + 1, ". ", row.kol_name || (row.handle ? `@${String(row.handle).replace(/^@/, "")}` : (isCompany ? "官方账号" : "Unknown KOL"))),
-                  e("div", { className: "truncate text-[10px] text-slate-500" }, row.platform || "unknown", row.title ? ` · ${shortText(row.title, 54)}` : "")
+                  e("div", { className: "truncate text-[12px] font-medium text-ink-2" }, index + 1, ". ", row.kol_name || (row.handle ? `@${String(row.handle).replace(/^@/, "")}` : (isCompany ? "官方账号" : "Unknown KOL"))),
+                  e("div", { className: "truncate text-[10px] text-muted" }, row.platform || "unknown", row.title ? ` · ${shortText(row.title, 54)}` : "")
                 ),
                 e("div", { className: "shrink-0 text-right" },
-                  e("div", { className: "text-[12px] font-semibold text-white tabular-nums" }, metricLabel(isCompany ? "by_views" : moverTab, row)),
-                  e("div", { className: "text-[9px] text-slate-500" }, row.publish_date ? String(row.publish_date).slice(0, 10) : "无历史涨跌")
+                  e("div", { className: "text-[12px] font-semibold text-ink tabular-nums" }, metricLabel(isCompany ? "by_views" : moverTab, row)),
+                  e("div", { className: "text-[9px] text-muted" }, row.publish_date ? String(row.publish_date).slice(0, 10) : "无历史涨跌")
                 )
               );
             })
           )
         ),
-        e("div", { className: "relative flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.07] px-5 py-3" },
-          e("div", { className: "text-[10px] text-slate-500" }, "零 mock · 没有 KOL daily snapshot 的趋势保持累积中"),
+        e("div", { className: "relative flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3" },
+          e("div", { className: "text-[10px] text-muted" }, "零 mock · 没有 KOL daily snapshot 的趋势保持累积中"),
           e("div", { className: "flex gap-2" },
-            e("button", { onClick: handleExportCsv, className: "inline-flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white" }, e(Download, { size: 12 }), "导出 CSV"),
-            e("button", { onClick: handleDrillToKolPool, className: "inline-flex items-center gap-1 rounded-lg border border-purple-400/20 bg-purple-500/[0.12] px-3 py-1.5 text-[11px] text-purple-100 hover:bg-purple-500/[0.18]" }, e(ExternalLink, { size: 12 }), "钻入 KOL Pool")
+            e("button", { onClick: handleExportCsv, className: "inline-flex items-center gap-1 rounded-lg border border-line bg-panel px-3 py-1.5 text-[11px] text-ink-2 hover:bg-accent-soft hover:text-ink" }, e(Download, { size: 12 }), "导出 CSV"),
+            e("button", { onClick: handleDrillToKolPool, className: "inline-flex items-center gap-1 rounded-lg border border-accent bg-accent-soft px-3 py-1.5 text-[11px] text-accent hover:bg-accent-soft" }, e(ExternalLink, { size: 12 }), "钻入 KOL Pool")
           )
         )
       )
@@ -451,21 +451,21 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
       animate: { scale: 1, opacity: 1, y: 0 },
       exit: { scale: 0.96, opacity: 0 },
       onClick: (ev) => ev.stopPropagation(),
-      className: "relative w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl",
+      className: "relative w-full max-w-3xl overflow-hidden rounded-2xl border border-line bg-card shadow-2xl",
     },
       e("div", { className: "pointer-events-none absolute inset-0 opacity-60", style: { background: `radial-gradient(circle at 20% -10%, ${color}33, transparent 38%)` } }),
-      e("div", { className: "relative border-b border-white/[0.07] px-5 py-4" },
+      e("div", { className: "relative border-b border-line px-5 py-4" },
         e("div", { className: "flex items-start gap-3" },
           e("div", {
-            className: "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.06]",
+            className: "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-line",
             style: { background: `${color}1f`, color },
           }, e(Icon, { size: 19 })),
           e("div", { className: "min-w-0 flex-1" },
             e("div", { className: "flex flex-wrap items-center gap-2" },
-              e("h2", { className: "text-lg font-semibold text-white" }, metric.label || metric.title || kpiId),
+              e("h2", { className: "text-lg font-semibold text-ink" }, metric.label || metric.title || kpiId),
               e("span", { className: `rounded-md border px-2 py-0.5 text-[10px] ${tone.bg} ${tone.text} ${tone.border}` }, statusLabel)
             ),
-            e("p", { className: "mt-1 text-[11px] text-slate-400" },
+            e("p", { className: "mt-1 text-[11px] text-muted" },
               metric.id === "exposure"
                 ? "30d 增量指标。snapshot 未成熟时不使用 lifetime 替代。"
                 : metric.id === "gmv" || metric.id === "roi"
@@ -475,39 +475,39 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
           ),
           e("button", {
             onClick: onClose,
-            className: "shrink-0 rounded-lg border border-white/10 bg-white/[0.04] p-2 text-slate-400 hover:bg-white/[0.08] hover:text-white",
+            className: "shrink-0 rounded-lg border border-line bg-panel p-2 text-muted hover:bg-accent-soft hover:text-ink",
           }, e(X, { size: 15 }))
         ),
         e("div", { className: "mt-3 flex flex-wrap gap-1.5" },
           SCOPE_OPTIONS.map((option) => e("button", {
             key: option.id,
             onClick: () => setScope(option.id),
-            className: `rounded-lg border px-3 py-1.5 text-[11px] transition ${scope === option.id ? "border-purple-400/40 bg-purple-500/[0.18] text-white" : "border-white/[0.08] bg-white/[0.02] text-slate-400 hover:text-white"}`,
-          }, option.label, e("span", { className: "ml-1 text-[9px] text-slate-500" }, option.desc)))
+            className: `rounded-lg border px-3 py-1.5 text-[11px] transition ${scope === option.id ? "border-accent bg-accent-soft text-ink" : "border-line bg-panel text-muted hover:text-ink"}`,
+          }, option.label, e("span", { className: "ml-1 text-[9px] text-muted" }, option.desc)))
         )
       ),
       e("div", { className: "relative grid gap-3 p-5 md:grid-cols-[260px_minmax(0,1fr)]" },
-        e("div", { className: "rounded-xl border border-white/[0.07] bg-white/[0.025] p-4" },
-          e("div", { className: "mb-2 text-[10px] uppercase tracking-[0.18em] text-slate-500" }, "Current"),
-          e("div", { className: "text-4xl font-light tracking-tight text-white tabular-nums" }, formatValue(metric, scoped.value)),
-          e("div", { className: "mt-2 text-[11px] text-slate-400" }, hasValue ? scoped.trend || "真实 API" : scoped.waiting || "数据待接入"),
-          e("div", { className: "mt-4 rounded-lg border border-white/[0.06] bg-black/20 p-3 text-[10px] leading-relaxed text-slate-400" },
-            e("div", { className: "mb-1 flex items-center gap-1.5 text-slate-300" }, e(Database, { size: 11 }), "数据契约"),
-            e("div", null, "scope: ", e("span", { className: "text-slate-200" }, scope === "company" ? "owned_matrix" : scope)),
-            e("div", null, "window: ", e("span", { className: "text-slate-200" }, scoped.source === "evidence_metrics" ? "evidence metrics" : metric.id === "kol-count" ? "roster snapshot" : "30d snapshot")),
-            e("div", null, "source: ", e("span", { className: "text-slate-200" }, scoped.source || "pending"))
+        e("div", { className: "rounded-xl border border-line bg-panel p-4" },
+          e("div", { className: "mb-2 text-[10px] uppercase tracking-[0.18em] text-muted" }, "Current"),
+          e("div", { className: "text-4xl font-light tracking-tight text-ink tabular-nums" }, formatValue(metric, scoped.value)),
+          e("div", { className: "mt-2 text-[11px] text-muted" }, hasValue ? scoped.trend || "真实 API" : scoped.waiting || "数据待接入"),
+          e("div", { className: "mt-4 rounded-lg border border-line bg-black/20 p-3 text-[10px] leading-relaxed text-muted" },
+            e("div", { className: "mb-1 flex items-center gap-1.5 text-ink-2" }, e(Database, { size: 11 }), "数据契约"),
+            e("div", null, "scope: ", e("span", { className: "text-ink-2" }, scope === "company" ? "owned_matrix" : scope)),
+            e("div", null, "window: ", e("span", { className: "text-ink-2" }, scoped.source === "evidence_metrics" ? "evidence metrics" : metric.id === "kol-count" ? "roster snapshot" : "30d snapshot")),
+            e("div", null, "source: ", e("span", { className: "text-ink-2" }, scoped.source || "pending"))
           )
         ),
-        e("div", { className: "rounded-xl border border-white/[0.07] bg-white/[0.025] p-4" },
+        e("div", { className: "rounded-xl border border-line bg-panel p-4" },
           e("div", { className: "mb-3 flex items-center justify-between" },
             e("div", null,
-              e("h3", { className: "text-sm font-semibold text-white" }, "Trend"),
-              e("p", { className: "text-[10px] text-slate-500" }, path ? "来自真实趋势点" : "趋势需要 snapshot / revenue-trend 成熟后显示")
+              e("h3", { className: "text-sm font-semibold text-ink" }, "Trend"),
+              e("p", { className: "text-[10px] text-muted" }, path ? "来自真实趋势点" : "趋势需要 snapshot / revenue-trend 成熟后显示")
             ),
             // 【D1】诚实化:原 7D/30D/90D 切换钮是假交互(弹窗数据来自 dashboard bundle 的固定
             // window_days=30 快照,切换从不改数字)→ 摘掉,换单一口径标签如实标窗口。
             e("span", {
-              className: "rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-400",
+              className: "rounded-lg border border-line bg-panel px-2.5 py-1 text-[10px] text-muted",
               title: "固定窗口:dashboard 汇总按 window_days=30 拉取;后端暂不支持 7/90 天切换",
             }, "30D · 固定窗口")
           ),
@@ -516,16 +516,16 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
                 e("path", { d: path, fill: "none", stroke: color, strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }),
                 e("path", { d: `${path} L560,128 L0,128 Z`, fill: color, opacity: 0.12 })
               )
-            : e("div", { className: "flex h-32 items-center justify-center rounded-lg border border-dashed border-white/[0.08] text-[11px] text-slate-500" },
+            : e("div", { className: "flex h-32 items-center justify-center rounded-lg border border-dashed border-line text-[11px] text-muted" },
                 scoped.source === "accumulating"
                   ? e(React.Fragment, null, e(Loader2, { size: 13, className: "mr-2 animate-spin text-cyan-300" }), statusLabel)
                   : scoped.waiting || "数据待接入"
               )
         )
       ),
-      e("div", { className: "relative flex items-center justify-between border-t border-white/[0.07] px-5 py-3" },
-        e("div", { className: "text-[10px] text-slate-500" }, "真实数据详情 · 不展示 mock composition / top contributors"),
-        e("button", { onClick: onClose, className: "rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white" }, t("关闭"))
+      e("div", { className: "relative flex items-center justify-between border-t border-line px-5 py-3" },
+        e("div", { className: "text-[10px] text-muted" }, "真实数据详情 · 不展示 mock composition / top contributors"),
+        e("button", { onClick: onClose, className: "rounded-lg border border-line bg-panel px-3 py-1.5 text-[11px] text-ink-2 hover:bg-accent-soft hover:text-ink" }, t("关闭"))
       )
     )
   );

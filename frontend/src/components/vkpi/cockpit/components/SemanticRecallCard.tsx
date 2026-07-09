@@ -50,13 +50,13 @@ function StageChips(stages: Stages) {
   const degraded = String(recall.method || "") === "ngram_fallback_v0";
   const rerankStatus = String(rerank.status || "");
   const rerankTone =
-    rerankStatus === "ok" ? "bg-emerald-400/10 text-emerald-300"
+    rerankStatus === "ok" ? "bg-good-soft text-good"
     : rerankStatus === "cached" ? "bg-cyan-400/10 text-cyan-200"
-    : "bg-white/[0.05] text-slate-500";
-  return e("div", { className: "flex flex-wrap items-center gap-1.5 px-3 py-1.5 border-b border-white/[0.05]" },
+    : "bg-card text-muted";
+  return e("div", { className: "flex flex-wrap items-center gap-1.5 px-3 py-1.5 border-b border-line" },
     e("span", {
       className: "rounded px-1.5 py-0.5 text-[9px] " +
-        (degraded ? "bg-amber-400/10 text-amber-300" : "bg-cyan-400/10 text-cyan-200"),
+        (degraded ? "bg-warn-soft text-warn" : "bg-cyan-400/10 text-cyan-200"),
       title: degraded
         ? "embedding 不可用(无网/无 key/预算闸),已决定性降级:字符 3-gram + 词表标签混合召回" +
           (recall.degraded_reason ? ` — ${recall.degraded_reason}` : "")
@@ -66,7 +66,7 @@ function StageChips(stages: Stages) {
       ` · ${Number(recall.candidates) || 0}人`,
     ),
     e("span", {
-      className: "rounded bg-white/[0.05] px-1.5 py-0.5 text-[9px] text-slate-400",
+      className: "rounded bg-card px-1.5 py-0.5 text-[9px] text-muted",
       title: "final_v1 十一维余弦粗排(video_similarity 向量口径)" +
         (coarse.with_dims_cosine != null ? ` — ${coarse.with_dims_cosine} 人有十一维向量` : ""),
     }, `② 粗排 ${Number(coarse.n) || 0}`),
@@ -78,7 +78,7 @@ function StageChips(stages: Stages) {
       : rerankStatus === "cached" ? "③ 重排 缓存"
       : "③ 重排 跳过",
     ),
-    degraded && e(AlertTriangle, { size: 11, className: "text-amber-400/80", strokeWidth: 2 }),
+    degraded && e(AlertTriangle, { size: 11, className: "text-warn", strokeWidth: 2 }),
   );
 }
 
@@ -90,25 +90,25 @@ function CandidateRow(it: RecallItem, i: number) {
         ? `召回 ${((Number(it.recall_score) || 0)).toFixed(3)} + 十一维余弦 ${it.dims_cosine != null ? Number(it.dims_cosine).toFixed(3) : "—"}`
         : `召回依据:${it.recall_basis || "—"} ${((Number(it.recall_score) || 0)).toFixed(3)}`);
   return e("div", { key: it.kol_pool_id || i, className: "flex items-start gap-2 px-3 py-1.5" },
-    e("span", { className: "mt-0.5 w-[18px] shrink-0 text-right text-[9px] tabular-nums text-slate-600" }, String(it.rank ?? i + 1)),
+    e("span", { className: "mt-0.5 w-[18px] shrink-0 text-right text-[9px] tabular-nums text-muted" }, String(it.rank ?? i + 1)),
     it.avatar_url
       ? e("img", { src: it.avatar_url, className: "mt-0.5 h-5 w-5 shrink-0 rounded-full object-cover", alt: "" })
-      : e("div", { className: "mt-0.5 h-5 w-5 shrink-0 rounded-full bg-white/[0.06]" }),
+      : e("div", { className: "mt-0.5 h-5 w-5 shrink-0 rounded-full bg-card" }),
     e("div", { className: "min-w-0 flex-1" },
       e("div", { className: "flex items-center gap-1.5" },
-        e("span", { className: "truncate text-[11px] font-medium text-slate-200" }, name),
-        it.platform && e("span", { className: "rounded bg-white/[0.05] px-1 py-px text-[8px] uppercase text-slate-500" }, it.platform),
-        e("span", { className: "text-[9px] tabular-nums text-slate-500" }, fmtFollowers(it.followers) + " 粉"),
+        e("span", { className: "truncate text-[11px] font-medium text-ink-2" }, name),
+        it.platform && e("span", { className: "rounded bg-card px-1 py-px text-[8px] uppercase text-muted" }, it.platform),
+        e("span", { className: "text-[9px] tabular-nums text-muted" }, fmtFollowers(it.followers) + " 粉"),
         it.llm_relevance != null && e("span", {
           className: "rounded bg-violet-400/10 px-1 py-px text-[8.5px] tabular-nums text-violet-300",
           title: "LLM 相关度(仅展示排序,不参与任何评分列)",
         }, "LLM " + Math.round(Number(it.llm_relevance))),
         it.profile_url && e("a", {
           href: it.profile_url, target: "_blank", rel: "noreferrer",
-          className: "text-slate-600 hover:text-cyan-300",
+          className: "text-muted hover:text-cyan-300",
         }, e(ExternalLink, { size: 10, strokeWidth: 2 })),
       ),
-      e("div", { className: "mt-0.5 truncate text-[9.5px] leading-relaxed " + (it.why_fit ? "text-cyan-200/80" : "text-slate-500"), title: why }, why),
+      e("div", { className: "mt-0.5 truncate text-[9.5px] leading-relaxed " + (it.why_fit ? "text-cyan-200/80" : "text-muted"), title: why }, why),
     ),
   );
 }
@@ -139,11 +139,11 @@ export function SemanticRecallCard({ apiToken }: any) {
   const items = Array.isArray(data?.items) ? (data?.items as RecallItem[]) : [];
   const stages = data?.stages || {};
 
-  return e("div", { className: "mb-4 rounded-xl border border-white/[0.06] bg-white/[0.012] overflow-hidden" },
-    e("div", { className: "flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.05]" },
+  return e("div", { className: "mb-4 rounded-xl border border-line bg-panel overflow-hidden" },
+    e("div", { className: "flex items-center gap-2 px-3 py-1.5 border-b border-line" },
       e(Sparkles, { size: 13, className: "text-violet-400", strokeWidth: 2 }),
-      e("span", { className: "text-[11px] font-medium text-slate-300" }, "语义找人 · 三段式召回"),
-      e("span", { className: "text-[8.5px] text-slate-600" }, "embedding→十一维粗排→LLM重排 · 不参与 Fit 评分"),
+      e("span", { className: "text-[11px] font-medium text-ink-2" }, "语义找人 · 三段式召回"),
+      e("span", { className: "text-[8.5px] text-muted" }, "embedding→十一维粗排→LLM重排 · 不参与 Fit 评分"),
     ),
     e("div", { className: "flex items-center gap-1.5 px-3 py-2" },
       e("input", {
@@ -151,7 +151,7 @@ export function SemanticRecallCard({ apiToken }: any) {
         onChange: (ev: any) => setQuery(ev.target.value),
         onKeyDown: (ev: any) => { if (ev.key === "Enter") run(); },
         placeholder: "描述你要找的创作者,如 cinematic wedding videographer",
-        className: "min-w-0 flex-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-600 outline-none focus:border-cyan-400/40",
+        className: "min-w-0 flex-1 rounded-md border border-line bg-panel px-2 py-1 text-[11px] text-ink-2 placeholder:text-muted outline-none focus:border-cyan-400/40",
       }),
       e("button", {
         onClick: run,
@@ -161,12 +161,12 @@ export function SemanticRecallCard({ apiToken }: any) {
     ),
     // U2 加载骨架:召回最长可到 60s(LLM 重排),用三段 chips + 4 行候选形状占位,不再白屏
     loading && e(React.Fragment, { key: "loading-skeleton" },
-      e("div", { className: "flex items-center gap-1.5 border-t border-white/[0.05] px-3 py-1.5" },
+      e("div", { className: "flex items-center gap-1.5 border-t border-line px-3 py-1.5" },
         e(SkeletonBlock, { key: "st1", className: "h-4 w-24 rounded" }),
         e(SkeletonBlock, { key: "st2", className: "h-4 w-14 rounded" }),
         e(SkeletonBlock, { key: "st3", className: "h-4 w-16 rounded" }),
       ),
-      e("div", { className: "divide-y divide-white/[0.04]" },
+      e("div", { className: "divide-y divide-line" },
         [0, 1, 2, 3].map((i) =>
           e("div", { key: i, className: "flex items-center gap-2 px-3 py-2" },
             e(SkeletonBlock, { className: "h-5 w-5 shrink-0 rounded-full" }),
@@ -174,19 +174,19 @@ export function SemanticRecallCard({ apiToken }: any) {
           )),
       ),
     ),
-    error && e("div", { className: "px-3 pb-2 text-[10px] text-slate-500" }, error),
+    error && e("div", { className: "px-3 pb-2 text-[10px] text-muted" }, error),
     data && String(data.status || "") === "error" &&
-      e("div", { className: "px-3 pb-2 text-[10px] text-slate-500" }, "召回失败:" + (data.reason || "未知原因")),
+      e("div", { className: "px-3 pb-2 text-[10px] text-muted" }, "召回失败:" + (data.reason || "未知原因")),
     data && String(data.status || "") === "empty" &&
       e(React.Fragment, null,
         StageChips(stages),
-        e("div", { className: "px-3 py-2 text-[10px] text-slate-500" }, data.reason || "没有命中的候选"),
+        e("div", { className: "px-3 py-2 text-[10px] text-muted" }, data.reason || "没有命中的候选"),
       ),
     data && String(data.status || "") === "ready" &&
       e(React.Fragment, null,
         StageChips(stages),
-        e("div", { className: "divide-y divide-white/[0.04]" }, items.map((it, i) => CandidateRow(it, i))),
-        e("div", { className: "px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-slate-600" },
+        e("div", { className: "divide-y divide-line" }, items.map((it, i) => CandidateRow(it, i))),
+        e("div", { className: "px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-muted" },
           `召回 ${Number(stages.recall?.candidates) || 0} 人 → 粗排 ${Number(stages.coarse?.n) || 0} → ` +
           (String(stages.rerank?.status) === "ok" ? "LLM 重排完成"
             : String(stages.rerank?.status) === "cached" ? "LLM 重排(当日缓存)"

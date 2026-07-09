@@ -56,8 +56,8 @@ function FunnelBar({ stage, total, index, reduced }: {
   const isOverdue = String(stage.key) === "overdue" && n > 0;
   const fillDelay = index * 0.1;
   return e("div", { className: "flex items-center gap-2 text-[10px]" },
-    e("span", { className: "w-[104px] shrink-0 truncate text-slate-300", title: stage.label }, stage.label || stage.key || "—"),
-    e("div", { className: "relative h-[9px] flex-1 overflow-hidden rounded-full bg-white/[0.05]" },
+    e("span", { className: "w-[104px] shrink-0 truncate text-ink-2", title: stage.label }, stage.label || stage.key || "—"),
+    e("div", { className: "relative h-[9px] flex-1 overflow-hidden rounded-full bg-card" },
       e(m.div, {
         "data-stage": String(stage.key || ""),
         "data-pulse-once": isOverdue ? "true" : undefined,
@@ -83,7 +83,7 @@ function FunnelBar({ stage, total, index, reduced }: {
         style: { background: STAGE_COLORS[String(stage.key)] || STAGE_COLORS.gifted },
       } as any),
     ),
-    e("span", { className: "w-[44px] shrink-0 text-right tabular-nums text-slate-300 font-medium" },
+    e("span", { className: "w-[44px] shrink-0 text-right tabular-nums text-ink-2 font-medium" },
       Number.isFinite(raw) ? e(AnimatedNumber, { value: raw, delayMs: index * 100 }) : "—"),
   );
 }
@@ -91,19 +91,19 @@ function FunnelBar({ stage, total, index, reduced }: {
 // 超期红名单行:KOL + 项目 + 超期天数 + 建议动作「催更」。
 function OverdueRow(it: OverdueItem, i: number) {
   const days = Number(it.days_since_sent);
-  return e("div", { key: it.assignment_id || i, className: "rounded border border-rose-400/15 bg-rose-500/[0.04] px-2 py-1.5" },
+  return e("div", { key: it.assignment_id || i, className: "rounded border border-rose-400/15 bg-crit-soft px-2 py-1.5" },
     e("div", { className: "flex items-center gap-1.5" },
-      e("span", { className: "shrink-0 rounded bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-rose-300" },
+      e("span", { className: "shrink-0 rounded bg-crit-soft px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-crit" },
         Number.isFinite(days) ? `${days}天` : "—"),
-      e("span", { className: "truncate text-[10.5px] text-slate-200", title: it.kol_name }, it.kol_name || `KOL#${it.kol_pool_id ?? "?"}`),
-      it.platform && e("span", { className: "shrink-0 text-[9px] text-slate-500" }, it.platform),
-      e("span", { className: "ml-auto shrink-0 rounded border border-amber-300/20 bg-amber-400/10 px-1.5 py-0.5 text-[9px] text-amber-200" },
+      e("span", { className: "truncate text-[10.5px] text-ink-2", title: it.kol_name }, it.kol_name || `KOL#${it.kol_pool_id ?? "?"}`),
+      it.platform && e("span", { className: "shrink-0 text-[9px] text-muted" }, it.platform),
+      e("span", { className: "ml-auto shrink-0 rounded border border-amber-300/20 bg-warn-soft px-1.5 py-0.5 text-[9px] text-warn" },
         it.suggested_action || "催更"),
     ),
-    e("div", { className: "mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-slate-500" },
+    e("div", { className: "mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-muted" },
       e("span", { className: "truncate", title: it.project_name }, it.project_name || it.product_name || `项目#${it.project_id ?? "?"}`),
-      it.sent_at && e("span", { className: "text-slate-600" }, `送样 ${it.sent_at}`),
-      it.sent_basis && e("span", { className: "text-slate-600", title: "送样时间基准" }, `基准 ${it.sent_basis}`),
+      it.sent_at && e("span", { className: "text-muted" }, `送样 ${it.sent_at}`),
+      it.sent_basis && e("span", { className: "text-muted", title: "送样时间基准" }, `基准 ${it.sent_basis}`),
     ),
   );
 }
@@ -147,18 +147,18 @@ export function GiftedFunnelPanel({ apiToken }: any) {
   const overdueN = Number(data.overdue) || 0;
   const rate = typeof data.post_rate === "number" ? (Math.round(data.post_rate * 1000) / 10).toFixed(1) + "%" : null;
 
-  return e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3" },
+  return e("div", { className: "rounded-lg border border-line bg-panel px-4 py-3" },
     // ── 标题行 ──
     e("div", { className: "flex items-center gap-1.5" },
-      e(PackageCheck, { size: 12, className: "text-sky-300" }),
-      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "送样 → 发布 履约漏斗"),
-      rate && e("span", { className: "rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-200" }, `发布率 ${rate}`),
-      overdueN > 0 && e("span", { className: "rounded bg-rose-500/10 px-1.5 py-0.5 text-[9px] text-rose-300" }, `超期 ×${overdueN}`),
+      e(PackageCheck, { size: 12, className: "text-accent" }),
+      e("span", { className: "text-[10px] uppercase tracking-wider text-muted" }, "送样 → 发布 履约漏斗"),
+      rate && e("span", { className: "rounded bg-good-soft px-1.5 py-0.5 text-[9px] text-good" }, `发布率 ${rate}`),
+      overdueN > 0 && e("span", { className: "rounded bg-crit-soft px-1.5 py-0.5 text-[9px] text-crit" }, `超期 ×${overdueN}`),
     ),
 
     // ── 诚实空态 ──
     data.status === "empty"
-      ? e("div", { className: "mt-2 text-[10px] leading-relaxed text-amber-300/90" }, String(data.reason || "暂无送样数据"))
+      ? e("div", { className: "mt-2 text-[10px] leading-relaxed text-warn" }, String(data.reason || "暂无送样数据"))
       : e(React.Fragment, null,
           // ── 漏斗条(入场逐段 stagger 填充)──
           e("div", { className: "mt-2 space-y-1" },
@@ -167,10 +167,10 @@ export function GiftedFunnelPanel({ apiToken }: any) {
           // ── 超期红名单 ──
           overdueItems.length > 0 && e(React.Fragment, null,
             e("div", { className: "mt-2.5 mb-1 flex items-center gap-1.5" },
-              e(AlertTriangle, { size: 10, className: "text-rose-300" }),
-              e("span", { className: "text-[10px] font-medium text-slate-300" },
+              e(AlertTriangle, { size: 10, className: "text-crit" }),
+              e("span", { className: "text-[10px] font-medium text-ink-2" },
                 `超期未发红名单(>${Number(data.overdue_days) || 21}天)`),
-              data.overdue_truncated && e("span", { className: "text-[8.5px] text-slate-600" }, "仅展示最久的若干条"),
+              data.overdue_truncated && e("span", { className: "text-[8.5px] text-muted" }, "仅展示最久的若干条"),
             ),
             e("div", { className: "max-h-[240px] space-y-1.5 overflow-y-auto pr-0.5" },
               overdueItems.slice(0, 30).map((it, i) => OverdueRow(it, i))),
@@ -181,16 +181,16 @@ export function GiftedFunnelPanel({ apiToken }: any) {
                 type: "button",
                 disabled: busy,
                 onClick: () => runCatchUp(true),
-                className: "flex items-center gap-1 rounded border border-sky-300/20 bg-sky-400/10 px-2 py-1 text-[9.5px] text-sky-200 hover:bg-sky-400/20 disabled:opacity-50",
+                className: "flex items-center gap-1 rounded border border-accent bg-accent-soft px-2 py-1 text-[9.5px] text-accent hover:bg-accent-soft disabled:opacity-50",
               }, e(Send, { size: 9 }), busy ? "处理中…" : "预览催更建议(dry-run)"),
               catchUp && catchUp.dry_run && catchUp.ok && e("button", {
                 type: "button",
                 disabled: busy,
                 onClick: () => runCatchUp(false),
-                className: "rounded border border-amber-300/20 bg-amber-400/10 px-2 py-1 text-[9.5px] text-amber-200 hover:bg-amber-400/20 disabled:opacity-50",
+                className: "rounded border border-amber-300/20 bg-warn-soft px-2 py-1 text-[9.5px] text-warn hover:bg-warn-soft disabled:opacity-50",
               }, `写入 Action Inbox(${Number(catchUp.would_write) || 0} 条,仍需人工审批)`),
             ),
-            catchUp && e("div", { className: "mt-1 text-[9px] leading-relaxed " + (catchUp.ok ? "text-slate-500" : "text-rose-300/90") },
+            catchUp && e("div", { className: "mt-1 text-[9px] leading-relaxed " + (catchUp.ok ? "text-muted" : "text-crit") },
               catchUp.ok
                 ? (catchUp.dry_run
                     ? `预览:${Number(catchUp.would_write) || 0} 条催更建议(未写库)。${String(catchUp.note || "")}`
@@ -199,7 +199,7 @@ export function GiftedFunnelPanel({ apiToken }: any) {
           ),
 
           // ── 口径脚注 ──
-          e("div", { className: "mt-2 text-[9px] leading-relaxed text-slate-600" },
+          e("div", { className: "mt-2 text-[9px] leading-relaxed text-muted" },
             String(data.basis_note || "") || "口径:送样=派单 stage 送样后词表;发布=stage/视频证据/确认内容候选。"),
         ),
   );

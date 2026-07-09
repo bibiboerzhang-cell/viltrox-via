@@ -50,26 +50,26 @@ export function OpsHealthCard({ apiToken = "", onOpenTriage }: OpsHealthCardProp
   const valueLabel = loading ? "…" : errored || count === null ? "--" : String(count);
 
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-xl">
+    <div className="rounded-xl border border-line bg-panel p-4 backdrop-blur-xl">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ShieldCheck size={14} className={hasBacklog ? "text-amber-300" : "text-emerald-300"} />
-          <h3 className="text-sm font-semibold text-white">运维健康</h3>
+          <ShieldCheck size={14} className={hasBacklog ? "text-warn" : "text-good"} />
+          <h3 className="text-sm font-semibold text-ink">运维健康</h3>
         </div>
-        {loading ? <Loader2 size={12} className="animate-spin text-slate-500" /> : null}
+        {loading ? <Loader2 size={12} className="animate-spin text-muted" /> : null}
       </div>
 
       <div className="flex items-end justify-between gap-3">
         <div>
           <div className="flex items-baseline gap-1.5">
             <span
-              className={`text-2xl font-semibold tabular-nums ${hasBacklog ? "text-amber-300" : "text-white"}`}
+              className={`text-2xl font-semibold tabular-nums ${hasBacklog ? "text-warn" : "text-ink"}`}
             >
               {valueLabel}
             </span>
-            <span className="text-[11px] text-slate-400">条待处理</span>
+            <span className="text-[11px] text-muted">条待处理</span>
           </div>
-          <p className="mt-0.5 text-[10px] text-slate-500">
+          <p className="mt-0.5 text-[10px] text-muted">
             {errored
               ? "队列读取失败"
               : hasBacklog
@@ -82,7 +82,7 @@ export function OpsHealthCard({ apiToken = "", onOpenTriage }: OpsHealthCardProp
       <button
         type="button"
         onClick={() => onOpenTriage?.()}
-        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-300 transition hover:bg-white/[0.06] hover:text-white"
+        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-line bg-panel px-3 py-1.5 text-[11px] text-ink-2 transition hover:bg-accent-soft hover:text-ink"
       >
         进入 Triage 队列
         <ArrowRight size={12} />

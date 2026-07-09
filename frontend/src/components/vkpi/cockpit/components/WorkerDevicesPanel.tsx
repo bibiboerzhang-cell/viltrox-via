@@ -91,10 +91,10 @@ function isOnline(d: BoardDevice): boolean {
 
 const LEASE_STATUS_STYLE: Record<string, string> = {
   leased: "bg-sky-500/10 text-sky-200",
-  submitted: "bg-amber-500/10 text-amber-200",
-  validated: "bg-emerald-500/10 text-emerald-200",
-  expired: "bg-rose-500/10 text-rose-300",
-  rejected: "bg-rose-500/10 text-rose-300",
+  submitted: "bg-warn-soft text-warn",
+  validated: "bg-good-soft text-good",
+  expired: "bg-crit-soft text-crit",
+  rejected: "bg-crit-soft text-crit",
 };
 
 const LEASE_STATUS_LABEL: Record<string, string> = {
@@ -134,7 +134,7 @@ function DeviceCard({ device }: { device: BoardDevice }) {
   const stats = device.lease_stats || {};
   const validated = Number(stats.validated) || 0;
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-black/20 px-2.5 py-2">
+    <div className="rounded-lg border border-line bg-black/20 px-2.5 py-2">
       <div className="flex items-center gap-1.5">
         {/* U2 呼吸灯:在线=绿轻呼吸(调用方 5min 心跳判定,state 显式覆盖);离线=灰静态(常态非事故) */}
         <FreshnessDot
@@ -143,23 +143,23 @@ function DeviceCard({ device }: { device: BoardDevice }) {
           ts={device.last_seen_at}
           title={online ? "在线(5 分钟内有心跳)" : "离线(5 分钟内无心跳)"}
         />
-        <span className="truncate text-[11px] font-medium text-slate-200" title={device.device_id || ""}>
+        <span className="truncate text-[11px] font-medium text-ink-2" title={device.device_id || ""}>
           {device.device_name || device.device_id || "(未命名节点)"}
         </span>
         {device.platform ? (
-          <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 text-[9px] text-slate-400">
+          <span className="shrink-0 rounded bg-card px-1.5 py-0.5 text-[9px] text-muted">
             {device.platform}
           </span>
         ) : null}
-        <span className="ml-auto shrink-0 rounded bg-purple-500/10 px-1.5 py-0.5 text-[9px] text-purple-200" title="信任级别">
+        <span className="ml-auto shrink-0 rounded bg-accent-soft px-1.5 py-0.5 text-[9px] text-accent" title="信任级别">
           T{Number(device.trust_level) || 0}
         </span>
       </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9.5px] text-slate-500">
+      <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[9.5px] text-muted">
         <span>
           {device.last_seen_at ? "心跳 " + relativeFromNow(device.last_seen_at) : "尚无心跳"}
         </span>
-        {validated > 0 ? <span className="text-emerald-300/80">已校验 ×{validated}</span> : null}
+        {validated > 0 ? <span className="text-good">已校验 ×{validated}</span> : null}
       </div>
       {task ? (
         <div className="mt-1 truncate rounded bg-sky-400/[0.06] border border-sky-300/10 px-1.5 py-1 text-[9.5px] text-sky-100/90">
@@ -167,10 +167,10 @@ function DeviceCard({ device }: { device: BoardDevice }) {
           {task.job_id != null ? " · job #" + task.job_id : ""}
         </div>
       ) : (
-        <div className="mt-1 text-[9.5px] text-slate-600">空闲(无在租任务)</div>
+        <div className="mt-1 text-[9.5px] text-muted">空闲(无在租任务)</div>
       )}
       {err && err.error_code ? (
-        <div className="mt-1 flex items-start gap-1 text-[9.5px] text-rose-300/90">
+        <div className="mt-1 flex items-start gap-1 text-[9.5px] text-crit">
           <AlertTriangle size={9} className="mt-0.5 shrink-0" />
           <span className="truncate" title={err.notes || err.error_code}>
             最近错误:{err.error_code}
@@ -238,29 +238,29 @@ export function WorkerDevicesPanel({ apiToken = "" }: WorkerDevicesPanelProps) {
   const empty = !errored && devices.length === 0;
 
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-xl">
+    <div className="rounded-xl border border-line bg-panel p-4 backdrop-blur-xl">
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Cpu size={14} className={onlineCount > 0 ? "text-emerald-300" : "text-slate-500"} />
-          <h3 className="text-sm font-semibold text-white">本地算力节点</h3>
+          <Cpu size={14} className={onlineCount > 0 ? "text-good" : "text-muted"} />
+          <h3 className="text-sm font-semibold text-ink">本地算力节点</h3>
           {devices.length > 0 ? (
-            <span className="rounded bg-white/[0.05] px-1.5 py-0.5 text-[9px] tabular-nums text-slate-400">
+            <span className="rounded bg-card px-1.5 py-0.5 text-[9px] tabular-nums text-muted">
               在线 {onlineCount}/{devices.length}
             </span>
           ) : null}
         </div>
-        {loading ? <Loader2 size={12} className="animate-spin text-slate-500" /> : null}
+        {loading ? <Loader2 size={12} className="animate-spin text-muted" /> : null}
       </div>
 
       {errored ? (
-        <div className="text-[10px] leading-relaxed text-amber-300/90">
+        <div className="text-[10px] leading-relaxed text-warn">
           节点看板读取失败(接口不可用),稍后自动重试
         </div>
       ) : empty ? (
-        <div className="text-[10px] leading-relaxed text-slate-500">
+        <div className="text-[10px] leading-relaxed text-muted">
           尚无本地节点,启动方式见 tools/local_worker/README
           {data?.status === "empty" && data?.reason ? (
-            <div className="mt-1 text-[9px] text-slate-600">{data.reason}</div>
+            <div className="mt-1 text-[9px] text-muted">{data.reason}</div>
           ) : null}
         </div>
       ) : (
@@ -270,17 +270,17 @@ export function WorkerDevicesPanel({ apiToken = "" }: WorkerDevicesPanelProps) {
               <DeviceCard key={d.device_id || String(i)} device={d} />
             ))}
             {devices.length > 8 ? (
-              <div className="text-[9px] text-slate-600">另有 {devices.length - 8} 台节点未展开</div>
+              <div className="text-[9px] text-muted">另有 {devices.length - 8} 台节点未展开</div>
             ) : null}
           </div>
 
           {typeCounts.length > 0 ? (
             <div className="mt-2 flex flex-wrap items-center gap-1">
-              <span className="text-[9px] text-slate-500">任务类型:</span>
+              <span className="text-[9px] text-muted">任务类型:</span>
               {typeCounts.slice(0, 6).map((t, i) => (
                 <span
                   key={t.task_type || String(i)}
-                  className="rounded border border-white/[0.06] bg-black/20 px-1.5 py-0.5 text-[9px] text-slate-300"
+                  className="rounded border border-line bg-black/20 px-1.5 py-0.5 text-[9px] text-ink-2"
                   title={Object.entries(t.by_status || {})
                     .map(([k, v]) => (LEASE_STATUS_LABEL[k] || k) + " " + v)
                     .join(" / ")}
@@ -293,16 +293,16 @@ export function WorkerDevicesPanel({ apiToken = "" }: WorkerDevicesPanelProps) {
 
           {leases.length > 0 ? (
             <div className="mt-2">
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">最近租约</div>
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-muted">最近租约</div>
               <div className="space-y-1">
                 {leases.map((l, i) => (
                   <div key={l.id ?? i} className="flex items-center gap-1.5 text-[9.5px]">
                     <LeaseStatusChip status={l.effective_status || l.status} />
-                    <span className="truncate text-slate-300" title={l.device_id || ""}>
+                    <span className="truncate text-ink-2" title={l.device_id || ""}>
                       {l.task_type || "(未知任务)"}
                     </span>
-                    <span className="truncate text-slate-600">{l.device_name || l.device_id || ""}</span>
-                    <span className="ml-auto shrink-0 tabular-nums text-slate-600">
+                    <span className="truncate text-muted">{l.device_name || l.device_id || ""}</span>
+                    <span className="ml-auto shrink-0 tabular-nums text-muted">
                       {l.issued_at ? relativeFromNow(l.issued_at) : ""}
                     </span>
                   </div>

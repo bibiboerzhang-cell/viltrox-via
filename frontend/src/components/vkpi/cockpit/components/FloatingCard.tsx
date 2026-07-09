@@ -55,7 +55,7 @@ export function FloatingCard({
       animate: { opacity: 1, scale: 1 },
       whileDrag: { scale: 1.05, cursor: "grabbing" },
       onClick: () => setCollapsed(false),
-      className: "cursor-pointer rounded-xl border border-white/[0.08] bg-[#0b1220]/95 px-3 py-2 backdrop-blur-xl shadow-lg hover:border-white/20",
+      className: "cursor-pointer rounded-xl border border-line bg-panel px-3 py-2 backdrop-blur-xl shadow-lg hover:border-line-strong",
       style: { zIndex: 800, cursor: "grab" }
     },
       e("div", { className: "flex items-center gap-2" },
@@ -64,8 +64,8 @@ export function FloatingCard({
           style: { background: `${iconColor}22`, color: iconColor } 
         }, e(icon, { size: 12 })),
         e("div", { className: "min-w-0" },
-          e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "Card"),
-          e("div", { className: "text-xs font-medium text-white truncate max-w-[140px]" }, title)
+          e("div", { className: "text-[10px] uppercase tracking-wider text-muted" }, "Card"),
+          e("div", { className: "text-xs font-medium text-ink truncate max-w-[140px]" }, title)
         )
       )
     );
@@ -84,7 +84,7 @@ export function FloatingCard({
     animate: { opacity: 1, y: 0 },
     transition: { delay: initialDelay },
     whileDrag: { scale: 1.02, zIndex: 999 },
-    className: "rounded-xl border border-white/[0.08] bg-[#0b1220]/90 backdrop-blur-xl shadow-2xl overflow-hidden",
+    className: "rounded-xl border border-line bg-panel backdrop-blur-xl shadow-2xl overflow-hidden",
     style: { 
       zIndex: 800,
       width: size.width,
@@ -94,7 +94,7 @@ export function FloatingCard({
   },
     // Header (drag handle)
     e("div", { 
-      className: "flex items-center justify-between gap-2 px-3 py-2 cursor-grab active:cursor-grabbing select-none border-b border-white/[0.04]"
+      className: "flex items-center justify-between gap-2 px-3 py-2 cursor-grab active:cursor-grabbing select-none border-b border-line"
     },
       e("div", { className: "flex items-center gap-1.5 flex-1 min-w-0" },
         // 拖拽指示 dots
@@ -104,13 +104,13 @@ export function FloatingCard({
           e("span", { className: "h-1 w-1 rounded-full bg-white/20" })
         ),
         icon && e(icon, { size: 12, style: { color: iconColor }, className: "ml-1" }),
-        e("h3", { className: "text-xs font-semibold text-white truncate" }, title)
+        e("h3", { className: "text-xs font-semibold text-ink truncate" }, title)
       ),
       // 控件 - 折叠按钮
       e("div", { className: "flex items-center gap-1 shrink-0" },
         e("button", {
           onClick: (ev: any) => { ev.stopPropagation(); setCollapsed(true); },
-          className: "p-1 rounded text-slate-500 hover:text-white hover:bg-white/5"
+          className: "p-1 rounded text-muted hover:text-ink hover:bg-accent-soft"
         }, e(X, { size: 12 }))
       )
     ),

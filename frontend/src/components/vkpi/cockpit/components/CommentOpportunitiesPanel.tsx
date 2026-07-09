@@ -51,39 +51,39 @@ function OppRow(it: OppItem, i: number) {
   const brands = Array.isArray(signals.competitor_hits) ? signals.competitor_hits : [];
   const angles = Array.isArray(it.comment_angles) ? it.comment_angles : [];
   const er = it.score_parts?.engagement_rate;
-  return e("div", { key: it.evidence_id || i, className: "px-3 py-2" + (i > 0 ? " border-t border-white/[0.04]" : ""), title: it.why || "" },
+  return e("div", { key: it.evidence_id || i, className: "px-3 py-2" + (i > 0 ? " border-t border-line" : ""), title: it.why || "" },
     e("div", { className: "flex items-start gap-1.5" },
-      e("span", { className: "shrink-0 text-[9px] font-bold tabular-nums mt-[1px] " + (i === 0 ? "text-amber-300" : "text-slate-500") }, "#" + (i + 1)),
+      e("span", { className: "shrink-0 text-[9px] font-bold tabular-nums mt-[1px] " + (i === 0 ? "text-warn" : "text-muted") }, "#" + (i + 1)),
       e("div", { className: "min-w-0 flex-1" },
         it.content_url
           ? e("a", {
               href: it.content_url, target: "_blank", rel: "noreferrer",
-              className: "block truncate text-[10.5px] text-slate-200 hover:text-cyan-200 hover:underline",
+              className: "block truncate text-[10.5px] text-ink-2 hover:text-cyan-200 hover:underline",
             }, it.title || it.content_url)
-          : e("span", { className: "block truncate text-[10.5px] text-slate-200" }, it.title || "(无标题)"),
-        e("div", { className: "mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] tabular-nums text-slate-500" },
-          (it.kol_name || it.kol_handle) && e("span", { className: "truncate max-w-[110px] text-slate-400" }, it.kol_name || "@" + it.kol_handle),
+          : e("span", { className: "block truncate text-[10.5px] text-ink-2" }, it.title || "(无标题)"),
+        e("div", { className: "mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] tabular-nums text-muted" },
+          (it.kol_name || it.kol_handle) && e("span", { className: "truncate max-w-[110px] text-muted" }, it.kol_name || "@" + it.kol_handle),
           e("span", null, String(it.platform || "")),
-          e("span", null, "播放 ", e("span", { className: "text-slate-300 font-medium" }, fmtNum(it.view_count))),
+          e("span", null, "播放 ", e("span", { className: "text-ink-2 font-medium" }, fmtNum(it.view_count))),
           typeof er === "number" && e("span", null, "互动 " + (Math.round(er * 1000) / 10).toFixed(1) + "%"),
-          it.published_day && e("span", { className: "text-slate-600" }, String(it.published_day).slice(5)),
+          it.published_day && e("span", { className: "text-muted" }, String(it.published_day).slice(5)),
         ),
       ),
       e("span", {
-        className: "shrink-0 rounded bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-amber-200",
+        className: "shrink-0 rounded bg-warn-soft px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-warn",
         title: "综合分 = 热度×0.35 + 主题相关×0.25 + 竞品语境×0.20 + 新鲜度×0.20(悬停整卡看「为何值得去」)",
       }, String(it.score ?? "—")),
     ),
     (focals.length > 0 || brands.length > 0 || signals.viltrox_mentioned) && e("div", { className: "mt-1 flex flex-wrap items-center gap-1" },
       focals.slice(0, 3).map((f, j) => e("span", { key: "f" + j, className: "rounded bg-cyan-400/10 px-1.5 py-0.5 text-[8.5px] text-cyan-200" }, f)),
-      brands.slice(0, 3).map((b, j) => e("span", { key: "b" + j, className: "flex items-center gap-0.5 rounded bg-rose-400/10 px-1.5 py-0.5 text-[8.5px] text-rose-200" },
+      brands.slice(0, 3).map((b, j) => e("span", { key: "b" + j, className: "flex items-center gap-0.5 rounded bg-crit-soft px-1.5 py-0.5 text-[8.5px] text-crit" },
         e(Swords, { size: 8, strokeWidth: 2 }), b)),
-      signals.viltrox_mentioned && e("span", { className: "rounded bg-emerald-400/10 px-1.5 py-0.5 text-[8.5px] text-emerald-200" }, "已提 Viltrox"),
+      signals.viltrox_mentioned && e("span", { className: "rounded bg-good-soft px-1.5 py-0.5 text-[8.5px] text-good" }, "已提 Viltrox"),
     ),
     // 建议评论角度(词表模板非 LLM):给人工撰写参考,最多两条防溢出。
     angles.length > 0 && e("div", { className: "mt-1 space-y-0.5" },
-      angles.slice(0, 2).map((a, j) => e("div", { key: "a" + j, className: "rounded bg-white/[0.02] border border-white/[0.04] px-1.5 py-1 text-[9px] leading-relaxed text-slate-400" }, "💬 " + a)),
-      angles.length > 2 && e("div", { className: "text-[8.5px] text-slate-600" }, `另有 ${angles.length - 2} 条角度(接口 comment_angles 全量)`),
+      angles.slice(0, 2).map((a, j) => e("div", { key: "a" + j, className: "rounded bg-panel border border-line px-1.5 py-1 text-[9px] leading-relaxed text-muted" }, "💬 " + a)),
+      angles.length > 2 && e("div", { className: "text-[8.5px] text-muted" }, `另有 ${angles.length - 2} 条角度(接口 comment_angles 全量)`),
     ),
   );
 }
@@ -113,21 +113,21 @@ export function CommentOpportunitiesPanel({ apiToken }: any) {
   const coverage = data.coverage || {};
   const isEmpty = data.status === "empty" || items.length === 0;
 
-  return e("div", { className: "mb-4 rounded-xl border border-white/[0.06] bg-white/[0.012] overflow-hidden" },
-    e("div", { className: "flex items-center justify-between gap-2 px-3 py-1.5 border-b border-white/[0.05]" },
+  return e("div", { className: "mb-4 rounded-xl border border-line bg-panel overflow-hidden" },
+    e("div", { className: "flex items-center justify-between gap-2 px-3 py-1.5 border-b border-line" },
       e("div", { className: "flex items-center gap-2" },
-        e(MessageCircle, { size: 13, className: "text-amber-300", strokeWidth: 2 }),
-        e("span", { className: "text-[11px] font-medium text-slate-300" }, `评论区机会 Top5 · ${Number(data.days) || DEFAULT_DAYS}天`),
+        e(MessageCircle, { size: 13, className: "text-warn", strokeWidth: 2 }),
+        e("span", { className: "text-[11px] font-medium text-ink-2" }, `评论区机会 Top5 · ${Number(data.days) || DEFAULT_DAYS}天`),
       ),
-      !isEmpty && e("span", { className: "text-[9px] tabular-nums text-slate-500", title: "窗口内扫描/可打分的证据视频数" },
+      !isEmpty && e("span", { className: "text-[9px] tabular-nums text-muted", title: "窗口内扫描/可打分的证据视频数" },
         `${Number(coverage.scored) || 0}/${Number(coverage.videos_scanned) || 0} 条参评`),
     ),
     isEmpty
       // 诚实空态:后端 reason 原样展示(含库内最新发布日提示),绝不编机会。
-      ? e("div", { className: "px-3 py-2 text-[10px] leading-relaxed text-slate-500" }, String(data.reason || "窗口内暂无可打分的视频证据"))
+      ? e("div", { className: "px-3 py-2 text-[10px] leading-relaxed text-muted" }, String(data.reason || "窗口内暂无可打分的视频证据"))
       : e(React.Fragment, null,
           e("div", null, items.slice(0, 5).map((it, i) => OppRow(it, i))),
-          e("div", { className: "border-t border-white/[0.05] px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-slate-600" },
+          e("div", { className: "border-t border-line px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-muted" },
             "热度×主题×竞品语境×新鲜度 词表打分(非 LLM)· 只出清单,评论由人工撰写发布 · 不参与 Fit 评分"),
         ),
   );

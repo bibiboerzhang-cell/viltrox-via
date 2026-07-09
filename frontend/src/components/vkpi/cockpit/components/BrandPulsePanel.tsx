@@ -62,16 +62,16 @@ function WeeklyBars(weekly: number[], accent: string) {
 
 function TrendBadge(trend: string, momentum: number) {
   if (trend === "rising") {
-    return e("span", { className: "flex items-center gap-0.5 text-emerald-400" },
+    return e("span", { className: "flex items-center gap-0.5 text-good" },
       e(TrendingUp, { size: 10, strokeWidth: 2 }),
       e("span", { className: "text-[9px] tabular-nums" }, (momentum > 0 ? "+" : "") + momentum + "%"));
   }
   if (trend === "falling") {
-    return e("span", { className: "flex items-center gap-0.5 text-rose-400" },
+    return e("span", { className: "flex items-center gap-0.5 text-crit" },
       e(TrendingDown, { size: 10, strokeWidth: 2 }),
       e("span", { className: "text-[9px] tabular-nums" }, momentum + "%"));
   }
-  return e("span", { className: "flex items-center gap-0.5 text-slate-500" },
+  return e("span", { className: "flex items-center gap-0.5 text-muted" },
     e(Minus, { size: 10, strokeWidth: 2 }),
     e("span", { className: "text-[9px]" }, "平稳"));
 }
@@ -95,14 +95,14 @@ function BrandRow(b: BrandItem, i: number, highlight: boolean) {
     title: exampleTitle(b),
   },
     e("div", { className: "w-[74px] min-w-0 shrink-0" },
-      e("div", { className: "truncate text-[11px] leading-none " + (highlight ? "font-semibold text-cyan-200" : "text-slate-300") }, b.brand || b.key || "—"),
-      typeTag && e("div", { className: "mt-0.5 text-[8px] leading-none text-slate-600" }, typeTag),
+      e("div", { className: "truncate text-[11px] leading-none " + (highlight ? "font-semibold text-cyan-200" : "text-ink-2") }, b.brand || b.key || "—"),
+      typeTag && e("div", { className: "mt-0.5 text-[8px] leading-none text-muted" }, typeTag),
     ),
     e("div", { className: "min-w-0 flex-1" }, WeeklyBars(weekly, barAccent)),
     e("div", { className: "w-[52px] shrink-0 text-right" }, TrendBadge(String(b.trend || "stable"), Number(b.momentum_pct) || 0)),
     e("div", { className: "w-[58px] shrink-0 text-right" },
-      e("span", { className: "text-[10px] tabular-nums text-slate-300" }, "×" + (Number(b.total_videos) || 0)),
-      e("span", { className: "ml-1 text-[8.5px] text-slate-600" }, (Number(b.kol_count) || 0) + "人"),
+      e("span", { className: "text-[10px] tabular-nums text-ink-2" }, "×" + (Number(b.total_videos) || 0)),
+      e("span", { className: "ml-1 text-[8.5px] text-muted" }, (Number(b.kol_count) || 0) + "人"),
     ),
   );
 }
@@ -162,11 +162,11 @@ export function BrandPulsePanel({ apiToken }: any) {
   const sov = typeof viltrox.share_of_voice === "number" ? Math.round(viltrox.share_of_voice * 1000) / 10 : null;
   const noSignal = data.status === "no_data_in_window" || data.status === "no_brand_signal";
 
-  return e("div", { className: "mb-4 rounded-xl border border-white/[0.06] bg-white/[0.012] overflow-hidden" },
-    e("div", { className: "flex items-center justify-between gap-2 px-3 py-1.5 border-b border-white/[0.05]" },
+  return e("div", { className: "mb-4 rounded-xl border border-line bg-panel overflow-hidden" },
+    e("div", { className: "flex items-center justify-between gap-2 px-3 py-1.5 border-b border-line" },
       e("div", { className: "flex items-center gap-2" },
         e(Activity, { size: 13, className: "text-cyan-400", strokeWidth: 2 }),
-        e("span", { className: "text-[11px] font-medium text-slate-300" }, `品牌脉搏 · ${Number(data.window_days) || 90}天`),
+        e("span", { className: "text-[11px] font-medium text-ink-2" }, `品牌脉搏 · ${Number(data.window_days) || 90}天`),
         // U2 新鲜度呼吸灯:最新入库证据的发布时间(无证据 → 空心灰圈,诚实「不知道」)
         !noSignal && e(FreshnessDot, { key: "fresh", ts: derived.latestEvidence, label: "最新证据" }),
       ),
@@ -181,23 +181,23 @@ export function BrandPulsePanel({ apiToken }: any) {
           title: "SoV 周走势:Viltrox 提及 ÷ 全部品牌提及(按周,客户端派生;无品牌提及的周跳过)",
         })),
         sov != null && e("span", { className: "rounded bg-cyan-400/10 px-1.5 py-0.5 text-[9px] tabular-nums text-cyan-200", title: "Viltrox 声量占比(视频×品牌口径)" }, `SoV ${sov}%`),
-        viltrox.rank != null && e("span", { className: "text-[9px] tabular-nums text-slate-500" }, `#${viltrox.rank}/${Number(viltrox.brand_count_ranked) || "—"}`),
+        viltrox.rank != null && e("span", { className: "text-[9px] tabular-nums text-muted" }, `#${viltrox.rank}/${Number(viltrox.brand_count_ranked) || "—"}`),
       ),
     ),
     noSignal
       // 诚实空态:窗口内没数据/词表零命中,一行灰字如实说,绝不编数。
-      ? e("div", { className: "px-3 py-2 text-[10px] text-slate-500" },
+      ? e("div", { className: "px-3 py-2 text-[10px] text-muted" },
           data.status === "no_data_in_window" ? "窗口内暂无入库视频证据" : "窗口内视频未命中品牌词表")
       : e(React.Fragment, null,
-          e("div", { className: "divide-y divide-white/[0.04]" },
+          e("div", { className: "divide-y divide-line" },
             BrandRow(viltrox, -1, true),
             brands.slice(0, 7).map((b, i) => BrandRow(b, i, false)),
           ),
-          (rising.length > 0 || falling.length > 0) && e("div", { className: "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 border-t border-white/[0.05] px-3 py-1.5 text-[9px]" },
-            rising.length > 0 && e("span", { className: "text-emerald-400/90" }, "升温 " + rising.map((k) => String(k)).slice(0, 4).join(" / ") + (rising.length > 4 ? ` 等${rising.length}个` : "")),
-            falling.length > 0 && e("span", { className: "text-rose-400/90" }, "降温 " + falling.map((k) => String(k)).slice(0, 4).join(" / ") + (falling.length > 4 ? ` 等${falling.length}个` : "")),
+          (rising.length > 0 || falling.length > 0) && e("div", { className: "flex flex-wrap items-center gap-x-2.5 gap-y-0.5 border-t border-line px-3 py-1.5 text-[9px]" },
+            rising.length > 0 && e("span", { className: "text-good" }, "升温 " + rising.map((k) => String(k)).slice(0, 4).join(" / ") + (rising.length > 4 ? ` 等${rising.length}个` : "")),
+            falling.length > 0 && e("span", { className: "text-crit" }, "降温 " + falling.map((k) => String(k)).slice(0, 4).join(" / ") + (falling.length > 4 ? ` 等${falling.length}个` : "")),
           ),
-          e("div", { className: "px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-slate-600" },
+          e("div", { className: "px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-muted" },
             `扫描 ${Number(coverage.videos_scanned) || 0} 条证据 · 命中 ${Number(coverage.brand_hit_videos) || 0} 条` +
             (sparseWeeks > 0 ? ` · ${sparseWeeks} 周无入库数据(空桶)` : "") +
             " · 趋势已按采集密度归一 · 不参与 Fit 评分"),

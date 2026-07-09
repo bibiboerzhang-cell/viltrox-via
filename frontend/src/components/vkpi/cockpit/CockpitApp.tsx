@@ -2,6 +2,7 @@
 
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTheme } from "../../../app/providers/ThemeProvider";
 // 车道B LazyMotion 瘦身:全 cockpit 树只用 m.*(motion.* 已全量替换),features 在此顶层
 // 注入一次。选 domMax 而非 domAnimation:FloatingCard 的 drag 与 ActivityFeed 的 layout
 // 动画都要 domMax 才生效(domAnimation 会静默砍掉拖拽 = 功能回退,不只是动效)。
@@ -127,7 +128,14 @@ export function CockpitApp(props: any = {}) {
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
   const [activeNav, setActiveNav] = useState((COCKPIT_BOARDS as readonly string[]).includes(initialNav) ? initialNav : "dashboard");
-  const [theme, setTheme] = useState(stored.theme || "dark");
+  // 主题统一(2026-07):cockpit 不再自持 theme,改吃全局 ThemeProvider(<html> data-theme/
+  // data-style,localStorage vkpi-ui-pref-v1),让 玻璃/仪器/单色 × 明暗 与全站一致。
+  // setTheme 桥接:兼容「传值」与「函数式更新」两种既有调用(侧栏传值 / 用户菜单函数式)。
+  const { theme: gTheme, setTheme: gSetTheme } = useTheme();
+  const theme = gTheme;
+  const setTheme = useCallback((next: any) => {
+    gSetTheme(typeof next === "function" ? next(gTheme) : next);
+  }, [gTheme, gSetTheme]);
 
   // 板块授权守卫:stored/程序化导航落到「被该成员隐藏」的板块时弹回 dashboard。
   // 侧栏已隐藏入口(CockpitSidebar 按 canViewBoard 过滤),此处为 stored state / 直链兜底。owner 全见不受影响。
@@ -594,7 +602,7 @@ export function CockpitApp(props: any = {}) {
 
   return e(LazyMotion, { features: domMax },
    e(I18nContext.Provider, { value: { t, lang, setLang } },
-   e("div", { "data-theme": "dark", className: "relative min-h-screen bg-bg text-ink-2" },
+   e("div", { className: "relative min-h-screen bg-bg text-ink-2" },
     e("div", {
       className: "pointer-events-none fixed inset-0",
       style: { background: "radial-gradient(circle at 50% -12%, var(--ds-accent-soft), transparent 42%), radial-gradient(circle at 88% 4%, var(--ds-accent-soft), transparent 30%), var(--ds-bg)" }

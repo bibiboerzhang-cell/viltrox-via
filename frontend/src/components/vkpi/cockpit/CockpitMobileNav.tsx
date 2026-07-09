@@ -60,7 +60,7 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
         aria-label="打开导航菜单"
         aria-expanded={open}
         onClick={() => setOpen(true)}
-        className="fixed left-3 top-3 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-[#0a0f1a]/90 text-slate-200 backdrop-blur md:hidden"
+        className="fixed left-3 top-3 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-panel text-ink-2 backdrop-blur md:hidden"
       >
         <Menu size={20} />
       </button>
@@ -79,17 +79,17 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
           role="dialog"
           aria-modal="true"
           aria-label="主导航"
-          className={`absolute left-0 top-0 flex h-full w-[280px] max-w-[85vw] flex-col border-r border-white/[0.06] bg-[#050810] shadow-2xl transition-transform duration-300 motion-reduce:transition-none ${
+          className={`absolute left-0 top-0 flex h-full w-[280px] max-w-[85vw] flex-col border-r border-line bg-panel shadow-2xl transition-transform duration-300 motion-reduce:transition-none ${
             open ? "translate-x-0" : "-translate-x-full"
           }`}
         >
           <div className="flex h-16 items-center justify-between px-5">
-            <span className="text-2xl font-black tracking-[.18em] text-white">VILTROX</span>
+            <span className="text-2xl font-black tracking-[.18em] text-ink">VILTROX</span>
             <button
               type="button"
               aria-label="关闭导航菜单"
               onClick={() => setOpen(false)}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 hover:text-white"
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:text-ink"
             >
               <X size={18} />
             </button>
@@ -104,14 +104,14 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
                   onClick={() => go(key)}
                   className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
                     active
-                      ? "bg-blue-500/15 text-blue-200"
-                      : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+                      ? "bg-accent-soft text-accent"
+                      : "text-muted hover:bg-accent-soft hover:text-ink-2"
                   }`}
                 >
-                  <Icon size={16} className={active ? "text-blue-300" : "text-slate-500"} />
+                  <Icon size={16} className={active ? "text-accent" : "text-muted"} />
                   <span className="flex-1 text-left">{label}</span>
                   {badge ? (
-                    <span className="rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] text-blue-200">
+                    <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
                       {badge}
                     </span>
                   ) : null}

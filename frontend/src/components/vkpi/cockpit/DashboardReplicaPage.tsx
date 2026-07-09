@@ -140,17 +140,17 @@ export function DashboardReplicaPage(props: any) {
     signals: () => e("div", { key: "insight-signals", className: "h-full" },
       dashboardError
         ? e("div", {
-            className: "h-full rounded-xl border border-red-500/20 bg-red-500/[0.04] p-4 backdrop-blur-xl flex flex-col",
+            className: "h-full rounded-xl border border-red-500/20 bg-crit-soft p-4 backdrop-blur-xl flex flex-col",
           },
             e("div", { className: "mb-3 flex items-center justify-between" },
               e("div", { className: "flex items-center gap-2" },
-                e(AlertTriangle, { size: 14, className: "text-red-300" }),
-                e("h3", { className: "text-sm font-semibold text-white" }, "Signals & Alerts")
+                e(AlertTriangle, { size: 14, className: "text-crit" }),
+                e("h3", { className: "text-sm font-semibold text-ink" }, "Signals & Alerts")
               ),
-              e("span", { className: "text-[9px] text-red-300/80" }, "信号源异常")
+              e("span", { className: "text-[9px] text-crit" }, "信号源异常")
             ),
             e("div", { className: "flex-1 flex items-center justify-center" },
-              e("div", { className: "rounded-md border border-dashed border-red-500/20 px-3 py-8 text-center text-[11px] text-red-300/70" },
+              e("div", { className: "rounded-md border border-dashed border-red-500/20 px-3 py-8 text-center text-[11px] text-crit" },
                 "信号源异常 · 暂不可用"
               )
             )

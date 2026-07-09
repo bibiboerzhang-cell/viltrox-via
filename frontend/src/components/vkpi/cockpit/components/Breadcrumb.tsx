@@ -7,22 +7,22 @@ import { ArrowLeft, ChevronRight } from "lucide-react";
 export function Breadcrumb({ levels, onGoBack }: any) {
   if (levels.length === 0) return null;
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0b1220]/70 px-3 py-1.5 backdrop-blur-xl">
+    <div className="flex items-center gap-2 rounded-lg border border-line bg-panel/70 px-3 py-1.5 backdrop-blur-xl">
       <button
         onClick={onGoBack}
         aria-label="Go back"
-        className="flex items-center gap-1 rounded-md text-[10px] text-slate-400 hover:text-white"
+        className="flex items-center gap-1 rounded-md text-[10px] text-muted hover:text-ink"
       >
         <ArrowLeft size={12} />
         <span>Back</span>
       </button>
       <div className="h-3 w-px bg-white/10" />
       <div className="flex items-center gap-1 text-[11px]">
-        <span className="text-slate-500">World</span>
+        <span className="text-muted">World</span>
         {levels.map((lv: any, i: any) => (
           <React.Fragment key={i}>
-            <ChevronRight size={10} className="text-slate-600" />
-            <span className={i === levels.length - 1 ? "text-white font-medium" : "text-slate-400"}>{lv}</span>
+            <ChevronRight size={10} className="text-muted" />
+            <span className={i === levels.length - 1 ? "text-ink font-medium" : "text-muted"}>{lv}</span>
           </React.Fragment>
         ))}
       </div>

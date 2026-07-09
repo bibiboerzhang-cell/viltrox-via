@@ -340,13 +340,13 @@ export function ActionInboxPanel({
   );
 
   const headerRight = loading
-    ? e(Loader2, { size: 12, className: "animate-spin text-slate-400" })
+    ? e(Loader2, { size: 12, className: "animate-spin text-muted" })
     : e(
         "button",
         {
           onClick: load,
           title: "刷新建议",
-          className: "text-slate-400 transition-colors hover:text-white",
+          className: "text-muted transition-colors hover:text-ink",
         },
         e(RefreshCw, { size: 12 }),
       );
@@ -378,7 +378,7 @@ export function ActionInboxPanel({
           e(Gavel, { size: 9 }),
           open ? "收起裁决" : "去裁决",
         ),
-        e("span", { key: "tag", className: "text-[8px] text-slate-500" }, "不可跳过 · 人工裁决"),
+        e("span", { key: "tag", className: "text-[8px] text-muted" }, "不可跳过 · 人工裁决"),
       );
     }
 
@@ -415,7 +415,7 @@ export function ActionInboxPanel({
         onClick: () => runAction(it, "snooze"),
         title: "稍后再说(默认 24h)",
         className:
-          "flex items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[9px] text-slate-300 transition-colors hover:bg-white/[0.08] disabled:opacity-40",
+          "flex items-center gap-1 rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-ink-2 transition-colors hover:bg-accent-soft disabled:opacity-40",
       },
       spin("snooze") || e(Clock, { size: 9 }),
       "稍后",
@@ -430,7 +430,7 @@ export function ActionInboxPanel({
           onClick: () => runAction(it, "dismiss"),
           title: "忽略此建议",
           className:
-            "flex items-center gap-1 rounded border border-white/10 bg-white/[0.02] px-1.5 py-0.5 text-[9px] text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40",
+            "flex items-center gap-1 rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-muted transition-colors hover:bg-crit-soft hover:text-crit disabled:opacity-40",
         },
         spin("dismiss") || e(X, { size: 9 }),
         label,
@@ -499,7 +499,7 @@ export function ActionInboxPanel({
     body = e(
       "div",
       { className: "flex-1 flex items-center justify-center py-8" },
-      e(Loader2, { size: 18, className: "animate-spin text-slate-500" }),
+      e(Loader2, { size: 18, className: "animate-spin text-muted" }),
     );
   } else if (error || !available) {
     body = e(
@@ -519,7 +519,7 @@ export function ActionInboxPanel({
       "div",
       {
         className:
-          "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500",
+          "rounded-md border border-dashed border-line px-3 py-8 text-center text-[11px] text-muted",
       },
       "暂无待办建议 · 一切已跟进",
     );
@@ -538,7 +538,7 @@ export function ActionInboxPanel({
           {
             key: it.id,
             status: String(it.status || ""),
-            className: "rounded-md border border-white/[0.05] bg-white/[0.015] px-2.5 py-2",
+            className: "rounded-md border border-line bg-panel px-2.5 py-2",
           },
           e(
             "div",
@@ -547,7 +547,7 @@ export function ActionInboxPanel({
               "div",
               { className: "flex items-center gap-1.5 min-w-0" },
               e(meta.Icon, { size: 12, className: `${meta.color} shrink-0` }),
-              e("span", { className: "truncate text-[11px] font-medium text-white" }, it.title),
+              e("span", { className: "truncate text-[11px] font-medium text-ink" }, it.title),
             ),
             e(
               "div",
@@ -556,7 +556,7 @@ export function ActionInboxPanel({
               e("span", { className: `rounded border px-1 py-0.5 text-[8px] ${pr.cls}` }, pr.label),
             ),
           ),
-          e("div", { className: "mt-0.5 line-clamp-2 text-[10px] text-slate-400" }, it.detail),
+          e("div", { className: "mt-0.5 line-clamp-2 text-[10px] text-muted" }, it.detail),
           // 路线0 决策四件套:收益 + 成本(为什么=reason 已在 detail 上方语义里;此处补收益/成本)
           (it.expected_gain || costCents > 0)
             ? e(
@@ -592,7 +592,7 @@ export function ActionInboxPanel({
           (it.requires_approval || it.uses_llm)
             ? e(
                 "div",
-                { className: "mt-1 flex items-center gap-1.5 text-[8px] text-slate-500" },
+                { className: "mt-1 flex items-center gap-1.5 text-[8px] text-muted" },
                 it.uses_llm && e("span", { className: "text-violet-300/70" }, "LLM"),
                 it.requires_approval && e("span", null, "· 需人工审批"),
               )
@@ -622,7 +622,7 @@ export function ActionInboxPanel({
               type: "button",
               onClick: () => setExpanded((v: boolean) => !v),
               className:
-                "mt-1 w-full rounded-md border border-white/[0.06] py-1 text-[10px] text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200",
+                "mt-1 w-full rounded-md border border-line py-1 text-[10px] text-muted transition hover:bg-accent-soft hover:text-ink-2",
             },
             expanded ? "收起" : `查看全部 ${items.length} →`,
           )
@@ -649,7 +649,7 @@ export function ActionInboxPanel({
             e("span", { className: "font-semibold text-emerald-200" }, String(todaySummary.today_executed_count)),
             " 条",
           ),
-          e("span", { className: "text-slate-600" }, "/"),
+          e("span", { className: "text-muted" }, "/"),
           e(
             "span",
             { className: "flex items-center gap-1 text-sky-300/90" },
@@ -667,7 +667,7 @@ export function ActionInboxPanel({
       animate: { opacity: 1, y: 0 },
       transition: { delay: 0.2 },
       className:
-        "rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 backdrop-blur-xl flex flex-col",
+        "rounded-xl border border-line bg-panel p-4 backdrop-blur-xl flex flex-col",
     },
     // header
     e(
@@ -677,11 +677,11 @@ export function ActionInboxPanel({
         "div",
         { className: "flex items-center gap-2" },
         e(Sparkles, { size: 14, className: "text-emerald-300" }),
-        e("h3", { className: "text-sm font-semibold text-white" }, heading),
+        e("h3", { className: "text-sm font-semibold text-ink" }, heading),
         items.length > 0 &&
           e(
             "span",
-            { className: "rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-slate-300" },
+            { className: "rounded-full bg-card px-1.5 py-0.5 text-[9px] text-ink-2" },
             String(items.length),
           ),
       ),
@@ -716,21 +716,21 @@ export function ActionInboxPanel({
     ledgerOpen
       ? e(
           "div",
-          { className: "mt-2 max-h-44 space-y-1 overflow-y-auto rounded border border-white/[0.06] bg-black/20 p-1.5" },
+          { className: "mt-2 max-h-44 space-y-1 overflow-y-auto rounded border border-line bg-black/20 p-1.5" },
           ledgerLoading
-            ? e("div", { className: "py-2 text-center text-[9px] text-slate-500" }, "加载执行台账…")
+            ? e("div", { className: "py-2 text-center text-[9px] text-muted" }, "加载执行台账…")
             : ledgerItems.length === 0
-              ? e("div", { className: "py-2 text-center text-[9px] text-slate-500" }, "暂无执行记录")
+              ? e("div", { className: "py-2 text-center text-[9px] text-muted" }, "暂无执行记录")
               : ledgerItems.map((l: any) =>
                   e(
                     "div",
                     {
                       key: `lg-${l.id}`,
-                      className: "flex items-center justify-between gap-2 rounded bg-white/[0.02] px-1.5 py-1",
+                      className: "flex items-center justify-between gap-2 rounded bg-panel px-1.5 py-1",
                     },
                     e(
                       "span",
-                      { className: "min-w-0 flex-1 truncate text-[9px] text-slate-300" },
+                      { className: "min-w-0 flex-1 truncate text-[9px] text-ink-2" },
                       `${(CATEGORY_META as any)[l.category]?.label || l.category || "run"} · ${l.mode}`,
                     ),
                     e(
@@ -741,7 +741,7 @@ export function ActionInboxPanel({
                             ? "text-emerald-300"
                             : l.outcome === "failed"
                               ? "text-red-300"
-                              : "text-slate-400"
+                              : "text-muted"
                         }`,
                       },
                       l.outcome,
@@ -753,14 +753,14 @@ export function ActionInboxPanel({
     // footer:数据源 + scope + 人审后执行 诚实标注 + 执行台账开关
     e(
       "div",
-      { className: "mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2" },
-      e("div", { className: "text-[9px] text-slate-500" }, scopeLabel ? `范围:${scopeLabel}` : "Auto-Ops · 建议"),
+      { className: "mt-3 flex items-center justify-between border-t border-line pt-2" },
+      e("div", { className: "text-[9px] text-muted" }, scopeLabel ? `范围:${scopeLabel}` : "Auto-Ops · 建议"),
       e(
         "button",
         {
           type: "button",
           onClick: toggleLedger,
-          className: "text-[9px] text-slate-500 transition-colors hover:text-slate-300",
+          className: "text-[9px] text-muted transition-colors hover:text-ink-2",
           title: "回读执行台账(谁/何时/结果/成本)",
         },
         ledgerOpen ? "收起台账" : "执行台账",

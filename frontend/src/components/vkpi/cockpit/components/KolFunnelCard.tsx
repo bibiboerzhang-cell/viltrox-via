@@ -38,23 +38,23 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
     initial: reduced ? false : { opacity: 0, y: 8 },
     animate: { opacity: 1, y: 0 },
     transition: reduced ? { duration: 0 } : { delay: 0.1, duration: 0.3 },
-    className: "rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 backdrop-blur-xl",
+    className: "rounded-xl border border-line bg-panel p-4 backdrop-blur-xl",
   },
     // Header
     e("div", { className: "mb-3 flex items-center justify-between" },
       e("div", { className: "flex items-center gap-2" },
-        e(Filter, { size: 14, className: "text-purple-300" }),
-        e("h3", { className: "text-sm font-semibold text-white" }, "KOL 漏斗")
+        e(Filter, { size: 14, className: "text-accent" }),
+        e("h3", { className: "text-sm font-semibold text-ink" }, "KOL 漏斗")
       ),
       isReal
-        ? e("span", { className: "rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-300" }, "真实")
-        : e("span", { className: "rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-300" }, "待后端")
+        ? e("span", { className: "rounded-md bg-good-soft px-1.5 py-0.5 text-[9px] font-medium text-good" }, "真实")
+        : e("span", { className: "rounded-md bg-warn-soft px-1.5 py-0.5 text-[9px] font-medium text-warn" }, "待后端")
     ),
     // Body
     !isReal
-      ? e("div", { className: "rounded-md border border-dashed border-white/[0.08] px-3 py-8 text-center text-[11px] text-slate-500" },
+      ? e("div", { className: "rounded-md border border-dashed border-line px-3 py-8 text-center text-[11px] text-muted" },
           "漏斗数据待后端",
-          e("div", { className: "mt-1 text-[9px] text-slate-600" }, "等待 dashboard summary.funnel 聚合块上线")
+          e("div", { className: "mt-1 text-[9px] text-muted" }, "等待 dashboard summary.funnel 聚合块上线")
         )
       : e("div", { className: "space-y-2" },
           stages.map((stage: any, index: any) => {
@@ -63,13 +63,13 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
             const color = STAGE_COLORS[index % STAGE_COLORS.length];
             return e("div", { key: stage.key },
               e("div", { className: "mb-0.5 flex items-center justify-between text-[10px]" },
-                e("span", { className: "text-slate-300" }, `${index + 1}.${stage.label}`),
-                e("span", { className: "tabular-nums text-slate-400" },
+                e("span", { className: "text-ink-2" }, `${index + 1}.${stage.label}`),
+                e("span", { className: "tabular-nums text-muted" },
                   // 数字 count-up:入场/变化各一次(AnimatedNumber 自带 reduced 直显)。
                   stage.count == null ? "--" : e(AnimatedNumber, { value: count, delayMs: index * 100 })
                 )
               ),
-              e("div", { className: "h-1.5 overflow-hidden rounded-full bg-white/[0.06]" },
+              e("div", { className: "h-1.5 overflow-hidden rounded-full bg-card" },
                 e(m.div, {
                   "data-stage": String(stage.key || index),
                   initial: reduced ? false : { width: 0 },
@@ -86,14 +86,14 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
           // D8(2026-07-02):by_staff 已回传 {staff_id, name, favorites, in_project} →
           // 可展开「按成员」小节(SectionFold,折叠态跨会话记忆),列 top5 成员的 收藏/入项目。
           // 旧块误标「我的漏斗」且只显收藏数,一并修正;数据仍全部来自后端 summary.funnel.by_staff。
-          byStaff.length > 0 && e("div", { className: "mt-2 border-t border-white/[0.06] pt-2" },
+          byStaff.length > 0 && e("div", { className: "mt-2 border-t border-line pt-2" },
             e(SectionFold, {
               id: "kol-funnel-by-staff",
               defaultOpen: false,
-              header: e("span", { className: "text-[9px] uppercase tracking-wider text-slate-500" }, `按成员(${byStaff.length} 人)`),
+              header: e("span", { className: "text-[9px] uppercase tracking-wider text-muted" }, `按成员(${byStaff.length} 人)`),
             },
               e("div", { className: "space-y-1" },
-                e("div", { className: "flex items-center justify-between text-[9px] text-slate-600" },
+                e("div", { className: "flex items-center justify-between text-[9px] text-muted" },
                   e("span", null, "成员"),
                   e("span", { className: "flex gap-3" }, e("span", null, "收藏"), e("span", null, "入项目"))
                 ),
@@ -101,23 +101,23 @@ export function KolFunnelCard({ funnel, onOpenMyKol }: any) {
                   key: row.staff_id ?? index,
                   className: "flex items-center justify-between text-[10px]"
                 },
-                  e("span", { className: "min-w-0 truncate text-slate-300" }, staffLabel(row)),
-                  e("span", { className: "shrink-0 flex gap-3 tabular-nums text-slate-400" },
+                  e("span", { className: "min-w-0 truncate text-ink-2" }, staffLabel(row)),
+                  e("span", { className: "shrink-0 flex gap-3 tabular-nums text-muted" },
                     e("span", { className: "w-8 text-right" }, staffCount(row, "favorites") == null ? "--" : staffCount(row, "favorites")!.toLocaleString()),
                     e("span", { className: "w-8 text-right" }, staffCount(row, "in_project") == null ? "--" : staffCount(row, "in_project")!.toLocaleString())
                   )
                 )),
-                byStaff.length > 5 && e("div", { className: "text-[9px] text-slate-500" }, `+${byStaff.length - 5} 人`)
+                byStaff.length > 5 && e("div", { className: "text-[9px] text-muted" }, `+${byStaff.length - 5} 人`)
               )
             )
           )
         ),
     // Footer
-    e("div", { className: "mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2" },
-      e("div", { className: "text-[9px] text-slate-500" }, "Sources: dashboard summary.funnel"),
+    e("div", { className: "mt-3 flex items-center justify-between border-t border-line pt-2" },
+      e("div", { className: "text-[9px] text-muted" }, "Sources: dashboard summary.funnel"),
       onOpenMyKol && e("button", {
         onClick: onOpenMyKol,
-        className: "text-[10px] text-slate-300 hover:text-white"
+        className: "text-[10px] text-ink-2 hover:text-ink"
       }, "去 MY KOL →")
     )
   );

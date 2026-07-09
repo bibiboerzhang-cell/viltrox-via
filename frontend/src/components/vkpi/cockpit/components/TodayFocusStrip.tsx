@@ -106,13 +106,13 @@ export function TodayFocusStrip({
   if (inboxError || !inboxAvailable) {
     inboxSeg = e(
       "span",
-      { className: "text-[10px] text-red-300/80" },
+      { className: "text-[10px] text-crit" },
       inboxAvailable ? `建议源异常 · ${inboxError}` : "建议系统待启用",
     );
   } else if (loading && topItems.length === 0) {
-    inboxSeg = e(Loader2, { size: 12, className: "animate-spin text-slate-500" });
+    inboxSeg = e(Loader2, { size: 12, className: "animate-spin text-muted" });
   } else if (topItems.length === 0) {
-    inboxSeg = e("span", { className: "text-[10px] text-slate-500" }, "暂无待办 · 一切已跟进");
+    inboxSeg = e("span", { className: "text-[10px] text-muted" }, "暂无待办 · 一切已跟进");
   } else {
     inboxSeg = e(
       "div",
@@ -126,14 +126,14 @@ export function TodayFocusStrip({
             onClick: onJumpToInbox,
             title: `${it.title || ""} · 点击直达「今日该做什么」`,
             className:
-              "flex max-w-[220px] items-center gap-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-1 text-[10px] text-slate-200 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/[0.06]",
+              "flex max-w-[220px] items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[10px] text-ink-2 transition-colors hover:border-emerald-500/30 hover:bg-good-soft",
           },
           e("i", {
             className: `h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT[it.priority] || PRIORITY_DOT.low}`,
           }),
           e(
             "span",
-            { className: "shrink-0 text-[9px] text-slate-400" },
+            { className: "shrink-0 text-[9px] text-muted" },
             CATEGORY_LABEL[it.category] || it.category,
           ),
           e("span", { className: "min-w-0 truncate" }, it.title),
@@ -144,7 +144,7 @@ export function TodayFocusStrip({
 
   // ── 晨报段:headline 一句话(点击直达右栏晨报卡)/ 失败如实 ──
   const briefSeg = briefFailed
-    ? e("span", { className: "text-[10px] text-slate-500" }, "-- 晨报读取失败")
+    ? e("span", { className: "text-[10px] text-muted" }, "-- 晨报读取失败")
     : headline
       ? e(
           "button",
@@ -153,21 +153,21 @@ export function TodayFocusStrip({
             onClick: onJumpToBrief,
             title: "点击直达夜班晨报",
             className:
-              "group flex min-w-0 items-center gap-1.5 text-left text-[10px] text-slate-300 transition-colors hover:text-white",
+              "group flex min-w-0 items-center gap-1.5 text-left text-[10px] text-ink-2 transition-colors hover:text-ink",
           },
-          e(Sunrise, { size: 11, className: "shrink-0 text-emerald-300/80" }),
+          e(Sunrise, { size: 11, className: "shrink-0 text-good" }),
           e("span", { className: "min-w-0 truncate" }, headline),
-          e(ArrowRight, { size: 10, className: "shrink-0 text-slate-500 group-hover:text-slate-300" }),
+          e(ArrowRight, { size: 10, className: "shrink-0 text-muted group-hover:text-ink-2" }),
         )
       : loading
         ? null
-        : e("span", { className: "text-[10px] text-slate-600" }, "晨报暂无 headline");
+        : e("span", { className: "text-[10px] text-muted" }, "晨报暂无 headline");
 
   return e(
     "div",
     {
       className:
-        "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.04] px-3 py-2 backdrop-blur-xl",
+        "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-emerald-500/15 bg-good-soft px-3 py-2 backdrop-blur-xl",
     },
     // 标头 + 待办计数(点击直达右栏面板)
     e(
@@ -178,17 +178,17 @@ export function TodayFocusStrip({
         title: "点击直达「今日该做什么」面板",
         className: "flex shrink-0 items-center gap-1.5 transition-opacity hover:opacity-80",
       },
-      e(Target, { size: 13, className: "text-emerald-300" }),
-      e("span", { className: "text-[11px] font-semibold text-white" }, "今日焦点"),
+      e(Target, { size: 13, className: "text-good" }),
+      e("span", { className: "text-[11px] font-semibold text-ink" }, "今日焦点"),
       e(
         "span",
         {
           className:
-            "rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-px text-[9px] tabular-nums text-emerald-200",
+            "rounded-full border border-emerald-500/25 bg-good-soft px-1.5 py-px text-[9px] tabular-nums text-good",
         },
         `待办 ${countLabel}`,
       ),
-      loading ? e(Loader2, { size: 10, className: "animate-spin text-slate-500" }) : null,
+      loading ? e(Loader2, { size: 10, className: "animate-spin text-muted" }) : null,
     ),
     e("span", { className: "hidden h-3 w-px bg-white/[0.08] sm:block" }),
     inboxSeg,
