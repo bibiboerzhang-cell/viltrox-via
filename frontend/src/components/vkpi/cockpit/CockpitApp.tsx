@@ -594,7 +594,7 @@ export function CockpitApp(props: any = {}) {
 
   return e(LazyMotion, { features: domMax },
    e(I18nContext.Provider, { value: { t, lang, setLang } },
-   e("div", { className: "relative min-h-screen bg-[#050810] text-slate-200" },
+   e("div", { "data-theme": "dark", className: "relative min-h-screen bg-bg text-ink-2" },
     e("div", {
       className: "pointer-events-none fixed inset-0",
       style: { background: "radial-gradient(circle at 30% -10%,rgba(65,73,255,.22),transparent 35%),radial-gradient(circle at 90% 20%,rgba(0,213,200,.08),transparent 30%),linear-gradient(180deg,#060a15,#03060c)" }

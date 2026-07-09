@@ -13,26 +13,26 @@ export const NAV_ITEMS = [
   { key: "my-kol",       icon: Heart,           label: "MY KOL",          badge: null },
   { key: "kol-pool",     icon: Users,           label: "KOL Pool",        badge: null },
   { key: "projects",     icon: Briefcase,       label: "Projects",        badge: null },
-  { key: "events",       icon: Calendar,        label: "Events",          badge: "New" },
+  { key: "events",       icon: Calendar,        label: "Events",          badge: null },
   { key: "shopify",      icon: PackageCheck,    label: "Shopify",         badge: null },
   { key: "dealers",      icon: MapPin,          label: "Dealers",         badge: null },
   // P1 智能可见周(拍定默认:入口全员可见)——Intelligent 问答 + 评论区销售员回复队列。
-  { key: "intelligent",  icon: Sparkles,        label: "Intelligent 问答", badge: "New" },
-  { key: "replyQueue",   icon: MessageSquare,   label: "回复队列",         badge: "New" },
+  { key: "intelligent",  icon: Sparkles,        label: "Intelligent 问答", badge: null },
+  { key: "replyQueue",   icon: MessageSquare,   label: "回复队列",         badge: null },
   // 第2轮 档案工程:SKU 360°(产品视角反查内容/人)+ KOL 完整档案(八层组装页)。
-  { key: "sku360",       icon: Boxes,           label: "SKU 360°",        badge: "New" },
-  { key: "kolProfile",   icon: Contact,         label: "KOL 档案",         badge: "New" },
+  { key: "sku360",       icon: Boxes,           label: "SKU 360°",        badge: null },
+  { key: "kolProfile",   icon: Contact,         label: "KOL 档案",         badge: null },
   // 第4轮 发射台:新品 SKU 一键出六输出全案(名单/预算/排期/打法/官号协同/覆盖组合)。
-  { key: "launchpad",    icon: Rocket,          label: "发射台",           badge: "New" },
+  { key: "launchpad",    icon: Rocket,          label: "发射台",           badge: null },
   // 第5轮 自治层:驾照板(挣来的自治 L0-L4)+ 市场之声(用户反馈反哺产品部)。
-  { key: "autonomy",     icon: ShieldCheck,     label: "自治驾照",         badge: "New" },
-  { key: "marketVoice",  icon: RadioTower,      label: "市场之声",         badge: "New" },
+  { key: "autonomy",     icon: ShieldCheck,     label: "自治驾照",         badge: null },
+  { key: "marketVoice",  icon: RadioTower,      label: "市场之声",         badge: null },
   // 第6轮 P6 飞轮:段级创意资产库(哪个开头/哪种画面最灵,可检索;白名单请求=后续刀)。
-  { key: "creativeLibrary", icon: Clapperboard, label: "创意资产库",       badge: "New" },
+  { key: "creativeLibrary", icon: Clapperboard, label: "创意资产库",       badge: null },
   // 战略大脑波:行业对照/新赛道/策略模拟/战略表现 四块合屏。
-  { key: "strategyBoard", icon: Target,          label: "战略台",           badge: "New" },
+  { key: "strategyBoard", icon: Target,          label: "战略台",           badge: null },
   // GTM-1 总脑:上市增长指挥图(纯读 GTM Plan Preview+五卡 summary,显示层宪法)。
-  { key: "gtmCommand",   icon: Compass,          label: "GTM Command",      badge: "New" },
+  { key: "gtmCommand",   icon: Compass,          label: "GTM Command",      badge: null },
   // ── 智能运维(Wave1-4 已建页,接通可达)──
   { key: "triage",       icon: ShieldCheck,     label: "运维 Triage",     badge: null, ops: true },
   { key: "dataQuery",    icon: MessageSquare,   label: "问数",            badge: null, ops: true },
