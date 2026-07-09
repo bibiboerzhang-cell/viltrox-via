@@ -6,6 +6,7 @@ import { AppProviders } from "./app/providers/AppProviders";
 import "./styles/global.css";
 import "./styles/tokens.css";
 import "./styles/theme-alias.css";
+import "./styles/ds-viz.css";
 
 // 部署后旧 chunk 被新版替换 → 页面里残留的动态 import() 拉到 404
 // ("Importing a module script failed" / "Loading chunk failed" 等)。

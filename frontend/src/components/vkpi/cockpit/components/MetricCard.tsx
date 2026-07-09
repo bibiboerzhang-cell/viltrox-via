@@ -1,9 +1,8 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
-// 波2门面:KPI 卡改吃 --ds-* token(玻璃卡片/圆角/accent hover),行为/动画/数据零变。
-
+// 波2门面:KPI 卡按 gtm_viz 执行标准重建 —— eyebrow 标签 + 状态点 + 大号数字 + 全宽 sparkline
+// + 玻璃卡 + 错峰入场;去掉图标块/状态chip/冗长副文案(废话)。数据/交互零变。
 
 import React from "react";
-import { m } from "framer-motion";
 import { Sparkline } from "./Sparkline";
 import { useRowFlash } from "./ui/rowFlash";
 import { useT } from "../lib/i18n";
@@ -12,10 +11,10 @@ const e = React.createElement;
 
 export function MetricCard({ item, i, scope, onClick }: any) {
   const { t } = useT();
-  const { label, sub, icon: Icon, format } = item;
+  const { label, format } = item;
   const scopeData = item.data[scope] || item.data.all;
-  const { value, trend, source, sourceLabel, color, spark, waiting, anomaly } = scopeData;
-  // 车道B row-flash:数值变化(轮询刷出新值/切 scope)soft pulse 一次;首帧不闪。
+  const { value, source, sourceLabel, color, spark, waiting, anomaly } = scopeData;
+  // 车道B row-flash:数值变化 soft pulse 一次;首帧不闪。
   const flashRef = useRowFlash<HTMLDivElement>(value);
 
   const isAccumulating = source === "accumulating";
@@ -23,7 +22,6 @@ export function MetricCard({ item, i, scope, onClick }: any) {
   const isPending = source === "pending" || (hasNoValue && !isAccumulating);
   const isUnavailable = isPending || isAccumulating;
 
-  // Format value
   const formatValue = (v: any) => {
     if (v === null || v === undefined) return "--";
     if (format === "compact") {
@@ -43,48 +41,28 @@ export function MetricCard({ item, i, scope, onClick }: any) {
     return String(v);
   };
 
-  return e(m.div, {
+  return e("div", {
     ref: flashRef,
-    initial: { opacity: 0, y: 8 },
-    animate: { opacity: 1, y: 0 },
-    transition: { delay: i * 0.04, duration: 0.5, ease: [0.16, 1, 0.3, 1] },
-    whileHover: { y: -2 },
-    onClick: onClick,
-    className: `group relative cursor-pointer overflow-hidden rounded-ds-lg border ${isUnavailable ? "border-warn-soft" : "border-line"} bg-card p-4 backdrop-blur-xl transition-colors hover:border-accent hover:bg-panel`,
+    onClick,
+    className: "ds-kpi ds-kpi-rise cursor-pointer",
+    style: { animationDelay: `${(i || 0) * 0.05}s` },
+    title: t(sourceLabel || (isUnavailable ? "待接入" : "真实")),
   },
-    // Header: icon + label + source chip
-    e("div", { className: "mb-2 flex items-start justify-between gap-2 text-[12px] text-muted" },
-      e("span", { className: "flex items-center gap-2 min-w-0" },
-        e("span", { className: "shrink-0 rounded-md bg-accent-soft p-1.5", style: { color } }, e(Icon, { size: 12 })),
-        e("span", { className: "truncate" }, t(label))
-      ),
-      // Source chip
-      isAccumulating
-        ? e("span", { className: "shrink-0 rounded-md bg-warn-soft px-1.5 py-0.5 text-[9px] font-medium text-warn" }, t(sourceLabel || "累积中"))
-        : isPending
-          ? e("span", { className: "shrink-0 rounded-md bg-warn-soft px-1.5 py-0.5 text-[9px] font-medium text-warn" }, t(sourceLabel || "待接入"))
-          : e("span", { className: "shrink-0 rounded-md bg-good-soft px-1.5 py-0.5 text-[9px] font-medium text-good" }, t(sourceLabel || "真实"))
+    // eyebrow:状态点 + 指标名
+    e("div", { className: "ds-kpi__k" },
+      e("span", { className: `ds-kpi__dot ${isUnavailable ? "ds-kpi__dot--pend" : "ds-kpi__dot--good"}` }),
+      e("span", { className: "truncate" }, t(label))
     ),
-    // Body
-    e("div", { className: "flex items-end justify-between gap-2" },
-      e("div", { className: "min-w-0" },
-        e("div", {
-          className: `text-2xl font-light tracking-tight tabular-nums ${isPending || hasNoValue ? "text-muted" : "text-ink"}`
-        }, formatValue(value)),
-        e("div", {
-          className: `mt-1 text-[10px] truncate ${isUnavailable ? "text-warn" : "text-muted"}`
-        }, isUnavailable ? t(waiting || trend) : t(sub || trend))
-      ),
-      !isUnavailable && spark && e(Sparkline, { color, data: spark })
-    ),
-    // 单源污染防御标注(2026-06-12 波3 R2):单条 evidence 占比 >80% 时提示
+    // 大号数字
+    e("div", { className: `ds-kpi__val ${isUnavailable ? "ds-kpi__val--pend" : ""}` }, formatValue(value)),
+    // 全宽 sparkline
+    !isUnavailable && spark && e(Sparkline, { color, data: spark, width: 240, height: 30, fluid: true }),
+    // 待接入/累积中:一行极简说明(替代原冗长副文案)
+    isUnavailable && e("div", { className: "mt-2 text-[10px] text-warn truncate" }, t(waiting || sourceLabel || "待接入")),
+    // 单源污染标注
     anomaly && e("div", {
       className: "mt-1 text-[9px] text-warn truncate",
       title: "单条 evidence 占总量 80% 以上,数值可能被单源污染(数据清理由主控负责)"
-    }, anomaly),
-    // Trend footer (only for non-pending)
-    !isUnavailable && trend && e("div", {
-      className: "mt-2 pt-2 border-t border-line text-[10px] text-good truncate"
-    }, "↑ " + t(trend))
+    }, anomaly)
   );
 }

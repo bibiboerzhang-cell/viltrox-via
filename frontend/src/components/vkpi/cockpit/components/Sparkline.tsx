@@ -3,7 +3,7 @@
 
 import { useMemo } from "react";
 
-export function Sparkline({ color, data, height = 36, width = 84 }: any) {
+export function Sparkline({ color, data, height = 36, width = 84, fluid = false }: any) {
   const path = useMemo(() => {
     if (!data || data.length === 0) return { line: "", area: "" };
     const max = Math.max(...data), min = Math.min(...data);
@@ -17,7 +17,11 @@ export function Sparkline({ color, data, height = 36, width = 84 }: any) {
   }, [data, height, width]);
   const gradId = `g-${(color ?? "").replace("#", "")}-${data?.[0] ?? 0}`;
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} style={{ width, height }}>
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio={fluid ? "none" : undefined}
+      style={fluid ? { width: "100%", height, display: "block" } : { width, height }}
+    >
       <defs>
         <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor={color} stopOpacity="0.42" />
