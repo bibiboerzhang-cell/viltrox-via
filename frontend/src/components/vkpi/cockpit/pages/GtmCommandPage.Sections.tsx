@@ -16,14 +16,14 @@ import type {
 const e = React.createElement;
 
 const CONF_TONE: Record<string, string> = {
-  high: "border-emerald-300/30 bg-emerald-500/[0.12] text-emerald-100",
-  medium: "border-amber-300/30 bg-amber-500/[0.12] text-amber-100",
-  low: "border-rose-300/30 bg-rose-500/[0.12] text-rose-100",
+  high: "border-transparent bg-good-soft text-good",
+  medium: "border-transparent bg-warn-soft text-warn",
+  low: "border-transparent bg-crit-soft text-crit",
 };
 
 export function confBadge(confidence: string, prefix = "置信") {
   const key = confidence.toLowerCase();
-  const tone = CONF_TONE[key] || "border-white/[0.1] bg-white/[0.04] text-slate-300";
+  const tone = CONF_TONE[key] || "border-transparent bg-line text-muted";
   return e(
     "span",
     { className: `shrink-0 rounded-md border px-2 py-0.5 text-[10px] ${tone}` },
@@ -34,26 +34,26 @@ export function confBadge(confidence: string, prefix = "置信") {
 export function Card({ title, hint, extra, children }: { title: string; hint?: string; extra?: React.ReactNode; children?: React.ReactNode }) {
   return e(
     "div",
-    { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4" },
+    { className: "ds-panel" },
     e(
       "div",
-      { className: "mb-3 flex items-start justify-between gap-2" },
+      { className: "ds-panel__head" },
       e(
         "div",
         { className: "min-w-0" },
-        e("div", { className: "text-[13px] font-semibold text-white" }, title),
-        hint ? e("div", { className: "mt-0.5 text-[10px] text-slate-500" }, hint) : null,
+        e("div", { className: "ds-panel__title" }, title),
+        hint ? e("div", { className: "mt-1 text-[10px] leading-relaxed text-muted" }, hint) : null,
       ),
       extra ?? null,
     ),
-    children,
+    e("div", { className: "ds-panel__body" }, children),
   );
 }
 
 export function Empty({ text }: { text: string }) {
   return e(
     "div",
-    { className: "rounded-lg border border-dashed border-white/[0.08] px-3 py-3 text-center text-[11px] text-slate-500" },
+    { className: "rounded-lg border border-dashed border-line px-3 py-3 text-center text-[11px] text-muted" },
     text,
   );
 }
@@ -68,13 +68,13 @@ export function PreviewSkeleton() {
     [0, 1, 2, 3, 4].map((i) =>
       e(
         "div",
-        { key: i, className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4 animate-pulse motion-reduce:animate-none" },
-        e("div", { className: "h-3 w-40 rounded bg-white/[0.06]" }),
-        e("div", { className: "mt-3 h-2.5 w-full rounded bg-white/[0.04]" }),
-        e("div", { className: "mt-2 h-2.5 w-2/3 rounded bg-white/[0.04]" }),
+        { key: i, className: "rounded-2xl border border-line bg-panel p-4 animate-pulse motion-reduce:animate-none" },
+        e("div", { className: "h-3 w-40 rounded bg-line" }),
+        e("div", { className: "mt-3 h-2.5 w-full rounded bg-panel" }),
+        e("div", { className: "mt-2 h-2.5 w-2/3 rounded bg-panel" }),
       ),
     ),
-    e("div", { className: "text-center text-[11px] text-slate-500" }, "作战预览聚合中(纯读,零写库)…"),
+    e("div", { className: "text-center text-[11px] text-muted" }, "作战预览聚合中(纯读,零写库)…"),
   );
 }
 
@@ -107,7 +107,7 @@ export function SectionList({ section, emptyText, max = 6 }: { section: GtmPlanS
   if (section.status && section.status !== "ok" && section.status !== "ready") {
     return e(
       "div",
-      { className: "rounded-lg border border-amber-300/20 bg-amber-500/[0.05] px-3 py-2 text-[11px] leading-relaxed text-amber-200/90" },
+      { className: "rounded-lg border border-warn bg-warn-soft px-3 py-2 text-[11px] leading-relaxed text-warn" },
       section.note || `该段暂不可用(${section.status},诚实空态)。`,
     );
   }
@@ -124,20 +124,20 @@ export function SectionList({ section, emptyText, max = 6 }: { section: GtmPlanS
     section.items.slice(0, max).map((row, i) =>
       e(
         "div",
-        { key: i, className: "rounded-lg border border-white/[0.06] px-2.5 py-1.5" },
+        { key: i, className: "rounded-lg border border-line px-2.5 py-1.5" },
         e(
           "div",
           { className: "flex flex-wrap items-center gap-1.5" },
-          e("span", { className: "text-[11.5px] text-slate-200" }, pickTitle(row)),
+          e("span", { className: "text-[11.5px] text-ink-2" }, pickTitle(row)),
           typeof row.confidence === "string" && row.confidence ? confBadge(row.confidence) : null,
           riskLabels(row).map((r, j) =>
-            e("span", { key: j, className: "rounded border border-rose-300/25 bg-rose-500/[0.08] px-1.5 py-0.5 text-[9.5px] text-rose-200" }, r),
+            e("span", { key: j, className: "rounded border border-crit bg-crit-soft px-1.5 py-0.5 text-[9.5px] text-crit" }, r),
           ),
         ),
-        pickSub(row) ? e("div", { className: "mt-0.5 text-[10px] leading-relaxed text-slate-500" }, pickSub(row)) : null,
+        pickSub(row) ? e("div", { className: "mt-0.5 text-[10px] leading-relaxed text-muted" }, pickSub(row)) : null,
       ),
     ),
-    section.note ? e("div", { className: "mt-1 text-[10px] text-slate-500" }, section.note) : null,
+    section.note ? e("div", { className: "mt-1 text-[10px] text-muted" }, section.note) : null,
   );
 }
 
@@ -152,17 +152,17 @@ function ActionRow({ item }: { item: GtmActionItem }) {
   ];
   return e(
     "div",
-    { className: "rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2" },
+    { className: "rounded-xl border border-line bg-panel px-3 py-2" },
     e(
       "div",
       { className: "flex items-start justify-between gap-2" },
-      e("div", { className: "min-w-0 text-[12px] font-medium text-slate-100" }, item.action || "—"),
+      e("div", { className: "min-w-0 text-[12px] font-medium text-ink" }, item.action || "—"),
       e(
         "button",
         {
           disabled: true,
           title: "GTM-3 接线",
-          className: "shrink-0 cursor-not-allowed rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] text-slate-500 opacity-60",
+          className: "shrink-0 cursor-not-allowed rounded-lg border border-line bg-panel px-2.5 py-1 text-[10px] text-muted opacity-60",
         },
         "人审执行",
       ),
@@ -174,12 +174,12 @@ function ActionRow({ item }: { item: GtmActionItem }) {
         e(
           "div",
           { key: i, className: "flex gap-1.5 text-[10.5px] leading-relaxed" },
-          e("span", { className: "shrink-0 text-slate-500" }, `${label}:`),
-          e("span", { className: "min-w-0 text-slate-300" }, value || "—"),
+          e("span", { className: "shrink-0 text-muted" }, `${label}:`),
+          e("span", { className: "min-w-0 text-ink-2" }, value || "—"),
         ),
       ),
     ),
-    item.ref ? e("div", { className: "mt-1 text-[9.5px] text-slate-600" }, `ref: ${item.ref}`) : null,
+    item.ref ? e("div", { className: "mt-1 text-[9.5px] text-muted" }, `ref: ${item.ref}`) : null,
   );
 }
 
@@ -190,7 +190,7 @@ export function ActionsBlock({ items, note, emptyText }: { items: GtmActionItem[
     items.length === 0
       ? e(Empty, { text: emptyText })
       : e("div", { className: "space-y-2" }, items.slice(0, 10).map((it, i) => e(ActionRow, { key: i, item: it }))),
-    note ? e("div", { className: "mt-2 text-[10px] text-slate-500" }, note) : null,
+    note ? e("div", { className: "mt-2 text-[10px] text-muted" }, note) : null,
   );
 }
 
@@ -212,13 +212,13 @@ export function LearningBlock({ digest, footnote }: { digest: LearningDigest; fo
           groups.map(([label, arr], i) =>
             e(
               "div",
-              { key: i, className: "rounded-lg border border-white/[0.06] px-3 py-2" },
-              e("div", { className: "text-[10px] text-slate-500" }, label),
+              { key: i, className: "rounded-lg border border-line px-3 py-2" },
+              e("div", { className: "text-[10px] text-muted" }, label),
               arr.length === 0
-                ? e("div", { className: "mt-1 text-[11px] text-slate-600" }, "暂无")
+                ? e("div", { className: "mt-1 text-[11px] text-muted" }, "暂无")
                 : e(
                     "ul",
-                    { className: "mt-1 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-slate-300" },
+                    { className: "mt-1 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-ink-2" },
                     arr.slice(0, 5).map((s, j) => e("li", { key: j }, s)),
                   ),
             ),
@@ -227,11 +227,11 @@ export function LearningBlock({ digest, footnote }: { digest: LearningDigest; fo
     digest.next_change
       ? e(
           "div",
-          { className: "mt-2 rounded-lg border border-sky-300/20 bg-sky-500/[0.06] px-3 py-2 text-[11px] leading-relaxed text-sky-100" },
+          { className: "mt-2 rounded-lg border border-accent bg-accent-soft px-3 py-2 text-[11px] leading-relaxed text-accent" },
           `下次推荐怎么变:${digest.next_change}`,
         )
       : null,
-    e("div", { className: "mt-2 text-[10px] leading-relaxed text-slate-600" }, [digest.honesty_note, footnote].filter(Boolean).join(" · ")),
+    e("div", { className: "mt-2 text-[10px] leading-relaxed text-muted" }, [digest.honesty_note, footnote].filter(Boolean).join(" · ")),
   );
 }
 
@@ -260,19 +260,19 @@ export function PlanThesisCard({ selectedSku, p }: { selectedSku: string; p: Gtm
             ] as Array<[string, string]>).map(([label, value], i) =>
               e(
                 "div",
-                { key: i, className: "rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2" },
-                e("div", { className: "text-[10px] text-slate-500" }, label),
-                e("div", { className: "mt-0.5 text-[13px] font-medium text-white" }, value || "—"),
+                { key: i, className: "rounded-xl border border-line bg-panel px-3 py-2" },
+                e("div", { className: "text-[10px] text-muted" }, label),
+                e("div", { className: "mt-0.5 text-[13px] font-medium text-ink" }, value || "—"),
               ),
             ),
           ),
           p.thesis.basis_summary
-            ? e("div", { className: "mt-2 text-[11px] leading-relaxed text-slate-400" }, `判断依据:${p.thesis.basis_summary}`)
+            ? e("div", { className: "mt-2 text-[11px] leading-relaxed text-muted" }, `判断依据:${p.thesis.basis_summary}`)
             : null,
           e(
             "div",
             { className: "mt-3" },
-            e("div", { className: "mb-1.5 text-[10px] text-slate-500" }, "市场机会(赛道口径)"),
+            e("div", { className: "mb-1.5 text-[10px] text-muted" }, "市场机会(赛道口径)"),
             e(SectionList, { section: p.market_opportunity, emptyText: "赛道段无数据(诚实空态)。", max: 4 }),
           ),
         ),
@@ -288,7 +288,7 @@ export function PlanForecastCard({ p }: { p: GtmPublicPlan }) {
       hint: "每条都是「条件成立才行动」的情景,不是结果承诺;触发加码与撤退线缺一不可",
       extra: e(
         "span",
-        { className: "shrink-0 rounded-md border border-purple-300/30 bg-purple-500/[0.12] px-2 py-0.5 text-[10px] text-purple-100" },
+        { className: "shrink-0 rounded-md border border-transparent bg-accent-soft px-2 py-0.5 text-[10px] text-accent-2" },
         "条件 ≠ 断言",
       ),
     },
@@ -300,11 +300,11 @@ export function PlanForecastCard({ p }: { p: GtmPublicPlan }) {
           p.forecast.slice(0, 6).map((f, i) =>
             e(
               "div",
-              { key: i, className: "rounded-xl border border-white/[0.06] bg-white/[0.02] p-3" },
+              { key: i, className: "rounded-xl border border-line bg-panel p-3" },
               e(
                 "div",
                 { className: "flex items-center justify-between gap-2" },
-                e("span", { className: "text-[11px] font-semibold text-slate-200" }, f.horizon_days != null ? `${f.horizon_days} 天窗口` : "窗口 —"),
+                e("span", { className: "text-[11px] font-semibold text-ink-2" }, f.horizon_days != null ? `${f.horizon_days} 天窗口` : "窗口 —"),
                 confBadge(f.confidence),
               ),
               e(
@@ -312,31 +312,31 @@ export function PlanForecastCard({ p }: { p: GtmPublicPlan }) {
                 { className: "mt-2 space-y-1.5 text-[10.5px] leading-relaxed" },
                 e(
                   "div",
-                  { className: "border-l-2 border-sky-300/50 pl-2" },
-                  e("span", { className: "text-slate-500" }, "预判:"),
-                  e("span", { className: "text-slate-200" }, f.statement || "—"),
+                  { className: "border-l-2 border-accent pl-2" },
+                  e("span", { className: "text-muted" }, "预判:"),
+                  e("span", { className: "text-ink-2" }, f.statement || "—"),
                 ),
                 e(
                   "div",
-                  { className: "border-l-2 border-slate-400/40 pl-2" },
-                  e("span", { className: "text-slate-500" }, "依据:"),
-                  e("span", { className: "text-slate-300" }, f.signals_summary || "—"),
+                  { className: "border-l-2 border-line pl-2" },
+                  e("span", { className: "text-muted" }, "依据:"),
+                  e("span", { className: "text-ink-2" }, f.signals_summary || "—"),
                 ),
                 e(
                   "div",
-                  { className: "border-l-2 border-emerald-300/50 pl-2" },
-                  e("span", { className: "text-slate-500" }, "触发加码:"),
+                  { className: "border-l-2 border-good pl-2" },
+                  e("span", { className: "text-muted" }, "触发加码:"),
                   f.escalate_if
-                    ? e("span", { className: "text-emerald-100" }, f.escalate_if)
-                    : e("span", { className: "text-rose-300" }, "条件缺失(不合规,待后端补齐)"),
+                    ? e("span", { className: "text-good" }, f.escalate_if)
+                    : e("span", { className: "text-crit" }, "条件缺失(不合规,待后端补齐)"),
                 ),
                 e(
                   "div",
-                  { className: "border-l-2 border-rose-300/50 pl-2" },
-                  e("span", { className: "text-slate-500" }, "撤退条件:"),
+                  { className: "border-l-2 border-crit pl-2" },
+                  e("span", { className: "text-muted" }, "撤退条件:"),
                   f.retreat_if
-                    ? e("span", { className: "text-rose-100" }, f.retreat_if)
-                    : e("span", { className: "text-rose-300" }, "条件缺失(不合规,待后端补齐)"),
+                    ? e("span", { className: "text-crit" }, f.retreat_if)
+                    : e("span", { className: "text-crit" }, "条件缺失(不合规,待后端补齐)"),
                 ),
               ),
               // U3 阈值进度条:文本里解析得出量化值才出条(解析不出保持纯文本卡,不硬编)。
@@ -360,8 +360,8 @@ export function PlanRoadmapCard({ p }: { p: GtmPublicPlan }) {
           p.roadmap.map((ph) =>
             e(
               "div",
-              { key: ph.key, className: "rounded-xl border border-white/[0.06] bg-white/[0.02] p-3" },
-              e("div", { className: "text-[11px] font-semibold text-sky-200" }, ph.label),
+              { key: ph.key, className: "rounded-xl border border-line bg-panel p-3" },
+              e("div", { className: "text-[11px] font-semibold text-accent" }, ph.label),
               ph.channels.length > 0
                 ? e(
                     "div",
@@ -370,8 +370,8 @@ export function PlanRoadmapCard({ p }: { p: GtmPublicPlan }) {
                       e(
                         "div",
                         { key: j, className: "flex gap-1.5 text-[10.5px] leading-relaxed" },
-                        e("span", { className: "shrink-0 rounded border border-white/[0.08] px-1.5 py-0.5 text-[9px] text-slate-400" }, c.channel || "—"),
-                        e("span", { className: "min-w-0 text-slate-300" }, c.play || "—"),
+                        e("span", { className: "shrink-0 rounded border border-line px-1.5 py-0.5 text-[9px] text-muted" }, c.channel || "—"),
+                        e("span", { className: "min-w-0 text-ink-2" }, c.play || "—"),
                       ),
                     ),
                   )
@@ -379,14 +379,14 @@ export function PlanRoadmapCard({ p }: { p: GtmPublicPlan }) {
               ph.items.length > 0
                 ? e(
                     "ul",
-                    { className: "mt-1.5 list-disc space-y-0.5 pl-4 text-[10.5px] leading-relaxed text-slate-300" },
+                    { className: "mt-1.5 list-disc space-y-0.5 pl-4 text-[10.5px] leading-relaxed text-ink-2" },
                     ph.items.slice(0, 6).map((s, j) => e("li", { key: j }, s)),
                   )
                 : null,
               ph.channels.length === 0 && ph.items.length === 0
-                ? e("div", { className: "mt-1.5 text-[10px] text-slate-600" }, ph.note || "该段暂无安排(诚实空态)。")
+                ? e("div", { className: "mt-1.5 text-[10px] text-muted" }, ph.note || "该段暂无安排(诚实空态)。")
                 : ph.note
-                  ? e("div", { className: "mt-1.5 text-[9.5px] text-slate-600" }, ph.note)
+                  ? e("div", { className: "mt-1.5 text-[9.5px] text-muted" }, ph.note)
                   : null,
             ),
           ),
@@ -406,8 +406,8 @@ export function PlanRoadmapCard({ p }: { p: GtmPublicPlan }) {
       ).map(([label, section, emptyText], i) =>
         e(
           "div",
-          { key: i, className: "rounded-xl border border-white/[0.06] bg-white/[0.02] p-3" },
-          e("div", { className: "mb-1.5 text-[10.5px] font-semibold text-slate-300" }, label),
+          { key: i, className: "rounded-xl border border-line bg-panel p-3" },
+          e("div", { className: "mb-1.5 text-[10.5px] font-semibold text-ink-2" }, label),
           e(SectionList, { section, emptyText, max: 4 }),
         ),
       ),
@@ -419,46 +419,46 @@ export function PlanRoadmapCard({ p }: { p: GtmPublicPlan }) {
 export function PlanFootnote({ p, meta }: { p: GtmPublicPlan; meta: GtmPlanMeta | undefined }) {
   return e(
     "div",
-    { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4" },
+    { className: "rounded-2xl border border-line bg-panel p-4" },
     p.risks.length > 0 &&
       e(
         "div",
         { className: "mb-2 flex flex-wrap items-center gap-1.5" },
-        e("span", { className: "text-[10px] text-slate-500" }, "风险:"),
+        e("span", { className: "text-[10px] text-muted" }, "风险:"),
         p.risks.slice(0, 8).map((r, i) =>
-          e("span", { key: i, className: "rounded border border-amber-300/25 bg-amber-500/[0.08] px-2 py-0.5 text-[10px] text-amber-200" }, r),
+          e("span", { key: i, className: "rounded border border-warn bg-warn-soft px-2 py-0.5 text-[10px] text-warn" }, r),
         ),
       ),
     (p.data_gaps.length > 0 || (meta?.data_gaps.length ?? 0) > 0) &&
       e(
         "div",
         { className: "mb-2 flex flex-wrap items-center gap-1.5" },
-        e("span", { className: "text-[10px] text-slate-500" }, "数据缺口:"),
+        e("span", { className: "text-[10px] text-muted" }, "数据缺口:"),
         Array.from(new Set([...p.data_gaps, ...(meta?.data_gaps || [])])).slice(0, 10).map((g, i) =>
-          e("span", { key: i, className: "rounded border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 text-[10px] text-slate-400" }, g),
+          e("span", { key: i, className: "rounded border border-line bg-panel px-2 py-0.5 text-[10px] text-muted" }, g),
         ),
       ),
     p.success_metrics.length > 0 &&
       e(
         "div",
         { className: "mb-2" },
-        e("div", { className: "mb-1 text-[10px] text-slate-500" }, "成功指标(规则库口径,可被自有数据推翻)"),
+        e("div", { className: "mb-1 text-[10px] text-muted" }, "成功指标(规则库口径,可被自有数据推翻)"),
         e(
           "div",
           { className: "flex flex-wrap gap-1.5" },
           p.success_metrics.slice(0, 8).map((m, i) =>
             e(
               "span",
-              { key: i, className: "rounded border border-sky-300/20 bg-sky-500/[0.06] px-2 py-0.5 text-[10px] text-sky-100" },
+              { key: i, className: "rounded border border-accent bg-accent-soft px-2 py-0.5 text-[10px] text-accent" },
               `${m.metric || "—"}${m.threshold ? ` ≥ ${m.threshold}` : ""}`,
-              m.confidence ? e("span", { className: "ml-1 text-sky-300/70" }, `(置信 ${m.confidence})`) : null,
+              m.confidence ? e("span", { className: "ml-1 text-accent/70" }, `(置信 ${m.confidence})`) : null,
             ),
           ),
         ),
       ),
     e(
       "div",
-      { className: "text-[10px] leading-relaxed text-slate-600" },
+      { className: "text-[10px] leading-relaxed text-muted" },
       `生成于 ${meta?.generated_at || "—"}(UTC)· 纯读预览零写库零 LLM 零采集 · 外部信号来源:内部缓存/计划口径,外部雷达 GTM-5 待接入`,
       meta && Object.keys(meta.coverage).length > 0
         ? ` · 覆盖度:${Object.entries(meta.coverage)
