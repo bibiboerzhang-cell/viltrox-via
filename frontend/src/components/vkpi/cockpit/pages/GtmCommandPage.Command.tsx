@@ -68,12 +68,12 @@ function HealthChip({
   return e(
     "div",
     { className: "flex items-center gap-1.5 px-1" },
-    e(icon, { size: 12, className: tone || "text-slate-500", strokeWidth: 2 }),
+    e(icon, { size: 12, className: tone || "text-muted", strokeWidth: 2 }),
     e(
       "div",
       { className: "min-w-0 leading-none" },
-      e("div", { className: "text-[8.5px] uppercase tracking-wide text-slate-500 mb-0.5" }, label),
-      e("div", { className: "text-[10.5px] text-slate-200 truncate" }, children),
+      e("div", { className: "text-[8.5px] uppercase tracking-wide text-muted mb-0.5" }, label),
+      e("div", { className: "text-[10.5px] text-ink-2 truncate" }, children),
     ),
   );
 }
@@ -92,11 +92,11 @@ export function HealthStrip({ apiToken = "" }: { apiToken?: string }) {
 
   const trust = asRow(health.data?.trust);
   const aligned = trust.sha_aligned;
-  const alignTone = aligned === true ? "text-emerald-400" : aligned === false ? "text-rose-400" : "text-amber-400/80";
+  const alignTone = aligned === true ? "text-good" : aligned === false ? "text-crit" : "text-warn";
   const alignLabel = aligned === true ? "对齐" : aligned === false ? "不一致" : "待确认";
 
   const workerOnline = trust.worker_online;
-  const workerTone = workerOnline === true ? "text-emerald-400" : workerOnline === false ? "text-rose-400" : "text-slate-500";
+  const workerTone = workerOnline === true ? "text-good" : workerOnline === false ? "text-crit" : "text-muted";
   const workerLabel = workerOnline === true ? "在线" : workerOnline === false ? "离线" : "未知";
 
   const sched = asRow(scheduler.data?.status);
@@ -106,28 +106,28 @@ export function HealthStrip({ apiToken = "" }: { apiToken?: string }) {
 
   const persisted = asRow(metrics.data?.requests_persisted);
   const persistedText = persisted.available === true ? "已留痕" : "待接入";
-  const persistedTone = persisted.available === true ? "text-sky-300" : "text-slate-500";
+  const persistedTone = persisted.available === true ? "text-accent" : "text-muted";
 
   return e(
     "div",
     {
       className:
-        "flex flex-wrap items-center gap-x-3 gap-y-1.5 divide-x divide-white/[0.06] rounded-xl border border-white/[0.06] bg-white/[0.012] px-3 py-1.5",
+        "flex flex-wrap items-center gap-x-3 gap-y-1.5 divide-x divide-white/[0.06] rounded-xl border border-line bg-panel px-3 py-1.5",
     },
     e(
       "div",
       { className: "flex items-center gap-1.5 pr-1" },
       e(HeartPulse, { size: 13, className: "text-violet-400", strokeWidth: 2 }),
-      e("span", { className: "text-[10.5px] font-medium text-slate-300" }, "系统健康"),
+      e("span", { className: "text-[10.5px] font-medium text-ink-2" }, "系统健康"),
       (health.refreshing || scheduler.refreshing || metrics.refreshing)
-        ? e("span", { className: "inline-block h-1 w-1 rounded-full bg-sky-400/70 animate-pulse", title: "后台刷新中" })
+        ? e("span", { className: "inline-block h-1 w-1 rounded-full bg-accent-soft/70 animate-pulse", title: "后台刷新中" })
         : null,
     ),
     e(HealthChip, { icon: GitCommit, label: "版本", tone: alignTone }, e(
       "span",
       { className: "flex items-center gap-1" },
       e("span", { className: alignTone }, alignLabel),
-      e("span", { className: "font-mono text-[9.5px] text-slate-400", title: String(trust.server_git_sha ?? "") }, shortSha(trust.server_git_sha)),
+      e("span", { className: "font-mono text-[9.5px] text-muted", title: String(trust.server_git_sha ?? "") }, shortSha(trust.server_git_sha)),
     )),
     e(HealthChip, { icon: Database, label: "迁移" }, String(trust.db_migration_max ?? "--")),
     e(HealthChip, { icon: Server, label: "Worker", tone: workerTone }, e("span", { className: workerTone }, workerLabel)),
@@ -143,9 +143,9 @@ export function HealthStrip({ apiToken = "" }: { apiToken?: string }) {
 function RouteSeg({ label, value }: { label: string; value: string }) {
   return e(
     "div",
-    { className: "min-w-[92px] rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2" },
-    e("div", { className: "text-[9px] uppercase tracking-wide text-slate-500" }, label),
-    e("div", { className: "mt-0.5 text-[12px] font-medium text-white truncate" }, value || "—"),
+    { className: "min-w-[92px] rounded-xl border border-line bg-panel px-3 py-2" },
+    e("div", { className: "text-[9px] uppercase tracking-wide text-muted" }, label),
+    e("div", { className: "mt-0.5 text-[12px] font-medium text-ink truncate" }, value || "—"),
   );
 }
 
@@ -173,7 +173,7 @@ function PreviewRoute({
 }) {
   const p = plan.public_plan;
   const budget = Number(budgetText) > 0 ? Number(budgetText) : 3000;
-  const arrow = e(ArrowRight, { size: 13, className: "shrink-0 self-center text-slate-600" });
+  const arrow = e(ArrowRight, { size: 13, className: "shrink-0 self-center text-muted" });
   return e(
     "div",
     null,
@@ -183,7 +183,7 @@ function PreviewRoute({
       { className: "mb-2 flex flex-wrap items-center gap-2" },
       e(
         "span",
-        { className: "rounded-md border border-sky-300/25 bg-sky-500/[0.08] px-2 py-0.5 text-[11px] text-sky-100" },
+        { className: "rounded-md border border-accent bg-accent-soft px-2 py-0.5 text-[11px] text-accent" },
         `决策 ${p.thesis.go_nogo || "—"}`,
       ),
       confBadge(p.thesis.confidence),
@@ -206,7 +206,7 @@ function PreviewRoute({
     p.risks.length > 0
       ? e(
           "div",
-          { className: "mt-2 text-[10.5px] leading-relaxed text-amber-200/80" },
+          { className: "mt-2 text-[10.5px] leading-relaxed text-warn" },
           `风险 ${p.risks.length} 项 · ${p.risks.slice(0, 4).join("、")}`,
         )
       : null,
@@ -234,14 +234,14 @@ function GlobalRoute({
         "div",
         {
           key: i,
-          className: "flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2",
+          className: "flex flex-wrap items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2",
         },
-        e("span", { className: "text-[9px] tabular-nums text-slate-600" }, `#${i + 1}`),
-        e("span", { className: "text-[12px] font-medium text-slate-100" }, o.sku || "—"),
-        o.market ? e("span", { className: "text-[10.5px] text-slate-400" }, `@ ${o.market}`) : null,
-        o.persona ? e("span", { className: "text-[10px] text-slate-500" }, `· ${o.persona}`) : null,
+        e("span", { className: "text-[9px] tabular-nums text-muted" }, `#${i + 1}`),
+        e("span", { className: "text-[12px] font-medium text-ink" }, o.sku || "—"),
+        o.market ? e("span", { className: "text-[10.5px] text-muted" }, `@ ${o.market}`) : null,
+        o.persona ? e("span", { className: "text-[10px] text-muted" }, `· ${o.persona}`) : null,
         o.opportunity_score != null
-          ? e("span", { className: "text-[10px] tabular-nums text-sky-200" }, `机会分 ${o.opportunity_score}`)
+          ? e("span", { className: "text-[10px] tabular-nums text-accent" }, `机会分 ${o.opportunity_score}`)
           : null,
         onPickSku && o.sku
           ? e(
@@ -250,7 +250,7 @@ function GlobalRoute({
                 type: "button",
                 onClick: () => onPickSku(o.sku),
                 className:
-                  "ml-auto flex items-center gap-1 rounded-lg border border-sky-300/30 bg-sky-500/[0.1] px-2 py-1 text-[10px] text-sky-100 hover:bg-sky-500/[0.18]",
+                  "ml-auto flex items-center gap-1 rounded-lg border border-accent bg-accent-soft px-2 py-1 text-[10px] text-accent hover:bg-accent-soft",
               },
               "生成路线",
               e(ArrowRight, { size: 11 }),
@@ -284,7 +284,7 @@ export function GrowthRouteLayer({
       hint: preview
         ? "SKU → 市场 → 渠道组合 → 预算 → 打法 · 一条可执行的作战线(详情见下方深度分析)"
         : "全库内既有数据里最值得推的机会 · 点「生成路线」出专属作战线",
-      extra: e(Route, { size: 15, className: "shrink-0 text-sky-300" }),
+      extra: e(Route, { size: 15, className: "shrink-0 text-accent" }),
     },
     plan
       ? e(PreviewRoute, { selectedSku, plan, budgetText, goal })
@@ -339,11 +339,11 @@ export function ExecutionQueueLayer({
 
   let body: React.ReactNode;
   if (inbox.error) {
-    body = e("div", { className: "text-[11px] text-rose-300/80" }, `建议源异常 · ${inbox.error}`);
+    body = e("div", { className: "text-[11px] text-crit" }, `建议源异常 · ${inbox.error}`);
   } else if (!available) {
     body = e(Empty, { text: "建议系统待启用(后端未就绪,诚实空态)。" });
   } else if (inbox.loading && items.length === 0) {
-    body = e("div", { className: "py-2 text-[11px] text-slate-500" }, "队列读取中…");
+    body = e("div", { className: "py-2 text-[11px] text-muted" }, "队列读取中…");
   } else if (buckets.length === 0) {
     body = e(Empty, { text: "暂无待执行动作 · 一切已跟进(诚实空态)。" });
   } else {
@@ -359,10 +359,10 @@ export function ExecutionQueueLayer({
             onClick: jump,
             title: "点击去 Action Inbox 人审执行",
             className:
-              "flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[11px] text-slate-200 hover:border-emerald-500/30 hover:bg-emerald-500/[0.06]",
+              "flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[11px] text-ink-2 hover:border-good hover:bg-good-soft",
           },
           e("span", null, QUEUE_LABEL[cat] || cat),
-          e("span", { className: "rounded-full bg-white/[0.06] px-1.5 py-px text-[9.5px] tabular-nums text-slate-300" }, String(count)),
+          e("span", { className: "rounded-full bg-panel px-1.5 py-px text-[9.5px] tabular-nums text-ink-2" }, String(count)),
         ),
       ),
     );
@@ -376,7 +376,7 @@ export function ExecutionQueueLayer({
     {
       title: "今日执行队列",
       hint: "按类型聚合的待办动作 · 只读展示,逐条人审执行在 Action Inbox 完成",
-      extra: e(ListChecks, { size: 15, className: "shrink-0 text-emerald-300" }),
+      extra: e(ListChecks, { size: 15, className: "shrink-0 text-good" }),
     },
     body,
     buckets.length > 0
@@ -389,13 +389,13 @@ export function ExecutionQueueLayer({
               type: "button",
               onClick: jump,
               className:
-                "flex items-center gap-1 rounded-lg border border-emerald-300/30 bg-emerald-500/[0.1] px-2.5 py-1 text-[10.5px] text-emerald-100 hover:bg-emerald-500/[0.18]",
+                "flex items-center gap-1 rounded-lg border border-good bg-good-soft px-2.5 py-1 text-[10.5px] text-good hover:bg-good-soft",
             },
             "去 Action Inbox 人审",
             e(ArrowRight, { size: 11 }),
           ),
           executedToday != null
-            ? e("span", { className: "text-[9.5px] text-slate-500" }, `今日已执行 ${executedToday} 条`)
+            ? e("span", { className: "text-[9.5px] text-muted" }, `今日已执行 ${executedToday} 条`)
             : null,
         )
       : null,
@@ -412,7 +412,7 @@ export function LearningLayer({ digest }: { digest: LearningDigest }) {
     {
       title: "本周学习沉淀",
       hint: "有效风格 / 失效假设 / 权重变化 —— 复盘账本口径,可被新证据推翻",
-      extra: e(Sparkles, { size: 15, className: "shrink-0 text-amber-300" }),
+      extra: e(Sparkles, { size: 15, className: "shrink-0 text-warn" }),
     },
     e(LearningBlock, { digest, footnote: "指挥台聚合 · 全局复盘账本口径(样本不足则诚实空态)" }),
   );
@@ -442,7 +442,7 @@ export function BetTimeline({ plan }: { plan: GtmPlanPreview | null }) {
     {
       title: "Bet 生命周期",
       hint: "一个增长押注从构想到沉淀的七段进度;灰段随人审在 Action Inbox 逐步点亮",
-      extra: e(Compass, { size: 15, className: "shrink-0 text-slate-400" }),
+      extra: e(Compass, { size: 15, className: "shrink-0 text-muted" }),
     },
     e(
       "div",
@@ -456,26 +456,26 @@ export function BetTimeline({ plan }: { plan: GtmPlanPreview | null }) {
             className:
               "flex flex-col items-center gap-1 rounded-lg border px-2 py-1 " +
               (lit
-                ? "border-emerald-300/30 bg-emerald-500/[0.1]"
-                : "border-white/[0.06] bg-white/[0.015]"),
+                ? "border-good bg-good-soft"
+                : "border-line bg-panel"),
           },
           e("div", {
-            className: "h-1 w-8 rounded-full " + (lit ? "bg-emerald-400/80" : "bg-white/[0.08]"),
+            className: "h-1 w-8 rounded-full " + (lit ? "bg-good-soft/80" : "bg-panel"),
           }),
-          e("span", { className: "text-[9.5px] " + (lit ? "text-emerald-100" : "text-slate-500") }, s.label),
+          e("span", { className: "text-[9.5px] " + (lit ? "text-good" : "text-muted") }, s.label),
         );
         if (i === BET_STAGES.length - 1) return seg;
         return e(
           React.Fragment,
           { key: `${s.key}-wrap` },
           seg,
-          e(ArrowRight, { size: 11, className: "shrink-0 self-start mt-1.5 text-slate-700" }),
+          e(ArrowRight, { size: 11, className: "shrink-0 self-start mt-1.5 text-muted" }),
         );
       }),
     ),
     e(
       "div",
-      { className: "mt-2 text-[9.5px] leading-relaxed text-slate-600" },
+      { className: "mt-2 text-[9.5px] leading-relaxed text-muted" },
       plan
         ? "已到「预览」段 · 落库(materialize)后进 Action Inbox,后续段随逐条人审推进点亮。"
         : "选 SKU 生成作战预览后,时间线从「构想」推进到「预览」。",

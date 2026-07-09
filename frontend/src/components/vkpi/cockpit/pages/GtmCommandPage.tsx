@@ -199,12 +199,12 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
     e(
       "div",
       { className: "flex items-center gap-2" },
-      e(Compass, { size: 18, className: "text-sky-300" }),
-      e("div", { className: "text-[18px] font-semibold text-white" }, "GTM Command · 上市增长指挥图"),
+      e(Compass, { size: 18, className: "text-accent" }),
+      e("div", { className: "text-[18px] font-semibold text-ink" }, "GTM Command · 上市增长指挥图"),
     ),
     e(
       "div",
-      { className: "mt-0.5 text-[12px] text-slate-400" },
+      { className: "mt-0.5 text-[12px] text-muted" },
       "GTM Command 把产品、市场、KOL、渠道和历史结果合成作战路线。",
     ),
   );
@@ -221,14 +221,14 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         onChange: (ev: any) => { setQuery(ev.target.value); setDropdownOpen(true); },
         onFocus: () => setDropdownOpen(true),
         placeholder: "搜索 SKU / 型号,如 AF-85MM-F14-PRO-FE…",
-        className: "w-full rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-white placeholder:text-slate-600 outline-none focus:border-sky-300/40",
+        className: "w-full rounded-xl border border-line bg-panel px-3 py-2 text-[12px] text-ink placeholder:text-muted outline-none focus:border-accent",
       }),
       dropdownOpen &&
         e(
           "div",
-          { className: "absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-white/[0.1] bg-[#10151f] shadow-xl" },
-          searching && e("div", { className: "px-3 py-2 text-[11px] text-slate-500" }, "搜索中…"),
-          !searching && options.length === 0 && e("div", { className: "px-3 py-2 text-[11px] text-slate-500" }, "无匹配 SKU"),
+          { className: "absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-line bg-card shadow-xl" },
+          searching && e("div", { className: "px-3 py-2 text-[11px] text-muted" }, "搜索中…"),
+          !searching && options.length === 0 && e("div", { className: "px-3 py-2 text-[11px] text-muted" }, "无匹配 SKU"),
           !searching &&
             options.map((opt) =>
               e(
@@ -236,15 +236,15 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
                 {
                   key: opt.sku,
                   onClick: () => loadPreview(opt.sku),
-                  className: "flex w-full items-center justify-between gap-2 border-b border-white/[0.04] px-3 py-1.5 text-left last:border-0 hover:bg-white/[0.05]",
+                  className: "flex w-full items-center justify-between gap-2 border-b border-line px-3 py-1.5 text-left last:border-0 hover:bg-panel",
                 },
                 e(
                   "span",
                   { className: "min-w-0" },
-                  e("span", { className: "block truncate text-[11px] text-slate-200" }, opt.model_name || opt.marketing_name || opt.sku),
-                  e("span", { className: "block truncate text-[9.5px] text-slate-500" }, opt.sku + (opt.mount ? ` · ${opt.mount}` : "")),
+                  e("span", { className: "block truncate text-[11px] text-ink-2" }, opt.model_name || opt.marketing_name || opt.sku),
+                  e("span", { className: "block truncate text-[9.5px] text-muted" }, opt.sku + (opt.mount ? ` · ${opt.mount}` : "")),
                 ),
-                e("span", { className: "shrink-0 text-[10px] text-slate-500" }, opt.price_usd != null ? `$${opt.price_usd}` : ""),
+                e("span", { className: "shrink-0 text-[10px] text-muted" }, opt.price_usd != null ? `$${opt.price_usd}` : ""),
               ),
             ),
         ),
@@ -255,14 +255,14 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
       onChange: (ev: any) => setCountry(ev.target.value.toUpperCase().slice(0, 2)),
       title: "国家(ISO 两位码,v1 只影响受众地域口径)",
       placeholder: "US",
-      className: "w-[52px] rounded-xl border border-white/[0.08] bg-white/[0.03] px-2 py-2 text-center text-[12px] text-white outline-none focus:border-sky-300/40",
+      className: "w-[52px] rounded-xl border border-line bg-panel px-2 py-2 text-center text-[12px] text-ink outline-none focus:border-accent",
     }),
     e("input", {
       value: budgetText,
       onChange: (ev: any) => setBudgetText(ev.target.value.replace(/[^0-9.]/g, "")),
       inputMode: "decimal",
       title: "预算(USD,默认 3000)",
-      className: "w-[84px] rounded-xl border border-white/[0.08] bg-white/[0.03] px-2 py-2 text-right text-[12px] tabular-nums text-amber-200 outline-none focus:border-sky-300/40",
+      className: "w-[84px] rounded-xl border border-line bg-panel px-2 py-2 text-right text-[12px] tabular-nums text-warn outline-none focus:border-accent",
     }),
     e(
       "select",
@@ -270,7 +270,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         value: goal,
         onChange: (ev: any) => setGoal(ev.target.value as GtmGoal),
         title: "目标主线",
-        className: "rounded-xl border border-white/[0.08] bg-[#10151f] px-2 py-2 text-[12px] text-slate-200 outline-none focus:border-sky-300/40",
+        className: "rounded-xl border border-line bg-card px-2 py-2 text-[12px] text-ink-2 outline-none focus:border-accent",
       },
       GOAL_OPTIONS.map((g) => e("option", { key: g.value, value: g.value }, g.label)),
     ),
@@ -280,7 +280,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         value: String(windowDays),
         onChange: (ev: any) => setWindowDays(Number(ev.target.value) || 30),
         title: "预判窗口(天)",
-        className: "rounded-xl border border-white/[0.08] bg-[#10151f] px-2 py-2 text-[12px] text-slate-200 outline-none focus:border-sky-300/40",
+        className: "rounded-xl border border-line bg-card px-2 py-2 text-[12px] text-ink-2 outline-none focus:border-accent",
       },
       [7, 14, 30].map((d) => e("option", { key: d, value: String(d) }, `${d} 天`)),
     ),
@@ -290,7 +290,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         onClick: () => { if (selectedSku) loadPreview(selectedSku); },
         disabled: !selectedSku || planLoading,
         title: selectedSku ? `重新生成 ${selectedSku} 的作战预览` : "先在左侧选一个 SKU",
-        className: "rounded-xl border border-sky-300/30 bg-sky-500/[0.12] px-3 py-2 text-[12px] text-sky-100 hover:bg-sky-500/[0.2] disabled:cursor-not-allowed disabled:opacity-40",
+        className: "rounded-xl border border-accent bg-accent-soft px-3 py-2 text-[12px] text-accent hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40",
       },
       planLoading ? "生成中…" : "生成作战预览",
     ),
@@ -299,7 +299,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         "button",
         {
           onClick: () => { setPlan(null); setPlanError(""); setSelectedSku(""); setMatPreview(null); setMatDone(null); setMatError(""); },
-          className: "rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] text-slate-300 hover:bg-white/[0.06]",
+          className: "rounded-xl border border-line bg-panel px-3 py-2 text-[12px] text-ink-2 hover:bg-panel",
         },
         "返回全局",
       ),
@@ -321,12 +321,12 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
               summary.weekly_signals.items.slice(0, 8).map((s, i) =>
                 e(
                   "div",
-                  { key: i, className: "flex flex-wrap items-center gap-1.5 rounded-lg border border-white/[0.06] px-2.5 py-1.5" },
-                  e("span", { className: "rounded border border-white/[0.08] px-1.5 py-0.5 text-[9.5px] text-slate-400" }, s.kind || "signal"),
-                  e("span", { className: "min-w-0 text-[11.5px] text-slate-200" }, s.signal || "—"),
+                  { key: i, className: "flex flex-wrap items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5" },
+                  e("span", { className: "rounded border border-line px-1.5 py-0.5 text-[9.5px] text-muted" }, s.kind || "signal"),
+                  e("span", { className: "min-w-0 text-[11.5px] text-ink-2" }, s.signal || "—"),
                   e(
                     "span",
-                    { className: "ml-auto flex shrink-0 items-center gap-1.5 text-[9.5px] text-slate-500" },
+                    { className: "ml-auto flex shrink-0 items-center gap-1.5 text-[9.5px] text-muted" },
                     s.freshness ? e("span", null, s.freshness) : null,
                     s.sample_size != null ? e("span", null, `样本 ${s.sample_size}`) : null,
                   ),
@@ -335,7 +335,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
               ),
             ),
         summary.weekly_signals.sources_note && summary.weekly_signals.items.length > 0
-          ? e("div", { className: "mt-2 text-[10px] text-slate-600" }, summary.weekly_signals.sources_note)
+          ? e("div", { className: "mt-2 text-[10px] text-muted" }, summary.weekly_signals.sources_note)
           : null,
       ),
       e(
@@ -349,19 +349,19 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
               summary.product_opportunities.items.slice(0, 6).map((o, i) =>
                 e(
                   "div",
-                  { key: i, className: "rounded-lg border border-white/[0.06] px-2.5 py-1.5" },
+                  { key: i, className: "rounded-lg border border-line px-2.5 py-1.5" },
                   e(
                     "div",
                     { className: "flex flex-wrap items-center gap-1.5 text-[11.5px]" },
-                    e("span", { className: "font-medium text-slate-100" }, o.sku || "—"),
-                    o.market ? e("span", { className: "text-slate-400" }, `@ ${o.market}`) : null,
+                    e("span", { className: "font-medium text-ink" }, o.sku || "—"),
+                    o.market ? e("span", { className: "text-muted" }, `@ ${o.market}`) : null,
                     o.opportunity_score != null
-                      ? e("span", { className: "ml-auto text-[10px] tabular-nums text-sky-200" }, `机会分 ${o.opportunity_score}`)
+                      ? e("span", { className: "ml-auto text-[10px] tabular-nums text-accent" }, `机会分 ${o.opportunity_score}`)
                       : null,
                   ),
                   e(
                     "div",
-                    { className: "mt-0.5 text-[10px] leading-relaxed text-slate-500" },
+                    { className: "mt-0.5 text-[10px] leading-relaxed text-muted" },
                     [o.persona && `人群:${o.persona}`, o.content_angle && `角度:${o.content_angle}`, o.basis && `依据:${o.basis}`]
                       .filter(Boolean)
                       .join(" · ") || "—",
@@ -385,7 +385,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         summary.strategy_defaults.sku_hint
           ? e(
               "div",
-              { className: "mb-2 text-[11px] text-slate-400" },
+              { className: "mb-2 text-[11px] text-muted" },
               `建议入口:${summary.strategy_defaults.sku_hint}`,
               summary.strategy_defaults.budget_hint != null ? ` · 预算参考 $${summary.strategy_defaults.budget_hint}` : "",
             )
@@ -398,7 +398,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         e(LearningBlock, { digest, footnote: "全局口径" }),
       ),
       summary.generated_at
-        ? e("div", { className: "text-right text-[10px] text-slate-600" }, `生成于 ${summary.generated_at}(UTC)· 纯聚合已有数据,零采集零写库`)
+        ? e("div", { className: "text-right text-[10px] text-muted" }, `生成于 ${summary.generated_at}(UTC)· 纯聚合已有数据,零采集零写库`)
         : null,
     );
 
@@ -436,7 +436,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
         // 后端 vkpi:write 403 兜底);失败只出本块小条(单卡错不拖垮整页)。
         e(
           "div",
-          { className: "mb-3 rounded-xl border border-sky-300/15 bg-sky-500/[0.04] p-3" },
+          { className: "mb-3 rounded-xl border border-accent bg-accent-soft p-3" },
           e(
             "div",
             { className: "flex flex-wrap items-center gap-2" },
@@ -447,7 +447,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
                 disabled: !selectedSku || matBusy !== "",
                 title: "dry-run:只出 bet 预览与幂等对账,零写库",
                 className:
-                  "rounded-lg border border-sky-300/30 bg-sky-500/[0.12] px-2.5 py-1.5 text-[11px] text-sky-100 hover:bg-sky-500/[0.2] disabled:cursor-not-allowed disabled:opacity-40",
+                  "rounded-lg border border-accent bg-accent-soft px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40",
               },
               matBusy === "dry" ? "预演中…" : "生成行动(预演)",
             ),
@@ -462,21 +462,21 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
                         ? "本次无可新增 bet(已存在的幂等不重插)"
                         : "真落库:bet 进 Action Inbox(status=suggested),逐条 requires_approval 人审;幂等不重插",
                     className:
-                      "rounded-lg border border-emerald-300/30 bg-emerald-500/[0.12] px-2.5 py-1.5 text-[11px] text-emerald-100 hover:bg-emerald-500/[0.2] disabled:cursor-not-allowed disabled:opacity-40",
+                      "rounded-lg border border-good bg-good-soft px-2.5 py-1.5 text-[11px] text-good hover:bg-good-soft disabled:cursor-not-allowed disabled:opacity-40",
                   },
                   matBusy === "persist" ? "落库中…" : `确认落库(新增 ${matPreview.would_insert ?? 0} 条)`,
                 )
               : null,
             e(
               "span",
-              { className: "text-[9.5px] text-slate-500" },
+              { className: "text-[9.5px] text-muted" },
               "预演零写库 · 落库后逐条进 Action Inbox 人审,无自动执行",
             ),
           ),
           matError
             ? e(
                 "div",
-                { className: "mt-2 rounded-lg border border-rose-300/25 bg-rose-500/[0.06] px-2.5 py-1.5 text-[10.5px] text-rose-200" },
+                { className: "mt-2 rounded-lg border border-crit bg-crit-soft px-2.5 py-1.5 text-[10.5px] text-crit" },
                 `生成行动未生效 · ${matError}`,
               )
             : null,
@@ -486,29 +486,29 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
                 { className: "mt-2" },
                 e(
                   "div",
-                  { className: "text-[10.5px] text-slate-300" },
+                  { className: "text-[10.5px] text-ink-2" },
                   `预演对账:共 ${matPreview.bets_total} 条 bet · 可新增 ${matPreview.would_insert ?? 0} 条 · 已存在 ${matPreview.already_present} 条(幂等不重插)` +
                     (matPreview.skipped_incomplete > 0 ? ` · 跳过不完整 ${matPreview.skipped_incomplete} 条` : ""),
                 ),
                 matPreview.bets.length > 0
                   ? e(
                       "ul",
-                      { className: "mt-1.5 list-disc space-y-0.5 pl-4 text-[10px] leading-relaxed text-slate-400" },
+                      { className: "mt-1.5 list-disc space-y-0.5 pl-4 text-[10px] leading-relaxed text-muted" },
                       matPreview.bets.slice(0, 6).map((b, i) => e("li", { key: i }, b.title || b.dedupe_key || "—")),
                       matPreview.bets.length > 6
-                        ? e("li", { key: "more", className: "list-none text-slate-600" }, `… 共 ${matPreview.bets.length} 条`)
+                        ? e("li", { key: "more", className: "list-none text-muted" }, `… 共 ${matPreview.bets.length} 条`)
                         : null,
                     )
-                  : e("div", { className: "mt-1.5 text-[10px] text-slate-500" }, "本次 plan 无完整七要素 bet 可落(诚实空态)。"),
+                  : e("div", { className: "mt-1.5 text-[10px] text-muted" }, "本次 plan 无完整七要素 bet 可落(诚实空态)。"),
               )
             : null,
           matDone
             ? e(
                 "div",
-                { className: "mt-2 rounded-lg border border-emerald-300/25 bg-emerald-500/[0.07] px-2.5 py-1.5" },
+                { className: "mt-2 rounded-lg border border-good bg-good-soft px-2.5 py-1.5" },
                 e(
                   "div",
-                  { className: "text-[10.5px] text-emerald-200" },
+                  { className: "text-[10.5px] text-good" },
                   `已落库:新增 ${matDone.inserted_new ?? 0} 条 · 已存在 ${matDone.already_present} 条未重插 · 逐条 requires_approval 待人审`,
                 ),
                 e(
@@ -516,7 +516,7 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
                   {
                     onClick: () => onNavigate?.("dashboard"),
                     className:
-                      "mt-1.5 rounded-lg border border-emerald-300/30 bg-emerald-500/[0.12] px-2.5 py-1 text-[10px] text-emerald-100 hover:bg-emerald-500/[0.2]",
+                      "mt-1.5 rounded-lg border border-good bg-good-soft px-2.5 py-1 text-[10px] text-good hover:bg-good-soft",
                   },
                   "去 Action Inbox 人审 →",
                 ),
@@ -536,8 +536,8 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
             { className: "space-y-3" },
             e(
               "div",
-              { className: "rounded-xl border border-white/[0.06] bg-white/[0.02] p-3" },
-              e("div", { className: "mb-1.5 text-[10.5px] font-semibold text-slate-300" }, "预算分配(三档模板)"),
+              { className: "rounded-xl border border-line bg-panel p-3" },
+              e("div", { className: "mb-1.5 text-[10.5px] font-semibold text-ink-2" }, "预算分配(三档模板)"),
               e(SectionList, { section: p.budget_mix, emptyText: "预算段无内容(诚实空态)。", max: 4 }),
             ),
             e(StrategySimPanel, { apiToken }),
@@ -584,11 +584,11 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
       ? e(
           "div",
           { className: "flex items-center gap-2 pt-1" },
-          e("span", { className: "text-[11px] font-medium text-slate-500" }, "深度分析"),
-          e("span", { className: "h-px flex-1 bg-white/[0.06]" }),
+          e("span", { className: "text-[11px] font-medium text-muted" }, "深度分析"),
+          e("span", { className: "h-px flex-1 bg-panel" }),
         )
       : null,
-    planError && e("div", { className: "rounded-lg border border-rose-300/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-200" }, planError),
+    planError && e("div", { className: "rounded-lg border border-crit bg-crit-soft px-3 py-2 text-[12px] text-crit" }, planError),
     planLoading && e(PreviewSkeleton),
     // 预览模式:五区块
     !planLoading && planCards,
@@ -597,9 +597,9 @@ export function GtmCommandPage({ apiToken = "", onNavigate }: { apiToken?: strin
       e(
         "div",
         null,
-        summaryLoading && e("div", { className: "py-8 text-center text-[12px] text-slate-400" }, "全局摘要加载中…"),
+        summaryLoading && e("div", { className: "py-8 text-center text-[12px] text-muted" }, "全局摘要加载中…"),
         !summaryLoading && summaryError &&
-          e("div", { className: "rounded-lg border border-amber-300/25 bg-amber-500/[0.06] px-3 py-2 text-[11px] text-amber-200" },
+          e("div", { className: "rounded-lg border border-warn bg-warn-soft px-3 py-2 text-[11px] text-warn" },
             `全局摘要暂不可用:${summaryError}(端点 W1 在建,选 SKU 生成预览不受影响)`),
         !summaryLoading && !summaryError && globalCards,
       ),
