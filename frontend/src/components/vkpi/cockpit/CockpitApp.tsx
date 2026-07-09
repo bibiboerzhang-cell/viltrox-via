@@ -15,6 +15,7 @@ import { ShopifyConnectPage } from "./ShopifyConnectPage";
 import { ShopifyHubPage } from "../pages/ShopifyHubPage";
 import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
+import { MockupDashboard } from "./MockupDashboard";
 import { CockpitSidebar } from "./CockpitSidebar";
 import { CockpitMobileNav } from "./CockpitMobileNav";
 import { CockpitTopbar } from "./CockpitTopbar";
@@ -869,7 +870,7 @@ export function CockpitApp(props: any = {}) {
               )
             ),
 
-            activeNav === "dashboard" && e(DashboardReplicaPage, {
+            activeNav === "dashboard" && e(MockupDashboard, {
               showSettingsModal,  // P2 穿透:设置浮层打开时,dashboard 浮卡/地图 overlay 不渲染
               kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,
               venue, item, city, country, setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange,
