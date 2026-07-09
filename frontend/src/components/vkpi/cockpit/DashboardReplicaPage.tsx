@@ -270,17 +270,17 @@ export function DashboardReplicaPage(props: any) {
           // V6.6: KPI Header — title + scope toggle
           e("div", { className: "mb-3 flex items-end justify-between gap-3 flex-wrap" },
             e("div", null,
-              e("h2", { className: "text-base font-semibold text-white" }, "Performance Overview"),
-              e("p", { className: "text-[11px] text-slate-500 mt-0.5" }, dashboardLoading ? "正在读取真实 API" : dashboardError ? "真实 API 无信号" : "Real-time KPIs · Last 30 days")
+              e("h2", { className: "text-base font-semibold text-ink" }, "Performance Overview"),
+              e("p", { className: "text-[11px] text-muted mt-0.5" }, dashboardLoading ? "正在读取真实 API" : dashboardError ? "真实 API 无信号" : "Real-time KPIs · Last 30 days")
             ),
             // Scope toggle (All / KOL / Company)
-            e("div", { className: "inline-flex items-center gap-0 rounded-lg border border-white/[0.08] bg-white/[0.02] p-0.5" },
+            e("div", { className: "inline-flex items-center gap-0 rounded-lg border border-line bg-panel p-0.5" },
               Object.entries(KPI_SCOPES).map(([key, sc]) => {
                 const active = kpiScope === key;
                 return e("button", {
                   key,
                   onClick: () => setKpiScope(key),
-                  className: `px-3 py-1 text-[11px] font-medium rounded-md transition-all ${active ? "text-white" : "text-slate-400 hover:text-white"}`,
+                  className: `px-3 py-1 text-[11px] font-medium rounded-md transition-all ${active ? "text-ink" : "text-muted hover:text-ink"}`,
                   style: active ? { background: sc.accent, color: sc.color } : {}
                 }, t(sc.shortLabel));
               })

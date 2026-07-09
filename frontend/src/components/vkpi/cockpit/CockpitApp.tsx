@@ -597,7 +597,7 @@ export function CockpitApp(props: any = {}) {
    e("div", { "data-theme": "dark", className: "relative min-h-screen bg-bg text-ink-2" },
     e("div", {
       className: "pointer-events-none fixed inset-0",
-      style: { background: "radial-gradient(circle at 30% -10%,rgba(65,73,255,.22),transparent 35%),radial-gradient(circle at 90% 20%,rgba(0,213,200,.08),transparent 30%),linear-gradient(180deg,#060a15,#03060c)" }
+      style: { background: "radial-gradient(circle at 50% -12%, var(--ds-accent-soft), transparent 42%), radial-gradient(circle at 88% 4%, var(--ds-accent-soft), transparent 30%), var(--ds-bg)" }
     }),
 
     // ─── Overlays ───(保守拆:全部模态/popover 挂载抽到 CockpitApp.Sections.tsx 的 CockpitOverlays,
