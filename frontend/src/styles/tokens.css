@@ -1,0 +1,127 @@
+/* =========================================================================
+   V-KPI 设计 token 中枢  ·  波0 地基
+   两个轴,都挂 <html>:
+     data-theme ∈ {light, dark}
+     data-style ∈ {glass(苹果玻璃·蓝) | instrument(光学仪器·金) | commandos(黑白单色)}
+   共 6 组合。选择器一律「裸属性选择器」,任何子树带上 data-* 即可局部重定作用域。
+   颜色存「成品色值」(hex/rgb/rgba),便于 theme-alias.css 把老变量 alias 成 var(--ds-*)。
+   透明层走各 tone 的 *-soft token(不依赖 Tailwind /opacity)。
+   ========================================================================= */
+
+/* ---------- 与主题/风格无关的常量 ---------- */
+:root {
+  --ds-font-sans: Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ds-font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+  --ds-space-sm: 12px;
+  --ds-space-md: 16px;
+  --ds-space-lg: 32px;
+  color-scheme: light; /* 属性注入前兜底 */
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+/* 属性尚未注入(极早期/禁 JS)时跟随系统,避免纯白闪 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { color-scheme: dark; }
+}
+
+/* =========================================================================
+   风格 1 · GLASS(苹果玻璃拟态 · 蓝)—— 现有 vkpi 观感的 token 化延续
+   ========================================================================= */
+[data-style="glass"][data-theme="light"] {
+  --ds-bg:#eef5ff; --ds-panel:rgba(255,255,255,.66); --ds-card:rgba(255,255,255,.82);
+  --ds-line:rgba(199,214,239,.62); --ds-line-strong:rgba(160,180,215,.75);
+  --ds-text:#101828; --ds-text-2:#344054; --ds-muted:#667085;
+  --ds-accent:#1b6cff; --ds-accent-hover:#155dfc; --ds-accent-soft:rgba(27,108,255,.12); --ds-accent-2:#8b5cf6;
+  --ds-on-accent:#ffffff;
+  --ds-good:#0f9d63; --ds-good-soft:rgba(24,199,132,.14);
+  --ds-warn:#c77d0a; --ds-warn-soft:rgba(245,166,35,.16);
+  --ds-crit:#e11d48; --ds-crit-soft:rgba(255,59,95,.14);
+  --ds-info:#1b6cff; --ds-info-soft:rgba(27,108,255,.12);
+  --ds-scrim:rgba(16,24,40,.28); --ds-blur:22px;
+  --ds-radius-sm:8px; --ds-radius-md:12px; --ds-radius-lg:18px; --ds-radius-xl:26px;
+  --ds-shadow:0 26px 80px rgba(32,64,128,.18); --ds-shadow-sm:0 8px 24px rgba(32,64,128,.10);
+  --ds-inner:inset 0 1px 0 rgba(255,255,255,.6);
+}
+[data-style="glass"][data-theme="dark"] {
+  --ds-bg:#0a0a0d; --ds-panel:rgba(255,255,255,.04); --ds-card:rgba(255,255,255,.055);
+  --ds-line:rgba(255,255,255,.08); --ds-line-strong:rgba(255,255,255,.16);
+  --ds-text:#e7ebf3; --ds-text-2:#c3cad6; --ds-muted:#8b94a7;
+  --ds-accent:#60a5fa; --ds-accent-hover:#7cb6fb; --ds-accent-soft:rgba(96,165,250,.16); --ds-accent-2:#a78bfa;
+  --ds-on-accent:#08111f;
+  --ds-good:#34d399; --ds-good-soft:rgba(52,211,153,.16);
+  --ds-warn:#ffbd55; --ds-warn-soft:rgba(255,189,85,.16);
+  --ds-crit:#fb7185; --ds-crit-soft:rgba(251,113,133,.16);
+  --ds-info:#60a5fa; --ds-info-soft:rgba(96,165,250,.16);
+  --ds-scrim:rgba(0,0,0,.72); --ds-blur:22px;
+  --ds-radius-sm:8px; --ds-radius-md:12px; --ds-radius-lg:18px; --ds-radius-xl:26px;
+  --ds-shadow:0 24px 70px rgba(0,0,0,.45); --ds-shadow-sm:0 8px 24px rgba(0,0,0,.35);
+  --ds-inner:inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+/* =========================================================================
+   风格 2 · INSTRUMENT(光学仪器 · 金)—— 哑光实心 / 直角 / 等宽刻字气质
+   ========================================================================= */
+[data-style="instrument"][data-theme="light"] {
+  --ds-bg:#f6f7f8; --ds-panel:#ffffff; --ds-card:#ffffff;
+  --ds-line:#e4e7ec; --ds-line-strong:#cfd4dc;
+  --ds-text:#0b0f14; --ds-text-2:#344054; --ds-muted:#667085;
+  --ds-accent:#a9791f; --ds-accent-hover:#8a6014; --ds-accent-soft:rgba(169,121,31,.12); --ds-accent-2:#0ea5e9;
+  --ds-on-accent:#ffffff;
+  --ds-good:#2f7d63; --ds-good-soft:rgba(47,125,99,.12);
+  --ds-warn:#b06f24; --ds-warn-soft:rgba(176,111,36,.14);
+  --ds-crit:#b0402d; --ds-crit-soft:rgba(176,64,45,.12);
+  --ds-info:#0ea5e9; --ds-info-soft:rgba(14,165,233,.12);
+  --ds-scrim:rgba(16,24,40,.30); --ds-blur:0px;
+  --ds-radius-sm:3px; --ds-radius-md:4px; --ds-radius-lg:6px; --ds-radius-xl:8px;
+  --ds-shadow:0 1px 3px rgba(16,24,40,.10); --ds-shadow-sm:0 1px 2px rgba(16,24,40,.08);
+  --ds-inner:none;
+}
+[data-style="instrument"][data-theme="dark"] {
+  --ds-bg:#0e1116; --ds-panel:#151a21; --ds-card:#171d26;
+  --ds-line:#262e39; --ds-line-strong:#37414e;
+  --ds-text:#eef1f5; --ds-text-2:#a9b3c1; --ds-muted:#6d7988;
+  --ds-accent:#e0a94a; --ds-accent-hover:#c7913a; --ds-accent-soft:rgba(224,169,74,.14); --ds-accent-2:#8ee6ff;
+  --ds-on-accent:#141a08;
+  --ds-good:#4fa487; --ds-good-soft:rgba(79,164,135,.16);
+  --ds-warn:#d98f42; --ds-warn-soft:rgba(217,143,66,.16);
+  --ds-crit:#cf5b46; --ds-crit-soft:rgba(207,91,70,.16);
+  --ds-info:#8ee6ff; --ds-info-soft:rgba(142,230,255,.16);
+  --ds-scrim:rgba(4,7,12,.76); --ds-blur:0px;
+  --ds-radius-sm:3px; --ds-radius-md:4px; --ds-radius-lg:6px; --ds-radius-xl:8px;
+  --ds-shadow:0 8px 24px rgba(0,0,0,.35); --ds-shadow-sm:0 2px 10px rgba(0,0,0,.30);
+  --ds-inner:none;
+}
+
+/* =========================================================================
+   风格 3 · COMMANDOS(黑白单色 · 信号色)—— 取自 /prototype/command-os 原型
+   单色基调 + 信号色(info=青 / good=薄荷 / warn=金)
+   ========================================================================= */
+[data-style="commandos"][data-theme="light"] {
+  --ds-bg:#f6f7f8; --ds-panel:rgba(255,255,255,.74); --ds-card:rgba(255,255,255,.92);
+  --ds-line:rgba(11,18,32,.12); --ds-line-strong:rgba(11,18,32,.22);
+  --ds-text:#05070c; --ds-text-2:rgba(5,7,12,.72); --ds-muted:rgba(5,7,12,.5);
+  --ds-accent:#05070c; --ds-accent-hover:#000000; --ds-accent-soft:rgba(5,7,12,.08); --ds-accent-2:#0ea5e9;
+  --ds-on-accent:#ffffff;
+  --ds-good:#0f9d63; --ds-good-soft:rgba(15,157,99,.12);
+  --ds-warn:#c07d10; --ds-warn-soft:rgba(192,125,16,.14);
+  --ds-crit:#e11d48; --ds-crit-soft:rgba(225,29,72,.10);
+  --ds-info:#0ea5e9; --ds-info-soft:rgba(14,165,233,.10);
+  --ds-scrim:rgba(16,24,40,.30); --ds-blur:20px;
+  --ds-radius-sm:6px; --ds-radius-md:10px; --ds-radius-lg:14px; --ds-radius-xl:20px;
+  --ds-shadow:0 20px 60px rgba(16,24,40,.12); --ds-shadow-sm:0 6px 18px rgba(16,24,40,.08);
+  --ds-inner:inset 0 1px 0 rgba(255,255,255,.6);
+}
+[data-style="commandos"][data-theme="dark"] {
+  --ds-bg:#020308; --ds-panel:rgba(255,255,255,.06); --ds-card:rgba(255,255,255,.085);
+  --ds-line:rgba(255,255,255,.13); --ds-line-strong:rgba(255,255,255,.24);
+  --ds-text:#f7f8fb; --ds-text-2:rgba(247,248,251,.78); --ds-muted:rgba(247,248,251,.56);
+  --ds-accent:#f7f8fb; --ds-accent-hover:#ffffff; --ds-accent-soft:rgba(255,255,255,.12); --ds-accent-2:#8ee6ff;
+  --ds-on-accent:#05070c;
+  --ds-good:#7ff0c2; --ds-good-soft:rgba(127,240,194,.14);
+  --ds-warn:#f8d47a; --ds-warn-soft:rgba(248,212,122,.14);
+  --ds-crit:#ff6b81; --ds-crit-soft:rgba(255,107,129,.14);
+  --ds-info:#8ee6ff; --ds-info-soft:rgba(142,230,255,.14);
+  --ds-scrim:rgba(2,3,8,.80); --ds-blur:20px;
+  --ds-radius-sm:6px; --ds-radius-md:10px; --ds-radius-lg:14px; --ds-radius-xl:20px;
+  --ds-shadow:0 24px 70px rgba(0,0,0,.5); --ds-shadow-sm:0 8px 24px rgba(0,0,0,.4);
+  --ds-inner:inset 0 1px 0 rgba(255,255,255,.05);
+}

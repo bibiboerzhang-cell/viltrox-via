@@ -1,0 +1,82 @@
+/* =========================================================================
+   过渡桥:把现有各家族老变量 alias 成 var(--ds-*)  ·  波0 地基 刀1
+   组件零改即照吃新 token(明暗/风格随 <html> 的 data-theme/data-style 切换)。
+   特异性策略:一律比原定义高一级 → 不管 CSS import 顺序,alias 稳赢。
+     · :root 家族(--vkpi-/--da-)原定义在 :root(0,1,0) → alias 用 :root[data-theme](0,2,0)
+     · class 作用域家族(--mission-/--kp-/--rv2-/--auth-)原定义在 .scope(0,1,0)
+       → alias 用 [data-theme] .scope(0,2,0)
+   刻意不 alias(子树内局部覆盖照旧赢,过渡期零回归):
+     .cockpit-settings-dark · .vkpi-page--discover · .command-os / .command-os--light
+   ========================================================================= */
+
+/* ---------- vkpi 家族(vkpi-shell.css :root,真实变量名) ---------- */
+:root[data-theme] {
+  --vkpi-bg: var(--ds-bg);
+  --vkpi-surface: var(--ds-panel);
+  --vkpi-surface-soft: var(--ds-panel);
+  --vkpi-glass: var(--ds-panel);
+  --vkpi-glass-strong: var(--ds-card);
+  --vkpi-glass-border: var(--ds-line);
+  --vkpi-text: var(--ds-text);
+  --vkpi-muted: var(--ds-muted);
+  --vkpi-subtle: var(--ds-muted);
+  --vkpi-blue: var(--ds-accent);
+  --vkpi-blue-soft: var(--ds-accent-soft);
+  --vkpi-green: var(--ds-good);
+  --vkpi-green-soft: var(--ds-good-soft);
+  --vkpi-red: var(--ds-crit);
+  --vkpi-red-soft: var(--ds-crit-soft);
+  --vkpi-yellow: var(--ds-warn);
+  --vkpi-yellow-soft: var(--ds-warn-soft);
+  --vkpi-border: var(--ds-line);
+  --vkpi-border-strong: var(--ds-line-strong);
+  --vkpi-shadow: var(--ds-shadow);
+  --vkpi-inner: var(--ds-inner);
+  --vkpi-radius-sm: var(--ds-radius-sm);
+  --vkpi-radius-md: var(--ds-radius-md);
+  --vkpi-radius-lg: var(--ds-radius-lg);
+
+  /* --da- 家族(data-analysis-base.css :root) */
+  --da-primary: var(--ds-accent);
+  --da-accent: var(--ds-accent-2);
+  --da-text-primary: var(--ds-text);
+  --da-text-secondary: var(--ds-text-2);
+  --da-text-muted: var(--ds-muted);
+  --da-bg: var(--ds-bg);
+  --da-bg-card: var(--ds-card);
+  --da-panel: var(--ds-panel);
+  --da-border: var(--ds-line);
+  --da-border-strong: var(--ds-line-strong);
+  --da-success: var(--ds-good);
+  --da-warning: var(--ds-warn);
+  --da-danger: var(--ds-crit);
+  --da-info: var(--ds-info);
+  --da-radius-card: var(--ds-radius-md);
+  --da-shadow-card: var(--ds-shadow-sm);
+}
+
+/* ---------- 页面级 class 作用域家族(用 [data-theme] .scope 拉高一级) ---------- */
+[data-theme] .mission-v2 {
+  --mission-bg: var(--ds-bg); --mission-panel: var(--ds-panel); --mission-panel-strong: var(--ds-card);
+  --mission-text: var(--ds-text); --mission-text-2: var(--ds-text-2); --mission-muted: var(--ds-muted);
+  --mission-blue: var(--ds-accent); --mission-green: var(--ds-good); --mission-violet: var(--ds-accent-2);
+  --mission-red: var(--ds-crit); --mission-amber: var(--ds-warn); --mission-line: var(--ds-line);
+  --mission-shadow: var(--ds-shadow);
+}
+[data-theme] .kol-pool-v2 {
+  --kp-bg: var(--ds-bg); --kp-panel: var(--ds-panel); --kp-card: var(--ds-card);
+  --kp-line: var(--ds-line); --kp-line-strong: var(--ds-line-strong);
+  --kp-text: var(--ds-text); --kp-text-2: var(--ds-text-2); --kp-muted: var(--ds-muted);
+  --kp-blue: var(--ds-accent); --kp-green: var(--ds-good); --kp-violet: var(--ds-accent-2);
+  --kp-red: var(--ds-crit); --kp-orange: var(--ds-warn);
+}
+[data-theme] .report-v2 {
+  --rv2-bg: var(--ds-bg); --rv2-panel: var(--ds-panel); --rv2-card: var(--ds-card);
+  --rv2-line: var(--ds-line); --rv2-line-strong: var(--ds-line-strong);
+  --rv2-text: var(--ds-text); --rv2-text-2: var(--ds-text-2); --rv2-muted: var(--ds-muted);
+  --rv2-blue: var(--ds-accent); --rv2-green: var(--ds-good); --rv2-amber: var(--ds-warn); --rv2-red: var(--ds-crit);
+}
+[data-theme] .admin-auth-viewport {
+  --auth-bg: var(--ds-bg); --auth-card: var(--ds-card); --auth-border: var(--ds-line);
+  --auth-text: var(--ds-text); --auth-muted: var(--ds-muted); --auth-blue: var(--ds-accent);
+}

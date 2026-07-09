@@ -14,6 +14,22 @@
         window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = { isDisabled: true };
       }
     </script>
+    <script>
+      /* 首帧注入 data-theme/data-style,避免主题闪烁。style 默认 glass。 */
+      (function () {
+        var r = document.documentElement;
+        try {
+          var p = JSON.parse(localStorage.getItem("vkpi-ui-pref-v1") || "null");
+          var theme = (p && p.theme) || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          var style = (p && p.style) || "glass";
+          r.setAttribute("data-theme", theme);
+          r.setAttribute("data-style", style);
+        } catch (e) {
+          r.setAttribute("data-theme", "light");
+          r.setAttribute("data-style", "glass");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
