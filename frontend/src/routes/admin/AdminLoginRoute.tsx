@@ -11,6 +11,7 @@ import { Navigate, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../hooks/useAuth";
 import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
+import { ThemeSwitch } from "../../shared/ThemeSwitch";
 import "../../styles/admin.css";
 
 export default function AdminLoginRoute() {
@@ -52,6 +53,9 @@ export default function AdminLoginRoute() {
 
   return (
     <div className="admin-auth-viewport">
+      <div style={{ position: "absolute", top: 18, right: 18, zIndex: 2 }}>
+        <ThemeSwitch />
+      </div>
       <div className="admin-auth-card" role="main">
         <div className="admin-auth-card__brand">
           <span className="admin-root__mark">V</span>

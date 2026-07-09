@@ -2,6 +2,7 @@ import { DataStatusBadge } from '../shared/DataStatusBadge';
 import { Icon } from '../shared/Icon';
 import type { VkpiDataStatus, VkpiRangeKey } from '../vkpiTypes';
 import { rangeOptions } from './vkpiLayoutConstants';
+import { ThemeSwitch } from '../../../shared/ThemeSwitch';
 
 interface VkpiTopbarProps {
   query: string;
@@ -87,6 +88,7 @@ export function VkpiTopbar({
       ) : null}
 
       <div className="vkpi-topbar__actions">
+        <ThemeSwitch />
         <button
           className="vkpi-button"
           type="button"

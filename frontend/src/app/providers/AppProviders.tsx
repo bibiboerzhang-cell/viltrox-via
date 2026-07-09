@@ -1,7 +1,12 @@
 import type { PropsWithChildren } from "react";
 
 import { AuthProvider } from "../../hooks/useAuth";
+import { ThemeProvider } from "./ThemeProvider";
 
 export function AppProviders({ children }: PropsWithChildren) {
-  return <AuthProvider>{children}</AuthProvider>;
+  return (
+    <ThemeProvider>
+      <AuthProvider>{children}</AuthProvider>
+    </ThemeProvider>
+  );
 }

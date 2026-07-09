@@ -1,0 +1,36 @@
+/* ThemeSwitch · 波0 刀2 · 自包含,只吃 --ds-* token */
+.ds-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--ds-line, rgba(128, 128, 128, 0.2));
+  border-radius: var(--ds-radius-md, 10px);
+  background: var(--ds-panel, transparent);
+}
+.ds-switch__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: calc(var(--ds-radius-md, 10px) - 3px);
+  background: transparent;
+  color: var(--ds-muted, #808080);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ds-switch__btn:hover {
+  color: var(--ds-text, inherit);
+  background: var(--ds-accent-soft, rgba(128, 128, 128, 0.12));
+}
+.ds-switch__btn--style {
+  color: var(--ds-accent, currentColor);
+}
+.ds-switch__label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
