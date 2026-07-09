@@ -80,4 +80,14 @@
 @media (prefers-reduced-motion: no-preference) {
   .ds-kpi-rise { animation: ds-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
   @keyframes ds-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  .ds-scale-marker { animation: ds-pulse 2.6s ease-in-out infinite; }
+  @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 }
+@media (prefers-reduced-motion: reduce) { .ds-scale-marker { animation: none; } }
+
+/* 图例 */
+.ds-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--ds-text-2); }
+.ds-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.ds-legend .sw { width: 14px; height: 3px; border-radius: 2px; }
+.ds-legend .sw.band { height: 10px; border-radius: 3px; opacity: 0.35; }
+.ds-legend .sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px); }
