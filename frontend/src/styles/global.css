@@ -37,9 +37,9 @@
 
 :root {
   color-scheme: light;
-  font-family: Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #101828;
-  background: #f7f8fb;
+  font-family: var(--ds-font-sans, Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  color: var(--ds-text, #101828);
+  background: var(--ds-bg, #f7f8fb);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -57,7 +57,7 @@ body,
 
 body {
   margin: 0;
-  background: #f7f8fb;
+  background: var(--ds-bg, #f7f8fb);
 }
 
 a {
