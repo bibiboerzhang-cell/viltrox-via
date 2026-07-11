@@ -48,8 +48,9 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
           className: "text-[9px] text-info hover:text-ink px-1.5 py-0.5 rounded border border-line hover:bg-info-soft"
         }, t("返回 Admin 视角"))
       ),
-      // Menu items - 3 main + 授权页 V1:「成员与授权」敏感管理入口收进头像菜单,仅 Owner
+      // Menu items - 3 main + 授权页 V1.1:「成员与授权」敏感管理入口收进头像菜单,仅 Owner
       // 渲染(判据 usePermissions().isOwner(),由 CockpitApp 透传;后端 require_tab(system.members) 硬闸)。
+      // 点击直达独立浮层页 AuthorizationOverlay(demo 第二页同款),不再打开整页系统设置。
       e("div", { className: "py-1" },
         [
           { icon: UserCircle, label: t("个人资料"), right: null,     onClick: onOpenProfile },

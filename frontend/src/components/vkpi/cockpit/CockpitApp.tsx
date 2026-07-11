@@ -438,6 +438,8 @@ export function CockpitApp(props: any = {}) {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   // 授权页 V1:头像菜单「成员与授权」(仅 owner)直达设置页 staff 区;普通「系统设置」重置回默认区。
   const [settingsInitialSection, setSettingsInitialSection] = useState<"staff" | null>(null);
+  // 授权页 V1.1:「成员与授权」改直达独立浮层页(AuthorizationOverlay);设置页 staff 分区保留(双入口)。
+  const [showMembersAuth, setShowMembersAuth] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   // V6.14.4: ViewAll modals + NotifDetail + EditGroup
@@ -644,6 +646,7 @@ export function CockpitApp(props: any = {}) {
       showProfile, showTeam, staffGroups, openGroupEditor,
       showSettingsModal, appViewMode,
       settingsInitialSection, setSettingsInitialSection, isOwnerUser: boardPerms.isOwner(),
+      showMembersAuth, setShowMembersAuth,
       showShortcuts, showFeedback, handleFeedbackSubmitted,
       showAllProjects, setShowAllProjects,
       showAllMovers, setShowAllMovers,
@@ -890,7 +893,8 @@ export function CockpitApp(props: any = {}) {
             activeNav === "dashboard" && e(DashboardReplicaPage, {
               dashboardEditing,
               onNavigate: setActiveNav,
-              showSettingsModal,  // P2 穿透:设置浮层打开时,dashboard 浮卡/地图 overlay 不渲染
+              // P2 穿透:设置/成员与授权全屏浮层打开时,dashboard 浮卡/地图 overlay 不渲染
+              showSettingsModal: showSettingsModal || showMembersAuth,
               kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,
               venue, item, city, country, setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange,
               setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,

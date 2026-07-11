@@ -22,6 +22,7 @@ import { ProfileModal } from "./components/modals/ProfileModal";
 import { PublishPreviewModal } from "./components/modals/PublishPreviewModal";
 import { ReportPanel } from "./components/ReportPanel";
 import { SettingsPage } from "../pages/SettingsPage";
+import { AuthorizationOverlay } from "../pages/settings/AuthorizationOverlay";
 import { ShortcutsModal } from "./components/modals/ShortcutsModal";
 import { SignalDetailModal } from "./components/modals/SignalDetailModal";
 import { SignalsAllModal } from "./components/modals/SignalsAllModal";
@@ -67,6 +68,7 @@ export function CockpitOverlays(p: any) {
     showProfile, showTeam, staffGroups, openGroupEditor,
     showSettingsModal, appViewMode,
     settingsInitialSection, setSettingsInitialSection, isOwnerUser,
+    showMembersAuth, setShowMembersAuth,
     showShortcuts, showFeedback, handleFeedbackSubmitted,
     showAllProjects, setShowAllProjects,
     showAllMovers, setShowAllMovers,
@@ -192,9 +194,11 @@ export function CockpitOverlays(p: any) {
       onOpenProfile: () => setShowProfile(true),
       onOpenTeam: () => setShowTeam(true),
       onOpenSettings: () => { setSettingsInitialSection && setSettingsInitialSection(null); setShowSettingsModal(true); },
-      // 授权页 V1:「成员与授权」仅 owner 可见,直达设置页 staff 区(侧栏不加项,用户裁决)。
+      // 授权页 V1.1(2026-07-11):「成员与授权」仅 owner 可见,直达独立浮层页
+      // AuthorizationOverlay(demo 第二页同款),不再借道整页系统设置;
+      // 设置页里的 staff 分区仍保留(头像菜单 + 设置页双入口,用户裁决)。
       isOwner: isOwnerUser,
-      onOpenMembersAuth: () => { setSettingsInitialSection && setSettingsInitialSection("staff"); setShowSettingsModal(true); },
+      onOpenMembersAuth: () => setShowMembersAuth && setShowMembersAuth(true),
       onImpersonate: (s: any) => setViewingAs(s),
       onLogout: async () => {
         await logoutCockpit().catch(() => null);
@@ -230,6 +234,15 @@ export function CockpitOverlays(p: any) {
         onRefreshData,
       })
     ),
+    // 授权页 V1.1:成员与授权独立浮层(仅 staff 内容,无设置侧栏/其他分区),容器机制同上。
+    showMembersAuth && e(AuthorizationOverlay, {
+      key: "ov-members-auth",
+      data: dashboardData,
+      apiToken,
+      onRefreshData,
+      t,
+      onClose: () => setShowMembersAuth(false),
+    }),
     e(AnimatePresence, { key: "ov-shortcuts" }, showShortcuts && e(ShortcutsModal, { onClose: () => setShowShortcuts(false) })),
     e(AnimatePresence, { key: "ov-feedback" }, showFeedback && e(FeedbackModal, { onClose: () => setShowFeedback(false), apiToken, onSubmitted: handleFeedbackSubmitted })),
     // V6.14.4: ViewAll modals + NotifDetail + EditGroup
