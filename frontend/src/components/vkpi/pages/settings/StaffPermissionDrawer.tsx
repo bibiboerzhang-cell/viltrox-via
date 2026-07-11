@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Copy, KeyRound, Link2, Save, ShieldCheck, X } from "lucide-react";
 import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkResponse, VkpiPermissionLevel } from "../../../../domains/settings";
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
@@ -73,12 +74,17 @@ export function StaffPermissionDrawer({
     }, {});
   }, []);
 
+  // 线上修(2026-07-10):依赖改 member.id —— 只在「换了一个人」时重置本地状态。
+  // 原依赖 [member](对象引用):生成激活链接的动作里 onRefreshData 刷新 staffMembers 后,
+  // resolveDrawerMember 每次渲染返回新对象 → 本 effect 触发 setLink(null),把刚生成的
+  // 链接立刻清掉(接口 200 但界面永远不显示)。重置密码不走刷新所以没中招。
   useEffect(() => {
     setDraft(initialPermissions(member));
     setLocalMessage("");
     setLink(null);
     setDirty(false);
-  }, [member]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [member.id]);
 
   const updateLevel = (key: string, value: VkpiPermissionLevel) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -95,6 +101,8 @@ export function StaffPermissionDrawer({
       if (DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) && normalizeLevel(next[module.key]) === "none") next[module.key] = "read";
     }
     setDraft(next);
+    setDirty(true);
+    setLocalMessage("");
   };
 
   const save = async () => {
@@ -109,18 +117,29 @@ export function StaffPermissionDrawer({
     }
   };
 
+  // 与 save() 同款处置:失败/空结果必须可见,不许静默(用户点了没反馈会反复点)。
   const activation = async () => {
     setLocalMessage("");
-    const response = await onCreateActivationLink(member);
-    const url = String(response?.activation_url || "");
-    if (url) setLink({ label: "激活链接", url, expires: Number(response?.expires_in_hours || 48), sent: false });
+    try {
+      const response = await onCreateActivationLink(member);
+      const url = String(response?.activation_url || "");
+      if (url) setLink({ label: "激活链接", url, expires: Number(response?.expires_in_hours || 48), sent: false });
+      else setLocalMessage("激活链接生成成功但未返回 URL，请查看后端日志。");
+    } catch (err) {
+      setLocalMessage(err instanceof Error ? err.message : "激活链接生成失败");
+    }
   };
 
   const resetPassword = async () => {
     setLocalMessage("");
-    const response = await onCreatePasswordResetLink(member.id);
-    const url = String(response?.reset_url || "");
-    if (url) setLink({ label: "密码重置链接", url, expires: Number(response?.expires_in_hours || 1), sent: Boolean(response?.email_sent) });
+    try {
+      const response = await onCreatePasswordResetLink(member.id);
+      const url = String(response?.reset_url || "");
+      if (url) setLink({ label: "密码重置链接", url, expires: Number(response?.expires_in_hours || 1), sent: Boolean(response?.email_sent) });
+      else setLocalMessage("密码重置链接生成成功但未返回 URL，请查看后端日志。");
+    } catch (err) {
+      setLocalMessage(err instanceof Error ? err.message : "密码重置链接生成失败");
+    }
   };
 
   const copyLink = async () => {
@@ -137,7 +156,9 @@ export function StaffPermissionDrawer({
           <h2>{member.name}</h2>
           <small>{member.email || "-"} · {member.role}</small>
         </div>
-        <button type="button" onClick={onClose}>×</button>
+        <button type="button" onClick={onClose} aria-label="关闭账号权限详情" title="关闭">
+          <X size={17} />
+        </button>
       </header>
 
       <section className="vkpi-staff-permission-profile">
@@ -162,8 +183,11 @@ export function StaffPermissionDrawer({
           <span>先套模板，再细调模块权限</span>
         </div>
         <div className="vkpi-staff-template-row">
-          {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
-            <button type="button" key={template.key} onClick={() => applyTemplate(template.key)}>{template.label}</button>
+                  {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
+            <button type="button" key={template.key} onClick={() => applyTemplate(template.key)}>
+              <ShieldCheck size={13} />
+              {template.label}
+            </button>
           ))}
         </div>
       </section>
@@ -189,6 +213,7 @@ export function StaffPermissionDrawer({
                       className={draft[module.key] === level.key ? "is-active" : ""}
                       key={level.key}
                       onClick={() => updateLevel(module.key, level.key)}
+                      aria-pressed={draft[module.key] === level.key}
                     >
                       {level.label}
                     </button>
@@ -206,14 +231,20 @@ export function StaffPermissionDrawer({
           <span>不设置临时密码，只发一次性链接</span>
         </div>
         <div className="vkpi-staff-action-row">
-          <button className="vkpi-button" type="button" disabled={busy} onClick={() => void activation()}>生成激活链接</button>
-          <button className="vkpi-button" type="button" disabled={busy} onClick={() => void resetPassword()}>重置密码</button>
-          <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy} onClick={() => void save()}
-            style={dirty ? { boxShadow: "0 0 0 2px #fbbf24", fontWeight: 700 } : undefined}>
-            {busy ? "保存中" : dirty ? "● 保存权限(未保存)" : "保存权限"}
+          <button className="vkpi-button" type="button" disabled={busy} onClick={() => void activation()}>
+            <Link2 size={14} />
+            生成激活链接
+          </button>
+          <button className="vkpi-button" type="button" disabled={busy} onClick={() => void resetPassword()}>
+            <KeyRound size={14} />
+            重置密码
+          </button>
+          <button className={`vkpi-button vkpi-button--primary ${dirty ? "is-dirty" : ""}`} type="button" disabled={busy} onClick={() => void save()}>
+            <Save size={14} />
+            {busy ? "保存中" : dirty ? "保存权限 · 未保存" : "保存权限"}
           </button>
         </div>
-        {dirty ? <div style={{ marginTop: 6, fontSize: "11px", color: "#fbbf24" }}>权限已改但未保存 —— 点「保存权限」才生效</div> : null}
+        {dirty ? <div className="vkpi-staff-permission-unsaved">权限已改但未保存，点“保存权限”后生效。</div> : null}
         {link ? (
           <div className="vkpi-activation-link-panel">
             <div>
@@ -221,7 +252,10 @@ export function StaffPermissionDrawer({
               <span>{link.sent ? "邮件已发送" : "手动复制"} · {link.expires} 小时内有效</span>
             </div>
             <input readOnly value={link.url} onFocus={(event) => event.currentTarget.select()} />
-            <button className="vkpi-button" type="button" onClick={() => void copyLink()}>复制链接</button>
+            <button className="vkpi-button" type="button" onClick={() => void copyLink()}>
+              <Copy size={14} />
+              复制链接
+            </button>
           </div>
         ) : null}
         {localMessage ? <div className="vkpi-inline-message">{localMessage}</div> : null}

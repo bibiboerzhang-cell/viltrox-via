@@ -77,7 +77,7 @@ export function SettingsStaffPanel({
         onCopyActivationLink={onCopyActivationLink}
         onSubmit={onSubmitInvite}
       />
-      <section className="vkpi-card vkpi-table-card">
+      <section className="vkpi-card vkpi-table-card vkpi-staff-directory-card">
         <div className="vkpi-table-card__header">
           <div><h2>授权账号</h2><span>{members.length} 人</span></div>
         </div>

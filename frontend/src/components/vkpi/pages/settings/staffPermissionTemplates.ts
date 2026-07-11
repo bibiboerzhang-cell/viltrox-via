@@ -82,7 +82,7 @@ export function boardLevelFor(permissions: Record<string, unknown> | null | unde
 export const STAFF_PERMISSION_TEMPLATES: StaffPermissionTemplate[] = [
   {
     key: "employee_workspace",
-    label: "成成员作台",
+    label: "成员工作台",
     detail: "官方账号矩阵和个人工作台，不开放管理后台",
     permissions: {
       overview: "none", kol_ops: "read", vkpi: "write", activities: "none",

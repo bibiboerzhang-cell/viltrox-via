@@ -1,6 +1,5 @@
 /* vkpi-settings-dark.css
- * 把旧 vkpi-* 浅色玻璃设计系统(白底/银灰渐变)在「系统设置全屏覆盖层」内
- * 重映射为 Cockpit 暗色玻璃风(#0a0a0d + rgba(255,255,255,.0x) 卡片)。
+ * 把旧 vkpi-* 设置结构收敛到 Cockpit 的同一套设计 token。
  * 作用域:.cockpit-settings-dark(由 CockpitApp 的覆盖层加在外层)。
  * 做法:1) 在作用域内重定义 --vkpi-* 变量为暗色(级联覆盖 :root 浅色值);
  *      2) 显式覆盖那些硬编码白底/白渐变的设置类。
@@ -8,19 +7,26 @@
  */
 
 .cockpit-settings-dark {
-  /* 1) 变量级联覆盖(凡用变量的规则自动变暗) */
-  --vkpi-bg: #0a0a0d;
-  --vkpi-surface: rgba(255, 255, 255, 0.02);
-  --vkpi-border: rgba(255, 255, 255, 0.08);
-  --vkpi-glass-border: rgba(255, 255, 255, 0.07);
-  --vkpi-text: #e7ebf3;
-  --vkpi-muted: #8b94a7;
-  --vkpi-blue: #a855f7;
-  --vkpi-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
-  --vkpi-inner: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --vkpi-bg: var(--ds-bg);
+  --vkpi-surface: var(--ds-panel);
+  --vkpi-border: var(--ds-line);
+  --vkpi-glass-border: var(--ds-line);
+  --vkpi-text: var(--ds-text);
+  --vkpi-muted: var(--ds-muted);
+  --vkpi-blue: var(--ds-accent);
+  --vkpi-blue-soft: var(--ds-accent-soft);
+  --vkpi-shadow: var(--ds-shadow);
+  --vkpi-inner: var(--ds-inner);
 
-  background: #0a0a0d;
+  background: radial-gradient(1200px 600px at 70% -10%, var(--ds-bg-2), var(--ds-bg)) fixed;
   color: var(--vkpi-text);
+}
+
+.cockpit-settings-dark .vkpi-settings-surface__close {
+  border-color: var(--ds-line);
+  color: var(--ds-muted);
+  background: var(--ds-card);
+  box-shadow: var(--ds-shadow-sm);
 }
 
 /* 布局壳 */
@@ -46,7 +52,7 @@
   letter-spacing: 0.14em;
 }
 .cockpit-settings-dark .vkpi-page-heading h1 {
-  color: #fff;
+  color: var(--ds-text);
 }
 .cockpit-settings-dark .vkpi-page-heading p {
   color: var(--vkpi-muted);
@@ -76,7 +82,7 @@
 }
 .cockpit-settings-dark .vkpi-settings-module__head { min-height: 64px; padding: 16px 20px; }
 .cockpit-settings-dark .vkpi-settings-module__head span {
-  color: #fff;
+  color: var(--ds-text);
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -87,9 +93,9 @@
   font-weight: 500;
 }
 .cockpit-settings-dark .vkpi-settings-module__head strong {
-  background: rgba(168, 85, 247, 0.14);
-  border: 1px solid rgba(168, 85, 247, 0.3);
-  color: #d8b9ff;
+  background: var(--ds-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 30%, transparent);
+  color: var(--ds-accent);
   font-size: 11px;
   font-weight: 600;
   padding: 6px 12px;
@@ -118,7 +124,7 @@
 .cockpit-settings-dark .vkpi-table-card h2,
 .cockpit-settings-dark .vkpi-card h3,
 .cockpit-settings-dark .vkpi-card-header,
-.cockpit-settings-dark .vkpi-card strong { color: #fff; }
+.cockpit-settings-dark .vkpi-card strong { color: var(--ds-text); }
 .cockpit-settings-dark .vkpi-card span,
 .cockpit-settings-dark .vkpi-table-card span,
 .cockpit-settings-dark label { color: var(--vkpi-muted); }
@@ -138,12 +144,12 @@
 .cockpit-settings-dark input:focus,
 .cockpit-settings-dark select:focus,
 .cockpit-settings-dark textarea:focus {
-  border-color: rgba(168, 85, 247, 0.5);
+  border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent);
   outline: none;
 }
-.cockpit-settings-dark select option { background: #14141a; color: var(--vkpi-text); }
+.cockpit-settings-dark select option { background: var(--ds-bg-2); color: var(--vkpi-text); }
 .cockpit-settings-dark .vkpi-checkbox { color: var(--vkpi-text); }
-.cockpit-settings-dark input[type="checkbox"] { accent-color: #a855f7; }
+.cockpit-settings-dark input[type="checkbox"] { accent-color: var(--ds-accent); }
 
 /* ── 按钮 ────────────────────────────────────────────────────────── */
 .cockpit-settings-dark .vkpi-button {
@@ -154,12 +160,12 @@
 }
 .cockpit-settings-dark .vkpi-button:hover { background: rgba(255, 255, 255, 0.08); }
 .cockpit-settings-dark .vkpi-button--primary {
-  background: linear-gradient(135deg, rgba(168, 85, 247, 0.9), rgba(139, 92, 246, 0.85));
-  border: 1px solid rgba(168, 85, 247, 0.5);
-  color: #fff;
+  background: var(--ds-accent);
+  border: 1px solid var(--ds-accent);
+  color: var(--ds-on-accent);
 }
 .cockpit-settings-dark .vkpi-button--primary:hover {
-  background: linear-gradient(135deg, rgba(168, 85, 247, 1), rgba(139, 92, 246, 1));
+  background: var(--ds-accent-hover);
 }
 .cockpit-settings-dark .vkpi-button:disabled { opacity: 0.45; }
 
@@ -171,7 +177,7 @@
   box-shadow: none;
 }
 .cockpit-settings-dark .vkpi-settings-api-card.is-configured { border-color: rgba(52, 211, 153, 0.28); }
-.cockpit-settings-dark .vkpi-settings-api-card strong { color: #fff; }
+.cockpit-settings-dark .vkpi-settings-api-card strong { color: var(--ds-text); }
 .cockpit-settings-dark .vkpi-settings-api-card p,
 .cockpit-settings-dark .vkpi-settings-api-card em { color: var(--vkpi-muted); }
 
@@ -190,7 +196,7 @@
 .cockpit-settings-dark .vkpi-table-empty { color: #5b657a; }
 .cockpit-settings-dark .vkpi-table-wrap,
 .cockpit-settings-dark .vkpi-table-card__header { border-color: rgba(255, 255, 255, 0.06); }
-.cockpit-settings-dark .vkpi-table-card__header h2 { color: #fff; }
+.cockpit-settings-dark .vkpi-table-card__header h2 { color: var(--ds-text); }
 
 /* ── 平台抓取行/卡 / 切换卡 ──────────────────────────────────────── */
 .cockpit-settings-dark .vkpi-platform-switch-card,
@@ -212,9 +218,9 @@
 
 /* ── 内联提示 ────────────────────────────────────────────────────── */
 .cockpit-settings-dark .vkpi-inline-message {
-  background: rgba(168, 85, 247, 0.1);
-  border: 1px solid rgba(168, 85, 247, 0.22);
-  color: #d8b9ff;
+  background: var(--ds-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 22%, transparent);
+  color: var(--ds-accent);
 }
 
 /* ── 成员权限抽屉(从设置里打开)──────────────────────────────────── */
@@ -235,7 +241,7 @@
 .cockpit-settings-dark h1,
 .cockpit-settings-dark h2,
 .cockpit-settings-dark h3,
-.cockpit-settings-dark strong { color: #fff; }
+.cockpit-settings-dark strong { color: var(--ds-text); }
 .cockpit-settings-dark p,
 .cockpit-settings-dark small,
 .cockpit-settings-dark em { color: var(--vkpi-muted); }
@@ -293,16 +299,16 @@
 .cockpit-settings-dark .vkpi-settings-tabs button:hover,
 .cockpit-settings-dark .vkpi-platform-advanced-toggle:hover { background: rgba(255, 255, 255, 0.08); }
 
-/* C. 选中态胶囊 → 紫色高亮 */
+/* C. 选中态胶囊 → 当前风格强调色 */
 .cockpit-settings-dark .vkpi-settings-tabs button.is-active,
 .cockpit-settings-dark .vkpi-staff-template-row button.is-active,
 .cockpit-settings-dark .vkpi-staff-template-row button[aria-pressed="true"],
 .cockpit-settings-dark .vkpi-chip.is-active,
 .cockpit-settings-dark .vkpi-permission-levels button.is-active,
 .cockpit-settings-dark .vkpi-permission-levels button[aria-pressed="true"] {
-  background: rgba(168, 85, 247, 0.16);
-  border-color: rgba(168, 85, 247, 0.4);
-  color: #d8b9ff;
+  background: var(--ds-accent-soft);
+  border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent);
+  color: var(--ds-accent);
 }
 
 /* D. 带类名的输入框 → 暗(通用 input 规则之外的补充) */
@@ -316,7 +322,7 @@
 }
 
 /* E. 抽屉(证据/评估)→ 暗 */
-.cockpit-settings-dark .vkpi-evidence-drawer { background: #14141a; border-color: rgba(255, 255, 255, 0.08); }
+.cockpit-settings-dark .vkpi-evidence-drawer { background: var(--ds-bg-2); border-color: var(--ds-line); }
 .cockpit-settings-dark .vkpi-evidence-list article { background: rgba(255, 255, 255, 0.016); border-color: rgba(255, 255, 255, 0.06); }
 
 /* F. 空态面板 → 暗虚线 */
@@ -392,8 +398,8 @@
   background: rgba(255, 255, 255, 0.06);
   color: var(--vkpi-text);
 }
-.cockpit-settings-dark .vkpi-product-catalog-group header strong { color: #fff; }
-.cockpit-settings-dark .vkpi-product-catalog-group header span { color: #c4b5fd; }
+.cockpit-settings-dark .vkpi-product-catalog-group header strong { color: var(--ds-text); }
+.cockpit-settings-dark .vkpi-product-catalog-group header span { color: var(--ds-accent); }
 
 /* J3. 浅蓝 hover / 渐变面板(#f8fbff/#eff6ff)→ 暗 subtle */
 .cockpit-settings-dark .vkpi-table tr.is-clickable-row:hover td,
@@ -406,14 +412,14 @@
   border-color: rgba(255, 255, 255, 0.06);
 }
 
-/* J4. 选中态(#eef4ff/#edf4ff)→ 紫高亮 */
+/* J4. 选中态(#eef4ff/#edf4ff)→ 当前风格强调色 */
 .cockpit-settings-dark .vkpi-platform-crawl-row.is-selected,
 .cockpit-settings-dark .vkpi-product-catalog-row.is-selected,
 .cockpit-settings-dark .vkpi-chip.is-selected,
 .cockpit-settings-dark .vkpi-flow-step.is-current {
-  background: rgba(168, 85, 247, 0.16);
-  border-color: rgba(168, 85, 247, 0.4);
-  color: #d8b9ff;
+  background: var(--ds-accent-soft);
+  border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent);
+  color: var(--ds-accent);
 }
 
 /* J5. 进度条底(#e5e7eb)→ 暗 */
@@ -445,4 +451,273 @@
   background: rgba(146, 64, 14, 0.18);
   border-color: rgba(253, 230, 138, 0.3);
   color: #fde68a;
+}
+
+/* Final convergence: settings and authorization consume the same six-mode token set as Dashboard. */
+.cockpit-settings-dark :is(h1, h2, h3, h4, strong) {
+  color: var(--ds-text);
+}
+
+.cockpit-settings-dark :is(p, small, em, label) {
+  color: var(--ds-muted);
+}
+
+.cockpit-settings-dark :is(
+  .vkpi-page-heading,
+  .vkpi-settings-loading-strip,
+  .vkpi-settings-module,
+  .vkpi-card,
+  .vkpi-action-card,
+  .vkpi-table-card,
+  .vkpi-settings-version-panel,
+  .vkpi-settings-toggle-card,
+  .vkpi-settings-api-card,
+  .vkpi-platform-crawl-detail,
+  .vkpi-product-catalog-group,
+  .vkpi-info-tile
+) {
+  border-color: var(--ds-line);
+  color: var(--ds-text);
+  background: var(--ds-panel);
+  box-shadow: var(--ds-shadow-sm), var(--ds-inner);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.cockpit-settings-dark :is(input, select, textarea, .vkpi-table-input) {
+  border-color: var(--ds-line);
+  color: var(--ds-text);
+  background: var(--ds-card);
+}
+
+.cockpit-settings-dark :is(input, select, textarea, .vkpi-table-input):focus {
+  border-color: var(--ds-accent);
+  box-shadow: 0 0 0 3px var(--ds-accent-soft);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-drawer {
+  width: min(720px, calc(100vw - 24px));
+  padding: 18px 20px 28px;
+  gap: 14px;
+  border-color: var(--ds-line);
+  color: var(--ds-text);
+  background: color-mix(in srgb, var(--ds-bg) 88%, transparent);
+  box-shadow: -18px 0 46px rgba(0, 0, 0, 0.32);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-drawer__header {
+  position: sticky;
+  top: -18px;
+  z-index: 2;
+  padding: 18px 0 14px;
+  border-color: var(--ds-line);
+  background: color-mix(in srgb, var(--ds-bg) 90%, transparent);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-drawer__header h2 {
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-drawer__header button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-muted);
+  background: var(--ds-card);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-drawer__header button:hover {
+  color: var(--ds-text);
+  background: var(--ds-accent-soft);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-profile {
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-text);
+  background: var(--ds-panel);
+  box-shadow: var(--ds-inner);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-section {
+  gap: 12px;
+  padding: 15px 0 2px;
+  border: 0;
+  border-top: 1px solid var(--ds-line);
+  border-radius: 0;
+  color: var(--ds-text);
+  background: transparent;
+}
+
+.cockpit-settings-dark .vkpi-staff-template-row button,
+.cockpit-settings-dark .vkpi-staff-action-row .vkpi-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-text-2);
+  background: var(--ds-card);
+}
+
+.cockpit-settings-dark .vkpi-staff-template-row button:hover,
+.cockpit-settings-dark .vkpi-staff-action-row .vkpi-button:hover {
+  border-color: var(--ds-line-strong);
+  color: var(--ds-text);
+  background: var(--ds-accent-soft);
+}
+
+.cockpit-settings-dark .vkpi-staff-action-row .vkpi-button--primary {
+  border-color: var(--ds-accent);
+  color: var(--ds-on-accent);
+  background: var(--ds-accent);
+}
+
+.cockpit-settings-dark .vkpi-staff-action-row .vkpi-button--primary.is-dirty {
+  box-shadow: 0 0 0 3px var(--ds-warn-soft);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-group {
+  gap: 6px;
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-row {
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-text);
+  background: var(--ds-panel);
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-row.is-owner-only {
+  border-color: color-mix(in srgb, var(--ds-warn) 30%, transparent);
+  background: var(--ds-warn-soft);
+}
+
+.cockpit-settings-dark .vkpi-permission-levels {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(58px, 1fr);
+  grid-template-columns: none;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-bg-2);
+}
+
+.cockpit-settings-dark .vkpi-permission-levels button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ds-muted);
+  background: transparent;
+  box-shadow: none;
+}
+
+.cockpit-settings-dark .vkpi-permission-levels button:is(.is-active, [aria-pressed="true"]) {
+  border: 0;
+  color: var(--ds-accent);
+  background: var(--ds-accent-soft);
+  box-shadow: none;
+}
+
+.cockpit-settings-dark .vkpi-staff-permission-unsaved {
+  color: var(--ds-warn);
+  font-size: 11px;
+}
+
+.cockpit-settings-dark .vkpi-settings-two-column {
+  align-items: stretch;
+  gap: 12px;
+}
+
+.cockpit-settings-dark :is(.vkpi-staff-invite-card, .vkpi-staff-directory-card) {
+  min-width: 0;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-text);
+  background: var(--ds-panel);
+  box-shadow: var(--ds-shadow-sm), var(--ds-inner);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.cockpit-settings-dark .vkpi-staff-invite-card .vkpi-staff-template-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--ds-radius-sm);
+}
+
+.cockpit-settings-dark .vkpi-staff-invite-card .vkpi-staff-template-row button:is(.is-active, [aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent);
+  color: var(--ds-accent);
+  background: var(--ds-accent-soft);
+}
+
+.cockpit-settings-dark .vkpi-staff-invite-card .vkpi-button,
+.cockpit-settings-dark .vkpi-staff-directory-card .vkpi-mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.cockpit-settings-dark .vkpi-staff-directory-card .vkpi-table-wrap {
+  max-height: 520px;
+  overflow: auto;
+  border-color: var(--ds-line);
+}
+
+.cockpit-settings-dark .vkpi-staff-directory-card .vkpi-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--ds-bg-2) 92%, transparent);
+  backdrop-filter: var(--ds-backdrop);
+}
+
+.cockpit-settings-dark .vkpi-staff-directory-card .vkpi-table tbody tr:hover {
+  background: var(--ds-accent-soft);
+}
+
+.cockpit-settings-dark .vkpi-activation-link-panel {
+  border-color: color-mix(in srgb, var(--ds-good) 30%, transparent);
+  color: var(--ds-good);
+  background: var(--ds-good-soft);
+}
+
+.cockpit-settings-dark .vkpi-activation-link-panel input {
+  border-color: color-mix(in srgb, var(--ds-good) 30%, transparent);
+  color: var(--ds-text);
+  background: var(--ds-card);
+}
+
+@media (max-width: 720px) {
+  .cockpit-settings-dark .vkpi-staff-permission-drawer {
+    width: 100vw;
+    padding-inline: 14px;
+  }
+
+  .cockpit-settings-dark .vkpi-staff-permission-row {
+    grid-template-columns: 1fr;
+  }
+
+  .cockpit-settings-dark .vkpi-permission-levels {
+    width: 100%;
+  }
 }

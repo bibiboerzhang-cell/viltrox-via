@@ -1,4 +1,5 @@
 import React from "react";
+import { Copy, Link2, Send, ShieldCheck } from "lucide-react";
 import type { VkpiStaffActivationLinkResponse, VkpiStaffInviteCapabilities } from "../../../../domains/settings";
 import type { VkpiProductCatalogItem } from "../../vkpiTypes";
 import { CardHeader } from "../../shared/CardHeader";
@@ -157,12 +158,12 @@ export function StaffInviteCard({
     : "viltrox.com";
   const submitLabel = inviteMode === "email" ? "发送邀请" : "生成激活链接";
   return (
-    <section className="vkpi-card vkpi-action-card">
+    <section className="vkpi-card vkpi-action-card vkpi-staff-invite-card">
       <CardHeader title="授权账户" />
       <form className="vkpi-form-stack" onSubmit={onSubmit}>
-        <input value={email} onChange={(event) => onEmailChange(event.target.value)} placeholder="成员邮箱，建议使用 @viltrox.com" />
-        <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="成员姓名 / 拼音 ID" />
-        <select value={role} onChange={(event) => onRoleChange(event.target.value)}><option value="employee">成员 / 运营</option><option value="manager">管理层</option><option value="analyst">数据分析</option><option value="readonly">只读</option></select>
+        <input aria-label="成员邮箱" value={email} onChange={(event) => onEmailChange(event.target.value)} placeholder="成员邮箱，建议使用 @viltrox.com" />
+        <input aria-label="成员姓名" value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="成员姓名 / 拼音 ID" />
+        <select aria-label="成员角色" value={role} onChange={(event) => onRoleChange(event.target.value)}><option value="employee">成员 / 运营</option><option value="manager">管理层</option><option value="analyst">数据分析</option><option value="readonly">只读</option></select>
         <div className="vkpi-staff-template-row">
           {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
             <button
@@ -171,12 +172,14 @@ export function StaffInviteCard({
               key={template.key}
               onClick={() => onPermissionTemplateChange(template.key)}
               title={template.detail}
+              aria-pressed={permissionTemplate === template.key}
             >
+              <ShieldCheck size={13} />
               {template.label}
             </button>
           ))}
         </div>
-        <select value={permission} onChange={(event) => onPermissionChange(event.target.value as "none" | "read" | "write")}><option value="write">可操作 Viltrox Marketing</option><option value="read">只读 Viltrox Marketing</option><option value="none">无 Viltrox Marketing 权限</option></select>
+        <select aria-label="Viltrox Marketing 权限" value={permission} onChange={(event) => onPermissionChange(event.target.value as "none" | "read" | "write")}><option value="write">可操作 Viltrox Marketing</option><option value="read">只读 Viltrox Marketing</option><option value="none">无 Viltrox Marketing 权限</option></select>
         <div className="vkpi-invite-mode-row">
           <span>权限模板</span>
           <em>{STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.find((item) => item.key === permissionTemplate)?.detail || `V-KPI ${vkpiPermissionFromTemplate(permissionTemplate)}`}</em>
@@ -186,7 +189,10 @@ export function StaffInviteCard({
           <em>{inviteMode === "email" ? "SMTP 已配置" : `允许域名 ${allowedDomains}`}</em>
         </div>
         {inviteCapabilitiesError ? <div className="vkpi-inline-message is-warn">{inviteCapabilitiesError}</div> : null}
-        <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canInvite}>{busy ? "处理中" : submitLabel}</button>
+        <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !canInvite}>
+          {inviteMode === "email" ? <Send size={14} /> : <Link2 size={14} />}
+          {busy ? "处理中" : submitLabel}
+        </button>
       </form>
       {activationLink?.activation_url ? (
         <div className="vkpi-activation-link-panel">
@@ -195,7 +201,10 @@ export function StaffInviteCard({
             <span>{activationLink.expires_in_hours || inviteCapabilities?.token_ttl_hours || 48} 小时内有效</span>
           </div>
           <input readOnly value={activationLink.activation_url} onFocus={(event) => event.currentTarget.select()} />
-          <button className="vkpi-button" type="button" onClick={onCopyActivationLink}>{activationCopied ? "已复制" : "复制链接"}</button>
+          <button className="vkpi-button" type="button" onClick={onCopyActivationLink}>
+            <Copy size={14} />
+            {activationCopied ? "已复制" : "复制链接"}
+          </button>
         </div>
       ) : null}
     </section>

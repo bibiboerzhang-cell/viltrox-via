@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { StaffPermissionDrawer } from "./StaffPermissionDrawer";
 
 const member = {
@@ -59,5 +59,14 @@ describe("StaffPermissionDrawer 授权页冒烟(C7 两态·默认显示)", () =>
     expect(row).toBeTruthy();
     const active = within(row).getByText("显示");
     expect(active.className).toContain("is-active");
+  });
+
+  it("套用模板会明确标记未保存，权限按钮暴露选中状态", () => {
+    renderDrawer();
+    fireEvent.click(screen.getByRole("button", { name: /成员工作台/ }));
+    expect(screen.getByText(/权限已改但未保存/)).toBeTruthy();
+
+    const row = screen.getByText("overview").closest(".vkpi-staff-permission-row") as HTMLElement;
+    expect(within(row).getByRole("button", { name: "显示" })).toHaveAttribute("aria-pressed", "true");
   });
 });
