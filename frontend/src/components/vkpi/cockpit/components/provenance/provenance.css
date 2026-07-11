@@ -1,0 +1,166 @@
+/* 溯源三组件样式(全站复用)— 逐条移植自板块页范式 demo 的 .src/.srctip/.provchain/.pchip/#recview 段。
+   取色全部走 var(--ds-*) token(词表见 src/styles/tokens.css),不写死任何颜色;
+   尺寸/字号/圆角保持 demo 原值。demo→token 映射:--brd→--ds-line / --card2→--ds-card /
+   --acc→--ds-accent / --mut→--ds-muted / --tx→--ds-text / --tx2→--ds-text-2 /
+   --sh→--ds-shadow / --blur→--ds-backdrop / --mono→--ds-font-mono / --font→--ds-font-sans。 */
+
+/* ===== SrcChip:⛁ 来源 chip + hover 来源卡(demo .src / .srctip) ===== */
+.vkpi-prov-src {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--ds-font-mono);
+  font-size: 8.5px;
+  line-height: 1.5;
+  color: var(--ds-muted);
+  background: none;
+  border: 1px solid var(--ds-line);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: 0.13s;
+}
+.vkpi-prov-src:hover {
+  border-color: var(--ds-accent);
+  color: var(--ds-text);
+}
+.vkpi-prov-src::before {
+  content: "⛁";
+  font-size: 9px;
+  color: var(--ds-accent);
+}
+.vkpi-prov-srctip {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 30;
+  width: 236px;
+  background: var(--ds-card);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+  border: 1px solid var(--ds-line);
+  border-radius: 10px;
+  box-shadow: var(--ds-shadow);
+  padding: 10px 12px;
+  display: none;
+  text-align: left;
+  font-family: var(--ds-font-sans);
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: default;
+}
+.vkpi-prov-src:hover .vkpi-prov-srctip,
+.vkpi-prov-src:focus-visible .vkpi-prov-srctip {
+  display: block;
+}
+.vkpi-prov-st-cap {
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ds-muted);
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+.vkpi-prov-st-r {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  padding: 3px 0;
+  color: var(--ds-text-2);
+}
+.vkpi-prov-st-r b {
+  font-family: var(--ds-font-mono);
+  color: var(--ds-text);
+  font-weight: 600;
+  font-size: 9.5px;
+  text-align: right;
+}
+
+/* ===== ProvChain:链式 chips + → 分隔 + provnote 小注(demo .provchain / .pchip / .provnote) ===== */
+.vkpi-prov-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.vkpi-prov-arrow {
+  color: var(--ds-muted);
+  font-size: 10px;
+}
+.vkpi-prov-pchip {
+  appearance: none;
+  font-size: 10px;
+  line-height: 1.5;
+  font-family: var(--ds-font-mono);
+  border: 1px solid var(--ds-line);
+  background: var(--ds-card);
+  border-radius: 7px;
+  padding: 4px 9px;
+  color: var(--ds-text-2);
+  cursor: pointer;
+  transition: 0.13s;
+}
+.vkpi-prov-pchip:hover {
+  border-color: var(--ds-accent);
+  color: var(--ds-text);
+}
+/* 外链节点保持 accent(与 demo 一致:.pchip.ext 声明在 :hover 之后,hover 时不褪色) */
+.vkpi-prov-pchip--ext {
+  color: var(--ds-accent);
+  text-decoration: none;
+}
+.vkpi-prov-pchip--mini {
+  padding: 2px 7px;
+  font-size: 9px;
+  flex: none;
+}
+.vkpi-prov-note {
+  font-size: 9px;
+  color: var(--ds-muted);
+  margin-top: 7px;
+  font-family: var(--ds-font-mono);
+}
+
+/* ===== RecordPreview:库记录预览卡(demo #recview .rec / .rc / .rr) ===== */
+.vkpi-prov-rec {
+  margin-top: 10px;
+  background: var(--ds-card);
+  border: 1px solid var(--ds-line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  animation: vkpi-prov-rise 0.25s;
+}
+.vkpi-prov-rec-cap {
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ds-accent);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.vkpi-prov-rr {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10.5px;
+  padding: 2px 0;
+  color: var(--ds-text-2);
+}
+.vkpi-prov-rr b {
+  font-family: var(--ds-font-mono);
+  color: var(--ds-text);
+  font-weight: 600;
+  text-align: right;
+  max-width: 60%;
+}
+
+@keyframes vkpi-prov-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vkpi-prov-rec { animation: none; }
+}
