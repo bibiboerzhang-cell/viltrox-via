@@ -26,7 +26,11 @@ interface MetricCell {
   source: string;
   sourceLabel: string | null;
   color: string;
-  spark: RawValue;
+  spark: number[] | null;
+  deltaPct: number | null;
+  windowDays: number | null;
+  basis: RawValue;
+  coverage: RawValue;
   waiting: string;
   anomaly: string | null;
 }
@@ -35,7 +39,11 @@ interface MetricCellOptions {
   sourceLabel?: string | null;
   trend?: string;
   waiting?: string;
-  spark?: RawValue;
+  spark?: number[] | null;
+  deltaPct?: number | null;
+  windowDays?: number | null;
+  basis?: RawValue;
+  coverage?: RawValue;
   anomaly?: string | null;
 }
 // 一个指标在 all/kol/company 三个口径下的卡格。
@@ -118,7 +126,11 @@ function metricData(value: number | null, color: string, options: MetricCellOpti
     source,
     sourceLabel: options.sourceLabel || null,
     color,
-    spark: hasValue ? options.spark || null : null,
+    spark: hasValue && Array.isArray(options.spark) ? options.spark : null,
+    deltaPct: options.deltaPct ?? null,
+    windowDays: options.windowDays ?? null,
+    basis: options.basis ?? null,
+    coverage: options.coverage ?? null,
     waiting: options.waiting || "数据待接入",
     anomaly: options.anomaly || null,
   };
@@ -135,6 +147,39 @@ function scopeLabel(scope: Scope) {
   if (key === "owned") return "Owned";
   if (key === "kol") return "KOL";
   return "K + O";
+}
+
+function metricSeriesRecord(seriesByScope: RawRecord, scope: Scope, metricId: string): RawRecord | null {
+  const direct = record(seriesByScope[scope]);
+  let raw = direct[metricId];
+  if ((raw === null || raw === undefined) && scope === "company") {
+    raw = record(seriesByScope.owned)[metricId];
+  }
+  return raw === null || raw === undefined ? null : record(raw);
+}
+
+function metricSeriesPoints(series: RawRecord): number[] {
+  const points: number[] = [];
+  for (const rawPoint of list(series.points)) {
+    const point = record(rawPoint);
+    const parsed = Object.keys(point).length > 0 ? number(point.value) : number(rawPoint);
+    if (parsed != null) points.push(parsed);
+  }
+  return points;
+}
+
+function withMetricSeries(cell: MetricCell, seriesByScope: RawRecord, scope: Scope, metricId: string): MetricCell {
+  const series = metricSeriesRecord(seriesByScope, scope, metricId);
+  if (!series) return cell;
+  const points = metricSeriesPoints(series);
+  return {
+    ...cell,
+    spark: points.length > 0 ? points : null,
+    deltaPct: number(series.delta_pct),
+    windowDays: int(series.window_days),
+    basis: series.basis ?? null,
+    coverage: series.coverage ?? null,
+  };
 }
 
 function maturityForScope(dashboard: RawRecord, scope: Scope) {
@@ -265,6 +310,7 @@ export function normalizeAlerts(rawAlerts: RawList = []) {
 export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = []) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
+  const metricSeriesByScope = record(summary.metric_series_by_scope);
   const evidenceMetrics = record(summary.evidence_metrics);
   const evidenceRoster = record(evidenceMetrics.active_roster_by_scope);
   const evidenceEngagement = record(evidenceMetrics.engagement);
@@ -338,12 +384,21 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
     },
   };
 
-  return METRICS.map((metric) => ({
-    ...metric,
-    data: values[metric.id] || metric.data,
-    rosterDetail: metric.id === "kol-count" ? rosterDetail : undefined,
-    sub: metric.id === "exposure" && totalExposure != null ? evidenceCoverageText : metric.id === "engagement" && engagementPercent != null ? evidenceVideoText : metric.id === "exposure" ? "30d 增量，不取 lifetime" : metric.sub,
-  }));
+  return METRICS.map((metric) => {
+    const scopes = values[metric.id];
+    return {
+      ...metric,
+      data: scopes
+        ? {
+            all: withMetricSeries(scopes.all, metricSeriesByScope, "all", metric.id),
+            kol: withMetricSeries(scopes.kol, metricSeriesByScope, "kol", metric.id),
+            company: withMetricSeries(scopes.company, metricSeriesByScope, "company", metric.id),
+          }
+        : metric.data,
+      rosterDetail: metric.id === "kol-count" ? rosterDetail : undefined,
+      sub: metric.id === "exposure" && totalExposure != null ? evidenceCoverageText : metric.id === "engagement" && engagementPercent != null ? evidenceVideoText : metric.id === "exposure" ? "30d 增量，不取 lifetime" : metric.sub,
+    };
+  });
 }
 
 function emptyFunnel(projectCount: number | null) {
@@ -581,22 +636,34 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
   const hot = record(aiTodayHot);
   const hotContent = record(hot.content);
   if (hot.available && hotContent.headline) {
+    const freshnessStatus = String(hotContent.freshness_status || hot.freshness_status || "unknown");
+    const freshnessLabel = String(hotContent.freshness_label || hot.freshness_label || "");
+    const isStale = freshnessStatus === "stale";
+    const recommendedVideos = list(hotContent.recommended_videos).map((value) => record(value));
+    const sources = list(hotContent.sources).map((value) => record(value));
     return {
       confidence: null,
-      updatedLabel: hotContent.generated_at ? timeLabel(hotContent.generated_at) : "时间待接入",
+      updatedLabel: freshnessLabel || (hotContent.generated_at ? timeLabel(hotContent.generated_at) : "时间待接入"),
+      freshnessStatus,
+      freshnessLabel,
+      isStale,
+      generatedAt: String(hotContent.generated_at || ""),
+      snapshotDate: String(hotContent.snapshot_date || hot.snapshot_date || ""),
       todayDecision: {
         text: String(hotContent.headline || ""),
         amount: "--",
-        reason: "据当下热点实时生成",
+        reason: isStale ? "该建议来自过期快照，需先查看证据再采用" : "基于市场来源与已深析视频生成",
         primaryAction: "查看证据",
         secondaryAction: "稍后处理",
       },
-      strengthenLabel: "🎬 拍摄方案",
+      strengthenLabel: "拍摄方案",
       strengthen: list(hotContent.shooting_plans).slice(0, 3).map((p) => ({ text: String(p), detail: "" })),
       weaken: [],
-      todayContentLabel: "🔥 当下热点·赛事",
+      todayContentLabel: "当下热点·赛事",
       todayContent: list(hotContent.hot_topics).slice(0, 3).map((x) => String(x)),
-      poweredBy: "每日早 8 点(中国)自动更新",
+      recommendedVideos,
+      sources,
+      poweredBy: isStale ? "过期快照 · 库内证据仅供复核" : "每日早 8 点更新 · 来源可回跳",
       raw: hot,
     };
   }
@@ -623,6 +690,11 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
     })),
     weaken: [],
     todayContent: taskItems.slice(0, 3).map((item) => String(record(item).title || record(item).body || "任务待复核")),
+    recommendedVideos: [],
+    sources: [],
+    freshnessStatus: "unknown",
+    freshnessLabel: "",
+    isStale: false,
     poweredBy: brief.source || "实时聚合",
     raw: brief,
   };
@@ -649,23 +721,55 @@ function humanSignalSource(label: RawValue) {
 export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: RawValue = null) {
   // 2026-06-15:竞品新品雷达(Gemini+Google 接地)置顶,后接 market-intelligence 信号。
   const radar = record(competitorRadar);
+  const radarContent = record(radar.content);
+  const radarFreshness = String(radarContent.freshness_status || radar.freshness_status || "unknown");
+  const radarFreshnessLabel = String(radarContent.freshness_label || radar.freshness_label || "");
+  const radarGlobalSources = list(radarContent.sources);
   const radarItems = (radar.available && Array.isArray(record(radar.content).items))
-    ? list(record(radar.content).items).slice(0, 5).map((it, i) => {
+    ? list(radarContent.items).slice(0, 5).map((it, i) => {
         const d = record(it);
         const isThreat = String(d.impact || "").includes("威胁");
         const brand = String(d.brand || "").trim();
+        const sourceRows = (list(d.sources).length ? list(d.sources) : radarGlobalSources)
+          .map((source) => {
+            const row = record(source);
+            const contentOrigin = String(row.content_origin || d.content_origin || "unknown");
+            const sourcePlatform = String(row.source_platform || d.source_platform || row.platform || d.platform || "");
+            return {
+              name: String(row.title || row.provider || row.source_table || "原始来源"),
+              url: String(row.url || row.source_url || d.source_url || ""),
+              provider: String(row.provider || row.source_table || ""),
+              platform: sourcePlatform,
+              sourcePlatform,
+              content_origin: contentOrigin,
+              contentOrigin,
+              relationType: String(row.relation_type || "unknown"),
+              sourceStatus: String(row.source_status || ""),
+              sourceTable: String(row.ledger_table || row.source_table || ""),
+              sourceId: row.ledger_id || row.source_id || null,
+              published_at: String(row.published_at || d.published_at || ""),
+              observedAt: String(row.observed_at || ""),
+            };
+          });
         return {
           id: `radar-${i}`,
           severity: isThreat ? "high" : "medium",
-          title: `🛰 ${brand || "竞品"}:${String(d.title || "")}`,
+          title: `${brand || "竞品"}:${String(d.title || "")}`,
           desc: `${String(d.summary || "")}${d.impact ? " · 对我们:" + String(d.impact) : ""}`,
-          time: "今日",
-          sources: [{ name: "竞品雷达", url: "" }],
+          summary: String(d.summary || ""),
+          time: radarFreshnessLabel || timeLabel(radarContent.generated_at),
+          freshnessStatus: radarFreshness,
+          stale: radarFreshness === "stale",
+          generatedAt: String(radarContent.generated_at || ""),
+          snapshotDate: String(radarContent.snapshot_date || radar.snapshot_date || ""),
+          sources: sourceRows,
+          sourceRelation: sourceRows.some((source) => source.relationType === "grounding") ? "grounding" : sourceRows.length ? "brand_context" : "missing",
+          impact: d.impact ? [{ level: isThreat ? "风险" : "机会", text: String(d.impact) }] : [],
           // D3:雷达来源本就是人话;品牌做成可点 chip(点击带上品牌进弹窗)。
-          sourceLine: "竞品雷达 · 今日",
-          sourceDetail: "competitor-radar (Gemini+Google 接地)",
+          sourceLine: `竞品雷达 · ${radarFreshnessLabel || "时间未知"}${sourceRows.some((source) => source.relationType === "grounding") ? ` · ${sourceRows.length} 条原始来源` : sourceRows.length ? ` · ${sourceRows.length} 条关联证据，原始引文未保留` : " · 未保留原始链接"}`,
+          sourceDetail: `competitor-radar · snapshot ${String(radarContent.snapshot_date || radar.snapshot_date || "unknown")}`,
           brands: brand ? [brand.toUpperCase()] : [],
-          totalMentions: 0,
+          totalMentions: sourceRows.length,
           trendPct: isThreat ? "威胁" : "机会",
           raw: d,
         };
@@ -690,8 +794,31 @@ export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: Ra
       desc: String(item.summary || "暂无摘要"),
       time: timeLabel(item.freshnessLabel || item.generated_at),
       sources: evidence.length
-        ? evidence.map((source) => ({ name: String(record(source).source || record(source).label || "evidence"), url: record(source).url || "" }))
-        : [{ name: String(item.sourceLabel || "market-intelligence"), url: "" }],
+        ? evidence.map((source) => {
+            const row = record(source);
+            const contentOrigin = String(row.content_origin || item.content_origin || "unknown");
+            const sourcePlatform = String(row.source_platform || row.platform || item.source_platform || "");
+            return {
+              name: String(row.label || row.source || "evidence"),
+              url: String(row.url || row.source_url || ""),
+              value: String(row.value || ""),
+              sourceTable: String(row.source || row.source_table || ""),
+              platform: sourcePlatform,
+              sourcePlatform,
+              content_origin: contentOrigin,
+              contentOrigin,
+              published_at: String(row.published_at || item.published_at || ""),
+              observedAt: String(row.observed_at || item.observed_at || ""),
+            };
+          })
+        : [{
+            name: String(item.sourceLabel || "market-intelligence"),
+            url: String(item.source_url || ""),
+            platform: String(item.source_platform || ""),
+            content_origin: String(item.content_origin || "unknown"),
+          }],
+      actions: list(item.actions).map((action) => String(record(action).label || record(action).title || "")).filter(Boolean),
+      thumbnails: list(item.thumbnails).map((value) => String(value)).filter(Boolean),
       sourceLine: evidence.length ? `${sourceHuman} · 本轮证据 ${evidence.length} 条` : sourceHuman,
       sourceDetail: evidenceKeys.join(" · ") || String(item.sourceLabel || "market-intelligence"),
       brands,
@@ -774,6 +901,38 @@ export function normalizeKolFunnel(summary: RawValue = {}) {
   return { isReal, stages, byStaff, raw: block };
 }
 
+export function normalizeDashboardSourceHealth(bundle: RawValue = {}) {
+  const sources = record(record(bundle)._sources);
+  const entries = Object.entries(sources).map(([key, value]) => {
+    const source = record(value);
+    return {
+      key,
+      label: String(source.label || key),
+      ok: source.ok === true,
+    };
+  });
+  const total = entries.length;
+  const ready = entries.filter((entry) => entry.ok).length;
+  const failed = entries.filter((entry) => !entry.ok).map((entry) => entry.label);
+  // 这两个指标当前在 normalizeDashboardMetrics 中明确保持 null，不能把“接口返回”
+  // 误写成“能力已接入”。后续订单归因上线时应连同指标契约一起移除。
+  const pendingCapabilities = ["GMV", "ROI"];
+  return {
+    available: total > 0,
+    total,
+    ready,
+    failed,
+    pendingCapabilities,
+    degraded: failed.length > 0,
+    label: total > 0 ? `${ready}/${total} 可用 · ${pendingCapabilities.length} 待接` : "实时",
+    detail: [
+      total > 0 ? `Dashboard 数据源 ${ready}/${total} 本次可用` : "Dashboard 数据源状态未知",
+      failed.length > 0 ? `异常: ${failed.join("、")}` : "数据源响应正常",
+      `待接能力: ${pendingCapabilities.join("、")}`,
+    ].join("；"),
+  };
+}
+
 export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);
@@ -806,5 +965,6 @@ export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
     topMovers: normalizeTopMovers(kolRows, bundle.fitMovers),
     mapHierarchy: normalizeMapHierarchy(bundle.distribution, mapKolRows),
     kolFunnel: normalizeKolFunnel(summary),
+    sourceHealth: normalizeDashboardSourceHealth(bundle),
   };
 }

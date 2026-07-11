@@ -45,6 +45,9 @@ export interface ProgressCenterData {
   queued: ProgressTask[];
   recent_done: ProgressRecentDone[];
   stage_flow: Array<{ stage: string; label: string }>;
+  diagnostics: {
+    worker_online: boolean | null;
+  };
 }
 
 /** 顶栏进度中心快照(10s 轮询)。后端字段缺失/非数组一律兜底,渲染永不炸。 */
@@ -78,5 +81,10 @@ export async function fetchProgressCenter(
           { stage: "thinking", label: "分析" },
           { stage: "summarizing", label: "落库" },
         ],
+    diagnostics: {
+      worker_online: typeof res?.diagnostics?.worker_online === "boolean"
+        ? res.diagnostics.worker_online
+        : null,
+    },
   };
 }

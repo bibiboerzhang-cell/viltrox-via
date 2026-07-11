@@ -15,30 +15,30 @@ const LANES = [
     key: "search",
     title: "搜索中",
     Icon: Search,
-    color: "#5DCAA5",
-    titleColor: "#9FE1CB",
-    border: "rgba(93,202,165,0.30)",
-    bg: "rgba(29,158,117,0.08)",
+    color: "var(--ds-good)",
+    titleColor: "var(--ds-good)",
+    border: "color-mix(in srgb, var(--ds-good) 30%, transparent)",
+    bg: "color-mix(in srgb, var(--ds-good) 8%, transparent)",
     showBar: false,
   },
   {
     key: "thinking",
     title: "思考中",
     Icon: Brain,
-    color: "#7F77DD",
-    titleColor: "#CECBF6",
-    border: "rgba(127,119,221,0.35)",
-    bg: "rgba(83,74,183,0.10)",
+    color: "var(--ds-accent-2)",
+    titleColor: "var(--ds-accent-2)",
+    border: "color-mix(in srgb, var(--ds-accent-2) 35%, transparent)",
+    bg: "color-mix(in srgb, var(--ds-accent-2) 10%, transparent)",
     showBar: true,
   },
   {
     key: "summarizing",
     title: "总结中",
     Icon: FileText,
-    color: "#FAC775",
-    titleColor: "#FAC775",
-    border: "rgba(239,159,39,0.35)",
-    bg: "rgba(186,117,23,0.10)",
+    color: "var(--ds-warn)",
+    titleColor: "var(--ds-warn)",
+    border: "color-mix(in srgb, var(--ds-warn) 35%, transparent)",
+    bg: "color-mix(in srgb, var(--ds-warn) 10%, transparent)",
     showBar: true,
   },
 ];
@@ -241,9 +241,9 @@ function sortMineFirst(tasks: any[], me: MeIdentity | null) {
 
 function lightColor(light: any) {
   const tone = String(light?.tone || "").toLowerCase();
-  if (tone === "red") return "#fb7185";
-  if (tone === "amber") return "#FAC775";
-  return "#5DCAA5";
+  if (tone === "red") return "var(--ds-crit)";
+  if (tone === "amber") return "var(--ds-warn)";
+  return "var(--ds-good)";
 }
 
 function TaskRow({ task, color, showBar, me }: any) {
@@ -311,13 +311,14 @@ function TaskLane({ lane, tasks, me }: any) {
 
 interface TaskProgressBoardProps {
   apiToken?: string;
+  compact?: boolean;
   // 10C 状态同源:CockpitApp 把共享的 workflow_runs 轮询流(useWorkflowRunsStream)透传进来,
   // 后台任务推进/完成时该流自动刷新 → 本板自动重渲染,无需手动刷新。
   // CockpitSidebar 仅传 apiToken(不传 stream),此时本板内部自起一个 hook 实例兜底。
   stream?: WorkflowRunsStream;
 }
 
-export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardProps) {
+export function TaskProgressBoard({ apiToken = "", stream, compact = false }: TaskProgressBoardProps) {
   // 没传 stream 时(如 CockpitSidebar 用法)在内部起一个 hook 实例;传了就复用上层共享流。
   // 注:hooks 不能条件调用,故无条件 call,再在下面择一使用——内部实例在有 stream 时也无害(同源端点)。
   const localStream = useWorkflowRunsStream(apiToken, { intervalMs: 5000, limit: 30, recentMinutes: 5 });
@@ -426,8 +427,55 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
   // 改挂 !!payload——后台刷新时上次 payload 留存,灰条稳住不闪;仅首次连接(无 payload)隐藏,此时 header 已显「连接中」。
   const emptyActive = activeTotal === 0 && !!payload && !error;
 
+  if (compact) {
+    const compactLanes = [
+      { key: "search", label: "搜索", tasks: laneTasks.search, color: "var(--ds-accent)" },
+      { key: "thinking", label: "思考", tasks: laneTasks.thinking, color: "var(--ds-accent-2)" },
+      { key: "summarizing", label: "总结", tasks: laneTasks.summarizing, color: "var(--ds-good)" },
+      { key: "queued", label: "排队", tasks: queuedTasks, color: "var(--ds-warn)" },
+    ];
+    const statusText = activeTotal > 0 ? `${activeTotal} 处理中` : queueTotal > 0 ? `${queueTotal} 排队` : "空闲";
+
+    return e("div", {
+      className: "vkpi-task-progress vkpi-task-progress--compact w-full",
+      title: "真实任务阶段 · 点击顶栏任务进度可查看明细",
+    },
+      e("div", { className: "vkpi-task-progress__compact-head" },
+        e("span", { className: "vkpi-task-progress__compact-title" }, "任务队列"),
+        e("span", { className: `vkpi-task-progress__compact-status ${activeTotal > 0 ? "is-active" : ""}` }, statusText)
+      ),
+      e("div", { className: "vkpi-task-progress__compact-lanes" },
+        compactLanes.map((lane) => {
+          const progressValues = lane.tasks
+            .map((task: any) => Number(task?.progress_pct ?? task?.progress))
+            .filter((value: number) => Number.isFinite(value));
+          const progress = progressValues.length
+            ? Math.round(progressValues.reduce((sum: number, value: number) => sum + value, 0) / progressValues.length)
+            : null;
+          const running = lane.tasks.length > 0;
+          return e("div", { key: lane.key, className: `vkpi-task-progress__compact-lane ${running ? "is-running" : "is-idle"}` },
+            e("span", { className: "vkpi-task-progress__compact-name" }, lane.label),
+            e("span", { className: "vkpi-task-progress__compact-bar" },
+              e("i", {
+                className: progress === null && running ? "is-indeterminate" : "",
+                style: {
+                  width: progress !== null ? `${Math.max(6, Math.min(100, progress))}%` : running ? "100%" : "34%",
+                  background: running ? lane.color : undefined,
+                },
+              })
+            ),
+            e("span", { className: "vkpi-task-progress__compact-value" }, progress !== null ? `${progress}` : running ? `${lane.tasks.length}` : "--")
+          );
+        })
+      ),
+      e("div", { className: "vkpi-task-progress__compact-foot" },
+        loading && !payload ? "连接中" : error && !payload ? "暂不可用" : `真实阶段 · ${queueTotal} 排队`
+      )
+    );
+  }
+
   return e("div", {
-    className: "w-full rounded-xl border border-white/10 bg-[#0d1117] px-3 py-3 shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
+    className: "vkpi-task-progress w-full rounded-xl border border-white/10 bg-[#0d1117] px-3 py-3 shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
   },
     e("div", { className: "mb-3.5 flex items-center justify-between gap-2" },
       e("div", { className: "flex min-w-0 items-center gap-1.5" },
@@ -452,9 +500,9 @@ export function TaskProgressBoard({ apiToken = "", stream }: TaskProgressBoardPr
         e("span", {
           className: "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9.5px] font-medium tabular-nums",
           style: {
-            borderColor: `${lightColor(speedLight)}55`,
+            borderColor: `color-mix(in srgb, ${lightColor(speedLight)} 34%, transparent)`,
             color: lightColor(speedLight),
-            background: `${lightColor(speedLight)}14`,
+            background: `color-mix(in srgb, ${lightColor(speedLight)} 8%, transparent)`,
           },
           title: speedLight?.policy || "调度速度灯",
         },

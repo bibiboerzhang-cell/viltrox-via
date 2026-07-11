@@ -4,11 +4,46 @@
 import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { useTheme } from "../../../../app/providers/ThemeProvider";
+
+function finitePin(pin: any) {
+  return Number.isFinite(Number(pin?.lat)) && Number.isFinite(Number(pin?.lng));
+}
+
+function nearestPinEdges(pins: any[]) {
+  const valid = pins.filter(finitePin);
+  const seen = new Set<string>();
+  const edges: Array<[any, any]> = [];
+  valid.forEach((pin, index) => {
+    let nearestIndex = -1;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    valid.forEach((candidate, candidateIndex) => {
+      if (candidateIndex === index) return;
+      const latDelta = Number(pin.lat) - Number(candidate.lat);
+      const lngDelta = Number(pin.lng) - Number(candidate.lng);
+      const distance = latDelta * latDelta + lngDelta * lngDelta;
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = candidateIndex;
+      }
+    });
+    if (nearestIndex < 0) return;
+    const key = [index, nearestIndex].sort((a, b) => a - b).join(":");
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push([pin, valid[nearestIndex]]);
+  });
+  return edges;
+}
 
 export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoom = 12 }: any) {
+  const { theme } = useTheme();
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
+  const tileLayerRef = useRef<any>(null);
+  const tileStyleRef = useRef<"light" | "dark" | null>(null);
   const markersRef = useRef<any[]>([]);
+  const networkRef = useRef<any[]>([]);
   const onPinClickRef = useRef(onPinClick);
   onPinClickRef.current = onPinClick;
   
@@ -25,18 +60,45 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     
     const map = L.map(container).setView([initialLat, initialLng], initialZoom);
     
-    const layer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    const initialTheme = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+    const layer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${initialTheme}_all/{z}/{x}/{y}{r}.png`, {
       attribution: '© CARTO',
       subdomains: 'abcd',
       maxZoom: 19,
     });
     layer.addTo(map);
+    tileLayerRef.current = layer;
+    tileStyleRef.current = initialTheme;
     
     mapRef.current = map;
     
     // 一次 invalidateSize 确保尺寸
-    setTimeout(() => map.invalidateSize(), 100);
+    const resizeTimer = window.setTimeout(() => map.invalidateSize(), 100);
+    return () => {
+      window.clearTimeout(resizeTimer);
+        markersRef.current = [];
+        networkRef.current = [];
+      tileLayerRef.current = null;
+      tileStyleRef.current = null;
+      map.remove();
+      mapRef.current = null;
+    };
   }, []);
+
+  // 深浅主题使用 CARTO 对应的黑白底图，不再在浅色模式里混入暗色瓦片。
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || tileStyleRef.current === theme) return;
+    if (tileLayerRef.current) map.removeLayer(tileLayerRef.current);
+    const layer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${theme}_all/{z}/{x}/{y}{r}.png`, {
+      attribution: '© CARTO',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    });
+    layer.addTo(map);
+    tileLayerRef.current = layer;
+    tileStyleRef.current = theme;
+  }, [theme]);
   
   // focusTarget 变化 → flyTo
   useEffect(() => {
@@ -47,16 +109,43 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     });
   }, [focusTarget?.lat, focusTarget?.lng, focusTarget?.zoom]);
   
-  // pins 变化 → 重新添加 markers
+    // pins 变化 → 重新添加真实节点与节点间的最近邻覆盖路径
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     
     // 清旧 markers
-    markersRef.current.forEach((m: any) => map.removeLayer(m));
-    markersRef.current = [];
+      markersRef.current.forEach((m: any) => map.removeLayer(m));
+      markersRef.current = [];
+      networkRef.current.forEach((line: any) => map.removeLayer(line));
+      networkRef.current = [];
 
-    pins.forEach((p: any) => {
+      const networkColor = accentColor || "#3f9bff";
+      nearestPinEdges(pins).forEach(([from, to]) => {
+        const points: [number, number][] = [
+          [Number(from.lat), Number(from.lng)],
+          [Number(to.lat), Number(to.lng)],
+        ];
+        const base = L.polyline(points, {
+          color: networkColor,
+          weight: 1.15,
+          opacity: 0.28,
+          dashArray: "5 9",
+          className: "vkpi-map-network-line",
+          interactive: false,
+        }).addTo(map);
+        const flow = L.polyline(points, {
+          color: networkColor,
+          weight: 2,
+          opacity: 0.82,
+          dashArray: "1 20",
+          className: "vkpi-map-network-line vkpi-map-network-line--flow",
+          interactive: false,
+        }).addTo(map);
+        networkRef.current.push(base, flow);
+      });
+
+      pins.filter(finitePin).forEach((p: any) => {
       const color = p.color || accentColor || "#a855f7";
       
       const icon = L.divIcon({
@@ -125,7 +214,7 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     <div
       ref={containerRef}
       className="absolute inset-0 vkpi-map-wrapper"
-      style={{ background: "#02060f" }}
+      style={{ background: "var(--ds-bg-2)" }}
     />
   );
 }

@@ -1,0 +1,249 @@
+.vkpi-editable-board.react-grid-layout {
+  position: relative;
+  display: block !important;
+  width: 100%;
+  min-width: 0;
+  min-height: 120px;
+}
+
+.vkpi-editable-board.react-grid-layout > .vkpi-board-module {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  transition: transform 180ms cubic-bezier(.2,.75,.25,1), width 180ms ease, height 180ms ease, opacity 120ms ease, box-shadow 120ms ease, outline-color 120ms ease;
+}
+
+.vkpi-editable-board.react-grid-layout > .vkpi-board-module.react-draggable-dragging {
+  z-index: 950;
+  opacity: 0.88;
+  transition: none;
+  filter: saturate(1.08);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+}
+
+.vkpi-editable-board.react-grid-layout > .vkpi-board-module.resizing {
+  z-index: 940;
+  transition: none;
+  outline-color: var(--ds-accent) !important;
+  box-shadow: 0 0 0 1px var(--ds-accent), 0 18px 48px color-mix(in srgb, var(--ds-accent) 18%, transparent);
+}
+
+.vkpi-editable-board .react-grid-placeholder {
+  z-index: 3;
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 74%, transparent);
+  border-radius: var(--ds-radius-lg);
+  background: color-mix(in srgb, var(--ds-accent) 18%, transparent);
+  opacity: 1;
+  transition: all 100ms ease;
+}
+
+.vkpi-editable-board .vkpi-board-module__content {
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  overflow: auto;
+  border-radius: inherit;
+  scrollbar-gutter: stable;
+}
+
+.vkpi-editable-board .vkpi-board-module__content > * {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 100%;
+  max-width: 100%;
+}
+
+.vkpi-editable-board :is(
+  .vkpi-board-module--kpi,
+  .vkpi-board-module--command-center,
+  .vkpi-board-module--north-star,
+  .vkpi-board-module--trend
+) .vkpi-board-module__content {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.vkpi-editable-board .vkpi-kpi-overview {
+  container-type: inline-size;
+}
+
+.vkpi-editable-board .vkpi-kpi-overview__grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr)) !important;
+}
+
+@container (max-width: 900px) {
+  .vkpi-editable-board .vkpi-kpi-overview__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@container (max-width: 560px) {
+  .vkpi-editable-board .vkpi-kpi-overview__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@container (max-width: 220px) {
+  .vkpi-editable-board .vkpi-kpi-overview__grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@container (max-width: 720px) {
+  .vkpi-editable-board .vkpi-kpi-overview__head,
+  .vkpi-editable-board .vkpi-kpi-overview__tools {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+.vkpi-editable-board .vkpi-board-module__content :where(
+  h1,
+  h2,
+  h3,
+  h4,
+  p,
+  li,
+  dt,
+  dd,
+  label,
+  strong,
+  small,
+  span,
+  a,
+  button
+) {
+  max-width: 100%;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+}
+
+.vkpi-editable-board .vkpi-board-module__content :where(
+  h1,
+  h2,
+  h3,
+  h4,
+  p,
+  li,
+  dt,
+  dd,
+  label,
+  strong,
+  small,
+  a
+) {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.vkpi-board-edit-hint__actions {
+  display: flex;
+  flex: none;
+  gap: 7px;
+}
+
+.vkpi-board-module__tools .vkpi-board-module__drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.vkpi-board-module__tools .vkpi-board-module__drag-handle:active {
+  cursor: grabbing;
+}
+
+.vkpi-board-module__tools .vkpi-board-module__drag-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.vkpi-grid-resize-handle {
+  position: absolute;
+  z-index: 935;
+  display: block;
+  border: 1px solid color-mix(in srgb, var(--ds-accent) 70%, transparent);
+  background: var(--ds-overlay-surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-accent) 12%, transparent);
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.vkpi-board-module:hover > .vkpi-grid-resize-handle,
+.vkpi-board-module:focus-within > .vkpi-grid-resize-handle,
+.vkpi-board-module.react-draggable-dragging > .vkpi-grid-resize-handle,
+.vkpi-board-module.is-dragging > .vkpi-grid-resize-handle,
+.vkpi-board-module.is-resizing > .vkpi-grid-resize-handle,
+.vkpi-board-module.resizing > .vkpi-grid-resize-handle {
+  opacity: 1;
+}
+
+.vkpi-grid-resize-handle:is(.react-resizable-handle-n, .react-resizable-handle-s) {
+  left: calc(50% - 14px);
+  width: 28px;
+  height: 7px;
+  border-radius: 5px;
+  cursor: ns-resize;
+}
+
+.vkpi-grid-resize-handle.react-resizable-handle-n { top: -4px; }
+.vkpi-grid-resize-handle.react-resizable-handle-s { bottom: -4px; }
+
+.vkpi-grid-resize-handle:is(.react-resizable-handle-e, .react-resizable-handle-w) {
+  top: calc(50% - 14px);
+  width: 7px;
+  height: 28px;
+  border-radius: 5px;
+  cursor: ew-resize;
+}
+
+.vkpi-grid-resize-handle.react-resizable-handle-e { right: -4px; }
+.vkpi-grid-resize-handle.react-resizable-handle-w { left: -4px; }
+
+.vkpi-grid-resize-handle:is(
+  .react-resizable-handle-ne,
+  .react-resizable-handle-se,
+  .react-resizable-handle-sw,
+  .react-resizable-handle-nw
+) {
+  width: 11px;
+  height: 11px;
+  border-radius: 4px;
+}
+
+.vkpi-grid-resize-handle.react-resizable-handle-ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.vkpi-grid-resize-handle.react-resizable-handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.vkpi-grid-resize-handle.react-resizable-handle-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.vkpi-grid-resize-handle.react-resizable-handle-nw { top: -5px; left: -5px; cursor: nwse-resize; }
+
+.vkpi-board-add {
+  display: flex;
+  width: 100%;
+  min-height: 88px;
+  margin-top: 14px;
+}
+
+.vkpi-editable-board.is-medium .vkpi-board-module__tools,
+.vkpi-editable-board.is-narrow .vkpi-board-module__tools {
+  right: 6px;
+}
+
+@media (max-width: 720px) {
+  .vkpi-board-edit-hint__actions {
+    width: 100%;
+  }
+
+  .vkpi-board-edit-hint__actions button {
+    flex: 1;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vkpi-editable-board.react-grid-layout > .vkpi-board-module,
+  .vkpi-editable-board .react-grid-placeholder,
+  .vkpi-grid-resize-handle {
+    transition: none;
+  }
+}

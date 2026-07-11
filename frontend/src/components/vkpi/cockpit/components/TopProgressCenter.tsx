@@ -210,6 +210,9 @@ export function TopProgressCenter() {
   const recentDone = data?.recent_done || [];
   const counts = data?.counts || { running: 0, queued: 0, active_total: 0, recent_total: 0 };
   const busy = counts.running > 0 || counts.queued > 0;
+  const hasRunning = counts.running > 0;
+  const workerOffline = data?.diagnostics?.worker_online === false;
+  const queueBlocked = workerOffline && counts.queued > 0;
   const flow = data?.stage_flow || [];
 
   // 药丸态聚合进度:跑中任务已知 % 的均值;全未知则 null(呼吸整条)。
@@ -220,9 +223,13 @@ export function TopProgressCenter() {
     ? Math.round(knownPcts.reduce((a, b) => a + b, 0) / knownPcts.length)
     : null;
 
-  const pillLabel = counts.queued > 0
-    ? `${counts.running} 跑中 · ${counts.queued} 排队`
-    : `${counts.running} 跑中`;
+  const pillLabel = hasRunning
+    ? counts.queued > 0
+      ? `${counts.running} 跑中 · ${counts.queued} 排队`
+      : `${counts.running} 跑中`
+    : queueBlocked
+      ? `Worker 离线 · ${counts.queued} 等待`
+      : `${counts.queued} 排队`;
 
   return e(MotionConfig, { reducedMotion: "user" },
     e("div", { ref: boxRef, className: "relative" },
@@ -233,16 +240,18 @@ export function TopProgressCenter() {
         onClick: () => setOpen((v) => !v),
         "aria-label": "Task Progress Center",
         "aria-expanded": open,
-        title: busy ? `任务进度:${pillLabel}` : "任务进度中心(当前空闲)",
+        title: queueBlocked ? "Worker 当前离线，排队任务尚未开始" : busy ? `任务进度:${pillLabel}` : "任务进度中心(当前空闲)",
         className: busy
-          ? "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-blue-500/25 bg-blue-500/[0.08] px-2.5 py-1.5 text-xs text-blue-200 hover:border-blue-500/40 hover:bg-blue-500/[0.15]"
+          ? queueBlocked && !hasRunning
+            ? "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-2.5 py-1.5 text-xs text-amber-300 hover:border-amber-500/45 hover:bg-amber-500/[0.14]"
+            : "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-blue-500/25 bg-blue-500/[0.08] px-2.5 py-1.5 text-xs text-blue-200 hover:border-blue-500/40 hover:bg-blue-500/[0.15]"
           : "rounded-lg p-2 text-slate-500 hover:bg-white/[0.04] hover:text-slate-300",
       },
         e(Activity, { size: busy ? 13 : 16 }),
         busy && e("span", { className: "tabular-nums" }, pillLabel),
-        busy && e(ChevronDown, { size: 12, className: "text-blue-300/70" }),
+        busy && e(ChevronDown, { size: 12, className: queueBlocked && !hasRunning ? "text-amber-300/70" : "text-blue-300/70" }),
         // 底部 2px 细进度条:有任务跑时缓慢呼吸(点名要的"呼吸",非闪烁)。
-        busy && e("div", { className: "absolute inset-x-0 bottom-0 h-[2px] bg-white/[0.06]" },
+        hasRunning && e("div", { className: "absolute inset-x-0 bottom-0 h-[2px] bg-white/[0.06]" },
           e("div", {
             className: "tpc-breath h-full bg-blue-400/80 transition-[width] duration-300 ease-out",
             style: { width: aggregatePct !== null ? `${Math.max(6, Math.min(100, aggregatePct))}%` : "100%" },
@@ -269,12 +278,15 @@ export function TopProgressCenter() {
           data !== null && !busy && recentDone.length === 0 && e("div", { className: "px-3 py-3 text-xs text-slate-500" },
             "队列空闲,没有在跑的任务"
           ),
+          queueBlocked && e("div", { className: "mx-2 mt-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-2.5 py-2 text-[10px] text-amber-300" },
+            "Worker 未在线，排队任务不会开始"
+          ),
           running.length > 0 && e(React.Fragment, { key: "sec-running" },
             SectionHeader("跑中", counts.running > running.length ? `共 ${counts.running} 条` : undefined),
             ...running.slice(0, 8).map((task) => e(RunningRow, { key: `run-${task.id}`, task, flow }))
           ),
           queued.length > 0 && e(React.Fragment, { key: "sec-queued" },
-            SectionHeader("排队", counts.queued > queued.length ? `深度 ${counts.queued}` : undefined),
+            SectionHeader(queueBlocked ? "等待 Worker" : "排队", counts.queued > queued.length ? `深度 ${counts.queued}` : undefined),
             ...queued.slice(0, 6).map((task) => e(QueuedRow, { key: `q-${task.id}`, task })),
             counts.queued > 6 && e("div", { className: "px-3 pb-1 text-[10px] text-slate-600" },
               `…还有 ${counts.queued - Math.min(6, queued.length)} 条在队`

@@ -5,6 +5,10 @@ import {
   latestCalendarDate,
   eventCoords,
   normalizeTopMovers,
+  normalizeDashboardSourceHealth,
+  normalizeAiInsight,
+  normalizeSignals,
+  normalizeCockpitDashboard,
 } from "./normalizers";
 
 // 源 normalizers.ts 的 `items = []` / `kolRows = []` 默认参被 TS 推断为 never[]
@@ -149,5 +153,173 @@ describe("normalizeTopMovers 真分排序(红线)", () => {
 
   it("空输入 → 空数组", () => {
     expect(normalizeTopMovers([])).toEqual([]);
+  });
+});
+
+describe("normalizeDashboardSourceHealth 数据源透明度", () => {
+  it("区分接口在线、接口异常与尚未接入的指标能力", () => {
+    const out = normalizeDashboardSourceHealth({
+      _sources: {
+        dashboard: { ok: true, label: "绩效总览" },
+        distribution: { ok: false, label: "KOL 地图" },
+      },
+    });
+
+    expect(out).toMatchObject({ available: true, total: 2, ready: 1, degraded: true });
+    expect(out.failed).toEqual(["KOL 地图"]);
+    expect(out.pendingCapabilities).toEqual(["GMV", "ROI"]);
+    expect(out.label).toBe("1/2 可用 · 2 待接");
+  });
+
+  it("旧缓存没有状态字段时保持兼容", () => {
+    expect(normalizeDashboardSourceHealth({})).toMatchObject({ available: false, label: "实时" });
+  });
+});
+
+describe("Dashboard 公司账号真实指标契约", () => {
+  it("把官方账号 roster、30d 曝光和互动率送入四张公司卡及详情", () => {
+    const out = normalizeCockpitDashboard({
+      dashboard: {
+        summary: {
+          active_roster: 525,
+          official_account_count: 18,
+          evidence_metrics: {
+            active_roster_by_scope: { all: 525, kol: 484, company: 18 },
+            active_30d_by_scope: { all: 114, kol: 95, company: 18, owned: 18, window_days: 30 },
+            total_exposure: 2_052_179_053,
+            engagement: { total_engagement: 35_059_369, total_views: 2_052_179_053, engagement_rate: 0.01708397 },
+            coverage: { evidence_total: 100, view_covered: 90, view_coverage_pct: 0.9 },
+            roster_detail: {
+              active_roster: 525,
+              total_pool: 1225,
+              company: { total_pool: 18, active_roster: 18, followers: 1_240_484, total_views: 370_719_506 },
+            },
+          },
+          active_30d_by_scope: { all: null, kol: null, owned: null },
+          exposure_30d_by_scope: { all: null, kol: null, owned: 27_806_378, company: 27_806_378 },
+          engagement_rate_by_scope: { all: null, kol: null, owned: 3.9723855, company: 3.9723855 },
+          metric_series_by_scope: {
+            company: {
+              "kol-count": {
+                points: [
+                  { date: "2026-07-09", value: 16 },
+                  { date: "2026-07-10", value: 18 },
+                ],
+                delta_pct: 12.5,
+                window_days: 30,
+                basis: "official_account_snapshots",
+                coverage: { observed_days: 2 },
+              },
+            },
+            owned: {
+              "kol-count": { points: [1, 2], delta_pct: 100 },
+              "active-30d": { points: [15, 17, 18], delta_pct: 20 },
+              exposure: {
+                points: [24_100_000, 26_800_000, 27_806_378],
+                delta_pct: 15.3792,
+                basis: { source: "owned_channel_metrics" },
+                coverage: 0.93,
+              },
+              engagement: {
+                points: [3.41, 3.67, 3.9723855],
+                delta_pct: 16.4922,
+              },
+            },
+          },
+        },
+      },
+      _sources: { dashboard: { ok: true, label: "绩效总览" } },
+    }, []);
+
+    const metric = (id: string) => out.metrics.find((item: { id: string }) => item.id === id);
+    expect(metric("kol-count")?.data.company.value).toBe(18);
+    expect(metric("active-30d")?.data.company.value).toBe(18);
+    expect(metric("exposure")?.data.company.value).toBe(27_806_378);
+    expect(metric("engagement")?.data.company.value).toBeCloseTo(3.9723855);
+    expect(metric("kol-count")?.data.company).toMatchObject({
+      spark: [16, 18],
+      deltaPct: 12.5,
+      windowDays: 30,
+      basis: "official_account_snapshots",
+      coverage: { observed_days: 2 },
+    });
+    expect(metric("active-30d")?.data.company.spark).toEqual([15, 17, 18]);
+    expect(metric("exposure")?.data.company).toMatchObject({
+      spark: [24_100_000, 26_800_000, 27_806_378],
+      deltaPct: 15.3792,
+      basis: { source: "owned_channel_metrics" },
+      coverage: 0.93,
+    });
+    expect(metric("engagement")?.data.company.spark).toEqual([3.41, 3.67, 3.9723855]);
+    expect(metric("kol-count")?.rosterDetail.company).toMatchObject({
+      total_pool: 18,
+      active_roster: 18,
+      followers: 1_240_484,
+      total_views: 370_719_506,
+    });
+  });
+});
+
+describe("AI Today 真实证据与新鲜度", () => {
+  it("保留视频、来源与过期状态", () => {
+    const out = normalizeAiInsight({}, {}, {
+      available: true,
+      freshness_status: "stale",
+      content: {
+        headline: "先复核再投放",
+        generated_at: "2026-07-01T00:00:00Z",
+        freshness_status: "stale",
+        freshness_label: "已过期 · 8 天前",
+        snapshot_date: "2026-07-01",
+        shooting_plans: ["弱光街拍"],
+        hot_topics: ["cinematic"],
+        recommended_videos: [{ evidence_id: 7, content_url: "https://example.com/video" }],
+        sources: [{ url: "https://example.com/source", title: "source" }],
+      },
+    });
+
+    expect(out.isStale).toBe(true);
+    expect(out.updatedLabel).toBe("已过期 · 8 天前");
+    expect(out.recommendedVideos).toHaveLength(1);
+    expect(out.sources).toHaveLength(1);
+    expect(out.todayDecision.reason).toContain("过期快照");
+  });
+});
+
+describe("竞品雷达来源归一化", () => {
+  it("原始 URL、数据表 ID 与过期状态进入详情", () => {
+    const [signal] = normalizeSignals({}, {
+      available: true,
+      freshness_status: "stale",
+      content: {
+        freshness_status: "stale",
+        freshness_label: "已过期 · 8 天前",
+        snapshot_date: "2026-07-01",
+        items: [{
+          brand: "Sony",
+          title: "FX 动态",
+          summary: "真实摘要",
+          impact: "威胁现有人像主题",
+          sources: [{
+            title: "Reddit source",
+            url: "https://reddit.com/r/example",
+            provider: "reddit",
+            relation_type: "brand_context",
+            ledger_table: "vkpi_market_mentions",
+            ledger_id: 12,
+          }],
+        }],
+      },
+    });
+
+    expect(signal.stale).toBe(true);
+    expect(signal.sources[0]).toMatchObject({
+      url: "https://reddit.com/r/example",
+      sourceTable: "vkpi_market_mentions",
+      sourceId: 12,
+    });
+    expect(signal.sourceLine).toContain("1 条关联证据");
+    expect(signal.sourceLine).toContain("原始引文未保留");
+    expect(signal.impact[0].text).toContain("威胁");
   });
 });

@@ -599,7 +599,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     initial: { x: "100%" }, animate: { x: 0 }, exit: { x: "100%" },
     transition: { type: "spring", damping: 28, stiffness: 240 },
     "aria-label": "KOL Pool 详情",
-    className: "fixed top-0 right-0 h-full w-[520px] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
+    className: "vkpi-kol-detail-drawer fixed top-0 right-0 h-full w-[520px] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
   },
     // ─── Header ───
     e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose }),

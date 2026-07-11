@@ -57,6 +57,7 @@ function fixture(overrides: Partial<ProgressCenterData> = {}): ProgressCenterDat
       },
     ],
     stage_flow: STAGE_FLOW,
+    diagnostics: { worker_online: true },
     ...overrides,
   };
 }
@@ -106,6 +107,24 @@ describe("TopProgressCenter 渲染冒烟", () => {
 
     fireEvent.click(btn);
     expect(await screen.findByText("队列空闲,没有在跑的任务")).toBeTruthy();
+  });
+
+  it("只有排队且 Worker 离线时不显示跑中动画，并解释等待原因", async () => {
+    fetchProgressCenter.mockResolvedValue(fixture({
+      counts: { running: 0, queued: 1, active_total: 1, recent_total: 0 },
+      running: [],
+      queued: [fixture().queued[0]],
+      recent_done: [],
+      diagnostics: { worker_online: false },
+    }));
+    const { container } = render(React.createElement(TopProgressCenter));
+
+    expect(await screen.findByText("Worker 离线 · 1 等待")).toBeTruthy();
+    expect(container.querySelector(".tpc-breath")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Task Progress Center" }));
+    expect(await screen.findByText("Worker 未在线，排队任务不会开始")).toBeTruthy();
+    expect(screen.getByText("等待 Worker")).toBeTruthy();
   });
 
   it("首拉失败:不炸,保持安静图标态", async () => {

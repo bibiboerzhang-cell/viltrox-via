@@ -14,6 +14,14 @@ async function settle<T>(request: Promise<T>, fallback: T): Promise<T> {
   }
 }
 
+async function settleWithStatus<T>(request: Promise<T>, fallback: T): Promise<{ value: T; ok: boolean }> {
+  try {
+    return { value: await request, ok: true };
+  } catch {
+    return { value: fallback, ok: false };
+  }
+}
+
 export async function fetchCockpitShellBundle(apiToken: string) {
   const [me, alerts] = await Promise.all([
     settle(cachedApiFetch<MeResponse>("/api/auth/me", { timeoutMs: 3000 }, apiToken), { status: "error" }),
@@ -26,34 +34,49 @@ export async function fetchCockpitShellBundle(apiToken: string) {
   };
 }
 
-export async function fetchCockpitDashboardBundle(apiToken: string) {
+export async function fetchCockpitDashboardBundle(
+  apiToken: string,
+  options: { forceRefresh?: boolean } = {},
+) {
+  const forceRefresh = options.forceRefresh === true;
   // 2026-06-12 波3 R8:revenue-trend(14 行全零)与 product-performance(rows=[])为死取数,
   // 前端解析后零消费,已从 90s 轮询 bundle 中移除;接真后再恢复。
   const [
-    dashboard,
-    distribution,
-    recentContent,
-    copilotBrief,
-    tasks,
-    marketCards,
-    starredProjects,
-    fitMovers,
-    aiTodayHot,
-    competitorRadar,
+    dashboardResult,
+    distributionResult,
+    recentContentResult,
+    copilotBriefResult,
+    tasksResult,
+    marketCardsResult,
+    starredProjectsResult,
+    fitMoversResult,
+    aiTodayHotResult,
+    competitorRadarResult,
   ] = await Promise.all([
     // 主 summary 是最重的一刀(KPI/漏斗/campaigns 全靠它):并发批里线上实测 ~4s+ 才完成,
     // 4000ms 会静默超时回空 → 整排 KPI + KOL 漏斗显示"待接入/待后端"。放宽到 10s(2026-07-02)。
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 10000 }, apiToken), {}),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500 }, apiToken), {}),
-    settle(cachedApiFetch<{ items?: Row[] }>("/api/admin/vkpi/dashboard/recent-content?limit=30", { timeoutMs: 4000 }, apiToken), { items: [] }),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500 }, apiToken), {}),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/tasks?limit=8", { timeoutMs: 2500 }, apiToken), {}),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/industry-data/market-intelligence/cards/v0?limit=120&brand_limit=5&include_latest_llm_artifact=false&include_latest_external_smoke=false", { timeoutMs: 2500 }, apiToken), {}),
-    settle(cachedApiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500 }, apiToken), { projects: [] }),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/fit-movers?limit=8", { timeoutMs: 2500 }, apiToken), {}),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 2500 }, apiToken), {}),
-    settle(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/competitor-radar", { timeoutMs: 2500 }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard?window_days=30", { timeoutMs: 10000, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/kol-distribution-pack?limit=250", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<{ items?: Row[] }>("/api/admin/vkpi/dashboard/recent-content?limit=30", { timeoutMs: 4000, forceRefresh }, apiToken), { items: [] }),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/copilot-brief", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/tasks?limit=8", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/industry-data/market-intelligence/cards/v0?limit=120&brand_limit=5&include_latest_llm_artifact=false&include_latest_external_smoke=false", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500, forceRefresh }, apiToken), { projects: [] }),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/fit-movers?limit=8", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/competitor-radar", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
   ]);
+
+  const dashboard = dashboardResult.value;
+  const distribution = distributionResult.value;
+  const recentContent = recentContentResult.value;
+  const copilotBrief = copilotBriefResult.value;
+  const tasks = tasksResult.value;
+  const marketCards = marketCardsResult.value;
+  const starredProjects = starredProjectsResult.value;
+  const fitMovers = fitMoversResult.value;
+  const aiTodayHot = aiTodayHotResult.value;
+  const competitorRadar = competitorRadarResult.value;
 
   return {
     dashboard,
@@ -66,6 +89,18 @@ export async function fetchCockpitDashboardBundle(apiToken: string) {
     fitMovers,
     aiTodayHot,
     competitorRadar,
+    _sources: {
+      dashboard: { ok: dashboardResult.ok, label: "绩效总览" },
+      distribution: { ok: distributionResult.ok, label: "KOL 地图" },
+      recentContent: { ok: recentContentResult.ok, label: "近期内容" },
+      copilotBrief: { ok: copilotBriefResult.ok, label: "Copilot 简报" },
+      tasks: { ok: tasksResult.ok, label: "Dashboard 任务" },
+      marketCards: { ok: marketCardsResult.ok, label: "市场信号" },
+      starredProjects: { ok: starredProjectsResult.ok, label: "重点项目" },
+      fitMovers: { ok: fitMoversResult.ok, label: "V6 Fit" },
+      aiTodayHot: { ok: aiTodayHotResult.ok, label: "AI Today" },
+      competitorRadar: { ok: competitorRadarResult.ok, label: "竞品雷达" },
+    },
   };
 }
 

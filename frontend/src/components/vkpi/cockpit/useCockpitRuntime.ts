@@ -10,6 +10,23 @@ const DASHBOARD_CACHE_KEY = "cockpit.dashboard.bundle.v1";
 const KOL_POOL_REFRESH_MS = 10 * 60 * 1000;
 const DASHBOARD_REFRESH_MS = 90 * 1000;
 
+function scopedCacheKey(base: string, token: string) {
+  // Persistent cache must never cross account/session boundaries. Keep the token
+  // itself out of IndexedDB while still producing a stable namespace per login.
+  let hash = 2166136261;
+  for (let index = 0; index < token.length; index += 1) {
+    hash ^= token.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${base}.${(hash >>> 0).toString(36)}`;
+}
+
+function hasDashboardSummary(bundle: any) {
+  return bundle?._sources?.dashboard?.ok === true
+    && bundle?.dashboard?.summary
+    && typeof bundle.dashboard.summary === "object";
+}
+
 function cacheAgeMs(savedAt: any) {
   const savedTime = typeof savedAt === "string" ? Date.parse(savedAt) : Number(savedAt || 0);
   return savedTime ? Date.now() - savedTime : Number.POSITIVE_INFINITY;
@@ -116,6 +133,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     let cancelled = false;
     let hasCachedValue = false;
     let cancelRefresh = () => {};
+    const cacheKey = scopedCacheKey(KOL_POOL_CACHE_KEY, apiToken);
     setKolPoolLoading(true);
     setKolPoolError("");
 
@@ -125,7 +143,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
         if (!cancelled) {
           const rows = toCockpitKolPoolRows(response || []);
           setKolPoolRows(rows);
-          void writeCachedResource(KOL_POOL_CACHE_KEY, rows);
+          void writeCachedResource(cacheKey, rows);
         }
       })
       .catch((error) => {
@@ -138,7 +156,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
         if (!cancelled) setKolPoolLoading(false);
       });
 
-    readCachedResource(KOL_POOL_CACHE_KEY)
+    readCachedResource(cacheKey)
       .then((cached: any) => {
         if (cancelled) return;
         hasCachedValue = Array.isArray(cached?.value);
@@ -168,14 +186,20 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     let cancelled = false;
     let hasCachedBundle = false;
     let cancelRefresh = () => {};
+    let intervalId = 0;
+    const cacheKey = scopedCacheKey(DASHBOARD_CACHE_KEY, apiToken);
     setDashboardLoading(true);
     setDashboardError("");
 
-    const refreshDashboard = () => fetchCockpitDashboardBundle(apiToken)
+    const refreshDashboard = (forceRefresh = true) => fetchCockpitDashboardBundle(apiToken, { forceRefresh })
       .then((bundle) => {
+        if (!hasDashboardSummary(bundle)) {
+          throw new Error("Dashboard 主数据源未返回 summary，已保留上一份有效数据");
+        }
         if (!cancelled) {
           setDashboardRaw(bundle);
-          void writeCachedResource(DASHBOARD_CACHE_KEY, bundle);
+          setDashboardError("");
+          void writeCachedResource(cacheKey, bundle);
         }
       })
       .catch((error) => {
@@ -188,7 +212,12 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
         if (!cancelled) setDashboardLoading(false);
       });
 
-    readCachedResource(DASHBOARD_CACHE_KEY)
+    const refreshWhenVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void refreshDashboard(true);
+    };
+
+    readCachedResource(cacheKey)
       .then((cached: any) => {
         if (cancelled) return;
         hasCachedBundle = Boolean(cached?.value);
@@ -197,15 +226,22 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
           setDashboardLoading(false);
         }
         if (!hasCachedBundle) setDashboardLoading(true);
-        cancelRefresh = scheduleRuntimeRefresh(refreshDashboard, hasCachedBundle ? 250 : 0);
+        cancelRefresh = scheduleRuntimeRefresh(() => refreshDashboard(true), hasCachedBundle ? 250 : 0);
       })
       .catch(() => {
-        if (!cancelled) cancelRefresh = scheduleRuntimeRefresh(refreshDashboard, 0);
+        if (!cancelled) cancelRefresh = scheduleRuntimeRefresh(() => refreshDashboard(true), 0);
       });
+
+    intervalId = window.setInterval(refreshWhenVisible, DASHBOARD_REFRESH_MS);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       cancelled = true;
       cancelRefresh();
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [apiToken]);
 
