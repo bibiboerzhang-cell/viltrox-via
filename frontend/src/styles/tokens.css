@@ -54,6 +54,7 @@
   --ds-workspace-surface:rgba(238,243,250,.92); --ds-sidebar-surface:rgb(255 255 255 / min(1, calc(var(--vkpi-glass-opacity) + .06))); --ds-topbar-surface:rgb(255 255 255 / min(1, calc(var(--vkpi-glass-opacity) + .04))); --ds-queue-surface:rgba(255,255,255,.96);
   --ds-sidebar-divider:rgba(16,26,50,.13); --ds-queue-border:rgba(16,26,50,.20); --ds-queue-shadow:0 1px 2px rgba(20,30,60,.08),0 8px 18px rgba(20,30,60,.11); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.9);
   --ds-overlay-surface:rgb(255 255 255 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(248 250 253 / var(--vkpi-glass-drawer-opacity));
+  --ds-card-2:#ffffff; /* 卡中卡表面:demo glass light --card2(外层 .86 → 内层实白) */
   --ds-line:rgba(16,26,50,.10); --ds-line-strong:rgba(16,26,50,.20);
   --ds-text:#0d1017; --ds-text-2:#3d4653; --ds-muted:#7a8496;
   --ds-accent:#0071e3; --ds-accent-hover:#0067cf; --ds-accent-soft:rgba(0,113,227,.09); --ds-accent-2:#7c3aed;
@@ -75,6 +76,7 @@
   --ds-workspace-surface:rgba(5,6,10,.90); --ds-sidebar-surface:rgb(11 15 24 / min(1, calc(var(--vkpi-glass-opacity) + .10))); --ds-topbar-surface:rgb(11 15 24 / min(1, calc(var(--vkpi-glass-opacity) + .08))); --ds-queue-surface:rgba(25,32,47,.96);
   --ds-sidebar-divider:rgba(255,255,255,.11); --ds-queue-border:rgba(255,255,255,.20); --ds-queue-shadow:0 1px 1px rgba(0,0,0,.65),0 8px 22px rgba(0,0,0,.38); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.07);
   --ds-overlay-surface:rgb(10 15 26 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(9 14 25 / var(--vkpi-glass-drawer-opacity));
+  --ds-card-2:rgba(255,255,255,.07); /* 卡中卡表面:demo glass dark --card2(.07 vs 外层 .045,亮一档) */
   --ds-line:rgba(255,255,255,.09); --ds-line-strong:rgba(255,255,255,.17);
   --ds-text:#f3f5fa; --ds-text-2:#c0c7d5; --ds-muted:#727b8d;
   --ds-accent:#3f9bff; --ds-accent-hover:#63adff; --ds-accent-soft:rgba(63,155,255,.15); --ds-accent-2:#9d5cff;
@@ -98,6 +100,7 @@
   --ds-workspace-surface:#eceff4; --ds-sidebar-surface:#f8fafc; --ds-topbar-surface:rgba(236,239,244,.96); --ds-queue-surface:#ffffff;
   --ds-sidebar-divider:#d8dee7; --ds-queue-border:#c9d2dd; --ds-queue-shadow:0 1px 2px rgba(20,26,34,.08),0 6px 14px rgba(20,26,34,.07); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.8);
   --ds-overlay-surface:#ffffff; --ds-drawer-surface:#f8fafc;
+  --ds-card-2:#ffffff; /* 卡中卡表面:demo instrument light --card2(同白,靠边线分层) */
   --ds-line:#e0e5ec; --ds-line-strong:#c9d2dd;
   --ds-text:#141a22; --ds-text-2:#4a5666; --ds-muted:#8794a4;
   --ds-accent:#a9791f; --ds-accent-hover:#8a6014; --ds-accent-soft:rgba(169,121,31,.12); --ds-accent-2:#0ea5e9;
@@ -117,6 +120,7 @@
   --ds-workspace-surface:#0e1116; --ds-sidebar-surface:#151b23; --ds-topbar-surface:rgba(14,17,22,.96); --ds-queue-surface:#1d2530;
   --ds-sidebar-divider:#2f3844; --ds-queue-border:#465260; --ds-queue-shadow:0 1px 1px rgba(0,0,0,.5),0 8px 18px rgba(0,0,0,.30); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.04);
   --ds-overlay-surface:#161c24; --ds-drawer-surface:#12161d;
+  --ds-card-2:#212a36; /* 卡中卡表面:比 --ds-card #1b222c 亮一档(demo card→card2 同步进) */
   --ds-line:#28303c; --ds-line-strong:#3b4653;
   --ds-text:#eef1f5; --ds-text-2:#aab4c2; --ds-muted:#6d7988;
   --ds-accent:#e0a94a; --ds-accent-hover:#c7913a; --ds-accent-soft:rgba(224,169,74,.14); --ds-accent-2:#8ee6ff;
@@ -141,6 +145,7 @@
   --ds-workspace-surface:#f4f5f8; --ds-sidebar-surface:rgba(255,255,255,.96); --ds-topbar-surface:rgba(244,245,248,.92); --ds-queue-surface:#ffffff;
   --ds-sidebar-divider:rgba(11,18,32,.14); --ds-queue-border:rgba(11,18,32,.24); --ds-queue-shadow:0 1px 2px rgba(11,18,32,.08),0 7px 16px rgba(11,18,32,.09); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.85);
   --ds-overlay-surface:#ffffff; --ds-drawer-surface:#fafbfc;
+  --ds-card-2:#ffffff; /* 卡中卡表面:demo commandos light --card2(外层 .9 → 内层实白) */
   --ds-line:rgba(11,18,32,.13); --ds-line-strong:rgba(11,18,32,.24);
   --ds-text:#05070c; --ds-text-2:#3a4150; --ds-muted:#79818e;
   --ds-accent:#05070c; --ds-accent-hover:#000000; --ds-accent-soft:rgba(5,7,12,.06); --ds-accent-2:#0284c7;
@@ -160,6 +165,7 @@
   --ds-workspace-surface:#020308; --ds-sidebar-surface:rgba(9,11,17,.94); --ds-topbar-surface:rgba(2,3,8,.82); --ds-queue-surface:#0f121a;
   --ds-sidebar-divider:rgba(255,255,255,.14); --ds-queue-border:rgba(255,255,255,.26); --ds-queue-shadow:0 1px 1px rgba(0,0,0,.62),0 8px 20px rgba(0,0,0,.44); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.06);
   --ds-overlay-surface:#0d1018; --ds-drawer-surface:#080b12;
+  --ds-card-2:rgba(255,255,255,.12); /* 卡中卡表面:demo commandos dark card→card2 步进(.05→.085)同幅上抬 */
   --ds-line:rgba(255,255,255,.12); --ds-line-strong:rgba(255,255,255,.24);
   --ds-text:#f7f8fb; --ds-text-2:#c7ced9; --ds-muted:#7f8896;
   --ds-accent:#eef2f8; --ds-accent-hover:#ffffff; --ds-accent-soft:rgba(255,255,255,.10); --ds-accent-2:#8ee6ff;

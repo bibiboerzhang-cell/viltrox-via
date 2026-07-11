@@ -28,13 +28,13 @@
 .ds-panel__title { margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: 0; color: var(--ds-text); }
 .ds-panel__body { padding: 3px 20px 20px; }
 
-/* ---- KPI 卡(标签 + 大号数字 + 环比 + sparkline)---- */
+/* ---- KPI 卡(标签 + 大号数字 + 环比 + sparkline)----
+   demo .kpi 1:1:card2 卡中卡表面、静态卡面(无扫光/无染底私货)、hover 抬 2px。 */
 .ds-kpi {
   --vkpi-kpi-accent: var(--ds-accent);
   position: relative;
-  isolation: isolate;
   overflow: hidden;
-  background: var(--ds-card);
+  background: var(--ds-card-2, var(--ds-card));
   backdrop-filter: var(--ds-backdrop); -webkit-backdrop-filter: var(--ds-backdrop);
   border: 1px solid var(--ds-line);
   border-radius: var(--ds-radius-md);
@@ -42,26 +42,9 @@
   padding: 12px 13px;
   transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s;
 }
-.ds-kpi::before {
-  position: absolute;
-  z-index: 0;
-  inset: -60% -35%;
-  background: linear-gradient(112deg, transparent 34%, color-mix(in srgb, var(--vkpi-kpi-accent) 20%, transparent) 48%, transparent 63%);
-  opacity: 0.72;
-  transform: translateX(-42%);
-  content: "";
-  pointer-events: none;
-}
-[data-theme="dark"] .ds-kpi {
-  background:
-    linear-gradient(140deg, color-mix(in srgb, var(--vkpi-kpi-accent) 11%, var(--ds-card)), var(--ds-card) 62%),
-    var(--ds-card);
-}
-.ds-kpi > * { position: relative; z-index: 1; }
 .ds-kpi:hover { transform: translateY(-2px); border-color: var(--ds-line-strong); }
 .ds-kpi__k {
   display: flex; align-items: center; gap: 6px;
-  min-height: 24px;
   font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--ds-muted); font-weight: 600;
 }
@@ -81,12 +64,15 @@
 .ds-kpi__dot { width: 5px; height: 5px; border-radius: 50%; flex: none; }
 .ds-kpi__dot--good { background: var(--ds-good); }
 .ds-kpi__dot--pend { background: var(--ds-warn); }
+.ds-kpi__dot--warn { background: var(--ds-warn); }
 .ds-kpi__val {
   display: flex; align-items: baseline; gap: 6px; margin-top: 6px;
-  font-size: 25px; font-weight: 680; letter-spacing: 0;
+  font-family: var(--ds-font-mono);
+  font-size: 25px; font-weight: 680; letter-spacing: -0.03em;
   color: var(--ds-text); font-variant-numeric: tabular-nums;
 }
 .ds-kpi__val--pend { color: var(--ds-muted); }
+.ds-kpi__val--warn { color: var(--ds-warn); }
 .ds-kpi__u { font-size: 12px; color: var(--ds-muted); font-weight: 500; }
 .ds-kpi__delta { display: inline-flex; align-items: center; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .ds-kpi__delta--up { color: var(--ds-good); background: var(--ds-good-soft); }
@@ -108,25 +94,29 @@
   filter: drop-shadow(0 0 4px var(--vkpi-kpi-accent));
 }
 .ds-sparkline__endpoint { filter: drop-shadow(0 0 4px var(--vkpi-kpi-accent)); }
+/* demo .spempty:诚实空序列 = 纯虚线底,零文字(有子文本时按 9px muted 收尾,不撑高) */
 .ds-kpi__series-empty {
   display: flex;
-  width: 100%;
-  height: 30px;
-  align-items: center;
-  gap: 7px;
-  margin-top: 9px;
+  align-items: flex-end;
+  height: 22px;
+  margin-top: 10px;
+  border-bottom: 1.5px dashed var(--ds-line-strong);
+  opacity: 0.55;
   color: var(--ds-muted);
   font-size: 9px;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.4;
 }
-.ds-kpi__series-empty::before {
-  height: 1px;
-  min-width: 22px;
-  flex: 1;
-  background: repeating-linear-gradient(90deg, var(--ds-line-strong) 0 4px, transparent 4px 8px);
-  content: "";
-  opacity: 0.7;
+/* demo .kpi .pt:pending 说明药丸,数值下方独立一行 */
+.ds-kpi__pt {
+  display: inline-block;
+  margin-top: 9px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--ds-warn);
+  background: var(--ds-warn-soft);
 }
 [data-theme="light"] .ds-sparkline__area { opacity: 0.24; }
 [data-theme="light"] .ds-sparkline__line {
@@ -187,22 +177,44 @@
 .ds-param__v { font-size: 14px; margin-top: 3px; font-weight: 560; color: var(--ds-text); }
 .ds-param__v--accent { color: var(--ds-accent); }
 
+/* ---- 模块卡骨架(demo .mod:玻璃三件套 backdrop/边线/大阴影 + hover 提亮抬升)---- */
+.ds-mod {
+  background: var(--ds-card);
+  backdrop-filter: var(--ds-backdrop); -webkit-backdrop-filter: var(--ds-backdrop);
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-lg);
+  box-shadow: var(--ds-shadow);
+  overflow: hidden;
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s;
+}
+.ds-mod:hover { border-color: var(--ds-line-strong); transform: translateY(-2px); }
+
+/* ---- 弹窗入场(demo .scrim/.drawer 两态过渡:挂载后下一帧置 is-on)---- */
+.ds-modal-fade { opacity: 0; transition: opacity 0.25s; }
+.ds-modal-fade.is-on { opacity: 1; }
+.ds-dialog-pop {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  backdrop-filter: var(--ds-backdrop); -webkit-backdrop-filter: var(--ds-backdrop);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.24s;
+}
+.ds-dialog-pop.is-on { opacity: 1; transform: none; }
+
 /* ---- 入场 + hover 动效(遵守 reduced-motion)---- */
 @media (prefers-reduced-motion: reduce) {
-  .ds-panel, .ds-kpi { transition: none; }
-  .ds-panel:hover, .ds-kpi:hover { transform: none; }
+  .ds-panel, .ds-kpi, .ds-mod { transition: none; }
+  .ds-panel:hover, .ds-kpi:hover, .ds-mod:hover { transform: none; }
+  .ds-modal-fade, .ds-dialog-pop { transition: none; opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .ds-kpi-rise { animation: ds-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+  .ds-rise, .ds-kpi-rise { animation: ds-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
   @keyframes ds-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
   .ds-scale-marker { animation: ds-pulse 2.6s ease-in-out infinite; }
     @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .ds-kpi::before { animation: ds-kpi-sheen 8s ease-in-out infinite; }
     .ds-kpi__signal-rail::before { animation: ds-signal-flow 6.4s linear infinite; }
     .ds-kpi__signal-rail::after { animation: ds-signal-flow 9.5s linear infinite reverse; }
     .ds-kpi__signal-rail i { animation: ds-signal-flow 4.8s linear infinite; }
     .ds-sparkline__flow { animation: ds-spark-flow 3.8s linear infinite; }
-    @keyframes ds-kpi-sheen { 0%, 35% { transform: translateX(-42%); } 75%, 100% { transform: translateX(42%); } }
     @keyframes ds-signal-flow { to { transform: translateX(68%) rotate(-1deg); } }
     @keyframes ds-spark-flow { to { stroke-dashoffset: 0; } }
 }

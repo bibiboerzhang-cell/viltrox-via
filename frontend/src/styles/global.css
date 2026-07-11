@@ -1,8 +1,16 @@
 @tailwind components;
 
 @layer components {
-  :where(.cockpit-shell),
+  :where(.cockpit-shell) {
+    color-scheme: dark;
+  }
+
+  /* 弹窗跟主题(此前随 shell 钉死 dark,浅色主题下原生滚动条/控件仍是暗色) */
   :where(.cockpit-modal) {
+    color-scheme: light;
+  }
+
+  :where([data-theme="dark"] .cockpit-modal) {
     color-scheme: dark;
   }
 
