@@ -43,6 +43,7 @@ from app.domains.kol.discovery_filters import (  # noqa: E402,F401
     _candidate_blob, _country_in_excluded_region, _detect_excluded_region,
     _has_camera_signal, _is_hard_avoid, _persona_avoid_terms,
     _persona_positive_terms, _persona_relevance, _persona_term_list,
+    _below_reach_floor, _reach_floor_reason,
 )
 
 
@@ -733,7 +734,7 @@ async def discover_new_creators(
     _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
     _neg_terms = _persona_avoid_terms(avoid_types)
     errors: list[dict[str, Any]] = []
-    _gate_dropped = {"hard_avoid": 0, "no_camera_signal": 0}  # 相机闸门丢弃计数(可观测,用于调参)
+    _gate_dropped = {"hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0}  # 闸门丢弃计数(可观测,用于调参)
 
     async def _search_one_platform(platform: str) -> dict[str, Any]:
         """Run one platform search with error isolation; returns annotated items + meta.
@@ -814,18 +815,30 @@ async def discover_new_creators(
             if not _has_camera_signal(item):
                 _gate_dropped["no_camera_signal"] += 1
                 continue
+            # 召回触达门槛(用户裁决 2026-07-11):followers 明确 < 门槛(默认 1000,env 可调)
+            # 或互动信号实测全零(views/comments 实测都 0)→ 不进「全网新发现」结果流。
+            # 与地区/相机闸同层的候选 FILTER;字段缺 / fast_path 填充 0 一律放行(不误杀);
+            # 只挡本入口不删数据。red line:零触 viltrox_fit_score / rule_v0。
+            _reach_reason = _reach_floor_reason(item)
+            if _reach_reason:
+                _gate_dropped["low_reach"] += 1
+                logger.debug(
+                    "discovery_reach_floor_filtered handle=%r platform=%s reason=%s",
+                    item.get("handle"), platform, _reach_reason,
+                )
+                continue
             # persona 启发式相关度(纯本地零 LLM):写 item['score']/relevance_score/relevance_tier;
             # 先全收集到 survivors,循环外按 relevance 降序排序再 top-N 截断(否则按到达顺序砍掉高相关项)。
             item.update(_persona_relevance(item, pos_terms=_pos_terms, neg_terms=_neg_terms))
             survivors.append(item)
 
-    # 相机闸门可观测:单行 INFO,丢弃明细(诚实——被丢=结果中静默缺席,非杜撰分)。便于调参。
-    _total_dropped = _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"]
+    # 闸门可观测:单行 INFO,丢弃明细(诚实——被丢=结果中静默缺席,非杜撰分)。便于调参。
+    _total_dropped = _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"] + _gate_dropped["low_reach"]
     if _total_dropped:
         logger.info(
-            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d survivors=%d query=%r",
+            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d low_reach=%d survivors=%d query=%r",
             _total_dropped, _gate_dropped["hard_avoid"], _gate_dropped["no_camera_signal"],
-            len(survivors), query,
+            _gate_dropped["low_reach"], len(survivors), query,
         )
     # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
     survivors.sort(key=lambda it: float(it.get("relevance_score") or 0.0), reverse=True)
@@ -885,6 +898,8 @@ async def discover_new_creators(
             # K3:本次真实自动入库条数(_auto_enroll_discoveries 逐条 upsert 的成功数;
             # 缺 handle/入库失败/已在库的项不计)。前端据此显示真数,不再拿发现数冒充入库数。
             "auto_enrolled": auto_enrolled_count,
+            # 召回触达门槛命中数(诚实可见,非静默;明细见 debug 日志 discovery_reach_floor_filtered)。
+            "filtered_low_reach": _gate_dropped["low_reach"],
             "platforms": len(resolved_platforms),
             "errors": len(errors),
         },

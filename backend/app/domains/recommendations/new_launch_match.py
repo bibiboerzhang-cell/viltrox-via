@@ -29,6 +29,10 @@ logger = get_logger(__name__)
 
 from app.domains.recommendations.new_launch_match_helpers import *  # noqa: F403
 
+# 召回触达门槛(用户裁决 2026-07-11):与 KOL 发现/召回侧同一实现(discovery_filters 叶子
+# 模块,无回环)。推荐刷新产出 vkpi_kol_recommendations 前的候选层 FILTER,零触评分公式。
+from app.domains.kol.discovery_filters import _reach_floor_reason  # noqa: E402
+
 def _json_write(path: str, payload: dict[str, Any]) -> None:
     if not path:
         return
@@ -360,6 +364,7 @@ def build_new_launch_match_preview(
     eligible: list[dict[str, Any]] = []
     hard_excluded = 0
     low_evidence = 0
+    filtered_low_reach = 0
 
     for kol in kol_rows:
         entity_id = int(kol["id"])
@@ -377,6 +382,18 @@ def build_new_launch_match_preview(
         review_state = _text(metadata.get("review_state") or _latest_fact_value(facts, "review_state"))
         if weak_label == "blocked_risk" or decision == "drop":
             hard_excluded += 1
+            continue
+        # 召回触达门槛(用户裁决 2026-07-11):pool 行 followers 明确 < 门槛(默认 1000,
+        # env VKPI_DISCOVERY_MIN_FOLLOWERS 可调)或互动信号实测全零 → 不进推荐刷新产出
+        # (vkpi_kol_recommendations 不再落这类行;pool 数据保留不删)。与 blocked_risk/drop
+        # 同层的候选硬排除;pool 缺行/字段 NULL 一律放行(不误杀)。零触评分公式/viltrox_fit_score。
+        _reach_reason = _reach_floor_reason(pool) if pool else ""
+        if _reach_reason:
+            filtered_low_reach += 1
+            logger.debug(
+                "new_launch_match_reach_floor_filtered handle=%r kol_pool_id=%s reason=%s",
+                (pool or {}).get("handle"), (pool or {}).get("id"), _reach_reason,
+            )
             continue
 
         source_refs = {link.get("source_ref") for link in links if _text(link.get("source_ref"))}
@@ -636,6 +653,8 @@ def build_new_launch_match_preview(
         "eligible_after_hard_filters": len(eligible),
         "excluded_blocked_or_dropped": hard_excluded,
         "excluded_low_evidence": low_evidence,
+        # 召回触达门槛命中数(诚实可见:被挡=不落 vkpi_kol_recommendations,非降分)。
+        "filtered_low_reach": filtered_low_reach,
         "returned": len(returned),
         "markdown_display_count": len(markdown_display),
         "top_score": returned[0]["score"] if returned else 0,

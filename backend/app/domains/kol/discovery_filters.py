@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -178,6 +179,95 @@ def _is_hard_avoid(item: dict[str, Any], neg_terms: list[str]) -> bool:
     if any(term in blob for term in _HARD_AVOID_TERMS):
         return True
     return any(t and t in blob for t in neg_terms)
+
+
+# ── 召回触达门槛(用户裁决 2026-07-11):粉丝明确低于门槛、或互动信号实测全零的账号
+# 不再进推荐/发现列表。与「排除中文 KOL(地区判据)」同族同层:纯召回/候选层 FILTER
+# (只挡展示/推荐入口,不删数据、Pool 已有行保留、MY KOL 不受影响)。
+# red line:绝不写 viltrox_fit_score / 不改 rule_v0 / 不动任何评分公式,只做候选过滤。
+# env:VKPI_DISCOVERY_REACH_FLOOR_ENABLED 总开关(默认开)+ VKPI_DISCOVERY_MIN_FOLLOWERS
+# 阈值(默认 1000)。运行时读 env(非 import 时快照),线上改 env 重启即生效。
+REACH_FLOOR_SWITCH_ENV = "VKPI_DISCOVERY_REACH_FLOOR_ENABLED"
+REACH_FLOOR_MIN_FOLLOWERS_ENV = "VKPI_DISCOVERY_MIN_FOLLOWERS"
+_REACH_FLOOR_DEFAULT_MIN_FOLLOWERS = 1000
+
+# 候选行字段形态各出口不一(pool 行 followers/avg_views/avg_comments;发现 item
+# views/comments/likes,followers 仅 facebook >0 时透出),按族探测、缺列不误杀。
+_REACH_FOLLOWER_KEYS = ("followers", "follower_count", "subscriber_count", "subscribers")
+_REACH_VIEW_KEYS = ("views", "avg_views", "view_count", "median_views", "play_count")
+_REACH_COMMENT_KEYS = ("comments", "avg_comments", "comment_count")
+_REACH_EXTRA_SIGNAL_KEYS = ("likes", "like_count", "engagement_rate", "engagement")
+
+
+def _reach_floor_enabled() -> bool:
+    """总开关(默认开)。与 RECALL_LLM_RERANK_ENABLED 同款 env 布尔口径。"""
+    raw = str(os.environ.get(REACH_FLOOR_SWITCH_ENV, "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _reach_floor_min_followers() -> int:
+    """粉丝门槛(默认 1000);env 不可解析/负数 → 回默认,绝不因坏配置放大误杀。"""
+    raw = str(os.environ.get(REACH_FLOOR_MIN_FOLLOWERS_ENV, "")).strip()
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        return _REACH_FLOOR_DEFAULT_MIN_FOLLOWERS
+    return value if value >= 0 else _REACH_FLOOR_DEFAULT_MIN_FOLLOWERS
+
+
+def _known_numeric(candidate: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    """候选行里该字段族第一个「明确在场且可解析」的数值;族内全缺 → None。
+
+    不误杀口径:key 不在 dict = 字段真缺;value=None/空串 = NULL 读回;两者都算「未知」,
+    返回 None 由调用方放行——绝不把未知当 0 挡人。BOOLEAN/Decimal 读回走 float() 容错。"""
+    for key in keys:
+        if key not in candidate:
+            continue
+        value = candidate.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _reach_floor_reason(candidate: dict[str, Any] | None) -> str:
+    """召回触达门槛判据:命中返回原因串(供 debug 日志),放行返回空串。
+
+    两条挡规(用户裁决 2026-07-11):
+    ① followers 明确在场且 < 门槛(默认 1000)→ 挡;followers 缺/NULL → 未知,放行。
+    ② 互动信号实测全零:播放族与评论族都「明确在场」且全为 0,且无任何其他正互动信号
+       (likes/engagement_rate)→ 挡。任一族真缺 → 未知,放行;fast_path 项豁免
+       (YouTube Data API search.list 无统计数据,views/comments=0 是填充非实测)。
+    red line:纯候选层过滤,零触 viltrox_fit_score / rule_v0 / 任何评分列。
+    """
+    if not isinstance(candidate, dict) or not _reach_floor_enabled():
+        return ""
+    floor = _reach_floor_min_followers()
+    followers = _known_numeric(candidate, _REACH_FOLLOWER_KEYS)
+    if followers is not None and followers < floor:
+        return f"followers_below_floor({int(followers)}<{floor})"
+    if candidate.get("fast_path"):
+        return ""  # 统计字段是填充 0 非实测,互动判据不适用(不误杀)
+    views = _known_numeric(candidate, _REACH_VIEW_KEYS)
+    comments = _known_numeric(candidate, _REACH_COMMENT_KEYS)
+    if views is None or comments is None:
+        return ""  # 任一族字段真缺 → 未知 → 放行(不误杀)
+    if views > 0 or comments > 0:
+        return ""
+    extra = _known_numeric(candidate, _REACH_EXTRA_SIGNAL_KEYS)
+    if extra is not None and extra > 0:
+        return ""
+    return "no_engagement_signal(views=0,comments=0)"
+
+
+def _below_reach_floor(candidate: dict[str, Any] | None) -> bool:
+    """召回触达门槛(bool 契约口):True=应从推荐/发现列表挡掉(数据保留,只挡入口)。"""
+    return bool(_reach_floor_reason(candidate))
 
 
 # facebook 为 opt-in 平台:用户显式选择才参与发现(FB 流量/召回质量一般,做够用的即可),

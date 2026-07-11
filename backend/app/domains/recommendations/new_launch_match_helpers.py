@@ -421,7 +421,8 @@ def _pool_by_source_ref() -> dict[str, dict[str, Any]]:
     rows = get_conn().execute(
         """
         SELECT id, platform, handle, display_name, country, source_ref,
-               sync_status, raw_platform_data
+               sync_status, raw_platform_data,
+               followers, avg_views, avg_comments, engagement_rate
         FROM vkpi_kol_pool
         WHERE source_type='legacy_excel_p2d'
         """
