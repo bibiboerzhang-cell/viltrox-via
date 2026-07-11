@@ -191,6 +191,83 @@ async def job_vkpi_official_daily_report(round_key: str = "daily"):
             logger.debug("scheduler run 兜底记录失败(best-effort)", exc_info=True)
 
 
+async def job_market_voice_alerts():
+    """市场之声「声量告警」(V0f):近 8h 窗按抱怨类别统计负面提及(lexicon_v0 口径复用,
+    官号帖 post_table='vkpi_employee_channels' 评论权重×2),加权分 ≥3 触发 →
+    推「今日该做什么」(vkpi_action_inbox,同类别同日 dedupe_key 幂等;纯提醒不做铃铛)。
+    零 LLM/零外调/零成本;唯一写=action inbox 自身台账;零触 viltrox_fit_score / rule_v0。
+
+    config-gate(scheduler_tasks.market_voice_alerts):注册表无此行/未开 → 默认关不跑。
+    开启方式(用户动作,默认不烧、不惊扰):
+      INSERT INTO scheduler_tasks (task_key, label, enabled, risk_level)
+      VALUES ('market_voice_alerts', '市场之声声量告警(8h窗×抱怨类别,官号×2,推今日该做什么)', TRUE, 'low')
+      ON CONFLICT (task_key) DO UPDATE SET enabled = TRUE;
+    (本地/测试可 env OPS_SCHEDULER_FORCE_ENABLE=1 整体强开。)"""
+    if not _scheduler_task_enabled("market_voice_alerts"):
+        return
+    try:
+        import asyncio
+        from app.domains.market import voice_alerts
+
+        result = await asyncio.to_thread(voice_alerts.push_voice_alerts)
+        logger.info(
+            "scheduler.market_voice_alerts",
+            extra={k: result.get(k) for k in ("scanned", "triggered", "pushed", "triggered_categories")},
+        )
+        _record_scheduler_result("market_voice_alerts", result)
+    except Exception as exc:
+        logger.exception("scheduler.market_voice_alerts_failed")
+        _record_scheduler_run("market_voice_alerts", ok=False, error=str(exc)[:240])
+
+
+async def job_sentiment_annotate():
+    """V0g 评论情绪批注(打包 LLM):sentiment_id IS NULL 的 vkpi_comments 每轮批注 ≤200 条
+    (env VKPI_SENTIMENT_ANNOTATE_MAX_PER_RUN 可调),一次调用打包 40 条省 token,
+    写 vkpi_sentiment_results + 回填 sentiment_id。走 llm_gateway(预算闸+代理+台账);
+    gateway 被闸(fallback_to_rule)→ 立即停跑不落库。零触 viltrox_fit_score / rule_v0。
+
+    config-gate:scheduler_tasks.vkpi_sentiment_annotate —— **默认关**(注册表无此行 → 不跑)。
+    开启方式(运营显式执行 SQL,或 Ops 设置页开关):
+      INSERT INTO scheduler_tasks (task_key, label, enabled, risk_level)
+      VALUES ('vkpi_sentiment_annotate', '评论情绪批注(LLM 打包)', TRUE, 'high')
+      ON CONFLICT (task_key) DO UPDATE SET enabled = TRUE;
+    关闸:UPDATE scheduler_tasks SET enabled = FALSE WHERE task_key = 'vkpi_sentiment_annotate';
+
+    成本口径(按 llm_gateway.PROVIDER_CONFIG 价目;全量 12,703 条 pending、pack=40 →
+    ceil(12703/40)=318 次调用;input ≈ 318×(~180 头部 + 40×~50 评论) ≈ 0.69M tok,
+    output ≈ 318×(40×40+60) ≈ 0.53M tok):
+      - google gemini-flash-latest(默认):0.69M×$0.07/M + 0.53M×$0.30/M ≈ **$0.21 全量**
+      - openai gpt-5.4-mini ≈ $1.23;anthropic claude ≈ $0.83
+    单 run 硬上限 200 条 = 5 次调用 ≈ $0.003;每日一跑清完全量 ≈ 64 天,或临时调高 env 一把梭。
+    """
+    if not _scheduler_task_enabled("vkpi_sentiment_annotate"):
+        return
+    try:
+        import asyncio
+
+        from app.domains.market import sentiment_annotate
+
+        result = await asyncio.to_thread(
+            sentiment_annotate.annotate_batch,
+            sentiment_annotate.run_hard_cap(),
+            dry_run=False,
+        )
+        logger.info(
+            "scheduler.vkpi_sentiment_annotate",
+            extra={
+                "result": {
+                    k: result.get(k)
+                    for k in ("selected", "annotated", "linked_from_cache", "skipped_unparsed", "halted_reason")
+                }
+            },
+        )
+        halted = str(result.get("halted_reason") or "")
+        _record_scheduler_run("vkpi_sentiment_annotate", ok=not halted, error=halted[:240])
+    except Exception as exc:
+        logger.exception("scheduler.vkpi_sentiment_annotate_failed")
+        _record_scheduler_run("vkpi_sentiment_annotate", ok=False, error=str(exc)[:240])
+
+
 async def job_vkpi_official_visual_scan():
     """官号视频画质分析(增量):每轮跑少量未分析的官号视频(Gemini final_v1 → content_quality_score),
     fit-safe 落 vkpi_official_post_visual,不进 kol_pool。config-gate(scheduler_tasks.vkpi_official_visual_scan);

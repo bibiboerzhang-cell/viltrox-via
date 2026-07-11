@@ -65,8 +65,10 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_kol_auto_poll,
     job_llm_batch_poll,
     job_logistics_track_sync,
+    job_market_voice_alerts,
     job_ops_threshold_alerts,
     job_pending_asset_cleanup,
+    job_sentiment_annotate,
     job_provider_health_check,
     job_rate_limit_cleanup,
     job_token_broker_reset_daily,
@@ -445,6 +447,16 @@ async def start_scheduler() -> None:
         max_instances=1,
         coalesce=True,
     )
+    # ── V0g 评论情绪批注(打包 LLM;config-gate scheduler_tasks.vkpi_sentiment_annotate,默认 OFF)──
+    # 排在 04:40,先把存量 sentiment_id 补上,05:00 的 comment_sentiment_refresh 再管当天新增。
+    _scheduler.add_job(
+        job_sentiment_annotate,
+        trigger=CronTrigger(hour=4, minute=40),
+        id="vkpi_sentiment_annotate",
+        name="V0g packed comment sentiment annotate (config-gated OFF, <=200/run)",
+        max_instances=1,
+        coalesce=True,
+    )
     # ── 市场情报每日刷新(config-gate,默认 OFF;07:15 中国,排在 signal_refresh 后)──
     _scheduler.add_job(
         job_vkpi_market_intelligence_refresh,
@@ -512,6 +524,17 @@ async def start_scheduler() -> None:
         trigger=CronTrigger(hour=7, minute=0, timezone=CHINA_TZ),
         id="vkpi_market_signal_refresh",
         name="Signals & Alerts daily refresh (07:00 China, bounded, no LLM)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── 市场之声声量告警(V0f·每 2h 扫近 8h 窗·lexicon_v0 复用·官号帖×2)──
+    # config-gate(scheduler_tasks.market_voice_alerts,注册表无此行 → 默认关,空跑即返回)。
+    # 触发只推「今日该做什么」(vkpi_action_inbox,同类别同日幂等),零 LLM/零成本;开启方式见 job 注释。
+    _scheduler.add_job(
+        job_market_voice_alerts,
+        trigger=IntervalTrigger(hours=2),
+        id="market_voice_alerts",
+        name="Market voice volume alerts (8h window x complaint category, owned x2, default-off)",
         max_instances=1,
         coalesce=True,
     )
