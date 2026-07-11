@@ -65,6 +65,10 @@ ALL_SQL_CONSTANTS = (
     voice_report_ext.PLATFORM_DIST_SQL,
     voice_report_ext.LINE_VOICE_SELECT_SQL,
     voice_report_ext.RECENT_ALERTS_SQL,
+    # V0i 增量三组(topics / language_dist / competitor_voice)也进红线静态审查
+    voice_report_ext.TOPIC_TEXT_SQL,
+    voice_report_ext.LANGUAGE_DIST_SQL,
+    voice_report_ext.COMPETITOR_VOICE_SQL,
 )
 ALL_SQL = "\n".join(ALL_SQL_CONSTANTS)
 
@@ -83,6 +87,9 @@ def test_sql_constants_parameterized_with_limit_pushdown():
         voice_report_ext.PLATFORM_DIST_SQL,
         voice_report_ext.LINE_VOICE_SELECT_SQL,
         voice_report_ext.RECENT_ALERTS_SQL,
+        voice_report_ext.TOPIC_TEXT_SQL,
+        voice_report_ext.LANGUAGE_DIST_SQL,
+        voice_report_ext.COMPETITOR_VOICE_SQL,
     )
     for sql in limited:
         assert "LIMIT ?" in sql
@@ -331,6 +338,7 @@ def test_response_envelope_contract_keys():
         "status", "month", "window",
         "kpi_series", "kpi_prev", "sentiment_summary",
         "alerts_state", "platform_dist", "line_voice",
+        "topics", "language_dist", "competitor_voice",
         "method", "generated_at",
     }
     assert body["status"] == "ready"

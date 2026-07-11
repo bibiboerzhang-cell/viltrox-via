@@ -1,12 +1,12 @@
-"""市场之声报表增强字段(voice_report_ext · V0h)——6 组趋势/环比/情绪/告警/平台/产品线读数。
+"""市场之声报表增强字段(voice_report_ext · V0h+V0i)——9 组窗口敏感报表读数。
 
 用途:给前端「市场之声」报表页补 sparkline / 环比药丸 / 情绪趋势双线 / 告警彩条 /
-平台条形 / 产品线声量榜 所需的窗口敏感真数据字段。挂独立端点
-GET /api/admin/vkpi/market/voice-report-ext?month=YYYY-MM(与 voice-report 同前缀、
-同 require_tab 权限、同窗口口径:month 自然月 UTC,缺省近 30 天),对现有
-voice-report 响应零改动 —— 全部字段增量新增,绝不破坏既有契约。
+平台条形 / 产品线声量榜 / 热点话题榜 / 语言分布 / 竞品声量 所需的窗口敏感真数据
+字段。挂独立端点 GET /api/admin/vkpi/market/voice-report-ext?month=YYYY-MM(与
+voice-report 同前缀、同 require_tab 权限、同窗口口径:month 自然月 UTC,缺省近
+30 天),对现有 voice-report 响应零改动 —— 全部字段增量新增,绝不破坏既有契约。
 
-六组字段(每组独立 status,单组失败诚实降级 {status:"error"} 不拖累其余):
+九组字段(每组独立 status,单组失败诚实降级 {status:"error"} 不拖累其余):
   kpi_series         窗口内按 UTC 日计数序列(comments=vkpi_comments,queue=vkpi_reply_queue);
                      日轴连续 0 填齐,前端 sparkline 直接画。
   kpi_prev           上一等长窗口同口径计数 + delta_pct;上窗为 0 → delta_pct=null
@@ -21,10 +21,23 @@ voice-report 响应零改动 —— 全部字段增量新增,绝不破坏既有�
   line_voice         产品线级声量榜:复用 focal_matrix.PRODUCT_LINES 词表分桶
                      (与月报 buckets.product_lines 同口径)× 情绪回链;
                      逐 SKU 关联不真实存在 → 如实停留在产品线级,绝不硬造 SKU 映射。
+  topics             热点话题榜:窗口内评论正文命中 market_voice 真词族
+                     (COMPLAINT_CATEGORIES 六类话题词 + WISH_TERMS 愿望词)的
+                     评论数 + 环比上一等长窗(上窗 0 → delta_pct=null);Top 12 封顶。
+                     热度口径=话题词命中,不叠负面线索过滤(热度≠抱怨)。
+  language_dist      窗口内 vkpi_comments.language_detected 语言分桶;NULL/空串归
+                     'und'(前端显示「待检」);是语言分布不是地理——geo 关联
+                     不真实存在,绝不冒充按国家/市场。
+  competitor_voice   竞品声量:复用 kol/competitor_exposure.py「百家饭指数」真实
+                     口径(vkpi_analysis_cache 已 ready 的 video_analysis_final_v1
+                     深析产物 × 视频×品牌去重),按 evidence 发布时间窗口过滤;
+                     Viltrox 自家行 is_self=true;本块只出分布,不算 index 不折扣。
 
 数据源(全只读,聚合逐一注明真实表名):vkpi_comments / vkpi_reply_queue /
-vkpi_sentiment_results / vkpi_action_inbox;产品线词表来自 focal_matrix(经
-market_voice._product_lines 复用,ImportError 自动降级精简词表)。
+vkpi_sentiment_results / vkpi_action_inbox / vkpi_analysis_cache /
+vkpi_kol_video_evidence;产品线词表来自 focal_matrix(经 market_voice._product_lines
+复用,ImportError 自动降级精简词表);话题词表来自 market_voice(lexicon_v0);
+竞品品牌词表经 competitor_exposure 复用 competitor_text.load_competitor_brands。
 
 诚实空态:算不出的字段返 null / 空数组,绝不编数;share 只在分母 > 0 时给,
 delta_pct 只在上窗 > 0 时给。所有 LIMIT 双层封顶(SQL LIMIT ? + Python 切片)。
@@ -46,6 +59,9 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains.market.market_voice import (
+    COMPLAINT_CATEGORIES,
+    VOICE_METHOD,
+    WISH_TERMS,
     _extract_focals,
     _int0,
     _matches_any,
@@ -69,6 +85,13 @@ RECENT_ALERTS_LIMIT = 10         # 已推送告警最近条数(SQL + Python 双�
 DAY_GRANULARITY_MAX_DAYS = 35    # 窗口 ≤35 天 → 日粒度;更长 → ISO 周粒度
 ALERT_DEDUPE_PREFIX = "voice_alert:"   # vkpi_action_inbox.dedupe_key 前缀(voice_alerts 同口径)
 SENTIMENT_LABELS = ("positive", "negative", "neutral")
+TOPIC_SCAN_LIMIT = 5000          # topics 扫描评论上限(本窗/上窗各一次;SQL+Python 双封顶)
+TOPIC_MAX_ITEMS = 12             # 话题榜条目 Top 12 封顶(施工单口径)
+LANGUAGE_ROWS_LIMIT = 40         # 语言分桶 SQL 层封顶(真库语言数远小于此)
+LANGUAGE_MAX_ITEMS = 30          # 语言条目 Python 层封顶
+UND_LANGUAGE = "und"             # NULL/空串语言归一桶(前端显示「待检」)
+COMPETITOR_SCAN_LIMIT = 2000     # 竞品声量扫描已深析视频上限(SQL+Python 双封顶)
+COMPETITOR_MAX_BRANDS = 12       # 竞品品牌条目封顶(与百家饭 breakdown[:12] 同款)
 
 # ── SQL 常量(全参数化;零字面 percent;窗口/LIMIT 全下推)────────────────
 # 计数口径与 market_voice._load_comments 同款:正文非空 + COALESCE(created_at, fetched_at)。
@@ -157,6 +180,49 @@ RECENT_ALERTS_SQL = """
     FROM vkpi_action_inbox
     WHERE strpos(dedupe_key, ?) = 1
     ORDER BY id DESC
+    LIMIT ?
+"""
+
+# topics 只取正文一列(显示层宪法);词表匹配全在 Python(零 LIKE 零字面 percent)。
+TOPIC_TEXT_SQL = """
+    SELECT comment_text
+    FROM vkpi_comments
+    WHERE comment_text IS NOT NULL AND comment_text <> ''
+      AND COALESCE(created_at, fetched_at) >= CAST(? AS TIMESTAMPTZ)
+      AND COALESCE(created_at, fetched_at) < CAST(? AS TIMESTAMPTZ)
+    ORDER BY id DESC
+    LIMIT ?
+"""
+
+LANGUAGE_DIST_SQL = """
+    SELECT language_detected, COUNT(*) AS n
+    FROM vkpi_comments
+    WHERE comment_text IS NOT NULL AND comment_text <> ''
+      AND COALESCE(created_at, fetched_at) >= CAST(? AS TIMESTAMPTZ)
+      AND COALESCE(created_at, fetched_at) < CAST(? AS TIMESTAMPTZ)
+    GROUP BY language_detected
+    ORDER BY n DESC
+    LIMIT ?
+"""
+
+# 竞品声量 = 百家饭指数(kol/competitor_exposure.py)同源同口径:final_v1 深析产物
+# 的三个品牌字段(jsonb 路径抽取与 pool_detail.py 同款);只抽品牌三列,零个人字段。
+# 窗口按 evidence 发布时间(published_at_norm 真库覆盖 480/480,publish_date 兜底);
+# is_active IS NOT FALSE 与百家饭一致(归属纠错下线的 evidence 不计入)。
+COMPETITOR_VOICE_SQL = """
+    SELECT
+        ac.result #>> '{raw_gemini_video,viltrox_detected}' AS viltrox_detected_text,
+        ac.result #> '{raw_gemini_video,viltrox_products_all}' AS viltrox_products,
+        ac.result #> '{raw_gemini_video,competitor_mentions}' AS competitor_mentions
+    FROM vkpi_analysis_cache ac
+    JOIN vkpi_kol_video_evidence e ON e.id = CAST(ac.target_id AS BIGINT)
+    WHERE ac.target_type = 'video'
+      AND ac.derive_method = 'video_analysis_final_v1'
+      AND ac.status = 'ready'
+      AND e.is_active IS NOT FALSE
+      AND COALESCE(e.published_at_norm, e.publish_date) >= CAST(? AS TIMESTAMPTZ)
+      AND COALESCE(e.published_at_norm, e.publish_date) < CAST(? AS TIMESTAMPTZ)
+    ORDER BY e.id DESC
     LIMIT ?
 """
 
@@ -459,6 +525,153 @@ def _line_voice(conn: Any, since: str, until: str) -> dict[str, Any]:
     }
 
 
+def _topic_families() -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """话题词族 = market_voice 真词表:六类抱怨话题词 + 愿望词(lexicon_v0 同源)。"""
+    families = [(key, label, tuple(terms)) for key, label, terms in COMPLAINT_CATEGORIES]
+    families.append(("wishlist", "愿望/求出", tuple(WISH_TERMS)))
+    return tuple(families)
+
+
+def _topic_hit_counts(conn: Any, since: str, until: str) -> tuple[dict[str, int], int]:
+    """窗口内逐词族命中评论数;返回 (counts, 实际扫描条数);SQL/Python 双封顶。"""
+    rows = conn.execute(TOPIC_TEXT_SQL, (since, until, TOPIC_SCAN_LIMIT)).fetchall()
+    lowers: list[str] = []
+    for r in list(rows)[:TOPIC_SCAN_LIMIT]:
+        text = " ".join(str(dict(r).get("comment_text") or "").split()).lower()
+        if text:
+            lowers.append(text)
+    counts = {
+        key: sum(1 for low in lowers if _matches_any(low, terms))
+        for key, _label, terms in _topic_families()
+    }
+    return counts, len(lowers)
+
+
+def _topics(conn: Any, since: str, until: str) -> dict[str, Any]:
+    """7. topics:热点话题榜 [{key,label,count,delta_pct}];环比上一等长窗,Top 12 封顶。"""
+    since_dt, until_dt = _parse_ts(since), _parse_ts(until)
+    if since_dt is None or until_dt is None or until_dt <= since_dt:
+        return {"status": "empty", "reason": "窗口时间解析失败,话题榜无从算起,诚实空。", "items": []}
+    span = until_dt - since_dt
+    prev_since, prev_until = (since_dt - span).isoformat(), since_dt.isoformat()
+    counts, scanned = _topic_hit_counts(conn, since, until)
+    prev_counts, _prev_scanned = _topic_hit_counts(conn, prev_since, prev_until)
+    labels = {key: label for key, label, _terms in _topic_families()}
+    items = [
+        {"key": k, "label": labels[k], "count": n, "delta_pct": _delta_pct(n, prev_counts.get(k, 0))}
+        for k, n in counts.items()
+        if n > 0
+    ]
+    items.sort(key=lambda x: (-_int0(x.get("count")), str(x.get("key"))))
+    body: dict[str, Any] = {
+        "status": "ready" if items else "empty",
+        "items": items[:TOPIC_MAX_ITEMS],
+        "scanned": scanned,
+        "window_prev": {"since": prev_since, "until": prev_until},
+        "basis": (
+            f"词表={VOICE_METHOD}(market_voice.COMPLAINT_CATEGORIES 六类话题词 + WISH_TERMS 愿望词);"
+            "vkpi_comments 窗口正文(正文非空,时间=COALESCE(created_at,fetched_at))小写包含匹配,"
+            "全在 Python(零 LIKE);热度口径=话题词命中,不叠负面线索过滤(热度≠抱怨);"
+            "delta_pct=vs 上一等长窗同口径命中数,上窗 0 → null(诚实省略环比)"
+        ),
+    }
+    if not items:
+        body["reason"] = f"窗口内 {scanned} 条评论无一命中话题词族——诚实空榜,不编热度。"
+    return body
+
+
+def _language_dist(conn: Any, since: str, until: str) -> dict[str, Any]:
+    """8. language_dist:语言分桶;NULL/空串归 'und'(待检);是语言分布不是地理。"""
+    rows = conn.execute(LANGUAGE_DIST_SQL, (since, until, LANGUAGE_ROWS_LIMIT)).fetchall()
+    counts: dict[str, int] = {}
+    for r in list(rows)[:LANGUAGE_ROWS_LIMIT]:
+        rec = dict(r)
+        lang = str(rec.get("language_detected") or "").strip().lower() or UND_LANGUAGE
+        counts[lang] = counts.get(lang, 0) + _int0(rec.get("n"))
+    total = sum(counts.values())
+    items = [{"language": k, "count": v} for k, v in counts.items()]
+    items.sort(key=lambda x: (-_int0(x.get("count")), str(x.get("language"))))
+    body: dict[str, Any] = {
+        "status": "ready" if items else "empty",
+        "items": items[:LANGUAGE_MAX_ITEMS],
+        "total": total,
+        "basis": (
+            "vkpi_comments.language_detected 窗口分桶(正文非空,时间=COALESCE(created_at,fetched_at));"
+            "NULL/空串归 'und'(未检出,前端显示「待检」);语言码原样 lower 透传;"
+            "这是语言分布不是地理——评论无真实 geo 关联,绝不冒充按国家/市场"
+        ),
+    }
+    if not items:
+        body["reason"] = "窗口内无评论行——语言分布诚实空。"
+    return body
+
+
+def _competitor_voice(conn: Any, since: str, until: str) -> dict[str, Any]:
+    """9. competitor_voice:竞品声量分布,复用百家饭指数(competitor_exposure)真实口径。
+
+    视频×品牌去重:同一视频同一品牌只记 1 次;V=Viltrox 出现的视频数,
+    C=Σ 每视频去重竞品品牌数;share 分母=V+C。只出分布不算 index(不做样本折扣)。
+    """
+    from app.domains.kol.competitor_exposure import (
+        _display_brand,
+        _known_brand_lookup,
+        _loads as _ce_loads,
+        _mention_brand_keys,
+    )
+
+    rows = conn.execute(COMPETITOR_VOICE_SQL, (since, until, COMPETITOR_SCAN_LIMIT)).fetchall()
+    known = _known_brand_lookup()
+    viltrox_videos = 0
+    brand_counts: dict[str, int] = {}
+    scanned = 0
+    for r in list(rows)[:COMPETITOR_SCAN_LIMIT]:
+        rec = dict(r)
+        scanned += 1
+        detected = str(rec.get("viltrox_detected_text") or "").strip().lower()
+        products = _ce_loads(rec.get("viltrox_products"))
+        has_products = isinstance(products, list) and any(str(p or "").strip() for p in products)
+        mention_keys = _mention_brand_keys(rec.get("competitor_mentions"), known)
+        if detected == "true" or has_products or "viltrox" in mention_keys:
+            viltrox_videos += 1
+        for key in mention_keys - {"viltrox"}:
+            brand_counts[key] = brand_counts.get(key, 0) + 1
+    competitor_exposures = sum(brand_counts.values())
+    total = viltrox_videos + competitor_exposures
+
+    ranked = sorted(brand_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:COMPETITOR_MAX_BRANDS]
+    items: list[dict[str, Any]] = []
+    if viltrox_videos:
+        items.append({
+            "brand": "Viltrox", "count": viltrox_videos,
+            "share": _share(viltrox_videos, total), "is_self": True,
+        })
+    items.extend(
+        {"brand": _display_brand(k), "count": n, "share": _share(n, total), "is_self": False}
+        for k, n in ranked
+    )
+    body: dict[str, Any] = {
+        "status": "ready" if items else "empty",
+        "sample_videos": scanned,
+        "viltrox_videos": viltrox_videos,
+        "competitor_exposures": competitor_exposures,
+        "items": items,
+        "basis": (
+            "vkpi_analysis_cache(derive_method=video_analysis_final_v1,status=ready)"
+            "JOIN vkpi_kol_video_evidence(is_active IS NOT FALSE,"
+            "窗口=COALESCE(published_at_norm,publish_date));视频×品牌去重口径与 "
+            "kol/competitor_exposure.py 百家饭指数同款(品牌归一复用 competitor_text 词表);"
+            "share 分母=Viltrox 视频数+竞品曝光数;本块只出分布,不算 index 不折扣;"
+            "零 LLM 零新分析,纯读已深析产物"
+        ),
+    }
+    if not items:
+        body["reason"] = (
+            f"窗口内 {scanned} 条已深析(final_v1)视频无任何品牌露出信号——诚实空。"
+            if scanned else "窗口内无已深析(final_v1)视频——竞品声量诚实空,不编。"
+        )
+    return body
+
+
 # ── 主入口 ──────────────────────────────────────────────────────────────
 
 
@@ -468,7 +681,7 @@ def build_ext(
     conn: Any = None,
     window: tuple[str, str, str] | None = None,
 ) -> dict[str, Any]:
-    """六组字段字典(仅 6 个键,可被上层 merge);单组失败降级 {status:'error'} 不拖全局。
+    """九组字段字典(仅 9 个键,可被上层 merge);单组失败降级 {status:'error'} 不拖全局。
 
     window=(since_iso, until_iso, label) 可直接注入(免二次算窗);缺省按 month 算
     (market_voice._window 同口径:month='YYYY-MM' 自然月 UTC / None=近 30 天,
@@ -486,19 +699,22 @@ def build_ext(
         ("alerts_state", lambda: _alerts_state(db)),
         ("platform_dist", lambda: _platform_dist(db, since, until)),
         ("line_voice", lambda: _line_voice(db, since, until)),
+        ("topics", lambda: _topics(db, since, until)),
+        ("language_dist", lambda: _language_dist(db, since, until)),
+        ("competitor_voice", lambda: _competitor_voice(db, since, until)),
     )
     out: dict[str, Any] = {}
     for name, build in builders:
         try:
             out[name] = build()
-        except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,不拖累其余五组
+        except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,不拖累其余八组
             logger.warning("voice_report_ext block %s failed: %s", name, exc)
             out[name] = {"status": "error", "reason": str(exc)[:200]}
     return out
 
 
 def voice_report_ext(month: str | None = None, *, conn: Any = None) -> dict[str, Any]:
-    """路由入口:窗口信封 + 六组字段(GET /api/admin/vkpi/market/voice-report-ext)。
+    """路由入口:窗口信封 + 九组字段(GET /api/admin/vkpi/market/voice-report-ext)。
 
     month='YYYY-MM' 自然月(UTC);None=近 30 天;格式非法抛 ValueError(路由转 400)。
     纯读、零 LLM、零写库;窗口口径与 voice-report 完全一致。
