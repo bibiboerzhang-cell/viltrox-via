@@ -12,8 +12,38 @@ from app.domains.channels.official import (
 )
 from app.domains.channels.posts import _posts_from_package
 
+def _fallback_nonempty_snapshot_raw(row: dict[str, Any]) -> dict[str, Any]:
+    """最新快照 raw_payload_json 为空('{}')时,回退该频道最近一条非空快照的 raw。
+
+    2026-07-11 断链修复:06-15 后 daily_sync 写入的最新快照 raw 全空(写端口径问题,
+    另行排查),帖子/package_dir/已缓存评论全经 raw 解出。_latest_channel_row 已在 SQL
+    层做了同口径回退;这里兜住不走该函数的行来源(如 _latest_official_channel_rows)。
+    """
+    channel_id = _int(row.get("id"))
+    if not channel_id:
+        return {}
+    try:
+        fallback = get_conn().execute(
+            """
+            SELECT raw_payload_json FROM vkpi_channel_metrics
+            WHERE channel_id=? AND LENGTH(COALESCE(raw_payload_json, '')) > 2
+            ORDER BY snapshot_date DESC, captured_at DESC, id DESC
+            LIMIT 1
+            """,
+            (int(channel_id),),
+        ).fetchone()
+    except Exception:
+        logger.warning("nonempty snapshot fallback query failed | channel_id=%s", channel_id, exc_info=True)
+        return {}
+    if not fallback:
+        return {}
+    return _parse_json(dict(fallback).get("raw_payload_json"))
+
+
 def _all_posts_for_channel(row: dict[str, Any]) -> tuple[list[dict[str, Any]], str, str]:
     raw = _parse_json(row.get("metric_raw_payload_json"))
+    if not raw:
+        raw = _fallback_nonempty_snapshot_raw(row)
     package_dir = _text(raw.get("package_dir"))
     posts = _posts_from_package(package_dir)
     source = "package_csv" if posts else "snapshot_sample"

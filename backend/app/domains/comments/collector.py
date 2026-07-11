@@ -219,7 +219,9 @@ def _standardize_comment(
             "author_id": ["from.id", "author_id", "profileId"],
             "likes_count": ["likesCount", "likes_count", "reactionsCount"],
             "reply_count": ["repliesCount"],
-            "created_at": ["createdTime", "created_at", "timestamp"],
+            # Apify facebook comments actor 的时间键是 'date'(ISO8601);此前键列表漏它
+            # → 49 条存量 created_at 全 NULL(2026-07-11 已回填,见修复报告)。
+            "created_at": ["createdTime", "created_at", "timestamp", "date"],
             "is_op": [],
             "author_avatar_url": ["profilePicture", "from.picture.data.url"],
         },

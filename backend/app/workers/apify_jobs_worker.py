@@ -363,12 +363,20 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _process_kol_pool_comments_collect,
     _process_kol_profile_deep_crawl,
     _process_logistics_track_sync,
+    _process_official_channel_comments_collect,
     _process_project_contract_extract,
     _process_project_retrospective,
     _process_session_advance,
     _process_smart_search_profile_advance,
     _resolve_job_staff,
 )
+
+# 2026-07-11 未知 job_type 防线:_process_job 显式分支簇之外,只有 'video' 一种 job_type
+# 合法落 _target 兜底分支(video_analysis_enqueue.py 唯一以裸 target/derive_method 入队)。
+# 此前任何不认识的 job_type(如 official_channel_comments_collect 落地前)会带着
+# derive_method 缺省='mock' 一路滑进 mock 假成功路径:写 mock cache + 标 done,
+# 队列面板绿灯但什么都没干。现在:不在集合内 → _block_job('unknown_job_type'),诚实可见。
+TARGET_FALLBACK_JOB_TYPES = frozenset({"video"})
 
 
 # LLM 预算 preflight 簇 + keyframe 抽帧/Gemini override 簇整簇已抽到 apify_jobs_worker_prep.py
@@ -481,6 +489,9 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
     if str(job.get("job_type") or "").strip().lower() == "kol_pool_comments_collect":
         _process_kol_pool_comments_collect(conn, job, payload)
         return
+    if str(job.get("job_type") or "").strip().lower() == "official_channel_comments_collect":
+        _process_official_channel_comments_collect(conn, job, payload)
+        return
     if str(job.get("job_type") or "").strip().lower() == "kol_outreach_draft":
         _process_kol_outreach_draft(conn, job, payload)
         return
@@ -495,6 +506,12 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_auto_poll":
         _process_kol_auto_poll(conn, job, payload)
+        return
+    # 未知 job_type 防线(2026-07-11):显式分支簇没接住、又不是合法兜底类型('video')的,
+    # 一律 blocked 而非滑进下方 derive_method='mock' 的假成功路径(写 mock cache + done)。
+    job_type = str(job.get("job_type") or "").strip().lower()
+    if job_type not in TARGET_FALLBACK_JOB_TYPES:
+        _block_job(conn, int(job["id"]), "unknown_job_type", {"job_type": job_type})
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:

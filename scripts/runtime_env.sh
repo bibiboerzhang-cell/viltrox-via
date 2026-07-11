@@ -137,6 +137,14 @@ if [[ -n "${YTDLP_PROXY:-}" && -z "${VKPI_DISABLE_LLM_PROXY:-}" ]]; then
   export http_proxy="${http_proxy:-$YTDLP_PROXY}"
   export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,0.0.0.0,::1}"
   export no_proxy="${no_proxy:-localhost,127.0.0.1,0.0.0.0,::1}"
+  # 2026-07-11:api.apify.com 直连(实测 1.18s vs 走代理 3.05s,且代理下 Apify 频出
+  # Cloudflare 522 → 评论采集逐帖全败)。LLM(OpenAI/Gemini/Anthropic)照旧走代理。
+  if [[ ",$NO_PROXY," != *",api.apify.com,"* ]]; then
+    export NO_PROXY="$NO_PROXY,api.apify.com"
+  fi
+  if [[ ",$no_proxy," != *",api.apify.com,"* ]]; then
+    export no_proxy="$no_proxy,api.apify.com"
+  fi
 fi
 
 # ──────────────────────────────────────────────────────────

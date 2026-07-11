@@ -84,6 +84,14 @@ def api_stats(
     return comments_collector.stats(days=days)
 
 
+def _mask_author_handle(value: Any) -> str | None:
+    """显示层宪法(全评论读口统一):作者个人字段不出明文,脱敏成首字符+***。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text[0] + "***"
+
+
 @router.get("/by-post/{post_id}")
 def api_comments_by_post(
     post_id: int,
@@ -91,26 +99,42 @@ def api_comments_by_post(
     limit: int = Query(100, ge=1, le=500),
     staff: dict = Depends(require_permission("vkpi.comments.read")),
 ) -> dict[str, Any]:
-    """List comments for a specific post."""
+    """List comments for a specific post.
+
+    显示层宪法(与 voice_feed 同口径,全评论读口统一):author_handle 只出脱敏形态
+    (首字符+***),author_id / raw_data_json 绝不入 SELECT。排序对齐 voice_feed:
+    created_at 为空的行(历史 facebook 缺 date 映射等)按 fetched_at 兜底,不再沉底乱序。
+    纯增量字段:language_detected + sentiment 关联(s.sentiment/emotion/brand_attitude),
+    不破现有返回形状。
+    """
     from app.db.connection import get_conn
-    
+
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT id, external_comment_id, comment_text, author_handle,
-               likes_count, reply_count, created_at, depth, parent_comment_id,
-               sentiment_id, pillar_id
-        FROM vkpi_comments
-        WHERE post_id = ? AND post_table = ?
-        ORDER BY created_at DESC
+        SELECT c.id, c.external_comment_id, c.comment_text, c.author_handle,
+               c.likes_count, c.reply_count, c.created_at, c.fetched_at,
+               c.depth, c.parent_comment_id,
+               c.sentiment_id, c.pillar_id, c.language_detected,
+               s.sentiment, s.emotion, s.brand_attitude
+        FROM vkpi_comments c
+        LEFT JOIN vkpi_sentiment_results s ON s.id = c.sentiment_id
+        WHERE c.post_id = ? AND c.post_table = ?
+        ORDER BY COALESCE(c.created_at, c.fetched_at) DESC
         LIMIT ?
         """,
         (post_id, post_table, limit),
     ).fetchall()
-    
+
+    comments = []
+    for r in rows:
+        item = dict(r)
+        item["author_handle"] = _mask_author_handle(item.get("author_handle"))
+        comments.append(item)
+
     return {
         "post_id": post_id,
         "post_table": post_table,
-        "count": len(rows),
-        "comments": [dict(r) for r in rows],
+        "count": len(comments),
+        "comments": comments,
     }

@@ -24,6 +24,11 @@ _PACKAGE_POSTS_CACHE_TTL_SEC = 300
 _PACKAGE_POSTS_CACHE: dict[tuple[str, int, int, int, int, int, bool], tuple[float, list[dict[str, Any]]]] = {}
 
 def _latest_channel_row(channel_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    # 2026-07-11 官号帖快照断链修复(读端回退):06-15 后线上 daily_sync 写入的最新快照
+    # raw_payload_json 全为 '{}'(写端口径问题,另行排查勿在此改写端)——帖子列表 /
+    # package_dir / 747 条已缓存评论全部经由 metric_raw_payload_json 解出,最新快照一空
+    # 整条链断。回退口径:数值指标仍取最新快照(m),raw_payload_json 在最新快照为空
+    # (LENGTH<=2,即 ''/'{}')时回退最近一条非空快照(mr)。
     ensure_vkpi_channels_schema()
     _assert_channel_access(channel_id, staff)
     row = get_conn().execute(
@@ -42,13 +47,23 @@ def _latest_channel_row(channel_id: int, *, staff: dict[str, Any] | None = None)
                m.total_comments AS metric_comments,
                m.total_shares AS metric_shares,
                m.engagement_rate AS metric_engagement_rate,
-               m.raw_payload_json AS metric_raw_payload_json,
+               CASE
+                 WHEN LENGTH(COALESCE(m.raw_payload_json, '')) > 2 THEN m.raw_payload_json
+                 ELSE mr.raw_payload_json
+               END AS metric_raw_payload_json,
                m.captured_at AS metric_captured_at
         FROM vkpi_employee_channels c
         LEFT JOIN vkpi_channel_metrics m ON m.id = (
             SELECT id FROM vkpi_channel_metrics mm
             WHERE mm.channel_id = c.id
             ORDER BY mm.snapshot_date DESC, mm.captured_at DESC, mm.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN vkpi_channel_metrics mr ON mr.id = (
+            SELECT id FROM vkpi_channel_metrics mn
+            WHERE mn.channel_id = c.id
+              AND LENGTH(COALESCE(mn.raw_payload_json, '')) > 2
+            ORDER BY mn.snapshot_date DESC, mn.captured_at DESC, mn.id DESC
             LIMIT 1
         )
         LEFT JOIN staff st ON st.id = c.staff_id

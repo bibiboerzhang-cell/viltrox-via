@@ -390,10 +390,13 @@ def _save_channel_comments(
     for raw in comments:
         if not isinstance(raw, dict):
             continue
+        # 2026-07-11 owned 回链:post_id 写 channel_id(此前写死 0 → voice_feed 的
+        # owned JOIN(ec.id = c.post_id)永不命中,identity_ref/post_url 全空)。
+        # 该表评论挂频道行,post_id 语义 = vkpi_employee_channels.id。
         standardized = comments_collector._standardize_comment(
             raw,
             platform=platform,
-            post_id=0,
+            post_id=int(channel_id),
             account_id=int(channel_id),
             external_post_id=external_post_id,
             post_table="vkpi_employee_channels",
@@ -435,13 +438,14 @@ def _save_channel_comments(
             """,
             (
                 int(channel_id),
-                0,
+                int(channel_id),
                 "vkpi_employee_channels",
                 external_post_id,
                 platform,
                 comment_id,
                 channels._text(standardized.get("comment_text")),
-                channels._text(standardized.get("language_detected"), raw.get("language")),
+                # 空值口径统一 NULL(此前 _text 把 None 压成 ''——语言回填/统计都要多认一种空)。
+                channels._text(standardized.get("language_detected"), raw.get("language")) or None,
                 channels._text(standardized.get("author_handle")),
                 channels._text(standardized.get("author_id")),
                 channels._bool(standardized.get("is_op")),
@@ -726,10 +730,15 @@ def run_official_channel_comments_for_job(payload: dict[str, Any], *, staff: dic
                 "status": status,
                 "new": new_count,
                 "fetched": channels._int(result.get("fetched_count")),
+                # 逐帖错误文本随行带出(worker 据此判「全败是否可重试类」;截断防payload膨胀)。
+                "error": channels._text(result.get("message"), result.get("error"))[:120],
             }
         )
+    # 诚实终态(对齐 run_kol_pool_comments_for_job):有帖可采却一条都没成、也没有
+    # 因缺 token 被合法跳过 → 不再报 ready 假成功;worker 侧按逐帖错误决定 requeue/blocked。
+    all_failed = bool(results) and not ok_count and not skipped_count
     return {
-        "status": "ready",
+        "status": "blocked:all_posts_failed" if all_failed else "ready",
         "channel_id": channel_id,
         "platform": platform,
         "posts": len(results),

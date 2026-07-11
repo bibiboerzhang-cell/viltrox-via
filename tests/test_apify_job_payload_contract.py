@@ -44,6 +44,9 @@ ACTIVE_JOB_TYPES = {
     "project_contract_extract",         # 4
     "kol_outreach_draft",               # 3
     "kol_pool_comments_collect",        # 1
+    # 2026-07-11 接入 worker handler(此前无 handler → 带缺省 derive_method='mock'
+    # 滑进 mock 假成功路径写 mock cache + done);入队器早已存在于 channel.py。
+    "official_channel_comments_collect",
 }
 
 
@@ -76,6 +79,8 @@ PAYLOAD_CONTRACT: dict[str, set[str]] = {
     "kol_outreach_draft": {"kol_pool_id", "target_type", "target_id"},
     # enqueue_kol_pool_comments_job:handler raise 若缺 kol_pool_id。
     "kol_pool_comments_collect": {"kol_pool_id", "target_type", "target_id"},
+    # _enqueue_official_channel_comments_job:handler 内核 raise 若缺 channel_id。
+    "official_channel_comments_collect": {"channel_id", "target_type", "target_id"},
 }
 
 
@@ -93,6 +98,7 @@ ENQUEUER_REF: dict[str, tuple[str, str]] = {
     "project_contract_extract": ("app.domains.projects.contracts", "enqueue_contract_extract_job"),
     "kol_outreach_draft": ("app.domains.kol.outreach_draft", "enqueue_outreach_draft_job"),
     "kol_pool_comments_collect": ("app.domains.comments.collector", "enqueue_kol_pool_comments_job"),
+    "official_channel_comments_collect": ("app.domains.comments.channel", "_enqueue_official_channel_comments_job"),
 }
 
 
@@ -111,6 +117,7 @@ WORKER_ROUTED_JOB_TYPES = {
     "kol_outreach_draft",
     "logistics_track_sync",
     "kol_auto_poll",  # 2026-06-28 补 worker handler 后移入(治 50 条 ValueError 失败)
+    "official_channel_comments_collect",  # 2026-07-11 补 worker handler 后移入(治 mock 假成功)
 }
 
 

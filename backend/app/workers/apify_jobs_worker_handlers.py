@@ -460,6 +460,63 @@ def _process_contract_polish(conn: psycopg.Connection[Any], job: dict[str, Any],
             )
 
 
+# 评论采集 all_posts_failed 的可重试判据(2026-07-11):此前逐帖全败(如 Apify 走代理
+# 522)直接落 blocked 终态,永不自愈 —— 而其它任务类型同类瞬时错都经 _fail_job →
+# provider_pressure → 退避 requeue 自愈。这里把「网络/5xx/proxy/timeout」词族的全败
+# 改抛异常,汇入统一 failure 通道;不可重试类(URL 无效/帖子不存在等)保持 blocked。
+_COMMENTS_RETRYABLE_ERROR_MARKERS = (
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "520",
+    "521",
+    "522",
+    "523",
+    "524",
+    "5xx",
+    "server error",
+    "rate limit",
+    "quota",
+    "timeout",
+    "timed out",
+    "proxy",
+    "connection",
+    "reset",
+    "refused",
+    "unreachable",
+    "temporarily",
+    "unavailable",
+    "network",
+    "ssl",
+)
+
+
+def _comments_failed_errors_retryable(results: list[dict[str, Any]] | None) -> tuple[bool, str]:
+    """全败批次的逐帖 error 是否全部属可重试类 → (retryable, 样本错误串)。
+
+    只看 status 不在 (ok, skip, not_configured) 的条目;没有任何 error 文本时不可判 →
+    保守 False(维持 blocked,不假装能自愈)。
+    """
+    errors: list[str] = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") in ("ok", "skip", "not_configured"):
+            continue
+        text = str(item.get("error") or "").strip()
+        if text:
+            errors.append(text)
+    if not errors:
+        return False, ""
+    retryable = all(
+        any(marker in err.lower() for marker in _COMMENTS_RETRYABLE_ERROR_MARKERS) for err in errors
+    )
+    sample = "; ".join(sorted(set(errors))[:3])[:300]
+    return retryable, sample
+
+
 def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """KOL Pool 收藏行评论采集(2026-06-12 裁令):逐帖走 collect_post_comments,泳道可见。"""
     from app.domains.comments import collector as comments_collector
@@ -470,6 +527,42 @@ def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[
     status = str((result or {}).get("status") or "")
     ok = status == "ready"
     payload["comments_collect_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
+    if not ok and "all_posts_failed" in status:
+        retryable, sample = _comments_failed_errors_retryable((result or {}).get("results"))
+        if retryable:
+            # 抛异常 → run_worker 捕获 → _fail_job 分类(522/timeout 等词族命中
+            # provider_pressure/timeout)→ 退避 requeue,与其它任务类型自愈通道对齐。
+            raise RuntimeError(f"comments_collect_all_posts_failed_retryable: {sample}")
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
+                (
+                    "done" if ok else "blocked",
+                    None if ok else (status or "comments_collect_failed")[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
+def _process_official_channel_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    """官号评论批量采集(2026-07-11 治「worker 无 handler → 滑进 mock 假成功」):
+    逐帖复用 collect_channel_post_comments,模式对齐 _process_kol_pool_comments_collect。
+    X 官号缺 token 由域内标 not_configured 计 skipped,不算失败。全败且逐帖错误属
+    可重试类(网络/5xx/proxy/timeout)→ 抛异常走统一 failure→requeue 通道。"""
+    from app.domains.comments import channel as comments_channel
+
+    staff = _resolve_job_staff(conn, payload)
+    with db_connection_sync_scope():
+        result = comments_channel.run_official_channel_comments_for_job(payload, staff=staff)
+    status = str((result or {}).get("status") or "")
+    ok = status == "ready"
+    payload["comments_collect_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
+    if not ok and "all_posts_failed" in status:
+        retryable, sample = _comments_failed_errors_retryable((result or {}).get("results"))
+        if retryable:
+            raise RuntimeError(f"comments_collect_all_posts_failed_retryable: {sample}")
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
