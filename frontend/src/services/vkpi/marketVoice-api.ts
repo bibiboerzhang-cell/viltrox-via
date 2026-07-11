@@ -102,3 +102,108 @@ export async function getVoiceReport(token: string, month = "") {
     token,
   );
 }
+
+// ===== V0h-ab:voice-report-ext(九组图形化真数据字段)=====
+// GET /api/admin/vkpi/market/voice-report-ext?month=YYYY-MM(缺省近30天;窗口口径与
+// voice-report 一致)。九组字段各自独立 status("ready"|"empty"|"error"|"ok"),单组
+// 失败诚实降级 {status:"error",reason} 不拖全响应 —— 前端逐组降级,绝不编数据。
+// 契约由后端 voice_report_ext.py 固定:
+//   kpi_series        按 UTC 日计数序列(comments/queue,日轴 0 填齐,sparkline 直画)
+//   kpi_prev          上一等长窗口环比(上窗 0 → delta_pct=null,诚实省略药丸)
+//   sentiment_summary 情绪总量 + pos/neg share + 趋势双线(空期 share=null 断线)
+//   alerts_state      告警评估(纯读不推送)+ vkpi_action_inbox 最近已推送
+//   platform_dist     按 platform 分组计数
+//   line_voice        产品线级声量榜(词表分桶 × 情绪回链;无逐 SKU 关联,如实)
+//   topics            热点话题榜(lexicon_v0 词族命中 + 环比,Top12)
+//   language_dist     语言分桶(und=待检;语言分布非地理)
+//   competitor_voice  竞品声量(百家饭同口径;is_self=Viltrox 自家行)
+
+export interface ExtSeriesPoint {
+  date: string;
+  count: number;
+}
+
+export interface ExtTrendPoint {
+  period_start: string;
+  total: number;
+  pos_share: number | null;
+  neg_share: number | null;
+}
+
+export interface ExtAlertCategory {
+  category: string;
+  label: string;
+  negative_count: number;
+  score: number;
+  threshold: number;
+  triggered: boolean;
+  window_hours: number;
+}
+
+export interface ExtAlertPushed {
+  id: number;
+  dedupe_key: string;
+  title: string;
+  priority: string;
+  status: string;
+  created_at: string | null;
+}
+
+type ExtGroup<T> = T & { status?: string; reason?: string; basis?: unknown };
+
+export interface VoiceReportExt {
+  status?: string;
+  month?: string | null;
+  window?: { since: string; until: string; label: string };
+  kpi_series?: ExtGroup<{
+    granularity?: string;
+    series?: { comments?: ExtSeriesPoint[]; queue?: ExtSeriesPoint[] };
+  }>;
+  kpi_prev?: ExtGroup<{
+    metrics?: Record<string, { current?: number; previous?: number; delta_pct?: number | null; table?: string }>;
+  }>;
+  sentiment_summary?: ExtGroup<{
+    done_total?: number;
+    pos_total?: number;
+    neu_total?: number;
+    neg_total?: number;
+    pos_share?: number | null;
+    neg_share?: number | null;
+    granularity?: string;
+    trend?: ExtTrendPoint[];
+  }>;
+  alerts_state?: ExtGroup<{
+    method?: string;
+    window_hours?: number;
+    threshold?: number;
+    scanned?: number;
+    categories?: ExtAlertCategory[];
+    recent_pushed?: ExtAlertPushed[];
+  }>;
+  platform_dist?: ExtGroup<{ items?: Array<{ platform: string; count: number }> }>;
+  line_voice?: ExtGroup<{
+    items?: Array<{ key: string; label: string; count: number; annotated: number; pos_share: number | null }>;
+  }>;
+  topics?: ExtGroup<{
+    items?: Array<{ key: string; label: string; count: number; delta_pct: number | null }>;
+    scanned?: number;
+  }>;
+  language_dist?: ExtGroup<{ items?: Array<{ language: string; count: number }>; total?: number }>;
+  competitor_voice?: ExtGroup<{
+    sample_videos?: number;
+    viltrox_videos?: number;
+    competitor_exposures?: number;
+    items?: Array<{ brand: string; count: number; share: number | null; is_self: boolean }>;
+  }>;
+  method?: string;
+  generated_at?: string;
+}
+
+export async function fetchVoiceReportExt(token: string, month = "") {
+  const query = month ? `?month=${encodeURIComponent(month)}` : "";
+  return apiFetch<VoiceReportExt>(
+    `/api/admin/vkpi/market/voice-report-ext${query}`,
+    { timeoutMs: 30000 },
+    token,
+  );
+}

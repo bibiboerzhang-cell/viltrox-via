@@ -1,5 +1,6 @@
 import React from "react";
 import { SrcChip } from "../components/provenance";
+import { Sparkline } from "../components/Sparkline";
 import { formatLocal } from "../../lib/timeLocal";
 import type { VoiceFeedItem } from "../../../../services/vkpi/marketVoice-api";
 import { IDENTITY_META, QuoteDialog, platformBadge, type QuoteRow } from "./MarketVoicePage.dialogs";
@@ -37,6 +38,155 @@ export const SOURCE_LABEL: Record<string, string> = {
 
 // 覆盖模块的固定源顺序(voice-report sources 键)
 export const SOURCE_ORDER = ["comments", "intent_queue", "bh_reviews", "brand_signal", "sentiment"] as const;
+
+// 每模块 SrcChip 口径(label=真实表名;rows=board-paradigm 接入映射 + voice-report-ext
+// basis 的真实来源,禁编造;卡头 cnt 只留短徽,长口径句全部住这里 + 调用点动态 extraRows)。
+// V0h-ab:图表模块族(alerts/cat/senti/line_voice/plat/topics/geo/comp)全部登记真实表名;
+// kpiV 情感行更新为真数据口径(vkpi_sentiment_results 已批注,「未点火」过期文案清除)。
+export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string, string]> }> = {
+  kpiV: {
+    label: "voice-report(-ext) · lexicon_v0",
+    rows: [
+      ["评论库", "vkpi_comments"],
+      ["意向队列", "vkpi_reply_queue"],
+      ["日序列", "voice-report-ext kpi_series(UTC 日轴 0 填齐)"],
+      ["环比", "kpi_prev 上一等长窗 · 上窗 0 → 诚实无药丸"],
+      ["情绪", "vkpi_sentiment_results(sentiment_id 回链)"],
+    ],
+  },
+  alerts: {
+    label: "voice_alerts · vkpi_action_inbox",
+    rows: [
+      ["规则", "类别 × 8h 负面加权 ≥ 3 触发"],
+      ["评估", "vkpi_comments 纯读实时评估(本页不推送)"],
+      ["已推送", "vkpi_action_inbox(dedupe_key 前缀 voice_alert:)"],
+    ],
+  },
+  cat: {
+    label: "vkpi_comments · lexicon_v0",
+    rows: [
+      ["口径", "抱怨类别命中构成(环图分母=类别命中合计)"],
+      ["中心大数", "complaints.total_matched 命中总数"],
+      ["方法", "纯词表聚合 · 零 LLM"],
+    ],
+  },
+  senti: {
+    label: "vkpi_sentiment_results",
+    rows: [
+      ["回链", "vkpi_comments.sentiment_id → vkpi_sentiment_results.id"],
+      ["聚合", "窗口 ≤35 天按日 · 更长按 ISO 周(UTC)"],
+      ["口径", "share 分母=该期已批注条数 · 空期 null 断线"],
+    ],
+  },
+  line_voice: {
+    label: "focal_matrix · 情绪回链",
+    rows: [
+      ["分桶", "focal_matrix.PRODUCT_LINES 词表(产品线级,非 SKU)"],
+      ["情绪", "vkpi_sentiment_results 回链 · pos_share 分母=已批注"],
+      ["染色", "≥.7 good / .4-.7 warn / <.4 crit / null 待批注"],
+    ],
+  },
+  plat: {
+    label: "vkpi_comments.platform",
+    rows: [
+      ["口径", "窗口内 GROUP BY platform(正文非空)"],
+      ["时间", "COALESCE(created_at, fetched_at) UTC"],
+    ],
+  },
+  topics: {
+    label: "lexicon_v0 词族 · vkpi_comments",
+    rows: [
+      ["词族", "六类话题词 + 愿望词(market_voice 真词表)"],
+      ["热度", "话题词命中评论数 · 热度≠抱怨(不叠负面过滤)"],
+      ["环比", "vs 上一等长窗 · 上窗 0 → null 诚实省略"],
+    ],
+  },
+  geo: {
+    label: "vkpi_comments.language_detected",
+    rows: [
+      ["口径", "语言分布 · 非地理归属(评论无真实 geo 关联)"],
+      ["待检", "NULL/空串归 und 桶,如实标「待检」"],
+    ],
+  },
+  comp: {
+    label: "vkpi_analysis_cache · 百家饭",
+    rows: [
+      ["口径", "final_v1 深析产物 × 视频×品牌去重(百家饭同口径)"],
+      ["窗口", "vkpi_kol_video_evidence 发布时间"],
+      ["联动", "战略台 · 行业对照 · 零 LLM 纯读已深析产物"],
+    ],
+  },
+  complaints: {
+    label: "vkpi_comments · lexicon_v0",
+    rows: [
+      ["口径", "话题词 + 负面线索双命中"],
+      ["主表", "vkpi_comments 等三源"],
+      ["方法", "纯词表聚合 · 零 LLM"],
+    ],
+  },
+  wishlist: {
+    label: "vkpi_comments · lexicon_v0",
+    rows: [
+      ["口径", "wish/hope/please make/需要 词表"],
+      ["主表", "vkpi_comments 等三源"],
+    ],
+  },
+  gaps: {
+    label: "vkpi_products · 目录对照",
+    rows: [
+      ["声量", "vkpi_comments 等三源"],
+      ["目录基准", "vkpi_products 焦段"],
+    ],
+  },
+  recs: {
+    label: "lexicon_v0 · 规则生成",
+    rows: [
+      ["输入", "抱怨 + 愿望 + 空白聚类"],
+      ["方法", "规则阈值 · 人工复核"],
+    ],
+  },
+  cover: {
+    label: "voice-report · sources",
+    rows: [
+      ["健康", "逐源 status / count 如实标"],
+      ["盲区", "空源 / 未建表如实标注"],
+    ],
+  },
+  feed: {
+    label: "vkpi_comments · 分页",
+    rows: [
+      ["正文", "vkpi_comments.comment_text"],
+      ["身份", "post_table 三分类 kol/owned/user"],
+      ["原帖", "evidence.content_url / 官号链接"],
+    ],
+  },
+  buckets: {
+    label: "focal_matrix · lexicon_v0",
+    rows: [
+      ["口径", "focal_matrix 产品线词表"],
+      ["主表", "vkpi_comments 等三源"],
+    ],
+  },
+};
+
+export const PROV_TITLES: Record<string, string> = {
+  kpiV: "反馈总览",
+  alerts: "声量告警",
+  cat: "类别构成",
+  senti: "情绪趋势",
+  line_voice: "产品线声音榜",
+  plat: "平台分布",
+  topics: "热点话题",
+  geo: "按语言 / 市场",
+  comp: "同话题竞品声量",
+  complaints: "抱怨聚类",
+  wishlist: "愿望清单",
+  gaps: "需求空白",
+  recs: "给产品部的建议",
+  cover: "监听覆盖",
+  feed: "反馈流",
+  buckets: "产品线声量分桶",
+};
 
 /* ============ 空态双轨(demo:纯窗口无数据 = 轻量一行;管线未点火/待接 = .mpend warn 盒) ============ */
 export function EmptyLine({ text }: { text: string }) {
@@ -123,7 +273,10 @@ export function ModuleCard({
   );
 }
 
-/* ============ KPI 卡:demo .kpi(card2 面 + mono 大数 + spempty 虚线 / pending .pt 药丸) ============ */
+/* ============ KPI 卡:demo .kpi(card2 面 + mono 大数 + sparkline / delta 药丸 /
+   spempty 虚线 / pending .pt 药丸)。V0h-ab:series ≥2 有效点 → 真 Sparkline
+   (demo sp:viewBox 240×30 preserveAspectRatio=none,端点发光走 ds-sparkline__endpoint);
+   delta=环比百分比,null/undefined = 诚实省略药丸(demo .dl.up/.dn)。 ============ */
 export function KpiCard({
   label,
   value,
@@ -131,6 +284,9 @@ export function KpiCard({
   tone = "good",
   pending,
   pendingNote,
+  series,
+  seriesColor,
+  delta,
 }: {
   label: string;
   value: React.ReactNode;
@@ -139,11 +295,24 @@ export function KpiCard({
   tone?: "good" | "warn";
   pending?: boolean;
   pendingNote?: string;
+  /** 历史序列(kpi_series 按日计数 / trend share);<2 有效点 → demo .spempty 纯虚线 */
+  series?: Array<number | null> | null;
+  /** sparkline 颜色(CSS var 串,主题切换自然生效);缺省 accent */
+  seriesColor?: string;
+  /** 环比百分比(kpi_prev.delta_pct);null/undefined = 上窗无数据,诚实不渲染药丸 */
+  delta?: number | null;
 }) {
   const dotCls = pending ? "ds-kpi__dot--pend" : tone === "warn" ? "ds-kpi__dot--warn" : "ds-kpi__dot--good";
   const valCls = pending ? " ds-kpi__val--pend" : tone === "warn" ? " ds-kpi__val--warn" : "";
+  const nums = (Array.isArray(series) ? series : []).filter(
+    (v): v is number => typeof v === "number" && Number.isFinite(v),
+  );
+  const deltaCls =
+    delta != null && delta > 0 ? "ds-kpi__delta--up" : delta != null && delta < 0 ? "ds-kpi__delta--down" : "ds-kpi__delta--flat";
   return (
-    <div className="ds-kpi ds-rise">
+    // --vkpi-kpi-accent 驱动 ds-sparkline__flow/endpoint 发光链(MetricCard 同款):
+    // warn/good 序列的端点光随线色走,而非恒 accent
+    <div className="ds-kpi ds-rise" style={seriesColor ? ({ "--vkpi-kpi-accent": seriesColor } as React.CSSProperties) : undefined}>
       <div className="ds-kpi__k">
         <span className={`ds-kpi__dot ${dotCls}`} />
         <span className="ds-kpi__label">{label}</span>
@@ -151,6 +320,12 @@ export function KpiCard({
       <div className={`ds-kpi__val${valCls}`}>
         {pending ? "—" : value}
         {!pending && unit ? <span className="ds-kpi__u">{unit}</span> : null}
+        {!pending && delta != null && (
+          <span className={`ds-kpi__delta ${deltaCls}`}>
+            {delta > 0 ? "▲" : delta < 0 ? "▼" : "—"}
+            {Math.abs(delta).toFixed(1)}%
+          </span>
+        )}
       </div>
       {pending ? (
         pendingNote ? (
@@ -158,8 +333,11 @@ export function KpiCard({
             <span className="ds-kpi__pt">{pendingNote}</span>
           </div>
         ) : null
+      ) : nums.length >= 2 ? (
+        // demo .kpi svg.sp:真序列 sparkline(渐变面积 + 流光 + 端点发光,Sparkline 现成件)
+        <Sparkline data={nums} color={seriesColor || "var(--ds-accent)"} height={30} width={240} fluid />
       ) : (
-        // 无历史序列(voice-report 单窗口计数)→ demo .spempty 纯虚线,零文字
+        // 无历史序列 → demo .spempty 纯虚线,零文字
         <div className="ds-kpi__series-empty" aria-hidden="true" />
       )}
     </div>

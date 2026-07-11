@@ -3,9 +3,11 @@ import { PencilLine } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import {
   enqueueReplyQueueComment,
+  fetchVoiceReportExt,
   getVoiceFeed,
   getVoiceReport,
   type VoiceFeedItem,
+  type VoiceReportExt,
 } from "../../../../services/vkpi/marketVoice-api";
 import {
   BucketsBody,
@@ -17,7 +19,9 @@ import {
   GapsBody,
   KpiCard,
   LoadingLine,
+  MODULE_SOURCES,
   ModuleCard,
+  PROV_TITLES,
   PendingCard,
   RecsBody,
   SOURCE_LABEL,
@@ -25,115 +29,56 @@ import {
   WishlistBody,
   type Row,
 } from "./MarketVoicePage.modules";
+import {
+  AlertsBody,
+  CatDonutBody,
+  CompetitorBody,
+  LanguageBody,
+  LineVoiceBody,
+  PlatformBody,
+  SentiTrendBody,
+  TopicsBody,
+} from "./MarketVoicePage.charts";
 import { FeedDetailModal, FeedListModal, ModuleProvModal } from "./MarketVoicePage.dialogs";
 
 // 件 C · 市场之声 → 板块页范式金样板(可编辑板块页,demo 1:1 对照)。
-//   V0h-c chrome 大扫除:页面从「文章感」拉回「仪表感」——
-//   页头方法论长句压成药丸徽 + 实时辉光点;卡头 cnt 全部短徽化(长口径进 SrcChip rows);
-//   页脚「生成于…」删除(挪进 kpiV SrcChip);feed 卡面只留 6 条 + 「≡ 查看全量」弹窗;
-//   引文全进弹窗;KPI 卡 demo .kpi 规格(mono 大数 / spempty 纯虚线 / pending .pt)。
+//   V0h-ab 波2 终棒:demo 全部图形模块补齐 + KPI 带图形化——
+//   KPI 四卡对齐 demo 语义(本月反馈/待处理/正面情绪占比/已转产品部)+ 真 sparkline
+//   (kpi_series 按日序列)+ 真环比药丸(kpi_prev,null=诚实省略);新增图表模块族
+//   alerts/cat/senti/line_voice/plat/topics/geo/comp(MarketVoicePage.charts.tsx),
+//   默认布局对齐 demo 六行;complaints/wishlist/gaps/buckets/plat 降为 palette 备选。
 //   数据源(全真,零编造):
-//     GET  /api/admin/vkpi/market/voice-report —— lexicon_v0 纯词表月报(抱怨/愿望/空白/建议)
-//     GET  /api/admin/vkpi/market/voice-feed  —— vkpi_comments 分页原声(身份三分类+溯源 prov)
+//     GET  /api/admin/vkpi/market/voice-report     —— lexicon_v0 纯词表月报(抱怨/愿望/空白/建议)
+//     GET  /api/admin/vkpi/market/voice-report-ext —— 九组图形化字段(每组独立 status,逐组诚实降级)
+//     GET  /api/admin/vkpi/market/voice-feed       —— vkpi_comments 分页原声(身份三分类+溯源 prov)
 //     POST /api/admin/vkpi/reply-queue/enqueue-comment —— V0e 闭环「转回复队列」(幂等入队);
-//       「转产品部」无落库通路(无 market_insights/PRD 表)→ 弹窗内诚实 disabled,不假装成功
-//   红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0;端点失败=诚实错误卡;
-//         颜色全 token 类零写死色;动效只用既有 ds-viz 类(自带 reduced-motion 降级)。
-//   注意:板块布局只走本机 storageKey,不给 EditableDashboardBoard 传 apiToken——
-//         该组件账户级持久化写死 dashboard_layout_v1 键,传了会覆写 Dashboard 的账户布局。
+//       「转产品部」无落库通路(无 market_insights/PRD 表)→ 诚实 pending,不假装成功
+//   红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0;端点失败=诚实错误卡;颜色全
+//   token(SVG 直接 var(--ds-*));发光只走 --ds-glow-radius(浅色 0);动效只用既有
+//   ds-viz 类 + vkpi-lane-pulse(自带 reduced-motion 降级)。布局只走本机 storageKey,
+//   不给 EditableDashboardBoard 传 apiToken(其账户级持久化写死 dashboard_layout_v1 键)。
 
-// v2:V0h-c 压实各模块默认高度(kpiV 去脚注后贴内容),bump 版本让新默认盖过本机旧布局
-const STORAGE_KEY = "vkpi-market-voice-layout-v2";
+// v3:V0h-ab 默认布局对齐 demo 六行(图表优先),bump 版本让新默认盖过本机旧布局
+const STORAGE_KEY = "vkpi-market-voice-layout-v3";
 const FEED_PAGE = 20; // 每次拉取页大小(端点分页)
 const FEED_FACE = 6; // 卡面收敛条数(demo FULL.slice(0,6);全量走弹窗)
 
-// 默认布局(12 列):kpiV(12) → complaints(8)+cover(4) → feed(8)+wishlist(4) → gaps(8)+recs(4)
+// 默认布局(12 列,demo defaultLayout 六行同构):
+// kpiV(12) → alerts(8)+cover(4) → cat(4)+senti(8) → feed(8)+line_voice(4)
+// → comp(8)+recs(4) → topics(8)+geo(4)
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiV", span: 12 },
-  { moduleKey: "complaints", span: 8 },
+  { moduleKey: "alerts", span: 8 },
   { moduleKey: "cover", span: 4 },
+  { moduleKey: "cat", span: 4 },
+  { moduleKey: "senti", span: 8 },
   { moduleKey: "feed", span: 8 },
-  { moduleKey: "wishlist", span: 4 },
-  { moduleKey: "gaps", span: 8 },
+  { moduleKey: "line_voice", span: 4 },
+  { moduleKey: "comp", span: 8 },
   { moduleKey: "recs", span: 4 },
+  { moduleKey: "topics", span: 8 },
+  { moduleKey: "geo", span: 4 },
 ];
-
-// 每模块 SrcChip 口径(label=真实表名;rows=board-paradigm 接入映射的真实来源,禁编造;
-// 卡头 cnt 只留短徽,原长口径句全部住进这里 + 调用点动态 extraRows)
-const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string, string]> }> = {
-  kpiV: {
-    label: "voice-report · lexicon_v0",
-    rows: [
-      ["评论库", "vkpi_comments"],
-      ["意向队列", "vkpi_reply_queue"],
-      ["B&H 口碑", "vkpi_bh_reviews"],
-      ["需求信号", "vkpi_brand_signal"],
-      ["情感", "vkpi_sentiment_results(未点火)"],
-    ],
-  },
-  complaints: {
-    label: "vkpi_comments · lexicon_v0",
-    rows: [
-      ["口径", "话题词 + 负面线索双命中"],
-      ["主表", "vkpi_comments 等三源"],
-      ["方法", "纯词表聚合 · 零 LLM"],
-    ],
-  },
-  wishlist: {
-    label: "vkpi_comments · lexicon_v0",
-    rows: [
-      ["口径", "wish/hope/please make/需要 词表"],
-      ["主表", "vkpi_comments 等三源"],
-    ],
-  },
-  gaps: {
-    label: "vkpi_products · 目录对照",
-    rows: [
-      ["声量", "vkpi_comments 等三源"],
-      ["目录基准", "vkpi_products 焦段"],
-    ],
-  },
-  recs: {
-    label: "lexicon_v0 · 规则生成",
-    rows: [
-      ["输入", "抱怨 + 愿望 + 空白聚类"],
-      ["方法", "规则阈值 · 人工复核"],
-    ],
-  },
-  cover: {
-    label: "voice-report · sources",
-    rows: [
-      ["健康", "逐源 status / count 如实标"],
-      ["盲区", "空源 / 未建表如实标注"],
-    ],
-  },
-  feed: {
-    label: "vkpi_comments · 分页",
-    rows: [
-      ["正文", "vkpi_comments.comment_text"],
-      ["身份", "post_table 三分类 kol/owned/user"],
-      ["原帖", "evidence.content_url / 官号链接"],
-    ],
-  },
-  buckets: {
-    label: "focal_matrix · lexicon_v0",
-    rows: [
-      ["口径", "focal_matrix 产品线词表"],
-      ["主表", "vkpi_comments 等三源"],
-    ],
-  },
-};
-
-const PROV_TITLES: Record<string, string> = {
-  kpiV: "反馈总览",
-  complaints: "抱怨聚类",
-  wishlist: "愿望清单",
-  gaps: "需求空白",
-  recs: "给产品部的建议",
-  cover: "监听覆盖",
-  feed: "反馈流",
-  buckets: "产品线声量分桶",
-};
 
 // demo .ph-b:pagehead 药丸徽(方法论长句压缩成短徽)
 const PH_BADGE = "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
@@ -164,6 +109,11 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
   const [queueBusyId, setQueueBusyId] = React.useState<number | null>(null);
   const [queueError, setQueueError] = React.useState("");
 
+  // voice-report-ext(V0h-ab 九组图形化字段;单组失败后端已诚实降级,整体失败走 extError)
+  const [extData, setExtData] = React.useState<VoiceReportExt | null>(null);
+  const [extLoading, setExtLoading] = React.useState(false);
+  const [extError, setExtError] = React.useState("");
+
   // 月报(现有真数据源,原样保留)
   React.useEffect(() => {
     if (!apiToken) return;
@@ -180,6 +130,28 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
       })
       .finally(() => {
         if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, month]);
+
+  // 图形化增量端点(与月报同窗口口径,独立加载互不拖累)
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setExtLoading(true);
+    setExtError("");
+    setExtData(null);
+    fetchVoiceReportExt(apiToken, month)
+      .then((res) => {
+        if (alive) setExtData(res && typeof res === "object" ? res : null);
+      })
+      .catch((err: any) => {
+        if (alive) setExtError(String(err?.detail || err?.message || "加载失败"));
+      })
+      .finally(() => {
+        if (alive) setExtLoading(false);
       });
     return () => {
       alive = false;
@@ -309,6 +281,24 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
     return null;
   };
 
+  // voice-report-ext 逐组闸:整体失败 → 错误卡;缺组字段 → 诚实 pending(不编数据);
+  // 组内 status error/empty → 逐组诚实降级(empty 带后端 reason 原样透出)。
+  const extGate = (group: Row | undefined | null): React.ReactNode | null => {
+    if (!apiToken) return noTokenCard;
+    if (extError) return <ErrorCard title="voice-report-ext 读取失败" text={extError} />;
+    if (extLoading && !extData) return <LoadingLine text="图形化字段聚合中…" />;
+    if (!extData || !group) {
+      return (
+        <PendingCard>
+          <b>数据字段施工中</b> —— voice-report-ext 未返回该组字段,接通后自动点亮。
+        </PendingCard>
+      );
+    }
+    if (String(group.status) === "error") return <ErrorCard title="该组聚合失败" text={String(group.reason || "未知原因")} />;
+    if (String(group.status) === "empty") return <EmptyLine text={String(group.reason || "窗口内无本组数据。")} />;
+    return null;
+  };
+
   const srcOf = (key: string) => MODULE_SOURCES[key] || { label: key, rows: [] };
   // extraRows:调用点的动态口径行(原卡头长句的新家),拼在静态 rows 之后进 SrcChip hover 卡;
   // 合并结果记入 ref,点击打开的 ModuleProvModal 同样拿全量口径(hover 卡在矮模块里可能被裁)
@@ -327,33 +317,134 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
 
   /* ---------- 模块 body ---------- */
 
+  // KPI 带四卡(V0h-ab):demo 语义 本月反馈/待处理/正面情绪占比/已转产品部;
+  // sparkline=kpi_series 按日真序列,delta=kpi_prev 真环比(null=诚实省略药丸);
+  // 旧口径(窗口样本三源合并等)保留为 SrcChip rows 说明,卡面零口径文字。
   const renderKpiBand = () => {
     const gate = reportGate();
-    const sentimentCount = srcCount("sentiment");
-    // 原页脚「生成于…」与卡带底部整行备注 → 收进 SrcChip rows(诚实口径不丢,卡面零文字)
+    const prevMetrics: Row = extData?.kpi_prev?.metrics || {};
+    const commentsSeries = (extData?.kpi_series?.series?.comments || []).map((p) => Number(p.count) || 0);
+    const queueSeries = (extData?.kpi_series?.series?.queue || []).map((p) => Number(p.count) || 0);
+    const senti: Row = extData?.sentiment_summary || {};
+    const posShare = typeof senti.pos_share === "number" ? senti.pos_share : null;
+    const posSeries = (Array.isArray(senti.trend) ? senti.trend : []).map((t: Row) =>
+      typeof t.pos_share === "number" ? t.pos_share * 100 : null,
+    );
+    const commentsCur = Number(prevMetrics.comments?.current ?? srcCount("comments")) || 0;
+    const queueCur = Number(prevMetrics.queue?.current ?? srcCount("intent_queue")) || 0;
+    // 原页脚「生成于…」/ 带底备注 / 旧口径四数 → 全部收进 SrcChip rows(诚实口径不丢)
     const kpiExtraRows: Array<[string, string]> =
       data && !reportErrored
         ? [
             ["窗口", `${windowLabel} · 样本 ${sampleSize} 条${dedupRemoved > 0 ? `(跨源去重 -${dedupRemoved})` : ""}`],
+            ["旧口径·窗口样本", `${sampleSize.toLocaleString()} 条(三源合并去重)`],
+            ["旧口径·评论库", `${srcCount("comments").toLocaleString()} 条 · vkpi_comments`],
+            ["旧口径·意向队列", `${srcCount("intent_queue").toLocaleString()} 条 · vkpi_reply_queue`],
+            ["情绪批注", `${Number(senti.done_total ?? srcCount("sentiment")) || 0} 条 · vkpi_sentiment_results`],
             ["生成于", `${String(data.generated_at || "—")}(UTC)`],
             ["口径", String(data.note || "纯词表聚合零 LLM · 不参与 V6 Fit 评分")],
+            ...(extError ? ([["扩展端点", `voice-report-ext → ${extError}`]] as Array<[string, string]>) : []),
           ]
         : [];
     return (
       <ModuleCard {...cardProps("kpiV", "反馈总览", windowLabel, kpiExtraRows)}>
         {gate ?? (
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <KpiCard label="窗口样本" value={sampleSize.toLocaleString()} unit="条" />
-            <KpiCard label="评论库" value={srcCount("comments").toLocaleString()} unit="条" />
-            {/* 意向队列 = 待处理积压 → demo .dot.w + warn 染数值 */}
-            <KpiCard label="意向队列" value={srcCount("intent_queue").toLocaleString()} unit="条" tone="warn" />
-            {sentimentCount > 0 ? (
-              <KpiCard label="情感结果" value={sentimentCount.toLocaleString()} unit="条" />
+            <KpiCard
+              label="本月反馈"
+              value={commentsCur.toLocaleString()}
+              unit="条"
+              series={commentsSeries}
+              seriesColor="var(--ds-accent)"
+              delta={prevMetrics.comments?.delta_pct ?? null}
+            />
+            {/* 待处理 = 回复队列积压 → demo .dot.w + warn 染数值/线色 */}
+            <KpiCard
+              label="待处理"
+              value={queueCur.toLocaleString()}
+              unit="条"
+              tone="warn"
+              series={queueSeries}
+              seriesColor="var(--ds-warn)"
+              delta={prevMetrics.queue?.delta_pct ?? null}
+            />
+            {posShare != null ? (
+              <KpiCard
+                label="正面情绪占比"
+                value={(Math.round(posShare * 1000) / 10).toFixed(1)}
+                unit="%"
+                series={posSeries}
+                seriesColor="var(--ds-good)"
+              />
             ) : (
-              <KpiCard label="情感结果" value="—" pending pendingNote="情绪管线未点火" />
+              <KpiCard
+                label="正面情绪占比"
+                value="—"
+                pending
+                pendingNote={extData ? "窗口内情绪批注 0 行" : "voice-report-ext 待接通"}
+              />
             )}
+            {/* 无 market→PRD 落库通路 → 诚实 pending,不编「已转 N 条」 */}
+            <KpiCard label="已转产品部" value="—" pending pendingNote="PRD 通路待建" />
           </div>
         )}
+      </ModuleCard>
+    );
+  };
+
+  /* ---------- V0h-ab 图表模块族(数据=voice-report-ext,extGate 逐组诚实降级;
+     cnt 只在组真实到货后显示,body 惰性求值) ---------- */
+
+  const arr = (v: unknown): Row[] => (Array.isArray(v) ? (v as Row[]) : []);
+  const extModule = (
+    key: string,
+    title: string,
+    group: Row | undefined,
+    cnt: React.ReactNode,
+    body: () => React.ReactNode,
+    extraRows?: Array<[string, string]>,
+  ) => <ModuleCard {...cardProps(key, title, group ? cnt : undefined, extraRows)}>{extGate(group) ?? body()}</ModuleCard>;
+
+  const renderAlerts = () => {
+    const g = extData?.alerts_state as Row | undefined;
+    const triggeredN = arr(g?.categories).filter((c) => c.triggered).length;
+    return extModule("alerts", "声量告警", g, `${triggeredN} 触发`, () => <AlertsBody alerts={g || {}} />);
+  };
+  const renderSenti = () => {
+    const g = extData?.sentiment_summary as Row | undefined;
+    const cnt = `${String(g?.granularity) === "week" ? "周" : "日"} × ${arr(g?.trend).length}`;
+    return extModule("senti", "情绪趋势", g, cnt, () => <SentiTrendBody senti={g || {}} />);
+  };
+  const renderLineVoice = () => {
+    const g = extData?.line_voice as Row | undefined;
+    const hitN = arr(g?.items).filter((it) => (Number(it.count) || 0) > 0).length;
+    return extModule("line_voice", "产品线声音榜", g, `${hitN} 线`, () => <LineVoiceBody items={arr(g?.items)} />);
+  };
+  const renderPlat = () => {
+    const g = extData?.platform_dist as Row | undefined;
+    return extModule("plat", "平台分布", g, `${arr(g?.items).length}`, () => <PlatformBody items={arr(g?.items)} />);
+  };
+  const renderTopics = () => {
+    const g = extData?.topics as Row | undefined;
+    return extModule("topics", "热点话题", g, `${arr(g?.items).length}`, () => <TopicsBody topics={g || {}} />);
+  };
+  // geo:language_dist 语言分布(诚实:非地理归属,und=待检)
+  const renderGeo = () => {
+    const g = extData?.language_dist as Row | undefined;
+    return extModule("geo", "按语言 / 市场", g, `${arr(g?.items).length}`, () => <LanguageBody dist={g || {}} />);
+  };
+  const renderComp = () => {
+    const g = extData?.competitor_voice as Row | undefined;
+    const extraRows = g?.basis ? ([["后端口径", String(g.basis)]] as Array<[string, string]>) : undefined;
+    return extModule("comp", "同话题竞品声量", g, `${arr(g?.items).length} 家`, () => <CompetitorBody comp={g || {}} />, extraRows);
+  };
+  // cat 环图:数据 = 现有 voice-report complaints 类别计数(复用既有 fetch,零新请求)
+  const renderCat = () => {
+    const cats = arr(complaints.categories);
+    const hitN = cats.filter((c) => (Number(c.count) || 0) > 0).length;
+    return (
+      <ModuleCard {...cardProps("cat", "类别构成", data && !reportErrored ? `${hitN} 类` : undefined)}>
+        {sectionGate(complaints) ?? <CatDonutBody categories={cats} totalMatched={Number(complaints.total_matched) || 0} />}
       </ModuleCard>
     );
   };
@@ -477,18 +568,35 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
     );
   };
 
-  /* ---------- 模块注册表(palette 全量可选;默认高度贴内容 · 1 格 = 22px + 14px gap) ---------- */
+  /* ---------- 模块注册表(palette 全量可选;默认高度贴内容 · 1 格 = 22px + 14px gap;
+     V0h-ab:图表模块族进默认布局,complaints/wishlist/gaps/buckets/plat 降为 palette 备选) ---------- */
   const modules: DashboardModuleDefinition[] = [
-    // kpiV:卡头 + 单行 4 KPI 卡(去脚注后)≈ 170px → 6 格(202px)贴合,杜绝大面积空底
-    { key: "kpiV", label: "反馈总览带", description: "样本 / 评论库 / 意向队列 / 情感 4 核心数", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
-    { key: "complaints", label: "抱怨聚类", description: "话题词 + 负面线索双命中 · 原声引文", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 24, render: renderComplaints },
-    { key: "wishlist", label: "愿望清单", description: "焦段 / 变焦 / 卡口 chips + 原声", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 10, minHeight: 6, maxHeight: 24, render: renderWishlist },
-    { key: "gaps", label: "需求空白", description: "有声量但目录零 SKU 的焦段", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 5, maxHeight: 24, render: renderGaps },
-    { key: "recs", label: "给产品部的建议", description: "规则生成 · lexicon_v0 · 人工复核", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 24, render: renderRecs },
+    // kpiV:卡头 + 单行 4 KPI 卡(sparkline 30px)≈ 200px → 6 格(202px)贴合
+    { key: "kpiV", label: "反馈总览带", description: "本月反馈 / 待处理 / 正面占比 / 已转产品部 + 迷你趋势", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
+    // alerts:6 类评估 → 正常态 1-3 行 + 口径注 ≈ 230px → 7 格
+    { key: "alerts", label: "声量告警", description: "类别 × 8h 负面阈值触发 · 已推送徽 · 正常态全绿", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 7, minHeight: 4, maxHeight: 20, render: renderAlerts },
+    // cat:132px 环图 + 图例 ≈ 190px → 6 格
+    { key: "cat", label: "类别构成", description: "抱怨类别环图 · 中心命中总数 + 占比图例", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 5, maxHeight: 16, render: renderCat },
+    // senti:tstats 三大数 + 176px 双线 + legend ≈ 300px → 9 格
+    { key: "senti", label: "情绪趋势", description: "正/负占比双线 · 空期断线 · 日/周自适应", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 20, render: renderSenti },
     // feed:卡面 6 条 + 「查看全量」按钮 ≈ 295px → 9 格(310px)
     { key: "feed", label: "反馈流", description: "vkpi_comments 一行一条 · 身份徽 · 点开连续翻", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 26, render: renderFeed },
+    // line_voice:5-7 条形行 + 口径注 ≈ 230px → 7 格
+    { key: "line_voice", label: "产品线声音榜", description: "产品线级正面% 彩条(诚实:非逐 SKU)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderLineVoice },
+    // comp:Viltrox+竞品条形 + 口径注 ≈ 200px → 6 格
+    { key: "comp", label: "同话题竞品声量", description: "百家饭同口径品牌份额条 · Viltrox 高亮", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 6, minHeight: 4, maxHeight: 16, render: renderComp },
+    { key: "recs", label: "给产品部的建议", description: "规则生成 · lexicon_v0 · 人工复核", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 5, maxHeight: 24, render: renderRecs },
+    // topics:chips 一两行 + 口径注 ≈ 130px → 4 格
+    { key: "topics", label: "热点话题", description: "词族热度 chips + ▲▼ 环比", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 12, render: renderTopics },
+    // geo:语言条形 + 待检桶 + 口径注 ≈ 230px → 7 格
+    { key: "geo", label: "按语言 / 市场", description: "language_detected 分桶 · und=待检(非地理)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderGeo },
     // cover:固定 5 源行 + 口径注 ≈ 230px → 7 格
     { key: "cover", label: "监听覆盖", description: "五源健康 + 盲区如实标注", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 20, render: renderCover },
+    // ↓ palette 备选(不进默认布局,注册表保留全量可选)
+    { key: "plat", label: "平台分布", description: "vkpi_comments 按 platform 条形", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderPlat },
+    { key: "complaints", label: "抱怨聚类", description: "话题词 + 负面线索双命中 · 原声引文", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 24, render: renderComplaints },
+    { key: "wishlist", label: "愿望清单", description: "焦段 / 变焦 / 卡口 chips + 原声", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 10, minHeight: 6, maxHeight: 24, render: renderWishlist },
+    { key: "gaps", label: "需求空白", description: "有声量但目录零 SKU 的焦段", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 5, maxHeight: 24, render: renderGaps },
     { key: "buckets", label: "产品线声量分桶", description: "focal_matrix 词表口径", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 16, render: renderBuckets },
   ];
 

@@ -416,7 +416,7 @@ const GENERIC_RECS: Record<string, Array<[string, string]>> = {
     ["意向队列", "vkpi_reply_queue"],
     ["B&H 口碑", "vkpi_bh_reviews"],
     ["需求信号", "vkpi_brand_signal"],
-    ["情感", "vkpi_sentiment_results(已建未跑)"],
+    ["情感", "vkpi_sentiment_results(批注管线已接)"],
   ],
   aggregate: [
     ["方法", "lexicon_v0 纯词表聚合 · 零 LLM"],

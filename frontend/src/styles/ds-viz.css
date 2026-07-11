@@ -220,6 +220,23 @@
 }
 @media (prefers-reduced-motion: reduce) { .ds-scale-marker { animation: none; } }
 
+/* ---- 告警状态点(demo .adot:crit 发光脉冲;脉冲复用 cockpit-reference.css 的
+   vkpi-lane-pulse keyframes;reduced-motion 走媒体查询降级为静态点)---- */
+.ds-adot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--ds-crit);
+  box-shadow: 0 0 7px var(--ds-crit);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ds-adot { animation: vkpi-lane-pulse 1.2s ease-in-out infinite; }
+}
+.ds-adot--ok {
+  background: var(--ds-good);
+  box-shadow: none;
+  opacity: 0.7;
+  animation: none;
+}
+
 /* 图例 */
 .ds-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--ds-text-2); }
 .ds-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
