@@ -49,7 +49,9 @@
    ========================================================================= */
 [data-style="glass"][data-theme="light"] {
   --ds-bg:#eef2f8; --ds-bg-2:#f6f9fd; --ds-panel:rgb(255 255 255 / var(--vkpi-glass-opacity)); --ds-card:rgb(255 255 255 / var(--vkpi-glass-card-opacity));
-  --ds-workspace-surface:rgba(238,243,250,.92); --ds-sidebar-surface:rgba(255,255,255,.82); --ds-topbar-surface:rgba(238,243,250,.72); --ds-queue-surface:rgba(255,255,255,.96);
+  /* 融合修(波A-A1/A3):顶栏与侧栏同色系,且都吃清晰度滑杆(比卡片高一档,min 封顶 1)——
+     此前顶栏 .72 写死且色调另起炉灶,滑杆只动卡片不动门面 → 左上角 L 形断层。 */
+  --ds-workspace-surface:rgba(238,243,250,.92); --ds-sidebar-surface:rgb(255 255 255 / min(1, calc(var(--vkpi-glass-opacity) + .06))); --ds-topbar-surface:rgb(255 255 255 / min(1, calc(var(--vkpi-glass-opacity) + .04))); --ds-queue-surface:rgba(255,255,255,.96);
   --ds-sidebar-divider:rgba(16,26,50,.13); --ds-queue-border:rgba(16,26,50,.20); --ds-queue-shadow:0 1px 2px rgba(20,30,60,.08),0 8px 18px rgba(20,30,60,.11); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.9);
   --ds-overlay-surface:rgb(255 255 255 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(248 250 253 / var(--vkpi-glass-drawer-opacity));
   --ds-line:rgba(16,26,50,.10); --ds-line-strong:rgba(16,26,50,.20);
@@ -68,7 +70,9 @@
 }
 [data-style="glass"][data-theme="dark"] {
   --ds-bg:#05060a; --ds-bg-2:#0a0c12; --ds-panel:rgb(14 19 31 / var(--vkpi-glass-opacity)); --ds-card:rgb(21 27 42 / var(--vkpi-glass-card-opacity));
-  --ds-workspace-surface:rgba(5,6,10,.90); --ds-sidebar-surface:rgba(11,15,24,.88); --ds-topbar-surface:rgba(5,6,10,.68); --ds-queue-surface:rgba(25,32,47,.96);
+  /* 融合修(波A-A1/A3):顶栏从全站最透的 .68 提档,与侧栏同色系(11,15,24),
+     两者都吃清晰度滑杆(侧栏 +.10 / 顶栏 +.08,min 封顶 1)。 */
+  --ds-workspace-surface:rgba(5,6,10,.90); --ds-sidebar-surface:rgb(11 15 24 / min(1, calc(var(--vkpi-glass-opacity) + .10))); --ds-topbar-surface:rgb(11 15 24 / min(1, calc(var(--vkpi-glass-opacity) + .08))); --ds-queue-surface:rgba(25,32,47,.96);
   --ds-sidebar-divider:rgba(255,255,255,.11); --ds-queue-border:rgba(255,255,255,.20); --ds-queue-shadow:0 1px 1px rgba(0,0,0,.65),0 8px 22px rgba(0,0,0,.38); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.07);
   --ds-overlay-surface:rgb(10 15 26 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(9 14 25 / var(--vkpi-glass-drawer-opacity));
   --ds-line:rgba(255,255,255,.09); --ds-line-strong:rgba(255,255,255,.17);

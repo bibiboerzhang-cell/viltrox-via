@@ -91,7 +91,10 @@
   backdrop-filter: var(--ds-backdrop);
   -webkit-backdrop-filter: var(--ds-backdrop);
   transition: width 0.22s ease;
-  overflow: hidden;
+  /* 融合修(波A-A2):此前 overflow:hidden 把 right:-11px 的收合圆钮切成半圆,
+     且矮窗口下底部 LLM 卡被静默裁掉。内部滚动由 .vkpi-rail__nav 承担(min-height:0
+     + overflow-y:auto 已就位),外层放开。 */
+  overflow: visible;
 }
 
 .vkpi-rail__toggle {
@@ -130,9 +133,10 @@
 }
 
 .vkpi-rail__brand {
+  /* 融合修(波A-A1):品牌行 45+3+13=61px 与顶栏 60px 差 1px,交角错位。锁齐 60。 */
   min-height: 45px;
   gap: 10px;
-  padding: 3px 7px 13px;
+  padding: 3px 7px 12px;
 }
 
 .vkpi-rail__logo {
@@ -448,6 +452,9 @@
   overflow: visible;
   color: var(--ds-text-2);
   border: 0;
+  /* 融合修(波A-A1):顶栏必须有下缘分界线,否则半透明面下内容滚过=烟熏断层。
+     分界线全站统一 --ds-line。 */
+  border-bottom: 1px solid var(--ds-line);
   background: var(--ds-topbar-surface);
   box-shadow: none;
   backdrop-filter: var(--ds-backdrop);
