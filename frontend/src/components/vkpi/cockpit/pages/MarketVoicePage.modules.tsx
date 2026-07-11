@@ -11,7 +11,10 @@ import type { VoiceFeedItem } from "../../../../services/vkpi/marketVoice-api";
 //   - 覆盖行 coverrow / 反馈行 fb / 详情弹窗 fnav:1:1 对照
 //     ~/.claude/skills/vkpi-dashboard-demo/assets/V-KPI-板块页范式-Demo.html。
 //   - 溯源 = 复用 SrcChip / ProvChain / RecordPreview 三组件(components/provenance)。
-// 红线:纯展示零执行;不触 viltrox_fit_score / rule_v0;颜色全 token 类零写死色;
+//   - 闭环动作(V0e,demo .aacts 行):详情弹窗底部「转回复队列 / 转产品部」;本文件只出
+//     UI + 回调,真实 API 调用在 MarketVoicePage(page 层持 token);转产品部无落库通路
+//     → 诚实 disabled 带说明(不假装成功)。
+// 红线:本文件零直连网络(动作走 page 层回调);不触 viltrox_fit_score / rule_v0;颜色全 token 类零写死色;
 //        动效只用 ds-viz.css 既有类(自带 reduced-motion 降级),不新增动画。
 
 export type Row = Record<string, any>;
@@ -183,7 +186,17 @@ export function platformBadge(platform: string) {
   return PLATFORM_SHORT[key] || (key ? key.toUpperCase().slice(0, 6) : "—");
 }
 
-export function FeedRowLine({ item, index, onOpen }: { item: VoiceFeedItem; index: number; onOpen: (i: number) => void }) {
+export function FeedRowLine({
+  item,
+  index,
+  onOpen,
+  queued = false,
+}: {
+  item: VoiceFeedItem;
+  index: number;
+  onOpen: (i: number) => void;
+  queued?: boolean;
+}) {
   const idn = IDENTITY_META[item.identity] || IDENTITY_META.user;
   return (
     <div
@@ -208,6 +221,14 @@ export function FeedRowLine({ item, index, onOpen }: { item: VoiceFeedItem; inde
         {idn.label}
       </span>
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">{item.text || "—"}</span>
+      {queued && (
+        <span
+          className="flex-none rounded-[5px] border border-good bg-good-soft px-1 py-px text-[8px] font-bold text-good"
+          title="已转回复队列(vkpi_reply_queue)"
+        >
+          💬 已入队
+        </span>
+      )}
       {Number(item.likes) > 0 && <span className="flex-none font-mono text-[9.5px] text-muted">♥ {item.likes}</span>}
       <span className="flex-none font-mono text-[9.5px] text-muted" title={item.created_at ? `${item.created_at}(UTC 存 · 按浏览器时区显示)` : "无时间戳"}>
         {formatLocal(item.created_at)}
@@ -327,6 +348,10 @@ export function FeedDetailModal({
   loadingNext,
   onNav,
   onClose,
+  queued = false,
+  queueBusy = false,
+  queueError = "",
+  onEnqueueReply,
 }: {
   item: VoiceFeedItem;
   index: number;
@@ -334,6 +359,14 @@ export function FeedDetailModal({
   loadingNext: boolean;
   onNav: (i: number) => void;
   onClose: () => void;
+  /** V0e 闭环动作:该条是否已入回复队列(本次会话真实结果 / already_queued) */
+  queued?: boolean;
+  /** 入队请求进行中(按钮防双击,不假装瞬时成功) */
+  queueBusy?: boolean;
+  /** 入队失败原因(如实展示,不吞) */
+  queueError?: string;
+  /** 「转回复队列」点击回调(page 层持 token 真调端点);缺省 = 按钮 disabled */
+  onEnqueueReply?: () => void;
 }) {
   const [rec, setRec] = React.useState<string | null>(null);
 
@@ -414,6 +447,41 @@ export function FeedDetailModal({
         <ProvChain steps={steps} onRecord={(key) => setRec(key)} />
         {rec ? <RecordPreview title="库记录预览 · 点其他节点切换" rows={feedRecordRows(item, rec)} /> : null}
       </div>
+
+      {/* 闭环动作(V0e · demo .aacts 行):转回复队列=真端点;转产品部=诚实降级(通路待建,不假装成功) */}
+      <div className="mt-4 flex gap-2 border-t border-line pt-3">
+        <button
+          type="button"
+          disabled={queued || queueBusy || !onEnqueueReply}
+          onClick={onEnqueueReply}
+          title={
+            queued
+              ? "该评论已在回复队列(vkpi_reply_queue),不重复入队"
+              : "手动把这条评论转入回复队列(POST /reply-queue/enqueue-comment,幂等)"
+          }
+          className={`flex-1 rounded-lg border px-3 py-2 text-center text-[11.5px] transition-colors disabled:cursor-default ${
+            queued
+              ? "border-good bg-good-soft text-good"
+              : "border-line text-ink-2 hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
+          }`}
+        >
+          {queued ? "✓ 已入队" : queueBusy ? "入队中…" : "💬 转回复队列"}
+        </button>
+        <button
+          type="button"
+          disabled
+          title="PRD 通路待建(V1.1):仓库暂无 market→PRD 落库端点(无 market_insights / PRD 表),不做假成功"
+          className="flex-1 cursor-default rounded-lg border border-dashed border-line px-3 py-2 text-center text-[11.5px] text-muted opacity-60"
+        >
+          ⚙ 转产品部
+        </button>
+      </div>
+      {queueError ? (
+        <div className="mt-2 rounded-lg border border-crit bg-crit-soft px-3 py-1.5 text-[11px] text-crit">
+          转回复队列失败:{queueError}
+        </div>
+      ) : null}
+      <div className="mt-1.5 text-right text-[9.5px] text-muted">转产品部:PRD 落库通路待建(V1.1)· 按钮暂不可用,不编造成功状态</div>
     </ModalShell>
   );
 }

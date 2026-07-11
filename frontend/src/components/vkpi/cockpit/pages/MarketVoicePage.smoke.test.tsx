@@ -1,17 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 // V0a 金样板冒烟:MarketVoicePage(可编辑板块页)挂载后渲染出
 // KPI 带 + 模块标题 + 反馈流真数据行 + 情感 pending 诚实卡。
-// mock seam:services/vkpi/marketVoice-api(getVoiceReport / getVoiceFeed)——
-// 页面唯一的网络出口,mock 后零真实 HTTP;布局走 localStorage(每测清空)。
+// V0e 闭环:详情弹窗「转回复队列」真调 enqueueReplyQueueComment → ✓ 已入队;
+// 「转产品部」诚实 disabled(PRD 通路待建,不假装成功)。
+// mock seam:services/vkpi/marketVoice-api(getVoiceReport / getVoiceFeed /
+// enqueueReplyQueueComment)—— 页面唯一的网络出口,mock 后零真实 HTTP;
+// 布局走 localStorage(每测清空)。
 
 const getVoiceReport = vi.fn();
 const getVoiceFeed = vi.fn();
+const enqueueReplyQueueComment = vi.fn();
 vi.mock("../../../../services/vkpi/marketVoice-api", () => ({
   getVoiceReport: (...args: unknown[]) => getVoiceReport(...args),
   getVoiceFeed: (...args: unknown[]) => getVoiceFeed(...args),
+  enqueueReplyQueueComment: (...args: unknown[]) => enqueueReplyQueueComment(...args),
 }));
 
 import { MarketVoicePage } from "./MarketVoicePage";
@@ -62,6 +67,20 @@ beforeEach(() => {
     offset: 0,
     limit: 20,
   });
+  enqueueReplyQueueComment.mockReset().mockResolvedValue({
+    ok: true,
+    already_queued: false,
+    comment_id: 1042,
+    item: {
+      id: 501,
+      platform: "youtube",
+      comment_external_id: "yt-c-777",
+      intent_tag: "manual",
+      lang: "zh",
+      status: "pending",
+      created_at: "2026-07-11T00:00:00Z",
+    },
+  });
 });
 
 describe("MarketVoicePage smoke (V0a 可编辑板块页)", () => {
@@ -99,5 +118,37 @@ describe("MarketVoicePage smoke (V0a 可编辑板块页)", () => {
     render(<MarketVoicePage apiToken="t" />);
     expect(await screen.findByText("端点待接 · voice-feed")).toBeTruthy();
     expect(await screen.findByText(/HTTP 404/)).toBeTruthy();
+  });
+
+  it("详情弹窗闭环动作(V0e):转回复队列真调端点→✓ 已入队;转产品部诚实 disabled", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+
+    // 点开反馈流单条 → 详情弹窗
+    fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
+    expect(await screen.findByText(/反馈详情/)).toBeTruthy();
+
+    // 转产品部:无 market→PRD 落库通路 → 按钮 disabled + title 说明(不假装成功)
+    const prdBtn = screen.getByRole("button", { name: /转产品部/ });
+    expect((prdBtn as HTMLButtonElement).disabled).toBe(true);
+    expect(prdBtn.getAttribute("title") || "").toContain("PRD 通路待建");
+
+    // 转回复队列:点击 → 端点按契约被调(token + vkpi_comments.id)→ 成功后变 ✓ 已入队
+    const rqBtn = screen.getByRole("button", { name: /转回复队列/ });
+    expect((rqBtn as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(rqBtn);
+    expect(enqueueReplyQueueComment).toHaveBeenCalledWith("t", 1042);
+    expect(await screen.findByText("✓ 已入队")).toBeTruthy();
+    // 该 fb 行加小徽(反馈流行内「已入队」徽)
+    expect(await screen.findByText("💬 已入队")).toBeTruthy();
+  });
+
+  it("转回复队列失败时错误如实展示(不吞、不假绿)", async () => {
+    enqueueReplyQueueComment.mockReset().mockRejectedValue(new Error("HTTP 403"));
+    render(<MarketVoicePage apiToken="t" />);
+    fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
+    fireEvent.click(await screen.findByRole("button", { name: /转回复队列/ }));
+    expect(await screen.findByText(/转回复队列失败/)).toBeTruthy();
+    expect(await screen.findByText(/HTTP 403/)).toBeTruthy();
+    expect(screen.queryByText("✓ 已入队")).toBeNull();
   });
 });

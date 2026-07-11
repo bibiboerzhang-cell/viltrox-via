@@ -2,6 +2,7 @@
 
 链路:
   screen_intents()  从 vkpi_comments 扫购买意向(多语种关键词规则)-> 入 vkpi_reply_queue(status=pending)。
+  enqueue_comment() 市场之声 V0e 闭环:按 vkpi_comments.id 单条手动入队(幂等,已在队返回已有行)。
   draft_reply(id)   RAG over 369 SKU(vkpi_products)-> llm_gateway.invoke 生成品牌口吻草稿(check_budget 先行,
                     降级给模板)-> 写 draft_reply + status=drafted。
 
@@ -251,6 +252,111 @@ def screen_intents(*, limit: int = 500, platform: str = "") -> dict[str, Any]:
             enqueued += 1
     conn.commit()
     return {"ok": True, "scanned": scanned, "matched": matched, "enqueued": enqueued}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# enqueue_comment:市场之声 V0e 闭环 —— 单条评论手动入队(幂等)
+# ══════════════════════════════════════════════════════════════════════════
+_QUEUE_ROW_SELECT_SQL = """
+        SELECT id, platform, comment_external_id, intent_tag, lang, status, created_at
+        FROM vkpi_reply_queue
+        WHERE platform = ? AND comment_external_id = ?
+        LIMIT 1
+"""
+
+
+def _queue_item_brief(row: Any) -> dict[str, Any]:
+    """队列行 → 契约摘要(仅回复队列自身字段,不带正文全文,不带内部列)。"""
+    return {
+        "id": int(_row_get(row, "id") or 0),
+        "platform": _text(_row_get(row, "platform")),
+        "comment_external_id": _text(_row_get(row, "comment_external_id")),
+        "intent_tag": _text(_row_get(row, "intent_tag")),
+        "lang": _text(_row_get(row, "lang")),
+        "status": _text(_row_get(row, "status")),
+        "created_at": _text(_row_get(row, "created_at")),
+    }
+
+
+def enqueue_comment(comment_id: int) -> dict[str, Any]:
+    """把 vkpi_comments 单条评论手动入 vkpi_reply_queue(市场之声 V0e「转回复队列」)。
+
+    与 screen_intents 同队列行结构、同幂等键 (platform, comment_external_id):
+      已在队 → 直接返回已有行(already_queued=True),绝不重复入队;
+      并发双击 → INSERT ON CONFLICT DO NOTHING,输者按 rowcount=0 判 already_queued,
+      两边最终都读回同一真实队列行(不编造成功状态)。
+    intent_tag 复用 _classify_intent 规则;规则不命中时落 'manual'(人工点名入队,如实标注,
+    不假装规则命中)。kol_pool_id 沿用缺陷⑤口径:account_id 必须真实存在于 vkpi_kol_pool 才落,
+    否则 NULL。红线:只读 vkpi_comments、只写 vkpi_reply_queue,零触 viltrox_fit_score / rule_v0。
+    """
+    conn = get_conn()
+    if not _table_exists("vkpi_reply_queue"):
+        return {"ok": False, "reason": "reply_queue_table_missing", "comment_id": int(comment_id)}
+
+    row = conn.execute(
+        """
+        SELECT id, external_comment_id, comment_text, platform, account_id, language_detected
+        FROM vkpi_comments
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (int(comment_id),),
+    ).fetchone()
+    if not row:
+        return {"ok": False, "reason": "comment_not_found", "comment_id": int(comment_id)}
+
+    ext_id = _text(_row_get(row, "external_comment_id"))
+    text = _text(_row_get(row, "comment_text"))
+    platform = _text(_row_get(row, "platform"))
+    if not ext_id:
+        # 幂等键缺半边:入不了队就如实说,不硬塞脏行。
+        return {"ok": False, "reason": "comment_missing_external_id", "comment_id": int(comment_id)}
+    if not text:
+        return {"ok": False, "reason": "comment_text_empty", "comment_id": int(comment_id)}
+
+    existing = conn.execute(_QUEUE_ROW_SELECT_SQL, (platform, ext_id)).fetchone()
+    if existing:
+        return {
+            "ok": True,
+            "already_queued": True,
+            "comment_id": int(comment_id),
+            "item": _queue_item_brief(existing),
+        }
+
+    intent = _classify_intent(text) or "manual"
+    lang = _guess_lang(text, _text(_row_get(row, "language_detected")))
+    try:
+        acct = int(_row_get(row, "account_id") or 0)
+    except (TypeError, ValueError):
+        acct = 0
+    kol_pool_id = acct if acct and acct in _valid_kol_pool_ids({acct}) else None
+
+    cur = conn.execute(
+        """
+        INSERT INTO vkpi_reply_queue (
+          platform, kol_pool_id, comment_external_id, comment_text,
+          intent_tag, lang, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        ON CONFLICT (platform, comment_external_id) DO NOTHING
+        """,
+        (platform, kol_pool_id, ext_id, text[:2000], intent, lang, _now_iso(), _now_iso()),
+    )
+    conn.commit()
+    try:
+        inserted = int(getattr(cur, "rowcount", 0) or 0) > 0
+    except Exception:
+        inserted = True
+
+    final = conn.execute(_QUEUE_ROW_SELECT_SQL, (platform, ext_id)).fetchone()
+    if not final:
+        # INSERT 后读不回 = 真失败(不假装成功)。
+        return {"ok": False, "reason": "enqueue_failed", "comment_id": int(comment_id)}
+    return {
+        "ok": True,
+        "already_queued": not inserted,
+        "comment_id": int(comment_id),
+        "item": _queue_item_brief(final),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════

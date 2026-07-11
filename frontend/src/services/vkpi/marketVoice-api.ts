@@ -6,9 +6,12 @@
 //     {items:[{id,source_table,platform,text,language,identity,identity_ref,
 //       post_url,likes,created_at,prov:{fetched_at,post_table,post_id}}],total,offset,limit}
 //     后端内部异常不 500 → 回契约形状 + status:"error"(调用方诚实降级,绝不编数据)。
-// 红线:纯读展示,不触 viltrox_fit_score / rule_v0。
+// - enqueueReplyQueueComment:POST /api/admin/vkpi/reply-queue/enqueue-comment
+//     V0e 闭环「转回复队列」:按 vkpi_comments.id 单条手动入 vkpi_reply_queue(幂等,
+//     已在队返回已有行 already_queued=true;失败 4xx 由 apiFetch 抛错,调用方如实展示)。
+// 红线:不触 viltrox_fit_score / rule_v0。
 
-import { apiFetch } from "../http";
+import { apiFetch, jsonBody } from "../http";
 
 export type VoiceIdentity = "kol" | "owned" | "user";
 
@@ -59,6 +62,32 @@ export async function getVoiceFeed(token: string, options: VoiceFeedOptions = {}
   return apiFetch<VoiceFeedResponse>(
     `/api/admin/vkpi/market/voice-feed?${params.toString()}`,
     {},
+    token,
+  );
+}
+
+// V0e 闭环:转回复队列(后端契约 reply_queue.enqueue_comment)
+export interface ReplyQueueEnqueueItem {
+  id: number;
+  platform: string;
+  comment_external_id: string;
+  intent_tag: string;
+  lang: string;
+  status: string;
+  created_at: string;
+}
+
+export interface ReplyQueueEnqueueResult {
+  ok: boolean;
+  already_queued: boolean;
+  comment_id: number;
+  item: ReplyQueueEnqueueItem;
+}
+
+export async function enqueueReplyQueueComment(token: string, commentId: number) {
+  return apiFetch<ReplyQueueEnqueueResult>(
+    "/api/admin/vkpi/reply-queue/enqueue-comment",
+    { method: "POST", body: jsonBody({ comment_id: commentId }) },
     token,
   );
 }

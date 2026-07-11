@@ -2,6 +2,7 @@ import React from "react";
 import { PencilLine } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import {
+  enqueueReplyQueueComment,
   getVoiceFeed,
   getVoiceReport,
   type VoiceFeedItem,
@@ -31,8 +32,10 @@ import {
 //   布局本机记忆 storageKey=vkpi-market-voice-layout-v1)/ 溯源可点进(SrcChip+ProvChain+
 //   RecordPreview)/ 全量+连续翻(反馈流分页 + ‹#n/N› + ↑↓)/ 诚实空态(逐源如实标)。
 //   数据源(全真,零编造):
-//     GET /api/admin/vkpi/market/voice-report —— lexicon_v0 纯词表月报(抱怨/愿望/空白/建议)
-//     GET /api/admin/vkpi/market/voice-feed  —— vkpi_comments 分页原声(身份三分类+溯源 prov)
+//     GET  /api/admin/vkpi/market/voice-report —— lexicon_v0 纯词表月报(抱怨/愿望/空白/建议)
+//     GET  /api/admin/vkpi/market/voice-feed  —— vkpi_comments 分页原声(身份三分类+溯源 prov)
+//     POST /api/admin/vkpi/reply-queue/enqueue-comment —— V0e 闭环「转回复队列」(幂等入队);
+//       「转产品部」无落库通路(无 market_insights/PRD 表)→ 弹窗内诚实 disabled,不假装成功
 //   红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0;端点失败=诚实错误卡;
 //         颜色全 token 类零写死色;动效只用既有 ds-viz 类(自带 reduced-motion 降级)。
 //   注意:板块布局只走本机 storageKey,不给 EditableDashboardBoard 传 apiToken——
@@ -147,6 +150,12 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
   const [wantIndex, setWantIndex] = React.useState<number | null>(null);
   const [provKey, setProvKey] = React.useState<string | null>(null);
 
+  // V0e 闭环「转回复队列」:queuedIds = 本会话真实入队成功(含 already_queued)的评论 id;
+  // 状态只在端点真实返回后落地,绝不点击即置绿(不编造成功状态)。
+  const [queuedIds, setQueuedIds] = React.useState<Set<number>>(() => new Set());
+  const [queueBusyId, setQueueBusyId] = React.useState<number | null>(null);
+  const [queueError, setQueueError] = React.useState("");
+
   // 月报(现有真数据源,原样保留)
   React.useEffect(() => {
     if (!apiToken) return;
@@ -210,6 +219,7 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
   const gotoFeed = (i: number) => {
     const items = feedItems || [];
     if (i < 0 || (feedTotal > 0 && i >= feedTotal)) return;
+    setQueueError("");
     if (i < items.length) {
       setDetailIndex(i);
       setWantIndex(null);
@@ -218,6 +228,35 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
       loadFeed(items.length);
     }
   };
+
+  // V0e「转回复队列」:真调 POST /reply-queue/enqueue-comment;成功(含 already_queued=幂等
+  // 命中已有行)才落 queuedIds;失败原因原样进 queueError(不吞、不假绿)。
+  const enqueueToReplyQueue = React.useCallback(
+    (item: VoiceFeedItem) => {
+      if (!apiToken || !item || queueBusyId != null) return;
+      setQueueBusyId(item.id);
+      setQueueError("");
+      enqueueReplyQueueComment(apiToken, item.id)
+        .then((res) => {
+          if (res && res.ok) {
+            setQueuedIds((prev) => {
+              const next = new Set(prev);
+              next.add(item.id);
+              return next;
+            });
+          } else {
+            setQueueError(String((res as Row)?.reason || "端点返回非 ok"));
+          }
+        })
+        .catch((err: any) => {
+          setQueueError(String(err?.detail || err?.message || "入队失败"));
+        })
+        .finally(() => {
+          setQueueBusyId((cur) => (cur === item.id ? null : cur));
+        });
+    },
+    [apiToken, queueBusyId],
+  );
 
   React.useEffect(() => {
     if (wantIndex != null && feedItems && wantIndex < feedItems.length) {
@@ -373,7 +412,7 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
       body = (
         <div>
           {loaded.map((item, i) => (
-            <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => gotoFeed(idx)} />
+            <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => gotoFeed(idx)} queued={queuedIds.has(item.id)} />
           ))}
           {loaded.length < feedTotal ? (
             <button
@@ -475,7 +514,15 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
           onClose={() => {
             setDetailIndex(null);
             setWantIndex(null);
+            setQueueError("");
           }}
+          queued={queuedIds.has(detailItem.id)}
+          queueBusy={queueBusyId === detailItem.id}
+          queueError={queueError}
+          onEnqueueReply={
+            // 入队按 vkpi_comments.id;反馈流当前唯一源即 vkpi_comments,其他源出现时如实禁用
+            detailItem.source_table === "vkpi_comments" ? () => enqueueToReplyQueue(detailItem) : undefined
+          }
         />
       )}
 

@@ -1,10 +1,11 @@
 """件3 · ReplyQueue 评论区销售员 v0 半自动 API。
 
 前缀 /api/admin/vkpi;权限:read 读、write 写(require_tab("vkpi", ...))。
-  GET  /reply-queue                列表(可按 status/platform 过滤)
-  POST /reply-queue/screen         触发从 vkpi_comments 筛购买意向入队(pending)
-  POST /reply-queue/{id}/draft     为一条生成品牌口吻草稿(RAG 369 SKU + LLM,预算闸降级模板)
-  POST /reply-queue/{id}/mark      人工标记 replied / dismissed(v0 不自动发帖)
+  GET  /reply-queue                    列表(可按 status/platform 过滤)
+  POST /reply-queue/screen             触发从 vkpi_comments 筛购买意向入队(pending)
+  POST /reply-queue/enqueue-comment    市场之声 V0e:按 vkpi_comments.id 单条手动入队(幂等)
+  POST /reply-queue/{id}/draft         为一条生成品牌口吻草稿(RAG 369 SKU + LLM,预算闸降级模板)
+  POST /reply-queue/{id}/mark          人工标记 replied / dismissed(v0 不自动发帖)
 
 红线:纯待办队列路由,零触 viltrox_fit_score/rule_v0。领域逻辑全在 comments/reply_queue.py。
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.api.dependencies.perms import require_tab
 
@@ -40,6 +42,31 @@ def api_screen(
     """从 vkpi_comments 扫购买意向评论入队(pending,幂等)。"""
     from app.domains.comments import reply_queue
     return reply_queue.screen_intents(limit=limit, platform=platform)
+
+
+class EnqueueCommentBody(BaseModel):
+    comment_id: int = Field(..., ge=1, description="vkpi_comments.id(市场之声反馈流单条)")
+
+
+@router.post("/reply-queue/enqueue-comment")
+def api_enqueue_comment(
+    body: EnqueueCommentBody,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    """市场之声 V0e「转回复队列」:把 vkpi_comments 单条评论手动入队(幂等)。
+
+    同 comment(平台 + external_comment_id)已在队 → 返回已有行(already_queued=True),
+    绝不重复入队;评论不存在 404;缺幂等键/空正文等入不了队的情况诚实 400 带 reason。
+    纯增量端点,不改 screen(全量筛)语义。
+    """
+    from app.domains.comments import reply_queue
+    result = reply_queue.enqueue_comment(body.comment_id)
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "enqueue_failed")
+        if reason == "comment_not_found":
+            raise HTTPException(status_code=404, detail=reason)
+        raise HTTPException(status_code=400, detail=reason)
+    return result
 
 
 @router.post("/reply-queue/{reply_id}/draft")
