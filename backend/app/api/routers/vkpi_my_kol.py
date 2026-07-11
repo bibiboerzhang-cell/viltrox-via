@@ -20,7 +20,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
 from app.domains.access import scope
-from app.domains.kol import my_kol_aggregate, risk_index
+from app.domains.kol import my_kol_aggregate, my_kol_board_ext, risk_index
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
 
@@ -56,6 +56,36 @@ def my_kol_aggregate_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+
+
+@router.get("/my-kol/board-ext")
+def my_kol_board_ext_endpoint(
+    days: int = Query(default=30, ge=1, le=365),
+    staff_id: int | None = Query(default=None, ge=1),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """【M2】MY KOL 改版看板聚合(七组读数,一次调用全给齐;纯 SELECT 零副作用)。
+
+    kpi_series(收藏集粉丝/新视频/官号粉丝/官号播放时序 + KOL 播放点时读数)、
+    funnel(13 真阶段归并 8 段)、platform_dist、fit_dist(只出桶计数)、
+    contact_coverage(只出类型计数,绝不出明文联系方式)、views_top、v_content
+    (三档派生)。口径细节全在 kol/my_kol_board_ext.py 各组 basis。
+
+    scope 与本路由家族同款 viewer/own-only 口径:员工经 scope.effective_staff_id
+    恒被压回本人(own-only);管理层缺省 None=全团队收藏集看板,显式 ?staff_id=
+    看指定成员(与 dashboard/summary 聚合的 effective_staff_id 语义一致——本端点
+    是团队看板聚合而非个人收藏清单,故管理层自查不回落 actor,与 aggregate 有别)。
+    无 staff 身份的非管理层拒 403(防 scope 漏成全量)。
+    红线:纯读;零写 viltrox_fit_score / 不碰 rule_v0;零 LLM;全程 ? 占位。
+    """
+    target = scope.effective_staff_id(staff, staff_id)
+    if target is None and not scope.can_view_all(staff):
+        raise HTTPException(status_code=403, detail="no staff identity in scope")
+    body = my_kol_board_ext.build_board_ext(
+        get_conn(), staff_scope_id=target, days=int(days)
+    )
+    body["scope"] = scope.scope_context(staff, staff_id)
+    return body
 
 
 @router.get("/my-kol/risk-index")
