@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.domains.market.competitor_radar import normalize_content_provenance
 from app.domains.market.llm_quality import evaluate_market_llm_report
 
 
@@ -53,6 +54,7 @@ def _market_summary_card(report: dict[str, Any]) -> dict[str, Any]:
     comments = int(_number(summary.get("comment_opportunities")))
     high = int(_number(summary.get("high_priority")))
     return {
+        **normalize_content_provenance({}, observed_at=report.get("generated_at")),
         "id": f"market-summary-run-{run_id or 'all'}",
         "type": "market",
         "priority": "high" if high >= 8 else "medium" if high else "low",
@@ -88,6 +90,7 @@ def _brand_cards(report: dict[str, Any], *, limit: int = 5) -> list[dict[str, An
         score = _number(item.get("score"))
         cards.append(
             {
+                **normalize_content_provenance({}, observed_at=report.get("generated_at")),
                 "id": f"market-brand-{brand}-{_hash(run_id, brand, count, score)}",
                 "type": "competitor",
                 "priority": _priority_from_score(score),
@@ -125,6 +128,7 @@ def _llm_card(llm_report: dict[str, Any] | None) -> dict[str, Any] | None:
     provider = _text(result.get("provider"))
     model = _text(result.get("model"))
     return {
+        **normalize_content_provenance({}, observed_at=llm_report.get("generated_at")),
         "id": f"market-llm-summary-{_hash(provider, model, text)}",
         "type": "brief",
         "priority": "medium",
@@ -168,6 +172,7 @@ def _external_signal_cards(report: dict[str, Any] | None, *, limit: int = 4) -> 
         return []
     cards: list[dict[str, Any]] = [
         {
+            **normalize_content_provenance({}, observed_at=report.get("generated_at")),
             "id": f"external-smoke-summary-{_hash(report.get('generated_at'), items_loaded, business_items)}",
             "type": "market",
             "priority": "medium" if business_items else "low",
@@ -199,6 +204,17 @@ def _external_signal_cards(report: dict[str, Any] | None, *, limit: int = 4) -> 
         url = _text(item.get("source_url"))
         cards.append(
             {
+                **normalize_content_provenance(
+                    {
+                        **item,
+                        "source_platform": _text(
+                            item.get("source_platform"),
+                            _text(item.get("platform"), item.get("provider")),
+                        ),
+                        "source_url": url,
+                    },
+                    observed_at=report.get("generated_at"),
+                ),
                 "id": f"external-signal-{_hash(item.get('source_uid'), item.get('source_url'), title)}",
                 "type": "market" if item.get("provider") != "google_news" else "competitor",
                 "priority": _priority_from_unit_score(score),
@@ -239,8 +255,13 @@ def build_market_intelligence_cards(
         cards.insert(1, llm_card)
     external_cards = _external_signal_cards(external_smoke_report)
     if external_cards:
-        insert_at = 2 if llm_card else 1
-        cards[insert_at:insert_at] = external_cards
+        origin_rank = {"external": 0, "unknown": 1, "owned": 2}
+        external_cards.sort(key=lambda card: origin_rank.get(_text(card.get("content_origin"), "unknown"), 1))
+        cards[0:0] = external_cards
+    origin_counts: dict[str, int] = {}
+    for card in cards:
+        origin = _text(card.get("content_origin"), "unknown")
+        origin_counts[origin] = origin_counts.get(origin, 0) + 1
     checks = {
         "market_report_ready": bool(market_report.get("passed")) and bool((market_report.get("summary") or {}).get("signals_loaded")),
         "cards_have_evidence": all(bool(card.get("evidence")) for card in cards),
@@ -267,6 +288,8 @@ def build_market_intelligence_cards(
             "llm_card_included": bool(llm_card),
             "external_smoke_card_count": len(external_cards),
             "source_run_id": (market_report.get("summary") or {}).get("run_id") if isinstance(market_report.get("summary"), dict) else None,
+            "default_content_origin": _text(cards[0].get("content_origin"), "unknown") if cards else "unknown",
+            "content_origin_counts": origin_counts,
         },
         "cards": cards,
         "policy": {

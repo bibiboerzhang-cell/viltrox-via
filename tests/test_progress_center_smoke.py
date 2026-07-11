@@ -89,6 +89,7 @@ def test_progress_center_contract(admin_client):
     assert stages == ["queued", "search", "thinking", "summarizing"]
 
     diagnostics = body.get("diagnostics") or {}
+    assert isinstance(diagnostics.get("worker_online"), bool)
     assert diagnostics.get("write_db") is False
     assert diagnostics.get("llm_calls") is False
     assert diagnostics.get("worker_touched") is False

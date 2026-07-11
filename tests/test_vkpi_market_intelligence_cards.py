@@ -86,6 +86,8 @@ def test_cards_include_market_summary_and_brand_cards() -> None:
     assert payload["cards"][0]["entityType"] == "market_signal_run"
     assert payload["cards"][1]["entityType"] == "competitor_brand"
     assert all(card["evidence"] for card in payload["cards"])
+    assert all(card["content_origin"] == "unknown" for card in payload["cards"])
+    assert all(card["observed_at"] == _market_report()["generated_at"] for card in payload["cards"])
 
 
 def test_cards_include_only_usable_llm_summary() -> None:
@@ -117,9 +119,36 @@ def test_cards_include_external_signal_smoke_cards() -> None:
     )
 
     assert payload["summary"]["external_smoke_card_count"] == 2
+    assert payload["summary"]["default_content_origin"] == "external"
+    assert payload["cards"][0]["entityType"] == "external_signal_item"
     assert payload["cards"][1]["entityType"] == "external_signal_smoke"
-    assert payload["cards"][2]["entityType"] == "external_signal_item"
-    assert payload["cards"][2]["evidence"][3]["url"].startswith("https://news.google.com/")
+    assert payload["cards"][0]["evidence"][3]["url"].startswith("https://news.google.com/")
+    assert payload["cards"][0]["content_origin"] == "external"
+    assert payload["cards"][0]["source_platform"] == "google_news"
+    assert payload["cards"][0]["source_url"].startswith("https://news.google.com/")
+    assert payload["cards"][0]["published_at"] == "2026-05-24T18:00:00Z"
+    assert payload["cards"][0]["observed_at"] == _external_smoke_report()["generated_at"]
+
+
+def test_external_card_never_labels_viltrox_owned_content_external() -> None:
+    report = _external_smoke_report()
+    report["top_candidates"][0].update(
+        {
+            "content_origin": "external",
+            "provider": "youtube",
+            "source_url": "https://www.youtube.com/@viltroxofficial/videos",
+        }
+    )
+
+    payload = build_market_intelligence_cards(
+        _market_report(),
+        external_smoke_report=report,
+        brand_limit=1,
+    )
+
+    item_card = next(card for card in payload["cards"] if card["entityType"] == "external_signal_item")
+    assert item_card["content_origin"] == "owned"
+    assert item_card["source_platform"] == "youtube"
 
 
 def test_latest_usable_market_llm_report_skips_bad_outputs(tmp_path) -> None:

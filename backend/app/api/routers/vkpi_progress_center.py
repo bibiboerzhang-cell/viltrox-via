@@ -186,6 +186,8 @@ def _build_center_payload(viewer: dict | None, limit: int, recent_minutes: int) 
     ]
 
     counts = snapshot.get("counts") or {}
+    snapshot_diagnostics = snapshot.get("diagnostics") or {}
+    worker_online = snapshot_diagnostics.get("worker_online")
     return {
         "status": "ready",
         "generated_at": now.isoformat(),
@@ -204,6 +206,7 @@ def _build_center_payload(viewer: dict | None, limit: int, recent_minutes: int) 
         "diagnostics": {
             "source": "task_queue_view.get_task_queue(include_llm_calls=False)+apify_jobs.started_at",
             "progress_model": "elapsed(now-started_at)/avg7d(job_type) clamp 3..95; unknown→null",
+            "worker_online": worker_online if isinstance(worker_online, bool) else None,
             "write_db": False,
             "llm_calls": False,
             "worker_touched": False,

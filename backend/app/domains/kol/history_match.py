@@ -304,6 +304,53 @@ def _recent_post_summary(raw: dict[str, Any], *, limit: int = 6) -> list[dict[st
     return rows
 
 
+def _recent_evidence_posts(conn, pool_id: int, *, limit: int = 6) -> tuple[list[dict[str, Any]], float | None]:
+    """Return real evidence rows for the mover preview; never synthesizes trend points."""
+    try:
+        rows = conn.execute(
+            """
+            SELECT e.id,
+                   COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), e.content_url) AS title,
+                   e.content_url AS post_url,
+                   e.content_url AS url,
+                   e.platform,
+                   e.publish_date AS published_at,
+                   e.view_count AS views,
+                   e.like_count AS likes,
+                   e.comment_count AS comments,
+                   COALESCE(
+                     NULLIF(asset.cache_url, ''),
+                     CASE WHEN COALESCE(asset.digest, '') != '' THEN '/api/vkpi-media/image-cache/' || asset.digest ELSE NULL END,
+                     NULLIF(e.thumbnail_url, '')
+                   ) AS thumbnail_url
+            FROM vkpi_kol_video_evidence e
+            LEFT JOIN LATERAL (
+                SELECT a.cache_url, a.digest
+                FROM vkpi_media_cache_assets a
+                WHERE a.media_kind='image'
+                  AND a.status='cached'
+                  AND COALESCE(e.thumbnail_url, '') != ''
+                  AND a.source_url=e.thumbnail_url
+                ORDER BY a.id DESC LIMIT 1
+            ) asset ON TRUE
+            WHERE e.kol_pool_id=?
+              AND e.is_active IS NOT FALSE
+            ORDER BY COALESCE(e.publish_date, e.updated_at, e.created_at) DESC NULLS LAST,
+                     COALESCE(e.view_count, 0) DESC,
+                     e.id DESC
+            LIMIT ?
+            """,
+            (int(pool_id), max(1, min(24, int(limit)))),
+        ).fetchall()
+    except Exception:
+        return [], None
+    posts = [dict(row) | {"source_kind": "vkpi_kol_video_evidence"} for row in rows]
+    total_views = sum(_int(post.get("views")) for post in posts)
+    total_engagement = sum(_int(post.get("likes")) + _int(post.get("comments")) for post in posts)
+    engagement_rate = round(total_engagement / total_views * 100, 3) if total_views > 0 else None
+    return posts, engagement_rate
+
+
 def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, Any]:
     evidence = raw.get("evidence_summary") if isinstance(raw.get("evidence_summary"), dict) else {}
     cooperation_count = _int(evidence.get("cooperation_rows"))
@@ -347,6 +394,7 @@ def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, A
 def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: float) -> dict[str, Any]:
     raw = _pool_raw(row)
     summary = _cooperation_summary(conn, int(row.get("id") or 0), raw)
+    evidence_posts, evidence_engagement_rate = _recent_evidence_posts(conn, int(row.get("id") or 0))
     avatar_url = _text(row.get("avatar_url")) or _avatar_from_raw(raw)
     return {
         "matched": True,
@@ -365,7 +413,9 @@ def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: 
         "source_type": _text(row.get("source_type")),
         "source_ref": _text(row.get("source_ref")),
         "sync_status": _text(row.get("sync_status")),
-        "recent_posts": _recent_post_summary(raw),
+        "recent_posts": evidence_posts or _recent_post_summary(raw),
+        "engagement_rate": evidence_engagement_rate,
+        "engagement_rate_source": "vkpi_kol_video_evidence" if evidence_engagement_rate is not None else "unavailable",
         **summary,
     }
 

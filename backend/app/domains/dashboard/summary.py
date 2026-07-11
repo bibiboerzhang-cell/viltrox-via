@@ -46,6 +46,7 @@ from app.domains.dashboard.summary_rows import (  # noqa: E402,F401
 # 公司/官方矩阵聚合器(_build_company_roster_detail / _build_company_window_metrics)
 # 已整簇搬到 summary_company.py;行为不变,re-export 兜本文件 orchestrator 调用点。
 from app.domains.dashboard.summary_company import (  # noqa: E402,F401
+    _build_company_metric_series,
     _build_company_roster_detail,
     _build_company_window_metrics,
 )
@@ -295,22 +296,45 @@ def _build_evidence_active_30d_summary(*, window_days: int = 30, staff_scope_id:
 
     official_row = get_conn().execute(
         f"""
+        WITH latest AS (
+            SELECT MAX(cm.snapshot_date) AS latest_date
+            FROM vkpi_channel_metrics cm
+            JOIN vkpi_employee_channels c ON c.id = cm.channel_id
+            WHERE {_OFFICIAL_CHANNEL_FILTER_SQL}
+        )
         SELECT
             COUNT(DISTINCT channel_id) FILTER (
-                WHERE posted_at::date >= CURRENT_DATE - INTERVAL '{days} days'
-                   OR COALESCE(views_delta, 0) > 0
-                   OR COALESCE(likes_delta, 0) > 0
-                   OR COALESCE(comments_delta, 0) > 0
+                WHERE (
+                    posted_at::date > latest.latest_date - INTERVAL '{days} days'
+                    AND posted_at::date <= latest.latest_date
+                ) OR (
+                    snapshot_date > latest.latest_date - INTERVAL '{days} days'
+                    AND snapshot_date <= latest.latest_date
+                    AND (
+                        COALESCE(views_delta, 0) > 0
+                        OR COALESCE(likes_delta, 0) > 0
+                        OR COALESCE(comments_delta, 0) > 0
+                    )
+                )
             ) AS active_accounts,
             COUNT(*) FILTER (
-                WHERE posted_at::date >= CURRENT_DATE - INTERVAL '{days} days'
-                   OR COALESCE(views_delta, 0) > 0
-                   OR COALESCE(likes_delta, 0) > 0
-                   OR COALESCE(comments_delta, 0) > 0
+                WHERE (
+                    posted_at::date > latest.latest_date - INTERVAL '{days} days'
+                    AND posted_at::date <= latest.latest_date
+                ) OR (
+                    snapshot_date > latest.latest_date - INTERVAL '{days} days'
+                    AND snapshot_date <= latest.latest_date
+                    AND (
+                        COALESCE(views_delta, 0) > 0
+                        OR COALESCE(likes_delta, 0) > 0
+                        OR COALESCE(comments_delta, 0) > 0
+                    )
+                )
             ) AS signal_rows,
             COUNT(DISTINCT snapshot_date) AS snapshot_days
         FROM vkpi_channel_post_metrics pm
         JOIN vkpi_employee_channels c ON c.id = pm.channel_id
+        CROSS JOIN latest
         WHERE {_OFFICIAL_CHANNEL_FILTER_SQL}
         """
     ).fetchone()
@@ -705,6 +729,15 @@ def build_dashboard_summary(
         summary["engagement_rate_by_scope"]["company"] = company_engagement_rate
         summary["engagement_rate_by_scope"]["owned"] = company_engagement_rate
     summary["company_window_metrics"] = company_window
+    company_metric_series = _build_company_metric_series(window_days=30, lookback_days=60)
+    metric_series_by_scope = (
+        dict(summary["metric_series_by_scope"])
+        if isinstance(summary.get("metric_series_by_scope"), dict)
+        else {}
+    )
+    metric_series_by_scope["company"] = company_metric_series
+    metric_series_by_scope["owned"] = company_metric_series
+    summary["metric_series_by_scope"] = metric_series_by_scope
     if official_summary:
         result["official_matrix_summary"] = official_summary
         summary["official_account_count"] = official_summary["account_count"]

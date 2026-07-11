@@ -6,13 +6,40 @@ V6 Fit 快照 / AI Today 简报 / 竞品雷达 / 市场信号刷新 / 今日热�
 jobs_tasks.py 通过 `from .jobs_tasks_intel import (...)` re-export 兜住所有调用点。
 
 红线对齐(与 jobs_tasks.py 原注释同款):走预算闸 + 代理;config-gate 默认 OFF;
-绝不写 viltrox_fit_score(快照只读源列不写回)。函数体逐字不变。
+绝不写 viltrox_fit_score(快照只读源列不写回)。核心情报 job 回写注册表运行结果。
 """
 from __future__ import annotations
+
+from typing import Any
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _scheduler_task_enabled(task_key: str) -> bool:
+    from .jobs_tasks import _scheduler_task_enabled as _impl
+
+    return _impl(task_key)
+
+
+def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "") -> None:
+    try:
+        from .jobs_tasks import _record_scheduler_run as _impl
+
+        _impl(task_key, ok=ok, error=error)
+    except Exception:
+        logger.debug("scheduler.intel_record_run_failed", extra={"task": task_key}, exc_info=True)
+
+
+def _record_scheduler_result(task_key: str, result: Any) -> None:
+    payload = result if isinstance(result, dict) else {}
+    status = str(payload.get("status") or "").strip().lower()
+    ok = status == "ok"
+    error = ""
+    if not ok:
+        error = str(payload.get("error") or payload.get("reason") or f"status={status or 'missing'}")[:240]
+    _record_scheduler_run(task_key, ok=ok, error=error)
 
 
 async def job_vkpi_fit_snapshot():
@@ -77,8 +104,6 @@ async def job_vkpi_brief_agent():
 async def job_vkpi_competitor_radar():
     """竞品新品雷达(每早·Gemini+Google 接地):查海外竞品新镜头/相机发布 + 对 Viltrox 影响。
     红线:走预算闸(cron:competitor_radar)+ 代理;一天一次。config-gate(scheduler_tasks.vkpi_competitor_radar)。"""
-    from .jobs_tasks import _scheduler_task_enabled
-
     if not _scheduler_task_enabled("vkpi_competitor_radar"):
         return
     try:
@@ -87,15 +112,15 @@ async def job_vkpi_competitor_radar():
 
         result = await asyncio.to_thread(competitor_radar.generate_competitor_radar)
         logger.info("scheduler.vkpi_competitor_radar", extra={"result": result})
-    except Exception:
+        _record_scheduler_result("vkpi_competitor_radar", result)
+    except Exception as exc:
         logger.exception("scheduler.vkpi_competitor_radar_failed")
+        _record_scheduler_run("vkpi_competitor_radar", ok=False, error=str(exc)[:240])
 
 
 async def job_vkpi_market_signal_refresh():
     """Signals & Alerts 每日刷新(竞品新品 + Reddit/Google News 热度):allowlisted 有界抓取,零 LLM/零 DB 写。
     竞品入库仍走人工审核闸(本 job 不 promote)。config-gate(scheduler_tasks.vkpi_market_signal_refresh)。"""
-    from .jobs_tasks import _scheduler_task_enabled
-
     if not _scheduler_task_enabled("vkpi_market_signal_refresh"):
         return
     try:
@@ -104,15 +129,15 @@ async def job_vkpi_market_signal_refresh():
 
         result = await asyncio.to_thread(signal_refresh.refresh_external_signals)
         logger.info("scheduler.vkpi_market_signal_refresh", extra={"result": result})
-    except Exception:
+        _record_scheduler_result("vkpi_market_signal_refresh", result)
+    except Exception as exc:
         logger.exception("scheduler.vkpi_market_signal_refresh_failed")
+        _record_scheduler_run("vkpi_market_signal_refresh", ok=False, error=str(exc)[:240])
 
 
 async def job_vkpi_ai_today_hot():
     """AI Today 今日热点(每早8点中国时区):LLM 据真实行业热点生成拍摄方案+话题。
     红线:走预算闸(cron:ai_today_hot 硬上限)+ claude 代理;一天一次。config-gate(scheduler_tasks.vkpi_ai_today_hot)。"""
-    from .jobs_tasks import _scheduler_task_enabled
-
     if not _scheduler_task_enabled("vkpi_ai_today_hot"):
         return
     try:
@@ -121,8 +146,10 @@ async def job_vkpi_ai_today_hot():
 
         result = await asyncio.to_thread(ai_today.generate_ai_today_hot)
         logger.info("scheduler.vkpi_ai_today_hot", extra={"result": result})
-    except Exception:
+        _record_scheduler_result("vkpi_ai_today_hot", result)
+    except Exception as exc:
         logger.exception("scheduler.vkpi_ai_today_hot_failed")
+        _record_scheduler_run("vkpi_ai_today_hot", ok=False, error=str(exc)[:240])
 
 
 async def job_vkpi_official_daily_report(round_key: str = "daily"):
