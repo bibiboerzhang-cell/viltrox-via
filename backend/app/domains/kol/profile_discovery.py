@@ -635,6 +635,8 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
         profile_data = {
             "platform": platform,
             "handle": handle,
+            # 线上修(2026-07-10):入库行此前不带名字,列表/抽屉只剩 handle(YT=UC 频道 ID 串)。
+            "display_name": _text(item.get("display_name") or item.get("name") or item.get("title") or item.get("channel_name")),
             "profile_url": _text(item.get("profile_url") or item.get("channel_url") or item.get("url")),
             "avatar_url": _text(item.get("avatar_url") or item.get("avatar")),
             "bio": _text(item.get("bio") or item.get("description") or item.get("snippet")),

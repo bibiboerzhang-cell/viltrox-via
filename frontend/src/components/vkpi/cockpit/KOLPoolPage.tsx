@@ -16,7 +16,7 @@ import { ContactModal } from "./components/modals/ContactModal";
 import { KolPoolAllModal } from "./components/modals/KolPoolAllModal";
 import { favoriteKolPool, getKolPoolDetailBundle, getKolPoolItem, listKolPoolFavorites, unfavoriteKolPool } from "../../../domains/kol";
 import { toCockpitKolPoolRows } from "./kolPoolRuntime";
-import { listKolsNeedingAnalysis, enqueueVideoAnalysisBatch, importKolPool } from "../../../services/vkpi/kolPool-api";
+import { listKolsNeedingAnalysis, enqueueVideoAnalysisBatch, importKolPool, resolveKolPool } from "../../../services/vkpi/kolPool-api";
 import { candidateKindGroup } from "./lib/candidateKind";
 import { CANDIDATE_KIND_INFO } from "./data/candidateKindInfo";
 import { normalizeCountryCode } from "./data/countryInfo";
@@ -319,25 +319,54 @@ export function KOLPoolPage({ items: sourceItems = [], loading = false, error = 
       }, avatar));
       return;
     }
-    // ② 全网发现项(new_creator,无 kol_pool_id,还没入库)→ 不再静默 return;
-    //    用召回项自带 identity(头像/handle/平台/followers/profile_url/why_fit/sample)拼轻量 seed,
-    //    直接打开抽屉只读展示。openItem 见 seed 无 id 会跳过 detail_bundle 拉取(纯前端、不触评分),
-    //    把 why_fit / 召回理由映射进 bio 让用户看到「为什么推荐它」。
+    // ② 全网发现项(new_creator,无 kol_pool_id)。发现其实已「即时轻量入库」,只是设计
+    //    不变量规定会话项不回写 pool id(见 profile_discovery._auto_enroll_discoveries 注释)
+    //    → 线上修(2026-07-10):先按 handle+platform 反查真池行(镜像 pickDiscovery 的
+    //    resolve 套路),命中就按库内项打开、拉 detail_bundle 看全部真数据;查不到/失败才
+    //    退回轻量 seed 只读展示。此前直接开空壳,库里明明有粉丝数抽屉却全「—」,用户误以为没入库。
     const src = (recallItem.source_fields && typeof recallItem.source_fields === "object") ? recallItem.source_fields : {};
     const handle = String(recallItem.handle || recallItem.display_name || src.handle || src.channel_name || "").trim();
     const why = String(recallItem.why_fit || recallItem.recall_reason || src.why_fit || src.sample_title || src.evidence || "").trim();
-    void openItem(mergeAvatarSeed({
-      id: null,
-      kol_pool_id: null,
-      handle: handle || "未入库候选",
-      display_name: String(recallItem.display_name || src.display_name || src.channel_name || handle || "").trim(),
-      platform: String(recallItem.platform || src.platform || "").trim(),
-      profile_type: recallItem.profile_type || "creator",
-      followers: recallItem.followers ?? src.followers ?? null,
-      profile_url: String(recallItem.profile_url || src.profile_url || src.channel_url || src.source_url || "").trim(),
-      bio: why,
-      candidate_kind: "new_discovered",
-    }, avatar));
+    const platform = String(recallItem.platform || src.platform || "").trim();
+    const displayName = String(recallItem.display_name || src.display_name || src.channel_name || handle || "").trim();
+    const openSeed = () => {
+      void openItem(mergeAvatarSeed({
+        id: null,
+        kol_pool_id: null,
+        handle: handle || "未入库候选",
+        display_name: displayName,
+        platform,
+        profile_type: recallItem.profile_type || "creator",
+        followers: recallItem.followers ?? src.followers ?? null,
+        profile_url: String(recallItem.profile_url || src.profile_url || src.channel_url || src.source_url || "").trim(),
+        bio: why,
+        candidate_kind: "new_discovered",
+      }, avatar));
+    };
+    if (handle && apiToken) {
+      void (async () => {
+        try {
+          const resp: any = await resolveKolPool(apiToken, handle, platform);
+          const pid = Number(resp?.kol_pool_id || resp?.matched_kol_pool_id) || 0;
+          if (pid > 0) {
+            void openItem(mergeAvatarSeed({
+              id: pid,
+              kol_pool_id: pid,
+              handle,
+              display_name: displayName,
+              platform,
+              profile_type: recallItem.profile_type || "creator",
+              followers: recallItem.followers ?? src.followers ?? null,
+              candidate_kind: "existing",
+            }, avatar));
+            return;
+          }
+        } catch { /* resolve 失败 → 轻量 seed 兜底,绝不让点击无响应 */ }
+        openSeed();
+      })();
+      return;
+    }
+    openSeed();
   }, [poolItems, recallAvatarIndex, apiToken]);
 
   // P7:找达人(账号 URL)结果卡点击 → 打开右侧 KOL 详情抽屉(镜像 openRecallItem)。

@@ -25,6 +25,10 @@ PROFILE_BASICS_WHITELIST = {
     "profile_url",
     "platform",
     "handle",
+    # 线上修(2026-07-10):发现自动入库的行 display_name 全空(列表只剩 handle,
+    # YT 时是一串 UC 频道 ID,用户误以为「没入库」)。白名单放行;只进 INSERT
+    # 字段、不进 UPDATE——已有行的名字绝不被搜索快照覆盖。评分域照旧零接触。
+    "display_name",
     "posts_count",
     "last_video_at",
     "raw_platform_data",
@@ -46,6 +50,7 @@ PROFILE_BASICS_INSERT_FIELDS = (
     "pool_uid",
     "platform",
     "handle",
+    "display_name",
     "profile_url",
     "avatar_url",
     "bio",

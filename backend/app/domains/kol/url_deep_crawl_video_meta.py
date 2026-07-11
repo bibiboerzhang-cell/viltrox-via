@@ -9,6 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.kol.pool_common import _first_present, _int_or_none
+# 线上修(2026-07-10):本文件 :131 一直在用 profile_crawl_source 却从未 import——
+# 走到该分支即 NameError,深爬任务进 triage(线上 6 条实证)。补上缺失的 import。
+from app.domains.kol.video_evidence_sources import profile_crawl_source
 from app.domains.kol.url_deep_crawl_helpers import (
     _duration_seconds,
     _metadata_text,
