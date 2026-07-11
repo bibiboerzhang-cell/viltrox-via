@@ -146,4 +146,6 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_official_planner",
     # CB2 Channel Brain:渠道组合器 Channel Mix Optimizer(Binet-Field 60/40 跨渠道预算分配,KOL 复用 strategy_sim,Dealer 0 行诚实 data_missing,纯读,append-only,2026-07-07)
     "vkpi_channel_mix",
+    # 市场之声反馈流:vkpi_comments 分页原声 feed(身份 kol/owned/user 三路 JOIN,纯读零 LLM,append-only,2026-07-11)
+    "vkpi_market_voice_feed",
 ]
