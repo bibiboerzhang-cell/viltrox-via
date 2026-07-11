@@ -97,6 +97,7 @@ interface SettingsCompanyZoneProps {
   onSubmitProductCost: React.FormEventHandler;
   // staff
   members: VkpiStaffMember[];
+  selectedStaffId?: string | null;
   email: string;
   name: string;
   role: string;
@@ -222,6 +223,7 @@ export function SettingsCompanyZone(props: SettingsCompanyZoneProps) {
       {renderModule('staff', `${props.members.length} 人 · 邀请 / 权限`, (
         <SettingsStaffPanel
           members={props.members}
+          selectedStaffId={props.selectedStaffId}
           email={props.email}
           name={props.name}
           role={props.role}

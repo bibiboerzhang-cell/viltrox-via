@@ -35,7 +35,9 @@ export function buildStaffMembers(rows: Row[]): VkpiStaffMember[] {
       lastActiveAt: String(row.last_active_at || row.last_login || ''),
       invitedAt: String(row.invited_at || ''),
       acceptedAt: String(row.accepted_at || ''),
-      online: Boolean(row.user_online),
+      online: row.user_online === true || Number(row.user_online ?? 0) === 1,
+      // BOOLEAN 读回可能是 int 1/0(compat 适配器陷阱),两种口径都认;不编造。
+      isOwner: row.is_owner === true || Number(row.is_owner ?? 0) === 1 || String(row.role || '').toLowerCase() === 'owner',
     };
   }).filter((row) => row.id || row.email);
 }

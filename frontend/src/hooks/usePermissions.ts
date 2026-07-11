@@ -1,5 +1,6 @@
 import { useAuth } from './useAuth';
 import { EMPLOYEE_ALLOWED_PAGES } from '../components/vkpi/layout/vkpiDashboardRouting';
+import { boardLevelFor } from '../components/vkpi/pages/settings/staffPermissionTemplates';
 
 /**
  * Frontend RBAC hook — mirrors backend permissions.py logic.
@@ -207,12 +208,12 @@ export function usePermissions(): UsePermissionsResult {
 
   // 导航板块授权(board.<navKey>)。未显式设置 → 默认 'read'(可见),避免现有成员
   // 升级后侧栏突然空白。owner 永远全见。
+  // 2026-07-11 授权页 V1:读法收敛到 staffPermissionTemplates.boardLevelFor(单一真源),
+  // 设置页「板块可见选择器」写进 permissions_json 的 board.* 与这里读的口径永不漂移。
+  // 默认口径向后兼容:没存过 board 权限的成员 = 全见(boardLevelFor 缺省 read)。
   const boardLevel = (navKey: string): PermissionLevel => {
     if (isOwner()) return 'admin';
-    if (!user?.permissions) return 'read';
-    const raw = String((user.permissions as Record<string, unknown>)[`board.${navKey}`] || '').toLowerCase().trim();
-    if (['none', 'read', 'write', 'admin'].includes(raw)) return raw as PermissionLevel;
-    return 'read';
+    return boardLevelFor(user?.permissions as Record<string, unknown> | undefined, navKey);
   };
   const canViewBoard = (navKey: string): boolean => {
     if (isOwner()) return true;

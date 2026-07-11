@@ -2,12 +2,12 @@
 
 
 import React from "react";
-import { ChevronRight, Languages, LogOut, Menu, Settings, UserCircle, Users } from "lucide-react";
+import { ChevronRight, Languages, LogOut, Menu, Settings, ShieldCheck, UserCircle, Users } from "lucide-react";
 import { PopoverWrapper } from "./PopoverWrapper";
 
 const e = React.createElement;
 
-export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, user, staff, lang, onToggleLang, viewingAs, onResetView, onImpersonate, onOpenProfile, onOpenTeam, onOpenSettings, onLogout }: any) {
+export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, user, staff, lang, onToggleLang, viewingAs, onResetView, onImpersonate, onOpenProfile, onOpenTeam, onOpenSettings, onOpenMembersAuth, isOwner, onLogout }: any) {
   // 2026-07-03:role 可能是裸值(admin/owner)也可能是历史显示标签(管理层),都认。
   const roleRaw = String(user.role || "");
   const isAdmin = ["admin", "owner"].includes(roleRaw.toLowerCase()) || roleRaw === "管理层";
@@ -44,12 +44,16 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
           className: "text-[9px] text-blue-300 hover:text-white px-1.5 py-0.5 rounded border border-blue-500/30 hover:bg-blue-500/15"
         }, t("返回 Admin 视角"))
       ),
-      // Menu items - 3 main
+      // Menu items - 3 main + 授权页 V1:「成员与授权」敏感管理入口收进头像菜单,仅 Owner
+      // 渲染(判据 usePermissions().isOwner(),由 CockpitApp 透传;后端 require_tab(system.members) 硬闸)。
       e("div", { className: "py-1" },
         [
           { icon: UserCircle, label: t("个人资料"), right: null,     onClick: onOpenProfile },
           { icon: Users,       label: t("团队管理"), right: isAdmin ? "4 人" : "我的团队", onClick: onOpenTeam },
           { icon: Settings,    label: t("系统设置"), right: null,     onClick: onOpenSettings },
+          ...(isOwner && onOpenMembersAuth ? [
+            { icon: ShieldCheck, label: t("成员与授权"), right: null, ownerBadge: true, onClick: onOpenMembersAuth },
+          ] : []),
         ].map((m: any, i: any) => e("button", {
           key: i,
           onClick: () => openMenuItem(m.onClick),
@@ -57,6 +61,7 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
         },
           e(m.icon, { size: 13, className: "text-slate-400 shrink-0" }),
           e("span", { className: "flex-1 text-[12px] text-white" }, m.label),
+          m.ownerBadge && e("span", { className: "text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300" }, "OWNER"),
           m.right && e("span", { className: "text-[10px] text-slate-500" }, m.right),
           e(ChevronRight, { size: 11, className: "text-slate-600" })
         ))

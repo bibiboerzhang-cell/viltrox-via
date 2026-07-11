@@ -518,3 +518,81 @@
   .vkpi-digest-scope,
   .vkpi-digest-status-grid { grid-template-columns: 1fr; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 授权页 V1 · 关系视图 + 权限面板增强(2026-07-11,对齐板块页范式 demo)
+ * 全部取 token 变量(--vkpi-* → theme-alias → --ds-*),零写死色。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* 视图切换(关系视图 / 表格) */
+.vkpi-staff-view-toggle { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--vkpi-border); border-radius: 999px; background: var(--vkpi-surface); }
+.vkpi-staff-view-toggle button { border: 0; border-radius: 999px; background: transparent; color: var(--vkpi-muted); font-size: 11px; font-weight: 700; padding: 4px 11px; cursor: pointer; }
+.vkpi-staff-view-toggle button.is-active { background: var(--vkpi-blue-soft); color: var(--vkpi-blue); }
+
+/* 关系视图容器 + 统计行 */
+.vkpi-staff-relations { display: grid; gap: 10px; }
+.vkpi-staff-relations__stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.vkpi-staff-relations__stats span { display: inline-flex; align-items: baseline; gap: 6px; border: 1px solid var(--vkpi-border); border-radius: 10px; background: var(--vkpi-surface); color: var(--vkpi-muted); font-size: 11px; font-weight: 700; padding: 6px 11px; }
+.vkpi-staff-relations__stats strong { color: var(--vkpi-text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.vkpi-staff-relations__stats strong.is-good { color: var(--vkpi-green); }
+.vkpi-staff-relations__stats strong.is-warn { color: var(--vkpi-yellow); }
+
+/* Owner 大卡 */
+.vkpi-staff-owner-card { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--vkpi-border); border-radius: 13px; background: linear-gradient(135deg, var(--vkpi-blue-soft), transparent); color: var(--vkpi-text); padding: 12px 14px; cursor: pointer; transition: border-color .14s; }
+.vkpi-staff-owner-card:hover { border-color: var(--vkpi-border-strong); }
+.vkpi-staff-owner-card.is-selected { border-color: var(--vkpi-blue); }
+.vkpi-staff-owner-card__badge { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 800; letter-spacing: .1em; color: var(--vkpi-yellow); background: var(--vkpi-yellow-soft); border-radius: 6px; padding: 3px 9px; flex: none; }
+
+/* 分组题注(管理层 N ── 说明) */
+.vkpi-staff-group-cap { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .13em; text-transform: uppercase; color: var(--vkpi-muted); font-weight: 700; margin: 3px 2px 0; }
+.vkpi-staff-group-cap strong { color: var(--vkpi-blue); font-variant-numeric: tabular-nums; }
+.vkpi-staff-group-cap i { height: 1px; flex: 1; background: var(--vkpi-border); }
+.vkpi-staff-group-cap em { font-style: normal; letter-spacing: 0; text-transform: none; font-weight: 600; }
+
+/* 成员卡 grid */
+.vkpi-staff-member-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 900px) { .vkpi-staff-member-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.vkpi-staff-member-card { display: flex; align-items: center; gap: 9px; min-width: 0; text-align: left; border: 1px solid var(--vkpi-border); border-radius: 11px; background: var(--vkpi-surface); color: var(--vkpi-text); padding: 9px 10px; cursor: pointer; transition: border-color .14s, background .14s; }
+.vkpi-staff-member-card:hover { border-color: var(--vkpi-border-strong); }
+.vkpi-staff-member-card.is-selected { border-color: var(--vkpi-blue); background: var(--vkpi-blue-soft); }
+.vkpi-staff-member-card__avatar { position: relative; flex: none; display: grid; place-items: center; }
+.vkpi-staff-member-card__avatar.is-online::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--vkpi-green); border: 2px solid var(--vkpi-surface); }
+.vkpi-staff-member-card__meta { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.vkpi-staff-member-card__meta strong { font-size: 11.5px; font-weight: 700; color: var(--vkpi-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vkpi-staff-member-card__meta > span { font-size: 9.5px; color: var(--vkpi-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vkpi-staff-online-text { font-style: normal; color: var(--vkpi-green); }
+.vkpi-staff-pending-badge { flex: none; font-size: 8.5px; font-weight: 800; color: var(--vkpi-yellow); background: var(--vkpi-yellow-soft); border-radius: 5px; padding: 2px 6px; }
+
+/* 权限面板:未保存黄条(顶部醒目,替代只藏在按钮旁) */
+.vkpi-staff-permission-dirtybar { display: flex; align-items: baseline; gap: 8px; border: 1px solid var(--vkpi-yellow); border-radius: 10px; background: var(--vkpi-yellow-soft); padding: 8px 12px; font-size: 12px; color: var(--vkpi-text); }
+.vkpi-staff-permission-dirtybar strong { color: var(--vkpi-yellow); font-size: 11px; letter-spacing: .08em; }
+.vkpi-staff-permission-dirtybar span { color: var(--vkpi-muted); }
+
+/* 两态/三态图例 */
+.vkpi-permission-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 10.5px; color: var(--vkpi-muted); }
+.vkpi-permission-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.vkpi-permission-legend i { width: 8px; height: 8px; border-radius: 3px; flex: none; }
+.vkpi-permission-legend i.is-two { background: var(--vkpi-blue); }
+.vkpi-permission-legend i.is-three { background: var(--vkpi-yellow); }
+
+/* OWNER 锁徽(敏感行) */
+.vkpi-owner-lock-badge { display: inline-flex; align-items: center; gap: 3px; flex: none; font-size: 8.5px; font-weight: 800; letter-spacing: .08em; color: var(--vkpi-yellow); background: var(--vkpi-yellow-soft); border-radius: 5px; padding: 2px 6px; }
+.vkpi-staff-permission-row { grid-template-columns: minmax(150px, 1fr) auto auto; }
+
+/* 「自定义」模板态 chip(非按钮,同排展示) */
+.vkpi-staff-template-custom { display: inline-flex; align-items: center; min-height: 36px; border: 1px dashed var(--vkpi-border); border-radius: 999px; background: transparent; color: var(--vkpi-muted); padding: 0 13px; font-size: 12px; font-weight: 700; }
+.vkpi-staff-template-custom.is-active { border-style: solid; border-color: var(--vkpi-blue); color: var(--vkpi-blue); background: var(--vkpi-blue-soft); }
+
+/* 板块可见选择器 */
+.vkpi-board-pickbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--vkpi-muted); }
+.vkpi-board-pickbar strong { color: var(--vkpi-blue); font-variant-numeric: tabular-nums; }
+.vkpi-board-chip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.vkpi-board-chip { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; border: 1px solid var(--vkpi-border); border-radius: 8px; background: transparent; color: var(--vkpi-muted); font-size: 11px; font-weight: 600; padding: 7px 10px; cursor: pointer; transition: border-color .12s, color .12s; }
+.vkpi-board-chip:hover { border-color: var(--vkpi-border-strong); }
+.vkpi-board-chip.is-on { border-color: var(--vkpi-blue); background: var(--vkpi-blue-soft); color: var(--vkpi-blue); }
+.vkpi-board-chip strong { font-variant-numeric: tabular-nums; }
+
+/* 授权账号卡头:标题 + 视图切换同排 */
+.vkpi-staff-directory-card .vkpi-table-card__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.vkpi-staff-directory-card .vkpi-staff-relations,
+.vkpi-staff-directory-card > .vkpi-empty-panel { margin: 12px 16px 16px; }

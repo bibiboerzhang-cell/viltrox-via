@@ -593,6 +593,8 @@ export interface VkpiStaffMember {
   invitedAt?: string;
   acceptedAt?: string;
   online?: boolean;
+  // 真源 staff.is_owner(创始人标记;owner 的 role 可能是 admin,不能只看 role)。
+  isOwner?: boolean;
 }
 
 export interface VkpiKpiLedgerEntry {

@@ -294,6 +294,8 @@ interface SettingsPageProps {
   data: VkpiDashboardData;
   viewMode: 'manager' | 'employee';
   apiToken?: string;
+  // 授权页 V1:头像菜单「成员与授权」直达设置页 staff 区(默认仍落 status)。
+  initialSection?: 'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification';
   onInviteStaff?: (payload: { email: string; name?: string; role: string; vkpiPermission: 'none' | 'read' | 'write'; permissions?: StaffPermissionMap; permissionTemplate?: string }) => Promise<void>;
   onUpdateStaffPermission?: (staffId: string, permission: 'none' | 'read' | 'write') => Promise<void>;
   onUpsertProductCost?: (payload: { productSku: string; productName?: string; unitCostUsd: number; note?: string; active?: boolean }) => Promise<void>;
@@ -301,7 +303,7 @@ interface SettingsPageProps {
   onRefreshData?: () => void | Promise<void>;
 }
 
-export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
+export function SettingsPage({ data, viewMode, apiToken, initialSection, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState('employee');
@@ -332,15 +334,20 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
   const [keyDraft, setKeyDraft] = useState<{ account_name: string; provider: string; key: string; daily_quota: string; enabled: boolean }>({ account_name: '', provider: 'gemini', key: '', daily_quota: '', enabled: true });
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification' | null>('status');
+  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification' | null>(initialSection ?? 'status');
 
   // 2026-07-03 账号授权空白根治:成员名单此前只搭启动大批量(5s 静默超时+缓存投毒)。
-  // 现打开设置页即直拉一次 staff-directory,拉到就覆盖 props 里的名单;失败保留 props(不降级)。
+  // 现打开设置页即直拉一次,拉到就覆盖 props 里的名单;失败保留 props(不降级)。
+  // 2026-07-11 授权页 V1:优先打 /api/admin/staff(list_members 富行:user_online 在线
+  // 5min 窗 / verification_status / delivery_method / is_owner / 归一化 permissions 含
+  // board.*),关系视图的在线点与待激活徽吃真字段;403/失败回退旧 staff-directory,
+  // 再失败保留 props —— 权限面从未放宽(后端 require_tab(system.read) 硬闸)。
   const [staffDirect, setStaffDirect] = useState<any[] | null>(null);
   useEffect(() => {
     if (!apiToken) return;
     let alive = true;
-    apiFetch<{ staff?: any[]; members?: any[] }>("/api/admin/vkpi/staff-directory", { timeoutMs: 10000 }, apiToken)
+    apiFetch<{ staff?: any[]; members?: any[] }>("/api/admin/staff", { timeoutMs: 10000 }, apiToken)
+      .catch(() => apiFetch<{ staff?: any[]; members?: any[] }>("/api/admin/vkpi/staff-directory", { timeoutMs: 10000 }, apiToken))
       .then((res) => {
         if (!alive) return;
         const list = (res?.staff || res?.members || []) as any[];
@@ -359,7 +366,10 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       })
       .catch(() => { /* 静默:props 名单兜底 */ });
     return () => { alive = false; };
-  }, [apiToken]);
+    // data.staffMembers 变化(onRefreshData 后)时重拉一次,富名单不落后于 props 名单。
+  }, [apiToken, data.staffMembers]);
+  // 面板与抽屉吃同一份名单(富名单优先),状态/在线/Owner 口径不再两处打架。
+  const staffList = (staffDirect && staffDirect.length ? staffDirect : data.staffMembers) as VkpiStaffMember[];
   const [rulesTab, setRulesTab] = useState<SettingsRulesTab>('platform');
   const [productSearch, setProductSearch] = useState('');
   const [selectedCatalogProduct, setSelectedCatalogProduct] = useState<VkpiProductCatalogItem | null>(null);
@@ -686,7 +696,8 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
           onProductSearchChange={setProductSearch}
           onSelectProduct={selectCatalogProduct}
           onSubmitProductCost={submitProductCost}
-          members={(staffDirect && staffDirect.length ? staffDirect : data.staffMembers) as any}
+          members={staffList as any}
+          selectedStaffId={selectedStaffForPermissions?.id ?? null}
           email={email}
           name={name}
           role={role}
@@ -783,7 +794,7 @@ export function SettingsPage({ data, viewMode, apiToken, onInviteStaff, onUpsert
       </div>
       {selectedStaffForPermissions ? (
         <StaffPermissionDrawer
-          member={resolveDrawerMember(data.staffMembers, selectedStaffForPermissions)}
+          member={resolveDrawerMember(staffList, selectedStaffForPermissions)}
           busy={busy}
           onClose={() => setSelectedStaffForPermissions(null)}
           onSavePermissions={saveStaffPermissionMatrix}

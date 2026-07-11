@@ -436,6 +436,8 @@ export function CockpitApp(props: any = {}) {
   const [showProfile, setShowProfile] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  // 授权页 V1:头像菜单「成员与授权」(仅 owner)直达设置页 staff 区;普通「系统设置」重置回默认区。
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"staff" | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   // V6.14.4: ViewAll modals + NotifDetail + EditGroup
@@ -641,6 +643,7 @@ export function CockpitApp(props: any = {}) {
       setViewingAs, setShowProfile, setShowTeam, setShowSettingsModal, onSignOut,
       showProfile, showTeam, staffGroups, openGroupEditor,
       showSettingsModal, appViewMode,
+      settingsInitialSection, setSettingsInitialSection, isOwnerUser: boardPerms.isOwner(),
       showShortcuts, showFeedback, handleFeedbackSubmitted,
       showAllProjects, setShowAllProjects,
       showAllMovers, setShowAllMovers,

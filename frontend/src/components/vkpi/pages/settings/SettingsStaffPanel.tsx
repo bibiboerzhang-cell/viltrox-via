@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type {
   VkpiStaffActivationLinkResponse,
   VkpiStaffInviteCapabilities,
@@ -6,9 +6,11 @@ import type {
 import type { VkpiStaffMember } from '../../vkpiTypes';
 import { StaffTable } from '../../tables/StaffTable';
 import { StaffInviteCard } from './SettingsAdminCards';
+import { StaffRelationView } from './SettingsStaffPanel.relations';
 
 interface SettingsStaffPanelProps {
   members: VkpiStaffMember[];
+  selectedStaffId?: string | null;
   email: string;
   name: string;
   role: string;
@@ -33,6 +35,7 @@ interface SettingsStaffPanelProps {
 
 export function SettingsStaffPanel({
   members,
+  selectedStaffId,
   email,
   name,
   role,
@@ -54,6 +57,9 @@ export function SettingsStaffPanel({
   onSubmitInvite,
   onSelectStaff,
 }: SettingsStaffPanelProps) {
+  // 授权页 V1(2026-07-11):默认关系视图(Owner 大卡 → 三组成员卡),
+  // 原 6 列扁平表保留为「表格」备选视图(信息与功能零删减)。
+  const [view, setView] = useState<'relations' | 'table'>('relations');
   return (
     <section className="vkpi-settings-two-column">
       <StaffInviteCard
@@ -79,9 +85,31 @@ export function SettingsStaffPanel({
       />
       <section className="vkpi-card vkpi-table-card vkpi-staff-directory-card">
         <div className="vkpi-table-card__header">
-          <div><h2>授权账号</h2><span>{members.length} 人</span></div>
+          <div><h2>授权账号</h2><span>{members.length} 人 · 点成员卡打开右侧权限面板</span></div>
+          <div className="vkpi-staff-view-toggle" role="group" aria-label="成员视图切换">
+            <button
+              type="button"
+              className={view === 'relations' ? 'is-active' : ''}
+              aria-pressed={view === 'relations'}
+              onClick={() => setView('relations')}
+            >
+              关系视图
+            </button>
+            <button
+              type="button"
+              className={view === 'table' ? 'is-active' : ''}
+              aria-pressed={view === 'table'}
+              onClick={() => setView('table')}
+            >
+              表格
+            </button>
+          </div>
         </div>
-        <StaffTable members={members} onSelectStaff={onSelectStaff} />
+        {view === 'relations' ? (
+          <StaffRelationView members={members} selectedStaffId={selectedStaffId} onSelectStaff={onSelectStaff} />
+        ) : (
+          <StaffTable members={members} onSelectStaff={onSelectStaff} />
+        )}
       </section>
     </section>
   );

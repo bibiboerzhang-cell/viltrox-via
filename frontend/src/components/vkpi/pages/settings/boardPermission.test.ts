@@ -7,16 +7,20 @@ import {
 } from "./staffPermissionTemplates";
 
 describe("板块授权注册表", () => {
-  it("覆盖侧栏 15 个导航板块,key 均以 board. 前缀", () => {
-    expect(BOARD_PERMISSION_MODULES).toHaveLength(15);
+  it("覆盖侧栏 17 个主导航板块(对齐 navItems 主项,非 ops/v2),key 均以 board. 前缀", () => {
+    expect(BOARD_PERMISSION_MODULES).toHaveLength(17);
     for (const m of BOARD_PERMISSION_MODULES) {
       expect(m.key).toBe(`${BOARD_PERMISSION_KEY_PREFIX}${m.navKey}`);
       expect(m.label.length).toBeGreaterThan(0);
       expect(m.group.startsWith("板块")).toBe(true);
     }
-    // 关键导航键都在(含和 tab 撞名的 analytics → board.analytics 不冲突)
-    for (const k of ["dashboard", "kol-pool", "shopify", "dealers", "analytics", "events"]) {
+    // 关键导航键都在(17 主项抽样:核心 + 增长渠道 + 智能中枢 + 自动化)
+    for (const k of ["dashboard", "my-kol", "kol-pool", "kolProfile", "shopify", "dealers", "events", "marketVoice", "replyQueue", "gtmCommand"]) {
       expect(BOARD_NAV_KEYS).toContain(k);
+    }
+    // 已归 V2 折叠组的旧 navKey 不再出现在选择器注册表里
+    for (const k of ["campaigns", "intelligence", "attribution", "analytics", "reports", "signals", "agents", "p15"]) {
+      expect(BOARD_NAV_KEYS).not.toContain(k);
     }
   });
 });

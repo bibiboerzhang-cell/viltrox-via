@@ -51,22 +51,29 @@ export const BOARD_PERMISSION_DEFAULT_LEVEL: VkpiPermissionLevel = "read";
 
 export type BoardPermissionModule = { key: string; navKey: string; label: string; group: string };
 
+// 2026-07-11 授权页 V1:注册表对齐 navItems.ts 的 17 个主导航项(非 ops / 非 v2),
+// 让「板块可见选择器」勾的 chips 与侧栏 canViewBoard 过滤的板块一一对应。
+// 旧 15 项里已归 V2 折叠组的 navKey(campaigns/intelligence/attribution/analytics/
+// reports/signals/agents/p15)从注册表下线;成员历史存过的 board.<v2Key> 值仍留在
+// permissions_json 里(boardLevelFor 默认 read,不影响任何人)。
 export const BOARD_PERMISSION_MODULES: BoardPermissionModule[] = [
-  { navKey: "dashboard",    label: "Dashboard",     group: "板块 · 核心" },
-  { navKey: "my-kol",       label: "MY KOL",        group: "板块 · 核心" },
-  { navKey: "kol-pool",     label: "KOL Pool",      group: "板块 · 核心" },
-  { navKey: "projects",     label: "Projects",      group: "板块 · 项目" },
-  { navKey: "campaigns",    label: "Campaigns",     group: "板块 · 项目" },
-  { navKey: "events",       label: "Events",        group: "板块 · 项目" },
-  { navKey: "intelligence", label: "Intelligence",  group: "板块 · 数据" },
-  { navKey: "attribution",  label: "Attribution",   group: "板块 · 数据" },
-  { navKey: "analytics",    label: "Analytics",     group: "板块 · 数据" },
-  { navKey: "reports",      label: "Reports",       group: "板块 · 数据" },
-  { navKey: "signals",      label: "Signals",       group: "板块 · 数据" },
-  { navKey: "agents",       label: "Agents",        group: "板块 · 运营" },
-  { navKey: "p15",          label: "P15 Warehouse", group: "板块 · 运营" },
-  { navKey: "shopify",      label: "Shopify",       group: "板块 · 运营" },
-  { navKey: "dealers",      label: "Dealers",       group: "板块 · 运营" },
+  { navKey: "dashboard",       label: "Dashboard",        group: "板块 · 总览" },
+  { navKey: "my-kol",          label: "MY KOL",           group: "板块 · 达人运营" },
+  { navKey: "kol-pool",        label: "KOL Pool",         group: "板块 · 达人运营" },
+  { navKey: "kolProfile",      label: "KOL 档案",          group: "板块 · 达人运营" },
+  { navKey: "projects",        label: "Projects",         group: "板块 · 增长渠道" },
+  { navKey: "events",          label: "Events",           group: "板块 · 增长渠道" },
+  { navKey: "shopify",         label: "Shopify",          group: "板块 · 增长渠道" },
+  { navKey: "dealers",         label: "Dealers",          group: "板块 · 增长渠道" },
+  { navKey: "intelligent",     label: "Intelligent 问答",  group: "板块 · 智能中枢" },
+  { navKey: "marketVoice",     label: "市场之声",          group: "板块 · 智能中枢" },
+  { navKey: "sku360",          label: "SKU 360°",         group: "板块 · 智能中枢" },
+  { navKey: "creativeLibrary", label: "创意资产库",        group: "板块 · 智能中枢" },
+  { navKey: "replyQueue",      label: "回复队列",          group: "板块 · 自动化" },
+  { navKey: "launchpad",       label: "发射台",            group: "板块 · 自动化" },
+  { navKey: "autonomy",        label: "自治驾照",          group: "板块 · 自动化" },
+  { navKey: "strategyBoard",   label: "战略台",            group: "板块 · 自动化" },
+  { navKey: "gtmCommand",      label: "GTM Command",      group: "板块 · 自动化" },
 ].map((b) => ({ ...b, key: `${BOARD_PERMISSION_KEY_PREFIX}${b.navKey}` }));
 
 export const BOARD_NAV_KEYS = BOARD_PERMISSION_MODULES.map((m) => m.navKey);
@@ -77,6 +84,30 @@ export function boardLevelFor(permissions: Record<string, unknown> | null | unde
   const next = String(raw || "").toLowerCase();
   if (next === "admin" || next === "write" || next === "read" || next === "none") return next as VkpiPermissionLevel;
   return BOARD_PERMISSION_DEFAULT_LEVEL;
+}
+
+// ── 成员状态统一口径(2026-07-11 授权页 V1)──────────────────────────────
+// 此前三处各写一份:Drawer.statusLabel(邀请过期)/ StaffTable.statusLabel(已过期,
+// 且 pending 优先级不同)/ 卡片区自拼 —— 同一个人在不同视图显示不同状态。
+// 现以原 Drawer 口径为唯一真源:停用 > 已验证 > 已激活 > 待激活 > 邀请过期 > 启用,
+// 「在线」是独立的 presence 维度(绿点),不混进账号状态。
+export type StaffStatusSource = {
+  active: boolean;
+  verificationStatus?: string;
+};
+
+export function staffStatusLabel(member: StaffStatusSource): string {
+  if (!member.active) return "停用";
+  if (member.verificationStatus === "verified") return "已验证";
+  if (member.verificationStatus === "activated") return "已激活";
+  if (member.verificationStatus === "pending") return "待激活";
+  if (member.verificationStatus === "expired") return "邀请过期";
+  return "启用";
+}
+
+// 待激活徽:pending/expired 都还没能登录,关系视图卡上黄徽提示。
+export function staffPendingActivation(member: StaffStatusSource): boolean {
+  return member.active && (member.verificationStatus === "pending" || member.verificationStatus === "expired");
 }
 
 export const STAFF_PERMISSION_TEMPLATES: StaffPermissionTemplate[] = [

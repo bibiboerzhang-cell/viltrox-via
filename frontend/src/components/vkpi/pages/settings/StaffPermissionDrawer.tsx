@@ -1,10 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Copy, KeyRound, Link2, Save, ShieldCheck, X } from "lucide-react";
+import { Copy, KeyRound, Link2, Lock, Save, ShieldCheck, X } from "lucide-react";
 import type { VkpiStaffActivationLinkResponse, VkpiStaffPasswordResetLinkResponse, VkpiPermissionLevel } from "../../../../domains/settings";
 import type { VkpiStaffMember } from "../../vkpiTypes";
 import { Avatar } from "../../shared/Avatar";
 import { InfoBlock } from "../../shared/InfoBlock";
-import { DEFAULT_VISIBLE_MODULE_KEYS, STAFF_ASSIGNABLE_PERMISSION_TEMPLATES, STAFF_PERMISSION_MODULES, STAFF_PERMISSION_TEMPLATES, type StaffPermissionMap } from "./staffPermissionTemplates";
+import {
+  BOARD_PERMISSION_KEY_PREFIX,
+  BOARD_PERMISSION_MODULES,
+  DEFAULT_VISIBLE_MODULE_KEYS,
+  STAFF_ASSIGNABLE_PERMISSION_TEMPLATES,
+  STAFF_PERMISSION_MODULES,
+  STAFF_PERMISSION_TEMPLATES,
+  boardLevelFor,
+  staffStatusLabel,
+  type StaffPermissionMap,
+} from "./staffPermissionTemplates";
 
 // C7「两态·默认显示」(2026-06-16 用户拍板):去掉「无」,业务模块只在 显示/可使用 两态间选。
 // 显示=read(能看见、进得了系统),可使用=write(能操作)。后端 require_tab(tab,read/write) 真 enforce,
@@ -34,16 +44,29 @@ function initialPermissions(member: VkpiStaffMember): StaffPermissionMap {
     return [module.key, (DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) && lvl === "none") ? "read" : lvl];
   })) as StaffPermissionMap;
   if (member.vkpiPermission && base.vkpi === "none") base.vkpi = normalizeLevel(member.vkpiPermission);
+  // 板块可见(board.<navKey>)已显式存过的值必须随草稿一起保存回去 ——
+  // 保存走「整包 permissions」通道,不带上会把历史板块设置洗掉。
+  for (const [key, value] of Object.entries(current)) {
+    if (key.startsWith(BOARD_PERMISSION_KEY_PREFIX)) base[key] = normalizeLevel(value);
+  }
   return base;
 }
 
-function statusLabel(member: VkpiStaffMember) {
-  if (!member.active) return "停用";
-  if (member.verificationStatus === "verified") return "已验证";
-  if (member.verificationStatus === "activated") return "已激活";
-  if (member.verificationStatus === "pending") return "待激活";
-  if (member.verificationStatus === "expired") return "邀请过期";
-  return "启用";
+// 状态口径统一走 staffPermissionTemplates.staffStatusLabel(与 StaffTable / 关系视图同源)。
+const statusLabel = staffStatusLabel;
+
+// 当前草稿匹配哪个模板(与 applyTemplate 同一套 floor 口径逐 key 对比);
+// 全不匹配 → null(UI 显示「自定义」高亮)。
+function detectTemplate(draft: StaffPermissionMap): string | null {
+  for (const template of STAFF_ASSIGNABLE_PERMISSION_TEMPLATES) {
+    const matches = STAFF_PERMISSION_MODULES.every((module) => {
+      let expected = normalizeLevel(template.permissions[module.key]);
+      if (DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) && expected === "none") expected = "read";
+      return normalizeLevel(draft[module.key]) === expected;
+    });
+    if (matches) return template.key;
+  }
+  return null;
 }
 
 export function StaffPermissionDrawer({
@@ -66,6 +89,11 @@ export function StaffPermissionDrawer({
   // 项②:权限矩阵是「改草稿→点保存」两步式,用户点了级别按钮以为生效其实没落库 → 加「未保存」标记
   // + 保存失败 toast(原 save() 吞异常,非 owner 403 时无任何反馈)。
   const [dirty, setDirty] = useState(false);
+  // 授权页 V1:模板选中态。套模板记 key;逐项微调后置 null(UI 高亮「自定义」);
+  // 初始按当前权限反推(与 demo「当前高亮=生效模板」一致)。
+  const [activeTemplate, setActiveTemplate] = useState<string | null>(() => detectTemplate(initialPermissions(member)));
+  // 板块可见选择器(17 板块 chips)展开态。
+  const [boardPickOpen, setBoardPickOpen] = useState(false);
   const [link, setLink] = useState<{ label: string; url: string; expires: number; sent?: boolean } | null>(null);
   const grouped = useMemo(() => {
     return STAFF_PERMISSION_MODULES.reduce<Record<string, typeof STAFF_PERMISSION_MODULES>>((acc, module) => {
@@ -79,7 +107,10 @@ export function StaffPermissionDrawer({
   // resolveDrawerMember 每次渲染返回新对象 → 本 effect 触发 setLink(null),把刚生成的
   // 链接立刻清掉(接口 200 但界面永远不显示)。重置密码不走刷新所以没中招。
   useEffect(() => {
-    setDraft(initialPermissions(member));
+    const next = initialPermissions(member);
+    setDraft(next);
+    setActiveTemplate(detectTemplate(next));
+    setBoardPickOpen(false);
     setLocalMessage("");
     setLink(null);
     setDirty(false);
@@ -88,6 +119,8 @@ export function StaffPermissionDrawer({
 
   const updateLevel = (key: string, value: VkpiPermissionLevel) => {
     setDraft((current) => ({ ...current, [key]: value }));
+    // 微调后模板不再整套生效 → 选中态落到「自定义」(demo 口径)。
+    setActiveTemplate(null);
     setDirty(true);
     setLocalMessage("");
   };
@@ -100,10 +133,33 @@ export function StaffPermissionDrawer({
     for (const module of STAFF_PERMISSION_MODULES) {
       if (DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) && normalizeLevel(next[module.key]) === "none") next[module.key] = "read";
     }
-    setDraft(next);
+    // 板块可见设置独立于模块模板,套模板不清洗已有 board.* 草稿。
+    setDraft((current) => {
+      for (const [k, v] of Object.entries(current)) {
+        if (k.startsWith(BOARD_PERMISSION_KEY_PREFIX)) next[k] = v;
+      }
+      return next;
+    });
+    // 痛点①:此前 applyTemplate 不记 activeTemplate → 点完模板毫无选中反馈。
+    setActiveTemplate(key);
     setDirty(true);
     setLocalMessage("");
   };
+
+  // 板块可见开关:写 board.<navKey> 进草稿(勾=read 可见,取消=none 隐藏),
+  // 保存仍走同一个 onSavePermissions 整包通道。不动模板选中态(板块层独立于模块模板)。
+  const toggleBoard = (navKey: string) => {
+    const key = `${BOARD_PERMISSION_KEY_PREFIX}${navKey}`;
+    setDraft((current) => ({
+      ...current,
+      [key]: boardLevelFor(current, navKey) === "none" ? "read" : "none",
+    }));
+    setDirty(true);
+    setLocalMessage("");
+  };
+
+  const visibleBoardCount = BOARD_PERMISSION_MODULES.filter((board) => boardLevelFor(draft, board.navKey) !== "none").length;
+  const memberIsOwner = Boolean(member.isOwner) || String(member.role || "").toLowerCase().trim() === "owner";
 
   const save = async () => {
     setLocalMessage("");
@@ -161,6 +217,14 @@ export function StaffPermissionDrawer({
         </button>
       </header>
 
+      {/* 痛点③:draft→save 两步式保留,但改动一发生就在顶部亮黄条,不再只藏在底部按钮旁。 */}
+      {dirty ? (
+        <div className="vkpi-staff-permission-dirtybar" role="status">
+          <strong>未保存</strong>
+          <span>改动还在草稿里，点底部「保存权限」才会生效。</span>
+        </div>
+      ) : null}
+
       <section className="vkpi-staff-permission-profile">
         <Avatar name={member.name} src={member.avatarUrl} size="lg" />
         <div>
@@ -180,15 +244,28 @@ export function StaffPermissionDrawer({
       <section className="vkpi-staff-permission-section">
         <div className="vkpi-staff-permission-section__head">
           <h3>权限模板</h3>
-          <span>先套模板，再细调模块权限</span>
+          <span>先套模板再细调 · 当前高亮 = 生效模板，微调后落「自定义」</span>
         </div>
         <div className="vkpi-staff-template-row">
-                  {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
-            <button type="button" key={template.key} onClick={() => applyTemplate(template.key)}>
+          {STAFF_ASSIGNABLE_PERMISSION_TEMPLATES.map((template) => (
+            <button
+              type="button"
+              key={template.key}
+              className={activeTemplate === template.key ? "is-active" : ""}
+              aria-pressed={activeTemplate === template.key}
+              title={template.detail}
+              onClick={() => applyTemplate(template.key)}
+            >
               <ShieldCheck size={13} />
               {template.label}
             </button>
           ))}
+          <span
+            className={`vkpi-staff-template-custom ${activeTemplate === null ? "is-active" : ""}`}
+            title="不完全匹配任何模板：按下方逐项微调的结果生效"
+          >
+            自定义
+          </span>
         </div>
       </section>
 
@@ -197,6 +274,12 @@ export function StaffPermissionDrawer({
           <h3>深度授权</h3>
           <span>敏感项需要 owner 权限，后端会兜底拦截</span>
         </div>
+        {/* 痛点②:两态/三态混排无图例 → 顶部一行图例讲清两种刻度。 */}
+        <div className="vkpi-permission-legend">
+          <span><i className="is-two" aria-hidden="true" />业务模块 · 两态（显示 / 可使用，默认人人显示）</span>
+          <span><i className="is-three" aria-hidden="true" />系统与敏感 · 三态（无 / 显示 / 可使用，默认无）</span>
+          <span><Lock size={10} aria-hidden="true" /> OWNER 锁 = 仅创始人，后端硬闸</span>
+        </div>
         {Object.entries(grouped).map(([group, modules]) => (
           <div className="vkpi-staff-permission-group" key={group}>
             <h4>{group}</h4>
@@ -204,8 +287,13 @@ export function StaffPermissionDrawer({
               <div className={`vkpi-staff-permission-row ${module.ownerOnly ? "is-owner-only" : ""}`} key={module.key}>
                 <div>
                   <strong>{module.label}</strong>
-                  <span>{module.key}{module.ownerOnly ? " · Owner 专属" : ""}</span>
+                  <span>{module.key}</span>
                 </div>
+                {module.ownerOnly ? (
+                  <span className="vkpi-owner-lock-badge" title="Owner 专属：非 owner 即使勾了也会被后端降级">
+                    <Lock size={10} />OWNER
+                  </span>
+                ) : null}
                 <div className="vkpi-permission-levels">
                   {(DEFAULT_VISIBLE_MODULE_KEYS.has(module.key) ? ASSIGN_LEVELS : OWNER_LEVELS).map((level) => (
                     <button
@@ -225,10 +313,51 @@ export function StaffPermissionDrawer({
         ))}
       </section>
 
+      {/* 授权页 V1 · 板块可见选择器:激活 boardLevelFor 死代码,勾选写 board.<navKey>
+          进草稿,保存走现有 onSavePermissions;侧栏 canViewBoard 读同一口径真实过滤。
+          默认口径向后兼容:没存过 board 权限 = 全见(17/17),owner 永远全见。 */}
+      <section className="vkpi-staff-permission-section">
+        <div className="vkpi-staff-permission-section__head">
+          <h3>板块可见 · 侧栏</h3>
+          <span>{memberIsOwner ? "Owner 全见，此配置对其不生效" : "该成员侧栏能看到哪些板块 · 未设置默认全见"}</span>
+        </div>
+        <div className="vkpi-board-pickbar">
+          <span>已开 <strong>{visibleBoardCount}</strong> / {BOARD_PERMISSION_MODULES.length}</span>
+          <button
+            type="button"
+            className="vkpi-button"
+            aria-expanded={boardPickOpen}
+            onClick={() => setBoardPickOpen((open) => !open)}
+          >
+            {boardPickOpen ? "收起" : "选择板块"}
+          </button>
+        </div>
+        {boardPickOpen ? (
+          <div className="vkpi-board-chip-grid">
+            {BOARD_PERMISSION_MODULES.map((board) => {
+              const visible = boardLevelFor(draft, board.navKey) !== "none";
+              return (
+                <button
+                  type="button"
+                  key={board.key}
+                  className={`vkpi-board-chip ${visible ? "is-on" : ""}`}
+                  aria-pressed={visible}
+                  title={`${board.group} · ${board.key}`}
+                  onClick={() => toggleBoard(board.navKey)}
+                >
+                  <span>{board.label}</span>
+                  <strong aria-hidden="true">{visible ? "✓" : "—"}</strong>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
+
       <section className="vkpi-staff-permission-section">
         <div className="vkpi-staff-permission-section__head">
           <h3>账号操作</h3>
-          <span>不设置临时密码，只发一次性链接</span>
+          <span>激活 / 重置 / 保存一处收拢 · 不设临时密码，只发一次性链接</span>
         </div>
         <div className="vkpi-staff-action-row">
           <button className="vkpi-button" type="button" disabled={busy} onClick={() => void activation()}>

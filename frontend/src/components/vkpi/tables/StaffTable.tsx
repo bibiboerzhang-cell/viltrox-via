@@ -1,16 +1,12 @@
 import type { VkpiDashboardData, VkpiStaffMember } from '../vkpiTypes';
 import { ShieldCheck } from 'lucide-react';
 import { Avatar } from '../shared/Avatar';
+import { staffStatusLabel } from '../pages/settings/staffPermissionTemplates';
 
 export function StaffTable({ members, onSelectStaff }: { members: VkpiDashboardData['staffMembers']; onSelectStaff?: (staffId: string, fallback?: Partial<VkpiStaffMember>) => void | Promise<void> }) {
-  const statusLabel = (member: VkpiStaffMember) => {
-    if (!member.active) return '停用';
-    if (member.verificationStatus === 'pending') return '待激活';
-    if (member.verificationStatus === 'expired') return '已过期';
-    if (member.verificationStatus === 'verified') return '已验证';
-    if (member.verificationStatus === 'activated') return '已激活';
-    return '启用';
-  };
+  // 状态口径统一(2026-07-11):此前这里自写一份(「已过期」且 pending 优先级不同),
+  // 与抽屉 / 关系视图三处打架。现统一走 staffPermissionTemplates.staffStatusLabel。
+  const statusLabel = staffStatusLabel;
   return (
     <div className="vkpi-table-wrap"><table className="vkpi-table"><thead><tr><th>成员</th><th>邮箱</th><th>角色</th><th>V-KPI</th><th>状态</th><th>操作</th></tr></thead><tbody>{members.length ? members.map((member) => <tr className={onSelectStaff ? 'is-clickable-row' : ''} key={member.id} onClick={() => {
       if (onSelectStaff) void onSelectStaff(member.id, member);

@@ -66,6 +66,7 @@ export function CockpitOverlays(p: any) {
     setViewingAs, setShowProfile, setShowTeam, setShowSettingsModal, onSignOut,
     showProfile, showTeam, staffGroups, openGroupEditor,
     showSettingsModal, appViewMode,
+    settingsInitialSection, setSettingsInitialSection, isOwnerUser,
     showShortcuts, showFeedback, handleFeedbackSubmitted,
     showAllProjects, setShowAllProjects,
     showAllMovers, setShowAllMovers,
@@ -190,7 +191,10 @@ export function CockpitOverlays(p: any) {
       viewingAs, onResetView: () => setViewingAs(null),
       onOpenProfile: () => setShowProfile(true),
       onOpenTeam: () => setShowTeam(true),
-      onOpenSettings: () => setShowSettingsModal(true),
+      onOpenSettings: () => { setSettingsInitialSection && setSettingsInitialSection(null); setShowSettingsModal(true); },
+      // 授权页 V1:「成员与授权」仅 owner 可见,直达设置页 staff 区(侧栏不加项,用户裁决)。
+      isOwner: isOwnerUser,
+      onOpenMembersAuth: () => { setSettingsInitialSection && setSettingsInitialSection("staff"); setShowSettingsModal(true); },
       onImpersonate: (s: any) => setViewingAs(s),
       onLogout: async () => {
         await logoutCockpit().catch(() => null);
@@ -217,9 +221,12 @@ export function CockpitOverlays(p: any) {
         "aria-label": t("关闭系统设置"),
       }, e(X, { size: 18 })),
       e(SettingsPage, {
+        // key 随目标区变:设置页已开着时再点「成员与授权」也能重定位到 staff 区。
+        key: settingsInitialSection || "default",
         data: dashboardData,
         viewMode: appViewMode === "employee" ? "employee" : "manager",
         apiToken,
+        initialSection: settingsInitialSection || undefined,
         onRefreshData,
       })
     ),
