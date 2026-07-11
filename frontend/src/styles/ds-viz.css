@@ -91,9 +91,9 @@
   stroke-dasharray: 0.1 0.9;
   stroke-dashoffset: 1;
   opacity: 0.82;
-  filter: drop-shadow(0 0 4px var(--vkpi-kpi-accent));
+  filter: drop-shadow(0 0 var(--ds-glow-radius, 0px) var(--vkpi-kpi-accent));
 }
-.ds-sparkline__endpoint { filter: drop-shadow(0 0 4px var(--vkpi-kpi-accent)); }
+.ds-sparkline__endpoint { filter: drop-shadow(0 0 var(--ds-glow-radius, 0px) var(--vkpi-kpi-accent)); }
 /* demo .spempty:诚实空序列 = 纯虚线底,零文字(有子文本时按 9px muted 收尾,不撑高) */
 .ds-kpi__series-empty {
   display: flex;
@@ -121,21 +121,21 @@
 [data-theme="light"] .ds-sparkline__area { opacity: 0.24; }
 [data-theme="light"] .ds-sparkline__line {
   stroke-width: 2.8px;
-  filter: drop-shadow(0 1px 0 rgba(7, 17, 34, 0.38));
+  filter: drop-shadow(0 1px 0 color-mix(in srgb, var(--ds-text) 38%, transparent));
 }
 [data-theme="light"] .ds-sparkline__flow {
   stroke-width: 3.1px;
   opacity: 0.7;
-  filter: drop-shadow(0 1px 0 rgba(7, 17, 34, 0.32));
+  filter: drop-shadow(0 1px 0 color-mix(in srgb, var(--ds-text) 32%, transparent));
 }
 [data-theme="light"] .ds-sparkline__endpoint {
-  stroke: rgba(7, 17, 34, 0.34);
+  stroke: color-mix(in srgb, var(--ds-text) 34%, transparent);
   stroke-width: 1px;
-  filter: drop-shadow(0 1px 1px rgba(7, 17, 34, 0.24));
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, var(--ds-text) 24%, transparent));
 }
 [data-theme="dark"] .ds-sparkline__area { opacity: 0.46; }
 [data-theme="dark"] .ds-sparkline__line {
-  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--vkpi-kpi-accent) 72%, transparent));
+  filter: drop-shadow(0 0 var(--ds-glow-radius, 0px) color-mix(in srgb, var(--vkpi-kpi-accent) 72%, transparent));
 }
 [data-theme="dark"] .ds-sparkline__endpoint {
   stroke: color-mix(in srgb, var(--ds-bg) 72%, transparent);
