@@ -67,7 +67,9 @@ import {
 import { CockpitOverlays } from "./CockpitApp.Sections";
 
 const e = React.createElement;
-const MyKolPage = React.lazy(() => import("../pages/myKol/MyKolPage").then((module) => ({ default: module.MyKolPage })));
+// MY KOL 改版 M1(2026-07-11):导航项改挂板块页范式新族 MyKolBoardPage(可编辑看板)。
+// 旧 pages/myKol/MyKolPage.tsx 保留不删(回滚垫:把本行 import 指回 ../pages/myKol/MyKolPage 即回滚)。
+const MyKolBoardPage = React.lazy(() => import("./pages/MyKolBoardPage").then((module) => ({ default: module.MyKolBoardPage })));
 const LegacyProjectsPage = React.lazy(() => import("../pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const EventsMockupPage = React.lazy(() => import("../pages/events/EventsMockupPage").then((module) => ({ default: module.EventsMockupPage })));
 // L1(2026-06-30):Wave1-4 已建运维页接进 cockpit 壳(原硬白名单够不到 → 点不到)。
@@ -703,7 +705,7 @@ export function CockpitApp(props: any = {}) {
             activeNav === "my-kol" && e(React.Suspense, {
               fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "MY KOL 加载中...")
             },
-              e(MyKolPage, {
+              e(MyKolBoardPage, {
                 apiToken,
                 viewMode: appViewMode,
                 data: dashboardData,
@@ -711,6 +713,8 @@ export function CockpitApp(props: any = {}) {
                 userRole,
                 onRefreshData,
                 onSelectPage: handleReplicaSelectPage,
+                // K3 内容播放实测:复用主控已拉的 evidence_metrics(零重复请求/零 lineage 隐藏写入)
+                metrics: dashboardRuntime.metrics,
               })
             ),
 
