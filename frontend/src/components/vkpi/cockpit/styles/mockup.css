@@ -1,7 +1,7 @@
 /* Verbatim from vkpi_v6.15.7_integrated.html */
 
 
-  body { background: #050810; font-family: -apple-system, BlinkMacSystemFont, Inter, "PingFang SC", sans-serif; margin: 0; }
+  body { background: var(--ds-bg); font-family: -apple-system, BlinkMacSystemFont, Inter, "PingFang SC", sans-serif; margin: 0; }
   .tabular-nums { font-variant-numeric: tabular-nums; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
@@ -12,9 +12,9 @@
     font-size: 10px; color: rgba(255,255,255,0.3); letter-spacing: 0.15em;
     text-transform: uppercase; pointer-events: none; user-select: none;
   }
-  /* Leaflet 暗色样式覆盖 */
+  /* Leaflet 跟随全局黑白主题 */
   .leaflet-container {
-    background: #040712 !important;
+    background: var(--ds-bg-2) !important;
     font-family: inherit;
     outline: none;
   }
@@ -106,12 +106,12 @@
     box-shadow: none !important;
   }
   .vkpi-pin-card {
-    background: rgba(11, 18, 32, 0.96);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: color-mix(in srgb, var(--ds-card) 94%, transparent);
+    border: 1px solid var(--ds-line-strong);
     border-radius: 12px;
     padding: 12px 14px;
     backdrop-filter: blur(20px);
-    box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+    box-shadow: var(--ds-shadow);
     min-width: 220px;
     font-family: inherit;
   }
@@ -121,7 +121,7 @@
     gap: 10px;
     margin-bottom: 10px;
     padding-bottom: 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid var(--ds-line);
   }
   .vkpi-pin-avatar {
     width: 36px; height: 36px;
@@ -136,7 +136,7 @@
   }
   .vkpi-pin-info { min-width: 0; flex: 1; }
   .vkpi-pin-name {
-    color: #fff;
+    color: var(--ds-text);
     font-size: 13px;
     font-weight: 600;
     white-space: nowrap;
@@ -144,7 +144,7 @@
     text-overflow: ellipsis;
   }
   .vkpi-pin-platform {
-    color: rgba(255,255,255,0.55);
+    color: var(--ds-muted);
     font-size: 10px;
     margin-top: 1px;
   }
@@ -156,13 +156,13 @@
     padding: 3px 0;
   }
   .vkpi-pin-key {
-    color: rgba(255,255,255,0.5);
+    color: var(--ds-muted);
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   .vkpi-pin-val {
-    color: rgba(255,255,255,0.92);
+    color: var(--ds-text-2);
     font-size: 11px;
     font-weight: 500;
     text-align: right;
@@ -171,8 +171,8 @@
   .vkpi-pin-hint {
     margin-top: 8px;
     padding-top: 8px;
-    border-top: 1px solid rgba(255,255,255,0.05);
-    color: rgba(255,255,255,0.4);
+    border-top: 1px solid var(--ds-line);
+    color: var(--ds-muted);
     font-size: 10px;
     text-align: center;
   }
@@ -184,8 +184,7 @@
   .leaflet-tooltip-pane { z-index: 350 !important; }
   .leaflet-popup-pane   { z-index: 400 !important; }
   .leaflet-control      { z-index: 450 !important; }
-  /* V6.2: 紫蓝主题滤镜 — 把灰色 Dark Matter 染成 V-KPI 主题 */
-  .vkpi-map-wrapper { background: #050b1a; }
+  .vkpi-map-wrapper { background: var(--ds-bg-2); }
   
   /* 关键 trick:
      sepia(0.6) 把灰度变暖色基底
@@ -193,13 +192,11 @@
      saturate 提色彩饱和度
      World 视图大陆暗,所以微提亮;街道级已经够亮,不动 */
   
-  /* 统一基础滤镜(World 到 City 都用这个) */
-  .vkpi-map-wrapper .leaflet-tile {
-    filter: brightness(1.4) contrast(1.1) sepia(0.55) saturate(1.6) hue-rotate(195deg);
-  }
+  [data-theme="light"] .vkpi-map-wrapper .leaflet-tile { filter: grayscale(.92) contrast(.94) brightness(1.02); }
+  [data-theme="dark"] .vkpi-map-wrapper .leaflet-tile { filter: grayscale(1) contrast(1.08) brightness(.92); }
   
   /* 海洋背景配色(瓦片间隙) */
-  .leaflet-container { background: #050b1a !important; }
+  .leaflet-container { background: var(--ds-bg-2) !important; }
   /* 防御性 z-index — 防止 Tailwind JIT 不识别 z-[N] */
   .z-overlay-mid  { z-index: 500 !important; }
   .z-overlay-high { z-index: 600 !important; }
@@ -233,4 +230,3 @@
   .kp-table tbody td:first-child { padding-left: 14px; }
   .geo-bar-bg { background: rgba(255,255,255,0.06); height: 4px; border-radius: 2px; overflow: hidden; }
   .geo-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
-

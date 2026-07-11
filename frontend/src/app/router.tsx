@@ -6,6 +6,9 @@ const AdminLoginRoute = lazy(() => import("../routes/admin/AdminLoginRoute"));
 const StaffActivateRoute = lazy(() => import("../routes/admin/StaffActivateRoute"));
 const ResetPasswordRoute = lazy(() => import("../routes/admin/ResetPasswordRoute"));
 const RouteErrorBoundary = lazy(() => import("../routes/system/RouteErrorBoundary"));
+const CommandOSPrototype = lazy(() => import("../prototypes/CommandOSPrototype"));
+const DashboardReferencePrototype = lazy(() => import("../prototypes/DashboardReferencePrototype"));
+const RealCockpitPrototype = lazy(() => import("../prototypes/RealCockpitPrototype"));
 
 function RouteLoading() {
   return <div className="muted-block">正在进入 Viltrox Marketing...</div>;
@@ -25,7 +28,16 @@ function buildRoute(path: string, node: React.ReactNode) {
   };
 }
 
+const prototypeRoutes = Boolean((import.meta as any).env?.DEV)
+  ? [
+      buildRoute("/prototype/command-os", <CommandOSPrototype />),
+      buildRoute("/prototype/dashboard-reference", <DashboardReferencePrototype />),
+      buildRoute("/prototype/real-cockpit", <RealCockpitPrototype />),
+    ]
+  : [];
+
 export const router = createBrowserRouter([
+  ...prototypeRoutes,
   buildRoute("/", <AdminRoute />),
   buildRoute("/login", <AdminLoginRoute />),
   buildRoute("/activate", <StaffActivateRoute />),

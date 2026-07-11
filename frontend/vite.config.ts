@@ -57,6 +57,7 @@ export default defineConfig(({ command }) => {
     ],
     define: {
       __VKPI_BUILD_INFO__: JSON.stringify(buildInfo),
+      "process.env.NODE_ENV": JSON.stringify(isBuild ? "production" : "development"),
     },
     esbuild: isBuild
       ? {
@@ -133,7 +134,16 @@ export default defineConfig(({ command }) => {
             if (
               id.includes("/src/components/vkpi/cockpit/components/ReportPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/TaskProgressBoard") ||
-              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel")
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/AITodayEvidenceModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/KPIDetailModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/ProjectDetailModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/BrandPulsePanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/CommentOpportunitiesPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/GiftedFunnelPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/MorningBriefCard") ||
+              id.includes("/src/components/vkpi/cockpit/components/SemanticRecallCard") ||
+              id.includes("/src/components/vkpi/cockpit/components/WorkerDevicesPanel")
             ) {
               return undefined;
             }

@@ -13,57 +13,172 @@
 /* ---- 玻璃面板(gtm_viz 的 .card)---- */
 .ds-panel {
   background: var(--ds-card);
-  backdrop-filter: blur(var(--ds-blur)); -webkit-backdrop-filter: blur(var(--ds-blur));
+  backdrop-filter: var(--ds-backdrop); -webkit-backdrop-filter: var(--ds-backdrop);
   border: 1px solid var(--ds-line);
   border-radius: var(--ds-radius-lg);
   box-shadow: var(--ds-shadow-sm);
   overflow: hidden;
-  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.3s, border-color 0.2s;
+  transition: box-shadow 0.3s, border-color 0.2s;
 }
-.ds-panel:hover { transform: translateY(-2px); }
+.ds-panel:hover { border-color: var(--ds-line-strong); }
 .ds-panel__head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 15px 20px 11px;
 }
-.ds-panel__title { margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em; color: var(--ds-text); }
+.ds-panel__title { margin: 0; font-size: 14.5px; font-weight: 650; letter-spacing: 0; color: var(--ds-text); }
 .ds-panel__body { padding: 3px 20px 20px; }
 
 /* ---- KPI 卡(标签 + 大号数字 + 环比 + sparkline)---- */
 .ds-kpi {
+  --vkpi-kpi-accent: var(--ds-accent);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   background: var(--ds-card);
-  backdrop-filter: blur(var(--ds-blur)); -webkit-backdrop-filter: blur(var(--ds-blur));
+  backdrop-filter: var(--ds-backdrop); -webkit-backdrop-filter: var(--ds-backdrop);
   border: 1px solid var(--ds-line);
-  border-radius: var(--ds-radius-lg);
+  border-radius: var(--ds-radius-md);
   box-shadow: var(--ds-shadow-sm);
-  padding: 15px 16px;
+  padding: 12px 13px;
   transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.2s;
 }
-.ds-kpi:hover { transform: translateY(-2px); border-color: var(--ds-accent); }
+.ds-kpi::before {
+  position: absolute;
+  z-index: 0;
+  inset: -60% -35%;
+  background: linear-gradient(112deg, transparent 34%, color-mix(in srgb, var(--vkpi-kpi-accent) 20%, transparent) 48%, transparent 63%);
+  opacity: 0.72;
+  transform: translateX(-42%);
+  content: "";
+  pointer-events: none;
+}
+[data-theme="dark"] .ds-kpi {
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--vkpi-kpi-accent) 11%, var(--ds-card)), var(--ds-card) 62%),
+    var(--ds-card);
+}
+.ds-kpi > * { position: relative; z-index: 1; }
+.ds-kpi:hover { transform: translateY(-2px); border-color: var(--ds-line-strong); }
 .ds-kpi__k {
   display: flex; align-items: center; gap: 6px;
+  min-height: 24px;
   font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--ds-muted); font-weight: 600;
 }
+.ds-kpi__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+.ds-kpi__go {
+  margin-left: auto;
+  color: var(--vkpi-kpi-accent);
+  opacity: 0;
+  transform: translateX(-3px);
+  transition: opacity 0.16s, transform 0.16s;
+}
+.ds-kpi:hover .ds-kpi__go { opacity: 0.74; transform: translateX(0); }
 .ds-kpi__dot { width: 5px; height: 5px; border-radius: 50%; flex: none; }
 .ds-kpi__dot--good { background: var(--ds-good); }
 .ds-kpi__dot--pend { background: var(--ds-warn); }
 .ds-kpi__val {
   display: flex; align-items: baseline; gap: 6px; margin-top: 6px;
-  font-size: 25px; font-weight: 680; letter-spacing: -0.02em;
+  font-size: 25px; font-weight: 680; letter-spacing: 0;
   color: var(--ds-text); font-variant-numeric: tabular-nums;
 }
 .ds-kpi__val--pend { color: var(--ds-muted); }
 .ds-kpi__u { font-size: 12px; color: var(--ds-muted); font-weight: 500; }
-.ds-kpi__delta { font-size: 11px; font-weight: 600; }
-.ds-kpi__delta--up { color: var(--ds-good); }
-.ds-kpi__delta--down { color: var(--ds-crit); }
-.ds-kpi__delta--pend { color: var(--ds-warn); }
-.ds-kpi__spark { width: 100%; height: 30px; margin-top: 9px; display: block; }
+.ds-kpi__delta { display: inline-flex; align-items: center; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ds-kpi__delta--up { color: var(--ds-good); background: var(--ds-good-soft); }
+.ds-kpi__delta--down { color: var(--ds-crit); background: var(--ds-crit-soft); }
+.ds-kpi__delta--pend { color: var(--ds-warn); background: var(--ds-warn-soft); }
+.ds-kpi__delta--flat {
+  color: var(--ds-text-2);
+  border-color: var(--ds-line);
+  background: color-mix(in srgb, var(--ds-muted) 11%, transparent);
+}
+.ds-kpi__spark { width: 100%; height: 30px; margin-top: 9px; display: block; overflow: visible; }
+.ds-sparkline__area { opacity: 0.34; }
+.ds-sparkline__line { stroke-width: 2.5px; opacity: 1; }
+.ds-sparkline__flow {
+  stroke-width: 2.9px;
+  stroke-dasharray: 0.1 0.9;
+  stroke-dashoffset: 1;
+  opacity: 0.82;
+  filter: drop-shadow(0 0 4px var(--vkpi-kpi-accent));
+}
+.ds-sparkline__endpoint { filter: drop-shadow(0 0 4px var(--vkpi-kpi-accent)); }
+.ds-kpi__series-empty {
+  display: flex;
+  width: 100%;
+  height: 30px;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  color: var(--ds-muted);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+.ds-kpi__series-empty::before {
+  height: 1px;
+  min-width: 22px;
+  flex: 1;
+  background: repeating-linear-gradient(90deg, var(--ds-line-strong) 0 4px, transparent 4px 8px);
+  content: "";
+  opacity: 0.7;
+}
+[data-theme="light"] .ds-sparkline__area { opacity: 0.24; }
+[data-theme="light"] .ds-sparkline__line {
+  stroke-width: 2.8px;
+  filter: drop-shadow(0 1px 0 rgba(7, 17, 34, 0.38));
+}
+[data-theme="light"] .ds-sparkline__flow {
+  stroke-width: 3.1px;
+  opacity: 0.7;
+  filter: drop-shadow(0 1px 0 rgba(7, 17, 34, 0.32));
+}
+[data-theme="light"] .ds-sparkline__endpoint {
+  stroke: rgba(7, 17, 34, 0.34);
+  stroke-width: 1px;
+  filter: drop-shadow(0 1px 1px rgba(7, 17, 34, 0.24));
+}
+[data-theme="dark"] .ds-sparkline__area { opacity: 0.46; }
+[data-theme="dark"] .ds-sparkline__line {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--vkpi-kpi-accent) 72%, transparent));
+}
+[data-theme="dark"] .ds-sparkline__endpoint {
+  stroke: color-mix(in srgb, var(--ds-bg) 72%, transparent);
+  stroke-width: 1px;
+}
+.ds-kpi__signal-rail {
+  position: relative;
+  display: block;
+  height: 30px;
+  margin-top: 9px;
+  overflow: hidden;
+  opacity: 0.76;
+}
+.ds-kpi__signal-rail::before,
+.ds-kpi__signal-rail::after,
+.ds-kpi__signal-rail i {
+  position: absolute;
+  left: -45%;
+  width: 145%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--vkpi-kpi-accent) 22%, transparent) 28%, var(--vkpi-kpi-accent) 66%, transparent 100%);
+  content: "";
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--vkpi-kpi-accent) 70%, transparent));
+}
+.ds-kpi__signal-rail::before { top: 11px; transform: rotate(-2deg); opacity: 0.58; }
+.ds-kpi__signal-rail::after { top: 18px; transform: rotate(1.4deg); opacity: 0.24; }
+.ds-kpi__signal-rail i { top: 14px; opacity: 0.92; }
 
 /* ---- 参数条(PRODUCT / MARKET / BUDGET 那排)---- */
 .ds-param {
   background: var(--ds-card);
-  backdrop-filter: blur(var(--ds-blur)); -webkit-backdrop-filter: blur(var(--ds-blur));
+  backdrop-filter: var(--ds-backdrop); -webkit-backdrop-filter: var(--ds-backdrop);
   border: 1px solid var(--ds-line);
   border-radius: var(--ds-radius-md);
   padding: 9px 15px;
@@ -81,7 +196,15 @@
   .ds-kpi-rise { animation: ds-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
   @keyframes ds-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
   .ds-scale-marker { animation: ds-pulse 2.6s ease-in-out infinite; }
-  @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .ds-kpi::before { animation: ds-kpi-sheen 8s ease-in-out infinite; }
+    .ds-kpi__signal-rail::before { animation: ds-signal-flow 6.4s linear infinite; }
+    .ds-kpi__signal-rail::after { animation: ds-signal-flow 9.5s linear infinite reverse; }
+    .ds-kpi__signal-rail i { animation: ds-signal-flow 4.8s linear infinite; }
+    .ds-sparkline__flow { animation: ds-spark-flow 3.8s linear infinite; }
+    @keyframes ds-kpi-sheen { 0%, 35% { transform: translateX(-42%); } 75%, 100% { transform: translateX(42%); } }
+    @keyframes ds-signal-flow { to { transform: translateX(68%) rotate(-1deg); } }
+    @keyframes ds-spark-flow { to { stroke-dashoffset: 0; } }
 }
 @media (prefers-reduced-motion: reduce) { .ds-scale-marker { animation: none; } }
 

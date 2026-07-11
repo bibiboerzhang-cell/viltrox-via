@@ -1,0 +1,42 @@
+.dashboard-reference-prototype {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.dashboard-reference-prototype .mkdash {
+  min-height: 100vh;
+  background: radial-gradient(1200px 600px at 70% -10%, var(--bg2), var(--bg)) fixed;
+}
+
+.dashboard-reference-prototype .mkdash .aura {
+  display: block !important;
+}
+
+.dashboard-reference-prototype .mkdash .shell {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.dashboard-reference-prototype .mkdash .rail {
+  display: flex !important;
+}
+
+.dashboard-reference-prototype .mkdash .top {
+  display: flex !important;
+}
+
+.dashboard-reference-prototype .mkdash .canvas {
+  max-width: 1560px;
+  padding: 15px 22px 40px;
+}
+
+body.rail-min .dashboard-reference-prototype .mkdash .shell {
+  grid-template-columns: 66px minmax(0, 1fr);
+}
+
+@media (max-width: 720px) {
+  .dashboard-reference-prototype {
+    min-width: 1180px;
+  }
+}

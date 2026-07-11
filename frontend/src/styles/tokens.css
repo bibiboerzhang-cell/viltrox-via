@@ -10,11 +10,32 @@
 
 /* ---------- 与主题/风格无关的常量 ---------- */
 :root {
-  --ds-font-sans: Inter, "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --ds-font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
+  --ds-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", system-ui, sans-serif;
+  --ds-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
   --ds-space-sm: 12px;
   --ds-space-md: 16px;
   --ds-space-lg: 32px;
+  --ds-glow-radius: 0px;
+  --ds-northstar-aura: 0;
+  --ds-flow-blue: #3f9bff;
+  --ds-flow-cyan: #37ddc5;
+  --ds-flow-violet: #8f63ff;
+  --ds-flow-rose: #ff6478;
+  --ds-flow-amber: #ffb64d;
+  --vkpi-glass-opacity: .78;
+  --vkpi-glass-card-opacity: .86;
+  --vkpi-glass-overlay-opacity: .90;
+  --vkpi-glass-drawer-opacity: .88;
+  --ds-workspace-surface: var(--ds-bg);
+  --ds-sidebar-surface: var(--ds-panel);
+  --ds-topbar-surface: var(--ds-panel);
+  --ds-queue-surface: var(--ds-card);
+  --ds-sidebar-divider: var(--ds-line);
+  --ds-queue-border: var(--ds-line-strong);
+  --ds-queue-shadow: var(--ds-shadow-sm);
+  --ds-queue-inset: var(--ds-inner);
+  --ds-overlay-surface: var(--ds-card);
+  --ds-drawer-surface: var(--ds-bg-2);
   color-scheme: light; /* 属性注入前兜底 */
 }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -27,67 +48,83 @@
    风格 1 · GLASS(苹果玻璃拟态 · 蓝)—— 现有 vkpi 观感的 token 化延续
    ========================================================================= */
 [data-style="glass"][data-theme="light"] {
-  --ds-bg:#eef5ff; --ds-panel:rgba(255,255,255,.66); --ds-card:rgba(255,255,255,.82);
-  --ds-line:rgba(199,214,239,.62); --ds-line-strong:rgba(160,180,215,.75);
-  --ds-text:#101828; --ds-text-2:#344054; --ds-muted:#667085;
-  --ds-accent:#1b6cff; --ds-accent-hover:#155dfc; --ds-accent-soft:rgba(27,108,255,.12); --ds-accent-2:#8b5cf6;
+  --ds-bg:#eef2f8; --ds-bg-2:#f6f9fd; --ds-panel:rgb(255 255 255 / var(--vkpi-glass-opacity)); --ds-card:rgb(255 255 255 / var(--vkpi-glass-card-opacity));
+  --ds-workspace-surface:rgba(238,243,250,.92); --ds-sidebar-surface:rgba(255,255,255,.82); --ds-topbar-surface:rgba(238,243,250,.72); --ds-queue-surface:rgba(255,255,255,.96);
+  --ds-sidebar-divider:rgba(16,26,50,.13); --ds-queue-border:rgba(16,26,50,.20); --ds-queue-shadow:0 1px 2px rgba(20,30,60,.08),0 8px 18px rgba(20,30,60,.11); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.9);
+  --ds-overlay-surface:rgb(255 255 255 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(248 250 253 / var(--vkpi-glass-drawer-opacity));
+  --ds-line:rgba(16,26,50,.10); --ds-line-strong:rgba(16,26,50,.20);
+  --ds-text:#0d1017; --ds-text-2:#3d4653; --ds-muted:#7a8496;
+  --ds-accent:#0071e3; --ds-accent-hover:#0067cf; --ds-accent-soft:rgba(0,113,227,.09); --ds-accent-2:#7c3aed;
   --ds-on-accent:#ffffff;
-  --ds-good:#0f9d63; --ds-good-soft:rgba(24,199,132,.14);
-  --ds-warn:#c77d0a; --ds-warn-soft:rgba(245,166,35,.16);
-  --ds-crit:#e11d48; --ds-crit-soft:rgba(255,59,95,.14);
-  --ds-info:#1b6cff; --ds-info-soft:rgba(27,108,255,.12);
-  --ds-scrim:rgba(16,24,40,.28); --ds-blur:22px;
-  --ds-radius-sm:8px; --ds-radius-md:12px; --ds-radius-lg:18px; --ds-radius-xl:26px;
-  --ds-shadow:0 26px 80px rgba(32,64,128,.18); --ds-shadow-sm:0 8px 24px rgba(32,64,128,.10);
+  --ds-good:#0a8f57; --ds-good-soft:rgba(10,143,87,.10);
+  --ds-warn:#a9700a; --ds-warn-soft:rgba(169,112,10,.12);
+  --ds-crit:#d61f45; --ds-crit-soft:rgba(214,31,69,.09);
+  --ds-info:#0071e3; --ds-info-soft:rgba(0,113,227,.09);
+  --ds-scrim:rgba(16,24,40,.28); --ds-blur:20px; --ds-backdrop:saturate(180%) blur(20px);
+  --ds-radius-sm:8px; --ds-radius-md:10px; --ds-radius-lg:16px; --ds-radius-xl:20px;
+  --ds-shadow:0 1px 2px rgba(20,30,60,.06),0 12px 28px rgba(20,30,60,.10); --ds-shadow-sm:0 1px 2px rgba(20,30,60,.06),0 8px 20px rgba(20,30,60,.08);
+  --ds-glow-radius:0px; --ds-northstar-aura:0;
   --ds-inner:inset 0 1px 0 rgba(255,255,255,.6);
 }
 [data-style="glass"][data-theme="dark"] {
-  --ds-bg:#0a0a0d; --ds-panel:rgba(255,255,255,.04); --ds-card:rgba(255,255,255,.055);
-  --ds-line:rgba(255,255,255,.08); --ds-line-strong:rgba(255,255,255,.16);
-  --ds-text:#e7ebf3; --ds-text-2:#c3cad6; --ds-muted:#8b94a7;
-  --ds-accent:#60a5fa; --ds-accent-hover:#7cb6fb; --ds-accent-soft:rgba(96,165,250,.16); --ds-accent-2:#a78bfa;
+  --ds-bg:#05060a; --ds-bg-2:#0a0c12; --ds-panel:rgb(14 19 31 / var(--vkpi-glass-opacity)); --ds-card:rgb(21 27 42 / var(--vkpi-glass-card-opacity));
+  --ds-workspace-surface:rgba(5,6,10,.90); --ds-sidebar-surface:rgba(11,15,24,.88); --ds-topbar-surface:rgba(5,6,10,.68); --ds-queue-surface:rgba(25,32,47,.96);
+  --ds-sidebar-divider:rgba(255,255,255,.11); --ds-queue-border:rgba(255,255,255,.20); --ds-queue-shadow:0 1px 1px rgba(0,0,0,.65),0 8px 22px rgba(0,0,0,.38); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.07);
+  --ds-overlay-surface:rgb(10 15 26 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(9 14 25 / var(--vkpi-glass-drawer-opacity));
+  --ds-line:rgba(255,255,255,.09); --ds-line-strong:rgba(255,255,255,.17);
+  --ds-text:#f3f5fa; --ds-text-2:#c0c7d5; --ds-muted:#727b8d;
+  --ds-accent:#3f9bff; --ds-accent-hover:#63adff; --ds-accent-soft:rgba(63,155,255,.15); --ds-accent-2:#9d5cff;
   --ds-on-accent:#08111f;
-  --ds-good:#34d399; --ds-good-soft:rgba(52,211,153,.16);
-  --ds-warn:#ffbd55; --ds-warn-soft:rgba(255,189,85,.16);
-  --ds-crit:#fb7185; --ds-crit-soft:rgba(251,113,133,.16);
-  --ds-info:#60a5fa; --ds-info-soft:rgba(96,165,250,.16);
-  --ds-scrim:rgba(0,0,0,.72); --ds-blur:22px;
-  --ds-radius-sm:8px; --ds-radius-md:12px; --ds-radius-lg:18px; --ds-radius-xl:26px;
-  --ds-shadow:0 24px 70px rgba(0,0,0,.45); --ds-shadow-sm:0 8px 24px rgba(0,0,0,.35);
-  --ds-inner:inset 0 1px 0 rgba(255,255,255,.06);
+  --ds-good:#37dd9a; --ds-good-soft:rgba(55,221,154,.14);
+  --ds-warn:#ffb64d; --ds-warn-soft:rgba(255,182,77,.14);
+  --ds-crit:#ff6478; --ds-crit-soft:rgba(255,100,120,.14);
+  --ds-info:#3f9bff; --ds-info-soft:rgba(63,155,255,.15);
+  --ds-scrim:rgba(0,0,0,.72); --ds-blur:20px; --ds-backdrop:saturate(180%) blur(20px);
+  --ds-radius-sm:8px; --ds-radius-md:10px; --ds-radius-lg:16px; --ds-radius-xl:20px;
+  --ds-shadow:0 1px 1px rgba(0,0,0,.5),0 18px 46px rgba(0,0,0,.55); --ds-shadow-sm:0 1px 1px rgba(0,0,0,.42),0 10px 26px rgba(0,0,0,.38);
+  --ds-glow-radius:5px; --ds-northstar-aura:.24;
+  --ds-inner:inset 0 1px 0 rgba(255,255,255,.08);
 }
 
 /* =========================================================================
    风格 2 · INSTRUMENT(光学仪器 · 金)—— 哑光实心 / 直角 / 等宽刻字气质
    ========================================================================= */
 [data-style="instrument"][data-theme="light"] {
-  --ds-bg:#f6f7f8; --ds-panel:#ffffff; --ds-card:#ffffff;
-  --ds-line:#e4e7ec; --ds-line-strong:#cfd4dc;
-  --ds-text:#0b0f14; --ds-text-2:#344054; --ds-muted:#667085;
+  --ds-bg:#eceff4; --ds-bg-2:#f3f6fa; --ds-panel:#ffffff; --ds-card:#ffffff;
+  --ds-workspace-surface:#eceff4; --ds-sidebar-surface:#f8fafc; --ds-topbar-surface:rgba(236,239,244,.96); --ds-queue-surface:#ffffff;
+  --ds-sidebar-divider:#d8dee7; --ds-queue-border:#c9d2dd; --ds-queue-shadow:0 1px 2px rgba(20,26,34,.08),0 6px 14px rgba(20,26,34,.07); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.8);
+  --ds-overlay-surface:#ffffff; --ds-drawer-surface:#f8fafc;
+  --ds-line:#e0e5ec; --ds-line-strong:#c9d2dd;
+  --ds-text:#141a22; --ds-text-2:#4a5666; --ds-muted:#8794a4;
   --ds-accent:#a9791f; --ds-accent-hover:#8a6014; --ds-accent-soft:rgba(169,121,31,.12); --ds-accent-2:#0ea5e9;
   --ds-on-accent:#ffffff;
-  --ds-good:#2f7d63; --ds-good-soft:rgba(47,125,99,.12);
-  --ds-warn:#b06f24; --ds-warn-soft:rgba(176,111,36,.14);
-  --ds-crit:#b0402d; --ds-crit-soft:rgba(176,64,45,.12);
+  --ds-good:#2f7d63; --ds-good-soft:rgba(47,125,99,.10);
+  --ds-warn:#b06f24; --ds-warn-soft:rgba(176,111,36,.12);
+  --ds-crit:#b0402d; --ds-crit-soft:rgba(176,64,45,.10);
   --ds-info:#0ea5e9; --ds-info-soft:rgba(14,165,233,.12);
-  --ds-scrim:rgba(16,24,40,.30); --ds-blur:0px;
-  --ds-radius-sm:3px; --ds-radius-md:4px; --ds-radius-lg:6px; --ds-radius-xl:8px;
-  --ds-shadow:0 1px 3px rgba(16,24,40,.10); --ds-shadow-sm:0 1px 2px rgba(16,24,40,.08);
+  --ds-scrim:rgba(16,24,40,.30); --ds-blur:20px; --ds-backdrop:saturate(180%) blur(20px);
+  --ds-radius-sm:4px; --ds-radius-md:4px; --ds-radius-lg:6px; --ds-radius-xl:8px;
+  --ds-shadow:0 1px 3px rgba(20,26,34,.09); --ds-shadow-sm:0 1px 2px rgba(20,26,34,.07);
+  --ds-glow-radius:0px; --ds-northstar-aura:0;
   --ds-inner:none;
 }
 [data-style="instrument"][data-theme="dark"] {
-  --ds-bg:#0e1116; --ds-panel:#151a21; --ds-card:#171d26;
-  --ds-line:#262e39; --ds-line-strong:#37414e;
-  --ds-text:#eef1f5; --ds-text-2:#a9b3c1; --ds-muted:#6d7988;
+  --ds-bg:#0e1116; --ds-bg-2:#12161d; --ds-panel:#161c24; --ds-card:#1b222c;
+  --ds-workspace-surface:#0e1116; --ds-sidebar-surface:#151b23; --ds-topbar-surface:rgba(14,17,22,.96); --ds-queue-surface:#1d2530;
+  --ds-sidebar-divider:#2f3844; --ds-queue-border:#465260; --ds-queue-shadow:0 1px 1px rgba(0,0,0,.5),0 8px 18px rgba(0,0,0,.30); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.04);
+  --ds-overlay-surface:#161c24; --ds-drawer-surface:#12161d;
+  --ds-line:#28303c; --ds-line-strong:#3b4653;
+  --ds-text:#eef1f5; --ds-text-2:#aab4c2; --ds-muted:#6d7988;
   --ds-accent:#e0a94a; --ds-accent-hover:#c7913a; --ds-accent-soft:rgba(224,169,74,.14); --ds-accent-2:#8ee6ff;
   --ds-on-accent:#141a08;
-  --ds-good:#4fa487; --ds-good-soft:rgba(79,164,135,.16);
-  --ds-warn:#d98f42; --ds-warn-soft:rgba(217,143,66,.16);
-  --ds-crit:#cf5b46; --ds-crit-soft:rgba(207,91,70,.16);
+  --ds-good:#4fa487; --ds-good-soft:rgba(79,164,135,.14);
+  --ds-warn:#d98f42; --ds-warn-soft:rgba(217,143,66,.14);
+  --ds-crit:#cf5b46; --ds-crit-soft:rgba(207,91,70,.14);
   --ds-info:#8ee6ff; --ds-info-soft:rgba(142,230,255,.16);
-  --ds-scrim:rgba(4,7,12,.76); --ds-blur:0px;
-  --ds-radius-sm:3px; --ds-radius-md:4px; --ds-radius-lg:6px; --ds-radius-xl:8px;
-  --ds-shadow:0 8px 24px rgba(0,0,0,.35); --ds-shadow-sm:0 2px 10px rgba(0,0,0,.30);
+  --ds-scrim:rgba(4,7,12,.76); --ds-blur:20px; --ds-backdrop:saturate(180%) blur(20px);
+  --ds-radius-sm:4px; --ds-radius-md:4px; --ds-radius-lg:6px; --ds-radius-xl:8px;
+  --ds-shadow:0 8px 24px rgba(0,0,0,.40); --ds-shadow-sm:0 2px 10px rgba(0,0,0,.30);
+  --ds-glow-radius:0px; --ds-northstar-aura:0;
   --ds-inner:none;
 }
 
@@ -96,32 +133,40 @@
    单色基调 + 信号色(info=青 / good=薄荷 / warn=金)
    ========================================================================= */
 [data-style="commandos"][data-theme="light"] {
-  --ds-bg:#f6f7f8; --ds-panel:rgba(255,255,255,.74); --ds-card:rgba(255,255,255,.92);
-  --ds-line:rgba(11,18,32,.12); --ds-line-strong:rgba(11,18,32,.22);
-  --ds-text:#05070c; --ds-text-2:rgba(5,7,12,.72); --ds-muted:rgba(5,7,12,.5);
-  --ds-accent:#05070c; --ds-accent-hover:#000000; --ds-accent-soft:rgba(5,7,12,.08); --ds-accent-2:#0ea5e9;
+  --ds-bg:#f4f5f8; --ds-bg-2:#fafbfc; --ds-panel:rgba(255,255,255,.90); --ds-card:#ffffff;
+  --ds-workspace-surface:#f4f5f8; --ds-sidebar-surface:rgba(255,255,255,.96); --ds-topbar-surface:rgba(244,245,248,.92); --ds-queue-surface:#ffffff;
+  --ds-sidebar-divider:rgba(11,18,32,.14); --ds-queue-border:rgba(11,18,32,.24); --ds-queue-shadow:0 1px 2px rgba(11,18,32,.08),0 7px 16px rgba(11,18,32,.09); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.85);
+  --ds-overlay-surface:#ffffff; --ds-drawer-surface:#fafbfc;
+  --ds-line:rgba(11,18,32,.13); --ds-line-strong:rgba(11,18,32,.24);
+  --ds-text:#05070c; --ds-text-2:#3a4150; --ds-muted:#79818e;
+  --ds-accent:#05070c; --ds-accent-hover:#000000; --ds-accent-soft:rgba(5,7,12,.06); --ds-accent-2:#0284c7;
   --ds-on-accent:#ffffff;
-  --ds-good:#0f9d63; --ds-good-soft:rgba(15,157,99,.12);
-  --ds-warn:#c07d10; --ds-warn-soft:rgba(192,125,16,.14);
-  --ds-crit:#e11d48; --ds-crit-soft:rgba(225,29,72,.10);
-  --ds-info:#0ea5e9; --ds-info-soft:rgba(14,165,233,.10);
-  --ds-scrim:rgba(16,24,40,.30); --ds-blur:20px;
-  --ds-radius-sm:6px; --ds-radius-md:10px; --ds-radius-lg:14px; --ds-radius-xl:20px;
-  --ds-shadow:0 20px 60px rgba(16,24,40,.12); --ds-shadow-sm:0 6px 18px rgba(16,24,40,.08);
+  --ds-good:#0a8f57; --ds-good-soft:rgba(10,143,87,.10);
+  --ds-warn:#a9700a; --ds-warn-soft:rgba(169,112,10,.12);
+  --ds-crit:#d61f45; --ds-crit-soft:rgba(214,31,69,.09);
+  --ds-info:#0284c7; --ds-info-soft:rgba(2,132,199,.10);
+  --ds-scrim:rgba(16,24,40,.30); --ds-blur:20px; --ds-backdrop:saturate(180%) blur(20px);
+  --ds-radius-sm:8px; --ds-radius-md:10px; --ds-radius-lg:13px; --ds-radius-xl:18px;
+  --ds-shadow:0 12px 28px rgba(16,24,40,.10); --ds-shadow-sm:0 6px 18px rgba(16,24,40,.08);
+  --ds-glow-radius:0px; --ds-northstar-aura:0;
   --ds-inner:inset 0 1px 0 rgba(255,255,255,.6);
 }
 [data-style="commandos"][data-theme="dark"] {
-  --ds-bg:#020308; --ds-panel:rgba(255,255,255,.06); --ds-card:rgba(255,255,255,.085);
-  --ds-line:rgba(255,255,255,.13); --ds-line-strong:rgba(255,255,255,.24);
-  --ds-text:#f7f8fb; --ds-text-2:rgba(247,248,251,.78); --ds-muted:rgba(247,248,251,.56);
-  --ds-accent:#f7f8fb; --ds-accent-hover:#ffffff; --ds-accent-soft:rgba(255,255,255,.12); --ds-accent-2:#8ee6ff;
+  --ds-bg:#020308; --ds-bg-2:#06080f; --ds-panel:rgba(255,255,255,.05); --ds-card:rgba(255,255,255,.085);
+  --ds-workspace-surface:#020308; --ds-sidebar-surface:rgba(9,11,17,.94); --ds-topbar-surface:rgba(2,3,8,.82); --ds-queue-surface:#0f121a;
+  --ds-sidebar-divider:rgba(255,255,255,.14); --ds-queue-border:rgba(255,255,255,.26); --ds-queue-shadow:0 1px 1px rgba(0,0,0,.62),0 8px 20px rgba(0,0,0,.44); --ds-queue-inset:inset 0 1px 0 rgba(255,255,255,.06);
+  --ds-overlay-surface:#0d1018; --ds-drawer-surface:#080b12;
+  --ds-line:rgba(255,255,255,.12); --ds-line-strong:rgba(255,255,255,.24);
+  --ds-text:#f7f8fb; --ds-text-2:#c7ced9; --ds-muted:#7f8896;
+  --ds-accent:#eef2f8; --ds-accent-hover:#ffffff; --ds-accent-soft:rgba(255,255,255,.10); --ds-accent-2:#8ee6ff;
   --ds-on-accent:#05070c;
-  --ds-good:#7ff0c2; --ds-good-soft:rgba(127,240,194,.14);
+  --ds-good:#7ff0c2; --ds-good-soft:rgba(127,240,194,.12);
   --ds-warn:#f8d47a; --ds-warn-soft:rgba(248,212,122,.14);
-  --ds-crit:#ff6b81; --ds-crit-soft:rgba(255,107,129,.14);
+  --ds-crit:#ff6478; --ds-crit-soft:rgba(255,100,120,.12);
   --ds-info:#8ee6ff; --ds-info-soft:rgba(142,230,255,.14);
-  --ds-scrim:rgba(2,3,8,.80); --ds-blur:20px;
-  --ds-radius-sm:6px; --ds-radius-md:10px; --ds-radius-lg:14px; --ds-radius-xl:20px;
-  --ds-shadow:0 24px 70px rgba(0,0,0,.5); --ds-shadow-sm:0 8px 24px rgba(0,0,0,.4);
+  --ds-scrim:rgba(2,3,8,.80); --ds-blur:20px; --ds-backdrop:saturate(180%) blur(20px);
+  --ds-radius-sm:8px; --ds-radius-md:10px; --ds-radius-lg:13px; --ds-radius-xl:18px;
+  --ds-shadow:0 20px 50px rgba(0,0,0,.50); --ds-shadow-sm:0 8px 24px rgba(0,0,0,.40);
+  --ds-glow-radius:6px; --ds-northstar-aura:.16;
   --ds-inner:inset 0 1px 0 rgba(255,255,255,.05);
 }

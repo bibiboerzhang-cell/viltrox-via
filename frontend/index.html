@@ -15,18 +15,29 @@
       }
     </script>
     <script>
-      /* 首帧注入 data-theme/data-style,避免主题闪烁。style 默认 glass。 */
+      /* 首帧注入主题、风格与玻璃清晰度,避免主题闪烁。 */
       (function () {
         var r = document.documentElement;
+        function setGlassOpacity(value) {
+          var n = Math.min(96, Math.max(60, Math.round(Number(value) || 78)));
+          var opacity = n / 100;
+          r.setAttribute("data-glass-opacity", String(n));
+          r.style.setProperty("--vkpi-glass-opacity", String(opacity));
+          r.style.setProperty("--vkpi-glass-card-opacity", String(Math.min(0.98, opacity + 0.08)));
+          r.style.setProperty("--vkpi-glass-overlay-opacity", String(Math.max(0.9, opacity)));
+          r.style.setProperty("--vkpi-glass-drawer-opacity", String(Math.max(0.88, opacity)));
+        }
         try {
           var p = JSON.parse(localStorage.getItem("vkpi-ui-pref-v1") || "null");
           var theme = (p && p.theme) || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
           var style = (p && p.style) || "glass";
           r.setAttribute("data-theme", theme);
           r.setAttribute("data-style", style);
+          setGlassOpacity(p && p.glassOpacity);
         } catch (e) {
           r.setAttribute("data-theme", "light");
           r.setAttribute("data-style", "glass");
+          setGlassOpacity(78);
         }
       })();
     </script>
