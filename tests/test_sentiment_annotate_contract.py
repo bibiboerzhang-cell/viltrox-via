@@ -203,6 +203,27 @@ def test_parse_batch_response_tolerates_noise():
     assert parsed[102]["aspects"] == []  # 非 list 的 aspects 归空
 
 
+def test_parse_batch_response_salvages_truncated_array():
+    """max_output_tokens 截断数组 → 抢救已完整对象;救不回的照旧缺席(诚实 skip)。"""
+    expected = {201, 202, 203}
+    text = (
+        "[\n"
+        '  {"id": 201, "score": 0.9, "label": "pos", "aspects": ["bokeh"]},\n'
+        '  {"id": 202, "score": -0.4, "label": "neg", "aspects": []},\n'
+        '  {"id": 203, "score": 0.1, "la'  # 第三条被切断,连数组闭合都没有
+    )
+    parsed = sa.parse_batch_response(text, expected)
+    assert set(parsed.keys()) == {201, 202}
+    assert parsed[201]["sentiment"] == "positive"
+    assert parsed[202]["sentiment"] == "negative"
+
+
+def test_parse_batch_response_truncated_inside_first_object():
+    """第一个对象都没写完 → 一条都救不回,返回空(绝不猜)。"""
+    text = '[\n  {"id": 301, "score": 0.5, "lab'
+    assert sa.parse_batch_response(text, {301}) == {}
+
+
 def test_live_run_persists_and_links_per_id(monkeypatch):
     rows = _rows(3)  # ids 100,101,102
     payload = [

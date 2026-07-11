@@ -51,7 +51,7 @@ DEFAULT_HARD_CAP = 200
 PACK_SIZE_ENV = "VKPI_SENTIMENT_ANNOTATE_PACK_SIZE"
 DEFAULT_PACK_SIZE = 40               # 一次调用打包条数(25-50 区间取中偏上)
 COMMENT_CHAR_CAP = 400               # 单条评论截断,控 input token
-OUTPUT_TOKENS_PER_COMMENT = 40       # 预算 max_output_tokens 用
+OUTPUT_TOKENS_PER_COMMENT = 60       # 预算 max_output_tokens 用(实付按真用量,上限放宽零成本)
 OUTPUT_TOKENS_SLACK = 60
 
 LABEL_MAP = {
@@ -170,7 +170,15 @@ def parse_batch_response(text: str, expected_ids: set[int]) -> dict[int, dict[st
     try:
         entries = json.loads(s[start : end + 1])
     except (json.JSONDecodeError, TypeError):
-        return {}
+        # 截断救援:数组被 max_output_tokens 切断时,退到最后一个完整对象闭合处,
+        # 抢救已完整的条目(仍是诚实语义:救不回的照旧 skipped,下轮重进队列)。
+        brace = s.rfind("}")
+        if brace <= start:
+            return {}
+        try:
+            entries = json.loads(s[start : brace + 1] + "]")
+        except (json.JSONDecodeError, TypeError):
+            return {}
     if not isinstance(entries, list):
         return {}
     out: dict[int, dict[str, Any]] = {}

@@ -90,7 +90,13 @@ def _call_google(prompt: str, max_output_tokens: int) -> dict[str, Any]:
             endpoint,
             {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": max(1, min(4000, int(max_output_tokens or 800))), "temperature": 0.2},
+                "generationConfig": {
+                    "maxOutputTokens": max(1, min(4000, int(max_output_tokens or 800))),
+                    "temperature": 0.2,
+                    # gemini-2.5 系默认动态思考,思考 token 计入 maxOutputTokens——
+                    # 本网关全是低成本结构化抽取,思考只会烧光预算导致正文截断,关死。
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             },
             {},
             int(config["timeout"]),
