@@ -234,7 +234,8 @@ export function buildPins({ currentMode, isAvailable, country, city, item, venue
   // Level 1:Country view — 该国所有城市
   if (!city && hierarchy[country]?.cities) {
     return Object.entries(hierarchy[country].cities).map(([cityName, cityData]) => ({
-      name: cityName,
+      key: cityName,
+      name: displayCityLabel(cityName),
       country, lat: cityData.lat, lng: cityData.lng,
       count: cityData.count, revenue: cityData.revenue,
       color: currentMode.pinColor,
@@ -328,6 +329,11 @@ export function buildFocusTarget({ country, city, item, venue, hierarchy, curren
 
 type ViewMode = "kols" | "dealers" | string;
 
+export function displayCityLabel(value: unknown) {
+  const label = String(value || "");
+  return label === "国家分布" ? "未标注城市" : label;
+}
+
 interface TopListParams {
   currentMode: MapMode | null;
   country: string;
@@ -351,7 +357,8 @@ export function buildTopListData({ currentMode, country, city, item, hierarchy, 
         .sort(([, a], [, b]) => (b.count || parseFloat((b.revenue || "$0").replace(/[$k,M]/g, "")) || 0) - (a.count || parseFloat((a.revenue || "$0").replace(/[$k,M]/g, "")) || 0))
         .slice(0, 7)
         .map(([name, d]) => ({
-          label: name,
+          key: name,
+          label: displayCityLabel(name),
           value: viewMode === "kols" ? `${Number(d.count || 0).toLocaleString()} KOLs` : d.revenue,
           barWidth: viewMode === "kols" ? Math.max(4, Math.min(100, (Number(d.count || 0) / total) * 100)) : Math.max(20, 100 - 0),
         }))
@@ -364,7 +371,8 @@ export function buildTopListData({ currentMode, country, city, item, hierarchy, 
         .slice()
         .sort(([, a], [, b]) => (b.count || parseFloat((b.revenue || "$0").replace(/[$k,]/g, "")) || 0) - (a.count || parseFloat((a.revenue || "$0").replace(/[$k,]/g, "")) || 0))
         .map(([name, d]) => ({
-          label: name,
+          key: name,
+          label: displayCityLabel(name),
           value: viewMode === "kols" ? `${d.count} KOLs` : d.revenue,
           barWidth: Math.max(6, Math.min(100, (Number(d.count || 0) / Math.max(1, Number(hierarchy[country].count || 0))) * 100)),
         }))
@@ -374,7 +382,7 @@ export function buildTopListData({ currentMode, country, city, item, hierarchy, 
     const cityData = hierarchy[country].cities[city];
     const items = cityData.kols || cityData.stores || [];
     return {
-      title: viewMode === "kols" ? `KOLs in ${city}` : `Dealers in ${city}`,
+      title: viewMode === "kols" ? `KOLs in ${displayCityLabel(city)}` : `Dealers in ${displayCityLabel(city)}`,
       // 2026-06-14 诚实化:此层无 per-KOL 真实排序量级,改用统一占位条宽(不再 Math.random 伪造排名)。
       items: items.map((d) => ({
         label: d.handle || d.name,
@@ -410,7 +418,7 @@ export function buildCountryOptions({ currentMode, hierarchy, viewMode }: { curr
       .sort(([, a], [, b]) => (b.count || parseFloat((b.revenue || "$0").replace(/[$k,M]/g, "")) || 0) - (a.count || parseFloat((a.revenue || "$0").replace(/[$k,M]/g, "")) || 0))
       .map(([name, data]) => ({
         key: name,
-        label: name,
+        label: displayCityLabel(name),
         sub: viewMode === "kols" ? `${data.count} KOLs` : `Revenue ${data.revenue}`,
         badge: viewMode === "kols" ? data.count : data.revenue,
       }))
@@ -426,7 +434,7 @@ export function buildCityOptions({ country, hierarchy, viewMode }: { country: st
       .sort(([, a], [, b]) => (b.count || parseFloat((b.revenue || "$0").replace(/[$k,]/g, "")) || 0) - (a.count || parseFloat((a.revenue || "$0").replace(/[$k,]/g, "")) || 0))
       .map(([name, data]) => ({
         key: name,
-        label: name,
+        label: displayCityLabel(name),
         sub: viewMode === "kols" ? `${data.count} KOLs` : `Revenue ${data.revenue}`,
         badge: viewMode === "kols" ? data.count : data.revenue,
       }))
@@ -439,7 +447,7 @@ export function buildItemOptions({ city, country, hierarchy }: { city: string; c
   const cityData = hierarchy[country].cities[city];
   const items = cityData.kols || cityData.stores || [];
   return [
-    { key: "", label: `All in ${city}`, sub: "City view" },
+    { key: "", label: `All in ${displayCityLabel(city)}`, sub: "City view" },
     ...items.map((d) => ({
       key: d.handle || d.name,
       label: d.handle || d.name,

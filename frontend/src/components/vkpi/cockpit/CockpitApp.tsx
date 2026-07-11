@@ -9,13 +9,13 @@ import { useTheme } from "../../../app/providers/ThemeProvider";
 import { AnimatePresence, LazyMotion, domMax, m } from "framer-motion";
 import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User, X } from "lucide-react";
 import "./styles/mockup.css";
+import "./styles/cockpit-reference.css";
 import "../styles/vkpi-settings-dark.css";
 import { KOLPoolPage } from "./KOLPoolPage";
 import { ShopifyConnectPage } from "./ShopifyConnectPage";
 import { ShopifyHubPage } from "../pages/ShopifyHubPage";
 import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
-import { MockupDashboard } from "./MockupDashboard";
 import { CockpitSidebar } from "./CockpitSidebar";
 import { CockpitMobileNav } from "./CockpitMobileNav";
 import { CockpitTopbar } from "./CockpitTopbar";
@@ -32,7 +32,6 @@ import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 import { MetricCard } from "./components/MetricCard";
 import { RealMap } from "./components/RealMap";
 import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
-import { useWorkflowRunsStream } from "./useWorkflowRunsStream";
 import { TopMoversCard } from "./components/TopMoversCard";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 // 模态 / popover / ReportPanel / SettingsPage / logout/resolve/staff-group api 已随 CockpitOverlays 抽到 CockpitApp.Sections.tsx。
@@ -61,6 +60,7 @@ import {
   buildTopListData,
   buildCountryOptions,
   buildCityOptions,
+  displayCityLabel,
   buildItemOptions,
   buildVenueOptions,
 } from "./CockpitApp.helpers";
@@ -129,6 +129,22 @@ export function CockpitApp(props: any = {}) {
   
   const [collapsed, setCollapsed] = useState(stored.collapsed || false);
   const [activeNav, setActiveNav] = useState((COCKPIT_BOARDS as readonly string[]).includes(initialNav) ? initialNav : "dashboard");
+  const [dashboardEditing, setDashboardEditing] = useState(false);
+  useEffect(() => {
+    if (activeNav !== "dashboard" && dashboardEditing) setDashboardEditing(false);
+  }, [activeNav, dashboardEditing]);
+  useEffect(() => {
+    // A focused sidebar item can re-anchor the document after the route paint,
+    // so reset once immediately and once after layout has settled.
+    const resetPageScroll = () => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    };
+    resetPageScroll();
+    const frame = window.requestAnimationFrame(resetPageScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeNav]);
   // 主题统一(2026-07):cockpit 不再自持 theme,改吃全局 ThemeProvider(<html> data-theme/
   // data-style,localStorage vkpi-ui-pref-v1),让 玻璃/仪器/单色 × 明暗 与全站一致。
   // setTheme 桥接:兼容「传值」与「函数式更新」两种既有调用(侧栏传值 / 用户菜单函数式)。
@@ -290,10 +306,6 @@ export function CockpitApp(props: any = {}) {
     dashboardLoading,
     dashboardError,
   } = useCockpitRuntime({ apiToken, userName, userRole, userAvatar, userEmail, userAuthRole, starredProjects: dashboardData.starredProjects || [] });
-  // 10C 状态同源:在 App 层持有唯一的 workflow_runs 轮询流(5s 间隔 + 可见性节流 + 卸载清理),
-  // 作为任务进度的统一数据源向下透传。后台任务推进/完成时该流自动刷新 → TaskProgressBoard 自动重渲染,
-  // 无需手动刷新。CockpitSidebar 把 taskStream 透传给 TaskProgressBoard(未拿到时该板内部自起兜底实例)。
-  const taskStream = useWorkflowRunsStream(apiToken, { intervalMs: 5000, limit: 30, recentMinutes: 5 });
   const activeStaffId = viewingAs ? viewingAs.id : currentUser.id;
   // 【D4】KPI scope 记忆(per-staff):身份就绪(真实 staff id 从 shell bundle 回来,>0)后,
   // 读回该员工上次选择的 scope(键带 staff id 防同浏览器多账号串号);此后变更同步写 per-staff 键。
@@ -438,10 +450,9 @@ export function CockpitApp(props: any = {}) {
   const [editGroupName, setEditGroupName] = useState("KOL Operations");
   const globeContainerRef = useRef(null);
 
-  useEffect(() => {
-    document.body.classList.toggle("light", theme === "light");
-  }, [theme]);
-  
+  // 死双轨清理(2026-07-11):body.light 全站零 CSS 消费,主题唯一真源=ThemeProvider 的
+  // <html> data-theme;保留此双轨迟早有人写 body.light{} 复活第二套主题源,故删。
+
   // V6.10: 持久化 state(用户偏好)
   useEffect(() => {
     saveStoredState({ collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope });
@@ -530,7 +541,7 @@ export function CockpitApp(props: any = {}) {
   const breadcrumb = useMemo(() => {
     const arr = [];
     if (country) arr.push(country);
-    if (city) arr.push(city);
+    if (city) arr.push(displayCityLabel(city));
     if (item) arr.push(item);
     if (venue) arr.push(venue);
     return arr;
@@ -606,7 +617,7 @@ export function CockpitApp(props: any = {}) {
    e("div", { className: "relative min-h-screen bg-bg text-ink-2" },
     e("div", {
       className: "pointer-events-none fixed inset-0",
-      style: { background: "radial-gradient(circle at 50% -12%, var(--ds-accent-soft), transparent 42%), radial-gradient(circle at 88% 4%, var(--ds-accent-soft), transparent 30%), var(--ds-bg)" }
+      style: { background: "linear-gradient(180deg, var(--ds-bg-2), var(--ds-bg) 42%) fixed" }
     }),
 
     // ─── Overlays ───(保守拆:全部模态/popover 挂载抽到 CockpitApp.Sections.tsx 的 CockpitOverlays,
@@ -641,7 +652,7 @@ export function CockpitApp(props: any = {}) {
       previewEvent, setPreviewEvent, mappedEvents,
     }),
 
-    e("div", { className: "cockpit-shell relative mx-auto flex min-h-screen max-w-[1920px]" },
+    e("div", { className: "cockpit-shell relative flex min-h-screen w-full" },
 
       // ─── 移动端导航 ───(< md:桌面侧边栏隐藏,此处补汉堡+滑出抽屉;≥ md 不渲染)
       e(CockpitMobileNav, { activeNav, setActiveNav }),
@@ -649,7 +660,6 @@ export function CockpitApp(props: any = {}) {
       // ─── Sidebar ───(保守拆:纯展示叶子区块抽到 CockpitSidebar,props 显式传递,行为不变)
       e(CockpitSidebar, {
         collapsed, setCollapsed, activeNav, setActiveNav, theme, setTheme, versionBadge, apiToken,
-        taskStream,
       }),
 
       // ─── Main ───
@@ -660,13 +670,17 @@ export function CockpitApp(props: any = {}) {
           activeNav, helpBtnRef, setShowHelp, messagesBtnRef, setShowMessages, activeReminders,
           setReportOpen, notifsBtnRef, setShowNotifs, runtimeNotifications, userMenuBtnRef,
           setShowUserMenu, viewingAs, currentUser, t,
+          apiToken,
+          onNavigate: setActiveNav,
+          dashboardEditing,
+          setDashboardEditing,
         }),
 
         // ─── ROUTING ───
         e(AnimatePresence, { mode: "wait", initial: false },
           e(m.div, {
             key: activeNav,
-            className: "min-h-[calc(100vh-4rem)]",
+            className: `vkpi-page-stage vkpi-page-stage--${activeNav} min-h-[calc(100vh-4rem)]`,
             initial: { opacity: 0, y: 14 },
             animate: { opacity: 1, y: 0 },
             exit: { opacity: 0, y: -10 },
@@ -870,7 +884,9 @@ export function CockpitApp(props: any = {}) {
               )
             ),
 
-            activeNav === "dashboard" && e(MockupDashboard, {
+            activeNav === "dashboard" && e(DashboardReplicaPage, {
+              dashboardEditing,
+              onNavigate: setActiveNav,
               showSettingsModal,  // P2 穿透:设置浮层打开时,dashboard 浮卡/地图 overlay 不渲染
               kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,
               venue, item, city, country, setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange,
@@ -880,6 +896,7 @@ export function CockpitApp(props: any = {}) {
               setSelectedPublish, setShowFullCalendar, focusTarget,
               viewModes: runtimeViewModes,
               metrics: dashboardRuntime.metrics,
+              sourceHealth: dashboardRuntime.sourceHealth,
               campaigns: dashboardRuntime.campaigns,
               campaignsMeta: dashboardRuntime.campaignsMeta,
               calendarDays: dashboardRuntime.calendarDays,

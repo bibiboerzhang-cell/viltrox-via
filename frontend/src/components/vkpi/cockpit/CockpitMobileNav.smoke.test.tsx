@@ -43,8 +43,12 @@ describe("CockpitMobileNav 移动端导航", () => {
       React.createElement(CockpitMobileNav, { activeNav: "dashboard", setActiveNav: vi.fn() }),
     );
     const burger = screen.getByLabelText("打开导航菜单");
+    const drawer = screen.getByLabelText("主导航");
     expect(burger.getAttribute("aria-expanded")).toBe("false");
+    expect(drawer).toHaveStyle({ transform: "translateX(-100%)" });
+    expect(screen.getByAltText("Viltrox")).toBeTruthy();
     fireEvent.click(burger);
     expect(burger.getAttribute("aria-expanded")).toBe("true");
+    expect(drawer).toHaveStyle({ transform: "translateX(0)" });
   });
 });

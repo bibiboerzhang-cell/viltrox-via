@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 // 控制板块可见性的桩(vi.hoisted 以便在 vi.mock 工厂里引用)。
 const { canViewBoard } = vi.hoisted(() => ({ canViewBoard: vi.fn() }));
@@ -47,5 +47,16 @@ describe("CockpitSidebar 员工可见区域过滤", () => {
     expect(screen.getByText("Shopify")).toBeTruthy();
     expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Dashboard")).toBeTruthy();
+  });
+
+  it("收起控件固定在侧栏边缘且不再重复主题开关", () => {
+    canViewBoard.mockReturnValue(true);
+    const setCollapsed = vi.fn();
+    render(React.createElement(CockpitSidebar, { ...baseProps, setCollapsed }));
+
+    fireEvent.click(screen.getByRole("button", { name: "收起侧栏" }));
+    expect(setCollapsed).toHaveBeenCalledWith(true);
+    expect(screen.queryByText("Collapse")).toBeNull();
+    expect(screen.queryByText("Dark")).toBeNull();
   });
 });

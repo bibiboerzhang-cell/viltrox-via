@@ -3,10 +3,12 @@
 // 波2门面:配色改吃 --ds-* token 类(bg-bg/text-ink/border-line/bg-accent-soft…),风格随全局切换。
 
 import React from "react";
-import { ChevronRight, Moon, PanelLeftClose, PanelLeftOpen, Sun, Wrench } from "lucide-react";
-import { TaskProgressBoard } from "./components/TaskProgressBoard";
+import { ChevronLeft, ChevronRight, Wrench } from "lucide-react";
+import { DashboardTaskQueueCard } from "./components/DashboardTaskQueueCard";
 import { NAV_ITEMS } from "./data/navItems";
 import { usePermissions } from "../../../hooks/usePermissions";
+import viltroxLogo from "../../../assets/viltrox-logo.png";
+import viltroxMark from "../../../assets/viltrox-mark.jpg";
 
 const e = React.createElement;
 
@@ -26,11 +28,8 @@ export function CockpitSidebar({
   setCollapsed,
   activeNav,
   setActiveNav,
-  theme,
-  setTheme,
   versionBadge,
   apiToken,
-  taskStream,
 }: any) {
   // 按板块授权过滤导航:成员设为「无」的板块不渲染(owner 全见)。默认可见。
   const perms = usePermissions();
@@ -43,11 +42,15 @@ export function CockpitSidebar({
   const navButton = ({ icon: Icon, label, badge, key }: NavItem) => {
     const active = activeNav === key;
     return e("button", {
-      key, onClick: () => setActiveNav(key), title: collapsed ? label : undefined,
-      className: `group flex w-full items-center ${collapsed ? "justify-center px-2" : "px-3 gap-3"} rounded-lg py-2 text-sm transition ${
+      key,
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.currentTarget.blur();
+        setActiveNav(key);
+      },
+      title: collapsed ? label : undefined,
+      className: `vkpi-rail__item group flex w-full items-center ${collapsed ? "justify-center px-2" : "px-3 gap-3"} rounded-lg py-2 text-sm transition ${
         active ? "bg-accent-soft text-ink" : "text-muted hover:bg-accent-soft hover:text-ink"
-      }`,
-      style: active ? { boxShadow: "inset 2px 0 0 var(--ds-accent)" } : {},
+      } ${active ? "is-active" : ""}`,
     },
       e(Icon, { size: 16, className: active ? "text-accent" : "text-muted" }),
       !collapsed && e("span", { className: "flex-1 text-left" }, label),
@@ -66,13 +69,25 @@ export function CockpitSidebar({
   const v2Items = showExperimental ? visible.filter((i) => i.v2) : [];
 
   return e("aside", {
-    className: `${collapsed ? "w-[64px]" : "w-[260px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-line bg-bg backdrop-blur-xl transition-all duration-300 md:flex`
+    className: `vkpi-rail ${collapsed ? "w-[66px] is-collapsed" : "w-[236px]"} sticky top-0 hidden h-screen shrink-0 flex-col justify-between border-r border-line transition-all duration-300 md:flex`
   },
+    e("button", {
+      type: "button",
+      onClick: () => setCollapsed(!collapsed),
+      className: "vkpi-rail__toggle",
+      title: collapsed ? "展开侧栏" : "收起侧栏",
+      "aria-label": collapsed ? "展开侧栏" : "收起侧栏",
+      "aria-expanded": !collapsed,
+    }, e(ChevronLeft, { size: 13 })),
     e("div", null,
-      e("div", { className: `flex h-16 items-center ${collapsed ? "justify-center" : "px-5"}` },
-        e("div", { className: "text-2xl font-black tracking-[.18em] text-ink" }, collapsed ? "V" : "VILTROX")
+      e("div", { className: `vkpi-rail__brand flex items-center ${collapsed ? "justify-center" : ""}` },
+        e("img", {
+          src: collapsed ? viltroxMark : viltroxLogo,
+          alt: "Viltrox",
+          className: collapsed ? "vkpi-rail__logo-mark" : "vkpi-rail__logo",
+        })
       ),
-      e("nav", { className: `space-y-1 ${collapsed ? "px-2" : "px-3"}` },
+      e("nav", { className: `vkpi-rail__nav space-y-1 ${collapsed ? "px-2" : "px-0.5"}` },
         // 分组渲染:按 group 连续分区,每区一个小标题(折叠态用细分隔线替代)。
         ...(() => {
           const out: any[] = [];
@@ -83,7 +98,7 @@ export function CockpitSidebar({
               const firstCap = last === undefined;
               last = g;
               out.push(!collapsed
-                ? e("div", { key: `cap-${g}`, className: `px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[.14em] text-muted ${firstCap ? "pt-1" : "pt-4"}` }, g)
+                ? e("div", { key: `cap-${g}`, className: `vkpi-rail__cap px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[.14em] text-muted ${firstCap ? "pt-1" : "pt-4"}` }, g)
                 : e("div", { key: `cap-${g}`, className: `mx-2 h-px bg-line ${firstCap ? "mb-2" : "my-2"}` }));
             }
             out.push(navButton(it));
@@ -116,22 +131,8 @@ export function CockpitSidebar({
         )
       )
     ),
-    e("div", { className: `flex flex-col gap-2 ${collapsed ? "px-2" : "px-3"} pb-4` },
-      !collapsed && e(TaskProgressBoard, { apiToken, stream: taskStream }),
-      e("button", {
-        onClick: () => setCollapsed(!collapsed),
-        className: `flex items-center ${collapsed ? "justify-center" : "gap-3 px-3"} rounded-lg py-2 text-sm text-muted hover:bg-accent-soft hover:text-ink`,
-      },
-        collapsed ? e(PanelLeftOpen, { size: 16 }) : e(PanelLeftClose, { size: 16 }),
-        !collapsed && e("span", null, "Collapse")
-      ),
-      e("button", {
-        onClick: () => setTheme(theme === "dark" ? "light" : "dark"),
-        className: `flex items-center ${collapsed ? "justify-center" : "gap-3 px-3"} rounded-lg py-2 text-sm text-muted hover:bg-accent-soft hover:text-ink`,
-      },
-        theme === "dark" ? e(Moon, { size: 16 }) : e(Sun, { size: 16 }),
-        !collapsed && e("span", null, theme === "dark" ? "Dark" : "Light")
-      ),
+    e("div", { className: `vkpi-rail__footer flex flex-col gap-2 ${collapsed ? "px-2" : "px-1"}` },
+      e(DashboardTaskQueueCard, { apiToken, compact: true }),
       // 版本徽标:仅展开态显示一行极淡文字,折叠态隐藏以免挤压窄轨
       !collapsed && versionBadge && versionBadge.shortSha && e("div", {
         className: "px-3 pt-1 text-[10px] leading-tight text-muted select-none",

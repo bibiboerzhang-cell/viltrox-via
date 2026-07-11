@@ -6,7 +6,6 @@
 import React from "react";
 import { AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
-import { AIDecisionConfirmModal } from "./components/modals/AIDecisionConfirmModal";
 import { AllMoversModal } from "./components/modals/AllMoversModal";
 import { AllNotificationsModal } from "./components/modals/AllNotificationsModal";
 import { AllProjectsModal } from "./components/modals/AllProjectsModal";
@@ -17,11 +16,9 @@ import { EventPreviewModal } from "./components/modals/EventPreviewModal";
 import { FeedbackModal } from "./components/modals/FeedbackModal";
 import { FullCalendarModal } from "./components/modals/FullCalendarModal";
 import { KOLDetailModal } from "./components/modals/KOLDetailModal";
-import { KPIDetailModal } from "./components/modals/KPIDetailModal";
 import { NotificationDetailModal } from "./components/modals/NotificationDetailModal";
 import { PinDetailModal } from "./components/modals/PinDetailModal";
 import { ProfileModal } from "./components/modals/ProfileModal";
-import { ProjectDetailModal } from "./components/modals/ProjectDetailModal";
 import { PublishPreviewModal } from "./components/modals/PublishPreviewModal";
 import { ReportPanel } from "./components/ReportPanel";
 import { SettingsPage } from "../pages/SettingsPage";
@@ -38,6 +35,9 @@ import { saveStoredState } from "./lib/storage";
 import { createStaffGroup, updateStaffGroup } from "../../../services/vkpi/groups-api";
 
 const e = React.createElement;
+const AITodayEvidenceModal = React.lazy(() => import("./components/modals/AITodayEvidenceModal").then((module) => ({ default: module.AITodayEvidenceModal })));
+const KPIDetailModal = React.lazy(() => import("./components/modals/KPIDetailModal").then((module) => ({ default: module.KPIDetailModal })));
+const ProjectDetailModal = React.lazy(() => import("./components/modals/ProjectDetailModal").then((module) => ({ default: module.ProjectDetailModal })));
 const VKPI_KOL_WORKFLOW_GUIDE_URL = "/assets/vkpi_kol_workflow_cloud_demo_2026-06-30.pdf?v=20260630-1115";
 
 function openKolWorkflowGuide() {
@@ -99,7 +99,7 @@ export function CockpitOverlays(p: any) {
         openEventsPage(id);
       },
     })),
-    e(AnimatePresence, { key: "ov-kpi" }, selectedKpi && e(KPIDetailModal, {
+    e(AnimatePresence, { key: "ov-kpi" }, selectedKpi && e(React.Suspense, { fallback: null }, e(KPIDetailModal, {
       kpiId: selectedKpi,
       initialScope: kpiScope,
       // 【D4】per-staff scope 记忆:弹窗内切 scope 也按 staff id 存,防同浏览器多账号串号。
@@ -111,13 +111,13 @@ export function CockpitOverlays(p: any) {
         setSelectedKpi(null);
         setActiveNav("kol-pool");
       },
-    })),
+    }))),
     // V6.10: Report Panel
     e(AnimatePresence, { key: "ov-report" }, reportOpen && e(ReportPanel, { onClose: () => setReportOpen(false), data: reportData, apiToken })),
     // V6.11: Signal Detail Modal
     e(AnimatePresence, { key: "ov-signal" }, selectedSignal && e(SignalDetailModal, { alert: selectedSignal, onClose: () => setSelectedSignal(null) })),
     // V6.13: 新 modal mounts
-    e(AnimatePresence, { key: "ov-project" }, selectedProject && e(ProjectDetailModal, {
+    e(AnimatePresence, { key: "ov-project" }, selectedProject && e(React.Suspense, { fallback: null }, e(ProjectDetailModal, {
       project: selectedProject,
       staff: uiStaff,
       apiToken,
@@ -134,7 +134,7 @@ export function CockpitOverlays(p: any) {
         saveStoredState({ activeNav: "projects" });
         setActiveNav("projects");
       },
-    })),
+    }))),
     e(AnimatePresence, { key: "ov-publish" }, selectedPublish && e(PublishPreviewModal, { item: selectedPublish, apiToken, onClose: () => setSelectedPublish(null) })),
     e(AnimatePresence, { key: "ov-mover" }, selectedMover && e(KOLDetailModal, {
       mover: selectedMover,
@@ -152,31 +152,15 @@ export function CockpitOverlays(p: any) {
       onClose: () => setShowAllSignals(false),
       onAlertClick: (a: any) => { setShowAllSignals(false); setSelectedSignal(a); }
     })),
-    e(AnimatePresence, { key: "ov-aiconfirm" }, showAIConfirm && e(AIDecisionConfirmModal, {
+    e(AnimatePresence, { key: "ov-aiconfirm" }, showAIConfirm && e(React.Suspense, { fallback: null }, e(AITodayEvidenceModal, {
       insight: dashboardRuntime.aiInsight,
       onClose: () => setShowAIConfirm(false),
-      // 2026-06-15 P0-3:AI 决策卡与 inbox action 无 1:1 映射,改为诚实引导到 Dashboard 右栏「今日建议」面板逐条审批(approve)
-      onConfirm: () => {
+      onOpenKolPool: () => {
         setShowAIConfirm(false);
-        saveStoredState({ activeNav: "dashboard" });
-        setActiveNav("dashboard");
-        pushLocalNotification({
-          id: `ai-confirm-${Date.now()}`,
-          raw: {},
-          iconKey: "bell",
-          iconColor: "#a855f7",
-          title: "已转到「今日建议」",
-          desc: "AI 决策需在 Dashboard 右侧「今日建议」面板逐条审批通过(approve)后由后端执行。",
-          time: "刚刚",
-          unread: true,
-          category: "notification",
-          severity: "low",
-          status: "todo",
-          priority: "low",
-          source: "ai_confirm_guide",
-        });
+        saveStoredState({ activeNav: "kol-pool" });
+        setActiveNav("kol-pool");
       }
-    })),
+    }))),
     // V6.14.2: 顶部 4 按钮 popovers - 锚定到具体按钮 + i18n + role
     e(AnimatePresence, { key: "ov-help" }, showHelp && e(HelpPopover, {
       onClose: () => setShowHelp(false),
@@ -224,11 +208,13 @@ export function CockpitOverlays(p: any) {
       onRefreshGroups: refreshStaffGroups,
       t
     })),
-    showSettingsModal && e("div", { key: "ov-settings", className: "cockpit-settings-dark fixed inset-0 z-[1000] bg-[#0a0a0d] overflow-auto" },
+    showSettingsModal && e("div", { key: "ov-settings", className: "cockpit-settings-dark vkpi-settings-surface fixed inset-0 z-[1000] overflow-auto" },
       e("button", {
+        type: "button",
         onClick: () => setShowSettingsModal(false),
-        className: "fixed top-4 right-5 z-[210] rounded-md border border-white/10 bg-white/5 p-2 text-slate-300 hover:text-white hover:bg-white/10",
+        className: "vkpi-settings-surface__close fixed right-5 top-4 z-[210] grid h-9 w-9 place-items-center rounded-lg border border-line bg-card text-muted shadow-sm backdrop-blur hover:bg-accent-soft hover:text-ink",
         title: t("关闭"),
+        "aria-label": t("关闭系统设置"),
       }, e(X, { size: 18 })),
       e(SettingsPage, {
         data: dashboardData,

@@ -9,6 +9,7 @@ import { Menu, X } from "lucide-react";
 
 import { NAV_ITEMS } from "./data/navItems";
 import { usePermissions } from "../../../hooks/usePermissions";
+import viltroxLogo from "../../../assets/viltrox-logo.png";
 
 interface NavItem {
   key: string;
@@ -82,9 +83,10 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
           className={`absolute left-0 top-0 flex h-full w-[280px] max-w-[85vw] flex-col border-r border-line bg-panel shadow-2xl transition-transform duration-300 motion-reduce:transition-none ${
             open ? "translate-x-0" : "-translate-x-full"
           }`}
+          style={{ transform: open ? "translateX(0)" : "translateX(-100%)" }}
         >
           <div className="flex h-16 items-center justify-between px-5">
-            <span className="text-2xl font-black tracking-[.18em] text-ink">VILTROX</span>
+            <img src={viltroxLogo} alt="Viltrox" className="h-[22px] w-auto object-contain" />
             <button
               type="button"
               aria-label="关闭导航菜单"
