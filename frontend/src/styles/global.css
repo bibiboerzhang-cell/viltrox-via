@@ -5,12 +5,23 @@
     color-scheme: dark;
   }
 
-  /* 弹窗跟主题(此前随 shell 钉死 dark,浅色主题下原生滚动条/控件仍是暗色) */
+  /* color-scheme 三口径(作用域按弹窗表面的真实肤色划分,勿再整族跟主题):
+     ① .cockpit-modal 基类钉死 dark —— 仓库仍有一批写死暗色表面的遗留弹窗
+        (CenterModal 等 bg-[#0a1020] 系)挂本类;浅色主题下表面仍是暗的,
+        原生控件/滚动条必须跟着暗,整族跟主题会让它们穿帮(暗表面配浅控件);
+     ② .cockpit-modal--themed(修饰类)才跟主题 —— 表面全 token 的弹窗
+        (市场之声 ModalShell 族)light 默认 + data-theme=dark 覆盖;
+     ③ 浮层:.vkpi-popover-layer(token 化账户菜单)跟主题;
+        .cockpit-settings-dark(名字即暗皮肤,表面写死暗色)钉死 dark(见下)。 */
   :where(.cockpit-modal) {
+    color-scheme: dark;
+  }
+
+  :where(.cockpit-modal.cockpit-modal--themed) {
     color-scheme: light;
   }
 
-  :where([data-theme="dark"] .cockpit-modal) {
+  :where([data-theme="dark"] .cockpit-modal.cockpit-modal--themed) {
     color-scheme: dark;
   }
 
@@ -35,14 +46,19 @@
   /* 两个不在 .cockpit-shell 子树里的浮层容器,此前吃不到上面任何重置:
      · .vkpi-popover-layer —— PopoverWrapper portal 挂 document.body(账户菜单等弹层);
      · .cockpit-settings-dark —— 系统设置全屏浮层,是 .cockpit-shell 的兄弟节点。
-     preflight 关着 → 原生 <button> 的 UA 边框直接露出(暗色下=刺眼白圈);
-     color-scheme 继承 :root 的 light → 暗色主题下滚动条/原生控件露白。
-     修法与 .cockpit-modal 同款:跟主题,不钉死 dark。 */
-  :where(.vkpi-popover-layer, .cockpit-settings-dark) {
+     preflight 关着 → 原生 <button> 的 UA 边框直接露出(暗色下=刺眼白圈)。
+     color-scheme 口径分开:.vkpi-popover-layer 表面全 token → 跟主题;
+     .cockpit-settings-dark 表面写死暗色(名字即暗皮肤)→ 钉死 dark,
+     浅色主题下原生控件/滚动条才不在暗表面上露白。 */
+  :where(.vkpi-popover-layer) {
     color-scheme: light;
   }
 
-  :where([data-theme="dark"] .vkpi-popover-layer, [data-theme="dark"] .cockpit-settings-dark) {
+  :where([data-theme="dark"] .vkpi-popover-layer) {
+    color-scheme: dark;
+  }
+
+  :where(.cockpit-settings-dark) {
     color-scheme: dark;
   }
 

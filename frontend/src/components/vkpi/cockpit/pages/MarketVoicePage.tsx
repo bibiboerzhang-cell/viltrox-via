@@ -165,7 +165,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
       if (!apiToken || feedBusyRef.current) return;
       feedBusyRef.current = true;
       setFeedLoading(true);
-      if (offset === 0) setFeedError("");
+      setFeedError(""); // 每次请求发起都清(含「载入更多」),瞬时分页失败不再黏死吞列表
       getVoiceFeed(apiToken, { offset, limit: FEED_PAGE })
         .then((res) => {
           if (res && String((res as Row).status) === "error") {
@@ -498,7 +498,9 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     const loaded = feedItems || [];
     let body: React.ReactNode;
     if (!apiToken) body = noTokenCard;
-    else if (feedError) body = <ErrorCard title="端点待接 · voice-feed" text={`GET /api/admin/vkpi/market/voice-feed → ${feedError}`} />;
+    // 整卡错误只留零数据;已有列表时分页失败降级为列表底部行内提示(不吞真实数据)
+    else if (feedError && loaded.length === 0)
+      body = <ErrorCard title="端点待接 · voice-feed" text={`GET /api/admin/vkpi/market/voice-feed → ${feedError}`} />;
     else if (feedLoading && !feedItems) body = <LoadingLine text="反馈流读取中…" />;
     else if (!feedItems) body = <EmptyLine text="暂无数据。" />;
     else if (loaded.length === 0) body = <EmptyLine text="反馈流 0 条(vkpi_comments 窗口内无非空正文)。" />;
@@ -517,6 +519,11 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
             >
               ≡ 查看全量 {feedTotal} 条 · 点单条连续翻
             </button>
+          )}
+          {feedError && (
+            <div className="mt-2 rounded-lg border border-crit bg-crit-soft px-3 py-1.5 text-[11px] text-crit">
+              分页加载失败:{feedError}
+            </div>
           )}
         </div>
       );
@@ -623,6 +630,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
           loadedCount={feedItems.length}
           hasMore={feedItems.length < feedTotal}
           loading={feedLoading}
+          error={feedError}
           onLoadMore={() => loadFeed(feedItems.length)}
           onClose={() => setFeedListOpen(false)}
         >

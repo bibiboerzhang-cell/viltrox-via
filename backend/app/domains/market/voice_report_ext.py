@@ -46,6 +46,11 @@ vkpi_kol_video_evidence / vkpi_market_prd_referrals;产品线词表来自 focal_
 delta_pct 只在上窗 > 0 时给。所有 LIMIT 双层封顶(SQL LIMIT ? + Python 切片)。
 时间全 UTC,返回 ISO 绝对时间戳;日粒度 = AT TIME ZONE 'UTC' 后取日,零本地时区污染。
 
+窗口右沿钳到 now(当月进行中口径):日轴/序列只到今天绝不产未来日 0 行;环比在
+窗口未走完时 current=[since, now) 实际流逝窗、previous=上窗同等流逝长度
+[prev_since, prev_since+(now-since)),部分窗绝不比整窗;整窗在 now 之后(选未来
+月份)→ 窗口敏感九组诚实 empty(alerts_state 告警窗独立近 8h,不受影响)。
+
 compat 约定:SQL 占位符用 ?;SQL 字符串零字面 percent(前缀匹配用 strpos 参数化,
 不用 LIKE);时间戳/日期读回可能是 str;conn 可注入(测试),缺省懒 import get_conn。
 
@@ -258,6 +263,27 @@ PRD_DAY_SQL = """
 # ── 小工具 ──────────────────────────────────────────────────────────────
 
 
+def _now_utc() -> datetime:
+    """当前 UTC 时刻(独立缝:「当月进行中」契约测试 monkeypatch 冻结 now)。"""
+    return datetime.now(timezone.utc)
+
+
+def _elapsed_until(since: str, until: str) -> str | None:
+    """窗口右沿钳到 now → min(until, now) 的 ISO;整窗在 now 之后 → None(诚实空)。
+
+    月份窗右沿可以在未来(「当月进行中」选当月 → until=下月 1 日):未来时段
+    不真实存在,日轴/计数/环比只覆盖 [since, now) 已流逝部分——未来日 0 填装有、
+    部分窗比整窗,都是编数据。解析不了的窗口原样透传(下游各自诚实降级)。
+    """
+    since_dt, until_dt = _parse_ts(since), _parse_ts(until)
+    if since_dt is None or until_dt is None:
+        return until
+    now = _now_utc()
+    if now <= since_dt:
+        return None
+    return until if now >= until_dt else now.astimezone(timezone.utc).isoformat()
+
+
 def _day_str(value: Any) -> str:
     """DB 读回的日期(date / datetime / str)→ 'YYYY-MM-DD';解不了返回 ''(诚实丢弃)。"""
     if isinstance(value, datetime):        # datetime 是 date 子类,必须先判
@@ -294,9 +320,16 @@ def _delta_pct(current: int, previous: int) -> float | None:
 
 
 def _day_axis(since_iso: str, until_iso: str) -> list[str]:
-    """[since, until) 覆盖到的连续 UTC 日轴(封顶 SERIES_MAX_DAYS)。"""
+    """[since, min(until, now)) 覆盖到的连续 UTC 日轴(封顶 SERIES_MAX_DAYS)。
+
+    右沿钳到 now:未来日不真实存在,日轴只到今天(未来日 0 填装有 = 编数据);
+    整窗在 now 之后 → 空轴(诚实空)。
+    """
     since_dt, until_dt = _parse_ts(since_iso), _parse_ts(until_iso)
-    if since_dt is None or until_dt is None or until_dt <= since_dt:
+    if since_dt is None or until_dt is None:
+        return []
+    until_dt = min(until_dt, _now_utc())
+    if until_dt <= since_dt:
         return []
     cursor = since_dt.astimezone(timezone.utc).date()
     last = (until_dt.astimezone(timezone.utc) - timedelta(microseconds=1)).date()
@@ -353,19 +386,41 @@ def _kpi_series(conn: Any, since: str, until: str) -> dict[str, Any]:
     }
 
 
-def _kpi_prev(conn: Any, since: str, until: str) -> dict[str, Any]:
-    """2. kpi_prev:上一等长窗口同口径计数 + delta_pct(上窗 0 → null)。"""
-    since_dt, until_dt = _parse_ts(since), _parse_ts(until)
-    if since_dt is None or until_dt is None or until_dt <= since_dt:
+def _prev_compare_window(since: str, until: str, until_eff: str) -> tuple[str, str] | None:
+    """环比对照窗 (prev_since, prev_until);解析失败/零流逝 → None(诚实空)。
+
+    上窗起点按完整窗长定位(prev_since = since - span);窗口右沿超 now
+    (当月进行中)时只比同等流逝长度:current=[since, now) vs
+    prev=[prev_since, prev_since+(now-since)) —— 部分窗绝不比整窗(环比失真修复);
+    完整已过窗 elapsed==span,退化为原有整窗对整窗。
+    """
+    since_dt, until_dt, eff_dt = _parse_ts(since), _parse_ts(until), _parse_ts(until_eff)
+    if since_dt is None or until_dt is None or eff_dt is None:
+        return None
+    if until_dt <= since_dt or eff_dt <= since_dt:
+        return None
+    span = until_dt - since_dt          # 完整窗长(定位上窗起点)
+    elapsed = min(eff_dt, until_dt) - since_dt   # 实际流逝长(两窗同长对比)
+    prev_since_dt = since_dt - span
+    return prev_since_dt.isoformat(), (prev_since_dt + elapsed).isoformat()
+
+
+def _kpi_prev(conn: Any, since: str, until: str, until_eff: str) -> dict[str, Any]:
+    """2. kpi_prev:上一等长窗口同口径计数 + delta_pct(上窗 0 → null)。
+
+    当月进行中(until 超 now):current 取 [since, now) 实际流逝窗,
+    previous 取上窗同等流逝长度(_prev_compare_window)——绝不拿部分窗比整窗。
+    """
+    prev_window = _prev_compare_window(since, until, until_eff)
+    if prev_window is None:
         return {"status": "empty", "reason": "窗口时间解析失败,环比无从算起,诚实空。"}
-    span = until_dt - since_dt
-    prev_since, prev_until = (since_dt - span).isoformat(), since_dt.isoformat()
+    prev_since, prev_until = prev_window
     metrics: dict[str, Any] = {}
     for name, sql, table in (
         ("comments", COMMENTS_COUNT_SQL, "vkpi_comments"),
         ("queue", QUEUE_COUNT_SQL, "vkpi_reply_queue"),
     ):
-        current = _scalar_count(conn, sql, since, until)
+        current = _scalar_count(conn, sql, since, until_eff)
         previous = _scalar_count(conn, sql, prev_since, prev_until)
         metrics[name] = {
             "current": current,
@@ -377,7 +432,10 @@ def _kpi_prev(conn: Any, since: str, until: str) -> dict[str, Any]:
         "status": "ready",
         "window_prev": {"since": prev_since, "until": prev_until},
         "metrics": metrics,
-        "basis": "上一等长窗口同口径 COUNT;上窗为 0 → delta_pct=null(前端诚实省略环比药丸)",
+        "basis": (
+            "上一等长窗口同口径 COUNT;上窗为 0 → delta_pct=null(前端诚实省略环比药丸);"
+            "窗口进行中时两侧都只取已流逝等长时段,不拿部分窗比整窗"
+        ),
     }
 
 
@@ -575,14 +633,16 @@ def _topic_hit_counts(conn: Any, since: str, until: str) -> tuple[dict[str, int]
     return counts, len(lowers)
 
 
-def _topics(conn: Any, since: str, until: str) -> dict[str, Any]:
-    """7. topics:热点话题榜 [{key,label,count,delta_pct}];环比上一等长窗,Top 12 封顶。"""
-    since_dt, until_dt = _parse_ts(since), _parse_ts(until)
-    if since_dt is None or until_dt is None or until_dt <= since_dt:
+def _topics(conn: Any, since: str, until: str, until_eff: str) -> dict[str, Any]:
+    """7. topics:热点话题榜 [{key,label,count,delta_pct}];环比上一等长窗,Top 12 封顶。
+
+    窗口进行中时环比两侧都只取已流逝等长时段(_prev_compare_window 同口径)。
+    """
+    prev_window = _prev_compare_window(since, until, until_eff)
+    if prev_window is None:
         return {"status": "empty", "reason": "窗口时间解析失败,话题榜无从算起,诚实空。", "items": []}
-    span = until_dt - since_dt
-    prev_since, prev_until = (since_dt - span).isoformat(), since_dt.isoformat()
-    counts, scanned = _topic_hit_counts(conn, since, until)
+    prev_since, prev_until = prev_window
+    counts, scanned = _topic_hit_counts(conn, since, until_eff)
     prev_counts, _prev_scanned = _topic_hit_counts(conn, prev_since, prev_until)
     labels = {key: label for key, label, _terms in _topic_families()}
     items = [
@@ -700,11 +760,12 @@ def _competitor_voice(conn: Any, since: str, until: str) -> dict[str, Any]:
     return body
 
 
-def _prd_referrals(conn: Any, since: str, until: str) -> dict[str, Any]:
+def _prd_referrals(conn: Any, since: str, until: str, until_eff: str) -> dict[str, Any]:
     """10. prd_referrals:「已转产品部」窗口计数 + 日序列 + 环比(表未建诚实 empty)。
 
     计数=窗口内转交行 COUNT(时间=created_at UTC);0 也如实 0(前端不再摆 pending 卡);
-    环比=上一等长窗同口径,上窗 0 → delta_pct=null(诚实省略药丸)。纯读,零写库。
+    环比=上一等长窗同口径,上窗 0 → delta_pct=null(诚实省略药丸)。窗口进行中时
+    日轴只到今天、环比两侧同取已流逝等长时段(_prev_compare_window)。纯读,零写库。
     """
     probe = conn.execute(PRD_TABLE_PROBE_SQL, (PRD_TABLE,)).fetchone()
     if not probe:
@@ -715,15 +776,14 @@ def _prd_referrals(conn: Any, since: str, until: str) -> dict[str, Any]:
             "series": [],
             "table": PRD_TABLE,
         }
-    axis = _day_axis(since, until)
-    day_counts = _day_counts(conn, PRD_DAY_SQL, since, until)
-    current = _scalar_count(conn, PRD_COUNT_SQL, since, until)
+    axis = _day_axis(since, until_eff)
+    day_counts = _day_counts(conn, PRD_DAY_SQL, since, until_eff)
+    current = _scalar_count(conn, PRD_COUNT_SQL, since, until_eff)
     previous: int | None = None
     delta: float | None = None
-    since_dt, until_dt = _parse_ts(since), _parse_ts(until)
-    if since_dt is not None and until_dt is not None and until_dt > since_dt:
-        span = until_dt - since_dt
-        previous = _scalar_count(conn, PRD_COUNT_SQL, (since_dt - span).isoformat(), since_dt.isoformat())
+    prev_window = _prev_compare_window(since, until, until_eff)
+    if prev_window is not None:
+        previous = _scalar_count(conn, PRD_COUNT_SQL, prev_window[0], prev_window[1])
         delta = _delta_pct(current, previous)
     return {
         "status": "ready",
@@ -734,12 +794,42 @@ def _prd_referrals(conn: Any, since: str, until: str) -> dict[str, Any]:
         "table": PRD_TABLE,
         "basis": (
             "vkpi_market_prd_referrals 窗口内转交行 COUNT(时间=created_at UTC,0 也如实 0);"
-            "日序列 0 填齐可直画 sparkline;环比=上一等长窗同口径,上窗 0 → delta_pct=null"
+            "日序列 0 填齐可直画 sparkline(只到今天,不产未来日);"
+            "环比=上一等长窗同口径,窗口进行中两侧同取已流逝等长,上窗 0 → delta_pct=null"
         ),
     }
 
 
 # ── 主入口 ──────────────────────────────────────────────────────────────
+
+FUTURE_WINDOW_REASON = "窗口整体在未来(尚未开始)——无已流逝时段,诚实空,不编 0 序列。"
+
+
+def _future_window_groups() -> dict[str, Any]:
+    """整窗在 now 之后(选了未来月份):窗口敏感九组诚实 empty,零窗口 SQL。
+
+    未来没有数据,0 填序列/环比都是编数;每组保持各自契约形状(items/series/
+    计数字段齐)。alerts_state 不在此列——它的告警窗独立于报表窗(恒当前近 8h),
+    由调用方照常评估。
+    """
+    reason = FUTURE_WINDOW_REASON
+    return {
+        "kpi_series": {"status": "empty", "reason": reason, "granularity": "day",
+                       "series": {"comments": [], "queue": []}},
+        "kpi_prev": {"status": "empty", "reason": reason},
+        "sentiment_summary": {"status": "empty", "reason": reason, "done_total": 0,
+                              "pos_total": 0, "neu_total": 0, "neg_total": 0,
+                              "pos_share": None, "neg_share": None,
+                              "granularity": "day", "trend": []},
+        "platform_dist": {"status": "empty", "reason": reason, "items": []},
+        "line_voice": {"status": "empty", "reason": reason, "items": []},
+        "topics": {"status": "empty", "reason": reason, "items": []},
+        "language_dist": {"status": "empty", "reason": reason, "items": [], "total": 0},
+        "competitor_voice": {"status": "empty", "reason": reason, "items": [],
+                             "sample_videos": 0, "viltrox_videos": 0, "competitor_exposures": 0},
+        "prd_referrals": {"status": "empty", "reason": reason, "count": None,
+                          "series": [], "table": PRD_TABLE},
+    }
 
 
 def build_ext(
@@ -759,20 +849,31 @@ def build_ext(
     since, until, _label = window if window else _window(month)
     db = conn or get_conn()
 
+    # 窗口右沿钳到 now:当月进行中只算 [since, now) 已流逝部分(未来日 0 填装有
+    # =编数据);整窗在未来 → 窗口敏感九组诚实 empty,零窗口 SQL。
+    until_eff = _elapsed_until(since, until)
+    future_window = until_eff is None
+    if future_window:
+        until_eff = until  # 不会被查询(窗口敏感组全走 _future_window_groups)
+
     builders: tuple[tuple[str, Any], ...] = (
-        ("kpi_series", lambda: _kpi_series(db, since, until)),
-        ("kpi_prev", lambda: _kpi_prev(db, since, until)),
-        ("sentiment_summary", lambda: _sentiment_summary(db, since, until)),
+        ("kpi_series", lambda: _kpi_series(db, since, until_eff)),
+        ("kpi_prev", lambda: _kpi_prev(db, since, until, until_eff)),
+        ("sentiment_summary", lambda: _sentiment_summary(db, since, until_eff)),
         ("alerts_state", lambda: _alerts_state(db)),
-        ("platform_dist", lambda: _platform_dist(db, since, until)),
-        ("line_voice", lambda: _line_voice(db, since, until)),
-        ("topics", lambda: _topics(db, since, until)),
-        ("language_dist", lambda: _language_dist(db, since, until)),
-        ("competitor_voice", lambda: _competitor_voice(db, since, until)),
-        ("prd_referrals", lambda: _prd_referrals(db, since, until)),
+        ("platform_dist", lambda: _platform_dist(db, since, until_eff)),
+        ("line_voice", lambda: _line_voice(db, since, until_eff)),
+        ("topics", lambda: _topics(db, since, until, until_eff)),
+        ("language_dist", lambda: _language_dist(db, since, until_eff)),
+        ("competitor_voice", lambda: _competitor_voice(db, since, until_eff)),
+        ("prd_referrals", lambda: _prd_referrals(db, since, until, until_eff)),
     )
+    future_groups = _future_window_groups() if future_window else {}
     out: dict[str, Any] = {}
     for name, build in builders:
+        if name in future_groups:  # alerts_state 告警窗独立(近 8h),不受未来月份影响
+            out[name] = future_groups[name]
+            continue
         try:
             out[name] = build()
         except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,不拖累其余各组

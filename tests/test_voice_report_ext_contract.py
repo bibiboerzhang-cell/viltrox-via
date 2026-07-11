@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -361,6 +362,126 @@ def test_invalid_month_raises_before_any_sql():
     with pytest.raises(ValueError):
         voice_report_ext.voice_report_ext(month="garbage", conn=conn)
     assert conn.calls == []  # 非法值挡在 SQL 之前(路由转 400)
+
+
+# ── 9. 当月进行中 / 未来月份(窗口右沿钳到 now;冻结 now 契约)──────────────
+
+# 冻结 now = 2026-06-15 12:00 UTC:2026-06 窗(30 天)只流逝了 14.5 天
+FROZEN_NOW = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+FROZEN_ISO = FROZEN_NOW.isoformat()
+# 上窗起点按完整窗长(30 天)定位;对照段=同等流逝长度 14.5 天
+PREV_SINCE_0606 = datetime(2026, 5, 2, tzinfo=timezone.utc).isoformat()
+PREV_CMP_UNTIL = datetime(2026, 5, 16, 12, 0, tzinfo=timezone.utc).isoformat()
+
+WINDOWED_SQL_CONSTANTS = tuple(
+    sql for sql in ALL_SQL_CONSTANTS if sql != voice_report_ext.RECENT_ALERTS_SQL
+)
+
+
+def test_month_in_progress_truncates_axis_and_uses_elapsed_prev_window(monkeypatch):
+    """当月进行中:日轴只到今天(零未来日 0 行)+ 环比两侧同取已流逝等长时段。"""
+    monkeypatch.setattr(voice_report_ext, "_now_utc", lambda: FROZEN_NOW)
+    conn = _FakeConn(routes={
+        voice_report_ext.COMMENTS_DAY_SQL: [{"day": "2026-06-03", "n": 4}],
+        voice_report_ext.SENTIMENT_DAY_SQL: [
+            {"day": "2026-06-02", "sentiment": "positive", "n": 3},
+        ],
+        # prd 表已建:探针命中 → 走真计数路径
+        voice_report_ext.PRD_TABLE_PROBE_SQL: [{"table_name": voice_report_ext.PRD_TABLE}],
+        voice_report_ext.PRD_DAY_SQL: [{"day": "2026-06-10", "n": 2}],
+        voice_report_ext.PRD_COUNT_SQL: lambda params: (
+            [{"n": 2}] if params[0] == SINCE_0606 else [{"n": 1}]
+        ),
+    })
+    body = voice_report_ext.voice_report_ext(month="2026-06", conn=conn)
+
+    # kpi_series:日轴截断到今天(06-01..06-15 共 15 天),绝不产未来日 0 行
+    comments = body["kpi_series"]["series"]["comments"]
+    assert len(comments) == 15
+    assert comments[0]["date"] == "2026-06-01"
+    assert comments[-1]["date"] == "2026-06-15"
+    assert comments[2] == {"date": "2026-06-03", "count": 4}
+    # 序列查询右沿 = now(不查未来时段)
+    day_calls = [c[1] for c in conn.calls if c[0] == voice_report_ext.COMMENTS_DAY_SQL]
+    assert day_calls == [(SINCE_0606, FROZEN_ISO, voice_report_ext.SERIES_ROWS_LIMIT)]
+
+    # kpi_prev:current=[since, now) 实际流逝窗;previous=上窗同等流逝长度
+    assert body["kpi_prev"]["status"] == "ready"
+    assert body["kpi_prev"]["window_prev"] == {"since": PREV_SINCE_0606, "until": PREV_CMP_UNTIL}
+    count_calls = [c[1] for c in conn.calls if c[0] == voice_report_ext.COMMENTS_COUNT_SQL]
+    assert count_calls == [(SINCE_0606, FROZEN_ISO), (PREV_SINCE_0606, PREV_CMP_UNTIL)]
+
+    # sentiment:trend 同样只到今天,零未来 period
+    trend = body["sentiment_summary"]["trend"]
+    assert len(trend) == 15
+    assert trend[-1]["period_start"] == "2026-06-15"
+    senti_calls = [c[1] for c in conn.calls if c[0] == voice_report_ext.SENTIMENT_DAY_SQL]
+    assert senti_calls == [(SINCE_0606, FROZEN_ISO, voice_report_ext.SENTIMENT_ROWS_LIMIT)]
+
+    # topics:环比两窗与 kpi_prev 同口径(本窗右沿 now,上窗等流逝长)
+    topic_calls = [c[1] for c in conn.calls if c[0] == voice_report_ext.TOPIC_TEXT_SQL]
+    assert topic_calls == [
+        (SINCE_0606, FROZEN_ISO, voice_report_ext.TOPIC_SCAN_LIMIT),
+        (PREV_SINCE_0606, PREV_CMP_UNTIL, voice_report_ext.TOPIC_SCAN_LIMIT),
+    ]
+    assert body["topics"]["window_prev"] == {"since": PREV_SINCE_0606, "until": PREV_CMP_UNTIL}
+
+    # prd_referrals:日序列只到今天 + 环比同口径(2 vs 1 → +100.0%)
+    prd = body["prd_referrals"]
+    assert prd["status"] == "ready"
+    assert len(prd["series"]) == 15
+    assert prd["series"][-1]["date"] == "2026-06-15"
+    assert prd["count"] == 2 and prd["previous"] == 1 and prd["delta_pct"] == 100.0
+    prd_count_calls = [c[1] for c in conn.calls if c[0] == voice_report_ext.PRD_COUNT_SQL]
+    assert prd_count_calls == [(SINCE_0606, FROZEN_ISO), (PREV_SINCE_0606, PREV_CMP_UNTIL)]
+
+
+def test_past_month_keeps_full_window_comparison(monkeypatch):
+    """完整已过窗:elapsed==span,环比退化为原有整窗对整窗(行为回归锁)。"""
+    monkeypatch.setattr(voice_report_ext, "_now_utc", lambda: datetime(2026, 7, 11, tzinfo=timezone.utc))
+    conn = _FakeConn()
+    body = voice_report_ext.voice_report_ext(month="2026-06", conn=conn)
+    assert len(body["kpi_series"]["series"]["comments"]) == 30  # 整月 30 天全轴
+    assert body["kpi_prev"]["window_prev"]["until"] == SINCE_0606
+    count_calls = [c[1] for c in conn.calls if c[0] == voice_report_ext.COMMENTS_COUNT_SQL]
+    assert count_calls[0] == (SINCE_0606, UNTIL_0606)  # current 用完整窗右沿
+
+
+def test_future_month_window_is_honest_empty(monkeypatch):
+    """整窗在 now 之后(选未来月份):窗口敏感九组诚实 empty,零窗口 SQL;
+    alerts_state 告警窗独立(近 8h)照常评估,不受未来月份影响。"""
+    monkeypatch.setattr(voice_report_ext, "_now_utc", lambda: FROZEN_NOW)
+    conn = _FakeConn()
+    body = voice_report_ext.voice_report_ext(month="2026-07", conn=conn)
+
+    for key in (
+        "kpi_series", "kpi_prev", "sentiment_summary", "platform_dist",
+        "line_voice", "topics", "language_dist", "competitor_voice", "prd_referrals",
+    ):
+        assert body[key]["status"] == "empty", key
+        assert body[key]["reason"] == voice_report_ext.FUTURE_WINDOW_REASON, key
+    # 各组契约形状保持(空序列/空榜/None 计数,绝不编 0 填序列)
+    assert body["kpi_series"]["series"] == {"comments": [], "queue": []}
+    assert body["sentiment_summary"]["trend"] == []
+    assert body["topics"]["items"] == []
+    assert body["prd_referrals"]["count"] is None
+    assert body["prd_referrals"]["series"] == []
+
+    # 窗口敏感 SQL 一条不发(未来窗不查库);alerts 独立链(RECENT_ALERTS_SQL)照常
+    issued = [sql for sql, _params in conn.calls]
+    assert all(sql not in WINDOWED_SQL_CONSTANTS for sql in issued)
+    assert voice_report_ext.RECENT_ALERTS_SQL in issued
+    assert body["alerts_state"]["status"] == "ok"
+
+    # 信封契约键不变(未来月份不破坏契约)
+    assert set(body.keys()) == {
+        "status", "month", "window",
+        "kpi_series", "kpi_prev", "sentiment_summary",
+        "alerts_state", "platform_dist", "line_voice",
+        "topics", "language_dist", "competitor_voice",
+        "prd_referrals",
+        "method", "generated_at",
+    }
 
 
 def test_line_voice_pos_share_null_without_annotation():

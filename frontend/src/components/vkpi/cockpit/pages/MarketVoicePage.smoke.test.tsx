@@ -430,6 +430,49 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect(await screen.findByText(/HTTP 404/)).toBeTruthy();
   });
 
+  it("分页失败不吞真实数据:载入更多失败 → 列表保留 + 行内错误(整卡只留零数据)", async () => {
+    getVoiceFeed
+      .mockReset()
+      .mockResolvedValueOnce({ items: FEED_ITEMS, total: 20, offset: 0, limit: 20 })
+      .mockRejectedValueOnce(new Error("HTTP 502"));
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("对焦很稳,呼吸效应控制超预期")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("≡ 查看全量 20 条 · 点单条连续翻"));
+    fireEvent.click(await screen.findByRole("button", { name: /载入更多/ }));
+
+    // 弹窗按钮下方 crit 小字 + 卡面行内提示,错误如实展示(不吞)
+    expect(await screen.findByText(/载入更多失败/)).toBeTruthy();
+    expect((await screen.findAllByText(/HTTP 502/)).length).toBeGreaterThan(0);
+    // 已加载的 7 条真实数据绝不被错误卡吞掉(feedError 不再黏死整卡)
+    expect(screen.getAllByText("对焦很稳,呼吸效应控制超预期").length).toBeGreaterThan(0);
+    expect(screen.queryByText("端点待接 · voice-feed")).toBeNull();
+  });
+
+  it("month 切换冒烟:改月份 → voice-report 与 voice-report-ext 都按该月重调;近30天 → 回空 month", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("本月反馈")).toBeTruthy();
+    expect(getVoiceReport).toHaveBeenCalledWith("t", "");
+    expect(fetchVoiceReportExt).toHaveBeenCalledWith("t", "");
+
+    getVoiceReport.mockClear();
+    fetchVoiceReportExt.mockClear();
+    const monthInput = document.querySelector('input[type="month"]') as HTMLInputElement;
+    expect(monthInput).toBeTruthy();
+    fireEvent.change(monthInput, { target: { value: "2026-06" } });
+    // 两个 fetcher 都以选中月重调(同窗口口径,互不掉队)
+    expect(getVoiceReport).toHaveBeenCalledWith("t", "2026-06");
+    expect(fetchVoiceReportExt).toHaveBeenCalledWith("t", "2026-06");
+
+    getVoiceReport.mockClear();
+    fetchVoiceReportExt.mockClear();
+    fireEvent.click(screen.getByText("近30天"));
+    // 点「近30天」→ 都回到空 month(近 30 天窗口)
+    expect(getVoiceReport).toHaveBeenCalledWith("t", "");
+    expect(fetchVoiceReportExt).toHaveBeenCalledWith("t", "");
+    expect(await screen.findByText("本月反馈")).toBeTruthy();
+  });
+
   it("详情弹窗闭环动作(V0e+V1.1):转回复队列/转产品部均真调端点,成功才置绿", async () => {
     render(<MarketVoicePage apiToken="t" />);
 

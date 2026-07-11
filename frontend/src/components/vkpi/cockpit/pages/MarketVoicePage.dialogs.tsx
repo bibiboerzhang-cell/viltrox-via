@@ -7,6 +7,8 @@ import type { VoiceFeedItem } from "../../../../services/vkpi/marketVoice-api";
 //   ModalShell 对齐 demo .scrim/.drawer:遮罩 var(--ds-scrim)+blur(3px)、容器 18px 圆角
 //   /86vh/标题 17px/680/关闭钮 30×30,入场 scale(.97)→1 两态过渡(ds-viz.css,自带
 //   reduced-motion 降级);弹窗内分区密度 = demo .dsec/.dl/.drow(22px/9.5px/12.5px)。
+//   color-scheme:本壳表面全 token 跟主题 → 挂 cockpit-modal--themed 修饰类
+//   (global.css:基类 .cockpit-modal 钉死 dark 供写死暗表面的遗留弹窗保真)。
 //   依赖单向:本文件不 import MarketVoicePage.modules(feed 行由调用方以 children 传入);
 //   身份徽/平台徽元数据(IDENTITY_META/platformBadge)住这里,modules 反向复用。
 // 红线:零直连网络(动作走调用方回调);不触 viltrox_fit_score / rule_v0;
@@ -82,7 +84,7 @@ export function ModalShell({
   }, [onClose]);
   return (
     <div
-      className={`cockpit-modal ds-modal-fade ${on ? "is-on" : ""} fixed inset-0 flex items-center justify-center bg-[var(--ds-scrim)] p-4 backdrop-blur-[3px]`}
+      className={`cockpit-modal cockpit-modal--themed ds-modal-fade ${on ? "is-on" : ""} fixed inset-0 flex items-center justify-center bg-[var(--ds-scrim)] p-4 backdrop-blur-[3px]`}
       style={{ zIndex: 999 }}
       role="presentation"
       onMouseDown={(ev) => {
@@ -191,6 +193,7 @@ export function FeedListModal({
   loadedCount,
   hasMore,
   loading,
+  error = "",
   onLoadMore,
   onClose,
   children,
@@ -199,6 +202,8 @@ export function FeedListModal({
   loadedCount: number;
   hasMore: boolean;
   loading: boolean;
+  /** 「载入更多」失败原因(如实展示在按钮下方,不吞;已加载列表照常渲染) */
+  error?: string;
   onLoadMore: () => void;
   onClose: () => void;
   children: React.ReactNode;
@@ -217,6 +222,7 @@ export function FeedListModal({
           {loading ? "加载中…" : `≡ 载入更多(已加载 ${loadedCount}/${total})`}
         </button>
       ) : null}
+      {error ? <div className="mt-2 text-[10.5px] text-crit">载入更多失败:{error}</div> : null}
     </ModalShell>
   );
 }
