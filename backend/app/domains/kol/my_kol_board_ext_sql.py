@@ -22,6 +22,8 @@ FIT_BUCKET_ROWS_LIMIT = 20         # fit 分桶行封顶(十分位至多 10 桶 
 CONTACT_TYPE_ROWS_LIMIT = 20       # 联系方式类型分组 SQL 层封顶
 CONTACT_TYPE_MAX_ITEMS = 20        # 类型条目 Python 层封顶
 VIEWS_TOP_LIMIT = 12               # 播放榜 Top 12 封顶(SQL + Python 双封顶)
+V_KOL_IDS_MAX = 2000               # v_kol_ids 行级名单契约封顶(Python 层切片)
+V_KOL_IDS_ROWS_LIMIT = V_KOL_IDS_MAX + 1   # SQL 层多取 1 行,如实检测截断(不靠猜)
 
 # 8 段展示漏斗 = stage_canonical.CANONICAL_STAGES 中真库有 raw 来源的 8 个阶段
 # (13 真值:discovery/discovered→discovered,contacted/replied→contacted,agreed,
@@ -188,4 +190,22 @@ V_KOL_COUNT_SQL = """
     FROM vkpi_kol_video_evidence e
     WHERE e.project_id IS NOT NULL
        OR strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
+"""
+
+V_KOL_IDS_SQL = """
+    SELECT DISTINCT e.kol_pool_id AS kol_pool_id
+    FROM vkpi_kol_video_evidence e
+    WHERE e.kol_pool_id IS NOT NULL
+      AND (e.project_id IS NOT NULL
+           OR strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0)
+    ORDER BY 1
+    LIMIT ?
+"""
+
+V_KOL_TIERS_SQL = """
+    SELECT COUNT(DISTINCT CASE WHEN e.project_id IS NOT NULL
+                               THEN e.kol_pool_id END) AS cooperation_kols,
+           COUNT(DISTINCT CASE WHEN strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
+                               THEN e.kol_pool_id END) AS title_mention_kols
+    FROM vkpi_kol_video_evidence e
 """

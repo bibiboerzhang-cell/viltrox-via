@@ -13,7 +13,9 @@
   6. fit_dist:十分位桶 + 未评分诚实桶;响应只有桶计数,零单 KOL 分数;
   7. contact_coverage / 私字段:contact_value、email 混进行里也绝不进响应;
   8. LIMIT 双层封顶:SQL 参数=模块常量,Python 层切片二次封顶;
-  9. v_content 三档判定:SQL 汇总口径 + classify_v_content 纯函数单测;
+  9. v_content 三档判定:SQL 汇总口径 + classify_v_content 纯函数单测;行级名单
+     v_kol_ids 去重升序/封顶 2000 truncated 如实标注/与 v_kol_count 一致;
+     tiers_by_kol KOL 级去重计数与条数级 tiers 区分;
  10. 信封契约键 + 单组失败降级 {status:'error'} 不拖全响应 + scope 参数下推。
 红线:纯读契约,不触真库,不触 viltrox_fit_score / rule_v0。
 """
@@ -73,6 +75,8 @@ ALL_SQL_CONSTANTS = (
     ext.VIEWS_TOP_SQL,
     ext.V_CONTENT_SQL,
     ext.V_KOL_COUNT_SQL,
+    ext.V_KOL_IDS_SQL,
+    ext.V_KOL_TIERS_SQL,
 )
 ALL_SQL = "\n".join(ALL_SQL_CONSTANTS)
 
@@ -106,7 +110,7 @@ def test_sql_constants_parameterized_with_limit_pushdown():
     limited = (
         ext.POOL_FOLLOWERS_DAY_SQL, ext.NEW_VIDEOS_DAY_SQL, ext.OFFICIAL_DAY_SQL,
         ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.FIT_DIST_SQL,
-        ext.CONTACT_TYPES_SQL, ext.VIEWS_TOP_SQL,
+        ext.CONTACT_TYPES_SQL, ext.VIEWS_TOP_SQL, ext.V_KOL_IDS_SQL,
     )
     for sql in limited:
         assert "LIMIT ?" in sql
@@ -424,6 +428,7 @@ def test_v_content_tiers_math(monkeypatch):
              "title_mention": 376, "overlap_both": 103},
         ],
         ext.V_KOL_COUNT_SQL: [{"n": 387}],
+        ext.V_KOL_TIERS_SQL: [{"cooperation_kols": 210, "title_mention_kols": 260}],
     })
     vc = _build(conn)["v_content"]
     assert vc["status"] == "ready"
@@ -436,10 +441,58 @@ def test_v_content_tiers_math(monkeypatch):
         "overlap_both": 103,
         "undetermined": 1690,          # 2769 - 806 - 273
     }
+    # KOL 级去重计数(同一 KOL 两档可重复计,与条数级 tiers 口径区分)
+    assert vc["tiers_by_kol"] == {"cooperation_kols": 210, "title_mention_kols": 260}
     # SQL 参数=词元常量(strpos 参数化,不区分大小写靠 lower)
     by_sql = {sql: params for sql, params in conn.calls}
     assert by_sql[ext.V_CONTENT_SQL] == (ext.VILTROX_TOKEN, ext.VILTROX_TOKEN)
     assert by_sql[ext.V_KOL_COUNT_SQL] == (ext.VILTROX_TOKEN,)
+    assert by_sql[ext.V_KOL_TIERS_SQL] == (ext.VILTROX_TOKEN,)
+
+
+def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
+    """行级名单:去重升序(mock 放水乱序带重复也稳);未截断时长度=v_kol_count。"""
+    _frozen(monkeypatch)
+    conn = _FakeConn(routes={
+        ext.V_CONTENT_SQL: [
+            {"total_evidence": 10, "cooperation": 4, "title_mention": 3, "overlap_both": 1},
+        ],
+        ext.V_KOL_COUNT_SQL: [{"n": 4}],
+        ext.V_KOL_IDS_SQL: [   # SQL 层被 mock 放水:乱序 + 重复 + 非法 0/None
+            {"kol_pool_id": 42}, {"kol_pool_id": 7}, {"kol_pool_id": 42},
+            {"kol_pool_id": 9001}, {"kol_pool_id": 0}, {"kol_pool_id": None},
+            {"kol_pool_id": 13},
+        ],
+    })
+    vc = _build(conn)["v_content"]
+    assert vc["v_kol_ids"] == [7, 13, 42, 9001]        # 去重 + 升序,0/None 剔除
+    assert vc["v_kol_ids_truncated"] is False
+    assert "v_kol_ids_note" not in vc                   # 未截断不带 note
+    assert len(vc["v_kol_ids"]) == vc["v_kol_count"]    # 名单与 KOL 级计数一致
+    # LIMIT 下推=封顶+1(多取 1 行如实检测截断),词元参数化
+    by_sql = {sql: params for sql, params in conn.calls}
+    assert by_sql[ext.V_KOL_IDS_SQL] == (ext.VILTROX_TOKEN, ext.V_KOL_IDS_ROWS_LIMIT)
+    assert ext.V_KOL_IDS_ROWS_LIMIT == ext.V_KOL_IDS_MAX + 1
+
+
+def test_v_kol_ids_capped_at_2000_with_truncated_note(monkeypatch):
+    """封顶 2000:超出 → 切片 + truncated:true + note;v_kol_count 仍给全量真数。"""
+    _frozen(monkeypatch)
+    over = [{"kol_pool_id": i} for i in range(1, ext.V_KOL_IDS_ROWS_LIMIT + 50)]
+    conn = _FakeConn(routes={
+        ext.V_CONTENT_SQL: [
+            {"total_evidence": 5000, "cooperation": 2500, "title_mention": 0, "overlap_both": 0},
+        ],
+        ext.V_KOL_COUNT_SQL: [{"n": 2050}],
+        ext.V_KOL_IDS_SQL: over,
+    })
+    vc = _build(conn)["v_content"]
+    assert ext.V_KOL_IDS_MAX == 2000
+    assert len(vc["v_kol_ids"]) == ext.V_KOL_IDS_MAX    # Python 层切片封顶
+    assert vc["v_kol_ids"] == list(range(1, ext.V_KOL_IDS_MAX + 1))   # id 升序前 2000
+    assert vc["v_kol_ids_truncated"] is True
+    assert "2000" in vc["v_kol_ids_note"] and "v_kol_count" in vc["v_kol_ids_note"]
+    assert vc["v_kol_count"] == 2050                    # 全量以 KOL 级计数为准
 
 
 def test_classify_v_content_pure_function():

@@ -27,10 +27,13 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
                     FALSE 与百家饭同口径;basis=点时实测,非时序)。
   v_content         V 相关内容三档派生:cooperation(project_id IS NOT NULL)/
                     title_mention(标题含 viltrox,strpos 参数化不区分大小写)/
-                    undetermined(其余)+ KOL 级汇总 v_kol_count。判定函数
-                    classify_v_content 独立可导出(M3 详情弹窗 /
-                    /kol-pool/{id}/videos 增强复用)。派生判据非采集字段;深析
-                    品牌命中判据后续接入。
+                    undetermined(其余)+ KOL 级汇总 v_kol_count + 行级名单
+                    v_kol_ids(有确定 V 信号的去重 kol_pool_id 升序数组,封顶
+                    V_KOL_IDS_MAX=2000,超出如实标注 truncated,前端库列表
+                    「有 V 视频」精确过滤用)+ tiers_by_kol(KOL 级去重计数,
+                    与条数级 tiers 区分)。判定函数 classify_v_content 独立
+                    可导出(M3 详情弹窗 / /kol-pool/{id}/videos 增强复用)。
+                    派生判据非采集字段;深析品牌命中判据后续接入。
 
 scope 口径(与 aggregate/viewer-context 同族):staff_scope_id 为已解析的
 effective_staff_id —— 员工恒被 scope.effective_staff_id 压回本人;管理层缺省
@@ -92,6 +95,10 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     SERIES_ROWS_LIMIT,
     V_CONTENT_SQL,
     V_KOL_COUNT_SQL,
+    V_KOL_IDS_MAX,
+    V_KOL_IDS_ROWS_LIMIT,
+    V_KOL_IDS_SQL,
+    V_KOL_TIERS_SQL,
     VIEWS_TOP_LIMIT,
     VIEWS_TOP_SQL,
     VILTROX_TOKEN,
@@ -471,7 +478,7 @@ def _views_top(conn: Any) -> dict[str, Any]:
 
 
 def _v_content(conn: Any) -> dict[str, Any]:
-    """7. v_content:V 相关内容三档派生 + KOL 级汇总(classify_v_content 同口径)。"""
+    """7. v_content:V 相关内容三档派生 + KOL 级汇总/名单(classify_v_content 同口径)。"""
     row = dict(conn.execute(V_CONTENT_SQL, (VILTROX_TOKEN, VILTROX_TOKEN)).fetchone() or {})
     total = _int0(row.get("total_evidence"))
     cooperation = _int0(row.get("cooperation"))
@@ -480,10 +487,27 @@ def _v_content(conn: Any) -> dict[str, Any]:
     title_only = max(title_any - overlap, 0)
     undetermined = max(total - cooperation - title_only, 0)
     kol_row = dict(conn.execute(V_KOL_COUNT_SQL, (VILTROX_TOKEN,)).fetchone() or {})
+    tier_row = dict(conn.execute(V_KOL_TIERS_SQL, (VILTROX_TOKEN,)).fetchone() or {})
+
+    # 行级名单:SQL DISTINCT+升序+LIMIT 多取 1 行,Python 去重二保险 + 切片封顶;
+    # 是否截断以「真取回超上限」如实判定,绝不拿 v_kol_count 反推。
+    id_rows = conn.execute(V_KOL_IDS_SQL, (VILTROX_TOKEN, V_KOL_IDS_ROWS_LIMIT)).fetchall()
+    seen: set[int] = set()
+    v_kol_ids: list[int] = []
+    for r in list(id_rows)[:V_KOL_IDS_ROWS_LIMIT]:
+        kid = _int0(dict(r).get("kol_pool_id"))
+        if kid > 0 and kid not in seen:
+            seen.add(kid)
+            v_kol_ids.append(kid)
+    ids_truncated = len(v_kol_ids) > V_KOL_IDS_MAX
+    v_kol_ids = sorted(v_kol_ids[:V_KOL_IDS_MAX])
+
     body: dict[str, Any] = {
         "status": "ready" if total else "empty",
         "total_evidence": total,
         "v_kol_count": _int0(kol_row.get("n")),
+        "v_kol_ids": v_kol_ids,
+        "v_kol_ids_truncated": ids_truncated,
         "tiers": {
             "cooperation": cooperation,
             "title_mention": title_any,
@@ -491,15 +515,27 @@ def _v_content(conn: Any) -> dict[str, Any]:
             "overlap_both": overlap,
             "undetermined": undetermined,
         },
+        "tiers_by_kol": {
+            "cooperation_kols": _int0(tier_row.get("cooperation_kols")),
+            "title_mention_kols": _int0(tier_row.get("title_mention_kols")),
+        },
         "basis": (
             "三档派生判据非采集字段:cooperation=project_id IS NOT NULL(判据最强,单条"
             "归档时优先);title_mention=标题(video_title/title)小写含 viltrox(strpos "
             "参数化,含与 cooperation 重叠 overlap_both);单条互斥归档=cooperation → "
             "title_mention_only → undetermined(classify_v_content 同口径,M3 复用);"
             "v_kol_count=至少一条 cooperation 或 title_mention 的去重 KOL 数;"
-            "深析品牌命中判据后续接入"
+            "v_kol_ids=同判据去重 kol_pool_id 升序名单(封顶 2000,超出 truncated 如实"
+            "标注,前端库列表「有 V 视频」精确过滤用);tiers_by_kol=KOL 级去重计数"
+            "(cooperation_kols/title_mention_kols,同一 KOL 两档可重复计,与条数级 "
+            "tiers 口径区分);深析品牌命中判据后续接入"
         ),
     }
+    if ids_truncated:
+        body["v_kol_ids_note"] = (
+            f"V 信号 KOL 超过名单封顶 {V_KOL_IDS_MAX},v_kol_ids 只含 id 升序前 "
+            f"{V_KOL_IDS_MAX} 个;全量以 v_kol_count 为准。"
+        )
     if not total:
         body["reason"] = "evidence 表零行——V 相关内容诚实空。"
     return body
