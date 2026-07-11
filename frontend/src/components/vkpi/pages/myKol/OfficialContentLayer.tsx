@@ -3,6 +3,7 @@ import { ExternalLink, ImageIcon, MessageCircle, Play, RefreshCw, X } from 'luci
 import { collectChannelPostComments, getChannelPostComments, getOfficialChannelPosts } from '../../../../domains/channels';
 import type { ChannelContentPost, ChannelCommentsResponse, ChannelPostPagination, OfficialChannelAccount } from '../channels/channelTypes';
 import {
+  canCollectComments,
   compact,
   compactDate,
   conciseTitle,
@@ -221,9 +222,15 @@ function CommentsModal({
           {!loading && !error && !comments.length ? (
             <div className="mykol-empty">
               {/* 评论区不能用根因(2026-07-03):官号帖评论从未有人采集,弹窗只读缓存是死路。
-                  后端 collect 端点是同步现场采集(约30-60秒一次 Apify 调用),点按钮即出数据。 */}
-              <div>暂无评论缓存 — 官号帖评论按需采集(点一次约 30-60 秒,消耗一次采集额度)。</div>
-              {(payload as any)?.collect_supported !== false ? (
+                  后端 collect 端点是同步现场采集(约30-60秒一次 Apify 调用),点按钮即出数据。
+                  门控走 helpers 的 canCollectComments(吃映射后的 collectSupported +
+                  平台白名单);此前读 snake_case collect_supported 在映射对象上恒真。 */}
+              <div>
+                {canCollectComments(account, payload)
+                  ? '暂无评论缓存 — 官号帖评论按需采集(点一次约 30-60 秒,消耗一次采集额度)。'
+                  : payload?.message || '暂无评论缓存 — 该平台评论采集未接入。'}
+              </div>
+              {canCollectComments(account, payload) ? (
                 <button
                   type="button"
                   disabled={collecting || !apiToken}

@@ -4,12 +4,23 @@ import type { PostPreview } from '../channels/myKolMatrixTypes';
 import { safeNumber } from '../../shared/vkpiDataUtils';
 import { EmployeeKolContentLayer } from './EmployeeKolContentLayer';
 import { GoaffproLinkSection } from '../../shared/GoaffproLinkSection';
+import {
+  analysisTerminalReceipt,
+  commentsTerminalReceipt,
+  missingJobIdReceipt,
+  waitJobTerminal,
+  type FlowReceipt,
+} from './PoolEvidenceContent.helpers';
 
 // C4-full(裁决重做,2026-06-12;2026-06-12 复审令拆出独立文件,行为升级三处):
 // Pool 收藏行的右侧内容层——evidence 视频走 /kol-pool/{id}/videos,渲染复用
 // EmployeeKolContentLayer(图2 同款)。升级:①账号分析/评论采集改 job 终态轮询
 // (不再靠 videos.length 猜完成,失败/纯补缓存也能正确回执)②Gemini 深析限批 5 条
 // (配额保护)。
+// 2026-07-11 评论链修复:①gone≠done,轮询封顶只报「仍在后台」绝不写 ✓
+// ②轮询按 source==='apify_jobs' 匹配(三源序号重叠会错认终态)
+// ③三个流(账号分析/视频深析/评论采集)各持独立消息槽,消息自带 tone,
+//   失败回执不再被后续操作覆盖、也不再穿绿色成功框。
 
 function compactNumber(value: number | null | undefined) {
   const next = safeNumber(value);
@@ -17,39 +28,26 @@ function compactNumber(value: number | null | undefined) {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: next >= 1000 ? 1 : 0 }).format(next);
 }
 
-type JobTerminal = { state: 'done' | 'blocked' | 'gone'; error?: string };
-
-// 轮询 apify_jobs 终态(经 task-queue/compact):done/blocked 为准;
-// 任务滑出 recent 窗口(10min)按"已结束"处理(gone)。
-async function waitJobTerminal(
-  apiToken: string,
-  jobId: number,
-  cancelled: { current: boolean },
-  { intervalMs = 6000, maxTries = 30 } = {},
-): Promise<JobTerminal | null> {
-  const { getTaskQueueCompact } = await import('../../../../services/vkpi/tasks-api');
-  let seen = false;
-  for (let i = 0; i < maxTries; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    if (cancelled.current) return null;
-    try {
-      const resp = await getTaskQueueCompact(apiToken, { limit: 50, recentMinutes: 10 }) as unknown as {
-        active?: Array<Record<string, unknown>>; recent?: Array<Record<string, unknown>>;
-      };
-      const all = [...(resp.active || []), ...(resp.recent || [])];
-      const item = all.find((task) => String(task.id) === String(jobId));
-      if (!item) {
-        if (seen) return { state: 'gone' };
-        if (i >= 2) return { state: 'gone' };
-        continue;
-      }
-      seen = true;
-      const status = String(item.status || '');
-      if (status === 'done') return { state: 'done' };
-      if (status === 'blocked' || status === 'failed') return { state: 'blocked', error: String(item.error || status).slice(0, 140) };
-    } catch { /* 单次轮询失败不终止 */ }
-  }
-  return { state: 'gone' };
+// 回执消息框:tone 决定配色,全走设计 token(--ds-good/crit/info + *-soft),零写死色。
+function FlowMessage({ msg }: { msg: FlowReceipt | null }) {
+  if (!msg) return null;
+  const tone = msg.tone === 'error' ? 'crit' : msg.tone === 'ok' ? 'good' : 'info';
+  return (
+    <div
+      role={msg.tone === 'error' ? 'alert' : 'status'}
+      style={{
+        border: `1px solid color-mix(in srgb, var(--ds-${tone}) 35%, transparent)`,
+        background: `var(--ds-${tone}-soft)`,
+        borderRadius: 8,
+        padding: '6px 10px',
+        fontSize: 10,
+        color: `var(--ds-${tone})`,
+        marginBottom: 6,
+      }}
+    >
+      {msg.text}
+    </div>
+  );
 }
 
 export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projects = [] }: { apiToken?: string; kol?: VkpiKolOption; poolId: number; viltroxOnly?: boolean; projects?: VkpiProjectRow[] }) {
@@ -83,32 +81,35 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
 
   // ① 账号分析:job 终态轮询回执(复审令:不再用 videos.length 猜——
   // worker 只补 cache/只更新已有行/任务失败时数量不变,旧法必误判)。
+  // 消息槽独立(analyzeMsg 只属本流),tone 随消息走,失败不穿绿。
   const [analyzeState, setAnalyzeState] = useState<'idle' | 'busy' | 'queued' | 'error'>('idle');
-  const [analyzeMsg, setAnalyzeMsg] = useState('');
+  const [analyzeMsg, setAnalyzeMsg] = useState<FlowReceipt | null>(null);
   const startAccountAnalysis = () => {
     if (!apiToken || !kol?.profileUrl || analyzeState === 'busy') return;
     setAnalyzeState('busy');
     import('../../../../domains/kol').then(({ enqueueKolProfileDeepCrawl }) =>
       enqueueKolProfileDeepCrawl(apiToken, String(kol.profileUrl), poolId).then((resp) => {
         setAnalyzeState('queued');
-        setAnalyzeMsg(resp.status === 'already_queued' ? '该账号分析已在队列中——完成后此处自动回执。' : '已入队(泳道「账号分析」)——完成后此处自动回执。');
+        setAnalyzeMsg({ text: resp.status === 'already_queued' ? '该账号分析已在队列中——完成后此处自动回执。' : '已入队(泳道「账号分析」)——完成后此处自动回执。', tone: 'info' });
         const jobId = Number((resp as Record<string, unknown>).job_id) || 0;
-        if (!jobId) return;
+        if (!jobId) {
+          // 入队响应缺 job_id:不静默挂死在「分析中」,回 idle 并明示去泳道看进度。
+          setAnalyzeState('idle');
+          setAnalyzeMsg(missingJobIdReceipt('账号分析'));
+          return;
+        }
         void waitJobTerminal(apiToken, jobId, cancelledRef).then((terminal) => {
           if (!terminal || cancelledRef.current) return;
-          if (terminal.state === 'blocked') {
-            setAnalyzeState('error');
-            setAnalyzeMsg(`账号分析被拦:${terminal.error || '原因见泳道'}`);
-            return;
-          }
-          setAnalyzeState('idle');
-          setRefreshTick((t) => t + 1);
-          setAnalyzeMsg(terminal.state === 'done' ? '✓ 账号分析完成——列表已刷新(视频/缩略图/R2 状态以最新为准)。' : '账号分析已结束(出泳道窗口)——列表已刷新。');
+          // gone(轮询封顶/滑出窗口)≠ done:回执只承认「仍在后台」,绝不写 ✓。
+          const receipt = analysisTerminalReceipt(terminal);
+          setAnalyzeState(terminal.state === 'blocked' ? 'error' : 'idle');
+          if (receipt.refresh) setRefreshTick((t) => t + 1);
+          setAnalyzeMsg(receipt);
         });
       }),
     ).catch((err) => {
       setAnalyzeState('error');
-      setAnalyzeMsg(String((err as Error)?.message || '发起失败').slice(0, 120));
+      setAnalyzeMsg({ text: String((err as Error)?.message || '发起失败').slice(0, 120), tone: 'error' });
     });
   };
 
@@ -158,8 +159,10 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   const unanalyzed = videos.filter((v) => !v.has_final_v1_cache && !isImageKind(v));
 
   // ② Gemini 深析:限批 5 条/次(复审令:200 条一键全入会放大配额与队列压力)。
+  // 消息槽独立(deepMsg 只属本流),不再借用账号分析的槽互相覆盖。
   const DEEP_BATCH = 5;
   const [deepState, setDeepState] = useState<'idle' | 'busy' | 'queued'>('idle');
+  const [deepMsg, setDeepMsg] = useState<FlowReceipt | null>(null);
   const startDeepAnalysis = () => {
     if (!apiToken || !unanalyzed.length || deepState === 'busy') return;
     setDeepState('busy');
@@ -172,12 +175,15 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
           queued += 1;
         } catch { /* 单条失败不阻断(已入队/预算拒绝等),计数如实 */ }
       }
-      setDeepState('queued');
+      // 0 条入队成功=没有可等的批——按失败回执并回 idle,不假装「深析中」。
+      setDeepState(queued > 0 ? 'queued' : 'idle');
       const rest = unanalyzed.length - batch.length;
-      setAnalyzeMsg(`已入队 ${queued}/${batch.length} 条 视频深析(思考中泳道)${rest > 0 ? `;剩 ${rest} 条未析,本批析完再点继续(配额保护)` : ''}。`);
+      setDeepMsg(queued > 0
+        ? { text: `已入队 ${queued}/${batch.length} 条 视频深析(思考中泳道)${rest > 0 ? `;剩 ${rest} 条未析,本批析完再点继续(配额保护)` : ''}。`, tone: 'info' }
+        : { text: `视频深析 ${queued}/${batch.length} 条入队成功——可能已在队列或被预算闸拒绝,请看泳道后重试。`, tone: 'error' });
     }).catch(() => {
       setDeepState('idle');
-      setAnalyzeMsg('深析入队失败——请重试或看泳道。');
+      setDeepMsg({ text: '深析入队失败——请重试或看泳道。', tone: 'error' });
     });
   };
   useEffect(() => {
@@ -193,7 +199,9 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   }, [deepState, unanalyzed.length]);
 
   // ③ 评论采集:job 终态轮询回执(复审令:此前只报"已入队",完成/失败无下文)。
+  // 消息槽独立(commentsMsg 只属本流);gone 不写 ✓(慢任务大多 >3min 才出终态)。
   const [commentsState, setCommentsState] = useState<'idle' | 'busy' | 'queued'>('idle');
+  const [commentsMsg, setCommentsMsg] = useState<FlowReceipt | null>(null);
   const poolCommentsFetcher = useMemo(() => (post: PostPreview) => {
     const evidenceId = Number(String(post.id).split(':')[1] || 0);
     if (!apiToken || !evidenceId) return Promise.resolve({ rows: [] as Array<Record<string, unknown>>, total: 0 });
@@ -210,23 +218,26 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
     import('../../../../services/vkpi/kolPool-api').then(({ enqueueKolPoolCommentsCollect }) =>
       enqueueKolPoolCommentsCollect(apiToken, poolId).then((resp) => {
         setCommentsState('queued');
-        setAnalyzeMsg(resp.status === 'already_queued' ? '评论采集已在队列中——完成后此处自动回执。' : '评论采集已入队(泳道「评论采集」)——完成后此处自动回执。');
+        setCommentsMsg({ text: resp.status === 'already_queued' ? '评论采集已在队列中——完成后此处自动回执。' : '评论采集已入队(泳道「评论采集」)——完成后此处自动回执。', tone: 'info' });
         const jobId = Number((resp as Record<string, unknown>).job_id) || 0;
-        if (!jobId) return;
+        if (!jobId) {
+          // 入队响应缺 job_id:不静默挂死在「采集中」,回 idle 并明示去泳道看进度。
+          setCommentsState('idle');
+          setCommentsMsg(missingJobIdReceipt('评论采集'));
+          return;
+        }
         void waitJobTerminal(apiToken, jobId, cancelledRef).then((terminal) => {
           if (!terminal || cancelledRef.current) return;
           setCommentsState('idle');
-          if (terminal.state === 'blocked') {
-            setAnalyzeMsg(`评论采集被拦:${terminal.error || '原因见泳道'}`);
-            return;
-          }
-          setRefreshTick((t) => t + 1);
-          setAnalyzeMsg('✓ 评论采集完成——点视频卡「评论明细」即见正文。');
+          // gone(轮询 3 分钟封顶)≠ done:62% 的慢任务终态在窗口外,绝不写 ✓。
+          const receipt = commentsTerminalReceipt(terminal);
+          if (receipt.refresh) setRefreshTick((t) => t + 1);
+          setCommentsMsg(receipt);
         });
       }),
     ).catch((err) => {
       setCommentsState('idle');
-      setAnalyzeMsg(String((err as Error)?.message || '评论采集入队失败').slice(0, 120));
+      setCommentsMsg({ text: String((err as Error)?.message || '评论采集入队失败').slice(0, 120), tone: 'error' });
     });
   };
 
@@ -262,9 +273,10 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
       </div>
       {/* 生成追踪链(GOAFFPRO)——与图2 同款操作排同区,复用 KOL 详情共享区块。poolId 即真 kol_pool_id。 */}
       <GoaffproLinkSection apiToken={apiToken} kolPoolId={poolId} />
-      {analyzeMsg ? (
-        <div style={{ border: analyzeState === 'error' ? '1px solid rgba(244,63,94,0.3)' : '1px solid rgba(16,185,129,0.25)', background: analyzeState === 'error' ? 'rgba(244,63,94,0.08)' : 'rgba(16,185,129,0.06)', borderRadius: 8, padding: '6px 10px', fontSize: 10, color: analyzeState === 'error' ? '#fca5a5' : '#bbf7d0', marginBottom: 8 }}>{analyzeMsg}</div>
-      ) : null}
+      {/* 三个流各持独立消息槽:失败回执不被后续操作覆盖,tone 随消息本体走。 */}
+      <FlowMessage msg={analyzeMsg} />
+      <FlowMessage msg={deepMsg} />
+      <FlowMessage msg={commentsMsg} />
       {projects.length ? (
         <div style={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: '#8b94a3', marginBottom: 6 }}>合作项目结果(来自 Projects 映射)</div>

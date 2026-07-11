@@ -79,6 +79,8 @@ export interface KolCommentItem {
   text: string;
   likes: number;
   sentiment: string;
+  /** 评论语言标签(读端 language/language_detected 容错;可选:老调用方不受影响)。 */
+  language?: string;
   intentTags: string[];
   createdAt: string;
 }

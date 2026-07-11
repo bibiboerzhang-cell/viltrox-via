@@ -117,20 +117,35 @@ function postOneLine(post: PostPreview) {
   return post.title || '内容描述暂无';
 }
 
+// 评论元信息行:意图标签 > 情绪 > 语言标签。后端缺省情绪是 'unknown' 字面量——
+// 不渲染英文占位,退语言标签(读端字段容错:拿不到就不显示,诚实空态)。
+function commentMetaLabel(comment: KolCommentItem) {
+  if (comment.intentTags.length) return comment.intentTags.join(' / ');
+  if (comment.sentiment && comment.sentiment !== 'unknown') return comment.sentiment;
+  return comment.language || '';
+}
+
 function CommentsModal({
   comments,
   loading,
+  error,
   post,
   onClose,
   onReload,
 }: {
   comments: KolCommentItem[];
   loading: boolean;
+  /** 评论读取失败原因(pool 路径 404=evidence 归属校验失败也如实显示)。 */
+  error?: string;
   post: PostPreview;
   onClose: () => void;
   onReload: () => void;
 }) {
   const postComments = commentsForPost(post, comments);
+  const metaFor = (comment: KolCommentItem) => {
+    const meta = commentMetaLabel(comment);
+    return meta ? `${meta} · ${compactDate(comment.createdAt)}` : compactDate(comment.createdAt);
+  };
   return (
     <div className="vkpi-my-kol-comment-modal" role="dialog" aria-modal="true" aria-label="KOL评论明细">
       <section>
@@ -143,11 +158,18 @@ function CommentsModal({
           <button type="button" onClick={onClose}>关闭</button>
         </header>
         <div className="vkpi-my-kol-comment-list">
-          {postComments.length ? postComments.map((comment) => (
+          {error ? (
+            <div className="mykol-warning" role="alert">
+              <span>评论读取失败：{error}</span>
+              <div style={{ marginTop: 8 }}>
+                <button type="button" onClick={onReload} disabled={loading}>{loading ? '重试中' : '重试'}</button>
+              </div>
+            </div>
+          ) : postComments.length ? postComments.map((comment) => (
             <article key={comment.id}>
               <header><strong>{comment.author}</strong><span>赞 {numberFormatter.format(comment.likes)}</span></header>
               <p>{comment.text}</p>
-              <small>{comment.intentTags.length ? comment.intentTags.join(' / ') : comment.sentiment} · {compactDate(comment.createdAt)}</small>
+              <small>{metaFor(comment)}</small>
             </article>
           )) : (
             <div className="vkpi-my-kol-content-empty">
@@ -209,10 +231,13 @@ export function EmployeeKolContentLayer({
         });
       })
       .catch((error) => {
+        // pool 旁路(evidence 评论):404=归属校验失败是真错误,必须如实显示;
+        // quietMissingError 的 404 静默只留给主 kol comments 接口(未采集≠错误)。
+        const rawMessage = error instanceof Error ? error.message : String(error || '');
         setCommentState((current) => ({
           ...current,
           loading: false,
-          error: quietMissingError(error),
+          error: commentsFetcher ? (rawMessage || '评论加载失败') : quietMissingError(error),
         }));
       });
   }, [apiToken, kol?.id, commentsFetcher]);
@@ -424,6 +449,7 @@ export function EmployeeKolContentLayer({
         <CommentsModal
           comments={commentState.items}
           loading={commentState.loading}
+          error={commentState.error}
           onClose={() => setCommentPost(null)}
           onReload={() => loadComments(commentPost)}
           post={commentPost}

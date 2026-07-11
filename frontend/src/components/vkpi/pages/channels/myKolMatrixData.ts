@@ -473,6 +473,9 @@ export function mapCommentRows(rows: Array<Record<string, unknown>>): KolComment
     text: textField(row, 'comment_text', 'text') || '无正文',
     likes: safeNumber(row.like_count || row.likes),
     sentiment: textField(row, 'sentiment') || 'unknown',
+    // 语言标签:存储列是 language_detected;读端别名按 snake_case 约定容错,
+    // 拿不到就空串(渲染层不显示,不写死假设)。
+    language: textField(row, 'language', 'language_detected', 'lang'),
     intentTags: parsedList(row.intent_tags_json || row.intentTags),
     createdAt: textField(row, 'created_at', 'createdAt'),
   }));
