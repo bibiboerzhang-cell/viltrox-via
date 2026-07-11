@@ -39,7 +39,7 @@ import {
   SentiTrendBody,
   TopicsBody,
 } from "./MarketVoicePage.charts";
-import { FeedDetailModal, FeedListModal, ModuleProvModal } from "./MarketVoicePage.dialogs";
+import { DrillFeedModal, FeedDetailModal, FeedListModal, ModuleProvModal, drillAlertSpec, drillCategorySpec, drillSentimentSpec, drillTopicSpec, type VoiceDrillSpec } from "./MarketVoicePage.dialogs";
 
 // 件 C · 市场之声 → 板块页范式金样板(可编辑板块页,demo 1:1 对照)。
 //   V0h-ab 波2 终棒:demo 全部图形模块补齐 + KPI 带图形化——
@@ -82,8 +82,9 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "geo", span: 4 },
 ];
 
-// demo .ph-b:pagehead 药丸徽(方法论长句压缩成短徽)
-const PH_BADGE = "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
+// 榜单行下钻 v1(产品线/平台/语言维度过滤待接,诚实不装):行点击 → 模块溯源弹窗 + 底部「底层样本」跳反馈流全量
+const DIM_PENDING = (dim: string) => `${dim}维度过滤待接 —— 底层样本打开的是反馈流全量,如实未按本行过滤。`;
+const SAMPLE_PENDING: Record<string, string> = { line_voice: DIM_PENDING("产品线"), plat: DIM_PENDING("平台"), geo: DIM_PENDING("语言") };
 
 export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
   const [month, setMonth] = React.useState<string>("");
@@ -99,11 +100,12 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
   const [feedError, setFeedError] = React.useState("");
   const feedBusyRef = React.useRef(false);
 
-  // 弹窗:全量列表(卡面只留 6 条)/ 单条详情(participants=已加载 items)/ 模块溯源
+  // 弹窗:全量列表(卡面只留 6 条)/ 单条详情 / 模块溯源 / 数据点下钻(规格住 dialogs)
   const [feedListOpen, setFeedListOpen] = React.useState(false);
   const [detailIndex, setDetailIndex] = React.useState<number | null>(null);
   const [wantIndex, setWantIndex] = React.useState<number | null>(null);
   const [provKey, setProvKey] = React.useState<string | null>(null);
+  const [drill, setDrill] = React.useState<VoiceDrillSpec | null>(null);
 
   // 闭环动作(状态只在端点真实返回后落地,绝不点击即置绿;逻辑住 MarketVoicePage.actions):
   // V0e「转回复队列」+ V1.1「转产品部」(vkpi_market_prd_referrals 真通路)
@@ -240,6 +242,20 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     }
   }, [feedItems, wantIndex]);
 
+  // 详情弹窗适配器(主反馈流与数据点下钻弹窗共用一套闭环动作/身份跳):端点真实返回才置绿;
+  // 转产品部按 (vkpi_comments, id) 幂等键、title=正文截断、category 留空如实;身份跳 user 不给。
+  const detailAdapter = (item: VoiceFeedItem) => ({
+    queued: replyQueue.queuedIds.has(item.id),
+    queueBusy: replyQueue.busyId === item.id,
+    queueError: replyQueue.error,
+    onEnqueueReply: item.source_table === "vkpi_comments" ? () => replyQueue.enqueue(item.id) : undefined,
+    referred: prd.referredKeys.has(prdKey("vkpi_comments", item.id)),
+    referBusy: prd.busyKey === prdKey("vkpi_comments", item.id),
+    referError: prd.error,
+    onReferPrd: item.source_table === "vkpi_comments" ? () => prd.refer({ source_table: "vkpi_comments", source_id: String(item.id), title: (item.text || "").slice(0, 120), detail: "", category: "" }) : undefined,
+    onIdentityJump: (item.identity === "kol" && item.identity_id != null) || item.identity === "owned" ? () => jumpIdentity(item) : undefined,
+  });
+
   const sources: Row = data?.sources || {};
   const complaints: Row = data?.complaints || {};
   const wishlist: Row = data?.wishlist || {};
@@ -285,7 +301,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     if (!extData || !group) {
       return (
         <PendingCard>
-          <b>数据字段施工中</b> —— voice-report-ext 未返回该组字段,接通后自动点亮。
+          <b>数据字段施工中</b> —— 扩展报表未返回该组字段,接通后自动点亮。
         </PendingCard>
       );
     }
@@ -358,46 +374,49 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     extraRows?: Array<[string, string]>,
   ) => <ModuleCard {...cardProps(key, title, group ? cnt : undefined, extraRows)}>{extGate(group) ?? body()}</ModuleCard>;
 
+  // 数据点即溯源:图表数据点回调 → setDrill(下钻规格住 dialogs,含诚实口径差说明);
+  // 产品线/平台/语言榜单行 v1 → 模块溯源弹窗(维度过滤待接,底部「底层样本」)
   const renderAlerts = () => {
     const g = extData?.alerts_state as Row | undefined;
     const triggeredN = arr(g?.categories).filter((c) => c.triggered).length;
-    return extModule("alerts", "声量告警", g, `${triggeredN} 触发`, () => <AlertsBody alerts={g || {}} />);
+    return extModule("alerts", "声量告警", g, `${triggeredN} 触发`, () => <AlertsBody alerts={g || {}} onSelect={(k, l) => setDrill(drillAlertSpec(k, l, Number(g?.window_hours) || 8))} />);
   };
   const renderSenti = () => {
     const g = extData?.sentiment_summary as Row | undefined;
     const cnt = `${String(g?.granularity) === "week" ? "周" : "日"} × ${arr(g?.trend).length}`;
-    return extModule("senti", "情绪趋势", g, cnt, () => <SentiTrendBody senti={g || {}} />);
+    return extModule("senti", "情绪趋势", g, cnt, () => <SentiTrendBody senti={g || {}} onPointClick={(kind) => setDrill(drillSentimentSpec(kind))} />);
   };
   const renderLineVoice = () => {
     const g = extData?.line_voice as Row | undefined;
     const hitN = arr(g?.items).filter((it) => (Number(it.count) || 0) > 0).length;
-    return extModule("line_voice", "产品线声音榜", g, `${hitN} 线`, () => <LineVoiceBody items={arr(g?.items)} />);
+    return extModule("line_voice", "产品线声音榜", g, `${hitN} 线`, () => <LineVoiceBody items={arr(g?.items)} onRowClick={() => setProvKey("line_voice")} />);
   };
   const renderPlat = () => {
     const g = extData?.platform_dist as Row | undefined;
-    return extModule("plat", "平台分布", g, `${arr(g?.items).length}`, () => <PlatformBody items={arr(g?.items)} />);
+    return extModule("plat", "平台分布", g, `${arr(g?.items).length}`, () => <PlatformBody items={arr(g?.items)} onRowClick={() => setProvKey("plat")} />);
   };
   const renderTopics = () => {
     const g = extData?.topics as Row | undefined;
-    return extModule("topics", "热点话题", g, `${arr(g?.items).length}`, () => <TopicsBody topics={g || {}} />);
+    return extModule("topics", "热点话题", g, `${arr(g?.items).length}`, () => <TopicsBody topics={g || {}} onSelect={(k, l, c) => setDrill(drillTopicSpec(k, l, c))} />);
   };
   // geo:language_dist 语言分布(诚实:非地理归属,und=待检)
   const renderGeo = () => {
     const g = extData?.language_dist as Row | undefined;
-    return extModule("geo", "按语言 / 市场", g, `${arr(g?.items).length}`, () => <LanguageBody dist={g || {}} />);
+    return extModule("geo", "按语言 / 市场", g, `${arr(g?.items).length}`, () => <LanguageBody dist={g || {}} onRowClick={() => setProvKey("geo")} />);
   };
   const renderComp = () => {
     const g = extData?.competitor_voice as Row | undefined;
     const extraRows = g?.basis ? ([["后端口径", String(g.basis)]] as Array<[string, string]>) : undefined;
     return extModule("comp", "同话题竞品声量", g, `${arr(g?.items).length} 家`, () => <CompetitorBody comp={g || {}} />, extraRows);
   };
-  // cat 环图:数据 = 现有 voice-report complaints 类别计数(复用既有 fetch,零新请求)
+  // cat 环图:数据 = 现有 voice-report complaints 类别计数(复用既有 fetch,零新请求);
+  // 分段/图例行可点 → 类别原声下钻(词族过滤,口径差在弹窗 sub 如实注明)
   const renderCat = () => {
     const cats = arr(complaints.categories);
     const hitN = cats.filter((c) => (Number(c.count) || 0) > 0).length;
     return (
       <ModuleCard {...cardProps("cat", "类别构成", data && !reportErrored ? `${hitN} 类` : undefined)}>
-        {sectionGate(complaints) ?? <CatDonutBody categories={cats} totalMatched={Number(complaints.total_matched) || 0} />}
+        {sectionGate(complaints) ?? <CatDonutBody categories={cats} totalMatched={Number(complaints.total_matched) || 0} onSelect={(k, l, c) => setDrill(drillCategorySpec(k, l, c))} />}
       </ModuleCard>
     );
   };
@@ -470,7 +489,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
               const on = status === "ready";
               const value =
                 status === "ready"
-                  ? `${Number(s.count) || 0} 条 · ready`
+                  ? `${Number(s.count) || 0} 条 · 在线`
                   : status === "absent"
                     ? "表未建 · 盲区"
                     : status === "empty"
@@ -503,7 +522,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
       body = <ErrorCard title="端点待接 · voice-feed" text={`GET /api/admin/vkpi/market/voice-feed → ${feedError}`} />;
     else if (feedLoading && !feedItems) body = <LoadingLine text="反馈流读取中…" />;
     else if (!feedItems) body = <EmptyLine text="暂无数据。" />;
-    else if (loaded.length === 0) body = <EmptyLine text="反馈流 0 条(vkpi_comments 窗口内无非空正文)。" />;
+    else if (loaded.length === 0) body = <EmptyLine text="反馈流 0 条(评论库暂无非空正文)。" />;
     else
       body = (
         <div>
@@ -555,37 +574,34 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     // senti:tstats 三大数 + 176px 双线 + legend ≈ 300px → 9 格
     { key: "senti", label: "情绪趋势", description: "正/负占比双线 · 空期断线 · 日/周自适应", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 20, render: renderSenti },
     // feed:卡面 6 条 + 「查看全量」按钮 ≈ 295px → 9 格(310px)
-    { key: "feed", label: "反馈流", description: "vkpi_comments 一行一条 · 身份徽 · 点开连续翻", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 26, render: renderFeed },
+    { key: "feed", label: "反馈流", description: "评论原声一行一条 · 身份徽 · 点开连续翻", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 26, render: renderFeed },
     // line_voice:5-7 条形行 + 口径注 ≈ 230px → 7 格
     { key: "line_voice", label: "产品线声音榜", description: "产品线级正面% 彩条(诚实:非逐 SKU)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderLineVoice },
     // comp:Viltrox+竞品条形 + 口径注 ≈ 200px → 6 格
     { key: "comp", label: "同话题竞品声量", description: "百家饭同口径品牌份额条 · Viltrox 高亮", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 6, minHeight: 4, maxHeight: 16, render: renderComp },
-    { key: "recs", label: "给产品部的建议", description: "规则生成 · lexicon_v0 · 人工复核", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 5, maxHeight: 24, render: renderRecs },
+    { key: "recs", label: "给产品部的建议", description: "规则生成 · 人工复核", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 5, maxHeight: 24, render: renderRecs },
     // topics:chips 一两行 + 口径注 ≈ 130px → 4 格
     { key: "topics", label: "热点话题", description: "词族热度 chips + ▲▼ 环比", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 12, render: renderTopics },
     // geo:语言条形 + 待检桶 + 口径注 ≈ 230px → 7 格
-    { key: "geo", label: "按语言 / 市场", description: "language_detected 分桶 · und=待检(非地理)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderGeo },
+    { key: "geo", label: "按语言 / 市场", description: "语言分桶 · 待检=未检出(非地理)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderGeo },
     // cover:固定 5 源行 + 口径注 ≈ 230px → 7 格
     { key: "cover", label: "监听覆盖", description: "五源健康 + 盲区如实标注", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 20, render: renderCover },
     // ↓ palette 备选(不进默认布局,注册表保留全量可选)
-    { key: "plat", label: "平台分布", description: "vkpi_comments 按 platform 条形", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderPlat },
+    { key: "plat", label: "平台分布", description: "评论按平台条形分布", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderPlat },
     { key: "complaints", label: "抱怨聚类", description: "话题词 + 负面线索双命中 · 原声引文", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 24, render: renderComplaints },
     { key: "wishlist", label: "愿望清单", description: "焦段 / 变焦 / 卡口 chips + 原声", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 10, minHeight: 6, maxHeight: 24, render: renderWishlist },
     { key: "gaps", label: "需求空白", description: "有声量但目录零 SKU 的焦段", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 5, maxHeight: 24, render: renderGaps },
-    { key: "buckets", label: "产品线声量分桶", description: "focal_matrix 词表口径", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 16, render: renderBuckets },
+    { key: "buckets", label: "产品线声量分桶", description: "产品线词表口径", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 16, render: renderBuckets },
   ];
 
   const detailItem = detailIndex != null && feedItems ? feedItems[detailIndex] : null;
 
   return (
     <div className="p-4 md:px-[22px] md:py-[15px]">
-      {/* pagehead(demo 范式):标题 + 药丸徽(方法论压缩)+ 实时辉光点 + 月份控件 + 编辑布局 */}
+      {/* pagehead(demo 范式):标题 + 实时辉光点 + 月份控件 + 编辑布局;原三枚方法论徽按「卡面去术语」收进 kpiV SrcChip 口径行 */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="text-[18px] font-[680] tracking-[-0.02em] text-ink">市场之声 · 用户反馈雷达</span>
-          <span className={PH_BADGE}>lexicon_v0</span>
-          <span className={PH_BADGE}>零 LLM</span>
-          <span className={PH_BADGE}>反哺产品部</span>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
@@ -640,7 +656,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
         </FeedListModal>
       )}
 
-      {/* 反馈单条详情:‹ #n/N › + ↑↓ 连续翻;从全量列表点入时,关掉即回列表(弹窗栈) */}
+      {/* 反馈单条详情:‹ #n/N › + ↑↓ 连续翻;闭环动作/身份跳走 detailAdapter(下钻弹窗共用) */}
       {detailItem && (
         <FeedDetailModal
           item={detailItem}
@@ -654,43 +670,28 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
             replyQueue.clearError();
             prd.clearError();
           }}
-          queued={replyQueue.queuedIds.has(detailItem.id)}
-          queueBusy={replyQueue.busyId === detailItem.id}
-          queueError={replyQueue.error}
-          onEnqueueReply={
-            // 入队按 vkpi_comments.id;反馈流当前唯一源即 vkpi_comments,其他源出现时如实禁用
-            detailItem.source_table === "vkpi_comments" ? () => replyQueue.enqueue(detailItem.id) : undefined
-          }
-          referred={prd.referredKeys.has(prdKey("vkpi_comments", detailItem.id))}
-          referBusy={prd.busyKey === prdKey("vkpi_comments", detailItem.id)}
-          referError={prd.error}
-          onReferPrd={
-            // 转产品部按 (vkpi_comments, id) 幂等键;title=正文截断;评论无类别字段 → category 留空如实
-            detailItem.source_table === "vkpi_comments"
-              ? () =>
-                  prd.refer({
-                    source_table: "vkpi_comments",
-                    source_id: String(detailItem.id),
-                    title: (detailItem.text || "").slice(0, 120),
-                    detail: "",
-                    category: "",
-                  })
-              : undefined
-          }
-          onIdentityJump={
-            // 身份跳只在跳得动时给回调(kol 需 identity_id;owned 恒可跳矩阵;user 不给)
-            (detailItem.identity === "kol" && detailItem.identity_id != null) || detailItem.identity === "owned"
-              ? () => jumpIdentity(detailItem)
-              : undefined
-          }
+          {...detailAdapter(detailItem)}
         />
       )}
 
-      {/* 模块溯源说明弹窗(SrcChip 点击;口径 = 静态 rows + 调用点动态 extraRows 合并) */}
+      {/* 数据点下钻:环图分段/告警行/话题 chip/趋势点 → 底层原声弹窗(category/sentiment 过滤) */}
+      {drill && (
+        <DrillFeedModal
+          spec={drill}
+          fetchPage={(offset) => getVoiceFeed(apiToken, { offset, limit: FEED_PAGE, ...drill.filters })}
+          renderRow={(item, i, onOpen) => <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={onOpen} queued={replyQueue.queuedIds.has(item.id)} />}
+          detailProps={detailAdapter}
+          onClose={() => setDrill(null)}
+        />
+      )}
+
+      {/* 模块溯源说明弹窗(SrcChip / 榜单行点击);产品线/平台/语言 v1:底部「底层样本」+ 维度过滤待接诚实说明 */}
       {provKey && (
         <ModuleProvModal
           title={PROV_TITLES[provKey] || provKey}
           caliber={mergedRowsRef.current[provKey] || srcOf(provKey).rows}
+          sampleNote={SAMPLE_PENDING[provKey]}
+          onOpenSamples={SAMPLE_PENDING[provKey] ? () => { setProvKey(null); setFeedListOpen(true); } : undefined}
           onClose={() => setProvKey(null)}
         />
       )}

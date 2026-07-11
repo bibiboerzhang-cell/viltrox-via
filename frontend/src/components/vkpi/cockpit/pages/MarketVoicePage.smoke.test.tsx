@@ -10,7 +10,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 //   逐组诚实降级(comp 空窗走后端 reason 原样透出);
 // - 默认布局 v3 对齐 demo 六行:complaints/wishlist/gaps/buckets/plat 不进默认,palette 可选;
 // - V0e「转回复队列」+ V1.1「转产品部」均为真端点调用,成功才置绿,失败原因不吞;
-// - 溯源身份跳:kol 身份节点可点(sessionStorage 传 kol_pool_id + onNavigate)。
+// - 溯源身份跳:kol 身份节点可点(sessionStorage 传 kol_pool_id + onNavigate);
+// - 数据点即溯源下钻:环图图例/告警行/话题 chip/趋势热区 → DrillFeedModal(voice-feed
+//   category/sentiment 过滤参数断言 + 口径差诚实注明);页头方法论徽已删(卡面去术语)。
 // mock seam:services/vkpi/marketVoice-api(getVoiceReport / getVoiceFeed /
 // fetchVoiceReportExt / enqueueReplyQueueComment / createPrdReferral)—— 页面唯一网络出口,
 // mock 后零真实 HTTP;布局走 localStorage(每测清空)。
@@ -187,9 +189,10 @@ beforeEach(() => {
     complaints: {
       status: "ready",
       total_matched: 4,
+      // key = 后端 COMPLAINT_CATEGORIES 真 key(voice-feed category 合法值,下钻透传)
       categories: [
-        { key: "af", label: "对焦", count: 3, quotes: [{ text: "对焦拉风箱有点烦", author: "u1", platform: "youtube" }] },
-        { key: "fw", label: "固件", count: 1, quotes: [] },
+        { key: "autofocus", label: "对焦", count: 3, quotes: [{ text: "对焦拉风箱有点烦", author: "u1", platform: "youtube" }] },
+        { key: "compatibility", label: "固件", count: 1, quotes: [] },
       ],
     },
     wishlist: { status: "empty", reason: "无愿望命中。" },
@@ -289,11 +292,11 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect(screen.queryByText(/prd_referrals 组待接通/)).toBeNull();
     unmount();
 
-    // 组缺失(旧后端)→ 诚实 pending,绝不编 0
+    // 组缺失(旧后端)→ 诚实 pending,绝不编 0(卡面文案已去术语,口径住 SrcChip)
     const { prd_referrals: _drop, ...extWithoutPrd } = EXT_OK as any;
     fetchVoiceReportExt.mockReset().mockResolvedValue(extWithoutPrd);
     render(<MarketVoicePage apiToken="t" />);
-    expect(await screen.findByText("prd_referrals 组待接通")).toBeTruthy();
+    expect(await screen.findByText("转交计数待接通")).toBeTruthy();
   });
 
   it("默认布局 v3 六行:图表模块族在场,文字模块降为 palette 备选;旧 v2 布局键不干扰", async () => {
@@ -317,6 +320,10 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect(screen.queryByText("需求空白")).toBeNull();
     expect(screen.queryByText("平台分布")).toBeNull();
     expect(screen.queryByText("产品线声量分桶")).toBeNull();
+    // 页头三枚方法论徽已删(卡面去术语;口径收进 kpiV SrcChip 行,那里不是独立徽文案)
+    expect(screen.queryByText("lexicon_v0")).toBeNull();
+    expect(screen.queryByText("零 LLM")).toBeNull();
+    expect(screen.queryByText("反哺产品部")).toBeNull();
     // 反馈流真数据行照常
     expect(await screen.findByText("对焦很稳,呼吸效应控制超预期")).toBeTruthy();
   });
@@ -558,5 +565,84 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     fireEvent.click(screen.getByRole("button", { name: /身份 KOL @demo_kol/ }));
     expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("321");
     expect(onNavigate).toHaveBeenCalledWith("kolProfile");
+  });
+
+  /* ---------- 数据点即溯源下钻(环图/告警/话题/趋势 → 底层原声弹窗) ---------- */
+
+  it("下钻·环图图例点击:类别原声弹窗 + voice-feed category=autofocus,点行进反馈详情", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("75%")).toBeTruthy();
+    getVoiceFeed.mockClear();
+    fireEvent.click(screen.getByText("对焦")); // cat 图例行(hover 亮边 + title 提示)
+    expect(await screen.findByText("类别原声 · 对焦")).toBeTruthy();
+    // category 参数断言:真 key 透传(offset/limit 照常分页)
+    expect(getVoiceFeed).toHaveBeenCalledWith("t", { offset: 0, limit: 20, category: "autofocus" });
+    // 口径差诚实注明:全库最新 ≠ 报表窗口;环图=双命中 vs 列表=词族命中
+    expect(screen.getByText(/非报表窗口/)).toBeTruthy();
+    // 下钻列表复用 FeedRowLine;点行 → FeedDetailModal 连续翻(闭环动作同一套适配器)
+    const rows = screen.getAllByText("对焦很稳,呼吸效应控制超预期");
+    fireEvent.click(rows[rows.length - 1]);
+    expect(await screen.findByText(/反馈详情/)).toBeTruthy();
+  });
+
+  it("下钻·告警行点击:词族 × sentiment=negative 双过滤 + 8h/全库口径差如实注明", async () => {
+    fetchVoiceReportExt.mockReset().mockResolvedValue({
+      ...EXT_OK,
+      alerts_state: {
+        ...EXT_OK.alerts_state,
+        categories: EXT_OK.alerts_state.categories.map((c) =>
+          c.category === "firmware" ? { ...c, negative_count: 5, score: 7, triggered: true } : c,
+        ),
+      },
+    });
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("1 触发")).toBeTruthy();
+    getVoiceFeed.mockClear();
+    fireEvent.click(screen.getByText(/8h 内 5 条负面/));
+    expect(await screen.findByText("告警原声 · 固件与兼容")).toBeTruthy();
+    expect(getVoiceFeed).toHaveBeenCalledWith("t", { offset: 0, limit: 20, category: "firmware", sentiment: "negative" });
+    // 不装同窗:告警 8h 口径 ≠ 本列表口径,弹窗 sub 里明说
+    expect(screen.getByText(/两口径不同/)).toBeTruthy();
+  });
+
+  it("下钻·话题 chip 点击:wishlist 词族过滤 + 热度同口径注明", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("愿望/求出")).toBeTruthy();
+    getVoiceFeed.mockClear();
+    fireEvent.click(screen.getByText("愿望/求出"));
+    expect(await screen.findByText("话题原声 · 愿望/求出")).toBeTruthy();
+    expect(getVoiceFeed).toHaveBeenCalledWith("t", { offset: 0, limit: 20, category: "wishlist" });
+    expect(screen.getByText(/热度同口径/)).toBeTruthy();
+  });
+
+  it("下钻·情绪趋势点点击:透明热区 r=8 → sentiment=positive 过滤列表", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("已批注样本")).toBeTruthy();
+    getVoiceFeed.mockClear();
+    const hotspot = document.querySelector('circle[r="8"]');
+    expect(hotspot).toBeTruthy();
+    fireEvent.click(hotspot as Element);
+    expect(await screen.findByText("情绪原声 · 正面")).toBeTruthy();
+    expect(getVoiceFeed).toHaveBeenCalledWith("t", { offset: 0, limit: 20, sentiment: "positive" });
+  });
+
+  it("下钻·voice-feed 失败:弹窗诚实错误卡,绝不编样本", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("75%")).toBeTruthy();
+    getVoiceFeed.mockReset().mockRejectedValue(new Error("HTTP 500"));
+    fireEvent.click(screen.getByText("对焦"));
+    expect(await screen.findByText("底层样本读取失败")).toBeTruthy();
+    expect((await screen.findAllByText(/HTTP 500/)).length).toBeGreaterThan(0);
+  });
+
+  it("下钻·榜单行 v1(维度过滤待接):产品线行点击 → 模块溯源弹窗 + 底层样本按钮 + 诚实说明", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("82% 正 · 32条")).toBeTruthy();
+    fireEvent.click(screen.getByText("AF 自动对焦镜头"));
+    // 打开的是模块溯源弹窗(不是假的过滤列表),底部诚实说明 + 全量样本入口
+    expect(await screen.findByText("产品线声音榜 · 数据溯源")).toBeTruthy();
+    expect(screen.getByText(/产品线维度过滤待接/)).toBeTruthy();
+    fireEvent.click(screen.getByText("≡ 查看底层样本 · 反馈流全量"));
+    expect(await screen.findByText("反馈流 · 全量")).toBeTruthy();
   });
 });

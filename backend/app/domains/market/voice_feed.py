@@ -21,6 +21,8 @@
 
 显示层宪法:返回体绝不含 raw_data_json / author_id / author_handle 等内部或
 个人字段;身份主体只暴露 KOL handle / 官号名(identity_ref),普通用户一律留空。
+全评论读口统一:所有 vkpi_comments 读端(含 /comments/by-post)同守此宪法——
+作者个人字段要么不出,要么脱敏(首字符+***),明文一律不出。
 
 compat 约定:SQL 占位符用 ?;SQL 字符串零字面 percent(不用 LIKE);
 时间戳读回可能是 str,统一转 ISO-8601(UTC,Z 后缀);函数内懒 import get_conn。
@@ -49,6 +51,14 @@ TEXT_MAX_CHARS = 400
 OWNED_POST_TABLE = "vkpi_employee_channels"
 KOL_POST_TABLE = "vkpi_kol_video_evidence"
 IDENTITY_VALUES = ("kol", "owned", "user")
+
+# 类别词族下钻(数据点即溯源,纯增量参数 category=):合法值 = market_voice
+# COMPLAINT_CATEGORIES 六类 key + 'wishlist'(WISH_TERMS 愿望词族,与 topics 榜同源)。
+# 词族匹配全在 Python(compat 红线:SQL 零 LIKE 零字面 percent):SQL 先按既有过滤
+# 取最新 CATEGORY_SCAN_LIMIT 条,再词族过滤 + offset/limit 切片(LIMIT 双层封顶不破)。
+# 口径:纯话题词族命中(topics 热度同口径),不叠负面线索——词族命中≠抱怨判定。
+CATEGORY_SCAN_LIMIT = 5000
+WISHLIST_CATEGORY = "wishlist"
 
 # ── SQL 常量(全参数化;身份判定 CASE 分支与 JOIN 同源,测试直接断言此常量)──
 # 基础 WHERE:空正文行对反馈流无意义,如实排除(total 也按同口径计数)。
@@ -140,6 +150,15 @@ def _iso_utc(value: Any) -> str | None:
     return text.replace("+00:00", "Z")
 
 
+def _category_families() -> dict[str, tuple[str, ...]]:
+    """category 合法值 → 词族(market_voice lexicon_v0 真词表,单一真源不复制)。"""
+    from app.domains.market.market_voice import COMPLAINT_CATEGORIES, WISH_TERMS
+
+    families = {key: tuple(terms) for key, _label, terms in COMPLAINT_CATEGORIES}
+    families[WISHLIST_CATEGORY] = tuple(WISH_TERMS)
+    return families
+
+
 def _build_filters(identity: str, sentiment: str) -> tuple[str, list[Any]]:
     """可选过滤 → (追加 WHERE 片段, 参数列表);全参数化,零字符串拼接用户值。"""
     where_sql = ""
@@ -195,21 +214,31 @@ def get_voice_feed(
     limit: int = DEFAULT_LIMIT,
     identity: str = "",
     sentiment: str = "",
+    category: str = "",
     *,
     conn: Any = None,
 ) -> dict[str, Any]:
     """反馈流分页读取:{items, total, offset, limit}(契约与前端并行开发,固定)。
 
     identity ∈ {'', 'kol', 'owned', 'user'}(非法值抛 ValueError → 路由转 400);
-    sentiment 透传到 vkpi_sentiment_results.sentiment(表空 → 如实空结果)。
+    sentiment 透传到 vkpi_sentiment_results.sentiment(表空 → 如实空结果);
+    category(纯增量,数据点下钻)∈ COMPLAINT_CATEGORIES 六类 key + 'wishlist',
+    词族过滤在 Python 层(SQL 零 LIKE),响应增量回 category 键,total=词族命中数
+    (扫描封顶 CATEGORY_SCAN_LIMIT 条时如实带 note,不装全量)。
     纯读,零写库;conn 可注入(测试),缺省懒取 get_conn。
     """
     from app.db.connection import get_conn
 
     identity = str(identity or "").strip().lower()
     sentiment = str(sentiment or "").strip().lower()
+    category = str(category or "").strip().lower()
     if identity and identity not in IDENTITY_VALUES:
         raise ValueError("identity 只接受 kol / owned / user 或留空")
+    families = _category_families() if category else {}
+    if category and category not in families:
+        raise ValueError(
+            "category 只接受 " + " / ".join(sorted(families)) + " 或留空"
+        )
 
     offset = max(0, _int0(offset))
     limit = _int0(limit, DEFAULT_LIMIT)
@@ -217,6 +246,35 @@ def get_voice_feed(
 
     where_sql, params = _build_filters(identity, sentiment)
     db = conn or get_conn()
+
+    if category:
+        # 词族下钻:SQL 取最新 CATEGORY_SCAN_LIMIT 条(既有过滤照常下推),
+        # Python 词族匹配后再切片 —— 双层封顶;total=命中数(封顶内,如实)。
+        terms = families[category]
+        rows = db.execute(
+            FEED_SELECT_SQL + where_sql + FEED_ORDER_SQL,
+            tuple(params) + (CATEGORY_SCAN_LIMIT, 0),
+        ).fetchall()
+        scanned = list(rows)[:CATEGORY_SCAN_LIMIT]
+        matched: list[dict[str, Any]] = []
+        for r in scanned:
+            rec = dict(r)
+            low = str(rec.get("comment_text") or "").lower()
+            if any(t in low for t in terms):
+                matched.append(rec)
+        body: dict[str, Any] = {
+            "items": [_row_to_item(rec) for rec in matched[offset : offset + limit]],
+            "total": len(matched),
+            "offset": offset,
+            "limit": limit,
+            "category": category,
+        }
+        if len(scanned) >= CATEGORY_SCAN_LIMIT:
+            body["note"] = (
+                f"词族过滤扫描封顶 {CATEGORY_SCAN_LIMIT} 条(按时间新→旧),"
+                "total 为封顶范围内命中数"
+            )
+        return body
 
     total_row = db.execute(FEED_COUNT_SQL + where_sql, tuple(params)).fetchone()
     total = _int0(dict(total_row or {}).get("total"))

@@ -6,7 +6,10 @@
      compat 红线(SQL 零字面 percent);
   2. mock conn 跑 get_voice_feed:返回体 {items,total,offset,limit} 键完整、
      item 契约键逐一齐全、limit 封顶 50、offset 负数归 0、identity 过滤
-     参数化下推、非法 identity 抛 ValueError。
+     参数化下推、非法 identity 抛 ValueError;
+  3. category 词族下钻(纯增量):合法值 = COMPLAINT_CATEGORIES 六类 key +
+     'wishlist';Python 层词族过滤 + 双层封顶(SQL 取 CATEGORY_SCAN_LIMIT 条,
+     切片在 Python);total=命中数;响应增量回 category 键;非法值 ValueError。
 红线:纯读契约,不触真库,不触 viltrox_fit_score / rule_v0。
 """
 from __future__ import annotations
@@ -217,3 +220,99 @@ def test_invalid_identity_raises_value_error():
     with pytest.raises(ValueError):
         voice_feed.get_voice_feed(identity="alien", conn=conn)
     assert conn.calls == []  # 非法值挡在 SQL 之前
+
+
+# ── 3. category 词族下钻(纯增量参数)────────────────────────────────────
+
+
+def test_category_families_cover_complaints_plus_wishlist():
+    from app.domains.market.market_voice import COMPLAINT_CATEGORIES
+
+    families = voice_feed._category_families()
+    expected = {key for key, _label, _terms in COMPLAINT_CATEGORIES}
+    expected.add(voice_feed.WISHLIST_CATEGORY)
+    assert set(families.keys()) == expected
+    # 词表来自 market_voice 单一真源(lexicon_v0),不复制不漂移
+    for key, _label, terms in COMPLAINT_CATEGORIES:
+        assert families[key] == tuple(terms)
+
+
+def test_category_filter_python_layer_and_double_cap():
+    """词族过滤在 Python 层:SQL 下推 CATEGORY_SCAN_LIMIT/0,total=词族命中数。"""
+    rows = [
+        _sample_row(id=1, comment_text="Autofocus keeps hunting on my a7iv"),
+        _sample_row(id=2, comment_text="Beautiful colors, love this lens"),
+        _sample_row(id=3, comment_text="对焦有点拉风箱"),
+    ]
+    conn = _FakeConn(rows=rows, total=999)
+    body = voice_feed.get_voice_feed(category="autofocus", limit=20, conn=conn)
+
+    # SQL 层:不做 COUNT(总数由 Python 命中数给出),分页参数=扫描封顶/偏移 0
+    assert len(conn.calls) == 1
+    select_sql, select_params = conn.calls[0]
+    assert "LIMIT ? OFFSET ?" in select_sql
+    assert select_params[-2:] == (voice_feed.CATEGORY_SCAN_LIMIT, 0)
+    # SQL 零 LIKE / 零字面 percent(词族匹配全在 Python)
+    assert "%" not in select_sql
+    assert " LIKE " not in f" {select_sql.upper()} ".replace("\n", " ")
+
+    # Python 层:命中 2/3(词族含中英词);响应契约 + 增量 category 键
+    assert body["total"] == 2
+    assert [it["id"] for it in body["items"]] == [1, 3]
+    assert body["category"] == "autofocus"
+    assert set(body.keys()) == {"items", "total", "offset", "limit", "category"}
+
+
+def test_category_filter_offset_slice_in_python():
+    rows = [
+        _sample_row(id=i, comment_text=f"the price is too expensive #{i}")
+        for i in range(1, 6)
+    ]
+    conn = _FakeConn(rows=rows, total=0)
+    body = voice_feed.get_voice_feed(category="price", offset=2, limit=2, conn=conn)
+    assert body["total"] == 5
+    assert [it["id"] for it in body["items"]] == [3, 4]
+
+
+def test_category_wishlist_and_combined_filters_push_down():
+    """wishlist 词族合法;identity/sentiment 既有过滤照常参数化下推同一条 SQL。"""
+    rows = [
+        _sample_row(id=1, comment_text="please make a 135mm f1.8"),
+        _sample_row(id=2, comment_text="sharp and fast"),
+    ]
+    conn = _FakeConn(rows=rows, total=0)
+    body = voice_feed.get_voice_feed(
+        category="wishlist", sentiment="negative", identity="kol", conn=conn
+    )
+    assert body["total"] == 1 and body["items"][0]["id"] == 1
+    select_sql, select_params = conn.calls[0]
+    assert "c.post_table = ?" in select_sql and "s.sentiment = ?" in select_sql
+    assert "vkpi_kol_video_evidence" in select_params
+    assert "negative" in select_params
+
+
+def test_category_scan_cap_note_honest():
+    """扫描触顶 → 响应带 note 如实说明 total 只覆盖封顶范围(绝不装全量)。"""
+    rows = [_sample_row(id=1, comment_text="firmware update please")]
+
+    class _CapConn(_FakeConn):
+        def execute(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            return _FakeResult(rows * voice_feed.CATEGORY_SCAN_LIMIT)
+
+    body = voice_feed.get_voice_feed(category="compatibility", conn=_CapConn())
+    assert "note" in body and str(voice_feed.CATEGORY_SCAN_LIMIT) in body["note"]
+
+
+def test_invalid_category_raises_value_error():
+    conn = _FakeConn()
+    with pytest.raises(ValueError):
+        voice_feed.get_voice_feed(category="alien_topic", conn=conn)
+    assert conn.calls == []  # 非法值挡在 SQL 之前
+
+
+def test_no_category_keeps_legacy_contract_shape():
+    """不带 category 的旧调用形状零变化(不长出新键,老前端零感知)。"""
+    conn = _FakeConn(rows=[_sample_row()], total=1)
+    body = voice_feed.get_voice_feed(conn=conn)
+    assert set(body.keys()) == {"items", "total", "offset", "limit"}

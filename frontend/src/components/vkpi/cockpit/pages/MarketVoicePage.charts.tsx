@@ -12,10 +12,23 @@ import { EmptyLine, KpiCard, type Row } from "./MarketVoicePage.modules";
 //   图表纪律:SVG 色值全部 var(--ds-*)(主题切换自然生效,零 JS 取色);发光只走
 //   --ds-glow-radius 链路(浅色=0px 自动无光);脉冲复用 cockpit-reference.css 的
 //   vkpi-lane-pulse(reduced-motion 由 ds-viz.css .ds-adot 媒体查询降级)。
+//   数据点即溯源:环图分段/图例行、告警行、话题 chip、趋势数据点、榜单行全部可点
+//   (onSelect/onPointClick/onRowClick 回调由 page 层注入 → 底层原声下钻弹窗);
+//   可点态统一 hover 亮边 + cursor-pointer + title 提示;缺回调 = 纯展示,零假按钮。
 // 红线:纯展示零网络;不触 viltrox_fit_score / rule_v0;诚实空态(空段/null share
 //        断点如实断,不插值不编数);显示层宪法(不渲染 author_* 等个人字段)。
 
 /* ============ 小工具:占比格式化 / pos_share 语义染色 / 发光滤镜 ============ */
+
+// 数据点下钻提示语(hover title 统一口径)
+const DRILL_HINT = "点击查看底层样本";
+// 榜单行 v1(该维度过滤待接):点行开模块溯源弹窗,底部再跳全量样本 —— 提示语如实
+const DIM_HINT = "点击查看溯源与底层样本(该维度过滤待接)";
+
+// 键盘可达:Enter / 空格触发(可点行统一)
+const keyActivate = (fn: () => void) => (ev: React.KeyboardEvent) => {
+  if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fn(); }
+};
 
 // 0.821 → "82.1"(整数去尾零:0.8 → "80")
 export function pctText(share: number): string {
@@ -49,6 +62,7 @@ export function BarRow({
   highlight = false,
   dashed = false,
   title,
+  onClick,
 }: {
   name: string;
   /** 条宽 0-100;0 也画空槽(demo .pbar 底槽常驻) */
@@ -60,10 +74,18 @@ export function BarRow({
   /** 无批注/待检桶:muted 虚线弱化条 */
   dashed?: boolean;
   title?: string;
+  /** 行下钻回调(缺省 = 纯展示行,零假按钮) */
+  onClick?: () => void;
 }) {
   const barBg = color || "linear-gradient(90deg, var(--ds-accent), var(--ds-accent-2))";
   return (
-    <div className="grid grid-cols-[minmax(64px,84px)_1fr_minmax(66px,auto)] items-center gap-2.5 py-[4.5px] text-[11.5px]" title={title}>
+    <div
+      className={`grid grid-cols-[minmax(64px,84px)_1fr_minmax(66px,auto)] items-center gap-2.5 py-[4.5px] text-[11.5px]${
+        onClick ? " -mx-1.5 cursor-pointer rounded-[7px] border border-transparent px-1.5 transition-colors hover:border-accent hover:bg-accent-soft" : ""
+      }`}
+      title={title}
+      role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined} onClick={onClick} onKeyDown={onClick ? keyActivate(onClick) : undefined}
+    >
       <span className={`truncate ${highlight ? "font-bold text-accent" : "text-ink-2"}`}>{name}</span>
       <span className="h-[6px] overflow-hidden rounded-[3px] bg-line">
         <i
@@ -81,10 +103,21 @@ export function BarRow({
 }
 
 /* ============ cat · 类别构成环图(demo donut():R44 / 描边13 / 分段留缝2 / 中心大数) ============ */
-export function CatDonutBody({ categories, totalMatched }: { categories: Row[]; totalMatched: number }) {
+// 数据点即溯源:分段与图例行可点(onSelect(key,label,count))→ 类别原声下钻弹窗;
+// hover 分段加粗描边 + 图例行亮边(纯两态,尊重 reduced-motion:无动画只有态)。
+export function CatDonutBody({
+  categories,
+  totalMatched,
+  onSelect,
+}: {
+  categories: Row[];
+  totalMatched: number;
+  onSelect?: (key: string, label: string, count: number) => void;
+}) {
   const PALETTE = ["var(--ds-accent)", "var(--ds-accent-2)", "var(--ds-good)", "var(--ds-warn)", "var(--ds-info)", "var(--ds-crit)"];
+  const [hot, setHot] = React.useState<number | null>(null);
   const segs = categories
-    .map((c) => ({ label: String(c.label || c.key), count: Number(c.count) || 0 }))
+    .map((c) => ({ key: String(c.key || c.label || ""), label: String(c.label || c.key), count: Number(c.count) || 0 }))
     .filter((c) => c.count > 0)
     .map((c, i) => ({ ...c, color: PALETTE[i % PALETTE.length] }));
   const sum = segs.reduce((a, s) => a + s.count, 0);
@@ -111,13 +144,17 @@ export function CatDonutBody({ categories, totalMatched }: { categories: Row[]; 
             r={R}
             fill="none"
             stroke={a.color}
-            strokeWidth={13}
+            strokeWidth={hot === i ? 15 : 13}
             strokeLinecap="butt"
             strokeDasharray={a.dasharray}
             strokeDashoffset={a.dashoffset}
             transform="rotate(-90 60 60)"
-            style={glow(a.color)}
-          />
+            style={{ ...glow(a.color), cursor: onSelect ? "pointer" : undefined }}
+            onClick={onSelect ? () => onSelect(a.key, a.label, a.count) : undefined}
+            onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)}
+          >
+            {onSelect ? <title>{`${a.label} ×${a.count} · ${DRILL_HINT}`}</title> : null}
+          </circle>
         ))}
         <text x={60} y={58} textAnchor="middle" style={{ fill: "var(--ds-text)", font: "700 21px var(--ds-font-mono)", letterSpacing: "-0.03em" }}>
           {center}
@@ -128,7 +165,16 @@ export function CatDonutBody({ categories, totalMatched }: { categories: Row[]; 
       </svg>
       <div className="flex min-w-0 flex-1 flex-col gap-[7px]">
         {segs.map((s, i) => (
-          <div key={i} className="flex items-center gap-2 text-[11.5px] text-ink-2">
+          <div
+            key={i}
+            className={`flex items-center gap-2 text-[11.5px] text-ink-2${
+              onSelect ? " -mx-1 cursor-pointer rounded-[7px] border border-transparent px-1 py-px transition-colors hover:border-accent hover:bg-accent-soft" : ""
+            }`}
+            role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined} title={onSelect ? DRILL_HINT : undefined}
+            onClick={onSelect ? () => onSelect(s.key, s.label, s.count) : undefined}
+            onKeyDown={onSelect ? keyActivate(() => onSelect(s.key, s.label, s.count)) : undefined}
+            onMouseEnter={() => setHot(i)} onMouseLeave={() => setHot(null)}
+          >
             <span className="h-[9px] w-[9px] flex-none rounded-[3px]" style={{ background: s.color }} />
             <span className="min-w-0 flex-1 truncate">{s.label}</span>
             <b className="font-mono font-semibold text-ink">{pctText(s.count / sum)}%</b>
@@ -190,7 +236,9 @@ function TrendSeries({ segs, color, fill, H, gid }: { segs: Pt[][]; color: strin
   );
 }
 
-export function SentiTrendBody({ senti }: { senti: Row }) {
+// 数据点即溯源:onPointClick(kind)——点已有数据的趋势点 → 该情感批注的原声下钻;
+// 命中热区 = 透明 circle r=8(小点难点原样解决),title 提示,缺回调零热区。
+export function SentiTrendBody({ senti, onPointClick }: { senti: Row; onPointClick?: (kind: "positive" | "negative") => void }) {
   const trend: Row[] = Array.isArray(senti.trend) ? senti.trend : [];
   const posShare = typeof senti.pos_share === "number" ? senti.pos_share : null;
   const negShare = typeof senti.neg_share === "number" ? senti.neg_share : null;
@@ -259,6 +307,19 @@ export function SentiTrendBody({ senti }: { senti: Row }) {
               })}
               <TrendSeries segs={posSegs} color="var(--ds-good)" fill H={H} gid="mv-senti-pos" />
               <TrendSeries segs={negSegs} color="var(--ds-crit)" fill={false} H={H} gid="mv-senti-neg" />
+              {/* 下钻热区:只在真实数据点上放大点击面(透明 r=8),空期无热区不装点 */}
+              {onPointClick &&
+                posVals.map((v, i) => v == null ? null : (
+                  <circle key={`hp-${i}`} cx={X(i)} cy={Y(v)} r={8} fill="transparent" style={{ cursor: "pointer" }} onClick={() => onPointClick("positive")}>
+                    <title>{`${String(trend[i]?.period_start || "")} 正面占比点 · ${DRILL_HINT}`}</title>
+                  </circle>
+                ))}
+              {onPointClick &&
+                negVals.map((v, i) => v == null ? null : (
+                  <circle key={`hn-${i}`} cx={X(i)} cy={Y(v)} r={8} fill="transparent" style={{ cursor: "pointer" }} onClick={() => onPointClick("negative")}>
+                    <title>{`${String(trend[i]?.period_start || "")} 负面占比点 · ${DRILL_HINT}`}</title>
+                  </circle>
+                ))}
             </svg>
           </div>
           {/* demo .legend2 */}
@@ -283,12 +344,18 @@ export function SentiTrendBody({ senti }: { senti: Row }) {
 
 /* ============ alerts · 声量告警(demo alertrow;正常态全绿,绝不摆假告警) ============ */
 
-function AlertRowView({ hot, dot, text, ax, axTone }: { hot?: boolean; dot: "hot" | "ok"; text: React.ReactNode; ax: React.ReactNode; axTone?: string }) {
+function AlertRowView({ hot, dot, text, ax, axTone, onClick }: {
+  hot?: boolean; dot: "hot" | "ok"; text: React.ReactNode; ax: React.ReactNode; axTone?: string;
+  /** 类别行下钻回调(聚合「其余 N 类别」行无单一类别不传 = 纯展示) */
+  onClick?: () => void;
+}) {
   return (
     <div
       className={`mb-2 flex items-center gap-2.5 rounded-[10px] border px-[11px] py-[9px] last:mb-0 ${
         hot ? "border-crit bg-crit-soft" : "border-line bg-[var(--ds-card-2,var(--ds-card))]"
-      }`}
+      }${onClick ? " cursor-pointer transition-colors hover:border-accent" : ""}`}
+      role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined} title={onClick ? DRILL_HINT : undefined}
+      onClick={onClick} onKeyDown={onClick ? keyActivate(onClick) : undefined}
     >
       <span className={dot === "hot" ? "ds-adot" : "ds-adot ds-adot--ok"} />
       <div className="min-w-0 flex-1 text-[11.5px] leading-[1.5] text-ink-2 [&_b]:text-ink">{text}</div>
@@ -297,7 +364,9 @@ function AlertRowView({ hot, dot, text, ax, axTone }: { hot?: boolean; dot: "hot
   );
 }
 
-export function AlertsBody({ alerts }: { alerts: Row }) {
+// 数据点即溯源:每条类别行可点(onSelect(category,label))→ 告警原声下钻;
+// 聚合「其余 N 类别」行无单一类别,如实不可点。
+export function AlertsBody({ alerts, onSelect }: { alerts: Row; onSelect?: (category: string, label: string) => void }) {
   const cats: Row[] = Array.isArray(alerts.categories) ? alerts.categories : [];
   const pushed: Row[] = Array.isArray(alerts.recent_pushed) ? alerts.recent_pushed : [];
   const windowHours = Number(alerts.window_hours) || 8;
@@ -318,6 +387,7 @@ export function AlertsBody({ alerts }: { alerts: Row }) {
             key={String(c.category)}
             hot
             dot="hot"
+            onClick={onSelect ? () => onSelect(String(c.category), String(c.label || c.category)) : undefined}
             text={
               <>
                 <b>{String(c.label || c.category)}</b> · {windowHours}h 内 {count} 条负面
@@ -332,6 +402,7 @@ export function AlertsBody({ alerts }: { alerts: Row }) {
         <AlertRowView
           key={String(c.category)}
           dot="ok"
+          onClick={onSelect ? () => onSelect(String(c.category), String(c.label || c.category)) : undefined}
           text={
             <>
               {String(c.label || c.category)} · {windowHours}h 内 {Number(c.negative_count) || 0} 条负面,未达阈值({threshold}),观察中
@@ -373,9 +444,10 @@ export function AlertsBody({ alerts }: { alerts: Row }) {
 }
 
 /* ============ line_voice · 产品线声音榜(demo sku 形态;诚实:产品线级非 SKU) ============ */
-export function LineVoiceBody({ items }: { items: Row[] }) {
+// 行可点(onRowClick,v1):该维度过滤待接 → 开模块溯源弹窗 + 底部「底层样本」,如实不装
+export function LineVoiceBody({ items, onRowClick }: { items: Row[]; onRowClick?: () => void }) {
   const rows = items.filter((it) => (Number(it.count) || 0) > 0);
-  if (rows.length === 0) return <EmptyLine text="窗口内产品线词表零命中。" />;
+  if (rows.length === 0) return <EmptyLine text="窗口内产品线声量零命中。" />;
   return (
     <div>
       {rows.map((it) => {
@@ -389,17 +461,19 @@ export function LineVoiceBody({ items }: { items: Row[] }) {
             color={shareTone(share)}
             dashed={share == null}
             value={share != null ? `${pctText(share)}% 正 · ${count}条` : `待批注 · ${count}条`}
-            title={`已批注 ${Number(it.annotated) || 0}/${count} 条`}
+            title={`已批注 ${Number(it.annotated) || 0}/${count} 条${onRowClick ? ` · ${DIM_HINT}` : ""}`}
+            onClick={onRowClick}
           />
         );
       })}
-      <ProvNote>产品线级词表分桶 · 无逐 SKU 真实关联(如实不下钻)· pos_share 分母=已批注条数</ProvNote>
+      <ProvNote>产品线级分桶 · 无逐 SKU 真实关联(如实不按 SKU 下钻)· 正面占比分母=已批注条数</ProvNote>
     </div>
   );
 }
 
 /* ============ plat · 平台分布(demo plat 形态:accent 渐变条 + count · pct%) ============ */
-export function PlatformBody({ items }: { items: Row[] }) {
+// 行可点(onRowClick,v1):平台维度过滤待接 → 开模块溯源弹窗 + 底部「底层样本」,如实不装
+export function PlatformBody({ items, onRowClick }: { items: Row[]; onRowClick?: () => void }) {
   const total = items.reduce((a, it) => a + (Number(it.count) || 0), 0);
   if (total === 0) return <EmptyLine text="窗口内无平台计数。" />;
   return (
@@ -407,28 +481,43 @@ export function PlatformBody({ items }: { items: Row[] }) {
       {items.map((it) => {
         const count = Number(it.count) || 0;
         const pct = (count / total) * 100;
-        return <BarRow key={String(it.platform)} name={String(it.platform || "unknown")} widthPct={pct} value={`${count} · ${pctText(count / total)}%`} />;
+        return (
+          <BarRow
+            key={String(it.platform)}
+            name={String(it.platform || "unknown")}
+            widthPct={pct}
+            value={`${count} · ${pctText(count / total)}%`}
+            title={onRowClick ? DIM_HINT : undefined}
+            onClick={onRowClick}
+          />
+        );
       })}
     </div>
   );
 }
 
 /* ============ topics · 热点话题 chips(demo .topic:词 + mono 计数 + ▲▼) ============ */
-export function TopicsBody({ topics }: { topics: Row }) {
+// 数据点即溯源:chip 可点(onSelect(key,label,count))→ 话题原声下钻弹窗
+export function TopicsBody({ topics, onSelect }: { topics: Row; onSelect?: (key: string, label: string, count: number) => void }) {
   const items: Row[] = Array.isArray(topics.items) ? topics.items : [];
-  if (items.length === 0) return <EmptyLine text={String(topics.reason || "窗口内话题词族零命中。")} />;
+  if (items.length === 0) return <EmptyLine text={String(topics.reason || "窗口内话题零命中。")} />;
   return (
     <div>
       <div className="flex flex-wrap gap-2">
         {items.map((t) => {
           const delta = typeof t.delta_pct === "number" ? t.delta_pct : null;
+          const count = Number(t.count) || 0;
+          const pick = onSelect ? () => onSelect(String(t.key), String(t.label || t.key), count) : undefined;
           return (
             <span
               key={String(t.key)}
-              className="inline-flex items-center gap-[7px] rounded-[18px] border border-line bg-[var(--ds-card-2,var(--ds-card))] px-3 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:border-accent hover:text-ink"
-              title={delta != null ? `vs 上一等长窗 ${delta > 0 ? "+" : ""}${delta}%` : "上一窗口 0 命中 · 环比诚实省略"}
+              className={`inline-flex items-center gap-[7px] rounded-[18px] border border-line bg-[var(--ds-card-2,var(--ds-card))] px-3 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:border-accent hover:text-ink${
+                pick ? " cursor-pointer" : ""
+              }`}
+              role={pick ? "button" : undefined} tabIndex={pick ? 0 : undefined} onClick={pick} onKeyDown={pick ? keyActivate(pick) : undefined}
+              title={`${delta != null ? `对比上一等长窗 ${delta > 0 ? "+" : ""}${delta}%` : "上一窗口 0 命中 · 环比诚实省略"}${pick ? ` · ${DRILL_HINT}` : ""}`}
             >
-              {String(t.label || t.key)} <b className="font-mono font-bold text-accent">{Number(t.count) || 0}</b>
+              {String(t.label || t.key)} <b className="font-mono font-bold text-accent">{count}</b>
               {delta != null && delta !== 0 && (
                 <span className={`text-[9px] font-bold ${delta > 0 ? "text-good" : "text-crit"}`}>
                   {delta > 0 ? "▲" : "▼"}
@@ -439,7 +528,7 @@ export function TopicsBody({ topics }: { topics: Row }) {
           );
         })}
       </div>
-      <ProvNote>热度=话题词命中评论数(lexicon_v0 词族)· ▲▼=vs 上一等长窗 · 扫描 {Number(topics.scanned) || 0} 条</ProvNote>
+      <ProvNote>热度=话题词命中评论数 · ▲▼=对比上一等长窗 · 扫描 {Number(topics.scanned) || 0} 条 · 点 chip 看底层样本</ProvNote>
     </div>
   );
 }
@@ -462,7 +551,8 @@ const LANG_LABEL: Record<string, string> = {
   und: "待检",
 };
 
-export function LanguageBody({ dist }: { dist: Row }) {
+// 行可点(onRowClick,v1):语言维度过滤待接 → 开模块溯源弹窗 + 底部「底层样本」,如实不装
+export function LanguageBody({ dist, onRowClick }: { dist: Row; onRowClick?: () => void }) {
   const items: Row[] = Array.isArray(dist.items) ? dist.items : [];
   const total = Number(dist.total) || items.reduce((a, it) => a + (Number(it.count) || 0), 0);
   if (items.length === 0 || total === 0) return <EmptyLine text={String(dist.reason || "窗口内无语言分桶。")} />;
@@ -480,11 +570,12 @@ export function LanguageBody({ dist }: { dist: Row }) {
             color={und ? "var(--ds-muted)" : undefined}
             dashed={und}
             value={`${count} · ${pctText(count / total)}%`}
-            title={und ? "language_detected 空 · 未检出存量" : `language_detected=${code}`}
+            title={`${und ? "language_detected 空 · 未检出存量" : `language_detected=${code}`}${onRowClick ? ` · ${DIM_HINT}` : ""}`}
+            onClick={onRowClick}
           />
         );
       })}
-      <ProvNote>语言分布 · 非地理归属(评论无真实 geo 关联,诚实口径)· 待检=未检出存量</ProvNote>
+      <ProvNote>语言分布 · 非地理归属(评论无真实地理关联,诚实口径)· 待检=未检出存量</ProvNote>
     </div>
   );
 }
@@ -577,7 +668,7 @@ export function KpiBandCards({
           label="正面情绪占比"
           value="—"
           pending
-          pendingNote={ext ? "窗口内情绪批注 0 行" : "voice-report-ext 待接通"}
+          pendingNote={ext ? "窗口内情绪批注 0 行" : "扩展报表待接通"}
         />
       )}
       {/* V1.1:PRD 通路已建(vkpi_market_prd_referrals)→ 真计数,0 也如实显示 0 */}
@@ -595,7 +686,7 @@ export function KpiBandCards({
           label="已转产品部"
           value="—"
           pending
-          pendingNote={String(prdGroup?.reason || (ext ? "prd_referrals 组待接通" : "voice-report-ext 待接通"))}
+          pendingNote={String(prdGroup?.reason || (ext ? "转交计数待接通" : "扩展报表待接通"))}
         />
       )}
     </div>

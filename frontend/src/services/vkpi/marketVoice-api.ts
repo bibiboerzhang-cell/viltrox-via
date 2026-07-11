@@ -6,6 +6,8 @@
 //     {items:[{id,source_table,platform,text,language,identity,identity_ref,
 //       post_url,likes,created_at,prov:{fetched_at,post_table,post_id}}],total,offset,limit}
 //     后端内部异常不 500 → 回契约形状 + status:"error"(调用方诚实降级,绝不编数据)。
+//     category(纯增量,数据点下钻):COMPLAINT_CATEGORIES 六类 key + 'wishlist' 词族
+//     过滤(后端 Python 层词族匹配,total=命中数;扫描封顶时响应带 note 如实说明)。
 // - enqueueReplyQueueComment:POST /api/admin/vkpi/reply-queue/enqueue-comment
 //     V0e 闭环「转回复队列」:按 vkpi_comments.id 单条手动入 vkpi_reply_queue(幂等,
 //     已在队返回已有行 already_queued=true;失败 4xx 由 apiFetch 抛错,调用方如实展示)。
@@ -49,6 +51,9 @@ export interface VoiceFeedResponse {
   // 后端诚实降级形状(聚合内部异常不 500)
   status?: string;
   reason?: string;
+  /** category 下钻增量:回显过滤词族 key;扫描封顶时 note 如实说明 total 覆盖范围 */
+  category?: string;
+  note?: string;
 }
 
 export interface VoiceFeedOptions {
@@ -56,6 +61,8 @@ export interface VoiceFeedOptions {
   limit?: number;
   identity?: VoiceIdentity | "";
   sentiment?: string;
+  /** 词族下钻(纯增量):COMPLAINT_CATEGORIES 六类 key + 'wishlist';非法值后端 400 */
+  category?: string;
 }
 
 export async function getVoiceFeed(token: string, options: VoiceFeedOptions = {}) {
@@ -65,6 +72,7 @@ export async function getVoiceFeed(token: string, options: VoiceFeedOptions = {}
   });
   if (options.identity) params.set("identity", options.identity);
   if (options.sentiment) params.set("sentiment", options.sentiment);
+  if (options.category) params.set("category", options.category);
   return apiFetch<VoiceFeedResponse>(
     `/api/admin/vkpi/market/voice-feed?${params.toString()}`,
     {},

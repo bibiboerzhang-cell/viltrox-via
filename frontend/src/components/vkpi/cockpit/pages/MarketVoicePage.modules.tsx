@@ -47,6 +47,8 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
   kpiV: {
     label: "voice-report(-ext) · lexicon_v0",
     rows: [
+      // 原页头三枚方法论徽(lexicon_v0/零 LLM/反哺产品部)收编到此(卡面去术语,口径不丢)
+      ["方法", "lexicon_v0 纯词表聚合 · 零 LLM · 反哺产品部"],
       ["评论库", "vkpi_comments"],
       ["意向队列", "vkpi_reply_queue"],
       ["日序列", "voice-report-ext kpi_series(UTC 日轴 0 填齐)"],
@@ -347,16 +349,18 @@ export function KpiCard({
 }
 
 /* ============ 覆盖行:demo .coverrow(绿点 + 名称 + mono 状态) ============ */
+// 卡面去术语:真实表名从行面收进 hover tooltip(诚实信息不丢,只挪位置)
 export function CoverRow({ on, name, table, value, note }: { on: boolean; name: string; table: string; value: string; note?: string }) {
   return (
-    <div className="flex items-center gap-2 border-b border-line py-1.5 text-[11.5px] last:border-0" title={note || table}>
+    <div
+      className="flex items-center gap-2 border-b border-line py-1.5 text-[11.5px] last:border-0"
+      title={`${table}${note && note !== table ? ` · ${note}` : ""}`}
+    >
       <span
         className={`h-[7px] w-[7px] flex-none rounded-full ${on ? "bg-good" : "bg-muted opacity-50"}`}
         style={on ? { boxShadow: "0 0 5px var(--ds-good)" } : undefined}
       />
-      <span className={`min-w-0 flex-1 truncate ${on ? "text-ink-2" : "text-muted"}`}>
-        {name} <span className="font-mono text-[9px] opacity-80">{table}</span>
-      </span>
+      <span className={`min-w-0 flex-1 truncate ${on ? "text-ink-2" : "text-muted"}`}>{name}</span>
       <span className={`flex-none font-mono text-[9.5px] ${on ? "text-muted" : "text-warn"}`}>{value}</span>
     </div>
   );
@@ -627,7 +631,7 @@ export function RecsBody({ suggestions, prd }: { suggestions: Row; prd?: RecsPrd
 // 产品线声量分桶(旧版功能保留;palette 可选模块)
 export function BucketsBody({ data }: { data: Row | null }) {
   const lineBuckets: Row[] = Array.isArray(data?.buckets?.product_lines) ? data!.buckets.product_lines : [];
-  if (lineBuckets.length === 0) return <EmptyLine text="本窗口无产品线声量分桶(focal_matrix 词表零命中)。" />;
+  if (lineBuckets.length === 0) return <EmptyLine text="本窗口无产品线声量分桶(产品线词零命中)。" />;
   return (
     <div className="flex flex-wrap gap-1.5">
       {lineBuckets.map((b) => (
