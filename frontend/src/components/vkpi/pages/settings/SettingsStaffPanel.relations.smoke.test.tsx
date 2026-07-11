@@ -106,7 +106,10 @@ describe("SettingsStaffPanel · 关系视图为默认,表格保留为备选(功�
   };
 
   it("默认关系视图;切「表格」回到 6 列 StaffTable;邀请卡(StaffInviteCard)仍在", () => {
-    render(React.createElement(SettingsStaffPanel, panelProps));
+    const { container } = render(React.createElement(SettingsStaffPanel, panelProps));
+    // 布局修锚点:staff 区两栏带 --staff 修饰类(traffic css 按它把 align-items 覆回 start,
+    // 左表单卡贴内容,不吃 settings-dark 的全局 stretch)。
+    expect(container.querySelector(".vkpi-settings-two-column.vkpi-settings-two-column--staff")).toBeTruthy();
     // 邀请入口保留
     expect(screen.getByText("授权账户")).toBeTruthy();
     // 默认 = 关系视图

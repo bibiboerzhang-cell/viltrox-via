@@ -19,29 +19,33 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
   return e(PopoverWrapper, { onClose, anchorRef, width: 280 },
     e("div", { className: "w-[280px]" },
       // Profile header
-      e("div", { className: "px-3 py-3 border-b border-white/[0.06] flex items-center gap-3" },
+      // 2026-07-11 样式回归修:边线/底色/文字全走 --ds-* token 类(border-line/text-ink/
+      // text-muted/…),不再写死 white/slate/amber/blue——写死色在明暗主题间必有一边露馅;
+      // 且 token 色禁 /opacity 修饰符(config 无 alpha-value,整类会被静默丢弃)。
+      // 中性底纹用 color-mix(var(--ds-text) N%) 任意值,两主题自适应。
+      e("div", { className: "px-3 py-3 border-b border-line flex items-center gap-3" },
         e("div", {
           className: "shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-[14px] font-bold text-white",
           style: { background: user.avatarGradient }
         }, user.avatar),
         e("div", { className: "min-w-0 flex-1" },
-          e("div", { className: "text-[12px] font-medium text-white" }, user.name),
-          e("div", { className: "text-[10px] text-slate-500 flex items-center gap-1 flex-wrap" },
-            e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, isAdmin ? t("Admin") : t("成员")),
+          e("div", { className: "text-[12px] font-medium text-ink" }, user.name),
+          e("div", { className: "text-[10px] text-muted flex items-center gap-1 flex-wrap" },
+            e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-accent-soft text-accent" }, isAdmin ? t("Admin") : t("成员")),
             e("span", null, "· " + user.email)
           )
         )
       ),
       // viewing as banner
-      viewingAs && e("div", { className: "px-3 py-2 border-b border-white/[0.06] bg-blue-500/[0.06] flex items-center gap-2" },
+      viewingAs && e("div", { className: "px-3 py-2 border-b border-line bg-info-soft flex items-center gap-2" },
         e("div", {
           className: "shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white",
           style: { background: viewingAs.color }
         }, viewingAs.avatar),
-        e("div", { className: "flex-1 text-[10px] text-blue-200" }, `${t("正在以")} ${viewingAs.name} ${t("的身份查看")}`),
+        e("div", { className: "flex-1 text-[10px] text-info" }, `${t("正在以")} ${viewingAs.name} ${t("的身份查看")}`),
         e("button", {
           onClick: () => { onResetView(); onClose(); },
-          className: "text-[9px] text-blue-300 hover:text-white px-1.5 py-0.5 rounded border border-blue-500/30 hover:bg-blue-500/15"
+          className: "text-[9px] text-info hover:text-ink px-1.5 py-0.5 rounded border border-line hover:bg-info-soft"
         }, t("返回 Admin 视角"))
       ),
       // Menu items - 3 main + 授权页 V1:「成员与授权」敏感管理入口收进头像菜单,仅 Owner
@@ -57,22 +61,23 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
         ].map((m: any, i: any) => e("button", {
           key: i,
           onClick: () => openMenuItem(m.onClick),
-          className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-white/[0.018] px-3 py-2 text-left text-slate-200 transition-colors hover:bg-white/[0.055]"
+          className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-[color:color-mix(in_srgb,var(--ds-text)_4%,transparent)] px-3 py-2 text-left text-ink-2 transition-colors hover:bg-[color:color-mix(in_srgb,var(--ds-text)_9%,transparent)]"
         },
-          e(m.icon, { size: 13, className: "text-slate-400 shrink-0" }),
-          e("span", { className: "flex-1 text-[12px] text-white" }, m.label),
-          m.ownerBadge && e("span", { className: "text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300" }, "OWNER"),
-          m.right && e("span", { className: "text-[10px] text-slate-500" }, m.right),
-          e(ChevronRight, { size: 11, className: "text-slate-600" })
+          e(m.icon, { size: 13, className: "text-muted shrink-0" }),
+          e("span", { className: "flex-1 text-[12px] text-ink" }, m.label),
+          // OWNER 徽与授权页 owner 卡同源:warn(金)token,6 主题自洽
+          m.ownerBadge && e("span", { className: "text-[8px] font-bold tracking-widest px-1.5 py-0.5 rounded bg-warn-soft text-warn" }, "OWNER"),
+          m.right && e("span", { className: "text-[10px] text-muted" }, m.right),
+          e(ChevronRight, { size: 11, className: "text-muted" })
         ))
       ),
       // Admin only: impersonate(快捷入口,完整列表在团队管理)
-      isAdmin && !viewingAs && onImpersonate && e("div", { className: "py-1 border-t border-white/[0.06]" },
-        e("div", { className: "px-3 py-1 text-[9px] uppercase tracking-wider text-slate-500" }, t("切换身份(查看为)")),
+      isAdmin && !viewingAs && onImpersonate && e("div", { className: "py-1 border-t border-line" },
+        e("div", { className: "px-3 py-1 text-[9px] uppercase tracking-wider text-muted" }, t("切换身份(查看为)")),
         staffList.filter((s: any) => String(s.id) !== String(user.id) && !s.isAdmin).slice(0, 3).map((s: any) => e("button", {
           key: s.id,
           onClick: () => { onImpersonate(s); onClose(); },
-          className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-2.5 rounded-lg bg-white/[0.018] px-3 py-1.5 text-left transition-colors hover:bg-white/[0.055]"
+          className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-2.5 rounded-lg bg-[color:color-mix(in_srgb,var(--ds-text)_4%,transparent)] px-3 py-1.5 text-left transition-colors hover:bg-[color:color-mix(in_srgb,var(--ds-text)_9%,transparent)]"
         },
           e("div", { className: "relative shrink-0" },
             e("div", {
@@ -80,31 +85,32 @@ export function UserMenuPopover({ onClose, theme, onToggleTheme, anchorRef, t, u
               style: { background: s.color }
             }, s.avatar),
             (s.online || s.user_online) ? e("span", {
-              className: "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400",
-              style: { boxShadow: "0 0 0 1.5px #0a1020" },
+              className: "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-good",
+              // 在线点描边跟弹层底色 token,原来写死 #0a1020 在浅色下是黑圈
+              style: { boxShadow: "0 0 0 1.5px var(--ds-overlay-surface)" },
               title: "在线"
             }) : null
           ),
-          e("span", { className: "flex-1 text-[11px] text-slate-300" }, s.name),
-          (s.online || s.user_online) ? e("span", { className: "text-[8.5px] text-emerald-400" }, "在线") : e("span", { className: "text-[9px] text-slate-500" }, s.title)
+          e("span", { className: "flex-1 text-[11px] text-ink-2" }, s.name),
+          (s.online || s.user_online) ? e("span", { className: "text-[8.5px] text-good" }, "在线") : e("span", { className: "text-[9px] text-muted" }, s.title)
         ))
       ),
       // Language only (V6.14.4: 切换主题删除 - 无 light theme)
-      e("div", { className: "py-1 border-t border-white/[0.06]" },
-        e("button", { 
+      e("div", { className: "py-1 border-t border-line" },
+        e("button", {
           onClick: onToggleLang,
-          className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-white/[0.018] px-3 py-2 text-left transition-colors hover:bg-white/[0.055]" 
+          className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-[color:color-mix(in_srgb,var(--ds-text)_4%,transparent)] px-3 py-2 text-left transition-colors hover:bg-[color:color-mix(in_srgb,var(--ds-text)_9%,transparent)]"
         },
-          e(Languages, { size: 13, className: "text-slate-400 shrink-0" }),
-          e("span", { className: "flex-1 text-[12px] text-white" }, t("语言")),
-          e("span", { className: "text-[10px] text-slate-300 font-medium" }, lang === "en" ? "English" : "中文")
+          e(Languages, { size: 13, className: "text-muted shrink-0" }),
+          e("span", { className: "flex-1 text-[12px] text-ink" }, t("语言")),
+          e("span", { className: "text-[10px] text-ink-2 font-medium" }, lang === "en" ? "English" : "中文")
         )
       ),
       // Logout
-      e("div", { className: "py-1 border-t border-white/[0.06]" },
-        e("button", { onClick: () => { onClose(); onLogout && onLogout(); }, className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-white/[0.018] px-3 py-2 text-left transition-colors hover:bg-rose-500/[0.08]" },
-          e(LogOut, { size: 13, className: "text-rose-400 shrink-0" }),
-          e("span", { className: "flex-1 text-[12px] text-rose-300" }, t("退出登录"))
+      e("div", { className: "py-1 border-t border-line" },
+        e("button", { onClick: () => { onClose(); onLogout && onLogout(); }, className: "mx-2 flex w-[calc(100%-1rem)] items-center gap-3 rounded-lg bg-[color:color-mix(in_srgb,var(--ds-text)_4%,transparent)] px-3 py-2 text-left transition-colors hover:bg-crit-soft" },
+          e(LogOut, { size: 13, className: "text-crit shrink-0" }),
+          e("span", { className: "flex-1 text-[12px] text-crit" }, t("退出登录"))
         )
       )
     )

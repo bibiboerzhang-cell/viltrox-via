@@ -61,7 +61,9 @@ export function SettingsStaffPanel({
   // 原 6 列扁平表保留为「表格」备选视图(信息与功能零删减)。
   const [view, setView] = useState<'relations' | 'table'>('relations');
   return (
-    <section className="vkpi-settings-two-column">
+    // --staff 修饰类:关系视图右卡天生高,本区左表单卡要贴内容(align-items:start,
+    // 规则在 vkpi-settings-traffic.css),不吃 settings-dark 的全局 stretch。
+    <section className="vkpi-settings-two-column vkpi-settings-two-column--staff">
       <StaffInviteCard
         email={email}
         name={name}

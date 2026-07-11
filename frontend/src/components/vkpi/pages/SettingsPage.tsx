@@ -68,10 +68,11 @@ interface SentinelResult {
   checks?: SentinelCheck[];
 }
 
+// 2026-07-11 样式回归修:状态点走 --ds-* 语义色 token,6 主题(3 风格×明暗)自洽,不写死 hex。
 const SENTINEL_DOT_COLOR: Record<string, string> = {
-  ok: '#22c55e',
-  warn: '#eab308',
-  fail: '#ef4444',
+  ok: 'var(--ds-good)',
+  warn: 'var(--ds-warn)',
+  fail: 'var(--ds-crit)',
 };
 
 function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
@@ -125,7 +126,7 @@ function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
       <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong style={{ fontSize: 14 }}>数据健康哨兵</strong>
-          <span className="text-slate-400" style={{ marginLeft: 10, fontSize: 12 }}>
+          <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
             {hasData
               ? `10 项黄金链路 · 正常 ${summary.ok ?? 0} / 留意 ${summary.warn ?? 0} / 失败 ${summary.fail ?? 0} · 上次运行 ${formatLocal(result?.ran_at)}`
               : loading
@@ -149,12 +150,12 @@ function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
                   height: 8,
                   borderRadius: '50%',
                   flex: '0 0 auto',
-                  background: SENTINEL_DOT_COLOR[check.status] || '#94a3b8',
+                  background: SENTINEL_DOT_COLOR[check.status] || 'var(--ds-muted)',
                 }}
               />
               <span style={{ minWidth: 170, fontWeight: 500 }}>{check.label}</span>
-              <span className="text-slate-400" style={{ flex: 1 }}>{check.detail}</span>
-              <span className="text-slate-500" style={{ flex: '0 0 auto', fontSize: 11 }}>
+              <span className="text-muted" style={{ flex: 1 }}>{check.detail}</span>
+              <span className="text-muted" style={{ flex: '0 0 auto', fontSize: 11 }}>
                 {formatLocal(check.checked_at)}
               </span>
             </div>
@@ -243,7 +244,7 @@ function CostLedgerCard({ apiToken }: { apiToken?: string }) {
       <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong style={{ fontSize: 14 }}>成本记账(内部口径)</strong>
-          <span className="text-slate-400" style={{ marginLeft: 10, fontSize: 12 }}>
+          <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
             {overview
               ? `本月合计 ${usd(month.total_usd)} · 统计时间 ${formatLocal(overview.generated_at)}`
               : loading
@@ -257,28 +258,28 @@ function CostLedgerCard({ apiToken }: { apiToken?: string }) {
         <>
           <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
             {stats.map((item) => (
-              <div key={item.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(148,163,184,0.08)' }}>
-                <div className="text-slate-400" style={{ fontSize: 11 }}>{item.label}</div>
+              <div key={item.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'color-mix(in srgb, var(--ds-text) 6%, transparent)' }}>
+                <div className="text-muted" style={{ fontSize: 11 }}>{item.label}</div>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{item.value}</div>
-                <div className="text-slate-500" style={{ fontSize: 11 }}>{item.sub}</div>
+                <div className="text-muted" style={{ fontSize: 11 }}>{item.sub}</div>
               </div>
             ))}
           </div>
           {topActors.length ? (
             <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
-              <div className="text-slate-400" style={{ fontSize: 11, fontWeight: 500 }}>本月 Top Actor</div>
+              <div className="text-muted" style={{ fontSize: 11, fontWeight: 500 }}>本月 Top Actor</div>
               {topActors.map((actor) => (
                 <div key={actor.actor_id} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {actor.actor_id}
                   </span>
-                  <span className="text-slate-400" style={{ flex: '0 0 auto' }}>{actor.runs ?? 0} 次</span>
+                  <span className="text-muted" style={{ flex: '0 0 auto' }}>{actor.runs ?? 0} 次</span>
                   <span style={{ flex: '0 0 auto', fontWeight: 500 }}>{usd(actor.cost_usd)}</span>
                 </div>
               ))}
             </div>
           ) : null}
-          <div className="text-slate-500" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+          <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
             记账收口覆盖(本月):{unified}/{apifyRuns} 笔 Apify run 走统一记账口
             {coverage.estimated_entries ? ` · 估算 ${coverage.estimated_entries} 笔` : ''}
             {coverage.zero_cost_entries ? ` · 零成本盲区 ${coverage.zero_cost_entries} 笔` : ''}

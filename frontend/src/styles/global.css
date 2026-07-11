@@ -32,6 +32,29 @@
     text-align: inherit;
   }
 
+  /* 两个不在 .cockpit-shell 子树里的浮层容器,此前吃不到上面任何重置:
+     · .vkpi-popover-layer —— PopoverWrapper portal 挂 document.body(账户菜单等弹层);
+     · .cockpit-settings-dark —— 系统设置全屏浮层,是 .cockpit-shell 的兄弟节点。
+     preflight 关着 → 原生 <button> 的 UA 边框直接露出(暗色下=刺眼白圈);
+     color-scheme 继承 :root 的 light → 暗色主题下滚动条/原生控件露白。
+     修法与 .cockpit-modal 同款:跟主题,不钉死 dark。 */
+  :where(.vkpi-popover-layer, .cockpit-settings-dark) {
+    color-scheme: light;
+  }
+
+  :where([data-theme="dark"] .vkpi-popover-layer, [data-theme="dark"] .cockpit-settings-dark) {
+    color-scheme: dark;
+  }
+
+  :where(.vkpi-popover-layer button, .cockpit-settings-dark button) {
+    appearance: none;
+    background: transparent;
+    border: 0 solid transparent;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+  }
+
   :where(.cockpit-shell input),
   :where(.cockpit-shell textarea),
   :where(.cockpit-shell select) {

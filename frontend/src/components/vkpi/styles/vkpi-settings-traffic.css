@@ -537,8 +537,8 @@
 .vkpi-staff-relations__stats strong.is-good { color: var(--vkpi-green); }
 .vkpi-staff-relations__stats strong.is-warn { color: var(--vkpi-yellow); }
 
-/* Owner 大卡 */
-.vkpi-staff-owner-card { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--vkpi-border); border-radius: 13px; background: linear-gradient(135deg, var(--vkpi-blue-soft), transparent); color: var(--vkpi-text); padding: 12px 14px; cursor: pointer; transition: border-color .14s; }
+/* Owner 大卡(appearance:none —— preflight 关着,原生 button 的 UA 皮肤必须显式关) */
+.vkpi-staff-owner-card { appearance: none; display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--vkpi-border); border-radius: 13px; background: linear-gradient(135deg, var(--vkpi-blue-soft), transparent); color: var(--vkpi-text); padding: 12px 14px; cursor: pointer; transition: border-color .14s; }
 .vkpi-staff-owner-card:hover { border-color: var(--vkpi-border-strong); }
 .vkpi-staff-owner-card.is-selected { border-color: var(--vkpi-blue); }
 .vkpi-staff-owner-card__badge { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 800; letter-spacing: .1em; color: var(--vkpi-yellow); background: var(--vkpi-yellow-soft); border-radius: 6px; padding: 3px 9px; flex: none; }
@@ -552,7 +552,7 @@
 /* 成员卡 grid */
 .vkpi-staff-member-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 900px) { .vkpi-staff-member-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.vkpi-staff-member-card { display: flex; align-items: center; gap: 9px; min-width: 0; text-align: left; border: 1px solid var(--vkpi-border); border-radius: 11px; background: var(--vkpi-surface); color: var(--vkpi-text); padding: 9px 10px; cursor: pointer; transition: border-color .14s, background .14s; }
+.vkpi-staff-member-card { appearance: none; display: flex; align-items: center; gap: 9px; min-width: 0; text-align: left; border: 1px solid var(--vkpi-border); border-radius: 11px; background: var(--vkpi-surface); color: var(--vkpi-text); padding: 9px 10px; cursor: pointer; transition: border-color .14s, background .14s; }
 .vkpi-staff-member-card:hover { border-color: var(--vkpi-border-strong); }
 .vkpi-staff-member-card.is-selected { border-color: var(--vkpi-blue); background: var(--vkpi-blue-soft); }
 .vkpi-staff-member-card__avatar { position: relative; flex: none; display: grid; place-items: center; }
@@ -587,7 +587,7 @@
 .vkpi-board-pickbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--vkpi-muted); }
 .vkpi-board-pickbar strong { color: var(--vkpi-blue); font-variant-numeric: tabular-nums; }
 .vkpi-board-chip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.vkpi-board-chip { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; border: 1px solid var(--vkpi-border); border-radius: 8px; background: transparent; color: var(--vkpi-muted); font-size: 11px; font-weight: 600; padding: 7px 10px; cursor: pointer; transition: border-color .12s, color .12s; }
+.vkpi-board-chip { appearance: none; display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; border: 1px solid var(--vkpi-border); border-radius: 8px; background: transparent; color: var(--vkpi-muted); font-size: 11px; font-weight: 600; padding: 7px 10px; cursor: pointer; transition: border-color .12s, color .12s; }
 .vkpi-board-chip:hover { border-color: var(--vkpi-border-strong); }
 .vkpi-board-chip.is-on { border-color: var(--vkpi-blue); background: var(--vkpi-blue-soft); color: var(--vkpi-blue); }
 .vkpi-board-chip strong { font-variant-numeric: tabular-nums; }
@@ -596,3 +596,9 @@
 .vkpi-staff-directory-card .vkpi-table-card__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .vkpi-staff-directory-card .vkpi-staff-relations,
 .vkpi-staff-directory-card > .vkpi-empty-panel { margin: 12px 16px 16px; }
+
+/* 错位修(2026-07-11):vkpi-settings-dark.css 给 .cockpit-settings-dark .vkpi-settings-two-column
+   统一 align-items: stretch(空白压实),但 staff 区右卡(关系视图)天生比左「授权账户」表单高
+   → 左卡被拉伸出大片空白。仅给 staff 区提特异性 (0,2,1) 覆回 start,左表单贴内容;
+   其余设置模块的 stretch 行为不动。 */
+.cockpit-settings-dark section.vkpi-settings-two-column--staff { align-items: start; }
