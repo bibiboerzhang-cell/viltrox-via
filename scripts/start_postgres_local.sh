@@ -15,7 +15,7 @@ if [ ! -x "$INITDB_BIN" ] || [ ! -x "$PG_CTL_BIN" ]; then
   exit 1
 fi
 
-mkdir -p "$POSTGRES_DATA_DIR" "$(dirname "$POSTGRES_LOG_FILE")"
+mkdir -p "$POSTGRES_DATA_DIR" "$(dirname "$POSTGRES_LOG_FILE")" "$POSTGRES_SOCKET_DIR"
 
 if [ ! -f "$POSTGRES_DATA_DIR/PG_VERSION" ] && [ -d "$POSTGRES_SOCKET_DIR" ]; then
   rmdir "$POSTGRES_SOCKET_DIR" 2>/dev/null || true

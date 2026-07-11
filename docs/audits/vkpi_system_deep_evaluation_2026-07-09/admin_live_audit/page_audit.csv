@@ -1,0 +1,19 @@
+﻿area,health,priority,finding,screenshot
+Dashboard,52,P0,指标可见但新鲜度不足，地图占首屏，Worker 离线,01-admin-dashboard.png
+全局搜索 / Intelligent,30,P0,复杂经营问题被误判成固定 ROI 排名并返回 0 行,12-intelligent-qa-result.png
+Report,38,P0,Dashboard 与报告人数、曝光、互动率口径冲突,03-report-panel.png
+MY KOL,45,P0,20 人、18 账号、717 MY KOL、1 个库对象并存,04-my-kol-team.png
+团队管理,32,P0,20 人但无活跃/登录时间、0 组、0 协作设置,05-team-management.png
+Projects,58,P0,阶段可管理，但导入态、占位 tracking 与真实证据混杂,06-projects.png
+战略台,64,P1,有 SoV 和机会分析，但缺证据到行动的动态路线,07-strategy-board-full.png
+GTM Command,47,P0,治理信息完整，但 North Star 几乎未推进且结果为 0,08-gtm-command.png
+提醒 / 通知,40,P0,提醒 0、建议 12、未读 74；模型分裂且有审计噪音,10-notifications.png
+KOL Pool,61,P1,1222 条供给强，但数据截至 6 月 12 日且大量待补全,13-kol-pool.png
+Market Voice,46,P1,规则词典有样本，结果与行动/结果没有串联,15-market-voice.png
+创意资产库,20,P0,实机持续停留在检索中，核心内容空白,17-creative-library.png
+Events,24,P0,测试数据、NaN、9642 天活动；任务表为 0,18-events.png
+Shopify / GOAFFPRO,28,P1,迁移尚未连接，订单与联盟销售为 0,19-shopify.png
+Dealers,18,P1,0 数据且地图瓦片未正常显示,20-dealers.png
+回复队列,29,P0,132 条中 130 pending，语言/意图识别存在明显误判,21-reply-queue.png
+Launchpad,42,P1,需先选实体，尚不是全局组合规划器,22-launchpad.png
+自治驾照,44,P0,治理概念强，但样本 n=2 或 0，暂不应升级自治,23-autonomy-license.png

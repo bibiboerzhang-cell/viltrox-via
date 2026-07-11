@@ -1,0 +1,5 @@
+﻿rule_key,count
+project.stalled_review,39
+recommendation.review_gap,27
+team_feedback.open,7
+budget_guard.warning_or_hard_stop,1

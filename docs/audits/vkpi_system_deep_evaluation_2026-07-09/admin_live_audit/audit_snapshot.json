@@ -1,0 +1,645 @@
+{
+  "version": 1,
+  "generatedAt": "2026-07-10T04:16:17+00:00",
+  "status": "ready",
+  "datasets": {
+    "daily_channel_metrics": [
+      {
+        "date": "2026-05-16",
+        "channels": 18,
+        "followers": 598907,
+        "total_views": 22652381,
+        "total_likes": 26378,
+        "total_comments": 1066,
+        "views_delta_24h": 0,
+        "avg_engagement_rate": 4.6959
+      },
+      {
+        "date": "2026-05-17",
+        "channels": 18,
+        "followers": 1174605,
+        "total_views": 369335574,
+        "total_likes": 14617428,
+        "total_comments": 267055,
+        "views_delta_24h": 0,
+        "avg_engagement_rate": 0.0
+      },
+      {
+        "date": "2026-05-18",
+        "channels": 1,
+        "followers": 34512,
+        "total_views": 278188,
+        "total_likes": 11683,
+        "total_comments": 298,
+        "views_delta_24h": 0,
+        "avg_engagement_rate": 0.0
+      },
+      {
+        "date": "2026-05-20",
+        "channels": 18,
+        "followers": 1179646,
+        "total_views": 368323010,
+        "total_likes": 14462252,
+        "total_comments": 263753,
+        "views_delta_24h": 716191,
+        "avg_engagement_rate": 18.552
+      },
+      {
+        "date": "2026-05-21",
+        "channels": 18,
+        "followers": 1180384,
+        "total_views": 368434611,
+        "total_likes": 14462617,
+        "total_comments": 263760,
+        "views_delta_24h": 111601,
+        "avg_engagement_rate": 18.5316
+      },
+      {
+        "date": "2026-05-22",
+        "channels": 18,
+        "followers": 1182213,
+        "total_views": 368434611,
+        "total_likes": 14462617,
+        "total_comments": 263769,
+        "views_delta_24h": 109851,
+        "avg_engagement_rate": 18.5317
+      },
+      {
+        "date": "2026-05-23",
+        "channels": 18,
+        "followers": 1182123,
+        "total_views": 368434611,
+        "total_likes": 14462617,
+        "total_comments": 263769,
+        "views_delta_24h": 103179,
+        "avg_engagement_rate": 18.5317
+      },
+      {
+        "date": "2026-05-24",
+        "channels": 18,
+        "followers": 1182887,
+        "total_views": 368662250,
+        "total_likes": 14462617,
+        "total_comments": 263773,
+        "views_delta_24h": 705020,
+        "avg_engagement_rate": 18.5301
+      },
+      {
+        "date": "2026-05-25",
+        "channels": 18,
+        "followers": 1183428,
+        "total_views": 368726935,
+        "total_likes": 14462617,
+        "total_comments": 263780,
+        "views_delta_24h": 473668,
+        "avg_engagement_rate": 18.5297
+      },
+      {
+        "date": "2026-05-26",
+        "channels": 18,
+        "followers": 1183835,
+        "total_views": 368726935,
+        "total_likes": 14462617,
+        "total_comments": 263785,
+        "views_delta_24h": 571386,
+        "avg_engagement_rate": 18.5297
+      },
+      {
+        "date": "2026-05-27",
+        "channels": 18,
+        "followers": 1185684,
+        "total_views": 368815603,
+        "total_likes": 14462617,
+        "total_comments": 263788,
+        "views_delta_24h": 1437527,
+        "avg_engagement_rate": 18.5291
+      },
+      {
+        "date": "2026-05-28",
+        "channels": 18,
+        "followers": 1188183,
+        "total_views": 368871241,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 795279,
+        "avg_engagement_rate": 18.5287
+      },
+      {
+        "date": "2026-05-29",
+        "channels": 17,
+        "followers": 1186196,
+        "total_views": 368903640,
+        "total_likes": 14450325,
+        "total_comments": 259389,
+        "views_delta_24h": 903940,
+        "avg_engagement_rate": 19.6184
+      },
+      {
+        "date": "2026-05-30",
+        "channels": 17,
+        "followers": 1188418,
+        "total_views": 369056852,
+        "total_likes": 14450325,
+        "total_comments": 259389,
+        "views_delta_24h": 974649,
+        "avg_engagement_rate": 19.6173
+      },
+      {
+        "date": "2026-05-31",
+        "channels": 17,
+        "followers": 1188504,
+        "total_views": 369119230,
+        "total_likes": 14450325,
+        "total_comments": 259389,
+        "views_delta_24h": 760706,
+        "avg_engagement_rate": 19.6168
+      },
+      {
+        "date": "2026-06-01",
+        "channels": 18,
+        "followers": 1194785,
+        "total_views": 369180617,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 730603,
+        "avg_engagement_rate": 18.5266
+      },
+      {
+        "date": "2026-06-02",
+        "channels": 18,
+        "followers": 1195239,
+        "total_views": 369246634,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 846180,
+        "avg_engagement_rate": 18.5261
+      },
+      {
+        "date": "2026-06-03",
+        "channels": 18,
+        "followers": 1195786,
+        "total_views": 369270695,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 735010,
+        "avg_engagement_rate": 18.526
+      },
+      {
+        "date": "2026-06-04",
+        "channels": 18,
+        "followers": 1196414,
+        "total_views": 369326424,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 700676,
+        "avg_engagement_rate": 18.5256
+      },
+      {
+        "date": "2026-06-05",
+        "channels": 18,
+        "followers": 1196960,
+        "total_views": 369378549,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 744071,
+        "avg_engagement_rate": 18.5253
+      },
+      {
+        "date": "2026-06-06",
+        "channels": 18,
+        "followers": 1197517,
+        "total_views": 369469201,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 503148,
+        "avg_engagement_rate": 18.5247
+      },
+      {
+        "date": "2026-06-07",
+        "channels": 18,
+        "followers": 1198381,
+        "total_views": 369492044,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 373655,
+        "avg_engagement_rate": 18.5245
+      },
+      {
+        "date": "2026-06-08",
+        "channels": 18,
+        "followers": 1199260,
+        "total_views": 369564798,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 404045,
+        "avg_engagement_rate": 18.524
+      },
+      {
+        "date": "2026-06-09",
+        "channels": 18,
+        "followers": 1199802,
+        "total_views": 369581532,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 1277296,
+        "avg_engagement_rate": 18.5239
+      },
+      {
+        "date": "2026-06-10",
+        "channels": 18,
+        "followers": 1201068,
+        "total_views": 369668334,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 1591963,
+        "avg_engagement_rate": 18.5234
+      },
+      {
+        "date": "2026-06-11",
+        "channels": 18,
+        "followers": 1202169,
+        "total_views": 369729226,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 1927485,
+        "avg_engagement_rate": 18.523
+      },
+      {
+        "date": "2026-06-12",
+        "channels": 18,
+        "followers": 1203332,
+        "total_views": 369778876,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 1484549,
+        "avg_engagement_rate": 18.5227
+      },
+      {
+        "date": "2026-06-13",
+        "channels": 18,
+        "followers": 1204327,
+        "total_views": 369800033,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 1516781,
+        "avg_engagement_rate": 18.5225
+      },
+      {
+        "date": "2026-06-14",
+        "channels": 18,
+        "followers": 1205115,
+        "total_views": 369892749,
+        "total_likes": 14462617,
+        "total_comments": 263791,
+        "views_delta_24h": 1401838,
+        "avg_engagement_rate": 18.5219
+      }
+    ],
+    "action_status": [
+      {
+        "status": "suggested",
+        "count": 196,
+        "share_pct": 67.4
+      },
+      {
+        "status": "dismissed",
+        "count": 75,
+        "share_pct": 25.8
+      },
+      {
+        "status": "executed",
+        "count": 13,
+        "share_pct": 4.5
+      },
+      {
+        "status": "approved",
+        "count": 6,
+        "share_pct": 2.1
+      },
+      {
+        "status": "snoozed",
+        "count": 1,
+        "share_pct": 0.3
+      }
+    ],
+    "open_alerts": [
+      {
+        "rule_key": "project.stalled_review",
+        "count": 39
+      },
+      {
+        "rule_key": "recommendation.review_gap",
+        "count": 27
+      },
+      {
+        "rule_key": "team_feedback.open",
+        "count": 7
+      },
+      {
+        "rule_key": "budget_guard.warning_or_hard_stop",
+        "count": 1
+      }
+    ],
+    "project_stages": [
+      {
+        "stage": "shipped",
+        "count": 27
+      },
+      {
+        "stage": "cancelled",
+        "count": 19
+      },
+      {
+        "stage": "discovery",
+        "count": 5
+      },
+      {
+        "stage": "content_published",
+        "count": 4
+      },
+      {
+        "stage": "active",
+        "count": 2
+      },
+      {
+        "stage": "contacted",
+        "count": 1
+      }
+    ],
+    "assignment_stages": [
+      {
+        "stage": "device_sent",
+        "count": 842,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "content_posted",
+        "count": 695,
+        "placeholder_count": 613
+      },
+      {
+        "stage": "contacted",
+        "count": 209,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "discovered",
+        "count": 170,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "churned",
+        "count": 160,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "agreed",
+        "count": 39,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "replied",
+        "count": 33,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "discovery",
+        "count": 23,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "shipped",
+        "count": 7,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "cancelled",
+        "count": 6,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "arrived",
+        "count": 2,
+        "placeholder_count": 0
+      },
+      {
+        "stage": "received",
+        "count": 2,
+        "placeholder_count": 2
+      },
+      {
+        "stage": "measured",
+        "count": 1,
+        "placeholder_count": 1
+      }
+    ],
+    "reply_status": [
+      {
+        "status": "pending",
+        "count": 130
+      },
+      {
+        "status": "drafted",
+        "count": 1
+      },
+      {
+        "status": "replied",
+        "count": 1
+      }
+    ],
+    "flatness": [
+      {
+        "pairs": 484,
+        "flat_likes": 463,
+        "flat_likes_pct": 95.7,
+        "flat_comments": 457,
+        "flat_comments_pct": 94.4
+      }
+    ],
+    "headline": [
+      {
+        "metric_rows": 502,
+        "channels": 18,
+        "metric_latest_date": "2026-06-14",
+        "data_age_days": 26,
+        "narrative_latest_date": "2026-06-29",
+        "worker_stale_days": 6.7,
+        "actions_total": 291,
+        "actions_executed": 13,
+        "action_execution_pct": 4.5,
+        "open_alerts": 74,
+        "staff_total": 20,
+        "staff_no_last_active": 20,
+        "staff_groups": 0,
+        "collab_settings": 0,
+        "gtm_outcomes": 0,
+        "prediction_evals": 0,
+        "outcome_evaluations": 98,
+        "successful_evaluations": 98,
+        "distinct_success_labels": 1,
+        "events": 5,
+        "event_tasks": 0,
+        "event_evidence": 2,
+        "event_retrospectives": 2,
+        "dealers": 0,
+        "shopify_orders": 0,
+        "goaffpro_sales": 0
+      }
+    ],
+    "page_audit": [
+      {
+        "area": "Dashboard",
+        "health": 52,
+        "priority": "P0",
+        "finding": "指标可见但新鲜度不足，地图占首屏，Worker 离线",
+        "screenshot": "01-admin-dashboard.png"
+      },
+      {
+        "area": "全局搜索 / Intelligent",
+        "health": 30,
+        "priority": "P0",
+        "finding": "复杂经营问题被误判成固定 ROI 排名并返回 0 行",
+        "screenshot": "12-intelligent-qa-result.png"
+      },
+      {
+        "area": "Report",
+        "health": 38,
+        "priority": "P0",
+        "finding": "Dashboard 与报告人数、曝光、互动率口径冲突",
+        "screenshot": "03-report-panel.png"
+      },
+      {
+        "area": "MY KOL",
+        "health": 45,
+        "priority": "P0",
+        "finding": "20 人、18 账号、717 MY KOL、1 个库对象并存",
+        "screenshot": "04-my-kol-team.png"
+      },
+      {
+        "area": "团队管理",
+        "health": 32,
+        "priority": "P0",
+        "finding": "20 人但无活跃/登录时间、0 组、0 协作设置",
+        "screenshot": "05-team-management.png"
+      },
+      {
+        "area": "Projects",
+        "health": 58,
+        "priority": "P0",
+        "finding": "阶段可管理，但导入态、占位 tracking 与真实证据混杂",
+        "screenshot": "06-projects.png"
+      },
+      {
+        "area": "战略台",
+        "health": 64,
+        "priority": "P1",
+        "finding": "有 SoV 和机会分析，但缺证据到行动的动态路线",
+        "screenshot": "07-strategy-board-full.png"
+      },
+      {
+        "area": "GTM Command",
+        "health": 47,
+        "priority": "P0",
+        "finding": "治理信息完整，但 North Star 几乎未推进且结果为 0",
+        "screenshot": "08-gtm-command.png"
+      },
+      {
+        "area": "提醒 / 通知",
+        "health": 40,
+        "priority": "P0",
+        "finding": "提醒 0、建议 12、未读 74；模型分裂且有审计噪音",
+        "screenshot": "10-notifications.png"
+      },
+      {
+        "area": "KOL Pool",
+        "health": 61,
+        "priority": "P1",
+        "finding": "1222 条供给强，但数据截至 6 月 12 日且大量待补全",
+        "screenshot": "13-kol-pool.png"
+      },
+      {
+        "area": "Market Voice",
+        "health": 46,
+        "priority": "P1",
+        "finding": "规则词典有样本，结果与行动/结果没有串联",
+        "screenshot": "15-market-voice.png"
+      },
+      {
+        "area": "创意资产库",
+        "health": 20,
+        "priority": "P0",
+        "finding": "实机持续停留在检索中，核心内容空白",
+        "screenshot": "17-creative-library.png"
+      },
+      {
+        "area": "Events",
+        "health": 24,
+        "priority": "P0",
+        "finding": "测试数据、NaN、9642 天活动；任务表为 0",
+        "screenshot": "18-events.png"
+      },
+      {
+        "area": "Shopify / GOAFFPRO",
+        "health": 28,
+        "priority": "P1",
+        "finding": "迁移尚未连接，订单与联盟销售为 0",
+        "screenshot": "19-shopify.png"
+      },
+      {
+        "area": "Dealers",
+        "health": 18,
+        "priority": "P1",
+        "finding": "0 数据且地图瓦片未正常显示",
+        "screenshot": "20-dealers.png"
+      },
+      {
+        "area": "回复队列",
+        "health": 29,
+        "priority": "P0",
+        "finding": "132 条中 130 pending，语言/意图识别存在明显误判",
+        "screenshot": "21-reply-queue.png"
+      },
+      {
+        "area": "Launchpad",
+        "health": 42,
+        "priority": "P1",
+        "finding": "需先选实体，尚不是全局组合规划器",
+        "screenshot": "22-launchpad.png"
+      },
+      {
+        "area": "自治驾照",
+        "health": 44,
+        "priority": "P0",
+        "finding": "治理概念强，但样本 n=2 或 0，暂不应升级自治",
+        "screenshot": "23-autonomy-license.png"
+      }
+    ],
+    "system_scores": [
+      {
+        "dimension": "完整系统成熟度",
+        "score": 56,
+        "assessment": "工程与模块强，闭环弱"
+      },
+      {
+        "dimension": "真正认知与监督能力",
+        "score": 38,
+        "assessment": "规划、监督、学习不足"
+      },
+      {
+        "dimension": "UI 一致性与顺畅度",
+        "score": 51,
+        "assessment": "跨页口径和负载分裂"
+      },
+      {
+        "dimension": "内部系统成长性",
+        "score": 82,
+        "assessment": "垂直数据与治理骨架稀缺"
+      },
+      {
+        "dimension": "SaaS 化就绪度",
+        "score": 35,
+        "assessment": "租户、SLO、配置化未成熟"
+      }
+    ]
+  }
+}
