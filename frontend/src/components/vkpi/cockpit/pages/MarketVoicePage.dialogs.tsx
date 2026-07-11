@@ -13,10 +13,14 @@ import type { VoiceFeedItem } from "../../../../services/vkpi/marketVoice-api";
 //        颜色全 token 类零写死色;动效只用 ds-viz.css 既有类。
 
 /* ============ 反馈身份/平台徽元数据(FeedDetailModal 与 modules 的 FeedRowLine 共用) ============ */
+// 四类身份徽:kol / owned / user 由 voice-feed post_table 三分类真实产出;
+// ec(电商,warn/amber token 系)为第四类预留 —— 数据源 vkpi_bh_reviews 未来接入
+// (feed 当前不产出 ec 条目,徽章族先补齐,接入后零改动点亮)。
 export const IDENTITY_META: Record<string, { label: string; cls: string; text: string }> = {
   kol: { label: "KOL", cls: "border-accent text-accent", text: "text-accent" },
   owned: { label: "官号", cls: "border-accent-2 text-accent-2", text: "text-accent-2" },
   user: { label: "路人", cls: "border-line text-muted", text: "text-muted" },
+  ec: { label: "电商", cls: "border-warn text-warn", text: "text-warn" },
 };
 
 const PLATFORM_SHORT: Record<string, string> = {
@@ -257,6 +261,11 @@ export function FeedDetailModal({
   queueBusy = false,
   queueError = "",
   onEnqueueReply,
+  referred = false,
+  referBusy = false,
+  referError = "",
+  onReferPrd,
+  onIdentityJump,
 }: {
   item: VoiceFeedItem;
   index: number;
@@ -272,6 +281,16 @@ export function FeedDetailModal({
   queueError?: string;
   /** 「转回复队列」点击回调(page 层持 token 真调端点);缺省 = 按钮 disabled */
   onEnqueueReply?: () => void;
+  /** V1.1 真闭环:该条是否已转产品部(端点真实返回 ok / already_referred 才为 true) */
+  referred?: boolean;
+  /** 转交请求进行中(按钮防双击,不假装瞬时成功) */
+  referBusy?: boolean;
+  /** 转交失败原因(如实展示,不吞) */
+  referError?: string;
+  /** 「转产品部」点击回调(page 层真调 POST /market/prd-referrals);缺省 = 按钮 disabled */
+  onReferPrd?: () => void;
+  /** 溯源身份跳:kol → KOL 档案页 / owned → 官号矩阵(MY KOL);缺省 = 身份节点纯文本不可点 */
+  onIdentityJump?: () => void;
 }) {
   const [rec, setRec] = React.useState<string | null>(null);
 
@@ -300,6 +319,16 @@ export function FeedDetailModal({
   const steps: ProvStep[] = [];
   if (item.post_url) steps.push({ label: `原帖 · ${platformBadge(item.platform)}`, href: item.post_url });
   else steps.push({ label: "原帖 URL 缺失(该源无帖级链接)" });
+  // 身份跳节点(波D 验收遗留补全):kol → KOL 档案 / owned → 官号矩阵;跳不了
+  // (user 身份 / kol 缺 identity_id)→ 纯文本节点,如实不可点,不装按钮。
+  const identityLabel = `身份 ${idn.label}${item.identity_ref ? ` ${item.identity_ref}` : ""}`;
+  if (item.identity === "kol" || item.identity === "owned") {
+    steps.push(
+      onIdentityJump
+        ? { label: `${identityLabel} →跳${item.identity === "kol" ? "档案" : "矩阵"}`, rec: "identity" }
+        : { label: identityLabel },
+    );
+  }
   steps.push({
     label: `帖子 ${prov.post_table || "—"}${prov.post_id != null ? ` #${prov.post_id}` : ""}`,
     rec: "post",
@@ -353,11 +382,18 @@ export function FeedDetailModal({
 
       <div>
         <SectionLabel>溯源链 · 每一跳可点(本条专属记录)</SectionLabel>
-        <ProvChain steps={steps} onRecord={(key) => setRec(key)} />
+        <ProvChain
+          steps={steps}
+          onRecord={(key) => {
+            // 身份节点点击 = 真跳转(kol → KOL 档案 / owned → 官号矩阵),其余节点开记录预览
+            if (key === "identity") onIdentityJump?.();
+            else setRec(key);
+          }}
+        />
         {rec ? <RecordPreview title="库记录预览 · 点其他节点切换" rows={feedRecordRows(item, rec)} /> : null}
       </div>
 
-      {/* 闭环动作(V0e · demo .aacts 行):转回复队列=真端点;转产品部=诚实降级(通路待建,不假装成功) */}
+      {/* 闭环动作(V0e+V1.1 · demo .aacts 行):转回复队列 / 转产品部均为真端点,成功才置绿 */}
       <div className="mt-[22px] flex gap-2 border-t border-line pt-3.5">
         <button
           type="button"
@@ -378,11 +414,20 @@ export function FeedDetailModal({
         </button>
         <button
           type="button"
-          disabled
-          title="PRD 通路待建(V1.1):仓库暂无 market→PRD 落库端点(无 market_insights / PRD 表),不做假成功"
-          className="flex-1 cursor-default rounded-lg border border-dashed border-line px-3 py-2 text-center text-[11.5px] text-muted opacity-60"
+          disabled={referred || referBusy || !onReferPrd}
+          onClick={onReferPrd}
+          title={
+            referred
+              ? "该条已转产品部(vkpi_market_prd_referrals),不重复转交"
+              : "把这条声音转交产品部(POST /market/prd-referrals → vkpi_market_prd_referrals,幂等)"
+          }
+          className={`flex-1 rounded-lg border px-3 py-2 text-center text-[11.5px] transition-colors disabled:cursor-default ${
+            referred
+              ? "border-good bg-good-soft text-good"
+              : "border-line text-ink-2 hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
+          }`}
         >
-          ⚙ 转产品部
+          {referred ? "✓ 已转交" : referBusy ? "转交中…" : "⚙ 转产品部"}
         </button>
       </div>
       {queueError ? (
@@ -390,7 +435,14 @@ export function FeedDetailModal({
           转回复队列失败:{queueError}
         </div>
       ) : null}
-      <div className="mt-1.5 text-right text-[9.5px] text-muted">转产品部:PRD 落库通路待建(V1.1)· 按钮暂不可用,不编造成功状态</div>
+      {referError ? (
+        <div className="mt-2 rounded-lg border border-crit bg-crit-soft px-3 py-1.5 text-[11px] text-crit">
+          转产品部失败:{referError}
+        </div>
+      ) : null}
+      <div className="mt-1.5 text-right text-[9.5px] text-muted">
+        转产品部:落 vkpi_market_prd_referrals(迁移 234)· 幂等,已转返回已有行 · 端点真实返回才置绿
+      </div>
     </ModalShell>
   );
 }
@@ -416,13 +468,14 @@ const GENERIC_RECS: Record<string, Array<[string, string]>> = {
     ["意向队列", "vkpi_reply_queue"],
     ["B&H 口碑", "vkpi_bh_reviews"],
     ["需求信号", "vkpi_brand_signal"],
-    ["情感", "vkpi_sentiment_results(批注管线已接)"],
+    ["情感", "vkpi_sentiment_results(已批注 · sentiment_id 回链)"],
+    ["PRD 转交", "vkpi_market_prd_referrals(转产品部账本 · 迁移 234)"],
   ],
   aggregate: [
     ["方法", "lexicon_v0 纯词表聚合 · 零 LLM"],
     ["端点", "GET /market/voice-report"],
     ["聚合表", "无独立聚合表 · 请求时实时计算"],
-    ["下游", "本板块 / 产品部月报"],
+    ["下游", "本板块 / 产品部月报 / vkpi_market_prd_referrals(转产品部)"],
   ],
 };
 

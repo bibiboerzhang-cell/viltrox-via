@@ -2,13 +2,13 @@ import React from "react";
 import { PencilLine } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import {
-  enqueueReplyQueueComment,
   fetchVoiceReportExt,
   getVoiceFeed,
   getVoiceReport,
   type VoiceFeedItem,
   type VoiceReportExt,
 } from "../../../../services/vkpi/marketVoice-api";
+import { prdKey, recoStableKey, usePrdReferral, useReplyQueueAction } from "./MarketVoicePage.actions";
 import {
   BucketsBody,
   ComplaintsBody,
@@ -17,7 +17,6 @@ import {
   ErrorCard,
   FeedRowLine,
   GapsBody,
-  KpiCard,
   LoadingLine,
   MODULE_SOURCES,
   ModuleCard,
@@ -33,6 +32,7 @@ import {
   AlertsBody,
   CatDonutBody,
   CompetitorBody,
+  KpiBandCards,
   LanguageBody,
   LineVoiceBody,
   PlatformBody,
@@ -51,8 +51,10 @@ import { FeedDetailModal, FeedListModal, ModuleProvModal } from "./MarketVoicePa
 //     GET  /api/admin/vkpi/market/voice-report     —— lexicon_v0 纯词表月报(抱怨/愿望/空白/建议)
 //     GET  /api/admin/vkpi/market/voice-report-ext —— 九组图形化字段(每组独立 status,逐组诚实降级)
 //     GET  /api/admin/vkpi/market/voice-feed       —— vkpi_comments 分页原声(身份三分类+溯源 prov)
-//     POST /api/admin/vkpi/reply-queue/enqueue-comment —— V0e 闭环「转回复队列」(幂等入队);
-//       「转产品部」无落库通路(无 market_insights/PRD 表)→ 诚实 pending,不假装成功
+//     POST /api/admin/vkpi/reply-queue/enqueue-comment —— V0e 闭环「转回复队列」(幂等入队)
+//     POST /api/admin/vkpi/market/prd-referrals    —— V1.1 真闭环「转产品部」:落
+//       vkpi_market_prd_referrals(迁移 234,幂等);KPI 第四卡读 voice-report-ext
+//       prd_referrals 组真计数(0 也如实 0,成功转交后重拉服务器数,绝不本地编数)
 //   红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0;端点失败=诚实错误卡;颜色全
 //   token(SVG 直接 var(--ds-*));发光只走 --ds-glow-radius(浅色 0);动效只用既有
 //   ds-viz 类 + vkpi-lane-pulse(自带 reduced-motion 降级)。布局只走本机 storageKey,
@@ -83,7 +85,7 @@ const DEFAULT_LAYOUT = [
 // demo .ph-b:pagehead 药丸徽(方法论长句压缩成短徽)
 const PH_BADGE = "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
 
-export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
+export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
   const [month, setMonth] = React.useState<string>("");
   const [data, setData] = React.useState<Row | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -103,11 +105,10 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
   const [wantIndex, setWantIndex] = React.useState<number | null>(null);
   const [provKey, setProvKey] = React.useState<string | null>(null);
 
-  // V0e 闭环「转回复队列」:queuedIds = 本会话真实入队成功(含 already_queued)的评论 id;
-  // 状态只在端点真实返回后落地,绝不点击即置绿(不编造成功状态)。
-  const [queuedIds, setQueuedIds] = React.useState<Set<number>>(() => new Set());
-  const [queueBusyId, setQueueBusyId] = React.useState<number | null>(null);
-  const [queueError, setQueueError] = React.useState("");
+  // 闭环动作(状态只在端点真实返回后落地,绝不点击即置绿;逻辑住 MarketVoicePage.actions):
+  // V0e「转回复队列」+ V1.1「转产品部」(vkpi_market_prd_referrals 真通路)
+  const replyQueue = useReplyQueueAction(apiToken);
+  const prd = usePrdReferral(apiToken);
 
   // voice-report-ext(V0h-ab 九组图形化字段;单组失败后端已诚实降级,整体失败走 extError)
   const [extData, setExtData] = React.useState<VoiceReportExt | null>(null);
@@ -136,7 +137,8 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
     };
   }, [apiToken, month]);
 
-  // 图形化增量端点(与月报同窗口口径,独立加载互不拖累)
+  // 图形化增量端点(与月报同窗口口径,独立加载互不拖累)。
+  // prd.version:真实新增转交后自增 → 重拉本端点,「已转产品部」KPI 读服务器真数(绝不本地 +1 编数)
   React.useEffect(() => {
     if (!apiToken) return;
     let alive = true;
@@ -156,7 +158,7 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
     return () => {
       alive = false;
     };
-  }, [apiToken, month]);
+  }, [apiToken, month, prd.version]);
 
   const loadFeed = React.useCallback(
     (offset: number) => {
@@ -199,7 +201,8 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
   const gotoFeed = (i: number) => {
     const items = feedItems || [];
     if (i < 0 || (feedTotal > 0 && i >= feedTotal)) return;
-    setQueueError("");
+    replyQueue.clearError();
+    prd.clearError();
     if (i < items.length) {
       setDetailIndex(i);
       setWantIndex(null);
@@ -209,33 +212,25 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
     }
   };
 
-  // V0e「转回复队列」:真调 POST /reply-queue/enqueue-comment;成功(含 already_queued=幂等
-  // 命中已有行)才落 queuedIds;失败原因原样进 queueError(不吞、不假绿)。
-  const enqueueToReplyQueue = React.useCallback(
+  // 溯源身份跳(波D 验收遗留):kol → KOL 档案页(sessionStorage 传 kol_pool_id,
+  // CockpitApp 既有事件/onNavigate 管道);owned → 官号矩阵(MY KOL 团队矩阵/账号管理)。
+  // 跳不了(user / kol 缺 identity_id)由调用点不给回调 → 身份节点纯文本,如实不可点。
+  const jumpIdentity = React.useCallback(
     (item: VoiceFeedItem) => {
-      if (!apiToken || !item || queueBusyId != null) return;
-      setQueueBusyId(item.id);
-      setQueueError("");
-      enqueueReplyQueueComment(apiToken, item.id)
-        .then((res) => {
-          if (res && res.ok) {
-            setQueuedIds((prev) => {
-              const next = new Set(prev);
-              next.add(item.id);
-              return next;
-            });
-          } else {
-            setQueueError(String((res as Row)?.reason || "端点返回非 ok"));
-          }
-        })
-        .catch((err: any) => {
-          setQueueError(String(err?.detail || err?.message || "入队失败"));
-        })
-        .finally(() => {
-          setQueueBusyId((cur) => (cur === item.id ? null : cur));
-        });
+      if (item.identity === "kol" && item.identity_id != null) {
+        try {
+          window.sessionStorage.setItem("vkpi:kol-profile-id", String(item.identity_id));
+        } catch {
+          /* sessionStorage 不可用忽略,事件管道仍会切页 */
+        }
+        if (onNavigate) onNavigate("kolProfile");
+        window.dispatchEvent(new CustomEvent("vkpi:open-kol-profile"));
+      } else if (item.identity === "owned") {
+        if (onNavigate) onNavigate("my-kol");
+        else window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol"));
+      }
     },
-    [apiToken, queueBusyId],
+    [onNavigate],
   );
 
   React.useEffect(() => {
@@ -317,21 +312,12 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
 
   /* ---------- 模块 body ---------- */
 
-  // KPI 带四卡(V0h-ab):demo 语义 本月反馈/待处理/正面情绪占比/已转产品部;
-  // sparkline=kpi_series 按日真序列,delta=kpi_prev 真环比(null=诚实省略药丸);
-  // 旧口径(窗口样本三源合并等)保留为 SrcChip rows 说明,卡面零口径文字。
+  // KPI 带四卡(V0h-ab 语义 + V1.1 第四卡真数;卡体在 charts.KpiBandCards):
+  // sparkline=按日真序列,delta=真环比(null=诚实省略);「已转产品部」=
+  // prd_referrals 组真计数(0 也如实 0,表未建 → 诚实 pending 带 reason)。
   const renderKpiBand = () => {
     const gate = reportGate();
-    const prevMetrics: Row = extData?.kpi_prev?.metrics || {};
-    const commentsSeries = (extData?.kpi_series?.series?.comments || []).map((p) => Number(p.count) || 0);
-    const queueSeries = (extData?.kpi_series?.series?.queue || []).map((p) => Number(p.count) || 0);
     const senti: Row = extData?.sentiment_summary || {};
-    const posShare = typeof senti.pos_share === "number" ? senti.pos_share : null;
-    const posSeries = (Array.isArray(senti.trend) ? senti.trend : []).map((t: Row) =>
-      typeof t.pos_share === "number" ? t.pos_share * 100 : null,
-    );
-    const commentsCur = Number(prevMetrics.comments?.current ?? srcCount("comments")) || 0;
-    const queueCur = Number(prevMetrics.queue?.current ?? srcCount("intent_queue")) || 0;
     // 原页脚「生成于…」/ 带底备注 / 旧口径四数 → 全部收进 SrcChip rows(诚实口径不丢)
     const kpiExtraRows: Array<[string, string]> =
       data && !reportErrored
@@ -349,44 +335,11 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
     return (
       <ModuleCard {...cardProps("kpiV", "反馈总览", windowLabel, kpiExtraRows)}>
         {gate ?? (
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <KpiCard
-              label="本月反馈"
-              value={commentsCur.toLocaleString()}
-              unit="条"
-              series={commentsSeries}
-              seriesColor="var(--ds-accent)"
-              delta={prevMetrics.comments?.delta_pct ?? null}
-            />
-            {/* 待处理 = 回复队列积压 → demo .dot.w + warn 染数值/线色 */}
-            <KpiCard
-              label="待处理"
-              value={queueCur.toLocaleString()}
-              unit="条"
-              tone="warn"
-              series={queueSeries}
-              seriesColor="var(--ds-warn)"
-              delta={prevMetrics.queue?.delta_pct ?? null}
-            />
-            {posShare != null ? (
-              <KpiCard
-                label="正面情绪占比"
-                value={(Math.round(posShare * 1000) / 10).toFixed(1)}
-                unit="%"
-                series={posSeries}
-                seriesColor="var(--ds-good)"
-              />
-            ) : (
-              <KpiCard
-                label="正面情绪占比"
-                value="—"
-                pending
-                pendingNote={extData ? "窗口内情绪批注 0 行" : "voice-report-ext 待接通"}
-              />
-            )}
-            {/* 无 market→PRD 落库通路 → 诚实 pending,不编「已转 N 条」 */}
-            <KpiCard label="已转产品部" value="—" pending pendingNote="PRD 通路待建" />
-          </div>
+          <KpiBandCards
+            ext={extData as Row | null}
+            fallbackComments={srcCount("comments")}
+            fallbackQueue={srcCount("intent_queue")}
+          />
         )}
       </ModuleCard>
     );
@@ -482,9 +435,24 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
 
   const renderRecs = () => {
     const n = Array.isArray(suggestions.items) ? suggestions.items.length : 0;
+    // 每条建议的「转产品部」真动作:source_table=lexicon_reco,source_id=稳定 key(kind+标题主干)
+    const recsPrd = {
+      keyOf: (s: Row) => prdKey("lexicon_reco", recoStableKey(String(s.kind || ""), String(s.title || ""))),
+      isReferred: (key: string) => prd.referredKeys.has(key),
+      isBusy: (key: string) => prd.busyKey === key,
+      error: prd.error,
+      refer: (s: Row, _key: string) =>
+        prd.refer({
+          source_table: "lexicon_reco",
+          source_id: recoStableKey(String(s.kind || ""), String(s.title || "")),
+          title: String(s.title || "").slice(0, 300),
+          detail: String(s.detail || "").slice(0, 2000),
+          category: String(s.kind || "").slice(0, 80),
+        }),
+    };
     return (
       <ModuleCard {...cardProps("recs", "给产品部的建议", `${n}`, [["条数", `${n} 条 · 人工复核`]])}>
-        {sectionGate(suggestions) ?? <RecsBody suggestions={suggestions} />}
+        {sectionGate(suggestions) ?? <RecsBody suggestions={suggestions} prd={recsPrd} />}
       </ModuleCard>
     );
   };
@@ -539,7 +507,7 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
         <div>
           {/* demo:卡面只渲染前 6 条,全量走弹窗(FULL.slice(0,6) + .feedmore) */}
           {loaded.slice(0, FEED_FACE).map((item, i) => (
-            <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => gotoFeed(idx)} queued={queuedIds.has(item.id)} />
+            <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => gotoFeed(idx)} queued={replyQueue.queuedIds.has(item.id)} />
           ))}
           {feedTotal > FEED_FACE && (
             <button
@@ -659,7 +627,7 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
           onClose={() => setFeedListOpen(false)}
         >
           {feedItems.map((item, i) => (
-            <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => gotoFeed(idx)} queued={queuedIds.has(item.id)} />
+            <FeedRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => gotoFeed(idx)} queued={replyQueue.queuedIds.has(item.id)} />
           ))}
         </FeedListModal>
       )}
@@ -675,14 +643,37 @@ export function MarketVoicePage({ apiToken = "" }: { apiToken?: string; onNaviga
           onClose={() => {
             setDetailIndex(null);
             setWantIndex(null);
-            setQueueError("");
+            replyQueue.clearError();
+            prd.clearError();
           }}
-          queued={queuedIds.has(detailItem.id)}
-          queueBusy={queueBusyId === detailItem.id}
-          queueError={queueError}
+          queued={replyQueue.queuedIds.has(detailItem.id)}
+          queueBusy={replyQueue.busyId === detailItem.id}
+          queueError={replyQueue.error}
           onEnqueueReply={
             // 入队按 vkpi_comments.id;反馈流当前唯一源即 vkpi_comments,其他源出现时如实禁用
-            detailItem.source_table === "vkpi_comments" ? () => enqueueToReplyQueue(detailItem) : undefined
+            detailItem.source_table === "vkpi_comments" ? () => replyQueue.enqueue(detailItem.id) : undefined
+          }
+          referred={prd.referredKeys.has(prdKey("vkpi_comments", detailItem.id))}
+          referBusy={prd.busyKey === prdKey("vkpi_comments", detailItem.id)}
+          referError={prd.error}
+          onReferPrd={
+            // 转产品部按 (vkpi_comments, id) 幂等键;title=正文截断;评论无类别字段 → category 留空如实
+            detailItem.source_table === "vkpi_comments"
+              ? () =>
+                  prd.refer({
+                    source_table: "vkpi_comments",
+                    source_id: String(detailItem.id),
+                    title: (detailItem.text || "").slice(0, 120),
+                    detail: "",
+                    category: "",
+                  })
+              : undefined
+          }
+          onIdentityJump={
+            // 身份跳只在跳得动时给回调(kol 需 identity_id;owned 恒可跳矩阵;user 不给)
+            (detailItem.identity === "kol" && detailItem.identity_id != null) || detailItem.identity === "owned"
+              ? () => jumpIdentity(detailItem)
+              : undefined
           }
         />
       )}

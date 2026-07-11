@@ -9,6 +9,10 @@
 // - enqueueReplyQueueComment:POST /api/admin/vkpi/reply-queue/enqueue-comment
 //     V0e 闭环「转回复队列」:按 vkpi_comments.id 单条手动入 vkpi_reply_queue(幂等,
 //     已在队返回已有行 already_queued=true;失败 4xx 由 apiFetch 抛错,调用方如实展示)。
+// - createPrdReferral / listPrdReferrals:POST/GET /api/admin/vkpi/market/prd-referrals
+//     V1.1 真闭环「转产品部」:一条声音(vkpi_comments)/ 一条规则建议(lexicon_reco)
+//     落 vkpi_market_prd_referrals 一行(迁移 234;UNIQUE(source_table,source_id) 幂等,
+//     已转返回已有行 already_referred=true;评论不存在 404,其余失败 400 带 reason)。
 // 红线:不触 viltrox_fit_score / rule_v0。
 
 import { apiFetch, jsonBody } from "../http";
@@ -29,6 +33,8 @@ export interface VoiceFeedItem {
   language: string;
   identity: VoiceIdentity;
   identity_ref: string;
+  /** 溯源身份跳锚:kol=vkpi_kol_pool.id(KOL 档案页)/ owned=vkpi_employee_channels.id / user=null */
+  identity_id: number | null;
   post_url: string | null;
   likes: number;
   created_at: string | null;
@@ -92,6 +98,68 @@ export async function enqueueReplyQueueComment(token: string, commentId: number)
   );
 }
 
+// ===== V1.1 真闭环:转产品部(vkpi_market_prd_referrals,迁移 234)=====
+export type PrdReferralSourceTable = "vkpi_comments" | "lexicon_reco";
+export type PrdReferralStatus = "referred" | "accepted" | "rejected";
+
+export interface PrdReferralItem {
+  id: number;
+  source_table: string;
+  source_id: string;
+  title: string;
+  detail: string;
+  category: string;
+  status: string;
+  created_by_staff_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PrdReferralCreateBody {
+  source_table: PrdReferralSourceTable;
+  /** 评论=vkpi_comments.id 文本化;规则建议=稳定 key(kind + 标题主干) */
+  source_id: string;
+  title: string;
+  detail?: string;
+  category?: string;
+}
+
+export interface PrdReferralCreateResult {
+  ok: boolean;
+  /** 幂等命中已有行 = true(端点真实返回;前端据此显「已转交」,绝不点击即绿) */
+  already_referred: boolean;
+  item: PrdReferralItem;
+}
+
+export async function createPrdReferral(token: string, body: PrdReferralCreateBody) {
+  return apiFetch<PrdReferralCreateResult>(
+    "/api/admin/vkpi/market/prd-referrals",
+    { method: "POST", body: jsonBody(body) },
+    token,
+  );
+}
+
+export interface PrdReferralListResponse {
+  ok: boolean;
+  status: string; // ready / absent(表未建,诚实空列表)
+  items: PrdReferralItem[];
+  count: number;
+  reason?: string;
+}
+
+export async function listPrdReferrals(
+  token: string,
+  options: { status?: PrdReferralStatus | ""; limit?: number } = {},
+) {
+  const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
+  if (options.status) params.set("status", options.status);
+  return apiFetch<PrdReferralListResponse>(
+    `/api/admin/vkpi/market/prd-referrals?${params.toString()}`,
+    {},
+    token,
+  );
+}
+
 export type VoiceReport = Record<string, any>;
 
 export async function getVoiceReport(token: string, month = "") {
@@ -103,9 +171,9 @@ export async function getVoiceReport(token: string, month = "") {
   );
 }
 
-// ===== V0h-ab:voice-report-ext(九组图形化真数据字段)=====
+// ===== V0h-ab:voice-report-ext(十组图形化真数据字段)=====
 // GET /api/admin/vkpi/market/voice-report-ext?month=YYYY-MM(缺省近30天;窗口口径与
-// voice-report 一致)。九组字段各自独立 status("ready"|"empty"|"error"|"ok"),单组
+// voice-report 一致)。十组字段各自独立 status("ready"|"empty"|"error"|"ok"),单组
 // 失败诚实降级 {status:"error",reason} 不拖全响应 —— 前端逐组降级,绝不编数据。
 // 契约由后端 voice_report_ext.py 固定:
 //   kpi_series        按 UTC 日计数序列(comments/queue,日轴 0 填齐,sparkline 直画)
@@ -117,6 +185,8 @@ export async function getVoiceReport(token: string, month = "") {
 //   topics            热点话题榜(lexicon_v0 词族命中 + 环比,Top12)
 //   language_dist     语言分桶(und=待检;语言分布非地理)
 //   competitor_voice  竞品声量(百家饭同口径;is_self=Viltrox 自家行)
+//   prd_referrals     「已转产品部」窗口真计数 + 日序列 + 环比(vkpi_market_prd_referrals;
+//                     表未建 → status=empty count=null,0 也如实 0)
 
 export interface ExtSeriesPoint {
   date: string;
@@ -194,6 +264,14 @@ export interface VoiceReportExt {
     viltrox_videos?: number;
     competitor_exposures?: number;
     items?: Array<{ brand: string; count: number; share: number | null; is_self: boolean }>;
+  }>;
+  /** V1.1「已转产品部」真计数(vkpi_market_prd_referrals 窗口 COUNT;表未建 → status=empty count=null) */
+  prd_referrals?: ExtGroup<{
+    count?: number | null;
+    previous?: number | null;
+    delta_pct?: number | null;
+    series?: ExtSeriesPoint[];
+    table?: string;
   }>;
   method?: string;
   generated_at?: string;

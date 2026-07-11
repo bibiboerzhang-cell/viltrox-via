@@ -52,6 +52,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["日序列", "voice-report-ext kpi_series(UTC 日轴 0 填齐)"],
       ["环比", "kpi_prev 上一等长窗 · 上窗 0 → 诚实无药丸"],
       ["情绪", "vkpi_sentiment_results(sentiment_id 回链)"],
+      ["已转产品部", "vkpi_market_prd_referrals(窗口内转交计数 · 0 也如实 0)"],
     ],
   },
   alerts: {
@@ -143,6 +144,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     rows: [
       ["输入", "抱怨 + 愿望 + 空白聚类"],
       ["方法", "规则阈值 · 人工复核"],
+      ["转产品部", "POST /market/prd-referrals → vkpi_market_prd_referrals(幂等,source=lexicon_reco)"],
     ],
   },
   cover: {
@@ -538,8 +540,18 @@ export function GapsBody({ gaps }: { gaps: Row }) {
   );
 }
 
-// 给产品部的建议:卡面一行一条(徽 + 标题 + 证据数),detail 说明段 + 引文全部收进弹窗(V0h-c)
-export function RecsBody({ suggestions }: { suggestions: Row }) {
+// 给产品部的建议:卡面一行一条(徽 + 标题 + 证据数),detail 说明段 + 引文全部收进弹窗(V0h-c)。
+// V1.1:每条建议带「转产品部」真动作(prd 适配器由 page 层注入:POST /market/prd-referrals,
+// source_table=lexicon_reco,source_id=稳定 key;端点真实返回才置「✓ 已转交」,失败原因不吞)。
+export interface RecsPrdAdapter {
+  keyOf: (s: Row) => string;
+  isReferred: (key: string) => boolean;
+  isBusy: (key: string) => boolean;
+  error: string;
+  refer: (s: Row, key: string) => void;
+}
+
+export function RecsBody({ suggestions, prd }: { suggestions: Row; prd?: RecsPrdAdapter }) {
   const suggItems: Row[] = Array.isArray(suggestions.items) ? suggestions.items : [];
   const [openIdx, setOpenIdx] = React.useState<number | null>(null);
   if (String(suggestions.status) === "empty") return <EmptyLine text={String(suggestions.reason || "无过阈值建议。")} />;
@@ -547,19 +559,56 @@ export function RecsBody({ suggestions }: { suggestions: Row }) {
   const metaOf = (s: Row) => KIND_META[String(s.kind)] || { label: String(s.kind || "建议"), tone: "border-line text-ink-2" };
   return (
     <div className="space-y-1.5">
-      {suggItems.map((s, i) => (
-        <button
-          key={i}
-          type="button"
-          onClick={() => setOpenIdx(i)}
-          title="点开看说明与原声引文"
-          className="flex w-full items-center gap-2 rounded-lg border border-line px-3 py-2 text-left transition-colors hover:border-accent"
-        >
-          <span className={`flex-none rounded-md border px-2 py-0.5 text-[10px] ${metaOf(s).tone}`}>{metaOf(s).label}</span>
-          <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{s.title}</span>
-          <span className="flex-none text-[10px] tabular-nums text-muted">证据 ×{Number(s.evidence_count) || 0}</span>
-        </button>
-      ))}
+      {suggItems.map((s, i) => {
+        const key = prd ? prd.keyOf(s) : "";
+        const referred = !!prd && prd.isReferred(key);
+        const busy = !!prd && prd.isBusy(key);
+        return (
+          <div
+            key={i}
+            role="button"
+            tabIndex={0}
+            onClick={() => setOpenIdx(i)}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" || ev.key === " ") {
+                ev.preventDefault();
+                setOpenIdx(i);
+              }
+            }}
+            title="点开看说明与原声引文"
+            className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-line px-3 py-2 text-left transition-colors hover:border-accent"
+          >
+            <span className={`flex-none rounded-md border px-2 py-0.5 text-[10px] ${metaOf(s).tone}`}>{metaOf(s).label}</span>
+            <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{s.title}</span>
+            <span className="flex-none text-[10px] tabular-nums text-muted">证据 ×{Number(s.evidence_count) || 0}</span>
+            {prd ? (
+              <button
+                type="button"
+                disabled={referred || busy}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  prd.refer(s, key);
+                }}
+                title={
+                  referred
+                    ? "该建议已转产品部(vkpi_market_prd_referrals),不重复转交"
+                    : "把这条建议转交产品部(POST /market/prd-referrals,幂等)"
+                }
+                className={`flex-none rounded-md border px-1.5 py-0.5 text-[9.5px] transition-colors disabled:cursor-default ${
+                  referred
+                    ? "border-good bg-good-soft text-good"
+                    : "border-line text-muted hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
+                }`}
+              >
+                {referred ? "✓ 已转交" : busy ? "转交中…" : "→ 产品部"}
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+      {prd && prd.error ? (
+        <div className="rounded-lg border border-crit bg-crit-soft px-3 py-1.5 text-[11px] text-crit">转产品部失败:{prd.error}</div>
+      ) : null}
       {openItem && (
         <QuoteDialog
           title={String(openItem.title || "建议详情")}

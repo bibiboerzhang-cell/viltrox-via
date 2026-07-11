@@ -845,7 +845,8 @@ export function CockpitApp(props: any = {}) {
               e(React.Suspense, {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "市场之声加载中...")
               },
-                e(MarketVoicePage as React.ComponentType<any>, { apiToken })
+                // onNavigate:溯源身份跳(kol → KOL 档案 / owned → MY KOL 官号矩阵)
+                e(MarketVoicePage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
             // 第6轮 创意资产库

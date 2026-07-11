@@ -1,4 +1,4 @@
-"""市场之声报表增强字段(voice_report_ext · V0h+V0i)——9 组窗口敏感报表读数。
+"""市场之声报表增强字段(voice_report_ext · V0h+V0i+V1.1)——10 组窗口敏感报表读数。
 
 用途:给前端「市场之声」报表页补 sparkline / 环比药丸 / 情绪趋势双线 / 告警彩条 /
 平台条形 / 产品线声量榜 / 热点话题榜 / 语言分布 / 竞品声量 所需的窗口敏感真数据
@@ -6,7 +6,7 @@
 voice-report 同前缀、同 require_tab 权限、同窗口口径:month 自然月 UTC,缺省近
 30 天),对现有 voice-report 响应零改动 —— 全部字段增量新增,绝不破坏既有契约。
 
-九组字段(每组独立 status,单组失败诚实降级 {status:"error"} 不拖累其余):
+十组字段(每组独立 status,单组失败诚实降级 {status:"error"} 不拖累其余):
   kpi_series         窗口内按 UTC 日计数序列(comments=vkpi_comments,queue=vkpi_reply_queue);
                      日轴连续 0 填齐,前端 sparkline 直接画。
   kpi_prev           上一等长窗口同口径计数 + delta_pct;上窗为 0 → delta_pct=null
@@ -32,10 +32,13 @@ voice-report 同前缀、同 require_tab 权限、同窗口口径:month 自然�
                      口径(vkpi_analysis_cache 已 ready 的 video_analysis_final_v1
                      深析产物 × 视频×品牌去重),按 evidence 发布时间窗口过滤;
                      Viltrox 自家行 is_self=true;本块只出分布,不算 index 不折扣。
+  prd_referrals      「已转产品部」窗口计数(vkpi_market_prd_referrals,迁移 234;
+                     时间=created_at UTC)+ 日序列(0 填齐,sparkline 直画)+
+                     环比上一等长窗;表未建 → status=empty 诚实空,0 也如实 0。
 
 数据源(全只读,聚合逐一注明真实表名):vkpi_comments / vkpi_reply_queue /
 vkpi_sentiment_results / vkpi_action_inbox / vkpi_analysis_cache /
-vkpi_kol_video_evidence;产品线词表来自 focal_matrix(经 market_voice._product_lines
+vkpi_kol_video_evidence / vkpi_market_prd_referrals;产品线词表来自 focal_matrix(经 market_voice._product_lines
 复用,ImportError 自动降级精简词表);话题词表来自 market_voice(lexicon_v0);
 竞品品牌词表经 competitor_exposure 复用 competitor_text.load_competitor_brands。
 
@@ -223,6 +226,31 @@ COMPETITOR_VOICE_SQL = """
       AND COALESCE(e.published_at_norm, e.publish_date) >= CAST(? AS TIMESTAMPTZ)
       AND COALESCE(e.published_at_norm, e.publish_date) < CAST(? AS TIMESTAMPTZ)
     ORDER BY e.id DESC
+    LIMIT ?
+"""
+
+# 「已转产品部」= vkpi_market_prd_referrals 转交账本(迁移 234;写路在 prd_referrals.py)。
+# 探针参数化(compat 红线同款);计数/日序列时间锚 = created_at(转交时刻,UTC)。
+PRD_TABLE = "vkpi_market_prd_referrals"
+PRD_TABLE_PROBE_SQL = """
+    SELECT table_name FROM information_schema.tables WHERE table_name = ? LIMIT 1
+"""
+
+PRD_COUNT_SQL = """
+    SELECT COUNT(*) AS n
+    FROM vkpi_market_prd_referrals
+    WHERE created_at >= CAST(? AS TIMESTAMPTZ)
+      AND created_at < CAST(? AS TIMESTAMPTZ)
+"""
+
+PRD_DAY_SQL = """
+    SELECT CAST((created_at AT TIME ZONE 'UTC') AS DATE) AS day,
+           COUNT(*) AS n
+    FROM vkpi_market_prd_referrals
+    WHERE created_at >= CAST(? AS TIMESTAMPTZ)
+      AND created_at < CAST(? AS TIMESTAMPTZ)
+    GROUP BY 1
+    ORDER BY 1
     LIMIT ?
 """
 
@@ -672,6 +700,45 @@ def _competitor_voice(conn: Any, since: str, until: str) -> dict[str, Any]:
     return body
 
 
+def _prd_referrals(conn: Any, since: str, until: str) -> dict[str, Any]:
+    """10. prd_referrals:「已转产品部」窗口计数 + 日序列 + 环比(表未建诚实 empty)。
+
+    计数=窗口内转交行 COUNT(时间=created_at UTC);0 也如实 0(前端不再摆 pending 卡);
+    环比=上一等长窗同口径,上窗 0 → delta_pct=null(诚实省略药丸)。纯读,零写库。
+    """
+    probe = conn.execute(PRD_TABLE_PROBE_SQL, (PRD_TABLE,)).fetchone()
+    if not probe:
+        return {
+            "status": "empty",
+            "reason": "vkpi_market_prd_referrals 表未建(迁移 234 未 apply)——诚实空,不编计数。",
+            "count": None,
+            "series": [],
+            "table": PRD_TABLE,
+        }
+    axis = _day_axis(since, until)
+    day_counts = _day_counts(conn, PRD_DAY_SQL, since, until)
+    current = _scalar_count(conn, PRD_COUNT_SQL, since, until)
+    previous: int | None = None
+    delta: float | None = None
+    since_dt, until_dt = _parse_ts(since), _parse_ts(until)
+    if since_dt is not None and until_dt is not None and until_dt > since_dt:
+        span = until_dt - since_dt
+        previous = _scalar_count(conn, PRD_COUNT_SQL, (since_dt - span).isoformat(), since_dt.isoformat())
+        delta = _delta_pct(current, previous)
+    return {
+        "status": "ready",
+        "count": current,
+        "previous": previous,
+        "delta_pct": delta,
+        "series": [{"date": d, "count": day_counts.get(d, 0)} for d in axis],
+        "table": PRD_TABLE,
+        "basis": (
+            "vkpi_market_prd_referrals 窗口内转交行 COUNT(时间=created_at UTC,0 也如实 0);"
+            "日序列 0 填齐可直画 sparkline;环比=上一等长窗同口径,上窗 0 → delta_pct=null"
+        ),
+    }
+
+
 # ── 主入口 ──────────────────────────────────────────────────────────────
 
 
@@ -681,7 +748,7 @@ def build_ext(
     conn: Any = None,
     window: tuple[str, str, str] | None = None,
 ) -> dict[str, Any]:
-    """九组字段字典(仅 9 个键,可被上层 merge);单组失败降级 {status:'error'} 不拖全局。
+    """十组字段字典(仅 10 个键,可被上层 merge);单组失败降级 {status:'error'} 不拖全局。
 
     window=(since_iso, until_iso, label) 可直接注入(免二次算窗);缺省按 month 算
     (market_voice._window 同口径:month='YYYY-MM' 自然月 UTC / None=近 30 天,
@@ -702,19 +769,20 @@ def build_ext(
         ("topics", lambda: _topics(db, since, until)),
         ("language_dist", lambda: _language_dist(db, since, until)),
         ("competitor_voice", lambda: _competitor_voice(db, since, until)),
+        ("prd_referrals", lambda: _prd_referrals(db, since, until)),
     )
     out: dict[str, Any] = {}
     for name, build in builders:
         try:
             out[name] = build()
-        except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,不拖累其余八组
+        except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,不拖累其余各组
             logger.warning("voice_report_ext block %s failed: %s", name, exc)
             out[name] = {"status": "error", "reason": str(exc)[:200]}
     return out
 
 
 def voice_report_ext(month: str | None = None, *, conn: Any = None) -> dict[str, Any]:
-    """路由入口:窗口信封 + 九组字段(GET /api/admin/vkpi/market/voice-report-ext)。
+    """路由入口:窗口信封 + 十组字段(GET /api/admin/vkpi/market/voice-report-ext)。
 
     month='YYYY-MM' 自然月(UTC);None=近 30 天;格式非法抛 ValueError(路由转 400)。
     纯读、零 LLM、零写库;窗口口径与 voice-report 完全一致。

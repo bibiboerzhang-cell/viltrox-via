@@ -12,6 +12,9 @@
   vkpi_kol_video_evidence      post_table='vkpi_kol_video_evidence' → identity=kol,
                                post_url = evidence.content_url(视频原帖);
       └ vkpi_kol_pool          evidence.kol_pool_id → pool.handle = identity_ref;
+  identity_id(溯源身份跳):kol=evidence.kol_pool_id(KOL 档案页锚),
+                               owned=employee_channels.id(官号矩阵行锚),user=null——
+                               实体自身 id 非作者个人字段,前端据此把身份节点变可点跳转;
   vkpi_sentiment_results       c.sentiment_id → 情感标签(当前表空,过滤器保留、
                                命中为零时如实返回空列表,绝不编造);
   其余 post_table(industry_posts 等)→ identity=user,identity_ref 留空。
@@ -72,6 +75,11 @@ FEED_SELECT_SQL = """
                 THEN COALESCE(kp.handle, '')
             ELSE ''
         END AS identity_ref,
+        CASE
+            WHEN c.post_table = 'vkpi_employee_channels' THEN ec.id
+            WHEN c.post_table = 'vkpi_kol_video_evidence' THEN ev.kol_pool_id
+            ELSE NULL
+        END AS identity_id,
         CASE
             WHEN c.post_table = 'vkpi_kol_video_evidence' THEN NULLIF(ev.content_url, '')
             WHEN c.post_table = 'vkpi_employee_channels' THEN NULLIF(ec.account_url, '')
@@ -161,6 +169,7 @@ def _row_to_item(rec: dict[str, Any]) -> dict[str, Any]:
     post_url = rec.get("post_url")
     post_url = str(post_url).strip() if post_url else None
     post_id = rec.get("post_id")
+    identity_id = rec.get("identity_id")
     return {
         "id": _int0(rec.get("id")),
         "source_table": SOURCE_TABLE,
@@ -169,6 +178,7 @@ def _row_to_item(rec: dict[str, Any]) -> dict[str, Any]:
         "language": str(rec.get("language_detected") or ""),
         "identity": identity,
         "identity_ref": str(rec.get("identity_ref") or ""),
+        "identity_id": _int0(identity_id) if identity_id is not None else None,
         "post_url": post_url or None,
         "likes": _int0(rec.get("likes_count")),
         "created_at": _iso_utc(rec.get("created_at")),

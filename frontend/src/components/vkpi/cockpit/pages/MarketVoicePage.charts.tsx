@@ -1,6 +1,6 @@
 import React from "react";
 import { formatLocal } from "../../lib/timeLocal";
-import { EmptyLine, type Row } from "./MarketVoicePage.modules";
+import { EmptyLine, KpiCard, type Row } from "./MarketVoicePage.modules";
 
 // 市场之声 · 图表模块族(V0h-ab 波2 终棒;MarketVoicePage 专用,页内拆件不入公共桶)。
 //   demo 对照(V-KPI-板块页范式-Demo.html):
@@ -513,6 +513,91 @@ export function CompetitorBody({ comp }: { comp: Row }) {
       <ProvNote>
         竞品份额上升 = 威胁信号 · 联动战略台 · 样本 {Number(comp.sample_videos) || 0} 条已深析视频(视频×品牌去重)
       </ProvNote>
+    </div>
+  );
+}
+
+/* ============ KPI 带四卡(V0h-ab 语义;V1.1 第四卡「已转产品部」接真计数) ============ */
+// 本月反馈/待处理 = kpi_prev 真环比口径(缺组回落 voice-report 旧口径计数);
+// 正面情绪占比 = sentiment_summary(批注 0 行 → 诚实 pending);
+// 已转产品部 = prd_referrals 组真计数(vkpi_market_prd_referrals 窗口 COUNT,0 也如实 0;
+// 表未建/组缺失 → 诚实 pending 带后端 reason,不编数)。sparkline 均为按日真序列。
+export function KpiBandCards({
+  ext,
+  fallbackComments,
+  fallbackQueue,
+}: {
+  ext: Row | null;
+  fallbackComments: number;
+  fallbackQueue: number;
+}) {
+  const prevMetrics: Row = ext?.kpi_prev?.metrics || {};
+  const commentsSeries = (ext?.kpi_series?.series?.comments || []).map((p: Row) => Number(p.count) || 0);
+  const queueSeries = (ext?.kpi_series?.series?.queue || []).map((p: Row) => Number(p.count) || 0);
+  const senti: Row = ext?.sentiment_summary || {};
+  const posShare = typeof senti.pos_share === "number" ? senti.pos_share : null;
+  const posSeries = (Array.isArray(senti.trend) ? senti.trend : []).map((t: Row) =>
+    typeof t.pos_share === "number" ? t.pos_share * 100 : null,
+  );
+  const commentsCur = Number(prevMetrics.comments?.current ?? fallbackComments) || 0;
+  const queueCur = Number(prevMetrics.queue?.current ?? fallbackQueue) || 0;
+  const prdGroup: Row | undefined = ext?.prd_referrals;
+  const prdReady = !!prdGroup && String(prdGroup.status) === "ready" && prdGroup.count != null;
+  const prdSeries = (Array.isArray(prdGroup?.series) ? prdGroup.series : []).map((p: Row) => Number(p.count) || 0);
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <KpiCard
+        label="本月反馈"
+        value={commentsCur.toLocaleString()}
+        unit="条"
+        series={commentsSeries}
+        seriesColor="var(--ds-accent)"
+        delta={prevMetrics.comments?.delta_pct ?? null}
+      />
+      {/* 待处理 = 回复队列积压 → demo .dot.w + warn 染数值/线色 */}
+      <KpiCard
+        label="待处理"
+        value={queueCur.toLocaleString()}
+        unit="条"
+        tone="warn"
+        series={queueSeries}
+        seriesColor="var(--ds-warn)"
+        delta={prevMetrics.queue?.delta_pct ?? null}
+      />
+      {posShare != null ? (
+        <KpiCard
+          label="正面情绪占比"
+          value={(Math.round(posShare * 1000) / 10).toFixed(1)}
+          unit="%"
+          series={posSeries}
+          seriesColor="var(--ds-good)"
+        />
+      ) : (
+        <KpiCard
+          label="正面情绪占比"
+          value="—"
+          pending
+          pendingNote={ext ? "窗口内情绪批注 0 行" : "voice-report-ext 待接通"}
+        />
+      )}
+      {/* V1.1:PRD 通路已建(vkpi_market_prd_referrals)→ 真计数,0 也如实显示 0 */}
+      {prdReady ? (
+        <KpiCard
+          label="已转产品部"
+          value={(Number(prdGroup.count) || 0).toLocaleString()}
+          unit="条"
+          series={prdSeries}
+          seriesColor="var(--ds-accent-2)"
+          delta={prdGroup.delta_pct ?? null}
+        />
+      ) : (
+        <KpiCard
+          label="已转产品部"
+          value="—"
+          pending
+          pendingNote={String(prdGroup?.reason || (ext ? "prd_referrals 组待接通" : "voice-report-ext 待接通"))}
+        />
+      )}
     </div>
   );
 }

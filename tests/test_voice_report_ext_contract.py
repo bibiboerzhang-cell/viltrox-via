@@ -69,6 +69,10 @@ ALL_SQL_CONSTANTS = (
     voice_report_ext.TOPIC_TEXT_SQL,
     voice_report_ext.LANGUAGE_DIST_SQL,
     voice_report_ext.COMPETITOR_VOICE_SQL,
+    # V1.1「已转产品部」组(prd_referrals)同进红线静态审查
+    voice_report_ext.PRD_TABLE_PROBE_SQL,
+    voice_report_ext.PRD_COUNT_SQL,
+    voice_report_ext.PRD_DAY_SQL,
 )
 ALL_SQL = "\n".join(ALL_SQL_CONSTANTS)
 
@@ -90,6 +94,7 @@ def test_sql_constants_parameterized_with_limit_pushdown():
         voice_report_ext.TOPIC_TEXT_SQL,
         voice_report_ext.LANGUAGE_DIST_SQL,
         voice_report_ext.COMPETITOR_VOICE_SQL,
+        voice_report_ext.PRD_DAY_SQL,
     )
     for sql in limited:
         assert "LIMIT ?" in sql
@@ -339,8 +344,12 @@ def test_response_envelope_contract_keys():
         "kpi_series", "kpi_prev", "sentiment_summary",
         "alerts_state", "platform_dist", "line_voice",
         "topics", "language_dist", "competitor_voice",
+        "prd_referrals",
         "method", "generated_at",
     }
+    # prd_referrals:mock conn 未配探针 → 表未建诚实 empty(count=null,不编数)
+    assert body["prd_referrals"]["status"] == "empty"
+    assert body["prd_referrals"]["count"] is None
     assert body["status"] == "ready"
     assert body["month"] == "2026-06"
     assert body["window"] == {"since": SINCE_0606, "until": UNTIL_0606, "label": _LABEL_0606}

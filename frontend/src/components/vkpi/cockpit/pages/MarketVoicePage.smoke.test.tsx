@@ -2,26 +2,30 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-// V0a 金样板冒烟 + V0h-ab 波2 终棒:
+// V0a 金样板冒烟 + V0h-ab 波2 终棒 + V1.1 转产品部真闭环:
 // - KPI 带四卡 demo 语义(本月反馈/待处理/正面情绪占比/已转产品部)+ 真 sparkline +
-//   环比药丸(delta null=诚实省略)+「情绪管线未点火」过期文案清除 + PRD 诚实 pending;
-// - 图表模块族(alerts/cat/senti/line_voice/topics/geo/comp)接 voice-report-ext 九组契约,
+//   环比药丸(delta null=诚实省略)+「情绪管线未点火」过期文案清除;
+// - 第四卡「已转产品部」= prd_referrals 组真计数(0 也如实 0;组缺失 → 诚实 pending);
+// - 图表模块族(alerts/cat/senti/line_voice/topics/geo/comp)接 voice-report-ext 契约,
 //   逐组诚实降级(comp 空窗走后端 reason 原样透出);
 // - 默认布局 v3 对齐 demo 六行:complaints/wishlist/gaps/buckets/plat 不进默认,palette 可选;
-// - V0e 闭环「转回复队列」/「转产品部」诚实态原样保留。
+// - V0e「转回复队列」+ V1.1「转产品部」均为真端点调用,成功才置绿,失败原因不吞;
+// - 溯源身份跳:kol 身份节点可点(sessionStorage 传 kol_pool_id + onNavigate)。
 // mock seam:services/vkpi/marketVoice-api(getVoiceReport / getVoiceFeed /
-// fetchVoiceReportExt / enqueueReplyQueueComment)—— 页面唯一网络出口,mock 后零真实 HTTP;
-// 布局走 localStorage(每测清空)。
+// fetchVoiceReportExt / enqueueReplyQueueComment / createPrdReferral)—— 页面唯一网络出口,
+// mock 后零真实 HTTP;布局走 localStorage(每测清空)。
 
 const getVoiceReport = vi.fn();
 const getVoiceFeed = vi.fn();
 const fetchVoiceReportExt = vi.fn();
 const enqueueReplyQueueComment = vi.fn();
+const createPrdReferral = vi.fn();
 vi.mock("../../../../services/vkpi/marketVoice-api", () => ({
   getVoiceReport: (...args: unknown[]) => getVoiceReport(...args),
   getVoiceFeed: (...args: unknown[]) => getVoiceFeed(...args),
   fetchVoiceReportExt: (...args: unknown[]) => fetchVoiceReportExt(...args),
   enqueueReplyQueueComment: (...args: unknown[]) => enqueueReplyQueueComment(...args),
+  createPrdReferral: (...args: unknown[]) => createPrdReferral(...args),
 }));
 
 import { MarketVoicePage } from "./MarketVoicePage";
@@ -35,6 +39,7 @@ const FEED_ITEMS = Array.from({ length: 7 }, (_, i) => ({
   language: "zh",
   identity: "kol",
   identity_ref: "@demo_kol",
+  identity_id: 321,
   post_url: "https://www.youtube.com/watch?v=demo",
   likes: i === 0 ? 3 : 0,
   created_at: "2026-07-10T02:41:00+00:00",
@@ -148,6 +153,19 @@ const EXT_OK = {
     competitor_exposures: 0,
     items: [],
   },
+  // V1.1「已转产品部」真计数组(vkpi_market_prd_referrals 窗口 COUNT;0 也如实 0)
+  prd_referrals: {
+    status: "ready",
+    count: 5,
+    previous: 2,
+    delta_pct: 150.0,
+    series: [
+      { date: "2026-07-08", count: 1 },
+      { date: "2026-07-09", count: 2 },
+      { date: "2026-07-10", count: 2 },
+    ],
+    table: "vkpi_market_prd_referrals",
+  },
   method: "lexicon_v0_ext",
   generated_at: "2026-07-11T00:00:00+00:00",
 };
@@ -209,27 +227,45 @@ beforeEach(() => {
       created_at: "2026-07-11T00:00:00Z",
     },
   });
+  createPrdReferral.mockReset().mockResolvedValue({
+    ok: true,
+    already_referred: false,
+    item: {
+      id: 9001,
+      source_table: "vkpi_comments",
+      source_id: "1042",
+      title: "对焦很稳,呼吸效应控制超预期",
+      detail: "",
+      category: "",
+      status: "referred",
+      created_by_staff_id: null,
+      created_at: "2026-07-11T00:00:00Z",
+      updated_at: "2026-07-11T00:00:00Z",
+    },
+  });
 });
 
-describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化)", () => {
-  it("KPI 带四卡 demo 语义:真环比药丸 + delta null 诚实省略 + PRD 诚实 pending + 过期文案清除", async () => {
+describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + V1.1 转产品部真闭环)", () => {
+  it("KPI 带四卡 demo 语义:真环比药丸 + delta null 诚实省略 + PRD 真计数 + 过期文案清除", async () => {
     expect(() => render(<MarketVoicePage apiToken="t" />)).not.toThrow();
 
     // 四卡新语义(demo kpiV 601-604 行同构)
     expect(await screen.findByText("本月反馈")).toBeTruthy();
     expect(screen.getByText("待处理")).toBeTruthy();
     expect(screen.getByText("正面情绪占比")).toBeTruthy();
-    expect(screen.getByText("已转产品部")).toBeTruthy();
+    expect(screen.getAllByText("已转产品部").length).toBeGreaterThan(0);
     // 数值来自 kpi_prev 真环比口径(769/132 也出现在 SrcChip 溯源行,取 ≥1)
     expect(screen.getAllByText("769").length).toBeGreaterThan(0);
     expect(screen.getAllByText("132").length).toBeGreaterThan(0);
     // 82.1 同时出现在 KPI 卡与 senti tstats(同源 pos_share,取 ≥1)
     expect(screen.getAllByText("82.1").length).toBeGreaterThan(0);
-    // comments delta 23.0 → ▲ 药丸;queue delta null → 诚实省略(全页无 ▼ 环比药丸)
+    // comments delta 23.0 → ▲;PRD delta 150.0 → ▲(queue delta null 诚实省略 → 恰 2 枚药丸)
     expect(screen.getByText("▲23.0%")).toBeTruthy();
-    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(1);
-    // PRD 无落库通路 → pending 药丸;「情绪管线未点火」过期文案全删(数据已 769 行)
-    expect(screen.getByText("PRD 通路待建")).toBeTruthy();
+    expect(screen.getByText("▲150.0%")).toBeTruthy();
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(2);
+    // V1.1:PRD 通路已建 → 第四卡真计数 5(不再是 pending 卡);过期文案全删
+    expect(screen.getAllByText("5").length).toBeGreaterThan(0);
+    expect(screen.queryByText("PRD 通路待建")).toBeNull();
     expect(screen.queryByText("情绪管线未点火")).toBeNull();
     // 旧口径四数不再占卡面(收进 SrcChip rows,以 hover 卡形式存在)
     expect(screen.queryByText("窗口样本")).toBeNull();
@@ -240,6 +276,24 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化)",
     expect(getVoiceReport).toHaveBeenCalledWith("t", "");
     expect(fetchVoiceReportExt).toHaveBeenCalledWith("t", "");
     expect(getVoiceFeed).toHaveBeenCalledWith("t", { offset: 0, limit: 20 });
+  });
+
+  it("KPI 第四卡:prd_referrals count=0 也如实显示 0(不摆 pending);组缺失 → 诚实 pending", async () => {
+    fetchVoiceReportExt.mockReset().mockResolvedValue({
+      ...EXT_OK,
+      prd_referrals: { status: "ready", count: 0, previous: null, delta_pct: null, series: [], table: "vkpi_market_prd_referrals" },
+    });
+    const { unmount } = render(<MarketVoicePage apiToken="t" />);
+    expect((await screen.findAllByText("已转产品部")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("0")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/prd_referrals 组待接通/)).toBeNull();
+    unmount();
+
+    // 组缺失(旧后端)→ 诚实 pending,绝不编 0
+    const { prd_referrals: _drop, ...extWithoutPrd } = EXT_OK as any;
+    fetchVoiceReportExt.mockReset().mockResolvedValue(extWithoutPrd);
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("prd_referrals 组待接通")).toBeTruthy();
   });
 
   it("默认布局 v3 六行:图表模块族在场,文字模块降为 palette 备选;旧 v2 布局键不干扰", async () => {
@@ -376,15 +430,11 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化)",
     expect(await screen.findByText(/HTTP 404/)).toBeTruthy();
   });
 
-  it("详情弹窗闭环动作(V0e):转回复队列真调端点→✓ 已入队;转产品部诚实 disabled", async () => {
+  it("详情弹窗闭环动作(V0e+V1.1):转回复队列/转产品部均真调端点,成功才置绿", async () => {
     render(<MarketVoicePage apiToken="t" />);
 
     fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
     expect(await screen.findByText(/反馈详情/)).toBeTruthy();
-
-    const prdBtn = screen.getByRole("button", { name: /转产品部/ });
-    expect((prdBtn as HTMLButtonElement).disabled).toBe(true);
-    expect(prdBtn.getAttribute("title") || "").toContain("PRD 通路待建");
 
     const rqBtn = screen.getByRole("button", { name: /转回复队列/ });
     expect((rqBtn as HTMLButtonElement).disabled).toBe(false);
@@ -392,6 +442,22 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化)",
     expect(enqueueReplyQueueComment).toHaveBeenCalledWith("t", 1042);
     expect(await screen.findByText("✓ 已入队")).toBeTruthy();
     expect(await screen.findByText("💬 已入队")).toBeTruthy();
+
+    // V1.1:转产品部按钮真调 POST /market/prd-referrals(source=vkpi_comments,title=正文截断)
+    const prdBtn = screen.getByRole("button", { name: "⚙ 转产品部" });
+    expect((prdBtn as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(prdBtn);
+    expect(createPrdReferral).toHaveBeenCalledWith("t", {
+      source_table: "vkpi_comments",
+      source_id: "1042",
+      title: "对焦很稳,呼吸效应控制超预期",
+      detail: "",
+      category: "",
+    });
+    // 端点真实返回 ok 才置绿「✓ 已转交」
+    expect(await screen.findByText("✓ 已转交")).toBeTruthy();
+    // 真实新增转交 → 重拉 voice-report-ext(KPI 读服务器真数,绝不本地 +1)
+    expect(fetchVoiceReportExt.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("转回复队列失败时错误如实展示(不吞、不假绿)", async () => {
@@ -402,5 +468,52 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化)",
     expect(await screen.findByText(/转回复队列失败/)).toBeTruthy();
     expect(await screen.findByText(/HTTP 403/)).toBeTruthy();
     expect(screen.queryByText("✓ 已入队")).toBeNull();
+  });
+
+  it("转产品部失败时错误如实展示(不吞、不假绿)", async () => {
+    createPrdReferral.mockReset().mockRejectedValue(new Error("HTTP 400 prd_referrals_table_missing"));
+    render(<MarketVoicePage apiToken="t" />);
+    fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
+    fireEvent.click(await screen.findByRole("button", { name: "⚙ 转产品部" }));
+    // 错误条同时出现在详情弹窗与 recs 卡(共用 prd 动作错误通道,均如实展示)
+    expect((await screen.findAllByText(/转产品部失败/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/prd_referrals_table_missing/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText("✓ 已转交")).toBeNull();
+  });
+
+  it("recs 每条建议「→ 产品部」真动作:source=lexicon_reco + 稳定 key,成功置「✓ 已转交」", async () => {
+    createPrdReferral.mockReset().mockResolvedValue({
+      ok: true,
+      already_referred: false,
+      item: {
+        id: 9002, source_table: "lexicon_reco", source_id: "improvement:低温马达异响改进",
+        title: "低温马达异响改进", detail: "", category: "improvement", status: "referred",
+        created_by_staff_id: null, created_at: "2026-07-11T00:00:00Z", updated_at: "2026-07-11T00:00:00Z",
+      },
+    });
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("低温马达异响改进")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "→ 产品部" }));
+    expect(createPrdReferral).toHaveBeenCalledWith("t", {
+      source_table: "lexicon_reco",
+      source_id: "improvement:低温马达异响改进",
+      title: "低温马达异响改进",
+      detail: "低温环境异响集中在 -10°C 以下,建议核查润滑脂标号。",
+      category: "improvement",
+    });
+    expect(await screen.findByText("✓ 已转交")).toBeTruthy();
+    // 行本体点击仍开引文弹窗(动作按钮 stopPropagation,不串行为)
+    expect(screen.queryByText(/低温异响原声样本/)).toBeNull();
+  });
+
+  it("溯源身份跳:kol 身份节点可点 → sessionStorage 传 kol_pool_id + onNavigate(kolProfile)", async () => {
+    const onNavigate = vi.fn();
+    window.sessionStorage.clear();
+    render(<MarketVoicePage apiToken="t" onNavigate={onNavigate} />);
+    fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
+    expect(await screen.findByText(/反馈详情/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /身份 KOL @demo_kol/ }));
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("321");
+    expect(onNavigate).toHaveBeenCalledWith("kolProfile");
   });
 });

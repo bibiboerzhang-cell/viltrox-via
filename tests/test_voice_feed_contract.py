@@ -64,6 +64,7 @@ def _sample_row(**overrides):
         "post_id": 456,
         "identity": "kol",
         "identity_ref": "some_kol_handle",
+        "identity_id": 789,
         "post_url": "https://youtube.com/watch?v=abc",
         # 内部列混进行里也不许泄漏(显示层宪法回归)
         "author_handle": "should_never_leak",
@@ -98,6 +99,9 @@ def test_sql_identity_case_branches():
     assert "WHEN c.post_table = 'vkpi_employee_channels' THEN 'owned'" in sql
     assert "WHEN c.post_table = 'vkpi_kol_video_evidence' THEN 'kol'" in sql
     assert "ELSE 'user'" in sql
+    # 溯源身份跳锚(identity_id):kol=ev.kol_pool_id / owned=ec.id / 其余 NULL
+    assert "WHEN c.post_table = 'vkpi_kol_video_evidence' THEN ev.kol_pool_id" in sql
+    assert "WHEN c.post_table = 'vkpi_employee_channels' THEN ec.id" in sql
     # 三路 JOIN 齐:官号 / 视频证据 / KOL 池(identity_ref 数据链)
     assert "LEFT JOIN vkpi_employee_channels" in sql
     assert "LEFT JOIN vkpi_kol_video_evidence" in sql
@@ -130,7 +134,7 @@ def test_feed_response_and_item_contract_keys():
     item = body["items"][0]
     assert set(item.keys()) == {
         "id", "source_table", "platform", "text", "language",
-        "identity", "identity_ref", "post_url", "likes", "created_at", "prov",
+        "identity", "identity_ref", "identity_id", "post_url", "likes", "created_at", "prov",
     }
     assert item["id"] == 123
     assert item["source_table"] == "vkpi_comments"
@@ -138,6 +142,8 @@ def test_feed_response_and_item_contract_keys():
     assert item["language"] == "en"
     assert item["identity"] == "kol"
     assert item["identity_ref"] == "some_kol_handle"
+    # 溯源身份跳锚:kol=vkpi_kol_pool.id / owned=vkpi_employee_channels.id / user=null
+    assert item["identity_id"] == 789
     assert item["post_url"] == "https://youtube.com/watch?v=abc"
     assert item["likes"] == 12
     assert item["created_at"] == "2026-07-11T02:41:00Z"
