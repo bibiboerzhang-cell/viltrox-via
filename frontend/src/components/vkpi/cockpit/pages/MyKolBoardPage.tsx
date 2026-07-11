@@ -9,14 +9,25 @@ import { ContributionRollupPanel } from "../../pages/myKol/ContributionRollupPan
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
 import {
+  KolLibraryModule,
   MODULE_SOURCES,
   MyKolKpiBand,
   OfficialMatrixModule,
   PendingBody,
   TeamMatrixModule,
 } from "./MyKolBoardPage.modules";
+import {
+  getMyKolBoardExt,
+  mapLibraryRows,
+  type VkpiMyKolBoardExtResponse,
+} from "../../../../services/vkpi/myKolBoard-api";
 
-// MY KOL → 板块页范式改版 · M1 骨架刀(金样板 = MarketVoicePage 可编辑板块页 1:1 同构)。
+// MY KOL → 板块页范式改版 · M1 骨架 + M3 库弹窗化(金样板 = MarketVoicePage 板块页 1:1 同构)。
+//   【M3】library 模块真身:卡面筛选 chips(有V视频/全部+平台+负责人)+ 6 条 KOL 行 +
+//   全量弹窗/详情弹窗(FeedList/FeedDetail 连续翻同构,住 MyKolBoardPage.dialogs.tsx);
+//   新增数据源 GET /my-kol/board-ext?days=30(v_content.v_kol_count 供 V 筛选 chip 计数,
+//   其余六组 M4+ 接线)与 GET /kol-pool/{id}/videos(详情视频区,V 三档=classify_v_content
+//   前端同构派生)。旧 KOL Pool 抽屉(vkpi:open-kol-pool-item 事件)保留不动,两入口并存。
 //   页壳:pagehead(标题 + 视角/KOL 数药丸徽 + 实时辉光点 + 编辑布局钮)+
 //   EditableDashboardBoard(模块注册表 + 默认布局六行 + palette 备选)。
 //   数据源(全真,零编造,本刀全走现成端点):
@@ -89,6 +100,26 @@ export function MyKolBoardPage({
   // K4 官号粉丝 + team/official 模块共用一份矩阵(hook 自带 30s 内存缓存 + localStorage SWR)
   const matrix = useOfficialChannelMatrix(apiToken || undefined);
 
+  // 【M3】board-ext 七组聚合(本刀只消费 v_content.v_kol_count;失败=chip 不带数,不编)
+  const [ext, setExt] = React.useState<VkpiMyKolBoardExtResponse | null>(null);
+  const [extError, setExtError] = React.useState("");
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setExtError("");
+    getMyKolBoardExt(apiToken, { days: 30 })
+      .then((res) => {
+        if (alive) setExt(res && typeof res === "object" ? res : null);
+      })
+      .catch((err: unknown) => {
+        const detail = (err as { detail?: unknown; message?: unknown }) || {};
+        if (alive) setExtError(String(detail.detail || detail.message || "读取失败"));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, reloadTick]);
+
   React.useEffect(() => {
     if (!apiToken) return;
     let alive = true;
@@ -127,6 +158,20 @@ export function MyKolBoardPage({
     if (matrix.platforms.length === 0) return null;
     return matrix.platforms.reduce((sum, platform) => sum + (Number(platform.totalFollowers) || 0), 0);
   }, [matrix.platforms]);
+
+  // 【M3】库行模型:aggregate.pool_favorites(已全量下发)+ claims 认领桥 → KolLibraryRow
+  const libraryRows = React.useMemo(
+    () => mapLibraryRows(agg?.pool_favorites, agg?.claims),
+    [agg?.pool_favorites, agg?.claims],
+  );
+  const staffOptions = React.useMemo(
+    () => (data?.staffMembers || []).map((member) => ({ id: member.id, name: member.name })),
+    [data?.staffMembers],
+  );
+  const vKolCount = React.useMemo(() => {
+    const value = Number(ext?.v_content?.v_kol_count);
+    return String(ext?.v_content?.status || "") === "ready" && Number.isFinite(value) ? value : null;
+  }, [ext?.v_content]);
 
   /* ---------- 卡头 props(金样板 cardProps 同构;本刀 SrcChip hover 口径卡起步,
      点击溯源弹窗随 M2/M3 dialogs 刀补——不借市场之声 GENERIC_CHAIN,链口径不同不冒充) ---------- */
@@ -211,6 +256,34 @@ export function MyKolBoardPage({
     </ModuleCard>
   );
 
+  // 【M3】KOL 库真身:aggregate 行 + board-ext V 计数;弹窗族在模块内自持(dialogs 文件)。
+  const renderLibrary = () => {
+    const extraRows: Array<[string, string]> =
+      vKolCount != null
+        ? [["V KOL 计数", `${vKolCount.toLocaleString()}(board-ext v_content · 全库口径)`]]
+        : extError
+          ? [["board-ext", `读取失败:${extError} —— V 计数缺席不编数`]]
+          : [];
+    return (
+      <ModuleCard {...cardProps("library", "KOL 库", agg ? libraryRows.length.toLocaleString() : undefined, extraRows)}>
+        {kpiGate() ?? (
+          <KolLibraryModule
+            apiToken={apiToken}
+            baseRows={libraryRows}
+            vKolCount={vKolCount}
+            isManager={isManager}
+            staffOptions={staffOptions}
+            projects={data?.projects || []}
+            onActionDone={() => {
+              setReloadTick((tick) => tick + 1);
+              if (onRefreshData) onRefreshData();
+            }}
+          />
+        )}
+      </ModuleCard>
+    );
+  };
+
   const pendingModule = (key: string, title: string, stage: string, note: string) => (
     <ModuleCard {...cardProps(key, title)}>
       <PendingBody stage={stage}>{note}</PendingBody>
@@ -224,7 +297,7 @@ export function MyKolBoardPage({
     { key: "digest", label: "每日学习摘要", description: "收藏 KOL + 官号变化 · daily-digest 真聚合(内嵌)", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderDigest },
     { key: "funnel", label: "四环漏斗", description: "收藏→认领→进项目→已发布 · M2 接线", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: () => pendingModule("funnel", "四环漏斗", "M2", "board-ext 端点接通后点亮四环漏斗(收藏→认领→进项目→已发布),本刀诚实待接不摆假漏斗。") },
     { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
-    { key: "library", label: "KOL 库", description: "员工 KOL 库模块化 · M2/M3 接线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 24, render: () => pendingModule("library", "KOL 库", "M2/M3", "EmployeeKolLibrary 模块化搬入(收藏/共享/漏斗过滤)在后续刀;底表 aggregate.pool_favorites 已在读。") },
+    { key: "library", label: "KOL 库", description: "收藏/共享全量 · V 视频筛选 + 全量弹窗 + 详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
     { key: "fitdist", label: "Fit 分布", description: "在库 KOL fit 只读分布 · M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: () => pendingModule("fitdist", "Fit 分布", "M2", "board-ext 端点接通后点亮 fit 只读分布(评分公式永不进前端)。") },
     { key: "official", label: "官方账号矩阵", description: "18 官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "在库 KOL 按平台分桶 · M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: () => pendingModule("platdist", "平台分布", "M2", "board-ext 端点接通后点亮在库 KOL 平台分桶(vkpi_kol_pool.platform 纯读)。") },

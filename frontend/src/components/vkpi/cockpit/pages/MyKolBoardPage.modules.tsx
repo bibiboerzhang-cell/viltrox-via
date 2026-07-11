@@ -1,10 +1,25 @@
 import React from "react";
 import {
   EmptyLine,
+  ErrorCard,
   KpiCard,
+  LoadingLine,
   PendingCard,
   type Row,
 } from "./MarketVoicePage.modules";
+import {
+  KolDetailModal,
+  KolLibraryListModal,
+  KolRowLine,
+  LibraryChips,
+} from "./MyKolBoardPage.dialogs";
+import {
+  filterLibraryRows,
+  libraryPlatformOptions,
+  mapLibraryRows,
+  type KolLibraryRow,
+  type LibraryFilter,
+} from "../../../../services/vkpi/myKolBoard-api";
 import { OfficialMatrix, TeamMatrix } from "../../pages/myKol/MyKolPage.Sections";
 import {
   isGenericStaffShell,
@@ -67,10 +82,15 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     ],
   },
   library: {
-    label: "vkpi_kol_pool_favorites · M2/M3 待接线",
+    label: "my-kol/aggregate · board-ext",
     rows: [
-      ["底表", "vkpi_kol_pool + favorites/共享行(aggregate.pool_favorites 已在读)"],
-      ["状态", "EmployeeKolLibrary 模块化搬入是 M2/M3 刀 · 本刀不重复嵌整页大件"],
+      ["在库行", "vkpi_kol_pool_favorites + 共享 vkpi_kol_pool_members(aggregate.pool_favorites 全量下发)"],
+      ["状态徽", "收藏/共享=行本体;进行中=挂 assignments;已认领=vkpi_kol_claims 平台+名称桥(真值在详情 viewer-context)"],
+      ["V 视频 KOL", "board-ext v_content.v_kol_count —— 至少 1 条合作/标题提及视频的去重 KOL(全库口径)"],
+      ["V 三档判据", "合作=挂项目(project_id 非空)/ 标题提及=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 同口径)"],
+      ["列表 V 筛选", "行级可判据=已进项目(合作);标题提及需逐 KOL 视频判定 → 详情弹窗逐条标注"],
+      ["单 KOL 视频", "GET /kol-pool/{id}/videos(view_count 点时实测 · NULL 剔除注明)"],
+      ["负责人筛选", "管理层按 ?staff_id= 服务端 scope 重取,零本地猜"],
     ],
   },
   fitdist: {
@@ -342,7 +362,7 @@ export function OfficialMatrixModule({ apiToken, matrix }: { apiToken?: string; 
     return (
       <div className="rounded-lg border border-crit bg-crit-soft px-3 py-2 text-[12px] text-crit">
         <div className="font-semibold">official-matrix 读取失败</div>
-        <div className="mt-0.5 text-[11px] opacity-90">{matrix.error}</div>
+        <div className="mt-0.5 text-[11px]">{matrix.error}</div>
       </div>
     );
   }
@@ -359,6 +379,131 @@ export function OfficialMatrixModule({ apiToken, matrix }: { apiToken?: string; 
       onSelectPlatform={setSelectedPlatformKey}
       onSelectAccount={(account) => setSelectedAccountId(account.id)}
     />
+  );
+}
+
+/* ============ KOL 库模块真身(M3:替换 M1 PendingCard)============
+   卡面 = 筛选 chips(有V视频/全部 + 平台 strip + 负责人)+ 6 条 KOL 行 + 「查看全量」;
+   弹窗族(全量列表/详情连续翻)住 MyKolBoardPage.dialogs(金样板 FeedList/FeedDetail 同构)。
+   数据:baseRows 由 page 层从 aggregate.pool_favorites 映射注入(零重复请求);
+   负责人筛选 = 管理层按 ?staff_id= 服务端 scope 重取(零本地猜);
+   「有 V 视频」count = board-ext v_content.v_kol_count(全库口径,行级过滤判据如实注明)。 */
+export function KolLibraryModule({
+  apiToken,
+  baseRows,
+  vKolCount,
+  isManager,
+  staffOptions,
+  projects,
+  onActionDone,
+}: {
+  apiToken: string;
+  baseRows: KolLibraryRow[];
+  /** board-ext v_content.v_kol_count;null = 聚合未就绪(chip 不带数,不编) */
+  vKolCount: number | null;
+  isManager: boolean;
+  staffOptions: Array<{ id: string; name: string }>;
+  projects: VkpiProjectRow[];
+  /** 动作落地后(入项目/释放认领)触发父级 aggregate 重拉 */
+  onActionDone?: () => void;
+}) {
+  const [filter, setFilter] = React.useState<LibraryFilter>({ vOnly: false, platform: "", query: "" });
+  const [staffId, setStaffId] = React.useState("");
+  const [staffRows, setStaffRows] = React.useState<KolLibraryRow[] | null>(null);
+  const [staffBusy, setStaffBusy] = React.useState(false);
+  const [staffError, setStaffError] = React.useState("");
+  const [listOpen, setListOpen] = React.useState(false);
+  const [detailIndex, setDetailIndex] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    if (!apiToken || !staffId) {
+      setStaffRows(null);
+      setStaffError("");
+      return;
+    }
+    let alive = true;
+    setStaffBusy(true);
+    setStaffError("");
+    import("../../../../services/vkpi/kol-api")
+      .then(({ getMyKolAggregate }) => getMyKolAggregate(apiToken, { staffId: Number(staffId) }))
+      .then((resp) => {
+        if (alive) setStaffRows(mapLibraryRows(resp.pool_favorites as Row[], resp.claims as Row[]));
+      })
+      .catch((err: unknown) => {
+        if (alive) setStaffError(String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || "按负责人读取失败").slice(0, 100));
+      })
+      .finally(() => {
+        if (alive) setStaffBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, staffId]);
+
+  const rows = staffId && staffRows ? staffRows : baseRows;
+  const filtered = React.useMemo(() => filterLibraryRows(rows, filter), [rows, filter]);
+  const platformOptions = React.useMemo(() => libraryPlatformOptions(rows), [rows]);
+  const staffProp = isManager && staffOptions.length
+    ? { options: staffOptions, value: staffId, onChange: setStaffId, busy: staffBusy }
+    : undefined;
+  const openDetail = (i: number) => {
+    if (i >= 0 && i < filtered.length) setDetailIndex(i);
+  };
+
+  return (
+    <div>
+      <div className="mb-2">
+        <LibraryChips filter={filter} onFilter={setFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staffProp} />
+      </div>
+      {staffError ? <ErrorCard title="负责人筛选读取失败" text={staffError} /> : null}
+      {staffBusy && !staffRows ? (
+        <LoadingLine text="按负责人读取中…" />
+      ) : rows.length === 0 ? (
+        <EmptyLine text="暂无在库 KOL(收藏/共享为空)。" />
+      ) : filtered.length === 0 ? (
+        <EmptyLine text="该筛选组合下 0 条——诚实空,不编行。" />
+      ) : (
+        <div>
+          {filtered.slice(0, 6).map((row, i) => (
+            <KolRowLine key={row.poolId} row={row} index={i} onOpen={openDetail} />
+          ))}
+          <button
+            type="button"
+            onClick={() => setListOpen(true)}
+            className="mt-2 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
+          >
+            ≡ 查看全量 {filtered.length} 条 · 点单条连续翻
+          </button>
+        </div>
+      )}
+      {listOpen ? (
+        <KolLibraryListModal
+          apiToken={apiToken}
+          rows={filtered}
+          totalAll={rows.length}
+          filter={filter}
+          onFilter={setFilter}
+          platformOptions={platformOptions}
+          vKolCount={vKolCount}
+          staff={staffProp}
+          projects={projects}
+          onOpenDetail={openDetail}
+          onClose={() => setListOpen(false)}
+          onActionDone={onActionDone}
+        />
+      ) : null}
+      {detailIndex != null && filtered[detailIndex] ? (
+        <KolDetailModal
+          apiToken={apiToken}
+          rows={filtered}
+          index={detailIndex}
+          onNav={openDetail}
+          onClose={() => setDetailIndex(null)}
+          projects={projects}
+          onActionDone={onActionDone}
+        />
+      ) : null}
+    </div>
   );
 }
 
