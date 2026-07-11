@@ -5,7 +5,7 @@
 //   端点缺/错 → 一行诚实降级提示;表缺 → 环显 0 + 「表缺」徽标(诚实展示欠账正是目的)。
 // 审美纪律:进度环入场扫描补间一次(300ms,依次错峰),无循环闪烁;
 //   prefers-reduced-motion 直显终值(useReducedMotion);数字直显不跳动(信息优先)。
-// 深色 slate/白 6% 透明度体系;sky/emerald/purple 均为页面既有语义色,不引新色板。
+// 配色走设计 token(bg-panel/border-line/text-muted);三环语义色 info/good/accent-2,不引新色板。
 
 import React, { useEffect, useState } from "react";
 import { m, useReducedMotion } from "framer-motion";
@@ -38,9 +38,9 @@ function asStr(v: unknown): string {
 }
 
 const METRIC_DEFS: Array<{ key: string; label: string; target: number; unit: string; color: string; dim: string }> = [
-  { key: "launch_briefs", label: "Launch Brief", target: 30, unit: "份", color: "rgba(125,211,252,0.9)", dim: "text-sky-200" },
-  { key: "dealers", label: "Dealer", target: 300, unit: "行", color: "rgba(52,211,153,0.9)", dim: "text-emerald-200" },
-  { key: "verdict_rate", label: "裁决率", target: 30, unit: "%", color: "rgba(216,180,254,0.9)", dim: "text-purple-200" },
+  { key: "launch_briefs", label: "Launch Brief", target: 30, unit: "份", color: "var(--ds-info)", dim: "text-info" },
+  { key: "dealers", label: "Dealer", target: 300, unit: "行", color: "var(--ds-good)", dim: "text-good" },
+  { key: "verdict_rate", label: "裁决率", target: 30, unit: "%", color: "var(--ds-accent-2)", dim: "text-accent-2" },
 ];
 
 export function normalizeNorthstar(raw: unknown): { metrics: GaugeMetric[]; generatedAt: string } | null {
@@ -87,7 +87,7 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
     e(
       "svg",
       { viewBox: "0 0 64 64", className: "h-16 w-16 shrink-0", role: "img", "aria-label": `${metric.label} ${valueText} / ${targetText}` },
-      e("circle", { cx: 32, cy: 32, r: R, fill: "none", stroke: "rgba(255,255,255,0.06)", strokeWidth: 5 }),
+      e("circle", { cx: 32, cy: 32, r: R, fill: "none", stroke: "var(--ds-line)", strokeWidth: 5 }),
       reduced
         ? e("circle", { ...ringProps, strokeDashoffset: dashTarget })
         : e(m.circle, {
@@ -98,7 +98,7 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
           }),
       e(
         "text",
-        { x: 32, y: 36, textAnchor: "middle", className: "fill-white", style: { fontSize: valueText.length > 4 ? 11 : 14, fontWeight: 600 } },
+        { x: 32, y: 36, textAnchor: "middle", className: "fill-ink", style: { fontSize: valueText.length > 4 ? 11 : 14, fontWeight: 600 } },
         valueText,
       ),
     ),
@@ -113,15 +113,15 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
           ? e(
               "span",
               {
-                className: "rounded border border-amber-300/25 bg-amber-500/[0.08] px-1 py-0.5 text-[8.5px] text-amber-200",
+                className: "rounded border border-warn-soft bg-warn-soft px-1 py-0.5 text-[8.5px] text-warn",
                 title: metric.note || metric.status,
               },
               metric.status === "table_missing" ? "表缺" : "指标异常",
             )
           : null,
       ),
-      e("div", { className: "text-[10px] tabular-nums text-slate-400" }, `${valueText} / ${targetText}${metric.unit !== "%" ? ` ${metric.unit}` : ""}`),
-      metric.detail ? e("div", { className: "text-[9px] text-slate-600" }, metric.detail) : null,
+      e("div", { className: "text-[10px] tabular-nums text-muted" }, `${valueText} / ${targetText}${metric.unit !== "%" ? ` ${metric.unit}` : ""}`),
+      metric.detail ? e("div", { className: "text-[9px] text-muted" }, metric.detail) : null,
     ),
   );
 }
@@ -288,24 +288,24 @@ export function NorthStarGauges({ apiToken = "", variant = "strip" }: { apiToken
 
   return e(
     "div",
-    { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4", "data-testid": "northstar-gauges" },
+    { className: "rounded-2xl border border-line bg-panel p-4", "data-testid": "northstar-gauges" },
     e(
       "div",
       { className: "mb-3 flex items-start justify-between gap-2" },
       e(
         "div",
         { className: "flex items-center gap-2" },
-        e(Target, { size: 14, className: "text-sky-300" }),
-        e("div", { className: "text-[13px] font-semibold text-white" }, "90 天北极星"),
+        e(Target, { size: 14, className: "text-info" }),
+        e("div", { className: "text-[13px] font-semibold text-ink" }, "90 天北极星"),
       ),
-      e("div", { className: "text-[10px] text-slate-500" }, "真库现查 · 表缺诚实 0"),
+      e("div", { className: "text-[10px] text-muted" }, "真库现查 · 表缺诚实 0"),
     ),
     loading && !data
-      ? e("div", { className: "py-3 text-center text-[11px] text-slate-500" }, "北极星指标加载中…")
+      ? e("div", { className: "py-3 text-center text-[11px] text-muted" }, "北极星指标加载中…")
       : failed || !data
         ? e(
             "div",
-            { className: "rounded-lg border border-dashed border-white/[0.08] px-3 py-2 text-center text-[11px] text-slate-500" },
+            { className: "rounded-lg border border-dashed border-line px-3 py-2 text-center text-[11px] text-muted" },
             "北极星端点暂不可用(诚实降级,不编数)。",
           )
         : e(
@@ -317,7 +317,7 @@ export function NorthStarGauges({ apiToken = "", variant = "strip" }: { apiToken
             }),
           ),
     data?.generatedAt
-      ? e("div", { className: "mt-2 text-right text-[9px] text-slate-600" }, `生成于 ${data.generatedAt}(UTC)· 纯读`)
+      ? e("div", { className: "mt-2 text-right text-[9px] text-muted" }, `生成于 ${data.generatedAt}(UTC)· 纯读`)
       : null,
   );
 }

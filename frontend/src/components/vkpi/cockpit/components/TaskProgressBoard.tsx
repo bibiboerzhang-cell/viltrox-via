@@ -227,10 +227,10 @@ function initiatorChipNode(task: any, me: MeIdentity | null) {
   if (initiator == null || initiator === "") return null;
   if (taskIsMine(task, me)) {
     return e("span", {
-      className: "shrink-0 rounded border border-amber-300/50 bg-amber-400/[0.12] px-1 text-[9px] font-medium leading-4 text-amber-200",
+      className: "shrink-0 rounded border border-warn bg-warn-soft px-1 text-[9px] font-medium leading-4 text-warn",
     }, "我");
   }
-  return e("span", { className: "shrink-0 text-[9px] text-white/30" }, `用户 ${initiator}`);
+  return e("span", { className: "shrink-0 text-[9px] text-muted" }, `用户 ${initiator}`);
 }
 
 // 我的任务置顶:稳定排序(现代 JS Array.sort 保证稳定),两组内部保持原有顺序。
@@ -256,7 +256,7 @@ function TaskRow({ task, color, showBar, me }: any) {
     type: "button",
     onClick: canOpen ? () => openTaskOrigin(task) : undefined,
     disabled: !canOpen,
-    className: `block w-full min-w-0 text-left ${canOpen ? "cursor-pointer rounded-md transition-colors hover:bg-white/[0.045]" : "cursor-default"} disabled:cursor-default`,
+    className: `block w-full min-w-0 text-left ${canOpen ? "cursor-pointer rounded-md transition-colors hover:bg-accent-soft" : "cursor-default"} disabled:cursor-default`,
     title: canOpen ? ((taskKolPoolId(task) || taskMyKolPoolId(task)) ? "打开 KOL Pool 该 KOL 完整详情" : "打开这次查找记录") : "",
   },
     e("div", { className: "flex items-center gap-1.5 min-w-0" },
@@ -264,19 +264,19 @@ function TaskRow({ task, color, showBar, me }: any) {
         className: `h-[5px] w-[5px] shrink-0 rounded-full ${showBar ? "animate-pulse" : ""}`,
         style: { background: color }
       }),
-      e("span", { className: "truncate text-[11px] leading-4 text-white/70" }, taskLabel(task)),
+      e("span", { className: "truncate text-[11px] leading-4 text-ink-2" }, taskLabel(task)),
       initiatorChipNode(task, me)
     ),
-    retryText && e("div", { className: "ml-[11px] truncate text-[10px] leading-4 text-white/35" }, retryText),
+    retryText && e("div", { className: "ml-[11px] truncate text-[10px] leading-4 text-muted" }, retryText),
     showBar && (
       hasProgress
-        ? e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-white/[0.08]" },
+        ? e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-panel" },
           e("div", {
             className: "h-full rounded-full transition-[width] duration-500",
             style: { width: `${progress}%`, background: color }
           })
         )
-        : e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-white/[0.08]" },
+        : e("div", { className: "ml-[11px] mt-1 h-[3px] overflow-hidden rounded-full bg-panel" },
           e("div", {
             className: "h-full w-1/2 rounded-full opacity-60",
             style: { background: `linear-gradient(90deg, transparent, ${color}, transparent)` }
@@ -304,7 +304,7 @@ function TaskLane({ lane, tasks, me }: any) {
     e("div", { className: "flex flex-col gap-1.5" },
       tasks.length
         ? tasks.map((task: any) => e(TaskRow, { key: task.id, task, color: lane.color, showBar: lane.showBar, me }))
-        : e("span", { className: "text-[11px] leading-4 text-white/30" }, "—")
+        : e("span", { className: "text-[11px] leading-4 text-muted" }, "—")
     )
   );
 }
@@ -475,12 +475,12 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
   }
 
   return e("div", {
-    className: "vkpi-task-progress w-full rounded-xl border border-white/10 bg-[#0d1117] px-3 py-3 shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
+    className: "vkpi-task-progress w-full rounded-xl border border-line bg-card px-3 py-3 shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
   },
     e("div", { className: "mb-3.5 flex items-center justify-between gap-2" },
       e("div", { className: "flex min-w-0 items-center gap-1.5" },
-        e(Zap, { size: 15, className: "shrink-0 text-[#5DCAA5]" }),
-        e("span", { className: "truncate text-[13px] font-medium text-white/90" }, "任务进度")
+        e(Zap, { size: 15, className: "shrink-0 text-good" }),
+        e("span", { className: "truncate text-[13px] font-medium text-ink" }, "任务进度")
       ),
       e("div", { className: "flex shrink-0 items-center gap-1.5" },
         // 「只看我的」开关(身份拉到才显示;记忆到 localStorage)
@@ -490,11 +490,11 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
           title: mineOnly ? "当前只显示我发起的任务,点击看全部" : "只看我发起的任务",
           className: `rounded border px-1.5 py-0.5 text-[9.5px] font-medium transition-colors ${
             mineOnly
-              ? "border-amber-300/50 bg-amber-400/[0.12] text-amber-200"
-              : "border-white/[0.1] text-white/40 hover:text-white/70"
+              ? "border-warn bg-warn-soft text-warn"
+              : "border-line text-muted hover:text-ink-2"
           }`,
         }, "只看我的"),
-        e("span", { className: "text-[11px] text-white/40 tabular-nums" },
+        e("span", { className: "text-[11px] text-muted tabular-nums" },
           loading && !payload ? "连接中" : `${activeTotal} 活跃`
         ),
         e("span", {
@@ -511,22 +511,22 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
         )
       )
     ),
-    error && e("div", { className: "mb-2 rounded border border-amber-300/15 bg-amber-300/[0.05] px-2 py-1 text-[10px] leading-4 text-amber-100/70" },
+    error && e("div", { className: "mb-2 rounded border border-warn-soft bg-warn-soft px-2 py-1 text-[10px] leading-4 text-warn" },
       payload ? "任务进度连接中 · 保留上次状态" : error
     ),
-    emptyActive && e("div", { className: "mb-2 rounded border border-white/[0.06] bg-white/[0.025] px-2 py-1.5 text-center text-[10.5px] text-white/35" },
+    emptyActive && e("div", { className: "mb-2 rounded border border-line bg-panel px-2 py-1.5 text-center text-[10.5px] text-muted" },
       "暂无运行中任务"
     ),
     e("div", { className: "flex flex-col gap-2.5" },
       lanes.map((lane) => e(TaskLane, { key: lane.key, lane, tasks: lane.tasks, me }))
     ),
-    e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
+    e("div", { className: "mt-3 border-t border-line pt-2.5" },
       e("div", { className: "flex items-center justify-between gap-2" },
         e("div", { className: "flex min-w-0 items-center gap-1.5" },
-          e(Clock3, { size: 12, className: "text-white/35" }),
-          e("span", { className: "truncate text-[11px] text-white/45" }, "排队等待")
+          e(Clock3, { size: 12, className: "text-muted" }),
+          e("span", { className: "truncate text-[11px] text-muted" }, "排队等待")
         ),
-        e("span", { className: "text-[11px] font-medium text-white/60 tabular-nums" }, queueTotal)
+        e("span", { className: "text-[11px] font-medium text-ink-2 tabular-nums" }, queueTotal)
       ),
       e("div", { className: "mt-1.5 flex flex-col gap-1" + (showAllQueue ? " max-h-64 overflow-y-auto pr-1" : "") },
         visibleQueue.length
@@ -537,38 +537,38 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
             disabled: !taskCanOpen(task),
             className: "flex min-w-0 items-start gap-1.5 text-left disabled:cursor-default"
           },
-            e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `#${Number.isFinite(Number(task?.queue_position)) ? Number(task.queue_position) : index + 1}`),
+            e("span", { className: "w-[18px] shrink-0 text-[10px] text-muted tabular-nums" }, `#${Number.isFinite(Number(task?.queue_position)) ? Number(task.queue_position) : index + 1}`),
             e("span", { className: "min-w-0 flex-1" },
               e("span", { className: "flex min-w-0 items-center gap-1" },
-                e("span", { className: "min-w-0 truncate text-[11px] text-white/60" }, taskLabel(task)),
+                e("span", { className: "min-w-0 truncate text-[11px] text-ink-2" }, taskLabel(task)),
                 initiatorChipNode(task, me)
               ),
-              etaHumanText(task) && e("span", { className: "block truncate text-[10px] text-emerald-300/70" }, etaHumanText(task)),
-              taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-white/30" }, taskRetryText(task))
+              etaHumanText(task) && e("span", { className: "block truncate text-[10px] text-good" }, etaHumanText(task)),
+              taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-muted" }, taskRetryText(task))
             )
           ))
-          : e("span", { className: "text-[11px] text-white/25" }, "—")
+          : e("span", { className: "text-[11px] text-muted" }, "—")
       ),
       // 「+N 更多任务」可点展开/收起全部排队(此前是死文字);queueTotal 受后端 LIMIT 50 截断。
       (remainingQueue > 0 || showAllQueue) && (queuedTasks.length > 5) && e("button", {
         type: "button",
         onClick: () => setShowAllQueue((v) => !v),
-        className: "mt-1 flex w-full items-center gap-1.5 text-left text-white/45 hover:text-white/70 transition-colors"
+        className: "mt-1 flex w-full items-center gap-1.5 text-left text-muted hover:text-ink-2 transition-colors"
       },
         showAllQueue
           ? e("span", { className: "text-[10.5px]" }, "收起 ▲")
           : e(React.Fragment, null,
-              e("span", { className: "w-[18px] shrink-0 text-[10px] text-white/40 tabular-nums" }, `+${remainingQueue}`),
+              e("span", { className: "w-[18px] shrink-0 text-[10px] text-muted tabular-nums" }, `+${remainingQueue}`),
               e("span", { className: "truncate text-[11px]" }, `更多任务…(展开看全部 ${queuedTasks.length} 条) ▼`)
             )
       )
     ),
     // 2026-06-12 波5 R7:无 target 的条目不再假装可点 — 按钮禁用、「可打开」标签按实际情况显示
     // 2026-06-15:并入失败桶 — 标题改「最近完成/失败」,失败任务按桶分类并提供重试入口。
-    (visibleRecent.length || failedRecent.length) ? e("div", { className: "mt-3 border-t border-white/[0.08] pt-2.5" },
+    (visibleRecent.length || failedRecent.length) ? e("div", { className: "mt-3 border-t border-line pt-2.5" },
       e("div", { className: "mb-1.5 flex items-center justify-between gap-2" },
-        e("span", { className: "text-[11px] text-white/45" }, failedRecent.length ? "最近完成/失败" : "最近完成"),
-        visibleRecent.some((task) => taskCanOpen(task)) && e("span", { className: "text-[10px] text-[#5DCAA5]/80" }, "可打开")
+        e("span", { className: "text-[11px] text-muted" }, failedRecent.length ? "最近完成/失败" : "最近完成"),
+        visibleRecent.some((task) => taskCanOpen(task)) && e("span", { className: "text-[10px] text-good" }, "可打开")
       ),
       visibleRecent.length ? e("div", { className: "flex flex-col gap-1" },
         visibleRecent.map((task) => {
@@ -579,10 +579,10 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
             onClick: canOpen ? () => openTaskOrigin(task) : undefined,
             disabled: !canOpen,
             title: canOpen ? "" : "无可跳转的所属对象",
-            className: `flex min-w-0 items-center justify-between gap-2 rounded-md border border-emerald-300/10 bg-emerald-400/[0.045] px-2 py-1 text-left ${canOpen ? "hover:bg-emerald-400/[0.08]" : "cursor-default opacity-60"}`
+            className: `flex min-w-0 items-center justify-between gap-2 rounded-md border border-good-soft bg-good-soft px-2 py-1 text-left ${canOpen ? "hover:border-good" : "cursor-default opacity-60"}`
           },
-            e("span", { className: "truncate text-[10.5px] text-white/65" }, taskLabel(task)),
-            canOpen && e("span", { className: "shrink-0 text-[10px] text-[#5DCAA5]" }, "打开")
+            e("span", { className: "truncate text-[10.5px] text-ink-2" }, taskLabel(task)),
+            canOpen && e("span", { className: "shrink-0 text-[10px] text-good" }, "打开")
           );
         })
       ) : null,
@@ -592,20 +592,20 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
           const st = retrying[task.id];
           return e("div", {
             key: `failed-${task.id}`,
-            className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-rose-300/15 bg-rose-400/[0.05] px-2 py-1"
+            className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-crit-soft bg-crit-soft px-2 py-1"
           },
             e("div", { className: "flex min-w-0 items-center gap-1.5" },
               e("span", {
                 className: "shrink-0 rounded px-1 py-0.5 text-[9px] font-medium",
                 style: { color: bucket.tone, background: `${bucket.tone}1a`, borderColor: `${bucket.tone}33` }
               }, bucket.label),
-              e("span", { className: "truncate text-[10.5px] text-white/65", title: task.error || "" }, taskLabel(task))
+              e("span", { className: "truncate text-[10.5px] text-ink-2", title: task.error || "" }, taskLabel(task))
             ),
             e("button", {
               type: "button",
               disabled: st === "loading" || st === "done",
               onClick: () => handleRetry(task),
-              className: `shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st === "done" ? "border-emerald-300/20 text-emerald-300/70 cursor-default" : st === "loading" ? "border-white/10 text-white/40 cursor-wait" : "border-rose-300/25 text-rose-200/80 hover:bg-rose-400/[0.08]"}`,
+              className: `shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st === "done" ? "border-good-soft text-good cursor-default" : st === "loading" ? "border-line text-muted cursor-wait" : "border-crit-soft text-crit hover:bg-crit-soft"}`,
               title: typeof st === "string" && st !== "loading" && st !== "done" ? st : ""
             }, st === "loading" ? "重试中…" : st === "done" ? "已重排" : "重试")
           );

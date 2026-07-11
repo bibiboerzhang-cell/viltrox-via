@@ -44,7 +44,7 @@ function formatValue(metric: any, value: any) {
 
 function statusTone(source: any) {
   if (source === "real") return { text: "text-good", bg: "bg-good-soft", border: "border-emerald-400/20" };
-  if (source === "accumulating") return { text: "text-cyan-200", bg: "bg-cyan-500/[0.10]", border: "border-cyan-400/20" };
+  if (source === "accumulating") return { text: "text-info", bg: "bg-info-soft", border: "border-line" };
   return { text: "text-warn", bg: "bg-warn-soft", border: "border-amber-400/20" };
 }
 
@@ -279,8 +279,8 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
             e("div", { className: "mt-2 text-sm text-ink-2" }, isCompany ? "官方在役账号" : "精准 active ", isCompany ? e("span", { className: "font-semibold text-good tabular-nums" }, `${active.toLocaleString()} 个`) : e("span", { className: "font-semibold text-good tabular-nums" }, active.toLocaleString())),
             isCompany
               ? e("div", { className: "mt-4 grid grid-cols-2 gap-2" },
-                  e("div", { className: "rounded-lg border border-cyan-400/15 bg-cyan-500/[0.08] p-3" },
-                    e("div", { className: "text-[10px] text-cyan-200" }, "粉丝总数"),
+                  e("div", { className: "rounded-lg border border-line bg-info-soft p-3" },
+                    e("div", { className: "text-[10px] text-info" }, "粉丝总数"),
                     e("div", { className: "mt-1 text-2xl font-semibold text-ink" }, compact(companyFollowers))
                   ),
                   e("div", { className: "rounded-lg border border-accent bg-accent-soft p-3" },
@@ -330,11 +330,11 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
             ),
             trendPath
               ? e("svg", { viewBox: "0 0 560 128", className: "h-32 w-full overflow-visible" },
-                  e("path", { d: trendPath, fill: "none", stroke: "#06b6d4", strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }),
-                  e("path", { d: `${trendPath} L560,128 L0,128 Z`, fill: "#06b6d4", opacity: 0.12 })
+                  e("path", { d: trendPath, fill: "none", stroke: "var(--ds-info)", strokeWidth: 3, strokeLinecap: "round", strokeLinejoin: "round" }),
+                  e("path", { d: `${trendPath} L560,128 L0,128 Z`, fill: "var(--ds-info)", opacity: 0.12 })
                 )
               : e("div", { className: "flex h-32 items-center justify-center rounded-lg border border-dashed border-line text-[11px] text-muted" },
-                  e(Loader2, { size: 13, className: "mr-2 animate-spin text-cyan-300" }),
+                  e(Loader2, { size: 13, className: "mr-2 animate-spin text-info" }),
                   `真实 snapshot 累积中 ${trend.snapshot_days || 7}/${trend.required_days || 30}`
                 )
           )
@@ -389,7 +389,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
                     e("span", { className: "capitalize text-ink-2" }, row.platform),
                     e("span", { className: "text-muted" }, count.toLocaleString(), " · ", pct(row.pct))
                   ),
-                  e("div", { className: "h-2 rounded-full bg-card" }, e("div", { className: "h-full rounded-full bg-cyan-400/80", style: { width } }))
+                  e("div", { className: "h-2 rounded-full bg-card" }, e("div", { className: "h-full rounded-full bg-info", style: { width } }))
                 );
               })
             )
@@ -518,7 +518,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
               )
             : e("div", { className: "flex h-32 items-center justify-center rounded-lg border border-dashed border-line text-[11px] text-muted" },
                 scoped.source === "accumulating"
-                  ? e(React.Fragment, null, e(Loader2, { size: 13, className: "mr-2 animate-spin text-cyan-300" }), statusLabel)
+                  ? e(React.Fragment, null, e(Loader2, { size: 13, className: "mr-2 animate-spin text-info" }), statusLabel)
                   : scoped.waiting || "数据待接入"
               )
         )

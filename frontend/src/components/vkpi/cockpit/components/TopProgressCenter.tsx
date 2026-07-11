@@ -82,13 +82,13 @@ function StageFlow({ task, flow }: { task: ProgressTask; flow: Array<{ stage: st
   const current = Math.max(0, flow.findIndex((s) => s.stage === String(task.stage || "")));
   return e("div", { className: "mt-1 flex items-center gap-1 text-[10px]" },
     ...flow.map((step, i) => e(React.Fragment, { key: step.stage },
-      i > 0 && e("span", { className: "text-slate-700" }, "→"),
+      i > 0 && e("span", { className: "text-muted" }, "→"),
       e("span", {
         className: i === current
-          ? "font-medium text-blue-300"
+          ? "font-medium text-accent"
           : i < current
-            ? "text-slate-400"
-            : "text-slate-600",
+            ? "text-ink-2"
+            : "text-muted",
       }, step.label)
     ))
   );
@@ -102,23 +102,23 @@ function RunningRow({ task, flow }: { task: ProgressTask; flow: Array<{ stage: s
   const eta = etaText(task.eta_seconds);
   return e("div", { className: "px-3 py-2" },
     e("div", { className: "flex items-center gap-2" },
-      e("span", { className: "min-w-0 flex-1 truncate text-xs text-slate-200" }, taskTitle(task)),
-      pct !== null && e("span", { className: "shrink-0 text-[10px] tabular-nums text-slate-400" }, `${pct}%`),
-      eta && e("span", { className: "shrink-0 text-[10px] text-slate-500" }, eta)
+      e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(task)),
+      pct !== null && e("span", { className: "shrink-0 text-[10px] tabular-nums text-muted" }, `${pct}%`),
+      eta && e("span", { className: "shrink-0 text-[10px] text-muted" }, eta)
     ),
-    e("div", { className: "mt-1.5 h-1 overflow-hidden rounded-full bg-white/[0.06]" },
+    e("div", { className: "mt-1.5 h-1 overflow-hidden rounded-full bg-panel" },
       pct !== null
         // 已知进度:宽度即进度,变化时 300ms 平滑过渡(变化动画一次,无循环)。
         ? e("div", {
-            className: "h-full rounded-full bg-blue-400/80 transition-[width] duration-300 ease-out",
+            className: "h-full rounded-full bg-accent transition-[width] duration-300 ease-out",
             style: { width: `${Math.max(3, pct)}%` },
           })
         // 未知进度:整条低幅呼吸(不做左右扫动,克制)。
-        : e("div", { className: "tpc-breath h-full rounded-full bg-blue-400/60" })
+        : e("div", { className: "tpc-breath h-full rounded-full bg-accent" })
     ),
     isDeepTask(task)
       ? e(StageFlow, { task, flow })
-      : task.stage_label && e("div", { className: "mt-1 text-[10px] text-slate-500" }, String(task.stage_label))
+      : task.stage_label && e("div", { className: "mt-1 text-[10px] text-muted" }, String(task.stage_label))
   );
 }
 
@@ -127,10 +127,10 @@ function QueuedRow({ task }: { task: ProgressTask }) {
   const eta = etaText(task.eta_seconds);
   return e("div", { className: "flex items-center gap-2 px-3 py-1.5" },
     Number.isFinite(pos) && pos > 0 && e("span", {
-      className: "shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 text-[10px] tabular-nums text-slate-400",
+      className: "shrink-0 rounded bg-panel px-1.5 py-0.5 text-[10px] tabular-nums text-muted",
     }, `第 ${pos} 位`),
-    e("span", { className: "min-w-0 flex-1 truncate text-xs text-slate-300" }, taskTitle(task)),
-    eta && e("span", { className: "shrink-0 text-[10px] text-slate-500" }, eta)
+    e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(task)),
+    eta && e("span", { className: "shrink-0 text-[10px] text-muted" }, eta)
   );
 }
 
@@ -138,11 +138,11 @@ function RecentRow({ item }: { item: ProgressRecentDone }) {
   const ok = String(item.status || "") === "done";
   return e("div", { className: "flex items-center gap-2 px-3 py-1.5" },
     e("span", {
-      className: `h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-emerald-400" : "bg-rose-400"}`,
+      className: `h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-good" : "bg-crit"}`,
       "aria-hidden": true,
     }),
-    e("span", { className: "min-w-0 flex-1 truncate text-xs text-slate-300" }, taskTitle(item)),
-    e("span", { className: "shrink-0 text-[10px] text-slate-500" },
+    e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(item)),
+    e("span", { className: "shrink-0 text-[10px] text-muted" },
       [ok ? "完成" : "失败", relativeFromNow(item.finished_at)].filter(Boolean).join(" · ")
     )
   );
@@ -150,8 +150,8 @@ function RecentRow({ item }: { item: ProgressRecentDone }) {
 
 function SectionHeader(label: string, extra?: string) {
   return e("div", { className: "flex items-baseline justify-between px-3 pb-1 pt-2" },
-    e("span", { className: "text-[10px] font-semibold uppercase tracking-wider text-slate-500" }, label),
-    extra ? e("span", { className: "text-[10px] text-slate-600" }, extra) : null
+    e("span", { className: "text-[10px] font-semibold uppercase tracking-wider text-muted" }, label),
+    extra ? e("span", { className: "text-[10px] text-muted" }, extra) : null
   );
 }
 
@@ -243,17 +243,17 @@ export function TopProgressCenter() {
         title: queueBlocked ? "Worker 当前离线，排队任务尚未开始" : busy ? `任务进度:${pillLabel}` : "任务进度中心(当前空闲)",
         className: busy
           ? queueBlocked && !hasRunning
-            ? "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-2.5 py-1.5 text-xs text-amber-300 hover:border-amber-500/45 hover:bg-amber-500/[0.14]"
-            : "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-blue-500/25 bg-blue-500/[0.08] px-2.5 py-1.5 text-xs text-blue-200 hover:border-blue-500/40 hover:bg-blue-500/[0.15]"
-          : "rounded-lg p-2 text-slate-500 hover:bg-white/[0.04] hover:text-slate-300",
+            ? "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-warn-soft bg-warn-soft px-2.5 py-1.5 text-xs text-warn hover:border-warn"
+            : "relative flex items-center gap-1.5 overflow-hidden rounded-lg border border-accent-soft bg-accent-soft px-2.5 py-1.5 text-xs text-accent hover:border-accent"
+          : "rounded-lg p-2 text-muted hover:bg-accent-soft hover:text-ink-2",
       },
         e(Activity, { size: busy ? 13 : 16 }),
         busy && e("span", { className: "tabular-nums" }, pillLabel),
-        busy && e(ChevronDown, { size: 12, className: queueBlocked && !hasRunning ? "text-amber-300/70" : "text-blue-300/70" }),
+        busy && e(ChevronDown, { size: 12, className: queueBlocked && !hasRunning ? "text-warn" : "text-accent" }),
         // 底部 2px 细进度条:有任务跑时缓慢呼吸(点名要的"呼吸",非闪烁)。
-        hasRunning && e("div", { className: "absolute inset-x-0 bottom-0 h-[2px] bg-white/[0.06]" },
+        hasRunning && e("div", { className: "absolute inset-x-0 bottom-0 h-[2px] bg-panel" },
           e("div", {
-            className: "tpc-breath h-full bg-blue-400/80 transition-[width] duration-300 ease-out",
+            className: "tpc-breath h-full bg-accent transition-[width] duration-300 ease-out",
             style: { width: aggregatePct !== null ? `${Math.max(6, Math.min(100, aggregatePct))}%` : "100%" },
           })
         )
@@ -266,19 +266,19 @@ export function TopProgressCenter() {
           animate: { opacity: 1, y: 0 },
           exit: { opacity: 0, y: -4 },
           transition: { duration: 0.22, ease: "easeOut" },
-          className: "absolute right-0 top-full z-50 mt-2 max-h-[70vh] w-[380px] overflow-y-auto rounded-lg border border-white/[0.08] bg-[#0a0f1e] py-1 shadow-2xl shadow-black/40",
+          className: "absolute right-0 top-full z-50 mt-2 max-h-[70vh] w-[380px] overflow-y-auto rounded-lg border border-line bg-card py-1 shadow-2xl shadow-black/40",
         },
-          e("div", { className: "flex items-center justify-between border-b border-white/[0.06] px-3 pb-2 pt-1.5" },
-            e("span", { className: "text-xs font-semibold text-white" }, "任务进度中心"),
-            e("span", { className: "text-[10px] tabular-nums text-slate-500" },
+          e("div", { className: "flex items-center justify-between border-b border-line px-3 pb-2 pt-1.5" },
+            e("span", { className: "text-xs font-semibold text-ink" }, "任务进度中心"),
+            e("span", { className: "text-[10px] tabular-nums text-muted" },
               busy ? pillLabel : "空闲"
             )
           ),
-          data === null && e("div", { className: "px-3 py-3 text-xs text-slate-500" }, "任务数据加载中..."),
-          data !== null && !busy && recentDone.length === 0 && e("div", { className: "px-3 py-3 text-xs text-slate-500" },
+          data === null && e("div", { className: "px-3 py-3 text-xs text-muted" }, "任务数据加载中..."),
+          data !== null && !busy && recentDone.length === 0 && e("div", { className: "px-3 py-3 text-xs text-muted" },
             "队列空闲,没有在跑的任务"
           ),
-          queueBlocked && e("div", { className: "mx-2 mt-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-2.5 py-2 text-[10px] text-amber-300" },
+          queueBlocked && e("div", { className: "mx-2 mt-2 rounded-md border border-warn-soft bg-warn-soft px-2.5 py-2 text-[10px] text-warn" },
             "Worker 未在线，排队任务不会开始"
           ),
           running.length > 0 && e(React.Fragment, { key: "sec-running" },
@@ -288,7 +288,7 @@ export function TopProgressCenter() {
           queued.length > 0 && e(React.Fragment, { key: "sec-queued" },
             SectionHeader(queueBlocked ? "等待 Worker" : "排队", counts.queued > queued.length ? `深度 ${counts.queued}` : undefined),
             ...queued.slice(0, 6).map((task) => e(QueuedRow, { key: `q-${task.id}`, task })),
-            counts.queued > 6 && e("div", { className: "px-3 pb-1 text-[10px] text-slate-600" },
+            counts.queued > 6 && e("div", { className: "px-3 pb-1 text-[10px] text-muted" },
               `…还有 ${counts.queued - Math.min(6, queued.length)} 条在队`
             )
           ),
