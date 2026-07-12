@@ -29,9 +29,14 @@ logger = get_logger(__name__)
 
 from app.domains.recommendations.new_launch_match_helpers import *  # noqa: F403
 
-# 召回触达门槛(用户裁决 2026-07-11):与 KOL 发现/召回侧同一实现(discovery_filters 叶子
-# 模块,无回环)。推荐刷新产出 vkpi_kol_recommendations 前的候选层 FILTER,零触评分公式。
-from app.domains.kol.discovery_filters import _reach_floor_reason  # noqa: E402
+# 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸):与 KOL 发现/召回侧同一实现
+# (discovery_filters 叶子模块,无回环)。推荐刷新产出 vkpi_kol_recommendations 前的候选层
+# FILTER,零触评分公式。_reach_display_state 三态:low_reach(实时判据/补全后 low_reach 标)
+# 与 unknown(followers 未知,「分析后再 po」)都不进推荐产出;pool 缺行(legacy 无池身)放行。
+from app.domains.kol.discovery_filters import (  # noqa: E402
+    _reach_display_state,
+    _reach_floor_reason,
+)
 
 def _json_write(path: str, payload: dict[str, Any]) -> None:
     if not path:
@@ -365,6 +370,7 @@ def build_new_launch_match_preview(
     hard_excluded = 0
     low_evidence = 0
     filtered_low_reach = 0
+    filtered_unknown_reach = 0
 
     for kol in kol_rows:
         entity_id = int(kol["id"])
@@ -383,16 +389,25 @@ def build_new_launch_match_preview(
         if weak_label == "blocked_risk" or decision == "drop":
             hard_excluded += 1
             continue
-        # 召回触达门槛(用户裁决 2026-07-11):pool 行 followers 明确 < 门槛(默认 1000,
-        # env VKPI_DISCOVERY_MIN_FOLLOWERS 可调)或互动信号实测全零 → 不进推荐刷新产出
+        # 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸):pool 行三态走
+        # _reach_display_state 单一真源——low_reach(followers 明确 < 门槛/互动实测全零/补全后
+        # low_reach 标)或 unknown(followers 未知,「分析后再 po」)→ 不进推荐刷新产出
         # (vkpi_kol_recommendations 不再落这类行;pool 数据保留不删)。与 blocked_risk/drop
-        # 同层的候选硬排除;pool 缺行/字段 NULL 一律放行(不误杀)。零触评分公式/viltrox_fit_score。
-        _reach_reason = _reach_floor_reason(pool) if pool else ""
-        if _reach_reason:
+        # 同层的候选硬排除;pool 缺行(legacy 无池身)放行(不误杀)。零触评分公式/viltrox_fit_score。
+        _reach_state = _reach_display_state(pool) if pool else "ok"
+        if _reach_state == "low_reach":
             filtered_low_reach += 1
             logger.debug(
                 "new_launch_match_reach_floor_filtered handle=%r kol_pool_id=%s reason=%s",
-                (pool or {}).get("handle"), (pool or {}).get("id"), _reach_reason,
+                (pool or {}).get("handle"), (pool or {}).get("id"),
+                _reach_floor_reason(pool) or "low_reach_flag",
+            )
+            continue
+        if _reach_state == "unknown":
+            filtered_unknown_reach += 1
+            logger.debug(
+                "new_launch_match_reach_unknown_hidden handle=%r kol_pool_id=%s",
+                (pool or {}).get("handle"), (pool or {}).get("id"),
             )
             continue
 
@@ -655,6 +670,8 @@ def build_new_launch_match_preview(
         "excluded_low_evidence": low_evidence,
         # 召回触达门槛命中数(诚实可见:被挡=不落 vkpi_kol_recommendations,非降分)。
         "filtered_low_reach": filtered_low_reach,
+        # followers 未知不落推荐(「分析后再 po」,2026-07-12 裁决);补全回填达标后自动回归。
+        "filtered_unknown_reach": filtered_unknown_reach,
         "returned": len(returned),
         "markdown_display_count": len(markdown_display),
         "top_score": returned[0]["score"] if returned else 0,

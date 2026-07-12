@@ -44,6 +44,7 @@ from app.domains.kol.discovery_filters import (  # noqa: E402,F401
     _has_camera_signal, _is_hard_avoid, _persona_avoid_terms,
     _persona_positive_terms, _persona_relevance, _persona_term_list,
     _below_reach_floor, _reach_floor_reason,
+    LOW_REACH_FLAG_LIKE_PATTERN, _reach_display_state, _reach_floor_enabled,
 )
 
 
@@ -641,7 +642,10 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             "profile_url": _text(item.get("profile_url") or item.get("channel_url") or item.get("url")),
             "avatar_url": _text(item.get("avatar_url") or item.get("avatar")),
             "bio": _text(item.get("bio") or item.get("description") or item.get("snippet")),
-            "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("avg_views") or 0),
+            # 诚实回填(2026-07-12 两粉号案随手修):followers 只写真粉丝族;未知写 NULL,
+            # 绝不再拿 avg_views 冒充粉丝数、也不把「未知」编成 0——否则第二道闸
+            # (followers 已知才推荐)会被杜撰值穿透。真值由 buildout 深爬回填。
+            "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("follower_count") or 0) or None,
         }
         try:
             _enroll_res = write_kol_profile_basics(None, profile_data, dry_run=False)
@@ -683,6 +687,77 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
     if enrolled:
         logger.info("auto_enroll_discovery enrolled=%d into vkpi_kol_pool", enrolled)
     return enrolled
+
+
+def _existing_match_pool_id(item: dict[str, Any]) -> int:
+    """「库内已有」发现项的 pool 行 id(history_kol_pool_id 或 historical_match.kol_pool_id;缺 → 0)。"""
+    pid = _int(item.get("history_kol_pool_id"))
+    if pid > 0:
+        return pid
+    match = item.get("historical_match")
+    if isinstance(match, dict):
+        return max(0, _int(match.get("kol_pool_id")))
+    return 0
+
+
+def _triage_existing_matches_reach(
+    existing_matches: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """「库内已有」发现项的触达分诊(第二道闸读端,2026-07-12 两粉号案)。
+
+    此前 existing_matches 跳过全部闸门 → 补全回填 followers=2 的行(kol_pool 12297)照样回到
+    「全网新发现」面。按 pool 行现值走 _reach_display_state 单一真源三态:
+    - low_reach(实时判据/low_reach 标命中)→ 丢出结果 + 计 filtered_low_reach(行保留,只挡入口);
+    - unknown(followers 未知)→ 丢出展示 + 计 analyzing(分析后再 po),并 best-effort 补点火
+      light 档 buildout(复用既有队列,queue 按 URL 自去重,绝不新造抓取);
+    - ok → 保留。DB 不可用 → 全放行(fail-open 不误杀)。零触 viltrox_fit_score / rule_v0。
+    """
+    counts = {"low_reach": 0, "analyzing": 0}
+    if not existing_matches or not _reach_floor_enabled():
+        return existing_matches, counts
+    ids = [_existing_match_pool_id(item) for item in existing_matches]
+    want = sorted({pid for pid in ids if pid})
+    pool_rows: dict[int, dict[str, Any]] = {}
+    if want:
+        try:
+            placeholders = ",".join(["?"] * len(want))
+            rows = get_conn().execute(
+                f"""
+                SELECT id, followers, avg_views, avg_comments, engagement_rate,
+                       (raw_platform_data LIKE ?) AS low_reach_flagged
+                FROM vkpi_kol_pool
+                WHERE id IN ({placeholders})
+                """,
+                (LOW_REACH_FLAG_LIKE_PATTERN, *want),
+            ).fetchall()
+            pool_rows = {int(dict(r)["id"]): dict(r) for r in rows}
+        except Exception:
+            logger.warning("existing match reach triage skipped(fail-open 不误杀)", exc_info=True)
+            return existing_matches, counts
+    kept: list[dict[str, Any]] = []
+    for item, pid in zip(existing_matches, ids):
+        row = pool_rows.get(pid)
+        state = _reach_display_state(row) if row else "ok"  # pool 行缺 → 放行(不误杀)
+        if state == "low_reach":
+            counts["low_reach"] += 1
+            logger.debug(
+                "discovery_existing_reach_floor_filtered handle=%r kol_pool_id=%s",
+                item.get("handle"), pid,
+            )
+            continue
+        if state == "unknown":
+            counts["analyzing"] += 1
+            # 补全链自动触发:followers 未知的库内行补点火 light 档(幂等;深爬回填 followers
+            # 后经 profile_basics 第二道闸重过闸,达标即在会话读端自动放出)。
+            try:
+                from app.domains.discovery.buildout import ignite_profile_buildout
+
+                ignite_profile_buildout(pid, score=0.0, demoted=True, source="discovery_reach_backfill")
+            except Exception:
+                logger.info("reach backfill ignite skip kol=%s", pid, exc_info=True)
+            continue
+        kept.append(item)
+    return kept, counts
 
 
 async def discover_new_creators(
@@ -867,10 +942,30 @@ async def discover_new_creators(
         if not _progressed:
             break
 
+    # 第二道闸·读端三态(用户裁决 2026-07-12「分析后再 po」):followers 已知达标 → 直接展示;
+    # 未知 → 保留在结果里(照样入库+点火补全)但标 reach_status=analyzing,由会话读端
+    # (search_sessions 展示闸)折叠为「分析中 ×N」,补全回填达标后自动放出;已知低于门槛
+    # 在上方闸门已丢(filtered_low_reach)。红线:落库≠推荐,标注不动任何评分。
+    _analyzing_new = 0
+    for item in new_creators:
+        _state = _reach_display_state(item)
+        if _state == "unknown":
+            item["reach_status"] = "analyzing"
+            _analyzing_new += 1
+        else:
+            item["reach_status"] = "ok"
+
+    # 「库内已有」同口径分诊(12297 两粉号正是从这条免检通道回流):low_reach 丢 + 计数;
+    # followers 未知折叠为分析中并补点火 enrichment;达标保留。
+    existing_matches, _existing_reach = _triage_existing_matches_reach(existing_matches)
+    _gate_dropped["low_reach"] += _existing_reach["low_reach"]
+    _analyzing_total = _analyzing_new + _existing_reach["analyzing"]
+
     # B 去重根治:把本次全网新发现即时轻量入库,下次同/近似搜索归「库内已有」、不再重复
     # (用户口径:「抓到自动入库就不会再出现这个状况」)。best-effort 同步小写,失败不阻断发现。
     # K3 正账(2026-07-03):接住返回值(此前被丢弃)记进 counts.auto_enrolled,
     # attach_new_discovery_result 会把 counts 原样透传进会话 result_summary → 前端显示真实入库数。
+    # 注意:reach_status=analyzing 的项也照样入库+buildout 点火(「发现→自动入库→补全→过闸→再 po」)。
     auto_enrolled_count = 0
     try:
         auto_enrolled_count = _auto_enroll_discoveries(new_creators)
@@ -900,6 +995,9 @@ async def discover_new_creators(
             "auto_enrolled": auto_enrolled_count,
             # 召回触达门槛命中数(诚实可见,非静默;明细见 debug 日志 discovery_reach_floor_filtered)。
             "filtered_low_reach": _gate_dropped["low_reach"],
+            # 「分析后再 po」折叠计数:followers 未知、已入库并点火补全的候选(会话读端不展示,
+            # 前端据此显示「分析中 ×N」;补全回填达标后自动放出)。
+            "analyzing": _analyzing_total,
             "platforms": len(resolved_platforms),
             "errors": len(errors),
         },

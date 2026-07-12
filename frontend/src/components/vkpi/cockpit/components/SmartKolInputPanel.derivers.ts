@@ -109,6 +109,37 @@ export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): bool
   return terminalSessionStatus(batch.status) || terminalSessionStatus(smartJob.status) || terminalSessionStatus(smartJob.advance_status);
 }
 
+// 触达展示闸折叠计数(2026-07-12 第二道闸):后端 get_session/list_history 按 pool 现值实时
+// 重判,被隐藏的项不再下发,只给诚实计数——hidden_low_reach=低触达不展示(已入库仅不推荐)、
+// hidden_analyzing=档案补全中(「分析后再 po」,补全回填达标后自动放出)。旧后端无该键 → null,
+// 前端静默不渲染(graceful absence,不编数字)。by_type 拆框:new_creator 归框3,其余归框2。
+export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem | null): {
+  discovery: { lowReach: number; analyzing: number };
+  recall: { lowReach: number; analyzing: number };
+} | null {
+  const raw = session?.reach_floor_display;
+  if (!raw || typeof raw !== "object") return null;
+  const info = asRecord(raw);
+  const byType = asRecord(info.by_type);
+  const bucket = (key: string) => {
+    const entry = asRecord(byType[key]);
+    return {
+      lowReach: Number(entry.hidden_low_reach) || 0,
+      analyzing: Number(entry.hidden_analyzing) || 0,
+    };
+  };
+  const newCreator = bucket("new_creator");
+  const existing = bucket("existing_kol");
+  const recall = bucket("recall_candidate");
+  return {
+    discovery: newCreator,
+    recall: {
+      lowReach: existing.lowReach + recall.lowReach,
+      analyzing: existing.analyzing + recall.analyzing,
+    },
+  };
+}
+
 export function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolRecallResponse {
   const creator: VkpiKolRecallItem[] = [];
   const reviewer: VkpiKolRecallItem[] = [];

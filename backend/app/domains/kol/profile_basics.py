@@ -156,6 +156,16 @@ def write_kol_profile_basics(
             raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}")
 
         _commit(db)
+        # 第二道闸(2026-07-12 两粉号案):本次写入含 followers(深爬回填/发现入库都走此口)
+        # → 立即重过触达门槛,命中打 low_reach 标(只写 raw_platform_data;推荐面据此不展示)。
+        # best-effort 绝不阻断写主流程;懒 import 防循环;零触 viltrox_fit_score。
+        if "followers" in planned_values and target_id:
+            try:
+                from app.domains.kol.reach_floor_regate import reapply_reach_floor
+
+                reapply_reach_floor(int(target_id), conn=db)
+            except Exception:
+                logger.warning("reach floor regate skipped kol=%s", target_id, exc_info=True)
         return {
             "ok": True,
             "dry_run": False,

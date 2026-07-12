@@ -36,6 +36,7 @@ import {
   historySessionId,
   isSearchSessionTerminal,
   looksLikeRetailer,
+  reachFloorDisplayFromSession,
   readPersistedSearchDisplay,
   recallResultFromSession,
   recallTopItems,
@@ -274,6 +275,9 @@ export function SmartKolInputPanel({
   // 【K3 正账】真实自动入库数(result_summary.new_discovery.counts.auto_enrolled);旧会话无该键 → null,
   // TextResultSection 回退到概述文案,不编数字。
   const discoveryAutoEnrolled = useMemo(() => discoveryAutoEnrolledFromSession(activeSearchSession), [activeSearchSession]);
+  // 触达展示闸折叠计数(2026-07-12 第二道闸「分析后再 po」):后端按 pool 现值隐藏低触达/
+  // 补全中的候选,前端只render诚实计数行;旧后端无该键 → null 静默不渲染。
+  const reachFloorDisplay = useMemo(() => reachFloorDisplayFromSession(activeSearchSession), [activeSearchSession]);
   // 三框·框1:LLM 人群理解可编辑(防 LLM 理解偏)——编辑后「用此重搜」。
   const [personaEditing, setPersonaEditing] = useState(false);
   const [personaDraft, setPersonaDraft] = useState("");
@@ -829,6 +833,7 @@ export function SmartKolInputPanel({
           discoveryItems={discoveryItems}
           discoveryTotal={discoveryTotal}
           discoveryAutoEnrolled={discoveryAutoEnrolled}
+          reachFloorDisplay={reachFloorDisplay}
           input={input}
           apiToken={apiToken}
           isBusy={isBusy}

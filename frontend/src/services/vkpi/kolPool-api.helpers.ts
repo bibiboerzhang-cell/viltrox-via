@@ -363,6 +363,9 @@ export interface VkpiKolSearchHistoryItem {
   active_items?: VkpiKolSearchSessionItem[];
   items?: VkpiKolSearchSessionItem[];
   counts?: Row;
+  /** 触达展示闸折叠计数(后端 get_session/list_history 按 pool 现值实时重判):
+   *  hidden_low_reach=低触达不展示;hidden_analyzing=档案补全中(分析后再放出)。 */
+  reach_floor_display?: Row;
   created_at?: string;
   updated_at?: string;
 }

@@ -169,6 +169,9 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
                     "relevance_score": raw.get("relevance_score"),
                     "relevance_tier": raw.get("relevance_tier"),
                     "relevance_hits": raw.get("relevance_hits"),
+                    # 触达三态(2026-07-12 第二道闸):analyzing=followers 未知、已入库点火补全,
+                    # 读端(get_session 展示闸)折叠为「分析中 ×N」;仅观测透传,展示以读端实时判据为准。
+                    "reach_status": raw.get("reach_status"),
                 },
             }
         )

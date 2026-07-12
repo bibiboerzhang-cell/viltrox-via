@@ -22,6 +22,7 @@ export function TextResultSection({
   discoveryItems,
   discoveryTotal = 0,
   discoveryAutoEnrolled = null,
+  reachFloorDisplay = null,
   input,
   apiToken,
   isBusy,
@@ -69,6 +70,12 @@ export function TextResultSection({
   discoveryItems: any[];
   discoveryTotal?: number;
   discoveryAutoEnrolled?: number | null;
+  /** 触达展示闸折叠计数(2026-07-12「分析后再 po」):lowReach=低触达不展示(已入库仅不推荐)、
+   *  analyzing=档案补全中,达标后自动放出;旧后端/无隐藏 → null 不渲染。 */
+  reachFloorDisplay?: {
+    discovery: { lowReach: number; analyzing: number };
+    recall: { lowReach: number; analyzing: number };
+  } | null;
   input: string;
   apiToken: string;
   isBusy: boolean;
@@ -110,6 +117,12 @@ export function TextResultSection({
   sessionPollNotice: string;
   retrySearchSession: () => void;
 }) {
+  // 发现真总数 = 可见 + 被触达闸折叠(分析中/低触达):K3 入库反馈按真总数说话,
+  // 否则「发现 3 人、入库 15 人」自相矛盾(隐藏项也都入了库)。纯派生,无 hooks。
+  const hiddenDiscovery = reachFloorDisplay
+    ? (reachFloorDisplay.discovery.analyzing || 0) + (reachFloorDisplay.discovery.lowReach || 0)
+    : 0;
+  const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
   return (
     <div className="mt-3 space-y-2.5">
       {/* 框1 · 产品人群分析(可编辑,防 LLM 理解偏) */}
@@ -174,6 +187,18 @@ export function TextResultSection({
         ) : (
           <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">暂无库内匹配</div>
         )}
+        {/* 触达展示闸折叠行(诚实信息,别删):被隐藏的候选不摆行,只报计数。 */}
+        {reachFloorDisplay && (reachFloorDisplay.recall.analyzing > 0 || reachFloorDisplay.recall.lowReach > 0) ? (
+          <div
+            className="mt-2 rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-[10px] text-slate-400"
+            title="低触达=粉丝数低于门槛,已入库仅不推荐;分析中=粉丝数待档案补全,达标后自动出现在列表"
+          >
+            {[
+              reachFloorDisplay.recall.analyzing > 0 ? `分析中 ×${reachFloorDisplay.recall.analyzing}(补全后自动放出)` : "",
+              reachFloorDisplay.recall.lowReach > 0 ? `低触达不展示 ×${reachFloorDisplay.recall.lowReach}` : "",
+            ].filter(Boolean).join(" · ")}
+          </div>
+        ) : null}
       </div>
 
       {/* 框3 · 全网发现(Apify+平台,带头像)· 优先新人主源,描边更亮 */}
@@ -192,14 +217,28 @@ export function TextResultSection({
         {/* 【K3 正账】入库反馈:发现即自动落 Pool(后端 _auto_enroll_discoveries)。后端现把真实入库数
             记进 result_summary.new_discovery.counts.auto_enrolled(仅计本次成功 upsert 的新行;
             已在库/缺 handle/入库失败的不计)→ 有真数就显示真数;旧会话无该键则回退到概述文案,不编数字。 */}
-        {discoveryTotal > 0 ? (
+        {discoveryGrandTotal > 0 ? (
           <div
             className="mb-2 rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-1.5 text-[10px] text-emerald-100/90"
-            title="全网新发现会即时轻量入库(仅基础资料,不触评分);已在库/缺 handle/入库失败的项不计入入库数"
+            title="全网新发现会即时轻量入库(仅基础资料,不触评分);已在库/缺 handle/入库失败的项不计入入库数;含下方「分析中/低触达」折叠项"
           >
             {typeof discoveryAutoEnrolled === "number"
-              ? `本次全网新发现 ${discoveryTotal} 人,其中 ${discoveryAutoEnrolled} 人已自动入库(其余已在库或入库失败)· 下次同类搜索归「库内已有的人」`
-              : `本次全网新发现 ${discoveryTotal} 人,已自动登记入库(个别缺 handle/入库失败的除外)· 下次同类搜索归「库内已有的人」`}
+              ? `本次全网新发现 ${discoveryGrandTotal} 人,其中 ${discoveryAutoEnrolled} 人已自动入库(其余已在库或入库失败)· 下次同类搜索归「库内已有的人」`
+              : `本次全网新发现 ${discoveryGrandTotal} 人,已自动登记入库(个别缺 handle/入库失败的除外)· 下次同类搜索归「库内已有的人」`}
+          </div>
+        ) : null}
+        {/* 触达展示闸折叠行(2026-07-12「分析后再 po」):粉丝数未知的发现项已入库并自动补全,
+            补全达标后自动出现在下方;低触达项不摆行,只报诚实计数。 */}
+        {reachFloorDisplay && (reachFloorDisplay.discovery.analyzing > 0 || reachFloorDisplay.discovery.lowReach > 0) ? (
+          <div
+            className="mb-2 flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-[10px] text-slate-400"
+            title="分析中=粉丝数待档案补全(已自动入库并排队补全),达标后自动出现在列表;低触达=粉丝数低于门槛,已入库仅不推荐"
+          >
+            {reachFloorDisplay.discovery.analyzing > 0 ? <Loader2 size={10} className="animate-spin text-emerald-200/70" /> : null}
+            {[
+              reachFloorDisplay.discovery.analyzing > 0 ? `分析中 ×${reachFloorDisplay.discovery.analyzing}(档案补全后达标自动放出)` : "",
+              reachFloorDisplay.discovery.lowReach > 0 ? `低触达不展示 ×${reachFloorDisplay.discovery.lowReach}` : "",
+            ].filter(Boolean).join(" · ")}
           </div>
         ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">

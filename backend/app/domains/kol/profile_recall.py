@@ -51,9 +51,13 @@ from app.domains.kol.profile_recall_product_queries import (  # noqa: E402
 
 from app.core.logging import get_logger
 
-# 召回触达门槛(用户裁决 2026-07-11):与地区排除同族的召回层 FILTER,实现统一放
-# discovery_filters(叶子模块,无回环)。env 开关/阈值见该模块;零触 viltrox_fit_score。
-from app.domains.kol.discovery_filters import _reach_floor_reason  # noqa: E402
+# 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸):与地区排除同族的召回层 FILTER,
+# 实现统一放 discovery_filters(叶子模块,无回环)。env 开关/阈值见该模块;零触 viltrox_fit_score。
+from app.domains.kol.discovery_filters import (  # noqa: E402
+    LOW_REACH_FLAG_LIKE_PATTERN,
+    _reach_display_state,
+    _reach_floor_reason,
+)
 
 logger = get_logger(__name__)
 
@@ -216,7 +220,8 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
                p.primary_topic,
                p.content_style,
                p.secondary_topics_json,
-               p.brand_collaborations_json
+               p.brand_collaborations_json,
+               (p.raw_platform_data LIKE ?) AS low_reach_flagged
         FROM vkpi_kol_profile_index_entries e
         JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
         WHERE e.collection_name = ?
@@ -226,7 +231,7 @@ def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
           AND p.duplicate_of_id IS NULL
           AND e.kol_pool_id IN ({placeholders})
         """,
-        (COLLECTION_NAME, METHOD, *kol_pool_ids),
+        (LOW_REACH_FLAG_LIKE_PATTERN, COLLECTION_NAME, METHOD, *kol_pool_ids),
     ).fetchall()
     return {int(row["kol_pool_id"]): dict(row) for row in rows}
 
@@ -246,11 +251,12 @@ def _pool_rows_fallback(kol_pool_ids: list[int]) -> dict[int, dict]:
         SELECT p.id AS kol_pool_id, p.platform, p.handle, p.display_name, p.profile_url,
                p.avatar_url, p.followers, p.avg_views, p.avg_comments, p.engagement_rate,
                p.bio, p.country, p.primary_topic, p.content_style,
-               p.secondary_topics_json, p.brand_collaborations_json
+               p.secondary_topics_json, p.brand_collaborations_json,
+               (p.raw_platform_data LIKE ?) AS low_reach_flagged
         FROM vkpi_kol_pool p
         WHERE p.duplicate_of_id IS NULL AND p.id IN ({placeholders})
         """,
-        tuple(int(x) for x in kol_pool_ids),
+        (LOW_REACH_FLAG_LIKE_PATTERN, *(int(x) for x in kol_pool_ids)),
     ).fetchall()
     out: dict[int, dict] = {}
     for row in rows:
@@ -917,6 +923,7 @@ def recall_kol_profiles(
     missing_type_count = 0
     excluded_chinese_count = 0
     filtered_low_reach_count = 0
+    filtered_unknown_reach_count = 0
     for hit in ordered_hits:
         row = rows_by_id.get(hit.kol_pool_id)
         if not row:
@@ -929,15 +936,24 @@ def recall_kol_profiles(
         if exclude_chinese and _country_in_excluded_region(row.get("country")):
             excluded_chinese_count += 1
             continue
-        # 召回触达门槛(用户裁决 2026-07-11,与地区排除同层的召回 FILTER):followers 明确
-        # < 门槛(默认 1000,env 可调)或互动信号实测全零 → 不进「库内已有」推荐列表。
-        # Pool 行保留不删,只挡本出口;字段缺/NULL 一律放行(不误杀)。零触 viltrox_fit_score。
-        _reach_reason = _reach_floor_reason(row)
-        if _reach_reason:
+        # 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸升级,与地区排除同层的召回
+        # FILTER):三态走 _reach_display_state 单一真源——low_reach(followers 明确 < 门槛/
+        # 互动实测全零/补全后 low_reach 标)不进「库内已有」推荐列表;unknown(followers 未知)
+        # 也不展示(「分析后再 po」),独立计数诚实透出。Pool 行保留不删,只挡本出口。
+        # 零触 viltrox_fit_score。
+        _reach_state = _reach_display_state(row)
+        if _reach_state == "low_reach":
             filtered_low_reach_count += 1
             logger.debug(
                 "recall_reach_floor_filtered handle=%r kol_pool_id=%s reason=%s",
-                row.get("handle"), hit.kol_pool_id, _reach_reason,
+                row.get("handle"), hit.kol_pool_id, _reach_floor_reason(row) or "low_reach_flag",
+            )
+            continue
+        if _reach_state == "unknown":
+            filtered_unknown_reach_count += 1
+            logger.debug(
+                "recall_reach_unknown_hidden handle=%r kol_pool_id=%s",
+                row.get("handle"), hit.kol_pool_id,
             )
             continue
         bucket = _bucket_for(row, mixed_policy)
@@ -1046,6 +1062,8 @@ def recall_kol_profiles(
             "missing_type_count": missing_type_count,
             # 召回触达门槛命中数(诚实可见:被挡=从本出口静默缺席,非降分)。
             "filtered_low_reach": filtered_low_reach_count,
+            # followers 未知不展示(「分析后再 po」,2026-07-12 裁决);补全回填达标后自动回归。
+            "filtered_unknown_reach": filtered_unknown_reach_count,
             "fallback_pool_rows": fallback_used_count,
             "pool_text_fallback_count": pool_text_fallback_count,
             "display_rerank": _rerank_note,

@@ -270,6 +270,71 @@ def _below_reach_floor(candidate: dict[str, Any] | None) -> bool:
     return bool(_reach_floor_reason(candidate))
 
 
+# ── 第二道闸(用户 live 实锤 2026-07-12,kol_pool 12297 两粉号穿闸案)────────────────
+# 根因:发现时 followers=NULL 按「不误杀」放行(正确),档案补全回填 followers=2 后无第二道闸,
+# 照样出现在推荐面。裁决升级:followers 未知的候选**不进推荐面**(「分析后再 po」),
+# 补全回填后重过闸命中 → 在 raw_platform_data JSON 打 low_reach 标(不建新列不迁移);
+# 推荐/发现/召回三出口读「实时判据 + 该标」双保险。red line 不变:落库≠推荐,库里保留资产
+# 只是不推荐;零触 viltrox_fit_score / rule_v0。
+LOW_REACH_FLAG_KEY = "low_reach"
+# SQL 侧探测标存在用的 LIKE 参数(house 口径:LIKE ? + 参数传 pattern,见 costs/budget_guard)。
+LOW_REACH_FLAG_LIKE_PATTERN = f'%"{LOW_REACH_FLAG_KEY}"%'
+
+
+def _reach_followers_known(candidate: dict[str, Any] | None) -> bool:
+    """followers 族是否「明确在场且可解析」(粉丝数已知)。未知=NULL/字段缺/空串。"""
+    if not isinstance(candidate, dict):
+        return False
+    return _known_numeric(candidate, _REACH_FOLLOWER_KEYS) is not None
+
+
+def _low_reach_flagged(candidate: dict[str, Any] | None) -> bool:
+    """读第二道闸的 low_reach 标(回填后重过闸命中时打进 raw_platform_data JSON)。
+
+    两种在场形态都认:① SQL 侧算好的 low_reach_flagged 列(LIKE 探测,BOOLEAN 读回可能是
+    int 1/0,按 truthy 容错);② 行里带 raw_platform_data(str/dict)时解析 JSON 取
+    LOW_REACH_FLAG_KEY.flag。总开关关闭时恒 False(与实时判据同款 env 口径)。纯函数零 IO。"""
+    if not isinstance(candidate, dict) or not _reach_floor_enabled():
+        return False
+    if candidate.get("low_reach_flagged"):
+        return True
+    raw = candidate.get("raw_platform_data")
+    payload: Any = raw
+    if isinstance(raw, (str, bytes)):
+        text = raw.decode() if isinstance(raw, bytes) else raw
+        if LOW_REACH_FLAG_KEY not in text:
+            return False
+        try:
+            import json as _json_mod
+
+            payload = _json_mod.loads(text)
+        except Exception:
+            return False
+    if not isinstance(payload, dict):
+        return False
+    flag = payload.get(LOW_REACH_FLAG_KEY)
+    if isinstance(flag, dict):
+        return bool(flag.get("flag"))
+    return bool(flag)
+
+
+def _reach_display_state(candidate: dict[str, Any] | None) -> str:
+    """推荐/发现/召回三出口 + 会话读端的统一展示三态(单一真源,别造第二套判据):
+
+    - "low_reach":实时判据命中(followers 明确 < 门槛/互动实测全零)或 low_reach 标在场 → 不展示;
+    - "unknown":followers 未知(NULL/缺)→ 不展示,折叠为「分析中 ×N」(分析后再 po);
+    - "ok":followers 已知且达标 → 展示。
+    总开关(VKPI_DISCOVERY_REACH_FLOOR_ENABLED)关闭 → 恒 "ok"(全放行,与既有开关语义一致)。
+    """
+    if not isinstance(candidate, dict) or not _reach_floor_enabled():
+        return "ok"
+    if _reach_floor_reason(candidate) or _low_reach_flagged(candidate):
+        return "low_reach"
+    if not _reach_followers_known(candidate):
+        return "unknown"
+    return "ok"
+
+
 # facebook 为 opt-in 平台:用户显式选择才参与发现(FB 流量/召回质量一般,做够用的即可),
 # 不进 _platforms() 的默认三平台兜底,避免稀释默认轮转结果。
 SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook"}
