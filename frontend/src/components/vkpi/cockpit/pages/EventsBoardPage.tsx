@@ -17,7 +17,10 @@ import { listInventory, toUiStock } from "../../../../services/vkpi/inventory-ap
 import { apiFetch } from "../../../../services/http";
 import { useAuth } from "../../../../hooks/useAuth";
 import { setRealProjects, setRealStaff } from "../../pages/events/shared/lookups";
-import type { CurrentUserVm, EventVm, StockItem, UiStaff } from "../../pages/events/shared/types";
+import type { CurrentUserVm, EventVm, StockItem, UiStaff as EventsUiStaff } from "../../pages/events/shared/types";
+// 页级 staff prop 用宽松结构型(与旧 EventsMockupPage 同款):CockpitApp 传的是 staffAdapter.UiStaff,
+// 缺 index signature 但字段兼容;喂给 events 内部件时收窄为 EventsUiStaff。
+type UiStaff = { id: string | number; name?: string; email?: string; avatar?: string; role?: string };
 import { ErrorCard, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import {
   ACTIVE_STATUSES,
@@ -98,11 +101,17 @@ interface EventsBoardPageProps {
 
 export function EventsBoardPage({
   userName,
-  staff = [],
+  staff: staffInput = [],
   currentUser: loggedInUser,
   initialEventId = null,
   onConsumeInitialEvent,
 }: EventsBoardPageProps) {
+  // 入口一次性归一化:CockpitApp 传 staffAdapter.UiStaff(宽松),下游全按
+  // events 严格口径(name 兜底 email/id 字符串,与旧页 ownerById 解析同语义)。
+  const staff = React.useMemo<EventsUiStaff[]>(
+    () => staffInput.map((s) => ({ ...s, name: s.name ?? s.email ?? String(s.id) })) as unknown as EventsUiStaff[],
+    [staffInput],
+  );
   const { token } = useAuth();
   const [editing, setEditing] = React.useState(false);
 

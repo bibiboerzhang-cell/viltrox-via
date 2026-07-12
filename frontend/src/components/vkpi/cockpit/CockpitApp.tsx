@@ -11,7 +11,8 @@ import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Load
 import "./styles/mockup.css";
 import "./styles/cockpit-reference.css";
 import "../styles/vkpi-settings-dark.css";
-import { KOLPoolPage } from "./KOLPoolPage";
+import { KolPoolBoardPage as KOLPoolPage } from "./pages/KolPoolBoardPage";
+// 回滚垫:改回 import { KOLPoolPage } from "./KOLPoolPage" 即回旧 KOL Pool
 import { ShopifyConnectPage } from "./ShopifyConnectPage";
 import { ShopifyHubPage } from "../pages/ShopifyHubPage";
 import { DealerMapPage } from "../pages/DealerMapPage";
@@ -70,8 +71,10 @@ const e = React.createElement;
 // MY KOL 改版 M1(2026-07-11):导航项改挂板块页范式新族 MyKolBoardPage(可编辑看板)。
 // 旧 pages/myKol/MyKolPage.tsx 保留不删(回滚垫:把本行 import 指回 ../pages/myKol/MyKolPage 即回滚)。
 const MyKolBoardPage = React.lazy(() => import("./pages/MyKolBoardPage").then((module) => ({ default: module.MyKolBoardPage })));
-const LegacyProjectsPage = React.lazy(() => import("../pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
-const EventsMockupPage = React.lazy(() => import("../pages/events/EventsMockupPage").then((module) => ({ default: module.EventsMockupPage })));
+const LegacyProjectsPage = React.lazy(() => import("./pages/ProjectsBoardPage").then((module) => ({ default: module.ProjectsBoardPage })));
+// 回滚垫:改回 ../pages/ProjectsPage + module.ProjectsPage 即回旧 Projects
+const EventsMockupPage = React.lazy(() => import("./pages/EventsBoardPage").then((module) => ({ default: module.EventsBoardPage })));
+// 回滚垫:改回 ../pages/events/EventsMockupPage + module.EventsMockupPage 即回旧 Events
 // L1(2026-06-30):Wave1-4 已建运维页接进 cockpit 壳(原硬白名单够不到 → 点不到)。
 const DataQualityPage = React.lazy(() => import("../pages/DataQualityPage").then((module) => ({ default: module.DataQualityPage })));
 const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((module) => ({ default: module.DataQueryPage })));
