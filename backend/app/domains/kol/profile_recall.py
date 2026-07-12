@@ -88,7 +88,7 @@ def _qdrant_client():
     return QdrantClient(path=str(QDRANT_LOCAL_PATH))
 
 
-def _openai_client():
+def _openai_client(*, proxy_override: str | None = None, direct: bool = False, timeout: float = 30.0):
     try:
         from openai import OpenAI
     except Exception as exc:  # pragma: no cover - environment guard
@@ -97,26 +97,126 @@ def _openai_client():
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("missing_openai_api_key")
-    # api.openai.com 在本网络下不可直连(SSL 握手超时,区域封锁);走与 yt-dlp 同一残留代理
+    # api.openai.com 在本网络下通常不可直连(SSL 握手超时,区域封锁);走与 yt-dlp 同一残留代理
     # (YTDLP_PROXY / OPENAI_PROXY)可达(实测直连 ConnectTimeout、走代理 HTTP200 2.9s)。
-    proxy = (os.getenv("OPENAI_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
+    # direct=True 仅供 403 failover 末位尝试(trust_env=False,防 env HTTPS_PROXY 把"直连"
+    # 悄悄绕回同一个被拉黑代理出口);失败由调用方接管,不比现状差。
+    if direct:
+        try:
+            import httpx
+
+            return OpenAI(api_key=api_key, http_client=httpx.Client(trust_env=False, timeout=timeout))
+        except Exception as exc:
+            raise RuntimeError(f"openai_direct_client_unavailable: {exc}") from exc
+    proxy = (proxy_override or os.getenv("OPENAI_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
     if proxy:
         try:
             import httpx
 
-            return OpenAI(api_key=api_key, http_client=httpx.Client(proxy=proxy, timeout=30.0))
+            return OpenAI(api_key=api_key, http_client=httpx.Client(proxy=proxy, timeout=timeout))
         except Exception:
             logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
     return OpenAI(api_key=api_key)
 
 
+# ── embedding 403 failover(2026-07-12 根因修复)──────────────────────────────
+# 根因分层(worker.log 2026-07-11 15:09 取证):CONNECT gate.decodo.com:10001 → TLS 握手成功
+# → api.openai.com 返 HTTP 403(Server: cloudflare,CF-RAY *-AMS,种 __cf_bm bot-management
+# cookie)= Cloudflare 按【代理出口 IP 信誉】拉黑,非请求头/UA 指纹问题(同一套头次日实测
+# 200;换 UA 实测无差别)。Decodo 1xxxx 端口族是 sticky 会话端口——出口 IP 被钉住,拉黑即
+# 连片 403。同一凭据换端口=换出口 IP(实测 10001/10002/10003/7000/10999 五端口五个不同出
+# 口),因此 failover 策略=先原配置端口,403/连接类失败再换端口重试;供应商与向量空间零变
+# 更(仍 text-embedding-3-small/1536 维),存量 Qdrant 索引零风险。
+EMBED_PROXY_ROTATE_PORTS_ENV = "VKPI_EMBED_PROXY_ROTATE_PORTS"
+EMBED_PROXY_ROTATE_PORTS_DEFAULT = "10002,7000"
+# 直连末位兜底默认 OFF(本网络 LLM 走代理是既定口径;2026-07-12 实测直连恰好可达,但不作默认
+# 假设)。置 1 开启:全部代理出口都被拉黑时最后试一次直连(trust_env=False,8s 超时封顶)。
+EMBED_DIRECT_FALLBACK_ENV = "VKPI_EMBED_DIRECT_FALLBACK"
+
+
+def _proxy_rotation_candidates(proxy: str) -> list[str]:
+    """同凭据换端口生成备选代理 URL(换端口=换 sticky 出口 IP)。
+
+    仅当配置代理以 :<port> 结尾才有备选;端口表读 env VKPI_EMBED_PROXY_ROTATE_PORTS
+    (默认 10002,7000),跳过与当前配置相同的端口。解析失败返回空表(不轮换,行为同旧)。
+    """
+    m = re.match(r"^(?P<base>.+):(?P<port>\d+)/?$", str(proxy or "").strip())
+    if not m:
+        return []
+    base, current_port = m.group("base"), m.group("port")
+    raw = os.getenv(EMBED_PROXY_ROTATE_PORTS_ENV, EMBED_PROXY_ROTATE_PORTS_DEFAULT)
+    out: list[str] = []
+    for token in str(raw).split(","):
+        token = token.strip()
+        if token.isdigit() and token != current_port and f"{base}:{token}" not in out:
+            out.append(f"{base}:{token}")
+    return out
+
+
+def _should_failover(exc: Exception) -> bool:
+    """是否值得换出口重试:403(CF 按出口 IP 拉黑)或连接类失败。
+
+    401/429/400 等其余 API 错误换出口无意义,立刻上抛(降级诊断照旧诚实)。
+    鸭子类型判据(status_code 属性 + 异常类名),不强依赖 openai/httpx 异常类导入。
+    """
+    if getattr(exc, "status_code", None) == 403:
+        return True
+    return exc.__class__.__name__ in {
+        "APIConnectionError",
+        "APITimeoutError",
+        "ConnectError",
+        "ConnectTimeout",
+        "ProxyError",
+        "ReadTimeout",
+    }
+
+
+def _embed_transport_plan() -> list[dict[str, Any]]:
+    """embedding 出网尝试序列:①原配置(行为不变)②换端口出口 ③直连(默认 OFF)。"""
+    plan: list[dict[str, Any]] = [{"transport": "proxy_primary", "proxy_override": None, "direct": False, "timeout": 30.0}]
+    proxy = (os.getenv("OPENAI_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
+    for candidate in _proxy_rotation_candidates(proxy)[:2]:
+        port = candidate.rsplit(":", 1)[-1]
+        plan.append({"transport": f"proxy_rotated:{port}", "proxy_override": candidate, "direct": False, "timeout": 15.0})
+    if os.getenv(EMBED_DIRECT_FALLBACK_ENV, "0").strip().lower() in {"1", "true", "yes"}:
+        plan.append({"transport": "direct", "proxy_override": None, "direct": True, "timeout": 8.0})
+    return plan
+
+
+def _create_embedding_with_failover(query_text: str, *, client_factory: Any = None) -> tuple[Any, str]:
+    """按 transport plan 逐个尝试 embeddings.create;返回 (resp, 实际用的 transport 标签)。
+
+    仅 403/连接类失败才换下一个出口(_should_failover);其余错误立刻上抛。
+    全部出口失败抛最后一个异常 → 上层 recall_degraded 降级路径原样保持诚实。
+    client_factory 仅供测试打桩;生产恒走 _openai_client。
+    """
+    factory = client_factory or (lambda spec: _openai_client(
+        proxy_override=spec["proxy_override"], direct=spec["direct"], timeout=spec["timeout"]
+    ))
+    plan = _embed_transport_plan()
+    last_exc: Exception | None = None
+    for i, spec in enumerate(plan):
+        try:
+            client = factory(spec)
+            resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query_text])
+            return resp, str(spec["transport"])
+        except Exception as exc:  # noqa: BLE001 — failover 判据集中在 _should_failover
+            if i + 1 >= len(plan) or not _should_failover(exc):
+                raise
+            last_exc = exc
+            logger.warning(
+                "embed_transport_failover from=%s to=%s reason=%s",
+                spec["transport"], plan[i + 1]["transport"], str(exc)[:160],
+            )
+    raise last_exc if last_exc else RuntimeError("embed_transport_plan_empty")  # pragma: no cover
+
+
 def _embed_query(query_text: str) -> tuple[list[float], dict[str, Any]]:
     # 护栏③ enforce(诊断 C-3③):embedding 调用前硬闸 + 调用后记账(此前裸奔零护栏零记账)。
     if not check_budget("provider:openai", 0.0, require_configured=True):
         raise RuntimeError("embedding_budget_exceeded")
-    client = _openai_client()
-    resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query_text])
+    resp, transport = _create_embedding_with_failover(query_text)
     data = list(resp.data or [])
     if not data:
         raise RuntimeError("empty_embedding_response")
@@ -138,7 +238,35 @@ def _embed_query(query_text: str) -> tuple[list[float], dict[str, Any]]:
         "embedding_model": EMBEDDING_MODEL,
         "query_embedding_tokens": tokens,
         "query_embedding_cost_usd_estimate": float(cost),
+        "embedding_transport": transport,
     }
+
+
+# 维度守卫(每进程一次,读侧防线):collection 向量维必须 == VECTOR_SIZE。防未来有人把
+# EMBEDDING_MODEL 换成别家(维度对不上立刻炸出 recall_degraded,而不是拿错误空间的向量
+# 查询返回垃圾召回);模型↔collection 配对由单测冻结,换模型必须开新 collection。
+_collection_dim_verified = False
+
+
+def _assert_collection_dim(client: Any) -> None:
+    global _collection_dim_verified
+    if _collection_dim_verified:
+        return
+    size: Any = None
+    try:
+        info = client.get_collection(COLLECTION_NAME)
+        vectors = info.config.params.vectors
+        size = getattr(vectors, "size", None)
+        if size is None and isinstance(vectors, dict) and vectors:  # named-vectors 形态兜底
+            size = getattr(next(iter(vectors.values())), "size", None)
+    except Exception:
+        # 结构解析不了(qdrant-client 版本漂移)不挡召回:守卫是纵深防线,
+        # 主防线是 _embed_query 的向量尺寸检查 + Qdrant 自身的维度校验。
+        logger.debug("collection_dim_probe_failed", exc_info=True)
+        return
+    if size is not None and int(size) != VECTOR_SIZE:
+        raise RuntimeError(f"qdrant_collection_dim_mismatch:{size}!={VECTOR_SIZE}")
+    _collection_dim_verified = True
 
 
 def _search_qdrant(query_vector: list[float], candidate_limit: int) -> list[RecallHit]:
@@ -147,6 +275,7 @@ def _search_qdrant(query_vector: list[float], candidate_limit: int) -> list[Reca
     client = _qdrant_client()
     if not client.collection_exists(COLLECTION_NAME):
         raise RuntimeError(f"qdrant_collection_missing:{COLLECTION_NAME}")
+    _assert_collection_dim(client)
     query_filter = qdrant_models.Filter(
         must=[
             qdrant_models.FieldCondition(
