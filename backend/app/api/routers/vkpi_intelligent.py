@@ -9,6 +9,7 @@
 端点:
   POST /api/admin/vkpi/intelligent/ask          三车道分诊,当日结果缓存(内存 dict + 日期键)。
   GET  /api/admin/vkpi/intelligent/suggestions  当日"异动种"chips(vkpi_alerts 近24h + apify_jobs 近24h)。
+  GET  /api/admin/vkpi/intelligent/stats        综合车道调用统计(vkpi_llm_calls 真留痕,UTC 日界)。
 
 铁律:
   - 全部第三方依赖走函数内懒 import,缺模块只降级不炸(never 500)。
@@ -313,6 +314,57 @@ def _recent_apify_seeds() -> list[str]:
     if n > 0:
         return [f"近24小时完成了 {n} 个抓取任务,有哪些新发现值得跟进?"]
     return []
+
+
+# ── /stats:综合车道服务端留痕统计(vkpi_llm_calls,purpose=vkpi_intelligent_ask) ───
+def _synth_call_stats() -> dict[str, Any]:
+    """综合车道调用统计:累计 + 最近一次 + 近14天按日(UTC 日界)。
+
+    意图/检索车道不落库(设计如此),故本统计只覆盖 LLM 综合车道 —— 口径原样
+    写进 note,前端如实标注。缺表 status=empty;异常 status=error;绝不 500。
+    """
+    try:
+        from app.db.connection import get_conn, table_exists  # 懒 import 防缺模块炸
+    except Exception:
+        return {"status": "error", "reason": "db module unavailable"}
+    if not table_exists("vkpi_llm_calls"):
+        return {"status": "empty", "reason": "vkpi_llm_calls 表未建 —— 综合车道尚无服务端留痕"}
+    try:
+        conn = get_conn()
+        head = conn.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM vkpi_llm_calls WHERE purpose = ?",
+            (_SYNTH_BUDGET_SCOPE,),
+        ).fetchone()
+        day_rows = conn.execute(
+            "SELECT CAST((created_at AT TIME ZONE 'UTC') AS DATE) AS day, COUNT(*) AS n "
+            "FROM vkpi_llm_calls "
+            "WHERE purpose = ? AND created_at >= NOW() - INTERVAL '14 days' "
+            "GROUP BY CAST((created_at AT TIME ZONE 'UTC') AS DATE) ORDER BY 1",
+            (_SYNTH_BUDGET_SCOPE,),
+        ).fetchall()
+    except Exception as exc:
+        return {"status": "error", "reason": str(exc)}
+    h = dict(head) if head else {}
+    last_at = h.get("last_at")
+    by_day: list[dict[str, Any]] = []
+    for row in day_rows or []:
+        d = dict(row)
+        day = d.get("day")
+        by_day.append({"date": str(day) if day is not None else "", "count": int(d.get("n") or 0)})
+    return {
+        "status": "ready",
+        "total": int(h.get("n") or 0),
+        "last_at": str(last_at) if last_at else None,
+        "by_day": by_day,
+        "note": "仅综合车道(llm_gateway 留痕 vkpi_llm_calls);意图/检索车道不落库,前端本机留痕另计",
+    }
+
+
+@router.get("/stats")
+def intelligent_stats(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+    """综合车道调用统计(只读):{status, total, last_at, by_day}。UTC 日界。"""
+    del staff
+    return _synth_call_stats()
 
 
 @router.get("/suggestions")

@@ -4,6 +4,7 @@ import { apiFetch, jsonBody } from "../http";
 // 后端:backend/app/api/routers/vkpi_intelligent.py(前缀 /api/admin/vkpi/intelligent)。
 //   POST /ask          -> IntelligentAnswer(三车道分诊,当日缓存)
 //   GET  /suggestions  -> { suggestions: string[]; source: "seeds" | "default" }
+//   GET  /stats        -> IntelligentStats(综合车道服务端留痕 vkpi_llm_calls,UTC 日界)
 // 全只读;前端只传 question,绝不拼 SQL / 不触 fit_score。
 
 // 车道:intent=意图秒回 | search=检索候选 | synth=LLM 综合 | degraded=诚实降级到检索。
@@ -42,6 +43,29 @@ export async function askIntelligent(
   return apiFetch<IntelligentAnswer>(
     "/api/admin/vkpi/intelligent/ask",
     { method: "POST", body: jsonBody({ question }), timeoutMs: 35000 },
+    token,
+  );
+}
+
+// GET /stats:综合车道调用统计(状态三轨 ready/empty/error,后端绝不 500)。
+export interface IntelligentStatsDay {
+  date: string; // UTC 日界(YYYY-MM-DD)
+  count: number;
+}
+
+export interface IntelligentStats {
+  status: "ready" | "empty" | "error" | string;
+  reason?: string;
+  total?: number;
+  last_at?: string | null;
+  by_day?: IntelligentStatsDay[];
+  note?: string;
+}
+
+export async function fetchIntelligentStats(token: string): Promise<IntelligentStats> {
+  return apiFetch<IntelligentStats>(
+    "/api/admin/vkpi/intelligent/stats",
+    { cache: "no-store" },
     token,
   );
 }
