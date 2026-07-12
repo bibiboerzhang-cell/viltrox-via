@@ -922,6 +922,8 @@ export function CockpitApp(props: any = {}) {
             activeNav === "dashboard" && e(DashboardReplicaPage, {
               dashboardEditing,
               onNavigate: setActiveNav,
+              // 跨板块拉卡(task #76):palette 按板块可见权限过滤(侧栏 canViewBoard 同源)
+              canViewBoard: boardPerms.canViewBoard,
               // P2 穿透:设置/成员与授权全屏浮层打开时,dashboard 浮卡/地图 overlay 不渲染
               showSettingsModal: showSettingsModal || showMembersAuth,
               kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,

@@ -41,6 +41,7 @@ import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { KPI_SCOPES } from "./data/kpiScopes";
 import { VIEW_MODES } from "./data/viewModes";
+import { buildCrossBoardModules } from "./pages/crossBoardModules";
 
 const e = React.createElement;
 const SHOW_EXPERIMENTAL = String((import.meta as any).env?.VITE_EXPERIMENTAL_NAV ?? "") === "1";
@@ -127,6 +128,9 @@ export function DashboardEditablePage(props: any) {
     onOpenEvents,
     onOpenTriage,
     onNavigate,
+    // 跨板块拉卡(task #76):usePermissions().canViewBoard 同源(CockpitApp 下传);
+    // 缺省全可见(冒烟测试 / 无权限上下文场景;真栈恒由 CockpitApp 传入)
+    canViewBoard = () => true,
   } = props;
 
   const commandCenterProps = {
@@ -212,6 +216,10 @@ export function DashboardEditablePage(props: any) {
     { key: "board-autonomy", label: "自治驾照", description: "自动化等级与审批红线", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "自治驾照", summary: "挣来的自治", Icon: ShieldCheck, onOpen: () => openBoard("autonomy") }) },
     { key: "board-strategy", label: "战略台", description: "行业对照与策略模拟", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "战略台", summary: "赛道与预算模拟", Icon: Target, onOpen: () => openBoard("strategyBoard") }) },
     { key: "board-gtm", label: "GTM Command", description: "产品上市增长指挥图", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "GTM Command", summary: "P2G 总脑出口", Icon: Compass, onOpen: () => openBoard("gtmCommand") }) },
+
+    // 跨板块模块(task #76):子板块注册表模块拉进 Dashboard 直接操作(全部 palette
+    // 备选,默认布局不动)。真身 lazy 分板块加载;canViewBoard 过滤 palette 可见性。
+    ...buildCrossBoardModules({ apiToken, canViewBoard, onOpenBoard: openBoard }),
   ];
 
   return e("div", { className: "vkpi-dashboard-canvas p-4 md:px-[22px] md:py-[15px]" },

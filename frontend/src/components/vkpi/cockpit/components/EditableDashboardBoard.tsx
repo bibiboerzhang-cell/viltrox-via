@@ -20,7 +20,9 @@ import "./EditableDashboardBoard.css";
 
 const e = React.createElement;
 
-export type DashboardModuleCategory = "核心模块" | "实时模块" | "业务板块";
+// 「跨板块模块」= Dashboard 专用第四类(task #76 跨板块拉卡):palette 可拉入子板块
+// 注册表模块(自带取数,来源徽可跳源板块)。板块页注册表仍只用前三类。
+export type DashboardModuleCategory = "核心模块" | "实时模块" | "业务板块" | "跨板块模块";
 
 export interface DashboardModuleDefinition {
   key: string;
@@ -53,7 +55,7 @@ interface EditableDashboardBoardProps {
   apiToken?: string;
 }
 
-const CATEGORY_ORDER: DashboardModuleCategory[] = ["核心模块", "实时模块", "业务板块"];
+const CATEGORY_ORDER: DashboardModuleCategory[] = ["核心模块", "实时模块", "业务板块", "跨板块模块"];
 const FLOW_MODULES = new Set(["trend"]);
 const BOARD_GAP_PX = 14;
 const BOARD_ROW_HEIGHT_PX = 22;
