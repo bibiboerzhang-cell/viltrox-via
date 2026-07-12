@@ -16,7 +16,15 @@
 
 读路(list_referrals,路由 GET 同前缀):按 status(referred/accepted/rejected)过滤,
 LIMIT 双层封顶 50(SQL 参数 + Python 切片);表未建 → status=absent 诚实空列表。
-「已转产品部」KPI 窗口计数住 voice_report_ext._prd_referrals(窗口敏感,本模块不重复)。
+「已转产品部」KPI 窗口计数住 voice_report_ext._prd_referrals(窗口敏感,本模块不重复;
+该计数含全状态行 —— 采纳/拒绝是状态流转,不出窗、不减计数)。
+
+状态流转(update_referral_status,路由 PATCH 同前缀 /{id}/status):
+  referred → accepted / rejected(仅这两个终态可置;目标枚举外 → invalid_status)。
+  幂等:目标状态 == 当前状态 → 返回已有行 already_set=True,零 UPDATE;
+  并发:UPDATE 带 WHERE status='referred' 护栏,输者按读回行判 —— 终态相同 =
+  already_set,终态相异 = status_conflict(如实报当前状态,绝不覆写别人已定的终态);
+  行不存在 → referral_not_found(路由转 404);已在另一终态 → status_conflict(路由转 409)。
 
 显示层宪法:返回体只含本账本自身字段(item 键白名单 _ITEM_KEYS),绝不含
 author_handle / author_id / raw_data_json 等评论作者个人字段(转交行本就不存这些)。
@@ -41,6 +49,8 @@ logger = get_logger(__name__)
 TABLE = "vkpi_market_prd_referrals"
 SOURCE_TABLES = ("vkpi_comments", "lexicon_reco")
 STATUS_VALUES = ("referred", "accepted", "rejected")
+# 状态流转只允许 referred → 这两个终态(referred 不是合法流转目标:回退不做)
+UPDATABLE_STATUSES = ("accepted", "rejected")
 
 # 护栏常量(SQL LIMIT ? + Python 切片双封顶;入库文本各自截断,防超长脏行)
 DEFAULT_LIMIT = 50
@@ -69,6 +79,22 @@ _INSERT_SQL = """
 
 _COMMENT_PROBE_SQL = """
     SELECT id FROM vkpi_comments WHERE id = ? LIMIT 1
+"""
+
+_ROW_BY_ID_SQL = """
+    SELECT id, source_table, source_id, title, detail, category, status,
+           created_by_staff_id, created_at, updated_at
+    FROM vkpi_market_prd_referrals
+    WHERE id = ?
+    LIMIT 1
+"""
+
+# WHERE status='referred' 并发护栏:两人同时点采纳/拒绝,只有一边真改到行;
+# 输者按读回行判 already_set / status_conflict(见 update_referral_status)。
+_UPDATE_STATUS_SQL = """
+    UPDATE vkpi_market_prd_referrals
+    SET status = ?, updated_at = ?
+    WHERE id = ? AND status = 'referred'
 """
 
 _LIST_SELECT_SQL = """
@@ -266,3 +292,63 @@ def list_referrals(*, status: str = "", limit: int = DEFAULT_LIMIT) -> dict[str,
     rows = conn.execute(sql, tuple(params)).fetchall()
     items = [_item(r) for r in list(rows)[:MAX_LIMIT]]
     return {"ok": True, "status": "ready", "items": items, "count": len(items)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# update_referral_status:状态流转 referred → accepted / rejected(幂等)
+# ══════════════════════════════════════════════════════════════════════════
+def update_referral_status(referral_id: Any, status: str) -> dict[str, Any]:
+    """把一条转交行置为终态(accepted / rejected;仅 referred 可流转)。
+
+    幂等:目标 == 当前状态 → 返回已有行 already_set=True,零 UPDATE;
+    并发:UPDATE 带 WHERE status='referred' 护栏,rowcount=0 时按读回行如实判——
+    终态相同 = already_set(对手先到,结果一致),终态相异 = status_conflict
+    (绝不覆写别人已定的终态、绝不编造成功状态)。
+    行不存在 / id 非法 → referral_not_found;表未建 → prd_referrals_table_missing。
+    红线:只写 vkpi_market_prd_referrals.status/updated_at,零触 viltrox_fit_score / rule_v0。
+    """
+    st = _text(status).lower()
+    if st not in UPDATABLE_STATUSES:
+        return {"ok": False, "reason": "invalid_status", "allowed": list(UPDATABLE_STATUSES)}
+
+    try:
+        rid = int(referral_id)
+    except (TypeError, ValueError):
+        rid = 0
+    if rid <= 0:
+        return {"ok": False, "reason": "referral_not_found", "id": _text(referral_id)}
+
+    conn = get_conn()
+    if not _table_exists(conn, TABLE):
+        # 迁移 234 未 apply:如实报缺表,不假装成功。
+        return {"ok": False, "reason": "prd_referrals_table_missing"}
+
+    row = conn.execute(_ROW_BY_ID_SQL, (rid,)).fetchone()
+    if not row:
+        return {"ok": False, "reason": "referral_not_found", "id": str(rid)}
+
+    current = _text(_row_get(row, "status")).lower()
+    if current == st:
+        # 幂等命中:已在目标终态 → 返回已有行,零 UPDATE(重复点击/重放安全)。
+        return {"ok": True, "already_set": True, "item": _item(row)}
+    if current != "referred":
+        # 已在另一终态:如实冲突,不覆写(accepted ↔ rejected 互改不做)。
+        return {"ok": False, "reason": "status_conflict", "current": current, "requested": st}
+
+    cur = conn.execute(_UPDATE_STATUS_SQL, (st, _now_iso(), rid))
+    conn.commit()
+    try:
+        updated = int(getattr(cur, "rowcount", 0) or 0) > 0
+    except Exception:
+        updated = True
+
+    final = conn.execute(_ROW_BY_ID_SQL, (rid,)).fetchone()
+    if not final:
+        # UPDATE 后读不回 = 真失败(不假装成功)。
+        return {"ok": False, "reason": "update_failed", "id": str(rid)}
+    final_status = _text(_row_get(final, "status")).lower()
+    if final_status == st:
+        # updated=False 而终态相同 = 并发对手做了同一流转 → already_set 如实标。
+        return {"ok": True, "already_set": not updated, "item": _item(final)}
+    # 并发对手先落了另一终态(WHERE 护栏挡下本次 UPDATE)→ 如实冲突。
+    return {"ok": False, "reason": "status_conflict", "current": final_status, "requested": st}

@@ -2,14 +2,21 @@ import React from "react";
 import {
   createPrdReferral,
   enqueueReplyQueueComment,
+  listPrdReferrals,
+  updatePrdReferralStatus,
   type PrdReferralCreateBody,
+  type PrdReferralItem,
+  type PrdReferralUpdatableStatus,
 } from "../../../../services/vkpi/marketVoice-api";
 
 // 市场之声 · 闭环动作 hooks(自 MarketVoicePage 拆出,行数纪律 ≤700/文件)。
 //   useReplyQueueAction  V0e「转回复队列」:POST /reply-queue/enqueue-comment(幂等);
 //   usePrdReferral       V1.1「转产品部」真闭环:POST /market/prd-referrals →
-//                        vkpi_market_prd_referrals 落一行(迁移 234,幂等)。
-//   两个 hook 的共同纪律:状态只在端点真实返回后落地(ok / already_*),绝不点击即置绿;
+//                        vkpi_market_prd_referrals 落一行(迁移 234,幂等);
+//   usePrdStatusBoard    「PRD 状态流转」模块数据 + 动作:GET /market/prd-referrals
+//                        列表(最近 50 条)+ PATCH /{id}/status(referred → accepted /
+//                        rejected,幂等)—— 药丸只在端点真实返回后按服务器回传行变色。
+//   hooks 的共同纪律:状态只在端点真实返回后落地(ok / already_*),绝不点击即置绿;
 //   失败原因原样进 error(不吞、不假绿);version 只在真实成功后自增,供调用方
 //   重拉窗口计数(KPI 真数),绝不本地 +1 编数。
 // 红线:不触 viltrox_fit_score / rule_v0;唯一网络出口 = services/vkpi/marketVoice-api。
@@ -97,4 +104,74 @@ export function usePrdReferral(apiToken: string) {
 
   const clearError = React.useCallback(() => setError(""), []);
   return { referredKeys, busyKey, error, version, refer, clearError };
+}
+
+/**
+ * 「PRD 状态流转」模块(prdStatus):转交账本列表 + 行内 ✓采纳/✕拒绝。
+ * - 列表 = GET /market/prd-referrals(最近 50 条,按转交时间倒序);version(新转交
+ *   真实成功后自增)变化时重拉,让新转交的行即刻进账本;
+ * - setStatus = PATCH /{id}/status:药丸只在端点真实返回后以服务器回传行覆盖本地行
+ *   (绝不点击即变色);失败原因原样进 actionError(不吞、不假绿)。
+ */
+export function usePrdStatusBoard(apiToken: string, version: number) {
+  const [items, setItems] = React.useState<PrdReferralItem[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState("");
+  // listStatus:后端诚实态透传("ready" / "absent"=表未建,迁移 234 未 apply)
+  const [listStatus, setListStatus] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const [busyId, setBusyId] = React.useState<number | null>(null);
+  const [actionError, setActionError] = React.useState("");
+
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setLoading(true);
+    setError("");
+    listPrdReferrals(apiToken, { limit: 50 })
+      .then((res) => {
+        if (!alive) return;
+        setItems(Array.isArray(res?.items) ? res.items : []);
+        setListStatus(String(res?.status || ""));
+        setReason(String(res?.reason || ""));
+      })
+      .catch((err: any) => {
+        if (!alive) return;
+        setError(String(err?.detail || err?.message || "加载失败"));
+        setItems(null);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, version]);
+
+  const setStatus = React.useCallback(
+    (referralId: number, status: PrdReferralUpdatableStatus) => {
+      if (!apiToken || busyId != null || !referralId) return;
+      setBusyId(referralId);
+      setActionError("");
+      updatePrdReferralStatus(apiToken, referralId, status)
+        .then((res) => {
+          if (res && res.ok && res.item) {
+            // 端点真实返回才变色:以服务器回传行覆盖本地行(already_set 同样是真行)
+            setItems((prev) => (prev ? prev.map((it) => (it.id === res.item.id ? res.item : it)) : prev));
+          } else {
+            setActionError(String((res as Record<string, any>)?.reason || "端点返回非 ok"));
+          }
+        })
+        .catch((err: any) => {
+          setActionError(String(err?.detail || err?.message || "状态更新失败"));
+        })
+        .finally(() => {
+          setBusyId((cur) => (cur === referralId ? null : cur));
+        });
+    },
+    [apiToken, busyId],
+  );
+
+  const clearActionError = React.useCallback(() => setActionError(""), []);
+  return { items, loading, error, listStatus, reason, busyId, actionError, setStatus, clearActionError };
 }

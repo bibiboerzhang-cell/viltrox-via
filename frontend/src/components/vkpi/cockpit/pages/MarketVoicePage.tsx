@@ -8,7 +8,7 @@ import {
   type VoiceFeedItem,
   type VoiceReportExt,
 } from "../../../../services/vkpi/marketVoice-api";
-import { prdKey, recoStableKey, usePrdReferral, useReplyQueueAction } from "./MarketVoicePage.actions";
+import { prdKey, recoStableKey, usePrdReferral, usePrdStatusBoard, useReplyQueueAction } from "./MarketVoicePage.actions";
 import {
   BucketsBody,
   ComplaintsBody,
@@ -17,11 +17,13 @@ import {
   ErrorCard,
   FeedRowLine,
   GapsBody,
+  LISTEN_KEYS,
   LoadingLine,
   MODULE_SOURCES,
   ModuleCard,
   PROV_TITLES,
   PendingCard,
+  PrdStatusBody,
   RecsBody,
   SOURCE_LABEL,
   SOURCE_ORDER,
@@ -55,19 +57,24 @@ import { DrillFeedModal, FeedDetailModal, FeedListModal, ModuleProvModal, drillA
 //     POST /api/admin/vkpi/market/prd-referrals    —— V1.1 真闭环「转产品部」:落
 //       vkpi_market_prd_referrals(迁移 234,幂等);KPI 第四卡读 voice-report-ext
 //       prd_referrals 组真计数(0 也如实 0,成功转交后重拉服务器数,绝不本地编数)
+//     GET   /api/admin/vkpi/market/prd-referrals   —— prdStatus 模块转交账本(最近 50 条)
+//     PATCH /api/admin/vkpi/market/prd-referrals/{id}/status —— PRD 状态流转:
+//       referred → accepted / rejected(幂等);药丸只在端点真实返回后按服务器行变色
+//   跳转桥(诚实版):line_voice 产品线行 → SKU360,产品线级无逐 SKU 关联,不装 SKU
+//   直跳 —— 只把产品线词写 vkpi:sku360-search 预填 SKU 搜索(接收位在 Sku360BoardPage)。
 //   红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0;端点失败=诚实错误卡;颜色全
 //   token(SVG 直接 var(--ds-*));发光只走 --ds-glow-radius(浅色 0);动效只用既有
 //   ds-viz 类 + vkpi-lane-pulse(自带 reduced-motion 降级)。布局只走本机 storageKey,
 //   不给 EditableDashboardBoard 传 apiToken(其账户级持久化写死 dashboard_layout_v1 键)。
 
-// v3:V0h-ab 默认布局对齐 demo 六行(图表优先),bump 版本让新默认盖过本机旧布局
-const STORAGE_KEY = "vkpi-market-voice-layout-v3";
+// v4:prdStatus(反哺产品部 · PRD 状态流转)进默认布局,bump 版本让新默认盖过本机旧布局
+const STORAGE_KEY = "vkpi-market-voice-layout-v4";
 const FEED_PAGE = 20; // 每次拉取页大小(端点分页)
 const FEED_FACE = 6; // 卡面收敛条数(demo FULL.slice(0,6);全量走弹窗)
 
-// 默认布局(12 列,demo defaultLayout 六行同构):
+// 默认布局(12 列,demo defaultLayout 六行同构 + 第七行 prdStatus):
 // kpiV(12) → alerts(8)+cover(4) → cat(4)+senti(8) → feed(8)+line_voice(4)
-// → comp(8)+recs(4) → topics(8)+geo(4)
+// → comp(8)+recs(4) → topics(8)+geo(4) → prdStatus(8)
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiV", span: 12 },
   { moduleKey: "alerts", span: 8 },
@@ -80,11 +87,18 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "recs", span: 4 },
   { moduleKey: "topics", span: 8 },
   { moduleKey: "geo", span: 4 },
+  { moduleKey: "prdStatus", span: 8 },
 ];
 
-// 榜单行下钻 v1(产品线/平台/语言维度过滤待接,诚实不装):行点击 → 模块溯源弹窗 + 底部「底层样本」跳反馈流全量
+// 榜单行下钻 v1(产品线/平台/语言维度过滤待接,诚实不装):行/SrcChip → 模块溯源弹窗 + 底部「底层样本」跳反馈流全量
+// (line_voice 行点击已升级为 SKU360 跳转桥;其 SrcChip 溯源弹窗仍如实标维度过滤待接)
 const DIM_PENDING = (dim: string) => `${dim}维度过滤待接 —— 底层样本打开的是反馈流全量,如实未按本行过滤。`;
 const SAMPLE_PENDING: Record<string, string> = { line_voice: DIM_PENDING("产品线"), plat: DIM_PENDING("平台"), geo: DIM_PENDING("语言") };
+
+// line_voice → SKU360 跳转桥的发送端三通道键(接收位在 Sku360BoardPage,同名常量刻意
+// 不 import —— 两页各自 lazy chunk,避免打破分包;手法同 comp → 战略台桥)
+const SKU360_SEARCH_KEY = "vkpi:sku360-search";
+const SKU360_SEARCH_EVENT = "vkpi:open-sku360-search";
 
 export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
   const [month, setMonth] = React.useState<string>("");
@@ -111,6 +125,9 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
   // V0e「转回复队列」+ V1.1「转产品部」(vkpi_market_prd_referrals 真通路)
   const replyQueue = useReplyQueueAction(apiToken);
   const prd = usePrdReferral(apiToken);
+  // prdStatus 模块:转交账本列表 + 行内 ✓采纳/✕拒绝(PATCH /{id}/status,幂等);
+  // prd.version 变化(真实新增转交)→ 重拉列表,新转交行即刻进账本
+  const prdBoard = usePrdStatusBoard(apiToken, prd.version);
 
   // voice-report-ext(V0h-ab 九组图形化字段;单组失败后端已诚实降级,整体失败走 extError)
   const [extData, setExtData] = React.useState<VoiceReportExt | null>(null);
@@ -238,7 +255,6 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
   // comp 品牌行 → 战略台联动(接收端 StrategyDeskPage 三通道已挂:sessionStorage
   // vkpi:strategy-brand + vkpi:open-strategy-desk 事件 + onNavigate 切板块)。键名与
   // StrategyDeskPage 导出常量一致,刻意不 import(两页各自 lazy chunk,避免打破分包)。
-  // 注:sku360 发送端保持挂账不硬接 —— 声音榜是产品线级,无逐 SKU 关联,如实不造。
   const openStrategyBrand = React.useCallback(
     (brandName: string) => {
       const brand = String(brandName || "").trim();
@@ -250,6 +266,24 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
       }
       window.dispatchEvent(new CustomEvent("vkpi:open-strategy-desk"));
       if (onNavigate) onNavigate("strategyBoard");
+    },
+    [onNavigate],
+  );
+
+  // line_voice 产品线行 → SKU360 跳转桥(诚实版):声音榜是产品线级、无逐 SKU 关联,
+  // 不装 SKU 直跳 —— 只把产品线词写 vkpi:sku360-search 预填 SKU 搜索(接收位在
+  // Sku360BoardPage,300ms 防抖搜索自动跑,搜不到=诚实「无匹配 SKU」)。三通道同 comp。
+  const openSku360Search = React.useCallback(
+    (lineLabel: string) => {
+      const word = String(lineLabel || "").trim();
+      if (!word) return;
+      try {
+        window.sessionStorage.setItem(SKU360_SEARCH_KEY, word);
+      } catch {
+        /* sessionStorage 不可用忽略,事件通道仍在 */
+      }
+      window.dispatchEvent(new CustomEvent(SKU360_SEARCH_EVENT));
+      if (onNavigate) onNavigate("sku360");
     },
     [onNavigate],
   );
@@ -405,10 +439,12 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     const cnt = `${String(g?.granularity) === "week" ? "周" : "日"} × ${arr(g?.trend).length}`;
     return extModule("senti", "情绪趋势", g, cnt, () => <SentiTrendBody senti={g || {}} onPointClick={(kind) => setDrill(drillSentimentSpec(kind))} />);
   };
+  // 行点击 = SKU360 跳转桥(onNavigate 缺失跳不了 → 如实不可点,手法同 comp);
+  // 溯源(维度过滤待接的诚实说明)仍走卡头 SrcChip → ModuleProvModal
   const renderLineVoice = () => {
     const g = extData?.line_voice as Row | undefined;
     const hitN = arr(g?.items).filter((it) => (Number(it.count) || 0) > 0).length;
-    return extModule("line_voice", "产品线声音榜", g, `${hitN} 线`, () => <LineVoiceBody items={arr(g?.items)} onRowClick={() => setProvKey("line_voice")} />);
+    return extModule("line_voice", "产品线声音榜", g, `${hitN} 线`, () => <LineVoiceBody items={arr(g?.items)} onRowClick={onNavigate ? openSku360Search : undefined} />);
   };
   const renderPlat = () => {
     const g = extData?.platform_dist as Row | undefined;
@@ -495,6 +531,31 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     );
   };
 
+  // prdStatus · 反哺产品部(PRD 状态流转):数据 = vkpi_market_prd_referrals 转交账本
+  // (GET 列表,最近 50 条);行内 ✓采纳/✕拒绝 = PATCH /{id}/status(referred → 终态,
+  // 幂等),药丸只在端点真实返回后按服务器回传行变色;表未建 → 诚实 pending 带后端 reason。
+  const renderPrdStatus = () => {
+    const items = prdBoard.items || [];
+    const ready = prdBoard.items != null && prdBoard.listStatus === "ready";
+    const nBy = (s: string) => items.filter((it) => String(it.status) === s).length;
+    const extraRows: Array<[string, string]> = ready
+      ? [["状态分布", `已转交 ${nBy("referred")} · 已采纳 ${nBy("accepted")} · 已拒绝 ${nBy("rejected")}(最近 ${items.length} 条口径)`]]
+      : [];
+    let body: React.ReactNode;
+    if (!apiToken) body = noTokenCard;
+    else if (prdBoard.error) body = <ErrorCard title="prd-referrals 读取失败" text={prdBoard.error} />;
+    else if (prdBoard.loading && !prdBoard.items) body = <LoadingLine text="转交账本读取中…" />;
+    else if (prdBoard.listStatus === "absent")
+      body = (
+        <PendingCard>
+          <b>转交账本未建</b> —— {prdBoard.reason || "数据表未建,接通后自动点亮。"}
+        </PendingCard>
+      );
+    else if (!prdBoard.items) body = <EmptyLine text="暂无数据。" />;
+    else body = <PrdStatusBody items={items} busyId={prdBoard.busyId} error={prdBoard.actionError} onSetStatus={prdBoard.setStatus} />;
+    return <ModuleCard {...cardProps("prdStatus", "反哺产品部", ready ? `${items.length}` : undefined, extraRows)}>{body}</ModuleCard>;
+  };
+
   const renderCover = () => {
     const gate = reportGate();
     const readyCount = SOURCE_ORDER.filter((k) => String((sources[k] || {}).status) === "ready").length;
@@ -506,14 +567,22 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
               const s: Row = sources[key] || {};
               const status = String(s.status || "unknown");
               const on = status === "ready";
+              // 迸发⑤ 扩源行三态(读采集闸真状态,禁装):not_connected=闸键未登记;
+              // scaffold=键在但 0(骨架就绪);旧后端缺键 → 如实回落「未接入·盲区」
               const value =
                 status === "ready"
                   ? `${Number(s.count) || 0} 条 · 在线`
-                  : status === "absent"
-                    ? "表未建 · 盲区"
-                    : status === "empty"
-                      ? "0 条 · 已建未跑"
-                      : "状态未知";
+                  : status === "scaffold"
+                    ? "骨架就绪 · 待开闸"
+                    : status === "not_connected"
+                      ? "未接入 · 盲区"
+                      : status === "absent"
+                        ? "表未建 · 盲区"
+                        : status === "empty"
+                          ? "0 条 · 已建未跑"
+                          : LISTEN_KEYS.has(key)
+                            ? "未接入 · 盲区"
+                            : "状态未知";
               return (
                 <CoverRow
                   key={key}
@@ -525,7 +594,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
                 />
               );
             })}
-            <div className="vkpi-prov-note">逐源如实标注 · 空源 / 未建表 = 盲区,不装 live</div>
+            <div className="vkpi-prov-note">逐源如实标注 · 空源 / 未建表 / 闸未登记 = 盲区,骨架就绪 ≠ 在线,不装 live</div>
           </div>
         )}
       </ModuleCard>
@@ -599,12 +668,14 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     // comp:Viltrox+竞品条形 + 口径注 ≈ 200px → 6 格
     { key: "comp", label: "同话题竞品声量", description: "百家饭同口径品牌份额条 · Viltrox 高亮", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 6, minHeight: 4, maxHeight: 16, render: renderComp },
     { key: "recs", label: "给产品部的建议", description: "规则生成 · 人工复核", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 5, maxHeight: 24, render: renderRecs },
+    // prdStatus:demo prd 卡形态 · 行=来源徽+标题+状态药丸+绝对时间+行内动作 ≈ 260px → 8 格
+    { key: "prdStatus", label: "反哺产品部", description: "转产品部账本 · 已转交 → 采纳/拒绝状态流转", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 5, maxHeight: 24, render: renderPrdStatus },
     // topics:chips 一两行 + 口径注 ≈ 130px → 4 格
     { key: "topics", label: "热点话题", description: "词族热度 chips + ▲▼ 环比", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 12, render: renderTopics },
     // geo:语言条形 + 待检桶 + 口径注 ≈ 230px → 7 格
     { key: "geo", label: "按语言 / 市场", description: "语言分桶 · 待检=未检出(非地理)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderGeo },
-    // cover:固定 5 源行 + 口径注 ≈ 230px → 7 格
-    { key: "cover", label: "监听覆盖", description: "五源健康 + 盲区如实标注", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 20, render: renderCover },
+    // cover:固定 7 源行(五源 + 迸发⑤ X/论坛扩源两行)+ 口径注 ≈ 280px → 8 格
+    { key: "cover", label: "监听覆盖", description: "七源健康 + 盲区/骨架如实标注", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 5, maxHeight: 20, render: renderCover },
     // ↓ palette 备选(不进默认布局,注册表保留全量可选)
     { key: "plat", label: "平台分布", description: "评论按平台条形分布", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderPlat },
     { key: "complaints", label: "抱怨聚类", description: "话题词 + 负面线索双命中 · 原声引文", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 6, maxHeight: 24, render: renderComplaints },

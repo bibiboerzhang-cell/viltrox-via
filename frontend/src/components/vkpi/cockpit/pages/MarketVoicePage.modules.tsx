@@ -34,10 +34,17 @@ export const SOURCE_LABEL: Record<string, string> = {
   bh_reviews: "B&H 口碑",
   brand_signal: "需求信号",
   sentiment: "情感结果",
+  x_listen: "X 监听",
+  forum_listen: "摄影论坛监听",
 };
 
 // 覆盖模块的固定源顺序(voice-report sources 键)
-export const SOURCE_ORDER = ["comments", "intent_queue", "bh_reviews", "brand_signal", "sentiment"] as const;
+// 迸发⑤ 扩源两行(x_listen/forum_listen):后端读采集闸真状态 —— 未接入·盲区 /
+// 骨架就绪·待开闸 / 已开闸计数;旧后端缺键时前端如实回落「未接入·盲区」(见 LISTEN_KEYS)。
+export const SOURCE_ORDER = ["comments", "intent_queue", "bh_reviews", "brand_signal", "sentiment", "x_listen", "forum_listen"] as const;
+
+// 扩源行键集合:旧后端响应缺这两键 ≠ 状态未知,而是确凿的「未接入·盲区」(如实回落)
+export const LISTEN_KEYS = new Set<string>(["x_listen", "forum_listen"]);
 
 // 每模块 SrcChip 口径(label=真实表名;rows=board-paradigm 接入映射 + voice-report-ext
 // basis 的真实来源,禁编造;卡头 cnt 只留短徽,长口径句全部住这里 + 调用点动态 extraRows)。
@@ -54,7 +61,17 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["日序列", "voice-report-ext kpi_series(UTC 日轴 0 填齐)"],
       ["环比", "kpi_prev 上一等长窗 · 上窗 0 → 诚实无药丸"],
       ["情绪", "vkpi_sentiment_results(sentiment_id 回链)"],
-      ["已转产品部", "vkpi_market_prd_referrals(窗口内转交计数 · 0 也如实 0)"],
+      ["已转产品部", "vkpi_market_prd_referrals(窗口内转交计数 · 含全状态:已转交/已采纳/已拒绝——采纳/拒绝是状态流转,不出窗不减计数 · 0 也如实 0)"],
+    ],
+  },
+  prdStatus: {
+    label: "vkpi_market_prd_referrals",
+    rows: [
+      ["账本", "vkpi_market_prd_referrals(迁移 234)· 最近 50 条按转交时间倒序"],
+      ["流转", "已转交 → 已采纳 / 已拒绝(幂等;药丸只在服务器真实返回后变色)"],
+      ["来源", "反馈流=vkpi_comments 单条 · 规则建议=lexicon_reco(规则生成,无独立存储表)"],
+      ["计数口径", "「已转产品部」KPI = 窗口内全状态转交行(采纳/拒绝不出窗、不减计数)"],
+      ["时间", "created_at / updated_at 存 UTC · 按浏览器时区显示绝对时间"],
     ],
   },
   alerts: {
@@ -154,6 +171,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     rows: [
       ["健康", "逐源 status / count 如实标"],
       ["盲区", "空源 / 未建表如实标注"],
+      ["扩源", "X / 摄影论坛 · 采集闸默认关 · 闸键登记后显示「骨架就绪 · 待开闸」"],
     ],
   },
   feed: {
@@ -187,6 +205,7 @@ export const PROV_TITLES: Record<string, string> = {
   wishlist: "愿望清单",
   gaps: "需求空白",
   recs: "给产品部的建议",
+  prdStatus: "反哺产品部",
   cover: "监听覆盖",
   feed: "反馈流",
   buckets: "产品线声量分桶",
@@ -624,6 +643,90 @@ export function RecsBody({ suggestions, prd }: { suggestions: Row; prd?: RecsPrd
           onClose={() => setOpenIdx(null)}
         />
       )}
+    </div>
+  );
+}
+
+/* ============ 反哺产品部 · PRD 状态流转(demo prd 卡形态:一行一条 + 状态语义色) ============
+   行 = 来源徽(反馈流/规则建议)+ 标题 + 状态药丸(已转交 warn / 已采纳 good / 已拒绝 muted)
+   + 绝对时间(UTC 存 · 浏览器时区显示)+ 行内 ✓采纳/✕拒绝(仅「已转交」行;动作只在
+   端点真实返回后以服务器回传行变色,失败原因如实展示 —— 纪律同 recs 转交按钮)。 */
+export const PRD_STATUS_META: Record<string, { label: string; cls: string }> = {
+  referred: { label: "已转交", cls: "border-warn bg-warn-soft text-warn" },
+  accepted: { label: "已采纳", cls: "border-good bg-good-soft text-good" },
+  rejected: { label: "已拒绝", cls: "border-line bg-card text-muted" },
+};
+
+// 来源徽(卡面去术语:真表名只进 hover title 与 SrcChip 口径行)
+const PRD_SOURCE_META: Record<string, { label: string; hint: string }> = {
+  vkpi_comments: { label: "反馈流", hint: "来源:反馈流单条(vkpi_comments)" },
+  lexicon_reco: { label: "规则建议", hint: "来源:规则建议(lexicon_reco,规则生成无独立存储表)" },
+};
+
+export function PrdStatusBody({
+  items,
+  busyId,
+  error,
+  onSetStatus,
+}: {
+  items: Row[];
+  busyId: number | null;
+  error: string;
+  /** 缺省 = 只读展示(无写权限调用点不给回调,零假按钮) */
+  onSetStatus?: (id: number, status: "accepted" | "rejected") => void;
+}) {
+  if (items.length === 0) return <EmptyLine text="暂无转交 —— 反馈详情里点『转产品部』。" />;
+  const actBtn = "flex-none rounded-md border border-line px-1.5 py-0.5 text-[9.5px] text-muted transition-colors disabled:cursor-default disabled:opacity-50";
+  return (
+    <div>
+      {items.map((it) => {
+        const id = Number(it.id) || 0;
+        const st = String(it.status || "");
+        const meta = PRD_STATUS_META[st] || { label: st || "—", cls: "border-line text-muted" };
+        const src = PRD_SOURCE_META[String(it.source_table)] || { label: String(it.source_table || "—"), hint: String(it.source_table || "") };
+        const busy = busyId === id;
+        const when = String(it.updated_at || it.created_at || "") || null;
+        return (
+          <div key={id} className="flex min-w-0 items-center gap-2 border-b border-line py-2 last:border-0">
+            <span className="min-w-[46px] flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-center text-[8.5px] font-semibold text-ink-2" title={src.hint}>
+              {src.label}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2" title={String(it.title || "")}>
+              {String(it.title || "—")}
+            </span>
+            <span className={`flex-none rounded-[5px] border px-1.5 py-px text-[8.5px] font-bold ${meta.cls}`}>{meta.label}</span>
+            <span className="flex-none font-mono text-[9.5px] text-muted" title={when ? `${when}(UTC 存 · 按浏览器时区显示)` : "无时间戳"}>
+              {formatLocal(when)}
+            </span>
+            {onSetStatus && st === "referred" ? (
+              <span className="flex flex-none items-center gap-1">
+                <button
+                  type="button"
+                  disabled={busyId != null}
+                  onClick={() => onSetStatus(id, "accepted")}
+                  title="采纳这条转交(服务器真实返回后才变色)"
+                  className={`${actBtn} hover:border-good hover:bg-good-soft hover:text-good`}
+                >
+                  {busy ? "…" : "✓ 采纳"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId != null}
+                  onClick={() => onSetStatus(id, "rejected")}
+                  title="拒绝这条转交(服务器真实返回后才变色)"
+                  className={`${actBtn} hover:border-crit hover:bg-crit-soft hover:text-crit`}
+                >
+                  {busy ? "…" : "✕ 拒绝"}
+                </button>
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+      {error ? (
+        <div className="mt-2 rounded-lg border border-crit bg-crit-soft px-3 py-1.5 text-[11px] text-crit">状态更新失败:{error}</div>
+      ) : null}
+      <div className="vkpi-prov-note">最近 50 条 · 按转交时间倒序 · 动作成功返回后才变色</div>
     </div>
   );
 }

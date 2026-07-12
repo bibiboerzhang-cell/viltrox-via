@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // V0a 金样板冒烟 + V0h-ab 波2 终棒 + V1.1 转产品部真闭环:
 // - KPI 带四卡 demo 语义(本月反馈/待处理/正面情绪占比/已转产品部)+ 真 sparkline +
@@ -22,12 +22,16 @@ const getVoiceFeed = vi.fn();
 const fetchVoiceReportExt = vi.fn();
 const enqueueReplyQueueComment = vi.fn();
 const createPrdReferral = vi.fn();
+const listPrdReferrals = vi.fn();
+const updatePrdReferralStatus = vi.fn();
 vi.mock("../../../../services/vkpi/marketVoice-api", () => ({
   getVoiceReport: (...args: unknown[]) => getVoiceReport(...args),
   getVoiceFeed: (...args: unknown[]) => getVoiceFeed(...args),
   fetchVoiceReportExt: (...args: unknown[]) => fetchVoiceReportExt(...args),
   enqueueReplyQueueComment: (...args: unknown[]) => enqueueReplyQueueComment(...args),
   createPrdReferral: (...args: unknown[]) => createPrdReferral(...args),
+  listPrdReferrals: (...args: unknown[]) => listPrdReferrals(...args),
+  updatePrdReferralStatus: (...args: unknown[]) => updatePrdReferralStatus(...args),
 }));
 
 import { MarketVoicePage } from "./MarketVoicePage";
@@ -246,6 +250,9 @@ beforeEach(() => {
       updated_at: "2026-07-11T00:00:00Z",
     },
   });
+  // prdStatus 账本(usePrdStatusBoard 挂在页面顶层,列表空态兜底,专项断言在其自己的用例里补)
+  listPrdReferrals.mockReset().mockResolvedValue({ status: "ready", items: [], total: 0 });
+  updatePrdReferralStatus.mockReset().mockResolvedValue({ ok: true, item: null });
 });
 
 describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + V1.1 转产品部真闭环)", () => {
@@ -299,9 +306,10 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect(await screen.findByText("转交计数待接通")).toBeTruthy();
   });
 
-  it("默认布局 v3 六行:图表模块族在场,文字模块降为 palette 备选;旧 v2 布局键不干扰", async () => {
-    // 旧 storageKey 残留不应影响 v3 新默认(bump 版本盖过本机旧布局)
+  it("默认布局 v4 七行:图表模块族 + 反哺产品部在场,文字模块降为 palette 备选;旧 v2/v3 布局键不干扰", async () => {
+    // 旧 storageKey 残留不应影响 v4 新默认(bump 版本盖过本机旧布局)
     window.localStorage.setItem("vkpi-market-voice-layout-v2", JSON.stringify([{ moduleKey: "complaints", span: 8 }]));
+    window.localStorage.setItem("vkpi-market-voice-layout-v3", JSON.stringify([{ moduleKey: "complaints", span: 8 }]));
     render(<MarketVoicePage apiToken="t" />);
 
     expect(await screen.findByText("声量告警")).toBeTruthy();
@@ -314,16 +322,18 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect(screen.getByText("监听覆盖")).toBeTruthy();
     expect(screen.getByText("反馈流")).toBeTruthy();
     expect(screen.getByText("给产品部的建议")).toBeTruthy();
+    // prdStatus(反哺产品部 · PRD 状态流转)进默认布局第七行
+    expect(screen.getByText("反哺产品部")).toBeTruthy();
     // 降级模块不进默认布局
     expect(screen.queryByText("抱怨聚类")).toBeNull();
     expect(screen.queryByText("愿望清单")).toBeNull();
     expect(screen.queryByText("需求空白")).toBeNull();
     expect(screen.queryByText("平台分布")).toBeNull();
     expect(screen.queryByText("产品线声量分桶")).toBeNull();
-    // 页头三枚方法论徽已删(卡面去术语;口径收进 kpiV SrcChip 行,那里不是独立徽文案)
+    // 页头三枚方法论徽已删(卡面去术语;口径收进 kpiV SrcChip 行,那里不是独立徽文案;
+    // 「反哺产品部」如今是 prdStatus 模块卡题,上面已按「在场」断言,不再断 null)
     expect(screen.queryByText("lexicon_v0")).toBeNull();
     expect(screen.queryByText("零 LLM")).toBeNull();
-    expect(screen.queryByText("反哺产品部")).toBeNull();
     // 反馈流真数据行照常
     expect(await screen.findByText("对焦很稳,呼吸效应控制超预期")).toBeTruthy();
   });
@@ -484,7 +494,7 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     render(<MarketVoicePage apiToken="t" />);
 
     fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
-    expect(await screen.findByText(/反馈详情/)).toBeTruthy();
+    expect(await screen.findByText(/反馈详情 · /)).toBeTruthy(); // 弹窗题带分隔点,避免与 prdStatus 空态文案「反馈详情里点…」撞正则
 
     const rqBtn = screen.getByRole("button", { name: /转回复队列/ });
     expect((rqBtn as HTMLButtonElement).disabled).toBe(false);
@@ -561,7 +571,7 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     window.sessionStorage.clear();
     render(<MarketVoicePage apiToken="t" onNavigate={onNavigate} />);
     fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
-    expect(await screen.findByText(/反馈详情/)).toBeTruthy();
+    expect(await screen.findByText(/反馈详情 · /)).toBeTruthy(); // 弹窗题带分隔点,避免与 prdStatus 空态文案「反馈详情里点…」撞正则
     fireEvent.click(screen.getByRole("button", { name: /身份 KOL @demo_kol/ }));
     expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("321");
     expect(onNavigate).toHaveBeenCalledWith("kolProfile");
@@ -582,7 +592,7 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     // 下钻列表复用 FeedRowLine;点行 → FeedDetailModal 连续翻(闭环动作同一套适配器)
     const rows = screen.getAllByText("对焦很稳,呼吸效应控制超预期");
     fireEvent.click(rows[rows.length - 1]);
-    expect(await screen.findByText(/反馈详情/)).toBeTruthy();
+    expect(await screen.findByText(/反馈详情 · /)).toBeTruthy(); // 弹窗题带分隔点,避免与 prdStatus 空态文案「反馈详情里点…」撞正则
   });
 
   it("下钻·告警行点击:词族 × sentiment=negative 双过滤 + 8h/全库口径差如实注明", async () => {
@@ -635,15 +645,71 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect((await screen.findAllByText(/HTTP 500/)).length).toBeGreaterThan(0);
   });
 
-  it("下钻·榜单行 v1(维度过滤待接):产品线行点击 → 模块溯源弹窗 + 底层样本按钮 + 诚实说明", async () => {
+  it("声音榜→SKU360 跳转桥(诚实版):产品线行点击 → 写 vkpi:sku360-search + 派发事件 + onNavigate(sku360),不装 SKU 直跳", async () => {
+    const onNavigate = vi.fn();
+    const eventSpy = vi.fn();
+    window.sessionStorage.clear();
+    window.addEventListener("vkpi:open-sku360-search", eventSpy);
+    try {
+      render(<MarketVoicePage apiToken="t" onNavigate={onNavigate} />);
+      const row = await screen.findByText("AF 自动对焦镜头");
+      // 行 title 口径如实:按产品线词搜索 SKU(产品线级 · 非 SKU 直跳)
+      expect(row.closest('[title*="按产品线词搜索 SKU"]')).toBeTruthy();
+      fireEvent.click(row);
+      // 三通道:sessionStorage 产品线词(Sku360BoardPage SEARCH_KEY 同名)+ 事件 + 切板块
+      expect(window.sessionStorage.getItem("vkpi:sku360-search")).toBe("AF 自动对焦镜头");
+      expect(eventSpy).toHaveBeenCalledTimes(1);
+      expect(onNavigate).toHaveBeenCalledWith("sku360");
+      // 诚实:绝不写 SKU 直选键(产品线级无逐 SKU 关联)
+      expect(window.sessionStorage.getItem("vkpi:sku360-sku")).toBeNull();
+    } finally {
+      window.removeEventListener("vkpi:open-sku360-search", eventSpy);
+    }
+  });
+
+  it("声音榜行无 onNavigate(跳不了)→ 如实不可点零假按钮;溯源与维度待接说明仍住 geo 行 → 模块溯源弹窗", async () => {
     render(<MarketVoicePage apiToken="t" />);
-    expect(await screen.findByText("82% 正 · 32条")).toBeTruthy();
-    fireEvent.click(screen.getByText("AF 自动对焦镜头"));
-    // 打开的是模块溯源弹窗(不是假的过滤列表),底部诚实说明 + 全量样本入口
-    expect(await screen.findByText("产品线声音榜 · 数据溯源")).toBeTruthy();
-    expect(screen.getByText(/产品线维度过滤待接/)).toBeTruthy();
+    const row = await screen.findByText("AF 自动对焦镜头");
+    expect(row.closest('[role="button"]')).toBeNull();
+    expect(row.closest('[title*="按产品线词搜索 SKU"]')).toBeNull();
+    // 榜单行 v1 溯源通道(维度过滤待接的诚实说明)仍在:geo 行点击 → 模块溯源弹窗 + 底层样本
+    fireEvent.click(screen.getByText("英语"));
+    expect(await screen.findByText("按语言 / 市场 · 数据溯源")).toBeTruthy();
+    expect(screen.getByText(/语言维度过滤待接/)).toBeTruthy();
     fireEvent.click(screen.getByText("≡ 查看底层样本 · 反馈流全量"));
     expect(await screen.findByText("反馈流 · 全量")).toBeTruthy();
+  });
+
+  /* ---------- 迸发⑤ 监听覆盖扩源两行(X / 摄影论坛,读采集闸真状态,禁装) ---------- */
+
+  it("监听覆盖扩源两行:旧后端缺键 → 双双如实「未接入 · 盲区」,绝不装 live", async () => {
+    // beforeEach 默认 mock 的 sources 不含 x_listen/forum_listen(=旧后端形状)
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("X 监听")).toBeTruthy();
+    expect(screen.getByText("摄影论坛监听")).toBeTruthy();
+    expect(screen.getAllByText("未接入 · 盲区").length).toBe(2);
+    expect(screen.queryByText("骨架就绪 · 待开闸")).toBeNull();
+  });
+
+  it("监听覆盖扩源两行:scaffold=骨架就绪·待开闸,not_connected=未接入·盲区(逐行真状态)", async () => {
+    const base = await (getVoiceReport() as Promise<Record<string, any>>);
+    getVoiceReport.mockReset().mockResolvedValue({
+      ...base,
+      sources: {
+        ...base.sources,
+        // 后端闸键已登记(VKPI_X_COLLECT_ENABLED=0)→ 骨架就绪 · 待开闸
+        x_listen: { table: "vkpi_comments · platform=x", status: "scaffold", count: 0, gate: "VKPI_X_COLLECT_ENABLED", gate_state: "off" },
+        // 论坛闸键未登记 → 仍是未接入 · 盲区
+        forum_listen: { table: "vkpi_comments · platform=forum", status: "not_connected", count: 0, gate: "VKPI_FORUM_COLLECT_ENABLED", gate_state: "absent" },
+      },
+    });
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("X 监听")).toBeTruthy();
+    expect(screen.getByText("骨架就绪 · 待开闸")).toBeTruthy();
+    expect(screen.getByText("摄影论坛监听")).toBeTruthy();
+    expect(screen.getAllByText("未接入 · 盲区").length).toBe(1);
+    // 骨架 ≠ 在线:readyCount 不因 scaffold 增加(七源里 ready 仍是 3)
+    expect(screen.getByText("3/7")).toBeTruthy();
   });
 });
 
@@ -690,5 +756,135 @@ describe("comp 品牌行联动战略台", () => {
     const row = await screen.findByText("Sigma");
     expect(row.closest('[role="button"]')).toBeNull();
     expect(row.closest('[title="查看竞争对照"]')).toBeNull();
+  });
+});
+
+/* ============ prdStatus · 反哺产品部(PRD 状态流转:账本行 + ✓采纳/✕拒绝 幂等动作) ============ */
+describe("prdStatus PRD 状态流转", () => {
+  const PRD_ROW = (over: Record<string, unknown> = {}) => ({
+    id: 9001,
+    source_table: "vkpi_comments",
+    source_id: "1042",
+    title: "对焦拉风箱抱怨转交",
+    detail: "",
+    category: "af",
+    status: "referred",
+    created_by_staff_id: 3,
+    created_at: "2026-07-10T02:00:00Z",
+    updated_at: "2026-07-10T02:00:00Z",
+    ...over,
+  });
+  const PRD_LIST_OK = {
+    ok: true,
+    status: "ready",
+    count: 3,
+    items: [
+      PRD_ROW(),
+      PRD_ROW({ id: 9002, source_table: "lexicon_reco", source_id: "improvement:低温润滑脂标号", title: "低温润滑脂标号复核", category: "improvement", status: "accepted" }),
+      PRD_ROW({ id: 9003, source_table: "lexicon_reco", source_id: "watch:增距镜", title: "增距镜声量观察", category: "watch", status: "rejected" }),
+    ],
+  };
+
+  it("账本行形态:来源徽(反馈流/规则建议)+ 标题 + 状态药丸三态 + 绝对时间;动作只挂「已转交」行;状态分布进 SrcChip 口径", async () => {
+    listPrdReferrals.mockReset().mockResolvedValue(PRD_LIST_OK);
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("对焦拉风箱抱怨转交")).toBeTruthy();
+    // 列表端点按契约被调(最近 50 条)
+    expect(listPrdReferrals).toHaveBeenCalledWith("t", { limit: 50 });
+    const prdCard = screen.getByText("反哺产品部").closest("section") as HTMLElement;
+    // 来源徽:卡面人话,真表名只进 hover title(「反馈流」限定卡内查,避免与 feed 卡题撞名)
+    expect(within(prdCard).getByText("反馈流")).toBeTruthy();
+    expect(screen.getAllByText("规则建议").length).toBe(2);
+    // 状态药丸三态(warn/good/muted 语义在 PRD_STATUS_META,文案断言)
+    expect(screen.getByText("已转交")).toBeTruthy();
+    expect(screen.getByText("已采纳")).toBeTruthy();
+    expect(screen.getByText("已拒绝")).toBeTruthy();
+    // 行内动作只挂「已转交」行(终态行零假按钮)
+    expect(screen.getAllByRole("button", { name: "✓ 采纳" }).length).toBe(1);
+    expect(screen.getAllByRole("button", { name: "✕ 拒绝" }).length).toBe(1);
+    // 绝对时间:每行 mono 时间 + UTC 存/浏览器时区显示 tooltip(禁相对时间当唯一展示)
+    expect(prdCard.querySelectorAll('[title*="UTC 存 · 按浏览器时区显示"]').length).toBe(3);
+    expect(prdCard.querySelectorAll('[title*="vkpi_comments"]').length).toBeGreaterThan(0);
+    // SrcChip 口径行:计数含状态分布(最近 N 条口径,如实)
+    expect(screen.getByText(/已转交 1 · 已采纳 1 · 已拒绝 1/)).toBeTruthy();
+  });
+
+  it("✓采纳:端点真实返回前药丸不变色(pending 中「…」),返回后按服务器回传行置「已采纳」", async () => {
+    listPrdReferrals.mockReset().mockResolvedValue(PRD_LIST_OK);
+    let resolveUpdate: (v: unknown) => void = () => {};
+    updatePrdReferralStatus.mockReset().mockImplementation(() => new Promise((res) => { resolveUpdate = res; }));
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("对焦拉风箱抱怨转交")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "✓ 采纳" }));
+    expect(updatePrdReferralStatus).toHaveBeenCalledWith("t", 9001, "accepted");
+    // 端点未返回:药丸仍是「已转交」,双按钮进「…」忙态(绝不点击即变色)
+    expect(screen.getByText("已转交")).toBeTruthy();
+    expect(screen.getAllByText("已采纳").length).toBe(1); // 只有 9002 原有那枚
+    expect(screen.getAllByText("…").length).toBe(2);
+
+    resolveUpdate({ ok: true, already_set: false, item: PRD_ROW({ status: "accepted", updated_at: "2026-07-11T05:00:00Z" }) });
+    await waitFor(() => expect(screen.getAllByText("已采纳").length).toBe(2));
+    expect(screen.queryByText("已转交")).toBeNull();
+    // 终态行动作按钮消失(零假按钮)
+    expect(screen.queryByRole("button", { name: "✓ 采纳" })).toBeNull();
+    expect(screen.queryByText(/状态更新失败/)).toBeNull();
+  });
+
+  it("✕拒绝:PATCH 契约 (id, rejected);already_set 幂等命中同样按服务器真行落态", async () => {
+    listPrdReferrals.mockReset().mockResolvedValue(PRD_LIST_OK);
+    updatePrdReferralStatus.mockReset().mockResolvedValue({
+      ok: true,
+      already_set: true, // 并发对手先落同终态 → 仍以真行变色,不编「本次改到」
+      item: PRD_ROW({ status: "rejected", updated_at: "2026-07-11T06:00:00Z" }),
+    });
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("对焦拉风箱抱怨转交")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "✕ 拒绝" }));
+    expect(updatePrdReferralStatus).toHaveBeenCalledWith("t", 9001, "rejected");
+    await waitFor(() => expect(screen.getAllByText("已拒绝").length).toBe(2));
+    expect(screen.queryByText("已转交")).toBeNull();
+  });
+
+  it("状态更新失败:错误如实展示(不吞),药丸绝不变色", async () => {
+    listPrdReferrals.mockReset().mockResolvedValue(PRD_LIST_OK);
+    updatePrdReferralStatus.mockReset().mockRejectedValue(new Error("HTTP 409 status_conflict"));
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("对焦拉风箱抱怨转交")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "✓ 采纳" }));
+    expect(await screen.findByText(/状态更新失败/)).toBeTruthy();
+    expect(screen.getByText(/status_conflict/)).toBeTruthy();
+    // 药丸不变:9001 仍「已转交」,「已采纳」仍只有 9002 一枚
+    expect(screen.getByText("已转交")).toBeTruthy();
+    expect(screen.getAllByText("已采纳").length).toBe(1);
+  });
+
+  it("空态:零转交 → 「暂无转交——反馈详情里点『转产品部』」;表未建 → 诚实 pending 带后端 reason", async () => {
+    // beforeEach 默认 mock = 空列表
+    const { unmount } = render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText(/暂无转交 —— 反馈详情里点『转产品部』/)).toBeTruthy();
+    unmount();
+
+    listPrdReferrals.mockReset().mockResolvedValue({
+      ok: true,
+      status: "absent",
+      reason: "vkpi_market_prd_referrals 表未建(迁移 234 未 apply)——诚实空列表。",
+      items: [],
+      count: 0,
+    });
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText("转交账本未建")).toBeTruthy();
+    expect(screen.getByText(/迁移 234 未 apply/)).toBeTruthy();
+  });
+
+  it("新转交真实成功 → 账本重拉(prd.version 联动),新行即刻进账本", async () => {
+    render(<MarketVoicePage apiToken="t" />);
+    expect(await screen.findByText(/暂无转交/)).toBeTruthy();
+    expect(listPrdReferrals.mock.calls.length).toBe(1);
+    // 反馈详情里点「⚙ 转产品部」(createPrdReferral 默认 mock 真实成功)
+    fireEvent.click(await screen.findByText("对焦很稳,呼吸效应控制超预期"));
+    fireEvent.click(await screen.findByRole("button", { name: "⚙ 转产品部" }));
+    expect(await screen.findByText("✓ 已转交")).toBeTruthy();
+    await waitFor(() => expect(listPrdReferrals.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 });

@@ -13,7 +13,12 @@
   7. 路由层映射:comment_not_found → 404,其余失败 → 400,invalid_status → 400,
      成功透传(直接调 api_*,monkeypatch domain,零 FastAPI TestClient / 零真库);
   8. voice_report_ext.prd_referrals 组:表在 → 窗口计数 + 日序列 0 填齐 + 环比;
-     表未建 → 诚实 empty(count=null)。
+     表未建 → 诚实 empty(count=null);
+  9. 状态流转(update_referral_status,PATCH /{id}/status):枚举校验(仅
+     accepted/rejected;referred 不是合法流转目标)、幂等(目标==当前 → already_set
+     零 UPDATE)、并发护栏(UPDATE 带 WHERE status='referred';输者按读回行判
+     already_set / status_conflict)、referral_not_found → 404 / status_conflict → 409、
+     item 键白名单 + 私字段零泄漏。
 红线:mock conn 全程,不触真库,不触 viltrox_fit_score / rule_v0。
 """
 from __future__ import annotations
@@ -65,12 +70,25 @@ class _FakeConn:
     def insert_calls(self):
         return [c for c in self.calls if c[0].lstrip().upper().startswith("INSERT")]
 
+    @property
+    def update_calls(self):
+        return [c for c in self.calls if c[0].lstrip().upper().startswith("UPDATE")]
+
     def execute(self, sql, params=()):
         self.calls.append((sql, tuple(params)))
         flat = " ".join(sql.split()).lower()
         if "information_schema.tables" in flat:
             name = params[0] if params else ""
             return _FakeResult([{"table_name": name}] if name in self.tables else [])
+        if flat.startswith("update vkpi_market_prd_referrals"):
+            # 状态流转:仿真 WHERE id=? AND status='referred' 并发护栏
+            st, updated_at, rid = params
+            row = self.existing_row
+            if row and int(row["id"]) == int(rid) and row["status"] == "referred":
+                row["status"] = st
+                row["updated_at"] = updated_at
+                return _FakeResult([], rowcount=1)
+            return _FakeResult([], rowcount=0)
         if flat.startswith("insert into vkpi_market_prd_referrals"):
             # 转交成功 → 物化账本行,后续 SELECT 读回同一行
             self.existing_row = {
@@ -89,6 +107,10 @@ class _FakeConn:
         if "from vkpi_comments" in flat:
             wanted = int(params[0]) if params else 0
             return _FakeResult([{"id": wanted}] if wanted in self.comment_ids else [])
+        if "from vkpi_market_prd_referrals" in flat and "where id" in flat:
+            row = self.existing_row
+            hit = row and int(row["id"]) == int(params[0])
+            return _FakeResult([dict(row)] if hit else [])
         if "from vkpi_market_prd_referrals" in flat and "where source_table" in flat:
             return _FakeResult([self.existing_row] if self.existing_row else [])
         if "from vkpi_market_prd_referrals" in flat:
@@ -339,6 +361,185 @@ def test_router_maps_reasons_to_http(monkeypatch):
     )
     listed = router_mod.api_list_prd_referrals(status="", limit=50, staff=None)
     assert listed["status"] == "ready"
+
+
+# ── 9. 状态流转:referred → accepted / rejected(幂等 + 并发护栏 + 路由映射)──
+
+
+def _referred_row(status="referred"):
+    return {
+        "id": 77,
+        "source_table": "vkpi_comments",
+        "source_id": "1042",
+        "title": "对焦很稳,呼吸效应控制超预期",
+        "detail": "",
+        "category": "af",
+        "status": status,
+        "created_by_staff_id": 3,
+        "created_at": "2026-07-10T00:00:00Z",
+        "updated_at": "2026-07-10T00:00:00Z",
+    }
+
+
+def test_update_status_invalid_enum_rejected(fake_conn):
+    conn = fake_conn(_FakeConn(existing_row=_referred_row()))
+    for bad in ("alien", "", "REFERRED", "referred"):  # referred 不是合法流转目标
+        result = prd_referrals.update_referral_status(77, bad)
+        assert result["ok"] is False
+        assert result["reason"] == "invalid_status"
+        assert result["allowed"] == ["accepted", "rejected"]
+    assert conn.calls == []  # 枚举挡在 SQL 之前
+
+
+def test_update_status_missing_table_is_honest(fake_conn):
+    conn = fake_conn(_FakeConn(tables=("vkpi_comments",), existing_row=_referred_row()))
+    result = prd_referrals.update_referral_status(77, "accepted")
+    assert result == {"ok": False, "reason": "prd_referrals_table_missing"}
+    assert conn.update_calls == []
+
+
+def test_update_status_not_found(fake_conn):
+    conn = fake_conn(_FakeConn(existing_row=None))
+    for missing_id in (999, 0, -1, "abc"):
+        result = prd_referrals.update_referral_status(missing_id, "accepted")
+        assert result["ok"] is False
+        assert result["reason"] == "referral_not_found"
+    assert conn.update_calls == []
+
+
+def test_update_status_happy_path_contract(fake_conn):
+    conn = fake_conn(_FakeConn(existing_row=_referred_row()))
+    result = prd_referrals.update_referral_status(77, "accepted")
+    assert result["ok"] is True
+    assert result["already_set"] is False
+    assert set(result["item"].keys()) == ITEM_KEYS
+    assert result["item"]["status"] == "accepted"
+    assert result["item"]["id"] == 77
+    # updated_at 被刷新(流转时刻),created_at 原样保留
+    assert result["item"]["updated_at"] != "2026-07-10T00:00:00Z"
+    assert result["item"]["created_at"] == "2026-07-10T00:00:00Z"
+    # 恰一次 UPDATE,带并发护栏 WHERE ... AND status = 'referred'
+    assert len(conn.update_calls) == 1
+    update_sql, update_params = conn.update_calls[0]
+    assert "AND status = 'referred'" in update_sql
+    assert update_params[0] == "accepted" and update_params[2] == 77
+    assert conn.commits >= 1
+
+
+def test_update_status_rejected_path(fake_conn):
+    fake_conn(_FakeConn(existing_row=_referred_row()))
+    result = prd_referrals.update_referral_status(77, "rejected")
+    assert result["ok"] is True and result["already_set"] is False
+    assert result["item"]["status"] == "rejected"
+
+
+def test_update_status_idempotent_same_target_zero_update(fake_conn):
+    conn = fake_conn(_FakeConn(existing_row=_referred_row(status="accepted")))
+    result = prd_referrals.update_referral_status(77, "accepted")
+    assert result["ok"] is True
+    assert result["already_set"] is True
+    assert result["item"]["status"] == "accepted"
+    assert conn.update_calls == []  # 幂等断言:重复置同终态零 UPDATE
+
+
+def test_update_status_cross_terminal_conflict(fake_conn):
+    conn = fake_conn(_FakeConn(existing_row=_referred_row(status="accepted")))
+    result = prd_referrals.update_referral_status(77, "rejected")
+    assert result["ok"] is False
+    assert result["reason"] == "status_conflict"
+    assert result["current"] == "accepted" and result["requested"] == "rejected"
+    assert conn.update_calls == []  # 终态互改不做,绝不覆写
+
+
+def test_update_status_concurrent_loser_same_target_is_already_set(fake_conn):
+    # 首读还是 referred,UPDATE 前对手已置 accepted(rowcount=0)→ 读回同终态 = already_set
+    class _RaceConn(_FakeConn):
+        def execute(self, sql, params=()):
+            flat = " ".join(sql.split()).lower()
+            if flat.startswith("update vkpi_market_prd_referrals"):
+                self.calls.append((sql, tuple(params)))
+                self.existing_row["status"] = "accepted"  # 对手先落同终态
+                return _FakeResult([], rowcount=0)
+            return super().execute(sql, params)
+
+    fake_conn(_RaceConn(existing_row=_referred_row()))
+    result = prd_referrals.update_referral_status(77, "accepted")
+    assert result["ok"] is True
+    assert result["already_set"] is True  # 两边都读回同一真实行,不编「本次改到」
+    assert result["item"]["status"] == "accepted"
+
+
+def test_update_status_concurrent_loser_other_target_is_conflict(fake_conn):
+    class _RaceConn(_FakeConn):
+        def execute(self, sql, params=()):
+            flat = " ".join(sql.split()).lower()
+            if flat.startswith("update vkpi_market_prd_referrals"):
+                self.calls.append((sql, tuple(params)))
+                self.existing_row["status"] = "rejected"  # 对手先落另一终态
+                return _FakeResult([], rowcount=0)
+            return super().execute(sql, params)
+
+    fake_conn(_RaceConn(existing_row=_referred_row()))
+    result = prd_referrals.update_referral_status(77, "accepted")
+    assert result["ok"] is False
+    assert result["reason"] == "status_conflict"
+    assert result["current"] == "rejected"
+
+
+def test_update_status_never_leaks_private_fields(fake_conn):
+    dirty = _referred_row()
+    dirty.update({"author_handle": "should_never_leak", "author_id": "u-999", "raw_data_json": "{}"})
+    fake_conn(_FakeConn(existing_row=dirty))
+    result = prd_referrals.update_referral_status(77, "accepted")
+    flat = repr(result)
+    assert "should_never_leak" not in flat
+    assert "u-999" not in flat
+    assert "raw_data_json" not in flat
+    assert set(result["item"].keys()) == ITEM_KEYS
+
+
+def test_update_status_sql_hygiene(fake_conn):
+    conn = fake_conn(_FakeConn(existing_row=_referred_row()))
+    prd_referrals.update_referral_status(77, "accepted")
+    assert conn.update_calls  # UPDATE 路径确实被覆盖
+    for sql, _params in conn.calls:
+        assert "%" not in sql, f"SQL 出现字面 percent(compat 红线): {sql}"
+        assert " LIKE " not in f" {sql.upper()} ".replace("\n", " ")
+
+
+def test_router_maps_status_update_to_http(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api.routers import vkpi_market_voice as router_mod
+
+    body = router_mod.PrdReferralStatusBody(status="accepted")
+
+    def _fake_update(reason=None, ok=False):
+        def _inner(*_args, **_kwargs):
+            if ok:
+                return {"ok": True, "already_set": False, "item": {"id": 77, "status": "accepted"}}
+            return {"ok": False, "reason": reason}
+
+        return _inner
+
+    monkeypatch.setattr(prd_referrals, "update_referral_status", _fake_update(reason="referral_not_found"))
+    with pytest.raises(HTTPException) as exc404:
+        router_mod.api_update_prd_referral_status(77, body, staff=None)
+    assert exc404.value.status_code == 404
+
+    monkeypatch.setattr(prd_referrals, "update_referral_status", _fake_update(reason="status_conflict"))
+    with pytest.raises(HTTPException) as exc409:
+        router_mod.api_update_prd_referral_status(77, body, staff=None)
+    assert exc409.value.status_code == 409
+
+    monkeypatch.setattr(prd_referrals, "update_referral_status", _fake_update(reason="invalid_status"))
+    with pytest.raises(HTTPException) as exc400:
+        router_mod.api_update_prd_referral_status(77, body, staff=None)
+    assert exc400.value.status_code == 400
+
+    monkeypatch.setattr(prd_referrals, "update_referral_status", _fake_update(ok=True))
+    result = router_mod.api_update_prd_referral_status(77, body, staff=None)
+    assert result["ok"] is True and result["item"]["status"] == "accepted"
 
 
 # ── 8. voice_report_ext.prd_referrals 组(KPI 真计数,窗口敏感)──

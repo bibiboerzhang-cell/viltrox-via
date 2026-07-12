@@ -793,7 +793,8 @@ def _prd_referrals(conn: Any, since: str, until: str, until_eff: str) -> dict[st
         "series": [{"date": d, "count": day_counts.get(d, 0)} for d in axis],
         "table": PRD_TABLE,
         "basis": (
-            "vkpi_market_prd_referrals 窗口内转交行 COUNT(时间=created_at UTC,0 也如实 0);"
+            "vkpi_market_prd_referrals 窗口内转交行 COUNT(时间=created_at UTC,0 也如实 0;"
+            "含全状态 referred/accepted/rejected —— 采纳/拒绝是状态流转,不出窗、不减计数);"
             "日序列 0 填齐可直画 sparkline(只到今天,不产未来日);"
             "环比=上一等长窗同口径,窗口进行中两侧同取已流逝等长,上窗 0 → delta_pct=null"
         ),

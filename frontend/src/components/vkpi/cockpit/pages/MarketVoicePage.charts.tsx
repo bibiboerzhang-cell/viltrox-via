@@ -444,8 +444,9 @@ export function AlertsBody({ alerts, onSelect }: { alerts: Row; onSelect?: (cate
 }
 
 /* ============ line_voice · 产品线声音榜(demo sku 形态;诚实:产品线级非 SKU) ============ */
-// 行可点(onRowClick,v1):该维度过滤待接 → 开模块溯源弹窗 + 底部「底层样本」,如实不装
-export function LineVoiceBody({ items, onRowClick }: { items: Row[]; onRowClick?: () => void }) {
+// 行可点(onRowClick(label)):SKU360 跳转桥(诚实版)—— 产品线级无逐 SKU 关联,不装
+// SKU 直跳,只把产品线词交给发送端预填 SKU 搜索;缺回调(跳不了)= 纯展示行,零假按钮。
+export function LineVoiceBody({ items, onRowClick }: { items: Row[]; onRowClick?: (lineLabel: string) => void }) {
   const rows = items.filter((it) => (Number(it.count) || 0) > 0);
   if (rows.length === 0) return <EmptyLine text="窗口内产品线声量零命中。" />;
   return (
@@ -453,20 +454,21 @@ export function LineVoiceBody({ items, onRowClick }: { items: Row[]; onRowClick?
       {rows.map((it) => {
         const share = typeof it.pos_share === "number" ? it.pos_share : null;
         const count = Number(it.count) || 0;
+        const lineLabel = String(it.label || it.key);
         return (
           <BarRow
             key={String(it.key)}
-            name={String(it.label || it.key)}
+            name={lineLabel}
             widthPct={share != null ? share * 100 : 12}
             color={shareTone(share)}
             dashed={share == null}
             value={share != null ? `${pctText(share)}% 正 · ${count}条` : `待批注 · ${count}条`}
-            title={`已批注 ${Number(it.annotated) || 0}/${count} 条${onRowClick ? ` · ${DIM_HINT}` : ""}`}
-            onClick={onRowClick}
+            title={`已批注 ${Number(it.annotated) || 0}/${count} 条${onRowClick ? " · 按产品线词搜索 SKU(产品线级 · 非 SKU 直跳)" : ""}`}
+            onClick={onRowClick ? () => onRowClick(lineLabel) : undefined}
           />
         );
       })}
-      <ProvNote>产品线级分桶 · 无逐 SKU 真实关联(如实不按 SKU 下钻)· 正面占比分母=已批注条数</ProvNote>
+      <ProvNote>产品线级分桶 · 无逐 SKU 真实关联 —— 点行以产品线词搜索 SKU(非直跳)· 正面占比分母=已批注条数</ProvNote>
     </div>
   );
 }

@@ -15,7 +15,12 @@
   评论不存在 404;来源/入参非法、表未建等诚实 400 带 reason。
 - GET /api/admin/vkpi/market/prd-referrals?status=&limit=
   → 转交列表(status ∈ referred/accepted/rejected;LIMIT 双层封顶 50;只读)。
-  实现在 app.domains.market.prd_referrals;「已转产品部」KPI 窗口计数走 voice-report-ext。
+  实现在 app.domains.market.prd_referrals;「已转产品部」KPI 窗口计数走 voice-report-ext
+  (计数含全状态行——采纳/拒绝是状态流转,不出窗、不减计数)。
+- PATCH /api/admin/vkpi/market/prd-referrals/{id}/status(require_tab vkpi write)
+  → 状态流转:referred → accepted / rejected(仅这两个终态;枚举外 400 invalid_status)。
+  幂等:目标 == 当前状态 → already_set=true 带已有行;行不存在 404;
+  已在另一终态 → 409 status_conflict(不覆写别人已定的终态)。
 
 诚实态:每块/每数据源缺数据由 domain 层返回 {status:"empty", reason};
 聚合内部异常不 500,回 {status:"error", reason}(前端安静降级,月报页非阻塞)。
@@ -107,6 +112,38 @@ def api_create_prd_referral(
         reason = str(result.get("reason") or "refer_failed")
         if reason == "comment_not_found":
             raise HTTPException(status_code=404, detail=reason)
+        raise HTTPException(status_code=400, detail=reason)
+    return result
+
+
+class PrdReferralStatusBody(BaseModel):
+    """状态流转入参(枚举复核在 domain 层:仅 accepted / rejected 可置)。"""
+
+    status: str = Field(..., min_length=1, max_length=20, description="accepted(采纳)/ rejected(拒绝)")
+
+
+@router.patch("/market/prd-referrals/{referral_id}/status")
+def api_update_prd_referral_status(
+    referral_id: int,
+    body: PrdReferralStatusBody,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    """转交行状态流转:referred → accepted / rejected(幂等,端到端真实返回)。
+
+    幂等:目标 == 当前状态 → already_set=true 带已有行(重复点击/重放安全);
+    行不存在 404;已在另一终态 → 409 status_conflict(不覆写);
+    枚举外 / 表未建等诚实 400 带 reason(绝不假装成功)。
+    """
+    del staff
+    from app.domains.market import prd_referrals
+
+    result = prd_referrals.update_referral_status(referral_id, body.status)
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "update_failed")
+        if reason == "referral_not_found":
+            raise HTTPException(status_code=404, detail=reason)
+        if reason == "status_conflict":
+            raise HTTPException(status_code=409, detail=reason)
         raise HTTPException(status_code=400, detail=reason)
     return result
 

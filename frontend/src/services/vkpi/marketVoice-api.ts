@@ -15,6 +15,9 @@
 //     V1.1 真闭环「转产品部」:一条声音(vkpi_comments)/ 一条规则建议(lexicon_reco)
 //     落 vkpi_market_prd_referrals 一行(迁移 234;UNIQUE(source_table,source_id) 幂等,
 //     已转返回已有行 already_referred=true;评论不存在 404,其余失败 400 带 reason)。
+// - updatePrdReferralStatus:PATCH /api/admin/vkpi/market/prd-referrals/{id}/status
+//     状态流转:referred → accepted / rejected(仅这两个终态;幂等,目标==当前 →
+//     already_set=true 带已有行;行不存在 404;已在另一终态 409 status_conflict)。
 // 红线:不触 viltrox_fit_score / rule_v0。
 
 import { apiFetch, jsonBody } from "../http";
@@ -164,6 +167,28 @@ export async function listPrdReferrals(
   return apiFetch<PrdReferralListResponse>(
     `/api/admin/vkpi/market/prd-referrals?${params.toString()}`,
     {},
+    token,
+  );
+}
+
+// 状态流转:referred → accepted / rejected(后端枚举复核;referred 不是合法流转目标)
+export type PrdReferralUpdatableStatus = "accepted" | "rejected";
+
+export interface PrdReferralStatusResult {
+  ok: boolean;
+  /** 幂等命中(目标==当前 / 并发对手先落同终态)= true;前端仍以 item 服务器真行落态 */
+  already_set: boolean;
+  item: PrdReferralItem;
+}
+
+export async function updatePrdReferralStatus(
+  token: string,
+  referralId: number,
+  status: PrdReferralUpdatableStatus,
+) {
+  return apiFetch<PrdReferralStatusResult>(
+    `/api/admin/vkpi/market/prd-referrals/${encodeURIComponent(String(referralId))}/status`,
+    { method: "PATCH", body: jsonBody({ status }) },
     token,
   );
 }
