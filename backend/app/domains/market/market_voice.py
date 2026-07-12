@@ -719,6 +719,35 @@ def _build_suggestions(
 # ── 主入口 ──────────────────────────────────────────────────────────────
 
 
+def _listening_sources(db: Any) -> dict[str, dict[str, Any]]:
+    """迸发⑤ 监听覆盖扩源两行(X / 摄影论坛),读真闸态,禁装。
+
+    骨架模块不可用(极端部署错位)时降级为「未接入·盲区」诚实兜底,
+    绝不让覆盖卡因扩源行报错而整卡失败。
+    """
+    try:
+        from app.domains.comments.market_listening import listening_cover_sources
+
+        return listening_cover_sources(db)
+    except Exception:
+        logger.warning("listening cover sources unavailable, honest fallback", exc_info=True)
+        fallback_note = "监听扩源骨架不可用 —— 按未接入·盲区如实标注。"
+        return {
+            "x_listen": {
+                "table": "vkpi_comments · platform=x",
+                "status": "not_connected",
+                "count": 0,
+                "note": fallback_note,
+            },
+            "forum_listen": {
+                "table": "vkpi_comments · platform=forum",
+                "status": "not_connected",
+                "count": 0,
+                "note": fallback_note,
+            },
+        }
+
+
 def voice_report(month: str | None = None, *, conn: Any = None) -> dict[str, Any]:
     """市场之声月报:评论库 + 意向队列 + B&H 口碑 + 品牌需求信号 → 产品部四块聚合。
 
@@ -768,6 +797,8 @@ def voice_report(month: str | None = None, *, conn: Any = None) -> dict[str, Any
             "count": sentiment_total,
             "note": "" if sentiment_total else "情感分析结果表 0 行(管线已建未跑),本报告不含 LLM 情感维度。",
         },
+        # 迸发⑤:X / 摄影论坛监听两行(闸三态:未接入·盲区 / 骨架就绪·待开闸 / 已开闸计数)
+        **_listening_sources(db),
     }
 
     if not docs:

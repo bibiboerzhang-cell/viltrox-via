@@ -258,6 +258,12 @@ BH_SNAPSHOT_ENABLED = os.environ.get("BH_SNAPSHOT_ENABLED", "0").strip().lower()
 BH_REVIEWS_ENABLED = os.environ.get("BH_REVIEWS_ENABLED", "0").strip().lower() not in {"0", "false", "no", ""}
 # 单次评论抓取的产品数硬上限(防烧钱,每个产品 = 1 次付费 actor call)。
 BH_REVIEWS_MAX_PRODUCTS = max(1, min(int(os.environ.get("BH_REVIEWS_MAX_PRODUCTS", "20")), 20))
+# ── 迸发⑤ 市场之声监听扩源闸(X / 摄影论坛)——骨架就绪,默认关 ─────────
+# 三态语义(监听覆盖卡如实展示,禁装):env 键不存在=未接入·盲区;键在但 0=骨架就绪·待开闸;
+# 1=开闸(执行体在开闸刀才接,骨架阶段即使误开也零网络零烧钱)。运行时判定读 os.environ
+# (app/domains/comments/market_listening.py),此处仅作中央登记;改闸只动 .env 不动代码。
+VKPI_X_COLLECT_ENABLED = _env_flag("VKPI_X_COLLECT_ENABLED", "0")
+VKPI_FORUM_COLLECT_ENABLED = _env_flag("VKPI_FORUM_COLLECT_ENABLED", "0")
 VIA_OFFICIAL_INSTAGRAM_HANDLE = os.environ.get("VIA_OFFICIAL_INSTAGRAM_HANDLE", "viltrox.official").strip()
 VIA_OFFICIAL_TIKTOK_HANDLE = os.environ.get("VIA_OFFICIAL_TIKTOK_HANDLE", "viltrox.global").strip()
 VIA_OFFICIAL_YOUTUBE_HANDLE = os.environ.get("VIA_OFFICIAL_YOUTUBE_HANDLE", "viltroxofficial").strip()

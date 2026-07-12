@@ -42,6 +42,9 @@ PLATFORM_DEFAULTS = {
     "reddit": 100,    # PRAW free, includes nested
     "facebook": 30,   # Apify cost
     "x": 50,           # X API / optional Apify replies actor
+    # 迸发⑤ 摄影论坛监听骨架:无 crawler(get_crawler→None→not_configured,零网络);
+    # 映射先行,执行体属开闸刀(market_listening.py,闸 VKPI_FORUM_COLLECT_ENABLED 默认 0)。
+    "forum": 50,
 }
 
 # Monthly budget for paid platforms (Apify)
@@ -224,6 +227,21 @@ def _standardize_comment(
             "created_at": ["createdTime", "created_at", "timestamp", "date"],
             "is_op": [],
             "author_avatar_url": ["profilePicture", "from.picture.data.url"],
+        },
+        # 迸发⑤ 摄影论坛监听骨架映射(Reddit 之外的论坛统一形态;XenForo/Discourse
+        # API 与 Apify 通用 actor 的常见键并存兜底)。执行体未接线,先立字段契约。
+        "forum": {
+            "external_comment_id": ["id", "post_id", "postId", "guid"],
+            "comment_text": ["message", "body", "content", "text"],
+            "author_handle": ["author", "username", "user.username", "user.name"],
+            "author_id": ["author_id", "user.id", "userId"],
+            "likes_count": ["likes", "like_count", "reaction_score", "score", "upVotes"],
+            "reply_count": ["replies", "reply_count", "comment_count"],
+            "created_at": ["post_date", "created_at", "createdAt", "date"],
+            "is_op": ["is_first_post", "isFirstPost", "is_topic_starter"],
+            "parent_comment_id": ["parent_id", "parentId", "quoted_post_id"],
+            "depth": ["depth", "position_in_thread"],
+            "author_avatar_url": ["avatar_url", "avatarUrl", "user.avatar_urls.s"],
         },
         "x": {
             "external_comment_id": ["id", "replyId", "tweetId"],
