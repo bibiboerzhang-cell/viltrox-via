@@ -1,9 +1,10 @@
 // Events 模块 · 工具函数
-// 接入时: TODAY 在生产环境应改为 new Date()
+// 收尾波(2026-07-12):旧页族退役,假时钟 TODAY=new Date("2026-05-26") 随之清除;
+// EventDetailView/tabs 仍被 EventsBoardPage.embeds 消费,倒计时改真实当前时间。
 
 import type { BudgetCell } from "./types";
 
-export const TODAY = new Date("2026-05-26");
+export const TODAY = new Date();
 
 export function daysUntil(dateStr: string): number {
   const d = new Date(dateStr);

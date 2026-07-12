@@ -13,8 +13,8 @@ import type { EventVm, UiStaff } from "../../pages/events/shared/types";
 //   KPI 四卡:进行中活动 / 本月活动 / 物料备货 / 费用合计 —— 全真值;vkpi_events 无
 //   历史快照表 → 四卡无时序,KpiCard 渲染 demo .spempty 纯虚线(诚实无 sparkline,
 //   绝不编序列);环比同理诚实省略药丸。
-//   倒计时用真实「今天」(new Date()),不用旧 events family helpers.TODAY(mock 定格
-//   2026-05-26 遗留;旧组件为回滚垫零改动,新代码不继承该债)。
+//   倒计时用真实「今天」(new Date());events family helpers.TODAY 的 mock 定格
+//   2026-05-26 债已在收尾波(2026-07-12)清除,helpers.TODAY 现同为真实当前时间。
 // 红线:纯展示零网络;不触 viltrox_fit_score / rule_v0;颜色全 token(状态/类型的
 //   旧 hex 常量不进新图形,统一走 STATUS_TONE token 类);零 opacity 修饰类;
 //   诚实空态(零预算/零已完成如实说,不摆假图)。

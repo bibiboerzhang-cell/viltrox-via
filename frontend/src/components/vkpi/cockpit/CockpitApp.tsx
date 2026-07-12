@@ -54,18 +54,18 @@ const e = React.createElement;
 // lazy 收尾(2026-07-12):KOL Pool / Shopify / Dealers 三板块由静态 import 改 React.lazy,
 // 与其余板块同款(挂载处 LazyErrorBoundary+Suspense),首屏 chunk 不再背三页。
 const KOLPoolPage = React.lazy(() => import("./pages/KolPoolBoardPage").then((module) => ({ default: module.KolPoolBoardPage })));
-// 回滚垫:改回 import { KOLPoolPage } from "./KOLPoolPage" 即回旧 KOL Pool
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 cockpit/KOLPoolPage.tsx
 const ShopifyBoardPage = React.lazy(() => import("./pages/ShopifyBoardPage").then((module) => ({ default: module.ShopifyBoardPage })));
-// 回滚垫:改回 ShopifyConnectPage("./ShopifyConnectPage")+ShopifyHubPage("../pages/ShopifyHubPage") 即回旧 Shopify
+// 旧页 ../pages/ShopifyHubPage.tsx 已退役于 4bcc5c68c 后收尾波(2026-07-12),从 git 历史找回;ShopifyConnectPage 与 ShopifyHubPage.Parts 仍被 ShopifyBoardPage.embeds 内嵌使用,保留。
 const DealerMapPage = React.lazy(() => import("./pages/DealersBoardPage").then((module) => ({ default: module.DealersBoardPage })));
-// 回滚垫:改回 import { DealerMapPage } from "../pages/DealerMapPage" 即回旧经销商地图
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/DealerMapPage.tsx(RealMap 共用件保留)
 // MY KOL 改版 M1(2026-07-11):导航项改挂板块页范式新族 MyKolBoardPage(可编辑看板)。
-// 旧 pages/myKol/MyKolPage.tsx 保留不删(回滚垫:把本行 import 指回 ../pages/myKol/MyKolPage 即回滚)。
+// 旧页 pages/myKol/MyKolPage.tsx 已退役于 4bcc5c68c 后收尾波(2026-07-12),从 git 历史找回;MyKolPage.Sections/.helpers 仍被 MyKolBoardPage 族消费,保留。
 const MyKolBoardPage = React.lazy(() => import("./pages/MyKolBoardPage").then((module) => ({ default: module.MyKolBoardPage })));
 const LegacyProjectsPage = React.lazy(() => import("./pages/ProjectsBoardPage").then((module) => ({ default: module.ProjectsBoardPage })));
-// 回滚垫:改回 ../pages/ProjectsPage + module.ProjectsPage 即回旧 Projects
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/ProjectsPage.tsx(.Sections/.helpers/.types 仍被 ProjectsBoardPage 族消费,保留)
 const EventsMockupPage = React.lazy(() => import("./pages/EventsBoardPage").then((module) => ({ default: module.EventsBoardPage })));
-// 回滚垫:改回 ../pages/events/EventsMockupPage + module.EventsMockupPage 即回旧 Events
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/events/EventsMockupPage.tsx(+pages/EventsPage.tsx;EventDetailView/modals/tabs 仍被 EventsBoardPage.embeds 消费,保留)
 // L1(2026-06-30):Wave1-4 已建运维页接进 cockpit 壳(原硬白名单够不到 → 点不到)。
 const DataQualityPage = React.lazy(() => import("../pages/DataQualityPage").then((module) => ({ default: module.DataQualityPage })));
 const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((module) => ({ default: module.DataQueryPage })));
@@ -74,28 +74,28 @@ const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then
 const IntelligentPage = React.lazy(() => import("./pages/IntelligentBoardPage").then((module) => ({ default: module.IntelligentBoardPage })));
 // 回滚垫:改回 ./pages/IntelligentPage + module.IntelligentPage 即回旧问答页
 const ReplyQueuePage = React.lazy(() => import("./pages/ReplyQueueBoardPage").then((module) => ({ default: module.ReplyQueueBoardPage })));
-// 回滚垫:改回 ../pages/ReplyQueuePage + module.ReplyQueuePage 即回旧回复队列
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/ReplyQueuePage.tsx
 // 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
 const Sku360Page = React.lazy(() => import("./pages/Sku360BoardPage").then((module) => ({ default: module.Sku360BoardPage })));
-// 回滚垫:改回 ./pages/Sku360Page + module.Sku360Page 即回旧 SKU360
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/Sku360Page.tsx
 const KolProfilePage = React.lazy(() => import("./pages/KolProfileBoardPage").then((module) => ({ default: module.KolProfileBoardPage })));
-// 回滚垫:改回 ./pages/KolProfilePage + module.KolProfilePage 即回旧档案页
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/KolProfilePage.tsx
 // 第4轮 发射台:新品 SKU 一键六输出全案
 const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadBoardPage").then((module) => ({ default: module.LaunchPadBoardPage })));
-// 回滚垫:改回 ./pages/LaunchPadPage + module.LaunchPadPage 即回旧发射台
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/LaunchPadPage.tsx
 // 第5轮 自治层:驾照板 + 市场之声月报
 const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyDrivePage").then((module) => ({ default: module.AutonomyDrivePage })));
-// 回滚垫:改回 ./pages/AutonomyBoardPage + module.AutonomyBoardPage 即回旧驾照页
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/AutonomyBoardPage.tsx(五面板共用件仍被 AutonomyDrivePage.embeds 消费,保留)
 const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
 // 第6轮 P6 飞轮:段级创意资产库
 const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryBoardPage").then((module) => ({ default: module.CreativeLibraryBoardPage })));
-// 回滚垫:改回 ./pages/CreativeLibraryPage + module.CreativeLibraryPage 即回旧创意库
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/CreativeLibraryPage.tsx
 // 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
 const StrategyBoardPage = React.lazy(() => import("./pages/StrategyDeskPage").then((module) => ({ default: module.StrategyDeskPage })));
-// 回滚垫:改回 ./pages/StrategyBoardPage + module.StrategyBoardPage 即回旧战略台
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/StrategyBoardPage.tsx(StrategySimPanel 仍被 StrategyDeskPage.perf 消费,保留)
 // GTM-1 总脑:上市增长指挥图
 const GtmCommandPage = React.lazy(() => import("./pages/GtmCommandBoardPage").then((module) => ({ default: module.GtmCommandBoardPage })));
-// 回滚垫:改回 ./pages/GtmCommandPage + module.GtmCommandPage 即回旧 GTM
+// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/GtmCommandPage.tsx(.Command/.Sections 仍被 GtmCommandBoardPage 族消费,保留)
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [

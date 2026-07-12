@@ -48,9 +48,9 @@ import {
 import { EventDetailTakeover, EventsBoardModals } from "./EventsBoardPage.embeds";
 
 // Events → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 五件套
-//   embeds 收编手法 1:1 同构)。旧 pages/events/EventsMockupPage(+EventsPage)保留
-//   不删 = 回滚垫;CockpitApp 零改动 —— 本组件 props 与 EventsMockupPage 完全同形,
-//   切换只改 CockpitApp.tsx 的一行 lazy import(见页尾注释)。
+//   embeds 收编手法 1:1 同构)。旧 pages/events/EventsMockupPage(+EventsPage)已退役
+//   于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回;EventDetailView/
+//   modals/tabs/shared 仍被本族 embeds 消费,保留。
 //   页壳:pagehead(标题 + 活动数药丸徽 + 实时辉光点 + 公司库存 / 新建 Event /
 //   编辑布局钮)+ EditableDashboardBoard(模块注册表 + 默认布局五行 + palette 备选)。
 //   数据源(全真,零编造):
@@ -526,4 +526,4 @@ export function EventsBoardPage({
 //   CockpitApp.tsx L74 的 lazy import 改为:
 //   const EventsMockupPage = React.lazy(() => import("./pages/EventsBoardPage").then((m) => ({ default: m.EventsBoardPage })));
 //   props 完全同形(userName/staff/currentUser/initialEventId/onConsumeInitialEvent);
-//   回滚 = 把该行指回 ../pages/events/EventsMockupPage(旧页族保留未动)。
+//   旧页族已退役于 4bcc5c68c 后收尾波(2026-07-12),回滚需从 git 历史找回。

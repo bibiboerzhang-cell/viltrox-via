@@ -36,10 +36,12 @@ const IntelligenceCenterPage = lazy(() => import('./IntelligenceCenterPage').the
 const KolPoolV2Page = lazy(() => import('../kol-pool-v2/KolPoolV2Page').then((module) => ({ default: module.KolPoolV2Page })));
 const LinksPage = lazy(() => import('./LinksPage').then((module) => ({ default: module.LinksPage })));
 const ProductBattlePage = lazy(() => import('./ProductBattlePage').then((module) => ({ default: module.ProductBattlePage })));
-const ProjectsPage = lazy(() => import('./ProjectsPage').then((module) => ({ default: module.ProjectsPage })));
+// 旧 ./ProjectsPage 已退役于 4bcc5c68c 后收尾波(2026-07-12,git 历史可找回);改挂新版 ProjectsBoardPage(props 同形 ProjectsPageProps,CockpitApp 同款切换)。
+const ProjectsPage = lazy(() => import('../cockpit/pages/ProjectsBoardPage').then((module) => ({ default: module.ProjectsBoardPage })));
 const ReportCenterV2Page = lazy(() => import('../report-v2/ReportCenterV2Page').then((module) => ({ default: module.ReportCenterV2Page })));
 const SettingsPage = lazy(() => import('./SettingsPage').then((module) => ({ default: module.SettingsPage })));
-const MyKolPage = lazy(() => import('./myKol/MyKolPage').then((module) => ({ default: module.MyKolPage })));
+// 旧 ./myKol/MyKolPage 已退役于 4bcc5c68c 后收尾波(2026-07-12,git 历史可找回);改挂新版 MyKolBoardPage(CockpitApp 同款切换)。
+const MyKolPage = lazy(() => import('../cockpit/pages/MyKolBoardPage').then((module) => ({ default: module.MyKolBoardPage })));
 
 export interface WorkspacePageProps {
   page: VkpiPageKey;

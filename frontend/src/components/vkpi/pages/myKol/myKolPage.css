@@ -2,46 +2,9 @@
    原稿是按暗色写死的 hex/rgba(2026-07 浅色主题对比度清缴时整体 token 化);
    布局/间距/字号一律未动。媒体缩略图上的悬浮件(播放遮罩/时长徽)刻意保留
    深色写死——它们叠在任意封面图上,与页面主题无关。 */
-.mykol-page {
-  min-height: calc(100vh - 64px);
-  padding: 28px 24px 42px;
-  color: var(--ds-text);
-  background:
-    radial-gradient(circle at 8% 4%, color-mix(in srgb, var(--ds-accent-2) 12%, transparent), transparent 24%),
-    radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--ds-accent) 8%, transparent), transparent 28%),
-    linear-gradient(180deg, var(--ds-bg-2), var(--ds-bg));
-}
-
-.mykol-hero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding-bottom: 22px;
-  border-bottom: 1px solid var(--ds-line);
-}
-
-.mykol-hero > div:first-child {
-  min-width: 0;
-}
-
-.mykol-hero h1 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0;
-  color: var(--ds-text);
-  font-size: 26px;
-  line-height: 1.2;
-  font-weight: 820;
-  letter-spacing: 0;
-}
-
-.mykol-hero h1 svg {
-  color: var(--ds-crit);
-}
-
-.mykol-hero h1 span,
+/* 收尾波(2026-07-12):旧页壳 MyKolPage.tsx 退役,.mykol-page/.mykol-hero(-actions)
+   页壳选择器族已删(B 类);存活选择器均仍被 MyKolPage.Sections/内容层(经
+   MyKolBoardPage embeds)消费(A 类),不可删。 */
 .mykol-section-head h2 em {
   color: var(--ds-muted);
   font-size: 14px;
@@ -49,29 +12,12 @@
   font-weight: 650;
 }
 
-.mykol-hero p,
 .mykol-section-head p {
   margin: 8px 0 0;
   color: var(--ds-muted);
   font-size: 13px;
 }
 
-.mykol-hero p {
-  max-width: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mykol-hero-actions {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 10px;
-}
-
-.mykol-hero-actions span,
-.mykol-hero-actions button,
 .mykol-chip-row span,
 .mykol-platform-tags span,
 .mykol-tabs button,
@@ -86,16 +32,6 @@
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 700;
-}
-
-.mykol-hero-actions button {
-  cursor: pointer;
-}
-
-.mykol-hero-actions .is-pending {
-  border-color: color-mix(in srgb, var(--ds-warn) 45%, transparent);
-  background: var(--ds-warn-soft);
-  color: var(--ds-warn);
 }
 
 .mykol-panel {
@@ -166,7 +102,6 @@
 
 .mykol-staff-card,
 .mykol-platform-card,
-.mykol-library-detail,
 .mykol-kol-list,
 .mykol-content-layer {
   border: 1px solid var(--ds-line);
@@ -292,47 +227,6 @@
   color: var(--ds-accent-2);
   font-size: 12px;
   font-style: normal;
-}
-
-.mykol-platform-card__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--ds-line);
-}
-
-.mykol-platform-card__footer span {
-  min-width: 0;
-  color: var(--ds-text-2);
-  font-size: 11px;
-}
-
-.mykol-platform-card__footer span:last-child {
-  color: var(--ds-good);
-}
-
-.mykol-platform-card__accounts {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 11px;
-}
-
-.mykol-platform-card__accounts span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--ds-accent-soft);
-  color: var(--ds-accent);
-  font-size: 10px;
-  font-weight: 820;
-  box-shadow: 0 0 0 1px var(--ds-bg);
 }
 
 .mykol-official-head-right {
@@ -796,47 +690,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.mykol-library-detail {
-  padding: 22px;
-  border: 0;
-  border-radius: 0;
-  background: color-mix(in srgb, var(--ds-bg) 40%, transparent);
-}
-
-.mykol-library-detail h3 {
-  margin: 0;
-  color: var(--ds-text);
-}
-
-.mykol-library-detail p {
-  color: var(--ds-muted);
-}
-
-.mykol-project-preview {
-  display: grid;
-  gap: 12px;
-  margin-top: 22px;
-}
-
-.mykol-project-preview article {
-  border: 1px solid var(--ds-line);
-  border-radius: 12px;
-  background: var(--ds-card-2);
-  padding: 14px;
-}
-
-.mykol-project-preview b,
-.mykol-project-preview span {
-  display: block;
-}
-
-.mykol-project-preview span {
-  margin-top: 7px;
-  color: var(--ds-muted);
-  font-size: 12px;
-}
-
 
 .mykol-empty,
 .mykol-warning {

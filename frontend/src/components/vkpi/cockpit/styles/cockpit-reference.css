@@ -1408,32 +1408,13 @@
   border-radius: var(--ds-radius-lg) !important;
 }
 
-/* MY KOL had a separate navy/purple visual system. */
-.vkpi-page-stage--my-kol .mykol-page {
-  min-width: 0;
-  padding: 20px 22px 40px;
-  color: var(--ds-text) !important;
-  background: transparent !important;
-}
-
-.vkpi-page-stage--my-kol .mykol-hero {
-  border-color: var(--ds-line) !important;
-}
-
-.vkpi-page-stage--my-kol .mykol-page :where(h1, h2, h3, h4, b, strong) {
-  color: var(--ds-text) !important;
-  letter-spacing: 0;
-}
-
-.vkpi-page-stage--my-kol .mykol-page :where(p, em, small, label) {
-  color: var(--ds-muted) !important;
-}
-
+/* MY KOL had a separate navy/purple visual system.
+   收尾波(2026-07-12):旧页壳退役,.mykol-page/.mykol-hero 页壳换肤选择器已随
+   B 类清除;下列选择器服务仍被 MyKolBoardPage embeds 消费的旧区块,保留。 */
 .vkpi-page-stage--my-kol :is(
   .mykol-panel,
   .mykol-staff-card,
   .mykol-platform-card,
-  .mykol-library-detail,
   .mykol-kol-list,
   .mykol-content-layer,
   .mykol-team-page-mini,
