@@ -81,9 +81,11 @@ const IntelligentPage = React.lazy(() => import("./pages/IntelligentPage").then(
 const ReplyQueuePage = React.lazy(() => import("../pages/ReplyQueuePage").then((module) => ({ default: module.ReplyQueuePage })));
 // 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
 const Sku360Page = React.lazy(() => import("./pages/Sku360Page").then((module) => ({ default: module.Sku360Page })));
-const KolProfilePage = React.lazy(() => import("./pages/KolProfilePage").then((module) => ({ default: module.KolProfilePage })));
+const KolProfilePage = React.lazy(() => import("./pages/KolProfileBoardPage").then((module) => ({ default: module.KolProfileBoardPage })));
+// 回滚垫:改回 ./pages/KolProfilePage + module.KolProfilePage 即回旧档案页
 // 第4轮 发射台:新品 SKU 一键六输出全案
-const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadPage").then((module) => ({ default: module.LaunchPadPage })));
+const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadBoardPage").then((module) => ({ default: module.LaunchPadBoardPage })));
+// 回滚垫:改回 ./pages/LaunchPadPage + module.LaunchPadPage 即回旧发射台
 // 第5轮 自治层:驾照板 + 市场之声月报
 const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyBoardPage").then((module) => ({ default: module.AutonomyBoardPage })));
 const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
@@ -92,7 +94,8 @@ const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryPage
 // 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
 const StrategyBoardPage = React.lazy(() => import("./pages/StrategyBoardPage").then((module) => ({ default: module.StrategyBoardPage })));
 // GTM-1 总脑:上市增长指挥图
-const GtmCommandPage = React.lazy(() => import("./pages/GtmCommandPage").then((module) => ({ default: module.GtmCommandPage })));
+const GtmCommandPage = React.lazy(() => import("./pages/GtmCommandBoardPage").then((module) => ({ default: module.GtmCommandBoardPage })));
+// 回滚垫:改回 ./pages/GtmCommandPage + module.GtmCommandPage 即回旧 GTM
 
 // L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
 const COCKPIT_BOARDS = [
