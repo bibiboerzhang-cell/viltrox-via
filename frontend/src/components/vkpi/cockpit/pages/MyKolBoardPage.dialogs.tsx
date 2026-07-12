@@ -1,19 +1,26 @@
 import React from "react";
-import { SrcChip, RecordPreview } from "../components/provenance";
+import { SrcChip } from "../components/provenance";
 import { formatLocal } from "../../lib/timeLocal";
-import { ModalShell, SectionLabel, Drow, platformBadge } from "./MarketVoicePage.dialogs";
+import { ModalShell, SectionLabel, platformBadge } from "./MarketVoicePage.dialogs";
 import {
   getMyKolPoolVideos,
-  isImageKindVideo,
-  sortClassifiedVideos,
   summarizeKolVideos,
-  V_TIER_LABEL,
-  videoRecordRows,
   type KolLibraryRow,
   type LibraryFilter,
-  type VContentTier,
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
+import {
+  CHIP,
+  CHIP_OFF,
+  CHIP_ON,
+  CoopResultsSection,
+  evidenceStatText,
+  GoaffproTrackSection,
+  KolVideoSection,
+  MINI_BADGE,
+  useKolEvidenceStats,
+  type KolEvidenceStats,
+} from "./MyKolBoardPage.libdetail";
 import {
   commentsTerminalReceipt,
   missingJobIdReceipt,
@@ -23,8 +30,10 @@ import {
 import type { VkpiProjectRow } from "../../vkpiTypes";
 
 // MY KOL · 弹窗族(M3:库弹窗化 + V 视频筛选;金样板 = MarketVoicePage.dialogs 的
-//   FeedListModal/FeedDetailModal 连续翻体验,ModalShell/SectionLabel/Drow 复用零重写)。
-//   依赖单向:MyKolBoardPage.modules → 本文件(反向禁止);行件/筛选 chips 住这里供两侧共用。
+//   FeedListModal/FeedDetailModal 连续翻体验,ModalShell/SectionLabel 复用零重写)。
+//   依赖单向:MyKolBoardPage.modules → 本文件 → MyKolBoardPage.libdetail(反向禁止);
+//   行件/筛选 chips 住这里供两侧共用;详情弹窗分区族(追踪链/合作结果/V 内容网格/
+//   行级采集统计)住 libdetail(闭环数据补刀 2026-07-12:旧两栏库右栏真数据零丢失接回)。
 //   与金样板的一处如实差异:本弹窗族持 apiToken 直调 services(动作端点多,页面层保持瘦身);
 //   mock seam 不变 —— 全部网络仍收敛到 services/http.apiFetch 单出口。
 // 动作纪律(绝不假成功):回执一律以端点真实返回为准;评论采集走 job 终态轮询(gone ≠ done
@@ -32,21 +41,10 @@ import type { VkpiProjectRow } from "../../vkpiTypes";
 //   口径只进 SrcChip/记录预览,卡面零技术术语;播放合计只算实测,NULL 条数如实注明。
 // 红线:颜色全 token 类零写死色;禁 opacity 修饰类;纯展示绝不写 fit 分 / 不触 rule_v0。
 
-/* ============ V 相关三档徽(cooperation=accent / title_mention=good / undetermined=muted) ============ */
-export const V_TIER_META: Record<VContentTier, { label: string; cls: string }> = {
-  cooperation: { label: V_TIER_LABEL.cooperation, cls: "border-accent bg-accent-soft text-accent" },
-  title_mention: { label: V_TIER_LABEL.title_mention, cls: "border-good bg-good-soft text-good" },
-  undetermined: { label: V_TIER_LABEL.undetermined, cls: "border-line text-muted" },
-};
-
 const NAV_BTN =
   "rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink disabled:cursor-default disabled:text-muted";
 const ACT_BTN =
   "rounded-lg border border-line px-2.5 py-1.5 text-[11px] text-ink-2 transition-colors hover:border-accent hover:bg-accent-soft hover:text-accent disabled:cursor-default disabled:text-muted disabled:hover:border-line disabled:hover:bg-transparent";
-const CHIP = "rounded-full border px-2.5 py-1 text-[10.5px] transition-colors";
-const CHIP_ON = "border-accent bg-accent-soft text-accent";
-const CHIP_OFF = "border-line text-muted hover:text-ink";
-const MINI_BADGE = "flex-none rounded-[5px] border px-1 py-px text-[8px] font-bold";
 const MORE_BTN =
   "mt-2.5 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft";
 const FIELD = "rounded-lg border border-line bg-card px-2 py-1.5 text-[10.5px] text-ink-2 outline-none focus:border-accent";
@@ -77,6 +75,7 @@ export function KolRowLine({
   selectable = false,
   selected = false,
   onToggleSelect,
+  stats,
 }: {
   row: KolLibraryRow;
   index: number;
@@ -84,6 +83,8 @@ export function KolRowLine({
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (poolId: number) => void;
+  /** 采集数据列(与详情弹窗同源同口径);undefined=读取中显 … */
+  stats?: KolEvidenceStats;
 }) {
   const onKey = (ev: React.KeyboardEvent) => {
     if (ev.key === "Enter" || ev.key === " ") {
@@ -119,6 +120,12 @@ export function KolRowLine({
       ) : null}
       <span className="w-[64px] flex-none text-right font-mono text-[9.5px] text-muted" title="粉丝数">{row.followers != null ? row.followers.toLocaleString() : "—"}</span>
       <span className="w-[46px] flex-none text-right font-mono text-[9.5px] text-muted" title="Fit 分(只读展示)">{row.fit != null ? `Fit ${Math.round(row.fit)}` : "—"}</span>
+      <span
+        className="hidden w-[150px] flex-none truncate text-right font-mono text-[9px] text-muted sm:inline"
+        title={stats ? "已采集视频 · 实测播放合计 · 已深析(与详情弹窗同源同口径;未实测播放已剔除,— = 尚无采集)" : "采集数据读取中…"}
+      >
+        {evidenceStatText(stats)}
+      </span>
     </div>
   );
 }
@@ -130,6 +137,7 @@ export function LibraryChips({
   platformOptions,
   vKolCount,
   staff,
+  mine,
 }: {
   filter: LibraryFilter;
   onFilter: (next: LibraryFilter) => void;
@@ -138,6 +146,8 @@ export function LibraryChips({
   vKolCount: number | null;
   /** 负责人筛选(管理层;走服务端 scope 重取,零本地猜);缺省不渲染 */
   staff?: { options: Array<{ id: string; name: string }>; value: string; onChange: (id: string) => void; busy?: boolean };
+  /** 「我的收藏」快捷筛选(viewer 本人收藏名单;名单未就绪不渲染,绝不摆假 chip) */
+  mine?: { on: boolean; count: number; onToggle: () => void };
 }) {
   return (
     <div>
@@ -146,6 +156,11 @@ export function LibraryChips({
           有 V 视频{vKolCount != null ? ` (${vKolCount.toLocaleString()})` : ""}
         </button>
         <button type="button" className={`${CHIP} ${filter.vOnly ? CHIP_OFF : CHIP_ON}`} onClick={() => onFilter({ ...filter, vOnly: false })}>全部</button>
+        {mine ? (
+          <button type="button" className={`${CHIP} ${mine.on ? CHIP_ON : CHIP_OFF}`} onClick={mine.onToggle} title="只看我自己收藏的 KOL(共享给我的与他人收藏不计;管理层全团队视图一键切回自己的)">
+            我的收藏 ({mine.count.toLocaleString()})
+          </button>
+        ) : null}
         <span className="mx-0.5 h-[14px] w-px flex-none bg-line" />
         <button type="button" className={`${CHIP} ${filter.platform ? CHIP_OFF : CHIP_ON}`} onClick={() => onFilter({ ...filter, platform: "" })}>全部平台</button>
         {platformOptions.map((opt) => (
@@ -183,6 +198,7 @@ export function KolLibraryListModal({
   platformOptions,
   vKolCount,
   staff,
+  mine,
   projects,
   onOpenDetail,
   onClose,
@@ -197,6 +213,7 @@ export function KolLibraryListModal({
   platformOptions: Array<{ platform: string; count: number }>;
   vKolCount: number | null;
   staff?: React.ComponentProps<typeof LibraryChips>["staff"];
+  mine?: React.ComponentProps<typeof LibraryChips>["mine"];
   projects: VkpiProjectRow[];
   onOpenDetail: (i: number) => void;
   onClose: () => void;
@@ -210,6 +227,9 @@ export function KolLibraryListModal({
   React.useEffect(() => setVisible(LIST_PAGE), [filter.vOnly, filter.platform, filter.query]);
 
   const shown = rows.slice(0, visible);
+  // 采集数据列:只拉当前页可见行(模块级缓存,与卡面/详情同源);翻页增量取。
+  const shownIds = React.useMemo(() => shown.map((row) => row.poolId), [shown]);
+  const statsMap = useKolEvidenceStats(apiToken, shownIds);
   const selectedRows = React.useMemo(() => rows.filter((row) => selected.has(row.poolId)), [rows, selected]);
   const allVisibleSelected = shown.length > 0 && shown.every((row) => selected.has(row.poolId));
   const toggleSelect = (poolId: number) =>
@@ -301,7 +321,7 @@ export function KolLibraryListModal({
     <ModalShell title="KOL 库 · 全量" sub={`筛出 ${rows.length} 条 / 在库 ${totalAll} 条 · 点单条看详情(详情内 ↑↓ 连续翻)`} onClose={onClose} maxWidth="max-w-[760px]">
       <input type="search" value={filter.query} onChange={(ev) => onFilter({ ...filter, query: ev.target.value })} placeholder="搜索名称 / handle…" aria-label="搜索 KOL" className="mb-2.5 w-full rounded-[10px] border border-line bg-card px-3 py-2 text-[12px] text-ink outline-none placeholder:text-muted focus:border-accent" />
       <div className="mb-2.5">
-        <LibraryChips filter={filter} onFilter={onFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staff} />
+        <LibraryChips filter={filter} onFilter={onFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staff} mine={mine} />
       </div>
       <div aria-label="批量工具条" className="mb-2.5 flex flex-wrap items-center gap-2 rounded-[10px] border border-line bg-panel px-2.5 py-2">
         <span className="text-[10.5px] text-muted">已选 {selectedRows.length}</span>
@@ -322,7 +342,7 @@ export function KolLibraryListModal({
       {rows.length === 0 ? (
         <div className="px-3 py-4 text-center text-[12px] text-muted">该筛选组合下 0 条——诚实空,不编行。</div>
       ) : (
-        shown.map((row, i) => <KolRowLine key={row.poolId} row={row} index={i} onOpen={onOpenDetail} selectable selected={selected.has(row.poolId)} onToggleSelect={toggleSelect} />)
+        shown.map((row, i) => <KolRowLine key={row.poolId} row={row} index={i} onOpen={onOpenDetail} selectable selected={selected.has(row.poolId)} onToggleSelect={toggleSelect} stats={statsMap.get(row.poolId)} />)
       )}
       {rows.length > visible ? (
         <button type="button" onClick={() => setVisible((v) => v + LIST_PAGE)} className={MORE_BTN}>
@@ -408,21 +428,17 @@ export function KolDetailModal({
   const [msgs, setMsgs] = React.useState<Record<string, FlowReceipt | null>>({});
   const [busyKeys, setBusyKeys] = React.useState<Set<string>>(new Set());
   const [queuedEvidence, setQueuedEvidence] = React.useState<Set<number>>(new Set());
-  const [vOnly, setVOnly] = React.useState(false);
-  const [sortBy, setSortBy] = React.useState<"time" | "views">("time");
-  const [recEvidence, setRecEvidence] = React.useState<VkpiKolPoolVideoRow | null>(null);
   const [projId, setProjId] = React.useState("");
   React.useEffect(() => {
-    setMsgs({}); setQueuedEvidence(new Set()); setVOnly(false); setSortBy("time"); setRecEvidence(null); setProjId("");
+    setMsgs({}); setQueuedEvidence(new Set()); setProjId("");
   }, [item?.poolId]);
   const setMsg = (key: string, msg: FlowReceipt | null) => setMsgs((prev) => ({ ...prev, [key]: msg }));
   const setBusy = (key: string, on: boolean) =>
     setBusyKeys((prev) => { const next = new Set(prev); if (on) next.add(key); else next.delete(key); return next; });
 
   const loaded = videos || [];
-  const summary = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
-  const { classified, unmeasuredCount, viewsTotal, vRelatedCount, analyzedCount, unanalyzed } = summary;
-  const shownVideos = React.useMemo(() => sortClassifiedVideos(classified, vOnly, sortBy), [classified, vOnly, sortBy]);
+  // 汇总口径与视频网格住 libdetail(KolVideoSection);这里只留动作排要用的未析清单。
+  const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
 
   // 单条深析入队(「未判定」一键深析同用):端点真实返回才标「已入队」。
   const enqueueOne = async (video: VkpiKolPoolVideoRow) => {
@@ -574,6 +590,8 @@ export function KolDetailModal({
   const openKolProfile = () => { try { window.sessionStorage.setItem("vkpi:kol-profile-id", String(item.poolId)); } catch { /* 存不进不阻断,事件管道仍切页 */ } window.dispatchEvent(new CustomEvent("vkpi:open-kol-profile")); };
   const srcRows: Array<[string, string]> = [
     ["库记录", `vkpi_kol_pool #${item.poolId}(收藏行 vkpi_kol_pool_favorites / 共享行 vkpi_kol_pool_members)`],
+    ["追踪链", "GOAFFPRO kol/{id}/link(读/建同端点;优惠码与佣金 PATCH 实时推回总台,销售经链/码归因该 KOL)"],
+    ["合作结果", "行内 assignments 真阶段 × Projects 板块同一份映射(曝光 views / 证据计数);未回填读数如实显 —"],
     ["V 三档判据", "cooperation=evidence.project_id 非空 / title_mention=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 后端同口径)"],
     ["视频", "GET /kol-pool/{id}/videos · vkpi_kol_video_evidence 全量(limit 200)"],
     ["播放口径", "view_count 点时实测(抓取时刻读数,非时序);NULL=未实测 ≠ 0 播放,合计已剔除并注明条数"],
@@ -628,9 +646,15 @@ export function KolDetailModal({
         </div>
       </div>
 
-      {/* 视频区(裁决③):全部过往视频网格 + V 三档徽 + 仅V开关 + 排序 + 诚实小结 */}
+      {/* 分区②:追踪链(GOAFFPRO 共享件原样内嵌 —— 生成/复制/优惠码/佣金调整功能零改动) */}
+      <GoaffproTrackSection apiToken={apiToken} kolPoolId={item.poolId} />
+
+      {/* 分区③:合作项目结果(assignments 真阶段 × Projects 板块同一份映射的曝光/证据) */}
+      <CoopResultsSection assignments={item.projects} projects={projects} />
+
+      {/* 分区④:V 相关内容 —— 全量视频网格(五 tabs + 汇总条 + 三档徽,住 libdetail) */}
       <div className="mb-[22px]">
-        <SectionLabel>过往视频 · 全量</SectionLabel>
+        <SectionLabel>V 相关内容 · 过往视频全量</SectionLabel>
         {videos == null ? (
           <div className="py-5 text-center text-[12px] text-muted">视频读取中…</div>
         ) : videosError ? (
@@ -649,74 +673,9 @@ export function KolDetailModal({
             <ReceiptLine msg={msgs.crawl || null} />
           </div>
         ) : (
-          <div>
-            <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted">
-              <span>
-                {loaded.length} 条视频 · 实测播放合计 {viewsTotal.toLocaleString()}
-                {unmeasuredCount > 0 ? `(${unmeasuredCount} 条未实测已剔除)` : ""} · V 相关 {vRelatedCount} 条 · 已深析 {analyzedCount} 条
-              </span>
-              <span className="ml-auto flex items-center gap-1.5">
-                <button type="button" className={`${CHIP} ${vOnly ? CHIP_ON : CHIP_OFF}`} onClick={() => setVOnly((v) => !v)} title="只看合作产出与标题提及V(未判定隐藏)">仅 V 相关</button>
-                <button type="button" className={`${CHIP} ${sortBy === "time" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("time")}>按时间</button>
-                <button type="button" className={`${CHIP} ${sortBy === "views" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("views")}>按播放</button>
-              </span>
-            </div>
-            {shownVideos.length === 0 ? (
-              <div className="px-3 py-4 text-center text-[12px] text-muted">该筛选下 0 条(仅 V 相关开启)——诚实空。</div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-                {shownVideos.map(({ video, tier }) => {
-                  const eid = Number(video.evidence_id ?? video.id) || 0;
-                  const thumb = String(video.cached_thumbnail_url || video.thumbnail_url || "");
-                  const title = String(video.title || video.video_title || "未命名视频");
-                  const meta = V_TIER_META[tier];
-                  return (
-                    <div key={eid} className="overflow-hidden rounded-[11px] border border-line bg-panel">
-                      <div className="grid h-[84px] w-full place-items-center overflow-hidden bg-card">
-                        {thumb ? <img src={thumb} alt="" loading="lazy" className="h-full w-full object-cover" /> : <span className="text-[16px] text-muted">▶</span>}
-                      </div>
-                      <div className="px-2.5 py-2">
-                        <div className="truncate text-[11px] text-ink" title={title}>{title}</div>
-                        <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[9.5px] text-muted">
-                          <span title={video.view_count == null ? "未实测(≠ 0 播放)" : "播放(点时实测)"}>▶ {video.view_count != null ? Number(video.view_count).toLocaleString() : "未实测"}</span>
-                          <span>♥ {Number(video.like_count ?? 0).toLocaleString()}</span>
-                          <span>💬 {Number(video.comment_count ?? 0).toLocaleString()}</span>
-                        </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                          <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`}>{meta.label}</span>
-                          {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
-                          {video.content_url ? (
-                            <a className="vkpi-prov-pchip vkpi-prov-pchip--ext vkpi-prov-pchip--mini flex-none" href={String(video.content_url)} target="_blank" rel="noopener noreferrer" title="直跳原帖" onClick={(ev) => ev.stopPropagation()}>↗</a>
-                          ) : null}
-                          <button type="button" className="rounded-[5px] border border-line px-1 py-px font-mono text-[8px] text-muted transition-colors hover:border-accent hover:text-accent" title="库记录预览" onClick={() => setRecEvidence((prev) => ((prev?.evidence_id ?? prev?.id) === eid ? null : video))}>
-                            #{eid}
-                          </button>
-                          {tier === "undetermined" && !video.has_final_v1_cache && !isImageKindVideo(video) ? (
-                            <button type="button" className="rounded-[5px] border border-line px-1 py-px text-[8px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default" disabled={queuedEvidence.has(eid) || busyKeys.has(`deep:${eid}`)} title="未判定视频一键入队深析(端点真实返回才标已入队)" onClick={() => enqueueOne(video)}>
-                              {queuedEvidence.has(eid) ? "已入队" : busyKeys.has(`deep:${eid}`) ? "入队中…" : "深析"}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {recEvidence ? <RecordPreview title="库记录预览 · 点其他 #id 切换" rows={videoRecordRows(recEvidence)} /> : null}
-          </div>
+          <KolVideoSection videos={loaded} queuedEvidence={queuedEvidence} busyKeys={busyKeys} onEnqueueOne={enqueueOne} />
         )}
       </div>
-
-      {/* 合作项目(aggregate 直连 assignments,只读) */}
-      {item.projects.length > 0 ? (
-        <div className="mb-[22px]">
-          <SectionLabel>合作项目 ×{item.projects.length}</SectionLabel>
-          {item.projects.slice(0, 6).map((project, i) => (
-            <Drow key={`${project.project_id}-${i}`} k={String(project.project_name || `项目 ${project.project_id}`)} v={String(project.stage || "—")} />
-          ))}
-        </div>
-      ) : null}
 
       {/* 闭环动作排:入项目 / 受众画像 / 深析入队 / 采集评论 / 释放认领(全真端点回执) */}
       <div className="border-t border-line pt-3.5">
@@ -735,12 +694,16 @@ export function KolDetailModal({
           <button type="button" className={ACT_BTN} disabled={!loaded.length || busyKeys.has("comments")} title="入队评论采集(job 终态轮询回执;超出轮询窗只报仍在后台)" onClick={runCommentsCollect}>
             {busyKeys.has("comments") ? "采集跟踪中…" : "采集评论"}
           </button>
+          <button type="button" className={ACT_BTN} disabled={!item.profileUrl || busyKeys.has("crawl")} title={item.profileUrl ? "重跑账号分析补采最新视频(旧库右栏同款入口;只报入队,泳道可见进度)" : "该 KOL 无主页链接,无法账号分析"} onClick={runDeepCrawl}>
+            {busyKeys.has("crawl") ? "入队中…" : "账号分析 · 补采"}
+          </button>
           <button type="button" className={ACT_BTN} disabled={!viewer?.canRelease || busyKeys.has("claim")} title={viewer?.canRelease ? "释放本人 active 认领" : "无本人可释放的认领(以认领真值端点为准)"} onClick={runReleaseClaim}>
             {busyKeys.has("claim") ? "释放中…" : "释放认领"}
           </button>
         </div>
-        {(["project", "audience", "deep", "comments", "claim"] as const).map((key) => (
-          <ReceiptLine key={key} msg={msgs[key] || null} />
+        {/* crawl 回执:空态区已就近展示,仅在有视频(空态区缺席)时在动作排补位,防双写 */}
+        {(["project", "audience", "deep", "comments", "crawl", "claim"] as const).map((key) => (
+          <ReceiptLine key={key} msg={key === "crawl" && loaded.length === 0 ? null : msgs[key] || null} />
         ))}
         <div className="mt-1.5 text-right text-[9.5px] text-muted">动作回执以端点真实返回为准 · 后台任务超出轮询窗只报「仍在后台」,绝不冒充完成</div>
       </div>

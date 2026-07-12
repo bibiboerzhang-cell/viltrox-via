@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // MY KOL 改版 M1 骨架 + M3 库弹窗化 + M4 图形真身冒烟(金样板 MarketVoicePage.smoke 同构):
 // - 页壳:pagehead(MY KOL + 视角/KOL 数药丸徽 + 编辑布局钮)+ 可编辑看板;
@@ -178,6 +178,23 @@ const VIDEOS: Record<string, unknown[]> = {
   ],
 };
 
+// 【闭环补刀】viewer 本人收藏名单(kol-pool/favorites 现有端点):Alpha+Gamma 是我的收藏,
+// Beta 只是共享给我 —— 「我的收藏」chip 判据(名单∩库行)。
+const MY_FAVORITES = { items: [{ kol_pool_id: 101 }, { kol_pool_id: 103 }], total: 2, staff_id: 3 };
+
+// 【闭环补刀】分析动态:task-queue/compact(泳道同源)active 任务 —— 三类相关 + 一类无关(过滤掉)
+const TASKS_OK = {
+  status: "ready",
+  counts: { active_total: 4, queued: 1 },
+  active: [
+    { id: "t1", source: "apify_jobs", kind: "账号分析", status: "running", stage: "search", target: { target_type: "kol_profile", target_id: 101, label: "Alpha 主页" }, created_at: "2026-07-12T02:00:00Z", updated_at: "2026-07-12T02:10:00Z" },
+    { id: "t2", source: "apify_jobs", kind: "video深析", status: "running", stage: "thinking", target: { target_type: "video", target_id: 9001, kol_pool_id: 101, label: "Alpha 新片实拍" }, created_at: "2026-07-12T02:05:00Z", updated_at: "2026-07-12T02:12:00Z" },
+    { id: "t3", source: "apify_jobs", kind: "评论采集", status: "queued", stage: "queued", target: { target_type: "kol_profile", target_id: 103, label: "Gamma Films" }, created_at: "2026-07-12T02:08:00Z", updated_at: "2026-07-12T02:08:00Z" },
+    { id: "t4", source: "vkpi_async_tasks", kind: "KOL查找", status: "running", stage: "search", target: { target_type: "search_session", target_id: 7 }, created_at: "2026-07-12T02:09:00Z", updated_at: "2026-07-12T02:09:00Z" },
+  ],
+  recent: [],
+};
+
 // 【①】个人矩阵分组:official-matrix 增量 personal 字段(官号名单之外的个人账号 + 持有人)
 const MATRIX_PERSONAL_ACCOUNT = {
   id: 77,
@@ -266,7 +283,7 @@ const METRICS_PROP = [
 
 const DATA: any = { projects: [], staffMembers: [], kolOptions: [] };
 
-function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown; matrix?: unknown } = {}) {
+function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown; matrix?: unknown; tasks?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
     if (p.startsWith("/api/admin/vkpi/my-kol/aggregate")) {
@@ -286,6 +303,14 @@ function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown; matrix?:
       if (value instanceof Error) throw value;
       return value;
     }
+    // 【闭环补刀】分析动态(泳道同源)/ 我的收藏名单 / GOAFFPRO 追踪链读端(详情分区)
+    if (p.startsWith("/api/admin/vkpi/task-queue/compact")) {
+      const value = overrides.tasks ?? TASKS_OK;
+      if (value instanceof Error) throw value;
+      return value;
+    }
+    if (p.startsWith("/api/admin/vkpi/kol-pool/favorites")) return MY_FAVORITES;
+    if (/\/api\/admin\/vkpi\/goaffpro\/kol\/\d+\/link/.test(p)) return { linked: false };
     const videosMatch = p.match(/\/api\/admin\/vkpi\/kol-pool\/(\d+)\/videos/);
     if (videosMatch) {
       const items = VIDEOS[videosMatch[1]] || [];
@@ -741,5 +766,135 @@ describe("MyKolBoardPage 个人矩阵分组(official-matrix 增量 personal 字�
       const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
       expect(calledPaths.some((p) => p.includes("/api/marketing/channels/77/posts"))).toBe(true);
     });
+  });
+
+  it("个人账号无公开播放口径 → 行尾播放显 — 不当 0(views_unavailable 诚实透传)", async () => {
+    routeApi({
+      matrix: {
+        ...MATRIX_OK,
+        personal: {
+          account_count: 1,
+          accounts: [{ ...MATRIX_PERSONAL_ACCOUNT, id: 78, display_name: "Pei Pics", handle: "@pei.pics", total_views: 0, views_unavailable: true, views_unavailable_reason: "IG 图文不公开播放数" }],
+        },
+      },
+    });
+    renderBoard({ apiToken: "t-personal-unavail" });
+    expect(await screen.findByText("Pei Pics")).toBeTruthy();
+    const cell = screen.getByTitle(/IG 图文不公开播放数/);
+    expect(cell.textContent).toContain("—");
+    expect(cell.textContent).not.toContain("· 0");
+  });
+});
+
+describe("MyKolBoardPage 闭环补刀(库行采集数据列 + 我的收藏 chip)", () => {
+  it("库行采集数据列:与详情同源(/kol-pool/{id}/videos)——Alpha 真数逐行点亮,零采集行诚实 —", async () => {
+    renderBoard();
+    expect(await screen.findByText("Alpha Cam")).toBeTruthy();
+    // Alpha:3 条 evidence · 实测播放 1000+500(NULL 剔除)· 深析 1/3 —— 与详情弹窗同数
+    expect(await screen.findByText("3 视频 · 1,500 播放 · 深析 1/3")).toBeTruthy();
+    // 三行全部加载完(loaded 态 title);Beta/Gamma 零采集 → 行尾 —(绝不摆 0)
+    await waitFor(() => expect(screen.getAllByTitle(/与详情弹窗同源同口径/).length).toBe(3));
+    const statCells = screen.getAllByTitle(/与详情弹窗同源同口径/).map((el) => el.textContent);
+    expect(statCells.filter((text) => text === "—").length).toBe(2);
+  });
+
+  it("「我的收藏」chip:kol-pool/favorites 名单∩库行 → 只留 Alpha/Gamma(共享的 Beta 排除);再点复原", async () => {
+    renderBoard();
+    expect(await screen.findByText("Beta Vlog")).toBeTruthy();
+    fireEvent.click(await screen.findByText("我的收藏 (2)"));
+    expect(screen.getByText("Alpha Cam")).toBeTruthy();
+    expect(screen.getByText("Gamma")).toBeTruthy();
+    expect(screen.queryByText("Beta Vlog")).toBeNull();
+    fireEvent.click(screen.getByText("我的收藏 (2)"));
+    expect(await screen.findByText("Beta Vlog")).toBeTruthy();
+  });
+});
+
+describe("MyKolBoardPage 库详情分区(档案→追踪链→合作结果→V 内容→动作排)", () => {
+  it("分区齐整:追踪链(GOAFFPRO 真读端)+ 合作项目结果(阶段/曝光/证据)+ V 相关内容标签", async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByText("Alpha Cam"));
+    // ② 追踪链:分区标题 + 共享件真身(GET link 未建链 → 生成按钮)
+    expect(await screen.findByText("追踪链 · GOAFFPRO")).toBeTruthy();
+    expect(await screen.findByText(/生成追踪链/)).toBeTruthy();
+    await waitFor(() => {
+      const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+      expect(calledPaths.some((p) => p.includes("/api/admin/vkpi/goaffpro/kol/101/link"))).toBe(true);
+    });
+    // ③ 合作项目结果:assignments 真阶段;Projects 未映射读数诚实 —
+    expect(screen.getByText("合作项目结果 ×1")).toBeTruthy();
+    expect(screen.getByText("AF 85mm 铺量")).toBeTruthy();
+    expect(screen.getByText(/阶段 shipped · 曝光 — · 证据 —/)).toBeTruthy();
+    // ④ V 相关内容分区标题 + 汇总条(点赞/评论合计)
+    expect(screen.getByText("V 相关内容 · 过往视频全量")).toBeTruthy();
+    expect(screen.getByText(/♥ 18 · 💬 3/)).toBeTruthy();
+    // ⑤ 动作排零丢失:旧库右栏「账号分析 · 采集视频」入口在动作排补位
+    expect(screen.getByText("账号分析 · 补采")).toBeTruthy();
+  });
+
+  it("视频五 tabs:最新/播放/点赞/评论/分享;按播放排序未实测(NULL)排最后", async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByText("Alpha Cam"));
+    expect(await screen.findByText(/3 条视频/)).toBeTruthy();
+    // 官号内容层也有同名五 tabs(卡在弹窗背后)——查询收敛到 dialog 内,防串台
+    const dialog = within(screen.getByRole("dialog"));
+    for (const label of ["最新", "播放", "点赞", "评论", "分享"]) {
+      expect(dialog.getByRole("button", { name: label })).toBeTruthy();
+    }
+    fireEvent.click(dialog.getByRole("button", { name: "播放" }));
+    const grid = screen.getByRole("dialog").querySelector(".grid.grid-cols-2") as HTMLElement;
+    const titles = [...grid.querySelectorAll("div.truncate")].map((el) => el.textContent);
+    expect(titles).toEqual(["On set with the new lens", "daily vlog", "VILTROX 85mm field test"]);
+    fireEvent.click(dialog.getByRole("button", { name: "点赞" }));
+    const likeGrid = screen.getByRole("dialog").querySelector(".grid.grid-cols-2") as HTMLElement;
+    const likeTitles = [...likeGrid.querySelectorAll("div.truncate")].map((el) => el.textContent);
+    expect(likeTitles[0]).toBe("On set with the new lens");
+  });
+
+  it("零采集 KOL 详情:空态 + 深爬入口保留(分区标题仍在场)", async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByText("Beta Vlog"));
+    expect(await screen.findByText(/暂无采集视频——可发起深爬/)).toBeTruthy();
+    expect(screen.getByText("V 相关内容 · 过往视频全量")).toBeTruthy();
+    expect(screen.getByText("合作项目结果 ×0")).toBeTruthy();
+    expect(screen.getByText(/暂无合作项目/)).toBeTruthy();
+  });
+});
+
+describe("MyKolBoardPage 分析动态(task-queue/compact 泳道同源小模组)", () => {
+  it("三类任务真身:在分析/在思考/采集中徽 + 任务主体 + 状态点 + 绝对时间;无关任务种类过滤", async () => {
+    renderBoard();
+    expect((await screen.findAllByText("分析动态")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("在分析")).toBeTruthy();
+    expect(screen.getByText("在思考")).toBeTruthy();
+    expect(screen.getByText("采集中")).toBeTruthy();
+    expect(screen.getByText("Alpha 主页")).toBeTruthy();
+    expect(screen.getByText("Alpha 新片实拍")).toBeTruthy();
+    expect(screen.getByText("Gamma Films")).toBeTruthy();
+    // 无关种类(KOL查找)不进本模组
+    expect(screen.queryByText("KOL查找")).toBeNull();
+    // 状态点:2 执行中(呼吸)+ 1 排队(静态);时间=绝对时间戳(浏览器时区)
+    expect(screen.getAllByTitle("执行中").length).toBe(2);
+    expect(screen.getAllByTitle("排队中").length).toBe(1);
+    expect(screen.getAllByTitle("任务最近更新时间(按浏览器时区)").length).toBe(3);
+  });
+
+  it("点行直达 KOL Pool:写 pending id + 派发 vkpi:open-kol-pool-item(既有事件管道)", async () => {
+    const onPoolItem = vi.fn();
+    window.addEventListener("vkpi:open-kol-pool-item", onPoolItem);
+    renderBoard();
+    fireEvent.click(await screen.findByText("Alpha 主页"));
+    expect(window.localStorage.getItem("vkpi:pending-kolpool-open-id")).toBe("101");
+    expect(onPoolItem).toHaveBeenCalledTimes(1);
+    window.removeEventListener("vkpi:open-kol-pool-item", onPoolItem);
+  });
+
+  it("空态诚实:0 进行中 → 「暂无进行中任务。」;卡底钮跳 KOL Pool(onSelectPage)", async () => {
+    routeApi({ tasks: { status: "ready", counts: { active_total: 0, queued: 0 }, active: [], recent: [] } });
+    const onSelectPage = vi.fn();
+    renderBoard({ onSelectPage });
+    expect(await screen.findByText("暂无进行中任务。")).toBeTruthy();
+    fireEvent.click(screen.getByText(/去 KOL Pool 泳道看全部任务/));
+    expect(onSelectPage).toHaveBeenCalledWith("kolPoolV2");
   });
 });

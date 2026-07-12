@@ -5,8 +5,8 @@ import { getMyKolAggregate, type VkpiMyKolAggregateResponse } from "../../../../
 import { useOfficialChannelMatrix } from "../../pages/channels/useOfficialChannelMatrix";
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
-import { KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
-import { DigestEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, TeamEmbed } from "./MyKolBoardPage.embeds";
+import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { DigestEmbed, LibClassicEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, TeamEmbed } from "./MyKolBoardPage.embeds";
 import {
   ClaimsBody,
   ContactsBody,
@@ -57,6 +57,12 @@ import {
 //   用户裁决②=A:risk/rollup 管理层专属 —— 员工视角注册表直接不出现(默认布局自动少两块),
 //   不是 403 卡。旧 MyKolPage.tsx 保留不删(回滚垫);跨页事件管道(vkpi:open-mykol-kol /
 //   vkpi:open-kol-pool-item 等)签名不变,内嵌组件自带监听照常工作。
+//   【闭环数据补刀 2026-07-12】旧两栏库右栏真数据零丢失接回新版(分区族住
+//   MyKolBoardPage.libdetail):库行采集数据列(视频 N·播放合计·深析 n/N,
+//   /kol-pool/{id}/videos 同源可见行懒取)+ 「我的收藏」快捷 chip(kol-pool/favorites
+//   名单)+ 详情弹窗分区(档案→追踪链 GOAFFPRO→合作项目结果→V 内容五 tabs→动作排);
+//   新增 activity 分析动态小模组(task-queue/compact 泳道同源)+ libclassic 经典视图
+//   (旧两栏库 palette 备选不删,默认体验统一新版行式库)。
 // 红线:纯展示,绝不写 viltrox fit 分 / 不触 rule_v0;颜色全 token 零写死色;发光只走
 //   既有 ds-* 类(自带 reduced-motion 降级);端点失败 = 诚实错误卡,board-ext 单组
 //   error → 单卡 ErrorCard / empty → 如实空。布局只走本机
@@ -65,14 +71,16 @@ import {
 
 const STORAGE_KEY = "vkpi-my-kol-layout-v1";
 
-// 默认布局(12 列 · 设计单定稿六行):
-// kpiM(12) → digest(8)+funnel(4) → team(12) → library(8)+fitdist(4)
-// → official(8)+platdist(4) → risk(8)+rollup(4)(manager-only,员工视角自动六行变五行)
+// 默认布局(12 列 · 设计单定稿六行;2026-07-12 补刀:team 12→8 腾出 span4 给
+// 「分析动态」小模组 —— 进行中的账号分析/深析/评论采集,点行直达 KOL Pool 泳道):
+// kpiM(12) → digest(8)+funnel(4) → team(8)+activity(4) → library(8)+fitdist(4)
+// → official(8)+platdist(4) → risk(8)+rollup(4)(manager-only,员工视角自动少一行)
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiM", span: 12 },
   { moduleKey: "digest", span: 8 },
   { moduleKey: "funnel", span: 4 },
-  { moduleKey: "team", span: 12 },
+  { moduleKey: "team", span: 8 },
+  { moduleKey: "activity", span: 4 },
   { moduleKey: "library", span: 8 },
   { moduleKey: "fitdist", span: 4 },
   { moduleKey: "official", span: 8 },
@@ -103,6 +111,7 @@ export function MyKolBoardPage({
   data,
   userName,
   onRefreshData,
+  onSelectPage,
   metrics,
 }: MyKolBoardPageProps) {
   const isManager = viewMode === "manager";
@@ -303,6 +312,22 @@ export function MyKolBoardPage({
   const renderOfficial = () => <OfficialEmbed apiToken={apiToken} matrix={matrix} noToken={noTokenCard} />;
   const renderRisk = () => <RiskEmbed apiToken={apiToken} noToken={noTokenCard} />;
   const renderRollup = () => <RollupEmbed apiToken={apiToken} viewMode={viewMode} noToken={noTokenCard} />;
+  // 经典视图(palette 备选):旧两栏库整体内嵌保留不删,默认体验统一走新版行式库。
+  const renderLibClassic = () => (
+    <LibClassicEmbed apiToken={apiToken} data={data} viewMode={viewMode} noToken={noTokenCard} onRefreshData={onRefreshData} />
+  );
+
+  // 分析动态(span4 小模组):进行中的 账号分析/视频深析/评论采集,泳道同源只读口;
+  // 点行直达 KOL Pool(有主体开该 KOL 详情,无主体切泳道全景)。
+  const renderActivity = () => (
+    <ModuleCard {...cardProps("activity", "分析动态")}>
+      {apiToken ? (
+        <AnalysisActivityModule apiToken={apiToken} onJumpPool={() => onSelectPage?.("kolPoolV2")} />
+      ) : (
+        noTokenCard
+      )}
+    </ModuleCard>
+  );
 
   // 【M3/M4】KOL 库真身:aggregate 行 + board-ext V 名单精确过滤;弹窗族在模块内自持。
   const renderLibrary = () => {
@@ -447,8 +472,9 @@ export function MyKolBoardPage({
     { key: "kpiM", label: "KOL 指标带", description: "在库 / 合作推进 / 内容播放实测 / 官号粉丝 + 关联时序与环比", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
     { key: "digest", label: "每日学习摘要", description: "收藏 KOL + 官号变化 · daily-digest 真聚合(内嵌)", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderDigest },
     { key: "funnel", label: "合作漏斗", description: "8 段真阶段条形 · 点段过滤 KOL 库", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFunnel },
-    { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
-    { key: "library", label: "KOL 库", description: "收藏/共享全量 · V 名单精确筛选 + 全量弹窗 + 详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
+    { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
+    { key: "activity", label: "分析动态", description: "进行中的账号分析/深析/评论采集 · 点行直达 KOL Pool", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 20, render: renderActivity },
+    { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
     { key: "official", label: "官方账号矩阵", description: "18 官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },
@@ -465,6 +491,7 @@ export function MyKolBoardPage({
     { key: "claims", label: "我的认领", description: "本人认领行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
     { key: "shares", label: "共享池", description: "共享给我的库行 · 0 行=已建未用诚实空", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderShares },
     { key: "cover", label: "数据覆盖", description: "六源盲区盘点 · 静态标日期非实时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderCover },
+    { key: "libclassic", label: "经典视图 · KOL 库", description: "升级前两栏库整体内嵌(保留备选;默认体验=新版行式库)", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 36, render: renderLibClassic },
   ];
 
   // 员工视角:默认布局里的 risk/rollup 会被 EditableDashboardBoard 的 moduleMap 过滤

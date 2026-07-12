@@ -11,6 +11,10 @@ import {
   KolRowLine,
   LibraryChips,
 } from "./MyKolBoardPage.dialogs";
+import { useKolEvidenceStats } from "./MyKolBoardPage.libdetail";
+import { useWorkflowRunsStream } from "../useWorkflowRunsStream";
+import { formatLocal } from "../../lib/timeLocal";
+import type { TaskQueueItem } from "../../../../services/vkpi/tasks-api";
 import {
   filterLibraryRows,
   libraryPlatformOptions,
@@ -100,7 +104,27 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["列表 V 筛选", "board-ext v_content.v_kol_ids 名单精确过滤(去重升序,封顶 2000;超封顶 truncated 如实降级提示;名单缺席时降级为已挂项目近似并标注)"],
       ["KOL 级三档", "tiers_by_kol=cooperation_kols/title_mention_kols(KOL 级去重,同一 KOL 两档可重复计,与条数级 tiers 区分)"],
       ["单 KOL 视频", "GET /kol-pool/{id}/videos(view_count 点时实测 · NULL 剔除注明)"],
+      ["采集数据列", "行尾 视频 N · 播放合计 · 深析 n/N = 同一 /kol-pool/{id}/videos 逐行实算(与详情弹窗同源同口径);只取当前可见行 + 会话级缓存,读取中=… / 零采集=—"],
+      ["我的收藏", "kol-pool/favorites 本人收藏名单(现有端点一次拉取);chip 计数=名单∩当前库行,管理层全团队视图一键切回自己的"],
+      ["详情分区", "档案 → 追踪链(GOAFFPRO 共享件原样)→ 合作项目结果(Projects 映射)→ V 相关内容(全量视频五 tabs)→ 闭环动作排"],
       ["负责人筛选", "管理层按 ?staff_id= 服务端 scope 重取,零本地猜"],
+    ],
+  },
+  activity: {
+    label: "task-queue/compact · workflow_runs",
+    rows: [
+      ["数据源", "后台任务事实源投影(与 KOL Pool 泳道同一只读端点)· 20s 轮询,标签页转后台自动暂停"],
+      ["口径", "只显进行中/排队:账号分析=在分析 · 视频深析=在思考 · 评论采集=采集中;其余任务种类看泳道全景"],
+      ["状态点", "绿点呼吸=执行中(系统减弱动效时自动静止)/ 琥珀=排队;时间=任务最近更新,按浏览器时区"],
+      ["跳转", "点行=有 KOL 主体的任务直达 KOL Pool 该 KOL 详情(既有事件管道);卡底钮=泳道全景"],
+    ],
+  },
+  libclassic: {
+    label: "my-kol/aggregate · 旧两栏库整体内嵌",
+    rows: [
+      ["性质", "升级前的两栏 KOL 库(EmployeeKolLibrary)整体内嵌保留——默认体验已由行式 KOL 库(库模块)取代,本卡是经典视图备选"],
+      ["数据", "组件自取 my-kol/aggregate(pool_favorites 真收藏源)+ 主控 projects/kolOptions;与新库同源"],
+      ["范围", "员工 own-only / 管理层过渡口径(组件内部原样,零改动)"],
     ],
   },
   fitdist: {
@@ -214,6 +238,8 @@ export const PROV_TITLES: Record<string, string> = {
   claims: "我的认领",
   shares: "共享池",
   cover: "数据覆盖",
+  activity: "分析动态",
+  libclassic: "经典视图 · KOL 库",
 };
 
 // KPI 带四卡与中文紧凑数(fmtZhCompact)M4 起搬家到 MyKolBoardPage.charts.tsx
@@ -358,6 +384,114 @@ export function OfficialMatrixModule({ apiToken, matrix }: { apiToken?: string; 
   );
 }
 
+/* ============ 分析动态模块(span4 小模组):进行中的分析任务 ============
+   数据 = useWorkflowRunsStream(泳道/顶栏同一只读端点 task-queue/compact 的共享轮询 hook,
+   20s 间隔 + 后台标签页自动暂停,零新端点)。只挑三类与 MY KOL 采集闭环直接相关的任务:
+   账号分析(在分析)/ video深析(在思考)/ 评论采集(采集中)——kind 判据与后端
+   queue_view._infer_kind 产出字面一致。点行 = 有 KOL 主体的任务直达 KOL Pool 该 KOL
+   详情(vkpi:pending-kolpool-open-id + vkpi:open-kol-pool-item 既有事件管道,
+   TaskProgressBoard 同口径);无主体/卡底钮 = onJumpPool 切泳道全景。
+   红线:纯读展示;呼吸点只用 motion-safe(系统减弱动效自动静止);绝对时间戳
+   (formatLocal 按浏览器时区),禁「刚刚/实时」假新鲜度。 ============ */
+
+export const ACTIVITY_TASK_META: Record<string, { label: string; cls: string }> = {
+  账号分析: { label: "在分析", cls: "border-accent bg-accent-soft text-accent" },
+  video深析: { label: "在思考", cls: "border-accent-2 text-accent-2" },
+  评论采集: { label: "采集中", cls: "border-info bg-info-soft text-info" },
+};
+
+const ACTIVITY_BADGE = "flex-none rounded-[5px] border px-1.5 py-px text-[8.5px] font-bold";
+const ACTIVITY_MAX_ROWS = 8;
+
+function activityTargetText(task: TaskQueueItem): string {
+  const target = (task.target && typeof task.target === "object" ? task.target : {}) as Row;
+  return (
+    String(target.label || target.handle || target.display_name || target.target_id || "").trim() || "未命名任务"
+  );
+}
+
+// KOL 主体定位(TaskProgressBoard 同口径):video/评论任务在 target.kol_pool_id;
+// 账号分析(kol_profile)的 target_id 即 kol_pool_id。
+function activityPoolId(task: TaskQueueItem): number | undefined {
+  const target = (task.target && typeof task.target === "object" ? task.target : {}) as Row;
+  const direct = Number(target.kol_pool_id);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const profileId = Number(target.target_id);
+  return String(target.target_type || "") === "kol_profile" && Number.isFinite(profileId) && profileId > 0
+    ? profileId
+    : undefined;
+}
+
+export function AnalysisActivityModule({ apiToken, onJumpPool }: { apiToken: string; onJumpPool: () => void }) {
+  const stream = useWorkflowRunsStream(apiToken, { intervalMs: 20000, limit: 30, recentMinutes: 5 });
+  const items = React.useMemo(() => {
+    const active = Array.isArray(stream.payload?.active) ? stream.payload!.active! : [];
+    return active.filter((task) => ACTIVITY_TASK_META[String(task.kind || "")]).slice(0, ACTIVITY_MAX_ROWS);
+  }, [stream.payload]);
+  const openTask = (task: TaskQueueItem) => {
+    const poolId = activityPoolId(task);
+    if (poolId && typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("vkpi:pending-kolpool-open-id", String(poolId));
+      } catch {
+        /* localStorage 不可用不阻断,事件管道仍切页 */
+      }
+      window.dispatchEvent(new CustomEvent("vkpi:open-kol-pool-item", { detail: { kolPoolId: poolId, task } }));
+      return;
+    }
+    onJumpPool();
+  };
+  if (stream.error && !stream.payload) return <ErrorCard title="任务队列读取失败" text={stream.error} />;
+  if (!stream.payload) return <LoadingLine text="任务队列读取中…" />;
+  return (
+    <div>
+      {items.length === 0 ? (
+        <EmptyLine text="暂无进行中任务。" />
+      ) : (
+        items.map((task) => {
+          const meta = ACTIVITY_TASK_META[String(task.kind || "")];
+          const running = String(task.status || "") !== "queued";
+          return (
+            <div
+              key={task.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => openTask(task)}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter" || ev.key === " ") {
+                  ev.preventDefault();
+                  openTask(task);
+                }
+              }}
+              className="group flex min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0"
+              title="点击直达 KOL Pool(有 KOL 主体的任务直接开该 KOL 详情)"
+            >
+              <span className={`${ACTIVITY_BADGE} ${meta.cls}`}>{meta.label}</span>
+              <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">
+                {activityTargetText(task)}
+              </span>
+              <span
+                className={`h-[6px] w-[6px] flex-none rounded-full ${running ? "bg-good motion-safe:animate-pulse" : "bg-warn"}`}
+                title={running ? "执行中" : "排队中"}
+              />
+              <span className="flex-none font-mono text-[9px] text-muted" title="任务最近更新时间(按浏览器时区)">
+                {formatLocal(task.updated_at || task.created_at)}
+              </span>
+            </div>
+          );
+        })
+      )}
+      <button
+        type="button"
+        onClick={onJumpPool}
+        className="mt-2 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
+      >
+        ≡ 去 KOL Pool 泳道看全部任务
+      </button>
+    </div>
+  );
+}
+
 /* ============ KOL 库模块真身(M3 弹窗族 + M4 精确名单/漏斗联动)============
    卡面 = 筛选 chips(有V视频/全部 + 平台 strip + 负责人)+ 6 条 KOL 行 + 「查看全量」;
    弹窗族(全量列表/详情连续翻)住 MyKolBoardPage.dialogs(金样板 FeedList/FeedDetail 同构)。
@@ -406,6 +540,30 @@ export function KolLibraryModule({
   const [listOpen, setListOpen] = React.useState(false);
   const [detailIndex, setDetailIndex] = React.useState<number | null>(null);
 
+  // 「我的收藏」快捷筛选:viewer 本人收藏名单(kol-pool/favorites 现有端点,一次拉取)。
+  // 名单读到才渲染 chip(读取失败/未就绪 = chip 缺席,绝不摆个会筛空的假开关)。
+  const [mineOnly, setMineOnly] = React.useState(false);
+  const [mineIds, setMineIds] = React.useState<ReadonlySet<number> | null>(null);
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    import("../../../../services/vkpi/kolPool-api")
+      .then(({ listKolPoolFavorites }) => listKolPoolFavorites(apiToken))
+      .then((resp) => {
+        if (!alive) return;
+        const ids = (Array.isArray(resp.items) ? resp.items : [])
+          .map((row) => Number((row as Row).kol_pool_id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+        setMineIds(new Set(ids));
+      })
+      .catch(() => {
+        if (alive) setMineIds(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken]);
+
   React.useEffect(() => {
     if (!apiToken || !staffId) {
       setStaffRows(null);
@@ -432,11 +590,26 @@ export function KolLibraryModule({
   }, [apiToken, staffId]);
 
   const rows = staffId && staffRows ? staffRows : baseRows;
-  const filtered = React.useMemo(() => filterLibraryRows(rows, filter, vKolIds), [rows, filter, vKolIds]);
-  const platformOptions = React.useMemo(() => libraryPlatformOptions(rows), [rows]);
+  // 「我的收藏」先于其余筛选收窄(名单∩库行;名单未就绪时开关不渲染,rows 原样)。
+  const scopedRows = React.useMemo(
+    () => (mineOnly && mineIds ? rows.filter((row) => mineIds.has(row.poolId)) : rows),
+    [rows, mineOnly, mineIds],
+  );
+  const filtered = React.useMemo(() => filterLibraryRows(scopedRows, filter, vKolIds), [scopedRows, filter, vKolIds]);
+  const platformOptions = React.useMemo(() => libraryPlatformOptions(scopedRows), [scopedRows]);
   const staffProp = isManager && staffOptions.length
     ? { options: staffOptions, value: staffId, onChange: setStaffId, busy: staffBusy }
     : undefined;
+  const mineCount = React.useMemo(
+    () => (mineIds ? rows.filter((row) => mineIds.has(row.poolId)).length : 0),
+    [rows, mineIds],
+  );
+  const mineProp = mineIds
+    ? { on: mineOnly, count: mineCount, onToggle: () => setMineOnly((value) => !value) }
+    : undefined;
+  // 采集数据列:卡面只拉当前可见 6 行(与全量弹窗/详情同源,会话级缓存)。
+  const visibleIds = React.useMemo(() => filtered.slice(0, 6).map((row) => row.poolId), [filtered]);
+  const statsMap = useKolEvidenceStats(apiToken, visibleIds);
   const openDetail = (i: number) => {
     if (i >= 0 && i < filtered.length) setDetailIndex(i);
   };
@@ -444,7 +617,7 @@ export function KolLibraryModule({
   return (
     <div>
       <div className="mb-2">
-        <LibraryChips filter={filter} onFilter={onFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staffProp} />
+        <LibraryChips filter={filter} onFilter={onFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staffProp} mine={mineProp} />
         {/* 漏斗阶段联动 chip(状态在 page 层,与合作漏斗模块同一份;再点移除) */}
         {filter.stage ? (
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9.5px] text-muted">
@@ -481,7 +654,7 @@ export function KolLibraryModule({
       ) : (
         <div>
           {filtered.slice(0, 6).map((row, i) => (
-            <KolRowLine key={row.poolId} row={row} index={i} onOpen={openDetail} />
+            <KolRowLine key={row.poolId} row={row} index={i} onOpen={openDetail} stats={statsMap.get(row.poolId)} />
           ))}
           <button
             type="button"
@@ -502,6 +675,7 @@ export function KolLibraryModule({
           platformOptions={platformOptions}
           vKolCount={vKolCount}
           staff={staffProp}
+          mine={mineProp}
           projects={projects}
           onOpenDetail={openDetail}
           onClose={() => setListOpen(false)}

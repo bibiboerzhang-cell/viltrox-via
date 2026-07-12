@@ -12,6 +12,8 @@ import { DailyDigestCard } from "../../pages/myKol/DailyDigestCard";
 import { RiskIndexPanel } from "../../pages/myKol/RiskIndexPanel";
 import { ContributionRollupPanel } from "../../pages/myKol/ContributionRollupPanel";
 import { OfficialContentLayer } from "../../pages/myKol/OfficialContentLayer";
+import { EmployeeKolLibrary } from "../../pages/myKol/MyKolPage.Sections";
+import { PendingCard } from "./MarketVoicePage.modules";
 import type { OfficialChannelAccount } from "../../pages/channels/channelTypes";
 import type { VkpiDashboardData } from "../../vkpiTypes";
 
@@ -67,6 +69,18 @@ const MATRIX_TRIM = [
   "[&.vkpi-embed[data-embed]>.mykol-panel]:!bg-transparent [&.vkpi-embed[data-embed]>.mykol-panel]:!shadow-none",
   "[&_.mykol-section-head]:px-0 [&_.mykol-section-head]:pt-0",
   "[&_.mykol-section-head>div:first-child]:hidden",
+].join(" ");
+
+// 【截图bug 修正 2026-07-12】官号矩阵展开(平台卡网格 + 账号列表/内容层 drill 两栏)后
+// 左半大空白/右侧挤压:旧 CSS 的 .mykol-drill-grid 两列固定最小宽(280px+360px)与
+// .mykol-platform-grid 固定 6 列都按**视口** ≤1200px 的媒体查询降栏——内嵌进 8-span
+// 模块卡后视口 >1200 永不触发,卡宽却只有 ~600-760px,固定列宽撑爆卡宽 → 布局偏移。
+// 修法 = 容器自适应列(auto-fit 最小列宽):列数随**卡宽**收放,窄卡自动叠排、宽卡
+// 恢复双栏,内容永远占满卡宽(span 4~12 全档安全);只挂在包装容器上,旧组件/旧页零改动。
+const OFFICIAL_GRID_FIX = [
+  "[&_.mykol-platform-grid]:!grid-cols-[repeat(auto-fit,minmax(148px,1fr))]",
+  "[&_.mykol-drill-grid]:!grid-cols-[repeat(auto-fit,minmax(280px,1fr))]",
+  "[&_.mykol-account-list]:min-w-0 [&_.mykol-content-layer]:min-w-0",
 ].join(" ");
 
 // RiskIndexPanel / ContributionRollupPanel:section/卡壳全内联样式(! 压 style=);
@@ -170,8 +184,15 @@ export function PersonalMatrixGroup({ accounts, apiToken }: { accounts: Official
             <span className="flex-none rounded-[6px] border border-line px-1.5 py-px text-[9px] text-muted" title="持有人(账号授权归属)">
               {account.staffName || "未分配"}
             </span>
-            <span className="w-[104px] flex-none text-right font-mono text-[9.5px] text-muted" title="粉丝 · 内容数 · 播放(最新快照)">
-              {fmtZhCompact(account.followers)} 粉 · {account.postsCount} 帖 · {fmtZhCompact(account.totalViews)}
+            <span
+              className="w-[104px] flex-none text-right font-mono text-[9.5px] text-muted"
+              title={
+                account.viewsUnavailable
+                  ? `粉丝 · 内容数 · 播放(${account.viewsUnavailableReason || "该平台无公开播放口径"},显 — 不当 0)`
+                  : "粉丝 · 内容数 · 播放(最新快照)"
+              }
+            >
+              {fmtZhCompact(account.followers)} 粉 · {account.postsCount} 帖 · {account.viewsUnavailable ? "—" : fmtZhCompact(account.totalViews)}
             </span>
           </button>
         );
@@ -203,7 +224,7 @@ export function OfficialEmbed({
     >
       {apiToken ? (
         <div>
-          <div data-embed="official" className={`${EMBED} ${MATRIX_TRIM}`}>
+          <div data-embed="official" className={`${EMBED} ${MATRIX_TRIM} ${OFFICIAL_GRID_FIX}`}>
             <OfficialMatrixModule apiToken={apiToken} matrix={matrix} />
           </div>
           <PersonalMatrixGroup accounts={matrix.personalAccounts} apiToken={apiToken} />
@@ -270,6 +291,41 @@ export function RollupEmbed({
         </div>
       ) : (
         noToken
+      )}
+    </ModuleCard>
+  );
+}
+
+/* ============ 经典视图 · KOL 库(palette 备选,不进默认布局) ============
+   旧两栏库 EmployeeKolLibrary 整体内嵌保留不删 —— 默认体验统一走新版行式 KOL 库
+   (library 模块),想用升级前两栏体的从 palette 添加本卡。组件自取 aggregate
+   (与新库同源),旧组件文件零改动;MATRIX_TRIM 同套收编(压平卡壳 + 隐藏
+   双写大标题,头部 chips/漏斗切换等功能控件全保留)。 ============ */
+export function LibClassicEmbed({
+  apiToken,
+  data,
+  viewMode,
+  noToken,
+  onRefreshData,
+}: {
+  apiToken: string;
+  data?: VkpiDashboardData;
+  viewMode: "manager" | "employee";
+  noToken: React.ReactNode;
+  onRefreshData?: () => void;
+}) {
+  return (
+    <ModuleCard title="经典视图 · KOL 库" srcLabel={src("libclassic").label} srcRows={src("libclassic").rows}>
+      {!apiToken ? (
+        noToken
+      ) : !data ? (
+        <PendingCard>
+          <b>主控数据未就绪</b> —— 经典视图依赖主控 projects/kolOptions,就绪后自动点亮。
+        </PendingCard>
+      ) : (
+        <div data-embed="libclassic" className={`${EMBED} ${MATRIX_TRIM}`}>
+          <EmployeeKolLibrary apiToken={apiToken} data={data} viewMode={viewMode} onRefreshData={onRefreshData} />
+        </div>
       )}
     </ModuleCard>
   );
