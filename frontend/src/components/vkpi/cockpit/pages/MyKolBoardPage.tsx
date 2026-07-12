@@ -491,7 +491,9 @@ export function MyKolBoardPage({
     { key: "claims", label: "我的认领", description: "本人认领行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
     { key: "shares", label: "共享池", description: "共享给我的库行 · 0 行=已建未用诚实空", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderShares },
     { key: "cover", label: "数据覆盖", description: "六源盲区盘点 · 静态标日期非实时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderCover },
-    { key: "libclassic", label: "经典视图 · KOL 库", description: "升级前两栏库整体内嵌(保留备选;默认体验=新版行式库)", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 36, render: renderLibClassic },
+    // 经典视图(libclassic)已退役出 palette(2026-07-12 用户裁决:旧两栏皮肤拉低质感,
+    // 功能已被新版行式库+详情弹窗零丢失覆盖)。想临时找回:恢复下一行 + embeds 的 renderLibClassic。
+    // { key: "libclassic", label: "经典视图 · KOL 库", description: "升级前两栏库整体内嵌", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 36, render: renderLibClassic },
   ];
 
   // 员工视角:默认布局里的 risk/rollup 会被 EditableDashboardBoard 的 moduleMap 过滤
