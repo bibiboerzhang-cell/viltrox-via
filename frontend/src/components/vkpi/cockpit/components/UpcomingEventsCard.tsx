@@ -22,11 +22,11 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
       animate: { opacity: 1, scale: 1 },
       whileDrag: { scale: 1.05, cursor: "grabbing" },
       onClick: () => setCollapsed(false),
-      className: "cursor-pointer rounded-xl border border-line bg-panel px-3 py-2 backdrop-blur-xl shadow-lg hover:border-line-strong active:cursor-grabbing",
+      className: "cursor-pointer rounded-xl border border-line bg-panel px-3 py-2 backdrop-blur-xl shadow-ds-sm hover:border-line-strong active:cursor-grabbing",
       style: { cursor: "grab" }
     },
       e("div", { className: "flex items-center gap-2" },
-        e("span", { className: "rounded-md p-1.5", style: { background: "rgba(251,191,36,0.18)", color: "#fbbf24" } },
+        e("span", { className: "rounded-md bg-warn-soft p-1.5 text-warn" },
           e(Calendar, { size: 12 })
         ),
         e("div", { className: "min-w-0" },
@@ -47,21 +47,21 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
     animate: { opacity: 1, y: 0 },
     transition: { delay: 0.4 },
     whileDrag: { scale: 1.02, cursor: "grabbing", zIndex: 50 },
-    className: "rounded-xl border border-line bg-panel p-3 backdrop-blur-xl shadow-2xl"
+    className: "rounded-xl border border-line bg-panel p-3 backdrop-blur-xl shadow-ds"
   },
     // Drag handle bar
     e("div", { className: "mb-2 flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing select-none" },
       e("div", { className: "flex items-center gap-1.5 flex-1 min-w-0" },
         e("div", { className: "flex gap-0.5" },
-          e("span", { className: "h-1 w-1 rounded-full bg-white/20" }),
-          e("span", { className: "h-1 w-1 rounded-full bg-white/20" }),
-          e("span", { className: "h-1 w-1 rounded-full bg-white/20" })
+          e("span", { className: "h-1 w-1 rounded-full bg-line-strong" }),
+          e("span", { className: "h-1 w-1 rounded-full bg-line-strong" }),
+          e("span", { className: "h-1 w-1 rounded-full bg-line-strong" })
         ),
         e(Calendar, { size: 12, className: "text-warn ml-1" }),
         e("h3", { className: "text-xs font-semibold text-ink truncate" }, "Upcoming Events"),
         e("span", { className: "text-[9px] text-muted tabular-nums" }, `(${events.length})`),
         // 数据来源标注:真实 events API(诚实化 2026-06-14)
-        e("span", { className: "shrink-0 rounded border border-emerald-500/20 bg-good-soft px-1 py-px text-[8px] text-good/80" }, "实时")
+        e("span", { className: "shrink-0 rounded border border-good-soft bg-good-soft px-1 py-px text-[8px] text-good" }, "实时")
       ),
       e("div", { className: "flex items-center gap-1 shrink-0" },
         // 加号接真:跳 Events 页(在那里新建活动);无 onViewAll 的老调用方直接隐藏,不留死按钮。
@@ -92,7 +92,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
           className: "group cursor-pointer rounded-lg border border-line bg-panel p-2 transition-colors hover:border-line-strong hover:bg-accent-soft"
         },
           e("div", { className: "mb-1.5 flex items-start gap-2" },
-            e("span", { className: "shrink-0 rounded-md p-1", style: { background: `${evt.color}22`, color: evt.color } },
+            e("span", { className: "shrink-0 rounded-md p-1", style: { background: `color-mix(in srgb, ${evt.color} 13%, transparent)`, color: evt.color } },
               e(Icon, { size: 10 })
             ),
             e("div", { className: "min-w-0 flex-1" },
@@ -105,7 +105,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
           ),
           // Material progress(精简)
           e("div", { className: "flex items-center gap-2" },
-            e("div", { className: "flex-1 h-0.5 overflow-hidden rounded-full bg-white/[0.05]" },
+            e("div", { className: "flex-1 h-0.5 overflow-hidden rounded-full bg-card" },
               e(m.div, {
                 initial: { width: 0 },
                 animate: { width: `${evt.materialProgress}%` },

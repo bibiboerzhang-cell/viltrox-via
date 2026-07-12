@@ -1,26 +1,33 @@
+/* 认证壳(登录 / 激活 / 重置密码 / 错误边界)—— 全 token 皮肤(隔离皮肤刀 2026-07-12)
+   浅深主题:登录前无用户偏好时,index.html 首帧脚本回退 prefers-color-scheme;
+   本文件只吃 --ds-* token,两主题 × 三风格自动成立,零写死色。
+   --auth-* 简写与 theme-alias.css 的映射保持同源(双保险,互不打架)。 */
 .admin-auth-viewport {
-  --auth-bg: #f7f8fb;
-  --auth-card: #ffffff;
-  --auth-border: #e7eaf0;
-  --auth-text: #101828;
-  --auth-muted: #667085;
-  --auth-blue: #155dfc;
+  --auth-bg: var(--ds-bg);
+  --auth-card: var(--ds-card);
+  --auth-border: var(--ds-line);
+  --auth-text: var(--ds-text);
+  --auth-muted: var(--ds-muted);
+  --auth-blue: var(--ds-accent);
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 24px;
   background:
-    radial-gradient(circle at 10% 0%, rgba(21, 93, 252, 0.08), transparent 32%),
-    linear-gradient(180deg, #ffffff 0%, var(--auth-bg) 100%);
+    radial-gradient(circle at 10% 0%, var(--ds-accent-soft), transparent 32%),
+    linear-gradient(180deg, var(--ds-bg-2) 0%, var(--auth-bg) 100%);
   color: var(--auth-text);
+  font-family: var(--ds-font-sans);
 }
 
 .admin-auth-card {
   width: min(420px, 100%);
   border: 1px solid var(--auth-border);
-  border-radius: 22px;
+  border-radius: var(--ds-radius-xl);
   background: var(--auth-card);
-  box-shadow: 0 24px 80px rgba(16, 24, 40, 0.08);
+  box-shadow: var(--ds-shadow), var(--ds-inner);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
   padding: 28px;
 }
 
@@ -34,12 +41,12 @@
 .admin-root__mark {
   width: 32px;
   height: 32px;
-  border-radius: 10px;
+  border-radius: var(--ds-radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: var(--auth-blue);
-  color: #ffffff;
+  color: var(--ds-on-accent);
   font-weight: 800;
   letter-spacing: -0.04em;
 }
@@ -65,7 +72,7 @@
 .admin-auth-card__field {
   display: grid;
   gap: 7px;
-  color: #344054;
+  color: var(--ds-text-2);
   font-size: 13px;
   font-weight: 700;
 }
@@ -76,27 +83,40 @@
 
 .admin-auth-card__field input {
   width: 100%;
-  border: 1px solid var(--auth-border);
-  border-radius: 12px;
+  border: 1px solid var(--ds-line-strong);
+  border-radius: var(--ds-radius-md);
   padding: 12px 14px;
   color: var(--auth-text);
-  background: #ffffff;
+  background: var(--ds-card-2);
   outline: none;
+}
+
+.admin-auth-card__field input::placeholder {
+  color: var(--auth-muted);
 }
 
 .admin-auth-card__field input:focus {
   border-color: var(--auth-blue);
-  box-shadow: 0 0 0 3px rgba(21, 93, 252, 0.12);
+  box-shadow: 0 0 0 3px var(--ds-accent-soft);
 }
 
 .admin-auth-card__primary {
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--ds-radius-md);
   padding: 12px 16px;
   background: var(--auth-blue);
-  color: #ffffff;
+  color: var(--ds-on-accent);
   font-weight: 800;
   cursor: pointer;
+}
+
+.admin-auth-card__primary:hover:not(:disabled) {
+  background: var(--ds-accent-hover);
+}
+
+.admin-auth-card__primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ds-accent-soft);
 }
 
 .admin-auth-card__primary:disabled {
@@ -104,21 +124,21 @@
 }
 
 .admin-auth-card__error {
-  border: 1px solid #fecaca;
-  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--ds-crit) 35%, transparent);
+  border-radius: var(--ds-radius-md);
   padding: 10px 12px;
-  background: #fff1f2;
-  color: #b42318;
+  background: var(--ds-crit-soft);
+  color: var(--ds-crit);
   font-size: 13px;
   margin-bottom: 14px;
 }
 
 .admin-auth-card__success {
-  border: 1px solid #abefc6;
-  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--ds-good) 35%, transparent);
+  border-radius: var(--ds-radius-md);
   padding: 10px 12px;
-  background: #ecfdf3;
-  color: #067647;
+  background: var(--ds-good-soft);
+  color: var(--ds-good);
   font-size: 13px;
   font-weight: 800;
   margin-bottom: 14px;
@@ -147,16 +167,16 @@
 }
 
 .ax-btn {
-  border: 1px solid var(--auth-border, #e7eaf0);
-  border-radius: 12px;
+  border: 1px solid var(--auth-border, var(--ds-line-strong));
+  border-radius: var(--ds-radius-md);
   padding: 10px 14px;
-  background: #ffffff;
-  color: #101828;
+  background: var(--ds-card);
+  color: var(--ds-text);
   font-weight: 700;
 }
 
 .ax-btn--primary {
-  border-color: #155dfc;
-  background: #155dfc;
-  color: #ffffff;
+  border-color: var(--ds-accent);
+  background: var(--ds-accent);
+  color: var(--ds-on-accent);
 }

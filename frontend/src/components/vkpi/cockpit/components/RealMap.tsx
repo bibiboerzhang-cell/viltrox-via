@@ -161,14 +161,15 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
       
       const marker = L.marker([p.lat, p.lng], { icon }).addTo(map);
       
-      // Hover 信息卡
+      // Hover 信息卡(DOM 覆盖层,隔离皮肤刀:头像渐变吃 token 随主题;
+      // pin/连线本体的取色与渲染逻辑不动 —— 颜色由调用方传运行时 token 计算值)
       const handle = p.handle || p.name || "";
       const initials = handle.replace(/^@/, "").slice(0, 2).toUpperCase();
-      const avatarBg = p.handle 
-        ? `linear-gradient(135deg, #8b5cf6, #3b82f6)` 
-        : p.parentItem 
-        ? `linear-gradient(135deg, #f59e0b, #ec4899)` 
-        : `linear-gradient(135deg, #10b981, #06b6d4)`;
+      const avatarBg = p.handle
+        ? `linear-gradient(135deg, var(--ds-accent-2), var(--ds-accent))`
+        : p.parentItem
+        ? `linear-gradient(135deg, var(--ds-warn), var(--ds-crit))`
+        : `linear-gradient(135deg, var(--ds-good), var(--ds-info))`;
       const platform = p.niche || p.type || (p.parentItem ? `Venue · ${p.parentItem}` : "");
       const location = p.city && p.country ? `${p.city}, ${p.country}` : p.country || "—";
       const metrics = p.handle

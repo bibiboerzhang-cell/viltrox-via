@@ -55,13 +55,14 @@ export function FloatingCard({
       animate: { opacity: 1, scale: 1 },
       whileDrag: { scale: 1.05, cursor: "grabbing" },
       onClick: () => setCollapsed(false),
-      className: "cursor-pointer rounded-xl border border-line bg-panel px-3 py-2 backdrop-blur-xl shadow-lg hover:border-line-strong",
+      className: "cursor-pointer rounded-xl border border-line bg-panel px-3 py-2 backdrop-blur-xl shadow-ds-sm hover:border-line-strong",
       style: { zIndex: 800, cursor: "grab" }
     },
       e("div", { className: "flex items-center gap-2" },
-        icon && e("span", { 
-          className: "rounded-md p-1.5", 
-          style: { background: `${iconColor}22`, color: iconColor } 
+        // color-mix 软底:iconColor 既可是 mode 数据色(hex)也可是 token var(),两者皆成立
+        icon && e("span", {
+          className: "rounded-md p-1.5",
+          style: { background: `color-mix(in srgb, ${iconColor} 13%, transparent)`, color: iconColor }
         }, e(icon, { size: 12 })),
         e("div", { className: "min-w-0" },
           e("div", { className: "text-[10px] uppercase tracking-wider text-muted" }, "Card"),
@@ -84,7 +85,7 @@ export function FloatingCard({
     animate: { opacity: 1, y: 0 },
     transition: { delay: initialDelay },
     whileDrag: { scale: 1.02, zIndex: 999 },
-    className: "rounded-xl border border-line bg-panel backdrop-blur-xl shadow-2xl overflow-hidden",
+    className: "rounded-xl border border-line bg-panel backdrop-blur-xl shadow-ds overflow-hidden",
     style: { 
       zIndex: 800,
       width: size.width,
@@ -99,9 +100,9 @@ export function FloatingCard({
       e("div", { className: "flex items-center gap-1.5 flex-1 min-w-0" },
         // 拖拽指示 dots
         e("div", { className: "flex gap-0.5" },
-          e("span", { className: "h-1 w-1 rounded-full bg-white/20" }),
-          e("span", { className: "h-1 w-1 rounded-full bg-white/20" }),
-          e("span", { className: "h-1 w-1 rounded-full bg-white/20" })
+          e("span", { className: "h-1 w-1 rounded-full bg-line-strong" }),
+          e("span", { className: "h-1 w-1 rounded-full bg-line-strong" }),
+          e("span", { className: "h-1 w-1 rounded-full bg-line-strong" })
         ),
         icon && e(icon, { size: 12, style: { color: iconColor }, className: "ml-1" }),
         e("h3", { className: "text-xs font-semibold text-ink truncate" }, title)
@@ -127,7 +128,7 @@ export function FloatingCard({
       onPointerDownCapture: (ev: any) => { ev.stopPropagation(); },
       className: "absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize",
       style: {
-        background: "linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.2) 50%, rgba(255,255,255,0.2) 60%, transparent 60%, transparent 70%, rgba(255,255,255,0.2) 70%, rgba(255,255,255,0.2) 80%, transparent 80%)",
+        background: "linear-gradient(135deg, transparent 50%, var(--ds-line-strong) 50%, var(--ds-line-strong) 60%, transparent 60%, transparent 70%, var(--ds-line-strong) 70%, var(--ds-line-strong) 80%, transparent 80%)",
         zIndex: 10,
       }
     })

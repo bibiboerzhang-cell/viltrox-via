@@ -9,37 +9,37 @@
   canvas { display: block; }
   .globe-hint {
     position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
-    font-size: 10px; color: rgba(255,255,255,0.3); letter-spacing: 0.15em;
+    font-size: 10px; color: var(--ds-muted); letter-spacing: 0.15em;
     text-transform: uppercase; pointer-events: none; user-select: none;
   }
-  /* Leaflet 跟随全局黑白主题 */
+  /* Leaflet 跟随全局明暗主题(隔离皮肤刀:控件全 token) */
   .leaflet-container {
     background: var(--ds-bg-2) !important;
     font-family: inherit;
     outline: none;
   }
   .leaflet-control-zoom {
-    border: 1px solid rgba(255,255,255,0.1) !important;
-    background: rgba(11,18,32,0.9) !important;
-    backdrop-filter: blur(20px);
+    border: 1px solid var(--ds-line) !important;
+    background: var(--ds-panel) !important;
+    backdrop-filter: var(--ds-backdrop);
   }
   .leaflet-control-zoom a {
     background: transparent !important;
-    color: rgba(255,255,255,0.7) !important;
-    border-color: rgba(255,255,255,0.08) !important;
+    color: var(--ds-text-2) !important;
+    border-color: var(--ds-line) !important;
   }
   .leaflet-control-zoom a:hover {
-    background: rgba(255,255,255,0.06) !important;
-    color: #fff !important;
+    background: var(--ds-accent-soft) !important;
+    color: var(--ds-text) !important;
   }
   .leaflet-control-attribution {
-    background: rgba(11,18,32,0.7) !important;
-    color: rgba(255,255,255,0.4) !important;
+    background: color-mix(in srgb, var(--ds-panel) 85%, transparent) !important;
+    color: var(--ds-muted) !important;
     font-size: 9px !important;
     backdrop-filter: blur(10px);
   }
   .leaflet-control-attribution a {
-    color: rgba(255,255,255,0.55) !important;
+    color: var(--ds-text-2) !important;
   }
   /* Custom pin styles */
   .vkpi-pin-wrapper {
@@ -71,14 +71,19 @@
     0%   { transform: translate(-50%, -50%) scale(0.6); opacity: 0.55; }
     100% { transform: translate(-50%, -50%) scale(2.4); opacity: 0; }
   }
+  /* reduced-motion:pin 脉冲与地图控件的 pulse 全部静止(脉冲层直接隐藏,避免残留静态色块) */
+  @media (prefers-reduced-motion: reduce) {
+    .vkpi-pin-pulse { animation: none !important; opacity: 0; }
+    .vkpi-command-map .animate-pulse { animation: none !important; }
+  }
   .vkpi-pin-label {
     position: absolute;
     left: 50%; top: 18px;
     transform: translateX(-50%);
-    background: rgba(11,18,32,0.92);
-    border: 1px solid rgba(255,255,255,0.1);
+    background: color-mix(in srgb, var(--ds-card) 94%, transparent);
+    border: 1px solid var(--ds-line-strong);
     backdrop-filter: blur(8px);
-    color: #fff;
+    color: var(--ds-text);
     font-size: 10px;
     padding: 3px 8px;
     border-radius: 6px;
@@ -129,7 +134,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
+    color: var(--ds-on-accent);
     font-weight: 600;
     font-size: 12px;
     flex-shrink: 0;

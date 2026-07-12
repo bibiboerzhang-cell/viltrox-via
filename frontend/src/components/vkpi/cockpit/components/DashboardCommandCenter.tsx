@@ -55,7 +55,8 @@ export function DashboardCommandCenter(props: any) {
         value: viewMode,
         placeholder: "Select",
         accent: !viewMode,
-        color: currentMode?.color || "#a855f7",
+        // 未选模式时的回退色走 token(下游 badge 已用 color-mix,var() 可直接吃)
+        color: currentMode?.color || "var(--ds-accent-2)",
         options: Object.entries(viewModes || {}).map(([key, mode]: [string, any]) => ({
           key,
           label: mode.label,
@@ -181,7 +182,7 @@ export function DashboardCommandCenter(props: any) {
       e(FloatingCard, {
         title: "Revenue by Source",
         icon: DollarSign,
-        iconColor: "#a855f7",
+        iconColor: "var(--ds-accent-2)",
         dragConstraintsRef: globeContainerRef,
         defaultSize: { width: 220, height: "auto" },
         initialDelay: 0.4,

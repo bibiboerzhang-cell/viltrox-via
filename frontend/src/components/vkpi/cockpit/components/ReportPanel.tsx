@@ -319,42 +319,44 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
     aiInsights:     { label: "Intelligence",        desc: "Real-time aggregation" },
   };
   
+  // 隔离皮肤刀 2026-07-12:外壳全 token(遮罩/卡基座/边线/文字/按钮),对齐 ModalShell
+  // (bg scrim + overlay-surface + border-line + shadow-ds);iframe 内部报告模板是独立
+  // 生成的浅色 HTML(reportRuntime.ts + srcDoc/print CSS),属另刀,本文件不动它。
   return e(m.div, {
     initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 },
-    className: "fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4",
+    className: "fixed inset-0 flex items-center justify-center bg-[var(--ds-scrim)] backdrop-blur-[3px] p-4",
     style: { zIndex: 9999 },
     onClick: onClose,
   },
     e(m.div, {
       initial: { scale: 0.95, opacity: 0, y: 20 }, animate: { scale: 1, opacity: 1, y: 0 }, exit: { scale: 0.95, opacity: 0 },
       onClick: (ev) => ev.stopPropagation(),
-      className: "relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl overflow-hidden",
+      className: "relative w-full max-w-4xl max-h-[88vh] flex flex-col rounded-[18px] border border-line bg-[var(--ds-overlay-surface)] shadow-ds overflow-hidden",
     },
       // Header
-      e("div", { className: "shrink-0 border-b border-white/[0.06] px-5 py-3.5 flex items-center justify-between" },
+      e("div", { className: "shrink-0 border-b border-line px-5 py-3.5 flex items-center justify-between" },
         e("div", { className: "flex items-center gap-3" },
-          e("div", { 
-            className: "flex h-9 w-9 items-center justify-center rounded-lg",
-            style: { background: "#a855f722", color: "#a855f7" }
+          e("div", {
+            className: "flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent",
           }, e(FileText, { size: 18 })),
           e("div", null,
-            e("h2", { className: "text-base font-semibold text-white" }, language === "zh" ? "生成报告" : "Generate Report"),
-            e("p", { className: "text-[11px] text-slate-400" }, language === "zh" ? "真实 API / 待接入缺口 · 不使用 mock 数字" : "Real API / pending gaps · no mock numbers")
+            e("h2", { className: "text-base font-semibold text-ink" }, language === "zh" ? "生成报告" : "Generate Report"),
+            e("p", { className: "text-[11px] text-muted" }, language === "zh" ? "真实 API / 待接入缺口 · 不使用 mock 数字" : "Real API / pending gaps · no mock numbers")
           )
         ),
         e("button", {
           onClick: onClose,
-          className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white hover:bg-white/10"
+          className: "rounded-md border border-line bg-card p-1.5 text-muted hover:text-ink hover:bg-accent-soft"
         }, e(X, { size: 14 }))
       ),
       
       // Body: left options + right preview
       e("div", { className: "flex flex-1 min-h-0" },
         // ─ Left: Options ─
-        e("div", { className: "w-72 shrink-0 border-r border-white/[0.06] overflow-y-auto p-4 space-y-4" },
+        e("div", { className: "w-72 shrink-0 border-r border-line overflow-y-auto p-4 space-y-4" },
           // V6.10.1: Language toggle
           e("div", null,
-            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, "Language · 语言"),
+            e("div", { className: "text-[10px] uppercase tracking-wider text-muted mb-2" }, "Language · 语言"),
             e("div", { className: "grid grid-cols-2 gap-1.5" },
               [
                 { id: "zh", label: "中文", sub: "给老板看" },
@@ -362,17 +364,17 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
               ].map(l => e("button", {
                 key: l.id,
                 onClick: () => setLanguage(l.id),
-                className: `rounded-lg border p-2 text-left transition ${language === l.id ? "border-purple-500/40 bg-purple-500/[0.08]" : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"}`
+                className: `rounded-lg border p-2 text-left transition ${language === l.id ? "border-accent bg-accent-soft" : "border-line bg-card hover:border-line-strong"}`
               },
-                e("div", { className: "text-[11px] font-medium text-white" }, l.label),
-                e("div", { className: "text-[9px] text-slate-500" }, l.sub)
+                e("div", { className: "text-[11px] font-medium text-ink" }, l.label),
+                e("div", { className: "text-[9px] text-muted" }, l.sub)
               ))
             )
           ),
-          
+
           // Period
           e("div", null,
-            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "周期" : "Period"),
+            e("div", { className: "text-[10px] uppercase tracking-wider text-muted mb-2" }, language === "zh" ? "周期" : "Period"),
             e("div", { className: "grid grid-cols-2 gap-1.5" },
               [
                 { id: "weekly",  label: language === "zh" ? "周报" : "Weekly",  sub: language === "zh" ? "过去 7 天" : "Last 7 days" },
@@ -380,17 +382,17 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
               ].map(p => e("button", {
                 key: p.id,
                 onClick: () => setPeriod(p.id),
-                className: `rounded-lg border p-2 text-left transition ${period === p.id ? "border-purple-500/40 bg-purple-500/[0.08]" : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"}`
+                className: `rounded-lg border p-2 text-left transition ${period === p.id ? "border-accent bg-accent-soft" : "border-line bg-card hover:border-line-strong"}`
               },
-                e("div", { className: "text-[11px] font-medium text-white" }, p.label),
-                e("div", { className: "text-[9px] text-slate-500" }, p.sub)
+                e("div", { className: "text-[11px] font-medium text-ink" }, p.label),
+                e("div", { className: "text-[9px] text-muted" }, p.sub)
               ))
             )
           ),
-          
+
           // V6.10.2: Format toggle (Visual vs Markdown)
           e("div", null,
-            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "格式" : "Format"),
+            e("div", { className: "text-[10px] uppercase tracking-wider text-muted mb-2" }, language === "zh" ? "格式" : "Format"),
             e("div", { className: "grid grid-cols-2 gap-1.5" },
               [
                 { id: "visual",   label: language === "zh" ? "图表版" : "Visual",   sub: language === "zh" ? "图表卡片 · 给老板" : "Charts · Stakeholder" },
@@ -398,30 +400,30 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
               ].map(f => e("button", {
                 key: f.id,
                 onClick: () => setFormat(f.id),
-                className: `rounded-lg border p-2 text-left transition ${format === f.id ? "border-purple-500/40 bg-purple-500/[0.08]" : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12]"}`
+                className: `rounded-lg border p-2 text-left transition ${format === f.id ? "border-accent bg-accent-soft" : "border-line bg-card hover:border-line-strong"}`
               },
-                e("div", { className: "text-[11px] font-medium text-white" }, f.label),
-                e("div", { className: "text-[9px] text-slate-500" }, f.sub)
+                e("div", { className: "text-[11px] font-medium text-ink" }, f.label),
+                e("div", { className: "text-[9px] text-muted" }, f.sub)
               ))
             )
           ),
-          
+
           // Sections
           e("div", null,
-            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "包含内容" : "Include Sections"),
+            e("div", { className: "text-[10px] uppercase tracking-wider text-muted mb-2" }, language === "zh" ? "包含内容" : "Include Sections"),
             e("div", { className: "space-y-1.5" },
               Object.entries(SECTION_LABELS).map(([key, info]) => e("button", {
                 key,
                 onClick: () => toggleSection(key),
-                className: `w-full rounded-lg border p-2 text-left transition ${sections[key] ? "border-purple-500/30 bg-purple-500/[0.05]" : "border-white/[0.06] bg-white/[0.01] opacity-50"}`
+                className: `w-full rounded-lg border p-2 text-left transition ${sections[key] ? "border-accent bg-accent-soft" : "border-line bg-card opacity-50"}`
               },
                 e("div", { className: "flex items-start gap-2" },
-                  e("div", { 
-                    className: `mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-2 flex items-center justify-center ${sections[key] ? "border-purple-400 bg-purple-500" : "border-white/20"}`
-                  }, sections[key] && e(Check, { size: 8, className: "text-white" })),
+                  e("div", {
+                    className: `mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-2 flex items-center justify-center ${sections[key] ? "border-accent bg-accent" : "border-line-strong"}`
+                  }, sections[key] && e(Check, { size: 8, className: "text-[var(--ds-on-accent)]" })),
                   e("div", { className: "min-w-0 flex-1" },
-                    e("div", { className: "text-[11px] font-medium text-white" }, info.label),
-                    e("div", { className: "text-[9px] text-slate-500 leading-tight" }, info.desc)
+                    e("div", { className: "text-[11px] font-medium text-ink" }, info.label),
+                    e("div", { className: "text-[9px] text-muted leading-tight" }, info.desc)
                   )
                 )
               ))
@@ -430,67 +432,67 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
           
           // 深度分析(据全量真实数据整理经营洞察,插到报告顶部)
           e("div", null,
-            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "深度分析" : "Deep Analysis"),
+            e("div", { className: "text-[10px] uppercase tracking-wider text-muted mb-2" }, language === "zh" ? "深度分析" : "Deep Analysis"),
             e("button", {
               onClick: handleAnalyze,
               disabled: analyzing || !apiToken,
               title: !apiToken ? (language === "zh" ? "缺少凭证,无法分析" : "Missing token") : undefined,
-              className: `w-full rounded-lg border p-2 text-left transition ${analysis ? "border-emerald-500/30 bg-emerald-500/[0.06]" : "border-purple-500/40 bg-purple-500/[0.08]"} ${(analyzing || !apiToken) ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-500/[0.14]"}`
+              className: `w-full rounded-lg border p-2 text-left transition ${analysis ? "border-good bg-good-soft" : "border-accent bg-accent-soft"} ${(analyzing || !apiToken) ? "opacity-60 cursor-not-allowed" : "hover:border-accent-hover"}`
             },
               e("div", { className: "flex items-center gap-2" },
                 analyzing
-                  ? e(Loader2, { size: 13, className: "text-purple-300 animate-spin shrink-0" })
-                  : e(Wand2, { size: 13, className: (analysis ? "text-emerald-300" : "text-purple-300") + " shrink-0" }),
+                  ? e(Loader2, { size: 13, className: "text-accent animate-spin shrink-0" })
+                  : e(Wand2, { size: 13, className: (analysis ? "text-good" : "text-accent") + " shrink-0" }),
                 e("div", { className: "min-w-0" },
-                  e("div", { className: "text-[11px] font-medium text-white" },
+                  e("div", { className: "text-[11px] font-medium text-ink" },
                     analyzing ? (language === "zh" ? "分析中…" : "Analyzing…")
                     : analysis ? (language === "zh" ? "已生成 · 重新分析" : "Generated · Re-analyze")
                     : (language === "zh" ? "生成深度分析" : "Generate Analysis")),
-                  e("div", { className: "text-[9px] text-slate-400 leading-tight" }, language === "zh" ? "据全量数据整理经营洞察,插入报告顶部" : "Synthesize insights from all data into the report top")
+                  e("div", { className: "text-[9px] text-muted leading-tight" }, language === "zh" ? "据全量数据整理经营洞察,插入报告顶部" : "Synthesize insights from all data into the report top")
                 )
               )
             ),
-            analyzeErr && e("div", { className: "mt-1.5 text-[9px] text-amber-400 leading-snug" }, analyzeErr),
-            analysis && !analyzeErr && e("div", { className: "mt-1.5 text-[9px] text-emerald-400 leading-snug" }, language === "zh" ? "✓ 已插入报告顶部 · 复制 / 下载 / PDF 都会包含" : "✓ Added to report top · included in copy / download / PDF")
+            analyzeErr && e("div", { className: "mt-1.5 text-[9px] text-warn leading-snug" }, analyzeErr),
+            analysis && !analyzeErr && e("div", { className: "mt-1.5 text-[9px] text-good leading-snug" }, language === "zh" ? "✓ 已插入报告顶部 · 复制 / 下载 / PDF 都会包含" : "✓ Added to report top · included in copy / download / PDF")
           ),
 
           // Format
           e("div", null,
-            e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500 mb-2" }, language === "zh" ? "导出方式" : "Output"),
+            e("div", { className: "text-[10px] uppercase tracking-wider text-muted mb-2" }, language === "zh" ? "导出方式" : "Output"),
             e("div", { className: "space-y-1.5" },
               e("button", {
                 onClick: handleCopy,
-                className: "w-full rounded-lg border border-white/[0.08] bg-white/[0.02] p-2 text-left hover:border-white/[0.18] hover:bg-white/[0.04]"
+                className: "w-full rounded-lg border border-line bg-card p-2 text-left hover:border-line-strong hover:bg-accent-soft"
               },
                 e("div", { className: "flex items-center gap-2" },
-                  e(Copy, { size: 12, className: "text-slate-400" }),
+                  e(Copy, { size: 12, className: "text-muted" }),
                   e("div", null,
-                    e("div", { className: "text-[11px] font-medium text-white" }, language === "zh" ? "复制到剪贴板" : "Copy to Clipboard"),
-                    e("div", { className: "text-[9px] text-slate-500" }, language === "zh" ? "粘到 Slack / 邮件正文" : "Paste into Slack / Email")
+                    e("div", { className: "text-[11px] font-medium text-ink" }, language === "zh" ? "复制到剪贴板" : "Copy to Clipboard"),
+                    e("div", { className: "text-[9px] text-muted" }, language === "zh" ? "粘到 Slack / 邮件正文" : "Paste into Slack / Email")
                   )
                 )
               ),
               e("button", {
                 onClick: handleDownloadMd,
-                className: "w-full rounded-lg border border-white/[0.08] bg-white/[0.02] p-2 text-left hover:border-white/[0.18] hover:bg-white/[0.04]"
+                className: "w-full rounded-lg border border-line bg-card p-2 text-left hover:border-line-strong hover:bg-accent-soft"
               },
                 e("div", { className: "flex items-center gap-2" },
-                  e(Download, { size: 12, className: "text-slate-400" }),
+                  e(Download, { size: 12, className: "text-muted" }),
                   e("div", null,
-                    e("div", { className: "text-[11px] font-medium text-white" }, language === "zh" ? "下载 Markdown" : "Download Markdown"),
-                    e("div", { className: "text-[9px] text-slate-500" }, language === "zh" ? ".md 文件归档" : ".md file for archive")
+                    e("div", { className: "text-[11px] font-medium text-ink" }, language === "zh" ? "下载 Markdown" : "Download Markdown"),
+                    e("div", { className: "text-[9px] text-muted" }, language === "zh" ? ".md 文件归档" : ".md file for archive")
                   )
                 )
               ),
               e("button", {
                 onClick: handlePrintPdf,
-                className: "w-full rounded-lg border border-purple-500/30 bg-purple-500/[0.08] p-2 text-left hover:border-purple-500/50 hover:bg-purple-500/[0.12]"
+                className: "w-full rounded-lg border border-accent bg-accent-soft p-2 text-left hover:border-accent-hover"
               },
                 e("div", { className: "flex items-center gap-2" },
-                  e(Printer, { size: 12, className: "text-purple-300" }),
+                  e(Printer, { size: 12, className: "text-accent" }),
                   e("div", null,
-                    e("div", { className: "text-[11px] font-medium text-white" }, language === "zh" ? "打印 → PDF" : "Print → PDF"),
-                    e("div", { className: "text-[9px] text-purple-200/70" }, language === "zh" ? "浏览器打印对话框 · 另存为 PDF" : "Browser print dialog · save as PDF")
+                    e("div", { className: "text-[11px] font-medium text-ink" }, language === "zh" ? "打印 → PDF" : "Print → PDF"),
+                    e("div", { className: "text-[9px] text-muted" }, language === "zh" ? "浏览器打印对话框 · 另存为 PDF" : "Browser print dialog · save as PDF")
                   )
                 )
               )
@@ -499,12 +501,12 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
         ),
         
         // ─ Right: Preview ─
-        e("div", { className: "flex-1 min-w-0 overflow-y-auto bg-[#080d18]" },
+        e("div", { className: "flex-1 min-w-0 overflow-y-auto bg-[var(--ds-bg-2)]" },
           format === "visual"
             ? e("div", { className: "p-4" },
                 e("div", { className: "mb-2 flex items-center justify-between" },
-                  e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, language === "zh" ? "预览 · 图表版" : "Preview · Visual"),
-                  e("div", { className: "text-[10px] text-slate-500" }, language === "zh" ? "打印 PDF 时为完整高分辨率" : "Full resolution on PDF print")
+                  e("div", { className: "text-[10px] uppercase tracking-wider text-muted" }, language === "zh" ? "预览 · 图表版" : "Preview · Visual"),
+                  e("div", { className: "text-[10px] text-muted" }, language === "zh" ? "打印 PDF 时为完整高分辨率" : "Full resolution on PDF print")
                 ),
                 // 用 iframe 渲染 visual HTML(避免 css 互相干扰)
                 e("iframe", {
@@ -608,38 +610,40 @@ export function ReportPanel({ onClose, data, apiToken }: any) {
                     .action-num { width: 18px; height: 18px; background: #a855f7; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
                     .empty { border: 1px dashed #cbd5e1; border-radius: 8px; padding: 12px; color: #64748b; font-size: 11px; }
                   </style></head><body>${finalVisualHtml}</body></html>`,
-                  style: { width: "100%", height: "calc(88vh - 200px)", border: "0", borderRadius: "8px", background: "#fff" },
+                  // iframe 内部是独立生成的浅色报告模板(另刀不动),白底是它自身的常量;
+                  // 这里只给宿主 frame 一个同底色,避免加载瞬间闪色。
+                  style: { width: "100%", height: "calc(88vh - 200px)", border: "0", borderRadius: "var(--ds-radius-md)", background: "#fff" },
                   title: "Report Preview"
                 })
               )
             : e("div", { className: "p-5" },
                 e("div", { className: "mb-2 flex items-center justify-between" },
-                  e("div", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, language === "zh" ? "预览 · Markdown" : "Preview · Markdown"),
-                  e("div", { className: "text-[10px] text-slate-500" }, `${finalReportContent.length} ${language === "zh" ? "字符" : "characters"}`)
+                  e("div", { className: "text-[10px] uppercase tracking-wider text-muted" }, language === "zh" ? "预览 · Markdown" : "Preview · Markdown"),
+                  e("div", { className: "text-[10px] text-muted" }, `${finalReportContent.length} ${language === "zh" ? "字符" : "characters"}`)
                 ),
                 e("pre", {
-                  className: "rounded-lg border border-white/[0.06] bg-[#040712] p-4 text-[11px] text-slate-300 whitespace-pre-wrap font-mono leading-relaxed",
+                  className: "rounded-lg border border-line bg-card p-4 text-[11px] text-ink-2 whitespace-pre-wrap font-mono leading-relaxed",
                   style: { maxHeight: "100%" }
                 }, finalReportContent)
               )
         )
       ),
-      
+
       // Footer
-      e("div", { className: "shrink-0 border-t border-white/[0.06] px-5 py-2.5 flex items-center justify-between" },
-        e("div", { className: "text-[10px] text-slate-500" }, 
-          language === "zh" 
+      e("div", { className: "shrink-0 border-t border-line px-5 py-2.5 flex items-center justify-between" },
+        e("div", { className: "text-[10px] text-muted" },
+          language === "zh"
             ? `已选 ${Object.values(sections).filter(Boolean).length} / ${Object.keys(sections).length} 个 section`
             : `${Object.values(sections).filter(Boolean).length} of ${Object.keys(sections).length} sections selected`
         ),
         e("div", { className: "flex gap-1.5" },
           e("button", {
             onClick: onClose,
-            className: "rounded-md border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-slate-300 hover:bg-white/[0.06]"
+            className: "rounded-md border border-line bg-card px-3 py-1 text-[11px] text-ink-2 hover:bg-accent-soft"
           }, language === "zh" ? "取消" : "Cancel"),
           e("button", {
             onClick: handlePrintPdf,
-            className: "rounded-md px-3 py-1 text-[11px] font-medium text-white bg-purple-600 hover:bg-purple-500"
+            className: "rounded-md px-3 py-1 text-[11px] font-medium text-[var(--ds-on-accent)] bg-accent hover:bg-accent-hover"
           }, language === "zh" ? "生成 PDF →" : "Generate PDF →")
         )
       )

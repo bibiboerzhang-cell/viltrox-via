@@ -7,7 +7,7 @@ import { ArrowLeft, ChevronRight } from "lucide-react";
 export function Breadcrumb({ levels, onGoBack }: any) {
   if (levels.length === 0) return null;
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-line bg-panel/70 px-3 py-1.5 backdrop-blur-xl">
+    <div className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-1.5 backdrop-blur-xl">
       <button
         onClick={onGoBack}
         aria-label="Go back"
@@ -16,7 +16,7 @@ export function Breadcrumb({ levels, onGoBack }: any) {
         <ArrowLeft size={12} />
         <span>Back</span>
       </button>
-      <div className="h-3 w-px bg-white/10" />
+      <div className="h-3 w-px bg-line" />
       <div className="flex items-center gap-1 text-[11px]">
         <span className="text-muted">World</span>
         {levels.map((lv: any, i: any) => (
