@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
+import logging
+
+from app.domains.market import ai_today
 from app.domains.market.ai_today import (
+    VILTROX_TOKEN,
     _extract_grounding_sources,
     _freshness_payload,
+    _market_sources,
     _platform_video_id,
     _rank_video_candidates,
+    _read_hot_brands,
+    _recommended_video_rows,
 )
 
 
@@ -183,3 +191,92 @@ def test_freshness_payload_marks_old_snapshot_stale() -> None:
     freshness = _freshness_payload("2020-01-01T00:00:00Z")
     assert freshness["freshness_status"] == "stale"
     assert freshness["age_hours"] > 36
+
+
+class _CaptureResult:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return self._rows
+
+    def fetchone(self) -> dict[str, object] | None:
+        return self._rows[0] if self._rows else None
+
+
+class _CaptureConn:
+    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
+        self.queries: list[str] = []
+        self.params: list[tuple[object, ...]] = []
+        self._rows = rows or []
+
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> _CaptureResult:
+        self.queries.append(query)
+        self.params.append(tuple(params))
+        return _CaptureResult(self._rows)
+
+
+def test_recommended_video_rows_excludes_own_content_at_query_layer(monkeypatch) -> None:
+    """「AI Today 只看外部世界」:三类自家内容(标题带品/官号帖/合作产出)在采样 SQL 层排除。"""
+    conn = _CaptureConn()
+    monkeypatch.setattr(ai_today, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        ai_today.logger, "isEnabledFor", lambda _level: False
+    )
+
+    assert _recommended_video_rows(limit=100) == []
+
+    assert len(conn.queries) == 1
+    query = conn.queries[0]
+    assert (
+        "AND NOT (strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0)"
+        in query
+    )
+    assert "AND NOT (e.project_id IS NOT NULL)" in query
+    assert "vkpi_employee_channels" in query
+    assert conn.params[0] == (VILTROX_TOKEN, 100)
+
+
+def test_recommended_video_rows_logs_excluded_counts_at_debug(monkeypatch) -> None:
+    count_row = {
+        "pool_total": 483,
+        "own_title_mention": 157,
+        "own_project_linked": 294,
+        "own_official_channel": 0,
+        "own_excluded_total": 405,
+    }
+    conn = _CaptureConn(rows=[count_row])
+    monkeypatch.setattr(ai_today, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        ai_today.logger, "isEnabledFor", lambda level: level == logging.DEBUG
+    )
+
+    _recommended_video_rows(limit=50)
+
+    assert len(conn.queries) == 2
+    count_query = conn.queries[0]
+    assert "own_excluded_total" in count_query
+    assert "vkpi_employee_channels" in count_query
+    assert conn.params[0] == (VILTROX_TOKEN, VILTROX_TOKEN)
+
+
+def test_read_hot_brands_drops_own_brand(tmp_path) -> None:
+    payload = {"hot_brands": ["Viltrox", "Sony", "viltrox AF 85mm", "Sigma"]}
+    (tmp_path / "20260712-market-signal.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    assert _read_hot_brands(ops_dir=str(tmp_path)) == ["Sony", "Sigma"]
+
+
+def test_market_sources_exclude_own_brand_in_query(monkeypatch) -> None:
+    conn = _CaptureConn()
+    monkeypatch.setattr(ai_today, "get_conn", lambda: conn)
+
+    assert _market_sources(["Sony"]) == []
+
+    assert len(conn.queries) == 2
+    for query, params in zip(conn.queries, conn.params):
+        assert "strpos(lower(COALESCE(" in query
+        assert ", ?) = 0" in query
+        assert params == (VILTROX_TOKEN,)

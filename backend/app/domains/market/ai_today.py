@@ -5,10 +5,15 @@
 - claude client 自带代理(本网络直连被墙,走 HTTPS_PROXY);一天一次小调用。
 - 只写本域表 `vkpi_ai_today_hot`,绝不碰 vkpi_kol_pool / viltrox_fit_score / 指纹。
 - 无可回跳的 Google grounding citation 时不覆盖 latest;Claude 回退只显式标为 ungrounded。
+- 【AI Today 只看外部世界】「外部市场样例」在采样查询层排除三类自家内容(非显示层遮罩):
+  ①标题/正文含 viltrox(strpos 参数化,判据同 my_kol_board_ext);②官号帖(账号命中
+  vkpi_employee_channels);③合作产出(evidence 挂 project_id)。池收窄如实显示,绝不
+  回填自家内容凑数;池空=诚实空态。hot_brands / 市场信号来源同口径剔除自家品牌。
 """
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from datetime import datetime, timezone
@@ -20,6 +25,7 @@ from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
+from app.domains.kol.my_kol_board_ext_sql import VILTROX_TOKEN
 
 logger = get_logger(__name__)
 
@@ -274,10 +280,87 @@ _TOPIC_TERMS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
 )
 
 
+# ── 「AI Today 只看外部世界」采样查询层排除三类自家内容(用户裁决 2026-07-12)──
+# 判据与 my_kol_board_ext 完全同口径;SQL 字符串内零注释(compat 把注释里的 ASCII
+# 问号当占位符),条件全参数化。
+_OWN_TITLE_MENTION_COND = (
+    "strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0"
+)
+_OWN_PROJECT_COND = "e.project_id IS NOT NULL"
+_OWN_OFFICIAL_CHANNEL_COND = """EXISTS (
+                SELECT 1 FROM vkpi_employee_channels oc
+                WHERE oc.deleted_at IS NULL
+                  AND lower(ltrim(COALESCE(oc.account_handle, ''), '@')) != ''
+                  AND lower(ltrim(COALESCE(oc.account_handle, ''), '@')) IN (
+                    lower(ltrim(COALESCE(e.channel_name, ''), '@')),
+                    lower(ltrim(COALESCE(p.handle, ''), '@'))
+                  )
+              )"""
+
+_SAMPLE_POOL_BASE_WHERE = """e.is_active IS NOT FALSE
+              AND COALESCE(e.evidence_type, 'video')='video'
+              AND COALESCE(e.content_url, '') != ''
+              AND (deep.id IS NOT NULL OR final_cache.id IS NOT NULL)"""
+
+_OWN_CONTENT_EXCLUDED_COUNT_SQL = f"""
+            SELECT
+                COUNT(*) AS pool_total,
+                SUM(CASE WHEN {_OWN_TITLE_MENTION_COND} THEN 1 ELSE 0 END) AS own_title_mention,
+                SUM(CASE WHEN {_OWN_PROJECT_COND} THEN 1 ELSE 0 END) AS own_project_linked,
+                SUM(CASE WHEN {_OWN_OFFICIAL_CHANNEL_COND} THEN 1 ELSE 0 END) AS own_official_channel,
+                SUM(CASE WHEN ({_OWN_TITLE_MENTION_COND})
+                          OR ({_OWN_PROJECT_COND})
+                          OR ({_OWN_OFFICIAL_CHANNEL_COND})
+                         THEN 1 ELSE 0 END) AS own_excluded_total
+            FROM vkpi_kol_video_evidence e
+            JOIN vkpi_kol_pool p ON p.id=e.kol_pool_id
+            LEFT JOIN LATERAL (
+                SELECT d.id
+                FROM vkpi_kol_llm_deep_analysis_results d
+                WHERE d.source_evidence_id=e.id AND d.status='ready'
+                ORDER BY d.id DESC LIMIT 1
+            ) deep ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT c.id
+                FROM vkpi_analysis_cache c
+                WHERE c.target_type='video'
+                  AND c.target_id=e.id::text
+                  AND c.derive_method='video_analysis_final_v1'
+                  AND c.status='ready'
+                ORDER BY c.id DESC LIMIT 1
+            ) final_cache ON TRUE
+            WHERE {_SAMPLE_POOL_BASE_WHERE}
+"""
+
+
+def _log_excluded_own_content_counts() -> None:
+    """debug 级记录采样池里被排除的自家内容数量(排除本身在查询层,见采样 SQL)。"""
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    try:
+        row = get_conn().execute(
+            _OWN_CONTENT_EXCLUDED_COUNT_SQL, (VILTROX_TOKEN, VILTROX_TOKEN)
+        ).fetchone()
+        counts = dict(row) if row is not None else {}
+        logger.debug(
+            "ai_today.sample_pool_own_content_excluded",
+            extra={
+                "pool_total": counts.get("pool_total"),
+                "own_title_mention": counts.get("own_title_mention"),
+                "own_project_linked": counts.get("own_project_linked"),
+                "own_official_channel": counts.get("own_official_channel"),
+                "own_excluded_total": counts.get("own_excluded_total"),
+            },
+        )
+    except Exception:
+        logger.debug("ai_today.own_content_exclusion_count_failed", exc_info=True)
+
+
 def _recommended_video_rows(limit: int = 240) -> list[dict[str, Any]]:
+    _log_excluded_own_content_counts()
     try:
         rows = get_conn().execute(
-            """
+            f"""
             SELECT
                 e.id AS evidence_id,
                 e.kol_pool_id,
@@ -345,16 +428,16 @@ def _recommended_video_rows(limit: int = 240) -> list[dict[str, Any]]:
                   )
                 ORDER BY asset.updated_at DESC LIMIT 1
             ) mvideo ON TRUE
-            WHERE e.is_active IS NOT FALSE
-              AND COALESCE(e.evidence_type, 'video')='video'
-              AND COALESCE(e.content_url, '') != ''
-              AND (deep.id IS NOT NULL OR final_cache.id IS NOT NULL)
+            WHERE {_SAMPLE_POOL_BASE_WHERE}
+              AND NOT ({_OWN_TITLE_MENTION_COND})
+              AND NOT ({_OWN_PROJECT_COND})
+              AND NOT ({_OWN_OFFICIAL_CHANNEL_COND})
             ORDER BY COALESCE(deep.llm_v6_fit, p.viltrox_fit_score, 0) DESC,
                      COALESCE(e.view_count, 0) DESC,
                      e.id DESC
             LIMIT ?
             """,
-            (max(20, min(500, int(limit))),),
+            (VILTROX_TOKEN, max(20, min(500, int(limit))),),
         ).fetchall()
         return [dict(row) for row in rows]
     except Exception:
@@ -503,6 +586,8 @@ def _rank_video_candidates(rows: list[dict[str, Any]], content: dict[str, Any]) 
 
 
 def _market_sources(hot_brands: Any, limit: int = 6) -> list[dict[str, Any]]:
+    """外部市场来源。自家品牌不是外部市场信号:brand 字段命中 viltrox 的行在查询层剔除
+    (只看 brand 归属字段,不看 detail 正文——外部内容提及我们仍属外部世界)。"""
     rows: list[Any] = []
     try:
         rows.extend(get_conn().execute(
@@ -511,9 +596,11 @@ def _market_sources(hot_brands: Any, limit: int = 6) -> list[dict[str, Any]]:
                    source_id, source_url, detail, score, review_status, expires_at, created_at
             FROM vkpi_competitor_signals
             WHERE COALESCE(source_url, '') != ''
+              AND strpos(lower(COALESCE(normalized_brand, brand, '')), ?) = 0
             ORDER BY score DESC NULLS LAST, updated_at DESC
             LIMIT 80
-            """
+            """,
+            (VILTROX_TOKEN,),
         ).fetchall())
     except Exception:
         logger.debug("ai_today.competitor_source_query_failed", exc_info=True)
@@ -536,9 +623,11 @@ def _market_sources(hot_brands: Any, limit: int = 6) -> list[dict[str, Any]]:
             FROM vkpi_market_mentions m
             JOIN vkpi_market_sources s ON s.id=m.source_id
             WHERE COALESCE(s.source_url, '') != ''
+              AND strpos(lower(COALESCE(m.competitor_product, '')), ?) = 0
             ORDER BY m.score DESC NULLS LAST, m.created_at DESC
             LIMIT 80
-            """
+            """,
+            (VILTROX_TOKEN,),
         ).fetchall())
     except Exception:
         logger.debug("ai_today.market_mention_source_query_failed", exc_info=True)
@@ -593,7 +682,8 @@ def _market_sources(hot_brands: Any, limit: int = 6) -> list[dict[str, Any]]:
 
 
 def _read_hot_brands(ops_dir: str = "runtime/ops", limit: int = 6) -> list[str]:
-    """best-effort 读最新 market 信号里的热点品牌喂 LLM;任何异常回退 [],绝不抛。"""
+    """best-effort 读最新 market 信号里的热点品牌喂 LLM;任何异常回退 [],绝不抛。
+    自家品牌剔除:AI Today 只看外部世界,viltrox 不是「外部热点品牌」信号。"""
     try:
         root = Path(ops_dir)
         files = sorted(
@@ -608,10 +698,13 @@ def _read_hot_brands(ops_dir: str = "runtime/ops", limit: int = 6) -> list[str]:
             summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
             hot = summary.get("hot_brands") or data.get("hot_brands") or []
             out: list[str] = []
-            for h in hot[:limit]:
+            for h in hot:
                 name = h.get("brand") if isinstance(h, dict) else str(h)
-                if name:
-                    out.append(str(name))
+                if not name or VILTROX_TOKEN in str(name).lower():
+                    continue
+                out.append(str(name))
+                if len(out) >= limit:
+                    break
             if out:
                 return out
         return []
