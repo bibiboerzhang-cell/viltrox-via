@@ -4,6 +4,7 @@
   GET /api/admin/vkpi/sku/list?query=&limit=          前端选择器搜 vkpi_products
   GET /api/admin/vkpi/sku/{sku_id_or_code}/content-performance
   GET /api/admin/vkpi/sku/{sku_id_or_code}/profile
+  GET /api/admin/vkpi/sku/{sku_id_or_code}/persona    产品知识库画像(vkpi_product_persona 只读)
 
 领域逻辑全在 app.domains.products.sku_performance;本文件只做接线 + 404 转换。
 路由声明顺序:/sku/list 在参数路由之前,避免被 {sku_id_or_code} 吞掉。
@@ -44,6 +45,17 @@ def sku_profile(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     payload = sku_performance.sku_profile(sku_id_or_code)
+    if payload.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail=f"SKU not found: {sku_id_or_code}")
+    return payload
+
+
+@router.get("/sku/{sku_id_or_code}/persona")
+def sku_persona(
+    sku_id_or_code: str,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    payload = sku_performance.sku_persona(sku_id_or_code)
     if payload.get("status") == "not_found":
         raise HTTPException(status_code=404, detail=f"SKU not found: {sku_id_or_code}")
     return payload

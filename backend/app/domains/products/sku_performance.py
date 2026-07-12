@@ -706,6 +706,36 @@ def _bh_reviews(conn: Any, sku: str, matcher: _AliasMatcher) -> dict[str, Any]:
     }
 
 
+# ── 产品知识库画像(vkpi_product_persona 只读透传) ───────────────────
+
+
+def sku_persona(sku_or_code: str) -> dict[str, Any]:
+    """产品知识库画像:vkpi_product_persona 单行只读透传(本函数零模型调用)。
+
+    该表由离线批跑 build_product_personas.py 走 llm_gateway 生成;
+    model / source / generated_at 原样回传给前端做来源标注。
+    表无数值置信度列 → 不编造 confidence;未生成画像 → persona=None 诚实空态。
+    红线:零触 viltrox_fit_score / rule_v0,纯读零写。
+    """
+    product = resolve_sku(sku_or_code)
+    if not product:
+        return {"status": "not_found", "query": _text(sku_or_code, 200), "generated_at": _utcnow()}
+
+    from app.domains.costs.product_persona import get_product_persona
+
+    try:
+        persona = get_product_persona(_text(product.get("sku"), 120))
+    except Exception:
+        logger.warning("sku_performance.persona_read_failed sku=%s", product.get("sku"), exc_info=True)
+        persona = None
+    return {
+        "status": "ok",
+        "product": _product_basic(product),
+        "persona": persona,
+        "generated_at": _utcnow(),
+    }
+
+
 # ── 360° 档案 ────────────────────────────────────────────────────────
 
 
