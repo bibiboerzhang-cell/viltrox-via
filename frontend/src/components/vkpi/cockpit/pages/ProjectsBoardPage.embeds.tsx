@@ -49,6 +49,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["在项 KOL", "vkpi_project_kol_assignments Σ kolCount(规划中/进行中/收尾中组)"],
       ["本窗发布", "vkpi_project_content_posts.published_at ≥ 近 30 天(own-only 服务端裁)"],
       ["归因销售", "vkpi_sales_attributions Σ revenue_cents ÷ 100(美分→美元唯一换算点,带单测)"],
+      ["归因口径", "按本人可见行合计(服务端裁:未删项目关联 + own-only),非全表 —— 挂他人/已删项目的行不计入"],
       ["趋势位", "无按日序列端点 → 诚实虚线零药丸(不编时序)"],
     ],
   },
@@ -98,6 +99,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "vkpi_sales_attributions",
     rows: [
       ["主表", "vkpi_sales_attributions(own-only 服务端裁剪)"],
+      ["口径", "列表与 KPI 卡同源同刀:未删项目关联 + 本人可见行,非全表(上限 500 行)"],
       ["金额", "revenue_cents 美分存储 ÷ 100 展示(唯一换算点,带单测)"],
       ["置信", "confirmed / estimated / manual / unmatched 真值徽"],
     ],

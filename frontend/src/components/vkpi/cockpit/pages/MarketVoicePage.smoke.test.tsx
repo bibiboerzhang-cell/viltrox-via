@@ -646,3 +646,49 @@ describe("MarketVoicePage smoke (V0h-ab 图形模块补齐 + KPI 带图形化 + 
     expect(await screen.findByText("反馈流 · 全量")).toBeTruthy();
   });
 });
+
+/* ============ comp 品牌行 → 战略台联动(发送端三通道:sessionStorage+事件+onNavigate) ============ */
+describe("comp 品牌行联动战略台", () => {
+  const EXT_WITH_COMP = {
+    ...EXT_OK,
+    competitor_voice: {
+      status: "ready",
+      sample_videos: 12,
+      viltrox_videos: 7,
+      competitor_exposures: 9,
+      items: [
+        { brand: "Viltrox", is_self: true, count: 7, share: 0.58 },
+        { brand: "Sigma", is_self: false, count: 3, share: 0.25 },
+        { brand: "Samyang", is_self: false, count: 2, share: 0.17 },
+      ],
+    },
+  };
+
+  it("品牌行可点(hover title 查看竞争对照)→ 写 vkpi:strategy-brand + 派发事件 + onNavigate(strategyBoard)", async () => {
+    fetchVoiceReportExt.mockReset().mockResolvedValue(EXT_WITH_COMP);
+    const onNavigate = vi.fn();
+    const eventSpy = vi.fn();
+    window.addEventListener("vkpi:open-strategy-desk", eventSpy);
+    try {
+      render(<MarketVoicePage apiToken="t" onNavigate={onNavigate} />);
+      const row = await screen.findByText("Sigma");
+      // 行加 hover+title「查看竞争对照」(BarRow onClick 通道自带 hover 态)
+      expect((row.closest('[title="查看竞争对照"]') as HTMLElement | null)).toBeTruthy();
+      fireEvent.click(row);
+      // 三通道:sessionStorage 键(StrategyDeskPage STRATEGY_BRAND_KEY 同名)+ 事件 + 切板块
+      expect(window.sessionStorage.getItem("vkpi:strategy-brand")).toBe("Sigma");
+      expect(eventSpy).toHaveBeenCalledTimes(1);
+      expect(onNavigate).toHaveBeenCalledWith("strategyBoard");
+    } finally {
+      window.removeEventListener("vkpi:open-strategy-desk", eventSpy);
+    }
+  });
+
+  it("无 onNavigate(跳不了)→ 品牌行如实不可点,零假按钮", async () => {
+    fetchVoiceReportExt.mockReset().mockResolvedValue(EXT_WITH_COMP);
+    render(<MarketVoicePage apiToken="t" />);
+    const row = await screen.findByText("Sigma");
+    expect(row.closest('[role="button"]')).toBeNull();
+    expect(row.closest('[title="查看竞争对照"]')).toBeNull();
+  });
+});

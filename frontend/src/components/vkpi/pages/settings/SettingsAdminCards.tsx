@@ -73,11 +73,11 @@ export function RuntimeTrustCard() {
       </div>
       <div className={`vkpi-info-block ${alignClass}`}>
         <span>版本对齐 (sha_aligned)</span>
-        <strong style={aligned === true ? { color: "#34d399" } : aligned === false ? { color: "#f43f5e" } : undefined}>{alignLabel}</strong>
+        <strong style={aligned === true ? { color: "var(--ds-good)" } : aligned === false ? { color: "var(--ds-crit)" } : undefined}>{alignLabel}</strong>
       </div>
       <div className="vkpi-info-block">
         <span>Worker 状态</span>
-        <strong style={workerOnline === false ? { color: "#f43f5e" } : workerOnline === true ? { color: "#34d399" } : undefined}>{workerLabel}</strong>
+        <strong style={workerOnline === false ? { color: "var(--ds-crit)" } : workerOnline === true ? { color: "var(--ds-good)" } : undefined}>{workerLabel}</strong>
       </div>
       <InfoBlock label="server sha" value={shortSha(trust?.server_git_sha ?? null)} />
       <InfoBlock label="client sha" value={shortSha(trust?.client_git_sha ?? null)} />

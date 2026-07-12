@@ -344,3 +344,31 @@ describe("ProjectsBoardPage 行模块弹窗", () => {
     expect(screen.queryByText("$6,496.49")).toBeNull();
   });
 });
+
+/* ============ open-project 管道 consume-reset(同项目二次 ⌘K 不再死点击) ============ */
+describe("openProjectId consume-reset", () => {
+  const boardProps = (openProjectId: string, onConsumeOpenProject: () => void) => (
+    <ProjectsBoardPage
+      data={data}
+      filteredProjects={ROWS}
+      viewMode="manager"
+      apiToken="t"
+      onSelectProject={noop}
+      openProjectId={openProjectId}
+      onConsumeOpenProject={onConsumeOpenProject}
+    />
+  );
+
+  it("消费 openProjectId 即回执 onConsumeOpenProject;宿主清空后同 id 再来 → 再消费(二次打开)", async () => {
+    const onConsume = vi.fn();
+    const view = render(boardProps("7", onConsume));
+    // 消费:详情打开(详情分支真发起 /api/marketing/projects/7)+ 回执一次
+    await waitFor(() => expect(onConsume).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(calledPaths().some((p) => p.includes("/api/marketing/projects/7"))).toBe(true));
+    // 宿主(CockpitApp)收到回执后清空管道 → 同一项目二次点开:id ""→"7" 再变 → effect 再触发。
+    // 修复前 openLegacyProjectId 永不清空,第二次 setOpenLegacyProjectId("7") 是 no-op = 死点击。
+    view.rerender(boardProps("", onConsume));
+    view.rerender(boardProps("7", onConsume));
+    await waitFor(() => expect(onConsume).toHaveBeenCalledTimes(2));
+  });
+});

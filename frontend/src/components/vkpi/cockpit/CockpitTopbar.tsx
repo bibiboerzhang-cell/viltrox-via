@@ -1,4 +1,4 @@
-// 2026-07 门面重建:布局对齐 mockup(标题+实时副标 / 居中搜索 / 外观弹层 / 通知 / 账户),
+// 2026-07 门面重建:布局对齐 mockup(标题+副标 / 居中搜索 / 外观弹层 / 通知 / 账户),
 // 配色全吃 --ds-* token(随全局 ThemeProvider 三风格×明暗切换)。搜索/进度中心/Help/消息/
 // Report/通知/账户菜单等真功能与 handler 逻辑一字不改,仅换皮 + 新增「外观弹层」(接 ThemeProvider)。
 
@@ -267,13 +267,16 @@ export function CockpitTopbar({
 
   return e(React.Fragment, null,
    e("header", { className: "vkpi-topbar sticky top-0 z-40 flex h-[60px] items-center gap-4 border-b border-line px-4 md:px-[22px]" },
-    // 左:标题 + 实时副标
+    // 左:标题 + 副标(时间机制红线:页头禁冒称「实时/Just now」;新鲜度口径由各模块
+    // SrcChip/溯源承担 —— dashboard 只留中性描述,其余板块不再挂副标字样)。
     e("div", { className: "vkpi-topbar-title flex flex-none flex-col justify-center" },
       e("h1", { className: "text-[16px] font-semibold leading-none text-ink" }, label),
-      e("div", { className: "mt-1 flex items-center gap-1.5 text-[10px] text-muted" },
-        e("span", { className: "h-1.5 w-1.5 rounded-full bg-good" }),
-        activeNav === "dashboard" ? "增长总览 · 实时" : (t ? t("实时") : "实时")
-      )
+      activeNav === "dashboard"
+        ? e("div", { className: "mt-1 flex items-center gap-1.5 text-[10px] text-muted" },
+            e("span", { className: "h-1.5 w-1.5 rounded-full bg-good" }),
+            "增长总览"
+          )
+        : null
     ),
     // 中:样品同款 Ask 入口;弹层内同时跑真全局搜索与 Intelligent 问答。
     e("button", {

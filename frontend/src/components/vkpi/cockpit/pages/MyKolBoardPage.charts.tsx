@@ -624,7 +624,7 @@ export function ClaimsBody({ claims }: { claims: Array<Record<string, unknown>> 
           <div key={String(c.id)} className="flex items-center gap-2 border-b border-line py-1.5 text-[11.5px] last:border-0">
             <span
               className={`h-[7px] w-[7px] flex-none rounded-full ${active ? "bg-good" : "bg-muted"}`}
-              style={active ? { boxShadow: "0 0 5px var(--ds-good)" } : undefined}
+              style={active ? { boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" } : undefined}
             />
             <span className={`min-w-0 flex-1 truncate ${active ? "text-ink-2" : "text-muted"}`} title={`kol_id #${String(c.kol_id ?? "—")}`}>
               {String(c.kol_name || `#${String(c.kol_id ?? "—")}`)}
@@ -686,7 +686,7 @@ export function CoverBody() {
         >
           <span
             className={`h-[7px] w-[7px] flex-none rounded-full ${row.count > 0 ? "bg-good" : "bg-muted"}`}
-            style={row.count > 0 ? { boxShadow: "0 0 5px var(--ds-good)" } : undefined}
+            style={row.count > 0 ? { boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" } : undefined}
           />
           <span className={`min-w-0 flex-1 truncate ${row.count > 0 ? "text-ink-2" : "text-muted"}`}>{row.name}</span>
           <span className={`flex-none font-mono text-[9.5px] ${row.count > 0 ? "text-muted" : "text-warn"}`}>

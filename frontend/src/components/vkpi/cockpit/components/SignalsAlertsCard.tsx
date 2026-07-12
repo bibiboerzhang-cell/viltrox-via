@@ -243,8 +243,8 @@ export function SignalsAlertsCard({ alerts, onAlertClick, onViewAll, freshnessAt
                 <div className="min-w-0 flex-1">
                   <div className="line-clamp-2 text-[11px] font-medium" style={{ color: sevTextColor[severity] }}>{alert.title}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-1">
-                    {externalPlatform ? <span className="rounded border border-accent/25 bg-accent-soft px-1.5 py-px text-[8px] text-accent">外部市场样例</span> : null}
-                    {stale ? <span className="rounded border border-warn/30 bg-warn-soft px-1.5 py-px text-[8px] text-warn">过期快照</span> : null}
+                    {externalPlatform ? <span className="rounded border border-[color:color-mix(in_srgb,var(--ds-accent)_25%,transparent)] bg-accent-soft px-1.5 py-px text-[8px] text-accent">外部市场样例</span> : null}
+                    {stale ? <span className="rounded border border-[color:color-mix(in_srgb,var(--ds-warn)_30%,transparent)] bg-warn-soft px-1.5 py-px text-[8px] text-warn">过期快照</span> : null}
                     {!featuredSourceHasLink ? <span className="rounded border border-line px-1.5 py-px text-[8px] text-warn">样例无原始链接</span> : null}
                   </div>
                 </div>

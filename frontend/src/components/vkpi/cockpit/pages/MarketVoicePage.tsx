@@ -235,6 +235,25 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     [onNavigate],
   );
 
+  // comp 品牌行 → 战略台联动(接收端 StrategyDeskPage 三通道已挂:sessionStorage
+  // vkpi:strategy-brand + vkpi:open-strategy-desk 事件 + onNavigate 切板块)。键名与
+  // StrategyDeskPage 导出常量一致,刻意不 import(两页各自 lazy chunk,避免打破分包)。
+  // 注:sku360 发送端保持挂账不硬接 —— 声音榜是产品线级,无逐 SKU 关联,如实不造。
+  const openStrategyBrand = React.useCallback(
+    (brandName: string) => {
+      const brand = String(brandName || "").trim();
+      if (!brand) return;
+      try {
+        window.sessionStorage.setItem("vkpi:strategy-brand", brand);
+      } catch {
+        /* sessionStorage 不可用忽略,事件通道仍在 */
+      }
+      window.dispatchEvent(new CustomEvent("vkpi:open-strategy-desk"));
+      if (onNavigate) onNavigate("strategyBoard");
+    },
+    [onNavigate],
+  );
+
   React.useEffect(() => {
     if (wantIndex != null && feedItems && wantIndex < feedItems.length) {
       setDetailIndex(wantIndex);
@@ -407,7 +426,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
   const renderComp = () => {
     const g = extData?.competitor_voice as Row | undefined;
     const extraRows = g?.basis ? ([["后端口径", String(g.basis)]] as Array<[string, string]>) : undefined;
-    return extModule("comp", "同话题竞品声量", g, `${arr(g?.items).length} 家`, () => <CompetitorBody comp={g || {}} />, extraRows);
+    return extModule("comp", "同话题竞品声量", g, `${arr(g?.items).length} 家`, () => <CompetitorBody comp={g || {}} onBrandClick={onNavigate ? openStrategyBrand : undefined} />, extraRows);
   };
   // cat 环图:数据 = 现有 voice-report complaints 类别计数(复用既有 fetch,零新请求);
   // 分段/图例行可点 → 类别原声下钻(词族过滤,口径差在弹窗 sub 如实注明)
@@ -605,7 +624,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
-            <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 6px var(--ds-good)" }} />
+            <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" }} />
             实时
           </span>
           <input

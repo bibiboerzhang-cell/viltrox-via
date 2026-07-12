@@ -61,7 +61,7 @@ export function ContentCalendarCard({ days, onItemClick, onViewAll, latestDate }
     ),
     // 数据源停更案(2026-06-12 波3 R3):上游同步可能停更,诚实标注数据截止日,不冒充「近 7 天」。
     latestDate && days.length > 0 && e("div", {
-      className: "mt-2 border-t border-line pt-2 text-[9px] text-warn/80",
+      className: "mt-2 border-t border-line pt-2 text-[9px] text-[color:color-mix(in_srgb,var(--ds-warn)_80%,transparent)]",
       title: "来自 dashboard/recent-content 的最新 posted_at;上游同步停更时此日期不再前进"
     }, `数据截至 ${latestDate}`)
   );

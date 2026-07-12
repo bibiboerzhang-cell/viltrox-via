@@ -91,6 +91,7 @@ export function ProjectsBoardPage({
   selectedProjectId,
   selectedProject,
   openProjectId,
+  onConsumeOpenProject,
   viewMode,
   onOpenKolProfile,
   onOpenStaffProfile,
@@ -132,8 +133,13 @@ export function ProjectsBoardPage({
   const [attrListOpen, setAttrListOpen] = React.useState(false);
 
   React.useEffect(() => {
-    if (openProjectId) setDetailProjectId(openProjectId);
-  }, [openProjectId]);
+    if (openProjectId) {
+      setDetailProjectId(openProjectId);
+      // 消费即回执:宿主(CockpitApp)清空 openLegacyProjectId 管道,
+      // 同一项目二次 ⌘K/泳道点开时 id 再变 → effect 再触发(此前永不清空 = 死点击)。
+      onConsumeOpenProject?.();
+    }
+  }, [openProjectId, onConsumeOpenProject]);
 
   // 智能中心 / 红人搜索焦点(旧页同款:读一次即清,命中即开详情)
   React.useEffect(() => {
@@ -256,7 +262,7 @@ export function ProjectsBoardPage({
     const extraRows: Array<[string, string]> = [
       ...(postsResp.error ? ([["本窗发布源", `读取失败:${postsResp.error}`]] as Array<[string, string]>) : []),
       ...(attrResp.error ? ([["归因源", `读取失败:${attrResp.error}`]] as Array<[string, string]>) : []),
-      ...(revenueUsd != null ? ([["归因合计", `${fmtUsd2(revenueUsd)}(${attributions?.length ?? 0} 行 Σ revenue_cents ÷ 100)`]] as Array<[string, string]>) : []),
+      ...(revenueUsd != null ? ([["归因合计", `${fmtUsd2(revenueUsd)}(${attributions?.length ?? 0} 行 Σ revenue_cents ÷ 100 · 按本人可见行合计,非全表)`]] as Array<[string, string]>) : []),
     ];
     return (
       <ModuleCard {...cardProps("kpiP", "项目指标带", groups.length ? `${groups.length} 组` : undefined, extraRows)}>
@@ -346,7 +352,7 @@ export function ProjectsBoardPage({
         "attrP",
         "归因销售",
         attributions ? `${attributions.length}` : undefined,
-        revenueUsd != null ? [["合计", `${fmtUsd2(revenueUsd)}(Σ revenue_cents ÷ 100)`]] : [],
+        revenueUsd != null ? [["合计", `${fmtUsd2(revenueUsd)}(Σ revenue_cents ÷ 100 · 按本人可见行,非全表)`]] : [],
       )}
     >
       {opsGate(attributions, attrResp.error, "attribution") ?? (
@@ -475,7 +481,7 @@ export function ProjectsBoardPage({
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
-            <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 6px var(--ds-good)" }} />
+            <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" }} />
             实时
           </span>
           {onCreateProject ? (

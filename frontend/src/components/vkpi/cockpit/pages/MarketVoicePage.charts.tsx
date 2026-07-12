@@ -581,7 +581,9 @@ export function LanguageBody({ dist, onRowClick }: { dist: Row; onRowClick?: () 
 }
 
 /* ============ comp · 同话题竞品声量(百家饭同口径;Viltrox 首行高亮) ============ */
-export function CompetitorBody({ comp }: { comp: Row }) {
+// onBrandClick:品牌行点击 → 联动战略台(发送端在 MarketVoicePage renderComp;
+// 缺省 = 纯展示行零假按钮,hover/键盘可达由 BarRow onClick 通道自带)。
+export function CompetitorBody({ comp, onBrandClick }: { comp: Row; onBrandClick?: (brand: string) => void }) {
   const items: Row[] = Array.isArray(comp.items) ? comp.items : [];
   if (items.length === 0) return <EmptyLine text={String(comp.reason || "窗口内无品牌露出信号。")} />;
   return (
@@ -590,14 +592,17 @@ export function CompetitorBody({ comp }: { comp: Row }) {
         const self = Boolean(it.is_self);
         const share = typeof it.share === "number" ? it.share : null;
         const count = Number(it.count) || 0;
+        const brandName = String(it.brand);
         return (
           <BarRow
-            key={String(it.brand)}
-            name={String(it.brand)}
+            key={brandName}
+            name={brandName}
             highlight={self}
             widthPct={share != null ? share * 100 : 0}
             color={self ? "linear-gradient(90deg, var(--ds-accent), var(--ds-accent-2))" : "var(--ds-muted)"}
             value={share != null ? `${count} 条 · ${pctText(share)}%` : `${count} 条`}
+            title={onBrandClick ? "查看竞争对照" : undefined}
+            onClick={onBrandClick ? () => onBrandClick(brandName) : undefined}
           />
         );
       })}

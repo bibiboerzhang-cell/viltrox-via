@@ -208,9 +208,9 @@ export function AIIntelligenceCard({
   const freshnessStatus = String(model.freshnessStatus || "unknown");
   const updatedLabel = String(model.updatedLabel || model.freshnessLabel || "更新时间未记录");
   const statusClass = isStale
-    ? "border-warn/30 bg-warn-soft text-warn"
+    ? "border-[color:color-mix(in_srgb,var(--ds-warn)_30%,transparent)] bg-warn-soft text-warn"
     : freshnessStatus === "fresh"
-      ? "border-good/30 bg-good-soft text-good"
+      ? "border-[color:color-mix(in_srgb,var(--ds-good)_30%,transparent)] bg-good-soft text-good"
       : "border-line bg-card text-muted";
   const hasDirectMarketSource = sources.some((source: Record<string, any>) => hasHttpUrl(source?.url || source?.content_url));
   const contextOnlySources = sources.length > 0 && sources.every((source: Record<string, any>) =>
@@ -347,7 +347,7 @@ export function AIIntelligenceCard({
               <div className="min-w-0 p-2.5">
                 <div className="mb-1 flex min-w-0 items-start justify-between gap-2">
                   <h4 className="line-clamp-2 min-w-0 text-[11px] font-semibold leading-snug text-ink">{video.title || "未命名外部样例"}</h4>
-                  <span className="shrink-0 rounded border border-accent/25 bg-accent-soft px-1.5 py-0.5 text-[8px] text-accent">外部</span>
+                  <span className="shrink-0 rounded border border-[color:color-mix(in_srgb,var(--ds-accent)_25%,transparent)] bg-accent-soft px-1.5 py-0.5 text-[8px] text-accent">外部</span>
                 </div>
                 <dl className="ai-evidence-card__metadata mt-2">
                   <div><dt>平台</dt><dd>{videoPlatform}</dd></div>

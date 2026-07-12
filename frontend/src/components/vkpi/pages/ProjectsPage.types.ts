@@ -6,6 +6,8 @@ export interface ProjectsPageProps {
   selectedProjectId?: string;
   selectedProject?: VkpiProjectRow;
   openProjectId?: string;
+  /** openProjectId 消费回执:页内已按该 id 打开详情后回调,宿主清空管道(同一项目可重复打开)。 */
+  onConsumeOpenProject?: () => void;
   viewMode: 'manager' | 'employee';
   onSelectProject: (project: VkpiProjectRow) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;

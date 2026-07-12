@@ -113,8 +113,9 @@ export function SettingsModule({
 export function EmployeePermissionCard({ permissions }: { permissions?: Record<string, string> }) {
   const levelLabel = (level: string): string =>
     ({ none: "无权限", read: "只读", write: "可写", admin: "管理" }[String(level || "none").toLowerCase()] || "无权限");
+  // 权限徽章色走 ds token(none=muted / read=info / write=good / admin=warn),明暗主题自适应,零写死 hex。
   const levelColor = (level: string): string =>
-    ({ none: "#64748b", read: "#3b82f6", write: "#10b981", admin: "#f59e0b" }[String(level || "none").toLowerCase()] || "#64748b");
+    ({ none: "var(--ds-muted)", read: "var(--ds-info)", write: "var(--ds-good)", admin: "var(--ds-warn)" }[String(level || "none").toLowerCase()] || "var(--ds-muted)");
   const keys = permissions ? Object.keys(permissions).sort() : [];
   return (
     <section className="vkpi-card vkpi-action-card">

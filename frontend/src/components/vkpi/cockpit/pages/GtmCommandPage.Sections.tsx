@@ -451,7 +451,7 @@ export function PlanFootnote({ p, meta }: { p: GtmPublicPlan; meta: GtmPlanMeta 
               "span",
               { key: i, className: "rounded border border-accent bg-accent-soft px-2 py-0.5 text-[10px] text-accent" },
               `${m.metric || "—"}${m.threshold ? ` ≥ ${m.threshold}` : ""}`,
-              m.confidence ? e("span", { className: "ml-1 text-accent/70" }, `(置信 ${m.confidence})`) : null,
+              m.confidence ? e("span", { className: "ml-1 text-[color:color-mix(in_srgb,var(--ds-accent)_70%,transparent)]" }, `(置信 ${m.confidence})`) : null,
             ),
           ),
         ),

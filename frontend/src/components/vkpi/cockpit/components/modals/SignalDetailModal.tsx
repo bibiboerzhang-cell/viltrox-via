@@ -166,10 +166,10 @@ function SignalSourceCard({ source, stale }: { source: Record<string, any>; stal
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-1.5">
-              {platform && isExternalSource(source) ? <span className="rounded border border-accent/25 bg-accent-soft px-1.5 py-0.5 text-[8.5px] text-accent">外部市场样例</span> : null}
-              {relation === "grounding" ? <span className="rounded border border-good/30 bg-good-soft px-1.5 py-0.5 text-[8.5px] text-good">直接来源</span> : null}
+              {platform && isExternalSource(source) ? <span className="rounded border border-[color:color-mix(in_srgb,var(--ds-accent)_25%,transparent)] bg-accent-soft px-1.5 py-0.5 text-[8.5px] text-accent">外部市场样例</span> : null}
+              {relation === "grounding" ? <span className="rounded border border-[color:color-mix(in_srgb,var(--ds-good)_30%,transparent)] bg-good-soft px-1.5 py-0.5 text-[8.5px] text-good">直接来源</span> : null}
               {relation === "brand_context" ? <span className="rounded border border-line px-1.5 py-0.5 text-[8.5px] text-muted">关联样例 · 非直接证明</span> : null}
-              {stale || sourceExpired ? <span className="rounded border border-warn/30 bg-warn-soft px-1.5 py-0.5 text-[8.5px] text-warn">历史</span> : null}
+              {stale || sourceExpired ? <span className="rounded border border-[color:color-mix(in_srgb,var(--ds-warn)_30%,transparent)] bg-warn-soft px-1.5 py-0.5 text-[8.5px] text-warn">历史</span> : null}
             </div>
             <h4 className="text-[11px] font-medium leading-relaxed text-ink-2">{title}</h4>
           </div>
@@ -177,7 +177,7 @@ function SignalSourceCard({ source, stale }: { source: Record<string, any>; stal
             <a href={url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-card px-2 py-1 text-[9px] text-ink-2 hover:text-ink">
               原帖 <ExternalLink size={9} />
             </a>
-          ) : <span className="shrink-0 rounded border border-warn/30 px-1.5 py-1 text-[8px] text-warn">无原始链接</span>}
+          ) : <span className="shrink-0 rounded border border-[color:color-mix(in_srgb,var(--ds-warn)_30%,transparent)] px-1.5 py-1 text-[8px] text-warn">无原始链接</span>}
         </div>
 
         {platform ? (
@@ -267,7 +267,7 @@ export function SignalDetailModal({ alert, onClose }: any) {
 
         <div className="flex-1 space-y-5 overflow-y-auto p-4 md:p-5">
           {stale ? (
-            <div className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5 text-[11px] text-warn">
+            <div className="flex items-start gap-2 rounded-lg border border-[color:color-mix(in_srgb,var(--ds-warn)_30%,transparent)] bg-warn-soft px-3 py-2.5 text-[11px] text-warn">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               <span>该信号快照已过期，只能用于历史复盘；执行前需重新生成并复核原始来源。</span>
             </div>
@@ -289,12 +289,12 @@ export function SignalDetailModal({ alert, onClose }: any) {
               <span className="shrink-0 font-mono text-[9px] text-muted">{traceableSources.length}/{sources.length} traceable</span>
             </div>
             {contextOnlySources ? (
-              <div className="mb-2 rounded-md border border-warn/25 bg-warn-soft px-2.5 py-2 text-[10px] leading-relaxed text-warn">
+              <div className="mb-2 rounded-md border border-[color:color-mix(in_srgb,var(--ds-warn)_25%,transparent)] bg-warn-soft px-2.5 py-2 text-[10px] leading-relaxed text-warn">
                 该历史快照未保留生成时的原始引文。下列是同品牌的关联市场样例，不能作为本条信号的直接证明。
               </div>
             ) : null}
             {sources.length > 0 && traceableSources.length === 0 ? (
-              <div className="mb-2 rounded-md border border-warn/25 bg-warn-soft px-2.5 py-2 text-[10px] text-warn">
+              <div className="mb-2 rounded-md border border-[color:color-mix(in_srgb,var(--ds-warn)_25%,transparent)] bg-warn-soft px-2.5 py-2 text-[10px] text-warn">
                 仅保留了来源标签或记录 ID，未保留任何原始链接，当前无法回跳核验。
               </div>
             ) : null}

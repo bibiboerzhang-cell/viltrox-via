@@ -7,35 +7,18 @@ import { useTheme } from "../../../app/providers/ThemeProvider";
 // 注入一次。选 domMax 而非 domAnimation:FloatingCard 的 drag 与 ActivityFeed 的 layout
 // 动画都要 domMax 才生效(domAnimation 会静默砍掉拖拽 = 功能回退,不只是动效)。
 import { AnimatePresence, LazyMotion, domMax, m } from "framer-motion";
-import { Bell, ChevronDown, DollarSign, FileText, Globe2, HelpCircle, List, Loader2, Menu, MessageCircle, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, TrendingUp, User, X } from "lucide-react";
+// 死 import 清理(2026-07-12):18 个 lucide 图标 + 12 个卡组件簇 + KPI_SCOPES 全为拆分残留
+// (正文零引用,图标/卡片实际消费方在 CockpitTopbar / CockpitApp.Sections / DashboardReplicaPage)。
 import "./styles/mockup.css";
 import "./styles/cockpit-reference.css";
 import "../styles/vkpi-settings-dark.css";
-import { KolPoolBoardPage as KOLPoolPage } from "./pages/KolPoolBoardPage";
-// 回滚垫:改回 import { KOLPoolPage } from "./KOLPoolPage" 即回旧 KOL Pool
-import { ShopifyBoardPage } from "./pages/ShopifyBoardPage";
-// 回滚垫:改回 ShopifyConnectPage("./ShopifyConnectPage")+ShopifyHubPage("../pages/ShopifyHubPage") 即回旧 Shopify
-import { DealersBoardPage as DealerMapPage } from "./pages/DealersBoardPage";
-// 回滚垫:改回 import { DealerMapPage } from "../pages/DealerMapPage" 即回旧经销商地图
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { CockpitSidebar } from "./CockpitSidebar";
 import { CockpitMobileNav } from "./CockpitMobileNav";
 import { CockpitTopbar } from "./CockpitTopbar";
 import { usePermissions } from "../../../hooks/usePermissions";
 import { useBrowserAssist, isBrowserAssistEnabled } from "../../../lib/browserAssist/enable";
-import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
-import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
-import { Avatar } from "./components/Avatar";
-import { Breadcrumb } from "./components/Breadcrumb";
-import { ContentCalendarCard } from "./components/ContentCalendarCard";
-import { FloatingCard } from "./components/FloatingCard";
-import { HierarchyDropdown } from "./components/HierarchyDropdown";
 import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
-import { MetricCard } from "./components/MetricCard";
-import { RealMap } from "./components/RealMap";
-import { SignalsAlertsCard } from "./components/SignalsAlertsCard";
-import { TopMoversCard } from "./components/TopMoversCard";
-import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 // 模态 / popover / ReportPanel / SettingsPage / logout/resolve/staff-group api 已随 CockpitOverlays 抽到 CockpitApp.Sections.tsx。
 import { buildApiUrl } from "../../../services/http";
 import { listEvents } from "../../../services/vkpi/events-api";
@@ -49,7 +32,6 @@ import { createProject, deleteProject, updateProject } from "../../../services/v
 import { addProjectCost } from "../../../services/vkpi/cost-api";
 import { toUiStaffList } from "../../../services/vkpi/staffAdapter";
 import { listStaffGroups, toUiGroup } from "../../../services/vkpi/groups-api";
-import { KPI_SCOPES } from "./data/kpiScopes";
 import { NAV_ITEMS } from "./data/navItems";
 import { VIEW_MODES } from "./data/viewModes";
 import { emptyDashboardData } from "../data/emptyDashboardData";
@@ -69,6 +51,14 @@ import {
 import { CockpitOverlays } from "./CockpitApp.Sections";
 
 const e = React.createElement;
+// lazy 收尾(2026-07-12):KOL Pool / Shopify / Dealers 三板块由静态 import 改 React.lazy,
+// 与其余板块同款(挂载处 LazyErrorBoundary+Suspense),首屏 chunk 不再背三页。
+const KOLPoolPage = React.lazy(() => import("./pages/KolPoolBoardPage").then((module) => ({ default: module.KolPoolBoardPage })));
+// 回滚垫:改回 import { KOLPoolPage } from "./KOLPoolPage" 即回旧 KOL Pool
+const ShopifyBoardPage = React.lazy(() => import("./pages/ShopifyBoardPage").then((module) => ({ default: module.ShopifyBoardPage })));
+// 回滚垫:改回 ShopifyConnectPage("./ShopifyConnectPage")+ShopifyHubPage("../pages/ShopifyHubPage") 即回旧 Shopify
+const DealerMapPage = React.lazy(() => import("./pages/DealersBoardPage").then((module) => ({ default: module.DealersBoardPage })));
+// 回滚垫:改回 import { DealerMapPage } from "../pages/DealerMapPage" 即回旧经销商地图
 // MY KOL 改版 M1(2026-07-11):导航项改挂板块页范式新族 MyKolBoardPage(可编辑看板)。
 // 旧 pages/myKol/MyKolPage.tsx 保留不删(回滚垫:把本行 import 指回 ../pages/myKol/MyKolPage 即回滚)。
 const MyKolBoardPage = React.lazy(() => import("./pages/MyKolBoardPage").then((module) => ({ default: module.MyKolBoardPage })));
@@ -707,13 +697,19 @@ export function CockpitApp(props: any = {}) {
             exit: { opacity: 0, y: -10 },
             transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] },
           },
-            activeNav === "kol-pool" && e(KOLPoolPage, {
-              items: kolPoolRows,
-              loading: kolPoolLoading,
-              error: kolPoolError,
-              apiToken,
-              staff: uiStaff,
-            }),
+            activeNav === "kol-pool" && e(LazyErrorBoundary, { name: "KolPool" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "KOL Pool 加载中...")
+              },
+                e(KOLPoolPage as React.ComponentType<any>, {
+                  items: kolPoolRows,
+                  loading: kolPoolLoading,
+                  error: kolPoolError,
+                  apiToken,
+                  staff: uiStaff,
+                })
+              )
+            ),
 
             activeNav === "my-kol" && e(React.Suspense, {
               fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "MY KOL 加载中...")
@@ -740,6 +736,9 @@ export function CockpitApp(props: any = {}) {
                 selectedProjectId: selectedLegacyProject?.id,
                 selectedProject: selectedLegacyProject || (dashboardData.projects || [])[0],
                 openProjectId: openLegacyProjectId,
+                // consume-reset(2026-07-12):消费后清空,否则同一项目二次 ⌘K/泳道点开时
+                // openProjectId 不变 → 页内 effect 不re-run = 死点击(Events 管道 onConsumeInitialEvent 同款)。
+                onConsumeOpenProject: () => setOpenLegacyProjectId(""),
                 viewMode: appViewMode,
                 apiToken,
                 onSelectProject: setSelectedLegacyProject,
@@ -779,8 +778,20 @@ export function CockpitApp(props: any = {}) {
               )
             ),
 
-            activeNav === "shopify" && e(ShopifyBoardPage as React.ComponentType<any>, { apiToken }),
-            activeNav === "dealers" && e(DealerMapPage as React.ComponentType<any>, { apiToken }),
+            activeNav === "shopify" && e(LazyErrorBoundary, { name: "Shopify" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Shopify 加载中...")
+              },
+                e(ShopifyBoardPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
+            activeNav === "dealers" && e(LazyErrorBoundary, { name: "Dealers" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "经销商地图加载中...")
+              },
+                e(DealerMapPage as React.ComponentType<any>, { apiToken })
+              )
+            ),
 
             // L1:智能运维组的 4 个 Wave1-4 页(各自只读自取数据;失败/无 token 静默)。
             //   triage 复用 DataQualityPage(运维页宿主,viewMode=manager 才拉质量摘要)。

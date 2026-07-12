@@ -518,7 +518,7 @@
 }
 
 .vkpi-map-network-line {
-  filter: drop-shadow(0 0 3px var(--ds-flow-blue));
+  filter: drop-shadow(0 0 var(--ds-glow-radius, 0px) var(--ds-flow-blue));
   stroke-linecap: round;
 }
 
@@ -2239,7 +2239,7 @@
   margin-right: 7px;
   border-radius: 50%;
   background: var(--ds-good);
-  box-shadow: 0 0 7px var(--ds-good);
+  box-shadow: 0 0 var(--ds-glow-radius, 0px) var(--ds-good);
   animation: vkpi-lane-pulse 1.4s ease-in-out infinite;
 }
 

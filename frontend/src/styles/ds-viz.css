@@ -225,7 +225,7 @@
 .ds-adot {
   width: 8px; height: 8px; border-radius: 50%; flex: none;
   background: var(--ds-crit);
-  box-shadow: 0 0 7px var(--ds-crit);
+  box-shadow: 0 0 var(--ds-glow-radius, 0px) var(--ds-crit);
 }
 @media (prefers-reduced-motion: no-preference) {
   .ds-adot { animation: vkpi-lane-pulse 1.2s ease-in-out infinite; }

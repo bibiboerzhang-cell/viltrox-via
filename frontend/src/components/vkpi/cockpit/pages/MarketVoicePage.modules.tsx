@@ -358,7 +358,7 @@ export function CoverRow({ on, name, table, value, note }: { on: boolean; name: 
     >
       <span
         className={`h-[7px] w-[7px] flex-none rounded-full ${on ? "bg-good" : "bg-muted opacity-50"}`}
-        style={on ? { boxShadow: "0 0 5px var(--ds-good)" } : undefined}
+        style={on ? { boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" } : undefined}
       />
       <span className={`min-w-0 flex-1 truncate ${on ? "text-ink-2" : "text-muted"}`}>{name}</span>
       <span className={`flex-none font-mono text-[9.5px] ${on ? "text-muted" : "text-warn"}`}>{value}</span>
