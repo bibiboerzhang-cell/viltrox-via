@@ -13,8 +13,8 @@ import "./styles/cockpit-reference.css";
 import "../styles/vkpi-settings-dark.css";
 import { KolPoolBoardPage as KOLPoolPage } from "./pages/KolPoolBoardPage";
 // 回滚垫:改回 import { KOLPoolPage } from "./KOLPoolPage" 即回旧 KOL Pool
-import { ShopifyConnectPage } from "./ShopifyConnectPage";
-import { ShopifyHubPage } from "../pages/ShopifyHubPage";
+import { ShopifyBoardPage } from "./pages/ShopifyBoardPage";
+// 回滚垫:改回 ShopifyConnectPage("./ShopifyConnectPage")+ShopifyHubPage("../pages/ShopifyHubPage") 即回旧 Shopify
 import { DealerMapPage } from "../pages/DealerMapPage";
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { CockpitSidebar } from "./CockpitSidebar";
@@ -92,13 +92,15 @@ const KolProfilePage = React.lazy(() => import("./pages/KolProfileBoardPage").th
 const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadBoardPage").then((module) => ({ default: module.LaunchPadBoardPage })));
 // 回滚垫:改回 ./pages/LaunchPadPage + module.LaunchPadPage 即回旧发射台
 // 第5轮 自治层:驾照板 + 市场之声月报
-const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyBoardPage").then((module) => ({ default: module.AutonomyBoardPage })));
+const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyDrivePage").then((module) => ({ default: module.AutonomyDrivePage })));
+// 回滚垫:改回 ./pages/AutonomyBoardPage + module.AutonomyBoardPage 即回旧驾照页
 const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
 // 第6轮 P6 飞轮:段级创意资产库
 const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryBoardPage").then((module) => ({ default: module.CreativeLibraryBoardPage })));
 // 回滚垫:改回 ./pages/CreativeLibraryPage + module.CreativeLibraryPage 即回旧创意库
 // 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
-const StrategyBoardPage = React.lazy(() => import("./pages/StrategyBoardPage").then((module) => ({ default: module.StrategyBoardPage })));
+const StrategyBoardPage = React.lazy(() => import("./pages/StrategyDeskPage").then((module) => ({ default: module.StrategyDeskPage })));
+// 回滚垫:改回 ./pages/StrategyBoardPage + module.StrategyBoardPage 即回旧战略台
 // GTM-1 总脑:上市增长指挥图
 const GtmCommandPage = React.lazy(() => import("./pages/GtmCommandBoardPage").then((module) => ({ default: module.GtmCommandBoardPage })));
 // 回滚垫:改回 ./pages/GtmCommandPage + module.GtmCommandPage 即回旧 GTM
@@ -775,7 +777,7 @@ export function CockpitApp(props: any = {}) {
               )
             ),
 
-            activeNav === "shopify" && e(ShopifyHubPage as React.ComponentType<any>, { apiToken }),
+            activeNav === "shopify" && e(ShopifyBoardPage as React.ComponentType<any>, { apiToken }),
             activeNav === "dealers" && e(DealerMapPage, { apiToken }),
 
             // L1:智能运维组的 4 个 Wave1-4 页(各自只读自取数据;失败/无 token 静默)。
