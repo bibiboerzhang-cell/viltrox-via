@@ -15,7 +15,8 @@ import { KolPoolBoardPage as KOLPoolPage } from "./pages/KolPoolBoardPage";
 // 回滚垫:改回 import { KOLPoolPage } from "./KOLPoolPage" 即回旧 KOL Pool
 import { ShopifyBoardPage } from "./pages/ShopifyBoardPage";
 // 回滚垫:改回 ShopifyConnectPage("./ShopifyConnectPage")+ShopifyHubPage("../pages/ShopifyHubPage") 即回旧 Shopify
-import { DealerMapPage } from "../pages/DealerMapPage";
+import { DealersBoardPage as DealerMapPage } from "./pages/DealersBoardPage";
+// 回滚垫:改回 import { DealerMapPage } from "../pages/DealerMapPage" 即回旧经销商地图
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
 import { CockpitSidebar } from "./CockpitSidebar";
 import { CockpitMobileNav } from "./CockpitMobileNav";
@@ -80,7 +81,8 @@ const DataQualityPage = React.lazy(() => import("../pages/DataQualityPage").then
 const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((module) => ({ default: module.DataQueryPage })));
 const MarketTrendsPage = React.lazy(() => import("../pages/MarketTrendsPage").then((module) => ({ default: module.MarketTrendsPage })));
 const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then((module) => ({ default: module.SkillStudioPage })));
-const IntelligentPage = React.lazy(() => import("./pages/IntelligentPage").then((module) => ({ default: module.IntelligentPage })));
+const IntelligentPage = React.lazy(() => import("./pages/IntelligentBoardPage").then((module) => ({ default: module.IntelligentBoardPage })));
+// 回滚垫:改回 ./pages/IntelligentPage + module.IntelligentPage 即回旧问答页
 const ReplyQueuePage = React.lazy(() => import("./pages/ReplyQueueBoardPage").then((module) => ({ default: module.ReplyQueueBoardPage })));
 // 回滚垫:改回 ../pages/ReplyQueuePage + module.ReplyQueuePage 即回旧回复队列
 // 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
@@ -778,7 +780,7 @@ export function CockpitApp(props: any = {}) {
             ),
 
             activeNav === "shopify" && e(ShopifyBoardPage as React.ComponentType<any>, { apiToken }),
-            activeNav === "dealers" && e(DealerMapPage, { apiToken }),
+            activeNav === "dealers" && e(DealerMapPage as React.ComponentType<any>, { apiToken }),
 
             // L1:智能运维组的 4 个 Wave1-4 页(各自只读自取数据;失败/无 token 静默)。
             //   triage 复用 DataQualityPage(运维页宿主,viewMode=manager 才拉质量摘要)。
