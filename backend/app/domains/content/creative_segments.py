@@ -174,6 +174,7 @@ def _load_final_v1_rows(conn: Any, scan_limit: int = _SCAN_LIMIT) -> list[dict[s
           e.platform,
           e.view_count,
           e.posted_at,
+          e.thumbnail_url,
           e.kol_pool_id,
           k.handle AS kol_handle,
           k.display_name AS kol_display_name,
@@ -190,6 +191,39 @@ def _load_final_v1_rows(conn: Any, scan_limit: int = _SCAN_LIMIT) -> list[dict[s
         (FINAL_V1_DERIVE_METHOD, int(scan_limit)),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── 缩略图链(pool_detail 同款语义;毒缓存自愈:cached_image_url 已把
+#    「上游失败写进磁盘的 1x1 透明 SVG 占位」判为无效,不再当真图上报)──────
+
+
+def _thumbnail_fields(row: dict[str, Any]) -> dict[str, Any]:
+    """看板缩略图三件套(纯读本地文件缓存 + 派生,零网络零写库):
+    cached_thumbnail_url = 本地图缓存(失败占位自愈后才算);youtube 从 content_url
+    派生官方缩略图;best_thumbnail 链序与 pool_detail 一致:cached → raw → youtube。
+    拿不到就 None / 空串,前端诚实占位,绝不编图。"""
+    from app.domains.kol.pool_detail import _youtube_thumbnail_url, _youtube_video_id
+    from app.domains.media.cache import cached_image_url
+
+    raw = _text(row.get("thumbnail_url"), 500)
+    cached = ""
+    if raw:
+        try:
+            cached = cached_image_url(raw) or ""
+        except Exception:  # noqa: BLE001 — 缓存读失败按无缓存处理,不炸检索
+            cached = ""
+    youtube_thumb = ""
+    if _text(row.get("platform"), 30).lower() == "youtube":
+        try:
+            youtube_thumb = _youtube_thumbnail_url(_youtube_video_id(row.get("content_url")))
+        except Exception:  # noqa: BLE001
+            youtube_thumb = ""
+    return {
+        "thumbnail_url": raw or None,
+        "cached_thumbnail_url": cached or None,
+        "youtube_thumbnail_url": youtube_thumb or None,
+        "best_thumbnail": cached or raw or youtube_thumb or None,
+    }
 
 
 # ── 单视频 → 段级条目拆解 ────────────────────────────────────────────
@@ -229,6 +263,8 @@ def _decompose_video(row: dict[str, Any]) -> list[dict[str, Any]]:
         "platform": _text(row.get("platform"), 30),
         "view_count": _int_or_none(row.get("view_count")),
         "posted_at": _iso(row.get("posted_at")),
+        # 看板缩略图(cached → raw → youtube 派生;毒缓存自愈链,失败=None 前端诚实占位)
+        **_thumbnail_fields(row),
     }
     kol = {
         "kol_pool_id": _int_or_none(row.get("kol_pool_id")),
@@ -351,12 +387,19 @@ def _matches(segment: dict[str, Any], query_token: str, style_token: str, focal_
     return True
 
 
+_SEGMENT_TYPE_LABEL = {"opening": "开头段", "scene": "分镜段", "product_exposure": "产品露出段"}
+
+
 def _facets(segments: list[dict[str, Any]]) -> dict[str, Any]:
-    """全索引(过滤前)三路可选项计数,供前端下拉/提示;只列真实存在的值。"""
+    """全索引(过滤前)可选项计数,供前端下拉/图形;只列真实存在的值。"""
     style_counts: dict[str, int] = {}
     opening_counts: dict[str, int] = {}
     focal_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
     for seg in segments:
+        type_key = str(seg.get("segment_type") or "")
+        if type_key:
+            type_counts[type_key] = type_counts.get(type_key, 0) + 1
         seen_styles = {str(t.get("key")) for t in list(seg.get("styles") or []) + list(seg.get("video_styles") or [])}
         for key in seen_styles:
             style_counts[key] = style_counts.get(key, 0) + 1
@@ -381,6 +424,15 @@ def _facets(segments: list[dict[str, Any]]) -> dict[str, Any]:
             key=lambda item: item["segment_count"],
             reverse=True,
         )[:24],
+        # 段型构成(看板环图口径:全索引过滤前计数,与三路 facets 同窗)
+        "segment_types": sorted(
+            (
+                {"key": k, "label": _SEGMENT_TYPE_LABEL.get(k, k), "segment_count": v}
+                for k, v in type_counts.items()
+            ),
+            key=lambda item: item["segment_count"],
+            reverse=True,
+        ),
     }
 
 
@@ -431,12 +483,16 @@ def segment_search(query: str = "", style: str = "", focal: str = "", limit: int
     if not matched:
         note_bits.append("三路过滤零命中 — 词表规则不硬凑,换词或看 facets 里真实存在的选项")
 
+    # 覆盖 KOL:扫描窗口内 distinct kol_pool_id(KPI 带真值;零推断,直读 join 行)
+    kol_count = len({kid for row in rows if (kid := _int_or_none(row.get("kol_pool_id"))) is not None})
+
     return {
         "status": "ready",
         "method": "lexicon_segments_v1",
         "filters": {"query": query_token, "style": style_token, "focal": focal_token or focal_input},
         "scanned_videos": len(rows),
         "segment_count": len(all_segments),
+        "kol_count": kol_count,
         "matched": len(matched),
         "returned": len(items),
         "items": items,
