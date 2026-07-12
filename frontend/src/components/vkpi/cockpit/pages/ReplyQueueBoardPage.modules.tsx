@@ -1,6 +1,6 @@
 import React from "react";
 import { formatLocal } from "../../lib/timeLocal";
-import type { ReplyQueueItem } from "../../../../services/vkpi/replyQueue-api";
+import type { ReplyQueueItem, ReplyQueueKpiMeasure, ReplyQueueKpiSeries } from "../../../../services/vkpi/replyQueue-api";
 import { EmptyLine, KpiCard, type Row } from "./MarketVoicePage.modules";
 import { BarRow } from "./MarketVoicePage.charts";
 import { platformBadge } from "./MarketVoicePage.dialogs";
@@ -8,11 +8,12 @@ import { platformBadge } from "./MarketVoicePage.dialogs";
 // 回复队列 · 板块页辅助件(ReplyQueueBoardPage 专用,页内拆件不入公共桶;
 //   金样板 = MarketVoicePage.modules / EventsBoardPage.charts 同构,图形件全复用:
 //   KpiCard(demo .kpi)/ BarRow(demo mplatrow)/ platformBadge 零自造样式)。
-//   数据 = 页层一次全量拉取的真队列行(GET /api/admin/vkpi/reply-queue → vkpi_reply_queue,
-//   132 行 2026-07-12 核实),本文件纯组合零网络。
-//   KPI 四卡:待起草 / 待回复 / 已回复 / 购买意向 —— 全真值;vkpi_reply_queue 无
-//   历史快照表 → 四卡无时序,KpiCard 渲染 demo .spempty 纯虚线(诚实无 sparkline,
-//   绝不编序列);环比同理诚实省略药丸。
+//   数据 = 页层服务端分页拉取的真队列行(GET /api/admin/vkpi/reply-queue →
+//   vkpi_reply_queue,首页 500 · 弹窗「载入更多」逐页拉齐),本文件纯组合零网络。
+//   KPI 四卡:待起草 / 待回复 / 已回复 / 购买意向 —— 数值=已载入队列真值;时序 =
+//   GET /reply-queue/kpi-series 按日真序列(0 填齐钳 now)+ 真环比(上窗 0 → null
+//   诚实省略药丸);时序端点未就绪/失败 → KpiCard 回落 demo .spempty 纯虚线
+//   (诚实无 sparkline,绝不编序列)。
 // 红线:纯展示零网络;不触 viltrox_fit_score / rule_v0;颜色全 token 零写死色;
 //   零 opacity 修饰类;绝对时间戳(存 UTC · formatLocal 按浏览器时区);
 //   显示层宪法(后端本就不回传 author_* 字段,门面零个人字段)。
@@ -95,16 +96,18 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["队列表", "vkpi_reply_queue"],
       ["源评论", "vkpi_comments(platform + external_comment_id 回链)"],
       ["可见性", "管理层全量 · 员工=未认领池 + 自己认领(服务端收敛)"],
-      ["上限", "单次拉取 500 条 · 超出如实截断"],
-      ["时序", "无历史快照表 · 迷你趋势诚实虚线"],
+      ["分页", "服务端分页:首页 500 条 · 弹窗「载入更多(已显 X/Y)」逐页拉齐 · Y=服务端总数"],
+      ["时序", "kpi-series 按日序列(近 30 天 UTC 日轴 0 填齐 · 右沿钳今天):入队=created_at · 已回复=标记时刻"],
+      ["环比", "上一等长窗同口径 · 上窗 0 → 诚实无药丸(绝不编百分比)"],
       ["时间", "存 UTC · 按浏览器时区显示"],
     ],
   },
   queue: {
     label: "vkpi_reply_queue",
     rows: [
-      ["排序", "待起草 → 待回复 → 终态 · 同级按建队时间倒序(服务端)"],
-      ["过滤", "状态 chips 本地过滤(同一次全量拉取,零二次请求)"],
+      ["排序", "待起草 → 待回复 → 终态 · 同级按建队时间倒序(服务端定序,跨页不重不漏)"],
+      ["分页", "首页 500 条 · 全量弹窗「载入更多」追加下一页 · 失败不吞已载入列表"],
+      ["过滤", "状态 chips 本地过滤(已载入页内;载入更多后同口径自动扩大)"],
       ["动作", "起草 / 复制 / 标记全走真端点 · 端点真实返回才落状态"],
       ["溯源", "单条详情链回 vkpi_comments 源评论(幂等键回链)"],
     ],
@@ -147,18 +150,29 @@ export const PROV_TITLES: Record<string, string> = {
   lang: "语言分布",
 };
 
-/* ============ KPI 带四卡(待起草/待回复/已回复/购买意向;无时序 → spempty 诚实虚线) ============ */
+/* ============ KPI 带四卡(待起草/待回复/已回复/购买意向;时序 = kpi-series 真序列) ============ */
 
-export function QueueKpiBand({ counts }: { counts: QueueCounts }) {
+export function QueueKpiBand({ counts, kpi }: { counts: QueueCounts; kpi?: ReplyQueueKpiSeries | null }) {
   const n = (key: string) => counts.byStatus[key] || 0;
   const price = counts.byIntent.find((it) => it.key === "price")?.count || 0;
+  // kpi-series ready → 按日真序列(0 填齐钳 now);未就绪/失败 → undefined,
+  // KpiCard 回落 spempty 虚线(诚实无时序,绝不编序列)
+  const seriesOf = (m: ReplyQueueKpiMeasure): number[] | undefined => {
+    const pts = kpi?.series?.[m];
+    return Array.isArray(pts) ? pts.map((p) => Number(p.count) || 0) : undefined;
+  };
+  // 真环比:delta_pct=null(上窗 0)→ KpiCard 诚实省略药丸;组缺失 → undefined 同省略
+  const deltaOf = (m: ReplyQueueKpiMeasure): number | null | undefined => {
+    const d = kpi?.prev?.[m];
+    return d ? (typeof d.delta_pct === "number" ? d.delta_pct : null) : undefined;
+  };
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      {/* 待起草 = 积压 → demo .dot.w + warn 染色 */}
-      <KpiCard label="待起草" value={n("pending").toLocaleString()} unit="条" tone="warn" />
-      <KpiCard label="待回复" value={n("drafted").toLocaleString()} unit="条" tone="warn" />
-      <KpiCard label="已回复" value={n("replied").toLocaleString()} unit="条" />
-      <KpiCard label="价格/购买意向" value={price.toLocaleString()} unit="条" />
+      {/* 待起草 = 积压 → demo .dot.w + warn 染色;sparkline 线色随语义 token 走 */}
+      <KpiCard label="待起草" value={n("pending").toLocaleString()} unit="条" tone="warn" series={seriesOf("pending")} seriesColor="var(--ds-warn)" delta={deltaOf("pending")} />
+      <KpiCard label="待回复" value={n("drafted").toLocaleString()} unit="条" tone="warn" series={seriesOf("drafted")} seriesColor="var(--ds-warn)" delta={deltaOf("drafted")} />
+      <KpiCard label="已回复" value={n("replied").toLocaleString()} unit="条" series={seriesOf("replied")} seriesColor="var(--ds-good)" delta={deltaOf("replied")} />
+      <KpiCard label="价格/购买意向" value={price.toLocaleString()} unit="条" series={seriesOf("price")} seriesColor="var(--ds-accent)" delta={deltaOf("price")} />
     </div>
   );
 }

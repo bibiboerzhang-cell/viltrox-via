@@ -8,7 +8,9 @@ import type { DraftReceipt } from "./ReplyQueueBoardPage.actions";
 
 // 回复队列 · 弹窗族(金样板 MarketVoicePage.dialogs 同构;弹窗骨架 ModalShell/
 //   SectionLabel/Drow 全复用零自造样式;行数纪律 ≤700/文件)。
-//   QueueListModal   全量列表(队列 ≤500 已一次拉齐,零分页;行由调用方 children 传入)。
+//   QueueListModal   全量列表(服务端分页:>500 队列由「载入更多(已显 X/Y)」逐页追加,
+//                    MarketVoice FeedListModal 先例;失败原因行内透出不吞已载入列表;
+//                    行由调用方 children 传入,过滤在已载入页内)。
 //   QueueDetailModal 单条详情:‹#n/N› + ↑↓ 连续翻 + 原文/草稿 + 数值行 + 溯源链
 //                    (链回 vkpi_comments 源评论,库节点开 RecordPreview)+ 闭环动作行
 //                    (生成草稿/复制/标记已回/忽略,全真端点,由页层适配器注入)。
@@ -16,28 +18,58 @@ import type { DraftReceipt } from "./ReplyQueueBoardPage.actions";
 //   颜色全 token 类零写死色;零 opacity 修饰类;绝对时间戳(UTC 存 · 浏览器时区显示);
 //   provider/表名等术语只进溯源区,不上按钮门面。
 
-/* ============ 全量列表弹窗 ============ */
+/* ============ 全量列表弹窗(服务端分页「载入更多」) ============ */
 
 export function QueueListModal({
   total,
   filterLabel,
+  loadedCount = 0,
+  streamTotal = 0,
+  hasMore = false,
+  loading = false,
+  loadMoreError = "",
+  onLoadMore,
   onClose,
   children,
 }: {
+  /** 当前过滤命中条数(已载入页内) */
   total: number;
   /** 当前过滤口径(如「待起草」「平台 IG」);空 = 全部 */
   filterLabel?: string;
+  /** 全队列已载入行数(载入更多的 X) */
+  loadedCount?: number;
+  /** 全队列服务端总数(载入更多的 Y;COUNT 真分母) */
+  streamTotal?: number;
+  hasMore?: boolean;
+  loading?: boolean;
+  /** 「载入更多」失败原因(如实展示在按钮下方,不吞;已载入列表照常渲染) */
+  loadMoreError?: string;
+  onLoadMore?: () => void;
   onClose: () => void;
   children: React.ReactNode;
 }) {
   return (
     <ModalShell
       title="回复队列 · 全量"
-      sub={`${filterLabel ? `${filterLabel} · ` : ""}共 ${total} 条 · 点单条看详情(详情内 ↑↓ 连续翻)`}
+      sub={`${filterLabel ? `${filterLabel} · ` : ""}命中 ${total} 条${
+        hasMore ? `(已载入 ${loadedCount}/${streamTotal} 条队列内)` : ""
+      } · 点单条看详情(详情内 ↑↓ 连续翻)`}
       onClose={onClose}
     >
       <SectionLabel>全量队列</SectionLabel>
       {children}
+      {hasMore && onLoadMore ? (
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loading}
+          title="服务端分页:追加下一页队列行(过滤在已载入页内同口径扩大)"
+          className="mt-2.5 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:cursor-default disabled:border-line disabled:text-muted"
+        >
+          {loading ? "加载中…" : `≡ 载入更多(已显 ${loadedCount}/${streamTotal})`}
+        </button>
+      ) : null}
+      {loadMoreError ? <div className="mt-2 text-[10.5px] text-crit">载入更多失败:{loadMoreError}</div> : null}
     </ModalShell>
   );
 }

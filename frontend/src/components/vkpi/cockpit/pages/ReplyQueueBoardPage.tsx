@@ -8,6 +8,7 @@ import { ModuleProvModal, platformBadge } from "./MarketVoicePage.dialogs";
 import {
   useCopyDraft,
   useDraftAction,
+  useKpiSeriesData,
   useMarkAction,
   useQueueData,
   useScreenAction,
@@ -34,8 +35,11 @@ import { QueueDetailModal, QueueListModal, type QueueDetailActions } from "./Rep
 //     扫描新意向(POST /reply-queue/screen)→ pagehead 按钮 + 真回执(已扫/命中/新入队);
 //     生成草稿/重新起草(POST /{id}/draft)/ 一键复制 / 标记已回 / 忽略(POST /{id}/mark
 //     + expected_status 乐观锁)→ 单条详情闭环动作行;刷新 → pagehead。
-//   数据源(全真,零编造):GET /api/admin/vkpi/reply-queue(status='' 一次全量 ≤500,
-//   四态/意向/平台/语言全部由同一份口径函数 queueCounts 计算)。
+//   数据源(全真,零编造):GET /api/admin/vkpi/reply-queue 服务端分页(首页 500 +
+//   total 真分母;>500 由全量弹窗「载入更多(已显 X/Y)」逐页追加,失败不吞已载入列表;
+//   四态/意向/平台/语言全部由同一份口径函数 queueCounts 在已载入行上计算)。
+//   KPI 时序:GET /reply-queue/kpi-series 按日真序列 + 真环比接四卡(0 填齐钳 now,
+//   上窗 0 → 诚实无药丸;端点失败四卡回落虚线,原因进 SrcChip)。
 //   溯源:每模块 SrcChip(真表名)→ ModuleProvModal;单条详情溯源链链回 vkpi_comments
 //   源评论(platform+external_comment_id 幂等键,2026-07-12 核实 132/132 全命中);
 //   kol_pool_id 命中 KOL 池 → 身份节点跳 KOL 档案。
@@ -54,7 +58,7 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "funnel", span: 4 },
 ];
 
-/** 列表过滤规格(队列 ≤500 已全量在手,全部本地过滤,零二次请求)。 */
+/** 列表过滤规格(已载入页内本地过滤;「载入更多」追加后同口径自动扩大)。 */
 interface ListFilter {
   status?: string;
   intent?: string;
@@ -88,12 +92,19 @@ export function ReplyQueueBoardPage({
   const [provKey, setProvKey] = React.useState<string | null>(null);
 
   const queue = useQueueData(apiToken);
-  const screen = useScreenAction(apiToken, queue.reload);
+  const kpiSeries = useKpiSeriesData(apiToken);
+  // 刷新/扫描后列表与时序一起重拉(入队会动按日序列;两端点独立加载互不拖累)
+  const reloadAll = React.useCallback(() => {
+    queue.reload();
+    kpiSeries.reload();
+  }, [queue.reload, kpiSeries.reload]);
+  const screen = useScreenAction(apiToken, reloadAll);
   const draft = useDraftAction(apiToken, queue.patchItem);
   const mark = useMarkAction(apiToken, queue.patchItem);
   const clip = useCopyDraft();
 
   const items = queue.items;
+  const hasMore = !!items && queue.total > items.length;
   const counts = React.useMemo(() => (items ? queueCounts(items) : null), [items]);
   const itemsById = React.useMemo(() => {
     const map = new Map<number, ReplyQueueItem>();
@@ -183,11 +194,25 @@ export function ReplyQueueBoardPage({
 
   /* ---------- 模块 body ---------- */
 
-  const renderKpi = () => (
-    <ModuleCard {...cardProps("kpiQ", "队列总览", counts ? `${counts.total}` : undefined)}>
-      {gate() ?? <QueueKpiBand counts={counts!} />}
-    </ModuleCard>
-  );
+  const renderKpi = () => {
+    // 动态口径行(诚实信息进 SrcChip):分页真分母 / 时序真窗口 / 时序端点失败原因
+    const kpiExtraRows: Array<[string, string]> = [];
+    if (items && hasMore) {
+      kpiExtraRows.push(["已载入", `${items.length}/${queue.total} 条 · 计数为已载入部分(弹窗「载入更多」拉齐)`]);
+    }
+    const win = kpiSeries.kpi?.window;
+    if (win?.since && win?.until) {
+      kpiExtraRows.push(["时序窗口", `${String(win.since).slice(0, 10)} → ${String(win.until).slice(0, 10)}(UTC 日轴,右沿=今天)`]);
+    }
+    if (kpiSeries.error) {
+      kpiExtraRows.push(["时序端点", `kpi-series → ${kpiSeries.error}(四卡诚实回落虚线)`]);
+    }
+    return (
+      <ModuleCard {...cardProps("kpiQ", "队列总览", counts ? `${counts.total}` : undefined, kpiExtraRows)}>
+        {gate() ?? <QueueKpiBand counts={counts!} kpi={kpiSeries.kpi} />}
+      </ModuleCard>
+    );
+  };
 
   const faceFilter: ListFilter = {
     status: statusFilter || undefined,
@@ -205,20 +230,29 @@ export function ReplyQueueBoardPage({
           <StatusChips active={statusFilter} counts={counts} onChange={setStatusFilter} />
           {items!.length === 0 ? (
             <EmptyLine text="队列 0 条。点右上「扫描新意向」从评论里筛购买意向。" />
-          ) : filtered.length === 0 ? (
-            <EmptyLine text={`「${faceFilter.label}」下暂无队列项。`} />
           ) : (
             <>
-              {filtered.slice(0, FACE_ROWS).map((item, i) => (
-                <QueueRowLine key={item.id} item={item} index={i} onOpen={(idx) => openDetail(filtered, idx)} />
-              ))}
-              {filtered.length > FACE_ROWS && (
+              {filtered.length === 0 ? (
+                <EmptyLine
+                  text={
+                    hasMore
+                      ? `「${faceFilter.label}」下已载入页内暂无队列项(服务端还有未载入行,下方入口可载入更多)。`
+                      : `「${faceFilter.label}」下暂无队列项。`
+                  }
+                />
+              ) : (
+                filtered.slice(0, FACE_ROWS).map((item, i) => (
+                  <QueueRowLine key={item.id} item={item} index={i} onOpen={(idx) => openDetail(filtered, idx)} />
+                ))
+              )}
+              {(filtered.length > FACE_ROWS || hasMore) && (
                 <button
                   type="button"
                   onClick={() => setListFilter(faceFilter)}
+                  title={hasMore ? `服务端还有未载入队列行(已载入 ${items!.length}/${queue.total}),弹窗内「载入更多」拉齐` : undefined}
                   className="mt-2 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
                 >
-                  ≡ 查看全量 {filtered.length} 条 · 点单条连续翻
+                  ≡ 查看全量 {filtered.length} 条{hasMore ? `(队列已载入 ${items!.length}/${queue.total})` : ""} · 点单条连续翻
                 </button>
               )}
             </>
@@ -265,7 +299,7 @@ export function ReplyQueueBoardPage({
 
   /* ---------- 模块注册表(palette 全量可选;默认简 = 前四) ---------- */
   const modules: DashboardModuleDefinition[] = [
-    { key: "kpiQ", label: "队列总览带", description: "待起草 / 待回复 / 已回复 / 价格购买意向 真值四卡", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpi },
+    { key: "kpiQ", label: "队列总览带", description: "待起草 / 待回复 / 已回复 / 价格购买意向 真值四卡 · 按日时序 + 环比", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpi },
     { key: "queue", label: "回复队列", description: "状态过滤 + 一行一条 · 点开连续翻 · 起草/复制/标记闭环", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 6, maxHeight: 26, render: renderQueue },
     { key: "intent", label: "意向构成", description: "价格/兼容/问询/手动入队 环图 · 分段点开该类队列", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 5, maxHeight: 16, render: renderIntent },
     { key: "funnel", label: "处理进度", description: "待起草 → 待回复 → 已回复/已忽略 状态漏斗", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderFunnel },
@@ -303,8 +337,9 @@ export function ReplyQueueBoardPage({
           </button>
           <button
             type="button"
-            onClick={queue.reload}
+            onClick={reloadAll}
             disabled={queue.loading || !apiToken}
+            title="重拉队列首页 + KPI 时序(服务器真数)"
             className="rounded-xl border border-line px-3 py-2 text-[12px] text-muted transition-colors hover:text-ink disabled:cursor-default disabled:text-muted"
           >
             {queue.loading ? "刷新中…" : "刷新"}
@@ -337,11 +372,27 @@ export function ReplyQueueBoardPage({
       {/* 可编辑看板:布局本机记忆(storageKey);不传 apiToken(账户级持久化键为 Dashboard 专属) */}
       <EditableDashboardBoard modules={modules} defaultLayout={DEFAULT_LAYOUT} editing={editing} storageKey={STORAGE_KEY} />
 
-      {/* 全量列表弹窗(队列 ≤500 已全量在手,零分页) */}
+      {/* 全量列表弹窗(服务端分页:>500 由「载入更多(已显 X/Y)」逐页追加,失败不吞已载入列表) */}
       {listFilter && listItems && (
-        <QueueListModal total={listItems.length} filterLabel={listFilter.label} onClose={() => setListFilter(null)}>
+        <QueueListModal
+          total={listItems.length}
+          filterLabel={listFilter.label}
+          loadedCount={items ? items.length : 0}
+          streamTotal={queue.total}
+          hasMore={hasMore}
+          loading={queue.loadingMore}
+          loadMoreError={queue.moreError}
+          onLoadMore={queue.loadMore}
+          onClose={() => setListFilter(null)}
+        >
           {listItems.length === 0 ? (
-            <EmptyLine text="该过滤组合下 0 条 —— 诚实空,不编样本。" />
+            <EmptyLine
+              text={
+                hasMore
+                  ? "已载入页内该过滤组合下 0 条 —— 服务端还有未载入队列行,点下方「载入更多」继续找。"
+                  : "该过滤组合下 0 条 —— 诚实空,不编样本。"
+              }
+            />
           ) : (
             listItems.map((item, i) => (
               <QueueRowLine key={item.id} item={item} index={i} onOpen={(idx) => openDetail(listItems, idx)} />

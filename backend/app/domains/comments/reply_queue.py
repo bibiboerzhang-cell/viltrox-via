@@ -600,23 +600,33 @@ def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[s
 # ══════════════════════════════════════════════════════════════════════════
 _VALID_STATUS = ("pending", "drafted", "replied", "dismissed")
 
+# offset Python 层封顶(router ge=0 + 本层 max/min 双保险;防天文数字 OFFSET 扫全表)
+MAX_LIST_OFFSET = 100_000
+
 
 def list_queue(
     *,
     status: str = "",
     platform: str = "",
     limit: int = 100,
+    offset: int = 0,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """列出队列项;可按 status / platform 过滤,并按 staff 认领可见性收敛。只读。
 
     可见性(缺陷①):管理层(can_view_all)看全量;普通员工只看「未认领的池 + 自己认领的」,
     别人正在跟进(claimed_by=他人)的行不进自己列表,避免 8 员工撞车。
+
+    分页(>500 队列):offset/limit 服务端分页(双层封顶:router Query 校验 + 本层
+    max/min),同 WHERE 口径先 COUNT 出 total(过滤后总数,与页无关)。旧调用零破坏:
+    缺省 offset=0 行为与原全量单页一致;items/count 键原样保留(count=本页行数),
+    total/offset/limit 纯增量键。
     """
     conn = get_conn()
-    if not _table_exists("vkpi_reply_queue"):
-        return {"items": [], "count": 0}
     safe_limit = max(1, min(int(limit or 100), 500))
+    safe_offset = max(0, min(int(offset or 0), MAX_LIST_OFFSET))
+    if not _table_exists("vkpi_reply_queue"):
+        return {"items": [], "count": 0, "total": 0, "offset": safe_offset, "limit": safe_limit}
     where = "WHERE 1=1"
     params: list[Any] = []
     st = _text(status).lower()
@@ -638,7 +648,18 @@ def list_queue(
             # 取不到登录人:保守只给未认领的池(不暴露他人在跟进的行)。
             where += " AND claimed_by IS NULL"
 
-    params.append(safe_limit)
+    # total:同一份 WHERE(过滤 + 可见性)先 COUNT,总数与页号无关(前端「已显 X/Y」真分母)。
+    total_row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM vkpi_reply_queue {where}",
+        tuple(params),
+    ).fetchone()
+    try:
+        total = int(_row_get(total_row, "n") or 0)
+    except (TypeError, ValueError):
+        total = 0
+
+    # 排序末位 id DESC 定序:created_at 撞值时跨页不重不漏(OFFSET 分页的稳定序前提)。
+    params.extend([safe_limit, safe_offset])
     rows = conn.execute(
         f"""
         SELECT id, platform, kol_pool_id, comment_external_id, comment_text,
@@ -648,8 +669,9 @@ def list_queue(
         {where}
         ORDER BY
           CASE status WHEN 'pending' THEN 0 WHEN 'drafted' THEN 1 ELSE 2 END,
-          created_at DESC
-        LIMIT ?
+          created_at DESC,
+          id DESC
+        LIMIT ? OFFSET ?
         """,
         tuple(params),
     ).fetchall()
@@ -672,7 +694,7 @@ def list_queue(
                 "updated_at": _text(_row_get(row, "updated_at")),
             }
         )
-    return {"items": items, "count": len(items)}
+    return {"items": items, "count": len(items), "total": total, "offset": safe_offset, "limit": safe_limit}
 
 
 def mark(reply_id: int, status: str, *, expected_status: str = "") -> dict[str, Any]:

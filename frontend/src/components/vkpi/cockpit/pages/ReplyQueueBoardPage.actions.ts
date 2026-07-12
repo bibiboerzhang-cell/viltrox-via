@@ -2,16 +2,23 @@ import React from "react";
 import {
   draftReply,
   fetchReplyQueue,
+  fetchReplyQueueKpiSeries,
   markReply,
   screenReplyQueue,
   type ReplyQueueItem,
+  type ReplyQueueKpiSeries,
   type ReplyQueueStatus,
 } from "../../../../services/vkpi/replyQueue-api";
 
 // 回复队列 · 板块页动作层(金样板 MarketVoicePage.actions / ProjectsBoardPage.actions 同构;
 // 行数纪律 ≤700/文件)。
-//   useQueueData    全量拉取(status='' + limit=500,一次取回四态;端点失败 = error 原文;
-//                   reload 重拉服务器真数,绝不本地编数)。
+//   useQueueData    服务端分页拉取(MarketVoice feed 先例):首页 status='' + limit=500 +
+//                   offset=0;>500 队列由弹窗「载入更多」逐页追加(loadMore);total=服务端
+//                   COUNT 真分母。载入更多失败绝不吞已加载列表(moreError 行内透出);
+//                   首拉/刷新失败 = error 原文;reload 回到第一页重拉服务器真数,绝不本地编数。
+//   useKpiSeriesData KPI 时序(GET /reply-queue/kpi-series):四卡 sparkline 按日真序列 +
+//                   环比 delta;端点失败/未 ready → kpi=null + error 原文,四卡诚实回落
+//                   spempty 虚线零药丸(绝不编时序)。
 //   useScreenAction 「扫描新意向」:POST /reply-queue/screen —— 回执只信端点真实返回
 //                   (ok + scanned/matched/enqueued 真计数),成功后重拉列表。
 //   useDraftAction  「生成草稿」:POST /reply-queue/{id}/draft —— 后端原子认领防并发双烧;
@@ -44,30 +51,97 @@ export function reasonText(reason: string): string {
 
 const errText = (err: any, fallback: string) => String(err?.detail || err?.message || fallback);
 
-/** 全量拉取:一次取回四态(limit=500 端点上限;超出如实截断,口径记 SrcChip)。 */
+/** 单页条数(端点单次封顶 500;>500 队列由「载入更多」逐页追加)。 */
+export const QUEUE_PAGE = 500;
+
+/** 服务端分页拉取(MarketVoice feed 先例):首页 offset=0;loadMore 追加下一页;
+ *  total=服务端过滤后总数(「已显 X/Y」真分母);载入更多失败不吞已加载列表。 */
 export function useQueueData(apiToken: string) {
   const [items, setItems] = React.useState<ReplyQueueItem[] | null>(null);
+  const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [moreError, setMoreError] = React.useState("");
+  const [version, setVersion] = React.useState(0);
+  // 并发口径:单飞行闸(busyRef);首页/载入更多共用一条通道,晚到响应无从交错
+  const busyRef = React.useRef(false);
+
+  const fetchPage = React.useCallback(
+    (offset: number) => {
+      if (!apiToken || busyRef.current) return;
+      busyRef.current = true;
+      if (offset === 0) {
+        setLoading(true);
+        setError("");
+      } else {
+        setLoadingMore(true);
+      }
+      setMoreError(""); // 每次请求发起都清(MarketVoice 先例:瞬时分页失败不黏死)
+      fetchReplyQueue(apiToken, { status: "", limit: QUEUE_PAGE, offset })
+        .then((res) => {
+          setTotal(res.total);
+          setItems((prev) => (offset === 0 || !prev ? res.items : [...prev, ...res.items]));
+        })
+        .catch((err: any) => {
+          // 首拉失败 items 仍为 null → 模块闸走诚实错误卡;刷新失败不清已有数据
+          // (页头如实挂「刷新失败 · 列表为上次成功数据」);载入更多失败 → moreError
+          // 行内透出,已加载列表照常渲染(失败不吞列表)
+          if (offset === 0) setError(errText(err, "加载队列失败"));
+          else setMoreError(errText(err, "载入更多失败"));
+        })
+        .finally(() => {
+          busyRef.current = false;
+          if (offset === 0) setLoading(false);
+          else setLoadingMore(false);
+        });
+    },
+    [apiToken],
+  );
+
+  React.useEffect(() => {
+    if (apiToken) fetchPage(0);
+  }, [apiToken, version, fetchPage]);
+
+  const reload = React.useCallback(() => setVersion((v) => v + 1), []);
+  /** 追加下一页(offset=已载入行数;拉齐后 hasMore=false 自然停)。 */
+  const loadMore = React.useCallback(() => {
+    if (!items || items.length >= total) return;
+    fetchPage(items.length);
+  }, [items, total, fetchPage]);
+  /** 单行以服务器返回字段就地纠正(草稿/状态落地;绝不编造服务器没给的值)。 */
+  const patchItem = React.useCallback((id: number, patch: Partial<ReplyQueueItem>) => {
+    setItems((prev) => (prev ? prev.map((it) => (it.id === id ? { ...it, ...patch } : it)) : prev));
+  }, []);
+
+  return { items, total, loading, loadingMore, error, moreError, reload, loadMore, patchItem };
+}
+
+/** KPI 时序:四卡 sparkline/环比真数据;非 ready(empty/error)→ kpi=null + 原因,
+ *  四卡回落 spempty 虚线零药丸(诚实无时序,绝不编序列)。 */
+export function useKpiSeriesData(apiToken: string) {
+  const [kpi, setKpi] = React.useState<ReplyQueueKpiSeries | null>(null);
   const [error, setError] = React.useState("");
   const [version, setVersion] = React.useState(0);
 
-  // 并发口径:version 变更即重拉;旧请求由 cleanup 的 alive 旗作废(晚到响应绝不盖新数据)
   React.useEffect(() => {
     if (!apiToken) return;
     let alive = true;
-    setLoading(true);
     setError("");
-    fetchReplyQueue(apiToken, { status: "", limit: 500 })
+    fetchReplyQueueKpiSeries(apiToken)
       .then((res) => {
-        if (alive) setItems(Array.isArray(res.items) ? res.items : []);
+        if (!alive) return;
+        if (res && res.status === "ready") {
+          setKpi(res);
+        } else {
+          setKpi(null);
+          setError(String(res?.reason || "时序端点未就绪"));
+        }
       })
       .catch((err: any) => {
-        // 刷新失败不清已有数据(页头如实挂「刷新失败 · 列表为上次成功数据」);
-        // 首拉失败 items 仍为 null → 模块闸走诚实错误卡
-        if (alive) setError(errText(err, "加载队列失败"));
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
+        if (!alive) return;
+        setKpi(null);
+        setError(errText(err, "时序加载失败"));
       });
     return () => {
       alive = false;
@@ -75,12 +149,7 @@ export function useQueueData(apiToken: string) {
   }, [apiToken, version]);
 
   const reload = React.useCallback(() => setVersion((v) => v + 1), []);
-  /** 单行以服务器返回字段就地纠正(草稿/状态落地;绝不编造服务器没给的值)。 */
-  const patchItem = React.useCallback((id: number, patch: Partial<ReplyQueueItem>) => {
-    setItems((prev) => (prev ? prev.map((it) => (it.id === id ? { ...it, ...patch } : it)) : prev));
-  }, []);
-
-  return { items, loading, error, reload, patchItem };
+  return { kpi, error, reload };
 }
 
 export interface ScreenReceipt {

@@ -4,8 +4,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // 回复队列改版冒烟(金样板 MarketVoice/Projects.smoke 同构):
 // - 页壳:pagehead(回复队列 + 扫描新意向 + 刷新 + 编辑布局)+ 可编辑看板;
-// - KPI 带四卡 = 同一次全量拉取真值(待起草/待回复/已回复/价格购买意向);
-//   vkpi_reply_queue 无历史快照表 → 四卡 spempty 虚线零药丸(诚实,不编时序);
+// - KPI 带四卡 = 已载入队列真值(待起草/待回复/已回复/价格购买意向)+ kpi-series
+//   按日真序列 sparkline + 真环比(上窗 0 → 该卡诚实无药丸);时序端点失败 →
+//   四卡回落 spempty 虚线零药丸(诚实,不编时序);
+// - 服务端分页(MarketVoice feed 先例):首页 limit=500&offset=0 + total 真分母;
+//   >500 由全量弹窗「载入更多(已显 X/Y)」逐页追加;载入更多失败不吞已载入列表;
 // - 旧页零丢失:状态过滤 chips(计数徽)、意向/语言/平台徽、扫描新意向真回执
 //   (已扫/命中/新入队)、生成草稿/复制/标记已回/忽略 全真端点;
 // - 动作纪律:端点真实返回才落状态;409(claimed_by_other/status_conflict)诚实透出
@@ -51,12 +54,47 @@ const ITEMS: ReplyQueueItem[] = [
   row({ id: 7, comment_external_id: "ext-7", status: "dismissed", lang: "ko", comment_text: "가격이 얼마인가요" }),
 ];
 
-type Overrides = { list?: unknown; draft?: unknown; mark?: unknown; screen?: unknown };
+// kpi-series 缺省 mock:三日真序列 + 真环比(drafted 上窗 0 → delta null,该卡诚实无药丸)
+const pts = (nums: number[]) => nums.map((n, i) => ({ date: `2026-07-${String(10 + i).padStart(2, "0")}`, count: n }));
+const KPI_SERIES = {
+  status: "ready",
+  granularity: "day",
+  days: 3,
+  window: { since: "2026-07-10T00:00:00Z", until: "2026-07-12T08:30:00Z" },
+  series: {
+    enqueued: pts([2, 3, 2]),
+    pending: pts([1, 2, 1]),
+    drafted: pts([0, 1, 0]),
+    replied: pts([0, 1, 1]),
+    price: pts([1, 1, 0]),
+  },
+  prev: {
+    enqueued: { current: 7, previous: 4, delta_pct: 75 },
+    pending: { current: 4, previous: 2, delta_pct: 100 },
+    drafted: { current: 1, previous: 0, delta_pct: null },
+    replied: { current: 2, previous: 1, delta_pct: 100 },
+    price: { current: 2, previous: 4, delta_pct: -50 },
+  },
+};
+
+type Overrides = {
+  /** 值 / Error / 按 offset 出页的函数(服务端分页仿真) */
+  list?: unknown;
+  kpi?: unknown;
+  draft?: unknown;
+  mark?: unknown;
+  screen?: unknown;
+};
 
 function routeApi(overrides: Overrides = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: RequestInit) => {
     const p = String(path);
     const method = String(init?.method || "GET").toUpperCase();
+    if (p.startsWith("/api/admin/vkpi/reply-queue/kpi-series") && method === "GET") {
+      const value = overrides.kpi ?? KPI_SERIES;
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.startsWith("/api/admin/vkpi/reply-queue/screen") && method === "POST") {
       const value = overrides.screen ?? { ok: true, scanned: 800, matched: 12, enqueued: 3 };
       if (value instanceof Error) throw value;
@@ -78,7 +116,11 @@ function routeApi(overrides: Overrides = {}) {
       return value;
     }
     if (p.startsWith("/api/admin/vkpi/reply-queue") && method === "GET") {
-      const value = overrides.list ?? { items: ITEMS, count: ITEMS.length };
+      const offset = Number(new URLSearchParams(p.split("?")[1] || "").get("offset")) || 0;
+      const value =
+        typeof overrides.list === "function"
+          ? (overrides.list as (offset: number) => unknown)(offset)
+          : overrides.list ?? { items: ITEMS, count: ITEMS.length, total: ITEMS.length, offset, limit: 500 };
       if (value instanceof Error) throw value;
       return value;
     }
@@ -112,17 +154,31 @@ describe("queueCounts(同一份口径函数)", () => {
 
 /* ============ 页壳 + KPI 带 + 注册表 ============ */
 describe("ReplyQueueBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () => {
-  it("KPI 带四卡真值:待起草 4 / 待回复 1 / 已回复 1 / 价格购买 2;无时序 → spempty 零药丸;全量端点一次拉取", async () => {
+  it("KPI 带四卡真值 + kpi-series 真时序:sparkline ×4;环比药丸 3 枚(drafted 上窗 0 诚实无药丸)", async () => {
     expect(() => renderBoard()).not.toThrow();
     expect((await screen.findAllByText("待起草")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("已回复").length).toBeGreaterThan(0);
     expect(screen.getAllByText("价格/购买意向").length).toBeGreaterThan(0);
     const kpis = document.querySelectorAll(".ds-kpi");
     expect(kpis.length).toBe(4);
+    // kpi-series ready → 四卡真 sparkline,零 spempty 虚线
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(4));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(0);
+    // 真环比:pending +100 / replied +100 / price -50;drafted 上窗 0 → null 无药丸
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(3);
+    expect(document.querySelectorAll(".ds-kpi__delta--down").length).toBe(1);
+    // 首页:status='' + limit=500 + offset=0(服务端分页);时序端点独立拉取
+    expect(calledPaths().some((p) => p === "/api/admin/vkpi/reply-queue?limit=500&offset=0")).toBe(true);
+    expect(calledPaths().some((p) => p === "/api/admin/vkpi/reply-queue/kpi-series?days=30")).toBe(true);
+  });
+
+  it("kpi-series 失败 → 四卡诚实回落 spempty 虚线零药丸(数值仍为已载入真值,绝不编时序)", async () => {
+    routeApi({ kpi: err409("series boom") });
+    renderBoard();
+    expect((await screen.findAllByText("待起草")).length).toBeGreaterThan(0);
     await waitFor(() => expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(4));
+    expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(0);
     expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
-    // status='' 一次全量(limit=500),不带 status 参数
-    expect(calledPaths().some((p) => p === "/api/admin/vkpi/reply-queue?limit=500")).toBe(true);
   });
 
   it("默认布局四模块在场;palette 备选(平台/语言分布)不进默认;编辑布局可从 palette 添加", async () => {
@@ -186,11 +242,12 @@ describe("ReplyQueueBoardPage 旧功能零丢失", () => {
   it("扫描新意向:POST /reply-queue/screen 真回执(已扫/命中/新入队)+ 成功后重拉列表", async () => {
     renderBoard();
     expect(await screen.findByText("Where can I buy this lens?")).toBeTruthy();
-    const listCallsBefore = calledPaths().filter((p) => p === "/api/admin/vkpi/reply-queue?limit=500").length;
+    const firstPage = "/api/admin/vkpi/reply-queue?limit=500&offset=0";
+    const listCallsBefore = calledPaths().filter((p) => p === firstPage).length;
     fireEvent.click(screen.getByText("⌁ 扫描新意向"));
     expect(await screen.findByText(/已扫 800 条 · 命中 12 · 新入队 3/)).toBeTruthy();
     await waitFor(() => {
-      const after = calledPaths().filter((p) => p === "/api/admin/vkpi/reply-queue?limit=500").length;
+      const after = calledPaths().filter((p) => p === firstPage).length;
       expect(after).toBeGreaterThan(listCallsBefore);
     });
   });
@@ -202,6 +259,57 @@ describe("ReplyQueueBoardPage 旧功能零丢失", () => {
     fireEvent.click(screen.getByText("⌁ 扫描新意向"));
     expect(await screen.findByText("扫描新意向失败")).toBeTruthy();
     expect(screen.queryByText(/已扫/)).toBeNull();
+  });
+});
+
+/* ============ 服务端分页(>500 队列 · 弹窗「载入更多(已显 X/Y)」) ============ */
+describe("ReplyQueueBoardPage 服务端分页", () => {
+  const EXTRA = [
+    row({ id: 8, comment_external_id: "ext-8", comment_text: "EXTRA-8" }),
+    row({ id: 9, comment_external_id: "ext-9", comment_text: "EXTRA-9", status: "drafted" }),
+  ];
+  const paged = (offset: number) =>
+    offset === 0
+      ? { items: ITEMS, count: ITEMS.length, total: 9, offset: 0, limit: 500 }
+      : { items: EXTRA, count: EXTRA.length, total: 9, offset, limit: 500 };
+
+  it("载入更多(已显 7/9)追加下一页:offset=已载入行数;拉齐后按钮消失", async () => {
+    routeApi({ list: paged });
+    renderBoard();
+    fireEvent.click(await screen.findByRole("button", { name: /全部/ }));
+    // 卡面入口如实标注已载入/总数
+    fireEvent.click(await screen.findByText(/≡ 查看全量 7 条\(队列已载入 7\/9\)/));
+    expect(await screen.findByText("回复队列 · 全量")).toBeTruthy();
+    // 第二页未载入:EXTRA 行不在,载入更多按钮带真分母
+    expect(screen.queryByText("EXTRA-8")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^≡ 载入更多\(已显 7\/9\)/ }));
+    expect(await screen.findByText("EXTRA-8")).toBeTruthy();
+    expect(screen.getByText("EXTRA-9")).toBeTruthy();
+    // 追加页走 offset=7(服务端分页真参数)
+    expect(calledPaths().some((p) => p === "/api/admin/vkpi/reply-queue?limit=500&offset=7")).toBe(true);
+    // 拉齐(9/9)→ hasMore=false,按钮消失
+    expect(screen.queryByRole("button", { name: /^≡ 载入更多/ })).toBeNull();
+  });
+
+  it("载入更多失败:已载入列表照常渲染 + 行内错误 + 可重试(失败不吞列表)", async () => {
+    routeApi({ list: (offset: number) => (offset === 0 ? paged(0) : err409("page boom")) });
+    renderBoard();
+    fireEvent.click(await screen.findByRole("button", { name: /全部/ }));
+    fireEvent.click(await screen.findByText(/≡ 查看全量 7 条/));
+    fireEvent.click(await screen.findByRole("button", { name: /^≡ 载入更多/ }));
+    expect(await screen.findByText(/载入更多失败:page boom/)).toBeTruthy();
+    // 已载入 7 行照常在列表里(整卡只留零数据才清)
+    expect(screen.getAllByText("Where can I buy this lens?").length).toBeGreaterThan(0);
+    // 按钮仍在 → 可重试
+    expect(screen.getByRole("button", { name: /^≡ 载入更多/ })).toBeTruthy();
+  });
+
+  it("total=已载入(≤500 小队列)→ 零「载入更多」,行为与旧全量单页一致", async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByRole("button", { name: /全部/ }));
+    fireEvent.click(await screen.findByText(/≡ 查看全量 7 条/));
+    expect(await screen.findByText("回复队列 · 全量")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^≡ 载入更多/ })).toBeNull();
   });
 });
 
