@@ -20,6 +20,9 @@ export interface ReplyQueueItem {
   lang: string;
   draft_reply: string;
   status: ReplyQueueStatus | string;
+  /** 认领人 staff_id(后端 list_queue 回传;未认领 = null) */
+  claimed_by?: number | null;
+  claimed_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -99,9 +102,15 @@ export async function markReply(
   token: string,
   id: number,
   status: ReplyQueueStatus,
+  /** 乐观锁(后端 expected_status):前端最后看到的状态;他人已改动 → 409 status_conflict。
+   *  可选参数,旧调用方(ReplyQueuePage 回滚垫)零改动。 */
+  expectedStatus?: string,
 ): Promise<MarkResult> {
+  const params = new URLSearchParams();
+  params.set("status", status);
+  if (expectedStatus) params.set("expected_status", expectedStatus);
   return apiFetch<MarkResult>(
-    `/api/admin/vkpi/reply-queue/${id}/mark?status=${encodeURIComponent(status)}`,
+    `/api/admin/vkpi/reply-queue/${id}/mark?${params.toString()}`,
     { method: "POST" },
     token,
   );
