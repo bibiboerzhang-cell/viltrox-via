@@ -37,6 +37,7 @@ import {
   mergeLaunchMembers,
   type SkuListItem,
 } from "../../../../services/vkpi/launchBoard-api";
+import { getBoardSeries } from "../../../../services/vkpi/boardSeries-api";
 
 // 发射台 → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 五件套 1:1 同构)。
 //   旧 LaunchPadPage 全功能零丢失搬家:SKU 选择器 + 人数上限进 pagehead;一键全案六段
@@ -183,6 +184,12 @@ export function LaunchPadBoardPage({ apiToken = "", onNavigate }: { apiToken?: s
     reloadTick + review.version,
     React.useCallback((t: string) => getStagesSummary(t), []),
   );
+  // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;失败 = KPI 卡照旧 spempty 诚实虚线
+  const kpiSeriesResp = useEndpoint(
+    apiToken,
+    reloadTick + review.version + publish.version,
+    React.useCallback((t: string) => getBoardSeries(t, { board: "launchpad" }), []),
+  );
 
   const posts = React.useMemo(() => (Array.isArray(postsResp.data?.items) ? (postsResp.data!.items as Row[]) : null), [postsResp.data]);
   const approvals = React.useMemo(
@@ -279,6 +286,13 @@ export function LaunchPadBoardPage({ apiToken = "", onNavigate }: { apiToken?: s
       ...(approvalsAvailable === false
         ? ([["审批源", `后端未上线:${String(approvalsResp.data?.reason || "迁移173未应用")}`]] as Array<[string, string]>)
         : []),
+      [
+        "趋势线",
+        "board-series?board=launchpad 按日真序列(30 天窗):内容候选待核←新候选帖/日(vkpi_project_content_posts 入库即候选)、审批中←新审批行/日(vkpi_publish_approvals,表未建诚实空);两条为关联指标,卡面大数是当前待办存量 → 不挂环比药丸",
+      ],
+      ...(kpiSeriesResp.error
+        ? ([["趋势线源", `读取失败:${kpiSeriesResp.error}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+        : []),
     ];
     return (
       <ModuleCard {...cardProps("kpiL", "发布指标带", undefined, extraRows)}>
@@ -296,6 +310,7 @@ export function LaunchPadBoardPage({ apiToken = "", onNavigate }: { apiToken?: s
             approvalsNote={
               approvalsAvailable === false ? `后端未上线:${String(approvalsResp.data?.reason || "迁移173未应用")}` : srcNote(approvalsResp.error)
             }
+            boardSeries={kpiSeriesResp.data ?? null}
           />
         )}
       </ModuleCard>

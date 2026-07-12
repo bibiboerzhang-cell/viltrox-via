@@ -54,7 +54,42 @@ const LOCS_OK = {
 const SCRAPE_PREVIEW = { ok: true, source: "usa_camera_retailers", requested: 20, inserted: 0, skipped: 0, geocoded: 0, pending_geocode: 0, record_only: true, plan: [], errors: [] };
 const SCRAPE_RUN = { ok: true, source: "usa_camera_retailers", requested: 20, inserted: 5, skipped: 15, geocoded: 4, pending_geocode: 1, record_only: false, errors: [{ name: "X", error: "geocode miss" }] };
 
-type Overrides = { dealers?: unknown; locs?: unknown };
+// board-series?board=dealers 真形状(对照 backend board_series._dealers_board 出参;
+// 缺省用例走 Error:端点失败 → 卡面照旧 spempty 诚实虚线的回归锁;本地 0 行时
+// 端点真实返回 status=empty + 空序列 —— 绝不 0 填平线)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "dealers",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  series: {
+    dealers_new: [
+      { date: "2026-07-10", count: 1 },
+      { date: "2026-07-11", count: 0 },
+      { date: "2026-07-12", count: 2 },
+    ],
+  },
+  metrics: {
+    dealers_new: { status: "ready", current: 3, previous: 0, delta_pct: null, table: "vkpi_dealers", unit: "rows" },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+const BOARD_SERIES_EMPTY = {
+  status: "empty",
+  board: "dealers",
+  days: 30,
+  reason: "vkpi_dealers 全表 0 行(数据在线上库)——诚实空,不摆 0 填平线冒充有数据流。",
+  series: { dealers_new: [] },
+  metrics: { dealers_new: { status: "empty", table: "vkpi_dealers" } },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+type Overrides = { dealers?: unknown; locs?: unknown; boardSeries?: unknown };
 
 function routeApi(overrides: Overrides = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: RequestInit) => {
@@ -65,6 +100,7 @@ function routeApi(overrides: Overrides = {}) {
       if (v instanceof Error) throw v;
       return v;
     };
+    if (p.startsWith("/api/admin/vkpi/board-series")) return pick(overrides.boardSeries, new Error("board-series 未接通"));
     if (p.startsWith("/api/admin/vkpi/dealers/locations")) return pick(overrides.locs, LOCS_OK);
     if (p.startsWith("/api/admin/vkpi/dealers/scrape-enqueue") && method === "POST") {
       const body = JSON.parse(String(init?.body || "{}"));
@@ -124,6 +160,31 @@ describe("DealersBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () 
     // 真端点全被调
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/dealers?") || p === "/api/admin/vkpi/dealers")).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/dealers/locations"))).toBe(true);
+  });
+
+  it("board-series 就绪 → 经销商数卡点亮真 sparkline(关联指标零环比药丸)", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_OK });
+    renderBoard();
+    expect((await screen.findAllByText("经销商数")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(1));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(3);
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    const bs = calledPaths().filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=dealers");
+  });
+
+  it("board-series 端点 empty(全表 0 行)→ 空序列 → 绝不画 0 填平线,四卡虚线如实", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_EMPTY });
+    renderBoard();
+    expect((await screen.findAllByText("经销商数")).length).toBeGreaterThan(0);
+    // 端点已真实返回(empty + 空序列)→ 依旧零 sparkline(诚实虚线,不编平线)
+    await waitFor(() => {
+      const bs = calledPaths().filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+      expect(bs.length).toBeGreaterThan(0);
+    });
+    expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(0);
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(4);
   });
 
   it("vkpi_dealers 0 行 → KPI 带全 pending 诚实空态注明数据在线上库;地区不画;地图角标如实", async () => {

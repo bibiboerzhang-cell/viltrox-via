@@ -10,6 +10,7 @@ import {
   type VkpiKolPoolDetailBundleResponse,
 } from "../../../../services/vkpi/kolPool-api";
 import { getKolCompetingActivity, getKolProductionLeadtime } from "../../../../services/vkpi/kolProfile-api";
+import { getBoardSeries, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { IdentityBody, DeepBody, CommentsBody, MODULE_SOURCES } from "./KolProfileBoardPage.modules";
 import {
@@ -188,6 +189,13 @@ export function KolProfileBoardPage({
     deps,
   );
   const leadtime = useRemote<Row>(enabled, () => getKolProductionLeadtime(apiToken, kolId) as Promise<Row>, deps);
+  // KPI 卡趋势线(挂账迸发①):board-series?board=kol-profile&kol_id= 该 KOL evidence 按日;
+  // 失败 = KPI 卡照旧 spempty 诚实虚线,不拖累档案主体
+  const kpiSeries = useRemote<VkpiBoardSeriesResponse>(
+    enabled,
+    () => getBoardSeries(apiToken, { board: "kol-profile", kolId }),
+    deps,
+  );
 
   const item: Row | null = bundle.data?.item ? (bundle.data.item as unknown as Row) : null;
   const displayName = str(item?.display_name) || str(item?.handle) || (kolId > 0 ? `#${kolId}` : "");
@@ -238,6 +246,13 @@ export function KolProfileBoardPage({
     const extraRows: Array<[string, string]> = item
       ? [
           ["采集时点", `${str(item.updated_at) || str(item.last_seen_at) || "—"}(UTC · 点时快照)`],
+          [
+            "趋势线",
+            "board-series?board=kol-profile&kol_id= 该 KOL 内容收录/日真序列(30 天窗,已深析视频卡;关联指标,卡面大数是存量 → 不挂环比药丸);粉丝/均播放/互动率为点时快照无历史 → 虚线如实",
+          ],
+          ...(kpiSeries.status === "error"
+            ? ([["趋势线源", `读取失败:${kpiSeries.error}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+            : []),
         ]
       : [];
     return (
@@ -251,6 +266,7 @@ export function KolProfileBoardPage({
             evidenceCount={num(analysisSummary?.evidence_count)}
             pending={!item}
             pendingNote="档案主体未就绪"
+            boardSeries={kpiSeries.data}
           />
         )}
       </ModuleCard>

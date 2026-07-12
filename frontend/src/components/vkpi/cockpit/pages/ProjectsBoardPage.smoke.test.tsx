@@ -106,12 +106,57 @@ const DUE_OK = {
   note: "",
 };
 
-type Overrides = { posts?: unknown; attr?: unknown; advance?: unknown };
+// board-series?board=projects 真形状(对照 backend board_series._projects_board 出参;
+// 缺省用例走 Error:端点失败 → 卡面照旧 spempty 诚实虚线的回归锁)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "projects",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  series: {
+    projects_new: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 1 },
+      { date: "2026-07-12", count: 4 },
+    ],
+    stage_advances: [
+      { date: "2026-07-10", count: 2 },
+      { date: "2026-07-11", count: 0 },
+      { date: "2026-07-12", count: 22 },
+    ],
+    content_posted: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 1 },
+      { date: "2026-07-12", count: 0 },
+    ],
+    attribution_revenue_cents: [
+      { date: "2026-07-10", value: 0 },
+      { date: "2026-07-11", value: 12999 },
+      { date: "2026-07-12", value: 0 },
+    ],
+  },
+  metrics: {
+    projects_new: { status: "ready", current: 5, previous: 45, delta_pct: -88.9, table: "vkpi_projects", unit: "rows" },
+    stage_advances: { status: "ready", current: 24, previous: 27, delta_pct: -11.1, table: "vkpi_project_stage_events", unit: "rows" },
+    content_posted: { status: "ready", current: 1, previous: 17, delta_pct: -94.1, table: "vkpi_project_content_posts", unit: "rows" },
+    attribution_revenue_cents: { status: "ready", current: 12999, previous: 0, delta_pct: null, table: "vkpi_sales_attributions", unit: "cents" },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+type Overrides = { posts?: unknown; attr?: unknown; advance?: unknown; boardSeries?: unknown };
 
 function routeApi(overrides: Overrides = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: RequestInit) => {
     const p = String(path);
     const method = String(init?.method || "GET").toUpperCase();
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      const value = overrides.boardSeries ?? new Error("board-series 未接通");
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.startsWith("/api/admin/vkpi/projects/deliverable-stages-summary")) return STAGES_OK;
     const patchMatch = p.match(/\/api\/admin\/vkpi\/projects\/content-posts\/(\d+)$/);
     if (patchMatch && method === "PATCH") {
@@ -213,6 +258,22 @@ describe("ProjectsBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", ()
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/projects/content-posts"))).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/projects/observation-windows"))).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/attribution"))).toBe(true);
+  });
+
+  it("board-series 就绪 → 四卡点亮真 sparkline;环比药丸只挂本窗发布(同口径),其余关联指标卡零药丸", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_OK });
+    renderBoard();
+    expect((await screen.findAllByText("进行中项目")).length).toBeGreaterThan(0);
+    // 四卡全点亮(projects_new / stage_advances / content_posted / attribution_revenue_cents)
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(4));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(0);
+    // 环比药丸:仅本窗发布(卡面大数与序列同口径 30 天窗)→ 恰 1 枚,-94.1%
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(1);
+    expect(screen.getByText(/94\.1%/)).toBeTruthy();
+    // 序列请求真发向 board-series?board=projects
+    const bs = calledPaths().filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=projects");
   });
 
   it("默认布局六模块在场;palette 备选(归因/成本)不进默认;编辑布局可从 palette 添加", async () => {

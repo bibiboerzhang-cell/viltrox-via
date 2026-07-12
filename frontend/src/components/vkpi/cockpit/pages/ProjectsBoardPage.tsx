@@ -15,6 +15,7 @@ import {
   listSalesAttributions,
   sumRevenueUsd,
 } from "../../../../services/vkpi/projectsBoard-api";
+import { getBoardSeries } from "../../../../services/vkpi/boardSeries-api";
 import { useEndpoint, useProjectsCrudActions, useRetroAdvance, type RetroReceipt } from "./ProjectsBoardPage.actions";
 import {
   AttributionBody,
@@ -186,6 +187,12 @@ export function ProjectsBoardPage({
     reloadTick,
     React.useCallback((t: string) => listSalesAttributions(t), []),
   );
+  // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;失败 = KPI 卡照旧 spempty 诚实虚线
+  const kpiSeriesResp = useEndpoint(
+    token,
+    reloadTick + review.version + retro.version,
+    React.useCallback((t: string) => getBoardSeries(t, { board: "projects" }), []),
+  );
 
   const posts = React.useMemo(() => (Array.isArray(postsResp.data?.items) ? (postsResp.data!.items as Row[]) : null), [postsResp.data]);
   const windows = React.useMemo(() => (Array.isArray(windowsResp.data?.items) ? (windowsResp.data!.items as Row[]) : null), [windowsResp.data]);
@@ -263,6 +270,13 @@ export function ProjectsBoardPage({
       ...(postsResp.error ? ([["本窗发布源", `读取失败:${postsResp.error}`]] as Array<[string, string]>) : []),
       ...(attrResp.error ? ([["归因源", `读取失败:${attrResp.error}`]] as Array<[string, string]>) : []),
       ...(revenueUsd != null ? ([["归因合计", `${fmtUsd2(revenueUsd)}(${attributions?.length ?? 0} 行 Σ revenue_cents ÷ 100 · 按本人可见行合计,非全表)`]] as Array<[string, string]>) : []),
+      [
+        "趋势线",
+        "board-series?board=projects 按日真序列(30 天窗):进行中项目←新建项目/日、在项 KOL←阶段推进事件/日(两条为关联指标,不挂环比药丸)、本窗发布←发布帖/日(与卡面同口径,环比药丸同源)、归因销售←按日归因金额",
+      ],
+      ...(kpiSeriesResp.error
+        ? ([["趋势线源", `读取失败:${kpiSeriesResp.error}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+        : []),
     ];
     return (
       <ModuleCard {...cardProps("kpiP", "项目指标带", groups.length ? `${groups.length} 组` : undefined, extraRows)}>
@@ -278,6 +292,7 @@ export function ProjectsBoardPage({
             postedNote={srcNote(postsResp.error)}
             revenueUsd={revenueUsd}
             revenueNote={srcNote(attrResp.error)}
+            boardSeries={kpiSeriesResp.data ?? null}
           />
         )}
       </ModuleCard>

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // SKU 360° 改版冒烟(金样板 MarketVoicePage/KolProfileBoardPage.smoke 同构):
 // - 页壳:pagehead(SKU 360° + 型号/类目药丸徽 + 编辑布局钮)+ 控件行选择器 + 可编辑看板;
@@ -169,9 +169,37 @@ const SKU_LIST_OK = {
   ],
 };
 
-function routeApi(overrides: { profile?: unknown; persona?: unknown } = {}) {
+// board-series?board=sku360&sku= 真形状(对照 backend board_series._sku360_board 出参;
+// 缺省用例走 Error:端点失败 → 卡面照旧 spempty 诚实虚线的回归锁)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "sku360",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  params: { sku: "AF-85MM-F14-PRO-FE", resolved_sku: "AF-85MM-F14-PRO-FE", alias_terms: 12 },
+  series: {
+    sku_mentions: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 1 },
+      { date: "2026-07-12", count: 1 },
+    ],
+  },
+  metrics: {
+    sku_mentions: { status: "ready", current: 2, previous: 0, delta_pct: null, table: "vkpi_kol_video_evidence", unit: "rows", scanned: 40 },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+function routeApi(overrides: { profile?: unknown; persona?: unknown; boardSeries?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      const value = overrides.boardSeries ?? new Error("board-series 未接通");
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.includes("/sku/list")) return SKU_LIST_OK;
     if (p.includes("/persona")) {
       const value = overrides.persona ?? PERSONA_OK;
@@ -224,6 +252,20 @@ describe("Sku360BoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + 全�
     for (const seg of ["/profile", "/persona", "/product-campaign-card"]) {
       expect(calledPaths.some((p) => p.includes(seg))).toBe(true);
     }
+  });
+
+  it("board-series 就绪 → 提及内容卡点亮真 sparkline(关联指标零环比药丸);其余三卡实算聚合虚线如实", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_OK });
+    renderBoard();
+    expect(await screen.findByText("12.3万")).toBeTruthy();
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(1));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(3);
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    // 序列请求真发向 board-series?board=sku360&sku=
+    const bs = apiFetchMock.mock.calls.map((c) => String(c[0])).filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=sku360");
+    expect(bs[0]).toContain("sku=AF-85MM-F14-PRO-FE");
   });
 
   it("默认布局九模块在场;candidates=palette 备选不进默认;真表名只进 SrcChip;AI 生成标注 + 置信原样", async () => {
@@ -308,5 +350,34 @@ describe("Sku360BoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + 全�
     window.sessionStorage.setItem("vkpi:sku360-sku", "AF-85MM-F14-PRO-FE");
     fireEvent(window, new Event("vkpi:open-sku360"));
     expect(await screen.findByText("声量指标带")).toBeTruthy();
+  });
+
+  /* ---------- 市场之声声音榜 → SKU360 跳转桥接收位(诚实版:预填搜索,非 SKU 直选) ---------- */
+
+  it("跳转桥接收位·挂载消费:vkpi:sku360-search 预填搜索框并即删(一次性),不写 SKU 直选", async () => {
+    window.sessionStorage.setItem("vkpi:sku360-search", "AF 自动对焦镜头");
+    render(<Sku360BoardPage apiToken="t" />);
+    // 引导态选择器被产品线词预填(300ms 防抖搜索自动跑,搜不到=诚实「无匹配 SKU」)
+    const input = screen.getByLabelText("搜索 SKU") as HTMLInputElement;
+    expect(input.value).toBe("AF 自动对焦镜头");
+    // 一次性消费即删;绝不据此直选 SKU(产品线级无逐 SKU 关联,不装直跳)
+    expect(window.sessionStorage.getItem("vkpi:sku360-search")).toBeNull();
+    expect(apiFetchMock.mock.calls.map((c) => String(c[0])).some((p) => p.includes("/profile"))).toBe(false);
+    // 防抖后以产品线词搜 /sku/list
+    await waitFor(() =>
+      expect(
+        apiFetchMock.mock.calls.map((c) => String(c[0])).some((p) => p.includes(`/sku/list?query=${encodeURIComponent("AF 自动对焦镜头")}`)),
+      ).toBe(true),
+    );
+  });
+
+  it("跳转桥接收位·在场消费:vkpi:open-sku360-search 事件 → 已挂载页面同样预填搜索框", async () => {
+    render(<Sku360BoardPage apiToken="t" />);
+    const input = screen.getByLabelText("搜索 SKU") as HTMLInputElement;
+    expect(input.value).toBe("");
+    window.sessionStorage.setItem("vkpi:sku360-search", "电影镜头");
+    fireEvent(window, new Event("vkpi:open-sku360-search"));
+    expect(input.value).toBe("电影镜头");
+    expect(window.sessionStorage.getItem("vkpi:sku360-search")).toBeNull();
   });
 });

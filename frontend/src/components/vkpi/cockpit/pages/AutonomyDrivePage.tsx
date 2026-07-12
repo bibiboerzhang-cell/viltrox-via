@@ -2,6 +2,7 @@ import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import { apiFetch, jsonBody } from "../../../../services/http";
+import { getBoardSeries, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { ModuleProvModal } from "./MarketVoicePage.dialogs";
 import {
@@ -76,6 +77,28 @@ export function AutonomyDrivePage({ apiToken = "" }: { apiToken?: string; onNavi
   const [ledgerError, setLedgerError] = React.useState("");
   const [inboxCount, setInboxCount] = React.useState<number | null>(null);
   const [inboxError, setInboxError] = React.useState("");
+  // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;失败 = KPI 卡照旧 spempty 诚实虚线
+  const [kpiSeries, setKpiSeries] = React.useState<VkpiBoardSeriesResponse | null>(null);
+  const [kpiSeriesError, setKpiSeriesError] = React.useState("");
+
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setKpiSeriesError("");
+    getBoardSeries(apiToken, { board: "autonomy" })
+      .then((res) => {
+        if (alive) setKpiSeries(res ?? null);
+      })
+      .catch((err: any) => {
+        if (alive) {
+          setKpiSeries(null);
+          setKpiSeriesError(String(err?.detail || err?.message || "加载失败"));
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, reloadTick]);
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -219,6 +242,13 @@ export function AutonomyDrivePage({ apiToken = "" }: { apiToken?: string; onNavi
       ...(licData?.note ? ([["驾照口径", String(licData.note)]] as Array<[string, string]>) : []),
       ...(ledgerError ? ([["台账端点", `prediction-ledger/summary → ${ledgerError}`]] as Array<[string, string]>) : []),
       ...(inboxError ? ([["建议端点", `actions/inbox → ${inboxError}`]] as Array<[string, string]>) : []),
+      [
+        "趋势线",
+        "board-series?board=autonomy 按日真序列(30 天窗,vkpi_action_inbox):待人审建议←新建议/日、已对答案←建议执行/日(executed 行按最后状态变更日);两条为关联指标,卡面大数是当前存量 → 不挂环比药丸",
+      ],
+      ...(kpiSeriesError
+        ? ([["趋势线源", `读取失败:${kpiSeriesError}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+        : []),
     ];
     return (
       <ModuleCard {...cardProps("kpiA", "自治总览", licReady ? `${items.length} 张` : undefined, kpiExtra)}>
@@ -238,6 +268,7 @@ export function AutonomyDrivePage({ apiToken = "" }: { apiToken?: string; onNavi
               suggested: inboxCount ?? 0,
               note: inboxError || "建议队列读取中…",
             }}
+            boardSeries={kpiSeries}
           />
         )}
       </ModuleCard>

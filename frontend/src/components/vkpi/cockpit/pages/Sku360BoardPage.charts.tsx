@@ -1,11 +1,13 @@
 import React from "react";
 import { EmptyLine, KpiCard } from "./MarketVoicePage.modules";
+import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 
 // SKU 360° · 图表模块族(Sku360BoardPage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage.charts / KolProfileBoardPage.charts 图形语言逐件同构
 //   (不跨页引它们的私有件,防纠缠):BarRow 条形行(关联创作者/推广候选/市场风险共用)、
-//   KPI 带四卡(KpiCard 现成件:四指标全是请求时实算聚合,无历史时序 →
-//   四卡诚实 spempty 虚线,永不编 series/环比)。
+//   KPI 带四卡(KpiCard 现成件:提及内容卡趋势线 = board-series?board=sku360&sku=
+//   该 SKU 标题提及/日真序列(关联指标,卡面大数是全量档案计数 → 不挂环比药丸);
+//   其余三指标为请求时实算聚合无历史时序 → 诚实 spempty 虚线,永不编 series/环比)。
 // 红线:纯展示零网络;fit/评分只读展示绝不写回;颜色全 token var(--ds-*) 零写死色;
 //   零 opacity 修饰类(条形弱化走内联 style,金样板同款);诚实空态,绝不编数。
 
@@ -112,6 +114,7 @@ export function SkuKpiBand({
   avgEngagementPct,
   pending,
   pendingNote,
+  boardSeries,
 }: {
   /** aggregate.content_count(命中该 SKU 的内容条数) */
   contentCount: number | null;
@@ -124,6 +127,8 @@ export function SkuKpiBand({
   /** 档案主体未就绪(加载中/失败)→ 四卡诚实 pending */
   pending: boolean;
   pendingNote: string;
+  /** board-series?board=sku360&sku= 响应(null=未就绪/失败 → 趋势位 spempty 诚实虚线) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -134,6 +139,8 @@ export function SkuKpiBand({
         tone={contentCount !== null && contentCount === 0 ? "warn" : "good"}
         pending={pending}
         pendingNote={pendingNote}
+        series={boardSeriesVals(boardSeries ?? null, "sku_mentions")}
+        seriesColor="var(--ds-accent)"
       />
       <KpiCard
         label="覆盖创作者"

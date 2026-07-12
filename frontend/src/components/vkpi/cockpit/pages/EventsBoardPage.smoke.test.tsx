@@ -115,15 +115,53 @@ const STAFF = [
   { id: "8", name: "Pei", email: "pei@viltrox.com", isAdmin: false, avatar: "P", color: "#06b6d4" },
 ];
 
+// board-series?board=events 真形状(对照 backend board_series._events_board 出参;
+// 缺省不路由 → 空对象 → 卡面照旧 spempty 诚实虚线)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "events",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  series: {
+    events_new: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 2 },
+      { date: "2026-07-12", count: 3 },
+    ],
+    events_started: [
+      { date: "2026-07-10", count: 1 },
+      { date: "2026-07-11", count: 0 },
+      { date: "2026-07-12", count: 2 },
+    ],
+    event_expense_amount: [
+      { date: "2026-07-10", value: 0 },
+      { date: "2026-07-11", value: 200 },
+      { date: "2026-07-12", value: 0 },
+    ],
+  },
+  metrics: {
+    events_new: { status: "ready", current: 5, previous: 0, delta_pct: null, table: "vkpi_events", unit: "rows" },
+    events_started: { status: "ready", current: 3, previous: 1, delta_pct: 200.0, table: "vkpi_events", unit: "rows" },
+    event_expense_amount: { status: "ready", current: 200, previous: 0, delta_pct: null, table: "vkpi_event_expenses", unit: "amount" },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
 type RouteOverrides = {
   events?: () => Promise<unknown>;
   inventory?: () => Promise<unknown>;
   detail?: () => Promise<unknown>;
+  boardSeries?: () => Promise<unknown>;
 };
 
 function routeApi(overrides: RouteOverrides = {}) {
   apiFetchMock.mockImplementation((path: unknown) => {
     const p = String(path);
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      return overrides.boardSeries ? overrides.boardSeries() : Promise.resolve({});
+    }
     if (p.startsWith("/api/admin/vkpi/events?")) {
       return overrides.events ? overrides.events() : Promise.resolve({ items: [EV1, EV2, EV3] });
     }
@@ -206,6 +244,20 @@ describe("EventsBoardPage 页壳 + KPI 带(全真值)", () => {
     });
     expect(text).toContain("—");
     expect(await kpiCardText("进行中活动")).toContain("2");
+  });
+
+  it("board-series 就绪 → 进行中/本月/费用三卡点亮真 sparkline(关联指标零环比药丸);物料备货点时无序列照旧虚线", async () => {
+    routeApi({ boardSeries: () => Promise.resolve(BOARD_SERIES_OK) });
+    renderBoard();
+    expect((await screen.findAllByText("进行中活动")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(3));
+    // 物料备货 = 点时库存无历史 → 唯一诚实虚线;关联指标卡零环比药丸
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(1);
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    // 序列请求真发向 board-series?board=events
+    const bs = apiFetchMock.mock.calls.map((c) => String(c[0])).filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=events");
   });
 });
 

@@ -118,12 +118,44 @@ const READY = {
   note: "段级条目=纯已有 final_v1 分析文本的索引。独立展示信号,不参与 V6 Fit 评分。",
 };
 
-function routeApi(response: unknown = READY) {
+// board-series?board=creative 真形状(对照 backend board_series._creative_board 出参):
+// 段级新增/深析新增双序列;缺省用例走 Error(端点失败 → 卡面照旧诚实虚线的回归锁)。
+const BOARD_SERIES_READY = {
+  status: "ready",
+  board: "creative",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  series: {
+    deep_videos_new: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 3 },
+      { date: "2026-07-12", count: 17 },
+    ],
+    segments_new: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 20 },
+      { date: "2026-07-12", count: 99 },
+    ],
+  },
+  metrics: {
+    deep_videos_new: { status: "ready", current: 20, previous: 417, delta_pct: -95.2, table: "vkpi_analysis_cache", unit: "rows" },
+    segments_new: { status: "ready", current: 119, previous: 3825, delta_pct: -96.9, table: "vkpi_analysis_cache", unit: "rows" },
+  },
+  basis: { deep_videos_new: "vkpi_analysis_cache final_v1 ready 按日", segments_new: "同窗 result 拆段按日" },
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+function routeApi(response: unknown = READY, boardSeries: unknown = new Error("board-series 未接通")) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
     if (p.startsWith("/api/admin/vkpi/creative-segments/search")) {
       if (response instanceof Error) throw response;
       return response;
+    }
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      if (boardSeries instanceof Error) throw boardSeries;
+      return boardSeries;
     }
     throw new Error(`unexpected apiFetch: ${p}`);
   });
@@ -149,7 +181,7 @@ describe("CreativeLibraryBoardPage smoke(页壳 + KPI 带真值 + 布局键)", (
     expect(screen.getByText("当前命中")).toBeTruthy();
     const kpis = document.querySelectorAll(".ds-kpi");
     expect(kpis.length).toBe(4);
-    // 无按日序列 → 全部诚实虚线;零 sparkline 零环比药丸(不编趋势)
+    // board-series 读取失败(缺省 mock)→ 全部诚实虚线;零 sparkline 零环比药丸(不编趋势)
     expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(4);
     expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(0);
     expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
@@ -168,7 +200,26 @@ describe("CreativeLibraryBoardPage smoke(页壳 + KPI 带真值 + 布局键)", (
     // 布局:本机 storageKey 落盘;绝不写账户级偏好端点(不传 apiToken 给看板)
     await waitFor(() => expect(window.localStorage.getItem("vkpi-creative-library-layout-v1")).toBeTruthy());
     const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
-    expect(calledPaths.every((p) => p.startsWith("/api/admin/vkpi/creative-segments/search"))).toBe(true);
+    expect(
+      calledPaths.every(
+        (p) => p.startsWith("/api/admin/vkpi/creative-segments/search") || p.startsWith("/api/admin/vkpi/board-series"),
+      ),
+    ).toBe(true);
+  });
+
+  it("board-series 就绪 → 段级条目/已深析视频两卡点亮真 sparkline(关联指标零环比药丸);另两卡虚线如实", async () => {
+    routeApi(READY, BOARD_SERIES_READY);
+    renderBoard();
+    expect(await screen.findByText("段级条目")).toBeTruthy();
+    // 两卡真 sparkline + 两卡诚实虚线(覆盖 KOL / 当前命中无按日序列)
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(2));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(2);
+    // 卡面大数是全库存量,序列是关联流量指标 → 环比药丸诚实不渲染
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    // 序列请求真发向 board-series?board=creative
+    const bsCalls = apiFetchMock.mock.calls.map((call) => String(call[0])).filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bsCalls.length).toBeGreaterThan(0);
+    expect(bsCalls[0]).toContain("board=creative");
   });
 
   it("段级条目流:卡面 6 条 + meta 行;全量弹窗 → 详情 ‹ #n/N › + ↑↓ 连续翻;溯源链每跳在场", async () => {

@@ -3,6 +3,7 @@ import { EmptyLine, ErrorCard, KpiCard, PendingCard, type Row } from "./MarketVo
 import { BarRow } from "./MarketVoicePage.charts";
 import { Drow } from "./MarketVoicePage.dialogs";
 import { CONFIDENCE_META, fmtNum, fmtUsd, type LaunchMember } from "../../../../services/vkpi/launchBoard-api";
+import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 
 // 发射台 · 板块页范式辅助件(LaunchPadBoardPage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage.modules / MyKolBoardPage.charts 同构:模块卡骨架、KPI 卡、
@@ -483,7 +484,10 @@ export function ForecastBody({ members, onOpenMember }: { members: LaunchMember[
   );
 }
 
-/* ============ KPI 带四卡(四源真计数;无按日序列端点 → 趋势位诚实虚线) ============ */
+/* ============ KPI 带四卡(四源真计数;趋势线 = board-series?board=launchpad 按日
+   真序列:内容候选待核←content_candidates 新候选帖/日、审批中←publish_approvals
+   新审批行/日(关联指标,卡面大数是待办存量 → 不挂环比药丸;表未建/端点失败
+   boardSeriesVals=null → spempty 诚实虚线让位);计划/已发无按日序列照旧虚线) ============ */
 export function LaunchKpiBand({
   launchesActive,
   launchesNote,
@@ -493,6 +497,7 @@ export function LaunchKpiBand({
   postedNote,
   approvalsPending,
   approvalsNote,
+  boardSeries,
 }: {
   launchesActive: number | null;
   launchesNote: string;
@@ -502,7 +507,10 @@ export function LaunchKpiBand({
   postedNote: string;
   approvalsPending: number | null;
   approvalsNote: string;
+  /** board-series?board=launchpad 响应(null=未就绪/失败 → 趋势位 spempty 诚实虚线) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
+  const bs = boardSeries ?? null;
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {launchesActive != null ? (
@@ -511,7 +519,14 @@ export function LaunchKpiBand({
         <KpiCard label="发布计划进行中" value="—" pending pendingNote={launchesNote} />
       )}
       {candidates != null ? (
-        <KpiCard label="内容候选待核" value={candidates.toLocaleString()} unit="条" tone="warn" seriesColor="var(--ds-warn)" />
+        <KpiCard
+          label="内容候选待核"
+          value={candidates.toLocaleString()}
+          unit="条"
+          tone="warn"
+          series={boardSeriesVals(bs, "content_candidates")}
+          seriesColor="var(--ds-warn)"
+        />
       ) : (
         <KpiCard label="内容候选待核" value="—" pending pendingNote={candidatesNote} />
       )}
@@ -521,7 +536,14 @@ export function LaunchKpiBand({
         <KpiCard label="已发内容" value="—" pending pendingNote={postedNote} />
       )}
       {approvalsPending != null ? (
-        <KpiCard label="审批中" value={approvalsPending.toLocaleString()} unit="条" tone="warn" seriesColor="var(--ds-warn)" />
+        <KpiCard
+          label="审批中"
+          value={approvalsPending.toLocaleString()}
+          unit="条"
+          tone="warn"
+          series={boardSeriesVals(bs, "publish_approvals")}
+          seriesColor="var(--ds-warn)"
+        />
       ) : (
         <KpiCard label="审批中" value="—" pending pendingNote={approvalsNote} />
       )}

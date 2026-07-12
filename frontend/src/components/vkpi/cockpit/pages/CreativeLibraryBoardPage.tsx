@@ -7,6 +7,7 @@ import {
   type CreativeSegmentItem,
   type CreativeSegmentsResponse,
 } from "../../../../services/vkpi/creativeLibrary-api";
+import { boardSeriesVals, getBoardSeries, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 import { CoverRow, EmptyLine, ErrorCard, KpiCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { BarRow, CatDonutBody } from "./MarketVoicePage.charts";
 import {
@@ -87,6 +88,28 @@ export function CreativeLibraryBoardPage({
   const [listOpen, setListOpen] = React.useState(false);
   const [detailIndex, setDetailIndex] = React.useState<number | null>(null);
   const [provKey, setProvKey] = React.useState<string | null>(null);
+
+  // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;失败 = KPI 卡照旧 spempty 诚实虚线
+  const [kpiSeries, setKpiSeries] = React.useState<VkpiBoardSeriesResponse | null>(null);
+  const [kpiSeriesError, setKpiSeriesError] = React.useState("");
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setKpiSeriesError("");
+    getBoardSeries(apiToken, { board: "creative" })
+      .then((res) => {
+        if (alive) setKpiSeries(res ?? null);
+      })
+      .catch((err: any) => {
+        if (alive) {
+          setKpiSeries(null);
+          setKpiSeriesError(String(err?.detail || err?.message || "加载失败"));
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, reloadTick]);
 
   // 三筛选任一变化 → 300ms 防抖重查(旧页同款);首载空筛选拉全库 TOP(封顶 200)
   React.useEffect(() => {
@@ -207,8 +230,10 @@ export function CreativeLibraryBoardPage({
 
   /* ---------- 模块 body ---------- */
 
-  // KPI 带四卡(全真值;端点无按日时序 → KpiCard 诚实虚线,零假 sparkline 零假环比;
-  // 深析库空 = readyGate 直出 reason 行,不摆四个 0 装有库)
+  // KPI 带四卡(全真值;段级条目/已深析视频两卡趋势线 = board-series?board=creative
+  // 按日真序列(关联指标:段级新增/日、深析新增/日;卡面大数是全库存量 → 不挂环比
+  // 药丸);端点失败 boardSeriesVals=null → spempty 诚实虚线;深析库空 = readyGate
+  // 直出 reason 行,不摆四个 0 装有库)
   const renderKpiBand = () => {
     const gate = readyGate();
     const extraRows: Array<[string, string]> =
@@ -217,7 +242,13 @@ export function CreativeLibraryBoardPage({
             ["扫描", `${Number(data.scanned_videos) || 0} 条深析视频`],
             ["索引", `${Number(data.segment_count) || 0} 个段级条目`],
             ["命中", `${matched} 段(当前三路过滤口径)`],
-            ["时序", "端点无按日序列 —— KPI 卡虚线如实,不编趋势"],
+            [
+              "趋势线",
+              "board-series?board=creative 按日真序列(30 天窗):段级条目←段级新增/日(与检索同口径拆段)、已深析视频←深析新增/日;两条为关联指标,卡面大数是全库存量 → 不挂环比药丸",
+            ],
+            ...(kpiSeriesError
+              ? ([["趋势线源", `读取失败:${kpiSeriesError}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+              : []),
             ["生成于", `${String(data.generated_at || "—")}(UTC)· 本地 ${generatedLocal}`],
             ...(data.note ? ([["口径备注", String(data.note)]] as Array<[string, string]>) : []),
           ]
@@ -227,8 +258,20 @@ export function CreativeLibraryBoardPage({
       <ModuleCard {...cardProps("kpiC", "资产总览", data ? `${Number(data.segment_count) || 0}` : undefined, extraRows)}>
         {gate ?? (
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <KpiCard label="段级条目" value={(Number(data!.segment_count) || 0).toLocaleString()} unit="段" seriesColor="var(--ds-accent)" />
-            <KpiCard label="已深析视频" value={(Number(data!.scanned_videos) || 0).toLocaleString()} unit="条" seriesColor="var(--ds-accent-2)" />
+            <KpiCard
+              label="段级条目"
+              value={(Number(data!.segment_count) || 0).toLocaleString()}
+              unit="段"
+              series={boardSeriesVals(kpiSeries, "segments_new")}
+              seriesColor="var(--ds-accent)"
+            />
+            <KpiCard
+              label="已深析视频"
+              value={(Number(data!.scanned_videos) || 0).toLocaleString()}
+              unit="条"
+              series={boardSeriesVals(kpiSeries, "deep_videos_new")}
+              seriesColor="var(--ds-accent-2)"
+            />
             {typeof kolCount === "number" ? (
               <KpiCard label="覆盖 KOL" value={kolCount.toLocaleString()} unit="位" seriesColor="var(--ds-good)" />
             ) : (

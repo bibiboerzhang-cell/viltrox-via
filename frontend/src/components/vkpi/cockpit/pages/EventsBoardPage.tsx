@@ -14,6 +14,7 @@ import {
   type VkpiEvent,
 } from "../../../../services/vkpi/events-api";
 import { listInventory, toUiStock } from "../../../../services/vkpi/inventory-api";
+import { getBoardSeries, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 import { apiFetch } from "../../../../services/http";
 import { useAuth } from "../../../../hooks/useAuth";
 import { setRealProjects, setRealStaff } from "../../pages/events/shared/lookups";
@@ -182,6 +183,27 @@ export function EventsBoardPage({
     };
   }, [token]);
 
+  // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;失败 = KPI 卡照旧 spempty 诚实虚线
+  const [kpiSeries, setKpiSeries] = React.useState<VkpiBoardSeriesResponse | null>(null);
+  const [kpiSeriesError, setKpiSeriesError] = React.useState("");
+  React.useEffect(() => {
+    let alive = true;
+    setKpiSeriesError("");
+    getBoardSeries(token, { board: "events" })
+      .then((res) => {
+        if (alive) setKpiSeries(res ?? null);
+      })
+      .catch((err: any) => {
+        if (alive) {
+          setKpiSeries(null);
+          setKpiSeriesError(String(err?.detail || err?.message || "读取失败"));
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [token]);
+
   const [stock, setStock] = React.useState<StockItem[]>([]);
   const [stockLoading, setStockLoading] = React.useState(true);
   const [stockError, setStockError] = React.useState("");
@@ -310,6 +332,13 @@ export function EventsBoardPage({
             ["旧口径·平均 ROI", avgRoi != null ? `${avgRoi.toFixed(1)}x(${done.length} 个已完成)` : "已完成活动 0 个,如实无数"],
             ["跨活动待办", "逐活动详情「任务」tab 内真数(跨活动聚合需逐活动拉详情,如实不摆)"],
             ["本月活动", `${events.filter((ev) => overlapsThisMonth(ev)).length} 个`],
+            [
+              "趋势线",
+              "board-series?board=events 按日真序列(30 天窗):进行中活动←新建活动/日、本月活动←开幕活动/日、费用合计←费用登记/日(vkpi_event_expenses);三条为关联指标,卡面大数是存量/合计 → 不挂环比药丸",
+            ],
+            ...(kpiSeriesError
+              ? ([["趋势线源", `读取失败:${kpiSeriesError}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+              : []),
           ]
         : [];
     return (
@@ -321,6 +350,7 @@ export function EventsBoardPage({
             stockCount={stockError ? null : stock.length}
             stockPending={stockLoading || !!stockError}
             stockPendingNote={stockError ? `库存端点读取失败:${stockError}` : stockLoading ? "库存读取中…" : undefined}
+            boardSeries={kpiSeries}
           />
         )}
       </ModuleCard>

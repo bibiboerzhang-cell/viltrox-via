@@ -3,11 +3,14 @@ import { Loader2 } from "lucide-react";
 import { EmptyLine, KpiCard, PendingCard } from "./MarketVoicePage.modules";
 import { formatLocal } from "../../lib/timeLocal";
 import type { VkpiDealer, VkpiDealerScrapeResult } from "../../../../services/vkpi/dealers-api";
+import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 
 // Dealers 板块页 · 图形件(金样板 MarketVoicePage.modules / ShopifyBoardPage.modules 同构)。
 //   DealersKpiBand   四卡:经销商数 / 已定位 / 覆盖州 / 国家数。有真数才真值;
 //                    vkpi_dealers 0 行 → 全带 pending 诚实空态注明数据在线上库;
-//                    无按日序列端点 → 趋势位 spempty 诚实虚线零环比药丸(不编时序)。
+//                    经销商数卡趋势线 = board-series?board=dealers 新入库/日真序列
+//                    (全表 0 行 → 端点诚实 empty → boardSeriesVals=null → spempty
+//                    虚线如实,绝不摆 0 填平线;关联指标不挂环比药丸)。
 //   RegionBars       地区分布条形(按州 GROUP BY,count 降序 top10;有数据才画,
 //                    空态由 page 层闸住,本件只画真行)。
 //   DealerListBody   经销商行列表(名录 / 待补定位共用):定位徽 + 名称 + 城市州 +
@@ -104,6 +107,7 @@ export function DealersKpiBand({
   locatedNote,
   stateCount,
   countryCount,
+  boardSeries,
 }: {
   total: number | null;
   totalNote: string;
@@ -111,9 +115,11 @@ export function DealersKpiBand({
   locatedNote: string;
   stateCount: number | null;
   countryCount: number | null;
+  /** board-series?board=dealers 响应(0 行 empty / 失败 → 趋势位 spempty 诚实虚线) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
-  const cards: Array<{ label: string; value: number | null; unit: string; note: string }> = [
-    { label: "经销商数", value: total, unit: "家", note: totalNote },
+  const cards: Array<{ label: string; value: number | null; unit: string; note: string; series?: Array<number | null> | null }> = [
+    { label: "经销商数", value: total, unit: "家", note: totalNote, series: boardSeriesVals(boardSeries ?? null, "dealers_new") },
     { label: "已定位", value: located, unit: "家", note: locatedNote },
     { label: "覆盖州", value: stateCount, unit: "州", note: totalNote },
     { label: "国家数", value: countryCount, unit: "国", note: locatedNote },
@@ -122,7 +128,7 @@ export function DealersKpiBand({
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {cards.map((card) =>
         card.value != null ? (
-          <KpiCard key={card.label} label={card.label} value={card.value.toLocaleString()} unit={card.unit} />
+          <KpiCard key={card.label} label={card.label} value={card.value.toLocaleString()} unit={card.unit} series={card.series ?? null} />
         ) : (
           <KpiCard key={card.label} label={card.label} value="—" pending pendingNote={card.note} />
         ),

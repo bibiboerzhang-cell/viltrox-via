@@ -1,6 +1,7 @@
 import React from "react";
 import { KpiCard } from "./MarketVoicePage.modules";
 import { formatLocal } from "../../lib/timeLocal";
+import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 
 // 自治驾照 · 板块页范式辅助件(AutonomyDrivePage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage 四件套:卡头 cnt 短徽 + SrcChip 口径注册表 + KPI 卡
@@ -160,20 +161,35 @@ export const PROV_TITLES: Record<string, string> = {
   loop: "闭环串跑",
 };
 
-/* ============ KPI 带四卡(现值全真;该域无按日时序端点 → 全 spempty 虚线零环比药丸) ============ */
+/* ============ KPI 带四卡(现值全真;趋势线 = board-series?board=autonomy 按日真序列:
+   待人审建议←inbox_suggested 新建议/日、已对答案←inbox_executed 建议执行/日
+   (关联指标,卡面大数是当前存量 → 不挂环比药丸);驾照无时序 → spempty 虚线;
+   端点失败 boardSeriesVals=null → 虚线让位) ============ */
 export function AutonomyKpiBand({
   lic,
   ledger,
   inbox,
+  boardSeries,
 }: {
   lic: { ready: boolean; count: number; note: string };
   ledger: { ready: boolean; judged: number; pending: number; note: string };
   inbox: { ready: boolean; suggested: number; note: string };
+  /** board-series?board=autonomy 响应(null=未就绪/失败 → 趋势位 spempty 诚实虚线) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
+  const bs = boardSeries ?? null;
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       <KpiCard label="驾照" value={lic.count} unit="张" pending={!lic.ready} pendingNote={lic.note} seriesColor="var(--ds-accent)" />
-      <KpiCard label="已对答案" value={ledger.judged} unit="条" pending={!ledger.ready} pendingNote={ledger.note} seriesColor="var(--ds-good)" />
+      <KpiCard
+        label="已对答案"
+        value={ledger.judged}
+        unit="条"
+        pending={!ledger.ready}
+        pendingNote={ledger.note}
+        series={boardSeriesVals(bs, "inbox_executed")}
+        seriesColor="var(--ds-good)"
+      />
       <KpiCard
         label="待对答案"
         value={ledger.pending}
@@ -190,6 +206,7 @@ export function AutonomyKpiBand({
         tone="warn"
         pending={!inbox.ready}
         pendingNote={inbox.note}
+        series={boardSeriesVals(bs, "inbox_suggested")}
         seriesColor="var(--ds-warn)"
       />
     </div>

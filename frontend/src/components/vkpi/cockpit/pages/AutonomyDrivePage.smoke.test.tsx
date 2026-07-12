@@ -126,9 +126,42 @@ const EVAL_WRITE = { ...EVAL_DRY, dry_run: false, items: [{ ...EVAL_DRY.items[0]
 
 const OVERRIDE_OK = { status: "ok", action_type: "kol_recommend", level: 2, previous_level: 1 };
 
-function routeApi(overrides: { licenses?: unknown } = {}) {
+// board-series?board=autonomy 真形状(对照 backend board_series._autonomy_board 出参;
+// 缺省用例走 Error:端点失败 → 卡面照旧 spempty 诚实虚线的回归锁)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "autonomy",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  series: {
+    inbox_suggested: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 20 },
+      { date: "2026-07-12", count: 25 },
+    ],
+    inbox_executed: [
+      { date: "2026-07-10", count: 1 },
+      { date: "2026-07-11", count: 0 },
+      { date: "2026-07-12", count: 12 },
+    ],
+  },
+  metrics: {
+    inbox_suggested: { status: "ready", current: 45, previous: 0, delta_pct: null, table: "vkpi_action_inbox", unit: "rows" },
+    inbox_executed: { status: "ready", current: 13, previous: 0, delta_pct: null, table: "vkpi_action_inbox", unit: "rows" },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+function routeApi(overrides: { licenses?: unknown; boardSeries?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      const value = overrides.boardSeries ?? new Error("board-series 未接通");
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.startsWith("/api/admin/vkpi/autonomy/licenses/") && p.includes("/override")) return OVERRIDE_OK;
     if (p.startsWith("/api/admin/vkpi/autonomy/licenses")) {
       const value = overrides.licenses ?? LIC_OK;
@@ -174,6 +207,19 @@ describe("AutonomyDrivePage smoke(页壳 + KPI 带真数 + 默认四行 + 驾照
     expect(screen.getByText("自治驾照 L0-L4")).toBeTruthy();
     expect(screen.getByText("编辑布局")).toBeTruthy();
     expect(screen.getByText("刷新")).toBeTruthy();
+  });
+
+  it("board-series 就绪 → 待人审建议/已对答案两卡点亮真 sparkline(关联指标零环比药丸);驾照/待对答案虚线如实", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_OK });
+    renderBoard();
+    expect(await screen.findByText("自治总览")).toBeTruthy();
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(2));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(2);
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    // 序列请求真发向 board-series?board=autonomy
+    const bs = calledPaths().filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=autonomy");
   });
 
   it("旧页功能零丢失:驾照卡族(五维 / 永久禁止 / 四读数 / 最近升降 / 调级控件)+ gates 登记表 + 四件 embeds", async () => {

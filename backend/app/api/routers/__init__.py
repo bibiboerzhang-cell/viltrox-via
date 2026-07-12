@@ -148,4 +148,6 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_channel_mix",
     # 市场之声反馈流:vkpi_comments 分页原声 feed(身份 kol/owned/user 三路 JOIN,纯读零 LLM,append-only,2026-07-11)
     "vkpi_market_voice_feed",
+    # 挂账迸发①:板块 KPI 按日时序统一端点 board-series(8 板 sparkline/环比真数据,纯读零 LLM,append-only,2026-07-12)
+    "vkpi_board_series",
 ]

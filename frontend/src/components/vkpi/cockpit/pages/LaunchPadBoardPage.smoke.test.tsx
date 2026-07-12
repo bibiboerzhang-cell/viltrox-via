@@ -143,17 +143,51 @@ const LAUNCHES_OK = {
   ],
 };
 
+// board-series?board=launchpad 真形状(对照 backend board_series._launchpad_board 出参;
+// 缺省用例走 Error:端点失败 → 卡面照旧 spempty 诚实虚线的回归锁)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "launchpad",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  series: {
+    content_candidates: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 22 },
+      { date: "2026-07-12", count: 1 },
+    ],
+    publish_approvals: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 1 },
+      { date: "2026-07-12", count: 0 },
+    ],
+  },
+  metrics: {
+    content_candidates: { status: "ready", current: 23, previous: 0, delta_pct: null, table: "vkpi_project_content_posts", unit: "rows" },
+    publish_approvals: { status: "ready", current: 1, previous: 0, delta_pct: null, table: "vkpi_publish_approvals", unit: "rows" },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
 type Overrides = {
   posts?: unknown;
   approvals?: unknown;
   launches?: unknown;
   stages?: unknown;
+  boardSeries?: unknown;
 };
 
 function routeApi(overrides: Overrides = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: RequestInit) => {
     const p = String(path);
     const method = String(init?.method || "GET").toUpperCase();
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      const value = overrides.boardSeries ?? new Error("board-series 未接通");
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.startsWith("/api/admin/vkpi/sku/list")) return SKUS;
     if (p.startsWith("/api/admin/vkpi/launch/assemble")) return PLAN_OK;
     if (p.startsWith("/api/admin/vkpi/publish/pending")) {
@@ -229,6 +263,19 @@ describe("LaunchPadBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", (
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/projects/content-posts"))).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/product-analysis/launches"))).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/projects/deliverable-stages-summary"))).toBe(true);
+  });
+
+  it("board-series 就绪 → 候选/审批两卡点亮真 sparkline(关联指标零环比药丸);计划/已发无按日序列照旧虚线", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_OK });
+    renderBoard();
+    expect(await screen.findByText("发布计划进行中")).toBeTruthy();
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(2));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(2);
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    // 序列请求真发向 board-series?board=launchpad
+    const bs = calledPaths().filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=launchpad");
   });
 
   it("默认布局:九模块在场;plan 六模块未选 SKU 诚实空;palette 备选不进默认", async () => {

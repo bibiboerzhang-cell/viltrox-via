@@ -4,15 +4,19 @@ import { BarRow, CatDonutBody } from "./MarketVoicePage.charts";
 import { EVENT_STATUS, EVENT_TYPES } from "../../pages/events/shared/constants";
 import { fmtMoneyShort, sum } from "../../pages/events/shared/helpers";
 import type { EventVm, UiStaff } from "../../pages/events/shared/types";
+import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 
 // Events · 板块页范式图表族(EventsBoardPage 专用,页内拆件不入公共桶;
 //   金样板 = MarketVoicePage.charts / MyKolBoardPage.charts 同构,图形件全复用:
 //   KpiCard(demo .kpi)/ CatDonutBody(demo donut)/ BarRow(demo mplatrow)零自造样式)。
 //   数据 = 页层已拉取的真活动行(GET /api/admin/vkpi/events → vkpi_events)与真库存行
 //   (GET /api/admin/vkpi/inventory → vkpi_inventory),本文件纯组合零网络。
-//   KPI 四卡:进行中活动 / 本月活动 / 物料备货 / 费用合计 —— 全真值;vkpi_events 无
-//   历史快照表 → 四卡无时序,KpiCard 渲染 demo .spempty 纯虚线(诚实无 sparkline,
-//   绝不编序列);环比同理诚实省略药丸。
+//   KPI 四卡:进行中活动 / 本月活动 / 物料备货 / 费用合计 —— 全真值;趋势线 =
+//   board-series?board=events 按日真序列(挂账迸发①):进行中活动←events_new
+//   (新建活动/日)、本月活动←events_started(开幕活动/日)、费用合计←
+//   event_expense_amount(费用登记/日,vkpi_event_expenses);三条皆为关联指标,
+//   卡面大数是存量/合计 → 不挂环比药丸(拿流量环比冒充是编数);物料备货为点时
+//   库存无历史 → 照旧 spempty 诚实虚线;端点失败 boardSeriesVals=null → 虚线让位。
 //   倒计时用真实「今天」(new Date());events family helpers.TODAY 的 mock 定格
 //   2026-05-26 债已在收尾波(2026-07-12)清除,helpers.TODAY 现同为真实当前时间。
 // 红线:纯展示零网络;不触 viltrox_fit_score / rule_v0;颜色全 token(状态/类型的
@@ -72,6 +76,7 @@ export function EventsKpiBand({
   stockCount,
   stockPending,
   stockPendingNote,
+  boardSeries,
 }: {
   events: EventVm[];
   /** 活动列表是否已真实到货(未到货 → 前两卡 + 费用卡 pending,不摆 0 冒充) */
@@ -80,19 +85,34 @@ export function EventsKpiBand({
   stockCount: number | null;
   stockPending?: boolean;
   stockPendingNote?: string;
+  /** board-series?board=events 响应(null=未就绪/失败 → 趋势位 spempty 诚实虚线) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
   const active = events.filter((ev) => (ACTIVE_STATUSES as readonly string[]).includes(ev.status));
   const thisMonth = events.filter((ev) => overlapsThisMonth(ev));
   const spentTotal = events.reduce((acc, ev) => acc + spentOf(ev), 0);
+  const bs = boardSeries ?? null;
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {eventsReady ? (
-        <KpiCard label="进行中活动" value={active.length.toLocaleString()} unit="个" seriesColor="var(--ds-accent)" />
+        <KpiCard
+          label="进行中活动"
+          value={active.length.toLocaleString()}
+          unit="个"
+          series={boardSeriesVals(bs, "events_new")}
+          seriesColor="var(--ds-accent)"
+        />
       ) : (
         <KpiCard label="进行中活动" value="—" pending pendingNote="活动列表待到货" />
       )}
       {eventsReady ? (
-        <KpiCard label="本月活动" value={thisMonth.length.toLocaleString()} unit="个" seriesColor="var(--ds-accent-2)" />
+        <KpiCard
+          label="本月活动"
+          value={thisMonth.length.toLocaleString()}
+          unit="个"
+          series={boardSeriesVals(bs, "events_started")}
+          seriesColor="var(--ds-accent-2)"
+        />
       ) : (
         <KpiCard label="本月活动" value="—" pending pendingNote="活动列表待到货" />
       )}
@@ -102,7 +122,13 @@ export function EventsKpiBand({
         <KpiCard label="物料备货" value="—" pending pendingNote={stockPendingNote || "库存端点待到货"} />
       )}
       {eventsReady ? (
-        <KpiCard label="费用合计" value={fmtMoneyFull(spentTotal)} seriesColor="var(--ds-warn)" tone={spentTotal > 0 ? "warn" : "good"} />
+        <KpiCard
+          label="费用合计"
+          value={fmtMoneyFull(spentTotal)}
+          seriesColor="var(--ds-warn)"
+          tone={spentTotal > 0 ? "warn" : "good"}
+          series={boardSeriesVals(bs, "event_expense_amount")}
+        />
       ) : (
         <KpiCard label="费用合计" value="—" pending pendingNote="活动列表待到货" />
       )}

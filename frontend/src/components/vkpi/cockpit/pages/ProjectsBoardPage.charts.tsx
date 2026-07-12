@@ -10,10 +10,21 @@ import {
   centsToUsd,
   fmtUsd2,
 } from "../../../../services/vkpi/projectsBoard-api";
+import {
+  boardSeriesDelta,
+  boardSeriesVals,
+  type VkpiBoardSeriesResponse,
+} from "../../../../services/vkpi/boardSeries-api";
 
 // Projects 板块页 · 图形件(金样板 MarketVoicePage.charts / LaunchPadBoardPage.ops 同构)。
 //   ProjectsKpiBand   四卡真值:进行中项目 / 在项 KOL / 本窗发布(30天) / 归因销售(USD)。
-//                     无按日序列端点 → 趋势位 spempty 诚实虚线零药丸(不编时序)。
+//                     趋势线 = board-series?board=projects 按日真序列(挂账迸发①):
+//                     进行中项目←projects_new(新建项目/日,关联指标)、在项 KOL←
+//                     stage_advances(阶段推进事件/日,关联指标)、本窗发布←
+//                     content_posted(与卡面大数同口径 30 天窗 → 环比药丸同源渲染)、
+//                     归因销售←attribution_revenue_cents(按日金额,美分序列画形状)。
+//                     关联指标卡不挂环比药丸(卡面大数是存量,拿流量环比冒充是编数);
+//                     端点失败 / 单指标降级 → boardSeriesVals=null → spempty 诚实虚线。
 //   分组口径          buildCampaignGroupsLite = 旧 ProjectCampaignBoard 同一状态分桶
 //                     (paused/取消/终态/收尾/规划/进行,零第二口径),KPI 与卡片墙对得上。
 //   WindowsBody       观察窗口行(开窗环节):状态徽 + 项目 + 窗口起止 + 扫描数,点行详情。
@@ -109,7 +120,9 @@ export function countInFlightKols(groups: CampaignGroupLite[]): number {
   return groups.filter((group) => IN_FLIGHT.has(group.status)).reduce((sum, group) => sum + group.kolCount, 0);
 }
 
-/* ============ KPI 带四卡(LaunchKpiBand 同构;无序列端点 → spempty 诚实虚线) ============ */
+/* ============ KPI 带四卡(LaunchKpiBand 同构;趋势线 = board-series 真按日序列,
+   单源失败 boardSeriesVals=null → spempty 诚实虚线;环比药丸只挂「本窗发布」
+   (卡面大数与序列同口径 30 天窗),关联指标卡绝不冒充大数环比) ============ */
 
 export function ProjectsKpiBand({
   activeProjects,
@@ -120,6 +133,7 @@ export function ProjectsKpiBand({
   postedNote,
   revenueUsd,
   revenueNote,
+  boardSeries,
 }: {
   activeProjects: number | null;
   activeNote: string;
@@ -129,26 +143,53 @@ export function ProjectsKpiBand({
   postedNote: string;
   revenueUsd: number | null;
   revenueNote: string;
+  /** board-series?board=projects 响应(null=未就绪/失败 → 四卡 spempty 诚实虚线) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
+  const bs = boardSeries ?? null;
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {activeProjects != null ? (
-        <KpiCard label="进行中项目" value={activeProjects.toLocaleString()} unit="个" />
+        <KpiCard
+          label="进行中项目"
+          value={activeProjects.toLocaleString()}
+          unit="个"
+          series={boardSeriesVals(bs, "projects_new")}
+          seriesColor="var(--ds-accent)"
+        />
       ) : (
         <KpiCard label="进行中项目" value="—" pending pendingNote={activeNote} />
       )}
       {inFlightKols != null ? (
-        <KpiCard label="在项 KOL" value={inFlightKols.toLocaleString()} unit="人" />
+        <KpiCard
+          label="在项 KOL"
+          value={inFlightKols.toLocaleString()}
+          unit="人"
+          series={boardSeriesVals(bs, "stage_advances")}
+          seriesColor="var(--ds-accent-2)"
+        />
       ) : (
         <KpiCard label="在项 KOL" value="—" pending pendingNote={kolsNote} />
       )}
       {posted30d != null ? (
-        <KpiCard label="本窗发布" value={posted30d.toLocaleString()} unit="条 · 30天" />
+        <KpiCard
+          label="本窗发布"
+          value={posted30d.toLocaleString()}
+          unit="条 · 30天"
+          series={boardSeriesVals(bs, "content_posted")}
+          seriesColor="var(--ds-good)"
+          delta={boardSeriesDelta(bs, "content_posted")}
+        />
       ) : (
         <KpiCard label="本窗发布" value="—" pending pendingNote={postedNote} />
       )}
       {revenueUsd != null ? (
-        <KpiCard label="归因销售" value={fmtUsd2(revenueUsd)} />
+        <KpiCard
+          label="归因销售"
+          value={fmtUsd2(revenueUsd)}
+          series={boardSeriesVals(bs, "attribution_revenue_cents")}
+          seriesColor="var(--ds-info)"
+        />
       ) : (
         <KpiCard label="归因销售" value="—" pending pendingNote={revenueNote} />
       )}

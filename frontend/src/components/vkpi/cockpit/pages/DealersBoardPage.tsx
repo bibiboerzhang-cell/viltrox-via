@@ -13,6 +13,7 @@ import {
   type VkpiDealer,
   type VkpiDealerPin,
 } from "../../../../services/vkpi/dealers-api";
+import { getBoardSeries } from "../../../../services/vkpi/boardSeries-api";
 import {
   AddDealerForm,
   DealerListBody,
@@ -108,6 +109,13 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
     token,
     reloadTick,
     React.useCallback((t: string) => getDealerLocations(t), []),
+  );
+  // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;vkpi_dealers 0 行 → 端点
+  // 诚实 empty(绝不 0 填平线)→ 卡面照旧 spempty 虚线;有数据流入后自动点亮
+  const kpiSeriesResp = useEndpoint(
+    token,
+    reloadTick,
+    React.useCallback((t: string) => getBoardSeries(t, { board: "dealers" }), []),
   );
 
   const dealers = React.useMemo(
@@ -235,6 +243,13 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
       ...(latestCreated ? ([["最新入库", `${latestCreated}(UTC 存 · 按浏览器时区显示)`]] as Array<[string, string]>) : []),
       ...(dealersResp.error ? ([["名录源", `读取失败:${dealersResp.error}`]] as Array<[string, string]>) : []),
       ...(locsResp.error ? ([["定位源", `读取失败:${locsResp.error}`]] as Array<[string, string]>) : []),
+      [
+        "趋势线",
+        "board-series?board=dealers 新入库经销商/日真序列(30 天窗;经销商数卡,关联指标不挂环比药丸);全表 0 行 → 端点诚实空 → 卡面虚线如实,绝不摆 0 填平线",
+      ],
+      ...(kpiSeriesResp.error
+        ? ([["趋势线源", `读取失败:${kpiSeriesResp.error}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+        : []),
     ];
     return (
       <ModuleCard {...cardProps("kpiD", "指标带", total != null ? `${total} 家` : undefined, extraRows)}>
@@ -248,6 +263,7 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
             locatedNote={locatedNote}
             stateCount={stateCount}
             countryCount={countryCount}
+            boardSeries={kpiSeriesResp.data ?? null}
           />
         )}
       </ModuleCard>

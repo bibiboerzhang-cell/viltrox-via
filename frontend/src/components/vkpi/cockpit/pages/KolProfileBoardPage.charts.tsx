@@ -1,12 +1,14 @@
 import React from "react";
 import { formatLocal } from "../../lib/timeLocal";
 import { EmptyLine, KpiCard } from "./MarketVoicePage.modules";
+import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 
 // KOL 档案 · 图表模块族(KolProfileBoardPage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage.charts / MyKolBoardPage.charts 图形语言逐件同构
 //   (不跨页引它们的私有件,防纠缠):BarRow 条形行(信用/评论/装备共用)、
-//   KPI 带四卡(KpiCard 现成件:该页四指标全是点时快照,无历史时序 →
-//   四卡诚实 spempty 虚线,永不编 series/环比)。
+//   KPI 带四卡(KpiCard 现成件:粉丝/均播放/互动率三指标是点时快照无历史时序 →
+//   诚实 spempty 虚线;已深析视频卡趋势线 = board-series?board=kol-profile&kol_id=
+//   该 KOL evidence 采集/日真序列(关联指标,卡面大数是存量 → 不挂环比药丸))。
 // 红线:纯展示零网络;fit 分只读展示绝不写回;颜色全 token var(--ds-*) 零写死色;
 //   零 opacity 修饰类(条形弱化走内联 style,金样板同款);诚实空态,绝不编数。
 
@@ -128,8 +130,9 @@ export function DistBars({ dist, title, tone }: { dist: Row; title: string; tone
 }
 
 /* ============ KPI 带四卡:粉丝 / 均播放 / 互动率 / 已深析视频。
-   四指标全部 = 档案点时快照(抓取时刻读数),无逐 KOL 历史时序端点 →
-   四卡 series 缺席 = KpiCard 自动 spempty 诚实虚线,永不编趋势/环比。 ============ */
+   前三指标 = 档案点时快照(抓取时刻读数)无历史时序 → series 缺席 = spempty
+   诚实虚线;已深析视频卡趋势线 = board-series evidence_new(该 KOL evidence
+   采集/日,关联指标),端点失败 boardSeriesVals=null → 虚线让位,永不编趋势。 ============ */
 export function ProfileKpiBand({
   followers,
   avgViews,
@@ -138,6 +141,7 @@ export function ProfileKpiBand({
   evidenceCount,
   pending,
   pendingNote,
+  boardSeries,
 }: {
   followers: number | null;
   avgViews: number | null;
@@ -149,6 +153,8 @@ export function ProfileKpiBand({
   /** 档案主体未就绪(加载中/失败)→ 四卡诚实 pending */
   pending: boolean;
   pendingNote: string;
+  /** board-series?board=kol-profile&kol_id= 响应(null=未就绪/失败 → spempty) */
+  boardSeries?: VkpiBoardSeriesResponse | null;
 }) {
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -186,6 +192,8 @@ export function ProfileKpiBand({
         tone={deepReady !== null && deepReady === 0 ? "warn" : "good"}
         pending={pending}
         pendingNote={pendingNote}
+        series={boardSeriesVals(boardSeries ?? null, "evidence_new")}
+        seriesColor="var(--ds-accent)"
       />
     </div>
   );

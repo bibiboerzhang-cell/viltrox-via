@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // KOL 档案改版冒烟(金样板 MarketVoicePage/MyKolBoardPage.smoke 同构):
 // - 页壳:pagehead(KOL 档案 + 名号/平台药丸徽 + 编辑布局钮)+ 可编辑看板;
@@ -168,9 +168,43 @@ const GEO_OK = {
   note: "多信号估算口径",
 };
 
-function routeApi(overrides: { deep?: unknown; competing?: unknown } = {}) {
+// board-series?board=kol-profile&kol_id= 真形状(对照 backend board_series._kol_profile_board
+// 出参;缺省用例走 Error:端点失败 → 卡面照旧 spempty 诚实虚线的回归锁)。
+const BOARD_SERIES_OK = {
+  status: "ready",
+  board: "kol-profile",
+  days: 30,
+  window: { since: "2026-06-13", until: "2026-07-12", prev_since: "2026-05-14", prev_until: "2026-06-12" },
+  params: { kol_id: 101 },
+  series: {
+    evidence_new: [
+      { date: "2026-07-10", count: 0 },
+      { date: "2026-07-11", count: 3 },
+      { date: "2026-07-12", count: 7 },
+    ],
+    evidence_published: [
+      { date: "2026-07-10", count: 1 },
+      { date: "2026-07-11", count: 1 },
+      { date: "2026-07-12", count: 1 },
+    ],
+  },
+  metrics: {
+    evidence_new: { status: "ready", current: 10, previous: 22, delta_pct: -54.5, table: "vkpi_kol_video_evidence", unit: "rows" },
+    evidence_published: { status: "ready", current: 10, previous: 4, delta_pct: 150.0, table: "vkpi_kol_video_evidence", unit: "rows" },
+  },
+  basis: {},
+  method: "board_series_v1",
+  generated_at: "2026-07-12T02:00:00+00:00",
+};
+
+function routeApi(overrides: { deep?: unknown; competing?: unknown; boardSeries?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
+    if (p.startsWith("/api/admin/vkpi/board-series")) {
+      const value = overrides.boardSeries ?? new Error("board-series 未接通");
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.includes("/detail-bundle")) return BUNDLE_OK;
     if (p.includes("/cooperation")) return COOP_OK;
     if (p.includes("/llm-deep-analysis")) {
@@ -229,6 +263,21 @@ describe("KolProfileBoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + �
     for (const seg of ["/detail-bundle", "/cooperation", "/llm-deep-analysis", "/intelligence-card", "/competing-activity", "/production-leadtime"]) {
       expect(calledPaths.some((p) => p.includes(seg))).toBe(true);
     }
+  });
+
+  it("board-series 就绪 → 已深析视频卡点亮真 sparkline(关联指标零环比药丸);点时快照三卡虚线如实", async () => {
+    routeApi({ boardSeries: BOARD_SERIES_OK });
+    renderBoard();
+    expect(await screen.findByText("12.0万")).toBeTruthy();
+    // 已深析视频卡点亮(evidence_new 采集/日);其余三卡点时快照照旧虚线
+    await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(1));
+    expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(3);
+    expect(document.querySelectorAll(".ds-kpi__delta").length).toBe(0);
+    // 序列请求真发向 board-series?board=kol-profile&kol_id=101
+    const bs = apiFetchMock.mock.calls.map((c) => String(c[0])).filter((p) => p.startsWith("/api/admin/vkpi/board-series"));
+    expect(bs.length).toBeGreaterThan(0);
+    expect(bs[0]).toContain("board=kol-profile");
+    expect(bs[0]).toContain("kol_id=101");
   });
 
   it("默认布局十模块在场;gear=palette 备选不进默认;真表名只进 SrcChip;Fit 只读徽", async () => {

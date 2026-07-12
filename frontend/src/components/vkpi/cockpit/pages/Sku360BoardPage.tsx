@@ -9,6 +9,7 @@ import {
   type Sku360ListItem,
 } from "../../../../services/vkpi/sku360-api";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
+import { getBoardSeries, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 import { AnglesBody, CatalogBody, ContentsBody, FitBody, KnowledgeBody, MODULE_SOURCES } from "./Sku360BoardPage.modules";
 import { BhBody, CandidatesBody, CreatorsBody, SkuKpiBand, VoiceBody, asArray, asRow, num, pct, str, type Row } from "./Sku360BoardPage.charts";
 import { ContentDetailModal, ContentListModal } from "./Sku360BoardPage.dialogs";
@@ -40,6 +41,8 @@ import { ContentDetailModal, ContentListModal } from "./Sku360BoardPage.dialogs"
 const STORAGE_KEY = "vkpi-sku360-layout-v1";
 const SKU_KEY = "vkpi:sku360-sku";
 const OPEN_SKU_EVENT = "vkpi:open-sku360";
+const SEARCH_KEY = "vkpi:sku360-search"; // 市场之声声音榜跳转桥:产品线词预填搜索(非 SKU 直选)
+const OPEN_SEARCH_EVENT = "vkpi:open-sku360-search";
 
 // 默认布局(12 列 · 五行):kpiS(12) → catalog(8)+knowledge(4) → contents(8)+angles(4)
 // → voice(8)+creators(4) → fit(4)+bh(4);candidates=palette 备选
@@ -135,6 +138,25 @@ export function Sku360BoardPage({
     return () => window.removeEventListener(OPEN_SKU_EVENT, consume);
   }, [readPendingSku]);
 
+  // 市场之声「产品线声音榜」跳转桥接收位:vkpi:sku360-search(产品线词)→ 预填搜索框
+  // (一次性消费即删;300ms 防抖搜索自动跑;产品线级无逐 SKU 关联,如实只预填不直选)
+  React.useEffect(() => {
+    const consumeSearch = () => {
+      try {
+        const word = (window.sessionStorage.getItem(SEARCH_KEY) || "").trim();
+        if (!word) return;
+        window.sessionStorage.removeItem(SEARCH_KEY);
+        setQuery(word);
+        setDropdownOpen(true);
+      } catch {
+        /* sessionStorage 不可用忽略 */
+      }
+    };
+    consumeSearch();
+    window.addEventListener(OPEN_SEARCH_EVENT, consumeSearch);
+    return () => window.removeEventListener(OPEN_SEARCH_EVENT, consumeSearch);
+  }, []);
+
   React.useEffect(() => {
     if (!apiToken) return;
     let alive = true;
@@ -178,6 +200,13 @@ export function Sku360BoardPage({
   const profile = useRemote<Row>(enabled, () => getSku360Profile(apiToken, selectedSku), deps);
   const persona = useRemote<Row>(enabled, () => getSku360Persona(apiToken, selectedSku), deps);
   const campaign = useRemote<Row>(enabled, () => getSku360CampaignCard(apiToken, selectedSku), deps);
+  // KPI 卡趋势线(挂账迸发①):board-series?board=sku360&sku= 该 SKU 提及/日;
+  // 失败 = KPI 卡照旧 spempty 诚实虚线,不拖累档案聚合
+  const kpiSeries = useRemote<VkpiBoardSeriesResponse>(
+    enabled,
+    () => getBoardSeries(apiToken, { board: "sku360", sku: selectedSku }),
+    deps,
+  );
 
   const product = asRow(profile.data?.product);
   const content = asRow(profile.data?.content);
@@ -235,7 +264,16 @@ export function Sku360BoardPage({
 
   const renderKpiBand = () => {
     const extraRows: Array<[string, string]> = profile.data
-      ? [["聚合时点", `${str(profile.data.generated_at) || "—"}(UTC · 请求时实算)`]]
+      ? [
+          ["聚合时点", `${str(profile.data.generated_at) || "—"}(UTC · 请求时实算)`],
+          [
+            "趋势线",
+            "board-series?board=sku360&sku= 该 SKU 标题提及/日真序列(30 天窗,发布日口径,词表与档案匹配同源;提及内容卡);卡面大数是全量档案计数、序列是 30 天窗 → 口径不同,不挂环比药丸",
+          ],
+          ...(kpiSeries.status === "error"
+            ? ([["趋势线源", `读取失败:${kpiSeries.error}(卡面虚线如实,不编时序)`]] as Array<[string, string]>)
+            : []),
+        ]
       : [];
     return (
       <ModuleCard {...cardProps("kpiS", "声量指标带", product ? str(product.sku) : undefined, extraRows)}>
@@ -247,6 +285,7 @@ export function Sku360BoardPage({
             avgEngagementPct={pct(num(agg?.avg_engagement_rate))}
             pending={!agg}
             pendingNote="档案聚合未就绪"
+            boardSeries={kpiSeries.data}
           />
         )}
       </ModuleCard>
