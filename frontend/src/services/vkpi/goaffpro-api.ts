@@ -284,6 +284,9 @@ export async function getGoaffproSummary(
     totals: res?.totals,
     note: res?.note,
     ok: res?.ok,
+    // 透传落库同步时间戳(此前被映射吞掉 → 「更新于」永远空;补齐真值,绝不编时间)。
+    last_synced_at: res?.last_synced_at ?? null,
+    stale_count: res?.stale_count,
   };
 }
 
