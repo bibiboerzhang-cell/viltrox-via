@@ -271,6 +271,9 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       llm_deep_analysis_count: (item as unknown as Record<string, unknown>).llm_deep_analysis_count ?? null,
       // d14:as-of 戳数据源(列表头部"数据截至"——脉冲恢复前,诚实陈旧比假新鲜值钱)。
       last_seen_at: (item as unknown as Record<string, unknown>).last_seen_at ?? null,
+      // 板块页 KPI「本周新发现」数据源:列表 payload 自带 created_at(pool_common 列),
+      // 此前被本固定键白名单滤掉 → 透传(纯增量,零消费点行为变化)。
+      created_at: (item as unknown as Record<string, unknown>).created_at ?? null,
       refresh_state: item.sync_status || "fresh",
       industry_label: item.content_style || item.primary_topic || "真实 KOL Pool",
       weekly_views_delta: null,

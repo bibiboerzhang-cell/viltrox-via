@@ -467,7 +467,7 @@ def summary() -> dict[str, Any]:
         "SELECT source_type, COUNT(*) AS n FROM vkpi_kol_pool GROUP BY source_type ORDER BY n DESC, source_type ASC"
     ).fetchall()
     country_distribution = _country_distribution(conn)
-    return _kol_pool_cache_store(cache_key, {
+    payload: dict[str, Any] = {
         "total": int(total["n"] if total else 0),
         "linked_main_kol_count": int(linked["n"] if linked else 0),
         "historical_collaboration_count": int(historical["n"] if historical else 0),
@@ -477,7 +477,27 @@ def summary() -> dict[str, Any]:
         "by_source": [dict(row) for row in by_source],
         "country_distribution": country_distribution,
         "note": "KOL Pool 是资产池；source_type=promo_plan_xlsx 表示局部历史/计划名录，不等于 Daily Top100 新候选。",
-    })
+    }
+    # 触达二段闸可见性计数(2026-07-12,KOL 池板块页 KPI 带消费):raw_platform_data.low_reach
+    # 标由 reach_floor_regate 单一真源打/摘;LIKE 预筛 + _low_reach_flagged 复核(尊重
+    # VKPI_DISCOVERY_REACH_FLOOR_ENABLED 总开关)。纯读计数零行为影响;失败=键缺席
+    # (前端诚实 pending,绝不编 0)。零触 viltrox_fit_score / rule_v0。
+    try:
+        from app.domains.kol.discovery_filters import (
+            LOW_REACH_FLAG_LIKE_PATTERN,
+            _low_reach_flagged,
+        )
+
+        flagged_rows = conn.execute(
+            "SELECT raw_platform_data FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL AND raw_platform_data LIKE ?",
+            (LOW_REACH_FLAG_LIKE_PATTERN,),
+        ).fetchall()
+        payload["low_reach_hidden_count"] = sum(
+            1 for row in flagged_rows if _low_reach_flagged(dict(row))
+        )
+    except Exception:  # noqa: BLE001 — 计数失败绝不拖垮 summary 主体
+        pass
+    return _kol_pool_cache_store(cache_key, payload)
 
 
 def get_item(kol_pool_id: int) -> dict[str, Any]:
