@@ -432,6 +432,16 @@ export function filterLibraryRows(
   });
 }
 
+/** 平台名门面映射:unknown→未知 / media→媒体站;其余首字母大写(youtube→Youtube)。
+    只管显示 —— 过滤键/联动状态仍用平台原值小写,绝不改数据。 */
+const PLATFORM_LABEL_ZH: Record<string, string> = { unknown: "未知", media: "媒体站" };
+
+export function platformLabel(platform: string): string {
+  const key = String(platform || "").trim().toLowerCase();
+  if (!key) return PLATFORM_LABEL_ZH.unknown;
+  return PLATFORM_LABEL_ZH[key] || key.charAt(0).toUpperCase() + key.slice(1);
+}
+
 /** 平台 strip 选项:按库内真实出现的平台计数降序,至多 top 个(全部 + N 平台)。 */
 export function libraryPlatformOptions(rows: KolLibraryRow[], top = 6): Array<{ platform: string; count: number }> {
   const counts = new Map<string, number>();

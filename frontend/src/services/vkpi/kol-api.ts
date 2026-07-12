@@ -135,12 +135,15 @@ function numberValue(value: unknown): number {
 
 // P5: unified MY KOL read — the single source that includes pool_favorites.
 // Employees always get their own aggregate; managers may pass staffId.
+// scope:"team" = 管理层全团队收藏集口径(与 board-ext 缺省同集合;后端 can_view_all
+// 硬闸,员工传了也只拿自己的);显式 staffId 优先(跨看单人),两者互斥。
 export async function getMyKolAggregate(
   token: string,
-  params: { staffId?: number; windowDays?: number } = {},
+  params: { staffId?: number; windowDays?: number; scope?: "team" } = {},
 ) {
   const query = new URLSearchParams();
   if (params.staffId != null) query.set("staff_id", String(params.staffId));
+  else if (params.scope) query.set("scope", params.scope);
   if (params.windowDays != null) query.set("window_days", String(params.windowDays));
   const suffix = query.toString();
   return apiFetch<VkpiMyKolAggregateResponse>(

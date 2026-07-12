@@ -4,7 +4,8 @@ from __future__ import annotations
 from app.domains.channels.common import *
 from app.domains.channels.media import _media_type_kind, _media_urls, _video_url
 
-def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> list[dict[str, Any]]:
+def _latest_channel_rows() -> list[dict[str, Any]]:
+    """All active channel rows (official + personal) with latest metrics; callers split."""
     ensure_vkpi_channels_schema()
     where = "WHERE c.deleted_at IS NULL AND c.status='active'"
     rows = get_conn().execute(
@@ -41,10 +42,13 @@ def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_s
         ORDER BY c.platform ASC, c.account_handle ASC, c.id ASC
         """,
     ).fetchall()
-    items = [dict(row) for row in rows]
+    return [dict(row) for row in rows]
+
+
+def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None) -> list[dict[str, Any]]:
     # The official-account matrix is a company-level baseline. Staff scope controls
     # personal bindings and writes, not visibility of the 18 official accounts.
-    return [row for row in items if _is_official_channel_row(row)]
+    return [row for row in _latest_channel_rows() if _is_official_channel_row(row)]
 
 
 def _platform_label(platform: str) -> str:
@@ -675,16 +679,58 @@ def _staff_managed_summary(*, list_cap: int = 20) -> list[dict[str, Any]]:
     return sorted(staff_map.values(), key=lambda item: -int(item["managed_kol_count"]))
 
 
+def _personal_matrix_account(row: dict[str, Any]) -> dict[str, Any]:
+    """个人矩阵账号行(与官号 account 同字段形状,group=personal,持有人经 staff→users join)。
+
+    帖子/播放内容链复用同一条 channels/{id}/posts(channel_id 通用,零新链);
+    此处不内嵌 posts 样本(内容层按需自取)。纯读,零写。
+    """
+    platform = str(row.get("platform") or "other").lower()
+    return {
+        "id": int(row.get("id") or 0),
+        "staff_id": _int(row.get("staff_id")),
+        "staff_name": _text(row.get("staff_name"), row.get("staff_email"), f"Staff {_int(row.get('staff_id'))}"),
+        "staff_email": _text(row.get("staff_email")),
+        "staff_avatar_url": _text(row.get("staff_avatar_url")),
+        "staff_role": _text(row.get("staff_role")),
+        "staff_active": bool(_int(row.get("staff_active"), 1)),
+        "platform": platform,
+        "platform_label": _platform_label(platform),
+        "handle": str(row.get("account_handle") or ""),
+        "group": "personal",
+        "display_name": _account_name(row),
+        "account_url": _account_url(row),
+        "avatar_url": _cached_media_url(row.get("avatar_url")),
+        "sync_status": row.get("last_sync_status") or "not_configured",
+        "last_sync_at": _text(row.get("metric_captured_at"), row.get("last_sync_at"), row.get("updated_at")),
+        "last_sync_error": _text(row.get("last_sync_error")),
+        "followers": _int(row.get("metric_followers")),
+        "followers_delta": _int(row.get("metric_followers_delta")),
+        "posts_count": _int(row.get("metric_posts")),
+        "posts_delta": _int(row.get("metric_posts_delta")),
+        "total_views": _int(row.get("metric_views")),
+        "views_delta": _int(row.get("metric_views_delta")),
+        "total_likes": _int(row.get("metric_likes")),
+        "total_comments": _int(row.get("metric_comments")),
+        "engagement_rate": _float(row.get("metric_engagement_rate")),
+        "posts": [],
+    }
+
+
 def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staff_id: int | None = None, limit: int = 50) -> dict[str, Any]:
     """Return the global official-account hierarchy for staff and managers."""
     from app.domains.channels.posts import _posts_from_package
 
     safe_limit = max(1, min(50, int(limit or 50)))
-    cache_key = _channel_cache_key("official_matrix_global", limit=safe_limit)
+    # v2:响应增量新增 personal(个人矩阵)分组 —— 换 cache key 让旧形状缓存自然失效
+    cache_key = _channel_cache_key("official_matrix_global_v2", limit=safe_limit)
     cached = cache_get(cache_key)
     if cached is not None:
         return _channel_cache_hit(cached)
-    rows = _latest_official_channel_rows()
+    all_rows = _latest_channel_rows()
+    rows = [row for row in all_rows if _is_official_channel_row(row)]
+    # 个人矩阵 = 官号名单之外的成员个人绑定账号(现状 0 行 = 前端诚实空态)
+    personal_rows = [row for row in all_rows if not _is_official_channel_row(row)]
     platforms: dict[str, dict[str, Any]] = {}
     total_views = 0
     total_posts = 0
@@ -778,6 +824,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
     group_counts = {"main_brand": 0, "product_line": 0, "regional": 0}
     for row in rows:
         group_counts[_account_group(row.get("account_handle"))] += 1
+    group_counts["personal"] = len(personal_rows)
     return _channel_cache_store(cache_key, {
         "platforms": sorted(platforms.values(), key=lambda item: item["label"]),
         "account_count": len(rows),
@@ -786,6 +833,15 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
         "groups": group_counts,
         # A1/A2:团队矩阵每负责人分管 KOL 真实聚合(收藏∪认领∪项目在役)
         "staff_managed": _staff_managed_summary(),
+        # 个人矩阵分组(增量新增):官号名单之外的个人绑定账号 + 持有人;
+        # 0 行 = 前端诚实空态(绑定入口在 设置 → 账号授权);内容链复用 channels/{id}/posts。
+        "personal": {
+            "account_count": len(personal_rows),
+            "accounts": sorted(
+                (_personal_matrix_account(row) for row in personal_rows),
+                key=lambda item: (item["platform"], item["handle"], item["id"]),
+            ),
+        },
     })
 
 

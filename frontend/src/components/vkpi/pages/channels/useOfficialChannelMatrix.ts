@@ -9,14 +9,15 @@ type MatrixSnapshot = {
   postCount: number;
   totalViews: number;
   staffManaged: StaffManagedSummary[];
+  personalAccounts: OfficialChannelAccount[];
   fetchedAt: number;
 };
 
 const MATRIX_STALE_MS = 30_000;
 const MATRIX_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const MATRIX_POST_SAMPLE_LIMIT = 4;
-// v3:快照新增 staffManaged(团队矩阵管 KOL 接真),换前缀让旧 v2 缓存自然失效
-const MATRIX_STORAGE_PREFIX = 'vkpi:mykol:official-matrix:v3:';
+// v4:快照新增 personalAccounts(个人矩阵分组),换前缀让旧 v3 缓存自然失效
+const MATRIX_STORAGE_PREFIX = 'vkpi:mykol:official-matrix:v4:';
 const MATRIX_CACHE = new Map<string, MatrixSnapshot>();
 
 function matrixCacheKey(apiToken?: string, viewAsStaffId?: string) {
@@ -238,6 +239,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
   const [postCount, setPostCount] = useState(initialSnapshot?.postCount || 0);
   const [totalViews, setTotalViews] = useState(initialSnapshot?.totalViews || 0);
   const [staffManaged, setStaffManaged] = useState<StaffManagedSummary[]>(initialSnapshot?.staffManaged || []);
+  const [personalAccounts, setPersonalAccounts] = useState<OfficialChannelAccount[]>(initialSnapshot?.personalAccounts || []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -248,6 +250,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setPostCount(0);
       setTotalViews(0);
       setStaffManaged([]);
+      setPersonalAccounts([]);
       setError('');
       return;
     }
@@ -258,6 +261,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setPostCount(cached.postCount);
       setTotalViews(cached.totalViews);
       setStaffManaged(cached.staffManaged || []);
+      setPersonalAccounts(cached.personalAccounts || []);
     }
     setLoading(!cached);
     setError('');
@@ -265,12 +269,15 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
       const response = await getOfficialChannelMatrix(apiToken, { limit: MATRIX_POST_SAMPLE_LIMIT, viewAsStaffId });
+      // personal(个人矩阵分组,后端增量字段;旧后端缺席 → 如实空数组)复用 mapAccount 同形状
+      const personal = recordValue((response as Row).personal);
       const nextSnapshot = {
         platforms: rows(response.platforms).map(mapPlatform),
         accountCount: numberValue(response.account_count),
         postCount: numberValue(response.post_count),
         totalViews: numberValue(response.total_views),
         staffManaged: rows(response.staff_managed).map(mapStaffManaged),
+        personalAccounts: rows(personal.accounts).map(mapAccount),
         fetchedAt: Date.now(),
       };
       MATRIX_CACHE.set(cacheKey, nextSnapshot);
@@ -280,6 +287,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
       setPostCount(nextSnapshot.postCount);
       setTotalViews(nextSnapshot.totalViews);
       setStaffManaged(nextSnapshot.staffManaged);
+      setPersonalAccounts(nextSnapshot.personalAccounts);
       const viteMeta = import.meta as unknown as { env?: { DEV?: boolean } };
       if (viteMeta.env?.DEV) {
         const elapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt);
@@ -296,6 +304,7 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
         setPostCount(0);
         setTotalViews(0);
         setStaffManaged([]);
+        setPersonalAccounts([]);
         setError(requestError instanceof Error ? requestError.message : '官方账号矩阵加载失败');
       } else {
         // Stale-while-revalidate: keep cached data visible and avoid replacing a usable page with a transient timeout.
@@ -310,5 +319,5 @@ export function useOfficialChannelMatrix(apiToken?: string, viewAsStaffId?: stri
     void refresh();
   }, [refresh]);
 
-  return { platforms, accountCount, postCount, totalViews, staffManaged, loading, error, refresh };
+  return { platforms, accountCount, postCount, totalViews, staffManaged, personalAccounts, loading, error, refresh };
 }

@@ -142,12 +142,14 @@ export function MyKolBoardPage({
   // 平台分布点行共用同一份(与 M3 共享筛选状态)
   const [libFilter, setLibFilter] = React.useState<LibraryFilter>({ vOnly: false, platform: "", query: "", stage: null });
 
+  // 库口径(与 board-ext scope 语义对齐):员工恒 own-only(服务端硬闸);
+  // 管理层缺省 scope=team 全团队收藏集(负责人下拉跨看单人仍走 ?staff_id=,在库模块内)。
   React.useEffect(() => {
     if (!apiToken) return;
     let alive = true;
     setAggLoading(true);
     setAggError("");
-    getMyKolAggregate(apiToken)
+    getMyKolAggregate(apiToken, isManager ? { scope: "team" } : {})
       .then((res) => {
         if (alive) setAgg(res && typeof res === "object" ? res : null);
       })
@@ -161,7 +163,7 @@ export function MyKolBoardPage({
     return () => {
       alive = false;
     };
-  }, [apiToken, reloadTick]);
+  }, [apiToken, isManager, reloadTick]);
 
   const kpi = (agg?.kpi_summary || null) as Record<string, number> | null;
   const kolCount = kpi && Number.isFinite(Number(kpi.favorites_count)) ? Number(kpi.favorites_count) : null;
@@ -260,7 +262,7 @@ export function MyKolBoardPage({
     const extraRows: Array<[string, string]> = agg
       ? [
           ["窗口", `${Number(agg.window_days) || 30} 天(aggregate 口径)`],
-          ["视角", isManager ? "管理层 · 全量" : `${userName || "成员"} · own-only(服务端裁剪)`],
+          ["视角", isManager ? "管理层 · 全团队收藏集(scope=team 服务端聚合)" : `${userName || "成员"} · own-only(服务端裁剪)`],
           ...(kolViews?.fill_rate != null
             ? ([["播放覆盖", `${pctText(kolViews.fill_rate)}% 实测填充(view_count 非空 / 全 evidence)`]] as Array<[string, string]>)
             : exposure.trend

@@ -1781,6 +1781,19 @@
   margin-bottom: 0 !important;
 }
 
+/* MY KOL · KOL 库模块:行数少时卡体收敛贴内容(flex 收敛)——
+   覆盖格高填充(上方 min-height:100% 通配 + ds-mod 的 h-full),卡体改
+   height:auto + max-height:100%:空底留在卡外的透明格内,「查看全量 N 条」
+   按钮自然贴在行下方不悬空;内容超过格高时仍封顶,由卡体 overflow 滚动。 */
+.vkpi-editable-board .vkpi-board-module--library .vkpi-board-module__content > * {
+  min-height: 0;
+}
+
+.vkpi-editable-board .vkpi-board-module--library .vkpi-board-module__content > .ds-mod {
+  height: auto;
+  max-height: 100%;
+}
+
 .vkpi-board-module__tools {
   position: absolute;
   z-index: 920;

@@ -113,7 +113,9 @@ const EXT_OK = {
     items: [
       { platform: "youtube", count: 520 },
       { platform: "instagram", count: 150 },
-      { platform: "tiktok", count: 47 },
+      { platform: "tiktok", count: 33 },
+      { platform: "media", count: 9 },
+      { platform: "unknown", count: 5 },
     ],
     total: 717,
     basis: "收藏集 GROUP BY platform",
@@ -174,6 +176,24 @@ const VIDEOS: Record<string, unknown[]> = {
     { evidence_id: 9002, id: 9002, kol_pool_id: 101, project_id: null, title: "VILTROX 85mm field test", view_count: null, like_count: 5, comment_count: 1, has_final_v1_cache: false, publish_date: "2026-06-20", content_url: "https://youtu.be/a2" },
     { evidence_id: 9003, id: 9003, kol_pool_id: 101, project_id: null, title: "daily vlog", view_count: 500, like_count: 3, comment_count: 0, has_final_v1_cache: false, publish_date: "2026-06-10", content_url: "https://youtu.be/a3" },
   ],
+};
+
+// 【①】个人矩阵分组:official-matrix 增量 personal 字段(官号名单之外的个人账号 + 持有人)
+const MATRIX_PERSONAL_ACCOUNT = {
+  id: 77,
+  staff_id: 6,
+  staff_name: "Pei",
+  staff_email: "pei@viltrox.com",
+  platform: "tiktok",
+  platform_label: "TikTok",
+  handle: "@pei.daily",
+  group: "personal",
+  display_name: "Pei Daily",
+  sync_status: "synced",
+  followers: 4200,
+  posts_count: 33,
+  total_views: 560000,
+  posts: [],
 };
 
 // official-matrix(mapPlatform/mapAccount 读 snake_case)
@@ -246,7 +266,7 @@ const METRICS_PROP = [
 
 const DATA: any = { projects: [], staffMembers: [], kolOptions: [] };
 
-function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown } = {}) {
+function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown; matrix?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
     if (p.startsWith("/api/admin/vkpi/my-kol/aggregate")) {
@@ -254,7 +274,7 @@ function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown } = {}) {
       if (value instanceof Error) throw value;
       return value;
     }
-    if (p.startsWith("/api/marketing/channels/official-matrix")) return MATRIX_OK;
+    if (p.startsWith("/api/marketing/channels/official-matrix")) return overrides.matrix ?? MATRIX_OK;
     if (p.startsWith("/api/marketing/channels/") && p.includes("/posts")) {
       return { account: {}, posts: [], pagination: { page: 1, pages: 1, total: 0 } };
     }
@@ -342,9 +362,10 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(screen.getAllByText(/vkpi_kol_pool_favorites/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/vkpi_kol_fit_snapshot/).length).toBeGreaterThan(0);
 
-    // 三个真端点全被调
+    // 三个真端点全被调;【②】管理层缺省 scope=team(全团队收藏集,与 board-ext 语义对齐)
     const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
     expect(calledPaths.some((p) => p.startsWith("/api/admin/vkpi/my-kol/aggregate"))).toBe(true);
+    expect(calledPaths.filter((p) => p.startsWith("/api/admin/vkpi/my-kol/aggregate")).every((p) => p.includes("scope=team"))).toBe(true);
     expect(calledPaths.some((p) => p.startsWith("/api/marketing/channels/official-matrix"))).toBe(true);
     expect(calledPaths.some((p) => p.startsWith("/api/admin/vkpi/my-kol/board-ext"))).toBe(true);
   });
@@ -364,7 +385,11 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(screen.getAllByText("Fit 分布").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/未评分/).length).toBeGreaterThan(0);
     expect(screen.getAllByText("平台分布").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("youtube").length).toBeGreaterThan(0);
+    // 【④】平台名门面映射:首字母大写 + unknown→未知 / media→媒体站(裸值不上卡面)
+    expect(screen.getAllByText("Youtube").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("媒体站").length).toBeGreaterThan(0);
+    expect(screen.queryByText("unknown")).toBeNull();
     expect(screen.getAllByText("KOL 库").length).toBeGreaterThan(0);
     // palette 备选不进默认布局
     expect(screen.queryByText("播放 Top 视频")).toBeNull();
@@ -389,6 +414,8 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     // 【M5/M6 收尾】library own-only 口径再断言:员工 aggregate 不带 staff_id(服务端裁剪,
     // 零本地猜),负责人筛选 select 即使 staff 目录有人也不渲染(管理层专属)
     expect(calledPaths.filter((p) => p.startsWith("/api/admin/vkpi/my-kol/aggregate")).every((p) => !p.includes("staff_id"))).toBe(true);
+    // 【②】员工恒 own-only:缺省绝不带 scope=team(即使带,后端 can_view_all 硬闸也只回本人)
+    expect(calledPaths.filter((p) => p.startsWith("/api/admin/vkpi/my-kol/aggregate")).every((p) => !p.includes("scope=team"))).toBe(true);
     expect(screen.queryByLabelText("负责人筛选")).toBeNull();
     // library 行本体仍是 aggregate 下发的本人集合(后端已裁,前端如实渲染)
     expect(await screen.findByText("Alpha Cam")).toBeTruthy();
@@ -471,15 +498,26 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
     expect(screen.queryByText(/漏斗阶段:已寄样/)).toBeNull();
   });
 
-  it("平台分布点行过滤:点 youtube 行 → library 只剩 youtube 行;再点同行取消", async () => {
+  it("平台分布点行过滤:点 Youtube 行(门面映射名)→ library 按平台原值 youtube 过滤;再点同行取消", async () => {
     renderBoard();
     expect(await screen.findByText("Alpha Cam")).toBeTruthy();
-    fireEvent.click(await screen.findByText("youtube"));
+    fireEvent.click(await screen.findByText("Youtube"));
     expect(screen.getByText("Alpha Cam")).toBeTruthy();
     expect(screen.queryByText("Beta Vlog")).toBeNull();
     expect(screen.queryByText("Gamma")).toBeNull();
-    fireEvent.click(screen.getByText("youtube"));
+    fireEvent.click(screen.getByText("Youtube"));
     expect(await screen.findByText("Beta Vlog")).toBeTruthy();
+  });
+
+  it("【④】直方条形可见性:非 0 小占比保底 2.5% 必可见;0 计数桶空槽常驻(极细底线)", async () => {
+    renderBoard();
+    // 90-100 桶 count=8 / total=1210 ≈ 0.66% → 保底 2.5%(不隐身);0-9 桶 count=0 → 0%(留空槽)
+    const tiny = await screen.findByTitle("fit 90-100 区间 KOL 数(只读分桶)");
+    expect((tiny.querySelector("i") as HTMLElement).style.width).toBe("2.5%");
+    const zero = screen.getByTitle("fit 0-9 区间 KOL 数(只读分桶)");
+    expect((zero.querySelector("i") as HTMLElement).style.width).toBe("0%");
+    // 空槽底轨(bg-line)常驻:0 桶的条形轨道元素仍在 DOM
+    expect(zero.querySelectorAll("span.bg-line").length).toBeGreaterThan(0);
   });
 
   it("fitdist 未评分桶:410 · 33.9% 灰桶如实在场(绝不并进 0 分桶)", async () => {
@@ -677,5 +715,31 @@ describe("MyKolBoardPage M5/M6(溯源身份跳 + 内嵌模块卡头收编)", () 
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     await waitFor(() => expect(calls().some((p) => p.includes("contribution-rollup?window_days=30"))).toBe(true));
     expect(screen.getAllByText("30 天").length).toBeGreaterThan(0);
+  });
+});
+
+describe("MyKolBoardPage 个人矩阵分组(official-matrix 增量 personal 字段)", () => {
+  it("0 个人账号 → 诚实空态 + 真实绑定入口(设置 → 账号授权),不摆假行", async () => {
+    renderBoard();
+    expect(await screen.findByText(/个人矩阵 · 0 账号/)).toBeTruthy();
+    expect(screen.getByText(/设置 → 账号授权/)).toBeTruthy();
+    expect(screen.getByText(/同步后即可查看帖子与播放数据/)).toBeTruthy();
+  });
+
+  it("有个人账号 → 行带持有人名;点行开内容层,走官号同一条 channels/{id}/posts 链(channel_id 通用)", async () => {
+    routeApi({ matrix: { ...MATRIX_OK, personal: { account_count: 1, accounts: [MATRIX_PERSONAL_ACCOUNT] } } });
+    // matrix hook 有模块级内存缓存(按 token 分键)——换 token 绕开上一用例的快照
+    renderBoard({ apiToken: "t-personal" });
+    expect(await screen.findByText("Pei Daily")).toBeTruthy();
+    // 持有人名(staff join)+ 个人矩阵组头
+    expect(screen.getAllByText("Pei").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/个人矩阵/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/暂无个人账号/)).toBeNull();
+    // 点行 → OfficialContentLayer 按 channel_id=77 拉帖子(与官号同链,零新链)
+    fireEvent.click(screen.getByText("Pei Daily"));
+    await waitFor(() => {
+      const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+      expect(calledPaths.some((p) => p.includes("/api/marketing/channels/77/posts"))).toBe(true);
+    });
   });
 });

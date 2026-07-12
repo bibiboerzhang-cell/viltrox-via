@@ -208,6 +208,65 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
     return items
 
 
+def _pool_favorites_team(conn: Any) -> list[dict[str, Any]]:
+    """管理层 scope=team 全团队收藏集:收藏 ∪ 共享(vkpi_kol_pool_members)按 KOL 去重。
+
+    口径与 my_kol_board_ext._COLLECTION_COND 的管理层全团队分支(staff 参数=0)同两张表
+    同判据 —— 库列表与看板聚合数出同一个集合。行形状与 _pool_favorites 完全一致
+    (favorite_id/is_shared/created_at/projects/contacts),前端零改映射:
+      - is_shared = 该 KOL 全团队无任何收藏行、仅经共享授予可见(现状 members 0 行);
+      - created_at = 最早入库时间(收藏/共享取早);note/shared_by 团队视图不指向单人,置空。
+    纯读零写;viltrox_fit_score 只读透传。SQL 无参数、无注释(compat 把注释里的
+    ASCII 问号当占位符,此处口径注全部住 Python docstring)。
+    """
+    rows = conn.execute(
+        """
+        SELECT MIN(f.id) AS favorite_id, kp.id AS kol_pool_id,
+               '' AS note,
+               COALESCE(MIN(f.created_at), MIN(sm.created_at)) AS created_at,
+               (COUNT(f.id) = 0) AS is_shared,
+               NULL AS shared_by_staff_id,
+               '' AS shared_by_name,
+               kp.platform, kp.handle, kp.display_name, kp.followers,
+               kp.viltrox_fit_score, kp.profile_url, kp.avatar_url, kp.country,
+               (
+                 SELECT json_agg(json_build_object(
+                   'project_id', p.id, 'project_name', p.project_name,
+                   'stage', a.stage, 'stage_status', a.stage_status))
+                 FROM vkpi_project_kol_assignments a
+                 JOIN vkpi_projects p ON p.id = a.project_id
+                 WHERE a.kol_pool_id = kp.id
+                   AND COALESCE(a.stage,'') NOT IN ('churned','cancelled','lost')
+                   AND COALESCE(p.restricted, FALSE) = FALSE
+               ) AS projects_json,
+               (
+                 SELECT json_agg(json_build_object(
+                   'contact_type', ct.contact_type, 'contact_value', ct.contact_value,
+                   'contact_source', ct.contact_source, 'consent_basis', ct.consent_basis))
+                 FROM vkpi_kol_pool_contacts ct
+                 WHERE ct.kol_pool_id = kp.id
+               ) AS contacts_json
+        FROM vkpi_kol_pool kp
+        LEFT JOIN vkpi_kol_pool_favorites f ON f.kol_pool_id = kp.id
+        LEFT JOIN vkpi_kol_pool_members sm ON sm.kol_pool_id = kp.id
+        WHERE (f.id IS NOT NULL OR sm.id IS NOT NULL)
+          AND kp.duplicate_of_id IS NULL
+        GROUP BY kp.id, kp.platform, kp.handle, kp.display_name, kp.followers,
+                 kp.viltrox_fit_score, kp.profile_url, kp.avatar_url, kp.country
+        ORDER BY COALESCE(MIN(f.created_at), MIN(sm.created_at)) DESC, kp.id DESC
+        """,
+        (),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for raw in rows:
+        item = dict(raw)
+        item["projects"] = _json(item.pop("projects_json", None), [])
+        item["contacts"] = _json(item.pop("contacts_json", None), [])
+        item["is_shared"] = bool(item.get("is_shared"))
+        items.append(item)
+    return items
+
+
 def _projects(conn: Any, staff: dict[str, Any], requested_staff_id: int | None) -> list[dict[str, Any]]:
     """This staff's projects via the shared project_filter scope (own-only for employees)."""
     from app.domains.access import scope
@@ -277,6 +336,7 @@ def build_my_kol_aggregate(
     window_days: int = 30,
     *,
     actor: dict[str, Any] | None = None,
+    team_scope: bool = False,
 ) -> dict[str, Any]:
     """Assemble the full MY KOL payload for one staff member in a single bundle.
 
@@ -284,15 +344,21 @@ def build_my_kol_aggregate(
     from the actor and enforces employee own-only). `actor` is the real logged-in
     staff dict, used only for project scope (a manager viewing a member still
     filters projects to that member via project_filter's requested_staff_id).
+
+    `team_scope=True`(路由已验 can_view_all,员工传参恒 False 硬闸):
+    pool_favorites 换全团队收藏集(_pool_favorites_team,与 board-ext 管理层缺省
+    口径同集合),projects 走管理层全量 scope;staff 行 / official_matrix / claims
+    仍按 actor 本人(「我的认领」语义不变)。响应形状零改,增量 scope_mode 标记。
     """
     staff_id = _int(staff_id)
     staff = _staff_row(conn, staff_id)
-    favorites = _pool_favorites(conn, staff_id)
-    projects = _projects(conn, actor or staff, staff_id)
+    favorites = _pool_favorites_team(conn) if team_scope else _pool_favorites(conn, staff_id)
+    projects = _projects(conn, actor or staff, None if team_scope else staff_id)
     claims = _claims(conn, staff_id)
     return {
         "staff": staff,
         "window_days": _int(window_days, 30),
+        "scope_mode": "team" if team_scope else "staff",
         "official_matrix": _official_matrix(conn, staff_id),
         "pool_favorites": favorites,
         "projects": projects,

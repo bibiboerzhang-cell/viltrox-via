@@ -1,17 +1,17 @@
 import React from "react";
 import { formatLocal } from "../../lib/timeLocal";
 import { EmptyLine } from "./MarketVoicePage.modules";
-import type {
-  KolLibraryRow,
-  VkpiContactCoverageGroup,
-  VkpiCountPoint,
-  VkpiFitDistGroup,
-  VkpiFunnelGroup,
-  VkpiFunnelSegment,
-  VkpiKpiSeriesGroup,
-  VkpiPlatformDistGroup,
-  VkpiSeriesPoint,
-  VkpiViewsTopGroup,
+import {
+  platformLabel, type KolLibraryRow,
+  type VkpiContactCoverageGroup,
+  type VkpiCountPoint,
+  type VkpiFitDistGroup,
+  type VkpiFunnelGroup,
+  type VkpiFunnelSegment,
+  type VkpiKpiSeriesGroup,
+  type VkpiPlatformDistGroup,
+  type VkpiSeriesPoint,
+  type VkpiViewsTopGroup,
 } from "../../../../services/vkpi/myKolBoard-api";
 
 // MY KOL · 图表模块族(M4 真身;MyKolBoardPage 专用,页内拆件不入公共桶)。
@@ -71,7 +71,7 @@ export function BarRow({
   onClick,
 }: {
   name: string;
-  /** 条宽 0-100;0 也画空槽(demo .pbar 底槽常驻) */
+  /** 条宽 0-100;0 也画空槽(demo .pbar 底槽常驻);非 0 保底 2.5 宽必可见(小占比不隐身) */
   widthPct: number;
   /** 条色(CSS var 串;缺省 accent→accent-2 渐变) */
   color?: string;
@@ -97,7 +97,7 @@ export function BarRow({
         <i
           className="block h-full rounded-[3px]"
           style={{
-            width: `${Math.max(0, Math.min(100, widthPct))}%`,
+            width: widthPct > 0 ? `${Math.min(100, Math.max(widthPct, 2.5))}%` : "0%",
             background: barBg,
             opacity: dashed ? 0.45 : 1,
           }}
@@ -438,7 +438,7 @@ export function PlatDistBody({
         return (
           <BarRow
             key={platform}
-            name={platform}
+            name={platformLabel(platform)}
             widthPct={(count / total) * 100}
             value={`${count.toLocaleString()} · ${pctText(count / total)}%`}
             highlight={active}

@@ -36,12 +36,17 @@ def _int(value: Any, default: int = 0) -> int:
 def my_kol_aggregate_endpoint(
     staff_id: int | None = Query(default=None, ge=1),
     window_days: int = Query(default=30, ge=1, le=365),
+    scope_mode: str = Query(default="", alias="scope"),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return the single MY KOL aggregate bundle for the scoped staff member."""
     # 修(2026-06-16):owner/manager(can_view_all=True)自查(未显式传 staff_id)时
     # effective_staff_id 返回 None('全部'语义)→ 旧逻辑 403,导致 owner 收藏写进库却永远读不到。
     # 自查场景回落到本人 actor id(显式传 staff_id 仍走 manager 跨看)。
+    # 增量(2026-07-12)?scope=team:管理层(can_view_all)全团队收藏集口径 ——
+    # 与 board-ext 管理层缺省同集合(收藏 ∪ 共享,去重)。权限判定同源 can_view_all:
+    # 员工传了也只拿自己的(team 恒 False,后端硬闸);显式 ?staff_id= 优先(跨看单人)。
+    team = scope_mode == "team" and staff_id is None and scope.can_view_all(staff)
     target = scope.effective_staff_id(staff, staff_id) or scope.actor_staff_id(staff)
     if not target:
         raise HTTPException(status_code=403, detail="no staff identity in scope")
@@ -51,6 +56,7 @@ def my_kol_aggregate_endpoint(
             int(target),
             window_days=int(window_days),
             actor=staff,
+            team_scope=bool(team),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

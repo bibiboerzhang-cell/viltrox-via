@@ -93,6 +93,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/aggregate · board-ext",
     rows: [
       ["在库行", "vkpi_kol_pool_favorites + 共享 vkpi_kol_pool_members(aggregate.pool_favorites 全量下发)"],
+      ["范围", "员工=own-only(服务端硬闸);管理层缺省 scope=team 全团队收藏集(收藏 ∪ 共享去重,与 board-ext 同两表同判据)"],
       ["状态徽", "收藏/共享=行本体;进行中=挂 assignments;已认领=vkpi_kol_claims 平台+名称桥(真值在详情 viewer-context)"],
       ["V 视频 KOL", "board-ext v_content.v_kol_count —— 至少 1 条合作/标题提及视频的去重 KOL(全库口径)"],
       ["V 三档判据", "合作=挂项目(project_id 非空)/ 标题提及=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 同口径)"],
@@ -117,6 +118,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["账号", "18 官号 · /api/marketing/channels/official-matrix(卡头计数=account_count 真值)"],
       ["指标", "vkpi_channel_metrics(961 行 · 100% 填充 · 2026-07-11 实测)每账号最新快照(followers/posts/views + delta)"],
       ["内容层", "channels/{id}/posts 按需分页(内嵌组件自取)"],
+      ["个人矩阵", "official-matrix.personal 增量分组=官号名单之外的成员个人账号(持有人 staff→users)· 现状 0 行=诚实空态;帖子/播放复用同一条 channels/{id}/posts 链"],
     ],
   },
   platdist: {
@@ -124,6 +126,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     rows: [
       ["口径", "收藏集(收藏 ∪ 共享,去重)按 platform 分桶(纯读 GROUP BY)"],
       ["联动", "点行=KOL 库按平台过滤(与库筛选 chips 同一份状态)"],
+      ["平台名", "门面映射 unknown→未知 / media→媒体站,其余首字母大写;过滤键仍用平台原值"],
     ],
   },
   risk: {

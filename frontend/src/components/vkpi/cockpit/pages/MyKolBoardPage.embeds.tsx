@@ -7,9 +7,12 @@ import {
   useTeamStaffCards,
   type MatrixState,
 } from "./MyKolBoardPage.modules";
+import { fmtZhCompact } from "./MyKolBoardPage.charts";
 import { DailyDigestCard } from "../../pages/myKol/DailyDigestCard";
 import { RiskIndexPanel } from "../../pages/myKol/RiskIndexPanel";
 import { ContributionRollupPanel } from "../../pages/myKol/ContributionRollupPanel";
+import { OfficialContentLayer } from "../../pages/myKol/OfficialContentLayer";
+import type { OfficialChannelAccount } from "../../pages/channels/channelTypes";
 import type { VkpiDashboardData } from "../../vkpiTypes";
 
 // MY KOL · 【M6】内嵌模块卡头收编包装族(digest/team/official/risk/rollup 五件)。
@@ -126,6 +129,62 @@ export function TeamEmbed({
   );
 }
 
+/* ============ 个人矩阵分组(官号三组之外的第四组):成员个人绑定账号 + 持有人名。
+   数据 = official-matrix 增量 personal 字段(官号名单之外的账号行,不混入官号
+   platforms —— K4 官号粉丝合计等聚合口径零污染);行点击开合 OfficialContentLayer,
+   与官号同一条 channels/{id}/posts 内容链(channel_id 通用,零新链);
+   0 账号 = 诚实空态,绑定入口指真实路径 设置 → 账号授权(成员账号授权)。
+   红线:纯展示零网络(数据在 matrix hook / 内容层自取);颜色全 token 零写死色。 ============ */
+export function PersonalMatrixGroup({ accounts, apiToken }: { accounts: OfficialChannelAccount[]; apiToken: string }) {
+  const [openId, setOpenId] = React.useState<number | null>(null);
+  if (accounts.length === 0) {
+    return (
+      <div className="mt-2.5 rounded-[9px] border border-dashed border-line px-3 py-2.5 text-[10.5px] leading-[1.7] text-muted">
+        <b className="font-semibold text-ink-2">个人矩阵 · 0 账号</b> —— 暂无个人账号。成员在 设置 → 账号授权
+        绑定个人账号后自动出现在这里,数据同步后即可查看帖子与播放数据。
+      </div>
+    );
+  }
+  const open = accounts.find((account) => account.id === openId) || null;
+  return (
+    <div className="mt-2.5">
+      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
+        个人矩阵 <b className="font-mono text-ink-2">{accounts.length}</b>
+      </div>
+      {accounts.map((account) => {
+        const active = openId === account.id;
+        return (
+          <button
+            key={account.id}
+            type="button"
+            onClick={() => setOpenId((cur) => (cur === account.id ? null : account.id))}
+            title={active ? "再点收起内容层" : "点击查看该账号的帖子与播放数据"}
+            className={`flex w-full items-center gap-2 rounded-[8px] border px-2 py-1.5 text-left text-[11.5px] transition-colors ${
+              active ? "border-accent bg-accent-soft" : "border-transparent hover:border-line hover:bg-card"
+            }`}
+          >
+            <span className={`min-w-0 flex-1 truncate ${active ? "text-accent" : "text-ink-2"}`}>
+              {account.displayName || account.handle || "个人账号"}
+              <span className="ml-1.5 text-[9.5px] text-muted">{account.platformLabel || account.platform}{account.handle ? ` · ${account.handle}` : ""}</span>
+            </span>
+            <span className="flex-none rounded-[6px] border border-line px-1.5 py-px text-[9px] text-muted" title="持有人(账号授权归属)">
+              {account.staffName || "未分配"}
+            </span>
+            <span className="w-[104px] flex-none text-right font-mono text-[9.5px] text-muted" title="粉丝 · 内容数 · 播放(最新快照)">
+              {fmtZhCompact(account.followers)} 粉 · {account.postsCount} 帖 · {fmtZhCompact(account.totalViews)}
+            </span>
+          </button>
+        );
+      })}
+      {open ? (
+        <div className="mt-2">
+          <OfficialContentLayer account={open} apiToken={apiToken} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function OfficialEmbed({
   apiToken,
   matrix,
@@ -143,8 +202,11 @@ export function OfficialEmbed({
       srcRows={src("official").rows}
     >
       {apiToken ? (
-        <div data-embed="official" className={`${EMBED} ${MATRIX_TRIM}`}>
-          <OfficialMatrixModule apiToken={apiToken} matrix={matrix} />
+        <div>
+          <div data-embed="official" className={`${EMBED} ${MATRIX_TRIM}`}>
+            <OfficialMatrixModule apiToken={apiToken} matrix={matrix} />
+          </div>
+          <PersonalMatrixGroup accounts={matrix.personalAccounts} apiToken={apiToken} />
         </div>
       ) : (
         noToken
