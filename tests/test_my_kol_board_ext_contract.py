@@ -73,6 +73,7 @@ ALL_SQL_CONSTANTS = (
     ext.CONTACT_TYPES_SQL,
     ext.CONTACT_COVERAGE_SQL,
     ext.VIEWS_TOP_SQL,
+    ext.RECENT_VIDEOS_SQL,
     ext.V_CONTENT_SQL,
     ext.V_KOL_COUNT_SQL,
     ext.V_KOL_IDS_SQL,
@@ -91,7 +92,7 @@ PREV_UNTIL_TS = "2026-06-11T12:00:00"   # 上窗起点 + 同等流逝长度(29.5
 
 GROUP_KEYS = (
     "kpi_series", "funnel", "platform_dist", "fit_dist",
-    "contact_coverage", "views_top", "v_content",
+    "contact_coverage", "views_top", "recent_videos", "v_content",
 )
 
 
@@ -110,7 +111,8 @@ def test_sql_constants_parameterized_with_limit_pushdown():
     limited = (
         ext.POOL_FOLLOWERS_DAY_SQL, ext.NEW_VIDEOS_DAY_SQL, ext.OFFICIAL_DAY_SQL,
         ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.FIT_DIST_SQL,
-        ext.CONTACT_TYPES_SQL, ext.VIEWS_TOP_SQL, ext.V_KOL_IDS_SQL,
+        ext.CONTACT_TYPES_SQL, ext.VIEWS_TOP_SQL, ext.RECENT_VIDEOS_SQL,
+        ext.V_KOL_IDS_SQL,
     )
     for sql in limited:
         assert "LIMIT ?" in sql
@@ -380,11 +382,21 @@ def test_response_never_leaks_private_fields(monkeypatch):
         ext.CONTACT_TYPES_SQL: [
             {"contact_type": "email", "n": 1, "contact_value": "secret2@example.com"},
         ],
+        ext.RECENT_VIDEOS_SQL: [
+            {"evidence_id": 3, "kol_pool_id": 9, "project_id": None, "content_url": "",
+             "platform": "tiktok", "title": "t", "video_title": "", "thumbnail_url": "",
+             "view_count": 1, "like_count": 0, "publish_date": "2026-07-01", "posted_at": None,
+             "created_at": None, "evidence_type": "video", "kol_name": "n", "kol_handle": "h",
+             "has_final_v1_cache": 0,
+             "email": "secret3@example.com", "contact_value": "+86-13900000000",
+             "viltrox_fit_score": 77.5},
+        ],
     })
     flat = repr(_build(conn))
     for leaked in (
-        "secret@example.com", "secret2@example.com", "+86-13800000000",
-        "88.5", "contact_value", "viltrox_fit_score",
+        "secret@example.com", "secret2@example.com", "secret3@example.com",
+        "+86-13800000000", "+86-13900000000",
+        "88.5", "77.5", "contact_value", "viltrox_fit_score",
     ):
         assert leaked not in flat
 
@@ -415,6 +427,59 @@ def test_limits_pushed_down_and_python_side_capped(monkeypatch):
     assert by_sql[ext.FUNNEL_SQL][-1] == ext.FUNNEL_ROWS_LIMIT
     assert by_sql[ext.FIT_DIST_SQL] == (ext.FIT_BUCKET_ROWS_LIMIT,)
     assert by_sql[ext.CONTACT_TYPES_SQL] == (ext.CONTACT_TYPE_ROWS_LIMIT,)
+
+
+# ── 8.5 recent_videos 内容墙(收藏集最近采集 + 缩略图自愈链)────────────────
+
+
+def test_recent_videos_honest_nulls_bool_and_thumbnail_chain(monkeypatch):
+    """view_count NULL 原样透出(未实测 ≠ 0);BOOLEAN 读回 1 → 真布尔;
+    缩略图三件套=创意库自愈链(无 raw 无缓存 → youtube 派生兜底)。"""
+    _frozen(monkeypatch)
+    conn = _FakeConn(routes={
+        ext.RECENT_VIDEOS_SQL: [
+            {"evidence_id": 11, "kol_pool_id": 101, "project_id": 7,
+             "content_url": "https://www.youtube.com/watch?v=abcdefghijk",
+             "platform": "youtube", "title": "Coop film", "video_title": "",
+             "thumbnail_url": "", "view_count": None, "like_count": 5,
+             "publish_date": "2026-07-10", "posted_at": None,
+             "created_at": "2026-07-10T08:00:00", "evidence_type": "video",
+             "kol_name": "Alpha", "kol_handle": "@alpha", "has_final_v1_cache": 1},
+        ],
+    })
+    rv = _build(conn)["recent_videos"]
+    assert rv["status"] == "ready"
+    item = rv["items"][0]
+    assert item["view_count"] is None                    # 未实测保持 null,绝不 0 填
+    assert item["like_count"] == 5
+    assert item["has_final_v1_cache"] is True            # BOOLEAN 读回 int 1 → 真布尔
+    assert item["project_id"] == 7 and item["kol_name"] == "Alpha"
+    assert item["publish_date"] == "2026-07-10"
+    # 三件套:raw 空、无本地缓存 → youtube 派生;best 链序 cached → raw → youtube
+    assert item["thumbnail_url"] is None and item["cached_thumbnail_url"] is None
+    assert item["youtube_thumbnail_url"] == "https://img.youtube.com/vi/abcdefghijk/hqdefault.jpg"
+    assert item["best_thumbnail"] == item["youtube_thumbnail_url"]
+
+
+def test_recent_videos_limit_double_capped_scope_pushed_and_empty_reason(monkeypatch):
+    _frozen(monkeypatch)
+    over = [
+        {"evidence_id": i, "kol_pool_id": 1, "project_id": None, "content_url": "",
+         "platform": "tiktok", "title": f"t{i}", "video_title": "", "thumbnail_url": "",
+         "view_count": 1, "like_count": 0, "publish_date": "2026-07-01", "posted_at": None,
+         "created_at": None, "evidence_type": "video", "kol_name": "n", "kol_handle": "h",
+         "has_final_v1_cache": 0}
+        for i in range(ext.RECENT_VIDEOS_LIMIT + 25)
+    ]
+    conn = _FakeConn(routes={ext.RECENT_VIDEOS_SQL: over})
+    body = _build(conn, sid=7684)
+    # Python 层二次封顶(哪怕 SQL 层被 mock 放水)+ scope 4 参与 LIMIT 常量下推
+    assert len(body["recent_videos"]["items"]) == ext.RECENT_VIDEOS_LIMIT
+    params = next(p for s, p in conn.calls if s == ext.RECENT_VIDEOS_SQL)
+    assert params == (7684, 7684, 7684, 7684, ext.RECENT_VIDEOS_LIMIT)
+    # 空收藏集 → 诚实 empty + reason(不摆假卡)
+    empty = _build(_FakeConn())["recent_videos"]
+    assert empty["status"] == "empty" and "诚实空" in empty["reason"]
 
 
 # ── 9. v_content 三档判定 ───────────────────────────────────────────────
@@ -549,7 +614,7 @@ def test_staff_scope_params_pushed_down(monkeypatch):
     _frozen(monkeypatch)
     conn = _FakeConn()
     _build(conn, sid=7684)
-    scoped_sqls = (ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.CONTACT_COVERAGE_SQL)
+    scoped_sqls = (ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.CONTACT_COVERAGE_SQL, ext.RECENT_VIDEOS_SQL)
     for sql in scoped_sqls:
         params = next(p for s, p in conn.calls if s == sql)
         assert params[:4] == (7684, 7684, 7684, 7684), sql

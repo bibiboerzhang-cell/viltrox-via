@@ -13,7 +13,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 //   (cover=board-ext 无此组 → 静态盘点标日期);
 // - 【M3→M4】库「有 V 视频」= board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
 //   truncated / 名单缺席均如实降级标注,绝不悄悄装精确);
-// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v1 +
+// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v2 +
 //   不传 apiToken → 绝不写账户级 dashboard_layout_v1;
 // - 诚实空态:aggregate 失败 = 错误卡;board-ext 失败 = 图形卡 ErrorCard + KPI 带
 //   时序/药丸缺席不编数;
@@ -153,11 +153,16 @@ const EXT_OK = {
   views_top: {
     status: "ready",
     items: [
-      { kol_pool_id: 101, display_name: "Alpha Cam", handle: "@alpha", platform: "youtube", total_views: 120_000_000, video_count: 42 },
+      // display_name 刻意不与库行同名(viewsTop 2026-07-12 起在默认布局,与库行同屏)
+      { kol_pool_id: 101, display_name: "Alpha Views", handle: "@alpha", platform: "youtube", total_views: 120_000_000, video_count: 42 },
       { kol_pool_id: 999, display_name: "Zeta Films", handle: "@zeta", platform: "tiktok", total_views: 80_000_000, video_count: 17 },
     ],
     basis: "view_count 点时实测 Top12",
   },
+  // 【内容墙】recent_videos:本文件恒给诚实 empty(网格真身/筛选/增页的行为冒烟住
+  // MyKolBoardPage.wall.smoke.test.tsx —— 卡上 KOL 名/三档徽与库行同名,塞真行会把
+  // 本文件既有单匹配断言全部打成多匹配)。
+  recent_videos: { status: "empty", reason: "收藏集内零 evidence——内容墙诚实空,不摆假卡。", limit: 60, items: [] },
   v_content: {
     status: "ready",
     total_evidence: 2134,
@@ -347,7 +352,7 @@ beforeEach(() => {
   routeApi();
 });
 
-describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布局键 v1)", () => {
+describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布局键 v2)", () => {
   it("KPI 带四卡:现值全真;K1/K2/K4 真 sparkline + delta 药丸,K1 缺快照日断点(两段线),K3 点时口径诚实虚线", async () => {
     expect(() => renderBoard()).not.toThrow();
 
@@ -395,7 +400,7 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(calledPaths.some((p) => p.startsWith("/api/admin/vkpi/my-kol/board-ext"))).toBe(true);
   });
 
-  it("默认布局六行(manager):漏斗/Fit 直方/平台分布真身在场;palette 备选不进默认", async () => {
+  it("默认布局七行(manager):漏斗/Fit 直方/平台分布/内容墙+播放榜真身在场;palette 备选不进默认", async () => {
     renderBoard();
     expect(await screen.findByText("KOL 指标带")).toBeTruthy();
     // 内嵌现有组件的模块
@@ -416,8 +421,12 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(screen.getAllByText("媒体站").length).toBeGreaterThan(0);
     expect(screen.queryByText("unknown")).toBeNull();
     expect(screen.getAllByText("KOL 库").length).toBeGreaterThan(0);
+    // 【内容墙】library 下一行(本文件 mock 恒 empty → 板面空态文案)+ viewsTop 上默认作旁柱
+    expect(screen.getAllByText("内容墙").length).toBeGreaterThan(0);
+    expect(await screen.findByText("暂无采集视频——在库行发起采集。")).toBeTruthy();
+    expect(screen.getAllByText("播放 Top 视频").length).toBeGreaterThan(0);
+    expect(await screen.findByText("Alpha Views")).toBeTruthy();
     // palette 备选不进默认布局
-    expect(screen.queryByText("播放 Top 视频")).toBeNull();
     expect(screen.queryByText("联系方式覆盖")).toBeNull();
     expect(screen.queryByText("粉丝趋势")).toBeNull();
     expect(screen.queryByText("我的认领")).toBeNull();
@@ -446,21 +455,24 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(await screen.findByText("Alpha Cam")).toBeTruthy();
   });
 
-  it("palette 全量可选:编辑布局 → 添加模块 弹层列出六个备选(M4 全真身)", async () => {
+  it("palette 全量可选:编辑布局 → 添加模块 弹层列出备选(M4 六真身 + 内容墙)", async () => {
     renderBoard();
     expect(await screen.findByText("KOL 指标带")).toBeTruthy();
     fireEvent.click(screen.getByText("编辑布局"));
     fireEvent.click(screen.getByText("添加模块"));
-    expect(await screen.findByText("播放 Top 视频")).toBeTruthy();
-    expect(screen.getByText("联系方式覆盖")).toBeTruthy();
-    expect(screen.getByText("粉丝趋势")).toBeTruthy();
-    expect(screen.getByText("我的认领")).toBeTruthy();
-    expect(screen.getByText("共享池")).toBeTruthy();
-    expect(screen.getByText("数据覆盖")).toBeTruthy();
+    // viewsTop/内容墙已在默认布局(弹层内仍列出、标已在看板)→ 查询收敛到弹层防多匹配
+    const palette = within(await screen.findByRole("dialog"));
+    expect(palette.getByText("播放 Top 视频")).toBeTruthy();
+    expect(palette.getByText("内容墙")).toBeTruthy();
+    expect(palette.getByText("联系方式覆盖")).toBeTruthy();
+    expect(palette.getByText("粉丝趋势")).toBeTruthy();
+    expect(palette.getByText("我的认领")).toBeTruthy();
+    expect(palette.getByText("共享池")).toBeTruthy();
+    expect(palette.getByText("数据覆盖")).toBeTruthy();
   });
 
-  it("布局键 vkpi-my-kol-layout-v1 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v1", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
+  it("布局键 vkpi-my-kol-layout-v2 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
+    window.localStorage.setItem("vkpi-my-kol-layout-v2", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
     renderBoard();
     expect((await screen.findAllByText("在库 KOL")).length).toBeGreaterThan(0);
     expect(screen.queryByText("每日学习摘要")).toBeNull();
@@ -481,8 +493,8 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
   it("board-ext 失败 → 图形卡 ErrorCard;KPI 带时序/药丸缺席不编数,K3 主控注入兜底", async () => {
     routeApi({ boardExt: new Error("HTTP 503") });
     renderBoard();
-    // 默认布局的三张图形卡(漏斗/fitdist/platdist)全部诚实错误卡
-    expect((await screen.findAllByText("board-ext 读取失败")).length).toBe(3);
+    // 默认布局的五张 board-ext 卡(漏斗/fitdist/platdist/viewsTop/内容墙)全部诚实错误卡
+    expect((await screen.findAllByText("board-ext 读取失败")).length).toBe(5);
     expect(screen.getAllByText(/HTTP 503/).length).toBeGreaterThan(0);
     // 四卡全 spempty,零 sparkline 零药丸(时序缺席不编)
     expect(await screen.findByText("719 KOL")).toBeTruthy();
@@ -554,7 +566,7 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
   });
 
   it("palette 六模块真身(预置布局):播放榜/覆盖/双线/认领/共享/静态盘点全真渲染", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v1", JSON.stringify(PALETTE_LAYOUT));
+    window.localStorage.setItem("vkpi-my-kol-layout-v2", JSON.stringify(PALETTE_LAYOUT));
     renderBoard();
     // viewsTop:实测播放条形榜(NULL 剔除口径注在 SrcChip/ProvNote)
     expect(await screen.findByText("播放 Top 视频")).toBeTruthy();

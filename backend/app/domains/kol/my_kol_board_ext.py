@@ -1,4 +1,4 @@
-"""MY KOL 看板聚合(my_kol_board_ext · M2)——七组看板读数,一次调用全给齐。
+"""MY KOL 看板聚合(my_kol_board_ext · M2)——八组看板读数,一次调用全给齐。
 
 用途:给前端 MY KOL 改版看板(M3/M4)补 KPI 序列 / 履约漏斗 / 平台分布 / fit 直方 /
 联系方式覆盖 / 播放榜 / V 相关内容三档 所需的聚合真数据。挂独立端点
@@ -6,7 +6,7 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
 读权限、同 viewer/own-only scope 口径),对现有 aggregate 响应零改动——全部字段
 增量新增,绝不破坏既有契约。仿 market/voice_report_ext.py 成熟模式。
 
-七组字段(每组独立 status,单组失败诚实降级 {status:"error"} 不拖累其余):
+八组字段(每组独立 status,单组失败诚实降级 {status:"error"} 不拖累其余):
   kpi_series        ①收藏集粉丝按日 SUM(vkpi_kol_fit_snapshot;快照缺日=null 断点,
                     绝不 0 填冒充掉粉)②新视频/日(vkpi_kol_video_evidence.created_at,
                     计数型 0 填齐)③官号粉丝/官号播放按日 SUM(vkpi_channel_metrics ×
@@ -25,6 +25,10 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
                     不进 SELECT;明文披露是 contact_reveal 门控端点的事)。
   views_top         evidence view_count Top12 KOL 榜(NULL 剔除,is_active IS NOT
                     FALSE 与百家饭同口径;basis=点时实测,非时序)。
+  recent_videos     收藏集最近采集视频墙(内容墙,2026-07-12 增量):evidence 最近
+                    N 条(封顶 RECENT_VIDEOS_LIMIT,双层封顶)按发布时间降序,
+                    带缩略图三件套(创意库同一条毒缓存自愈链 cached → raw →
+                    youtube 派生);view_count NULL 原样透出(未实测 ≠ 0 播放)。
   v_content         V 相关内容三档派生:cooperation(project_id IS NOT NULL)/
                     title_mention(标题含 viltrox,strpos 参数化不区分大小写)/
                     undetermined(其余)+ KOL 级汇总 v_kol_count + 行级名单
@@ -91,6 +95,8 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     PLATFORM_MAX_ITEMS,
     PLATFORM_ROWS_LIMIT,
     POOL_FOLLOWERS_DAY_SQL,
+    RECENT_VIDEOS_LIMIT,
+    RECENT_VIDEOS_SQL,
     SERIES_MAX_DAYS,
     SERIES_ROWS_LIMIT,
     V_CONTENT_SQL,
@@ -128,6 +134,22 @@ def _day_str(value: Any) -> str:
         return value.isoformat()
     text = str(value or "").strip()
     return text[:10] if len(text) >= 10 else ""
+
+
+def _ts_str(value: Any) -> str:
+    """DB 读回的时间戳(datetime / str)→ ISO 字符串;空值返回 ''(诚实缺席)。"""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "").strip()
+
+
+def _truthy_db(value: Any) -> bool:
+    """compat BOOLEAN 读回可能是 True / 1 / 't'(BOOLEAN 读回 int 已知陷阱)——统一容错判真。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("t", "true", "1", "y", "yes")
 
 
 def _share(part: int, total: int) -> float | None:
@@ -477,6 +499,60 @@ def _views_top(conn: Any) -> dict[str, Any]:
     return body
 
 
+def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
+    """8. recent_videos:收藏集最近采集视频墙(内容墙数据源,照 views_top 先例)。
+
+    收藏集(收藏 ∪ 共享,scope 同族)evidence 最近 N 条,按发布时间(缺则回退
+    posted_at/采集时间)降序;LIMIT 双层封顶。缩略图三件套复用创意库同一条
+    毒缓存自愈链(creative_segments._thumbnail_fields:cached → raw → youtube
+    派生,失败占位 SVG 不算真图,三路皆无 = null 前端诚实占位)。view_count
+    保持 NULL 原样透出(未实测 ≠ 0 播放);列白名单,零明文联系方式零 fit 分。
+    """
+    from app.domains.content.creative_segments import _thumbnail_fields
+
+    rows = conn.execute(RECENT_VIDEOS_SQL, (*_scope_params(sid), RECENT_VIDEOS_LIMIT)).fetchall()
+    items: list[dict[str, Any]] = []
+    for r in list(rows)[:RECENT_VIDEOS_LIMIT]:
+        rec = dict(r)
+        view_count = rec.get("view_count")
+        like_count = rec.get("like_count")
+        project_id = rec.get("project_id")
+        items.append({
+            "evidence_id": _int0(rec.get("evidence_id")),
+            "kol_pool_id": _int0(rec.get("kol_pool_id")),
+            "project_id": _int0(project_id) if project_id is not None else None,
+            "content_url": str(rec.get("content_url") or ""),
+            "platform": str(rec.get("platform") or ""),
+            "title": str(rec.get("title") or ""),
+            "video_title": str(rec.get("video_title") or ""),
+            "view_count": _int0(view_count) if view_count is not None else None,
+            "like_count": _int0(like_count) if like_count is not None else None,
+            "publish_date": _day_str(rec.get("publish_date")) or None,
+            "posted_at": _ts_str(rec.get("posted_at")) or None,
+            "collected_at": _ts_str(rec.get("created_at")) or None,
+            "evidence_type": str(rec.get("evidence_type") or "video"),
+            "kol_name": str(rec.get("kol_name") or ""),
+            "kol_handle": str(rec.get("kol_handle") or ""),
+            "has_final_v1_cache": _truthy_db(rec.get("has_final_v1_cache")),
+            **_thumbnail_fields(rec),
+        })
+    body: dict[str, Any] = {
+        "status": "ready" if items else "empty",
+        "items": items,
+        "limit": RECENT_VIDEOS_LIMIT,
+        "basis": (
+            "vkpi_kol_video_evidence × 收藏集(收藏 ∪ 共享,去重;is_active IS NOT FALSE,"
+            "video/image 两类)按 COALESCE(publish_date, posted_at, created_at) 降序取最近 "
+            f"{RECENT_VIDEOS_LIMIT} 条;view_count 点时实测 NULL 原样透出(未实测 ≠ 0 播放);"
+            "缩略图三件套=创意库同一条毒缓存自愈链(cached → raw → youtube 派生,"
+            "失败占位不算真图);V 三档判定由前端 classify_v_content 同口径派生"
+        ),
+    }
+    if not items:
+        body["reason"] = "收藏集内零 evidence——内容墙诚实空,不摆假卡。"
+    return body
+
+
 def _v_content(conn: Any) -> dict[str, Any]:
     """7. v_content:V 相关内容三档派生 + KOL 级汇总/名单(classify_v_content 同口径)。"""
     row = dict(conn.execute(V_CONTENT_SQL, (VILTROX_TOKEN, VILTROX_TOKEN)).fetchone() or {})
@@ -550,7 +626,7 @@ def build_board_ext(
     staff_scope_id: int | None = None,
     days: int = 30,
 ) -> dict[str, Any]:
-    """七组看板字段 + 窗口信封;单组失败降级 {status:'error'} 不拖全响应。
+    """八组看板字段 + 窗口信封;单组失败降级 {status:'error'} 不拖全响应。
 
     staff_scope_id=已解析 scope(路由 scope.effective_staff_id 产物):None=管理层
     全团队收藏集口径,>0=该成员收藏集(员工恒被压回本人)。纯读;conn 可注入
@@ -570,6 +646,7 @@ def build_board_ext(
         ("fit_dist", lambda: _fit_dist(db)),
         ("contact_coverage", lambda: _contact_coverage(db, sid)),
         ("views_top", lambda: _views_top(db)),
+        ("recent_videos", lambda: _recent_videos(db, sid)),
         ("v_content", lambda: _v_content(db)),
     )
     out: dict[str, Any] = {}

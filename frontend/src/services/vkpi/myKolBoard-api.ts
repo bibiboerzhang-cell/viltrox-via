@@ -1,11 +1,13 @@
 import { apiFetch } from "../http";
 
 // MY KOL 板块页 · 看板扩展数据层(M3/M4):
-//   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 七组聚合(kpi_series/funnel/
-//      platform_dist/fit_dist/contact_coverage/views_top/v_content)类型化 fetch;
-//      M4 把七组契约逐组类型化(形状 1:1 对齐 backend my_kol_board_ext.py 构建器,
-//      禁编字段);v_content 增量三键 v_kol_ids / v_kol_ids_truncated / tiers_by_kol
-//      (库「有 V 视频」名单精确过滤 + KOL 级去重计数)。
+//   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 八组聚合(kpi_series/funnel/
+//      platform_dist/fit_dist/contact_coverage/views_top/recent_videos/v_content)
+//      类型化 fetch;M4 把各组契约逐组类型化(形状 1:1 对齐 backend
+//      my_kol_board_ext.py 构建器,禁编字段);v_content 增量三键 v_kol_ids /
+//      v_kol_ids_truncated / tiers_by_kol(库「有 V 视频」名单精确过滤 + KOL 级
+//      去重计数);recent_videos(内容墙 2026-07-12 增量)= 收藏集最近采集视频
+//      带缩略图三件套(创意库同一条毒缓存自愈链,best_thumbnail 语义)。
 //   ② GET /api/admin/vkpi/kol-pool/{id}/videos —— 单 KOL 全部 evidence 视频(类型化);
 //   ③ classifyVContent —— 后端 my_kol_board_ext.classify_v_content 的前端同构复现
 //      (口径逐字对齐:cooperation=project_id 非空且非 '0' / title_mention=标题小写含
@@ -129,6 +131,26 @@ export interface VkpiViewsTopGroup extends VkpiBoardExtGroup {
   items?: VkpiViewsTopItem[];
 }
 
+/** 内容墙条目:形状 = /kol-pool/{id}/videos 行的超集(KOL 归属 + 缩略图三件套增量),
+    两数据源(board-ext 聚合 / 逐 KOL 端点)共用同一套卡渲染与 V 判定。 */
+export interface VkpiRecentVideoItem extends VkpiKolPoolVideoRow {
+  /** 收藏集 KOL 展示名(board-ext 下发;逐 KOL 端点行缺席时由调用方补) */
+  kol_name?: string;
+  kol_handle?: string;
+  /** youtube 官方缩略图(content_url 派生;i.ytimg 直连域) */
+  youtube_thumbnail_url?: string | null;
+  /** 毒缓存自愈链产物,链序 cached → raw → youtube;null = 三路皆无,前端诚实占位 */
+  best_thumbnail?: string | null;
+  /** evidence 采集入库时间(created_at;发布时间缺席时的墙排序回退) */
+  collected_at?: string | null;
+}
+
+export interface VkpiRecentVideosGroup extends VkpiBoardExtGroup {
+  items?: VkpiRecentVideoItem[];
+  /** 后端封顶常量(SQL + Python 双封顶)原样透出 */
+  limit?: number;
+}
+
 export interface VkpiVContentGroup extends VkpiBoardExtGroup {
   total_evidence?: number;
   /** 至少一条 cooperation / title_mention evidence 的去重 KOL 数(全 evidence 口径) */
@@ -164,6 +186,7 @@ export interface VkpiMyKolBoardExtResponse {
   fit_dist?: VkpiFitDistGroup;
   contact_coverage?: VkpiContactCoverageGroup;
   views_top?: VkpiViewsTopGroup;
+  recent_videos?: VkpiRecentVideosGroup;
   v_content?: VkpiVContentGroup;
   method?: string;
   generated_at?: string;
@@ -262,8 +285,13 @@ export function summarizeKolVideos(videos: VkpiKolPoolVideoRow[]) {
   };
 }
 
-/** 二级筛选(仅 V 相关)+ 排序(时间/播放;未实测排最后)。纯函数,不改入参。 */
-export function sortClassifiedVideos(classified: ClassifiedVideo[], vOnly: boolean, sortBy: "time" | "views"): ClassifiedVideo[] {
+/** 二级筛选(仅 V 相关)+ 排序(时间/播放;未实测排最后)。纯函数,不改入参。
+    泛型:内容墙条目(VkpiRecentVideoItem)与弹窗行共用,不丢子类型字段。 */
+export function sortClassifiedVideos<T extends VkpiKolPoolVideoRow>(
+  classified: Array<{ video: T; tier: VContentTier }>,
+  vOnly: boolean,
+  sortBy: "time" | "views",
+): Array<{ video: T; tier: VContentTier }> {
   const base = vOnly ? classified.filter(({ tier }) => tier !== "undetermined") : [...classified];
   if (sortBy === "views") base.sort((a, b) => (Number(b.video.view_count ?? -1) || -1) - (Number(a.video.view_count ?? -1) || -1));
   else base.sort((a, b) => String(b.video.publish_date || b.video.posted_at || "").localeCompare(String(a.video.publish_date || a.video.posted_at || "")));

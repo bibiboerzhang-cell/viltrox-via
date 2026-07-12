@@ -22,6 +22,7 @@ FIT_BUCKET_ROWS_LIMIT = 20         # fit 分桶行封顶(十分位至多 10 桶 
 CONTACT_TYPE_ROWS_LIMIT = 20       # 联系方式类型分组 SQL 层封顶
 CONTACT_TYPE_MAX_ITEMS = 20        # 类型条目 Python 层封顶
 VIEWS_TOP_LIMIT = 12               # 播放榜 Top 12 封顶(SQL + Python 双封顶)
+RECENT_VIDEOS_LIMIT = 60           # 内容墙最近采集视频封顶(SQL + Python 双封顶)
 V_KOL_IDS_MAX = 2000               # v_kol_ids 行级名单契约封顶(Python 层切片)
 V_KOL_IDS_ROWS_LIMIT = V_KOL_IDS_MAX + 1   # SQL 层多取 1 行,如实检测截断(不靠猜)
 
@@ -171,6 +172,38 @@ VIEWS_TOP_SQL = """
       AND e.is_active IS NOT FALSE
     GROUP BY 1, 2, 3, 4
     ORDER BY 5 DESC, 1 ASC
+    LIMIT ?
+"""
+
+RECENT_VIDEOS_SQL = f"""
+    SELECT e.id AS evidence_id,
+           e.kol_pool_id AS kol_pool_id,
+           e.project_id AS project_id,
+           COALESCE(e.content_url, '') AS content_url,
+           COALESCE(NULLIF(e.platform, ''), kp.platform, '') AS platform,
+           COALESCE(e.title, '') AS title,
+           COALESCE(e.video_title, '') AS video_title,
+           e.thumbnail_url AS thumbnail_url,
+           e.view_count AS view_count,
+           e.like_count AS like_count,
+           e.publish_date AS publish_date,
+           e.posted_at AS posted_at,
+           e.created_at AS created_at,
+           COALESCE(e.evidence_type, 'video') AS evidence_type,
+           COALESCE(NULLIF(kp.display_name, ''), kp.handle, '') AS kol_name,
+           COALESCE(kp.handle, '') AS kol_handle,
+           EXISTS (SELECT 1 FROM vkpi_analysis_cache c
+                   WHERE c.target_type = 'video'
+                     AND c.target_id = e.id::text
+                     AND c.derive_method = 'video_analysis_final_v1'
+                     AND c.status = 'ready') AS has_final_v1_cache
+    FROM vkpi_kol_video_evidence e
+    JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND e.is_active IS NOT FALSE
+      AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
+      AND {_COLLECTION_COND}
+    ORDER BY COALESCE(e.publish_date, e.posted_at, e.created_at) DESC NULLS LAST, e.id DESC
     LIMIT ?
 """
 

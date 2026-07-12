@@ -5,7 +5,7 @@ import { getMyKolAggregate, type VkpiMyKolAggregateResponse } from "../../../../
 import { useOfficialChannelMatrix } from "../../pages/channels/useOfficialChannelMatrix";
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
-import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { AnalysisActivityModule, ContentWallModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
 import { DigestEmbed, LibClassicEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, TeamEmbed } from "./MyKolBoardPage.embeds";
 import {
   ClaimsBody,
@@ -63,18 +63,26 @@ import {
 //   名单)+ 详情弹窗分区(档案→追踪链 GOAFFPRO→合作项目结果→V 内容五 tabs→动作排);
 //   新增 activity 分析动态小模组(task-queue/compact 泳道同源)+ libclassic 经典视图
 //   (旧两栏库 palette 备选不删,默认体验统一新版行式库)。
+//   【内容墙 2026-07-12】contentWall 模块(span8,library 下一行,viewsTop 上默认作
+//   旁柱):收藏集最近采集视频缩略图网格,数据 = board-ext recent_videos 增量组
+//   (封顶 60;单 KOL 视图改走 /kol-pool/{id}/videos 同源);缩略图 = 创意库同款
+//   毒缓存自愈链(best_thumbnail);布局键 bump v1→v2。
 // 红线:纯展示,绝不写 viltrox fit 分 / 不触 rule_v0;颜色全 token 零写死色;发光只走
 //   既有 ds-* 类(自带 reduced-motion 降级);端点失败 = 诚实错误卡,board-ext 单组
 //   error → 单卡 ErrorCard / empty → 如实空。布局只走本机
 //   storageKey,不传 apiToken 给 EditableDashboardBoard(其账户级持久化写死
 //   dashboard_layout_v1 键,传了会覆写 Dashboard 布局 —— 金样板同注释)。
 
-const STORAGE_KEY = "vkpi-my-kol-layout-v1";
+// v1→v2(2026-07-12):默认布局插入「内容墙」行(contentWall 8 + viewsTop 4),
+// 旧本机布局不含新模块 → bump 键让全员看到新默认(手动改过布局的本机记忆一并重置)。
+const STORAGE_KEY = "vkpi-my-kol-layout-v2";
 
-// 默认布局(12 列 · 设计单定稿六行;2026-07-12 补刀:team 12→8 腾出 span4 给
-// 「分析动态」小模组 —— 进行中的账号分析/深析/评论采集,点行直达 KOL Pool 泳道):
+// 默认布局(12 列 · 设计单定稿七行;2026-07-12 两刀:team 12→8 腾出 span4 给
+// 「分析动态」小模组;library 下一行加「内容墙」(收藏集最近采集视频网格)+
+// 「播放 Top 视频」从 palette 上默认作旁柱):
 // kpiM(12) → digest(8)+funnel(4) → team(8)+activity(4) → library(8)+fitdist(4)
-// → official(8)+platdist(4) → risk(8)+rollup(4)(manager-only,员工视角自动少一行)
+// → contentWall(8)+viewsTop(4) → official(8)+platdist(4)
+// → risk(8)+rollup(4)(manager-only,员工视角自动少一行)
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiM", span: 12 },
   { moduleKey: "digest", span: 8 },
@@ -83,6 +91,8 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "activity", span: 4 },
   { moduleKey: "library", span: 8 },
   { moduleKey: "fitdist", span: 4 },
+  { moduleKey: "contentWall", span: 8 },
+  { moduleKey: "viewsTop", span: 4 },
   { moduleKey: "official", span: 8 },
   { moduleKey: "platdist", span: 4 },
   { moduleKey: "risk", span: 8 },
@@ -412,6 +422,29 @@ export function MyKolBoardPage({
     );
   };
 
+  // 内容墙(span8):收藏集最近采集视频网格(board-ext recent_videos);
+  // 选单 KOL 改走 /kol-pool/{id}/videos(库详情同源);空态按板面文案(不透传后端 reason)。
+  const wallKolOptions = React.useMemo(
+    () =>
+      libraryRows
+        .map((row) => ({ poolId: row.poolId, name: row.name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [libraryRows],
+  );
+  const renderContentWall = () => {
+    const g = ext?.recent_videos;
+    const n = g && String(g.status) === "ready" && Array.isArray(g.items) ? g.items.length : undefined;
+    return (
+      <ModuleCard {...cardProps("contentWall", "内容墙", n != null ? `近 ${n} 条` : undefined, basisRows(g))}>
+        {String(g?.status || "") === "empty" ? (
+          <EmptyLine text="暂无采集视频——在库行发起采集。" />
+        ) : (
+          extGate(g) ?? <ContentWallModule apiToken={apiToken} group={g!} kolOptions={wallKolOptions} />
+        )}
+      </ModuleCard>
+    );
+  };
+
   const renderViewsTop = () => {
     const g = ext?.views_top;
     const n = g?.items?.length || 0;
@@ -475,6 +508,7 @@ export function MyKolBoardPage({
     { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
     { key: "activity", label: "分析动态", description: "进行中的账号分析/深析/评论采集 · 点行直达 KOL Pool", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 20, render: renderActivity },
     { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
+    { key: "contentWall", label: "内容墙", description: "收藏集最近采集视频网格 · KOL/仅V/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30, render: renderContentWall },
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
     { key: "official", label: "官方账号矩阵", description: "18 官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },
@@ -484,8 +518,8 @@ export function MyKolBoardPage({
           { key: "rollup", label: "贡献度聚合", description: "每负责人一行 · 管理层专属(内嵌)", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderRollup },
         ] as DashboardModuleDefinition[])
       : []),
-    // ↓ palette 备选(不进默认布局;设计单定稿六项,M4 全部真身)
-    { key: "viewsTop", label: "播放 Top 视频", description: "实测播放 Top 12 KOL 条形榜(NULL 剔除)", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 4, maxHeight: 24, render: renderViewsTop },
+    // ↓ M4 六真身:viewsTop 2026-07-12 起进默认布局(内容墙旁柱 span4),其余仍为 palette 备选
+    { key: "viewsTop", label: "播放 Top 视频", description: "实测播放 Top 12 KOL 条形榜(NULL 剔除)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 24, render: renderViewsTop },
     { key: "contacts", label: "联系方式覆盖", description: "覆盖率大数 + 类型条形(永远零明文)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderContacts },
     { key: "followerTrend", label: "粉丝趋势", description: "收藏集 vs 官号双线 · 缺快照日断线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderFollowerTrend },
     { key: "claims", label: "我的认领", description: "本人认领行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
