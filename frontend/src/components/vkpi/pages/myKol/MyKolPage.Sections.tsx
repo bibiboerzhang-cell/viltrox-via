@@ -53,9 +53,10 @@ export function MyKolSkeleton() {
 }
 
 // 【M2】批量操作条内小按钮的统一内联样式(遵循本文件既有内联样式先例,不动共享 CSS)。
+// 色值走 --ds-* token(浅深两主题自适配;此前写死暗色 rgba,浅色下是突兀深灰块)。
 const batchBtnStyle: React.CSSProperties = {
-  border: '1px solid rgba(148, 163, 184, 0.25)', borderRadius: 8, background: 'rgba(15, 23, 42, 0.62)',
-  color: '#c7d2e4', padding: '4px 9px', fontSize: 10.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+  border: '1px solid var(--ds-line-strong)', borderRadius: 8, background: 'var(--ds-panel)',
+  color: 'var(--ds-text-2)', padding: '4px 9px', fontSize: 10.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
 };
 
 // A1 直达 KOL Pool 抽屉:全仓同款 localStorage + window 事件管道(照抄 TaskProgressBoard)。
@@ -258,7 +259,7 @@ export function TeamMatrix({
                   {platformTags.map((platform) => (
                     <span
                       key={platform}
-                      style={{ '--tag-accent': platformAccent[platform] || '#8b5cf6' } as React.CSSProperties}
+                      style={{ '--tag-accent': platformAccent[platform] || 'var(--ds-accent-2)' } as React.CSSProperties}
                     >
                       {platformDisplay(platform)}
                     </span>
@@ -400,7 +401,7 @@ export function OfficialMatrix({
         <>
           <div className="mykol-platform-grid mykol-platform-grid--compact">
             {matrix.platforms.map((platform) => {
-              const accent = platformAccent[platform.platform] || '#8b5cf6';
+              const accent = platformAccent[platform.platform] || 'var(--ds-accent-2)';
               const active = selectedPlatform?.platform === platform.platform;
               return (
                 <button
@@ -941,18 +942,18 @@ export function EmployeeKolLibrary({
           aria-label="批量操作条"
           style={{
             display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, margin: '10px 14px 0',
-            border: '1px solid rgba(34, 211, 238, 0.32)', borderRadius: 11, background: 'rgba(8, 47, 73, 0.35)',
-            padding: '7px 12px', fontSize: 11, color: '#d7deeb',
+            border: '1px solid color-mix(in srgb, var(--ds-accent) 32%, transparent)', borderRadius: 11, background: 'var(--ds-accent-soft)',
+            padding: '7px 12px', fontSize: 11, color: 'var(--ds-text-2)',
           }}
         >
-          <b style={{ color: '#a5f3fc' }}>已选 {batchSelectedItems.length} / 可见 {filteredItems.length}</b>
+          <b style={{ color: 'var(--ds-accent)' }}>已选 {batchSelectedItems.length} / 可见 {filteredItems.length}</b>
           <button type="button" style={batchBtnStyle} disabled={!filteredItems.length || batchBusy} onClick={toggleSelectAllVisible}>
             {allVisibleSelected ? '取消全选' : '全选可见'}
           </button>
           <button type="button" style={batchBtnStyle} disabled={!batchSelectedItems.length || batchBusy} onClick={() => setBatchSelected(new Set())}>
             清空
           </button>
-          <span style={{ width: 1, height: 16, background: 'rgba(148, 163, 184, 0.25)' }} />
+          <span style={{ width: 1, height: 16, background: 'var(--ds-line-strong)' }} />
           <select
             aria-label="批量入项目目标"
             value={batchProjectId}
@@ -967,7 +968,7 @@ export function EmployeeKolLibrary({
           </select>
           <button
             type="button"
-            style={{ ...batchBtnStyle, borderColor: 'rgba(34, 211, 238, 0.4)', color: '#a5f3fc' }}
+            style={{ ...batchBtnStyle, borderColor: 'color-mix(in srgb, var(--ds-accent) 40%, transparent)', color: 'var(--ds-accent)' }}
             disabled={batchBusy || !batchSelectedItems.length || !batchProjectId}
             onClick={() => void runBatchAddToProject()}
           >
@@ -979,7 +980,7 @@ export function EmployeeKolLibrary({
           <button type="button" style={batchBtnStyle} disabled={batchBusy || !batchSelectedItems.length} onClick={() => void runBatchAudience()}>
             批量生成受众画像
           </button>
-          {batchNote ? <em style={{ fontStyle: 'normal', color: '#a5f3fc' }}>{batchNote}</em> : null}
+          {batchNote ? <em style={{ fontStyle: 'normal', color: 'var(--ds-accent)' }}>{batchNote}</em> : null}
         </div>
       ) : null}
       <div className={`mykol-employee-funnel ${funnelCollapsed ? 'is-collapsed' : ''}`} aria-label="KOL 合作漏斗">
@@ -1021,12 +1022,12 @@ export function EmployeeKolLibrary({
         <div className="mykol-library-grid">
           <div className="mykol-kol-list">
             {favError ? (
-              <div style={{ border: '1px solid rgba(244,63,94,0.3)', background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: '6px 10px', fontSize: 10.5, color: '#fca5a5', marginBottom: 6 }}>
+              <div style={{ border: '1px solid color-mix(in srgb, var(--ds-crit) 30%, transparent)', background: 'var(--ds-crit-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 10.5, color: 'var(--ds-crit)', marginBottom: 6 }}>
                 收藏读取失败:{favError} —— 列表可能缺收藏项,请刷新或报值班。
               </div>
             ) : null}
             {claimNote ? (
-              <div style={{ border: '1px solid rgba(34,211,238,0.3)', background: 'rgba(34,211,238,0.07)', borderRadius: 8, padding: '5px 10px', fontSize: 10.5, color: '#a5f3fc', marginBottom: 6 }}>
+              <div style={{ border: '1px solid color-mix(in srgb, var(--ds-accent) 30%, transparent)', background: 'var(--ds-accent-soft)', borderRadius: 8, padding: '5px 10px', fontSize: 10.5, color: 'var(--ds-accent)', marginBottom: 6 }}>
                 {claimNote}
               </div>
             ) : null}
@@ -1056,9 +1057,9 @@ export function EmployeeKolLibrary({
                       aria-hidden="true"
                       style={{
                         flex: '0 0 auto', width: 14, height: 14, borderRadius: 4, textAlign: 'center',
-                        border: `1px solid ${batchChecked ? 'rgba(34, 211, 238, 0.8)' : 'rgba(148, 163, 184, 0.45)'}`,
-                        background: batchChecked ? 'rgba(34, 211, 238, 0.22)' : 'transparent',
-                        color: '#a5f3fc', fontSize: 10, lineHeight: '12px',
+                        border: `1px solid ${batchChecked ? 'var(--ds-accent)' : 'var(--ds-line-strong)'}`,
+                        background: batchChecked ? 'var(--ds-accent-soft)' : 'transparent',
+                        color: 'var(--ds-accent)', fontSize: 10, lineHeight: '12px',
                       }}
                     >{batchChecked ? '✓' : ''}</span>
                   ) : null}
@@ -1069,7 +1070,7 @@ export function EmployeeKolLibrary({
                   </div>
                   {/* 【M5】经共享获得的行标「来自 XX 的共享」(P-GROUP-7 只读可见;共享人名来自 aggregate 的 shared_by_name,旧行可空回落「共享」) */}
                   <strong title={poolId ? (isShared ? `经共享池共享给我的 KOL(只读可见,非本人收藏)${sharedByName ? ` · 共享人 ${sharedByName}` : ''}` : '本人收藏') : claimTip || undefined}
-                    style={isShared ? { borderColor: 'rgba(139,92,246,0.45)', color: '#c4b5fd' } : undefined}
+                    style={isShared ? { borderColor: 'color-mix(in srgb, var(--ds-accent-2) 45%, transparent)', color: 'var(--ds-accent-2)' } : undefined}
                   >{poolId ? (isShared ? (sharedByName ? `来自 ${sharedByName} 的共享` : '共享') : '收藏') : claimId ? '已认领' : projects.length ? '进行中' : '待定'}</strong>
                   {/* 【M3】释放小按钮:行本体是 <button>,内嵌交互用 span+role 阻断冒泡 */}
                   {!poolId && claimId ? (
@@ -1081,7 +1082,7 @@ export function EmployeeKolLibrary({
                       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); void releaseClaim(claimId, kol.name || kol.handle || 'KOL'); } }}
                       style={{
                         flex: '0 0 auto', marginLeft: 4, padding: '2px 5px', borderRadius: 7, fontSize: 9, whiteSpace: 'nowrap',
-                        border: '1px solid rgba(251,191,36,0.4)', color: releasingId === claimId ? '#94a3b8' : '#fbbf24',
+                        border: '1px solid color-mix(in srgb, var(--ds-warn) 40%, transparent)', color: releasingId === claimId ? 'var(--ds-muted)' : 'var(--ds-warn)',
                         cursor: releasingId === claimId ? 'wait' : 'pointer',
                       }}
                     >{releasingId === claimId ? '释放中…' : '释放'}</span>

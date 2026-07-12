@@ -1,11 +1,15 @@
+/* MY KOL 基础样式 —— 色值全走 --ds-* 设计 token(浅/深两主题自适配)。
+   原稿是按暗色写死的 hex/rgba(2026-07 浅色主题对比度清缴时整体 token 化);
+   布局/间距/字号一律未动。媒体缩略图上的悬浮件(播放遮罩/时长徽)刻意保留
+   深色写死——它们叠在任意封面图上,与页面主题无关。 */
 .mykol-page {
   min-height: calc(100vh - 64px);
   padding: 28px 24px 42px;
-  color: #f8fbff;
+  color: var(--ds-text);
   background:
-    radial-gradient(circle at 8% 4%, rgba(87, 64, 210, 0.28), transparent 24%),
-    radial-gradient(circle at 88% 10%, rgba(0, 188, 212, 0.18), transparent 28%),
-    linear-gradient(180deg, rgba(7, 12, 26, 0.96), rgba(3, 7, 14, 0.98));
+    radial-gradient(circle at 8% 4%, color-mix(in srgb, var(--ds-accent-2) 12%, transparent), transparent 24%),
+    radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--ds-accent) 8%, transparent), transparent 28%),
+    linear-gradient(180deg, var(--ds-bg-2), var(--ds-bg));
 }
 
 .mykol-hero {
@@ -14,7 +18,7 @@
   justify-content: space-between;
   gap: 24px;
   padding-bottom: 22px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid var(--ds-line);
 }
 
 .mykol-hero > div:first-child {
@@ -26,7 +30,7 @@
   align-items: center;
   gap: 10px;
   margin: 0;
-  color: #ffffff;
+  color: var(--ds-text);
   font-size: 26px;
   line-height: 1.2;
   font-weight: 820;
@@ -34,12 +38,12 @@
 }
 
 .mykol-hero h1 svg {
-  color: #ff73b7;
+  color: var(--ds-crit);
 }
 
 .mykol-hero h1 span,
 .mykol-section-head h2 em {
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 14px;
   font-style: normal;
   font-weight: 650;
@@ -48,7 +52,7 @@
 .mykol-hero p,
 .mykol-section-head p {
   margin: 8px 0 0;
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 13px;
 }
 
@@ -75,9 +79,9 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(15, 23, 42, 0.62);
-  color: #8fa0bd;
+  border: 1px solid var(--ds-line);
+  background: var(--ds-panel);
+  color: var(--ds-text-2);
   border-radius: 9px;
   padding: 8px 12px;
   font-size: 12px;
@@ -89,17 +93,17 @@
 }
 
 .mykol-hero-actions .is-pending {
-  border-color: rgba(251, 146, 60, 0.45);
-  background: rgba(251, 146, 60, 0.11);
-  color: #ffb86b;
+  border-color: color-mix(in srgb, var(--ds-warn) 45%, transparent);
+  background: var(--ds-warn-soft);
+  color: var(--ds-warn);
 }
 
 .mykol-panel {
   margin-top: 26px;
-  border: 1px solid rgba(148, 163, 184, 0.13);
+  border: 1px solid var(--ds-line);
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(15, 23, 42, 0.72), rgba(2, 8, 16, 0.62));
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
+  background: var(--ds-card);
+  box-shadow: var(--ds-shadow);
   overflow: hidden;
 }
 
@@ -109,7 +113,7 @@
   justify-content: space-between;
   gap: 20px;
   padding: 20px 22px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  border-bottom: 1px solid var(--ds-line);
 }
 
 .mykol-section-head h2 {
@@ -117,28 +121,29 @@
   align-items: center;
   gap: 9px;
   margin: 0;
-  color: #fff;
+  color: var(--ds-text);
   font-size: 18px;
   line-height: 1.2;
   font-weight: 820;
 }
 
+/* 标题色条:发光半径挂 --ds-glow-radius(浅色为 0 → 自动无光,守「发光只在暗色」)。 */
 .mykol-section-head h2 > span {
   width: 5px;
   height: 24px;
   border-radius: 99px;
-  background: #d946ef;
-  box-shadow: 0 0 22px rgba(217, 70, 239, 0.5);
+  background: var(--ds-accent-2);
+  box-shadow: 0 0 calc(var(--ds-glow-radius) * 4.4) color-mix(in srgb, var(--ds-accent-2) 50%, transparent);
 }
 
 .mykol-section-head h2 > .is-blue {
-  background: #38bdf8;
-  box-shadow: 0 0 22px rgba(56, 189, 248, 0.45);
+  background: var(--ds-accent);
+  box-shadow: 0 0 calc(var(--ds-glow-radius) * 4.4) color-mix(in srgb, var(--ds-accent) 45%, transparent);
 }
 
 .mykol-section-head h2 > .is-cyan {
-  background: #06d6d6;
-  box-shadow: 0 0 22px rgba(6, 214, 214, 0.45);
+  background: var(--ds-info);
+  box-shadow: 0 0 calc(var(--ds-glow-radius) * 4.4) color-mix(in srgb, var(--ds-info) 45%, transparent);
 }
 
 .mykol-chip-row {
@@ -149,12 +154,12 @@
 }
 
 .mykol-chip-row b {
-  color: #ffffff;
+  color: var(--ds-text);
   font-size: 14px;
 }
 
 .mykol-chip-row small {
-  color: #21e6aa;
+  color: var(--ds-good);
   font-size: 11px;
   font-weight: 760;
 }
@@ -164,8 +169,8 @@
 .mykol-library-detail,
 .mykol-kol-list,
 .mykol-content-layer {
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(135deg, rgba(18, 25, 43, 0.82), rgba(2, 8, 16, 0.8));
+  border: 1px solid var(--ds-line);
+  background: var(--ds-card);
   border-radius: 15px;
 }
 
@@ -182,7 +187,7 @@
 .mykol-kol-row h3,
 .mykol-content-layer h3 {
   margin: 0;
-  color: #fff;
+  color: var(--ds-text);
   font-size: 16px;
   font-weight: 820;
 }
@@ -191,10 +196,11 @@
 .mykol-kol-row p,
 .mykol-content-layer p {
   margin: 4px 0 0;
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 12px;
 }
 
+/* 头像:品牌/身份渐变,白字压饱和底色两主题皆可读,刻意不随主题换。 */
 .mykol-avatar {
   display: inline-flex;
   align-items: center;
@@ -233,12 +239,12 @@
   padding: 18px;
   text-align: left;
   cursor: pointer;
-  color: #f8fbff;
+  color: var(--ds-text);
 }
 
 .mykol-platform-card.is-active {
   border-color: color-mix(in srgb, var(--accent) 58%, transparent);
-  box-shadow: inset 0 -2px 0 var(--accent), 0 0 0 1px rgba(255, 255, 255, 0.02);
+  box-shadow: inset 0 -2px 0 var(--accent), 0 0 0 1px var(--ds-line);
 }
 
 .mykol-platform-icon {
@@ -269,7 +275,7 @@
 .mykol-platform-card em,
 .mykol-platform-card small {
   margin-top: 5px;
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 12px;
   font-style: normal;
 }
@@ -283,7 +289,7 @@
 
 .mykol-platform-card i {
   margin-top: 13px;
-  color: #c4b5fd;
+  color: var(--ds-accent-2);
   font-size: 12px;
   font-style: normal;
 }
@@ -295,17 +301,17 @@
   gap: 10px;
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  border-top: 1px solid var(--ds-line);
 }
 
 .mykol-platform-card__footer span {
   min-width: 0;
-  color: #8fa0bd;
+  color: var(--ds-text-2);
   font-size: 11px;
 }
 
 .mykol-platform-card__footer span:last-child {
-  color: #21e6aa;
+  color: var(--ds-good);
 }
 
 .mykol-platform-card__accounts {
@@ -322,11 +328,11 @@
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: rgba(59, 130, 246, 0.22);
-  color: #dbeafe;
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent);
   font-size: 10px;
   font-weight: 820;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.8);
+  box-shadow: 0 0 0 1px var(--ds-bg);
 }
 
 .mykol-official-head-right {
@@ -387,16 +393,16 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--ds-line);
   border-radius: 11px;
-  background: rgba(15, 23, 42, 0.58);
-  color: #c7d2e4;
+  background: var(--ds-panel);
+  color: var(--ds-text-2);
   padding: 7px 11px;
   cursor: pointer;
 }
 
 .mykol-platform-summary__item:hover {
-  border-color: rgba(56, 189, 248, 0.4);
+  border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent);
 }
 
 .mykol-platform-summary__item svg {
@@ -404,13 +410,13 @@
 }
 
 .mykol-platform-summary__item b {
-  color: #ffffff;
+  color: var(--ds-text);
   font-size: 12.5px;
   font-weight: 800;
 }
 
 .mykol-platform-summary__item em {
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 11px;
   font-style: normal;
 }
@@ -421,17 +427,17 @@
   align-items: center;
   gap: 6px;
   padding: 9px 18px 7px;
-  color: #8fa0bd;
+  color: var(--ds-text-2);
   font-size: 11px;
   font-weight: 820;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  background: rgba(15, 23, 42, 0.4);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  background: var(--ds-panel);
+  border-bottom: 1px solid var(--ds-line);
 }
 
 .mykol-account-group__head b {
-  color: #c4b5fd;
+  color: var(--ds-accent-2);
   font-size: 11px;
 }
 
@@ -442,23 +448,23 @@
   justify-content: space-between;
   gap: 12px;
   margin: 12px 14px 0;
-  border: 1px solid rgba(168, 85, 247, 0.32);
+  border: 1px solid color-mix(in srgb, var(--ds-accent-2) 32%, transparent);
   border-radius: 11px;
-  background: rgba(124, 58, 237, 0.12);
-  color: #d7deeb;
+  background: color-mix(in srgb, var(--ds-accent-2) 12%, transparent);
+  color: var(--ds-text-2);
   padding: 8px 13px;
   font-size: 12px;
 }
 
 .mykol-staff-filter-bar b {
-  color: #ead7ff;
+  color: var(--ds-text);
 }
 
 .mykol-staff-filter-bar button {
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid var(--ds-line-strong);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.62);
-  color: #c7d2e4;
+  background: var(--ds-panel);
+  color: var(--ds-text-2);
   padding: 5px 10px;
   font-size: 11px;
   font-weight: 760;
@@ -468,29 +474,29 @@
 .mykol-drill-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.7fr) minmax(360px, 1.3fr);
-  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  border-top: 1px solid var(--ds-line);
 }
 
 .mykol-account-list {
   max-height: 560px;
   overflow: auto;
-  border-right: 1px solid rgba(148, 163, 184, 0.12);
+  border-right: 1px solid var(--ds-line);
 }
 
 .mykol-account-row {
   width: 100%;
   padding: 15px 18px;
   border: 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  border-bottom: 1px solid var(--ds-line);
   background: transparent;
-  color: #f8fbff;
+  color: var(--ds-text);
   text-align: left;
   cursor: pointer;
 }
 
 .mykol-account-row.is-active,
 .mykol-kol-row:hover {
-  background: rgba(124, 58, 237, 0.12);
+  background: color-mix(in srgb, var(--ds-accent-2) 12%, transparent);
 }
 
 .mykol-account-row span:nth-child(2) {
@@ -499,20 +505,20 @@
 
 .mykol-account-row b {
   display: block;
-  color: #ffffff;
+  color: var(--ds-text);
 }
 
 .mykol-account-row em {
   display: block;
   margin-top: 3px;
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 12px;
   font-style: normal;
 }
 
 .mykol-account-row strong {
   margin-left: auto;
-  color: #21e6aa;
+  color: var(--ds-good);
   font-size: 13px;
 }
 
@@ -521,7 +527,7 @@
   padding: 18px;
   border: 0;
   border-radius: 0;
-  background: rgba(2, 8, 16, 0.32);
+  background: color-mix(in srgb, var(--ds-bg) 40%, transparent);
 }
 
 .mykol-content-layer header {
@@ -530,7 +536,7 @@
 }
 
 .mykol-content-layer a {
-  color: #9fb0ca;
+  color: var(--ds-text-2);
 }
 
 .mykol-post-grid {
@@ -542,9 +548,9 @@
 .mykol-post-card {
   display: block;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border: 1px solid var(--ds-line);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.62);
+  background: var(--ds-card-2);
   color: inherit;
   text-decoration: none;
 }
@@ -555,8 +561,8 @@
   align-items: center;
   justify-content: center;
   aspect-ratio: 16 / 9;
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.32), rgba(6, 214, 214, 0.18));
-  color: #8fa0bd;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--ds-accent-2) 32%, transparent), color-mix(in srgb, var(--ds-info) 18%, transparent));
+  color: var(--ds-text-2);
 }
 
 .mykol-post-media img {
@@ -573,6 +579,7 @@
   border: 0;
 }
 
+/* 播放遮罩/时长徽:悬浮在任意封面图上,保持深底白字,与主题无关(刻意写死)。 */
 .mykol-post-media i {
   position: absolute;
   inset: 0;
@@ -600,12 +607,12 @@
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  border-bottom: 1px solid var(--ds-line);
 }
 
 .mykol-tabs {
   display: flex;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--ds-line);
   border-radius: 11px;
   overflow: hidden;
 }
@@ -617,8 +624,8 @@
 }
 
 .mykol-tabs .is-active {
-  background: rgba(124, 58, 237, 0.35);
-  color: #c084fc;
+  background: color-mix(in srgb, var(--ds-accent-2) 24%, transparent);
+  color: var(--ds-accent-2);
 }
 
 .mykol-search {
@@ -627,9 +634,9 @@
   align-items: center;
   gap: 8px;
   min-width: 190px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--ds-line);
   border-radius: 9px;
-  background: rgba(15, 23, 42, 0.58);
+  background: var(--ds-panel);
   padding: 0 11px;
 }
 
@@ -639,25 +646,25 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: #f8fbff;
+  color: var(--ds-text);
 }
 
 .mykol-toggle span {
   width: 28px;
   height: 16px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.32);
-  box-shadow: inset -13px 0 0 #ffffff;
+  background: var(--ds-line-strong);
+  box-shadow: inset -13px 0 0 var(--ds-text);
 }
 
 .mykol-toggle.is-active {
-  border-color: rgba(168, 85, 247, 0.46);
-  background: rgba(124, 58, 237, 0.25);
-  color: #ead7ff;
+  border-color: color-mix(in srgb, var(--ds-accent-2) 46%, transparent);
+  background: color-mix(in srgb, var(--ds-accent-2) 22%, transparent);
+  color: var(--ds-text);
 }
 
 .mykol-toggle.is-active span {
-  background: #a855f7;
+  background: var(--ds-accent-2);
   box-shadow: inset 13px 0 0 #ffffff;
 }
 
@@ -667,7 +674,7 @@
   gap: 6px;
   overflow-x: auto;
   padding: 0 12px 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  border-bottom: 1px solid var(--ds-line);
   scrollbar-width: thin;
 }
 
@@ -677,17 +684,17 @@
 
 .mykol-employee-funnel button {
   min-width: 0;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--ds-line);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.46);
-  color: #8fa0bd;
+  background: var(--ds-panel);
+  color: var(--ds-text-2);
   padding: 7px 9px;
   text-align: left;
 }
 
 .mykol-employee-funnel button.is-active {
-  border-color: rgba(168, 85, 247, 0.58);
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.34), rgba(15, 23, 42, 0.5));
+  border-color: color-mix(in srgb, var(--ds-accent-2) 58%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--ds-accent-2) 30%, transparent), var(--ds-panel));
 }
 
 .mykol-employee-funnel span,
@@ -697,7 +704,7 @@
 }
 
 .mykol-employee-funnel span {
-  color: #c084fc;
+  color: var(--ds-accent-2);
   font-size: 10px;
   font-weight: 850;
   letter-spacing: 0.08em;
@@ -705,13 +712,13 @@
 
 .mykol-employee-funnel b {
   margin-top: 4px;
-  color: #f8fbff;
+  color: var(--ds-text);
   font-size: 11px;
 }
 
 .mykol-employee-funnel strong {
   margin-top: 5px;
-  color: #ffffff;
+  color: var(--ds-text);
   font-size: 14px;
 }
 
@@ -721,14 +728,14 @@
   margin-top: 7px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--ds-line);
 }
 
 .mykol-employee-funnel em {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #a855f7, #06d6d6);
+  background: linear-gradient(90deg, var(--ds-accent-2), var(--ds-info));
 }
 
 .mykol-library-grid {
@@ -741,7 +748,7 @@
   max-height: 620px;
   overflow: auto;
   border: 0;
-  border-right: 1px solid rgba(148, 163, 184, 0.12);
+  border-right: 1px solid var(--ds-line);
   border-radius: 0;
 }
 
@@ -749,7 +756,7 @@
   gap: 9px;
   min-height: 42px;
   padding: 6px 8px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  border-bottom: 1px solid var(--ds-line);
 }
 
 .mykol-kol-row div {
@@ -758,9 +765,9 @@
 
 .mykol-kol-row strong {
   margin-left: auto;
-  border: 1px solid rgba(16, 185, 129, 0.35);
+  border: 1px solid color-mix(in srgb, var(--ds-good) 35%, transparent);
   border-radius: 7px;
-  color: #21e6aa;
+  color: var(--ds-good);
   padding: 2px 4px;
   font-size: 9px;
   white-space: nowrap;
@@ -794,16 +801,16 @@
   padding: 22px;
   border: 0;
   border-radius: 0;
-  background: rgba(2, 8, 16, 0.3);
+  background: color-mix(in srgb, var(--ds-bg) 40%, transparent);
 }
 
 .mykol-library-detail h3 {
   margin: 0;
-  color: #ffffff;
+  color: var(--ds-text);
 }
 
 .mykol-library-detail p {
-  color: #7f8da7;
+  color: var(--ds-muted);
 }
 
 .mykol-project-preview {
@@ -813,9 +820,9 @@
 }
 
 .mykol-project-preview article {
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border: 1px solid var(--ds-line);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.55);
+  background: var(--ds-card-2);
   padding: 14px;
 }
 
@@ -826,7 +833,7 @@
 
 .mykol-project-preview span {
   margin-top: 7px;
-  color: #7f8da7;
+  color: var(--ds-muted);
   font-size: 12px;
 }
 
@@ -834,16 +841,16 @@
 .mykol-empty,
 .mykol-warning {
   margin: 16px;
-  border: 1px dashed rgba(148, 163, 184, 0.18);
+  border: 1px dashed var(--ds-line);
   border-radius: 14px;
-  color: #7f8da7;
+  color: var(--ds-muted);
   padding: 28px;
   text-align: center;
 }
 
 .mykol-warning {
-  border-color: rgba(248, 113, 113, 0.35);
-  color: #fecaca;
+  border-color: color-mix(in srgb, var(--ds-crit) 35%, transparent);
+  color: var(--ds-crit);
 }
 
 .mykol-skeleton-grid {
@@ -854,9 +861,9 @@
 }
 
 .mykol-skeleton-card {
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  border: 1px solid var(--ds-line);
   border-radius: 14px;
-  background: rgba(15, 23, 42, 0.6);
+  background: var(--ds-card);
   padding: 18px;
 }
 
@@ -866,7 +873,7 @@
   display: block;
   height: 12px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(148, 163, 184, 0.08), rgba(148, 163, 184, 0.2), rgba(148, 163, 184, 0.08));
+  background: linear-gradient(90deg, var(--ds-line), var(--ds-line-strong), var(--ds-line));
   animation: mykol-pulse 1.35s ease-in-out infinite;
 }
 

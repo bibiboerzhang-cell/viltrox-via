@@ -9,7 +9,7 @@
  * 设计约束:此组件不改 MyKolPage.tsx(集成者挂),不引入新 CSS 文件(用内联样式),
  * 仅依赖 services/vkpi/kol-api 的 fetchContributionRollup。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { BarChart3, RefreshCw } from 'lucide-react';
 import {
   fetchContributionRollup,
@@ -34,6 +34,22 @@ function usd(value: number): string {
 }
 
 const PLACEHOLDER = '— / 暂无数据源';
+
+// 表面/边线/文字全走设计 token(此前写死暗色 rgba,浅色主题下灰底灰字看不清)。
+const MUTED = 'var(--ds-muted)';
+// 刷新钮/窗口选择:与换肤层给全站 mykol 按钮的同一 token 三件套(--ds-panel/--ds-text-2/--ds-line)。
+const ACTION_BTN: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  fontSize: 12,
+  padding: '4px 10px',
+  borderRadius: 8,
+  cursor: 'pointer',
+  background: 'var(--ds-panel)',
+  color: 'var(--ds-text-2)',
+  border: '1px solid var(--ds-line)',
+};
 
 export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: ContributionRollupPanelProps) {
   const [items, setItems] = useState<VkpiContributionRollupItem[]>([]);
@@ -97,8 +113,9 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
         marginTop: 24,
         padding: 20,
         borderRadius: 14,
-        border: '1px solid rgba(148,163,184,0.18)',
-        background: 'rgba(15,23,42,0.35)',
+        border: '1px solid var(--ds-line)',
+        background: 'var(--ds-card)',
+        color: 'var(--ds-text)',
       }}
     >
       <header
@@ -115,12 +132,12 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
           <h2 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             <BarChart3 size={16} /> KOL 贡献度聚合
           </h2>
-          <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.7 }}>
+          <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
             管理层视角 · 每位负责人一行 · 各指标分列
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label style={{ fontSize: 12, opacity: 0.7 }}>窗口</label>
+          <label style={{ fontSize: 12, color: MUTED }}>窗口</label>
           <select
             value={windowSel}
             onChange={(e) => setWindowSel(Number(e.target.value))}
@@ -128,9 +145,9 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
               fontSize: 12,
               padding: '4px 8px',
               borderRadius: 8,
-              background: 'rgba(30,41,59,0.6)',
-              color: 'inherit',
-              border: '1px solid rgba(148,163,184,0.25)',
+              background: 'var(--ds-panel)',
+              color: 'var(--ds-text-2)',
+              border: '1px solid var(--ds-line)',
             }}
           >
             {WINDOW_OPTIONS.map((d) => (
@@ -139,35 +156,20 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
               </option>
             ))}
           </select>
-          <button
-            type="button"
-            onClick={() => setReloadTick((t) => t + 1)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              fontSize: 12,
-              padding: '4px 10px',
-              borderRadius: 8,
-              cursor: 'pointer',
-              background: 'rgba(30,41,59,0.6)',
-              color: 'inherit',
-              border: '1px solid rgba(148,163,184,0.25)',
-            }}
-          >
+          <button type="button" onClick={() => setReloadTick((t) => t + 1)} style={ACTION_BTN}>
             <RefreshCw size={13} /> 刷新
           </button>
         </div>
       </header>
 
       {error ? (
-        <p style={{ fontSize: 13, color: '#f87171', margin: '8px 0' }}>读取失败:{error}</p>
+        <p style={{ fontSize: 13, color: 'var(--ds-crit)', margin: '8px 0' }}>读取失败:{error}</p>
       ) : null}
 
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr style={{ textAlign: 'left', opacity: 0.7, borderBottom: '1px solid rgba(148,163,184,0.2)' }}>
+            <tr style={{ textAlign: 'left', color: MUTED, borderBottom: '1px solid var(--ds-line-strong)' }}>
               <th style={{ padding: '8px 10px' }}>负责人</th>
               <th style={{ padding: '8px 10px', textAlign: 'right' }}>在管 KOL 数</th>
               <th style={{ padding: '8px 10px', textAlign: 'right' }}>已发布数</th>
@@ -177,14 +179,14 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
           <tbody>
             {loading && items.length === 0 ? (
               <tr>
-                <td colSpan={4} style={{ padding: '16px 10px', opacity: 0.6 }}>
+                <td colSpan={4} style={{ padding: '16px 10px', color: MUTED }}>
                   加载中…
                 </td>
               </tr>
             ) : null}
             {!loading && items.length === 0 ? (
               <tr>
-                <td colSpan={4} style={{ padding: '16px 10px', opacity: 0.6 }}>
+                <td colSpan={4} style={{ padding: '16px 10px', color: MUTED }}>
                   暂无在管归属(无 active claim)
                 </td>
               </tr>
@@ -192,12 +194,12 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
             {items.map((it) => (
               <tr
                 key={it.staff_id ?? `unknown-${it.staff_name ?? Math.random()}`}
-                style={{ borderBottom: '1px solid rgba(148,163,184,0.1)' }}
+                style={{ borderBottom: '1px solid var(--ds-line)' }}
               >
                 <td style={{ padding: '8px 10px' }}>
                   <div style={{ fontWeight: 600 }}>{it.staff_name || `#${it.staff_id ?? '?'}`}</div>
                   {it.staff_email ? (
-                    <div style={{ fontSize: 11, opacity: 0.55 }}>{it.staff_email}</div>
+                    <div style={{ fontSize: 11, color: MUTED }}>{it.staff_email}</div>
                   ) : null}
                 </td>
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>{it.active_kol_count ?? 0}</td>
@@ -205,14 +207,14 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
                   {it.published_count > 0 ? (
                     it.published_count
                   ) : (
-                    <span style={{ opacity: 0.45 }}>0</span>
+                    <span style={{ color: MUTED }}>0</span>
                   )}
                 </td>
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>
                   {it.has_attribution ? (
                     usd(it.attributed_sales_usd)
                   ) : (
-                    <span style={{ opacity: 0.45 }} title="归因销售数据源尚未接入该负责人">
+                    <span style={{ color: MUTED }} title="归因销售数据源尚未接入该负责人">
                       {PLACEHOLDER}
                     </span>
                   )}
@@ -222,12 +224,12 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
           </tbody>
           {items.length > 0 ? (
             <tfoot>
-              <tr style={{ borderTop: '1px solid rgba(148,163,184,0.25)', fontWeight: 600 }}>
+              <tr style={{ borderTop: '1px solid var(--ds-line-strong)', fontWeight: 600 }}>
                 <td style={{ padding: '8px 10px' }}>合计</td>
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>{totals.kols}</td>
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>{totals.published}</td>
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                  {totals.hasAnyAttribution ? usd(totals.sales) : <span style={{ opacity: 0.45 }}>{PLACEHOLDER}</span>}
+                  {totals.hasAnyAttribution ? usd(totals.sales) : <span style={{ color: MUTED }}>{PLACEHOLDER}</span>}
                 </td>
               </tr>
             </tfoot>
@@ -235,7 +237,7 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
         </table>
       </div>
 
-      <p style={{ fontSize: 11, opacity: 0.5, marginTop: 12 }}>
+      <p style={{ fontSize: 11, color: MUTED, marginTop: 12 }}>
         已发布数来自内容库(window 内 published_at);归因销售来自销售归因表(按 KOL 关联),无数据源时显示「暂无数据源」。
       </p>
     </section>
