@@ -2,9 +2,7 @@ import React from "react";
 import {
   EmptyLine,
   ErrorCard,
-  KpiCard,
   LoadingLine,
-  PendingCard,
   type Row,
 } from "./MarketVoicePage.modules";
 import {
@@ -34,28 +32,32 @@ import type { VkpiDashboardData, VkpiProjectRow } from "../../vkpiTypes";
 import "../../pages/myKol/myKolPage.css";
 import "../../pages/myKol/myKolTeamMatrix.css";
 
-// MY KOL 板块页范式 · 辅助件(M1 骨架刀,金样板 = MarketVoicePage.modules 同构)。
-//   通用骨架件(ModuleCard/KpiCard/PendingCard/EmptyLine/ErrorCard/LoadingLine)直接
+// MY KOL 板块页范式 · 辅助件(M1 骨架 → M4 图形真身,金样板 = MarketVoicePage.modules 同构)。
+//   通用骨架件(ModuleCard/PendingCard/EmptyLine/ErrorCard/LoadingLine)直接
 //   从 MarketVoicePage.modules 复用(施工单放行「引组件」,零平移重写);本文件只放
-//   MY KOL 专属件:MODULE_SOURCES 溯源注册表 / KPI 带四卡 / TeamMatrix·OfficialMatrix
-//   内嵌包装(把 pages/myKol 现有组件的取数与选中态搬进模块作用域,组件本体零改动)。
-//   charts/dialogs 文件 M2/M3 刀再建;SrcChip 本刀 hover 口径卡起步(点击溯源弹窗随
-//   dialogs 刀补,不复用市场之声的 GENERIC_CHAIN——那条链是评论域口径,挂这里会说谎)。
+//   MY KOL 专属件:MODULE_SOURCES 溯源注册表 / TeamMatrix·OfficialMatrix 内嵌包装 /
+//   KOL 库模块(M3 弹窗族 + M4 精确 V 名单过滤 + 漏斗阶段联动)。
+//   图表件(KPI 带四卡/漏斗/直方/条形/双线/认领/共享/覆盖)住 MyKolBoardPage.charts.tsx
+//   (M4 建成);SrcChip hover 口径卡,点击溯源弹窗随后续刀补(不复用市场之声的
+//   GENERIC_CHAIN——那条链是评论域口径,挂这里会说谎)。
 // 红线:本文件零直连网络(取数住 page 层/内嵌组件自带);纯展示绝不写 fit 分/rule_v0;
-//   颜色全 token 类零写死色;诚实空态(无历史快照 → spempty,待接线 → PendingCard 直说)。
+//   颜色全 token 类零写死色;诚实空态(无历史快照 → spempty,降级/截断如实标注)。
 
 /* ============ 溯源注册表(金样板 MODULE_SOURCES 同构;label=真实端点/表名,rows=真实
    行数与口径,2026-07-11 实测,禁编造) ============ */
 export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string, string]> }> = {
   kpiM: {
-    label: "my-kol/aggregate · official-matrix",
+    label: "my-kol/aggregate · board-ext kpi_series",
     rows: [
       ["在库 KOL", "vkpi_kol_pool_favorites(779 行 · staff×kol 收藏对)+ 共享行 vkpi_kol_pool_members"],
       ["合作推进中", "vkpi_project_kol_assignments(2,189 行)在役 stage 去重 KOL"],
-      ["内容播放", "vkpi_kol_video_evidence.view_count(2,134 条实测 · 填充 77.1%)"],
-      ["播放口径", "点时实测 · 非时序 —— SUM(view_count) 当前快照,无历史序列"],
+      ["内容播放", "vkpi_kol_video_evidence.view_count(board-ext kol_views 自取 · 主控注入兜底)"],
+      ["播放口径", "点时实测 · 非时序 —— SUM(view_count) 当前快照,无历史序列 → K3 诚实虚线零药丸"],
       ["官号粉丝", "vkpi_channel_metrics(961 行 · 100% 填充)每账号最新快照 Σ followers"],
-      ["series/delta", "无历史快照 → sparkline 诚实 spempty · 环比药丸不渲染;M2 board-ext 端点补时序"],
+      ["K1 趋势线", "vkpi_kol_fit_snapshot 收藏集粉丝按日 SUM · 快照缺日 null 断点如实(关联时序,非在库数)"],
+      ["K2 趋势线", "vkpi_kol_video_evidence 新视频/日(计数型 0 填齐;关联时序,非推进中数)"],
+      ["K4 趋势线", "vkpi_channel_metrics 官号粉丝按日 SUM(日快照全量)"],
+      ["环比药丸", "board-ext kpi_series.metrics 与趋势线同源同指标 · 上窗无数 → 药丸诚实不渲染"],
     ],
   },
   digest: {
@@ -67,10 +69,12 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     ],
   },
   funnel: {
-    label: "四环漏斗 · M2 待接线",
+    label: "board-ext funnel · assignments",
     rows: [
-      ["口径", "收藏(favorites)→ 认领(vkpi_kol_claims)→ 进项目(assignments)→ 已发布"],
-      ["状态", "M2 board-ext 端点接线后点亮 · 本刀诚实待接不摆假漏斗"],
+      ["口径", "vkpi_project_kol_assignments × 收藏集(收藏 ∪ 共享,去重)按 stage 行计数"],
+      ["归并", "13 真阶段经 stage_canonical 归并 8 段展示(存量值 arrived 读侧补映射已签收)"],
+      ["联动", "点段=按该段真库 raw 阶段过滤 KOL 库行;段计数=指派行、库行=KOL,两口径如实不强对齐"],
+      ["未知桶", "未识别新阶段值落 other 诚实桶,绝不吞行"],
     ],
   },
   team: {
@@ -88,16 +92,19 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["状态徽", "收藏/共享=行本体;进行中=挂 assignments;已认领=vkpi_kol_claims 平台+名称桥(真值在详情 viewer-context)"],
       ["V 视频 KOL", "board-ext v_content.v_kol_count —— 至少 1 条合作/标题提及视频的去重 KOL(全库口径)"],
       ["V 三档判据", "合作=挂项目(project_id 非空)/ 标题提及=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 同口径)"],
-      ["列表 V 筛选", "行级可判据=已进项目(合作);标题提及需逐 KOL 视频判定 → 详情弹窗逐条标注"],
+      ["列表 V 筛选", "board-ext v_content.v_kol_ids 名单精确过滤(去重升序,封顶 2000;超封顶 truncated 如实降级提示;名单缺席时降级为已挂项目近似并标注)"],
+      ["KOL 级三档", "tiers_by_kol=cooperation_kols/title_mention_kols(KOL 级去重,同一 KOL 两档可重复计,与条数级 tiers 区分)"],
       ["单 KOL 视频", "GET /kol-pool/{id}/videos(view_count 点时实测 · NULL 剔除注明)"],
       ["负责人筛选", "管理层按 ?staff_id= 服务端 scope 重取,零本地猜"],
     ],
   },
   fitdist: {
-    label: "fit 分布 · M2 待接线",
+    label: "board-ext fit_dist · vkpi_kol_pool",
     rows: [
-      ["口径", "vkpi_kol_pool.viltrox_fit_score 只读分布(评分公式永不进前端)"],
-      ["状态", "M2 board-ext 端点接线后点亮"],
+      ["口径", "全池(duplicate_of_id IS NULL)fit 分十分位分桶直方 · 纯读展示"],
+      ["评分", "规则分口径(rule_v0 系写点,与本卡无关)· 评分公式永不进前端"],
+      ["未评分", "分值为空的诚实桶 · 绝不当 0 分"],
+      ["红线", "接口只回分桶计数,不含任何单 KOL 分数;本卡零写零触发打分"],
     ],
   },
   official: {
@@ -109,10 +116,10 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     ],
   },
   platdist: {
-    label: "vkpi_kol_pool.platform · M2 待接线",
+    label: "board-ext platform_dist · vkpi_kol_pool",
     rows: [
-      ["口径", "在库 KOL 按 platform 分桶(纯读 GROUP BY)"],
-      ["状态", "M2 board-ext 端点接线后点亮"],
+      ["口径", "收藏集(收藏 ∪ 共享,去重)按 platform 分桶(纯读 GROUP BY)"],
+      ["联动", "点行=KOL 库按平台过滤(与库筛选 chips 同一份状态)"],
     ],
   },
   risk: {
@@ -131,35 +138,60 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     ],
   },
   viewsTop: {
-    label: "vkpi_kol_video_evidence · M2 待接线",
-    rows: [["口径", "播放 Top 视频榜(view_count 实测降序)· M2 接线"]],
+    label: "board-ext views_top · vkpi_kol_video_evidence",
+    rows: [
+      ["口径", "view_count 点时实测按 KOL SUM · Top 12(全 evidence 口径,不随视角收窄)"],
+      ["剔除", "view_count IS NULL(未实测 ≠ 0 播放)与 is_active=FALSE(归属纠错下线)行"],
+    ],
   },
   contacts: {
-    label: "vkpi_kol_pool_contacts · M2 待接线",
-    rows: [["口径", "联系方式覆盖(类型/来源计数,明文走 contact_reveal 门控)· M2 接线"]],
+    label: "board-ext contact_coverage · vkpi_kol_pool_contacts",
+    rows: [
+      ["类型计数", "全池 GROUP BY contact_type(明文值一列不进 SELECT)"],
+      ["覆盖率", "收藏集内至少一条联系方式的 KOL 占比 · 分母 0 → 诚实 null"],
+      ["明文", "永远走 contact_reveal 门控端点,本卡零明文联系方式"],
+    ],
   },
   followerTrend: {
-    label: "粉丝时序 · M2 待接线",
-    rows: [["口径", "官号 vkpi_channel_metrics 日快照序列;KOL 侧无历史快照如实标"]],
+    label: "board-ext kpi_series · 双快照源",
+    rows: [
+      ["收藏侧", "vkpi_kol_fit_snapshot 按 snapshot_date SUM(followers)· 缺快照日断线不插值"],
+      ["官号侧", "vkpi_channel_metrics × vkpi_employee_channels 按 snapshot_date SUM(followers)"],
+      ["口径", "两线同轴同刻度 · 存量型快照,右沿=今天,零未来日"],
+    ],
   },
   claims: {
-    label: "vkpi_kol_claims · M2 待接线",
-    rows: [["口径", "认领状态(active/expired + 到期窗口)· M2 接线"]],
+    label: "my-kol/aggregate · vkpi_kol_claims",
+    rows: [
+      ["行", "本人认领(FK=kols.id,LEFT JOIN kols 回填名称/平台)"],
+      ["状态", "active/expired + 到期时间原样展示 · 无行=诚实空"],
+    ],
   },
   shares: {
-    label: "vkpi_kol_pool_members · M2 待接线",
-    rows: [["口径", "共享池(谁共享给谁 · 只读可见性授予)· M2 接线"]],
+    label: "my-kol/aggregate · vkpi_kol_pool_members",
+    rows: [
+      ["口径", "共享给我的库行(is_shared)+ 共享人展示名 · 只读可见性授予"],
+      ["诚实", "0 行=已建未用如实空,不装 live"],
+    ],
   },
   cover: {
-    label: "数据覆盖盘点 · M3 待接线",
-    rows: [["口径", "逐源健康 + 盲区如实标注(金样板 cover 同构)· M3 接线"]],
+    label: "静态盘点 2026-07-11 · 六源",
+    rows: [
+      ["性质", "board-ext 无此组 → 盘点日硬编码读数,非实时、会过期(卡面同款标注)"],
+      ["外联记录", "kol_outreach(0 行)"],
+      ["合作事件", "vkpi_kol_cooperation_events(0 行)"],
+      ["生命周期", "vkpi_kol_lifecycle_events(0 行)"],
+      ["联盟销售", "vkpi_goaffpro_sales / _kol_links(0 行)"],
+      ["内容手录", "vkpi_content_posts(0 行)"],
+      ["触点", "vkpi_kol_pool_touches(2 行)"],
+    ],
   },
 };
 
 export const PROV_TITLES: Record<string, string> = {
   kpiM: "KOL 指标带",
   digest: "每日学习摘要",
-  funnel: "四环漏斗",
+  funnel: "合作漏斗",
   team: "团队矩阵",
   library: "KOL 库",
   fitdist: "Fit 分布",
@@ -170,84 +202,13 @@ export const PROV_TITLES: Record<string, string> = {
   viewsTop: "播放 Top 视频",
   contacts: "联系方式覆盖",
   followerTrend: "粉丝趋势",
-  claims: "认领状态",
+  claims: "我的认领",
   shares: "共享池",
   cover: "数据覆盖",
 };
 
-/* ============ 中文紧凑数(20.5亿 / 25.1万;KPI 卡大数用,mono 由 ds-kpi 基类管) ============ */
-export function fmtZhCompact(value: number | null | undefined): string {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  const abs = Math.abs(n);
-  if (abs >= 1e8) return `${(n / 1e8).toFixed(1)}亿`;
-  if (abs >= 1e4) return `${(n / 1e4).toFixed(1)}万`;
-  return n.toLocaleString();
-}
-
-/* ============ KPI 带四卡(设计单 K1-K4;KpiCard 金样板复用):
-   K1 在库 KOL / K2 合作推进中 = aggregate.kpi_summary 现值;
-   K3 内容播放实测 = 主控 evidence_metrics 注入(点时实测 SUM view_count,非时序);
-   K4 官号粉丝 = official-matrix 最新快照 Σ followers。
-   四卡 series 一律不传 → KpiCard 自落 demo .spempty 纯虚线(无历史快照,诚实);
-   delta 一律不传 → 环比药丸不渲染;时序/环比等 M2 board-ext 端点(props 位已留)。 ============ */
-export function MyKolKpiBand({
-  kpi,
-  exposureValue,
-  exposureNote,
-  officialFollowers,
-  officialNote,
-}: {
-  /** aggregate.kpi_summary(favorites_count / in_project_count …),null=上游 gate 已拦 */
-  kpi: Record<string, number> | null;
-  /** 主控 evidence_metrics.total_exposure(SUM view_count 点时实测);null=未注入 → 诚实 pending */
-  exposureValue: number | null;
-  exposureNote: string;
-  /** official-matrix Σ totalFollowers;null=矩阵未就绪 → 诚实 pending */
-  officialFollowers: number | null;
-  officialNote: string;
-}) {
-  const favorites = Number(kpi?.favorites_count);
-  const inProject = Number(kpi?.in_project_count);
-  return (
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <KpiCard
-        label="在库 KOL"
-        value={Number.isFinite(favorites) ? favorites.toLocaleString() : "—"}
-        unit="个"
-      />
-      <KpiCard
-        label="合作推进中"
-        value={Number.isFinite(inProject) ? inProject.toLocaleString() : "—"}
-        unit="个"
-        seriesColor="var(--ds-accent-2)"
-      />
-      <KpiCard
-        label="内容播放实测"
-        value={fmtZhCompact(exposureValue)}
-        pending={exposureValue == null}
-        pendingNote={exposureNote}
-        seriesColor="var(--ds-good)"
-      />
-      <KpiCard
-        label="官号粉丝"
-        value={fmtZhCompact(officialFollowers)}
-        pending={officialFollowers == null}
-        pendingNote={officialNote}
-        seriesColor="var(--ds-info)"
-      />
-    </div>
-  );
-}
-
-/* ============ 待接线占位体(诚实空态:说明「什么在 M 几接线」,绝不摆假数据) ============ */
-export function PendingBody({ stage, children }: { stage: string; children: React.ReactNode }) {
-  return (
-    <PendingCard>
-      <b>{stage} 接线中</b> —— {children}
-    </PendingCard>
-  );
-}
+// KPI 带四卡与中文紧凑数(fmtZhCompact)M4 起搬家到 MyKolBoardPage.charts.tsx
+// (series 接线后属图表族);待接线占位体 PendingBody 随 M4 全模块点亮退役。
 
 type MatrixState = ReturnType<typeof useOfficialChannelMatrix>;
 
@@ -382,16 +343,23 @@ export function OfficialMatrixModule({ apiToken, matrix }: { apiToken?: string; 
   );
 }
 
-/* ============ KOL 库模块真身(M3:替换 M1 PendingCard)============
+/* ============ KOL 库模块真身(M3 弹窗族 + M4 精确名单/漏斗联动)============
    卡面 = 筛选 chips(有V视频/全部 + 平台 strip + 负责人)+ 6 条 KOL 行 + 「查看全量」;
    弹窗族(全量列表/详情连续翻)住 MyKolBoardPage.dialogs(金样板 FeedList/FeedDetail 同构)。
    数据:baseRows 由 page 层从 aggregate.pool_favorites 映射注入(零重复请求);
    负责人筛选 = 管理层按 ?staff_id= 服务端 scope 重取(零本地猜);
-   「有 V 视频」count = board-ext v_content.v_kol_count(全库口径,行级过滤判据如实注明)。 */
+   筛选状态 M4 起提升到 page 层(合作漏斗点段 / 平台分布点行与本模块共用同一份);
+   「有 V 视频」= board-ext v_content.v_kol_ids 名单精确过滤(名单缺席降级为已挂项目
+   近似 + 如实标注;truncated 如实降级提示)。 */
 export function KolLibraryModule({
   apiToken,
   baseRows,
   vKolCount,
+  vKolIds,
+  vIdsTruncated,
+  vIdsNote,
+  filter,
+  onFilter,
   isManager,
   staffOptions,
   projects,
@@ -401,13 +369,21 @@ export function KolLibraryModule({
   baseRows: KolLibraryRow[];
   /** board-ext v_content.v_kol_count;null = 聚合未就绪(chip 不带数,不编) */
   vKolCount: number | null;
+  /** board-ext v_content.v_kol_ids 的 Set(精确名单);null = 未就绪 → vOnly 降级近似 */
+  vKolIds: ReadonlySet<number> | null;
+  /** 名单超封顶被截断(后端如实标注)→ vOnly 激活时降级提示 */
+  vIdsTruncated: boolean;
+  /** 截断时后端原话说明(原样透出;空串则用兜底文案) */
+  vIdsNote: string;
+  /** 库筛选状态(page 层持有;漏斗/平台分布模块联动同一份) */
+  filter: LibraryFilter;
+  onFilter: (next: LibraryFilter) => void;
   isManager: boolean;
   staffOptions: Array<{ id: string; name: string }>;
   projects: VkpiProjectRow[];
   /** 动作落地后(入项目/释放认领)触发父级 aggregate 重拉 */
   onActionDone?: () => void;
 }) {
-  const [filter, setFilter] = React.useState<LibraryFilter>({ vOnly: false, platform: "", query: "" });
   const [staffId, setStaffId] = React.useState("");
   const [staffRows, setStaffRows] = React.useState<KolLibraryRow[] | null>(null);
   const [staffBusy, setStaffBusy] = React.useState(false);
@@ -441,7 +417,7 @@ export function KolLibraryModule({
   }, [apiToken, staffId]);
 
   const rows = staffId && staffRows ? staffRows : baseRows;
-  const filtered = React.useMemo(() => filterLibraryRows(rows, filter), [rows, filter]);
+  const filtered = React.useMemo(() => filterLibraryRows(rows, filter, vKolIds), [rows, filter, vKolIds]);
   const platformOptions = React.useMemo(() => libraryPlatformOptions(rows), [rows]);
   const staffProp = isManager && staffOptions.length
     ? { options: staffOptions, value: staffId, onChange: setStaffId, busy: staffBusy }
@@ -453,7 +429,32 @@ export function KolLibraryModule({
   return (
     <div>
       <div className="mb-2">
-        <LibraryChips filter={filter} onFilter={setFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staffProp} />
+        <LibraryChips filter={filter} onFilter={onFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staffProp} />
+        {/* 漏斗阶段联动 chip(状态在 page 层,与合作漏斗模块同一份;再点移除) */}
+        {filter.stage ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9.5px] text-muted">
+            <button
+              type="button"
+              onClick={() => onFilter({ ...filter, stage: null })}
+              className="inline-flex items-center gap-1 rounded-[7px] border border-accent bg-accent-soft px-2 py-0.5 font-semibold text-accent"
+              title="来自合作漏斗点段 · 点此移除该过滤"
+            >
+              漏斗阶段:{filter.stage.label} ✕
+            </button>
+            <span>按行内项目阶段匹配(段计数=指派行,与库行数口径不同,如实不强对齐)</span>
+          </div>
+        ) : null}
+        {/* V 名单诚实降级(仅 vOnly 激活时出现;绝不悄悄装精确) */}
+        {filter.vOnly && vKolIds == null ? (
+          <div className="mt-1.5 text-[9.5px] text-warn">
+            V 名单未就绪(board-ext 未返回)——暂按「已挂项目」近似过滤,如实降级。
+          </div>
+        ) : null}
+        {filter.vOnly && vKolIds != null && vIdsTruncated ? (
+          <div className="mt-1.5 text-[9.5px] text-warn">
+            {vIdsNote || "V 名单超封顶被截断——过滤只覆盖名单内 KOL,全量以计数为准(如实降级)。"}
+          </div>
+        ) : null}
       </div>
       {staffError ? <ErrorCard title="负责人筛选读取失败" text={staffError} /> : null}
       {staffBusy && !staffRows ? (
@@ -482,7 +483,7 @@ export function KolLibraryModule({
           rows={filtered}
           totalAll={rows.length}
           filter={filter}
-          onFilter={setFilter}
+          onFilter={onFilter}
           platformOptions={platformOptions}
           vKolCount={vKolCount}
           staff={staffProp}

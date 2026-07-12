@@ -1,19 +1,22 @@
 import { apiFetch } from "../http";
 
-// MY KOL 板块页 · 看板扩展数据层(M3):
+// MY KOL 板块页 · 看板扩展数据层(M3/M4):
 //   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 七组聚合(kpi_series/funnel/
 //      platform_dist/fit_dist/contact_coverage/views_top/v_content)类型化 fetch;
+//      M4 把七组契约逐组类型化(形状 1:1 对齐 backend my_kol_board_ext.py 构建器,
+//      禁编字段);v_content 增量三键 v_kol_ids / v_kol_ids_truncated / tiers_by_kol
+//      (库「有 V 视频」名单精确过滤 + KOL 级去重计数)。
 //   ② GET /api/admin/vkpi/kol-pool/{id}/videos —— 单 KOL 全部 evidence 视频(类型化);
 //   ③ classifyVContent —— 后端 my_kol_board_ext.classify_v_content 的前端同构复现
 //      (口径逐字对齐:cooperation=project_id 非空且非 '0' / title_mention=标题小写含
 //      viltrox / 其余 undetermined;派生规则非采集字段);
 //   ④ mapLibraryRows / filterLibraryRows —— aggregate.pool_favorites 行 → 库行模型
-//      (收藏/共享/认领桥/进行中)+ 纯函数过滤(V 筛选/平台/搜索)。
+//      (收藏/共享/认领桥/进行中)+ 纯函数过滤(V 名单精确/平台/搜索/漏斗阶段)。
 // 红线:纯读封装,零写库;绝不触 viltrox_fit_score 写点 / rule_v0;fit 分只作只读透传。
 
 export type Row = Record<string, unknown>;
 
-/* ============ ① board-ext 七组聚合 ============ */
+/* ============ ① board-ext 七组聚合(逐组契约对齐 my_kol_board_ext.py,禁编字段) ============ */
 
 export interface VkpiBoardExtGroup {
   status?: string;
@@ -22,16 +25,131 @@ export interface VkpiBoardExtGroup {
   [key: string]: unknown;
 }
 
+/** 存量型日点:快照缺日 value=null 如实断点(绝不 0 填冒充清零) */
+export interface VkpiSeriesPoint {
+  date?: string;
+  value?: number | null;
+}
+
+/** 流量型日点:计数 0 填齐(今天为进行中日) */
+export interface VkpiCountPoint {
+  date?: string;
+  count?: number;
+}
+
+/** 环比读数:上窗缺数 → delta_pct=null(前端诚实省略药丸) */
+export interface VkpiKpiSeriesMetric {
+  current?: number | null;
+  previous?: number | null;
+  delta_pct?: number | null;
+  table?: string;
+}
+
+export interface VkpiKolViewsPoint {
+  status?: string;
+  views_total?: number;
+  measured?: number;
+  evidence_total?: number;
+  /** view_count 非空行 / 全 evidence 行;分母 0 → null */
+  fill_rate?: number | null;
+  basis?: string;
+}
+
+export interface VkpiKpiSeriesGroup extends VkpiBoardExtGroup {
+  granularity?: string;
+  series?: {
+    pool_followers?: VkpiSeriesPoint[];
+    new_videos?: VkpiCountPoint[];
+    official_followers?: VkpiSeriesPoint[];
+    official_views?: VkpiSeriesPoint[];
+  };
+  metrics?: {
+    pool_followers?: VkpiKpiSeriesMetric;
+    new_videos?: VkpiKpiSeriesMetric;
+    official_followers?: VkpiKpiSeriesMetric;
+    official_views?: VkpiKpiSeriesMetric;
+  };
+  /** KOL 内容播放:点时实测无时序 → 无 series 无 delta(诚实缺席) */
+  kol_views?: VkpiKolViewsPoint;
+}
+
+export interface VkpiFunnelSegment {
+  stage?: string;
+  label?: string;
+  count?: number;
+  /** 该段吸收的真库 raw 阶段值(库行过滤联动用同一份真值,零本地猜) */
+  raw_stages?: string[];
+}
+
+export interface VkpiFunnelGroup extends VkpiBoardExtGroup {
+  total?: number;
+  items?: VkpiFunnelSegment[];
+  /** 未识别新阶段值的诚实桶(绝不吞行) */
+  other?: Array<{ stage?: string; count?: number }>;
+}
+
+export interface VkpiPlatformDistGroup extends VkpiBoardExtGroup {
+  items?: Array<{ platform?: string; count?: number }>;
+  total?: number;
+}
+
+export interface VkpiFitBucket {
+  bucket?: string;
+  min?: number;
+  max?: number;
+  count?: number;
+}
+
+export interface VkpiFitDistGroup extends VkpiBoardExtGroup {
+  buckets?: VkpiFitBucket[];
+  /** fit 分为空的诚实桶(绝不当 0 分) */
+  unscored?: number;
+  scored_total?: number;
+  total?: number;
+}
+
+export interface VkpiContactCoverageGroup extends VkpiBoardExtGroup {
+  types?: Array<{ contact_type?: string; count?: number }>;
+  covered?: number;
+  total?: number;
+  /** 收藏集覆盖率;分母 0 → null */
+  coverage?: number | null;
+}
+
+export interface VkpiViewsTopItem {
+  kol_pool_id?: number;
+  display_name?: string;
+  handle?: string;
+  platform?: string;
+  total_views?: number;
+  video_count?: number;
+}
+
+export interface VkpiViewsTopGroup extends VkpiBoardExtGroup {
+  items?: VkpiViewsTopItem[];
+}
+
 export interface VkpiVContentGroup extends VkpiBoardExtGroup {
   total_evidence?: number;
   /** 至少一条 cooperation / title_mention evidence 的去重 KOL 数(全 evidence 口径) */
   v_kol_count?: number;
+  /** 同判据去重 kol_pool_id 升序名单(封顶 2000;库「有 V 视频」精确过滤用) */
+  v_kol_ids?: number[];
+  /** 名单超封顶被截断 —— 前端过滤必须如实降级提示,绝不装全量 */
+  v_kol_ids_truncated?: boolean;
+  /** 截断时后端给的原话说明(原样透出) */
+  v_kol_ids_note?: string;
   tiers?: {
     cooperation?: number;
     title_mention?: number;
     title_mention_only?: number;
     overlap_both?: number;
     undetermined?: number;
+  };
+  /** KOL 级去重计数(同一 KOL 两档可重复计,与条数级 tiers 口径区分) */
+  tiers_by_kol?: {
+    cooperation_kols?: number;
+    title_mention_kols?: number;
   };
 }
 
@@ -40,12 +158,12 @@ export interface VkpiMyKolBoardExtResponse {
   days?: number;
   window?: { since?: string; until?: string; prev_since?: string; prev_until?: string };
   staff_scope_id?: number | null;
-  kpi_series?: VkpiBoardExtGroup;
-  funnel?: VkpiBoardExtGroup;
-  platform_dist?: VkpiBoardExtGroup;
-  fit_dist?: VkpiBoardExtGroup;
-  contact_coverage?: VkpiBoardExtGroup;
-  views_top?: VkpiBoardExtGroup;
+  kpi_series?: VkpiKpiSeriesGroup;
+  funnel?: VkpiFunnelGroup;
+  platform_dist?: VkpiPlatformDistGroup;
+  fit_dist?: VkpiFitDistGroup;
+  contact_coverage?: VkpiContactCoverageGroup;
+  views_top?: VkpiViewsTopGroup;
   v_content?: VkpiVContentGroup;
   method?: string;
   generated_at?: string;
@@ -272,19 +390,42 @@ export function mapLibraryRows(favorites: Row[] | undefined, claims: Row[] | und
   });
 }
 
+/** 合作漏斗点段联动:段(canonical)+ 展示名 + 该段吸收的真库 raw 阶段值(board-ext 下发) */
+export interface LibraryStageFilter {
+  stage: string;
+  label: string;
+  rawStages: string[];
+}
+
 export interface LibraryFilter {
-  /** 「有 V 视频」筛选:行级可判据 = 已挂项目(合作口径);标题提及需进详情逐条判定 */
+  /** 「有 V 视频」筛选:优先 board-ext v_kol_ids 名单精确过滤;名单缺席时降级为已挂项目近似 */
   vOnly: boolean;
   /** 平台原值小写;空 = 全部 */
   platform: string;
   /** 名称/handle 子串搜索(不区分大小写) */
   query: string;
+  /** 合作漏斗点段过滤(按行内项目 raw 阶段匹配);null/缺席 = 不过滤 */
+  stage?: LibraryStageFilter | null;
 }
 
-export function filterLibraryRows(rows: KolLibraryRow[], filter: LibraryFilter): KolLibraryRow[] {
+/**
+ * 纯函数过滤。vKolIds = board-ext v_content.v_kol_ids 的 Set(精确名单);
+ * 传 null/缺席 = 名单未就绪 → vOnly 降级为「已挂项目」近似(调用方须如实标注降级)。
+ */
+export function filterLibraryRows(
+  rows: KolLibraryRow[],
+  filter: LibraryFilter,
+  vKolIds?: ReadonlySet<number> | null,
+): KolLibraryRow[] {
   const query = filter.query.trim().toLowerCase();
+  const stageRaws = filter.stage ? new Set(filter.stage.rawStages.map((s) => s.trim().toLowerCase())) : null;
   return rows.filter((row) => {
-    if (filter.vOnly && row.projects.length === 0) return false;
+    if (filter.vOnly) {
+      if (vKolIds) {
+        if (!vKolIds.has(row.poolId)) return false;
+      } else if (row.projects.length === 0) return false;
+    }
+    if (stageRaws && !row.projects.some((p) => stageRaws.has(String(p.stage || "").trim().toLowerCase()))) return false;
     if (filter.platform && row.platform !== filter.platform) return false;
     if (query && !`${row.name} ${row.handle}`.toLowerCase().includes(query)) return false;
     return true;

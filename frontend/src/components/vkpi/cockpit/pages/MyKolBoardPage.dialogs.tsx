@@ -143,7 +143,7 @@ export function LibraryChips({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <button type="button" className={`${CHIP} ${filter.vOnly ? CHIP_ON : CHIP_OFF}`} onClick={() => onFilter({ ...filter, vOnly: true })} title="全库有 V 相关视频的 KOL 总数;列表按「已进项目(合作)」过滤,单条三档判定见详情">
+        <button type="button" className={`${CHIP} ${filter.vOnly ? CHIP_ON : CHIP_OFF}`} onClick={() => onFilter({ ...filter, vOnly: true })} title="全库有确定 V 信号(合作/标题提及)的 KOL 总数;点选按名单精确过滤,单条三档判定见详情">
           有 V 视频{vKolCount != null ? ` (${vKolCount.toLocaleString()})` : ""}
         </button>
         <button type="button" className={`${CHIP} ${filter.vOnly ? CHIP_OFF : CHIP_ON}`} onClick={() => onFilter({ ...filter, vOnly: false })}>全部</button>
@@ -165,7 +165,7 @@ export function LibraryChips({
       </div>
       {filter.vOnly ? (
         <div className="mt-1.5 text-[9.5px] text-muted">
-          筛选判据=已进项目的合作 KOL{vKolCount != null ? `;${vKolCount.toLocaleString()} 为全库有 V 相关视频的 KOL 总数` : ""} · 单条视频三档判定见详情
+          按全库 V 信号名单精确过滤(合作 / 标题提及 · 派生判据非采集字段){vKolCount != null ? `;名单 ${vKolCount.toLocaleString()} 人` : ""} · 单条视频三档判定见详情
         </div>
       ) : null}
     </div>

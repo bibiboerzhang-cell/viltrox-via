@@ -7,42 +7,62 @@ import { DailyDigestCard } from "../../pages/myKol/DailyDigestCard";
 import { RiskIndexPanel } from "../../pages/myKol/RiskIndexPanel";
 import { ContributionRollupPanel } from "../../pages/myKol/ContributionRollupPanel";
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
-import { ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
+import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
 import {
   KolLibraryModule,
   MODULE_SOURCES,
-  MyKolKpiBand,
   OfficialMatrixModule,
-  PendingBody,
   TeamMatrixModule,
 } from "./MyKolBoardPage.modules";
 import {
+  ClaimsBody,
+  ContactsBody,
+  CoverBody,
+  FitDistBody,
+  FollowerTrendBody,
+  FunnelBody,
+  MyKolKpiBand,
+  PlatDistBody,
+  SharesBody,
+  ViewsTopBody,
+  pctText,
+} from "./MyKolBoardPage.charts";
+import {
   getMyKolBoardExt,
   mapLibraryRows,
+  type LibraryFilter,
+  type VkpiBoardExtGroup,
   type VkpiMyKolBoardExtResponse,
 } from "../../../../services/vkpi/myKolBoard-api";
 
-// MY KOL → 板块页范式改版 · M1 骨架 + M3 库弹窗化(金样板 = MarketVoicePage 板块页 1:1 同构)。
-//   【M3】library 模块真身:卡面筛选 chips(有V视频/全部+平台+负责人)+ 6 条 KOL 行 +
-//   全量弹窗/详情弹窗(FeedList/FeedDetail 连续翻同构,住 MyKolBoardPage.dialogs.tsx);
-//   新增数据源 GET /my-kol/board-ext?days=30(v_content.v_kol_count 供 V 筛选 chip 计数,
-//   其余六组 M4+ 接线)与 GET /kol-pool/{id}/videos(详情视频区,V 三档=classify_v_content
-//   前端同构派生)。旧 KOL Pool 抽屉(vkpi:open-kol-pool-item 事件)保留不动,两入口并存。
+// MY KOL → 板块页范式改版 · M1 骨架 + M3 库弹窗化 + M4 图形真身
+//   (金样板 = MarketVoicePage 板块页 1:1 同构)。
+//   【M4】board-ext 七组聚合全量接线,M1 的 PendingCard 模块全部换真图形(图表件住
+//   MyKolBoardPage.charts.tsx,图形语言 = MarketVoicePage.charts 同构):
+//     funnel 合作漏斗(8 段条形 · 点段=过滤 library,库筛选状态提升到本层共享)/
+//     fitdist Fit 直方(10 桶 + 未评分诚实桶,只读)/ platdist 平台条形(点行=库平台过滤)/
+//     KPI 带 series+delta 接线(K1←pool_followers 缺快照日 null 断点如实 / K2←new_videos /
+//     K4←official_followers;K3 保持 kol_views 点时实测口径,无 series 诚实虚线)/
+//     palette 六备选真身:viewsTop 播放榜 / contacts 联系方式覆盖 / followerTrend 双线 /
+//     claims 我的认领 / shares 共享池 / cover 数据覆盖(board-ext 无此组 → 静态盘点标日期)。
+//   【M3→M4】library:V 筛选升级 board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
+//   truncated / 名单缺席均如实降级标注);弹窗族住 MyKolBoardPage.dialogs.tsx 不动;
+//   旧 KOL Pool 抽屉(vkpi:open-kol-pool-item 事件)保留不动,两入口并存。
 //   页壳:pagehead(标题 + 视角/KOL 数药丸徽 + 实时辉光点 + 编辑布局钮)+
 //   EditableDashboardBoard(模块注册表 + 默认布局六行 + palette 备选)。
-//   数据源(全真,零编造,本刀全走现成端点):
-//     GET /api/admin/vkpi/my-kol/aggregate        —— K1 在库 KOL / K2 合作推进中(kpi_summary)
-//     GET /api/marketing/channels/official-matrix —— K4 官号粉丝(vkpi_channel_metrics 最新快照)
-//     metrics prop(CockpitApp dashboardRuntime)  —— K3 内容播放实测 = 主控 evidence_metrics
-//       .total_exposure(SUM view_count 点时实测 · 非时序;复用主控已拉数据,零重复请求、
-//       零触发 /dashboard 的 metric_lineage 隐藏写入);series/delta 等 M2 board-ext 端点。
-//   模块落地:kpiM 真值;digest/team/official/risk/rollup 内嵌 pages/myKol 现有组件(零重写,
-//   M2+ 再模块化);funnel/library/fitdist/platdist 与 palette 备选 = PendingCard 诚实待接。
+//   数据源(全真,零编造):
+//     GET /api/admin/vkpi/my-kol/aggregate        —— K1/K2 现值(kpi_summary)+ 库行 + claims
+//     GET /api/admin/vkpi/my-kol/board-ext        —— 七组聚合(单组失败逐组诚实降级)
+//     GET /api/marketing/channels/official-matrix —— K4 官号粉丝现值(最新快照)
+//     metrics prop(CockpitApp dashboardRuntime)  —— K3 兜底(board-ext kol_views 优先,
+//       复用主控已拉数据,零触发 /dashboard 的 metric_lineage 隐藏写入)。
+//   模块落地:digest/team/official/risk/rollup 仍内嵌 pages/myKol 现有组件(零重写)。
 //   用户裁决②=A:risk/rollup 管理层专属 —— 员工视角注册表直接不出现(默认布局自动少两块),
 //   不是 403 卡。旧 MyKolPage.tsx 保留不删(回滚垫);跨页事件管道(vkpi:open-mykol-kol /
 //   vkpi:open-kol-pool-item 等)签名不变,内嵌组件自带监听照常工作。
 // 红线:纯展示,绝不写 viltrox fit 分 / 不触 rule_v0;颜色全 token 零写死色;发光只走
-//   既有 ds-* 类(自带 reduced-motion 降级);端点失败 = 诚实错误卡。布局只走本机
+//   既有 ds-* 类(自带 reduced-motion 降级);端点失败 = 诚实错误卡,board-ext 单组
+//   error → 单卡 ErrorCard / empty → 如实空。布局只走本机
 //   storageKey,不传 apiToken 给 EditableDashboardBoard(其账户级持久化写死
 //   dashboard_layout_v1 键,传了会覆写 Dashboard 布局 —— 金样板同注释)。
 
@@ -100,7 +120,8 @@ export function MyKolBoardPage({
   // K4 官号粉丝 + team/official 模块共用一份矩阵(hook 自带 30s 内存缓存 + localStorage SWR)
   const matrix = useOfficialChannelMatrix(apiToken || undefined);
 
-  // 【M3】board-ext 七组聚合(本刀只消费 v_content.v_kol_count;失败=chip 不带数,不编)
+  // 【M4】board-ext 七组聚合(KPI 带时序/漏斗/直方/平台/覆盖/播放榜/V 名单全吃这口;
+  // 端点失败 = 各图形卡 ErrorCard,单组 error/empty 由 extGate 逐组诚实降级)
   const [ext, setExt] = React.useState<VkpiMyKolBoardExtResponse | null>(null);
   const [extError, setExtError] = React.useState("");
   React.useEffect(() => {
@@ -119,6 +140,10 @@ export function MyKolBoardPage({
       alive = false;
     };
   }, [apiToken, reloadTick]);
+
+  // 【M4】库筛选状态提升到 page 层:library 卡面 chips / 全量弹窗 / 合作漏斗点段 /
+  // 平台分布点行共用同一份(与 M3 共享筛选状态)
+  const [libFilter, setLibFilter] = React.useState<LibraryFilter>({ vOnly: false, platform: "", query: "", stage: null });
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -173,6 +198,23 @@ export function MyKolBoardPage({
     return String(ext?.v_content?.status || "") === "ready" && Number.isFinite(value) ? value : null;
   }, [ext?.v_content]);
 
+  // 【M4】V 名单精确过滤:v_content.v_kol_ids → Set(去重升序名单;未就绪 = null →
+  // library 内降级为已挂项目近似并如实标注;truncated 原样透出后端说明)
+  const vKolIds = React.useMemo(() => {
+    const group = ext?.v_content;
+    if (String(group?.status || "") !== "ready" || !Array.isArray(group?.v_kol_ids)) return null;
+    return new Set(group.v_kol_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0));
+  }, [ext?.v_content]);
+  const vIdsTruncated = Boolean(ext?.v_content?.v_kol_ids_truncated);
+  const vIdsNote = String(ext?.v_content?.v_kol_ids_note || "");
+
+  // board-ext kpi_series 组(ready 才喂 KPI 带;error/缺席 → 四卡 spempty 诚实虚线)
+  const kpiSeriesGroup = React.useMemo(() => {
+    const group = ext?.kpi_series;
+    return group && String(group.status || "") === "ready" ? group : null;
+  }, [ext?.kpi_series]);
+  const kolViews = kpiSeriesGroup?.kol_views;
+
   /* ---------- 卡头 props(金样板 cardProps 同构;本刀 SrcChip hover 口径卡起步,
      点击溯源弹窗随 M2/M3 dialogs 刀补——不借市场之声 GENERIC_CHAIN,链口径不同不冒充) ---------- */
   const srcOf = (key: string) => MODULE_SOURCES[key] || { label: key, rows: [] };
@@ -195,6 +237,26 @@ export function MyKolBoardPage({
     return null;
   };
 
+  /* ---------- board-ext 逐组 gate(金样板 extGate 同构:端点错 → ErrorCard,
+     组缺席 → PendingCard,组 error/empty → 诚实降级;null = 放行画图) ---------- */
+  const extGate = (group?: VkpiBoardExtGroup): React.ReactNode | null => {
+    if (!apiToken) return noTokenCard;
+    if (extError) return <ErrorCard title="board-ext 读取失败" text={extError} />;
+    if (!ext) return <LoadingLine text="看板聚合读取中…" />;
+    if (!group) {
+      return (
+        <PendingCard>
+          <b>该组字段缺席</b> —— board-ext 未返回本组,接通后自动点亮(不摆假图)。
+        </PendingCard>
+      );
+    }
+    if (String(group.status) === "error") return <ErrorCard title="该组聚合失败" text={String(group.reason || "未知原因")} />;
+    if (String(group.status) === "empty") return <EmptyLine text={String(group.reason || "窗口内无本组数据。")} />;
+    return null;
+  };
+  const basisRows = (group?: VkpiBoardExtGroup): Array<[string, string]> =>
+    group && typeof group.basis === "string" ? [["后端口径", group.basis]] : [];
+
   /* ---------- 模块 body ---------- */
 
   const renderKpiBand = () => {
@@ -202,7 +264,12 @@ export function MyKolBoardPage({
       ? [
           ["窗口", `${Number(agg.window_days) || 30} 天(aggregate 口径)`],
           ["视角", isManager ? "管理层 · 全量" : `${userName || "成员"} · own-only(服务端裁剪)`],
-          ...(exposure.trend ? ([["播放覆盖", exposure.trend]] as Array<[string, string]>) : []),
+          ...(kolViews?.fill_rate != null
+            ? ([["播放覆盖", `${pctText(kolViews.fill_rate)}% 实测填充(view_count 非空 / 全 evidence)`]] as Array<[string, string]>)
+            : exposure.trend
+              ? ([["播放覆盖", exposure.trend]] as Array<[string, string]>)
+              : []),
+          ...(extError ? ([["board-ext", `读取失败:${extError} —— 时序/环比药丸缺席不编数`]] as Array<[string, string]>) : []),
         ]
       : [];
     return (
@@ -210,8 +277,13 @@ export function MyKolBoardPage({
         {kpiGate() ?? (
           <MyKolKpiBand
             kpi={kpi}
+            kpiSeries={kpiSeriesGroup}
             exposureValue={exposure.value}
-            exposureNote="主控 evidence_metrics 未注入 · M2 board-ext 自取"
+            exposureNote={
+              extError
+                ? "board-ext 读取失败且主控指标未注入 —— 点时实测读数缺席不编数"
+                : "点时实测读数待接(board-ext kol_views / 主控注入均未就绪)"
+            }
             officialFollowers={officialFollowers}
             officialNote={
               matrix.error && matrix.platforms.length === 0
@@ -256,13 +328,18 @@ export function MyKolBoardPage({
     </ModuleCard>
   );
 
-  // 【M3】KOL 库真身:aggregate 行 + board-ext V 计数;弹窗族在模块内自持(dialogs 文件)。
+  // 【M3/M4】KOL 库真身:aggregate 行 + board-ext V 名单精确过滤;弹窗族在模块内自持。
   const renderLibrary = () => {
     const extraRows: Array<[string, string]> =
       vKolCount != null
-        ? [["V KOL 计数", `${vKolCount.toLocaleString()}(board-ext v_content · 全库口径)`]]
+        ? [
+            ["V KOL 计数", `${vKolCount.toLocaleString()}(board-ext v_content · 全库口径)`],
+            ...(vKolIds
+              ? ([["V 名单", `${vKolIds.size.toLocaleString()} 个 kol_pool_id 精确过滤${vIdsTruncated ? " · 已截断(封顶 2000)如实降级" : ""}`]] as Array<[string, string]>)
+              : []),
+          ]
         : extError
-          ? [["board-ext", `读取失败:${extError} —— V 计数缺席不编数`]]
+          ? [["board-ext", `读取失败:${extError} —— V 计数/名单缺席不编数`]]
           : [];
     return (
       <ModuleCard {...cardProps("library", "KOL 库", agg ? libraryRows.length.toLocaleString() : undefined, extraRows)}>
@@ -271,6 +348,11 @@ export function MyKolBoardPage({
             apiToken={apiToken}
             baseRows={libraryRows}
             vKolCount={vKolCount}
+            vKolIds={vKolIds}
+            vIdsTruncated={vIdsTruncated}
+            vIdsNote={vIdsNote}
+            filter={libFilter}
+            onFilter={setLibFilter}
             isManager={isManager}
             staffOptions={staffOptions}
             projects={data?.projects || []}
@@ -284,36 +366,129 @@ export function MyKolBoardPage({
     );
   };
 
-  const pendingModule = (key: string, title: string, stage: string, note: string) => (
-    <ModuleCard {...cardProps(key, title)}>
-      <PendingBody stage={stage}>{note}</PendingBody>
+  /* ---------- 【M4】图形模块族(数据 = board-ext 七组;extGate 逐组诚实降级) ---------- */
+
+  const renderFunnel = () => {
+    const g = ext?.funnel;
+    return (
+      <ModuleCard {...cardProps("funnel", "合作漏斗", g && String(g.status) === "ready" ? Number(g.total || 0).toLocaleString() : undefined, basisRows(g))}>
+        {extGate(g) ?? (
+          <FunnelBody
+            funnel={g!}
+            selectedStage={libFilter.stage?.stage || ""}
+            onSelectStage={(seg) =>
+              setLibFilter((f) => (f.stage?.stage === seg.stage ? { ...f, stage: null } : { ...f, stage: seg }))
+            }
+          />
+        )}
+      </ModuleCard>
+    );
+  };
+
+  const renderFitdist = () => {
+    const g = ext?.fit_dist;
+    return (
+      <ModuleCard {...cardProps("fitdist", "Fit 分布", g && String(g.status) === "ready" ? Number(g.total || 0).toLocaleString() : undefined, basisRows(g))}>
+        {extGate(g) ?? <FitDistBody fitDist={g!} />}
+      </ModuleCard>
+    );
+  };
+
+  const renderPlatdist = () => {
+    const g = ext?.platform_dist;
+    return (
+      <ModuleCard {...cardProps("platdist", "平台分布", g && String(g.status) === "ready" ? Number(g.total || 0).toLocaleString() : undefined, basisRows(g))}>
+        {extGate(g) ?? (
+          <PlatDistBody
+            dist={g!}
+            selectedPlatform={libFilter.platform}
+            onSelectPlatform={(platform) =>
+              setLibFilter((f) => ({ ...f, platform: f.platform === platform ? "" : platform }))
+            }
+          />
+        )}
+      </ModuleCard>
+    );
+  };
+
+  const renderViewsTop = () => {
+    const g = ext?.views_top;
+    const n = g?.items?.length || 0;
+    return (
+      <ModuleCard {...cardProps("viewsTop", "播放 Top 视频", g && String(g.status) === "ready" ? `Top ${n}` : undefined, basisRows(g))}>
+        {extGate(g) ?? <ViewsTopBody viewsTop={g!} />}
+      </ModuleCard>
+    );
+  };
+
+  const renderContacts = () => {
+    const g = ext?.contact_coverage;
+    const coverage = typeof g?.coverage === "number" && Number.isFinite(g.coverage) ? g.coverage : null;
+    return (
+      <ModuleCard {...cardProps("contacts", "联系方式覆盖", g && String(g.status) === "ready" && coverage != null ? `${pctText(coverage)}%` : undefined, basisRows(g))}>
+        {extGate(g) ?? <ContactsBody cc={g!} />}
+      </ModuleCard>
+    );
+  };
+
+  const renderFollowerTrend = () => {
+    const g = ext?.kpi_series;
+    return (
+      <ModuleCard {...cardProps("followerTrend", "粉丝趋势", g && String(g.status) === "ready" ? "双线 · 按日" : undefined)}>
+        {extGate(g) ?? <FollowerTrendBody kpiSeries={g!} />}
+      </ModuleCard>
+    );
+  };
+
+  const renderClaims = () => {
+    const claims = Array.isArray(agg?.claims) ? (agg.claims as Array<Record<string, unknown>>) : [];
+    return (
+      <ModuleCard {...cardProps("claims", "我的认领", agg ? `${claims.length}` : undefined)}>
+        {kpiGate() ?? <ClaimsBody claims={claims} />}
+      </ModuleCard>
+    );
+  };
+
+  const renderShares = () => {
+    const shared = libraryRows.filter((row) => row.isShared);
+    return (
+      <ModuleCard {...cardProps("shares", "共享池", agg ? `${shared.length}` : undefined)}>
+        {kpiGate() ?? <SharesBody rows={shared} />}
+      </ModuleCard>
+    );
+  };
+
+  // cover:board-ext 无此组 → 静态盘点(卡体 + SrcChip 双处如实标注日期与非实时性)
+  const renderCover = () => (
+    <ModuleCard {...cardProps("cover", "数据覆盖", "6 源")}>
+      <CoverBody />
     </ModuleCard>
   );
 
   /* ---------- 模块注册表(palette 全量可选;risk/rollup 管理层专属 = 员工注册表直接不含,
      默认布局经 moduleMap 过滤自动少两块 —— 不渲染 403 卡,裁决②A) ---------- */
   const modules: DashboardModuleDefinition[] = [
-    { key: "kpiM", label: "KOL 指标带", description: "在库 / 合作推进 / 内容播放实测 / 官号粉丝(现值 · 时序等 M2)", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
+    { key: "kpiM", label: "KOL 指标带", description: "在库 / 合作推进 / 内容播放实测 / 官号粉丝 + 关联时序与环比", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
     { key: "digest", label: "每日学习摘要", description: "收藏 KOL + 官号变化 · daily-digest 真聚合(内嵌)", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderDigest },
-    { key: "funnel", label: "四环漏斗", description: "收藏→认领→进项目→已发布 · M2 接线", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: () => pendingModule("funnel", "四环漏斗", "M2", "board-ext 端点接通后点亮四环漏斗(收藏→认领→进项目→已发布),本刀诚实待接不摆假漏斗。") },
+    { key: "funnel", label: "合作漏斗", description: "8 段真阶段条形 · 点段过滤 KOL 库", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFunnel },
     { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
-    { key: "library", label: "KOL 库", description: "收藏/共享全量 · V 视频筛选 + 全量弹窗 + 详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
-    { key: "fitdist", label: "Fit 分布", description: "在库 KOL fit 只读分布 · M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: () => pendingModule("fitdist", "Fit 分布", "M2", "board-ext 端点接通后点亮 fit 只读分布(评分公式永不进前端)。") },
+    { key: "library", label: "KOL 库", description: "收藏/共享全量 · V 名单精确筛选 + 全量弹窗 + 详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
+    { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
     { key: "official", label: "官方账号矩阵", description: "18 官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
-    { key: "platdist", label: "平台分布", description: "在库 KOL 按平台分桶 · M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: () => pendingModule("platdist", "平台分布", "M2", "board-ext 端点接通后点亮在库 KOL 平台分桶(vkpi_kol_pool.platform 纯读)。") },
+    { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },
     ...(isManager
       ? ([
           { key: "risk", label: "KOL 风险指数", description: "final_v1 深析信号聚合 · 管理层专属(内嵌)", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderRisk },
           { key: "rollup", label: "贡献度聚合", description: "每负责人一行 · 管理层专属(内嵌)", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderRollup },
         ] as DashboardModuleDefinition[])
       : []),
-    // ↓ palette 备选(不进默认布局;设计单定稿六项,全部诚实待接)
-    { key: "viewsTop", label: "播放 Top 视频", description: "view_count 实测降序榜 · M2 接线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 24, render: () => pendingModule("viewsTop", "播放 Top 视频", "M2", "vkpi_kol_video_evidence 播放榜接 board-ext 后点亮。") },
-    { key: "contacts", label: "联系方式覆盖", description: "类型/来源计数(明文走门控)· M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: () => pendingModule("contacts", "联系方式覆盖", "M2", "vkpi_kol_pool_contacts 覆盖计数接线后点亮;明文永远走 contact_reveal 门控。") },
-    { key: "followerTrend", label: "粉丝趋势", description: "官号日快照序列;KOL 侧无历史如实标 · M2", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: () => pendingModule("followerTrend", "粉丝趋势", "M2", "官号 vkpi_channel_metrics 有日快照可画;KOL 池无历史快照,接线后也只画官号侧,诚实分轨。") },
-    { key: "claims", label: "认领状态", description: "vkpi_kol_claims active/到期 · M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: () => pendingModule("claims", "认领状态", "M2", "认领(active/expired + 到期窗口)接线后点亮。") },
-    { key: "shares", label: "共享池", description: "vkpi_kol_pool_members 只读授予 · M2 接线", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: () => pendingModule("shares", "共享池", "M2", "共享行(谁共享给谁)接线后点亮。") },
-    { key: "cover", label: "数据覆盖", description: "逐源健康 + 盲区如实标注 · M3 接线", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: () => pendingModule("cover", "数据覆盖", "M3", "金样板 cover 同构的逐源健康盘点,M3 接线。") },
+    // ↓ palette 备选(不进默认布局;设计单定稿六项,M4 全部真身)
+    { key: "viewsTop", label: "播放 Top 视频", description: "实测播放 Top 12 KOL 条形榜(NULL 剔除)", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 4, maxHeight: 24, render: renderViewsTop },
+    { key: "contacts", label: "联系方式覆盖", description: "覆盖率大数 + 类型条形(永远零明文)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderContacts },
+    { key: "followerTrend", label: "粉丝趋势", description: "收藏集 vs 官号双线 · 缺快照日断线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderFollowerTrend },
+    { key: "claims", label: "我的认领", description: "vkpi_kol_claims 本人行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
+    { key: "shares", label: "共享池", description: "共享给我的库行 · 0 行=已建未用诚实空", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderShares },
+    { key: "cover", label: "数据覆盖", description: "六源盲区盘点 · 静态标日期非实时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderCover },
   ];
 
   // 员工视角:默认布局里的 risk/rollup 会被 EditableDashboardBoard 的 moduleMap 过滤
