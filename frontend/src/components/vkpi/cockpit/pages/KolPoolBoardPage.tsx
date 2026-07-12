@@ -6,7 +6,8 @@ import { KOLDetailDrawer } from "../components/KOLDetailDrawer";
 import { ContactModal } from "../components/modals/ContactModal";
 import { KolPoolAllModal } from "../components/modals/KolPoolAllModal";
 import { ErrorCard, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
-import { MODULE_SOURCES, NeedsBody, PoolKpiBand } from "./KolPoolBoardPage.modules";
+import { MODULE_SOURCES, NeedsBody, PoolKpiBand, QuickProjectModal } from "./KolPoolBoardPage.modules";
+import { DiscoveryFunnelBody, PoolFitDistBody, PoolPlatformBody } from "./KolPoolBoardPage.charts";
 import {
   CoverageEmbed,
   KindBarEmbed,
@@ -21,10 +22,11 @@ import {
   deepAnalyzedStats,
   filterPoolItems,
   sortedPoolItems,
-  useLowReachHidden,
   useNeedsAnalysis,
   usePoolDrawer,
   usePoolFavorites,
+  usePoolSummary,
+  useQuickAddToProject,
   useRecallAvatars,
   useSmartOpeners,
   weekNewCount,
@@ -36,7 +38,10 @@ import {
 //   旧 KOLPoolPage.tsx 保留不删(回滚垫);功能块零丢失映射:
 //   页头状态 pills(真实 API / V6 Fit 只读 / 数据截至)→ pagehead 徽 + SrcChip 口径;
 //   KPIBar 五卡(总数开大窗/分类筛选/均 Fit/播放汇总/待补全灰卡)→ kinds 模块(原件内嵌,
-//   点击行为原样);智能入口 SmartKolInputPanel(URL/建档/视频分析/语义召回 + 触达二段闸
+//   点击行为原样;2026-07-12 去重复:与 kpiK 带信息重复 → 降 palette 备选「经典指标条」,
+//   默认布局撤出;独有信息接棒:分类点击筛选=FilterBar kindFilter 保留原样,总数大窗
+//   入口=卡片流工具行「全部 N」钮,均 Fit=「Fit 分布」直方替代,播放汇总=卡面均播 chip
+//   + 备选卡保留);智能入口 SmartKolInputPanel(URL/建档/视频分析/语义召回 + 触达二段闸
 //   折叠计数 + 历史条 + 发现流勾选收藏/生成话术/立项草案)→ smart 模块(embeds 包装,
 //   行为一根手指未动);待分析折叠区(needs-analysis + 批量入队)→ needs 模块真身;
 //   海外市场覆盖 MarketCoverageCard(缺口「去发现」联动 country+探索模式)→ coverage 模块;
@@ -49,8 +54,13 @@ import {
 //   新增(板块页范式要素):KPI 带四卡真值(在池总数 1,237 / 本周新发现 / 已深析 /
 //   低触达暂不推荐 —— 2026-07-12 本地实测口径见 MODULE_SOURCES)+ 任务泳道模块
 //   (TaskProgressBoard 内嵌,批量深析/找达人任务的真实执行序)。
+//   新增(2026-07-12 图形密度波,金样板 = MarketVoicePage.charts / MyKolBoardPage.charts
+//   同构):图形三件 fitDist(全池 Fit 十分位直方 + 未评分桶,前端只读分桶)/
+//   platDist(平台条形,前端聚合)/ funnel(发现转化近 30 天四段,
+//   summary.discovery_funnel_30d,段缺席诚实灰行);行内快捷动作(收藏/入项目,
+//   不用先开抽屉;入项目=既有 projects 列表 + addKolsToProject 幂等端点)。
 //   数据源(全真,零编造):items = CockpitApp kolPoolRows(workspace 分页取尽);
-//   kol-pool/favorites · needs-analysis · summary(低触达计数) · detail-bundle;
+//   kol-pool/favorites · needs-analysis · summary(低触达计数 + 漏斗) · detail-bundle;
 //   smart/lanes 内嵌组件自取。
 // 切换(一行,待用户发令,不改 CockpitApp):CockpitApp.tsx 「kol-pool」分支
 //   e(KOLPoolPage, {...}) → e(KolPoolBoardPage, {...})(props 同形:items/loading/error/
@@ -61,18 +71,22 @@ import {
 //   EditableDashboardBoard(其账户级持久化写死 dashboard_layout_v1 键,传了会覆写
 //   Dashboard 布局 —— 金样板同注释)。
 
-const STORAGE_KEY = "vkpi-kol-pool-layout-v1";
+// v1→v2(2026-07-12):kinds 撤出默认 + 图形三件进默认;bump 键让默认变更盖过本机残留布局。
+const STORAGE_KEY = "vkpi-kol-pool-layout-v2";
 
-// 默认布局(12 列 · 默认简五行):kpiK(12) → smart(12) → recs(8)+kinds(4)
-// → lanes(8)+needs(4) → coverage(12);table=palette 备选(旧页表格默认收起的等价物)
+// 默认布局(12 列 · 默认简六行):kpiK(12) → smart(12) → fitDist(4)+platDist(4)+funnel(4)
+// → recs(8)+needs(4) → coverage(12) → lanes(12);
+// kinds(经典指标条)/table = palette 备选(旧页五卡与表格默认收起的等价物)
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiK", span: 12 },
   { moduleKey: "smart", span: 12 },
+  { moduleKey: "fitDist", span: 4 },
+  { moduleKey: "platDist", span: 4 },
+  { moduleKey: "funnel", span: 4 },
   { moduleKey: "recs", span: 8 },
-  { moduleKey: "kinds", span: 4 },
-  { moduleKey: "lanes", span: 8 },
   { moduleKey: "needs", span: 4 },
   { moduleKey: "coverage", span: 12 },
+  { moduleKey: "lanes", span: 12 },
 ];
 
 // demo .ph-b:pagehead 药丸徽(金样板同款)
@@ -125,7 +139,8 @@ export function KolPoolBoardPage({
   const { myList, toggleMyList } = usePoolFavorites(apiToken, selectedItem, setSelectedItem, avatarForItem);
   const { openRecallItem, openProfileItem } = useSmartOpeners(apiToken, poolItems, openItem, mergeAvatarSeed);
   const needs = useNeedsAnalysis(apiToken);
-  const lowReachHidden = useLowReachHidden(apiToken);
+  const { lowReachHidden, funnel30d, summaryLoading } = usePoolSummary(apiToken);
+  const quickProject = useQuickAddToProject(apiToken);
 
   // 顶栏全局搜索接真:消费 pending 关键词 → 填入本地筛选并展开筛选条
   // (vkpi:open-kol-pool-item 同款 localStorage+event 管道)。挂载即消费一次 + 监听事件。
@@ -228,13 +243,42 @@ export function KolPoolBoardPage({
           kindCounts={kindCounts}
           filtersOpen={filtersOpen}
           setFiltersOpen={setFiltersOpen}
+          onOpenPoolModal={() => setPoolModalOpen(true)}
+          onToggleFavorite={(item) => toggleMyList(item.id)}
+          onAddToProject={(item) => quickProject.openFor(item)}
         />
       )}
     </ModuleCard>
   );
 
+  /* ---------- 图形三件(金样板 charts 同构;fitDist/platDist 前端只读聚合,funnel 吃 summary) ---------- */
+
+  const renderFitDist = () => (
+    <ModuleCard {...cardProps("fitDist", "Fit 分布", poolItems.length ? poolItems.length.toLocaleString() : undefined)}>
+      {poolGate() ?? <PoolFitDistBody items={poolItems} />}
+    </ModuleCard>
+  );
+
+  const renderPlatDist = () => (
+    <ModuleCard {...cardProps("platDist", "平台分布", poolItems.length ? poolItems.length.toLocaleString() : undefined)}>
+      {poolGate() ?? <PoolPlatformBody items={poolItems} />}
+    </ModuleCard>
+  );
+
+  const renderFunnel = () => (
+    <ModuleCard
+      {...cardProps(
+        "funnel",
+        "发现转化 · 近30天",
+        funnel30d && Number.isFinite(Number(funnel30d.discovered)) ? Number(funnel30d.discovered).toLocaleString() : undefined,
+      )}
+    >
+      {!apiToken ? noTokenCard : <DiscoveryFunnelBody funnel={funnel30d} loading={summaryLoading} />}
+    </ModuleCard>
+  );
+
   const renderKinds = () => (
-    <ModuleCard {...cardProps("kinds", "分类速览", poolItems.length ? kindCounts.total.toLocaleString() : undefined)}>
+    <ModuleCard {...cardProps("kinds", "经典指标条", poolItems.length ? kindCounts.total.toLocaleString() : undefined)}>
       {poolGate() ?? (
         <KindBarEmbed
           items={poolItems}
@@ -298,16 +342,19 @@ export function KolPoolBoardPage({
     </ModuleCard>
   );
 
-  /* ---------- 模块注册表(palette 全量可选;table 为 palette 备选不进默认布局) ---------- */
+  /* ---------- 模块注册表(palette 全量可选;kinds/table 为 palette 备选不进默认布局) ---------- */
   const modules: DashboardModuleDefinition[] = [
     { key: "kpiK", label: "池子指标带", description: "在池总数 / 本周新发现 / 已深析 / 低触达暂不推荐(请求时点真值)", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
     { key: "smart", label: "找达人", description: "贴链接看资料 · 描述需求找人 · 结果勾选收藏/话术/立项(内嵌)", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 34, render: renderSmart },
-    { key: "recs", label: "推荐 · 卡片流", description: "池内候选卡片 + 筛选·排序次级展开 · 点卡开抽屉", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 18, minHeight: 8, maxHeight: 36, render: renderRecs },
-    { key: "kinds", label: "分类速览", description: "总数开全量大窗 · 新/已有分类点击筛选(内嵌)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 14, render: renderKinds },
-    { key: "lanes", label: "任务进度", description: "搜索/分析任务真实泳道 + 排队区 · 失败可重试(内嵌)", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 6, maxHeight: 28, render: renderLanes },
+    { key: "recs", label: "推荐 · 卡片流", description: "池内候选卡片 + 筛选·排序次级展开 · 行内收藏/入项目 · 点卡开抽屉", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 18, minHeight: 8, maxHeight: 36, render: renderRecs },
+    { key: "fitDist", label: "Fit 分布", description: "全池匹配分十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitDist },
+    { key: "platDist", label: "平台分布", description: "全池按平台条形(前端聚合,与总览口径同径)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderPlatDist },
+    { key: "funnel", label: "发现转化 · 近30天", description: "发现 → 自动入库 → 已深析 → 已收藏 四段(同窗计数)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFunnel },
+    { key: "lanes", label: "任务进度", description: "搜索/分析任务真实泳道 + 排队区 · 失败可重试(内嵌)", category: "实时模块", defaultSpan: 12, minSpan: 4, defaultHeight: 12, minHeight: 6, maxHeight: 28, render: renderLanes },
     { key: "needs", label: "待深析", description: "有视频没分析的 KOL 清单 · 一键全部分析", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 5, maxHeight: 24, render: renderNeeds },
     { key: "coverage", label: "海外市场覆盖", description: "国家覆盖条形 + 配置缺口 · 一键去发现(内嵌)", category: "业务板块", defaultSpan: 12, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 22, render: renderCoverage },
-    // ↓ palette 备选(不进默认布局;旧页表格默认收起的等价物)
+    // ↓ palette 备选(不进默认布局)
+    { key: "kinds", label: "经典指标条", description: "旧版五卡(总数开大窗/分类筛选/均 Fit/播放汇总)· 独有信息已由筛选条/工具行/Fit 分布接棒", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 14, render: renderKinds },
     { key: "table", label: "表格视图", description: "全列表格 · 与卡片流同一份筛选排序 · 点行开抽屉", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 14, minHeight: 6, maxHeight: 32, render: renderTable },
   ];
 
@@ -389,6 +436,18 @@ export function KolPoolBoardPage({
             item={contactItem}
             apiToken={apiToken}
             onClose={() => setContactItem(null)}
+          />
+        )}
+        {quickProject.target && (
+          <QuickProjectModal
+            key="kol-pool-quick-project"
+            item={quickProject.target}
+            projects={quickProject.projects}
+            projectsError={quickProject.projectsError}
+            busy={quickProject.busy}
+            msg={quickProject.msg}
+            onConfirm={(projId) => void quickProject.confirm(projId)}
+            onClose={quickProject.close}
           />
         )}
       </AnimatePresence>

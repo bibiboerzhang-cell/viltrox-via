@@ -8,18 +8,25 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 //   (llm_deep_analysis_count>0 的 KOL 数)/ 低触达暂不推荐(kol-pool/summary
 //   low_reach_hidden_count);四指标全点时快照 → 4 卡 spempty 诚实虚线、零 delta 药丸;
 //   summary 键缺席 → 第 4 卡诚实 pending(绝不编 0);
-// - 默认布局七模块在场(kpiK/smart/recs/kinds/lanes/needs/coverage),
-//   table=palette 备选不进默认;
-// - 零丢失:找达人(SmartKolInputPanel 内嵌,触达二段闸行为零改动)/ 分类速览
-//   (KPIBar 内嵌,总数卡开全量大窗)/ 待深析(needs-analysis 清单 + 批量入队)/
-//   任务进度(TaskProgressBoard 内嵌)/ 海外市场覆盖(MarketCoverageCard 内嵌)/
-//   推荐卡片流 + 筛选次级展开 / 详情抽屉 · 联系弹窗 · 全量大窗页级 overlay;
+// - 图形三件真值(2026-07-12 图形密度波):Fit 分布(poolItems 前端十分位分桶 +
+//   未评分诚实桶)/ 平台分布(前端聚合)/ 发现转化近 30 天四段
+//   (summary.discovery_funnel_30d;键缺席 → 诚实空态,绝不编 0);
+// - 默认布局九模块在场(kpiK/smart/fitDist/platDist/funnel/recs/needs/coverage/lanes),
+//   kinds(经典指标条)/table=palette 备选不进默认;
+// - 去重复接棒:kinds 撤出默认后,总数大窗入口=卡片流工具行「全部 N」钮
+//   (aria-label 打开全量池表大窗);分类点击筛选在 FilterBar kindFilter 保留;
+// - 行内快捷动作:卡片流每卡收藏(favorite 既有端点)/ 入项目(projects 列表 +
+//   addKolsToProject 既有端点,快捷小窗)一键可达,不用先开抽屉;
+// - 零丢失:找达人(SmartKolInputPanel 内嵌,触达二段闸行为零改动)/ 待深析
+//   (needs-analysis 清单 + 批量入队)/ 任务进度(TaskProgressBoard 内嵌)/
+//   海外市场覆盖(MarketCoverageCard 内嵌)/ 推荐卡片流 + 筛选次级展开 /
+//   详情抽屉 · 联系弹窗 · 全量大窗页级 overlay;
 // - 跨页事件:vkpi:open-kol-pool-search 消费 pending 关键词 → 填筛选并展开;
 //   vkpi:open-kol-pool-item 消费 pending id → 开抽屉(拉 detail-bundle);
 // - 溯源:真实表名只进 SrcChip rows(vkpi_kol_pool / vkpi_kol_llm_deep_analysis_results
 //   / kol-pool/summary),卡面零术语;
-// - 布局键 vkpi-kol-pool-layout-v1 本机记忆;不传 apiToken → 绝不写账户级
-//   dashboard_layout_v1。
+// - 布局键 vkpi-kol-pool-layout-v2 本机记忆(v1→v2:kinds 撤默认 + 图形三件进默认,
+//   bump 盖本机残留);不传 apiToken → 绝不写账户级 dashboard_layout_v1。
 // mock seam:services/http.apiFetch(全页唯一网络出口),按 path 路由,零真实 HTTP。
 
 const apiFetchMock = vi.fn();
@@ -71,7 +78,11 @@ const NEEDS_OK = {
   count: 1,
 };
 
-const SUMMARY_OK = { total: 1237, low_reach_hidden_count: 81 };
+const SUMMARY_OK = {
+  total: 1237,
+  low_reach_hidden_count: 81,
+  discovery_funnel_30d: { window_days: 30, discovered: 42, enrolled: 18, deep_analyzed: 7, favorited: 5 },
+};
 
 const BUNDLE_OK = {
   status: "ready",
@@ -144,7 +155,7 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     expect(screen.getByText("编辑布局")).toBeTruthy();
   });
 
-  it("summary 键缺席 → 低触达卡诚实 pending(绝不编 0)", async () => {
+  it("summary 键缺席 → 低触达卡诚实 pending + 漏斗诚实空态(绝不编 0)", async () => {
     routeApi({ summary: { total: 1237 } });
     renderBoard();
     await waitFor(() => {
@@ -154,28 +165,52 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     const kpis = document.querySelectorAll(".ds-kpi");
     expect(kpis[3].textContent).toContain("计数暂不可用");
     expect(kpis[3].textContent).not.toContain("81");
+    // discovery_funnel_30d 缺席 → 漏斗模块诚实空态(不画四段条形;
+    // 「自动入库」等词在 SrcChip 溯源行仍在,故按段行 title 断言零条形)
+    expect(await screen.findByText(/漏斗计数暂不可用/)).toBeTruthy();
+    expect(document.querySelector('[title*="搜到自动落池"]')).toBeNull();
   });
 
-  it("默认布局七模块在场;table=palette 备选不进默认;零丢失:找达人/分类速览/待深析/任务进度/覆盖", async () => {
+  it("默认布局九模块在场;kinds/table=palette 备选不进默认;图形三件真值;零丢失接线", async () => {
     renderBoard();
-    for (const title of ["池子指标带", "找达人", "推荐 · 卡片流", "分类速览", "任务进度", "待深析", "海外市场覆盖"]) {
+    for (const title of ["池子指标带", "找达人", "推荐 · 卡片流", "Fit 分布", "平台分布", "发现转化 · 近30天", "任务进度", "待深析", "海外市场覆盖"]) {
       expect(screen.getAllByText(title).length).toBeGreaterThan(0);
     }
+    // kinds(经典指标条)与 table 撤出默认布局(palette 备选);KPIBar 旧卡不再默认挂载
+    expect(screen.queryByText("经典指标条")).toBeNull();
     expect(screen.queryByText("表格视图")).toBeNull();
+    expect(screen.queryByText("Pool 总数")).toBeNull();
+
+    // Fit 直方真值:82→80-89 桶 / 55→50-59 桶 / null→未评分桶(前端只读分桶;
+    // 「未评分」在 SrcChip 溯源行也出现 → getAllByText)
+    expect(screen.getByText("80-89 分")).toBeTruthy();
+    expect(screen.getByText("50-59 分")).toBeTruthy();
+    expect(screen.getAllByText("未评分").length).toBeGreaterThan(0);
+
+    // 平台分布真值:三行三平台(前端聚合)
+    for (const label of ["YouTube", "Instagram", "TikTok"]) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+
+    // 发现转化四段真值(summary.discovery_funnel_30d:42→18→7→5)
+    expect(await screen.findByText("自动入库")).toBeTruthy();
+    expect(screen.getAllByText("发现").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已收藏").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("42").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("18").length).toBeGreaterThan(0);
 
     // 找达人内嵌真身(SmartKolInputPanel 输入框 + 触达闸所在结果区容器,行为零改动)
     expect(screen.getByTestId("smart-kol-input-panel")).toBeTruthy();
     expect(screen.getByTestId("smart-kol-input")).toBeTruthy();
 
-    // 分类速览 = KPIBar 内嵌真身(旧卡文案原样;推导口径进 SrcChip)
-    expect(screen.getByText("Pool 总数")).toBeTruthy();
-
     // 待深析清单真值(needs-analysis 1 行 + 一键全部分析)
     expect(await screen.findByText("全部分析 (1)")).toBeTruthy();
     expect(screen.getAllByText("@gamma").length).toBeGreaterThan(0);
 
-    // 卡片流:结果计数 + 筛选次级展开钮
+    // 卡片流:结果计数 + 筛选次级展开钮 + 数据密度 chips(粉丝/均播 mono 显眼位)
     expect(screen.getByText("筛选 · 排序")).toBeTruthy();
+    expect(screen.getAllByText("粉丝").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("均播").length).toBeGreaterThan(0);
 
     // needs-analysis / favorites / summary 三读端点都被调
     const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
@@ -184,10 +219,10 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     }
   });
 
-  it("分类速览总数卡 → 全量大窗;点卡片流卡片 → 详情抽屉(拉 detail-bundle)", async () => {
+  it("卡片流工具行「全部 N」钮 → 全量大窗(kinds 撤默认后的接棒入口);点卡片 → 详情抽屉", async () => {
     renderBoard();
-    // KPIBar「Pool 总数」卡开 KolPoolAllModal
-    fireEvent.click(screen.getByText("Pool 总数"));
+    // 工具行「全部 N」钮开 KolPoolAllModal(原 KPIBar 总数卡的等价入口)
+    fireEvent.click(screen.getByLabelText("打开全量池表大窗"));
     expect(await screen.findByPlaceholderText(/搜索/)).toBeTruthy();
 
     // 大窗点行(行内「打开详情」冒泡到行 onClick)→ openItem 拉 detail-bundle 开抽屉
@@ -197,6 +232,28 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
       const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
       expect(calledPaths.some((p) => p.includes("/detail-bundle"))).toBe(true);
     });
+  });
+
+  it("行内快捷动作:收藏走 favorite 既有端点;入项目开快捷小窗(projects 列表端点 + 诚实空态)", async () => {
+    renderBoard();
+    // 每卡一键收藏(不用开抽屉):点第一张卡的收藏钮 → favorite 端点被调
+    const favButtons = screen.getAllByLabelText("收藏");
+    expect(favButtons.length).toBeGreaterThan(0);
+    fireEvent.click(favButtons[0]);
+    await waitFor(() => {
+      const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+      expect(calledPaths.some((p) => p.includes("/favorite"))).toBe(true);
+    });
+    // 收藏动作不开抽屉(detail-bundle 未被调)
+    expect(apiFetchMock.mock.calls.map((call) => String(call[0])).some((p) => p.includes("/detail-bundle"))).toBe(false);
+
+    // 每卡一键入项目:开快捷小窗 → projects 列表端点被调;mock 空列表 → 诚实空态
+    const projButtons = screen.getAllByLabelText("入项目");
+    expect(projButtons.length).toBeGreaterThan(0);
+    fireEvent.click(projButtons[0]);
+    expect(await screen.findByText(/暂无可选项目/)).toBeTruthy();
+    const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledPaths.some((p) => p.includes("/vkpi/projects?limit=200"))).toBe(true);
   });
 
   it("跨页事件:vkpi:open-kol-pool-search 消费 pending 关键词 → 填筛选并展开;-item 消费 id → 开抽屉", async () => {
@@ -215,10 +272,10 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     });
   });
 
-  it("布局只走本机键 vkpi-kol-pool-layout-v1;绝不写账户级 dashboard_layout_v1", async () => {
+  it("布局只走本机键 vkpi-kol-pool-layout-v2(v1→v2 bump 盖本机残留);绝不写账户级 dashboard_layout_v1", async () => {
     renderBoard();
     expect(await screen.findByText("池子指标带")).toBeTruthy();
-    expect(window.localStorage.getItem("vkpi-kol-pool-layout-v1")).toBeTruthy();
+    expect(window.localStorage.getItem("vkpi-kol-pool-layout-v2")).toBeTruthy();
     expect(window.localStorage.getItem("dashboard_layout_v1")).toBeNull();
     const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
     expect(calledPaths.some((p) => p.includes("dashboard/layout"))).toBe(false);

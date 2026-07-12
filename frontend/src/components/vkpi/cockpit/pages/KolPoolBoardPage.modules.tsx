@@ -1,11 +1,14 @@
 import React from "react";
 import { KpiCard } from "./MarketVoicePage.modules";
+import { ModalShell } from "./MarketVoicePage.dialogs";
 
 // KOL 池 · 板块页辅助件(KolPoolBoardPage 专用,页内拆件不入公共桶;
 //   金样板 = KolProfileBoardPage.modules / MyKolBoardPage.modules 同构)。
 //   MODULE_SOURCES 溯源注册表(label=真实端点/表名,rows=2026-07-12 本地实测口径,禁编造)/
 //   PoolKpiBand KPI 带四卡(全部点时快照,无历史时序端点 → 四卡诚实 spempty 虚线,
-//   永不编 series/环比)/ NeedsBody 待深析清单(批量入队动作在 page 层回调)。
+//   永不编 series/环比)/ NeedsBody 待深析清单(批量入队动作在 page 层回调)/
+//   QuickProjectModal 快捷入项目小窗(纯展示件:项目下拉 + 确认;取数/写入住
+//   actions.useQuickAddToProject,ModalShell 复用金样板弹窗骨架)。
 // 红线:本文件零直连网络(取数住 page 层/actions hooks);fit 分只读展示绝不写回;
 //   颜色全 token 类零写死色;零 opacity 修饰类;诚实空态;卡面零技术术语
 //   (表名/端点/闸口径只进 SrcChip rows / tooltip)。
@@ -49,6 +52,33 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["播放量汇总", "Σ avg_views(611/1,237 有值)· 非去重触达,如实标注"],
       ["待补全", "分类列缺失 → 诚实灰卡不可点,接真后恢复"],
       ["总数卡", "点开 = 全量池表大窗(搜索 + 平台分组)"],
+      ["去向", "2026-07-12 默认布局撤出 → palette 备选;分类点击筛选在「推荐 · 卡片流」筛选条保留,总数大窗入口移至卡片流工具行,均 Fit 由「Fit 分布」直方替代"],
+    ],
+  },
+  fitDist: {
+    label: "vkpi_kol_pool.viltrox_fit_score · 前端分桶",
+    rows: [
+      ["口径", "全池行按 V6 Fit 十分位分 10 桶 + 未评分诚实桶(列表 payload 前端只读分桶)"],
+      ["未评分", "fit 为空的行独立灰桶,绝不当 0 分"],
+      ["红线", "既有分数只读展示 · 本页零打分零写回(rule_v0 既有产物)"],
+    ],
+  },
+  platDist: {
+    label: "vkpi_kol_pool.platform · 前端聚合",
+    rows: [
+      ["口径", "全池行按 platform 计数(与 kol-pool/summary.by_platform 同径)"],
+      ["未标平台", "platform 空值归「未标平台」灰行,如实入总数"],
+      ["联动", "平台维度筛选待接 → 纯展示行零假按钮"],
+    ],
+  },
+  funnel: {
+    label: "kol-pool/summary.discovery_funnel_30d",
+    rows: [
+      ["发现", "vkpi_kol_search_session_items 近 30 天条目(找达人产出,含在库命中)"],
+      ["自动入库", "vkpi_kol_pool 近 30 天新建非重复行(搜到自动落池)"],
+      ["已深析", "vkpi_kol_llm_deep_analysis_results 近 30 天 ready 覆盖 KOL 数"],
+      ["已收藏", "vkpi_kol_pool_favorites 近 30 天收藏覆盖 KOL 数(收藏=归我)"],
+      ["口径", "四段同窗各自计数(非严格同批追踪)· 段算不出=键缺席 → 灰行诚实缺席"],
     ],
   },
   needs: {
@@ -200,5 +230,87 @@ export function NeedsBody({
         ))}
       </div>
     </div>
+  );
+}
+
+/* ============ 快捷入项目小窗(卡片流行内「入项目」→ 不开抽屉直达;纯展示件,
+   项目列表/写入回执全由 page 层 useQuickAddToProject 注入) ============ */
+export function QuickProjectModal({
+  item,
+  projects,
+  projectsError,
+  busy,
+  msg,
+  onConfirm,
+  onClose,
+}: {
+  item: Row;
+  /** null = 读取中;[] = 真空列表或读取失败(以 projectsError 区分) */
+  projects: Row[] | null;
+  projectsError: string;
+  busy: boolean;
+  msg: { text: string; tone: "ok" | "error" | "info" } | null;
+  onConfirm: (projectId: string) => void;
+  onClose: () => void;
+}) {
+  const [projId, setProjId] = React.useState("");
+  const options = (Array.isArray(projects) ? projects : [])
+    .map((p: any) => {
+      const raw = p?.id ?? p?.project_id;
+      if (raw === undefined || raw === null || raw === "") return null;
+      return { id: String(raw), name: String(p?.project_name || p?.name || p?.title || `项目 ${raw}`) };
+    })
+    .filter(Boolean) as Array<{ id: string; name: string }>;
+  const toneCls = msg?.tone === "ok" ? "text-good" : msg?.tone === "error" ? "text-crit" : "text-muted";
+  return (
+    <ModalShell
+      title="入项目"
+      sub={`${String(item.handle || item.display_name || "该 KOL")} · 加入现有项目(动作幂等,可重复确认)`}
+      onClose={onClose}
+      maxWidth="max-w-[420px]"
+    >
+      {projects === null && !projectsError ? (
+        <div className="py-4 text-center text-[12px] text-muted">项目列表读取中…</div>
+      ) : projectsError ? (
+        <div className="py-4 text-center text-[12px] text-crit">{projectsError}</div>
+      ) : options.length === 0 ? (
+        <div className="rounded-[9px] border border-dashed border-line px-3 py-2.5 text-[10.5px] leading-[1.7] text-muted">
+          <b className="font-semibold text-ink-2">暂无可选项目</b> —— 先在「项目」板块建项目,再回这里一键加入。
+        </div>
+      ) : (
+        <div>
+          <label className="mb-1.5 block text-[10.5px] text-muted" htmlFor="kol-pool-quick-project">目标项目</label>
+          <select
+            id="kol-pool-quick-project"
+            value={projId}
+            onChange={(ev) => setProjId(ev.target.value)}
+            className="w-full rounded-[10px] border border-line bg-card px-3 py-2 text-[12px] text-ink outline-none focus:border-accent"
+          >
+            <option value="">选择项目…</option>
+            {options.map((opt) => (
+              <option key={opt.id} value={opt.id}>{opt.name}</option>
+            ))}
+          </select>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-line bg-card px-2.5 py-1.5 text-[10.5px] text-muted transition-colors hover:text-ink"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={busy || !projId}
+              onClick={() => onConfirm(projId)}
+              className="rounded-lg border border-accent bg-accent-soft px-2.5 py-1.5 text-[10.5px] font-medium text-accent transition-colors hover:border-accent-hover disabled:cursor-default disabled:border-line disabled:bg-card disabled:text-muted"
+            >
+              {busy ? "入项目中…" : "确认入项目"}
+            </button>
+          </div>
+        </div>
+      )}
+      {msg ? <div className={`mt-2.5 text-[10.5px] ${toneCls}`}>{msg.text}</div> : null}
+    </ModalShell>
   );
 }

@@ -8,6 +8,8 @@ import {
   type VkpiKolRecallItem,
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
+import { apiFetch } from "../../../../services/http";
+import { addKolsToProject } from "../../../../services/vkpi/projects-api";
 import { toCockpitKolPoolRows } from "../kolPoolRuntime";
 import {
   enqueueVideoAnalysisBatch,
@@ -26,8 +28,10 @@ import { normalizeCountryCode } from "../data/countryInfo";
 //   跨页事件消费(vkpi:open-kol-pool-item / vkpi:open-kol-pool-search)/
 //   召回·账号结果开抽屉(openRecallItem / openProfileItem,含 resolve 反查)/
 //   待深析清单 + 批量入队 / 筛选·分类计数·排序纯函数。
-// 红线:纯读 + 既有写端点(收藏/入队/建档),绝不写 viltrox fit 分 / 不触 rule_v0;
-//   唯一网络出口 = domains/kol 与 services/vkpi/kolPool-api 既有函数,零新造端点。
+// 红线:纯读 + 既有写端点(收藏/入队/建档/入项目),绝不写 viltrox fit 分 / 不触 rule_v0;
+//   网络出口 = domains/kol · services/vkpi/kolPool-api · projects-api.addKolsToProject
+//   与既有 GET /api/admin/vkpi/projects 列表(EventsBoardPage/EditGroupModal 同款),
+//   零新造端点。
 
 export type Row = Record<string, any>;
 
@@ -519,21 +523,98 @@ export function useNeedsAnalysis(apiToken: string) {
   return { needsItems, needsLoading, needsBusy, needsMsg, loadNeeds, runNeedsBatch };
 }
 
-/* ============ 低触达隐藏计数(kol-pool/summary.low_reach_hidden_count;缺席=诚实 pending) ============ */
+/* ============ 池 summary 消费(kol-pool/summary 单次拉取两键:low_reach_hidden_count
+   → KPI 第四卡;discovery_funnel_30d → 发现转化漏斗模块。键缺席=诚实 pending/缺席,
+   绝不编 0;原 useLowReachHidden 升级为本 hook,同端点零多余请求)。 ============ */
 
-export function useLowReachHidden(apiToken: string) {
-  const [count, setCount] = React.useState<number | null>(null);
+/** kol-pool/summary.discovery_funnel_30d 形状(四段各自可缺席=该段计数暂不可用) */
+export interface PoolDiscoveryFunnel {
+  window_days?: number;
+  discovered?: number;
+  enrolled?: number;
+  deep_analyzed?: number;
+  favorited?: number;
+}
+
+export function usePoolSummary(apiToken: string) {
+  const [lowReachHidden, setLowReachHidden] = React.useState<number | null>(null);
+  const [funnel30d, setFunnel30d] = React.useState<PoolDiscoveryFunnel | null>(null);
+  const [summaryLoading, setSummaryLoading] = React.useState(false);
   React.useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
+    setSummaryLoading(true);
     getKolPoolSummary(apiToken)
       .then((resp: Row) => {
         if (cancelled) return;
         const n = Number(resp?.low_reach_hidden_count);
-        setCount(Number.isFinite(n) ? n : null);
+        setLowReachHidden(Number.isFinite(n) ? n : null);
+        const f = resp?.discovery_funnel_30d;
+        setFunnel30d(f && typeof f === "object" ? (f as PoolDiscoveryFunnel) : null);
       })
-      .catch(() => { /* 读取失败 → 保持 null,KPI 卡诚实 pending,绝不编 0 */ });
+      .catch(() => { /* 读取失败 → 保持 null,KPI 卡/漏斗诚实 pending,绝不编 0 */ })
+      .finally(() => { if (!cancelled) setSummaryLoading(false); });
     return () => { cancelled = true; };
   }, [apiToken]);
-  return count;
+  return { lowReachHidden, funnel30d, summaryLoading };
+}
+
+/* ============ 快捷入项目(卡片流行内动作,不用先开抽屉):项目列表懒取一次
+   (既有 GET /api/admin/vkpi/projects,EventsBoardPage 同款)+ 既有
+   POST /projects/{id}/kols(addKolsToProject,后端幂等)。真实返回才回执,
+   失败如实报错;候选无真 id → 动作不可达(卡面按钮已按 id 隐藏)。 ============ */
+
+export interface QuickProjectMsg {
+  text: string;
+  tone: "ok" | "error" | "info";
+}
+
+export function useQuickAddToProject(apiToken: string) {
+  const [target, setTarget] = React.useState<Row | null>(null);
+  /** null = 未取/读取中;[] 可能是真空列表(诚实空态在弹窗里区分 error) */
+  const [projects, setProjects] = React.useState<Row[] | null>(null);
+  const [projectsError, setProjectsError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<QuickProjectMsg | null>(null);
+  const loadedRef = React.useRef(false);
+
+  const openFor = React.useCallback((item: Row) => {
+    setTarget(item);
+    setMsg(null);
+    if (!apiToken || loadedRef.current) return;
+    loadedRef.current = true;
+    setProjectsError("");
+    apiFetch<{ projects?: Row[]; items?: Row[] }>("/api/admin/vkpi/projects?limit=200", { timeoutMs: 6000 }, apiToken)
+      .then((resp) => {
+        const rows = Array.isArray(resp?.projects) ? resp.projects : Array.isArray(resp?.items) ? resp.items : [];
+        setProjects(rows);
+      })
+      .catch(() => {
+        loadedRef.current = false; // 下次打开重试
+        setProjects([]);
+        setProjectsError("项目列表读取失败——关闭重开可重试");
+      });
+  }, [apiToken]);
+
+  const close = React.useCallback(() => {
+    setTarget(null);
+    setMsg(null);
+  }, []);
+
+  const confirm = React.useCallback(async (projectId: string) => {
+    const poolId = realPoolId(target?.id ?? target?.kol_pool_id);
+    if (!apiToken || busy || !projectId || !poolId) return;
+    setBusy(true);
+    setMsg({ text: "入项目请求中…", tone: "info" });
+    try {
+      await addKolsToProject(apiToken, projectId, [String(poolId)]);
+      setMsg({ text: "已入项目(端点确认)——推进状态看「项目」板块。", tone: "ok" });
+    } catch (err: any) {
+      setMsg({ text: `入项目失败:${String(err?.message || err?.detail || err || "请重试").slice(0, 100)}`, tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }, [apiToken, busy, target]);
+
+  return { target, projects, projectsError, busy, msg, openFor, close, confirm };
 }

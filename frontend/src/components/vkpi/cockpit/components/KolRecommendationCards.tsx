@@ -4,7 +4,7 @@
 // 红线:纯读展示,零新端点、零 LLM、零触 viltrox_fit_score / rule_v0;
 // signature 拉取失败安静缺席(卡片如实显示「招牌拍法待深析」,绝不编造)。
 import React from "react";
-import { Star } from "lucide-react";
+import { FolderPlus, Star } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
 import { CandidateKindChip } from "./CandidateKindChip";
 import { KPAvatar } from "./KPAvatar";
@@ -161,9 +161,17 @@ function CardAvatar({ item, avatarUrl }: { item: any; avatarUrl?: string }) {
   return e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size: 36 });
 }
 
-function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl }: any) {
+// 【D3 快捷动作 2026-07-12】行内一键收藏/入项目(不用先开抽屉):可选回调,缺省=按钮
+// 不摆(旧 KOLPoolPage 不传 → 行为零改动);新增样式全 token 类(旧卡壳写死色属豁免区)。
+const QUICK_BTN = "flex h-6 w-6 items-center justify-center rounded-[6px] border border-line bg-card transition-colors hover:border-accent hover:text-ink";
+
+function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl, onToggleFavorite, onAddToProject }: any) {
   const kolPoolId = realKolId(item);
   const flag = item.country ? (getCountryInfo(item.country)?.flag || "") : "";
+  // 【D2 数据密度 2026-07-12】粉丝/均播提到显眼位:mono 数字 chip(值缺席=chip 不摆,绝不编 0)。
+  const statChips: Array<[string, string, string]> = [];
+  if (item.followers != null && Number.isFinite(Number(item.followers))) statChips.push(["粉丝", formatNumber(item.followers), "全平台粉丝数(池行读数)"]);
+  if (item.avg_views != null && Number.isFinite(Number(item.avg_views))) statChips.push(["均播", formatNumber(item.avg_views), "平均播放量(池行读数,非去重触达)"]);
   return e("div", {
     role: "button",
     tabIndex: 0,
@@ -192,20 +200,49 @@ function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl }: any
       ),
       e("div", { className: "shrink-0" }, e(V6FitBar, { score: item.v6_fit, kind: item.candidate_kind })),
     ),
+    // ── 【D2】数据密度行:粉丝 / 均播 mono chips(显眼位;值缺席=chip 不摆)──
+    statChips.length > 0 && e("div", { className: "mt-2 flex flex-wrap items-center gap-1.5" },
+      statChips.map(([label, value, tip]) => e("span", {
+        key: label,
+        title: tip,
+        className: "inline-flex items-baseline gap-1 rounded-[6px] border border-line bg-card px-1.5 py-0.5",
+      },
+        e("span", { className: "text-[8.5px] text-muted" }, label),
+        e("span", { className: "font-mono text-[11px] font-semibold tabular-nums leading-none text-ink" }, value),
+      )),
+    ),
     // ── 招牌拍法一行(既有 signature 聚合端点,失败安静缺席)──
     e("div", { className: "mt-2" }, e(SignatureLine, { apiToken, kolPoolId })),
-    // ── 底行:粉丝 / Real ER / 国家 ──
+    // ── 底行:Real ER / 国家(粉丝已上移显眼位)+ 快捷动作(收藏/入项目,不用开抽屉)──
     e("div", { className: "mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-white/[0.045] pt-1.5 text-[10px] tabular-nums text-slate-500" },
-      e("span", null, "粉丝 ", e("span", { className: "font-medium text-slate-200" }, formatNumber(item.followers))),
       item.real_er_pct != null && e("span", null, "Real ER ", e("span", { className: "font-medium text-slate-300" }, formatPercent(item.real_er_pct, 2))),
       (flag || item.country) && e("span", null, `${flag ? flag + " " : ""}${item.country}`),
-      e("span", { className: "ml-auto text-slate-600 opacity-0 transition-opacity group-hover:opacity-100" }, "点开详情 →"),
+      e("span", { className: "ml-auto flex items-center gap-1" },
+        e("span", { className: "text-slate-600 opacity-0 transition-opacity group-hover:opacity-100" }, "点开详情 →"),
+        onToggleFavorite && e("button", {
+          type: "button",
+          title: inMyList ? "取消收藏" : "收藏到 MY KOL(不用开抽屉)",
+          "aria-label": inMyList ? "取消收藏" : "收藏",
+          onClick: (ev: any) => { ev.stopPropagation(); onToggleFavorite(item); },
+          onKeyDown: (ev: any) => ev.stopPropagation(),
+          className: QUICK_BTN + (inMyList ? " text-warn" : " text-muted"),
+        }, e(Star, { size: 11, style: inMyList ? { fill: "var(--ds-warn)" } : undefined } as any)),
+        onAddToProject && kolPoolId != null && e("button", {
+          type: "button",
+          title: "入项目(选目标项目,不用开抽屉)",
+          "aria-label": "入项目",
+          onClick: (ev: any) => { ev.stopPropagation(); onAddToProject(item); },
+          onKeyDown: (ev: any) => ev.stopPropagation(),
+          className: QUICK_BTN + " text-muted",
+        }, e(FolderPlus, { size: 11 })),
+      ),
     ),
   );
 }
 
 // 推荐卡片流:items = 页面既有筛选+排序后的行(与表格视图同一数据源,筛选/排序对两个视图同时生效)。
-export function KolRecommendationCards({ items, apiToken, myList, onOpenItem, avatarFor, emptyHint }: any) {
+// onToggleFavorite / onAddToProject 可选(D3 行内快捷动作;缺省=按钮不摆,旧页零改动)。
+export function KolRecommendationCards({ items, apiToken, myList, onOpenItem, avatarFor, emptyHint, onToggleFavorite, onAddToProject }: any) {
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
   const list = Array.isArray(items) ? items : [];
   // 筛选/排序变化 → 回到第一页(避免翻到深处后切筛选残留大页码)。
@@ -224,6 +261,8 @@ export function KolRecommendationCards({ items, apiToken, myList, onOpenItem, av
         inMyList: Boolean(myList && myList.has && myList.has(item.id)),
         onOpen: onOpenItem,
         avatarUrl: typeof avatarFor === "function" ? avatarFor(item) : "",
+        onToggleFavorite,
+        onAddToProject,
       })),
     ),
     list.length > visibleCount && e("div", { className: "mt-2.5 flex justify-center" },

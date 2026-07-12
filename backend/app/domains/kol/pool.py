@@ -497,6 +497,39 @@ def summary() -> dict[str, Any]:
         )
     except Exception:  # noqa: BLE001 — 计数失败绝不拖垮 summary 主体
         pass
+    # 发现转化漏斗 · 近 30 天(2026-07-12,KOL 池板块页「发现转化」图形模块消费):
+    #   discovered    = vkpi_kol_search_session_items 近 30 天条目(找达人产出,含在库命中)
+    #   enrolled      = vkpi_kol_pool 近 30 天新建非重复行(搜到自动落池)
+    #   deep_analyzed = vkpi_kol_llm_deep_analysis_results 近 30 天 ready 覆盖 KOL 数
+    #   favorited     = vkpi_kol_pool_favorites 近 30 天收藏覆盖 KOL 数
+    # 四段同窗各自计数(非严格同批 cohort 追踪,前端 tooltip 如实标注)。纯读零行为影响;
+    # 逐段独立兜底:单段算不出=该键缺席(前端诚实缺席,绝不编 0)。零触 viltrox_fit_score / rule_v0。
+    funnel: dict[str, Any] = {"window_days": 30}
+    funnel_counts = {
+        "discovered": (
+            "SELECT COUNT(*) AS n FROM vkpi_kol_search_session_items "
+            "WHERE created_at >= NOW() - INTERVAL '30 days'"
+        ),
+        "enrolled": (
+            "SELECT COUNT(*) AS n FROM vkpi_kol_pool "
+            "WHERE duplicate_of_id IS NULL AND created_at >= NOW() - INTERVAL '30 days'"
+        ),
+        "deep_analyzed": (
+            "SELECT COUNT(DISTINCT kol_pool_id) AS n FROM vkpi_kol_llm_deep_analysis_results "
+            "WHERE status='ready' AND created_at >= NOW() - INTERVAL '30 days'"
+        ),
+        "favorited": (
+            "SELECT COUNT(DISTINCT kol_pool_id) AS n FROM vkpi_kol_pool_favorites "
+            "WHERE created_at >= NOW() - INTERVAL '30 days'"
+        ),
+    }
+    for segment_key, segment_sql in funnel_counts.items():
+        try:
+            segment_row = conn.execute(segment_sql).fetchone()
+            funnel[segment_key] = int(segment_row["n"] if segment_row else 0)
+        except Exception:  # noqa: BLE001 — 单段失败=键缺席,绝不拖垮 summary 主体
+            continue
+    payload["discovery_funnel_30d"] = funnel
     return _kol_pool_cache_store(cache_key, payload)
 
 

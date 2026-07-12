@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, LayoutGrid, Search, SlidersHorizontal, Star, X } from "lucide-react";
+import { ChevronDown, LayoutGrid, Maximize2, Search, SlidersHorizontal, Star, X } from "lucide-react";
 import { SmartKolInputPanel } from "../components/SmartKolInputPanel";
 import { TaskProgressBoard } from "../components/TaskProgressBoard";
 import { MarketCoverageCard } from "../components/MarketCoverageCard";
@@ -143,8 +143,10 @@ export function TableEmbed({
 }
 
 /* ============ 卡片流区段(旧页「推荐 · 卡片流」section 平移:结果计数 + 模式配额徽 +
-   生效筛选 chips + 筛选·排序次级展开(FilterBar 原样)+ SearchProgressBar + 卡片流)。
-   区段头是页级新作 JSX → 全 token;FilterBar/卡片流本体旧组件零改动。 ============ */
+   生效筛选 chips + 全量大窗入口(kinds 撤出默认后总数卡的接棒者)+ 筛选·排序次级展开
+   (FilterBar 原样)+ SearchProgressBar + 卡片流)。行内快捷动作(收藏/入项目,
+   不用先开抽屉)经 onToggleFavorite/onAddToProject 透传给卡片(缺回调=按钮不摆)。
+   区段头是页级新作 JSX → 全 token;FilterBar/卡片流本体旧组件加性扩展零行为改动。 ============ */
 
 export interface RecsFilterState {
   search: string;
@@ -172,6 +174,9 @@ export function RecsSection({
   kindCounts,
   filtersOpen,
   setFiltersOpen,
+  onOpenPoolModal,
+  onToggleFavorite,
+  onAddToProject,
 }: {
   items: Row[];
   poolTotal: number;
@@ -196,6 +201,12 @@ export function RecsSection({
   kindCounts: Record<string, number>;
   filtersOpen: boolean;
   setFiltersOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  /** 全量池表大窗入口(kinds 撤出默认布局后,总数卡开大窗的接棒入口) */
+  onOpenPoolModal?: () => void;
+  /** 行内快捷收藏(缺回调=卡面不摆按钮) */
+  onToggleFavorite?: (item: Row) => void;
+  /** 行内快捷入项目(缺回调=卡面不摆按钮) */
+  onAddToProject?: (item: Row) => void;
 }) {
   const anyFilterActive = Boolean(
     filters.search || filters.country || filters.audienceType || filters.trendLevel ||
@@ -212,6 +223,18 @@ export function RecsSection({
             <span className="font-medium tabular-nums text-ink">{items.length}</span>
             <span className="text-muted">/{poolTotal}</span>
           </span>
+          {onOpenPoolModal ? (
+            <button
+              type="button"
+              onClick={onOpenPoolModal}
+              aria-label="打开全量池表大窗"
+              title="全量池表大窗(搜索 + 平台分组)"
+              className="inline-flex items-center gap-1 rounded-[6px] border border-line px-1.5 py-0.5 text-[9.5px] text-muted transition-colors hover:border-accent hover:text-ink"
+            >
+              <Maximize2 size={9} />
+              <span>全部 {poolTotal.toLocaleString()}</span>
+            </button>
+          ) : null}
           {/* K1:与真实映射表对齐(库内召回 创作者+测评 · 全网发现条数)。 */}
           <span
             className="rounded-[6px] border border-line px-1.5 py-0.5 text-[9.5px] text-muted"
@@ -284,7 +307,15 @@ export function RecsSection({
         <span>点卡片打开详情抽屉;收藏 / 联系 / 合作方案草案都在抽屉里</span>
       </div>
       <div className="mt-2" data-embed="cards">
-        <KolRecommendationCards items={items} apiToken={apiToken} myList={myList} onOpenItem={onOpenItem} avatarFor={avatarFor} />
+        <KolRecommendationCards
+          items={items}
+          apiToken={apiToken}
+          myList={myList}
+          onOpenItem={onOpenItem}
+          avatarFor={avatarFor}
+          onToggleFavorite={onToggleFavorite}
+          onAddToProject={onAddToProject}
+        />
       </div>
     </div>
   );
