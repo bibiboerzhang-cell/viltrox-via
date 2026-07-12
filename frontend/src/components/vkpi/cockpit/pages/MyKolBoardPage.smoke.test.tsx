@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // MY KOL 改版 M1 骨架 + M3 库弹窗化 + M4 图形真身冒烟(金样板 MarketVoicePage.smoke 同构):
 // - 页壳:pagehead(MY KOL + 视角/KOL 数药丸徽 + 编辑布局钮)+ 可编辑看板;
@@ -16,7 +16,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 // - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v1 +
 //   不传 apiToken → 绝不写账户级 dashboard_layout_v1;
 // - 诚实空态:aggregate 失败 = 错误卡;board-ext 失败 = 图形卡 ErrorCard + KPI 带
-//   时序/药丸缺席不编数。
+//   时序/药丸缺席不编数;
+// - 【M5】详情档案卡「打开 KOL 档案 →」= sessionStorage 传 kol_pool_id +
+//   vkpi:open-kol-profile 事件(CockpitApp 既有管道,MarketVoice jumpIdentity 同口径);
+// - 【M6】五内嵌模块 embeds 包装收编:卡头真短计数(team 负责人数/official 账号数/
+//   rollup 窗口徽=包装层持窗)+ data-embed 收编容器;旧组件文件零改动(标题 CSS 隐藏仍在 DOM)。
 // mock seam:services/http.apiFetch(全页唯一网络出口),按 path 路由,零真实 HTTP。
 
 const apiFetchMock = vi.fn();
@@ -372,7 +376,7 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
   });
 
   it("employee 注册表差异(裁决②A):risk/rollup 直接不出现,专属端点零请求,不是 403 卡", async () => {
-    renderBoard({ viewMode: "employee", userName: "Momo" });
+    renderBoard({ viewMode: "employee", userName: "Momo", data: { ...DATA, staffMembers: [{ id: "5", name: "Alice" }] } });
     expect((await screen.findAllByText("在库 KOL")).length).toBeGreaterThan(0);
     expect(screen.getByText("Momo · own-only")).toBeTruthy();
     expect(screen.queryByText("KOL 风险指数")).toBeNull();
@@ -382,6 +386,12 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(calledPaths.some((p) => p.includes("contribution-rollup"))).toBe(false);
     expect(screen.getAllByText("每日学习摘要").length).toBeGreaterThan(0);
     expect(screen.getAllByText("官方账号矩阵").length).toBeGreaterThan(0);
+    // 【M5/M6 收尾】library own-only 口径再断言:员工 aggregate 不带 staff_id(服务端裁剪,
+    // 零本地猜),负责人筛选 select 即使 staff 目录有人也不渲染(管理层专属)
+    expect(calledPaths.filter((p) => p.startsWith("/api/admin/vkpi/my-kol/aggregate")).every((p) => !p.includes("staff_id"))).toBe(true);
+    expect(screen.queryByLabelText("负责人筛选")).toBeNull();
+    // library 行本体仍是 aggregate 下发的本人集合(后端已裁,前端如实渲染)
+    expect(await screen.findByText("Alpha Cam")).toBeTruthy();
   });
 
   it("palette 全量可选:编辑布局 → 添加模块 弹层列出六个备选(M4 全真身)", async () => {
@@ -624,5 +634,48 @@ describe("MyKolBoardPage M3/M4(KOL 库:V 名单精确过滤 + 弹窗族)", () =>
     expect(await screen.findByText("#3 / 3")).toBeTruthy();
     fireEvent.keyDown(window, { key: "ArrowUp" });
     expect(await screen.findByText("#2 / 3")).toBeTruthy();
+  });
+});
+
+describe("MyKolBoardPage M5/M6(溯源身份跳 + 内嵌模块卡头收编)", () => {
+  it("【M5】详情档案卡「打开 KOL 档案 →」:sessionStorage 传 kol_pool_id + 派发 vkpi:open-kol-profile(CockpitApp 既有管道)", async () => {
+    const onProfile = vi.fn();
+    window.addEventListener("vkpi:open-kol-profile", onProfile);
+    window.sessionStorage.clear();
+    renderBoard();
+    fireEvent.click(await screen.findByText("Alpha Cam"));
+    fireEvent.click(await screen.findByText("打开 KOL 档案 →"));
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("101");
+    expect(onProfile).toHaveBeenCalledTimes(1);
+    window.removeEventListener("vkpi:open-kol-profile", onProfile);
+  });
+
+  it("【M6】卡头真短计数:team=负责人数 / official=账号数 / rollup=窗口徽;五收编容器在场,旧标题仍在 DOM(CSS 隐藏非删改)", async () => {
+    renderBoard();
+    // team cnt = 已知展示元数据(Jianbo 壳)+ 矩阵真 staff(Alice)= 2,与旧头「负责人」chip 同源同数
+    expect((await screen.findAllByText("2 负责人")).length).toBeGreaterThan(0);
+    // official cnt = official-matrix account_count 真值
+    expect(screen.getAllByText("1 账号").length).toBeGreaterThan(0);
+    // rollup cnt = 包装层持窗默认 90 天(徽 + 窗口 chips 同数)
+    expect(screen.getAllByText("90 天").length).toBeGreaterThan(0);
+    // 五内嵌收编容器全在场(digest/team/official/risk/rollup)
+    const embeds = [...document.querySelectorAll("[data-embed]")].map((el) => el.getAttribute("data-embed")).sort();
+    expect(embeds).toEqual(["digest", "official", "risk", "rollup", "team"]);
+    // 旧组件自带大标题仍在 DOM(包装容器 CSS 隐藏 —— 非侵入收编,旧组件文件零改动)
+    expect(screen.getByText("每日学习")).toBeTruthy();
+    expect(screen.getByText("KOL 贡献度聚合")).toBeTruthy();
+    // digest 功能控件保留:窗口切换钮(内部 state,卡头不摆假窗口徽)
+    expect(screen.getByText("昨天")).toBeTruthy();
+    expect(screen.getByText("近30天")).toBeTruthy();
+  });
+
+  it("【M6】rollup 包装层持窗:点 30 天 → key 重挂载按 window_days=30 真重取(徽数=真实取数窗口)", async () => {
+    renderBoard();
+    expect((await screen.findAllByText("贡献度聚合")).length).toBeGreaterThan(0);
+    const calls = () => apiFetchMock.mock.calls.map((call) => String(call[0]));
+    await waitFor(() => expect(calls().some((p) => p.includes("contribution-rollup?window_days=90"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "30 天" }));
+    await waitFor(() => expect(calls().some((p) => p.includes("contribution-rollup?window_days=30"))).toBe(true));
+    expect(screen.getAllByText("30 天").length).toBeGreaterThan(0);
   });
 });

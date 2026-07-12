@@ -615,7 +615,7 @@ export function FollowerTrendBody({ kpiSeries }: { kpiSeries: VkpiKpiSeriesGroup
 
 /* ============ claims · 我的认领(aggregate.claims 小列表;coverrow 行语言同构) ============ */
 export function ClaimsBody({ claims }: { claims: Array<Record<string, unknown>> }) {
-  if (claims.length === 0) return <EmptyLine text="无认领记录(vkpi_kol_claims 本人 0 行)——诚实空。" />;
+  if (claims.length === 0) return <EmptyLine text="无认领记录(本人名下 0 行)——诚实空。" />;
   return (
     <div>
       {claims.map((c) => {

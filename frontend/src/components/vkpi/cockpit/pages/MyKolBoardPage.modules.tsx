@@ -32,10 +32,12 @@ import type { VkpiDashboardData, VkpiProjectRow } from "../../vkpiTypes";
 import "../../pages/myKol/myKolPage.css";
 import "../../pages/myKol/myKolTeamMatrix.css";
 
-// MY KOL 板块页范式 · 辅助件(M1 骨架 → M4 图形真身,金样板 = MarketVoicePage.modules 同构)。
-//   通用骨架件(ModuleCard/PendingCard/EmptyLine/ErrorCard/LoadingLine)直接
-//   从 MarketVoicePage.modules 复用(施工单放行「引组件」,零平移重写);本文件只放
-//   MY KOL 专属件:MODULE_SOURCES 溯源注册表 / TeamMatrix·OfficialMatrix 内嵌包装 /
+// MY KOL 板块页范式 · 辅助件(M1 骨架 → M4 图形真身 → M6 内嵌收编,金样板 =
+//   MarketVoicePage.modules 同构)。通用骨架件(ModuleCard/PendingCard/EmptyLine/
+//   ErrorCard/LoadingLine)直接从 MarketVoicePage.modules 复用(施工单放行「引组件」,
+//   零平移重写);本文件只放 MY KOL 专属件:MODULE_SOURCES 溯源注册表 /
+//   TeamMatrix·OfficialMatrix 内嵌包装(【M6】ModuleCard 卡头收编住
+//   MyKolBoardPage.embeds.tsx,本文件的 useTeamStaffCards 供 embeds 取真负责人数)/
 //   KOL 库模块(M3 弹窗族 + M4 精确 V 名单过滤 + 漏斗阶段联动)。
 //   图表件(KPI 带四卡/漏斗/直方/条形/双线/认领/共享/覆盖)住 MyKolBoardPage.charts.tsx
 //   (M4 建成);SrcChip hover 口径卡,点击溯源弹窗随后续刀补(不复用市场之声的
@@ -64,6 +66,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/daily-digest",
     rows: [
       ["聚合", "vkpi_kol_video_evidence + vkpi_channel_metrics + vkpi_kol_pool_contacts 纯读聚合"],
+      ["窗口", "1/7/30 天切换钮在卡内(内嵌组件内部状态,无外部口)——卡头不摆假窗口徽"],
       ["范围", "员工只看自己集合 · 管理层默认全员并集(后端 scope 裁剪)"],
       ["降级", "接口失败整卡安静缺席 · 各块 empty 带后端 reason 原样透出"],
     ],
@@ -80,7 +83,8 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
   team: {
     label: "staff · official-matrix staff_managed",
     rows: [
-      ["负责人", "staff + users 目录(员工视角 staff-directory 为管理层端点 → 卡列自然收敛)"],
+      ["负责人", "staff 表(20 行 · 2026-07-11 实测)+ users 目录(员工视角 staff-directory 为管理层端点 → 卡列自然收敛)"],
+      ["卡头计数", "负责人卡数 = 已知展示元数据 ∪ 真 staff 目录合并去重(与旧头「负责人」chip 同源)"],
       ["归属账号", "vkpi_employee_channels 按 staff_id 归属"],
       ["分管 KOL", "official-matrix.staff_managed(数量/粉丝合计/名单 cap 20)"],
     ],
@@ -110,8 +114,8 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
   official: {
     label: "vkpi_employee_channels · vkpi_channel_metrics",
     rows: [
-      ["账号", "18 官号 · /api/marketing/channels/official-matrix"],
-      ["指标", "vkpi_channel_metrics 最新快照(followers/posts/views + delta)"],
+      ["账号", "18 官号 · /api/marketing/channels/official-matrix(卡头计数=account_count 真值)"],
+      ["指标", "vkpi_channel_metrics(961 行 · 100% 填充 · 2026-07-11 实测)每账号最新快照(followers/posts/views + delta)"],
       ["内容层", "channels/{id}/posts 按需分页(内嵌组件自取)"],
     ],
   },
@@ -126,6 +130,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/risk-index",
     rows: [
       ["信号", "Gemini final_v1 深析结构化信号聚合(内容无深度/素材复用/竞品露出)"],
+      ["深析表", "llm_deep_analysis_results(481 行 · 2026-07-11 实测)· 已析/总覆盖读数见卡内右上"],
       ["诚实", "只覆盖已深析 KOL · 未深析显「未分析」灰态,绝不当 0 风险"],
       ["可见", "管理层专属(裁决②A)· 员工注册表直接不出现"],
     ],
@@ -134,6 +139,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/contribution-rollup",
     rows: [
       ["口径", "每负责人一行:在管 KOL / 已发布 / 归因销售(has_attribution 诚实降级)"],
+      ["数据表", "vkpi_kol_claims 在管 / vkpi_content_posts 已发布(0 行 · 盲区)/ vkpi_goaffpro_sales 归因(0 行 · 盲区,2026-07-11 实测)"],
       ["门禁", "后端 scope.can_view_all 二次 gate · 管理层专属(裁决②A)"],
     ],
   },
@@ -210,17 +216,18 @@ export const PROV_TITLES: Record<string, string> = {
 // KPI 带四卡与中文紧凑数(fmtZhCompact)M4 起搬家到 MyKolBoardPage.charts.tsx
 // (series 接线后属图表族);待接线占位体 PendingBody 随 M4 全模块点亮退役。
 
-type MatrixState = ReturnType<typeof useOfficialChannelMatrix>;
+export type MatrixState = ReturnType<typeof useOfficialChannelMatrix>;
 
 /* ============ 团队矩阵模块(TeamMatrix 内嵌;staffCards 组装逻辑自 MyKolPage.tsx
    原样平移——已知负责人展示元数据 + 真 staff 目录合并、staff_managed 按 id 桥接;
-   选中态本刀仅高亮自身,联动过滤 KOL 库随 library 模块 M2/M3 刀接回) ============ */
-export function TeamMatrixModule({ data, matrix }: { data?: VkpiDashboardData; matrix: MatrixState }) {
-  const [selectedStaff, setSelectedStaff] = React.useState<{ id: string; name: string } | null>(null);
+   选中态本刀仅高亮自身,联动过滤 KOL 库随 library 模块 M2/M3 刀接回。
+   【M6】staffCards 组装抽成 useTeamStaffCards 钩子:embeds 包装层要用 cards.length
+   做卡头真短计数(负责人数),模块本体只吃算好的 cards/pendingCount,零重复计算) ============ */
+export function useTeamStaffCards(data: VkpiDashboardData | undefined, matrix: MatrixState) {
   const projects = React.useMemo<VkpiProjectRow[]>(() => data?.projects || [], [data?.projects]);
   const staffMembers = React.useMemo(() => data?.staffMembers || [], [data?.staffMembers]);
 
-  const staffCards = React.useMemo<StaffCard[]>(() => {
+  const cards = React.useMemo<StaffCard[]>(() => {
     const accounts = matrix.platforms.flatMap((platform) => platform.accounts);
     const projectsByOwner = new Map<string, VkpiProjectRow[]>();
     projects.forEach((project) => {
@@ -283,9 +290,14 @@ export function TeamMatrixModule({ data, matrix }: { data?: VkpiDashboardData; m
     .flatMap((platform) => platform.accounts)
     .filter((account) => account.syncStatus !== "synced" && account.syncStatus !== "official_readonly").length;
 
+  return { cards, pendingCount };
+}
+
+export function TeamMatrixModule({ cards, pendingCount }: { cards: StaffCard[]; pendingCount: number }) {
+  const [selectedStaff, setSelectedStaff] = React.useState<{ id: string; name: string } | null>(null);
   return (
     <TeamMatrix
-      cards={staffCards}
+      cards={cards}
       pendingCount={pendingCount}
       selectedStaffId={selectedStaff?.id ?? null}
       onSelectStaff={(card) =>
@@ -328,7 +340,7 @@ export function OfficialMatrixModule({ apiToken, matrix }: { apiToken?: string; 
     );
   }
   if (!matrix.loading && matrix.platforms.length === 0) {
-    return <EmptyLine text="暂无官号账号(vkpi_employee_channels 空)。" />;
+    return <EmptyLine text="暂无官号账号(账号目录 0 行)。" />;
   }
 
   return (

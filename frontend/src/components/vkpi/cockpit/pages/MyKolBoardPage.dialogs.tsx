@@ -3,7 +3,6 @@ import { SrcChip, RecordPreview } from "../components/provenance";
 import { formatLocal } from "../../lib/timeLocal";
 import { ModalShell, SectionLabel, Drow, platformBadge } from "./MarketVoicePage.dialogs";
 import {
-  filterLibraryRows,
   getMyKolPoolVideos,
   isImageKindVideo,
   sortClassifiedVideos,
@@ -571,6 +570,8 @@ export function KolDetailModal({
   };
 
   if (!item) return null;
+  // 【M5】溯源身份跳:档案卡 → KOL 档案页(sessionStorage 传 kol_pool_id + vkpi:open-kol-profile 事件管道,MarketVoice jumpIdentity / CockpitApp 既有监听同口径)
+  const openKolProfile = () => { try { window.sessionStorage.setItem("vkpi:kol-profile-id", String(item.poolId)); } catch { /* 存不进不阻断,事件管道仍切页 */ } window.dispatchEvent(new CustomEvent("vkpi:open-kol-profile")); };
   const srcRows: Array<[string, string]> = [
     ["库记录", `vkpi_kol_pool #${item.poolId}(收藏行 vkpi_kol_pool_favorites / 共享行 vkpi_kol_pool_members)`],
     ["V 三档判据", "cooperation=evidence.project_id 非空 / title_mention=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 后端同口径)"],
@@ -620,6 +621,7 @@ export function KolDetailModal({
               {item.profileUrl ? (
                 <a href={item.profileUrl} target="_blank" rel="noopener noreferrer" className="text-accent transition-colors hover:text-accent-hover" onClick={(ev) => ev.stopPropagation()}>主页 ↗</a>
               ) : null}
+              <button type="button" className="text-accent transition-colors hover:text-accent-hover" title="跳到 KOL 档案页(同一库记录直达,跨板块)" onClick={openKolProfile}>打开 KOL 档案 →</button>
             </div>
           </div>
           <SrcChip label={`vkpi_kol_pool #${item.poolId}`} rows={srcRows} />
@@ -745,5 +747,3 @@ export function KolDetailModal({
     </ModalShell>
   );
 }
-
-export { filterLibraryRows };

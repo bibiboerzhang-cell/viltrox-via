@@ -3,17 +3,10 @@ import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import { getMyKolAggregate, type VkpiMyKolAggregateResponse } from "../../../../services/vkpi/kol-api";
 import { useOfficialChannelMatrix } from "../../pages/channels/useOfficialChannelMatrix";
-import { DailyDigestCard } from "../../pages/myKol/DailyDigestCard";
-import { RiskIndexPanel } from "../../pages/myKol/RiskIndexPanel";
-import { ContributionRollupPanel } from "../../pages/myKol/ContributionRollupPanel";
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
-import {
-  KolLibraryModule,
-  MODULE_SOURCES,
-  OfficialMatrixModule,
-  TeamMatrixModule,
-} from "./MyKolBoardPage.modules";
+import { KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { DigestEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, TeamEmbed } from "./MyKolBoardPage.embeds";
 import {
   ClaimsBody,
   ContactsBody,
@@ -56,7 +49,11 @@ import {
 //     GET /api/marketing/channels/official-matrix —— K4 官号粉丝现值(最新快照)
 //     metrics prop(CockpitApp dashboardRuntime)  —— K3 兜底(board-ext kol_views 优先,
 //       复用主控已拉数据,零触发 /dashboard 的 metric_lineage 隐藏写入)。
-//   模块落地:digest/team/official/risk/rollup 仍内嵌 pages/myKol 现有组件(零重写)。
+//   模块落地:digest/team/official/risk/rollup 仍内嵌 pages/myKol 现有组件(零重写);
+//   【M6】五件走 MyKolBoardPage.embeds 包装族:卡头真短计数 + 旧组件双标题/卡壳
+//   非侵入收编(包装容器选择器,旧组件文件零改动)。【M5】library 详情档案卡
+//   「打开 KOL 档案 →」= sessionStorage["vkpi:kol-profile-id"] + vkpi:open-kol-profile
+//   事件管道(MarketVoice jumpIdentity 同口径,CockpitApp 既有监听切页)。
 //   用户裁决②=A:risk/rollup 管理层专属 —— 员工视角注册表直接不出现(默认布局自动少两块),
 //   不是 403 卡。旧 MyKolPage.tsx 保留不删(回滚垫);跨页事件管道(vkpi:open-mykol-kol /
 //   vkpi:open-kol-pool-item 等)签名不变,内嵌组件自带监听照常工作。
@@ -290,7 +287,7 @@ export function MyKolBoardPage({
                 ? "official-matrix 读取失败"
                 : matrix.loading
                   ? "官号矩阵读取中…"
-                  : "暂无官号账号(vkpi_employee_channels 空)"
+                  : "暂无官号账号(账号目录 0 行)"
             }
           />
         )}
@@ -298,35 +295,12 @@ export function MyKolBoardPage({
     );
   };
 
-  const renderDigest = () => (
-    <ModuleCard {...cardProps("digest", "每日学习摘要")}>
-      {apiToken ? <DailyDigestCard apiToken={apiToken} /> : noTokenCard}
-    </ModuleCard>
-  );
-
-  const renderTeam = () => (
-    <ModuleCard {...cardProps("team", "团队矩阵", matrix.accountCount ? `${matrix.accountCount} 账号` : undefined)}>
-      {apiToken ? <TeamMatrixModule data={data} matrix={matrix} /> : noTokenCard}
-    </ModuleCard>
-  );
-
-  const renderOfficial = () => (
-    <ModuleCard {...cardProps("official", "官方账号矩阵", matrix.platforms.length ? `${matrix.platforms.length} 平台` : undefined)}>
-      {apiToken ? <OfficialMatrixModule apiToken={apiToken} matrix={matrix} /> : noTokenCard}
-    </ModuleCard>
-  );
-
-  const renderRisk = () => (
-    <ModuleCard {...cardProps("risk", "KOL 风险指数")}>
-      {apiToken ? <RiskIndexPanel apiToken={apiToken} /> : noTokenCard}
-    </ModuleCard>
-  );
-
-  const renderRollup = () => (
-    <ModuleCard {...cardProps("rollup", "贡献度聚合")}>
-      {apiToken ? <ContributionRollupPanel apiToken={apiToken} viewMode={viewMode} /> : noTokenCard}
-    </ModuleCard>
-  );
+  // 【M6】五内嵌模块 → embeds 包装族(卡头真短计数 + 双标题非侵入收编;旧组件零改动)
+  const renderDigest = () => <DigestEmbed apiToken={apiToken} noToken={noTokenCard} />;
+  const renderTeam = () => <TeamEmbed apiToken={apiToken} data={data} matrix={matrix} noToken={noTokenCard} />;
+  const renderOfficial = () => <OfficialEmbed apiToken={apiToken} matrix={matrix} noToken={noTokenCard} />;
+  const renderRisk = () => <RiskEmbed apiToken={apiToken} noToken={noTokenCard} />;
+  const renderRollup = () => <RollupEmbed apiToken={apiToken} viewMode={viewMode} noToken={noTokenCard} />;
 
   // 【M3/M4】KOL 库真身:aggregate 行 + board-ext V 名单精确过滤;弹窗族在模块内自持。
   const renderLibrary = () => {
@@ -486,7 +460,7 @@ export function MyKolBoardPage({
     { key: "viewsTop", label: "播放 Top 视频", description: "实测播放 Top 12 KOL 条形榜(NULL 剔除)", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 4, maxHeight: 24, render: renderViewsTop },
     { key: "contacts", label: "联系方式覆盖", description: "覆盖率大数 + 类型条形(永远零明文)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderContacts },
     { key: "followerTrend", label: "粉丝趋势", description: "收藏集 vs 官号双线 · 缺快照日断线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderFollowerTrend },
-    { key: "claims", label: "我的认领", description: "vkpi_kol_claims 本人行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
+    { key: "claims", label: "我的认领", description: "本人认领行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
     { key: "shares", label: "共享池", description: "共享给我的库行 · 0 行=已建未用诚实空", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderShares },
     { key: "cover", label: "数据覆盖", description: "六源盲区盘点 · 静态标日期非实时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderCover },
   ];
