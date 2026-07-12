@@ -216,7 +216,8 @@ export function mediaStatusNote(post: ChannelContentPost) {
 }
 
 export function viewsLabel(post: ChannelContentPost) {
-  return post.viewsUnavailable ? '--' : compact(post.views);
+  // 诚实口径:无播放量口径(图文帖/Reddit)或来源未采集 → 显 —;0 只留给"实测为零"。
+  return post.viewsUnavailable || post.viewsMissing ? '—' : compact(post.views);
 }
 
 export function viewsMetricLabel(post: ChannelContentPost, account: OfficialChannelAccount) {
@@ -227,9 +228,10 @@ export function viewsMetricLabel(post: ChannelContentPost, account: OfficialChan
 
 export function viewsUnavailableText(post: ChannelContentPost, account: OfficialChannelAccount) {
   if (post.viewsUnavailableReason) return post.viewsUnavailableReason;
+  if (!post.viewsUnavailable && post.viewsMissing) return '播放量未采集(来源数据缺失),显示 — 以区分实测 0。';
   if (account.viewsUnavailableReason) return account.viewsUnavailableReason;
   if (account.platform.toLowerCase() === 'reddit') return 'Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。';
-  return '图文无公开播放，需后台 Insights 才能补齐。';
+  return '图文帖无播放量口径(IG 图文/轮播不公开播放数),需后台 Insights 才能补齐。';
 }
 
 export function accountViewsValue(account: OfficialChannelAccount) {
@@ -363,6 +365,7 @@ export function mapPost(row: Row): ChannelContentPost {
     shares: numberValue(row.shares),
     accountLevel: Boolean(row.account_level || row.accountLevel),
     viewsUnavailable: Boolean(row.views_unavailable || row.viewsUnavailable),
+    viewsMissing: Boolean(row.views_missing || row.viewsMissing),
     viewsMetricLabel: text(row.views_metric_label || row.viewsMetricLabel),
     viewsUnavailableReason: text(row.views_unavailable_reason || row.viewsUnavailableReason),
   };

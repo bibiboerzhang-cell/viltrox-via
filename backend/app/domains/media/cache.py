@@ -48,12 +48,33 @@ from app.domains.media.cache_ytdlp import _cache_video_for_item_via_ytdlp
 
 logger = get_logger(__name__)
 
+# 失败占位防线(2026-07-12):image-proxy 曾把上游失败时的 1x1 透明 SVG 写进磁盘缓存,
+# 之后 cached_image_url() 把这份"失败占位"当"已缓存真图"上报(media_status=cached),
+# 前端拿到 200 的透明 SVG 渲染成一片空白渐变。读侧一律把"极小的 SVG 缓存"视为无效:
+# 真实平台缩略图不可能是几百字节的 SVG。
+_FAILURE_PLACEHOLDER_MAX_BYTES = 512
+
+
+def is_failure_placeholder_cache(cache_path: Path, content_type_path: Path) -> bool:
+    """True when the cached image entry is a tiny SVG failure placeholder, not a real image."""
+    try:
+        if not cache_path.exists() or cache_path.stat().st_size > _FAILURE_PLACEHOLDER_MAX_BYTES:
+            return False
+        if content_type_path.exists():
+            content_type = content_type_path.read_text().strip().lower()
+            if content_type and not content_type.startswith("image/svg"):
+                return False
+        return cache_path.read_bytes().lstrip()[:4] == b"<svg"
+    except OSError:
+        return False
+
+
 def cached_image_url(raw_url: Any) -> str:
     normalized = _normalize_image_url(raw_url)
     if not normalized:
         return ""
     digest, cache_path, content_type_path = _cache_paths(normalized[0])
-    if cache_path.exists() and content_type_path.exists():
+    if cache_path.exists() and content_type_path.exists() and not is_failure_placeholder_cache(cache_path, content_type_path):
         return f"{PUBLIC_IMAGE_CACHE_PREFIX}/{digest}"
     return ""
 
@@ -78,7 +99,9 @@ def cache_image(raw_url: Any, *, timeout: int = 12) -> dict[str, Any]:
     url, host = normalized
     digest, cache_path, content_type_path = _cache_paths(url)
     if cache_path.exists() and content_type_path.exists():
-        return {"status": "cached", "url": f"{PUBLIC_IMAGE_CACHE_PREFIX}/{digest}"}
+        # 失败占位不算命中:重抓真图,成功后覆盖毒缓存。
+        if not is_failure_placeholder_cache(cache_path, content_type_path):
+            return {"status": "cached", "url": f"{PUBLIC_IMAGE_CACHE_PREFIX}/{digest}"}
 
     request = urllib.request.Request(
         url,
@@ -190,6 +213,9 @@ def cached_image_file(digest: str) -> tuple[Path, str] | None:
     cache_path = CACHE_DIR / digest.lower()
     content_type_path = CACHE_DIR / f"{digest.lower()}.content-type"
     if not cache_path.exists() or not content_type_path.exists():
+        return None
+    if is_failure_placeholder_cache(cache_path, content_type_path):
+        # 毒缓存(历史失败占位)按 miss 处理 → 端点 404 → 前端走 onError 诚实占位,不再展示透明假图。
         return None
     return cache_path, content_type_path.read_text().strip() or "image/jpeg"
 

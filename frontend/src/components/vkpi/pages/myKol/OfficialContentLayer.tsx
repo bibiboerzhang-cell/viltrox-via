@@ -18,7 +18,9 @@ import {
   postVideoId,
   SORT_OPTIONS,
   type Row,
+  viewsLabel,
   viewsMetricLabel,
+  viewsUnavailableText,
   WINDOW_OPTIONS,
 } from '../channels/ChannelContentList.helpers';
 import { platformDisplay } from '../../shared/vkpiDataUtils';
@@ -85,10 +87,23 @@ function PostMedia({
   apiToken?: string;
   compactMode?: boolean;
 }) {
+  // 缩略图诚实化(2026-07-12):候选图逐个尝试,加载失败(缓存 404/来源签名过期)自动换下一张;
+  // 全部失败才落诚实占位。onLoad 里再识破"1x1 透明 SVG"——历史毒缓存会以 200 返回一张
+  // 看不见的假图(渲染成空白渐变),naturalWidth<=2 一律按失败处理。
+  const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    setFailedImages(new Set());
+  }, [post.id, post.mediaUrl, post.videoUrl, (post.imageUrls || []).join('|'), (post.mediaUrls || []).join('|')]);
   const media = mediaState(post, account);
   const cachedVideoUrl = useCachedVideoUrl(apiToken, account.platform, postVideoId(post), media.videoUrl || post.videoUrl || '');
   const videoUrl = cachedVideoUrl || media.videoUrl;
-  const image = media.imageUrls[0];
+  const imageCandidates = media.imageUrls.filter((url) => !failedImages.has(url));
+  const image = imageCandidates[0];
+  const markFailed = (url: string) => setFailedImages((prev) => {
+    const next = new Set(prev);
+    next.add(url);
+    return next;
+  });
   if (media.embedUrl && !compactMode) {
     return <iframe src={media.embedUrl} title={conciseTitle(post)} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen />;
   }
@@ -98,8 +113,22 @@ function PostMedia({
   if (videoUrl && !compactMode) {
     return <video src={videoUrl} poster={image || undefined} controls playsInline />;
   }
-  if (image) return <img src={image} alt="" loading="lazy" />;
-  return <ImageIcon size={30} />;
+  if (image) {
+    return (
+      <img
+        src={image}
+        alt=""
+        loading="lazy"
+        onError={() => markFailed(image)}
+        onLoad={(event) => {
+          const element = event.currentTarget;
+          if (element.naturalWidth <= 2 && element.naturalHeight <= 2) markFailed(image);
+        }}
+      />
+    );
+  }
+  const fallbackReason = mediaStatusNote(post) || '真实缩略图暂不可得：来源图片已过期且无本地缓存，可打开原帖查看。';
+  return <span title={fallbackReason} aria-label={fallbackReason}><ImageIcon size={30} /></span>;
 }
 
 function PostPreviewModal({
@@ -139,7 +168,9 @@ function PostPreviewModal({
           <PostMedia post={post} account={account} apiToken={apiToken} />
         </div>
         <footer>
-          <span>{post.viewsUnavailable ? '播放不可用' : `${compact(post.views)} 播放`}</span>
+          <span title={post.viewsUnavailable || post.viewsMissing ? viewsUnavailableText(post, account) : undefined}>
+            {viewsMetricLabel(post, account)} {viewsLabel(post)}
+          </span>
           <span>{compact(post.likes)} 赞</span>
           <span>{compact(post.comments)} 评论</span>
           <span>{compact(post.shares)} 分享</span>
@@ -298,7 +329,8 @@ export function OfficialContentLayer({ account, apiToken }: { account?: Official
       .map((post) => post.postedAt)
       .filter(Boolean)
       .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
-    const pageViews = posts.reduce((sum, post) => sum + (post.viewsUnavailable ? 0 : post.views), 0);
+    // 累计口径:无播放口径(—)与未采集(—)都不计入合计,避免把「—」当 0 混进累计播放。
+    const pageViews = posts.reduce((sum, post) => sum + (post.viewsUnavailable || post.viewsMissing ? 0 : post.views), 0);
     const accountViews = account.viewsUnavailable ? 0 : account.totalViews;
     const totalContent = account.postsCount || pagination.total || posts.length;
     return {
@@ -406,7 +438,8 @@ export function OfficialContentLayer({ account, apiToken }: { account?: Official
         <span><b>{compact(quickStats.comments)}</b> 累计评论</span>
         <span><b>{compact(quickStats.shares)}</b> 本页分享</span>
         <span><b>{quickStats.renderable}/{posts.length || 0}</b> 本页媒体</span>
-        <span><b>{quickStats.latest}</b> 最新</span>
+        {/* 数据截止诚实标:「最新」= 已采集内容里最近一次发布时间,即数据截至点,非今日实时。 */}
+        <span title="数据截至:已采集内容里最近一次发布时间(以最近一次成功同步为准,非今日实时)"><b>{quickStats.latest}</b> 最新</span>
       </div>
       {error ? <div className="mykol-warning">{error}</div> : null}
       {loading && !posts.length ? <ContentSkeleton /> : null}
@@ -431,7 +464,10 @@ export function OfficialContentLayer({ account, apiToken }: { account?: Official
                   <p title={copy.excerpt || note || ''}>{copy.excerpt || note || viewsMetricLabel(post, account)}</p>
                 </div>
                 <div className="mykol-post-metrics">
-                  <span>{post.viewsUnavailable ? `${viewsMetricLabel(post, account)} --` : `${viewsMetricLabel(post, account)} ${compact(post.views)}`}</span>
+                  {/* 播放数诚实化:图文帖/未采集显 —(带口径说明),0 只留给视频实测零。 */}
+                  <span title={post.viewsUnavailable || post.viewsMissing ? viewsUnavailableText(post, account) : undefined}>
+                    {viewsMetricLabel(post, account)} {viewsLabel(post)}
+                  </span>
                   <span>点赞 {compact(post.likes)}</span>
                   <button type="button" onClick={(event) => { event.stopPropagation(); setCommentsPost(post); }}>
                     评论 {compact(post.comments)}

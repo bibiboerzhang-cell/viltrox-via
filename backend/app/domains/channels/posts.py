@@ -190,6 +190,30 @@ def _video_url(value: Any, *, depth: int = 0) -> str:
     return ""
 
 
+def _apply_views_semantics(post: dict[str, Any], fallback_platform: Any = "") -> dict[str, Any]:
+    """播放数诚实口径(2026-07-12)。
+
+    历史缺陷:views_unavailable 只在 package_csv 路径(_enrich_package_post)里计算,
+    snapshot_sample 回退路径(_extract_posts)从不写这个字段 → IG 图文/轮播帖在前端
+    显示「播放 0」(图片帖根本没有公开播放量口径,显 0 = 撒谎)。此助手对两条路径统一:
+    - IG 图文/轮播且 views<=0 → views_unavailable=True(前端显 —)
+    - Reddit → 平台不公开播放量,恒 True
+    幂等:重复调用结果一致。
+    """
+    platform = _text(post.get("platform"), fallback_platform).lower()
+    media_kind = _text(post.get("media_kind")).lower() or _media_type_kind(post.get("media_type"))
+    instagram_image_views_unavailable = platform == "instagram" and media_kind in {"image", "carousel"} and _int(post.get("views")) <= 0
+    post["views_unavailable"] = instagram_image_views_unavailable or platform == "reddit"
+    if post["views_unavailable"]:
+        post["views_metric_label"] = "公开播放"
+        post["views_unavailable_reason"] = (
+            "Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。"
+            if platform == "reddit"
+            else "IG 图文/轮播没有公开视频播放量，需要后台 Insights 才能补齐。"
+        )
+    return post
+
+
 def _raw_package_posts(raw: dict[str, Any]) -> list[dict[str, Any]]:
     posts = raw.get("posts") if isinstance(raw.get("posts"), dict) else {}
     profile = raw.get("profile") if isinstance(raw.get("profile"), dict) else {}
@@ -253,15 +277,7 @@ def _enrich_package_post(post: dict[str, Any], raw_index: dict[str, dict[str, An
         post["image_urls"] = image_urls[:12]
     post["media_kind"] = "video" if video_url or media_kind == "video" else ("carousel" if len(image_urls) > 1 or media_kind == "carousel" else media_kind or "image")
     platform = _text(post.get("platform")).lower()
-    instagram_image_views_unavailable = platform == "instagram" and post["media_kind"] in {"image", "carousel"} and _int(post.get("views")) <= 0
-    post["views_unavailable"] = instagram_image_views_unavailable or platform == "reddit"
-    if post["views_unavailable"]:
-        post["views_metric_label"] = "公开播放"
-        post["views_unavailable_reason"] = (
-            "Reddit 不公开帖子播放量；今年分析使用点赞、评论和站内评分。"
-            if platform == "reddit"
-            else "IG 图文/轮播没有公开视频播放量，需要后台 Insights 才能补齐。"
-        )
+    _apply_views_semantics(post)
     if platform == "reddit":
         post["score"] = _int(raw.get("score"), _int(post.get("likes")))
         post["upvote_ratio"] = _float(raw.get("upvoteRatio"), _float(raw.get("upvote_ratio")))
@@ -287,6 +303,8 @@ def _post_from_package_row(row: dict[str, Any]) -> dict[str, Any]:
         "media_type": _text(row.get("media_type")),
         "posted_at": _text(row.get("posted_at")),
         "views": _count(row.get("views")),
+        # 0 与 NULL 区分:CSV 里 views 缺列/空串 = 从未采集(前端显 —),而 "0" = 实测为零。
+        "views_missing": row.get("views") in (None, ""),
         "likes": _count(row.get("likes")),
         "comments": _count(row.get("comments")),
         "shares": _count(row.get("shares")),
@@ -465,6 +483,11 @@ def channel_posts(
     posts = _attach_cached_item_videos(posts, row.get("platform"))
     posts = _attach_post_identity(posts, row.get("platform"))
     posts = _attach_media_contract(posts, row.get("platform"))
+    # snapshot_sample 回退路径不带 views_unavailable(恒 None)→ 统一补播放数诚实口径;
+    # package_csv 路径已在 _enrich_package_post 里算过(bool),不重复覆写。
+    for post in posts:
+        if not isinstance(post.get("views_unavailable"), bool):
+            _apply_views_semantics(post, row.get("platform"))
     posts = [post for post in posts if _text(post.get("id"), post.get("url"))]
     posts = _filter_posts_by_window(posts, window)
     posts = _sort_posts(posts, sort, direction)

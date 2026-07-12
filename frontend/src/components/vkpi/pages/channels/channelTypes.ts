@@ -20,6 +20,8 @@ export interface ChannelContentPost {
   shares: number;
   accountLevel?: boolean;
   viewsUnavailable?: boolean;
+  /** 0 与 NULL 区分:true=来源数据从未采集播放量(显 —),false/缺省=views 为实测值(0=实测零)。 */
+  viewsMissing?: boolean;
   viewsMetricLabel?: string;
   viewsUnavailableReason?: string;
 }

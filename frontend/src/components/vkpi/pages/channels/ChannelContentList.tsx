@@ -80,7 +80,7 @@ function MediaSlot({ post, account, apiToken, compact = false, refreshKey = 0 }:
   const resolvedVideoUrl = useCachedVideoUrl(apiToken, account.platform, postVideoId(post), media.videoUrl, refreshKey);
   const hasPlayableVideo = Boolean(media.embedUrl || resolvedVideoUrl);
   if (!media.renderable && !hasPlayableVideo) {
-    return <span className="vkpi-channel-content-card__pending">{mediaStatusLabel(post)}</span>;
+    return <span className="vkpi-channel-content-card__pending" title={mediaStatusNote(post) || undefined}>{mediaStatusLabel(post)}</span>;
   }
   const imageUrls = media.imageUrls.filter((url) => !failedImages.has(url));
   const current = imageUrls[Math.min(active, Math.max(0, imageUrls.length - 1))];
@@ -108,11 +108,22 @@ function MediaSlot({ post, account, apiToken, compact = false, refreshKey = 0 }:
     );
   }
   if (!current) {
-    return <span className="vkpi-channel-content-card__pending">{mediaStatusLabel(post)}</span>;
+    // 候选图全部加载失败(缓存缺失/来源过期)→ 诚实占位并给出原因,不再无限显示空白。
+    return <span className="vkpi-channel-content-card__pending" title={mediaStatusNote(post) || '真实缩略图暂不可得：来源图片已过期且无本地缓存，可打开原帖查看。'}>{mediaStatusLabel(post)}</span>;
   }
   return (
     <div className="vkpi-channel-content-card__carousel">
-      <img src={current} alt="" loading="lazy" onError={() => markFailed(current)} />
+      {/* onLoad 识破 1x1 透明 SVG(历史毒缓存以 200 返回假图),按失败换下一张候选。 */}
+      <img
+        src={current}
+        alt=""
+        loading="lazy"
+        onError={() => markFailed(current)}
+        onLoad={(event) => {
+          const element = event.currentTarget;
+          if (element.naturalWidth <= 2 && element.naturalHeight <= 2) markFailed(current);
+        }}
+      />
       {hasPlayableVideo ? <span className="vkpi-channel-content-card__play">▶</span> : null}
       {media.kind === 'video-poster' ? <span className="vkpi-channel-content-card__video-pending">视频待缓存</span> : null}
       {imageUrls.length > 1 ? (

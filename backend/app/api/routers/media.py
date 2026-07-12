@@ -26,7 +26,7 @@ from app.db.connection import get_conn
 from app.core.security import get_current_user
 from app.db.repositories.assets import get_submission_asset
 from app.services.media.storage import resolve_local_media_path
-from app.domains.media import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item
+from app.domains.media import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item, is_failure_placeholder_cache
 
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
@@ -234,7 +234,12 @@ def _cached_external_image_path(url: str) -> tuple[Path, Path]:
     return VKPI_IMAGE_PROXY_CACHE_DIR / digest, VKPI_IMAGE_PROXY_CACHE_DIR / f"{digest}.content-type"
 
 
-def _fetch_external_image(url: str, host: str) -> tuple[bytes, str]:
+def _fetch_external_image(url: str, host: str) -> tuple[bytes, str, bool]:
+    """Fetch an allowlisted platform image. Returns (data, content_type, ok).
+
+    ok=False means upstream failed (expired signature / blocked network) and data is
+    the transparent fallback SVG — callers must NOT cache it as a real image.
+    """
     request = urllib.request.Request(
         url,
         headers={
@@ -262,11 +267,11 @@ def _fetch_external_image(url: str, host: str) -> tuple[bytes, str]:
         raise
     except urllib.error.HTTPError as exc:
         logger.info("media.image_proxy_upstream_unavailable", extra={"host": host, "status": exc.code})
-        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml"
+        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
     except Exception as exc:
         logger.info("media.image_proxy_fetch_failed", extra={"host": host, "reason": type(exc).__name__})
-        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml"
-    return b"".join(chunks), content_type
+        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
+    return b"".join(chunks), content_type, True
 
 
 @router.get("/api/submissions/{submission_id}/video")
@@ -294,12 +299,25 @@ def serve_vkpi_external_image(request: Request, url: str = Query(..., min_length
     normalized_url, host = _allowed_external_image_url(url)
     cache_path, content_type_path = _cached_external_image_path(normalized_url)
     if cache_path.exists() and content_type_path.exists():
-        return FileResponse(
-            cache_path,
-            media_type=content_type_path.read_text().strip() or "image/jpeg",
-            headers={"Cache-Control": "private, max-age=86400"},
+        # 自愈:历史 bug 曾把"上游失败的透明 SVG"写进缓存(毒缓存),命中时删除并重抓,
+        # 不再永久性地把失败假装成真图。
+        if not is_failure_placeholder_cache(cache_path, content_type_path):
+            return FileResponse(
+                cache_path,
+                media_type=content_type_path.read_text().strip() or "image/jpeg",
+                headers={"Cache-Control": "private, max-age=86400"},
+            )
+        cache_path.unlink(missing_ok=True)
+        content_type_path.unlink(missing_ok=True)
+    data, content_type, ok = _fetch_external_image(normalized_url, host)
+    if not ok:
+        # 上游失败(签名过期/网络不可达):返回透明占位但绝不写缓存、不允许缓存,
+        # 让下一次请求仍有机会拿到真图;X 头供排障区分"真图"与"占位"。
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={"Cache-Control": "no-store", "X-VKPI-Media-Fallback": "upstream_unavailable"},
         )
-    data, content_type = _fetch_external_image(normalized_url, host)
     cache_path.write_bytes(data)
     content_type_path.write_text(content_type)
     return Response(
