@@ -81,9 +81,11 @@ const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((mo
 const MarketTrendsPage = React.lazy(() => import("../pages/MarketTrendsPage").then((module) => ({ default: module.MarketTrendsPage })));
 const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then((module) => ({ default: module.SkillStudioPage })));
 const IntelligentPage = React.lazy(() => import("./pages/IntelligentPage").then((module) => ({ default: module.IntelligentPage })));
-const ReplyQueuePage = React.lazy(() => import("../pages/ReplyQueuePage").then((module) => ({ default: module.ReplyQueuePage })));
+const ReplyQueuePage = React.lazy(() => import("./pages/ReplyQueueBoardPage").then((module) => ({ default: module.ReplyQueueBoardPage })));
+// 回滚垫:改回 ../pages/ReplyQueuePage + module.ReplyQueuePage 即回旧回复队列
 // 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
-const Sku360Page = React.lazy(() => import("./pages/Sku360Page").then((module) => ({ default: module.Sku360Page })));
+const Sku360Page = React.lazy(() => import("./pages/Sku360BoardPage").then((module) => ({ default: module.Sku360BoardPage })));
+// 回滚垫:改回 ./pages/Sku360Page + module.Sku360Page 即回旧 SKU360
 const KolProfilePage = React.lazy(() => import("./pages/KolProfileBoardPage").then((module) => ({ default: module.KolProfileBoardPage })));
 // 回滚垫:改回 ./pages/KolProfilePage + module.KolProfilePage 即回旧档案页
 // 第4轮 发射台:新品 SKU 一键六输出全案
@@ -93,7 +95,8 @@ const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadBoardPage").then
 const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyBoardPage").then((module) => ({ default: module.AutonomyBoardPage })));
 const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
 // 第6轮 P6 飞轮:段级创意资产库
-const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryPage").then((module) => ({ default: module.CreativeLibraryPage })));
+const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryBoardPage").then((module) => ({ default: module.CreativeLibraryBoardPage })));
+// 回滚垫:改回 ./pages/CreativeLibraryPage + module.CreativeLibraryPage 即回旧创意库
 // 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
 const StrategyBoardPage = React.lazy(() => import("./pages/StrategyBoardPage").then((module) => ({ default: module.StrategyBoardPage })));
 // GTM-1 总脑:上市增长指挥图
@@ -825,7 +828,7 @@ export function CockpitApp(props: any = {}) {
               e(React.Suspense, {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "SKU 360° 加载中...")
               },
-                e(Sku360Page as React.ComponentType<any>, { apiToken })
+                e(Sku360Page as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
             activeNav === "kolProfile" && e(LazyErrorBoundary, { name: "KolProfile" },
