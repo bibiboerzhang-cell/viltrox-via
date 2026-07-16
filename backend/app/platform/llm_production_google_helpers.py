@@ -30,18 +30,44 @@ def google_contents_fingerprint(contents: list[Any]) -> str:
     return f"google_contents_sha256:{digest}"
 
 
-def google_config_with_output_limit(config: Any, output_limit: int) -> Any:
-    if config is None:
-        return {"max_output_tokens": output_limit}
+def _default_thinking_config(config: Any, model: str) -> dict[str, Any] | None:
+    """Return a zero-budget thinking config when the caller left it unset.
+
+    gemini-2.5 系默认动态思考,思考 token 计入 max_output_tokens——本边界全是
+    结构化抽取,思考只会烧光预算导致正文截断(769 事故在网关修过,2026-07-16
+    evidence 3972 在本 SDK 路径复发:Unterminated string)。pro 系不允许关思考,
+    跳过;调用方显式给过 thinking_config 也不动。
+    """
+
+    model_id = str(model or "").lower()
+    if not model_id or "pro" in model_id:
+        return None
     if isinstance(config, dict):
-        return {**config, "max_output_tokens": output_limit}
+        if config.get("thinking_config") is not None or config.get("thinkingConfig") is not None:
+            return None
+    elif config is not None and getattr(config, "thinking_config", None) is not None:
+        return None
+    return {"thinking_budget": 0}
+
+
+def google_config_with_output_limit(
+    config: Any, output_limit: int, *, model: str = ""
+) -> Any:
+    update: dict[str, Any] = {"max_output_tokens": output_limit}
+    thinking = _default_thinking_config(config, model)
+    if thinking is not None:
+        update["thinking_config"] = thinking
+    if config is None:
+        return dict(update)
+    if isinstance(config, dict):
+        return {**config, **update}
     model_copy = getattr(config, "model_copy", None)
     if callable(model_copy):
-        return model_copy(update={"max_output_tokens": output_limit})
+        return model_copy(update=update)
     copy_method = getattr(config, "copy", None)
     if callable(copy_method):
         try:
-            return copy_method(update={"max_output_tokens": output_limit})
+            return copy_method(update=update)
         except TypeError:
             pass
     raise ValueError("unsupported_google_generate_config")

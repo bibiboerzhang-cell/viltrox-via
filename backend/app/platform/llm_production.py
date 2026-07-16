@@ -413,7 +413,9 @@ def generate_google_content(
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("valid token limits are required") from exc
-    provider_config = _google_config_with_output_limit(config, output_limit)
+    provider_config = _google_config_with_output_limit(
+        config, output_limit, model=exact_model
+    )
     progress_metadata = _progress_metadata(
         exact_purpose,
         metadata,

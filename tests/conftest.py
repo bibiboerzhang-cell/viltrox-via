@@ -98,6 +98,9 @@ else:
         }
     )
 os.environ.update(_common_test_env)
+# 密闭纪律:操作员放行开关(runtime/local_operator_env.sh 注入)绝不能漂进测试进程,
+# 否则「就绪门默认 fail-closed」类断言会被本机运行环境污染;要测放行的用 monkeypatch.setenv。
+os.environ.pop("VKPI_LLM_READINESS_OPERATOR_ACK", None)
 
 
 def _read_env_dsn() -> str:
