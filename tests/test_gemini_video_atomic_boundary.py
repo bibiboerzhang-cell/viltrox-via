@@ -182,6 +182,47 @@ def test_uri_and_file_attempts_each_reserve_settle_once_without_double_budget(
     assert [row["state"] for row in attempt_log] == ["settled", "settled"]
 
 
+def test_google_multimodal_attempt_is_covered_by_fleet_breaker(monkeypatch) -> None:
+    llm_production, reservations, _ledgers = _install_boundary(monkeypatch)
+    guard = object()
+
+    def acquire(**kwargs):
+        reservations.events.append(("breaker_acquire", (kwargs["provider"], kwargs["model"])))
+        return guard
+
+    def complete(actual_guard, outcome):
+        assert actual_guard is guard
+        reservations.events.append(("breaker_complete", outcome["status"]))
+
+    monkeypatch.setattr(llm_production.llm_gateway, "_acquire_strict_fleet_breaker", acquire)
+    monkeypatch.setattr(llm_production.llm_gateway, "_complete_strict_fleet_breaker", complete)
+
+    class Models:
+        @staticmethod
+        def generate_content(**kwargs):
+            reservations.events.append(("provider", kwargs["model"]))
+            return SimpleNamespace(
+                model_version="gemini-2.5-flash",
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=100,
+                    candidates_token_count=20,
+                    thoughts_token_count=1,
+                ),
+                text="{}",
+            )
+
+    _call(
+        llm_production,
+        client=SimpleNamespace(models=Models()),
+        attempt_log=[],
+        attempt_index=1,
+        subphase="breaker-coverage",
+    )
+    names = [event[0] for event in reservations.events]
+    assert names.index("breaker_acquire") < names.index("provider")
+    assert names.index("provider") < names.index("breaker_complete")
+
+
 def test_provider_exception_is_unknown_and_never_released(monkeypatch) -> None:
     llm_production, reservations, ledgers = _install_boundary(monkeypatch)
 

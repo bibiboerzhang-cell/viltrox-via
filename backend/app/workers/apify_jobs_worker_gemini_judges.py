@@ -17,6 +17,7 @@ from typing import Any
 import psycopg
 
 from app.core.logging import get_logger
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.workers.apify_jobs_worker_helpers import _platform_from_content_url
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.workers.apify_jobs_cost import (
@@ -534,7 +535,7 @@ def _process_gemini_video_flash_claude_judge(
                 keyframes=qa_frames["frames"],
                 title=str(evidence.get("title") or ""),
                 performance_context=performance,
-                model_name="claude-opus-4-8",
+                model_name=CLAUDE_OPUS_EXACT_MODEL,
             )
         )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _anthropic_cost(judgment_raw, anthropic_estimated_cost)
@@ -557,7 +558,7 @@ def _process_gemini_video_flash_claude_judge(
     raw = {
         **judgment_raw,
         "method": "gemini_flash_claude_judge",
-        "model": "gemini-3-flash-preview+claude-opus-4-8",
+        "model": f"gemini-3-flash-preview+{CLAUDE_OPUS_EXACT_MODEL}",
         "visual_pass": visual_raw,
         "cost_segments": [
             {
@@ -571,7 +572,7 @@ def _process_gemini_video_flash_claude_judge(
             {
                 "stage": "judgment_pass",
                 "provider": "anthropic",
-                "model": "claude-opus-4-8",
+                "model": CLAUDE_OPUS_EXACT_MODEL,
                 "cost_usd": judgment_cost,
                 "cost_basis": judgment_basis,
                 "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},

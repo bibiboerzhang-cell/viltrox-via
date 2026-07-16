@@ -90,6 +90,13 @@ export interface VkpiVideoAnalysisEnqueueResponse {
   derive_method?: string;
   message?: string;
   reason?: string;
+  provider_gate_reason?: string;
+  state?: string;
+  stage?: string;
+  terminal?: boolean;
+  model_readiness_status?: string;
+  provider_calls?: boolean;
+  write_db?: boolean;
   job?: Record<string, unknown> | null;
   cache?: Record<string, unknown> | null;
   budget?: Record<string, unknown> | null;
@@ -105,6 +112,7 @@ export interface VkpiKolLlmDeepAnalysisResult {
   llm_dimensions_11?: Record<string, unknown>;
   method?: string;
   provider?: string;
+  result_kind?: "llm" | "local_aggregate" | "unverified_ai" | string;
   confidence?: number | null;
   source_cache_id?: number | null;
   status?: string;

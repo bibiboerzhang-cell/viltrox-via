@@ -236,6 +236,77 @@ def test_account_url_finishes_profile_and_marks_representative_ai_not_requested(
     assert result["items"][0]["status"] == "ai_disabled"
 
 
+def test_tiktok_profile_uses_normal_enqueue_and_preserves_readiness_gate(monkeypatch) -> None:
+    from app.domains.kol import url_deep_crawl_execute_profile_videos as profile_videos
+
+    metadata = {
+        "platform": "tiktok",
+        "content_url": "https://www.tiktok.com/@creator/video/7501797229913459999",
+        "title": "Representative TikTok video",
+    }
+    monkeypatch.setattr(
+        profile_videos,
+        "_profile_representative_video_metadata",
+        lambda *_args, **_kwargs: [metadata],
+    )
+    monkeypatch.setattr(
+        profile_videos,
+        "_filter_incremental_profile_videos",
+        lambda videos, _state, *, limit: (videos[:limit], 0),
+    )
+    monkeypatch.setattr(
+        profile_videos,
+        "ensure_video_evidence_from_url",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "status": "created",
+            "evidence_id": 3683,
+            "viltrox_fit_score_changed_ids": [],
+        },
+    )
+    enqueue_calls: list[dict[str, Any]] = []
+
+    def blocked_by_readiness(*_args, **kwargs):
+        enqueue_calls.append(kwargs)
+        return {
+            "status": "ai_disabled",
+            "state": "not_requested",
+            "reason": "ai_disabled",
+            "ai_analysis": {
+                "state": "not_requested",
+                "reason": "ai_disabled",
+                "gate_reason": "model_binding_blocked",
+                "model_readiness_status": "not_ready",
+                "provider_calls_allowed": False,
+            },
+            "viltrox_fit_score_changed_ids": [],
+            "write_db": False,
+        }
+
+    monkeypatch.setattr(
+        profile_videos,
+        "_enqueue_final_v1_video_analysis",
+        blocked_by_readiness,
+    )
+
+    result = profile_videos._execute_profile_representative_video_analysis(
+        object(),
+        classified=SimpleNamespace(platform="tiktok"),
+        kol_pool_id=4645,
+        crawl={"status": "ok"},
+        body={"mode": "account_deep", "representative_video_limit": 1},
+        incremental_state={},
+    )
+
+    assert enqueue_calls and enqueue_calls[0]["evidence_id"] == 3683
+    assert result["status"] == "completed"
+    assert result["queued"] == 0
+    assert result["skipped"] == 1
+    assert result["worker_touched"] is False
+    assert result["ai_analysis"]["reason"] == "ai_disabled"
+    assert result["items"][0]["status"] == "ai_disabled"
+
+
 def test_text_search_skips_content_fit_job_when_ai_is_disabled(monkeypatch) -> None:
     from app.domains.kol import content_fit_enqueue
 

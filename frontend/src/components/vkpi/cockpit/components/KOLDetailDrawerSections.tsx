@@ -695,6 +695,8 @@ export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onP
       className: "mt-1 text-center text-[10px] leading-snug " + (
         videoEnqueueState.status === "error" || videoEnqueueState.status === "budget_denied"
           ? "text-rose-300"
+          : videoEnqueueState.status === "ai_disabled" || videoEnqueueState.status === "not_requested"
+            ? "text-amber-300"
           : videoEnqueueState.status === "queued" || videoEnqueueState.status === "already_queued"
             ? "text-cyan-200"
             : "text-slate-400"

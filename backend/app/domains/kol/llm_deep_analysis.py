@@ -71,6 +71,16 @@ def _item_sort_key(item: dict[str, Any]) -> tuple[bool, float, float, int]:
     )
 
 
+def _result_kind(item: dict[str, Any]) -> str:
+    provider = str(item.get("provider") or "").strip().lower()
+    method = str(item.get("method") or "").strip().lower()
+    if provider in {"local_extract", "local", "rules", "deterministic"} or "local_extract" in method:
+        return "local_aggregate"
+    if provider and (item.get("source_cache_id") is not None or item.get("source_evidence_id") is not None):
+        return "llm"
+    return "unverified_ai"
+
+
 def _row_to_item(row: Any) -> dict[str, Any]:
     item = dict(row)
     dimensions = _loads(item.get("llm_dimensions_11"), {})
@@ -92,6 +102,7 @@ def _row_to_item(row: Any) -> dict[str, Any]:
         "llm_has_qa": _has_qa(dimensions),
         "llm_qa_pass": _qa_pass(dimensions),
     }
+    normalized["result_kind"] = _result_kind(normalized)
     return _jsonable(normalized)
 
 
@@ -142,8 +153,16 @@ def get_kol_llm_deep_analysis(kol_pool_id: int, *, limit: int = 20) -> dict[str,
             "count": 0,
         }
 
-    sorted_items = sorted(items, key=_item_sort_key, reverse=True)
+    sorted_items = sorted(
+        items,
+        key=lambda item: (
+            {"llm": 2, "unverified_ai": 1, "local_aggregate": 0}.get(str(item.get("result_kind")), 0),
+            *_item_sort_key(item),
+        ),
+        reverse=True,
+    )
     primary = sorted_items[0]
+    result_kind_counts = Counter(str(item.get("result_kind") or "") for item in items)
     scores = [_number(item.get("llm_v6_fit")) for item in items if item.get("llm_v6_fit") is not None]
     analysis_kind_counts = Counter(str(item.get("analysis_kind") or "") for item in items)
     provider_counts = Counter(str(item.get("provider") or "") for item in items)
@@ -159,7 +178,10 @@ def get_kol_llm_deep_analysis(kol_pool_id: int, *, limit: int = 20) -> dict[str,
             "llm_has_qa_count": sum(1 for item in items if item.get("llm_has_qa")),
             "analysis_kind_counts": dict(analysis_kind_counts),
             "provider_counts": dict(provider_counts),
-            "sort_policy": "qa_first_then_llm_v6_fit_confidence_source_evidence_desc",
+            "result_kind_counts": dict(result_kind_counts),
+            "has_verified_llm": bool(result_kind_counts.get("llm")),
+            "primary_result_kind": primary.get("result_kind"),
+            "sort_policy": "verified_llm_first_then_qa_llm_v6_fit_confidence_source_evidence_desc",
             "source": "vkpi_kol_llm_deep_analysis_results",
             "llm_calls": False,
             "write_db": False,

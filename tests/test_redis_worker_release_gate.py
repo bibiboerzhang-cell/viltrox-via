@@ -263,6 +263,9 @@ def test_local_worker_cluster_detaches_from_launcher_process_group() -> None:
     assert 'PYTHON_BIN="$ROOT/.venv/bin/python"' in source
     assert 'heartbeat_name="${VKPI_REDIS_WORKER_HEARTBEAT_NAME:-redis-worker-main}"' in source
     assert 'export VKPI_REDIS_WORKER_HEARTBEAT_NAME="$heartbeat_name"' in source
+    assert 'PROFILE_CONSUMERS="${WORKER_ASYNC_CONSUMERS:-2}"' in source
+    assert 'REDIS_CONSUMER_HARD_MAX="${VKPI_REDIS_WORKER_MAX_CONSUMERS:-2}"' in source
+    assert "WORKER_ASYNC_CONSUMERS > REDIS_CONSUMER_HARD_MAX" in source
 
 
 def test_redis_worker_db_preflight_is_read_only_and_does_not_run_startup_writes(monkeypatch) -> None:

@@ -6,8 +6,11 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import signal
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -15,8 +18,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from psycopg.rows import dict_row
+
 from app.core.logging import get_logger
 from app.domains.media.cache import cache_local_video_file
+from app.domains.media.cache_core import MAX_VIDEO_BYTES, VIDEO_CACHE_DIR
 from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
 from app.workers.apify_jobs_worker_helpers import (
     _json,
@@ -27,6 +33,255 @@ from app.workers.apify_jobs_worker_helpers import (
 
 
 logger = get_logger(__name__)
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cached_video_asset_rows(
+    conn: Any,
+    evidence: dict[str, Any],
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Find cached bytes for one evidence without mutating cache state.
+
+    Exact source URL is the primary identity.  ``external_id`` is a bounded
+    compatibility fallback because older cache writers stored the provider
+    download URL as ``source_url`` while keeping the public IG/TikTok native id.
+    """
+
+    content_url = str(evidence.get("content_url") or "").strip()
+    platform = _platform_from_content_url(content_url)
+    if platform not in {"instagram", "tiktok"} or not content_url:
+        return []
+    parsed = urlparse(content_url)
+    native_id = _content_url_video_id(
+        platform,
+        (parsed.hostname or "").lower(),
+        parsed.path,
+        parsed.query,
+    )
+    source_hash = hashlib.sha256(content_url.encode("utf-8")).hexdigest()
+    try:
+        # Worker connections run in autocommit mode.  The explicit transaction
+        # makes a lookup error self-contained so the resolver fallback receives
+        # a usable connection rather than an aborted transaction.
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      id,
+                      platform,
+                      external_id,
+                      source_url,
+                      digest,
+                      checksum,
+                      content_type,
+                      size_bytes,
+                      storage_backend,
+                      local_path,
+                      r2_key,
+                      updated_at
+                    FROM vkpi_media_cache_assets
+                    WHERE media_kind='video'
+                      AND status='cached'
+                      AND (
+                        source_url_hash=%s
+                        OR source_url=%s
+                        OR (
+                          %s <> ''
+                          AND platform=%s
+                          AND external_id=%s
+                        )
+                      )
+                    ORDER BY
+                      CASE
+                        WHEN source_url_hash=%s THEN 0
+                        WHEN source_url=%s THEN 1
+                        WHEN external_id=%s THEN 2
+                        ELSE 3
+                      END,
+                      updated_at DESC,
+                      id DESC
+                    LIMIT %s
+                    """,
+                    (
+                        source_hash,
+                        content_url,
+                        native_id,
+                        platform,
+                        native_id,
+                        source_hash,
+                        content_url,
+                        native_id,
+                        max(1, min(int(limit or 8), 24)),
+                    ),
+                )
+                return [dict(row) for row in cur.fetchall()]
+    except Exception as exc:
+        # Cache is an optimization.  Missing schema/read failures must not turn
+        # a previously valid provider fallback into a terminal worker failure.
+        logger.info(
+            "video media cache lookup unavailable | platform=%s error_type=%s",
+            platform,
+            type(exc).__name__,
+        )
+        return []
+
+
+def _validated_cached_video_file(path: Path, asset: dict[str, Any]) -> dict[str, Any]:
+    content_type = str(asset.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type and not (
+        content_type.startswith("video/")
+        or content_type == "application/octet-stream"
+    ):
+        return {"ok": False, "reason": "media_cache_content_type_invalid"}
+    if not path.is_file():
+        return {"ok": False, "reason": "media_cache_file_missing"}
+    size_bytes = int(path.stat().st_size)
+    expected_size = int(asset.get("size_bytes") or 0)
+    if size_bytes <= 0 or size_bytes > MAX_VIDEO_BYTES:
+        return {"ok": False, "reason": "media_cache_size_invalid"}
+    if expected_size > 0 and size_bytes != expected_size:
+        return {"ok": False, "reason": "media_cache_size_mismatch"}
+    checksum = str(asset.get("checksum") or "").strip().lower()
+    if checksum.startswith("sha256:"):
+        checksum = checksum.split(":", 1)[1]
+    if not _SHA256_RE.fullmatch(checksum):
+        return {"ok": False, "reason": "media_cache_checksum_missing"}
+    actual_checksum = _sha256_path(path)
+    if actual_checksum != checksum:
+        return {"ok": False, "reason": "media_cache_checksum_mismatch"}
+    return {
+        "ok": True,
+        "bytes": size_bytes,
+        "checksum": actual_checksum,
+        "content_type": content_type or "video/mp4",
+    }
+
+
+def _trusted_local_cache_file(value: Any) -> Path | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        path = Path(raw).resolve(strict=True)
+        cache_root = VIDEO_CACHE_DIR.resolve(strict=False)
+        if not path.is_file() or not path.is_relative_to(cache_root):
+            return None
+        return path
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _materialize_cached_video_media(
+    conn: Any,
+    evidence: dict[str, Any],
+    output_dir: str,
+) -> dict[str, Any]:
+    """Copy/download a validated cached video into the worker temp directory.
+
+    The returned path is always under ``output_dir`` and is therefore covered
+    by the existing TemporaryDirectory cleanup boundary.  R2 object keys and
+    filesystem paths never escape in the public result/log payload.
+    """
+
+    content_url = str(evidence.get("content_url") or "").strip()
+    platform = _platform_from_content_url(content_url)
+    candidates = _cached_video_asset_rows(conn, evidence)
+    if not candidates:
+        return {
+            "ok": False,
+            "status": "miss",
+            "reason": "media_cache_miss",
+            "cache_hit": False,
+            "cache_candidate_count": 0,
+            "platform": platform,
+        }
+    destination = Path(output_dir) / "cached_video_input.mp4"
+    failure_reasons: list[str] = []
+    for asset in candidates:
+        destination.unlink(missing_ok=True)
+        source = ""
+        local_path = _trusted_local_cache_file(asset.get("local_path"))
+        try:
+            if local_path is not None:
+                shutil.copyfile(local_path, destination)
+                source = "local_cache"
+            elif str(asset.get("r2_key") or "").strip():
+                from app.services.media.r2 import download_file
+
+                download_file(str(asset.get("r2_key") or ""), str(destination))
+                source = "r2_cache"
+            else:
+                failure_reasons.append("media_cache_bytes_unavailable")
+                continue
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            failure_reasons.append(f"media_cache_{source or 'read'}_failed:{type(exc).__name__}")
+            continue
+        validation = _validated_cached_video_file(destination, asset)
+        if not validation.get("ok"):
+            destination.unlink(missing_ok=True)
+            failure_reasons.append(str(validation.get("reason") or "media_cache_validation_failed"))
+            continue
+        return {
+            "ok": True,
+            "status": "ready",
+            "reason": "media_cache_hit",
+            "cache_hit": True,
+            "cache_source": source,
+            "cache_asset_id": int(asset.get("id") or 0) or None,
+            "cache_storage_backend": str(asset.get("storage_backend") or ""),
+            "cache_candidate_count": len(candidates),
+            "platform": platform,
+            "source_url_host": _url_host(content_url),
+            "direct_video_url": "",
+            "direct_video_url_host": "",
+            "path": str(destination),
+            "bytes": int(validation.get("bytes") or 0),
+            "content_type": str(validation.get("content_type") or "video/mp4"),
+            "checksum": str(validation.get("checksum") or ""),
+            "scraped_ok": False,
+        }
+    return {
+        "ok": False,
+        "status": "miss",
+        "reason": "media_cache_invalid",
+        "cache_hit": False,
+        "cache_candidate_count": len(candidates),
+        "cache_failure_reasons": failure_reasons[:3],
+        "platform": platform,
+    }
+
+
+def _resolve_cached_or_provider_video(
+    conn: Any,
+    evidence: dict[str, Any],
+    output_dir: str,
+) -> dict[str, Any]:
+    """Prefer durable cached bytes, then preserve the existing resolver path."""
+
+    cached = _materialize_cached_video_media(conn, evidence, output_dir)
+    if cached.get("ok"):
+        return cached
+    resolved = _resolve_video_media(evidence)
+    resolved["cache_hit"] = False
+    resolved["cache_lookup_reason"] = str(cached.get("reason") or "media_cache_miss")
+    resolved["cache_candidate_count"] = int(cached.get("cache_candidate_count") or 0)
+    if cached.get("cache_failure_reasons"):
+        resolved["cache_failure_reasons"] = list(cached["cache_failure_reasons"])
+    return resolved
 
 
 def _warm_video_to_r2_from_local(

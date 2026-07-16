@@ -139,6 +139,26 @@ function renderDrawer(props: Record<string, unknown> = {}) {
 }
 
 describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
+  it("按智能搜索解析的精确 SKU 读取和入队内容契合", async () => {
+    renderDrawer({ item: { ...baseItem, product_sku: "AF-35MM-F18-PRO-FE" } });
+
+    await waitFor(() => expect(getKolPoolContentFit).toHaveBeenCalledWith(
+      "tok",
+      42,
+      { productSku: "AF-35MM-F18-PRO-FE" },
+    ));
+
+    getKolPoolContentFit.mockClear();
+    fireEvent.click(screen.getByText("深度分析"));
+    fireEvent.click(await screen.findByRole("button", { name: "开始深析" }));
+
+    await waitFor(() => expect(getKolPoolContentFit).toHaveBeenCalledWith(
+      "tok",
+      42,
+      { analyze: true, force: false, productSku: "AF-35MM-F18-PRO-FE" },
+    ));
+  });
+
   it("单视频入队后轮询真实终态并自动回填详情", async () => {
     vi.useFakeTimers();
     const onReloadDetail = vi.fn().mockResolvedValue(undefined);
@@ -191,6 +211,68 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     );
     expect(onReloadDetail).toHaveBeenCalledTimes(2);
     expect(screen.getByText("视频深析已完成并自动回填。")).toBeInTheDocument();
+  });
+
+  it("单视频 ai_disabled 显示精确门禁原因且不启动轮询", async () => {
+    enqueueVideoAnalysis.mockResolvedValue({
+      status: "ai_disabled",
+      state: "not_requested",
+      provider_gate_reason: "model_binding_blocked",
+      model_readiness_status: "not_production_ready",
+      provider_calls: false,
+      write_db: false,
+    });
+    const video = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/video/99" };
+    renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [video] },
+      detailBundle: {
+        status: "ready",
+        item: { video_evidence: [video] },
+        video_analysis: { items: [], summary: { evidence_count: 1, ready_count: 0, pending_count: 1 } },
+      },
+      onReloadDetail: vi.fn().mockResolvedValue(undefined),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AI深度分析" }));
+
+    expect(await screen.findByText("精确视频模型尚未通过生产就绪，本次未入队（not_production_ready）。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI暂不可用" })).toBeEnabled();
+    expect(getKolVideoAnalysisCache).not.toHaveBeenCalled();
+  });
+
+  it("单视频轮询遇到 not_requested 立即终止而非空转30分钟", async () => {
+    vi.useFakeTimers();
+    getKolVideoAnalysisCache.mockResolvedValue({
+      target_id: "99",
+      state: "not_requested",
+      analysis_job: { state: "not_requested", reason: "model_binding_blocked" },
+    });
+    const video = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/video/99" };
+    renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [video] },
+      detailBundle: {
+        status: "ready",
+        item: { video_evidence: [video] },
+        video_analysis: { items: [], summary: { evidence_count: 1, ready_count: 0, pending_count: 1 } },
+      },
+      onReloadDetail: vi.fn().mockResolvedValue(undefined),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AI深度分析" }));
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("视频深析未完成：model_binding_blocked")).toBeInTheDocument();
+    const callsAfterTerminal = getKolVideoAnalysisCache.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(20_000);
+      await Promise.resolve();
+    });
+    expect(getKolVideoAnalysisCache).toHaveBeenCalledTimes(callsAfterTerminal);
   });
 
   it("切换 KOL 后丢弃上一位的延迟入队响应且不启动旧轮询", async () => {
@@ -393,7 +475,8 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
 
     expect(await screen.findByText("全视频深析终态：0 条就绪，1 条未完成（model_binding_blocked）。")).toBeInTheDocument();
-    expect(getKolVideoAnalysisCache).not.toHaveBeenCalled();
+    expect(getKolVideoAnalysisBatch).not.toHaveBeenCalled();
+    expect(getKolVideoAnalysisCache).toHaveBeenCalledTimes(2);
   });
 
   it("status=ready → 渲染长期记忆标题/内容风格/产品线/履约/独立徽标", async () => {

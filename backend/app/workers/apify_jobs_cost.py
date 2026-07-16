@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.model_pricing import estimate_cost_usd
 from app.platform import llm_gateway
 from app.workers.apify_jobs_worker_helpers import _int_or_none
 
@@ -120,13 +121,7 @@ def _anthropic_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float
     tokens_in = _usage_count(metadata, "input_tokens")
     tokens_out = _usage_count(metadata, "output_tokens")
     if tokens_in or tokens_out:
-        model = str(result.get("model") or result.get("method") or "").lower()
-        if "opus" in model:
-            cost = (tokens_in * 15.0 + tokens_out * 75.0) / 1_000_000
-        else:
-            config = llm_gateway.PROVIDER_CONFIG.get("anthropic") or {}
-            input_cents = float(config.get("input_cents_per_million") or 0)
-            output_cents = float(config.get("output_cents_per_million") or 0)
-            cost = ((tokens_in * input_cents) + (tokens_out * output_cents)) / 100_000_000
+        model = str(result.get("model") or result.get("method") or "")
+        cost = estimate_cost_usd(model, tokens_in, tokens_out)
         return round(max(0.0, cost), 6), "anthropic_usage_metadata_model_rate", tokens_in, tokens_out
     return round(max(0.0, float(fallback_cost or 0.0)), 6), "llm_gateway_budget_preflight", 0, 0

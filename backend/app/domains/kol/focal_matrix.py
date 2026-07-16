@@ -3,8 +3,9 @@
 三块输出(全部纯聚合已有数据,零新采集、零 LLM、零写库):
   covered           焦段覆盖:从 evidence 标题 + final_v1 深析文本里用正则/词表提焦段
                     (9mm…135mm)→ 每焦段视频数 + 均播放 + 最佳例子;
-  gaps              空白焦段:vkpi_products 目录里有 SKU 但该 KOL 零覆盖的焦段,
-                    按目录营销价值代理(官方 SKU 数 × 价格合计)降序 = 「可切入」排序;
+  gaps              空白焦段:vkpi_products 目录里有 SKU 但该 KOL 零覆盖的焦段;
+                    适配产品按机身/卡口、创作类型、价格带与系列多样性排序,
+                    高价多焦段套装不再重复灌入每个焦段;
   matched_products  命中的我方 SKU 家族:焦段 + 系列词(LAB/Pro/Air/EVO)/光圈 + viltrox
                     语境三重词表匹配,跨卡口去重成家族。
 
@@ -13,7 +14,7 @@
 覆盖≠用的是我方产品(matched_products 才是我方命中),注释与响应 note 里都明说。
 
 诚实态:每块缺数据返回 {status:"empty", reason:...},识别是词表/正则规则
-(method=lexicon_focal_v1),识别不了就不算,绝不杜撰;目录价值是代理指标,注明口径。
+(method=lexicon_focal_v1),识别不了就不算,绝不杜撰;价格带只是目录分层代理,注明口径。
 负语境剔除:焦段词命中但邻近是胶片/等效语境("shot on 35mm film"、"35mm 胶片"、
 "50mm equivalent"、"等效50mm")时不算覆盖 —— 那说的是底片规格或换算视角,不是这支镜头。
 
@@ -186,7 +187,13 @@ def _extract_zooms(blob: str) -> set[str]:
 
 def _load_pool_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
     row = conn.execute(
-        "SELECT id, handle, display_name, platform FROM vkpi_kol_pool WHERE id = ?",
+        """
+        SELECT id, handle, display_name, platform, bio, raw_platform_data,
+               recommended_product_lines_json, primary_topic, content_style,
+               followers, avg_views
+        FROM vkpi_kol_pool
+        WHERE id = ?
+        """,
         (int(kol_pool_id),),
     ).fetchone()
     return dict(row) if row else None
@@ -236,7 +243,9 @@ def _load_products(conn: Any) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT sku, series, category_main, category_detail,
-               model_name, marketing_name, price_usd, status
+               model_name, marketing_name, price_usd, status,
+               mount, product_url, description, specs_json, fit_tags_json,
+               source_confidence, official_catalog_product_id
         FROM vkpi_products
         """,
         (),
@@ -400,6 +409,38 @@ def _build_catalog(products: list[dict[str, Any]]) -> dict[str, Any]:
                     fam["name"] = name
 
     return {"focals": focal_cat, "lines": line_cat, "families": families}
+
+
+# ── 个性化产品机会(机身/卡口 × 创作类型 × 价格带 × 系列多样性)─────────
+
+from app.domains.kol.focal_recommendations import (
+    creator_context as _creator_context,
+    creator_price_profile as _creator_price_profile,
+    effective_product_mount as _effective_product_mount,
+    infer_creator_mount as _infer_creator_mount,
+    price_fit as _price_fit,
+    product_opportunities as _rank_product_opportunities,
+    product_series as _product_series,
+)
+
+
+def _product_opportunities(
+    products: list[dict[str, Any]],
+    gap_focals: set[str],
+    context: dict[str, Any],
+    *,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    return _rank_product_opportunities(
+        products,
+        gap_focals,
+        context,
+        product_line_of=_product_line_of,
+        product_focals=_product_focals,
+        focal_sort_mm=_focal_sort_mm,
+        line_labels=_LINE_LABEL,
+        limit=limit,
+    )
 
 
 # ── 视频侧检测 ──────────────────────────────────────────────────────
@@ -573,6 +614,7 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
     catalog = _build_catalog(products)
     videos = _merge_videos(evidence_rows, final_rows)
     focal_hits, line_hits, zoom_mentions = _detect_coverage(videos)
+    creator_context = _creator_context(pool, videos)
 
     # ── 矩阵格子:目录焦段(covered / gap)+ 目录外但 KOL 拍过的焦段 ──
     focal_cells: list[dict[str, Any]] = []
@@ -621,8 +663,13 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
             "example_title": (hit["example"] or None) if hit else None,
         })
 
-    # ── gaps:目录有 SKU 但 KOL 零覆盖的焦段,按目录营销价值代理降序 ──
-    gap_items = [
+    # ── gaps:目录焦段空白 + 机身/卡口/创作类型/价格带/系列多样性后的具体产品 ──
+    gap_focals = {
+        cell["focal"]
+        for cell in focal_cells
+        if cell["in_catalog"] and not cell["covered"]
+    }
+    catalog_gap_items = [
         {
             "focal": cell["focal"],
             "mm": cell["mm"],
@@ -635,9 +682,10 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
             "lines": cell["catalog"]["lines"],
         }
         for cell in focal_cells
-        if cell["in_catalog"] and not cell["covered"]
+        if cell["focal"] in gap_focals
     ]
-    gap_items.sort(key=lambda g: (g["value_usd"], g["sku_count"]), reverse=True)
+    catalog_gap_items.sort(key=lambda item: item["mm"])
+    recommendations = _product_opportunities(products, gap_focals, creator_context)
     line_gaps = [c for c in line_cells if c["in_catalog"] and not c["covered"]]
 
     covered_focals = [c for c in focal_cells if c["covered"]]
@@ -649,13 +697,30 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
         gaps_block: dict[str, Any] = {
             "status": "empty",
             "reason": "没有任何视频证据时全目录皆是空白,排序无意义 — 先补充 evidence 再看可切入焦段。",
+            "items": [],
+            "recommendations": [],
+            "creator_context": creator_context,
+            "catalog_gap_count": len(gap_focals),
+            "recommendation_status": "insufficient_evidence",
         }
     elif not covered_focals:
         covered_block = {
             "status": "empty",
             "reason": f"扫了 {len(videos)} 条视频(标题+深析文本),没提到任何具体焦段 — 词表/正则不硬猜。",
         }
-        gaps_block = {"status": "ready", "items": gap_items, "product_lines": line_gaps}
+        gaps_block = {
+            "status": "ready",
+            "items": catalog_gap_items,
+            "recommendations": recommendations,
+            "product_lines": line_gaps,
+            "creator_context": creator_context,
+            "catalog_gap_count": len(gap_focals),
+            "ranking_method": "mount_content_price_series_v2",
+            "recommendation_status": "ready" if recommendations else "insufficient_evidence" if gap_focals else "not_applicable",
+            **({
+                "recommendation_reason": "存在目录焦段空白,但机身/卡口/常用镜头证据不足或冲突;不生成伪 Top1。"
+            } if gap_focals and not recommendations else {}),
+        }
     else:
         covered_block = {
             "status": "ready",
@@ -665,7 +730,19 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
                 for k, v in sorted(zoom_mentions.items(), key=lambda kv: kv[1], reverse=True)
             ][:6],
         }
-        gaps_block = {"status": "ready", "items": gap_items, "product_lines": line_gaps}
+        gaps_block = {
+            "status": "ready",
+            "items": catalog_gap_items,
+            "recommendations": recommendations,
+            "product_lines": line_gaps,
+            "creator_context": creator_context,
+            "catalog_gap_count": len(gap_focals),
+            "ranking_method": "mount_content_price_series_v2",
+            "recommendation_status": "ready" if recommendations else "insufficient_evidence" if gap_focals else "not_applicable",
+            **({
+                "recommendation_reason": "存在目录焦段空白,但机身/卡口/常用镜头证据不足或冲突;不生成伪 Top1。"
+            } if gap_focals and not recommendations else {}),
+        }
 
     matched_items = _match_families(videos, catalog["families"]) if videos else []
     matched_block: dict[str, Any] = (
@@ -690,6 +767,7 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
             "deep_analyzed_count": len(final_rows),
             "catalog_focal_count": len(catalog["focals"]),
             "method": "lexicon_focal_v1",
+            "opportunity_method": "mount_content_price_series_v2",
         },
         "matrix": {"focals": focal_cells, "product_lines": line_cells},
         "covered": covered_block,
@@ -701,6 +779,8 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
             "胶片/等效负语境剔除:35mm film、35mm 胶片、50mm equivalent、等效50mm 这类"
             "底片规格/换算视角写法不算焦段覆盖;"
             "覆盖=拍过该类内容,不代表用的是我方产品(我方命中看 matched_products);"
-            "空白价值=该焦段官方 SKU 数×价格合计的目录代理,非真实销量。独立展示信号,不参与 V6 Fit 评分。"
+            "产品机会=官方单品经机身/卡口硬闸,再按创作类型、装备价格带代理与系列多样性排序;"
+            "多焦段套装不重复计价,卡口未知明确待核验;价格带不是购买力/合作预算。"
+            "独立展示信号,不参与 V6 Fit 评分。"
         ),
     }

@@ -638,6 +638,16 @@ export function LlmDeepAnalysisPanel({ payload }: any) {
     );
   }
   const primary = recordOr(payload.primary_result);
+  const resultKind = String(primary.result_kind || (
+    String(primary.provider || "").toLowerCase() === "local_extract" ? "local_aggregate" : "unverified_ai"
+  ));
+  const isLocalAggregate = resultKind === "local_aggregate";
+  const isVerifiedLlm = resultKind === "llm";
+  const resultTitle = isLocalAggregate
+    ? "账号基础聚合（无 LLM）"
+    : isVerifiedLlm
+      ? "LLM 深度判断"
+      : "历史 AI 判断（来源待核验）";
   const dimensions = recordOr(primary.llm_dimensions_11);
   const fitPayload = recordOr(dimensions.llm_v6_fit);
   const recommendations = recordOr(dimensions.recommendations);
@@ -662,14 +672,19 @@ export function LlmDeepAnalysisPanel({ payload }: any) {
     e("div", { className: "flex items-center justify-between gap-2 mb-2" },
       e("div", { className: "flex items-center gap-1.5" },
         e(Sparkles, { size: 11, className: "text-fuchsia-300" }),
-        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "LLM 深度判断")
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, resultTitle)
       ),
-      e("span", { className: "text-[8.5px] text-slate-600" }, "llm_v6_fit · independent from V6 Fit")
+      e("span", { className: "text-[8.5px] text-slate-600" },
+        isLocalAggregate ? "local_extract · zero provider calls" : isVerifiedLlm ? "verified provider lineage" : "lineage incomplete")
     ),
     e("div", { className: "rounded-md border border-fuchsia-400/15 bg-fuchsia-400/[0.035] p-2.5" },
+      isLocalAggregate && e("div", {
+        className: "mb-2 rounded border border-cyan-300/15 bg-cyan-300/[0.04] px-2 py-1 text-[9.5px] leading-relaxed text-cyan-100/80",
+      }, "这是本地规则/档案聚合，不是外部大模型结果；真实 LLM 深析仍需 final_v1 与 provider lineage。"),
       e("div", { className: "flex items-start justify-between gap-3" },
         e("div", null,
-          e("div", { className: "text-[9px] uppercase tracking-wider text-fuchsia-200/80" }, "LLM判断 · 独立于V6 Fit"),
+          e("div", { className: "text-[9px] uppercase tracking-wider text-fuchsia-200/80" },
+            isLocalAggregate ? "本地聚合 · 独立于V6 Fit" : "AI判断 · 独立于V6 Fit"),
           e("div", { className: "mt-1 flex items-baseline gap-2" },
             e("span", { className: "text-2xl font-semibold tabular-nums text-white" }, llmScore == null ? "—" : scoreText(llmScore)),
             confidence != null && e("span", { className: "text-[9.5px] text-slate-500" }, "conf " + fixedOrDash(confidence, 2))

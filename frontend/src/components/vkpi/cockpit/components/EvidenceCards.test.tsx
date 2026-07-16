@@ -130,6 +130,65 @@ describe("external evidence dashboard cards", () => {
     expect(screen.getByText("缩略图不可用")).toBeTruthy();
   });
 
+  it("AI Today 可触发真实重新生成，降级时明确保留旧快照", () => {
+    const onRegenerate = vi.fn();
+    const { container } = render(<AIIntelligenceCard
+      insight={baseInsight}
+      onApprove={vi.fn()}
+      onRegenerate={onRegenerate}
+      regenerationState={{
+        phase: "degraded",
+        message: "新结果未通过就绪门禁；继续显示上一份快照。",
+      }}
+    />);
+
+    expect(screen.getByText("优先复核外部样例")).toBeInTheDocument();
+    expect(container.querySelector('[data-ai-regeneration-phase="degraded"]'))
+      .toHaveTextContent("继续显示上一份快照");
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it("AI Today 持久显示最新失败尝试的时间、状态、provider 和 reason", () => {
+    const { container } = render(<AIIntelligenceCard
+      insight={{
+        ...baseInsight,
+        latestAttempt: {
+          attemptedLabel: "2 分钟前",
+          status: "invalid",
+          provider: "anthropic",
+          reason: "invalid_result_contract",
+          generationStatus: "all_providers_failed",
+        },
+      }}
+      onApprove={vi.fn()}
+    />);
+
+    const attempt = container.querySelector('[data-ai-latest-attempt-status="invalid"]');
+    expect(attempt).toHaveTextContent("最近生成尝试 · 2 分钟前 · 合同未通过 · anthropic");
+    expect(attempt).toHaveTextContent("结果合同未通过（invalid_result_contract）");
+    expect(attempt).toHaveTextContent("all_providers_failed");
+  });
+
+  it("AI Today 展示 Claude 基于热点证据产出的产品、内容与视频建议", () => {
+    render(<AIIntelligenceCard
+      insight={{
+        ...baseInsight,
+        productRecommendations: ["EVO · 适合轻量旅行创作者"],
+        contentRecommendations: ["YouTube · 发布镜头对比与拍摄参数"],
+        videoRecommendations: ["用已回溯外部样例说明弱光构图"],
+      }}
+      onApprove={vi.fn()}
+    />);
+
+    expect(screen.getByText("产品推荐")).toBeInTheDocument();
+    expect(screen.getByText("EVO · 适合轻量旅行创作者")).toBeInTheDocument();
+    expect(screen.getByText("内容打法")).toBeInTheDocument();
+    expect(screen.getByText("YouTube · 发布镜头对比与拍摄参数")).toBeInTheDocument();
+    expect(screen.getByText("视频推荐理由")).toBeInTheDocument();
+    expect(screen.getByText("用已回溯外部样例说明弱光构图")).toBeInTheDocument();
+  });
+
   it("Signals 卡覆盖四个平台并诚实显示缺失新鲜度和来源", () => {
     const platforms = [
       { id: "yt", platform: "youtube", url: "https://youtube.com/shorts/yt", format: "Shorts", author: "YT Author" },

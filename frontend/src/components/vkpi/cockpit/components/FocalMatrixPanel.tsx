@@ -2,7 +2,7 @@
 // 数据:GET /api/admin/vkpi/kol-pool/{id}/focal-matrix —— 纯聚合已有数据
 // (evidence 标题 + final_v1 深析文本 词表/正则提焦段与产品线,对照 vkpi_products 目录),零新采集/零 LLM。
 // 三块:📐 焦段矩阵格子(covered=拍过 ×N+均播放;空白+目录有 SKU=高亮「可切入」)
-//      / 产品线覆盖 chips / 🎯 可切入 TOP(按目录营销价值代理排序)+ 命中我方 SKU 家族。
+//      / 产品线覆盖 chips / 🎯 适配产品机会(卡口硬闸+装备价带+系列多样性)+ 命中我方 SKU 家族。
 // 诚实态:每块 status==="empty" 时如实展示 reason;接口失败整块安静缺席(非阻塞增益块);
 //         覆盖=拍过该类内容≠用的是我方产品(我方命中单独列 matched_products),不骗数据。
 // 红线:纯展示,绝不渲染/触碰 viltrox_fit_score 与 rule_v0。
@@ -30,6 +30,19 @@ type GapItem = {
   focal?: string; sku_count?: number; official_sku_count?: number; value_usd?: number;
   max_price_usd?: number | null; flagship?: string | null; series?: string[]; lines?: string[];
 };
+type ProductOpportunity = GapItem & {
+  sku?: string; product_name?: string; line?: string; mount?: string | null;
+  price_usd?: number | null; product_url?: string | null; recommendation_score?: number;
+  compatibility_status?: string; confidence?: string; price_fit?: string;
+  reasons?: string[]; score_breakdown?: Record<string, number>;
+};
+type CreatorContext = {
+  camera_body?: string | null; mount?: string | null; mount_status?: string;
+  mount_evidence?: string; lens_brands?: string[]; content_lane?: string;
+  catalog_price_ceiling_proxy_usd?: number | null; price_tier_status?: string;
+  price_tier_evidence?: string; recommendation_status?: string; recommendation_stage?: string;
+  deep_evidence_count?: number; price_proxy_note?: string;
+};
 type MatchedItem = {
   family?: string; focal?: string; series?: string | null; aperture?: string | null;
   skus?: string[]; matched_video_count?: number; example_title?: string; example_view_count?: number | null;
@@ -41,7 +54,11 @@ type FocalMatrixResp = {
   basis?: { evidence_count?: number; deep_analyzed_count?: number; catalog_focal_count?: number };
   matrix?: { focals?: FocalCell[]; product_lines?: LineCell[] };
   covered?: Block<{ focal_count?: number; zoom_mentions?: { range_mm?: string; video_count?: number }[] }>;
-  gaps?: Block<{ items?: GapItem[]; product_lines?: LineCell[] }>;
+  gaps?: Block<{
+    items?: GapItem[]; recommendations?: ProductOpportunity[]; product_lines?: LineCell[];
+    creator_context?: CreatorContext; recommendation_status?: string;
+    recommendation_reason?: string; ranking_method?: string;
+  }>;
   matched_products?: Block<{ items?: MatchedItem[] }>;
   note?: string;
 };
@@ -125,7 +142,8 @@ export function FocalMatrixPanel({ apiToken, kolPoolId }: any) {
   const covered = data.covered || {};
   const gaps = data.gaps || {};
   const matched = data.matched_products || {};
-  const gapItems = Array.isArray(gaps.items) ? gaps.items : [];
+  const opportunities = Array.isArray(gaps.recommendations) ? gaps.recommendations : [];
+  const creatorContext = gaps.creator_context || {};
   const matchedItems = Array.isArray(matched.items) ? matched.items : [];
   const zoomMentions = Array.isArray(covered.zoom_mentions) ? covered.zoom_mentions : [];
   const coveredCount = focals.filter((c) => c.covered).length;
@@ -175,26 +193,82 @@ export function FocalMatrixPanel({ apiToken, kolPoolId }: any) {
         ),
       ),
 
-      // ── 🎯 可切入 TOP(库里有 SKU 但该 KOL 零覆盖,按目录营销价值代理降序)──
-      BlockTitle(e(Target, { size: 10, className: "text-amber-300" }), "可切入空白 TOP",
-        gaps.status === "ready" && e("span", { className: "text-[8.5px] text-slate-600" }, "按官方 SKU 数×价格合计排序(目录代理)")),
+      // ── 🎯 适配产品机会:卡口冲突硬排除;无机身/卡口证据不生成伪 Top1。──
+      BlockTitle(e(Target, { size: 10, className: "text-amber-300" }), "适配产品机会 TOP",
+        e("span", { className: "text-[8.5px] text-slate-600" }, "卡口硬闸 · 装备价带 · 系列去重")),
+      e("div", { className: "mb-1.5 flex flex-wrap gap-1 text-[8.5px]" },
+        e("span", {
+          className: "rounded border px-1.5 py-0.5 " + (creatorContext.camera_body
+            ? "border-cyan-400/20 bg-cyan-400/[0.06] text-cyan-200"
+            : "border-amber-400/20 bg-amber-400/[0.05] text-amber-200"),
+          title: creatorContext.mount_evidence || undefined,
+        }, creatorContext.camera_body || "机身待补"),
+        e("span", {
+          className: "rounded border px-1.5 py-0.5 " + (creatorContext.mount
+            ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200"
+            : "border-amber-400/20 bg-amber-400/[0.05] text-amber-200"),
+          title: creatorContext.mount_evidence || undefined,
+        }, creatorContext.mount || (creatorContext.mount_status === "conflict" ? "卡口信号冲突" : "卡口待核验")),
+        creatorContext.content_lane && e("span", { className: "rounded border border-white/[0.06] bg-black/20 px-1.5 py-0.5 text-slate-400" },
+          `内容 ${creatorContext.content_lane}`),
+        e("span", {
+          className: "rounded border px-1.5 py-0.5 " + (creatorContext.recommendation_stage === "deep_validated"
+            ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200"
+            : "border-amber-400/20 bg-amber-400/[0.05] text-amber-200"),
+          title: creatorContext.recommendation_stage === "deep_validated"
+            ? `已有 ${Number(creatorContext.deep_evidence_count) || 0} 条 final_v1 深析证据`
+            : "仅档案/标题/设备词证据；final_v1 完成后会自动升级",
+        }, creatorContext.recommendation_stage === "deep_validated" ? "深析已验证" : "初步推荐"),
+        creatorContext.catalog_price_ceiling_proxy_usd != null
+          ? e("span", {
+              className: "rounded border border-white/[0.06] bg-black/20 px-1.5 py-0.5 text-slate-400",
+              title: `${creatorContext.price_tier_evidence || ""}\n${creatorContext.price_proxy_note || ""}`,
+            }, `装备价带≤$${fmtNum(creatorContext.catalog_price_ceiling_proxy_usd)}`)
+          : e("span", {
+              className: "rounded border border-amber-400/20 bg-amber-400/[0.05] px-1.5 py-0.5 text-amber-200",
+              title: creatorContext.price_proxy_note || undefined,
+            }, "价格层待补"),
+        Array.isArray(creatorContext.lens_brands) && creatorContext.lens_brands.length > 0
+          ? e("span", { className: "rounded border border-white/[0.06] bg-black/20 px-1.5 py-0.5 text-slate-400" },
+              `常用 ${creatorContext.lens_brands.slice(0, 3).join("/")}`)
+          : null,
+      ),
       gaps.status === "empty"
         ? EmptyLine(String(gaps.reason || ""))
-        : gapItems.length === 0
+        : gapCount === 0
           ? e("div", { className: "text-[10px] text-slate-500" }, "目录焦段全覆盖,没有空白格 🎉")
-          : e("div", { className: "space-y-1" },
-              gapItems.slice(0, 5).map((g, i) => e("div", {
-                key: g.focal || i,
-                className: "flex items-center gap-2 rounded border border-white/[0.05] bg-black/20 px-2 py-1 text-[10px]",
-              },
-                e("span", { className: "shrink-0 text-[9px] font-bold tabular-nums " + (i === 0 ? "text-amber-300" : "text-slate-500") }, "#" + (i + 1)),
-                e("span", { className: "w-[52px] shrink-0 font-semibold tabular-nums text-amber-200" }, g.focal || "—"),
-                e("span", { className: "truncate text-slate-400", title: g.flagship || undefined },
-                  (g.flagship || "—") + (Array.isArray(g.series) && g.series.length ? ` · ${g.series.join("/")}` : "")),
-                e("span", { className: "ml-auto shrink-0 tabular-nums text-slate-500" },
-                  `${Number(g.official_sku_count) || 0} SKU` + (g.max_price_usd != null ? ` · 至$${fmtNum(g.max_price_usd)}` : "")),
-              )),
-            ),
+          : opportunities.length === 0
+            ? EmptyLine(String(gaps.recommendation_reason || "机身/卡口/常用镜头证据不足,暂不生成个性化 Top1。"))
+            : e("div", { className: "space-y-1" },
+                opportunities.slice(0, 5).map((g, i) => e("div", {
+                  key: g.sku || `${g.focal || "gap"}-${i}`,
+                  className: "rounded border border-white/[0.05] bg-black/20 px-2 py-1.5 text-[10px]",
+                  title: [
+                    ...(Array.isArray(g.reasons) ? g.reasons : []),
+                    g.sku ? `SKU: ${g.sku}` : "",
+                  ].filter(Boolean).join("\n"),
+                },
+                  e("div", { className: "flex items-center gap-2" },
+                    e("span", { className: "shrink-0 text-[9px] font-bold tabular-nums " + (i === 0 ? "text-amber-300" : "text-slate-500") }, "#" + (i + 1)),
+                    e("span", { className: "w-[42px] shrink-0 font-semibold tabular-nums text-amber-200" }, g.focal || "—"),
+                    g.product_url
+                      ? e("a", { href: g.product_url, target: "_blank", rel: "noreferrer", className: "min-w-0 truncate text-cyan-200 hover:text-cyan-100" }, g.product_name || g.flagship || g.sku || "—")
+                      : e("span", { className: "min-w-0 truncate text-slate-300" }, g.product_name || g.flagship || g.sku || "—"),
+                    e("span", { className: "ml-auto shrink-0 tabular-nums text-slate-500" },
+                      g.price_usd != null ? `$${fmtNum(g.price_usd)}` : "价格待补"),
+                  ),
+                  e("div", { className: "mt-1 flex flex-wrap items-center gap-1 text-[8.5px] text-slate-500" },
+                    e("span", { className: "rounded bg-violet-500/10 px-1 py-0.5 text-violet-200" },
+                      Array.isArray(g.series) && g.series.length ? g.series.join("/") : "Standard"),
+                    e("span", { className: "rounded bg-emerald-500/10 px-1 py-0.5 text-emerald-200" }, g.mount || "卡口待核验"),
+                    e("span", { className: "rounded bg-white/[0.04] px-1 py-0.5" }, `置信 ${g.confidence || "—"}`),
+                    g.recommendation_score != null && e("span", { className: "ml-auto tabular-nums" }, `score ${g.recommendation_score}`),
+                  ),
+                  Array.isArray(g.reasons) && g.reasons.length > 0
+                    ? e("div", { className: "mt-1 truncate text-[8.5px] text-slate-600" }, g.reasons.slice(0, 2).join(" · "))
+                    : null,
+                )),
+              ),
 
       // ── 命中的我方 SKU 家族(焦段+系列/光圈+Viltrox 语境三重匹配,宁缺毋滥)──
       BlockTitle(e("span", { className: "text-[10px]" }, "✅"), "命中我方 SKU"),

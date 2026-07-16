@@ -401,7 +401,11 @@ async def get_pool_item_content_fit(
                 force=bool(force),
                 staff=staff_dict,
             )
-        return await run_in_threadpool(kol_content_fit.get_content_fit, int(kol_pool_id))
+        return await run_in_threadpool(
+            kol_content_fit.get_content_fit,
+            int(kol_pool_id),
+            product_sku,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

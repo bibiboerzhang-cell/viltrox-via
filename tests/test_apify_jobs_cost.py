@@ -27,8 +27,8 @@ def test_openai_gpt55_rate():
 
 def test_anthropic_opus_rate():
     # opus: input 15/Mtok, output 75/Mtok
-    r = _anthropic_cost({"model": "claude-opus", "usage_metadata": {"input_tokens": 1000, "output_tokens": 500}}, 0.0)
-    assert r[0] == round((1000 * 15.0 + 500 * 75.0) / 1_000_000, 6)  # 0.0525
+    r = _anthropic_cost({"model": "claude-opus-4-7", "usage_metadata": {"input_tokens": 1000, "output_tokens": 500}}, 0.0)
+    assert r[0] == round((1000 * 5.0 + 500 * 25.0) / 1_000_000, 6)  # 0.0175
 
 
 def test_gemini_31_pro_under_and_over_200k():

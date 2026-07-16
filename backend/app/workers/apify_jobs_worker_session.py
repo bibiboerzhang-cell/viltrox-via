@@ -419,45 +419,19 @@ def _enqueue_content_fit_after_final_v1(
     Gemini 分析 + 评论,LLM 出 creator_type/fit_verdict(发现的新人经 account_deep 抓取入库 +
     视频深析后,在此自动获得内容契合)。镜像 account_dossier followup。
     控量:① 已有 ready content_fit_v1 cache → 复用不重烧;② 已有 queued/running content_fit job → 去重;
-    每 KOL 仅一次。LLM 走 content_fit_analysis 的 openai + 预算闸(闸A)。product_sku 尽力从该 KOL 的
+    每 KOL+产品仅一次。LLM 走 content_fit_analysis 的 openai + 预算闸(闸A)。product_sku 尽力从该 KOL 的
     搜索会话取(无则 None→通用类型分析)。绝不写 viltrox_fit_score(独立 cache);失败不阻断 final_v1。"""
     if not deep_result or deep_result.get("status") != "ready":
         return None
     kol_pool_id = _int_or_none(deep_result.get("kol_pool_id"))
     if not kol_pool_id:
         return None
+    from app.domains.kol import content_fit_analysis as kol_content_fit
+
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
-            # ① 复用:已有 ready content_fit_v1 cache → 不重复烧 LLM
-            cur.execute(
-                """
-                SELECT 1 FROM vkpi_analysis_cache
-                WHERE target_type='kol' AND derive_method='content_fit_v1'
-                  AND target_id=%s AND status='ready' LIMIT 1
-                """,
-                (str(kol_pool_id),),
-            )
-            if cur.fetchone():
-                return {"status": "cache_reused", "kol_pool_id": kol_pool_id}
-            # ② 去重:已有 queued/running content_fit job
-            cur.execute(
-                """
-                SELECT id, status FROM apify_jobs
-                WHERE job_type='kol_content_fit_analysis'
-                  AND status IN ('queued', 'running')
-                  AND payload->>'kol_pool_id'=%s
-                ORDER BY created_at DESC, id DESC LIMIT 1
-                """,
-                (str(kol_pool_id),),
-            )
-            existing = cur.fetchone()
-            if existing:
-                return {
-                    "status": "already_queued" if existing["status"] == "queued" else "already_running",
-                    "job_id": int(existing["id"]),
-                    "kol_pool_id": kol_pool_id,
-                }
-            # product_sku 尽力而为:取最近一次以此 KOL 为候选、且带 product_sku 的搜索会话(无则 None)
+            # product_sku 尽力而为:取最近一次以此 KOL 为候选、且带 product_sku 的搜索会话。
+            # 必须先解析产品作用域,再查 cache/job;否则旧通用结果会拦住 EVO/Pro/EPIC。
             product_sku: str | None = None
             try:
                 cur.execute(
@@ -476,18 +450,62 @@ def _enqueue_content_fit_after_final_v1(
                     product_sku = str(srow["sku"])
             except Exception:
                 product_sku = None
+            normalized_product_sku = kol_content_fit.normalize_product_sku(product_sku)
+            derive_method = kol_content_fit.content_fit_derive_method(normalized_product_sku)
+
+            # ① 复用:只复用同一 SKU 作用域的 ready cache。无 SKU 保持旧 generic 兼容。
+            cur.execute(
+                """
+                SELECT 1 FROM vkpi_analysis_cache
+                WHERE target_type='kol' AND derive_method=%s
+                  AND target_id=%s AND status='ready' LIMIT 1
+                """,
+                (derive_method, str(kol_pool_id)),
+            )
+            if cur.fetchone():
+                return {
+                    "status": "cache_reused",
+                    "kol_pool_id": kol_pool_id,
+                    "product_sku": normalized_product_sku or None,
+                    "derive_method": derive_method,
+                }
+            # ② 去重:只阻止同 KOL+同 SKU 的 active content_fit job。
+            cur.execute(
+                """
+                SELECT id, status FROM apify_jobs
+                WHERE job_type='kol_content_fit_analysis'
+                  AND status IN ('queued', 'running')
+                  AND payload->>'kol_pool_id'=%s
+                  AND COALESCE(payload->>'product_sku', '')=%s
+                ORDER BY created_at DESC, id DESC LIMIT 1
+                """,
+                (str(kol_pool_id), normalized_product_sku),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_queued" if existing["status"] == "queued" else "already_running",
+                    "job_id": int(existing["id"]),
+                    "kol_pool_id": kol_pool_id,
+                    "product_sku": normalized_product_sku or None,
+                    "derive_method": derive_method,
+                }
             payload = {
                 "queue_lane": "batch",
                 "kol_pool_id": int(kol_pool_id),
-                "product_sku": product_sku,
-                "derive_method": "content_fit_v1",
+                "product_sku": normalized_product_sku or None,
+                "derive_method": derive_method,
                 "source": "final_v1_worker_followup",
                 "trigger": "final_v1_done",
                 "source_job_id": int(job_id),
                 "viltrox_fit_score_untouched": True,
                 "query_text": f"content fit - kol_pool #{kol_pool_id}",
             }
-            idempotency_key = active_job_idempotency_key("kol_content_fit_analysis", kol_pool_id)
+            idempotency_key = active_job_idempotency_key(
+                "kol_content_fit_analysis",
+                kol_pool_id,
+                normalized_product_sku,
+            )
             cur.execute(
                 """
                 INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
@@ -514,7 +532,8 @@ def _enqueue_content_fit_after_final_v1(
         "status": "queued" if inserted else ("already_running" if row.get("status") == "running" else "already_queued"),
         "job_id": int(row["id"]) if row.get("id") is not None else None,
         "kol_pool_id": kol_pool_id,
-        "product_sku": product_sku,
+        "product_sku": normalized_product_sku or None,
+        "derive_method": derive_method,
     }
 
 

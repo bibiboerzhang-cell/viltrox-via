@@ -21,7 +21,7 @@ from app.domains.costs.product_catalog import list_product_catalog
 _STOPWORDS = frozenset(
     {
         "mm", "f", "the", "a", "for", "and", "lens", "camera", "viltrox", "af",
-        "pl", "t", "x", "full", "frame", "inch", "kit", "set", "new", "pro",
+        "pl", "t", "x", "full", "frame", "inch", "kit", "set", "new",
     }
 )
 
@@ -73,7 +73,31 @@ _MOUNT_RULES: list[tuple[str, str]] = [
     ("L-mount", r"\bl[- ]?mount\b|l\s*卡口"),
     ("M43", r"m4/?3|松下|panasonic|olympus"),
 ]
-_LENS_CONTEXT_RE = re.compile(r"evo|lab|air|prime|卡口|镜头|定焦|mm", re.I)
+_LENS_CONTEXT_RE = re.compile(r"evo|lab|epic|air|raze|prime|macro|卡口|镜头|定焦|mm", re.I)
+
+
+def _pro_is_product_series(text: str) -> bool:
+    """Treat ``Pro`` as a series only when the query contains product evidence.
+
+    ``pro`` used to be an unconditional stopword, which made real catalog rows
+    such as 35mm Pro and 75mm Pro impossible to resolve when ``Pro`` lived only
+    in the catalog's ``series`` column.  It cannot be an unconditional identity
+    token either: "pro photographer" is a creator persona, not a product.  The
+    focal/model/mount/lens context below separates those two cases.
+    """
+
+    low = str(text or "").lower()
+    if not re.search(r"(?<![a-z0-9])pro(?![a-z0-9])", low):
+        return False
+    return bool(
+        re.search(r"\d{2,3}\s*mm", low)
+        or re.search(r"(?:\d{2,3}\s*pro\b|\bpro\s*\d{2,3})(?!\s*(?:ws|w\b|nit|inch|mah|fps))", low)
+        or _query_mount(low)
+        or re.search(
+            r"\b(?:af|lens|viltrox|evo|lab|epic|air|raze|prime|macro)\b|维卓|镜头|定焦|卡口",
+            low,
+        )
+    )
 
 
 def _query_mount(text: str) -> str:
@@ -93,7 +117,11 @@ def _query_focals(text: str) -> set[int]:
     # form is only used to recognise context; the focal still comes from the raw
     # text so unrelated numbers are not promoted into lens focal lengths.
     compact = _normkey(low)
-    if _LENS_CONTEXT_RE.search(low) or any(series in compact for series in ("evo", "lab", "epic")):
+    if (
+        _LENS_CONTEXT_RE.search(low)
+        or any(series in compact for series in ("evo", "lab", "epic"))
+        or _pro_is_product_series(low)
+    ):
         for m in re.findall(r"(?<![0-9a-z.])(\d{2,3})(?![0-9])(?!\s*(?:ws|w\b|nit|寸|inch|mah|fps))", low):
             focals.add(int(m))
     return {f for f in focals if 8 <= f <= 800}
@@ -115,6 +143,8 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
         return None
     compact = _normkey(text)
     series = next((name.upper() for name in _EXPLICIT_PRODUCT_SERIES if name in compact), "")
+    if not series and _pro_is_product_series(text):
+        series = "PRO"
     model_code = ""
     code_match = re.search(r"\b(dc[- ]?[a-z0-9-]{2,}|af[- ]?\d{2,3}[a-z0-9./-]*)\b", text.lower())
     if code_match:
@@ -225,7 +255,7 @@ def _candidate_pool(query: str, probe_tokens: list[str]) -> dict[str, dict[str, 
 def _score(prod: dict[str, Any], score_tokens: list[str]) -> tuple[int, int, int]:
     blob = " ".join(
         str(prod.get(key) or "")
-        for key in ("sku", "model_name", "marketing_name")
+        for key in ("sku", "model_name", "marketing_name", "series")
     ).lower()
     blob_sp = _split_glued(blob)
     # 整词集合:同时用原始 blob 与拆粘连版切词。既认 "z1"(原词)又认 "65"(由 "65mm" 拆出),
@@ -286,10 +316,13 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     if not pool:
         return None
     base = _query_tokens(text)
+    product_pro = _pro_is_product_series(text)
     score_tokens = [
         tok
         for tok in dict.fromkeys(base + probe_tokens)
-        if len(tok) >= 2 and tok not in _STOPWORDS
+        if len(tok) >= 2
+        and tok not in _STOPWORDS
+        and (tok != "pro" or product_pro)
     ]
     if not score_tokens:
         return None

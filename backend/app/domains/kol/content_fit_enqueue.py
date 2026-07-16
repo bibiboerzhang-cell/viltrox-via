@@ -25,7 +25,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.kol import search_sessions
+from app.domains.kol import content_fit_analysis, search_sessions
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 from app.domains.tasks.search_session_lineage import (
     attach_search_session_lineage_to_job,
@@ -133,7 +133,11 @@ def _ids_with_video_evidence(conn: Any, kol_pool_ids: list[int]) -> set[int]:
     return {int(row["kol_pool_id"]) for row in rows if row and row["kol_pool_id"] is not None}
 
 
-def _ids_with_existing_fit(conn: Any, kol_pool_ids: list[int]) -> set[int]:
+def _ids_with_existing_fit(
+    conn: Any,
+    kol_pool_ids: list[int],
+    product_sku: str | None = None,
+) -> set[int]:
     """已有 ready content_fit_v1 cache 的候选(复用,不重复入队/烧 LLM)。纯 SELECT。"""
     wanted = [pid for pid in kol_pool_ids if pid and pid > 0]
     if not wanted:
@@ -149,7 +153,7 @@ def _ids_with_existing_fit(conn: Any, kol_pool_ids: list[int]) -> set[int]:
               AND status = 'ready'
               AND CAST(target_id AS INTEGER) IN ({placeholders})
             """,
-            (CONTENT_FIT_DERIVE_METHOD, *wanted),
+            (content_fit_analysis.content_fit_derive_method(product_sku), *wanted),
         ).fetchall()
     except Exception:
         logger.warning("vkpi.content_fit_enqueue.fit_cache_probe_failed", exc_info=True)
@@ -157,7 +161,12 @@ def _ids_with_existing_fit(conn: Any, kol_pool_ids: list[int]) -> set[int]:
     return {int(row["kid"]) for row in rows if row and row["kid"] is not None}
 
 
-def _already_queued_ids(conn: Any, session_id: int, kol_pool_ids: list[int]) -> set[int]:
+def _already_queued_ids(
+    conn: Any,
+    session_id: int,
+    kol_pool_ids: list[int],
+    product_sku: str | None = None,
+) -> set[int]:
     """同 session 已有 queued/running 的内容契合 job 的 kol_pool_id(去重,防重复入队)。"""
     wanted = [pid for pid in kol_pool_ids if pid and pid > 0]
     if not wanted:
@@ -170,8 +179,13 @@ def _already_queued_ids(conn: Any, session_id: int, kol_pool_ids: list[int]) -> 
             WHERE job_type = ?
               AND status IN ('queued', 'running', 'retrying')
               AND payload->>'search_session_id' = ?
+              AND COALESCE(payload->>'product_sku', '') = ?
             """,
-            (CONTENT_FIT_JOB_TYPE, str(int(session_id))),
+            (
+                CONTENT_FIT_JOB_TYPE,
+                str(int(session_id)),
+                content_fit_analysis.normalize_product_sku(product_sku),
+            ),
         ).fetchall()
     except Exception:
         logger.warning("vkpi.content_fit_enqueue.dedupe_probe_failed", exc_info=True)
@@ -270,6 +284,8 @@ def enqueue_content_fit_for_session(
     返回入队明细 + 每候选 exposure_potential(纯展示);零写 fit,零烧 LLM。
     """
     sid = int(session_id)
+    normalized_product_sku = content_fit_analysis.normalize_product_sku(product_sku)
+    derive_method = content_fit_analysis.content_fit_derive_method(normalized_product_sku)
     safe_top_n = max(1, min(_int(top_n, DEFAULT_TOP_N), MAX_TOP_N))
     session = search_sessions.get_session(sid)
     candidates = _top_pool_candidates(session, safe_top_n)
@@ -277,8 +293,16 @@ def enqueue_content_fit_for_session(
 
     conn = get_conn()
     has_evidence = _ids_with_video_evidence(conn, pool_ids)
-    has_fit = _ids_with_existing_fit(conn, pool_ids)
-    already_queued = _already_queued_ids(conn, sid, pool_ids)
+    # Preserve the historical generic seam (two-argument probes) when no
+    # product was selected; product-scoped sessions opt into the extra key.
+    # Besides keeping old callers/tests compatible, this makes the migration
+    # rule explicit: existing content_fit_v1 rows remain generic-only.
+    if normalized_product_sku:
+        has_fit = _ids_with_existing_fit(conn, pool_ids, normalized_product_sku)
+        already_queued = _already_queued_ids(conn, sid, pool_ids, normalized_product_sku)
+    else:
+        has_fit = _ids_with_existing_fit(conn, pool_ids)
+        already_queued = _already_queued_ids(conn, sid, pool_ids)
     readiness = _content_fit_ai_readiness()
 
     enqueued: list[dict[str, Any]] = []
@@ -294,7 +318,7 @@ def enqueue_content_fit_for_session(
             try:
                 from app.domains.kol import content_fit_analysis as _cfa
 
-                cached = _cfa.get_content_fit(kid)
+                cached = _cfa.get_content_fit(kid, normalized_product_sku)
                 fit_conf = _float_or_none(((cached or {}).get("result") or {}).get("confidence"))
             except Exception:
                 fit_conf = None
@@ -324,10 +348,10 @@ def enqueue_content_fit_for_session(
             "queue_lane": "batch",
             "target_type": "kol",
             "target_id": str(kid),
-            "derive_method": CONTENT_FIT_DERIVE_METHOD,
+            "derive_method": derive_method,
             "search_session_id": sid,
             "kol_pool_id": kid,
-            "product_sku": str(product_sku or ""),
+            "product_sku": normalized_product_sku,
             "handle": (cand.get("payload") or {}).get("handle") if isinstance(cand.get("payload"), dict) else None,
             "platform": (cand.get("payload") or {}).get("platform") if isinstance(cand.get("payload"), dict) else None,
             "prompt": f"content fit analysis · kol:{kid}",
@@ -344,7 +368,11 @@ def enqueue_content_fit_for_session(
                 conn,
                 job_type=CONTENT_FIT_JOB_TYPE,
                 payload=payload,
-                idempotency_key=active_job_idempotency_key(CONTENT_FIT_JOB_TYPE, kid),
+                idempotency_key=active_job_idempotency_key(
+                    CONTENT_FIT_JOB_TYPE,
+                    kid,
+                    normalized_product_sku,
+                ),
             )
             conn.commit()
             if inserted:
@@ -370,6 +398,8 @@ def enqueue_content_fit_for_session(
         "stage": "ai_disabled" if status == "ai_disabled" else "analysis",
         "terminal": status in {"ai_disabled", "nothing_to_queue"},
         "session_id": sid,
+        "product_sku": normalized_product_sku or None,
+        "derive_method": derive_method,
         "top_n": safe_top_n,
         "candidate_count": len(candidates),
         "enqueued": enqueued,
@@ -404,9 +434,11 @@ def enqueue_content_fit_on_demand(
 
     kid = int(kol_pool_id)
     conn = get_conn()
+    normalized_product_sku = kol_content_fit.normalize_product_sku(product_sku)
+    derive_method = kol_content_fit.content_fit_derive_method(normalized_product_sku)
 
     if not force:
-        cached = kol_content_fit.get_content_fit(kid)
+        cached = kol_content_fit.get_content_fit(kid, normalized_product_sku)
         if cached and str(cached.get("state") or "") not in ("missing", ""):
             return cached
 
@@ -418,6 +450,8 @@ def enqueue_content_fit_on_demand(
             "stage": "ai_disabled",
             "terminal": True,
             "kol_pool_id": kid,
+            "product_sku": normalized_product_sku or None,
+            "derive_method": derive_method,
             "job_id": None,
             "job_type": CONTENT_FIT_JOB_TYPE,
             "reason": "ai_disabled",
@@ -436,10 +470,11 @@ def enqueue_content_fit_on_demand(
         WHERE job_type=?
           AND status IN ('queued', 'running', 'retrying')
           AND payload->>'kol_pool_id'=?
+          AND COALESCE(payload->>'product_sku', '')=?
         ORDER BY created_at DESC, id DESC
         LIMIT 1
         """,
-        (CONTENT_FIT_JOB_TYPE, str(kid)),
+        (CONTENT_FIT_JOB_TYPE, str(kid), normalized_product_sku),
     ).fetchone()
     if existing:
         row = dict(existing)
@@ -447,6 +482,8 @@ def enqueue_content_fit_on_demand(
             "status": "already_queued" if str(row.get("status")) == "queued" else "already_running",
             "state": "queued",
             "kol_pool_id": kid,
+            "product_sku": normalized_product_sku or None,
+            "derive_method": derive_method,
             "job_id": int(row.get("id")) if row.get("id") is not None else None,
             "job_type": CONTENT_FIT_JOB_TYPE,
             "ai_analysis": {
@@ -463,8 +500,8 @@ def enqueue_content_fit_on_demand(
         "kol_pool_id": kid,
         "target_type": "kol",
         "target_id": str(kid),
-        "product_sku": str(product_sku or "") or None,
-        "derive_method": CONTENT_FIT_DERIVE_METHOD,
+        "product_sku": normalized_product_sku or None,
+        "derive_method": derive_method,
         "source": "kol_pool_detail_on_demand",
         "trigger": "content_fit_on_demand",
         "force": bool(force),
@@ -476,7 +513,11 @@ def enqueue_content_fit_on_demand(
         conn,
         job_type=CONTENT_FIT_JOB_TYPE,
         payload=payload,
-        idempotency_key=active_job_idempotency_key(CONTENT_FIT_JOB_TYPE, kid),
+        idempotency_key=active_job_idempotency_key(
+            CONTENT_FIT_JOB_TYPE,
+            kid,
+            normalized_product_sku,
+        ),
     )
     conn.commit()
     job_id = job.get("id")
@@ -484,6 +525,8 @@ def enqueue_content_fit_on_demand(
         "status": "queued" if inserted else ("already_running" if job.get("status") == "running" else "already_queued"),
         "state": "queued",
         "kol_pool_id": kid,
+        "product_sku": normalized_product_sku or None,
+        "derive_method": derive_method,
         "job_id": int(job_id) if job_id is not None else None,
         "job_type": CONTENT_FIT_JOB_TYPE,
         "ai_analysis": {

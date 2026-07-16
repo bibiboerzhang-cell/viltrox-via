@@ -17,6 +17,7 @@ from typing import Any
 import psycopg
 
 from app.core.logging import get_logger
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.db.connection import db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.services.media.video_download import download_direct_video_url
@@ -432,7 +433,7 @@ def _record_anthropic_cost(
             scope=LLM_BUDGET_SCOPE,
             cron_task="vkpi_analysis_worker",
             ai_provider="anthropic",
-            model_name=str(raw.get("model") or raw.get("method") or "claude-opus-4-8"),
+            model_name=str(raw.get("model") or raw.get("method") or CLAUDE_OPUS_EXACT_MODEL),
             cost_usd=cost,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
@@ -673,27 +674,36 @@ def _process_gemini_video(
         },
     }
     if platform in {"instagram", "tiktok"}:
-        resolved = _resolve_video_media(evidence)
-        if str(resolved.get("status") or "") == "blocked":
-            _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
-            return
-        if not resolved.get("ok"):
-            resolve_reason = str(resolved.get("reason") or "")
-            # X6(2026-07-02 对齐 prod 热修):IG 图文帖 —— 抓取本身成功(scraped_ok)但没有可下载
-            # 视频 URL(scraped_no_downloadable_url)= 这条内容就是图文没有视频,重试多少次也长不出
-            # 视频。裸 raise 会进 retry/triage 白耗预算 → 直接转 blocked(image_post_no_video)。
-            if platform == "instagram" and resolved.get("scraped_ok") and resolve_reason.endswith("scraped_no_downloadable_url"):
-                _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
-                return
-            # reason 已含 media_resolve_failed:<platform>:<真因>(见 _resolve_video_media 诚实化),
-            # 不再二次包装成 "media_resolve_failed: media_resolve_failed",保留可诊断真因。
-            raise RuntimeError(resolve_reason or f"media_resolve_failed:{platform}")
         with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
-            download = download_direct_video_url(
-                str(resolved.get("direct_video_url") or ""),
-                tmpdir,
-                referer=str(evidence.get("content_url") or ""),
-            )
+            resolved = _resolve_cached_or_provider_video(conn, evidence, tmpdir)
+            if str(resolved.get("status") or "") == "blocked":
+                _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
+                return
+            if not resolved.get("ok"):
+                resolve_reason = str(resolved.get("reason") or "")
+                # X6(2026-07-02 对齐 prod 热修):IG 图文帖 —— 抓取本身成功(scraped_ok)但没有可下载
+                # 视频 URL(scraped_no_downloadable_url)= 这条内容就是图文没有视频,重试多少次也长不出
+                # 视频。裸 raise 会进 retry/triage 白耗预算 → 直接转 blocked(image_post_no_video)。
+                if platform == "instagram" and resolved.get("scraped_ok") and resolve_reason.endswith("scraped_no_downloadable_url"):
+                    _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
+                    return
+                # reason 已含 media_resolve_failed:<platform>:<真因>(见 _resolve_video_media 诚实化),
+                # 不再二次包装成 "media_resolve_failed: media_resolve_failed",保留可诊断真因。
+                raise RuntimeError(resolve_reason or f"media_resolve_failed:{platform}")
+            if resolved.get("cache_hit"):
+                download = {
+                    "success": True,
+                    "path": str(resolved.get("path") or ""),
+                    "bytes": int(resolved.get("bytes") or 0),
+                    "error": None,
+                    "cache_hit": True,
+                }
+            else:
+                download = download_direct_video_url(
+                    str(resolved.get("direct_video_url") or ""),
+                    tmpdir,
+                    referer=str(evidence.get("content_url") or ""),
+                )
             if not download.get("success") or not download.get("path"):
                 # Point 8: a terminal precheck verdict (404/403/410/451) means the
                 # direct URL is confidently unavailable. Re-raise its bare reason —
@@ -725,21 +735,26 @@ def _process_gemini_video(
                 "source_url_host": _url_host(str(evidence.get("content_url") or "")),
                 "direct_video_url_host": resolved.get("direct_video_url_host"),
                 "status": resolved.get("status"),
+                "cache_hit": bool(resolved.get("cache_hit")),
+                "cache_source": resolved.get("cache_source"),
+                "cache_asset_id": resolved.get("cache_asset_id"),
+                "cache_lookup_reason": resolved.get("cache_lookup_reason"),
             }
             raw["local_video_input"] = {
                 "download_bytes": int(download.get("bytes") or 0),
                 "temporary_files_cleaned": True,
                 "download_error": download.get("error"),
             }
-            # C3:临时目录删除前,把这份已下载、已被 Gemini 分析的字节登记进视频缓存(传 R2),
-            # 令 KOL 详情页 cached_video_url 有值、视频可播。失败仅告警,不影响分析结果。
-            _warm_video_to_r2_from_local(
-                job_id=job.get("id"),
-                platform=platform,
-                content_url=str(evidence.get("content_url") or ""),
-                direct_video_url=str(resolved.get("direct_video_url") or ""),
-                local_path=str(download.get("path") or ""),
-            )
+            if not resolved.get("cache_hit"):
+                # C3:临时目录删除前,把这份已下载、已被 Gemini 分析的字节登记进视频缓存(传 R2),
+                # 令 KOL 详情页 cached_video_url 有值、视频可播。已命中缓存时不重复上传。
+                _warm_video_to_r2_from_local(
+                    job_id=job.get("id"),
+                    platform=platform,
+                    content_url=str(evidence.get("content_url") or ""),
+                    direct_video_url=str(resolved.get("direct_video_url") or ""),
+                    local_path=str(download.get("path") or ""),
+                )
     else:
         analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
         raw = _run_gemini_analyzer_with_timeout(
@@ -954,6 +969,7 @@ from app.workers.apify_jobs_worker import (  # noqa: E402
     _log_budget_preflight_record_only,
     _provider_allowed,
     _provider_budget_preflight,
+    _resolve_cached_or_provider_video,
     _resolve_video_media,
     _run_gemini_analyzer_with_timeout,
     _warm_video_to_r2_from_local,

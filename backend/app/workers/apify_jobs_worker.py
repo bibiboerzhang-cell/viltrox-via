@@ -299,6 +299,7 @@ def _respect_gemini_qps(conn: psycopg.Connection[Any]) -> None:
 from app.workers.apify_jobs_worker_media import (  # noqa: E402
     _gemini_analyzer_child_code,
     _mock_result,
+    _resolve_cached_or_provider_video,
     _resolve_video_media,
     _run_gemini_analyzer_with_timeout,
     _scrape_with_apify_timeout,

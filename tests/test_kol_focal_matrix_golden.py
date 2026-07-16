@@ -68,11 +68,12 @@ class _Conn:
         return _Result([])
 
 
-def _product(sku, model_name, price, series=""):
+def _product(sku, model_name, price, series="", mount=""):
     return {
         "sku": sku, "series": series, "category_main": "Lens",
         "category_detail": "AF Lens", "model_name": model_name,
         "marketing_name": model_name, "price_usd": price, "status": "official",
+        "mount": mount, "product_url": f"https://example.com/{sku.lower()}",
     }
 
 
@@ -127,3 +128,103 @@ def test_focal_matrix_film_context_not_covered_golden():
     for key in ("focal", "mm", "in_catalog", "covered", "video_count", "avg_views",
                 "title_hits", "deep_hits", "top_example", "catalog"):
         assert key in cell
+
+
+def test_product_opportunity_uses_mount_price_and_series_diversity_not_epic_total():
+    conn = _Conn({
+        "FROM vkpi_kol_pool": [{
+            "id": 9,
+            "handle": "sony_filmmaker",
+            "display_name": "Sony Filmmaker",
+            "platform": "tiktok",
+            "bio": "Sony FX3 filmmaker and camera rig breakdowns",
+            "followers": 728_000,
+            "avg_views": 349_900,
+        }],
+        "FROM vkpi_analysis_cache": [],
+        "FROM vkpi_kol_video_evidence": [{
+            "evidence_id": 91,
+            "title": "Sony FX3 camera rig breakdown for cinematic color grading",
+            "view_count": 349_900,
+            "is_active": 1,
+        }],
+        "FROM vkpi_products": [
+            # 多焦段高价套装:旧算法会把 25.8K 重复灌到每个焦段;v2 必须排除。
+            {
+                **_product(
+                    "EPIC-25MM-35MM-50MM-75MM-100MM-PL-SET",
+                    "EPIC 25mm/35mm/50mm/75mm/100mm PL Cine Lens Set",
+                    25_800,
+                    series="Cine",
+                    mount="L-mount",
+                ),
+                "category_detail": "Cine Lens",
+            },
+            # 同焦段错误卡口:即使价格/系列一样也必须硬排除。
+            _product("AF-35MM-F18-EVO-Z", "AF 35mm F1.8 EVO Nikon Z", 395, series="EVO", mount="Z-mount"),
+            _product("AF-35MM-F18-EVO-FE", "AF 35mm F1.8 EVO Sony E", 395, series="EVO", mount="FE-mount"),
+            _product("AF-50MM-F14-PRO-FE", "AF 50mm F1.4 Pro Sony E", 549, series="Pro", mount="FE-mount"),
+            _product("AF-135MM-F18-LAB-FE", "AF 135mm F1.8 LAB Sony E", 899, series="LAB", mount="FE-mount"),
+            _product("AF-15MM-F17-AIR-FE", "AF 15mm F1.7 Air Sony E", 239, series="Air", mount="FE-mount"),
+            {
+                **_product("MF-20MM-T20-CINE-FE", "MF 20mm T2.0 Cine Sony E", 499, series="Cine", mount="FE-mount"),
+                "category_detail": "Cine Lens",
+            },
+        ],
+    })
+
+    payload = fm.focal_matrix(9, conn=conn)
+    context = payload["gaps"]["creator_context"]
+    items = payload["gaps"]["recommendations"][:5]
+    skus = [item["sku"] for item in items]
+    series = [item["series"][0] for item in items]
+
+    assert context["camera_body"].lower() == "sony fx3"
+    assert context["mount"] == "FE-mount"
+    assert context["content_lane"] == "cinema"
+    assert "EPIC-25MM-35MM-50MM-75MM-100MM-PL-SET" not in skus
+    assert "AF-35MM-F18-EVO-Z" not in skus
+    assert all(item["mount"] == "FE-mount" for item in items)
+    assert {"EVO", "Pro", "LAB", "Air", "Cine"} <= set(series)
+    assert len(series) == len(set(series))
+    assert all(item["compatibility_status"] == "compatible" for item in items)
+    assert all(item["reasons"] and item["score_breakdown"] for item in items)
+    assert payload["basis"]["opportunity_method"] == "mount_content_price_series_v2"
+
+
+def test_product_opportunity_unknown_mount_does_not_emit_fake_top1():
+    products = [
+        _product("AF-35MM-F18-EVO-FE", "AF 35mm F1.8 EVO Sony E", 395, series="EVO", mount="FE-mount"),
+    ]
+    context = fm._creator_context({"followers": 20_000}, [{"title_blob": "lens review", "deep_blob": ""}])
+    items = fm._product_opportunities(products, {"35mm"}, context)
+
+    assert context["mount_status"] == "unknown"
+    assert context["recommendation_status"] == "insufficient_evidence"
+    assert items == []
+
+
+def test_explicit_camera_body_wins_over_competitor_mentions():
+    mount, evidence, status = fm._infer_creator_mount(
+        "comparison with nikon z8 and fujifilm x-h2",
+        "Sony A7 IV",
+    )
+    assert mount == "FE-mount"
+    assert status == "inferred_from_camera"
+    assert "Sony" in evidence
+
+
+def test_conflicting_text_mounts_stop_recommendation_when_camera_unknown():
+    mount, evidence, status = fm._infer_creator_mount(
+        "Sony versus Nikon versus Fujifilm camera comparison",
+        "",
+    )
+    assert mount == ""
+    assert status == "conflict"
+    assert "多个卡口" in evidence
+
+
+def test_compact_camera_models_and_red_komodo_mounts_are_not_misclassified():
+    assert fm._infer_creator_mount("mentions PL adapter", "sonyfx9")[0] == "FE-mount"
+    assert fm._infer_creator_mount("compares Nikon", "fujifilmxh2")[0] == "X-mount"
+    assert fm._infer_creator_mount("cine camera", "RED Komodo")[0] == "RF-mount"

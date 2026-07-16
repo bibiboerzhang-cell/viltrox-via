@@ -44,10 +44,18 @@ def build_item(
         return None  # 诚实:无 ready 视频证据,不烧 batch
     comments = cfa._fan_comments(conn, kid)
     dimensions = cfa._dimensions_11(kid)
-    product = cfa._resolve_product(product_sku, product_persona)
+    normalized_product_sku = cfa.normalize_product_sku(product_sku)
+    derive_method = cfa.content_fit_derive_method(normalized_product_sku)
+    product = cfa._resolve_product(normalized_product_sku, product_persona)
     prompt = cfa._build_prompt(kol, product, videos, comments, dimensions)
+    # Anthropic batch custom_id must be unique inside one batch and only uses a
+    # conservative character set.  The scoped derive suffix is already a
+    # bounded hex digest, so reuse it instead of placing a raw SKU in the ID.
+    custom_id = str(kid)
+    if normalized_product_sku:
+        custom_id = f"{kid}-{derive_method.rsplit(':', 1)[-1]}"
     return {
-        "custom_id": str(kid),
+        "custom_id": custom_id,
         "prompt": prompt,
         "max_output_tokens": cfa.MAX_OUTPUT_TOKENS,
         "meta": {
@@ -57,6 +65,8 @@ def build_item(
             "has_dimensions_11": bool(dimensions),
             "video_evidence_ids": [v.get("evidence_id") for v in videos],
             "product": product,
+            "product_sku": normalized_product_sku or None,
+            "derive_method": derive_method,
         },
     }
 
@@ -98,7 +108,7 @@ def consume(results_by_id: dict[str, str], request_map: dict[str, Any]) -> dict[
     for cid, text in (results_by_id or {}).items():
         meta = (request_map or {}).get(cid) or {}
         try:
-            kid = int(meta.get("kol_pool_id") or cid)
+            kid = int(meta.get("kol_pool_id") or str(cid).split("-", 1)[0])
             parsed = cfa._parse_llm_json(text)
             if not parsed:
                 failed += 1
@@ -127,7 +137,15 @@ def consume(results_by_id: dict[str, str], request_map: dict[str, Any]) -> dict[
                     "via": "batch",
                 },
             }
-            cfa._write_cache(conn, kid, result, model="anthropic-batch", cost_usd=0.0, triggered_by_user_id=None)
+            cfa._write_cache(
+                conn,
+                kid,
+                result,
+                model="anthropic-batch",
+                cost_usd=0.0,
+                triggered_by_user_id=None,
+                product_sku=meta.get("product_sku"),
+            )
             written += 1
         except Exception:
             logger.warning("content_fit_batch.consume_entry_failed", extra={"custom_id": cid}, exc_info=True)

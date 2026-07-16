@@ -37,6 +37,7 @@ import { AudienceGeoPanel } from "./AudienceGeoPanel";
 import { OutreachCriticSignalCard } from "./OutreachCriticSignalCard";
 import { SafetyAuthenticityPanel } from "./SafetyAuthenticityPanel";
 import { DRAWER_TABS, KOLDrawerBriefSkill, KOLDrawerCoopActions, KOLDrawerViewerContextBar, readStoredDrawerTab, storeDrawerTab } from "./KOLDetailDrawer.Subsections";
+import { useKOLDrawerViewerContext } from "./useKOLDrawerViewerContext";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -59,52 +60,31 @@ export { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOL
 
 const e = React.createElement;
 
+export function videoAnalysisGateMessage(payload: any): string {
+  const gate = String(payload?.provider_gate_reason || payload?.reason || payload?.status || "").trim();
+  const readiness = String(payload?.model_readiness_status || "").trim();
+  if (/model_binding_blocked|readiness_not_production_ready|probe_evidence_missing|evaluation_evidence_missing/i.test(gate)) {
+    return `精确视频模型尚未通过生产就绪，本次未入队${readiness ? `（${readiness}）` : ""}。`;
+  }
+  if (/budget_guard_blocked|budget_denied|budget/i.test(gate)) {
+    return "预算授权尚未放行，本次未入队且未产生模型费用。";
+  }
+  if (/operator_disabled|provider_disabled|ai_disabled/i.test(gate)) {
+    return "AI 视频分析当前未启用，本次未入队；基础视频证据仍保留。";
+  }
+  return `视频深析未入队${gate ? `（${gate}）` : ""}。`;
+}
+
 // 【C1 Tab 化】抽屉内容区四 tab:按「用户看数据的心智」把既有 section 分组渲染(零改各 section 内部)。
 // 概览=这人是谁/分数为何/内容速览;深度分析=LLM/视频深析产物;受众=粉丝画像;合作=推进合作的动作面。
 // 头部身份卡与底部粘性行动条在 tab 结构之外,全 tab 常驻。tab 选择记忆到 localStorage(跨 KOL/会话)。
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
+  const contentFitProductSku = String(item?.product_sku || item?.productSku || "").trim();
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
   // 【M3/M5】观看者上下文:共享来源(来自谁的共享)+ active 认领(本人/管理层可释放)。
-  // 开抽屉只读拉取(动态 import 保持 mock seam 不变),失败静默 → 不渲染徽标(graceful absence)。
-  const [viewerCtx, setViewerCtx] = React.useState<any>(null);
-  const [releaseBusy, setReleaseBusy] = React.useState(false);
-  const [releaseMsg, setReleaseMsg] = React.useState("");
-  React.useEffect(() => {
-    setViewerCtx(null);
-    setReleaseBusy(false);
-    setReleaseMsg("");
-    if (!apiToken || !item?.id) return;
-    let cancelled = false;
-    void import("../../../../services/vkpi/kol-api")
-      .then(({ getMyKolViewerContext }) => getMyKolViewerContext(apiToken, item.id))
-      .then((payload: any) => {
-        if (!cancelled) setViewerCtx(payload && typeof payload === "object" ? payload : null);
-      })
-      .catch(() => { if (!cancelled) setViewerCtx(null); });
-    return () => { cancelled = true; };
-  }, [apiToken, item?.id]);
-  // 【M3】释放认领:确认 → 乐观摘掉认领条 → POST /claims/{id}/release;失败回滚 + 显示原因。
-  // 权限由后端把关(认领人本人或管理层),按钮只在 can_release=true 时出现。
-  const handleReleaseClaim = React.useCallback(() => {
-    const claim = viewerCtx?.claim;
-    const claimId = claim?.id;
-    if (!apiToken || !claimId || releaseBusy) return;
-    const kolLabel = String(item?.display_name || item?.handle || "该 KOL");
-    if (!window.confirm(`确认释放对「${kolLabel}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
-    setReleaseBusy(true);
-    setReleaseMsg("");
-    const snapshot = viewerCtx;
-    setViewerCtx((prev: any) => (prev ? { ...prev, claim: null } : prev));
-    void import("../../../../services/vkpi/kol-api")
-      .then(({ releaseKolClaim }) => releaseKolClaim(apiToken, String(claimId)))
-      .then(() => setReleaseMsg("已释放认领"))
-      .catch((error: any) => {
-        setViewerCtx(snapshot);
-        setReleaseMsg("释放失败:" + String(error?.message || "请重试").slice(0, 80));
-      })
-      .finally(() => setReleaseBusy(false));
-  }, [apiToken, viewerCtx, releaseBusy, item?.display_name, item?.handle]);
+  // 动态 import 保持 mock seam 不变;失败时不渲染徽标(graceful absence)。
+  const { viewerCtx, releaseBusy, releaseMsg, handleReleaseClaim } = useKOLDrawerViewerContext({ apiToken, item });
   // 【C1】当前 tab:惰性读 localStorage(非法值回落「概览」);切换时写回记忆。
   const [activeTab, setActiveTab] = React.useState<string>(() => readStoredDrawerTab());
   const handleSelectTab = React.useCallback((key: string) => {
@@ -209,7 +189,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             setVideoEnqueueState({ status: "already_analyzed", message: "视频深析已完成并自动回填。" });
             return;
           }
-          if (["blocked", "failed", "error", "cancelled", "canceled"].includes(state)) {
+          if (snapshot.terminal) {
             await reloadDetailSafely();
             if (!isCurrent()) return;
             clearVideoAnalysisPoll(options.mode);
@@ -561,7 +541,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     setContentFitBusy(false);
     if (!apiToken || !item?.id) return;
     let cancelled = false;
-    void getKolPoolContentFit(apiToken, item.id)
+    void getKolPoolContentFit(
+      apiToken,
+      item.id,
+      contentFitProductSku ? { productSku: contentFitProductSku } : {},
+    )
       .then((payload) => {
         if (cancelled) return;
         setContentFit(payload && payload.state === "ready" ? payload : null);
@@ -572,7 +556,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     return () => {
       cancelled = true;
     };
-  }, [apiToken, item?.id]);
+  }, [apiToken, item?.id, contentFitProductSku]);
 
   // W3 长期记忆:开抽屉纯读聚合快照(不烧 LLM、零触评分)。失败静默(记忆是增益,非阻塞)。
   React.useEffect(() => {
@@ -596,7 +580,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     if (!apiToken || !item?.id || contentFitBusy) return;
     setContentFitBusy(true);
     setContentFitError("");
-    void getKolPoolContentFit(apiToken, item.id, { analyze: true, force })
+    void getKolPoolContentFit(apiToken, item.id, {
+      analyze: true,
+      force,
+      ...(contentFitProductSku ? { productSku: contentFitProductSku } : {}),
+    })
       .then((payload) => {
         if (payload && payload.state === "ready") {
           setContentFit(payload);
@@ -671,6 +659,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     videoEnqueueState.status === "queued" ? "分析中…" :
     videoEnqueueState.status === "already_analyzed" ? "已分析过" :
     videoEnqueueState.status === "already_queued" ? "已在队列中" :
+    videoEnqueueState.status === "ai_disabled" || videoEnqueueState.status === "not_requested" ? "AI暂不可用" :
     "AI深度分析";
   const videoEnqueueTitle =
     videoEnqueueState.message ||
@@ -701,6 +690,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         } else if (status === "already_queued") {
           setVideoEnqueueState({ status, message: "这条 evidence 已在队列中，避免重复入队" });
           startVideoAnalysisPoll({ evidenceId: primaryVideoEvidenceId, itemIdentity: operationItemIdentity, mode: "single" });
+        } else if (status === "ai_disabled" || status === "not_requested") {
+          setVideoEnqueueState({ status: "ai_disabled", message: videoAnalysisGateMessage(payload) });
         } else if (status === "budget_denied") {
           setVideoEnqueueState({ status, message: "预算闸门拒绝，本次未入队" });
         } else {
@@ -896,6 +887,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           preloadedBundles: preloadedVideoAnalysisBundles,
           summary: videoAnalysisSummary,
           crawling: crawlBusy,
+          analysisState: videoEnqueueState,
           onRefresh: reloadDetailSafely,
         }),
         // ── 全视频跑:该 KOL 全部视频证据各入队一条 final_v1 → 发完综合评估 ──

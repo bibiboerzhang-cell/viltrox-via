@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -49,6 +50,32 @@ LLM_PURPOSE = "vkpi_kol_content_fit"
 LLM_COST_TAG = "vkpi_kol_content_fit"
 MODEL_TASK = "kol_content_fit_analysis"
 MAX_MODEL_ATTEMPTS = 3
+
+
+def normalize_product_sku(product_sku: str | None) -> str:
+    """Canonical product identity used by cache and active-job idempotency.
+
+    A content-fit verdict is about one KOL *and one product*.  Treating the SKU
+    as optional cache metadata allowed a generic verdict, EVO verdict, Pro
+    verdict, and EPIC verdict for the same creator to overwrite/reuse one row.
+    """
+
+    return " ".join(str(product_sku or "").strip().upper().split())
+
+
+def content_fit_derive_method(product_sku: str | None = None) -> str:
+    """Return the cache namespace for the exact product scope.
+
+    Keep the historical base method for an explicitly generic analysis.  A
+    bounded digest avoids leaking arbitrary SKU text into an index key while
+    preserving deterministic separation between products.
+    """
+
+    normalized = normalize_product_sku(product_sku)
+    if not normalized:
+        return DERIVE_METHOD
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return f"{DERIVE_METHOD}:sku:{digest}"
 
 
 def _utcnow() -> str:
@@ -538,7 +565,12 @@ def _build_prompt(
 # ── 缓存读写 ───────────────────────────────────────────────────────
 
 
-def _read_cache(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
+def _read_cache(
+    conn: Any,
+    kol_pool_id: int,
+    product_sku: str | None = None,
+) -> dict[str, Any] | None:
+    derive_method = content_fit_derive_method(product_sku)
     row = conn.execute(
         """
         SELECT result, model, cost, updated_at
@@ -547,7 +579,7 @@ def _read_cache(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
         """,
-        (TARGET_TYPE, str(int(kol_pool_id)), DERIVE_METHOD),
+        (TARGET_TYPE, str(int(kol_pool_id)), derive_method),
     ).fetchone()
     if not row:
         return None
@@ -556,6 +588,8 @@ def _read_cache(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
     return {
         "state": "ready",
         "kol_pool_id": int(kol_pool_id),
+        "product_sku": normalize_product_sku(product_sku) or None,
+        "derive_method": derive_method,
         "result": result,
         "model": data.get("model"),
         "cost": data.get("cost"),
@@ -572,8 +606,10 @@ def _write_cache(
     model: str,
     cost_usd: float,
     triggered_by_user_id: int | None,
+    product_sku: str | None = None,
 ) -> None:
     now = _utcnow()
+    derive_method = content_fit_derive_method(product_sku)
     conn.execute(
         """
         INSERT INTO vkpi_analysis_cache (
@@ -589,7 +625,7 @@ def _write_cache(
             TARGET_TYPE,
             str(int(kol_pool_id)),
             str(model or "llm_gateway"),
-            DERIVE_METHOD,
+            derive_method,
             json.dumps(result, ensure_ascii=False, default=str),
             float(cost_usd or 0.0),
             int(triggered_by_user_id) if triggered_by_user_id else None,
@@ -617,13 +653,22 @@ def _parse_llm_json(text: str) -> dict[str, Any] | None:
 # ── 公共入口 ───────────────────────────────────────────────────────
 
 
-def get_content_fit(kol_pool_id: int) -> dict[str, Any]:
+def get_content_fit(
+    kol_pool_id: int,
+    product_sku: str | None = None,
+) -> dict[str, Any]:
     """纯只读:返回已缓存的 content_fit_v1;无则 state=missing。端点默认用它(不烧 LLM)。"""
     conn = get_conn()
-    cached = _read_cache(conn, int(kol_pool_id))
+    cached = _read_cache(conn, int(kol_pool_id), product_sku)
     if cached:
         return cached
-    return {"state": "missing", "kol_pool_id": int(kol_pool_id)}
+    normalized_sku = normalize_product_sku(product_sku)
+    return {
+        "state": "missing",
+        "kol_pool_id": int(kol_pool_id),
+        "product_sku": normalized_sku or None,
+        "derive_method": content_fit_derive_method(normalized_sku),
+    }
 
 
 def analyze_content_fit(
@@ -651,7 +696,7 @@ def analyze_content_fit(
         raise LookupError(f"kol_pool_id not found: {kid}")
 
     if not force:
-        cached = _read_cache(conn, kid)
+        cached = _read_cache(conn, kid, product_sku)
         if cached:
             return cached
 
@@ -704,6 +749,7 @@ def analyze_content_fit(
                     "video_count": len(videos),
                     "comment_count": len(comments),
                     "product_mode": product.get("mode"),
+                    "product_sku": normalize_product_sku(product_sku) or None,
                     "phase": "kol_analysis",
                     "subphase": "content_fit",
                     "attempt_index": attempt_index,
@@ -781,11 +827,14 @@ def analyze_content_fit(
             else float(resp.get("cost_cents") or 0) / 100.0
         ),
         triggered_by_user_id=int(triggered_by_user_id) if triggered_by_user_id else None,
+        product_sku=product_sku,
     )
 
     return {
         "state": "ready",
         "kol_pool_id": kid,
+        "product_sku": normalize_product_sku(product_sku) or None,
+        "derive_method": content_fit_derive_method(product_sku),
         "result": result,
         "model": model,
         "cost": float(resp.get("cost_cents") or 0) / 100.0,

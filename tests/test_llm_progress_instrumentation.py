@@ -72,6 +72,32 @@ def test_generate_json_adds_progress_without_relaxing_strict_gates(monkeypatch):
     assert captured["metadata"]["target_label"] == "deepsight_strategy"
 
 
+def test_generate_json_rejects_task_binding_model_mismatch_before_gateway(monkeypatch):
+    from app.platform import llm_production
+
+    called = False
+
+    def fake_invoke_json(_prompt, **_kwargs):
+        nonlocal called
+        called = True
+        return {"status": "success", "json": {}}
+
+    monkeypatch.setattr(llm_production.llm_gateway, "invoke_json", fake_invoke_json)
+    try:
+        llm_production.generate_json(
+            "prompt",
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            purpose="ai_today.evidence_strategy",
+            metadata={"task_binding": "ai_today_evidence_strategy"},
+        )
+    except llm_production.ProductionLlmUnavailable as exc:
+        assert exc.code == "task_binding_model_mismatch"
+    else:
+        raise AssertionError("mismatched task binding must fail closed")
+    assert called is False
+
+
 def test_via_summary_keeps_its_reviewed_task_binding(monkeypatch):
     from app.services.via import model_router
 
@@ -309,6 +335,8 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
 
     reservations = Reservations()
     call_rows = []
+    breaker_events = []
+    breaker_guard = object()
     monkeypatch.setattr(
         llm_production.llm_gateway,
         "budget_preflight",
@@ -331,6 +359,16 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
         llm_production.llm_gateway,
         "record_call",
         lambda **kwargs: call_rows.append(kwargs) or {"call": {"call_uid": "unit"}},
+    )
+    monkeypatch.setattr(
+        llm_production.llm_gateway,
+        "_acquire_strict_fleet_breaker",
+        lambda **kwargs: breaker_events.append(("acquire", kwargs)) or breaker_guard,
+    )
+    monkeypatch.setattr(
+        llm_production.llm_gateway,
+        "_complete_strict_fleet_breaker",
+        lambda guard, outcome: breaker_events.append(("complete", guard, outcome)),
     )
 
     response = llm_production.generate_anthropic_messages(
@@ -363,6 +401,10 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
     assert call_rows[-1]["status"] == "success"
     assert call_rows[-1]["metadata"]["task_binding"] == "audit_vision_fallback"
     assert call_rows[-1]["update_budget_scopes"] is False
+    assert breaker_events[0][0] == "acquire"
+    assert breaker_events[0][1]["provider"] == "anthropic"
+    assert breaker_events[-1][0] == "complete"
+    assert breaker_events[-1][1] is breaker_guard
 
 
 def test_claude_image_batch_routes_through_reviewed_vision_binding(monkeypatch):

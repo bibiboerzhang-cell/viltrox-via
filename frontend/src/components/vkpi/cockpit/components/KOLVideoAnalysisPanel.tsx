@@ -10,6 +10,9 @@ export interface AnalysisBundle {
   video: VideoEvidence;
   finalEntry: VkpiKolVideoAnalysisCacheEntry | null;
   qaEntry: VkpiKolVideoAnalysisCacheEntry | null;
+  state?: string;
+  reason?: string;
+  analysisJob?: Record<string, unknown> | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -453,6 +456,7 @@ export function KOLVideoAnalysisPanel({
   preloadedBundles,
   summary,
   crawling = false,
+  analysisState,
   onRefresh,
 }: {
   apiToken?: string;
@@ -462,9 +466,16 @@ export function KOLVideoAnalysisPanel({
   // 【A3】抓取进度徽标:父层(KOLDetailDrawer)在 profile 深爬入队/轮询中时置 true,
   // 标题旁显示「抓取中·完成自动出现」。纯 props 透传,本组件不新增任何全局依赖。
   crawling?: boolean;
+  analysisState?: { status?: string; message?: string } | null;
   onRefresh?: () => void | Promise<void>;
 }) {
   const evidenceVideos = useMemo(() => videos.filter((video) => videoEvidenceId(video)).slice(0, 3), [videos]);
+  // Parent detail mapping can recreate equivalent arrays on every render. Depend on a
+  // semantic signature below so the cache probe does not fan out again for the same IDs.
+  const evidenceSignature = evidenceVideos.map((video) => videoEvidenceId(video)).join("|");
+  const preloadedSignature = (Array.isArray(preloadedBundles) ? preloadedBundles : [])
+    .map((bundle) => `${videoEvidenceId(bundle.video)}:${bundle.finalEntry ? "ready" : bundle.state || "missing"}`)
+    .join("|");
   const summaryRecord = asRecord(summary);
   const summaryReadyCount = Number(summaryRecord.ready_count);
   const summaryEvidenceCount = Number(summaryRecord.evidence_count);
@@ -488,8 +499,13 @@ export function KOLVideoAnalysisPanel({
     let cancelled = false;
     setError("");
     setBundles([]);
-    if (Array.isArray(preloadedBundles)) {
-      setBundles(preloadedBundles);
+    const preloadedByEvidence = new Map(
+      (Array.isArray(preloadedBundles) ? preloadedBundles : []).map((bundle) => [videoEvidenceId(bundle.video), bundle]),
+    );
+    const allPreloadedReady = evidenceVideos.length > 0
+      && evidenceVideos.every((video) => Boolean(preloadedByEvidence.get(videoEvidenceId(video))?.finalEntry));
+    if (allPreloadedReady) {
+      setBundles(Array.isArray(preloadedBundles) ? preloadedBundles : []);
       setLoading(false);
       return () => {
         cancelled = true;
@@ -509,10 +525,16 @@ export function KOLVideoAnalysisPanel({
           getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1"),
           getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa"),
         ]);
+        const finalResponse = finalResult.status === "fulfilled" ? finalResult.value : null;
+        const analysisJob = asRecord(finalResponse?.analysis_job);
+        const state = textFrom(analysisJob.state ?? analysisJob.status ?? finalResponse?.state).toLowerCase() || "unknown";
         return {
           video,
-          finalEntry: finalResult.status === "fulfilled" && finalResult.value.state === "ready" ? finalResult.value.entry || null : null,
+          finalEntry: finalResponse?.state === "ready" ? finalResponse.entry || null : null,
           qaEntry: qaResult.status === "fulfilled" && qaResult.value.state === "ready" ? qaResult.value.entry || null : null,
+          state,
+          reason: firstText(analysisJob.reason_detail, analysisJob.reason, analysisJob.error_category, state),
+          analysisJob: Object.keys(analysisJob).length ? analysisJob : null,
         };
       }),
     )
@@ -528,9 +550,21 @@ export function KOLVideoAnalysisPanel({
     return () => {
       cancelled = true;
     };
-  }, [apiToken, evidenceVideos, preloadedBundles]);
+  }, [apiToken, evidenceSignature, preloadedSignature]);
 
   const readyBundles = bundles.filter((bundle) => bundle.finalEntry);
+  const requestedState = textFrom(analysisState?.status).toLowerCase();
+  const liveBundle = bundles.find((bundle) => ["queued", "running", "retrying", "processing", "pending"].includes(String(bundle.state || "")));
+  const terminalBundle = bundles.find((bundle) => ["blocked", "failed", "error", "cancelled", "canceled"].includes(String(bundle.state || "")));
+  const analysisNotice = analysisState?.message
+    ? { kind: requestedState === "ai_disabled" || requestedState === "not_requested" ? "blocked" : "active", text: analysisState.message }
+    : terminalBundle
+      ? { kind: "blocked", text: `视频深析未完成：${terminalBundle.reason || terminalBundle.state || "任务终止"}` }
+      : liveBundle?.analysisJob
+        ? { kind: "active", text: `视频深析正在${liveBundle.state === "queued" ? "排队" : "处理"}，完成后自动回填。` }
+        : bundles.some((bundle) => bundle.state === "not_requested")
+          ? { kind: "idle", text: "尚未请求 final_v1 深析；可点击下方“AI深度分析”发起。" }
+          : null;
 
   return (
     <section className="border-b border-white/[0.06] px-5 py-3">
@@ -542,6 +576,11 @@ export function KOLVideoAnalysisPanel({
             <span className="rounded border border-amber-400/25 bg-amber-400/[0.10] px-1.5 py-0.5 text-[8.5px] font-medium text-amber-300">
               抓取中 · 完成自动出现
             </span>
+          ) : null}
+          {analysisNotice?.kind === "active" ? (
+            <span className="rounded border border-cyan-400/25 bg-cyan-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-cyan-200">分析处理中</span>
+          ) : analysisNotice?.kind === "blocked" ? (
+            <span className="rounded border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-amber-200">未入队/已阻断</span>
           ) : null}
         </div>
         <div className="flex items-center gap-1.5">
@@ -590,11 +629,11 @@ export function KOLVideoAnalysisPanel({
       ) : (
         <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3">
           <div className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
-            <CheckCircle2 size={11} className="text-slate-500" />
-            暂无深度分析
+            {analysisNotice?.kind === "blocked" ? <AlertTriangle size={11} className="text-amber-300" /> : <CheckCircle2 size={11} className="text-slate-500" />}
+            {analysisNotice?.kind === "active" ? "深度分析处理中" : analysisNotice?.kind === "blocked" ? "深度分析未启动" : "暂无深度分析"}
           </div>
           <div className="mt-1 text-[9.5px] text-slate-600">
-            已找到 {Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? summaryEvidenceCount : evidenceVideos.length} 条 video evidence，但未命中 video_analysis_final_v1 cache。
+            {analysisNotice?.text || `已找到 ${Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? summaryEvidenceCount : evidenceVideos.length} 条 video evidence，但尚无 video_analysis_final_v1 结果。`}
           </div>
           {error ? <div className="mt-1 text-[9.5px] text-rose-300">{error}</div> : null}
         </div>

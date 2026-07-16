@@ -14,14 +14,27 @@ logger = get_logger(__name__)
 Step = tuple[str, Callable[[dict[str, Any]], dict[str, Any]]]
 
 
+def _require_fence() -> dict[str, Any]:
+    from app.domains.platform import workflow_engine
+
+    return workflow_engine.require_workflow_fence()
+
+
 def build_kol_onboarding_steps(query: str, staff: dict[str, Any] | None = None) -> list[Step]:
     """KOL 建档 3 步(复用 enroll / apify_enrich / agent_memory_writer)。"""
 
     def s_discover(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.discovery import enroll
 
+        execution = _require_fence()
         r = enroll.federated_discover_and_enroll(query, limit=20, staff=staff)
-        return {"found": r.get("found", 0), "enrolled": r.get("enrolled", 0), "enrolled_ids": r.get("enrolled_ids", [])}
+        return {
+            "found": r.get("found", 0),
+            "enrolled": r.get("enrolled", 0),
+            "enrolled_ids": r.get("enrolled_ids", []),
+            "discover_side_effect_key": execution["side_effect_key"],
+            "external_exactly_once": False,
+        }
 
     def s_enrich(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.discovery import apify_enrich
@@ -29,19 +42,35 @@ def build_kol_onboarding_steps(query: str, staff: dict[str, Any] | None = None) 
         ids = list(state.get("enrolled_ids", []) or [])[:10]
         enriched = 0
         for kid in ids:
+            _require_fence()
             if apify_enrich.enrich_kol(int(kid)).get("status") == "ok":
                 enriched += 1
-        return {"enrich_attempted": len(ids), "enriched": enriched}
+        return {
+            "enrich_attempted": len(ids),
+            "enriched": enriched,
+            "external_exactly_once": False,
+        }
 
     def s_memory(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.memory import agent_memory_writer
 
+        execution = _require_fence()
         agent_memory_writer.record_signal(
             action_kind="search", entity_type="discovery", entity_id=str(query), staff=staff,
             reason=f"KOL建档链:发现{state.get('found', 0)}/落库{state.get('enrolled', 0)}",
-            detail={"query": query, "found": state.get("found", 0), "enrolled": state.get("enrolled", 0)},
+            detail={
+                "query": query,
+                "found": state.get("found", 0),
+                "enrolled": state.get("enrolled", 0),
+                "workflow_side_effect_key": execution["side_effect_key"],
+                "external_exactly_once": False,
+            },
         )
-        return {"memory_recorded": True}
+        return {
+            "memory_recorded": True,
+            "memory_side_effect_key": execution["side_effect_key"],
+            "external_exactly_once": False,
+        }
 
     return [("federated_discover", s_discover), ("enrich_new", s_enrich), ("write_memory", s_memory)]
 

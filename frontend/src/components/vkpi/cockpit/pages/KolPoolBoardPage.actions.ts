@@ -403,6 +403,7 @@ export function useSmartOpeners(
         platform: recallItem.platform || matched.platform,
         profile_type: recallItem.profile_type || matched.profile_type,
         followers: recallItem.followers ?? matched.followers,
+        product_sku: recallItem.product_sku || recallItem.productSku || matched.product_sku || matched.productSku,
         candidate_kind: matched.candidate_kind || "existing",
       }, avatar));
       return;
@@ -425,6 +426,7 @@ export function useSmartOpeners(
         followers: recallItem.followers ?? src.followers ?? null,
         profile_url: String(recallItem.profile_url || src.profile_url || src.channel_url || src.source_url || "").trim(),
         bio: why,
+        product_sku: recallItem.product_sku || recallItem.productSku || null,
         candidate_kind: "new_discovered",
       }, avatar));
     };
@@ -442,6 +444,7 @@ export function useSmartOpeners(
               platform,
               profile_type: recallItem.profile_type || "creator",
               followers: recallItem.followers ?? src.followers ?? null,
+              product_sku: recallItem.product_sku || recallItem.productSku || null,
               candidate_kind: "existing",
             }, avatar));
             return;

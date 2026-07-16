@@ -127,26 +127,6 @@ def _execute_profile_representative_video_analysis(
             "viltrox_fit_score_changed_ids": [],
             "incremental": incremental_state,
         }
-    if classified.platform == "tiktok":
-        return {
-            "enabled": True,
-            "status": "skipped_tiktok_video_resolver_known_issue",
-            "items": [],
-            "queued": 0,
-            "skipped": 1,
-            "errors": 0,
-            "worker_touched": False,
-            "ai_analysis": {
-                "state": "not_requested",
-                "reason": "unsupported_tiktok_video_resolver",
-                "gate_reason": "",
-                "model_readiness_status": "not_ready",
-                "provider_calls_allowed": False,
-            },
-            "viltrox_fit_score_changed_ids": [],
-            "incremental": incremental_state,
-        }
-
     limit = _profile_representative_video_limit(body)
     all_videos = _profile_representative_video_metadata(
         classified,

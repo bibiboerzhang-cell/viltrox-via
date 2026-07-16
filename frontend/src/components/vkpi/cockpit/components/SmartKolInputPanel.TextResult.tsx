@@ -17,6 +17,18 @@ type SessionBanner = {
   note: string;
 } | null;
 
+export function resolvedProductSkuFromPlan(plan: Row): string {
+  const resolved = plan?.resolved_product && typeof plan.resolved_product === "object"
+    ? plan.resolved_product as Row
+    : {};
+  return cleanText(resolved.sku ?? plan?.product_sku ?? plan?.productSku);
+}
+
+export function withResolvedProductSku<T extends object>(item: T, productSku: string): T & { product_sku?: string } {
+  const normalized = cleanText(productSku);
+  return normalized ? { ...item, product_sku: normalized } : item;
+}
+
 export function TextResultSection({
   recallResult,
   llmPlan,
@@ -127,6 +139,10 @@ export function TextResultSection({
     ? (reachFloorDisplay.discovery.analyzing || 0) + (reachFloorDisplay.discovery.lowReach || 0)
     : 0;
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
+  const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
+  const openProductScopedItem = (item: VkpiKolRecallItem) => {
+    onOpenRecallItem?.(withResolvedProductSku(item, resolvedProductSku));
+  };
   return (
     <div className="mt-3 space-y-2.5">
       <ProgressiveSearchStageCard progress={sessionProgress} />
@@ -187,7 +203,7 @@ export function TextResultSection({
         {recallItems.length ? (
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {recallItems.map((item, index) => (
-              <RecallMiniItem key={`r-${item.bucket}-${item.kol_pool_id || item.handle || index}`} item={item} index={index + 1} onOpen={onOpenRecallItem} />
+              <RecallMiniItem key={`r-${item.bucket}-${item.kol_pool_id || item.handle || index}`} item={item} index={index + 1} onOpen={openProductScopedItem} />
             ))}
           </div>
         ) : (
@@ -386,7 +402,7 @@ export function TextResultSection({
               const resolving = resolvingKeys.has(key);
               return (
                 <div key={`d-${item.kol_pool_id || item.handle || index}`} className="relative h-full">
-                  <RecallMiniItem item={item} index={index + 1} onOpen={onOpenRecallItem} className="pr-6" />
+                  <RecallMiniItem item={item} index={index + 1} onOpen={openProductScopedItem} className="pr-6" />
                   <button
                     type="button"
                     disabled={resolving}
