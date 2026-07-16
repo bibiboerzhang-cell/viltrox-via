@@ -221,9 +221,33 @@ def _response_usage_metadata(resp: Any) -> dict[str, Any]:
     return output
 
 
+def _syntax_repair_candidates(raw: str) -> list[str]:
+    """Bounded, deterministic syntax repairs for common Gemini JSON glitches.
+
+    只修 token 之间的语法(尾逗号/行尾漏逗号),绝不改动字符串内容本身;
+    修不好就让原始 JSONDecodeError 冒出来,不做任何有损猜测。
+    """
+
+    candidates: list[str] = []
+    # 尾逗号:{"a":1,} / [1,2,]
+    no_trailing = re.sub(r",\s*([}\]])", r"\1", raw)
+    if no_trailing != raw:
+        candidates.append(no_trailing)
+    # 行尾漏逗号:一行以 " / } / ] / 数字 结尾,下一行以 " 开新键
+    # (Expecting ',' delimiter 的典型来源,2026-07-16 evidence 3972 实例)
+    missing_comma = re.sub(r'(["\]}0-9])\s*\n(\s*")', r"\1,\n\2", raw)
+    if missing_comma != raw:
+        candidates.append(missing_comma)
+        both = re.sub(r",\s*([}\]])", r"\1", missing_comma)
+        if both != missing_comma:
+            candidates.append(both)
+    return candidates
+
+
 def _parse_json_response_text(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+    parsed: Any = None
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -231,7 +255,18 @@ def _parse_json_response_text(text: str) -> dict[str, Any]:
         end = raw.rfind("}")
         if start < 0 or end <= start:
             raise
-        parsed = json.loads(raw[start : end + 1])
+        sliced = raw[start : end + 1]
+        try:
+            parsed = json.loads(sliced)
+        except json.JSONDecodeError:
+            for candidate in _syntax_repair_candidates(sliced):
+                try:
+                    parsed = json.loads(candidate)
+                    break
+                except json.JSONDecodeError:
+                    continue
+            else:
+                raise
     if not isinstance(parsed, dict):
         raise ValueError("Gemini response JSON root must be an object")
     return parsed
