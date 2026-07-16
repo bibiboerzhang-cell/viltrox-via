@@ -130,6 +130,15 @@ def test_default_manifest_covers_every_cockpit_family_and_only_safe_gets() -> No
     assert all(item["method"] == "GET" for item in manifest["endpoints"])
     assert all(item["read_only_ack"] is True for item in manifest["endpoints"])
 
+    health = next(item for item in manifest["endpoints"] if item["id"] == "runtime.health")
+    assert health["auth"] is True
+
+    weekly_list = next(item for item in manifest["endpoints"] if item["id"] == "reports.weekly-list")
+    weekly_read = next(item for item in manifest["endpoints"] if item["id"] == "reports.weekly-read")
+    assert weekly_list["allowed_states"] == ["real", "empty"]
+    assert weekly_read["allowed_states"] == ["real", "empty"]
+    assert weekly_read["bind"]["report_id"]["fallback"] == 0
+
     market_history = next(item for item in manifest["endpoints"] if item["id"] == "marketTrends.history")
     assert "history=true" in market_history["path"]
     endpoint_ids = {item["id"] for item in manifest["endpoints"]}
@@ -232,7 +241,6 @@ def test_runner_resolves_dependencies_and_preserves_real_empty_pending_states(
                 contract="health",
                 data_paths=["build", "trust"],
                 allowed_states=["real"],
-                auth=False,
             ),
             acceptance._ep(
                 "runtime.scheduler-registry",
@@ -311,7 +319,7 @@ def test_runner_resolves_dependencies_and_preserves_real_empty_pending_states(
     assert any(path == "/items/A%2FB" for path, _, _ in transport.calls)
     assert TOKEN not in json.dumps(report)
     assert all(TOKEN not in path for path, _, _ in transport.calls)
-    assert next(token for path, token, _ in transport.calls if path == "/health") is None
+    assert next(token for path, token, _ in transport.calls if path == "/health") == TOKEN
 
 
 def test_redaction_failure_reports_labels_without_echoing_sensitive_body() -> None:
@@ -367,7 +375,6 @@ def test_health_trust_mismatches_and_stale_worker_fail(health_payload: dict[str,
                 contract="health",
                 data_paths=["build", "trust"],
                 allowed_states=["real"],
-                auth=False,
             )
         ],
     }
@@ -634,6 +641,116 @@ def test_empty_dependency_fails_instead_of_claiming_read_contract_success() -> N
     assert by_id["reports.weekly-list"]["data_state"] == "empty"
     assert by_id["reports.weekly-read"]["pass"] is False
     assert by_id["reports.weekly-read"]["errors"] == ["dependency produced no value: reports.weekly-list"]
+
+
+def test_explicit_weekly_fallback_probes_strict_typed_empty_contract() -> None:
+    manifest = {
+        "name": "weekly-empty-contract",
+        "version": 1,
+        "board_families": [],
+        "endpoints": [
+            acceptance._ep(
+                "reports.weekly-list",
+                "reports",
+                "/weekly/list",
+                contract="weekly_report_list",
+                data_paths=["reports"],
+                required_paths=["reports", "count"],
+                list_paths=["reports"],
+                integer_paths=["count"],
+                count_matches={"count": "reports"},
+                allowed_states=["real", "empty"],
+            ),
+            acceptance._ep(
+                "reports.weekly-read",
+                "reports",
+                "/weekly/{report_id}",
+                contract="weekly_report_read",
+                data_paths=["body_md", "title"],
+                bind={
+                    "report_id": {
+                        "endpoint": "reports.weekly-list",
+                        "paths": ["reports.0.id"],
+                        "fallback": 0,
+                    }
+                },
+                allowed_states=["real", "empty"],
+            ),
+        ],
+    }
+    transport = FixtureTransport(
+        {
+            "/weekly/list": (200, {"count": 0, "reports": []}, None, 1.0),
+            "/weekly/0": (
+                200,
+                {
+                    "status": "not_found",
+                    "data_status": "no_data",
+                    "report_id": 0,
+                    "reason": "report_not_found",
+                },
+                None,
+                1.0,
+            ),
+        }
+    )
+
+    report = _runner(manifest, transport).run()
+    by_id = {item["id"]: item for item in report["endpoints"]}
+
+    assert report["overall"]["pass"] is True
+    assert [path for path, _, _ in transport.calls] == ["/weekly/list", "/weekly/0"]
+    assert by_id["reports.weekly-list"]["data_state"] == "empty"
+    assert by_id["reports.weekly-read"]["data_state"] == "empty"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "status": "not_found",
+            "data_status": "no_data",
+            "report_id": 0,
+            "reason": "wrong_reason",
+        },
+        {
+            "status": "not_found",
+            "data_status": "no_data",
+            "report_id": "0",
+            "reason": "report_not_found",
+        },
+        {
+            "status": "not_found",
+            "data_status": "no_data",
+            "report_id": 0,
+            "reason": "report_not_found",
+            "body_md": "must not leak",
+        },
+    ],
+)
+def test_weekly_typed_empty_contract_rejects_malformed_or_real_fields(payload: dict[str, Any]) -> None:
+    manifest = {
+        "name": "weekly-malformed-empty",
+        "version": 1,
+        "board_families": [],
+        "endpoints": [
+            acceptance._ep(
+                "reports.weekly-read",
+                "reports",
+                "/weekly/0",
+                contract="weekly_report_read",
+                data_paths=["body_md", "title"],
+                allowed_states=["real", "empty"],
+            )
+        ],
+    }
+    report = _runner(
+        manifest,
+        FixtureTransport({"/weekly/0": (200, payload, None, 1.0)}),
+    ).run()
+
+    assert report["overall"]["pass"] is False
+    assert report["endpoints"][0]["pass"] is False
 
 
 def test_manifest_and_base_url_guards_reject_mutating_or_remote_targets() -> None:

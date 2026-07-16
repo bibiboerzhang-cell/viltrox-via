@@ -757,7 +757,12 @@ def get_report(report_id: int, *, staff: dict[str, Any] | None = None) -> dict:
         (report_id,),
     ).fetchone()
     if not row:
-        return {"status": "fail", "error": "report not found"}
+        return {
+            "status": "not_found",
+            "data_status": "no_data",
+            "report_id": report_id,
+            "reason": "report_not_found",
+        }
     report = dict(row)
     if not _report_readable(report, staff):
         raise scope.ScopeDenied("weekly report scope denied")

@@ -75,7 +75,7 @@ KOL = {"kol_id": {"endpoint": "kol-pool.list", "paths": ["items.0.id", "items.0.
 DEFAULT_MANIFEST: dict[str, Any] = {
     "name": "vkpi-local-release-acceptance", "version": 1, "board_families": list(COCKPIT_BOARD_FAMILIES),
     "endpoints": [
-        E("runtime.health", "runtime", "/health", c="health", d=["build", "trust"], allowed=["real"], auth=False),
+        E("runtime.health", "runtime", "/health", c="health", d=["build", "trust"], allowed=["real"]),
         E("runtime.scheduler-registry", "runtime", "/api/admin/vkpi/settings/scheduler-tasks", c="scheduler_registry", d=["tasks"], req=["tasks", "status"], lists=["tasks"], allowed=["real"], scan=True),
         E("dashboard.summary", "dashboard", "/api/admin/vkpi/dashboard?window_days=30", d=["summary"], req=["summary"], t=20),
         E("kol-pool.list", "kol-pool", "/api/admin/vkpi/kol-pool?limit=25&offset=0&refresh_if_stale=false", c="list_response", d=["items"], lists=["items"]),
@@ -142,8 +142,8 @@ DEFAULT_MANIFEST: dict[str, Any] = {
         E("gtmCommand.summary", "gtmCommand", "/api/admin/vkpi/market-brain/summary", d=["weekly_signals.items", "product_opportunities.items", "recommended_actions.items", "strategy_defaults", "learning_digest"], s=["weekly_signals.status", "product_opportunities.status", "recommended_actions.status", "strategy_defaults.status"], t=20),
         E("gtmCommand.preview", "gtmCommand", "/api/admin/vkpi/market-brain/gtm-plan/preview?sku={sku}&budget_usd=3000&window_days=30", d=["plan", "bets", "public_plan", "gtm_plan_id"], bind=SKU, t=60),
         E("reports.history", "reports", "/api/admin/vkpi/reports?archived=false&limit=25", c="report_history_list", d=["reports"], req=["reports", "count", "archived"], lists=["reports"], ints=["count"], bools=["archived"], counts={"count": "reports"}),
-        E("reports.weekly-list", "reports", "/api/admin/vkpi/weekly-reports/list?limit=25", c="weekly_report_list", d=["reports"], req=["reports", "count"], lists=["reports"], ints=["count"], counts={"count": "reports"}, allowed=["real"]),
-        E("reports.weekly-read", "reports", "/api/admin/vkpi/weekly-reports/{report_id}", c="weekly_report_read", d=["body_md", "title"], bind={"report_id": {"endpoint": "reports.weekly-list", "paths": ["reports.0.id"]}}, allowed=["real", "empty"]),
+        E("reports.weekly-list", "reports", "/api/admin/vkpi/weekly-reports/list?limit=25", c="weekly_report_list", d=["reports"], req=["reports", "count"], lists=["reports"], ints=["count"], counts={"count": "reports"}, allowed=["real", "empty"]),
+        E("reports.weekly-read", "reports", "/api/admin/vkpi/weekly-reports/{report_id}", c="weekly_report_read", d=["body_md", "title"], bind={"report_id": {"endpoint": "reports.weekly-list", "paths": ["reports.0.id"], "fallback": 0}}, allowed=["real", "empty"]),
         # Bind the read-contract probe to a terminal-success session. The newest
         # history entry may legitimately be partial (for example one profile
         # failed while 19 candidates remain usable); using items.0 without a
@@ -511,6 +511,28 @@ def _validate_contract(payload: Any, spec: Mapping[str, Any], runner: "Acceptanc
     elif name == "weekly_report_list":
         result.errors += _item_errors(payload, "reports", ["id", "staff_id", "template_key", "title", "status", "generated_at"])
     elif name == "weekly_report_read":
+        typed_empty_markers = (
+            payload.get("status") == "not_found",
+            payload.get("data_status") == "no_data",
+            payload.get("reason") == "report_not_found",
+        )
+        if any(typed_empty_markers):
+            expected_keys = {"status", "data_status", "report_id", "reason"}
+            if set(payload) != expected_keys:
+                result.errors.append("weekly report typed empty fields are not exact")
+            if payload.get("status") != "not_found":
+                result.errors.append("weekly report typed empty status is invalid")
+            if payload.get("data_status") != "no_data":
+                result.errors.append("weekly report typed empty data_status is invalid")
+            if payload.get("reason") != "report_not_found":
+                result.errors.append("weekly report typed empty reason is invalid")
+            report_id = payload.get("report_id")
+            if isinstance(report_id, bool) or not isinstance(report_id, int):
+                result.errors.append("weekly report typed empty report_id is not an integer")
+            if not result.errors:
+                result.state_override = "empty"
+                result.warnings.append("weekly report does not exist")
+            return result
         invalidated = payload.get("truth_invalidated") is True
         required = ("id", "staff_id", "template_key", "title", "status", "generated_at")
         for path in required:
@@ -577,7 +599,10 @@ def _render_path(spec: Mapping[str, Any], payloads: Mapping[str, Any]) -> tuple[
         source_id, paths = str(binding.get("endpoint") or ""), [str(item) for item in binding.get("paths", [])]
         if source_id not in payloads: return None, f"dependency response unavailable: {source_id}"
         value = _extract_first(payloads[source_id], paths)
-        if value is _MISSING: return None, f"dependency produced no value: {source_id}"
+        if value is _MISSING:
+            if "fallback" not in binding:
+                return None, f"dependency produced no value: {source_id}"
+            value = binding["fallback"]
         path = path.replace("{" + str(name) + "}", quote(str(value), safe=""))
     return (None, "unresolved path template") if "{" in path or "}" in path else (path, None)
 

@@ -105,6 +105,7 @@ BROWSER_GATE_PAGE_TIMEOUT_MS="${VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS:-30000}"
 BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS:-}"
 POST_DEPLOY_CHROME_PATH="${VKPI_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 REMOTE_ACCEPTANCE_BASE_URL="${VKPI_REMOTE_ACCEPTANCE_BASE_URL:-${HEALTH_URL%/health}}"
+LOCAL_ACCEPTANCE_REPORT_TMP=""
 RELEASE_ID="${VKPI_RELEASE_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${LOCAL_GIT_SHA:0:12}}"
 if ! [[ "${RELEASE_ID}" =~ ^[A-Za-z0-9_.-]+$ ]] || [ "${RELEASE_ID}" = "." ] || [ "${RELEASE_ID}" = ".." ]; then
   echo "VKPI_RELEASE_ID must be a safe release directory name." >&2
@@ -672,6 +673,9 @@ cleanup_post_deploy_evidence() {
   fi
   if [ -n "${REMOTE_LOG_BASELINE}" ] || [ -n "${REMOTE_ACCEPTANCE_REPORT}" ]; then
     ssh "${SSH_TARGET}" "rm -f -- '${REMOTE_LOG_BASELINE}' '${REMOTE_ACCEPTANCE_REPORT}'" >/dev/null 2>&1
+  fi
+  if [ -n "${LOCAL_ACCEPTANCE_REPORT_TMP}" ]; then
+    rm -f -- "${LOCAL_ACCEPTANCE_REPORT_TMP}"
   fi
   if [ -d "${POST_DEPLOY_EVIDENCE_DIR}" ]; then
     echo "[deploy] post-restart evidence retained: ${POST_DEPLOY_EVIDENCE_DIR}" >&2
@@ -1704,8 +1708,20 @@ ssh "${SSH_TARGET}" "cat -- '${REMOTE_LOG_BASELINE}'" >"${LOCAL_LOG_BASELINE}"
 
 # Repeat the complete manifest-driven read-only API acceptance against the
 # restarted remote service; a local pre-deploy 41/41+ receipt is not transferable.
-ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-acceptance-home TMPDIR=/tmp ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web DB_RUNTIME_BACKEND=postgres LOCAL_RUNTIME_FORCE_STACK=0 LOCAL_ENV_FILE='${REMOTE_ROOT}/.env' RUNTIME_ROOT='${REMOTE_ROOT}/runtime' PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null"
-ssh "${SSH_TARGET}" "cat -- '${REMOTE_ACCEPTANCE_REPORT}'" >"${LOCAL_ACCEPTANCE_REPORT}"
+REMOTE_ACCEPTANCE_RC=0
+ssh "${SSH_TARGET}" "rm -f -- '${REMOTE_ACCEPTANCE_REPORT}' && cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-acceptance-home TMPDIR=/tmp ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web DB_RUNTIME_BACKEND=postgres LOCAL_RUNTIME_FORCE_STACK=0 LOCAL_ENV_FILE='${REMOTE_ROOT}/.env' RUNTIME_ROOT='${REMOTE_ROOT}/runtime' PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null" || REMOTE_ACCEPTANCE_RC=$?
+LOCAL_ACCEPTANCE_REPORT_TMP="$(mktemp "${POST_DEPLOY_EVIDENCE_DIR}/.release-acceptance.XXXXXX")"
+if ! ssh "${SSH_TARGET}" "cat -- '${REMOTE_ACCEPTANCE_REPORT}'" >"${LOCAL_ACCEPTANCE_REPORT_TMP}"; then
+  rm -f -- "${LOCAL_ACCEPTANCE_REPORT_TMP}"
+  echo "Remote acceptance report could not be retained locally; deployment is not accepted." >&2
+  exit 1
+fi
+chmod 600 "${LOCAL_ACCEPTANCE_REPORT_TMP}"
+mv -- "${LOCAL_ACCEPTANCE_REPORT_TMP}" "${LOCAL_ACCEPTANCE_REPORT}"
+if [ "${REMOTE_ACCEPTANCE_RC}" -ne 0 ]; then
+  echo "Remote acceptance failed with exit ${REMOTE_ACCEPTANCE_RC}; report retained at ${LOCAL_ACCEPTANCE_REPORT}." >&2
+  exit 1
+fi
 "${PROJECT_ROOT}/.venv/bin/python" - "${LOCAL_ACCEPTANCE_REPORT}" <<'PY'
 import json
 import sys

@@ -457,6 +457,35 @@ def test_remote_release_acceptance_uses_the_production_nonroot_runtime_contract(
     assert "scripts/local_release_acceptance.py" in acceptance
 
 
+def test_deploy_retains_failed_remote_acceptance_report_before_rollback() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    acceptance = deploy.split(
+        "# Repeat the complete manifest-driven read-only API acceptance",
+        1,
+    )[1].split("# A caller may supply an explicit reviewed token", 1)[0]
+
+    run_at = acceptance.index("REMOTE_ACCEPTANCE_RC=0")
+    copy_at = acceptance.index(
+        'cat -- \'${REMOTE_ACCEPTANCE_REPORT}\'\" >\"${LOCAL_ACCEPTANCE_REPORT_TMP}\"'
+    )
+    publish_at = acceptance.index(
+        'mv -- "${LOCAL_ACCEPTANCE_REPORT_TMP}" "${LOCAL_ACCEPTANCE_REPORT}"'
+    )
+    fail_at = acceptance.index('if [ "${REMOTE_ACCEPTANCE_RC}" -ne 0 ]; then')
+
+    assert run_at < copy_at < publish_at < fail_at
+    assert "rm -f -- '${REMOTE_ACCEPTANCE_REPORT}' && cd" in acceptance
+    assert '|| REMOTE_ACCEPTANCE_RC=$?' in acceptance
+    assert 'mktemp "${POST_DEPLOY_EVIDENCE_DIR}/.release-acceptance.XXXXXX"' in acceptance
+    assert 'chmod 600 "${LOCAL_ACCEPTANCE_REPORT_TMP}"' in acceptance
+    assert "report retained at ${LOCAL_ACCEPTANCE_REPORT}" in acceptance
+
+    cleanup = deploy.split("cleanup_post_deploy_evidence()", 1)[1].split(
+        "trap cleanup_post_deploy_evidence EXIT", 1
+    )[0]
+    assert 'rm -f -- "${LOCAL_ACCEPTANCE_REPORT_TMP}"' in cleanup
+
+
 def test_deploy_browser_gate_runs_reviewed_21_page_and_network_contract() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     capture = _read("scripts/capture_browser_console_cdp.mjs")
