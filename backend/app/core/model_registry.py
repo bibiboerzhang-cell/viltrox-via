@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 
+CLAUDE_OPUS_EXACT_MODEL = "claude-opus-4-7"
+
 AVAILABLE_MODELS = {
     "anthropic": [
         "claude-fable-5",
-        "claude-opus-4-7",
+        CLAUDE_OPUS_EXACT_MODEL,
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
         "claude-haiku-4-5-20251001",
@@ -45,7 +47,7 @@ TASK_MODEL_BINDING = {
     "audit_video_analysis": "google/gemini-2.5-flash",
     "audit_vision_fallback": "anthropic/claude-sonnet-4-6",
     "audit_deep_score": "anthropic/claude-sonnet-4-6",
-    "deepsight_strategy": "anthropic/claude-opus-4-7",
+    "deepsight_strategy": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     "deepsight_market_empath": "openai/gpt-5.5",
     "deepsight_opportunity": "google/gemini-2.5-pro",
     "via_chat": "openai/gpt-5.4-mini",
@@ -54,6 +56,10 @@ TASK_MODEL_BINDING = {
     "kol_content_fit_analysis": "openai/gpt-5.4-mini",
     "kol_product_fit_reason": "openai/gpt-5.4-mini",
     "kol_outreach_pack": "anthropic/claude-sonnet-4-6",
+    "ai_today_grounded_discovery": "google/gemini-2.5-pro",
+    "ai_today_evidence_strategy": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
+    "contract_pdf_extract": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
+    "invoice_extract": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
 }
 
 TASK_MODEL_ENV_KEYS = {
@@ -100,3 +106,31 @@ def current_task_model_binding() -> dict[str, str]:
         provider = os.environ.get(provider_env, "").strip().lower() if provider_env else default_provider
         current[task] = f"{provider or default_provider}/{model or default_model}"
     return current
+
+
+def floating_production_task_bindings(
+    bindings: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return production task bindings that use a floating ``*-latest`` model."""
+
+    current = dict(
+        current_task_model_binding() if bindings is None else bindings
+    )
+    return {
+        task: binding
+        for task, binding in current.items()
+        if split_binding(binding)[1].strip().lower().endswith("-latest")
+    }
+
+
+def assert_production_task_bindings_are_pinned(
+    bindings: dict[str, str] | None = None,
+) -> None:
+    floating = floating_production_task_bindings(bindings)
+    if not floating:
+        return
+    tasks = ",".join(sorted(floating))
+    raise RuntimeError(
+        "Production task model bindings must use exact model ids; "
+        f"floating_latest_tasks={tasks}"
+    )

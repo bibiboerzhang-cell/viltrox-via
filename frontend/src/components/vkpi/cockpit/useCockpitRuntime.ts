@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getKolPoolWorkspace, listKolPool } from "../../../domains/kol";
-import { fetchCockpitDashboardBundle, fetchCockpitShellBundle } from "./api";
+import {
+  aiTodayAttemptFingerprint,
+  aiTodaySnapshotFailureReason,
+  aiTodaySnapshotFingerprint,
+  fetchAiTodayHotSnapshot,
+  fetchCockpitDashboardBundle,
+  fetchCockpitShellBundle,
+  isAiTodaySnapshotReady,
+  runAiTodaySchedulerNow,
+} from "./api";
 import { toCockpitKolPoolRows } from "./kolPoolRuntime";
 import { readCachedResource, writeCachedResource } from "./lib/resourceCache";
 import { normalizeAlerts, normalizeCurrentUser, normalizeCockpitDashboard } from "./normalizers";
@@ -12,6 +21,18 @@ const KOL_POOL_CACHE_KEY = "cockpit.kol_pool.rows.v3";
 const DASHBOARD_CACHE_KEY = "cockpit.dashboard.bundle.v1";
 const KOL_POOL_REFRESH_MS = 10 * 60 * 1000;
 const DASHBOARD_REFRESH_MS = 90 * 1000;
+const AI_TODAY_POLL_ATTEMPTS = 40;
+const AI_TODAY_POLL_INTERVAL_MS = 1500;
+
+export type AiTodayRegenerationState = {
+  phase: "idle" | "running" | "success" | "degraded" | "error";
+  message: string;
+};
+
+const IDLE_AI_TODAY_REGENERATION: AiTodayRegenerationState = {
+  phase: "idle",
+  message: "",
+};
 
 function scopedCacheKey(base: string, token: string) {
   // Persistent cache must never cross account/session boundaries. Keep the token
@@ -28,6 +49,41 @@ function hasDashboardSummary(bundle: any) {
   return bundle?._sources?.dashboard?.ok === true
     && bundle?.dashboard?.summary
     && typeof bundle.dashboard.summary === "object";
+}
+
+function hasSnapshotValue(value: unknown) {
+  return Boolean(value && typeof value === "object" && Object.keys(value as object).length);
+}
+
+function retainLastReadyAiToday(current: any, incoming: any) {
+  if (isAiTodaySnapshotReady(incoming?.aiTodayHot)) return incoming;
+  if (!isAiTodaySnapshotReady(current?.aiTodayHot)) return incoming;
+  const incomingAttempt = incoming?.aiTodayHot?.latest_attempt
+    || incoming?.aiTodayHot?.content?.latest_attempt;
+  if (!incomingAttempt || typeof incomingAttempt !== "object") {
+    return { ...incoming, aiTodayHot: current.aiTodayHot };
+  }
+  const retainedContent = current.aiTodayHot?.content && typeof current.aiTodayHot.content === "object"
+    ? { ...current.aiTodayHot.content, latest_attempt: incomingAttempt }
+    : current.aiTodayHot?.content;
+  return {
+    ...incoming,
+    aiTodayHot: {
+      ...current.aiTodayHot,
+      latest_attempt: incomingAttempt,
+      ...(retainedContent ? { content: retainedContent } : {}),
+    },
+  };
+}
+
+function waitForRuntimePoll(delayMs: number) {
+  return new Promise<void>((resolve) => {
+    if (typeof window === "undefined") {
+      setTimeout(resolve, delayMs);
+      return;
+    }
+    window.setTimeout(resolve, delayMs);
+  });
 }
 
 function cacheAgeMs(savedAt: any) {
@@ -96,6 +152,27 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
   const [dashboardRaw, setDashboardRaw] = useState<any>({});
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState("");
+  const [aiTodayRegeneration, setAiTodayRegeneration] = useState<AiTodayRegenerationState>(IDLE_AI_TODAY_REGENERATION);
+  const dashboardRawRef = useRef<any>(dashboardRaw);
+  const mountedRef = useRef(true);
+  const apiTokenRef = useRef(apiToken);
+  const regenerationOperationRef = useRef(0);
+  const regenerationInFlightRef = useRef(false);
+  dashboardRawRef.current = dashboardRaw;
+  apiTokenRef.current = apiToken;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    regenerationOperationRef.current += 1;
+    regenerationInFlightRef.current = false;
+    setAiTodayRegeneration(IDLE_AI_TODAY_REGENERATION);
+  }, [apiToken]);
 
   useEffect(() => {
     setCurrentUser(normalizeCurrentUser(null, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
@@ -200,9 +277,11 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
           throw new Error("Dashboard 主数据源未返回 summary，已保留上一份有效数据");
         }
         if (!cancelled) {
-          setDashboardRaw(bundle);
+          const next = retainLastReadyAiToday(dashboardRawRef.current, bundle);
+          dashboardRawRef.current = next;
+          setDashboardRaw(next);
           setDashboardError("");
-          void writeCachedResource(cacheKey, bundle);
+          void writeCachedResource(cacheKey, next);
         }
       })
       .catch((error) => {
@@ -225,7 +304,9 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
         if (cancelled) return;
         hasCachedBundle = Boolean(cached?.value);
         if (hasCachedBundle) {
-          setDashboardRaw({ ...(cached.value || {}), _cache_status: "stale-while-revalidate", _cache_saved_at: cached.savedAt });
+          const next = { ...(cached.value || {}), _cache_status: "stale-while-revalidate", _cache_saved_at: cached.savedAt };
+          dashboardRawRef.current = next;
+          setDashboardRaw(next);
           setDashboardLoading(false);
         }
         if (!hasCachedBundle) setDashboardLoading(true);
@@ -248,6 +329,135 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     };
   }, [apiToken]);
 
+  const regenerateAiToday = useCallback(async () => {
+    if (!apiToken) {
+      setAiTodayRegeneration({ phase: "error", message: "未登录，无法触发 AI Today 任务。" });
+      return false;
+    }
+    if (regenerationInFlightRef.current) return false;
+
+    regenerationInFlightRef.current = true;
+    const operationId = regenerationOperationRef.current + 1;
+    regenerationOperationRef.current = operationId;
+    const baselineBundle = dashboardRawRef.current || {};
+    const baselineSnapshot = baselineBundle.aiTodayHot;
+    const baselineFingerprint = aiTodaySnapshotFingerprint(baselineSnapshot);
+    const baselineAttemptFingerprint = aiTodayAttemptFingerprint(baselineSnapshot);
+    const retainedMessage = hasSnapshotValue(baselineSnapshot)
+      ? "继续显示上一份快照"
+      : "当前无可用快照";
+    const isCurrent = () => mountedRef.current
+      && apiTokenRef.current === apiToken
+      && regenerationOperationRef.current === operationId;
+
+    if (isCurrent()) {
+      setAiTodayRegeneration({
+        phase: "running",
+        message: `已触发后台生成，${retainedMessage}。`,
+      });
+    }
+
+    try {
+      await runAiTodaySchedulerNow(apiToken);
+
+      let polledSnapshot: any = null;
+      let transientPollError = "";
+      for (let attempt = 0; attempt < AI_TODAY_POLL_ATTEMPTS && isCurrent(); attempt += 1) {
+        try {
+          const candidate = await fetchAiTodayHotSnapshot(apiToken, { forceRefresh: true });
+          const candidateFingerprint = aiTodaySnapshotFingerprint(candidate);
+          const candidateAttemptFingerprint = aiTodayAttemptFingerprint(candidate);
+          if (hasSnapshotValue(candidate) && (
+            candidateFingerprint !== baselineFingerprint
+            || candidateAttemptFingerprint !== baselineAttemptFingerprint
+          )) {
+            polledSnapshot = candidate;
+            break;
+          }
+        } catch (error) {
+          transientPollError = error instanceof Error ? error.message : "快照轮询失败";
+        }
+        if (attempt < AI_TODAY_POLL_ATTEMPTS - 1) {
+          await waitForRuntimePoll(AI_TODAY_POLL_INTERVAL_MS);
+        }
+      }
+      if (!isCurrent()) return false;
+
+      // The point refresh is intentionally followed by a full forced bundle
+      // refresh. This keeps the regenerated card and the rest of Cockpit on the
+      // same source generation while still retaining the previous valid AI
+      // snapshot when the new run is blocked or degraded.
+      let refreshedBundle: any = null;
+      try {
+        refreshedBundle = await fetchCockpitDashboardBundle(apiToken, { forceRefresh: true });
+      } catch {
+        refreshedBundle = null;
+      }
+      if (!isCurrent()) return false;
+
+      const refreshedSnapshot = refreshedBundle?.aiTodayHot;
+      const refreshedChanged = hasSnapshotValue(refreshedSnapshot)
+        && aiTodaySnapshotFingerprint(refreshedSnapshot) !== baselineFingerprint;
+      const refreshedAttemptChanged = hasSnapshotValue(refreshedSnapshot)
+        && aiTodayAttemptFingerprint(refreshedSnapshot) !== baselineAttemptFingerprint;
+      const polledChanged = hasSnapshotValue(polledSnapshot)
+        && aiTodaySnapshotFingerprint(polledSnapshot) !== baselineFingerprint;
+      const readySnapshot = polledChanged && isAiTodaySnapshotReady(polledSnapshot)
+        ? polledSnapshot
+        : refreshedChanged && isAiTodaySnapshotReady(refreshedSnapshot)
+          ? refreshedSnapshot
+          : null;
+
+      if (readySnapshot) {
+        const nextBase = hasDashboardSummary(refreshedBundle) ? refreshedBundle : baselineBundle;
+        const next = { ...nextBase, aiTodayHot: readySnapshot };
+        dashboardRawRef.current = next;
+        setDashboardRaw(next);
+        setDashboardError("");
+        void writeCachedResource(scopedCacheKey(DASHBOARD_CACHE_KEY, apiToken), next);
+        setAiTodayRegeneration({ phase: "success", message: "AI Today 新快照已生成并刷新。" });
+        return true;
+      }
+
+      const degradedSnapshot = polledSnapshot
+        || (refreshedChanged || refreshedAttemptChanged ? refreshedSnapshot : null);
+      if (degradedSnapshot) {
+        const nextBase = hasDashboardSummary(refreshedBundle) ? refreshedBundle : baselineBundle;
+        const next = retainLastReadyAiToday(
+          baselineBundle,
+          { ...nextBase, aiTodayHot: degradedSnapshot },
+        );
+        dashboardRawRef.current = next;
+        setDashboardRaw(next);
+        void writeCachedResource(scopedCacheKey(DASHBOARD_CACHE_KEY, apiToken), next);
+        setAiTodayRegeneration({
+          phase: "degraded",
+          message: `新结果未通过就绪门禁（${aiTodaySnapshotFailureReason(degradedSnapshot)}）；${retainedMessage}。`,
+        });
+        return false;
+      }
+
+      setAiTodayRegeneration({
+        phase: "degraded",
+        message: `任务已触发，但新快照在 60 秒内未就绪${transientPollError ? `（${transientPollError}）` : ""}；${retainedMessage}。`,
+      });
+      return false;
+    } catch (error) {
+      if (isCurrent()) {
+        const message = error instanceof Error ? error.message : "未知错误";
+        setAiTodayRegeneration({
+          phase: "error",
+          message: `AI Today 重新生成失败（${message}）；${retainedMessage}。`,
+        });
+      }
+      return false;
+    } finally {
+      if (regenerationOperationRef.current === operationId) {
+        regenerationInFlightRef.current = false;
+      }
+    }
+  }, [apiToken]);
+
   const dashboardRuntime = useMemo(() => normalizeCockpitDashboard({
     ...dashboardRaw,
     starredProjects: Array.isArray(starredProjects) ? starredProjects : dashboardRaw.starredProjects,
@@ -264,5 +474,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     dashboardRuntime,
     dashboardLoading,
     dashboardError,
+    aiTodayRegeneration,
+    regenerateAiToday,
   };
 }

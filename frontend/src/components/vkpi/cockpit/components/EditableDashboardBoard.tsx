@@ -11,6 +11,8 @@ import "react-resizable/css/styles.css";
 import {
   DASHBOARD_LAYOUT_COLUMNS,
   DASHBOARD_LAYOUT_PREFERENCE,
+  DASHBOARD_LAYOUT_SCHEMA_VERSION,
+  dashboardLayoutPreferenceVersion,
   decodeDashboardLayoutPreference,
   encodeDashboardLayoutPreference,
   loadDashboardPreference,
@@ -75,6 +77,7 @@ const NARROW_COLUMNS = 1;
 const DESKTOP_MIN_INLINE_PX = 960;
 const MEDIUM_MIN_INLINE_PX = 640;
 const RESIZE_HANDLES: ResizeHandleAxis[] = ["n", "e", "s", "w", "ne", "se", "sw", "nw"];
+const EMPTY_STRING_ARRAY: string[] = [];
 
 function buildFlowPath(phase: number, amplitude = 1) {
   const points: string[] = [];
@@ -344,7 +347,11 @@ function loadLayout(
   try {
     const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
     const restored = normalizeStoredLayout(parsed, moduleMap, "restored");
-    if (restored !== null) return restored;
+    if (restored !== null) {
+      return dashboardLayoutPreferenceVersion(parsed) < DASHBOARD_LAYOUT_SCHEMA_VERSION
+        ? appendRequiredDefaultModules(restored, defaultLayout, moduleMap, requiredDefaultModuleKeys, "restored-required")
+        : restored;
+    }
   } catch {
     // Try a reviewed legacy key before falling back to the new default.
   }
@@ -353,33 +360,44 @@ function loadLayout(
       const parsed = JSON.parse(window.localStorage.getItem(legacyStorageKey) || "null");
       const legacy = normalizeStoredLayout(parsed, moduleMap, "migrated");
       if (legacy !== null) {
-        const activeKeys = new Set(legacy.map((item) => item.moduleKey));
-        let nextY = legacy.reduce((bottom, item) => Math.max(bottom, item.y + normalizeHeight(item.height)), 0);
-        const additions = requiredDefaultModuleKeys.flatMap((moduleKey, index) => {
-          if (activeKeys.has(moduleKey)) return [];
-          const definition = moduleMap.get(moduleKey);
-          const defaultItem = defaultLayout.find((item) => item.moduleKey === moduleKey);
-          if (!definition || !defaultItem) return [];
-          const height = normalizeModuleHeight(defaultItem.height, definition);
-          const item: DashboardLayoutItem = {
-            instanceId: `migrated-required-${moduleKey}-${index}`,
-            moduleKey,
-            span: normalizeModuleSpan(defaultItem.span, definition),
-            height,
-            x: 0,
-            y: nextY,
-          };
-          nextY += height;
-          activeKeys.add(moduleKey);
-          return [item];
-        });
-        return [...legacy, ...additions];
+        return appendRequiredDefaultModules(legacy, defaultLayout, moduleMap, requiredDefaultModuleKeys, "migrated-required");
       }
     } catch {
       // Continue to the next legacy key; malformed legacy data stays untouched.
     }
   }
   return freshDefaultLayout(defaultLayout, moduleMap);
+}
+
+function appendRequiredDefaultModules(
+  layout: DashboardLayoutItem[],
+  defaultLayout: EditableDashboardBoardProps["defaultLayout"],
+  moduleMap: Map<string, DashboardModuleDefinition>,
+  requiredDefaultModuleKeys: string[],
+  idPrefix: string,
+) {
+  if (!requiredDefaultModuleKeys.length) return layout;
+  const activeKeys = new Set(layout.map((item) => item.moduleKey));
+  let nextY = layout.reduce((bottom, item) => Math.max(bottom, item.y + normalizeHeight(item.height)), 0);
+  const additions = requiredDefaultModuleKeys.flatMap((moduleKey, index) => {
+    if (activeKeys.has(moduleKey)) return [];
+    const definition = moduleMap.get(moduleKey);
+    const defaultItem = defaultLayout.find((item) => item.moduleKey === moduleKey);
+    if (!definition || !defaultItem) return [];
+    const height = normalizeModuleHeight(defaultItem.height, definition);
+    const item: DashboardLayoutItem = {
+      instanceId: `${idPrefix}-${moduleKey}-${index}`,
+      moduleKey,
+      span: normalizeModuleSpan(defaultItem.span, definition),
+      height,
+      x: 0,
+      y: nextY,
+    };
+    nextY += height;
+    activeKeys.add(moduleKey);
+    return [item];
+  });
+  return [...layout, ...additions];
 }
 
 function scopedLocalStorageKey(storageKey: string, scope: string | number | undefined) {
@@ -465,14 +483,22 @@ export function EditableDashboardBoard({
   editing,
   storageKey = "vkpi-dashboard-layout-v1",
   localStorageScope,
-  legacyStorageKeys = [],
-  requiredDefaultModuleKeys = [],
+  legacyStorageKeys = EMPTY_STRING_ARRAY,
+  requiredDefaultModuleKeys = EMPTY_STRING_ARRAY,
   apiToken = "",
 }: EditableDashboardBoardProps) {
   const resolvedStorageKey = scopedLocalStorageKey(storageKey, localStorageScope);
   const resolvedLegacyStorageKeys = legacyStorageKeys.map((key) => scopedLocalStorageKey(key, localStorageScope));
   const moduleMap = React.useMemo(() => new Map(modules.map((module) => [module.key, module])), [modules]);
   const moduleKeySignature = modules.map((module) => module.key).join("|");
+  const defaultLayoutSignature = defaultLayout.map((item) => [
+    item.moduleKey,
+    item.span,
+    item.height ?? "",
+    item.x ?? "",
+    item.y ?? "",
+  ].join(":")).join("|");
+  const requiredDefaultModuleKeySignature = requiredDefaultModuleKeys.join("|");
   const [layout, setLayout] = React.useState<DashboardLayoutItem[]>(() => loadLayout(
     resolvedStorageKey,
     defaultLayout,
@@ -545,8 +571,15 @@ export function EditableDashboardBoard({
         if (!alive) return;
         const normalized = normalizeStoredLayout(remoteLayout, moduleMap, "remote");
         if (normalized !== null) {
-          layoutRef.current = normalized;
-          setLayout(normalized);
+          const remoteVersion = dashboardLayoutPreferenceVersion(remoteLayout);
+          const next = remoteVersion < DASHBOARD_LAYOUT_SCHEMA_VERSION
+            ? appendRequiredDefaultModules(normalized, defaultLayout, moduleMap, requiredDefaultModuleKeys, "remote-required")
+            : normalized;
+          layoutRef.current = next;
+          setLayout(next);
+          if (remoteVersion < DASHBOARD_LAYOUT_SCHEMA_VERSION || !layoutsMatch(normalized, next)) {
+            void saveDashboardPreference(apiToken, DASHBOARD_LAYOUT_PREFERENCE, encodeDashboardLayoutPreference(next));
+          }
         }
         setSyncState("saved");
       })
@@ -554,7 +587,7 @@ export function EditableDashboardBoard({
         if (alive) setSyncState("error");
       });
     return () => { alive = false; };
-  }, [apiToken, moduleKeySignature]);
+  }, [apiToken, defaultLayoutSignature, moduleKeySignature, requiredDefaultModuleKeySignature]);
 
   React.useEffect(() => {
     if (!paletteOpen) return undefined;
@@ -724,6 +757,7 @@ export function EditableDashboardBoard({
           key: item.instanceId,
           className: `vkpi-board-module vkpi-board-module--${definition.key}`,
           "data-dashboard-instance": item.instanceId,
+          "data-dashboard-module": definition.key,
           "data-dashboard-x": item.x,
           "data-dashboard-y": item.y,
           "data-dashboard-span": item.span,
@@ -732,6 +766,7 @@ export function EditableDashboardBoard({
             "--vkpi-module-span": item.span,
             "--vkpi-module-height": normalizeHeight(item.height),
           } as React.CSSProperties,
+          tabIndex: -1,
         },
           FLOW_MODULES.has(definition.key) && e(ModuleFlowField),
           editing && e("div", { className: "vkpi-board-module__tools", "aria-label": `${definition.label} 布局工具` },

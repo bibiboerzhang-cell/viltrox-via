@@ -22,7 +22,6 @@ import {
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ActionInboxPanel } from "./components/ActionInboxPanel";
 import { ActiveCampaignsCard } from "./components/ActiveCampaignsCard";
-import { AIIntelligenceCard } from "./components/AIIntelligenceCard";
 import { ContentCalendarCard } from "./components/ContentCalendarCard";
 import { DashboardBoardLinkCard } from "./components/DashboardBoardLinkCard";
 import { DashboardCommandCenter } from "./components/DashboardCommandCenter";
@@ -45,6 +44,7 @@ import { buildCrossBoardModules } from "./pages/crossBoardModules";
 
 const e = React.createElement;
 const SHOW_EXPERIMENTAL = String((import.meta as any).env?.VITE_EXPERIMENTAL_NAV ?? "") === "1";
+const AIIntelligenceCard = React.lazy(() => import("./components/AIIntelligenceCard").then((module) => ({ default: module.AIIntelligenceCard })));
 const BrandPulsePanel = React.lazy(() => import("./components/BrandPulsePanel").then((module) => ({ default: module.BrandPulsePanel })));
 const CommentOpportunitiesPanel = React.lazy(() => import("./components/CommentOpportunitiesPanel").then((module) => ({ default: module.CommentOpportunitiesPanel })));
 const GiftedFunnelPanel = React.lazy(() => import("./components/GiftedFunnelPanel").then((module) => ({ default: module.GiftedFunnelPanel })));
@@ -75,6 +75,7 @@ const EMPTY_AI_INSIGHT = {
 };
 
 const DEFAULT_LAYOUT = [
+  { moduleKey: "today-focus", span: 12 },
   { moduleKey: "kpi", span: 12 },
   { moduleKey: "command-center", span: 8 },
   { moduleKey: "north-star", span: 4 },
@@ -82,9 +83,14 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "signals", span: 4 },
   { moduleKey: "v6-fit", span: 4 },
   { moduleKey: "memo", span: 4 },
+  { moduleKey: "trend-pulse", span: 8 },
   { moduleKey: "trend", span: 8 },
   { moduleKey: "ai-today", span: 4 },
 ];
+
+// v5 safety modules are appended once to pre-v5 layouts. Once the stored
+// envelope is v5, a user's explicit deletion remains authoritative.
+const REQUIRED_V5_DEFAULT_MODULE_KEYS = ["today-focus", "trend-pulse"];
 
 function formatRoster(value: unknown) {
   const number = Number(value);
@@ -115,7 +121,9 @@ export function DashboardEditablePage(props: any) {
     setSelectedSignal,
     setShowAllSignals,
     setShowAIConfirm,
-    aiRegenerating,
+    aiRegenerating = false,
+    aiRegeneration = { phase: "idle", message: "" },
+    onRegenerateAiToday,
     setSelectedMover,
     setShowAllMovers,
     setSelectedProject,
@@ -155,6 +163,13 @@ export function DashboardEditablePage(props: any) {
     else if (key === "events") onOpenEvents?.();
   };
 
+  const scrollToDashboardModule = React.useCallback((moduleKey: string) => {
+    const target = document.querySelector<HTMLElement>(`[data-dashboard-module="${moduleKey}"]`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.focus({ preventScroll: true });
+  }, []);
+
   const visibleBoardModule = (
     board: string,
     definition: DashboardModuleDefinition,
@@ -187,12 +202,12 @@ export function DashboardEditablePage(props: any) {
       : e(SignalsAlertsCard, { alerts: signals, onAlertClick: setSelectedSignal, onViewAll: () => setShowAllSignals(true) }) },
     { key: "v6-fit", label: "V6 Fit Top", description: "真实 KOL Pool 高拟合候选", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 10, minHeight: 7, maxHeight: 18, render: () => e(TopMoversCard, { movers: topMovers, onMoverClick: setSelectedMover, onViewAll: () => setShowAllMovers(true) }) },
     { key: "trend", label: "曝光与互动趋势", description: "真实 KPI 连续窗口趋势", category: "核心模块", defaultSpan: 8, minSpan: 6, defaultHeight: 9, minHeight: 7, maxHeight: 18, render: () => e(DashboardTrendCard, { metrics, scope: kpiScope }) },
-    { key: "ai-today", label: "AI Today", description: "真实每日决策、证据与拍摄建议", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 15, minHeight: 10, maxHeight: 26, render: () => e(AIIntelligenceCard, { insight: aiInsight, onApprove: () => setShowAIConfirm(true), onLater: null, regenerating: aiRegenerating }) },
+    { key: "ai-today", label: "AI Today", description: "真实每日决策、证据与拍摄建议", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 15, minHeight: 10, maxHeight: 26, render: () => renderLazyModule(AIIntelligenceCard, { insight: aiInsight, onApprove: () => setShowAIConfirm(true), onLater: null, onRegenerate: onRegenerateAiToday, regenerating: aiRegenerating, regenerationState: aiRegeneration }) },
     { key: "task-queue", label: "智能任务队列", description: "真实抓取 / 分析 / 落库 / 排队与成本", category: "核心模块", defaultSpan: 4, defaultHeight: 9, minHeight: 7, render: () => e(DashboardTaskQueueCard, { apiToken }) },
       { key: "memo", label: "备忘录", description: "账户偏好中保存的计划与待办", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 9, minHeight: 7, maxHeight: 18, allowMultiple: true, render: () => e(DashboardMemoCard, { apiToken }) },
     { key: "trend-pulse", label: "市场热词", description: "近期行业帖热词与真实稀疏态", category: "核心模块", defaultSpan: 8, render: () => e(TrendPulseBar, { apiToken }) },
 
-    { key: "today-focus", label: "今日焦点", description: "Action Inbox 与晨报摘要", category: "实时模块", defaultSpan: 12, render: () => apiToken ? e(TodayFocusStrip, { apiToken }) : null },
+    { key: "today-focus", label: "今日焦点", description: "Action Inbox 与晨报摘要", category: "实时模块", defaultSpan: 12, render: () => apiToken ? e(TodayFocusStrip, { apiToken, onJumpToInbox: () => scrollToDashboardModule("actions") }) : null },
       { key: "morning-brief", label: "夜班晨报", description: "昨夜自动任务结果", category: "实时模块", defaultSpan: 4, render: () => apiToken ? renderLazyModule(MorningBriefCard, { apiToken }) : null },
       { key: "gifted-funnel", label: "送样履约漏斗", description: "签收、开窗、发布与超期", category: "实时模块", defaultSpan: 4, render: () => apiToken ? renderLazyModule(GiftedFunnelPanel, { apiToken }) : null },
     { key: "activity-feed", label: "思考流", description: "任务完成、告警与会话推进", category: "实时模块", defaultSpan: 4, render: () => apiToken ? e(ActivityFeed, { apiToken }) : null },
@@ -233,6 +248,7 @@ export function DashboardEditablePage(props: any) {
         key: `dashboard-layout-${dashboardStorageScope || "unscoped"}`,
         modules,
         defaultLayout: DEFAULT_LAYOUT,
+        requiredDefaultModuleKeys: REQUIRED_V5_DEFAULT_MODULE_KEYS,
         editing: dashboardEditing,
         apiToken,
         localStorageScope: dashboardStorageScope,

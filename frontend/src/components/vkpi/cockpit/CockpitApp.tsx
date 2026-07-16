@@ -20,7 +20,7 @@ import { usePermissions } from "../../../hooks/usePermissions";
 import { useBrowserAssist, isBrowserAssistEnabled } from "../../../lib/browserAssist/enable";
 import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 // 模态 / popover / ReportPanel / SettingsPage / logout/resolve/staff-group api 已随 CockpitOverlays 抽到 CockpitApp.Sections.tsx。
-import { listEvents } from "../../../services/vkpi/events-api";
+import { listUpcomingEvents } from "../../../services/vkpi/events-api";
 import { getDealerLocations } from "../../../services/vkpi/dealers-api";
 import { normalizeEventsHierarchy, normalizeDealersHierarchy } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
@@ -37,6 +37,7 @@ import { VIEW_MODES } from "./data/viewModes";
 import { emptyDashboardData } from "../data/emptyDashboardData";
 import {
   buildMappedEvents,
+  filterUpcomingEvents,
   buildUpcomingEvents,
   buildEventPins,
   buildPins,
@@ -158,7 +159,6 @@ export function CockpitApp(props: any = {}) {
   const [selectedMover, setSelectedMover] = useState<any>(null);     // Top Movers 单条
   const [showAllSignals, setShowAllSignals] = useState(false);  // Signals View All
   const [showAIConfirm, setShowAIConfirm] = useState(false);    // AI Today Approve 确认
-  const [aiRegenerating, setAiRegenerating] = useState(false);  // AI Today Regenerate loading
   // V6.14: 顶部 4 按钮 popover state
   const [showHelp, setShowHelp] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
@@ -184,7 +184,10 @@ export function CockpitApp(props: any = {}) {
     dashboardRuntime,
     dashboardLoading,
     dashboardError,
+    aiTodayRegeneration,
+    regenerateAiToday,
   } = useCockpitRuntime({ apiToken, userName, userRole, userAvatar, userEmail, userAuthRole, starredProjects: dashboardData.starredProjects || [] });
+  const aiRegenerating = aiTodayRegeneration?.phase === "running";
   const activeStaffId = viewingAs ? viewingAs.id : currentUser.id;
   // 【D4】KPI scope 记忆(per-staff):身份就绪(真实 staff id 从 shell bundle 回来,>0)后,
   // 读回该员工上次选择的 scope(键带 staff id 防同浏览器多账号串号);此后变更同步写 per-staff 键。
@@ -341,13 +344,30 @@ export function CockpitApp(props: any = {}) {
     saveStoredState({ collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope });
   }, [collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope]);
 
+  // 活动日期的唯一前端口径:UTC YYYY-MM-DD，同一值同时传给
+  // upcoming API 与本地 fail-closed 过滤，不让浏览器时区再选一个日期。
+  const eventAsOfDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const mappedEvents = useMemo(() => buildMappedEvents(eventRows), [eventRows]);
+  const currentUpcomingEvents = useMemo(
+    () => filterUpcomingEvents(mappedEvents, eventAsOfDate),
+    [eventAsOfDate, mappedEvents],
+  );
+  const upcomingEvents = useMemo(
+    () => buildUpcomingEvents(mappedEvents, eventAsOfDate),
+    [eventAsOfDate, mappedEvents],
+  );
+  const eventPins = useMemo(() => buildEventPins(currentUpcomingEvents), [currentUpcomingEvents]);
+
   // 地图模式只由真实层级/坐标数据点亮。请求状态单独保留，避免把“仍在加载”误判为空。
   const kolHierarchyReady = Boolean(
     dashboardRuntime.mapHierarchy && Object.keys(dashboardRuntime.mapHierarchy).length > 0,
   );
-  // 真实活动地图层(只上图带定位的活动;0 个带定位则诚实保持禁用)。
-  const eventsHierarchy = useMemo(() => normalizeEventsHierarchy(eventRows) || {}, [eventRows]);
-  const eventsGeoCount = Object.keys(eventsHierarchy).length;
+  // 真实活动地图层:只消费 upcoming + 精确经纬度。国家字段不伪造点位。
+  const eventsHierarchy = useMemo(
+    () => normalizeEventsHierarchy(currentUpcomingEvents.map((event) => event.raw)) || {},
+    [currentUpcomingEvents],
+  );
+  const eventsGeoCount = eventPins.length;
   // 经销商地图层(主页地球):/dealers/locations 扁平 pin → US→cities 层级;0 个带经纬度则诚实禁用。
   const dealersHierarchy = useMemo(() => normalizeDealersHierarchy(dealerPins) || {}, [dealerPins]);
   const dealersGeoCount = Object.keys(dealersHierarchy).length;
@@ -378,7 +398,7 @@ export function CockpitApp(props: any = {}) {
     },
     events: {
       ...VIEW_MODES.events,
-      desc: eventsGeoCount > 0 ? `${eventsGeoCount} 地有定位活动` : "活动填城市/国家后自动上图",
+      desc: eventsGeoCount > 0 ? `${eventsGeoCount} 个未结束活动有精确坐标` : "未结束活动需精确经纬度才上图；国家信息仅作聚合",
       hierarchy: eventsHierarchy,
       available: eventsGeoCount > 0,
       loading: eventsGeoCount === 0 && eventMapRequest.loading,
@@ -435,19 +455,6 @@ export function CockpitApp(props: any = {}) {
   // V4.5: Venue options(街道级 / 店内楼层 / Landmark)
   const venueOptions = useMemo(() => buildVenueOptions({ item, city, country, hierarchy }), [item, city, country, hierarchy]);
 
-  // 真实 events → 统一 UI 形态(Upcoming 卡 / 地图落点 / preview 共用同一映射)。
-  // 定义在 pins useMemo 之前:pins 在 events 视图引用 eventPins。
-  const mappedEvents = useMemo(() => buildMappedEvents(eventRows), [eventRows]);
-
-  // Upcoming 卡:start_date >= 今天,升序,取前 6。
-  // 时区安全:用本地 YYYY-MM-DD 字符串比较(Date.parse 把 date-only 当 UTC,
-  // 在 UTC- 时区会把"今天"的活动算成昨天而漏掉 → 之前 Upcoming(0) 的真因)。
-  const upcomingEvents = useMemo(() => buildUpcomingEvents(mappedEvents), [mappedEvents]);
-
-  // 地图落点:每个「有定位」(显式经纬度或可识别国家)的活动一个 pin,点击弹 preview。
-  // 无定位的活动诚实不上图(不会凭空造点)。country 统一大写,与 pins 过滤口径一致。
-  const eventPins = useMemo(() => buildEventPins(mappedEvents), [mappedEvents]);
-
   // 计算当前要在地球上显示的 pins
   const pins = useMemo(
     () => buildPins({ currentMode, isAvailable, country, city, item, venue, hierarchy, eventPins }),
@@ -495,7 +502,7 @@ export function CockpitApp(props: any = {}) {
     [currentMode, country, city, item, hierarchy, effectiveViewMode],
   );
 
-  // 2026-06-14 诚实化:拉真实 events(只读,失败/无 token 静默置空,绝不硬编码假活动)。
+  // 只读 upcoming/进行中 Events。后端与前端复用同一显式 UTC as_of_date。
   useEffect(() => {
     if (!apiToken) {
       setEventRows([]);
@@ -504,7 +511,7 @@ export function CockpitApp(props: any = {}) {
     }
     let cancelled = false;
     setEventMapRequest({ loading: true, error: "" });
-    listEvents(apiToken, { limit: 100 })
+    listUpcomingEvents(apiToken, 200, eventAsOfDate)
       .then((res) => {
         if (cancelled) return;
         setEventRows(Array.isArray(res?.items) ? res.items : []);
@@ -522,7 +529,7 @@ export function CockpitApp(props: any = {}) {
     return () => {
       cancelled = true;
     };
-  }, [apiToken]);
+  }, [apiToken, eventAsOfDate]);
 
   const dealerBoardOwnsLocations = activeNav === "dealers";
 
@@ -940,7 +947,8 @@ export function CockpitApp(props: any = {}) {
               venue, item, city, country, setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange,
               setVenue, setSelectedPin, viewMode: effectiveViewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
               breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
-              setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
+              aiRegenerating, aiRegeneration: aiTodayRegeneration, onRegenerateAiToday: regenerateAiToday,
+              setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
               setSelectedPublish, setShowFullCalendar, focusTarget,
               viewModes: runtimeViewModes,
               mapSelectionLoading: mapSelection.pending,
@@ -955,7 +963,7 @@ export function CockpitApp(props: any = {}) {
               aiInsight: dashboardRuntime.aiInsight,
               topMovers: dashboardRuntime.topMovers,
               kolFunnel: dashboardRuntime.kolFunnel,
-              // 2026-06-14 诚实化:Upcoming Events 接真实 listEvents(空则卡内显「暂无活动」)。
+              // Upcoming Events 只接显式 as_of_date 过滤后的 upcoming/进行中记录。
               upcomingEvents,
               // Revenue by Source 无真实后端口径 → 维持空,卡片自带 length>0 守卫不渲染(绝不编造收入)。
               revenueBySource: [],

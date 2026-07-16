@@ -34,6 +34,15 @@ def test_video_task_binding_uses_the_worker_model_configuration(monkeypatch) -> 
     )
 
 
+def test_ai_today_two_stage_models_are_exact_reviewed_bindings() -> None:
+    assert model_registry.TASK_MODEL_BINDING["ai_today_grounded_discovery"] == (
+        "google/gemini-2.5-pro"
+    )
+    assert model_registry.TASK_MODEL_BINDING["ai_today_evidence_strategy"] == (
+        "anthropic/claude-opus-4-7"
+    )
+
+
 def test_all_gateway_defaults_match_router_exact_model_and_cost() -> None:
     expectations = {
         "openai": (registry.GPT, "gpt-5.4-mini", 75, 450),

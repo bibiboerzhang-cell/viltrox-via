@@ -6,6 +6,95 @@ import { cachedApiFetch, clearApiCache } from "../../../lib/apiCache";
 
 type Row = Record<string, unknown>;
 
+export const AI_TODAY_SCHEDULER_JOB_ID = "vkpi_ai_today_hot";
+
+function objectRow(value: unknown): Row {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+}
+
+function textValue(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = String(value ?? "").trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+export function aiTodaySnapshotFingerprint(value: unknown) {
+  const snapshot = objectRow(value);
+  const content = objectRow(snapshot.content);
+  return [
+    textValue(snapshot.generated_at, content.generated_at),
+    textValue(snapshot.snapshot_date, content.snapshot_date),
+    textValue(snapshot.result_status, snapshot.status),
+    textValue(snapshot.model, content.model),
+  ].join("|");
+}
+
+export function aiTodayAttemptFingerprint(value: unknown) {
+  const snapshot = objectRow(value);
+  const content = objectRow(snapshot.content);
+  const attempt = objectRow(snapshot.latest_attempt || content.latest_attempt);
+  return [
+    textValue(attempt.attempted_at),
+    textValue(attempt.status),
+    textValue(attempt.provider),
+    textValue(attempt.reason),
+    textValue(attempt.generation_status, attempt.provider_status),
+  ].join("|");
+}
+
+export function isAiTodaySnapshotReady(value: unknown) {
+  const snapshot = objectRow(value);
+  const status = textValue(snapshot.result_status, snapshot.status).toLowerCase();
+  return snapshot.available === true && snapshot.is_ready === true && status === "ready";
+}
+
+export function aiTodaySnapshotFailureReason(value: unknown) {
+  const snapshot = objectRow(value);
+  const content = objectRow(snapshot.content);
+  const attempt = objectRow(snapshot.latest_attempt || content.latest_attempt);
+  const validation = Array.isArray(snapshot.validation_errors)
+    ? snapshot.validation_errors.map((item) => String(item || "").trim()).filter(Boolean).join("、")
+    : "";
+  return textValue(
+    attempt.reason,
+    attempt.generation_status,
+    attempt.provider_status,
+    snapshot.reason,
+    snapshot.error,
+    validation,
+    snapshot.result_status,
+    snapshot.status,
+    "新快照未就绪",
+  );
+}
+
+export async function runAiTodaySchedulerNow(apiToken: string): Promise<Row> {
+  const response = await apiFetch<Row>(
+    `/api/admin/runtime/scheduler/${encodeURIComponent(AI_TODAY_SCHEDULER_JOB_ID)}/run-now`,
+    { method: "POST", body: jsonBody({}) },
+    apiToken,
+  );
+  const status = textValue(response?.status).toLowerCase();
+  const accepted = response?.triggered === true || (status === "queued" && response?.queued === true);
+  if (!accepted) {
+    throw new Error(textValue(response?.error, response?.status, "AI Today 调度任务未触发"));
+  }
+  return response;
+}
+
+export async function fetchAiTodayHotSnapshot(
+  apiToken: string,
+  options: { forceRefresh?: boolean } = {},
+): Promise<Row> {
+  return cachedApiFetch<Row>(
+    "/api/admin/vkpi/dashboard/ai-today-hot",
+    { timeoutMs: 5000, forceRefresh: options.forceRefresh !== false },
+    apiToken,
+  );
+}
+
 async function settle<T>(request: Promise<T>, fallback: T): Promise<T> {
   try {
     return await request;

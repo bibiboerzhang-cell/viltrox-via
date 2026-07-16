@@ -4,6 +4,7 @@ import {
   DASHBOARD_LAYOUT_COLUMNS,
   DASHBOARD_LAYOUT_PREFERENCE,
   DASHBOARD_LAYOUT_SCHEMA_VERSION,
+  dashboardLayoutPreferenceVersion,
   decodeDashboardLayoutPreference,
   encodeDashboardLayoutPreference,
   loadDashboardPreference,
@@ -84,5 +85,10 @@ describe("dashboardPreferenceStore", () => {
       columns: DASHBOARD_LAYOUT_COLUMNS,
       items: legacy,
     });
+    expect(dashboardLayoutPreferenceVersion(legacy)).toBe(0);
+    expect(dashboardLayoutPreferenceVersion({ layout: legacy })).toBe(0);
+    expect(dashboardLayoutPreferenceVersion({ version: 3, items: legacy })).toBe(3);
+    expect(dashboardLayoutPreferenceVersion(encodeDashboardLayoutPreference(legacy)))
+      .toBe(DASHBOARD_LAYOUT_SCHEMA_VERSION);
   });
 });

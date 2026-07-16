@@ -4,10 +4,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 
 let capturedModules: DashboardModuleDefinition[] = [];
+let capturedDefaultLayout: Array<{ moduleKey: string; span: number }> = [];
+let capturedRequiredKeys: string[] = [];
 
 vi.mock("../components/EditableDashboardBoard", () => ({
-  EditableDashboardBoard: ({ modules }: { modules: DashboardModuleDefinition[] }) => {
+  EditableDashboardBoard: ({
+    modules,
+    defaultLayout,
+    requiredDefaultModuleKeys,
+  }: {
+    modules: DashboardModuleDefinition[];
+    defaultLayout: Array<{ moduleKey: string; span: number }>;
+    requiredDefaultModuleKeys?: string[];
+  }) => {
     capturedModules = modules;
+    capturedDefaultLayout = defaultLayout;
+    capturedRequiredKeys = requiredDefaultModuleKeys || [];
     return <div data-testid="editable-dashboard-board" />;
   },
 }));
@@ -29,6 +41,8 @@ const baseProps = {
 
 beforeEach(() => {
   capturedModules = [];
+  capturedDefaultLayout = [];
+  capturedRequiredKeys = [];
 });
 
 function moduleKeys(category: DashboardModuleDefinition["category"]) {
@@ -36,6 +50,32 @@ function moduleKeys(category: DashboardModuleDefinition["category"]) {
 }
 
 describe("Dashboard 模块 registry 权限", () => {
+  it("默认布局包含今日焦点和市场热词，并将待办按钮映射到真实 Action Inbox 模块", () => {
+    render(<DashboardEditablePage {...baseProps} />);
+
+    expect(capturedDefaultLayout.map((item) => item.moduleKey)).toEqual(expect.arrayContaining([
+      "today-focus",
+      "trend-pulse",
+    ]));
+    expect(capturedRequiredKeys).toEqual(["today-focus", "trend-pulse"]);
+
+    const target = document.createElement("section");
+    target.dataset.dashboardModule = "actions";
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(target, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    const focus = vi.spyOn(target, "focus");
+    document.body.appendChild(target);
+
+    const todayFocus = capturedModules.find((module) => module.key === "today-focus");
+    const element = todayFocus?.render() as React.ReactElement<{ onJumpToInbox?: () => void }>;
+    expect(element.props.onJumpToInbox).toBeTypeOf("function");
+    element.props.onJumpToInbox?.();
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    target.remove();
+  });
+
   it("缺少权限上下文时不暴露业务入口或跨页模块", () => {
     render(<DashboardEditablePage {...baseProps} />);
     expect(moduleKeys("业务板块")).toEqual([]);

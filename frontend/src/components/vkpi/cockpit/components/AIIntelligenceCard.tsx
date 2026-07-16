@@ -191,6 +191,7 @@ export function AIIntelligenceCard({
   onLater,
   onRegenerate,
   regenerating,
+  regenerationState,
   variant,
 }: any) {
   const { t } = useT();
@@ -223,6 +224,37 @@ export function AIIntelligenceCard({
         ? `${sources.length} 条市场来源可回跳`
         : `${sources.length} 条来源记录 · 无原始链接`;
   const sourceNeedsWarning = !sources.length || contextOnlySources || !hasDirectMarketSource;
+  const latestAttempt = model.latestAttempt && typeof model.latestAttempt === "object"
+    ? model.latestAttempt
+    : null;
+  const latestAttemptStatus = String(latestAttempt?.status || "").toLowerCase();
+  const latestAttemptFailed = Boolean(latestAttempt)
+    && !["ok", "ready", "success"].includes(latestAttemptStatus);
+  const attemptStatusLabel = ({
+    invalid: "合同未通过",
+    degraded: "降级",
+    failed: "失败",
+    budget_blocked: "预算拦截",
+  } as Record<string, string>)[latestAttemptStatus] || latestAttemptStatus || "未知状态";
+  const latestAttemptProvider = String(latestAttempt?.provider || "unknown");
+  const latestAttemptReason = String(latestAttempt?.reason || "ai_today_not_ready");
+  const reasonLabel = ({
+    invalid_result_contract: "结果合同未通过",
+    partial_result_contract: "结果字段不完整",
+    budget_blocked: "预算闸已拦截",
+    claude_fallback_without_grounding: "Claude 回退缺少可回溯来源",
+    invalid_grounding_contract: "来源合同未通过",
+    no_grounded_citations: "未取得可回溯引文",
+  } as Record<string, string>)[latestAttemptReason] || latestAttemptReason;
+  const regenerationPhase = String(regenerationState?.phase || "idle");
+  const regenerationMessage = String(regenerationState?.message || "").trim();
+  const regenerationTone = regenerationPhase === "success"
+    ? "border-good bg-good-soft text-good"
+    : regenerationPhase === "degraded"
+      ? "border-warn bg-warn-soft text-warn"
+      : regenerationPhase === "error"
+        ? "border-crit bg-crit-soft text-crit"
+        : "border-accent bg-accent-soft text-accent";
 
   const decision = model.todayDecision || {};
   const decisionText = String(decision.text || "暂无今日决策");
@@ -238,6 +270,18 @@ export function AIIntelligenceCard({
   const todayContent = (Array.isArray(model.todayContent) ? model.todayContent : []).slice(0, displayLimit).map((item: any) => ({
     text: String(item || ""),
   })).filter((item: { text: string }) => item.text);
+  const productRecommendations = (Array.isArray(model.productRecommendations) ? model.productRecommendations : [])
+    .slice(0, displayLimit)
+    .map((item: any) => ({ text: String(item || "") }))
+    .filter((item: { text: string }) => item.text);
+  const contentRecommendations = (Array.isArray(model.contentRecommendations) ? model.contentRecommendations : [])
+    .slice(0, displayLimit)
+    .map((item: any) => ({ text: String(item || "") }))
+    .filter((item: { text: string }) => item.text);
+  const videoRecommendations = (Array.isArray(model.videoRecommendations) ? model.videoRecommendations : [])
+    .slice(0, displayLimit)
+    .map((item: any) => ({ text: String(item || "") }))
+    .filter((item: { text: string }) => item.text);
 
   const video = featuredVideo || {};
   const videoUrl = String(video.content_url || video.url || "");
@@ -389,10 +433,47 @@ export function AIIntelligenceCard({
 
         <div className="ai-evidence-card__details">
           <AdviceSection label={model.strengthenLabel || "加强"} tone="text-good" rows={strengthen} />
+          {productRecommendations.length ? (
+            <AdviceSection label={model.productRecommendationLabel || "产品推荐"} tone="text-accent" rows={productRecommendations} />
+          ) : null}
+          {contentRecommendations.length ? (
+            <AdviceSection label={model.contentRecommendationLabel || "内容打法"} tone="text-good" rows={contentRecommendations} />
+          ) : null}
+          {videoRecommendations.length ? (
+            <AdviceSection label="视频推荐理由" tone="text-accent" rows={videoRecommendations} />
+          ) : null}
           {weaken.length ? <AdviceSection label="减弱" tone="text-warn" rows={weaken} /> : null}
           <AdviceSection label={model.todayContentLabel || "今天适合发"} tone="text-accent" rows={todayContent} />
         </div>
       </div>
+
+      {latestAttemptFailed ? (
+        <div
+          role="status"
+          data-ai-latest-attempt-status={latestAttemptStatus || "unknown"}
+          className="mt-3 rounded-lg border border-warn bg-warn-soft px-2.5 py-2 text-[9.5px] leading-relaxed text-warn"
+          title={`${latestAttemptProvider} · ${latestAttemptReason}`}
+        >
+          <div className="font-medium">
+            最近生成尝试 · {latestAttempt.attemptedLabel || "时间未记录"} · {attemptStatusLabel} · {latestAttemptProvider}
+          </div>
+          <div className="mt-0.5 opacity-90">
+            原因：{reasonLabel}{reasonLabel !== latestAttemptReason ? `（${latestAttemptReason}）` : ""}
+            {latestAttempt.generationStatus ? ` · ${latestAttempt.generationStatus}` : ""}
+          </div>
+        </div>
+      ) : null}
+
+      {regenerationPhase !== "idle" && regenerationMessage ? (
+        <div
+          role="status"
+          aria-live="polite"
+          data-ai-regeneration-phase={regenerationPhase}
+          className={`mt-3 rounded-lg border px-2.5 py-2 text-[9.5px] leading-relaxed ${regenerationTone}`}
+        >
+          {regenerationMessage}
+        </div>
+      ) : null}
 
       <footer className="mt-3 flex min-w-0 items-center justify-between gap-3 border-t border-line pt-2.5">
         <span className={`min-w-0 text-[9px] ${isStale || sourceNeedsWarning ? "text-warn" : "text-muted"}`}>

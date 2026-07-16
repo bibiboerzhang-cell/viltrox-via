@@ -52,12 +52,12 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
     manifest = plan["execution_manifest"]
     rows = {row["binding"]: row for row in manifest["bindings"]}
 
-    assert manifest["task_binding_count"] == 13
+    assert manifest["task_binding_count"] == 17
     assert manifest["unique_binding_count"] == 8
     assert manifest["minimum_actual_evaluation_cases_per_task"] == 30
-    assert manifest["minimum_possible_generation_calls"] == 390
-    assert manifest["provider_generation_calls_ceiling"] == 398
-    assert manifest["known_text_only_cost_subtotal_usd"] == 3.86055
+    assert manifest["minimum_possible_generation_calls"] == 510
+    assert manifest["provider_generation_calls_ceiling"] == 518
+    assert manifest["known_text_only_cost_subtotal_usd"] == 6.1218
     assert rows["openai/gpt-5.4-mini"]["required_calls"] == {
         "actual_evaluation_cases": 120,
         "actual_evaluation_cases_per_task": {
@@ -79,3 +79,13 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
     assert rows["anthropic/claude-sonnet-4-6"]["required_calls"][
         "actual_evaluation_cases"
     ] == 90
+    assert rows["anthropic/claude-opus-4-7"]["tasks"] == [
+        "ai_today_evidence_strategy",
+        "contract_pdf_extract",
+        "deepsight_strategy",
+        "invoice_extract",
+    ]
+    assert rows["google/gemini-2.5-pro"]["tasks"] == [
+        "ai_today_grounded_discovery",
+        "deepsight_opportunity",
+    ]

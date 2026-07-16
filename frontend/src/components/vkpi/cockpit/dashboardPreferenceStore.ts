@@ -1,6 +1,11 @@
 export const DASHBOARD_LAYOUT_PREFERENCE = "dashboard_layout_v1";
 export const DASHBOARD_MEMO_PREFERENCE = "dashboard_memo_v1";
-export const DASHBOARD_LAYOUT_SCHEMA_VERSION = 3;
+// v5 restores the two compact operating modules that were accidentally omitted
+// when Dashboard moved to the editable board. An intermediate local v4 was
+// already persisted for some accounts while only Today Focus was registered;
+// the new version therefore gives Market Trends its own one-time migration too.
+// Once v5 is stored, a user's later explicit deletion remains authoritative.
+export const DASHBOARD_LAYOUT_SCHEMA_VERSION = 5;
 export const DASHBOARD_LAYOUT_COLUMNS = 12;
 
 export interface DashboardLayoutPreferencePayload<T = unknown> {
@@ -22,6 +27,12 @@ export function decodeDashboardLayoutPreference<T = unknown>(value: unknown): T[
   if (Array.isArray(payload.items)) return payload.items.slice() as T[];
   if (Array.isArray(payload.layout)) return payload.layout.slice() as T[];
   return null;
+}
+
+export function dashboardLayoutPreferenceVersion(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const version = Number((value as { version?: unknown }).version);
+  return Number.isInteger(version) && version > 0 ? version : 0;
 }
 
 export function encodeDashboardLayoutPreference<T>(

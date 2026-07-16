@@ -38,7 +38,7 @@ export const VIEW_MODES = {
     label: "Events",
     icon: Calendar,
     color: "#fbbf24",
-    desc: "events/upcoming endpoint 待接入",
+    desc: "未结束活动需精确经纬度才上图；国家信息仅作聚合",
     pinColor: "#fbbf24",
     hierarchy: {},
     apiEndpoint: "/api/admin/vkpi/events/upcoming",

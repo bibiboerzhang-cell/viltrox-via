@@ -78,6 +78,7 @@ describe("EditableDashboardBoard", () => {
     render(<EditableDashboardBoard modules={modules} defaultLayout={defaultLayout} editing storageKey={STORAGE_KEY} />);
 
     const alphaSection = screen.getByText("模块 A 内容").closest("section") as HTMLElement;
+    expect(alphaSection).toHaveAttribute("data-dashboard-module", "alpha");
     expect(alphaSection?.style.getPropertyValue("--vkpi-module-span")).toBe("12");
     expect(alphaSection.querySelectorAll("[data-resize-axis]")).toHaveLength(8);
     expect(Array.from(alphaSection.querySelectorAll<HTMLElement>("[data-resize-axis]"))
@@ -184,6 +185,61 @@ describe("EditableDashboardBoard", () => {
         .toMatchObject({ instanceId: "legacy-c", span: 4, height: 5, x: 8, y: 0 });
       expect(saved.items.find((item: { moduleKey: string }) => item.moduleKey === "beta"))
         .toMatchObject({ instanceId: "migrated-required-beta-0", x: 0, y: 5 });
+    });
+  });
+
+  it("将当前 key 上的 v3 布局一次迁移到 v4 并在底部补必需模块", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      version: 3,
+      columns: 12,
+      items: [
+        { instanceId: "v3-alpha", moduleKey: "alpha", span: 12, height: 5, x: 0, y: 0 },
+      ],
+    }));
+
+    render(<EditableDashboardBoard
+      modules={modules}
+      defaultLayout={defaultLayout}
+      editing={false}
+      storageKey={STORAGE_KEY}
+      requiredDefaultModuleKeys={["beta"]}
+    />);
+
+    expect(screen.getByText("模块 A 内容")).toBeInTheDocument();
+    expect(screen.getByText("模块 B 内容")).toBeInTheDocument();
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "null");
+      expect(saved.version).toBe(DASHBOARD_LAYOUT_SCHEMA_VERSION);
+      expect(saved.items.find((item: { moduleKey: string }) => item.moduleKey === "alpha"))
+        .toMatchObject({ instanceId: "v3-alpha", x: 0, y: 0, height: 5 });
+      expect(saved.items.find((item: { moduleKey: string }) => item.moduleKey === "beta"))
+        .toMatchObject({ instanceId: "restored-required-beta-0", x: 0, y: 5 });
+    });
+  });
+
+  it("尊重 v4 用户删除，后续挂载不会把必需默认模块重新加回", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      version: DASHBOARD_LAYOUT_SCHEMA_VERSION,
+      columns: 12,
+      items: [
+        { instanceId: "v4-alpha", moduleKey: "alpha", span: 12, height: 5, x: 0, y: 0 },
+      ],
+    }));
+
+    render(<EditableDashboardBoard
+      modules={modules}
+      defaultLayout={defaultLayout}
+      editing={false}
+      storageKey={STORAGE_KEY}
+      requiredDefaultModuleKeys={["beta"]}
+    />);
+
+    expect(screen.getByText("模块 A 内容")).toBeInTheDocument();
+    expect(screen.queryByText("模块 B 内容")).not.toBeInTheDocument();
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "null");
+      expect(saved.version).toBe(DASHBOARD_LAYOUT_SCHEMA_VERSION);
+      expect(saved.items.map((item: { moduleKey: string }) => item.moduleKey)).toEqual(["alpha"]);
     });
   });
 

@@ -247,6 +247,7 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/MorningBriefCard") ||
               id.includes("/src/components/vkpi/cockpit/components/SemanticRecallCard") ||
               id.includes("/src/components/vkpi/cockpit/components/WorkerDevicesPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/AIIntelligenceCard") ||
               // These panels each belong to one lazy board family. Keeping them
               // out of the always-shared widgets chunk lets Rollup attach them to
               // the owning route rather than charging every initial navigation.

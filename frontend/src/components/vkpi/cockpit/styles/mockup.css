@@ -53,7 +53,7 @@
     z-index: 2;
   }
   .vkpi-pin-pulse {
-    width: 30px; height: 30px; border-radius: 50%;
+    width: 20px; height: 20px; border-radius: 50%;
     background: var(--pin-color);
     opacity: 0.4;
     position: absolute; left: 50%; top: 50%;
@@ -61,7 +61,7 @@
     animation: vkpi-pulse 2.4s ease-out infinite;
   }
   .vkpi-pin-ring {
-    width: 22px; height: 22px; border-radius: 50%;
+    width: 18px; height: 18px; border-radius: 50%;
     border: 2px solid var(--pin-color);
     opacity: 0.7;
     position: absolute; left: 50%; top: 50%;
@@ -69,7 +69,53 @@
   }
   @keyframes vkpi-pulse {
     0%   { transform: translate(-50%, -50%) scale(0.6); opacity: 0.55; }
-    100% { transform: translate(-50%, -50%) scale(2.4); opacity: 0; }
+    100% { transform: translate(-50%, -50%) scale(1.8); opacity: 0; }
+  }
+  .vkpi-map-cluster {
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--cluster-color) 76%, white);
+    background: color-mix(in srgb, var(--cluster-color) 78%, var(--ds-card));
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--cluster-color) 18%, transparent), 0 6px 18px rgba(0,0,0,.28);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    user-select: none;
+  }
+  .vkpi-pin-card--cluster { min-width: 170px; }
+  .vkpi-map-cluster-popup .leaflet-popup-content-wrapper,
+  .vkpi-map-cluster-popup .leaflet-popup-tip {
+    background: color-mix(in srgb, var(--ds-card) 96%, transparent);
+    color: var(--ds-text);
+  }
+  .vkpi-map-cluster-popup .leaflet-popup-content-wrapper {
+    border: 1px solid var(--ds-line-strong);
+    border-radius: 12px;
+    box-shadow: var(--ds-shadow);
+  }
+  .vkpi-map-cluster-popup .leaflet-popup-content { margin: 10px; }
+  .vkpi-map-cluster-members { display: grid; gap: 6px; min-width: 180px; }
+  .vkpi-map-cluster-members__title { color: var(--ds-muted); font-size: 10px; font-weight: 600; }
+  .vkpi-map-cluster-members__item {
+    width: 100%;
+    border: 1px solid var(--ds-line);
+    border-radius: 7px;
+    background: var(--ds-bg-2);
+    color: var(--ds-text-2);
+    padding: 7px 9px;
+    text-align: left;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .vkpi-map-cluster-members__item:hover,
+  .vkpi-map-cluster-members__item:focus-visible {
+    border-color: var(--ds-accent);
+    color: var(--ds-text);
+    outline: none;
   }
   /* reduced-motion:pin 脉冲与地图控件的 pulse 全部静止(脉冲层直接隐藏,避免残留静态色块) */
   @media (prefers-reduced-motion: reduce) {

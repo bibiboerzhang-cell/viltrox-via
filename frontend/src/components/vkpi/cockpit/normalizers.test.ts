@@ -115,11 +115,8 @@ describe("eventCoords 落点逻辑", () => {
     expect(eventCoords("ZZ", null, null)).toBeNull();
   });
 
-  it("有国家 → 质心 + jitter,lat/lng 为 number(不断言精确值)", () => {
-    const coords = eventCoords("US", null, null, "seed");
-    expect(coords).not.toBeNull();
-    expect(typeof coords!.lat).toBe("number");
-    expect(typeof coords!.lng).toBe("number");
+  it("只有国家不得伪造精确点", () => {
+    expect(eventCoords("US", null, null, "seed")).toBeNull();
   });
 });
 
@@ -260,6 +257,35 @@ describe("Dashboard 公司账号真实指标契约", () => {
   });
 });
 
+describe("Dashboard KOL 地图分布来源优先级", () => {
+  it("global distribution-pack 与 Pool 行重叠时也不重复计数", () => {
+    const out = normalizeCockpitDashboard({
+      distribution: {
+        resource: "dashboard.kol_distribution_pack",
+        schema_version: 1,
+        is_real: true,
+        scope: { mode: "global" },
+        stats: { mapped_kol_count: 3 },
+        countries: [{ code: "US", lat: 39.8, lng: -98.6, count: 3, cities: [] }],
+      },
+    }, [
+      { id: 1, country: "US", city: "NYC" },
+      { id: 2, country: "DE", city: "Berlin" },
+    ]);
+
+    expect(out.mapHierarchy.US.count).toBe(3);
+    expect(out.mapHierarchy.DE).toBeUndefined();
+  });
+
+  it("distribution-pack 缺失时保留 kolRows fallback", () => {
+    const out = normalizeCockpitDashboard({ distribution: {} }, [
+      { id: 1, country: "US", city: "NYC" },
+    ]);
+
+    expect(out.mapHierarchy.US.count).toBe(1);
+  });
+});
+
 describe("AI Today 真实证据与新鲜度", () => {
   it("保留视频、来源与过期状态", () => {
     const out = normalizeAiInsight({}, {}, {
@@ -273,6 +299,9 @@ describe("AI Today 真实证据与新鲜度", () => {
         snapshot_date: "2026-07-01",
         shooting_plans: ["弱光街拍"],
         hot_topics: ["cinematic"],
+        product_recommendations: ["EVO · 适配轻量街拍"],
+        content_recommendations: ["YouTube · 做镜头对比"],
+        video_recommendations: ["用外部样例解释构图"],
         recommended_videos: [{ evidence_id: 7, content_url: "https://example.com/video" }],
         sources: [{ url: "https://example.com/source", title: "source" }],
       },
@@ -281,8 +310,44 @@ describe("AI Today 真实证据与新鲜度", () => {
     expect(out.isStale).toBe(true);
     expect(out.updatedLabel).toBe("已过期 · 8 天前");
     expect(out.recommendedVideos).toHaveLength(1);
+    expect(out.productRecommendations).toEqual(["EVO · 适配轻量街拍"]);
+    expect(out.contentRecommendations).toEqual(["YouTube · 做镜头对比"]);
+    expect(out.videoRecommendations).toEqual(["用外部样例解释构图"]);
     expect(out.sources).toHaveLength(1);
     expect(out.todayDecision.reason).toContain("过期快照");
+  });
+
+  it("保留可用快照并单独映射最新失败尝试", () => {
+    const out = normalizeAiInsight({}, {}, {
+      available: true,
+      latest_attempt: {
+        attempted_at: "2026-07-16T12:05:00Z",
+        status: "invalid",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        reason: "invalid_result_contract",
+        provider_status: "transient_error",
+        generation_status: "all_providers_failed",
+        providers_attempted: ["google", "anthropic"],
+      },
+      content: {
+        headline: "保留的可用快照",
+        generated_at: "2026-07-16T11:00:00Z",
+        freshness_status: "fresh",
+        shooting_plans: ["计划"],
+        hot_topics: ["话题"],
+        sources: [{ url: "https://example.com/source" }],
+      },
+    });
+
+    expect(out.todayDecision.text).toBe("保留的可用快照");
+    expect(out.latestAttempt).toMatchObject({
+      status: "invalid",
+      provider: "anthropic",
+      reason: "invalid_result_contract",
+      generationStatus: "all_providers_failed",
+      providersAttempted: ["google", "anthropic"],
+    });
   });
 });
 

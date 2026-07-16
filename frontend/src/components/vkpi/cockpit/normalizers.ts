@@ -635,6 +635,21 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
   // 2026-06-15:优先用 AI Today LLM「今日热点」(每早8点生成的拍摄方案+话题);无则回落原 copilot-brief。
   const hot = record(aiTodayHot);
   const hotContent = record(hot.content);
+  const attempt = record(hot.latest_attempt || hotContent.latest_attempt);
+  const hasAttempt = Boolean(
+    attempt.attempted_at || attempt.status || attempt.provider || attempt.reason,
+  );
+  const latestAttempt = hasAttempt ? {
+    attemptedAt: String(attempt.attempted_at || ""),
+    attemptedLabel: attempt.attempted_at ? timeLabel(attempt.attempted_at) : "时间未记录",
+    status: String(attempt.status || "unknown"),
+    provider: String(attempt.provider || "unknown"),
+    model: String(attempt.model || ""),
+    reason: String(attempt.reason || ""),
+    providerStatus: String(attempt.provider_status || ""),
+    generationStatus: String(attempt.generation_status || ""),
+    providersAttempted: list(attempt.providers_attempted).map((value) => String(value)),
+  } : null;
   if (hot.available && hotContent.headline) {
     const freshnessStatus = String(hotContent.freshness_status || hot.freshness_status || "unknown");
     const freshnessLabel = String(hotContent.freshness_label || hot.freshness_label || "");
@@ -658,11 +673,17 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
       },
       strengthenLabel: "拍摄方案",
       strengthen: list(hotContent.shooting_plans).slice(0, 3).map((p) => ({ text: String(p), detail: "" })),
+      productRecommendationLabel: "产品推荐",
+      productRecommendations: list(hotContent.product_recommendations).slice(0, 4).map((x) => String(x)),
+      contentRecommendationLabel: "内容打法",
+      contentRecommendations: list(hotContent.content_recommendations).slice(0, 4).map((x) => String(x)),
+      videoRecommendations: list(hotContent.video_recommendations).slice(0, 4).map((x) => String(x)),
       weaken: [],
       todayContentLabel: "当下热点·赛事",
       todayContent: list(hotContent.hot_topics).slice(0, 3).map((x) => String(x)),
       recommendedVideos,
       sources,
+      latestAttempt,
       poweredBy: isStale ? "过期快照 · 库内证据仅供复核" : "每日早 8 点更新 · 来源可回跳",
       raw: hot,
     };
@@ -691,7 +712,11 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
     weaken: [],
     todayContent: taskItems.slice(0, 3).map((item) => String(record(item).title || record(item).body || "任务待复核")),
     recommendedVideos: [],
+    productRecommendations: [],
+    contentRecommendations: [],
+    videoRecommendations: [],
     sources: [],
+    latestAttempt,
     freshnessStatus: "unknown",
     freshnessLabel: "",
     isStale: false,
@@ -942,12 +967,8 @@ export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
   const realCampaigns = activeCampaignsMeta.isReal ? normalizeActiveCampaigns(activeCampaignsBlock) : null;
   // 2026-06-12 波3 R7:无 starred 时回退到后端真实 active_campaigns 块,不再整块丢弃。
   const campaigns = starredCampaigns.length ? starredCampaigns : (realCampaigns || []);
-  // C3 员工轻隔离(2026-07-03):distribution-pack 声明 scope.mode==="staff"(后端按登录人
-  // 服务端推导,员工=只含自己的 KOL)时,地图只画后端算好的分布,不再把全量 Pool 行合并成
-  // pins —— Pool 是公共资产别处照常可看,但 Dashboard 地图口径 = 自己的 KOL 分布。
-  // owner/管理层的 pack 是 global 口径(scope.mode==="global"),合并行为不变。
-  const distributionScopeMode = String(record(record(bundle.distribution).scope).mode || "");
-  const mapKolRows = distributionScopeMode === "staff" ? [] : kolRows;
+  // 有效的服务端 distribution-pack 已经是完整分母,无论 staff/global 都是地图唯一来源。
+  // kolRows 只作 pack 缺失、契约损坏或 is_real=false 时的 fallback,避免同一 KOL 被双重计数。
   return {
     metrics: normalizeDashboardMetrics(bundle, kolRows),
     campaigns,
@@ -963,7 +984,7 @@ export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
     aiInsight: normalizeAiInsight(bundle.copilotBrief, bundle.tasks, bundle.aiTodayHot),
     signals: normalizeSignals(bundle.marketCards, bundle.competitorRadar),
     topMovers: normalizeTopMovers(kolRows, bundle.fitMovers),
-    mapHierarchy: normalizeMapHierarchy(bundle.distribution, mapKolRows),
+    mapHierarchy: normalizeMapHierarchy(bundle.distribution, kolRows),
     kolFunnel: normalizeKolFunnel(summary),
     sourceHealth: normalizeDashboardSourceHealth(bundle),
   };

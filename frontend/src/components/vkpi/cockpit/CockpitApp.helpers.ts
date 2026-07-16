@@ -18,6 +18,7 @@ interface EventRow {
   type_key?: string;
   title?: string;
   start_date?: string;
+  end_date?: string;
   status?: string;
   status_label?: string;
   health_score?: number | string;
@@ -35,6 +36,8 @@ interface MappedEvent {
   title: string;
   date: string;
   startDate: string;
+  endDate: string;
+  status: string;
   location: string;
   venue: string;
   country: string;
@@ -109,6 +112,7 @@ export function buildMappedEvents(eventRows: unknown): MappedEvent[] {
     const visual = EVENT_TYPE_VISUAL[String(row.type_key || "")] || { icon: Calendar, color: "#a855f7" };
     const start = new Date(String(row.start_date));
     const startStr = String(row.start_date || "").slice(0, 10);
+    const endStr = String(row.end_date || "").slice(0, 10);
     const dateLabel = Number.isNaN(start.getTime())
       ? startStr
       : start.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
@@ -120,6 +124,8 @@ export function buildMappedEvents(eventRows: unknown): MappedEvent[] {
       title: String(row.title || "未命名活动"),
       date: dateLabel,
       startDate: startStr,
+      endDate: endStr,
+      status: status.toLowerCase(),
       location: String(row.location_name || locParts.join(" · ") || "地点待补"),
       venue: String(row.location_name || locParts.join(" · ") || ""),
       country: String(row.location_country || "").toUpperCase(),
@@ -136,14 +142,28 @@ export function buildMappedEvents(eventRows: unknown): MappedEvent[] {
   });
 }
 
-// Upcoming 卡:start_date >= 今天,升序,取前 6。
-export function buildUpcomingEvents(mappedEvents: MappedEvent[]) {
-  const nowLocal = new Date();
-  const todayStr = `${nowLocal.getFullYear()}-${String(nowLocal.getMonth() + 1).padStart(2, "0")}-${String(nowLocal.getDate()).padStart(2, "0")}`;
+const CLOSED_EVENT_STATUSES = new Set(["done", "ended", "cancelled", "canceled", "closed"]);
+
+// Upcoming/进行中以 end_date 为生效边界。asOfDate 由调用方传入 UTC
+// YYYY-MM-DD，默认也只用 UTC，不读浏览器本地日期。
+export function filterUpcomingEvents(
+  mappedEvents: MappedEvent[],
+  asOfDate = new Date().toISOString().slice(0, 10),
+) {
   return mappedEvents
-    .filter((ev) => String(ev.startDate || "") >= todayStr)
-    .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")))
-    .slice(0, 6);
+    .filter((ev) => (
+      /^\d{4}-\d{2}-\d{2}$/.test(ev.endDate)
+      && ev.endDate >= asOfDate
+      && !CLOSED_EVENT_STATUSES.has(ev.status)
+    ))
+    .sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || "")));
+}
+
+export function buildUpcomingEvents(
+  mappedEvents: MappedEvent[],
+  asOfDate = new Date().toISOString().slice(0, 10),
+) {
+  return filterUpcomingEvents(mappedEvents, asOfDate).slice(0, 6);
 }
 
 // 地球上的活动落点 pin。
@@ -164,7 +184,8 @@ interface EventPin {
   [key: string]: unknown;
 }
 
-// 地图落点:每个「有定位」的活动一个 pin。
+// 地图落点:每个有精确经纬度的活动一个 pin。国家字段只是聚合维度，
+// 不允许用国家质心 + jitter 伪装场馆/活动点。
 export function buildEventPins(mappedEvents: MappedEvent[]): EventPin[] {
   return mappedEvents
     .map((ev): EventPin | null => {

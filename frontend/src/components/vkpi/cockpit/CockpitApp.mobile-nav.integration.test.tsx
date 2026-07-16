@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const serviceMocks = vi.hoisted(() => ({
   getDealerLocations: vi.fn(async () => ({ pins: [] })),
-  listEvents: vi.fn(async () => ({ items: [] })),
+  listUpcomingEvents: vi.fn(async () => ({ items: [] })),
   listStaffGroups: vi.fn(async () => ({ items: [] })),
 }));
 
@@ -40,7 +40,7 @@ vi.mock("../../../services/vkpi/dealers-api", () => ({
 }));
 
 vi.mock("../../../services/vkpi/events-api", () => ({
-  listEvents: serviceMocks.listEvents,
+  listUpcomingEvents: serviceMocks.listUpcomingEvents,
 }));
 
 vi.mock("../../../services/vkpi/groups-api", () => ({
@@ -120,6 +120,7 @@ vi.mock("./CockpitApp.lazyBoards", async () => {
 
 vi.mock("./CockpitApp.helpers", () => ({
   buildMappedEvents: () => [],
+  filterUpcomingEvents: () => [],
   buildUpcomingEvents: () => [],
   buildEventPins: () => [],
   buildPins: () => [],
@@ -160,7 +161,7 @@ import { CockpitApp } from "./CockpitApp";
 describe("CockpitApp mobile navigation integration", () => {
   beforeEach(() => {
     serviceMocks.getDealerLocations.mockClear();
-    serviceMocks.listEvents.mockClear();
+    serviceMocks.listUpcomingEvents.mockClear();
     serviceMocks.listStaffGroups.mockClear();
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -173,7 +174,7 @@ describe("CockpitApp mobile navigation integration", () => {
     render(React.createElement(CockpitApp, { apiToken: "token" }));
 
     expect(await screen.findByTestId("dealers-board")).toHaveTextContent("Dealers content");
-    await waitFor(() => expect(serviceMocks.listEvents).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(serviceMocks.listUpcomingEvents).toHaveBeenCalledTimes(1));
     expect(serviceMocks.getDealerLocations).not.toHaveBeenCalled();
   });
 
