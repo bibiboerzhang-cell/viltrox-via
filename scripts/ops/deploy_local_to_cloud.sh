@@ -98,7 +98,7 @@ POST_DEPLOY_BROWSER_TOKEN="${VKPI_BROWSER_GATE_TOKEN:-}"
 # Keep an explicitly supplied bearer out of every subsequently spawned process.
 # It is passed only to the in-memory browser controller at the final gate.
 unset VKPI_BROWSER_GATE_TOKEN
-BROWSER_GATE_TOKEN_TTL_SECONDS="${VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS:-300}"
+BROWSER_GATE_TOKEN_TTL_SECONDS="${VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS:-900}"
 BROWSER_GATE_SETTLE_MS="${VKPI_BROWSER_GATE_SETTLE_MS:-5000}"
 BROWSER_GATE_PAGE_SETTLE_MS="${VKPI_BROWSER_GATE_PAGE_SETTLE_MS:-1000}"
 BROWSER_GATE_PAGE_TIMEOUT_MS="${VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS:-30000}"
@@ -239,7 +239,7 @@ try:
     parsed = urlsplit(sys.argv[1])
     valid = (
         parsed.scheme == "https"
-        and parsed.hostname == "viltroxtest.com"
+        and parsed.hostname == "www.viltroxtest.com"
         and parsed.username is None
         and parsed.password is None
         and parsed.port in (None, 443)
@@ -330,7 +330,7 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     exit 1
   fi
   if ! viltroxtest_browser_gate_is_exact; then
-    echo "VKPI_STAGING_DB_CLONE=1 requires an HTTPS browser gate on host viltroxtest.com." >&2
+    echo "VKPI_STAGING_DB_CLONE=1 requires an HTTPS browser gate on host www.viltroxtest.com." >&2
     exit 1
   fi
   if [ -n "${FORWARD_COMPATIBILITY_DECLARATION}" ]; then
@@ -343,8 +343,8 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
 fi
 if ! [[ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" =~ ^[0-9]+$ ]] \
   || [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -lt 60 ] \
-  || [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -gt 300 ]; then
-  echo "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS must be an integer within [60, 300]." >&2
+  || [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -gt 900 ]; then
+  echo "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS must be an integer within [60, 900]." >&2
   exit 1
 fi
 if ! [[ "${BROWSER_GATE_SETTLE_MS}" =~ ^[0-9]+$ ]] \
@@ -363,6 +363,41 @@ if ! [[ "${BROWSER_GATE_PAGE_TIMEOUT_MS}" =~ ^[0-9]+$ ]] \
   || [ "${BROWSER_GATE_PAGE_TIMEOUT_MS}" -lt 5000 ] \
   || [ "${BROWSER_GATE_PAGE_TIMEOUT_MS}" -gt 60000 ]; then
   echo "VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS must be an integer within [5000, 60000]." >&2
+  exit 1
+fi
+BROWSER_GATE_PAGE_COUNT="$("${PROJECT_ROOT}/.venv/bin/python" - \
+  "${PROJECT_ROOT}/scripts/browser_gate_pages.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+pages = payload.get("pages")
+if payload.get("schema_version") != "vkpi-browser-page-manifest/v1" or not isinstance(pages, list):
+    raise SystemExit("browser page manifest contract is invalid")
+if not pages:
+    raise SystemExit("browser page manifest must contain at least one page")
+print(len(pages))
+PY
+)"
+# Budget the token against the capture's fail-closed upper bound: Chromium/CDP
+# startup, bootstrap navigation, initial settle, the initial and per-page auth
+# probes, every full page timeout plus its settle window, the final API-idle
+# wait, and a 30-second controller margin.
+# This is evaluated before any remote mutation, so an impossible capture cannot
+# consume a release slot or expire halfway through the page manifest.
+BROWSER_GATE_CAPTURE_BUDGET_MS=$((
+  15000
++  30000
++  BROWSER_GATE_SETTLE_MS
++  5000 * (BROWSER_GATE_PAGE_COUNT + 1)
++  BROWSER_GATE_PAGE_COUNT * (BROWSER_GATE_PAGE_TIMEOUT_MS + BROWSER_GATE_PAGE_SETTLE_MS)
+  + BROWSER_GATE_PAGE_TIMEOUT_MS
+  + 30000
+))
+BROWSER_GATE_CAPTURE_BUDGET_SECONDS=$(((BROWSER_GATE_CAPTURE_BUDGET_MS + 999) / 1000))
+if [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -lt "${BROWSER_GATE_CAPTURE_BUDGET_SECONDS}" ]; then
+  echo "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS=${BROWSER_GATE_TOKEN_TTL_SECONDS} is below the ${BROWSER_GATE_CAPTURE_BUDGET_SECONDS}s fail-closed browser capture budget." >&2
   exit 1
 fi
 if ! "${PROJECT_ROOT}/.venv/bin/python" - \
@@ -1745,7 +1780,7 @@ PY
 
 # A caller may supply an explicit reviewed token.  Otherwise, and only after
 # strict post-restart web + seven-worker identity and read-only acceptance have
-# passed, mint one 60-300s admin JWT inside the active remote release.  The
+# passed, mint one 60-900s admin JWT inside the active remote release.  The
 # production JWT secret and DB identity never leave the host: SSH stdout carries
 # only the short-lived token directly into this shell variable, never argv,
 # evidence, logs, or a file.  Any lookup/signing failure blocks the deployment.

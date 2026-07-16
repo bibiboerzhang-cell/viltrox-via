@@ -113,7 +113,11 @@ export function writeVkpiHash(page: VkpiPageKey) {
   // replaceState 不会原生触发 hashchange，所以只在真实变化后补发一次。
   // 相同 hash 若继续派发，会让监听器 write -> dispatch -> write 无限递归。
   if (window.location.hash === nextHash) return false;
-  window.history.replaceState(null, '', nextHash);
+  // 只替换 hash，保留 Cockpit 深链中的 pathname 和 query（例如
+  // /?cockpit=dealers#cockpit）。若只写 nextHash，replaceState 会把 query 一并丢掉，
+  // 导致内层 CockpitApp 读不到目标页而回落 Dashboard。
+  const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+  window.history.replaceState(null, '', nextUrl);
   const event = typeof HashChangeEvent === 'function' ? new HashChangeEvent('hashchange') : new Event('hashchange');
   window.dispatchEvent(event);
   return true;

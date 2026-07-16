@@ -580,6 +580,12 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         "new URL('/api/auth/me', location.href)",
         "body?.status === 'success'",
         "body?.user && typeof body.user === 'object'",
+        "const AUTH_PROBE_TIMEOUT_MS = 5000",
+        "signal: AbortSignal.timeout(${AUTH_PROBE_TIMEOUT_MS})",
+        "async function requireAuthentication(session)",
+        'throw new Error("browser_gate_token_expired")',
+        "await requireAuthentication(session)",
+        "browser_gate_first_page_failed",
         "document.querySelector('.cockpit-shell main')",
         "document.querySelector('input[type=\"password\"]')",
         "authenticated_surface: authenticatedSurface",
@@ -631,6 +637,25 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
     cookie_injection = source.index('await session.send("Network.setCookie", {')
     page_navigation = source.index('await session.send("Page.navigate", { url: args.url })')
     assert network_enable < cookie_injection < page_navigation
+
+    per_page_navigation = source.split(
+        "async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)",
+        1,
+    )[1].split("async function waitForFinalSameOriginApiIdle", 1)[0]
+    auth_at = per_page_navigation.index("await requireAuthentication(session)")
+    target_at = per_page_navigation.index("const target = pageUrl", auth_at)
+    navigate_at = per_page_navigation.index('await session.send("Page.navigate"', target_at)
+    assert auth_at < target_at < navigate_at
+
+    page_loop = source.split(
+        "for (const [pageIndex, page] of pageManifest.pages.entries())",
+        1,
+    )[1].split('const pageState = await session.send("Runtime.evaluate"', 1)[0]
+    result_at = page_loop.index("const pageResult = await navigateAndProbePage")
+    retain_at = page_loop.index("pages.push(pageResult)", result_at)
+    fail_fast_at = page_loop.index("pageIndex === 0", retain_at)
+    explicit_error_at = page_loop.index("browser_gate_first_page_failed", fail_fast_at)
+    assert result_at < retain_at < fail_fast_at < explicit_error_at
 
     final_state_read = source.index('const pageState = await session.send("Runtime.evaluate", {')
     final_idle = source.index(

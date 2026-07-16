@@ -136,6 +136,14 @@ describe("getInitialVkpiPage / writeVkpiHash 触 window", () => {
     writeVkpiHash("projects");
     expect(window.location.hash).toBe("#projects");
   });
+  it("writeVkpiHash 只替换 hash，保留 pathname 和 Cockpit 深链 query", () => {
+    window.history.replaceState(null, "", "/workspace?cockpit=dealers&source=release#cockpit");
+
+    expect(writeVkpiHash("projects")).toBe(true);
+    expect(window.location.pathname).toBe("/workspace");
+    expect(window.location.search).toBe("?cockpit=dealers&source=release");
+    expect(window.location.hash).toBe("#projects");
+  });
   it("writeVkpiHash 对相同 hash 幂等且只派发一次事件", () => {
     let events = 0;
     const onHashChange = () => { events += 1; };

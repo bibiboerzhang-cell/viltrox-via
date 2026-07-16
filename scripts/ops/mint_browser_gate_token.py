@@ -19,7 +19,7 @@ from typing import Any
 
 
 MIN_TTL_SECONDS = 60
-MAX_TTL_SECONDS = 300
+MAX_TTL_SECONDS = 900
 DEFAULT_TTL_SECONDS = 180
 INSECURE_LOCAL_JWT_SECRET = "viltrox2-local-dev-secret-change-me"
 ADMIN_QUERY = """

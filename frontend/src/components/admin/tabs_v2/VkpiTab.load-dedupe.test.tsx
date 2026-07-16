@@ -2,8 +2,9 @@ import React, { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchVkpiDashboardData } = vi.hoisted(() => ({
+const { fetchVkpiDashboardData, writeVkpiHash } = vi.hoisted(() => ({
   fetchVkpiDashboardData: vi.fn(),
+  writeVkpiHash: vi.fn(),
 }));
 
 vi.mock("../../../domains/dashboard", () => ({
@@ -18,17 +19,19 @@ vi.mock("../../../hooks/useAuth", () => ({
 
 vi.mock("../../vkpi/layout/vkpiDashboardRouting", () => ({
   getInitialVkpiPage: () => "cockpit",
+  writeVkpiHash,
 }));
 
 vi.mock("../../vkpi", async () => {
   const ReactModule = await import("react");
   return {
-    VkpiDashboard: ({ data, isRefreshing, onRefreshData }: any) => ReactModule.createElement(
+    VkpiDashboard: ({ data, isRefreshing, onRefreshData, onToggleView }: any) => ReactModule.createElement(
       "div",
       null,
       ReactModule.createElement("output", { "data-testid": "dashboard-marker" }, data?.marker || "empty"),
       ReactModule.createElement("output", { "data-testid": "dashboard-loading" }, isRefreshing ? "loading" : "idle"),
       ReactModule.createElement("button", { type: "button", onClick: onRefreshData }, "refresh"),
+      ReactModule.createElement("button", { type: "button", onClick: () => onToggleView?.("projects") }, "switch-to-projects"),
     ),
   };
 });
@@ -55,6 +58,7 @@ describe("VkpiTab dashboard load coalescing", () => {
   beforeEach(() => {
     window.localStorage.clear();
     fetchVkpiDashboardData.mockReset();
+    writeVkpiHash.mockReset();
   });
 
   afterEach(() => {
@@ -117,5 +121,16 @@ describe("VkpiTab dashboard load coalescing", () => {
     view.unmount();
     await act(async () => request.resolve(payload("late")));
     expect(window.localStorage.length).toBe(0);
+  });
+
+  it("delegates the post-view-switch route write to the query-preserving hash helper", async () => {
+    fetchVkpiDashboardData.mockResolvedValue(payload("route"));
+    render(<VkpiTab token="token-a" user={owner} />);
+    await waitFor(() => expect(screen.getByTestId("dashboard-marker")).toHaveTextContent("route"));
+
+    fireEvent.click(screen.getByRole("button", { name: "switch-to-projects" }));
+
+    await waitFor(() => expect(writeVkpiHash).toHaveBeenCalledWith("projects"));
+    expect(writeVkpiHash).toHaveBeenCalledTimes(1);
   });
 });

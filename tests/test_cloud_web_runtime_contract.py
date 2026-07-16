@@ -427,7 +427,9 @@ def test_deploy_mints_browser_token_only_after_remote_identity_and_never_persist
     assert 'if [ -z "${POST_DEPLOY_BROWSER_TOKEN}" ]; then' in deploy[mint_at - 1200 : mint_at]
     assert "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i" in deploy
     assert "ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web" in deploy
-    assert "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS must be an integer within [60, 300]" in deploy
+    assert "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS must be an integer within [60, 900]" in deploy
+    assert "BROWSER_GATE_CAPTURE_BUDGET_SECONDS" in deploy
+    assert "is below the ${BROWSER_GATE_CAPTURE_BUDGET_SECONDS}s fail-closed browser capture budget" in deploy
     assert 'POST_DEPLOY_BROWSER_TOKEN="$(ssh' in deploy
     assert 'VKPI_BROWSER_GATE_TOKEN="${POST_DEPLOY_BROWSER_TOKEN}" node' in deploy
     assert '--ttl-seconds \'${BROWSER_GATE_TOKEN_TTL_SECONDS}\'' in deploy
@@ -498,10 +500,31 @@ def test_deploy_browser_gate_runs_reviewed_21_page_and_network_contract() -> Non
     assert '"Network.responseReceived"' in capture
     assert '"Network.loadingFailed"' in capture
     assert "navigateAndProbePage" in capture
-    assert 'BROWSER_GATE_TOKEN_TTL_SECONDS="${VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS:-300}"' in deploy
+    assert 'BROWSER_GATE_TOKEN_TTL_SECONDS="${VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS:-900}"' in deploy
     assert '--page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}"' in deploy
     assert '--page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}"' in deploy
     assert "VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS must contain only exact external HTTPS origins" in deploy
+
+
+def test_default_browser_token_ttl_covers_the_complete_fail_closed_capture_budget() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    manifest = json.loads(_read("scripts/browser_gate_pages.json"))
+    page_count = len(manifest["pages"])
+    budget_ms = (
+        15_000
+        + 30_000
+        + 5_000
+        + 5_000 * (page_count + 1)
+        + page_count * (30_000 + 1_000)
+        + 30_000
+        + 30_000
+    )
+
+    assert page_count == 21
+    assert budget_ms == 871_000
+    assert 900 >= (budget_ms + 999) // 1000
+    assert "+  5000 * (BROWSER_GATE_PAGE_COUNT + 1)" in deploy
+    assert "+  BROWSER_GATE_PAGE_COUNT * (BROWSER_GATE_PAGE_TIMEOUT_MS + BROWSER_GATE_PAGE_SETTLE_MS)" in deploy
 
 
 def test_backup_owns_its_separate_write_surface_and_never_chowns_history() -> None:

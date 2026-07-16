@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { VkpiDashboard, type VkpiDashboardData, type VkpiPageKey } from "../../vkpi";
-import { getInitialVkpiPage } from "../../vkpi/layout/vkpiDashboardRouting";
+import { getInitialVkpiPage, writeVkpiHash } from "../../vkpi/layout/vkpiDashboardRouting";
 import {
   createSalesAttribution,
   importAmazonAttributionRows,
@@ -224,14 +224,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
 
   useEffect(() => {
     if (!pendingPageAfterViewSwitch) return;
-    if (typeof window !== "undefined") {
-      const nextHash = `#${pendingPageAfterViewSwitch}`;
-      if (window.location.hash !== nextHash) {
-        window.history.replaceState(null, "", nextHash);
-      }
-      const event = typeof HashChangeEvent === "function" ? new HashChangeEvent("hashchange") : new Event("hashchange");
-      window.dispatchEvent(event);
-    }
+    writeVkpiHash(pendingPageAfterViewSwitch);
     setPendingPageAfterViewSwitch(null);
   }, [effectiveViewMode, pendingPageAfterViewSwitch]);
 

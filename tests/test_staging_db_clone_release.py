@@ -627,7 +627,8 @@ def test_deploy_clone_path_is_tightly_scoped_ordered_and_rollback_bound() -> Non
     for required in (
         'STAGING_DB_CLONE_MODE="${VKPI_STAGING_DB_CLONE:-0}"',
         'VILTROXTEST_RELEASE_SCOPE=1',
-        'parsed.hostname == "viltroxtest.com"',
+        'parsed.hostname == "www.viltroxtest.com"',
+        'requires an HTTPS browser gate on host www.viltroxtest.com',
         'DATABASE_RELEASE_STRATEGY="reuse-active-clone"',
         "--database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}'",
         'STAGING_REDIS_WORKER_SERVICE="vkpi-redis-worker.service"',
@@ -642,7 +643,23 @@ def test_deploy_clone_path_is_tightly_scoped_ordered_and_rollback_bound() -> Non
         "rollback environment fingerprint or database identity mismatch",
     ):
         assert required in deploy
+    assert 'parsed.hostname == "viltroxtest.com"' not in deploy
     assert "redis.service" not in deploy
+
+    rollback_armed_at = deploy.index("ROLLBACK_ARMED=1")
+    browser_capture_at = deploy.index("scripts/capture_browser_console_cdp.mjs")
+    browser_verify_at = deploy.index("scripts/verify_browser_console_capture.py")
+    private_surface_at = deploy.index("scripts/verify_private_surface_live.py")
+    success_marker_at = deploy.index("write-success-marker")
+    accepted_at = deploy.rindex("DEPLOY_ACCEPTED=1")
+    assert (
+        rollback_armed_at
+        < browser_capture_at
+        < browser_verify_at
+        < private_surface_at
+        < success_marker_at
+        < accepted_at
+    )
 
     prepare_at = deploy.index("atomic_release_layout.py' prepare")
     unit_state_at = deploy.index("STAGING_REDIS_WORKER_UNIT_STATE=", prepare_at)

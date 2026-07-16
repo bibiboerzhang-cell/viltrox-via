@@ -30,7 +30,7 @@ def test_minted_token_is_admin_and_strictly_bounded() -> None:
         secret=SECRET,
         issuer=ISSUER,
         audience=AUDIENCE,
-        ttl_seconds=60,
+        ttl_seconds=900,
         now=issued_at,
     )
     payload = jwt.decode(
@@ -42,11 +42,11 @@ def test_minted_token_is_admin_and_strictly_bounded() -> None:
     )
     assert payload["uid"] == 42
     assert payload["role"] == "admin"
-    assert payload["exp"] - payload["iat"] == 60
+    assert payload["exp"] - payload["iat"] == 900
     assert payload["nbf"] == payload["iat"]
 
 
-@pytest.mark.parametrize("ttl", [0, 59, 301, 3600])
+@pytest.mark.parametrize("ttl", [0, 59, 901, 3600])
 def test_minted_token_rejects_out_of_contract_ttl(ttl: int) -> None:
     with pytest.raises(mint.MintError):
         mint.mint_admin_token(

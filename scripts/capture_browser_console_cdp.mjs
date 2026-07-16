@@ -24,6 +24,7 @@ const NETWORK_EVENT_CHANNELS = [
   "Network.loadingFinished",
   "Network.loadingFailed",
 ];
+const AUTH_PROBE_TIMEOUT_MS = 5000;
 const DEFAULT_PAGE_MANIFEST = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "browser_gate_pages.json",
@@ -453,9 +454,72 @@ async function pageDomProof(session, page) {
   return result.result?.value || {};
 }
 
+async function probeAuthentication(session) {
+  const authState = await session.send("Runtime.evaluate", {
+    expression: `(async () => {
+      const proof = {
+        request_completed: false,
+        same_origin: false,
+        token_present: false,
+        http_status: null,
+        http_2xx: false,
+        status_success: false,
+        user_present: false,
+      };
+      try {
+        const token = localStorage.getItem('viltrox_marketing_token_v1') || '';
+        const endpoint = new URL('/api/auth/me', location.href);
+        proof.same_origin = endpoint.origin === location.origin;
+        proof.token_present = token.length > 0;
+        const response = await fetch(endpoint.pathname, {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { Authorization: 'Bearer ' + token },
+          signal: AbortSignal.timeout(${AUTH_PROBE_TIMEOUT_MS}),
+        });
+        proof.request_completed = true;
+        proof.http_status = response.status;
+        proof.http_2xx = response.status >= 200 && response.status < 300;
+        const body = await response.json().catch(() => null);
+        proof.status_success = body?.status === 'success';
+        proof.user_present = Boolean(body?.user && typeof body.user === 'object');
+      } catch {}
+      return proof;
+    })()`,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  return authState.result?.value || {};
+}
+
+function authenticationPassed(proof) {
+  return (
+    proof.request_completed === true
+    && proof.same_origin === true
+    && proof.token_present === true
+    && proof.http_2xx === true
+    && proof.status_success === true
+    && proof.user_present === true
+  );
+}
+
+async function requireAuthentication(session) {
+  const proof = await probeAuthentication(session);
+  if (!authenticationPassed(proof)) {
+    throw new Error("browser_gate_token_expired");
+  }
+  return proof;
+}
+
 async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs) {
   session.currentPageFamily = page.family;
   session.loadCompleted = false;
+  // Re-prove the bearer immediately before every navigation.  HTTP 200 alone
+  // is insufficient because /api/auth/me may encode auth failure in its JSON
+  // body; require the complete body-aware success contract and stop before a
+  // stale token can create a cascade of unrelated page/API failures.
+  await requireAuthentication(session);
   const target = pageUrl(baseUrl, page.nav_key);
   const startedAt = Date.now();
   const responseStart = session.networkResponses.length;
@@ -634,41 +698,7 @@ async function main() {
     // writing a token to localStorage is not evidence that the token is valid:
     // /api/auth/me must return 2xx + status=success + a user object. Keep only
     // booleans/status in the capture; never persist the token or user payload.
-    const authState = await session.send("Runtime.evaluate", {
-      expression: `(async () => {
-        const proof = {
-          request_completed: false,
-          same_origin: false,
-          token_present: false,
-          http_status: null,
-          http_2xx: false,
-          status_success: false,
-          user_present: false,
-        };
-        try {
-          const token = localStorage.getItem('viltrox_marketing_token_v1') || '';
-          const endpoint = new URL('/api/auth/me', location.href);
-          proof.same_origin = endpoint.origin === location.origin;
-          proof.token_present = token.length > 0;
-          const response = await fetch(endpoint.pathname, {
-            method: 'GET',
-            credentials: 'same-origin',
-            cache: 'no-store',
-            headers: { Authorization: 'Bearer ' + token },
-          });
-          proof.request_completed = true;
-          proof.http_status = response.status;
-          proof.http_2xx = response.status >= 200 && response.status < 300;
-          const body = await response.json().catch(() => null);
-          proof.status_success = body?.status === 'success';
-          proof.user_present = Boolean(body?.user && typeof body.user === 'object');
-        } catch {}
-        return proof;
-      })()`,
-      awaitPromise: true,
-      returnByValue: true,
-    });
-    const authProof = authState.result?.value || {};
+    const authProof = await requireAuthentication(session);
 
     // A successful auth API probe is still insufficient if the browser ended
     // on a login/reset screen. Require the actual cockpit shell and reject any
@@ -687,14 +717,18 @@ async function main() {
     // ?cockpit=<nav-key> contract, so production-hidden operational pages are
     // still release-tested without changing the deployed navigation menu.
     const pages = [];
-    for (const page of pageManifest.pages) {
-      pages.push(await navigateAndProbePage(
+    for (const [pageIndex, page] of pageManifest.pages.entries()) {
+      const pageResult = await navigateAndProbePage(
         session,
         args.url,
         page,
         args.pageTimeoutMs,
         args.pageSettleMs,
-      ));
+      );
+      pages.push(pageResult);
+      if (pageIndex === 0 && pageResult.page_settled !== true) {
+        throw new Error(`browser_gate_first_page_failed:${page.family}`);
+      }
     }
     const pageState = await session.send("Runtime.evaluate", {
       expression: "({url: location.href, readyState: document.readyState, title: document.title})",
