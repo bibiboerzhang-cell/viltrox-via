@@ -30,7 +30,7 @@ def test_registry_is_read_only_disabled_and_truth_bounded():
     }
     assert report["counts"] == {
         "event_sources": 72,
-        "dealer_discovery_sources": 34,
+        "dealer_discovery_sources": 35,
         "dealer_official_ingest_sources": 2,
         "event_source_kinds": {
             "association_directory": 2,
@@ -43,7 +43,7 @@ def test_registry_is_read_only_disabled_and_truth_bounded():
             "university_calendar": 4,
         },
         "dealer_source_kinds": {
-            "manufacturer_dealer_directory": 13,
+            "manufacturer_dealer_directory": 14,
             "retailer_location_directory": 21,
         },
         "dealer_official_ingest_kinds": {
@@ -52,8 +52,8 @@ def test_registry_is_read_only_disabled_and_truth_bounded():
         },
         "event_source_jurisdictions": 51,
         "dealer_source_jurisdictions": 51,
-        "dealer_discovery_scopes": 15,
-        "dealer_manufacturer_scopes": 13,
+        "dealer_discovery_scopes": 16,
+        "dealer_manufacturer_scopes": 14,
         "enabled": 0,
         "direct_import_allowed": 0,
     }
@@ -130,24 +130,24 @@ def test_authenticated_router_views_remain_read_only():
     assert len(event["event_sources"]) == 72
     assert event["dealer_discovery_sources"] == []
     assert event["dealer_official_ingest_sources"] == []
-    assert len(dealer["dealer_discovery_sources"]) == 34
+    assert len(dealer["dealer_discovery_sources"]) == 35
     assert len(dealer["dealer_official_ingest_sources"]) == 2
     assert dealer["event_sources"] == []
-    assert dealer["adapter_readiness"]["registered_source_count"] == 34
-    assert dealer["adapter_readiness"]["adapter_source_count"] == 34
-    assert dealer["adapter_readiness"]["mapped_adapter_source_count"] == 34
+    assert dealer["adapter_readiness"]["registered_source_count"] == 35
+    assert dealer["adapter_readiness"]["adapter_source_count"] == 35
+    assert dealer["adapter_readiness"]["mapped_adapter_source_count"] == 35
     assert dealer["adapter_readiness"]["sources_without_mapped_adapter"] == []
     assert dealer["adapter_readiness"]["all_registered_sources_have_mapped_adapter"] is True
     assert dealer["adapter_readiness"]["readiness_level"] == (
         "format_mapping_only_not_source_fixture_verified"
     )
     assert dealer["adapter_readiness"]["source_fixture_verified_count"] == 0
-    assert len(dealer["adapter_readiness"]["sources_without_verified_adapter"]) == 34
+    assert len(dealer["adapter_readiness"]["sources_without_verified_adapter"]) == 35
     assert dealer["adapter_readiness"]["all_registered_sources_have_verified_adapter"] is False
     assert dealer["adapter_readiness"]["activation_blocker"] == (
         "source_specific_fixture_and_terms_robots_review_required"
     )
-    assert len(dealer["adapter_source_readiness"]) == 34
+    assert len(dealer["adapter_source_readiness"]) == 35
     assert all(
         row["snapshot_import_readiness"] == "blocked"
         for row in dealer["adapter_source_readiness"]
@@ -224,6 +224,7 @@ def test_registry_covers_major_expos_retailer_events_schools_and_dealer_universe
         "dealer_canon_us_where_to_buy",
         "dealer_nikon_us_authorized_imaging",
         "dealer_sony_us_where_to_buy",
+        "dealer_godox_us_authorized_distributors",
         "dealer_fujifilm_us_shop",
         "dealer_panasonic_us_authorized",
         "dealer_omsystem_us_locator",
@@ -368,6 +369,117 @@ def test_dealer_directories_bind_exact_official_location_surfaces():
     assert all(row["enabled"] is False for row in rows.values())
 
 
+def test_verified_manufacturer_source_snapshots_are_descriptive_only():
+    response = vkpi_dealers.dealer_us_source_registry(staff={"id": 1})
+    rows = {row["id"]: row for row in response["dealer_discovery_sources"]}
+
+    nikon = rows["dealer_nikon_us_authorized_imaging"]
+    assert len(nikon["state_codes"]) == 42
+    assert "DC" in nikon["state_codes"]
+    assert "LA" not in nikon["state_codes"]
+    assert nikon["source_snapshot"] == {
+        "snapshot_date": "2026-07-16",
+        "document_last_modified": "Thu, 16 Jul 2026 10:00:11 GMT",
+        "document_sha256": (
+            "406032919ca69701a93f6f355dd568cc92cef535ad7ff61068953c0da26ffedd"
+        ),
+        "listed_entry_count": 175,
+        "unique_organization_count": 175,
+        "source_jurisdiction_count": 42,
+        "record_granularity": "authorized_dealer_organization_not_branch_location",
+        "published_fields": ["organization_name", "city", "state", "dealer_type"],
+        "missing_map_fields": [
+            "street_address",
+            "postal_code",
+            "phone",
+            "website",
+            "latitude",
+            "longitude",
+        ],
+        "terms_use_status": "pending_review",
+        "map_location_import_ready": False,
+        "count_scope_note": (
+            "175 is a count of listed authorized dealer organizations, not a count "
+            "of store branches or mappable locations."
+        ),
+        "summary": (
+            "Official Nikon USA directory snapshot with organization, city, state "
+            "and dealer-type fields only; branch-level map enrichment remains required."
+        ),
+    }
+
+    canon = rows["dealer_canon_us_where_to_buy"]
+    assert canon["source_snapshot"]["listed_entry_count"] == 307
+    assert canon["source_snapshot"]["unique_organization_count"] == 305
+    assert canon["source_snapshot"]["document_page_count"] == 13
+    assert canon["source_snapshot"]["entries_without_state_count"] == 11
+    assert canon["source_snapshot"]["additional_territory_codes"] == ["GU"]
+    assert canon["source_snapshot"]["published_fields"] == [
+        "organization_name",
+        "headquarters_state",
+    ]
+
+    sony = rows["dealer_sony_us_where_to_buy"]
+    assert sony["official_directory_url"] == (
+        "https://electronics.sony.com/retailers?path=%2Fretailers"
+    )
+    assert sony["source_snapshot"]["listed_entry_count"] == 2224
+    assert sony["source_snapshot"]["unique_organization_count"] == 2223
+    assert sony["source_snapshot"]["duplicate_entry_count"] == 1
+    assert sony["source_snapshot"]["published_fields"] == ["retailer_name"]
+
+    godox = rows["dealer_godox_us_authorized_distributors"]
+    assert godox["canonical_url"] == (
+        "https://www.godox.com/authorized-distributor/?ext_country=536"
+    )
+    assert godox["source_snapshot"]["listed_entry_count"] == 3
+    assert godox["source_snapshot"]["unique_organization_count"] == 3
+    assert godox["source_snapshot"]["listed_organizations"] == [
+        "Adorama",
+        "B&H",
+        "GodoxUSA",
+    ]
+    assert godox["source_snapshot"]["record_granularity"] == (
+        "authorized_distributor_or_online_store_contact_not_branch_location"
+    )
+    assert godox["source_snapshot"]["map_location_import_ready"] is False
+
+    for row in (nikon, canon, sony):
+        assert row["source_snapshot"]["terms_use_status"] == "pending_review"
+        assert row["source_snapshot"]["map_location_import_ready"] is False
+        assert row["source_access_review"]["stable_import_status"] == "blocked"
+        assert row["source_access_review"]["automated_commercial_import_status"] == (
+            "blocked_pending_publisher_permission"
+        )
+        assert row["candidate_only"] is True
+        assert row["direct_import_allowed"] is False
+        assert row["site_has_viltrox_product"] == "unknown"
+        assert row["viltrox_authorized"] == "unknown"
+        assert row["viltrox_authorization_evidence"] is False
+        assert "branch" in row["source_snapshot"]["count_scope_note"]
+
+    assert godox["source_snapshot"]["terms_use_status"] == (
+        "automated_access_and_extraction_prohibited"
+    )
+    assert godox["source_access_review"]["stable_import_status"] == "blocked"
+    assert godox["source_access_review"]["terms_url"] == (
+        "https://www.godox.com/terms-of-use/"
+    )
+    assert godox["source_access_review"]["automated_commercial_import_status"] == (
+        "blocked_terms_prohibit_automated_access_and_extraction"
+    )
+    assert godox["candidate_only"] is True
+    assert godox["direct_import_allowed"] is False
+    assert godox["site_has_viltrox_product"] == "unknown"
+    assert godox["viltrox_authorized"] == "unknown"
+    assert godox["viltrox_authorization_evidence"] is False
+    assert "branch" in godox["source_snapshot"]["count_scope_note"]
+
+    assert response["claim_status"] == "descriptive_only"
+    assert "do not prove" in response["truth_note"]
+    assert response["import_gate"]["allowed"] is False
+
+
 def test_manufacturer_and_viltrox_source_identities_match_review_fixture():
     fixture = json.loads(SOURCE_IDENTITY_FIXTURE.read_text(encoding="utf-8"))
     report = us_coverage_registry.audit_registry()
@@ -385,14 +497,14 @@ def test_manufacturer_and_viltrox_source_identities_match_review_fixture():
     assert fixture["contains_contact_rows"] is False
     assert fixture["contains_inventory"] is False
     assert fixture["network_capture"] is False
-    assert len(expected_rows) == 15
+    assert len(expected_rows) == 16
     assert len(
         [
             row
             for row in report["dealer_discovery_sources"]
             if row["source_kind"] == "manufacturer_dealer_directory"
         ]
-    ) == 13
+    ) == 14
     for source_id, expected in expected_rows.items():
         row = registry_rows[source_id]
         assert row["publisher"] == expected["publisher"]

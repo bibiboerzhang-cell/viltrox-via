@@ -7,6 +7,7 @@ never used as a fuzzy fallback.
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn, table_exists
@@ -17,6 +18,7 @@ _REQUIRED_TABLES = (
     "vkpi_event_watch_targets",
     "vkpi_event_opportunities",
     "vkpi_event_opportunity_dealers",
+    "vkpi_event_opportunity_promotions",
 )
 
 
@@ -36,6 +38,22 @@ def _row(value: Any) -> dict[str, Any]:
     return dict(value) if value is not None else {}
 
 
+def _as_of_date(raw: Any = None) -> date:
+    """Return one application-owned UTC date boundary for Radar reads."""
+    if raw in (None, ""):
+        return datetime.now(timezone.utc).date()
+    if isinstance(raw, datetime):
+        if raw.tzinfo is not None:
+            return raw.astimezone(timezone.utc).date()
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    try:
+        return date.fromisoformat(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("as_of_date must be YYYY-MM-DD") from exc
+
+
 def _schema_ready() -> bool:
     try:
         return all(table_exists(name) for name in _REQUIRED_TABLES)
@@ -49,6 +67,7 @@ def list_dealer_activities(
     organization_id: Any,
     limit: Any = 20,
     include_past: bool = False,
+    as_of_date: date | str | None = None,
     connection: Any | None = None,
 ) -> dict[str, Any]:
     """Return exact, enabled-source Event Radar links for one Dealer.
@@ -59,6 +78,7 @@ def list_dealer_activities(
     normalized_dealer_id = _positive_int(dealer_id, "dealer_id")
     normalized_org_id = _positive_int(organization_id, "organization_id")
     safe_limit = max(1, min(_positive_int(limit, "limit"), 100))
+    effective_date = _as_of_date(as_of_date)
     if connection is None and not _schema_ready():
         return {
             "status": "migration_pending",
@@ -66,6 +86,7 @@ def list_dealer_activities(
             "activities": [],
             "count": 0,
             "next_activity_at": None,
+            "as_of_date": effective_date.isoformat(),
             "association_policy": "exact_dealer_id_only",
             "claim_status": "descriptive_only",
         }
@@ -78,9 +99,17 @@ def list_dealer_activities(
     if dealer is None:
         raise LookupError("dealer not found")
 
+    terminal_statuses = ("done", "ended", "cancelled", "canceled", "closed")
     time_clause = "" if include_past else (
-        "AND (o.end_date IS NULL OR o.end_date >= CURRENT_DATE) "
-        "AND COALESCE(o.event_status,'') NOT IN ('ended','cancelled')"
+        "AND (o.end_date IS NULL OR o.end_date >= ?) "
+        "AND LOWER(COALESCE(o.event_status,'')) NOT IN ("
+        + ",".join("?" for _ in terminal_statuses)
+        + ")"
+    )
+    association_params: tuple[Any, ...] = (
+        normalized_org_id,
+        normalized_dealer_id,
+        *(() if include_past else (effective_date.isoformat(), *terminal_statuses)),
     )
     association_where = f"""
         od.organization_id=? AND od.dealer_id=? AND od.relation_type='host'
@@ -98,7 +127,7 @@ def list_dealer_activities(
         LEFT JOIN vkpi_event_watch_targets s ON s.id=o.source_id
         WHERE {association_where}
         """,
-        (normalized_org_id, normalized_dealer_id),
+        association_params,
     ).fetchone()
     rows = conn.execute(
         f"""
@@ -107,25 +136,49 @@ def list_dealer_activities(
                o.country_code,o.official_url,o.registration_url,o.event_status,
                o.decision_status,o.verification_status,o.last_verified_at,
                o.source_checked_at,s.id AS source_id,s.name AS source_name,
-               s.source_kind
+               s.source_kind,p.event_id AS converted_event_id,
+               p.promoted_at AS promotion_promoted_at,
+               p.promoted_by AS promotion_promoted_by
         FROM vkpi_event_opportunity_dealers od
         JOIN vkpi_event_opportunities o ON o.id=od.opportunity_id
         JOIN vkpi_event_watch_targets s ON s.id=o.source_id
+        LEFT JOIN vkpi_event_opportunity_promotions p
+          ON p.organization_id=od.organization_id
+         AND p.opportunity_id=o.id
         WHERE {association_where}
           AND s.status='active' AND COALESCE(s.enabled,FALSE)=TRUE
         ORDER BY o.start_date ASC NULLS LAST,o.id ASC
         LIMIT ?
         """,
-        (normalized_org_id, normalized_dealer_id, safe_limit),
+        (*association_params, safe_limit),
     ).fetchall()
-    activities = [
-        {
-            **_row(raw),
-            "association": "exact_dealer_id",
-            "claim_status": "descriptive_only",
-        }
-        for raw in rows
-    ]
+    activities: list[dict[str, Any]] = []
+    for raw in rows:
+        item = _row(raw)
+        converted_event_id = item.get("converted_event_id")
+        is_internal_event = converted_event_id not in (None, "")
+        item.update(
+            {
+                "association": "exact_dealer_id",
+                "record_type": (
+                    "internal_event" if is_internal_event
+                    else "external_opportunity_candidate"
+                ),
+                "is_internal_event": is_internal_event,
+                "promotion_receipt": {
+                    "present": is_internal_event,
+                    "event_id": converted_event_id if is_internal_event else None,
+                    "promoted_at": (
+                        item.get("promotion_promoted_at") if is_internal_event else None
+                    ),
+                    "promoted_by": (
+                        item.get("promotion_promoted_by") if is_internal_event else None
+                    ),
+                },
+                "claim_status": "descriptive_only",
+            }
+        )
+        activities.append(item)
     count_values = _row(count_row)
     linked_total = int(count_values.get("linked_n") or 0)
     total = int(count_values.get("visible_n") or 0)
@@ -152,9 +205,11 @@ def list_dealer_activities(
         "returned": len(activities),
         "next_activity_at": next_activity_at,
         "include_past": bool(include_past),
+        "as_of_date": effective_date.isoformat(),
         "association_policy": "exact_dealer_id_only",
-        # This view projects exact, already-promoted Dealer/Event relations.
-        # Candidate feed ingestion is a separate review-only control plane.
+        # This view intentionally retains external candidates.  Only a durable
+        # promotion receipt makes an item an internal Event.
+        "formal_event_rule": "promotion_receipt_required",
         "automatic_sync": False,
         "candidate_sync_capability": "separate_review_only_pipeline",
         "source": "vkpi_event_opportunity_dealers",

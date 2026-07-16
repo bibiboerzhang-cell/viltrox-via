@@ -78,7 +78,34 @@ export interface VkpiDealer {
     source_url?: string | null;
     checked_at?: string | null;
   }>;
+  location_verification?: VkpiDealerLocationVerification;
   created_at?: string;
+}
+
+export interface VkpiDealerLocationVerification {
+  schema_visible?: boolean;
+  contract_version?: number;
+  canonical_location_status?: "pending" | "official_site_verified" | "conflict" | "rejected" | string;
+  canonical_location_checked_at?: string | null;
+  physical_store_status?: "pending" | "verified_physical_store" | "not_physical_store" | "conflict" | string;
+  physical_store_checked_at?: string | null;
+  physical_store_verification_note?: string | null;
+  coordinate?: {
+    provider?: "us_census_geocoder" | string | null;
+    match_level?: string | null;
+    value_status?: string | null;
+    google_derived?: boolean;
+    provenance_valid?: boolean;
+  };
+  google_place_cross_check?: {
+    status?: "pending" | "matched" | "conflict" | "not_found" | string;
+    place_id?: string | null;
+    maps_url?: string | null;
+    checked_at?: string | null;
+    canonical_source?: false;
+  };
+  map_eligible?: boolean;
+  claim_status?: "descriptive_only" | string;
 }
 
 export interface VkpiDealerBrandRelationship {
@@ -124,6 +151,10 @@ export interface VkpiDealerLinkedActivity {
   event_status?: string | null;
   decision_status?: string | null;
   verification_status?: string | null;
+  converted_event_id?: string | null;
+  /** True only when an immutable Radar promotion receipt points to vkpi_events. */
+  is_internal_event?: boolean;
+  promotion_status?: "not_promoted" | "promoted" | string;
   source_name?: string | null;
   source_kind?: string | null;
   association?: "exact_dealer_id" | string;
@@ -182,6 +213,7 @@ export interface VkpiDealerPin {
   product_evidence?: VkpiDealer["product_evidence"];
   authorization_evidence?: VkpiDealer["authorization_evidence"];
   provenance?: VkpiDealer["provenance"];
+  location_verification?: VkpiDealerLocationVerification;
 }
 
 export type VkpiDealerChannelFilter = "all" | "offline_location" | "online_product_page" | "both";
@@ -516,6 +548,31 @@ export interface VkpiUsDealerDiscoverySource {
   candidate_only?: boolean;
   site_has_viltrox_product?: "unknown" | string;
   viltrox_authorized?: "unknown" | string;
+  official_directory_url?: string | null;
+  source_snapshot?: VkpiUsDealerSourceSnapshot | null;
+}
+
+export interface VkpiUsDealerSourceSnapshot {
+  snapshot_date?: string | null;
+  document_effective_date?: string | null;
+  document_last_modified?: string | null;
+  document_sha256?: string | null;
+  document_page_count?: number | null;
+  listed_entry_count?: number | null;
+  unique_organization_count?: number | null;
+  duplicate_entry_count?: number | null;
+  source_jurisdiction_count?: number | null;
+  source_jurisdiction_token_count?: number | null;
+  us_state_dc_count?: number | null;
+  additional_territory_codes?: string[];
+  entries_without_state_count?: number | null;
+  record_granularity?: string | null;
+  published_fields?: string[];
+  missing_map_fields?: string[];
+  terms_use_status?: "pending_review" | string;
+  map_location_import_ready?: false;
+  count_scope_note?: string | null;
+  summary?: string | null;
 }
 
 export interface VkpiUsSourceJurisdictionMatrix {
@@ -786,8 +843,12 @@ export async function getDealerActivities(
   token: string,
   dealerId: string | number,
   limit = 20,
+  asOfDate = new Date().toISOString().slice(0, 10),
 ): Promise<VkpiDealerActivityFeed> {
-  const query = new URLSearchParams({ limit: String(Math.max(1, Math.min(limit, 100))) });
+  const query = new URLSearchParams({
+    limit: String(Math.max(1, Math.min(limit, 100))),
+    as_of_date: asOfDate,
+  });
   return apiFetch<VkpiDealerActivityFeed>(
     `/api/admin/vkpi/dealers/${encodeURIComponent(String(dealerId))}/activities?${query.toString()}`,
     { cache: "no-store" },

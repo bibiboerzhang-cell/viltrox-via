@@ -39,6 +39,7 @@ ADAPTER_BY_SOURCE = {
     "dealer_blackmagic_us_resellers": "published_html_rows",
     "dealer_canon_us_where_to_buy": "tabular_pdf",
     "dealer_fujifilm_us_shop": "published_html_rows",
+    "dealer_godox_us_authorized_distributors": "published_html_rows",
     "dealer_hasselblad_us_locator": "published_html_rows",
     "dealer_leica_us_locator": "published_html_rows",
     "dealer_omsystem_us_locator": "json_locator",
@@ -808,7 +809,7 @@ def adapter_contracts() -> dict[str, Any]:
     )
     # A format mapping is intentionally weaker than a reviewed source fixture.
     # No source-specific captured payload is checked in as verification, so a
-    # 34/34 mapping must never collapse the separate activation/verification
+    # A complete format mapping must never collapse the separate activation/verification
     # gate to "ready".
     sources_without_source_fixture_verification = list(registered_sources)
     source_readiness = []

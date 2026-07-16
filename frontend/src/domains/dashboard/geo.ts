@@ -77,6 +77,31 @@ function asCityEntries(value: any): any[] {
   return Object.entries(record(value));
 }
 
+function isUsableDistributionCountry(value: any) {
+  const item = record(value);
+  const code = String(item.code || item.country_code || item.name || "").trim().toUpperCase();
+  if (!code) return false;
+  const centroid = countryCentroid(code);
+  const lat = number(item.lat) ?? number(item.latitude) ?? centroid?.lat ?? null;
+  const lng = number(item.lng) ?? number(item.longitude) ?? centroid?.lng ?? null;
+  const count = int(item.count) ?? int(item.kol_count);
+  return lat != null && lng != null && count != null && count >= 0;
+}
+
+// Server distribution-pack is authoritative when its versioned contract is intact.
+// An explicit, real empty pack (mapped_kol_count=0) is also authoritative: falling
+// back to the independently fetched Pool rows would turn a verified empty result
+// into a different denominator.  Missing/malformed/non-real packs fall back to rows.
+function isValidServerDistributionPack(value: any) {
+  const pack = record(value);
+  if (String(pack.resource || "") !== "dashboard.kol_distribution_pack") return false;
+  const schemaVersion = int(pack.schema_version);
+  if (schemaVersion == null || schemaVersion < 1 || pack.is_real !== true) return false;
+  if (!Array.isArray(pack.countries)) return false;
+  if (pack.countries.length > 0) return pack.countries.every(isUsableDistributionCountry);
+  return (int(record(pack.stats).mapped_kol_count) ?? -1) === 0;
+}
+
 export function normalizeKolPins(rows: any, cityLat?: any, cityLng?: any) {
   return list(rows).map((raw: any, index: number) => {
     const item = record(raw);
@@ -103,7 +128,8 @@ export function normalizeKolPins(rows: any, cityLat?: any, cityLng?: any) {
 }
 
 export function normalizeMapHierarchy(distribution: any = {}, kolRows: any = []) {
-  const countries = list(record(distribution).countries);
+  const useServerDistribution = isValidServerDistributionPack(distribution);
+  const countries = useServerDistribution ? list(record(distribution).countries) : [];
   const hierarchy: Record<string, any> = {};
   for (const row of countries) {
     const item = record(row);
@@ -133,37 +159,41 @@ export function normalizeMapHierarchy(distribution: any = {}, kolRows: any = [])
     }
   }
 
-  for (const row of list(kolRows)) {
-    const item = record(row);
-    const rawCode = String(item.country || list(item.geo_distribution)[0]?.country || "").trim().toUpperCase();
-    const countryInfo = getCountryInfo(rawCode);
-    const code = countryInfo?.code || rawCode;
-    const cityName = String(item.city || item.location_city || item.location || "国家分布").trim();
-    const centroid = countryCentroid(code);
-    const lat = number(item.lat) || number(item.latitude) || centroid?.lat;
-    const lng = number(item.lng) || number(item.longitude) || centroid?.lng;
-    if (!code || !cityName || lat == null || lng == null) continue;
-    if (!hierarchy[code]) {
-      hierarchy[code] = { lat, lng, count: 0, revenue: "", cities: {} };
+  if (!useServerDistribution) {
+    for (const row of list(kolRows)) {
+      const item = record(row);
+      const rawCode = String(item.country || list(item.geo_distribution)[0]?.country || "").trim().toUpperCase();
+      const countryInfo = getCountryInfo(rawCode);
+      const code = countryInfo?.code || rawCode;
+      const cityName = String(item.city || item.location_city || item.location || "国家分布").trim();
+      const centroid = countryCentroid(code);
+      const lat = number(item.lat) || number(item.latitude) || centroid?.lat;
+      const lng = number(item.lng) || number(item.longitude) || centroid?.lng;
+      if (!code || !cityName || lat == null || lng == null) continue;
+      if (!hierarchy[code]) {
+        hierarchy[code] = { lat, lng, count: 0, revenue: "", cities: {} };
+      }
+      const bucket = hierarchy[code].cities[cityName] || {
+        lat: lat + jitter(item.id || item.handle, 21, 0.8),
+        lng: lng + jitter(item.id || item.handle, 22, 0.8),
+        count: 0,
+        revenue: "",
+        kols: [],
+        raw: {},
+      };
+      bucket.count += 1;
+      bucket.kols.push(...normalizeKolPins([item], bucket.lat, bucket.lng));
+      hierarchy[code].cities[cityName] = bucket;
+      hierarchy[code].count = (Object.values(hierarchy[code].cities || {}) as any[])
+        .reduce((sum: number, city: any) => sum + (int(city.count) || 0), 0);
     }
-    const bucket = hierarchy[code].cities[cityName] || {
-      lat: lat + jitter(item.id || item.handle, 21, 0.8),
-      lng: lng + jitter(item.id || item.handle, 22, 0.8),
-      count: 0,
-      revenue: "",
-      kols: [],
-      raw: {},
-    };
-    bucket.count += 1;
-    hierarchy[code].count = Math.max(int(hierarchy[code].count) || 0, (Object.values(hierarchy[code].cities || {}) as any[]).reduce((sum: any, city: any) => sum + (int(city.count) || 0), 0) + 1);
-    bucket.kols.push(...normalizeKolPins([item], bucket.lat, bucket.lng));
-    hierarchy[code].cities[cityName] = bucket;
   }
   return Object.keys(hierarchy).length ? hierarchy : null;
 }
 
 // 真实活动 → 地图层(与 KOL 同形:{country:{lat,lng,count,cities}})。
-// 只上图带定位的活动(有 location_country 用国家质心,或显式 lat/lng);都没有则诚实不上图。
+// 点位层只接受显式 lat/lng。location_country 可用于其他国家聚合统计，
+// 但不在这里用国家质心伪造精确活动点。
 export function normalizeEventsHierarchy(eventRows: any = []) {
   const hierarchy: Record<string, any> = {};
   for (const raw of list(eventRows)) {
@@ -171,15 +201,12 @@ export function normalizeEventsHierarchy(eventRows: any = []) {
     const code = String(ev.location_country || "").trim().toUpperCase();
     const lat = number(ev.location_lat);
     const lng = number(ev.location_lng);
-    if (!code && (lat == null || lng == null)) continue;
-    const centroid = code ? countryCentroid(code) : null;
+    if (lat == null || lng == null) continue;
     const key = code || `${lat},${lng}`;
-    const baseLat = lat != null ? lat : (centroid?.lat ?? 0);
-    const baseLng = lng != null ? lng : (centroid?.lng ?? 0);
-    if (!hierarchy[key]) hierarchy[key] = { lat: baseLat, lng: baseLng, count: 0, revenue: "", cities: {} };
+    if (!hierarchy[key]) hierarchy[key] = { lat, lng, count: 0, revenue: "", cities: {}, mapPrecision: "exact_coordinates" };
     hierarchy[key].count += 1;
     const city = String(ev.location_city || ev.location_name || "").trim();
-    if (city && lat != null && lng != null) {
+    if (city) {
       const c = hierarchy[key].cities[city] || (hierarchy[key].cities[city] = { lat, lng, count: 0, revenue: "", kols: [], raw: ev });
       c.count += 1;
     }
@@ -209,14 +236,11 @@ export function normalizeDealersHierarchy(pins: any = []) {
   return Object.keys(hierarchy).length ? hierarchy : null;
 }
 
-// 单个活动的地图落点:优先显式经纬度;否则用国家质心 + 轻抖动(同国多活动不完全重叠)。
-// 既无显式经纬度又无可识别国家 → 返回 null(诚实不上图)。
-export function eventCoords(countryCode: any, lat: any, lng: any, seed = "") {
-  const code = String(countryCode || "").trim().toUpperCase();
+// 单个活动的地图落点只允许显式经纬度。国家级信息只能作聚合，
+// 不能通过质心或 jitter 冒充场馆/门店精确位置。
+export function eventCoords(_countryCode: any, lat: any, lng: any, _seed = "") {
   const latNum = number(lat);
   const lngNum = number(lng);
   if (latNum != null && lngNum != null) return { lat: latNum, lng: lngNum };
-  const centroid = code ? countryCentroid(code) : null;
-  if (!centroid) return null;
-  return { lat: centroid.lat + jitter(seed, 31, 1.4), lng: centroid.lng + jitter(seed, 32, 1.4) };
+  return null;
 }

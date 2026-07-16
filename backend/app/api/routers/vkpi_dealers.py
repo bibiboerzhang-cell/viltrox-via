@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
@@ -555,6 +557,7 @@ def dealer_activities_route(
     dealer_id: int,
     limit: int = Query(default=20, ge=1, le=100),
     include_past: bool = Query(default=False),
+    as_of_date: date | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ):
     """Read exact Event Radar links for one Dealer; no fuzzy name matching."""
@@ -564,6 +567,7 @@ def dealer_activities_route(
         organization_id=_organization_id(staff),
         limit=limit,
         include_past=include_past,
+        as_of_date=as_of_date,
     )
 
 

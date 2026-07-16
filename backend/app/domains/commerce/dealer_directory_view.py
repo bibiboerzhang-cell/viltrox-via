@@ -65,6 +65,24 @@ MANAGED_DEALER_DURABLE_FIELDS = frozenset(
     }
 )
 
+# Migration 270 fields are read as one optional bundle.  Older databases keep
+# the legacy response shape; once the bundle exists, the projection can prove
+# map eligibility without treating a Google cross-check as canonical.
+LOCATION_VERIFICATION_DURABLE_FIELDS = frozenset(
+    {
+        "location_verification_contract_version",
+        "canonical_location_status",
+        "canonical_location_checked_at",
+        "physical_store_status",
+        "physical_store_checked_at",
+        "physical_store_verification_note",
+        "google_place_verification_status",
+        "google_place_id",
+        "google_maps_url",
+        "google_place_checked_at",
+    }
+)
+
 
 def reviewed_persistence_contract(
     available_fields: Iterable[str] | None = None,
@@ -257,6 +275,12 @@ def project_dealer(
         and product_receipt.get("source_url") == _text(item.get("brand_listing_url"))
         and product_receipt.get("value_status") == "observed"
     )
+    coordinate_receipt = (
+        raw_evidence_receipt.get("coordinate")
+        if isinstance(raw_evidence_receipt, dict)
+        and isinstance(raw_evidence_receipt.get("coordinate"), dict)
+        else {}
+    )
     review_contract_valid = bool(
         review_version == REVIEWED_DEALER_PERSISTENCE_VERSION
         and durable_review_identity
@@ -386,6 +410,41 @@ def project_dealer(
     activity_status = _text(item.get("activity_status"))
     if activity_status not in {"unknown", "none_observed", "active"}:
         activity_status = "unknown"
+    location_schema_visible = item.get("location_verification_contract_version") is not None
+    try:
+        location_contract_version = int(item.get("location_verification_contract_version") or 0)
+    except (TypeError, ValueError):
+        location_contract_version = 0
+    canonical_location_status = _text(item.get("canonical_location_status")) or "pending"
+    physical_store_status = _text(item.get("physical_store_status")) or "pending"
+    google_place_status = _text(item.get("google_place_verification_status")) or "pending"
+    coordinate_provider = _text(coordinate_receipt.get("provider")) or None
+    coordinate_status = _text(coordinate_receipt.get("value_status")) or None
+    coordinate_provenance_valid = bool(
+        coordinate_provider == "us_census_geocoder"
+        and coordinate_status == "observed"
+        and coordinate_receipt.get("google_derived") is False
+    )
+    location_map_eligible = bool(
+        location_schema_visible
+        and location_contract_version == 1
+        and canonical_location_status == "official_site_verified"
+        and physical_store_status == "verified_physical_store"
+        and publication_status == "published"
+        and item.get("lat") is not None
+        and item.get("lng") is not None
+    )
+
+    # Keep internal reviewer identifiers and raw provider receipts out of the
+    # public directory projection.  The bounded status/timestamp projection is
+    # sufficient for UI truth labels.
+    for internal_field in (
+        "canonical_location_checked_by",
+        "physical_store_checked_by",
+        "google_place_checked_by",
+        "google_place_evidence_json",
+    ):
+        item.pop(internal_field, None)
 
     item.update(
         {
@@ -442,6 +501,37 @@ def project_dealer(
                 "checked_at": _text(item.get("activity_checked_at")) or None,
                 "next_event_at": _text(item.get("next_activity_at")) or None,
                 "note": _text(item.get("activity_note")),
+                "claim_status": "descriptive_only",
+            },
+            "location_verification": {
+                "schema_visible": location_schema_visible,
+                "contract_version": location_contract_version,
+                "canonical_location_status": canonical_location_status,
+                "canonical_location_checked_at": _text(
+                    item.get("canonical_location_checked_at")
+                )
+                or None,
+                "physical_store_status": physical_store_status,
+                "physical_store_checked_at": _text(item.get("physical_store_checked_at"))
+                or None,
+                "physical_store_verification_note": _text(
+                    item.get("physical_store_verification_note")
+                ),
+                "coordinate": {
+                    "provider": coordinate_provider,
+                    "match_level": _text(coordinate_receipt.get("match_level")) or None,
+                    "value_status": coordinate_status,
+                    "google_derived": bool(coordinate_receipt.get("google_derived")),
+                    "provenance_valid": coordinate_provenance_valid,
+                },
+                "google_place_cross_check": {
+                    "status": google_place_status,
+                    "place_id": _text(item.get("google_place_id")) or None,
+                    "maps_url": _text(item.get("google_maps_url")) or None,
+                    "checked_at": _text(item.get("google_place_checked_at")) or None,
+                    "canonical_source": False,
+                },
+                "map_eligible": location_map_eligible,
                 "claim_status": "descriptive_only",
             },
             "social_links": social_links,
@@ -686,6 +776,13 @@ def build_dealer_pins(
     """Project already-reviewed Dealer rows into safe map pins."""
     pins: list[dict[str, Any]] = []
     for row in rows:
+        location_verification = row.get("location_verification")
+        if (
+            isinstance(location_verification, dict)
+            and location_verification.get("schema_visible") is True
+            and location_verification.get("map_eligible") is not True
+        ):
+            continue
         lat = _coordinate(row.get("lat"), minimum=-90, maximum=90)
         lng = _coordinate(row.get("lng"), minimum=-180, maximum=180)
         if lat is None or lng is None:
@@ -725,6 +822,7 @@ def build_dealer_pins(
                 "product_evidence": row.get("product_evidence"),
                 "authorization_evidence": row.get("authorization_evidence"),
                 "provenance": row.get("provenance"),
+                "location_verification": location_verification,
             }
         )
     return pins

@@ -1,6 +1,6 @@
 {
-  "registry_version": "2026-07-15.9",
-  "checked_at": "2026-07-15T18:05:00Z",
+  "registry_version": "2026-07-16.2",
+  "checked_at": "2026-07-16T20:32:02Z",
   "country_code": "US",
   "coverage_claim": "registered_publisher_owned_public_entries_only",
   "full_us_coverage": false,
@@ -824,10 +824,35 @@
       "terms_robots_status": "pending_review",
       "fixture_status": "format_fixture_only_not_source_verified",
       "publisher_identity_status": "official_publisher_entry_verified",
-      "publisher_identity_checked_at": "2026-07-15T18:05:00Z",
-      "state_codes": ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "HI", "IA", "ID", "IL", "IN", "KY", "LA", "MA", "MD", "MI", "MN", "MO", "MS", "MT", "NC", "NE", "NJ", "NM", "NV", "NY", "OH", "OR", "PA", "SC", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WY"],
+      "publisher_identity_checked_at": "2026-07-16T19:02:53Z",
+      "state_codes": ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "HI", "IA", "ID", "IL", "IN", "KY", "MA", "MD", "MI", "MN", "MO", "MS", "MT", "NC", "NE", "NJ", "NM", "NV", "NY", "OH", "OR", "PA", "SC", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WY"],
       "manufacturer_authorization_scope": "Nikon Imaging",
-      "jurisdiction_evidence_basis": "State/DC codes are derived only from dealer rows visible in Nikon USA's dated 2026-07-14 PDF, not from a nationwide completeness assumption.",
+      "jurisdiction_evidence_basis": "The 42 state/DC codes are derived only from dealer rows visible in Nikon USA's 2026-07-16 PDF snapshot; Louisiana is not present, and no nationwide completeness assumption is made.",
+      "source_snapshot": {
+        "snapshot_date": "2026-07-16",
+        "document_last_modified": "Thu, 16 Jul 2026 10:00:11 GMT",
+        "document_sha256": "406032919ca69701a93f6f355dd568cc92cef535ad7ff61068953c0da26ffedd",
+        "listed_entry_count": 175,
+        "unique_organization_count": 175,
+        "source_jurisdiction_count": 42,
+        "record_granularity": "authorized_dealer_organization_not_branch_location",
+        "published_fields": ["organization_name", "city", "state", "dealer_type"],
+        "missing_map_fields": ["street_address", "postal_code", "phone", "website", "latitude", "longitude"],
+        "terms_use_status": "pending_review",
+        "map_location_import_ready": false,
+        "count_scope_note": "175 is a count of listed authorized dealer organizations, not a count of store branches or mappable locations.",
+        "summary": "Official Nikon USA directory snapshot with organization, city, state and dealer-type fields only; branch-level map enrichment remains required."
+      },
+      "source_access_review": {
+        "checked_at": "2026-07-16T20:30:16Z",
+        "robots_url": "https://www.nikonusa.com/robots.txt",
+        "robots_fetch_status": 200,
+        "directory_path_explicitly_disallowed": false,
+        "terms_url": "https://www.nikonusa.com/content/terms-of-use",
+        "terms_observation": "Published Nikon terms describe website/content use as personal, noncommercial and informational; no automated commercial reuse permission was identified.",
+        "automated_commercial_import_status": "blocked_pending_publisher_permission",
+        "stable_import_status": "blocked"
+      },
       "published_scope_note": "Candidate retailer universe for camera retail research; Nikon authorization is not Viltrox authorization."
     },
     {
@@ -847,6 +872,33 @@
       "state_codes": ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "HI", "IA", "ID", "IL", "IN", "KS", "KY", "MA", "MD", "MI", "MN", "MO", "MS", "MT", "NC", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "SC", "SD", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WY"],
       "manufacturer_authorization_scope": "Canon Consumer and Home Office products",
       "jurisdiction_evidence_basis": "State/DC codes are headquarters states printed in Canon USA's 13-page Authorized Dealers PDF effective 2026-05-15; they are not branch-location coverage.",
+      "source_snapshot": {
+        "document_effective_date": "2026-05-15",
+        "document_page_count": 13,
+        "listed_entry_count": 307,
+        "unique_organization_count": 305,
+        "source_jurisdiction_token_count": 47,
+        "us_state_dc_count": 46,
+        "additional_territory_codes": ["GU"],
+        "entries_without_state_count": 11,
+        "record_granularity": "authorized_dealer_organization_headquarters_not_branch_location",
+        "published_fields": ["organization_name", "headquarters_state"],
+        "missing_map_fields": ["street_address", "city", "postal_code", "phone", "website", "latitude", "longitude"],
+        "terms_use_status": "pending_review",
+        "map_location_import_ready": false,
+        "count_scope_note": "307 listed rows and 305 unique organization names are headquarters-level directory entries, not branch-store counts.",
+        "summary": "Official Canon USA PDF supplies organization names and headquarters state tokens only; exact store locations and current Viltrox facts remain unverified."
+      },
+      "source_access_review": {
+        "checked_at": "2026-07-16T20:30:17Z",
+        "robots_url": "https://www.usa.canon.com/robots.txt",
+        "robots_fetch_status": 403,
+        "directory_path_explicitly_disallowed": null,
+        "terms_url": "https://www.usa.canon.com/terms-of-use",
+        "terms_observation": "Canon terms limit ordinary service use to personal and non-commercial use and prohibit copying or selling obtained information absent separate permission.",
+        "automated_commercial_import_status": "blocked_pending_publisher_permission",
+        "stable_import_status": "blocked"
+      },
       "published_scope_note": "Candidate organization universe only; Canon authorization is not Viltrox authorization, and the PDF explicitly warns that listed dealers may not sell every Canon product."
     },
     {
@@ -862,9 +914,92 @@
       "terms_robots_status": "pending_review",
       "fixture_status": "not_provided",
       "publisher_identity_status": "official_publisher_entry_verified",
-      "publisher_identity_checked_at": "2026-07-15T18:05:00Z",
+      "publisher_identity_checked_at": "2026-07-16T19:02:53Z",
       "manufacturer_authorization_scope": "Sony USA",
+      "official_directory_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+      "source_snapshot": {
+        "snapshot_date": "2026-07-16",
+        "listed_entry_count": 2224,
+        "unique_organization_count": 2223,
+        "duplicate_entry_count": 1,
+        "source_jurisdiction_count": null,
+        "record_granularity": "retailer_name_only_not_branch_location",
+        "published_fields": ["retailer_name"],
+        "missing_map_fields": ["street_address", "city", "state", "postal_code", "phone", "website", "latitude", "longitude"],
+        "terms_use_status": "pending_review",
+        "map_location_import_ready": false,
+        "count_scope_note": "2224 rendered entries reduce to 2223 unique retailer names after one duplicate; neither value is a branch-store count.",
+        "summary": "Official Sony USA retailer directory exposes retailer names without branch addresses or coordinates; branch-level map enrichment remains required."
+      },
+      "source_access_review": {
+        "checked_at": "2026-07-16T20:30:17Z",
+        "robots_urls": [
+          "https://www.sony.com/robots.txt",
+          "https://electronics.sony.com/robots.txt"
+        ],
+        "robots_fetch_statuses": [403, 403],
+        "directory_path_explicitly_disallowed": null,
+        "terms_url": "https://electronics.sony.com/terms-conditions",
+        "terms_observation": "The located Sony Electronics terms govern direct purchases; no publisher grant for automated commercial directory reuse was identified.",
+        "automated_commercial_import_status": "blocked_pending_publisher_permission",
+        "stable_import_status": "blocked"
+      },
       "published_scope_note": "Candidate retailer universe only; Sony authorization is not Viltrox authorization."
+    },
+    {
+      "id": "dealer_godox_us_authorized_distributors",
+      "name": "Godox United States Authorized Distributors",
+      "source_kind": "manufacturer_dealer_directory",
+      "source_channel": "official_public_directory",
+      "publisher": "Godox",
+      "canonical_url": "https://www.godox.com/authorized-distributor/?ext_country=536",
+      "geographic_scope": "us_authorized_distributor_contact_directory",
+      "status": "awaiting_review",
+      "enabled": false,
+      "terms_robots_status": "pending_review",
+      "fixture_status": "not_provided",
+      "publisher_identity_status": "official_publisher_entry_verified",
+      "publisher_identity_checked_at": "2026-07-16T20:32:02Z",
+      "state_codes": ["NY"],
+      "manufacturer_authorization_scope": "Godox authorized distributor and online-store relationship",
+      "jurisdiction_evidence_basis": "Godox's official United States filter publishes New York contact addresses for Adorama, B&H and GodoxUSA; these are distributor/online-store contacts, not a branch-location denominator.",
+      "source_snapshot": {
+        "snapshot_date": "2026-07-16",
+        "document_sha256": "99dcc930a85e1a52bd4b2c7110e55fc7dc9082b3b093b2c45a60c163dccf2138",
+        "listed_entry_count": 3,
+        "unique_organization_count": 3,
+        "source_jurisdiction_count": 1,
+        "record_granularity": "authorized_distributor_or_online_store_contact_not_branch_location",
+        "published_fields": [
+          "organization_name",
+          "country",
+          "contact_address",
+          "email",
+          "phone",
+          "online_store_url"
+        ],
+        "listed_organizations": ["Adorama", "B&H", "GodoxUSA"],
+        "missing_map_fields": [
+          "branch_identity",
+          "latitude",
+          "longitude"
+        ],
+        "terms_use_status": "automated_access_and_extraction_prohibited",
+        "map_location_import_ready": false,
+        "count_scope_note": "3 is a count of publisher-listed United States distributor/online-store contacts, not a count of physical branches or all US Godox resellers.",
+        "summary": "Godox's official country-filtered page identifies three US distributor/online-store contacts with contact details; physical retail status and nationwide branch coverage remain unproven."
+      },
+      "source_access_review": {
+        "checked_at": "2026-07-16T20:30:19Z",
+        "robots_url": "https://www.godox.com/robots.txt",
+        "robots_fetch_status": 404,
+        "directory_path_explicitly_disallowed": null,
+        "terms_url": "https://www.godox.com/terms-of-use/",
+        "terms_observation": "Godox Terms of Use sections 6.8 and 6.9 prohibit harvesting or mining, access inconsistent with individual human usage, and robot, spider, crawler, scraper or other automated extraction.",
+        "automated_commercial_import_status": "blocked_terms_prohibit_automated_access_and_extraction",
+        "stable_import_status": "blocked"
+      },
+      "published_scope_note": "Candidate distributor/online-store organizations only; Godox authorization is not Viltrox authorization, physical-store evidence, current inventory, or local coverage."
     },
     {
       "id": "dealer_fujifilm_us_shop",
@@ -1075,6 +1210,15 @@
       "manufacturer_authorization_scope": "Retailer-owned store identity and location only; no manufacturer authorization is inferred",
       "jurisdiction_evidence_basis": "B&H's official SuperStore page publishes the New York City store address.",
       "related_event_source_ids": ["dealer_bh_event_space_us"],
+      "manufacturer_relationship_observations": [
+        {
+          "manufacturer": "Godox",
+          "relationship": "Godox-published United States authorized distributor / online-store contact",
+          "evidence_url": "https://www.godox.com/authorized-distributor/?ext_country=536",
+          "checked_at": "2026-07-16T20:32:02Z",
+          "entity_granularity": "retailer_organization_contact_not_branch_location"
+        }
+      ],
       "published_scope_note": "Candidate physical store only; retailer scale or online assortment never proves Viltrox authorization, product presence or local inventory."
     },
     {
@@ -1088,6 +1232,22 @@
       "manufacturer_authorization_scope": "Retailer-owned store identity and location only; no manufacturer authorization is inferred",
       "jurisdiction_evidence_basis": "Adorama's official store page publishes its New York City retail address.",
       "related_event_source_ids": ["dealer_adorama_events_us"],
+      "manufacturer_relationship_observations": [
+        {
+          "manufacturer": "Godox",
+          "relationship": "Godox-published United States authorized distributor / online-store contact",
+          "evidence_url": "https://www.godox.com/authorized-distributor/?ext_country=536",
+          "checked_at": "2026-07-16T20:32:02Z",
+          "entity_granularity": "retailer_organization_contact_not_branch_location"
+        },
+        {
+          "manufacturer": "Flashpoint",
+          "relationship": "Adorama-exclusive brand and sales/support channel",
+          "evidence_url": "https://www.adorama.com/g/adorama-brands",
+          "checked_at": "2026-07-16T20:32:02Z",
+          "entity_granularity": "exclusive_brand_channel_not_dealer_network"
+        }
+      ],
       "published_scope_note": "Candidate physical store only; events, product pages, authorization and stock are separate evidence dimensions."
     },
     {

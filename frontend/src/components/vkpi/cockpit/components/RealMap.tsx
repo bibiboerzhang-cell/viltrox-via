@@ -16,6 +16,144 @@ function finitePin(pin: any) {
 // small-map behaviour and fail closed (no decorative network) at large scale.
 export const MAX_NETWORK_LINE_PIN_COUNT = 250;
 export const MAX_DOM_MARKER_PIN_COUNT = 1_000;
+export const LOW_ZOOM_CLUSTER_MAX = 7;
+export const MAP_CLUSTER_GRID_SIZE = 36;
+export const NETWORK_LINE_MIN_ZOOM = 8;
+
+export interface MapPinCluster {
+  key: string;
+  lat: number;
+  lng: number;
+  members: any[];
+  count: number;
+  exactCoordinates: boolean;
+}
+
+type ProjectPin = (pin: any) => { x: number; y: number };
+
+function stablePinKey(pin: any) {
+  return [
+    pin?.id ?? pin?.dealer_id ?? pin?.event_id ?? pin?.key ?? pin?.handle ?? pin?.name ?? "",
+    Number(pin?.lat).toFixed(7),
+    Number(pin?.lng).toFixed(7),
+    pin?.type ?? pin?.niche ?? "",
+  ].map((value) => String(value)).join("\u0001");
+}
+
+function coordinateKey(pin: any) {
+  return `${Number(pin.lat).toFixed(7)}:${Number(pin.lng).toFixed(7)}`;
+}
+
+/**
+ * Build display-only clusters without changing any source coordinate.
+ *
+ * At low zoom, pins share a deterministic projected-pixel grid.  Above the
+ * threshold, only exact-coordinate duplicates remain grouped so two Dealer
+ * records at the same address never silently cover each other.
+ */
+export function clusterPinsForZoom(
+  pins: any[],
+  project: ProjectPin,
+  zoom: number,
+  gridSize = MAP_CLUSTER_GRID_SIZE,
+): MapPinCluster[] {
+  const valid = (Array.isArray(pins) ? pins : [])
+    .filter(finitePin)
+    .slice()
+    .sort((left, right) => stablePinKey(left).localeCompare(stablePinKey(right)));
+  const lowZoom = Number(zoom) <= LOW_ZOOM_CLUSTER_MAX;
+  const safeGridSize = Number.isFinite(gridSize) && gridSize > 0 ? gridSize : MAP_CLUSTER_GRID_SIZE;
+  const groups = new Map<string, any[]>();
+
+  if (lowZoom) {
+    const projected = valid.map((pin) => {
+      const point = project(pin);
+      return { pin, x: Number(point.x), y: Number(point.y) };
+    });
+    const parents = projected.map((_, index) => index);
+    const find = (index: number): number => {
+      let root = index;
+      while (parents[root] !== root) root = parents[root];
+      while (parents[index] !== index) {
+        const next = parents[index];
+        parents[index] = root;
+        index = next;
+      }
+      return root;
+    };
+    const union = (left: number, right: number) => {
+      const leftRoot = find(left);
+      const rightRoot = find(right);
+      if (leftRoot === rightRoot) return;
+      parents[Math.max(leftRoot, rightRoot)] = Math.min(leftRoot, rightRoot);
+    };
+    const cells = new Map<string, number[]>();
+    const maxDistanceSquared = safeGridSize * safeGridSize;
+
+    projected.forEach((point, index) => {
+      const cellX = Math.floor(point.x / safeGridSize);
+      const cellY = Math.floor(point.y / safeGridSize);
+      for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+          const candidates = cells.get(`${cellX + xOffset}:${cellY + yOffset}`) || [];
+          candidates.forEach((candidateIndex) => {
+            const candidate = projected[candidateIndex];
+            const xDelta = point.x - candidate.x;
+            const yDelta = point.y - candidate.y;
+            if (xDelta * xDelta + yDelta * yDelta <= maxDistanceSquared) {
+              union(index, candidateIndex);
+            }
+          });
+        }
+      }
+      const cellKey = `${cellX}:${cellY}`;
+      const cell = cells.get(cellKey) || [];
+      cell.push(index);
+      cells.set(cellKey, cell);
+    });
+
+    projected.forEach(({ pin }, index) => {
+      const key = `proximity:${find(index)}`;
+      const members = groups.get(key) || [];
+      members.push(pin);
+      groups.set(key, members);
+    });
+  } else {
+    valid.forEach((pin) => {
+      const key = `coordinate:${coordinateKey(pin)}`;
+      const members = groups.get(key) || [];
+      members.push(pin);
+      groups.set(key, members);
+    });
+  }
+
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([bucketKey, rawMembers]) => {
+      const members = rawMembers.slice().sort((left, right) => stablePinKey(left).localeCompare(stablePinKey(right)));
+      const lat = members.reduce((sum, pin) => sum + Number(pin.lat), 0) / members.length;
+      const lng = members.reduce((sum, pin) => sum + Number(pin.lng), 0) / members.length;
+      const exactCoordinates = new Set(members.map(coordinateKey)).size === 1;
+      return {
+        key: `${bucketKey.split(":")[0]}:${members.map(stablePinKey).join("|")}`,
+        lat,
+        lng,
+        members,
+        count: members.length,
+        exactCoordinates,
+      };
+    });
+}
+
+export function clusterClickAction(cluster: MapPinCluster) {
+  if (cluster.count <= 1) return "pin" as const;
+  return cluster.exactCoordinates ? "members" as const : "zoom" as const;
+}
+
+export function shouldShowNetworkLines(zoom: number, pins: any[]) {
+  const count = (Array.isArray(pins) ? pins : []).filter(finitePin).length;
+  return Number(zoom) >= NETWORK_LINE_MIN_ZOOM && count > 1 && count <= MAX_NETWORK_LINE_PIN_COUNT;
+}
 
 export function shouldUseCanvasMarkers(pins: any[]) {
   return pins.filter(finitePin).length > MAX_DOM_MARKER_PIN_COUNT;
@@ -140,70 +278,160 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     });
   }, [focusTarget?.lat, focusTarget?.lng, focusTarget?.zoom]);
   
-    // pins 变化 → 重新添加真实节点与节点间的最近邻覆盖路径
+    // pins / zoom 变化 → 重新生成显示簇。低缩放只显示簇，不伪改业务坐标。
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    
-    // 清旧 markers
+
+    const sourcePins = Array.isArray(pins) ? pins : [];
+
+    const clearDisplayLayers = () => {
       markersRef.current.forEach((m: any) => map.removeLayer(m));
       markersRef.current = [];
       networkRef.current.forEach((line: any) => map.removeLayer(line));
       networkRef.current = [];
+    };
 
-      const networkColor = safeMapColor(accentColor, "#3f9bff");
-      nearestPinEdges(pins).forEach(([from, to]) => {
-        const points: [number, number][] = [
-          [Number(from.lat), Number(from.lng)],
-          [Number(to.lat), Number(to.lng)],
-        ];
-        const base = L.polyline(points, {
-          color: networkColor,
-          weight: 1.15,
-          opacity: 0.28,
-          dashArray: "5 9",
-          className: "vkpi-map-network-line",
-          interactive: false,
-        }).addTo(map);
-        const flow = L.polyline(points, {
-          color: networkColor,
-          weight: 2,
-          opacity: 0.82,
-          dashArray: "1 20",
-          className: "vkpi-map-network-line vkpi-map-network-line--flow",
-          interactive: false,
-        }).addTo(map);
-        networkRef.current.push(base, flow);
+    const pinLabel = (pin: any, index: number) => String(
+      pin?.handle || pin?.name || pin?.city || pin?.country || `Point ${index + 1}`,
+    );
+
+    const buildMembersPopup = (cluster: MapPinCluster) => {
+      const root = document.createElement("div");
+      root.className = "vkpi-map-cluster-members";
+
+      const heading = document.createElement("div");
+      heading.className = "vkpi-map-cluster-members__title";
+      heading.textContent = `${cluster.count} 个同坐标点位`;
+      root.appendChild(heading);
+
+      cluster.members.forEach((member, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "vkpi-map-cluster-members__item";
+        button.textContent = pinLabel(member, index);
+        button.addEventListener("click", () => {
+          if (onPinClickRef.current) onPinClickRef.current(member);
+          map.closePopup();
+        });
+        root.appendChild(button);
       });
 
-      const validPins = pins.filter(finitePin);
-      const useCanvasMarkers = validPins.length > MAX_DOM_MARKER_PIN_COUNT;
-      validPins.forEach((p: any) => {
-      const color = safeMapColor(p.color || accentColor, "#a855f7");
+      return root;
+    };
 
-      // Thousands of HTML divIcon nodes make a national map janky. Leaflet's
-      // canvas renderer keeps the same click/tooltip behaviour at high volume;
-      // small maps retain the original branded animated marker.
-      const marker = useCanvasMarkers
-        ? L.circleMarker([Number(p.lat), Number(p.lng)], {
-            radius: 4,
-            color,
-            weight: 1,
-            fillColor: color,
-            fillOpacity: 0.82,
-          }).addTo(map)
-        : L.marker([Number(p.lat), Number(p.lng)], {
+    const renderDisplayLayers = () => {
+      clearDisplayLayers();
+
+      const zoom = map.getZoom();
+      const networkColor = safeMapColor(accentColor, "#3f9bff");
+      if (shouldShowNetworkLines(zoom, sourcePins)) {
+        nearestPinEdges(sourcePins).forEach(([from, to]) => {
+          const points: [number, number][] = [
+            [Number(from.lat), Number(from.lng)],
+            [Number(to.lat), Number(to.lng)],
+          ];
+          const base = L.polyline(points, {
+            color: networkColor,
+            weight: 1.15,
+            opacity: 0.28,
+            dashArray: "5 9",
+            className: "vkpi-map-network-line",
+            interactive: false,
+          }).addTo(map);
+          const flow = L.polyline(points, {
+            color: networkColor,
+            weight: 2,
+            opacity: 0.82,
+            dashArray: "1 20",
+            className: "vkpi-map-network-line vkpi-map-network-line--flow",
+            interactive: false,
+          }).addTo(map);
+          networkRef.current.push(base, flow);
+        });
+      }
+
+      const validPins = sourcePins.filter(finitePin);
+      const useCanvasMarkers = validPins.length > MAX_DOM_MARKER_PIN_COUNT;
+      const clusters = clusterPinsForZoom(
+        validPins,
+        (pin) => map.project(L.latLng(Number(pin.lat), Number(pin.lng)), zoom),
+        zoom,
+      );
+
+      clusters.forEach((cluster) => {
+        const action = clusterClickAction(cluster);
+        if (action !== "pin") {
+          const first = cluster.members[0] || {};
+          const color = safeMapColor(first.color || accentColor, "#a855f7");
+          const countLabel = cluster.count > 999 ? "999+" : String(cluster.count);
+          const marker = L.marker([cluster.lat, cluster.lng], {
             icon: L.divIcon({
-              html: `<div class="vkpi-pin-wrapper" style="--pin-color: ${color}">
-                       <div class="vkpi-pin-pulse"></div>
-                       <div class="vkpi-pin-ring"></div>
-                       <div class="vkpi-pin-dot"></div>
-                     </div>`,
-              className: '',
-              iconSize: [30, 30],
-              iconAnchor: [15, 15],
+              html: `<div class="vkpi-map-cluster" style="--cluster-color: ${color}" role="button" aria-label="${cluster.count} map points"><span>${countLabel}</span></div>`,
+              className: "",
+              iconSize: [34, 34],
+              iconAnchor: [17, 17],
             }),
           }).addTo(map);
+
+          const tooltipTitle = action === "members"
+            ? `${cluster.count} 个同坐标点位`
+            : `${cluster.count} 个附近点位`;
+          const tooltipHint = action === "members" ? "点击选择具体记录" : "点击放大地图";
+          marker.bindTooltip(
+            `<div class="vkpi-pin-card vkpi-pin-card--cluster"><div class="vkpi-pin-name">${escapeMapHtml(tooltipTitle)}</div><div class="vkpi-pin-hint">${escapeMapHtml(tooltipHint)} →</div></div>`,
+            { direction: "top", offset: [0, -10], opacity: 1, className: "vkpi-pin-tooltip" },
+          );
+
+          if (action === "members") {
+            marker.bindPopup(buildMembersPopup(cluster), {
+              className: "vkpi-map-cluster-popup",
+              closeButton: true,
+              maxWidth: 320,
+            });
+          }
+
+          marker.on("click", () => {
+            if (action === "members") {
+              marker.openPopup();
+              return;
+            }
+            const bounds = L.latLngBounds(
+              cluster.members.map((member) => [Number(member.lat), Number(member.lng)] as [number, number]),
+            );
+            map.fitBounds(bounds, { padding: [48, 48], maxZoom: 18 });
+          });
+
+          markersRef.current.push(marker);
+          return;
+        }
+
+        const p = cluster.members[0];
+        const color = safeMapColor(p.color || accentColor, "#a855f7");
+
+        // Thousands of HTML divIcon nodes make a national map janky. Leaflet's
+        // canvas renderer keeps the same click/tooltip behaviour at high volume;
+        // small maps retain the original branded animated marker.
+        const marker = useCanvasMarkers
+          ? L.circleMarker([Number(p.lat), Number(p.lng)], {
+              radius: 4,
+              color,
+              weight: 1,
+              fillColor: color,
+              fillOpacity: 0.82,
+            }).addTo(map)
+          : L.marker([Number(p.lat), Number(p.lng)], {
+              icon: L.divIcon({
+                html: `<div class="vkpi-pin-wrapper" style="--pin-color: ${color}">
+                         <div class="vkpi-pin-pulse"></div>
+                         <div class="vkpi-pin-ring"></div>
+                         <div class="vkpi-pin-dot"></div>
+                       </div>`,
+                className: "",
+                iconSize: [24, 24],
+                iconAnchor: [12, 12],
+              }),
+            }).addTo(map);
       
       // Hover 信息卡(DOM 覆盖层,隔离皮肤刀:头像渐变吃 token 随主题;
       // pin/连线本体的取色与渲染逻辑不动 —— 颜色由调用方传运行时 token 计算值)
@@ -257,8 +485,16 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
         if (onPinClickRef.current) onPinClickRef.current(p);
       });
       
-      markersRef.current.push(marker);
-    });
+        markersRef.current.push(marker);
+      });
+    };
+
+    renderDisplayLayers();
+    map.on("zoomend moveend", renderDisplayLayers);
+    return () => {
+      map.off("zoomend moveend", renderDisplayLayers);
+      clearDisplayLayers();
+    };
   }, [pins, accentColor]);
   
   return (

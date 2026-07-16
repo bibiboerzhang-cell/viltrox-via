@@ -186,28 +186,52 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
+export interface VkpiEventListPage {
+  limit: number;
+  offset: number;
+  returned: number;
+  next_offset: number | null;
+  has_more: boolean;
+}
+
+export interface VkpiEventListResponse {
+  items?: VkpiEvent[];
+  count?: number;
+  total_count?: number;
+  offset?: number;
+  limit?: number;
+  page?: VkpiEventListPage;
+}
+
 export async function listEvents(
   token: string,
   params: { limit?: number; offset?: number; status?: string; owner_id?: string } = {},
-): Promise<{ items?: VkpiEvent[] }> {
+): Promise<VkpiEventListResponse> {
   const query = new URLSearchParams({ limit: String(params.limit || 100) });
   if (typeof params.offset === "number") query.set("offset", String(params.offset));
   if (params.status) query.set("status", params.status);
   if (params.owner_id) query.set("owner_id", params.owner_id);
-  return apiFetch<{ items?: VkpiEvent[] }>(
+  return apiFetch<VkpiEventListResponse>(
     `/api/admin/vkpi/events?${query.toString()}`,
     {},
     token,
   );
 }
 
-/** upcoming/进行中活动(end_date>=今天)+ location + budget,给报告「活动进度」用。 */
+/** upcoming/进行中活动(end_date>=as_of_date)+ location + budget。 */
 export async function listUpcomingEvents(
   token: string,
   limit = 50,
+  asOfDate = new Date().toISOString().slice(0, 10),
 ): Promise<{ items?: Array<Record<string, unknown>>; count?: number }> {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    // Explicit UTC date keeps the browser, Python and PostgreSQL session
+    // timezone from silently choosing three different calendar days.
+    as_of_date: asOfDate,
+  });
   return apiFetch<{ items?: Array<Record<string, unknown>>; count?: number }>(
-    `/api/admin/vkpi/events/upcoming?limit=${encodeURIComponent(String(limit))}`,
+    `/api/admin/vkpi/events/upcoming?${query.toString()}`,
     {},
     token,
   );

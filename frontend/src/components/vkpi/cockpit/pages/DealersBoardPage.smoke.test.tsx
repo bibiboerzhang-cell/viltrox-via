@@ -76,6 +76,16 @@ const LOCS_OK = {
       brand_listing_url: "https://dealer.example/viltrox",
       channel_evidence: { physical_location_registered: true, online_product_page: "declared_public_url" },
       truth_status: { public_listing: "verified", product_evidence: "declared_public_url", viltrox_authorization: "pending" },
+      location_verification: {
+        schema_visible: true,
+        contract_version: 1,
+        canonical_location_status: "official_site_verified",
+        physical_store_status: "verified_physical_store",
+        coordinate: { provider: "us_census_geocoder", match_level: "exact_address", value_status: "observed", google_derived: false, provenance_valid: true },
+        google_place_cross_check: { status: "pending", place_id: null, maps_url: null, canonical_source: false },
+        map_eligible: true,
+        claim_status: "descriptive_only",
+      },
       brand_codes: ["VILTROX", "NIKON", "CANON"], publication_status: "published",
       viltrox_deployment: { status: "deployed", note: "local map pilot" },
       activity: { status: "active", page_url: "https://www.bhphotovideo.com/find/EventSpace.jsp", next_event_at: "2026-08-01T15:00:00Z" },
@@ -152,7 +162,7 @@ const US_SOURCE_REGISTRY_OK = {
   full_us_coverage: false,
   claim_status: "descriptive_only",
   dealer_discovery_sources: [
-    { id: "nikon", name: "Nikon dealer directory", source_kind: "manufacturer_dealer_directory", publisher: "Nikon USA", canonical_url: "https://example.com/nikon", state_codes: ["CA", "NY"], candidate_only: true },
+    { id: "nikon", name: "Nikon dealer directory", source_kind: "manufacturer_dealer_directory", publisher: "Nikon USA", canonical_url: "https://example.com/nikon", state_codes: ["CA", "NY"], candidate_only: true, manufacturer_authorization_scope: "Nikon Imaging", source_snapshot: { listed_entry_count: 175, unique_organization_count: 175, record_granularity: "authorized_dealer_organization_not_branch_location", map_location_import_ready: false } },
     { id: "canon", name: "Canon where to buy", source_kind: "manufacturer_dealer_directory", publisher: "Canon USA", canonical_url: "https://example.com/canon", state_codes: ["CA"], candidate_only: true },
   ],
   source_jurisdiction_matrix: {
@@ -249,6 +259,10 @@ const DEALER_ACTIVITIES_OK = {
     local_time_text: "14:00 ET",
     city: "New York",
     region: "NY",
+    decision_status: "new",
+    verification_status: "verified",
+    converted_event_id: null,
+    is_internal_event: false,
     official_url: "https://events.bhphotovideo.com/workshop",
     association: "exact_dealer_id",
   }],
@@ -416,6 +430,8 @@ describe("DealersBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () 
     expect(screen.getByTestId("dealer-reviewed-persistence-readiness").textContent).toContain("人工核验落库 待迁移");
     expect(screen.getByTestId("dealer-source-readiness-nikon").textContent).toContain("格式已映射");
     expect(screen.getByTestId("dealer-source-readiness-nikon").textContent).toContain("导入阻断");
+    expect(screen.getByTestId("dealer-source-readiness-nikon").textContent).toContain("175 个官方目录组织/名称");
+    expect(screen.getByTestId("dealer-source-readiness-nikon").textContent).toContain("不可直接当分店坐标");
     expect(screen.getAllByTestId(/^dealer-map-state-/)).toHaveLength(51);
     expect(screen.getByTestId("dealer-map-state-NY").getAttribute("aria-label")).toContain("已入库门店实体 2");
     expect(screen.getByTestId("dealer-map-state-NY").getAttribute("aria-label")).toContain("公开来源核验 2");
@@ -468,9 +484,36 @@ describe("DealersBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () 
     expect(within(detail).getByText("NIKON")).toBeTruthy();
     expect(within(detail).getByText("CANON")).toBeTruthy();
     expect(within(detail).getByText("有公开活动")).toBeTruthy();
+    expect(within(detail).getByText("Google Maps 待复核")).toBeTruthy();
+    expect(within(detail).getByText("US Census 地址级地理编码（非 Google）")).toBeTruthy();
+    expect(within(detail).getByRole("link", { name: "在 Google Maps 复核（待核验）" }).getAttribute("href"))
+      .toBe("https://www.google.com/maps/search/?api=1&query=B%26H%20Photo%2C%20420%209th%20Ave%2C%20New%20York%2C%20NY");
     expect(within(detail).getByRole("link", { name: "活动页" }).getAttribute("href")).toContain("EventSpace");
     expect(await within(detail).findByText("B&H Creator Workshop")).toBeTruthy();
-    expect(within(detail).getByRole("link", { name: "官方活动页" }).getAttribute("href")).toContain("events.bhphotovideo.com");
+    expect(within(detail).getByText("外部机会候选 · 未转 Event")).toBeTruthy();
+    expect(within(detail).getByText("人工判断 待判断")).toBeTruthy();
+    expect(within(detail).getByText("证据 已核验")).toBeTruthy();
+    expect(within(detail).getByRole("link", { name: "登记来源" }).getAttribute("href")).toContain("events.bhphotovideo.com");
+  });
+
+  it("只有 promotion receipt 指向内部 Event 才标记正式 Event", async () => {
+    routeApi({
+      dealerActivities: {
+        ...DEALER_ACTIVITIES_OK,
+        activities: [{
+          ...DEALER_ACTIVITIES_OK.activities[0],
+          decision_status: "promoted",
+          converted_event_id: "evt_radar_123",
+          is_internal_event: true,
+        }],
+      },
+    });
+    renderBoard();
+    const map = await screen.findByTestId("real-map-stub");
+    fireEvent.click(map);
+    const detail = await screen.findByRole("dialog", { name: /Dealer 地图详情 B&H Photo/ });
+    expect(await within(detail).findByText("正式 Event · evt_radar_123")).toBeTruthy();
+    expect(within(detail).queryByText("外部机会候选 · 未转 Event")).toBeNull();
   });
 
   it("人工记录可在显式发布后上私有地图，但 pin 详情仍标记来源待核验", async () => {

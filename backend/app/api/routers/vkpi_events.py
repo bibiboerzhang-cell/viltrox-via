@@ -8,6 +8,8 @@ scope.assert_event_access(..., write=True)收口 —— 不再是任何 vkpi:wri
 """
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
@@ -83,15 +85,38 @@ def _assert_manage_team(event_id: str, staff) -> None:
 
 # ── Events ────────────────────────────────────────────────────────────────
 @router.get("")
-def list_events(limit: int = Query(default=200, ge=1, le=500), staff=Depends(require_tab("vkpi", "read"))):
-    return _guard(service.list_events, staff, limit=limit)
+def list_events(
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    status: str | None = Query(default=None, max_length=64),
+    owner_id: int | None = Query(default=None, ge=1),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Scoped Event list with server-side filters and verifiable pagination."""
+    return _guard(
+        service.list_events,
+        staff,
+        limit=limit,
+        offset=offset,
+        status=status,
+        owner_id=owner_id,
+    )
 
 
 # /upcoming 必须在动态 /{event_id} 路由之前注册,否则 "upcoming" 会被当成 event_id。
 @router.get("/upcoming")
-def upcoming_events(limit: int = Query(default=50, ge=1, le=200), staff=Depends(require_tab("vkpi", "read"))):
-    """upcoming/进行中活动(end_date>=今天)+ location + budget;给 dashboard 地图 / 报告活动进度。"""
-    return _guard(service.list_upcoming_events, staff, limit=limit)
+def upcoming_events(
+    limit: int = Query(default=50, ge=1, le=200),
+    as_of_date: date | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Upcoming/in-progress Events relative to an explicit UTC calendar date."""
+    return _guard(
+        service.list_upcoming_events,
+        staff,
+        limit=limit,
+        as_of_date=as_of_date,
+    )
 
 
 # ── Share members(真·活动共享:必须在动态 /{event_id} 路由之前注册)─────────────

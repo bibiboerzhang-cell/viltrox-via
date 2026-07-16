@@ -1,0 +1,162 @@
+{
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false
+  },
+  "excluded_brand_directories": {
+    "canon": "No branch-exact official-directory receipt is included in this bounded manifest.",
+    "sony": "No branch-exact official-directory receipt is included in this bounded manifest."
+  },
+  "stores": [
+    {
+      "source_id": "bhphoto_store_page",
+      "organization_key_material": "B&H Photo Video",
+      "name": "B&H Photo Video · NYC SuperStore",
+      "address": "420 9th Ave",
+      "city": "New York",
+      "state": "NY",
+      "postal_code": "10001",
+      "retailer_host": "bhphotovideo.com",
+      "location_source_url": "https://www.bhphotovideo.com/find/HelpCenter/StoreInfo.jsp",
+      "brand_listing_url": "https://www.bhphotovideo.com/c/browse/viltrox/ci/58790",
+      "observed_at": "2026-07-16T16:00:00Z",
+      "coordinates": {
+        "provider": "us_census_geocoder",
+        "match_level": "exact_address",
+        "value_status": "observed",
+        "lat": 40.753308871719,
+        "lng": -73.996272449882
+      },
+      "brand_relationships": [
+        {
+          "brand_key": "nikon",
+          "relationship_status": "official_directory_listed",
+          "authorization_status": "unverified",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf"
+        },
+        {
+          "brand_key": "godox",
+          "relationship_status": "official_directory_listed",
+          "authorization_status": "unverified",
+          "evidence_scope": "official_distributor_page_with_address",
+          "evidence_url": "https://www.godox.com/authorized-distributor/"
+        }
+      ]
+    },
+    {
+      "source_id": "adorama_store_page",
+      "organization_key_material": "Adorama",
+      "name": "Adorama · NYC Store",
+      "address": "42 W 18th St",
+      "city": "New York",
+      "state": "NY",
+      "postal_code": "10011",
+      "retailer_host": "adorama.com",
+      "location_source_url": "https://www.adorama.com/g/nyc-store",
+      "brand_listing_url": "https://www.adorama.com/brands/Viltrox",
+      "observed_at": "2026-07-16T16:00:00Z",
+      "coordinates": {
+        "provider": "us_census_geocoder",
+        "match_level": "exact_address",
+        "value_status": "observed",
+        "lat": 40.7390215706,
+        "lng": -73.993187846046
+      },
+      "brand_relationships": [
+        {
+          "brand_key": "nikon",
+          "relationship_status": "official_directory_listed",
+          "authorization_status": "unverified",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf"
+        },
+        {
+          "brand_key": "godox",
+          "relationship_status": "official_directory_listed",
+          "authorization_status": "unverified",
+          "evidence_scope": "official_distributor_page_with_address",
+          "evidence_url": "https://www.godox.com/authorized-distributor/"
+        }
+      ]
+    },
+    {
+      "source_id": "samys_store_page",
+      "organization_key_material": "Samy's Camera",
+      "name": "Samy's Camera · Los Angeles",
+      "address": "431 S Fairfax Ave",
+      "city": "Los Angeles",
+      "state": "CA",
+      "postal_code": "90036",
+      "retailer_host": "samys.com",
+      "location_source_url": "https://www.samys.com/stores",
+      "brand_listing_url": "https://www.samys.com/p/Video-Monitors--Viewfinders/DC-X3/Viltrox-6-in.-Touchscreen-HDMI/SDI-On-Camera-Monitor/268996.html",
+      "observed_at": "2026-07-16T16:00:00Z",
+      "coordinates": {
+        "provider": "us_census_geocoder",
+        "match_level": "exact_address",
+        "value_status": "observed",
+        "lat": 34.068877313256,
+        "lng": -118.361468202166
+      },
+      "brand_relationships": [
+        {
+          "brand_key": "nikon",
+          "relationship_status": "official_directory_listed",
+          "authorization_status": "unverified",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf"
+        }
+      ]
+    },
+    {
+      "source_id": "samys_store_page",
+      "organization_key_material": "Samy's Camera",
+      "name": "Samy's Camera · Orange County",
+      "address": "3309B S Bristol St",
+      "city": "Santa Ana",
+      "state": "CA",
+      "postal_code": "92704",
+      "retailer_host": "samys.com",
+      "location_source_url": "https://www.samys.com/stores",
+      "brand_listing_url": "https://www.samys.com/p/Video-Monitors--Viewfinders/DC-X3/Viltrox-6-in.-Touchscreen-HDMI/SDI-On-Camera-Monitor/268996.html",
+      "observed_at": "2026-07-16T16:00:00Z",
+      "coordinates": {
+        "provider": "us_census_geocoder",
+        "match_level": "exact_address",
+        "value_status": "observed",
+        "lat": 33.703354625186,
+        "lng": -117.885373938329
+      },
+      "brand_relationships": []
+    },
+    {
+      "source_id": "samys_store_page",
+      "organization_key_material": "Samy's Camera",
+      "name": "Samy's Camera · Pasadena",
+      "address": "1759 E Colorado Blvd",
+      "city": "Pasadena",
+      "state": "CA",
+      "postal_code": "91106",
+      "retailer_host": "samys.com",
+      "location_source_url": "https://www.samys.com/stores",
+      "brand_listing_url": "https://www.samys.com/p/Video-Monitors--Viewfinders/DC-X3/Viltrox-6-in.-Touchscreen-HDMI/SDI-On-Camera-Monitor/268996.html",
+      "observed_at": "2026-07-16T16:00:00Z",
+      "coordinates": {
+        "provider": "us_census_geocoder",
+        "match_level": "exact_address",
+        "value_status": "observed",
+        "lat": 34.146070421965,
+        "lng": -118.114029360225
+      },
+      "brand_relationships": []
+    }
+  ]
+}

@@ -24,6 +24,25 @@ import type {
 
 const src = (key: string) => MODULE_SOURCES[key] || { label: key, rows: [] as Array<[string, string]> };
 
+const RADAR_DECISION_LABEL: Record<string, string> = {
+  new: "待判断",
+  watching: "已关注",
+  approved: "已批准",
+  dismissed: "已忽略",
+  promoted: "已转 Event",
+};
+
+const RADAR_VERIFICATION_LABEL: Record<string, string> = {
+  verified: "已核验",
+  current: "已核验",
+  pending: "待核验",
+  provisional: "暂定",
+  needs_review: "待复核",
+  stale: "已过期",
+  conflict: "来源冲突",
+  conflicted: "来源冲突",
+};
+
 /* ---- 运行时取 accent token 计算值(主题切换 → useTheme 触发重读重绘) ---- */
 function useAccentToken(): string | undefined {
   const { theme } = useTheme();
@@ -46,6 +65,17 @@ type DealerMapPinShape = {
   note?: string;
   dealer: VkpiDealerPin;
 };
+
+/** A user-initiated search link, never stored or rendered as Google evidence. */
+export function dealerGoogleMapsSearchUrl(
+  dealer: Pick<VkpiDealerPin, "name" | "address" | "city" | "state">,
+): string {
+  const query = [dealer.name, dealer.address, dealer.city, dealer.state]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
 
 // This is a state/DC aggregate, deliberately not a fake set of store pins.
 // Exact store coordinates stay in RealMap below and require reviewed business
@@ -372,11 +402,22 @@ export function DealerMapEmbed({
               <span className="rounded-[6px] border border-line bg-panel px-2 py-1 text-[8.5px] text-muted">
                 地图状态 {selectedDealer.publication_status === "published" ? "已发布" : "旧记录 / 待迁移"}
               </span>
+              <span className={`rounded-[6px] border px-2 py-1 text-[8.5px] ${selectedDealer.location_verification?.google_place_cross_check?.status === "matched" ? "border-good bg-good-soft text-good" : "border-warn bg-warn-soft text-warn"}`}>
+                {selectedDealer.location_verification?.google_place_cross_check?.status === "matched" ? "Google Maps 已匹配" : "Google Maps 待复核"}
+              </span>
             </div>
             <dl className="mt-3 space-y-2 text-[9.5px]">
               <div className="flex gap-2"><dt className="w-20 flex-none text-muted">电话</dt><dd className="text-ink-2">{selectedDealer.phone || "未收集"}</dd></div>
               <div className="flex gap-2"><dt className="w-20 flex-none text-muted">公开邮箱</dt><dd className="text-ink-2">{selectedDealer.contact_email || "未收集"}</dd></div>
               <div className="flex gap-2"><dt className="w-20 flex-none text-muted">活动观测</dt><dd className="text-ink-2">{selectedDealer.activity?.status === "active" ? "有公开活动" : selectedDealer.activity?.status === "none_observed" ? "本次未观测到" : "未检索 / 未知"}</dd></div>
+              <div className="flex gap-2">
+                <dt className="w-20 flex-none text-muted">坐标来源</dt>
+                <dd className="text-ink-2">
+                  {selectedDealer.location_verification?.coordinate?.provider === "us_census_geocoder"
+                    ? "US Census 地址级地理编码（非 Google）"
+                    : "未记录 / 待核验"}
+                </dd>
+              </div>
             </dl>
             <section className="mt-3 rounded-[8px] border border-line bg-panel p-2" aria-label="Event Radar 关联活动">
               <div className="flex items-center justify-between gap-2 text-[9.5px]">
@@ -396,7 +437,22 @@ export function DealerMapEmbed({
                 <div key={String(activity.id)} className="mt-2 border-t border-line pt-2 text-[9px]">
                   <div className="font-medium text-ink-2">{activity.title}</div>
                   <div className="mt-0.5 text-muted">{[activity.start_date, activity.local_time_text, activity.city, activity.region].filter(Boolean).join(" · ") || "时间 / 地点待核验"}</div>
-                  {activity.official_url ? <a href={activity.official_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-accent underline">官方活动页</a> : null}
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {activity.is_internal_event === true || Boolean(activity.converted_event_id) ? (
+                      <span className="rounded-[5px] border border-good bg-good-soft px-1.5 py-px text-good">
+                        正式 Event{activity.converted_event_id ? ` · ${activity.converted_event_id}` : " · 已核对 promotion receipt"}
+                      </span>
+                    ) : (
+                      <span className="rounded-[5px] border border-warn bg-warn-soft px-1.5 py-px text-warn">外部机会候选 · 未转 Event</span>
+                    )}
+                    <span className="rounded-[5px] border border-line bg-card px-1.5 py-px text-muted">
+                      人工判断 {RADAR_DECISION_LABEL[String(activity.decision_status || "new").toLowerCase()] || activity.decision_status || "待判断"}
+                    </span>
+                    <span className="rounded-[5px] border border-line bg-card px-1.5 py-px text-muted">
+                      证据 {RADAR_VERIFICATION_LABEL[String(activity.verification_status || "pending").toLowerCase()] || activity.verification_status || "待核验"}
+                    </span>
+                  </div>
+                  {activity.official_url ? <a href={activity.official_url} target="_blank" rel="noreferrer" className="mt-1 inline-block text-accent underline">登记来源</a> : null}
                 </div>
               ))}
             </section>
@@ -404,6 +460,7 @@ export function DealerMapEmbed({
               {selectedDealer.website_url ? <a href={selectedDealer.website_url} target="_blank" rel="noreferrer" className="text-accent underline">门店网站</a> : null}
               {selectedDealer.activity?.page_url ? <a href={selectedDealer.activity.page_url} target="_blank" rel="noreferrer" className="text-accent underline">活动页</a> : null}
               {selectedDealer.location_source_url ? <a href={selectedDealer.location_source_url} target="_blank" rel="noreferrer" className="text-accent underline">门店来源</a> : null}
+              <a href={dealerGoogleMapsSearchUrl(selectedDealer)} target="_blank" rel="noreferrer" className="text-accent underline">在 Google Maps 复核（待核验）</a>
             </div>
             <p className="mt-3 border-t border-line pt-2 text-[8.5px] leading-4 text-muted">地址、联系方式、品牌关系和 Event Radar 活动分开记录；品牌关系不等于 Viltrox 授权或实时库存。</p>
           </aside>

@@ -159,12 +159,12 @@ describe("dealers-api evidence normalization", () => {
       association_policy: "exact_dealer_id_only",
     });
 
-    const response = await getDealerActivities("tok", 9, 8);
+    const response = await getDealerActivities("tok", 9, 8, "2026-07-16");
 
     expect(response.count).toBe(1);
     expect(response.activities[0].association).toBe("exact_dealer_id");
     expect(apiFetch).toHaveBeenCalledWith(
-      "/api/admin/vkpi/dealers/9/activities?limit=8",
+      "/api/admin/vkpi/dealers/9/activities?limit=8&as_of_date=2026-07-16",
       { cache: "no-store" },
       "tok",
     );

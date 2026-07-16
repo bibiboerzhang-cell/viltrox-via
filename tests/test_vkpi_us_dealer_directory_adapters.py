@@ -91,6 +91,7 @@ def test_contract_manifest_separates_source_formats_and_never_imports():
         "dealer_district_camera_locations_us",
         "dealer_dodd_store_locator_us",
         "dealer_fujifilm_us_shop",
+        "dealer_godox_us_authorized_distributors",
         "dealer_glazers_store_us",
         "dealer_hasselblad_us_locator",
         "dealer_hunts_store_locations_us",
@@ -117,7 +118,7 @@ def test_contract_manifest_separates_source_formats_and_never_imports():
         "viltrox_product_page": "unknown",
         "current_inventory": "unknown",
     }
-    assert len(contract["source_readiness"]) == 34
+    assert len(contract["source_readiness"]) == 35
     assert all(row["format_mapped"] is True for row in contract["source_readiness"])
     assert all(
         row["source_fixture_verified"] is False
@@ -141,20 +142,21 @@ def test_contract_manifest_separates_source_formats_and_never_imports():
     assert contract["scheduler_enabled"] is False
     assert contract["business_rows_written"] == 0
     readiness = contract["registry_adapter_readiness"]
-    assert readiness["registered_source_count"] == 34
-    assert readiness["adapter_source_count"] == 34
-    assert readiness["mapped_adapter_source_count"] == 34
+    assert readiness["registered_source_count"] == 35
+    assert readiness["adapter_source_count"] == 35
+    assert readiness["mapped_adapter_source_count"] == 35
     assert readiness["adapter_sources_not_registered"] == []
     assert readiness["sources_without_mapped_adapter"] == []
     assert readiness["all_registered_sources_have_mapped_adapter"] is True
     assert readiness["source_fixture_verified_count"] == 0
-    assert len(readiness["sources_without_source_fixture_verification"]) == 34
+    assert len(readiness["sources_without_source_fixture_verification"]) == 35
     assert readiness["all_registered_sources_have_source_fixture_verification"] is False
     assert readiness["all_registered_sources_have_verified_adapter"] is False
     assert readiness["source_coverage_is_not_entity_coverage"] is True
     assert {
         "dealer_blackmagic_us_resellers",
         "dealer_fujifilm_us_shop",
+        "dealer_godox_us_authorized_distributors",
         "dealer_hasselblad_us_locator",
         "dealer_leica_us_locator",
         "dealer_panasonic_us_authorized",
@@ -163,7 +165,7 @@ def test_contract_manifest_separates_source_formats_and_never_imports():
         "dealer_sony_us_where_to_buy",
         "dealer_tamron_americas_locator",
     } <= set(readiness["sources_without_verified_adapter"])
-    assert len(readiness["sources_without_verified_adapter"]) == 34
+    assert len(readiness["sources_without_verified_adapter"]) == 35
     assert readiness["mapping_blocker"] is None
     assert readiness["activation_blocker"] == (
         "source_specific_fixture_and_terms_robots_review_required"
@@ -178,6 +180,7 @@ def test_contract_manifest_separates_source_formats_and_never_imports():
     [
         "dealer_blackmagic_us_resellers",
         "dealer_fujifilm_us_shop",
+        "dealer_godox_us_authorized_distributors",
         "dealer_hasselblad_us_locator",
         "dealer_leica_us_locator",
         "dealer_panasonic_us_authorized",

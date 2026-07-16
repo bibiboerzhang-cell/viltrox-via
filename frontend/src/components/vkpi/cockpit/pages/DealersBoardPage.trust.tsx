@@ -119,16 +119,33 @@ export function DealerTrustPipeline({
           <div className="mt-2 grid gap-1.5 md:grid-cols-2">
             {registry.dealer_discovery_sources.map((source) => {
               const readiness = sourceReadinessById.get(source.id);
+              const snapshot = source.source_snapshot;
+              const snapshotCount = Number(
+                snapshot?.unique_organization_count
+                  ?? snapshot?.listed_entry_count
+                  ?? 0,
+              );
+              const snapshotLabel = snapshotCount > 0
+                ? `${snapshotCount.toLocaleString()} 个官方目录组织/名称`
+                : "未形成来源快照计数";
               return (
                 <a
                   key={source.id}
                   href={source.canonical_url}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-[7px] border border-line px-2.5 py-1.5 text-[9px] text-ink-2 hover:border-accent hover:text-accent"
+                  className="flex min-w-0 flex-wrap items-start justify-between gap-2 rounded-[7px] border border-line px-2.5 py-2 text-[9px] text-ink-2 hover:border-accent hover:text-accent"
                   data-testid={`dealer-source-readiness-${source.id}`}
                 >
-                  <span className="min-w-0 flex-1 truncate">{source.publisher} · {source.name}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{source.publisher} · {source.name}</span>
+                    <span className="mt-0.5 block text-[8px] leading-3 text-muted">
+                      {snapshotLabel}
+                      {snapshot?.record_granularity ? ` · ${snapshot.record_granularity}` : ""}
+                      {source.manufacturer_authorization_scope ? ` · ${source.manufacturer_authorization_scope}` : ""}
+                      {snapshot ? " · 不可直接当分店坐标" : ""}
+                    </span>
+                  </span>
                   <span className="flex flex-none flex-wrap items-center justify-end gap-1 text-[8px]">
                     <span className={readiness?.format_mapped ? "text-emerald-300" : "text-warn"}>
                       {readiness ? `格式${readiness.format_mapped ? "已映射" : "待映射"}` : "格式状态待返回"}

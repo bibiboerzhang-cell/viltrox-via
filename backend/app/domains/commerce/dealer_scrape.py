@@ -35,6 +35,7 @@ from app.domains.commerce.dealer_directory_view import (
     DEALER_EVIDENCE_FILTERS,
     DEALER_PRODUCT_FILTERS,
     MANAGED_DEALER_DURABLE_FIELDS,
+    LOCATION_VERIFICATION_DURABLE_FIELDS,
     REVIEWED_DEALER_DURABLE_FIELDS,
     REVIEWED_DEALER_PERSISTENCE_VERSION,
     build_dealer_pins,
@@ -585,6 +586,11 @@ def list_dealers(
         if map_management_enforced
         else ""
     )
+    location_verification_select = (
+        ", " + ", ".join(sorted(LOCATION_VERIFICATION_DURABLE_FIELDS))
+        if LOCATION_VERIFICATION_DURABLE_FIELDS.issubset(table_columns)
+        else ""
+    )
     safe_limit = max(1, min(int(limit or 100), 5000))
     safe_offset = max(0, int(offset or 0))
     where_sql, params, normalized = _dealer_filter_sql(
@@ -610,7 +616,7 @@ def list_dealers(
                brand_listing_url, location_source_url, source_status,
                authorization_status, source_checked_at, verification_note,
                postal_code, phone, contact_email, store_hours, public_services,
-               created_at{reviewed_select}{managed_select}
+               created_at{reviewed_select}{managed_select}{location_verification_select}
         FROM vkpi_dealers
         {where_sql}
         ORDER BY created_at DESC, id DESC
@@ -670,13 +676,18 @@ def get_dealer(dealer_id: Any) -> dict[str, Any]:
         if map_management_enforced
         else ""
     )
+    location_verification_select = (
+        ", " + ", ".join(sorted(LOCATION_VERIFICATION_DURABLE_FIELDS))
+        if LOCATION_VERIFICATION_DURABLE_FIELDS.issubset(table_columns)
+        else ""
+    )
     row = get_conn().execute(
         f"""
         SELECT id, name, address, city, state, lat, lng, source, country,
                brand_listing_url, location_source_url, source_status,
                authorization_status, source_checked_at, verification_note,
                postal_code, phone, contact_email, store_hours, public_services,
-               created_at{reviewed_select}{managed_select}
+               created_at{reviewed_select}{managed_select}{location_verification_select}
         FROM vkpi_dealers
         WHERE id = ?
         LIMIT 1

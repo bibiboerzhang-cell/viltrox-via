@@ -19,7 +19,7 @@ official-ingest entry point.  It does not contain or authorize dealer rows.
 ## Registered manufacturer discovery surfaces
 
 The registry currently identifies official public entry points for Nikon,
-Canon, Sony, Fujifilm, Panasonic/LUMIX, OM SYSTEM, Leica, Blackmagic Design,
+Canon, Sony, Godox, Fujifilm, Panasonic/LUMIX, OM SYSTEM, Leica, Blackmagic Design,
 Tamron Americas, SIGMA, Hasselblad, Profoto and Phase One.  The exact publisher,
 canonical URL, manufacturer scope, channel and fixture state live in
 `backend/app/domains/events/us_coverage_source_registry.json`.
@@ -27,7 +27,7 @@ canonical URL, manufacturer scope, channel and fixture state live in
 The source identity review fixture at
 `tests/fixtures/us_dealer_source_registry/official_source_identity_review.json`
 contains no dealer, contact, inventory or network-capture rows.  It only locks
-the publisher/canonical identity reviewed on 2026-07-15.
+the publisher/canonical identity reviewed through 2026-07-16.
 
 ## Viltrox official inputs
 
@@ -65,7 +65,10 @@ PYTHONPATH=backend .venv/bin/python scripts/audit_vkpi_dealer_source_preflight.p
   --output runtime/ops/dealer-source-technical-preflight-20260715.json
 ```
 
-The current artifact covers all 34 registered discovery sources.  It records
+The 2026-07-15 artifact covers the 34 sources registered at that time.  A Godox
+official-distributor discovery source was added on 2026-07-16, bringing the
+current registry to 35; a new transport preflight is required before describing
+reachability for the expanded registry.  The older artifact records
 28 reachable pages, four HTTP failures (two `403`, two `429`) and two sources
 blocked by the robots gate.  Twenty-one reachable snapshots exposed same-host
 terms or privacy link candidates.  The artifact SHA-256 is
@@ -78,6 +81,12 @@ any Dealer entity, manufacturer relationship, Viltrox authorization, product
 presence, inventory, sales, ROI or local impact.  The four HTTP failures require
 an approved feed, a publisher-provided export, or a separately reviewed access
 method.  The two robots-gated paths must not be fetched by this pipeline.
+
+The 2026-07-16 Godox review found a stronger block than a missing permission:
+sections 6.8 and 6.9 of Godox's official Terms of Use prohibit harvesting,
+non-human-style access and robot/crawler/scraper extraction.  The Godox entry
+therefore remains discovery metadata only; the system must not automatically
+extract or import its directory rows.
 
 ## Dealer to Event Radar projection
 

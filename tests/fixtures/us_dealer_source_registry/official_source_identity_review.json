@@ -1,6 +1,6 @@
 {
   "fixture_kind": "source_identity_review_only",
-  "reviewed_at": "2026-07-15T18:05:00Z",
+  "reviewed_at": "2026-07-16T20:32:02Z",
   "country_code": "US",
   "contains_dealer_rows": false,
   "contains_contact_rows": false,
@@ -25,6 +25,12 @@
       "publisher": "Sony USA",
       "canonical_url": "https://www.sony.com/electronics/support/articles/00025266",
       "source_channel": "official_support_article"
+    },
+    {
+      "id": "dealer_godox_us_authorized_distributors",
+      "publisher": "Godox",
+      "canonical_url": "https://www.godox.com/authorized-distributor/?ext_country=536",
+      "source_channel": "official_public_directory"
     },
     {
       "id": "dealer_fujifilm_us_shop",

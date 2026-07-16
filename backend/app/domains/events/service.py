@@ -8,11 +8,15 @@ id 用 VARCHAR(前端 evt_/tsk_ 串生成)。DB 走 get_conn(? 占位)应用路�
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.access import scope
+from app.domains.events.service_rows import (
+    material_row as _material_row,
+    product_row as _product_row,
+)
 
 from app.core.logging import get_logger
 
@@ -21,6 +25,27 @@ logger = get_logger(__name__)
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_of_date(raw: Any = None) -> date:
+    """Normalize one explicit calendar boundary for date-based reads.
+
+    Runtime defaults are calculated in the application in UTC.  Queries bind
+    this value instead of using PostgreSQL ``CURRENT_DATE`` because the
+    database session timezone can differ from the application/browser day.
+    """
+    if raw in (None, ""):
+        return _now().date()
+    if isinstance(raw, datetime):
+        if raw.tzinfo is not None:
+            return raw.astimezone(timezone.utc).date()
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    try:
+        return date.fromisoformat(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("as_of_date must be YYYY-MM-DD") from exc
 
 
 def _gen_id(prefix: str) -> str:
@@ -60,55 +85,6 @@ def _task_row(r: Any) -> dict[str, Any]:
         row[k] = _loads(row.get(k), [])
     row["details"] = _loads(row.get("details"), {})
     return row
-
-
-def _short_date(raw: Any) -> str:
-    """updated_at(datetime / ISO 串)→ 展示用 "M/D"(给物料/产品 updatedAt 列)。
-    诚实派生服务端时间,绝不硬编码「刚刚/实时」(时间机制铁律)。"""
-    if not raw:
-        return ""
-    try:
-        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00")) if isinstance(raw, str) else raw
-        return f"{dt.month}/{dt.day}"
-    except Exception:
-        return str(raw)
-
-
-def _material_row(r: Any) -> dict[str, Any]:
-    """vkpi_event_materials 行 → 前端 MarketingMaterialsPanel 期望的 camelCase 形态。"""
-    d = dict(r)
-    return {
-        "id": d.get("id"),
-        "category": d.get("category") or "display",
-        "name": d.get("name") or "",
-        "source": d.get("source") or "ship",
-        "qty": int(d.get("qty") or 0),
-        "status": d.get("status") or "pending",
-        "owner": d.get("owner") or "",
-        "note": d.get("note") or "",
-        "trackingNo": d.get("tracking_no") or "",
-        "fileUrl": d.get("file_url") or "",
-        "alert": d.get("alert") or "",
-        "updatedAt": _short_date(d.get("updated_at")),
-    }
-
-
-def _product_row(r: Any) -> dict[str, Any]:
-    """vkpi_event_products 行 → 前端 ProductPrepPanel 期望的 camelCase 形态。"""
-    d = dict(r)
-    return {
-        "id": d.get("id"),
-        "category": d.get("category") or "lens",
-        "name": d.get("name") or "",
-        "source": d.get("source") or "new_purchase",
-        "qty": int(d.get("qty") or 0),
-        "status": d.get("status") or "ordered",
-        "owner": d.get("owner") or "",
-        "note": d.get("note") or "",
-        "trackingNo": d.get("tracking_no") or "",
-        "arriveBy": d.get("arrive_by") or "",
-        "returnAfter": bool(d.get("return_after")),
-    }
 
 
 def _staff_id(staff: dict[str, Any] | None) -> int | None:
@@ -261,24 +237,47 @@ def _merge_invited_kols(conn: Any, event_id: Any, stored_json: Any) -> list[dict
     return out
 
 
-def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, Any]:
-    """列活动:管理层看当前组织全部;员工只看当前组织内 own/team/share/public。"""
+def list_events(
+    staff: dict[str, Any] | None,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    status: str | None = None,
+    owner_id: int | None = None,
+) -> dict[str, Any]:
+    """列活动:管理层看当前组织全部;员工只看当前组织内 own/team/share/public。
+
+    Filtering and the count query share exactly the same scope predicates so
+    callers can verify server-side pagination instead of inferring it from a
+    truncated page.
+    """
     conn = get_conn()
     organization_id, organization_scoped = scope.event_organization_context(staff, conn)
     safe_limit = max(1, min(int(limit or 200), 500))
-    if _can_view_all(staff):
-        if organization_scoped:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE organization_id = ? "
-                "ORDER BY start_date DESC, created_at DESC LIMIT ?",
-                (organization_id, safe_limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events ORDER BY start_date DESC, created_at DESC LIMIT ?",
-                (safe_limit,),
-            ).fetchall()
-    else:
+    try:
+        safe_offset = int(offset or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("offset must be a non-negative integer") from exc
+    if safe_offset < 0:
+        raise ValueError("offset must be a non-negative integer")
+    normalized_status = str(status or "").strip().casefold() or None
+    normalized_owner_id: int | None = None
+    if owner_id not in (None, ""):
+        if isinstance(owner_id, bool):
+            raise ValueError("owner_id must be a positive integer")
+        try:
+            normalized_owner_id = int(owner_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("owner_id must be a positive integer") from exc
+        if normalized_owner_id <= 0:
+            raise ValueError("owner_id must be a positive integer")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if organization_scoped:
+        clauses.append("organization_id = ?")
+        params.append(organization_id)
+    if not _can_view_all(staff):
         sid = _staff_id(staff)
         # 员工:owner_id 是自己 或 team_ids(jsonb 数组)含自己。
         # 活动共享接线(2026-06-14,ADDITIVE):再 OR 进「被显式共享给自己」的活动
@@ -287,60 +286,80 @@ def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
         # 公司公共活动接线(2026-06-14,ADDITIVE,迁移 133 is_public):再 OR 进
         # 「COALESCE(is_public,FALSE)=TRUE」——public 活动对所有员工可见。只「加宽」读,
         # 写仍由 assert_event_access 严格 gate(public 不放开写)。镜像 scope.project_filter。
-        visibility = _event_visibility_sql()
-        if organization_scoped:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE organization_id = ? AND " + visibility + " "
-                "ORDER BY start_date DESC, created_at DESC LIMIT ?",
-                (organization_id, sid, sid, sid, safe_limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE " + visibility + " "
-                "ORDER BY start_date DESC, created_at DESC LIMIT ?",
-                (sid, sid, sid, safe_limit),
-            ).fetchall()
+        clauses.append(_event_visibility_sql())
+        params.extend((sid, sid, sid))
+    if normalized_status is not None:
+        clauses.append("LOWER(COALESCE(status, '')) = ?")
+        params.append(normalized_status)
+    if normalized_owner_id is not None:
+        clauses.append("owner_id = ?")
+        params.append(normalized_owner_id)
+
+    where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
+    total_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM vkpi_events" + where_sql,
+        tuple(params),
+    ).fetchone()
+    total_count = int((dict(total_row) if total_row is not None else {}).get("n") or 0)
+    rows = conn.execute(
+        "SELECT * FROM vkpi_events" + where_sql + " "
+        "ORDER BY start_date DESC, created_at DESC, id DESC LIMIT ? OFFSET ?",
+        (*params, safe_limit, safe_offset),
+    ).fetchall()
     items = [_event_row(r) for r in rows]
     for it in items:
         it["invited_kols_json"] = _merge_invited_kols(conn, it.get("id"), it.get("invited_kols_json"))
-    return {"items": items}
+    next_offset = safe_offset + len(items)
+    has_more = next_offset < total_count
+    return {
+        "items": items,
+        "count": len(items),
+        "total_count": total_count,
+        "offset": safe_offset,
+        "limit": safe_limit,
+        "page": {
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "returned": len(items),
+            "next_offset": next_offset if has_more else None,
+            "has_more": has_more,
+        },
+    }
 
 
-def list_upcoming_events(staff: dict[str, Any] | None, *, limit: int = 50) -> dict[str, Any]:
+def list_upcoming_events(
+    staff: dict[str, Any] | None,
+    *,
+    limit: int = 50,
+    as_of_date: date | str | None = None,
+) -> dict[str, Any]:
     """upcoming/进行中活动(end_date >= 今天),给 dashboard 地图 + 报告「活动进度」用。
     员工 scope 同 list_events;返回精简形(location + budget + status,无 tasks/expenses)。"""
     conn = get_conn()
     organization_id, organization_scoped = scope.event_organization_context(staff, conn)
     safe_limit = max(1, min(int(limit or 50), 200))
-    if _can_view_all(staff):
-        if organization_scoped:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE organization_id = ? AND end_date >= CURRENT_DATE "
-                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
-                (organization_id, safe_limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE end_date >= CURRENT_DATE "
-                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
-                (safe_limit,),
-            ).fetchall()
-    else:
+    effective_date = _as_of_date(as_of_date)
+    terminal_statuses = ("done", "ended", "cancelled", "canceled", "closed")
+    clauses: list[str] = []
+    params: list[Any] = []
+    if organization_scoped:
+        clauses.append("organization_id = ?")
+        params.append(organization_id)
+    clauses.append("end_date >= ?")
+    params.append(effective_date.isoformat())
+    clauses.append(
+        "LOWER(COALESCE(status, '')) NOT IN (" + ",".join("?" for _ in terminal_statuses) + ")"
+    )
+    params.extend(terminal_statuses)
+    if not _can_view_all(staff):
         sid = _staff_id(staff)
-        visibility = _event_visibility_sql()
-        if organization_scoped:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE organization_id = ? "
-                "AND end_date >= CURRENT_DATE AND " + visibility + " "
-                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
-                (organization_id, sid, sid, sid, safe_limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM vkpi_events WHERE end_date >= CURRENT_DATE AND " + visibility + " "
-                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
-                (sid, sid, sid, safe_limit),
-            ).fetchall()
+        clauses.append(_event_visibility_sql())
+        params.extend((sid, sid, sid))
+    rows = conn.execute(
+        "SELECT * FROM vkpi_events WHERE " + " AND ".join(clauses) + " "
+        "ORDER BY start_date ASC, created_at ASC, id ASC LIMIT ?",
+        (*params, safe_limit),
+    ).fetchall()
     items: list[dict[str, Any]] = []
     for r in rows:
         row = _event_row(r)
@@ -359,7 +378,11 @@ def list_upcoming_events(staff: dict[str, Any] | None, *, limit: int = 50) -> di
             "location_lng": row.get("location_lng"),
             "budget_total": row.get("budget_total") or 0,
         })
-    return {"items": items, "count": len(items)}
+    return {
+        "items": items,
+        "count": len(items),
+        "as_of_date": effective_date.isoformat(),
+    }
 
 
 def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
