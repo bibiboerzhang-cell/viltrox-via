@@ -42,13 +42,29 @@ def test_sync_timer_and_service_are_captured_quiesced_and_restored() -> None:
     early_quiesce = deploy.split("quiesce_remote_sync_units()", 1)[1].split(
         "quiesce_remote_release_consumers()", 1
     )[0]
-    assert "sudo systemctl mask --runtime --now '${SYNC_TIMER}' '${SYNC_SERVICE}'" in early_quiesce
+    timer_stop = early_quiesce.index("sudo systemctl stop '${SYNC_TIMER}'")
+    timer_mask = early_quiesce.index("sudo systemctl mask --runtime '${SYNC_TIMER}'")
+    service_stop = early_quiesce.index("sudo systemctl stop '${SYNC_SERVICE}'")
+    service_mask = early_quiesce.index("sudo systemctl mask --runtime '${SYNC_SERVICE}'")
+    assert timer_stop < timer_mask < service_stop < service_mask
+    assert r'sync_mask_path=\"/run/systemd/system/\${sync_unit}\"' in early_quiesce
+    assert r'readlink -- \"\${sync_mask_path}\"' in early_quiesce
+    assert "UnitFileState" not in early_quiesce
+    assert "mask --runtime --now '${SYNC_TIMER}' '${SYNC_SERVICE}'" not in early_quiesce
     assert "SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1" in early_quiesce
 
     quiesce = deploy.split("quiesce_remote_release_consumers()", 1)[1].split(
         "fetch_predeploy_runtime_health()", 1
     )[0]
-    assert "sudo systemctl mask --runtime --now '${SYNC_TIMER}' '${SYNC_SERVICE}'" in quiesce
+    timer_stop = quiesce.index("sudo systemctl stop '${SYNC_TIMER}'")
+    timer_mask = quiesce.index("sudo systemctl mask --runtime '${SYNC_TIMER}'")
+    service_stop = quiesce.index("sudo systemctl stop '${SYNC_SERVICE}'")
+    service_mask = quiesce.index("sudo systemctl mask --runtime '${SYNC_SERVICE}'")
+    assert timer_stop < timer_mask < service_stop < service_mask
+    assert r'sync_mask_path=\"/run/systemd/system/\${sync_unit}\"' in quiesce
+    assert r'readlink -- \"\${sync_mask_path}\"' in quiesce
+    assert "UnitFileState" not in quiesce
+    assert "mask --runtime --now '${SYNC_TIMER}' '${SYNC_SERVICE}'" not in quiesce
     assert "sync unit failed to stop" in quiesce
     assert "sync unit failed to mask" in quiesce
     assert "SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1" in quiesce
