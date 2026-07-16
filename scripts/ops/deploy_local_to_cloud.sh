@@ -432,13 +432,13 @@ attempt_automatic_rollback() {
     echo "[deploy] CRITICAL: complete web/worker fleet could not be quiesced before rollback." >&2
     return 1
   fi
-  if ! ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' restore --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system && sudo systemctl daemon-reload"; then
+  if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' restore --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system && sudo systemctl daemon-reload"; then
     echo "[deploy] CRITICAL: filesystem, environment, or unit rollback failed; operator intervention required." >&2
     return 1
   fi
   if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
     || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
-    if ! rollback_env_state="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${PREDEPLOY_DATABASE_NAME}'")"; then
+    if ! rollback_env_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${PREDEPLOY_DATABASE_NAME}'")"; then
       echo "[deploy] CRITICAL: restored environment database identity could not be verified." >&2
       return 1
     fi
@@ -450,13 +450,13 @@ attempt_automatic_rollback() {
     fi
     if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ]; then
       if [ "${STAGING_DB_CLONE_ACTIVATED}" != "1" ]; then
-        if ! ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin '${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' drop --target-db '${STAGING_CLONE_DATABASE}' >/dev/null"; then
+        if ! ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' drop --target-db '${STAGING_CLONE_DATABASE}' >/dev/null"; then
           echo "[deploy] CRITICAL: unactivated staging clone cleanup failed." >&2
           return 1
         fi
       fi
       if [ -n "${STAGING_CLONE_ENV_SHA256}" ]; then
-        ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state rollback-restored --rollback-env-fingerprint '${rollback_env_sha256}' >/dev/null" || return 1
+        ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state rollback-restored --rollback-env-fingerprint '${rollback_env_sha256}' >/dev/null" || return 1
       fi
     fi
   fi
@@ -490,7 +490,7 @@ attempt_automatic_rollback() {
     ssh "${SSH_TARGET}" "sudo systemctl unmask '${STAGING_REDIS_WORKER_SERVICE}' >/dev/null 2>&1 || true; sudo systemctl daemon-reload" || return 1
   fi
   local restored_redis_unit_state
-  if ! restored_redis_unit_state="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' inspect-unit-state --unit-dir /etc/systemd/system --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")" \
+  if ! restored_redis_unit_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' inspect-unit-state --unit-dir /etc/systemd/system --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")" \
     || [ "${restored_redis_unit_state}" != "${STAGING_REDIS_WORKER_UNIT_STATE}" ]; then
     echo "[deploy] CRITICAL: rollback did not restore the exact Redis worker unit state." >&2
     return 1
@@ -499,7 +499,7 @@ attempt_automatic_rollback() {
     echo "[deploy] CRITICAL: restored web/worker service restart failed; operator intervention required." >&2
     return 1
   fi
-  if ! rollback_health="$(ssh "${SSH_TARGET}" "for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox '${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null; then exit 0; fi; sleep 2; done; exit 1")"; then
+  if ! rollback_health="$(ssh "${SSH_TARGET}" "for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null; then exit 0; fi; sleep 2; done; exit 1")"; then
     echo "[deploy] CRITICAL: restored release did not return authenticated health." >&2
     return 1
   fi
@@ -634,7 +634,7 @@ quiesce_remote_release_consumers() {
 # remote .env in memory and returns health JSON; it never writes to the host.
 fetch_predeploy_runtime_health() {
   ssh "${SSH_TARGET}" \
-    "sudo -n -u viltrox -g viltrox '${REMOTE_ROOT}/.venv/bin/python' - --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'" \
+    "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B - --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'" \
     < "${PROJECT_ROOT}/scripts/ops/fetch_runtime_health.py"
 }
 
@@ -684,7 +684,7 @@ if ! printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/
   exit 1
 fi
 if [ "${VILTROXTEST_RELEASE_SCOPE}" = "1" ]; then
-  if ! REMOTE_PREDEPLOY_DB_STATE_JSON="$(ssh "${SSH_TARGET}" "sudo python3 - '${REMOTE_ROOT}/.env'" <<'PY'
+  if ! REMOTE_PREDEPLOY_DB_STATE_JSON="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}/.env'" <<'PY'
 import hashlib
 import json
 import re
@@ -942,6 +942,11 @@ rsync -az --delete \
   --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
   --exclude '.git/' \
   --exclude '.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '*.pyo' \
+  --exclude '.pytest_cache/' \
+  --exclude '.DS_Store' \
   --exclude 'frontend/node_modules/' \
   --exclude 'node_modules/' \
   --exclude 'uploads/' \
@@ -966,18 +971,22 @@ ssh "${SSH_TARGET}" "cd '${REMOTE_RELEASE_DIR}' && printf '%s\n' '${LOCAL_GIT_SH
 # Seal the release and prove every runtime dependency before current can move.
 # Package installation during deployment is forbidden: the shared venv is an
 # independently prepared prerequisite, not mutable release state.
-ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' '${REMOTE_ROOT}/.venv/bin/python' -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp '${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
+# Every remote Python call carries both the environment guard and -B.  The
+# redundancy is intentional: helpers run before and after sealing, and neither
+# a sudo environment policy nor a future env -i refactor may recreate bytecode
+# inside the immutable release/current tree and invalidate its payload digest.
+ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
 
 # Capture the exact effective env/units and establish previous before changing
 # shared configuration or the active application pointer.
-if ! STAGING_REDIS_WORKER_CAPTURED_STATE="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' inspect-unit-state --unit-dir /etc/systemd/system --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")"; then
+if ! STAGING_REDIS_WORKER_CAPTURED_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' inspect-unit-state --unit-dir /etc/systemd/system --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")"; then
   echo "Refusing deploy because the Redis worker systemd state is not exactly restorable." >&2
   exit 1
 fi
-ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}'"
+ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}'"
 ROLLBACK_ARMED=1
 
-if ! STAGING_REDIS_WORKER_UNIT_STATE="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")"; then
+if ! STAGING_REDIS_WORKER_UNIT_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")"; then
   echo "Refusing deploy because the captured Redis worker unit state is unreadable." >&2
   exit 1
 fi
@@ -1027,13 +1036,13 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     exit 1
   fi
 
-  STAGING_CLONE_CREATE_JSON="$(ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin '${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' create --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
+  STAGING_CLONE_CREATE_JSON="$(ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' create --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
   if ! printf '%s' "${STAGING_CLONE_CREATE_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); assert p["source_database"] == sys.argv[1]; assert p["target_database"] == sys.argv[2]; assert int(p["free_bytes_before"]) >= int(p["source_size_bytes"]) + 1024**3' "${STAGING_SOURCE_DATABASE}" "${STAGING_CLONE_DATABASE}"; then
     echo "Staging clone creation receipt did not satisfy the reviewed disk/identity contract." >&2
     exit 1
   fi
 
-  STAGING_CLONE_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' switch-env --env-file '${REMOTE_ROOT}/.env' --expected-source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
+  STAGING_CLONE_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' switch-env --env-file '${REMOTE_ROOT}/.env' --expected-source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
   read -r STAGING_CLONE_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_CLONE_ENV_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
   if [ "${STAGING_CLONE_ENV_DATABASE}" != "${STAGING_CLONE_DATABASE}" ] \
     || ! [[ "${STAGING_CLONE_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
@@ -1042,11 +1051,11 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     exit 1
   fi
 
-  ssh "${SSH_TARGET}" "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-migration-home XDG_CACHE_HOME=/tmp/vkpi-migration-cache TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' run-migrations-only --env-file '${REMOTE_ROOT}/.env' --release-path '${REMOTE_RELEASE_DIR}' --expected-db '${STAGING_CLONE_DATABASE}' --app-user '${REMOTE_APP_USER}' >/dev/null"
-  ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin '${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' verify-migration --target-db '${STAGING_CLONE_DATABASE}' --expected-version '${LATEST_MIGRATION}' >/dev/null"
+  ssh "${SSH_TARGET}" "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-migration-home XDG_CACHE_HOME=/tmp/vkpi-migration-cache TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' run-migrations-only --env-file '${REMOTE_ROOT}/.env' --release-path '${REMOTE_RELEASE_DIR}' --expected-db '${STAGING_CLONE_DATABASE}' --app-user '${REMOTE_APP_USER}' >/dev/null"
+  ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' verify-migration --target-db '${STAGING_CLONE_DATABASE}' --expected-version '${LATEST_MIGRATION}' >/dev/null"
 fi
 
-ssh "${SSH_TARGET}" "sudo python3 - <<'PY'
+ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
 from pathlib import Path
 
 path = Path('${REMOTE_ROOT}/.env')
@@ -1081,7 +1090,7 @@ PY
 
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
-  STAGING_FINAL_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${STAGING_CLONE_DATABASE}'")"
+  STAGING_FINAL_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${STAGING_CLONE_DATABASE}'")"
   read -r STAGING_FINAL_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_FINAL_ENV_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
   if [ "${STAGING_FINAL_ENV_DATABASE}" != "${STAGING_CLONE_DATABASE}" ] \
     || ! [[ "${STAGING_CLONE_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -1093,14 +1102,14 @@ if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
       echo "Staging clone environment fingerprint did not change after database switch." >&2
       exit 1
     fi
-    ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state migrated-not-activated >/dev/null"
+    ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state migrated-not-activated >/dev/null"
   fi
 fi
 
-ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' activate --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}'"
+ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' activate --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}'"
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ]; then
   STAGING_DB_CLONE_ACTIVATED=1
-  ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state activated >/dev/null"
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state activated >/dev/null"
 fi
 
 # Install only the already-verified unit payload after current has switched.
@@ -1117,16 +1126,16 @@ if ! [[ "${REDIS_WORKER_MAIN_PID}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 30); do if sudo -n -u viltrox -g viltrox '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' >/dev/null; then exit 0; fi; sleep 1; done; echo 'authenticated health check failed after service restart: ${HEALTH_URL}' >&2; exit 1"
+ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 30); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' >/dev/null; then exit 0; fi; sleep 1; done; echo 'authenticated health check failed after service restart: ${HEALTH_URL}' >&2; exit 1"
 
-ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' | '${REMOTE_ROOT}/.venv/bin/python' scripts/verify_redis_worker_health.py --expected-head '${LOCAL_GIT_SHA}' --expected-count 1 --expected-main-pid '${REDIS_WORKER_MAIN_PID}' --min-ready-sequence 3 --worker-not-before '${REDIS_WORKER_RESTART_NOT_BEFORE}' --max-age-seconds '${MAX_WORKER_AGE_SECONDS}' >/dev/null; then exit 0; fi; sleep 2; done; echo 'dedicated Redis worker failed strict readiness after restart: ${HEALTH_URL}' >&2; exit 1"
+ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' | env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/verify_redis_worker_health.py --expected-head '${LOCAL_GIT_SHA}' --expected-count 1 --expected-main-pid '${REDIS_WORKER_MAIN_PID}' --min-ready-sequence 3 --worker-not-before '${REDIS_WORKER_RESTART_NOT_BEFORE}' --max-age-seconds '${MAX_WORKER_AGE_SECONDS}' >/dev/null; then exit 0; fi; sleep 2; done; echo 'dedicated Redis worker failed strict readiness after restart: ${HEALTH_URL}' >&2; exit 1"
 
 # Worker restart is mandatory for deployment acceptance.  Cloud capacity is a
 # reviewed seven-service systemd fleet (one interactive + six batch).  Never
 # fall back to the legacy singleton launcher: it would leave old systemd workers
 # executing the in-place rsync payload and let one fresh heartbeat mask them.
 WORKER_RESTART_NOT_BEFORE="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")"
-ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && bash scripts/stop_worker.sh >/dev/null && [ ! -f '${REMOTE_ROOT}/runtime/worker.pid' ] && for unit in ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl cat -- \"\${unit}\" >/dev/null; done && sudo systemctl restart ${WORKER_SYSTEMD_UNIT_ARGS} && for unit in ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl is-active --quiet \"\${unit}\"; done && for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' >/tmp/vkpi-health.json && python3 - <<'PY'
+ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && bash scripts/stop_worker.sh >/dev/null && [ ! -f '${REMOTE_ROOT}/runtime/worker.pid' ] && for unit in ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl cat -- \"\${unit}\" >/dev/null; done && sudo systemctl restart ${WORKER_SYSTEMD_UNIT_ARGS} && for unit in ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl is-active --quiet \"\${unit}\"; done && for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' >/tmp/vkpi-health.json && env PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -1160,7 +1169,7 @@ then exit 0; fi; sleep 2; done; echo 'exact seven-service worker fleet failed re
 # Remote acceptance is deliberately separate from the pre-deploy local gate:
 # fetch the post-restart JSON remotely, then validate it with the local, reviewed
 # validator and explicit expected HEAD/migration/worker freshness parameters.
-if ! REMOTE_HEALTH_JSON="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u viltrox -g viltrox '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'")"; then
+if ! REMOTE_HEALTH_JSON="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'")"; then
   echo "Failed to fetch post-restart remote health JSON: ${HEALTH_URL}" >&2
   exit 1
 fi
@@ -1193,7 +1202,7 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
 fi
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
-  POST_RESTART_DB_STATE="$(ssh "${SSH_TARGET}" "sudo python3 '${REMOTE_CURRENT_DIR}/scripts/ops/staging_db_clone.py' prove-active-source --root '${REMOTE_ROOT}' --expected-db '${STAGING_CLONE_DATABASE}'")"
+  POST_RESTART_DB_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/staging_db_clone.py' prove-active-source --root '${REMOTE_ROOT}' --expected-db '${STAGING_CLONE_DATABASE}'")"
   read -r POST_RESTART_DATABASE POST_RESTART_ENV_SHA256 POST_RESTART_DB_OWNER POST_RESTART_ACTIVE_RELEASE < <(printf '%s' "${POST_RESTART_DB_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"], p["database_owner_release_id"], p["active_release_id"])')
   if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ]; then
     EXPECTED_POST_RESTART_DB_OWNER="${RELEASE_ID}"
@@ -1247,12 +1256,12 @@ REMOTE_ACCEPTANCE_REPORT="/tmp/vkpi-release-acceptance-${WORKER_BOOT_NONCE_SHA25
 
 # The reviewed systemd units write to journald, not the legacy runtime/logs
 # files.  Bind a cursor to the exact web + seven Apify + Redis unit filter.
-ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/audit_systemd_journal_media_log_leaks.py ${JOURNAL_SYSTEMD_UNIT_FLAGS} --worker-boot-nonce-sha256 '${WORKER_BOOT_NONCE_SHA256}' --worker-not-before '${WORKER_RESTART_NOT_BEFORE}' --compact > '${REMOTE_LOG_BASELINE}' && chmod 600 '${REMOTE_LOG_BASELINE}'"
+ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/audit_systemd_journal_media_log_leaks.py ${JOURNAL_SYSTEMD_UNIT_FLAGS} --worker-boot-nonce-sha256 '${WORKER_BOOT_NONCE_SHA256}' --worker-not-before '${WORKER_RESTART_NOT_BEFORE}' --compact > '${REMOTE_LOG_BASELINE}' && chmod 600 '${REMOTE_LOG_BASELINE}'"
 ssh "${SSH_TARGET}" "cat -- '${REMOTE_LOG_BASELINE}'" >"${LOCAL_LOG_BASELINE}"
 
 # Repeat the complete manifest-driven read-only API acceptance against the
 # restarted remote service; a local pre-deploy 41/41+ receipt is not transferable.
-ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && '${REMOTE_ROOT}/.venv/bin/python' scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null"
+ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null"
 ssh "${SSH_TARGET}" "cat -- '${REMOTE_ACCEPTANCE_REPORT}'" >"${LOCAL_ACCEPTANCE_REPORT}"
 "${PROJECT_ROOT}/.venv/bin/python" - "${LOCAL_ACCEPTANCE_REPORT}" <<'PY'
 import json
@@ -1282,7 +1291,7 @@ PY
 # only the short-lived token directly into this shell variable, never argv,
 # evidence, logs, or a file.  Any lookup/signing failure blocks the deployment.
 if [ -z "${POST_DEPLOY_BROWSER_TOKEN}" ]; then
-  if ! POST_DEPLOY_BROWSER_TOKEN="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp XDG_CACHE_HOME=/tmp TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 LOG_LEVEL=CRITICAL ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/mint_browser_gate_token.py --ttl-seconds '${BROWSER_GATE_TOKEN_TTL_SECONDS}'")"; then
+  if ! POST_DEPLOY_BROWSER_TOKEN="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp XDG_CACHE_HOME=/tmp TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 LOG_LEVEL=CRITICAL ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/mint_browser_gate_token.py --ttl-seconds '${BROWSER_GATE_TOKEN_TTL_SECONDS}'")"; then
     echo "Remote short-lived browser gate token mint failed; deployment is not accepted." >&2
     exit 1
   fi
@@ -1320,7 +1329,7 @@ fi
 # truncation, unread tails, or any new sensitive URL/credential finding fails the
 # deployment.  The standalone validator re-reads both receipts instead of
 # trusting the scanner exit code alone.
-if ! ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && '${REMOTE_ROOT}/.venv/bin/python' scripts/ops/audit_systemd_journal_media_log_leaks.py ${JOURNAL_SYSTEMD_UNIT_FLAGS} --baseline-state '${REMOTE_LOG_BASELINE}' --worker-boot-nonce-sha256 '${WORKER_BOOT_NONCE_SHA256}' --worker-not-before '${WORKER_RESTART_NOT_BEFORE}' --require-complete-baseline --compact --fail-on-new" >"${LOCAL_LOG_CANARY}"; then
+if ! ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/audit_systemd_journal_media_log_leaks.py ${JOURNAL_SYSTEMD_UNIT_FLAGS} --baseline-state '${REMOTE_LOG_BASELINE}' --worker-boot-nonce-sha256 '${WORKER_BOOT_NONCE_SHA256}' --worker-not-before '${WORKER_RESTART_NOT_BEFORE}' --require-complete-baseline --compact --fail-on-new" >"${LOCAL_LOG_CANARY}"; then
   echo "Post-restart remote runtime log canary failed." >&2
   exit 1
 fi

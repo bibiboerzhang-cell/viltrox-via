@@ -102,6 +102,73 @@ def test_deploy_uses_atomic_release_and_fail_closed_migration_contract() -> None
     assert "-m yt_dlp --version" in deploy
 
 
+def test_deploy_rsync_excludes_local_cache_artifacts_not_runtime_payload() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    sync_at = deploy.index("rsync -az --delete")
+    sync_end = deploy.index(
+        './ "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"',
+        sync_at,
+    )
+    sync = deploy[sync_at:sync_end]
+
+    for cache_pattern in (
+        "__pycache__/",
+        "*.pyc",
+        "*.pyo",
+        ".pytest_cache/",
+        ".DS_Store",
+    ):
+        assert f"--exclude '{cache_pattern}'" in sync
+
+    # The exclusions must stay narrow: source, the built frontend, and release
+    # operations are part of the immutable runtime payload.
+    for required_payload_pattern in (
+        "*.py",
+        "*.js",
+        "backend/",
+        "frontend/dist/",
+        "scripts/",
+    ):
+        assert f"--exclude '{required_payload_pattern}'" not in sync
+
+
+def test_deploy_remote_python_cannot_write_bytecode_into_release() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    # Local checks use PROJECT_ROOT/.venv.  Every system-python or REMOTE_ROOT
+    # interpreter in this script therefore executes on the remote host, where a
+    # late import from release/current would otherwise invalidate the seal.
+    markers = ("python3", "'${REMOTE_ROOT}/.venv/bin/python'")
+    for marker in markers:
+        matches = list(re.finditer(re.escape(marker), deploy))
+        assert matches, f"missing reviewed remote Python marker: {marker}"
+        for match in matches:
+            tail = deploy[match.end() : match.end() + 16]
+            assert re.match(r"\s+-B(?:\s|$)", tail), (
+                f"remote Python invocation is missing -B near offset {match.start()}"
+            )
+
+            prefix = deploy[: match.start()]
+            boundaries = (
+                (prefix.rfind("\n"), 1),
+                (prefix.rfind("&&"), 2),
+                (prefix.rfind("||"), 2),
+                (prefix.rfind(";"), 1),
+                (prefix.rfind("|"), 1),
+            )
+            boundary, width = max(boundaries, key=lambda item: item[0])
+            command_prefix = prefix[boundary + width :]
+            assert "PYTHONDONTWRITEBYTECODE=1" in command_prefix, (
+                "remote Python invocation is missing the bytecode environment "
+                f"guard near offset {match.start()}"
+            )
+
+    assert "sudo python3 " not in deploy
+    assert "'${REMOTE_ROOT}/.venv/bin/python' scripts/" not in deploy
+    assert "'${REMOTE_ROOT}/.venv/bin/python' '${REMOTE_RELEASE_DIR}" not in deploy
+
+
 def test_reviewed_worker_units_execute_only_from_atomic_current() -> None:
     for relative in (
         "scripts/ops/systemd/vkpi-worker-interactive.service",
