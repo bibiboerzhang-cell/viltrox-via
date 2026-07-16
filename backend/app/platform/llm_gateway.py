@@ -18,7 +18,7 @@ from typing import Any, Iterable
 from app.core.config import CLAUDE_MODEL, IS_PRODUCTION
 from app.core.logging import get_logger
 from app.core.model_registry import assert_production_task_bindings_are_pinned
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.platform.llm_runtime_errors import (
     build_runtime_error as _build_runtime_error,
@@ -305,11 +305,57 @@ def _monthly_budget_cents() -> int:
     return max(0, _env_money_cents("LLM_MONTHLY_BUDGET_USD", "0"))
 
 
+def _ledger_month_spent_cents(first_of_month: str) -> int:
+    """vkpi_ai_cost_ledger 本月非网关行的花费折算 cents。
+
+    双表口径的补集侧:vkpi_llm_calls 只覆盖经网关的调用,Apify/视频批注等
+    AI 成本只落 vkpi_ai_cost_ledger,单表口径会低估真实月度花费。
+    去重:网关记账时会往 ledger 写一份 metadata_json 含 'llm_call_uid' 的
+    镜像行(见 llm_gateway_ledger.record_call),这些行已计入 vkpi_llm_calls,
+    此处必须排除,否则网关调用被双计。子串匹配用 strpos/instr 参数无关式,
+    不用 LIKE —— compat 层禁 SQL 字面 percent 号。
+    方言差异:Postgres 侧 occurred_at 是 TIMESTAMPTZ、月窗直接
+    date_trunc('month', NOW()),metadata_json 显式 cast text 再 strpos;
+    SQLite(本地/测试)侧两列均为 TEXT,用 instr 加字符串比较,occurred_at
+    与入参同为 UTC ISO 秒级格式,字典序即时间序。
+    """
+    try:
+        conn = get_conn()
+        if is_postgres_runtime():
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) AS usd
+                FROM vkpi_ai_cost_ledger
+                WHERE occurred_at >= date_trunc('month', NOW())
+                  AND strpos(COALESCE(metadata_json::text, ''), 'llm_call_uid') = 0
+                """
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(cost_usd), 0) AS usd
+                FROM vkpi_ai_cost_ledger
+                WHERE occurred_at >= ?
+                  AND instr(COALESCE(metadata_json, ''), 'llm_call_uid') = 0
+                """,
+                (first_of_month,),
+            ).fetchone()
+        usd = float(row["usd"] or 0) if row else 0.0
+        # cost_usd 是浮点/NUMERIC 累加,x100 后 round 防 0.30*100=30.000000000004 类伪差一分。
+        return max(0, int(round(usd * 100)))
+    except Exception:
+        # ledger 表缺失/方言异常时该侧按 0 计,退回单表口径;不让整闸读 0(那会放开预算)。
+        logger.warning("vkpi.llm_gateway.ledger_month_spend_failed", exc_info=True)
+        return 0
+
+
 def _current_month_spent_cents() -> int:
     # 精度修复:月度累计改读 cost_micro_usd(精度源)而非被整除归零的 cost_cents,这样亚分/大 token
     # 调用都进得了累计,月度 env 预算闸不再恒读 $0。迁移已把旧行回填 micro=cents*10000,故对每行取
     # GREATEST(cost_micro_usd, cost_cents*10000) 既覆盖新精度行、又兜底极旧未回填行,无双计风险。
     # 求和用 micro_usd,最后 /10000 折算成 cents(向下取整,亚分累计仍诚实)。
+    # 口径修复:再叠加 vkpi_ai_cost_ledger 非网关行(见 _ledger_month_spent_cents),
+    # 月度闸看到的才是双表合并后的真实花费。
     try:
         ensure_vkpi_product_industry_schema()
         now = datetime.now(timezone.utc)
@@ -326,7 +372,7 @@ def _current_month_spent_cents() -> int:
             (first_of_month,),
         ).fetchone()
         micro = int(row["micro"] or 0) if row else 0
-        return micro // 10000
+        return micro // 10000 + _ledger_month_spent_cents(first_of_month)
     except Exception:
         logger.warning("vkpi.llm_gateway.monthly_spend_failed", exc_info=True)
         return 0
