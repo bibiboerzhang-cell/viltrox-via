@@ -593,6 +593,11 @@ def _snapshot_legacy(root: Path, release_id: str) -> Path:
         "--exclude", "submissions.db",
         "--exclude", RELEASE_MANIFEST_NAME,
         "--exclude", "node_modules/",
+        # These are reviewed legacy host/developer workspaces, not application
+        # release state.  Keep all other unexpected special files fail-closed
+        # so the immutable payload verifier can still reject them.
+        "--exclude", ".codegraph/",
+        "--exclude", "video-production-platform/",
         f"{root}/",
         f"{legacy}/",
     ]
