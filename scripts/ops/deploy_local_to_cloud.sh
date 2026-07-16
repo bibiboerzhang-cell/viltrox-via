@@ -557,7 +557,7 @@ attempt_automatic_rollback() {
     rollback_anchor="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/rollback-anchor.json"
     rollback_health_file="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/rollback-health.json"
     printf '%s\n' "${rollback_health}" >"${rollback_health_file}"
-    chmod 600 -- "${rollback_health_file}"
+    chmod 600 "${rollback_health_file}"
     if "${PROJECT_ROOT}/.venv/bin/python" \
       "${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py" \
       --ssh-target "${SSH_TARGET}" \
@@ -571,7 +571,7 @@ attempt_automatic_rollback() {
     else
       rollback_preflight_status=$?
     fi
-    chmod 600 -- "${rollback_preflight}"
+    chmod 600 "${rollback_preflight}"
     if [ "${rollback_preflight_status}" -ne 2 ]; then
       echo "[deploy] CRITICAL: restored legacy preflight no longer has the exact planned six blockers." >&2
       return 1
@@ -583,7 +583,7 @@ attempt_automatic_rollback() {
       echo "[deploy] CRITICAL: restored legacy filesystem anchor could not be collected." >&2
       return 1
     fi
-    chmod 600 -- "${rollback_anchor}"
+    chmod 600 "${rollback_anchor}"
     if ! "${PROJECT_ROOT}/.venv/bin/python" \
       "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-rollback \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
@@ -1127,12 +1127,12 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
       --field recovery.backup_stamp
   )"
   FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vkpi-first-atomic-bootstrap.XXXXXX")"
-  chmod 700 -- "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}"
+  chmod 700 "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}"
   BOOTSTRAP_PREFLIGHT_JSON="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/preflight.json"
   BOOTSTRAP_HEALTH_JSON="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/health.json"
   BOOTSTRAP_ANCHOR_JSON="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/anchor.json"
   printf '%s\n' "${REMOTE_PREDEPLOY_HEALTH_JSON}" >"${BOOTSTRAP_HEALTH_JSON}"
-  chmod 600 -- "${BOOTSTRAP_HEALTH_JSON}"
+  chmod 600 "${BOOTSTRAP_HEALTH_JSON}"
 
   if "${PROJECT_ROOT}/.venv/bin/python" \
     "${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py" \
@@ -1147,7 +1147,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   else
     bootstrap_preflight_status=$?
   fi
-  chmod 600 -- "${BOOTSTRAP_PREFLIGHT_JSON}"
+  chmod 600 "${BOOTSTRAP_PREFLIGHT_JSON}"
   if [ "${bootstrap_preflight_status}" -ne 2 ]; then
     echo "The first atomic bootstrap requires the exact reviewed six-blocker legacy preflight state." >&2
     exit 1
@@ -1157,7 +1157,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
     "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - collect-anchor --root '${REMOTE_ROOT}' --backup-stamp '${FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP}' --success-marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}'" \
     <"${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
     >"${BOOTSTRAP_ANCHOR_JSON}"
-  chmod 600 -- "${BOOTSTRAP_ANCHOR_JSON}"
+  chmod 600 "${BOOTSTRAP_ANCHOR_JSON}"
 
   FIRST_ATOMIC_BOOTSTRAP_SUMMARY="$(
     "${PROJECT_ROOT}/.venv/bin/python" \
@@ -1304,7 +1304,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '' --database-strategy 'staging-clone' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
   BOOTSTRAP_CANDIDATE_MANIFEST="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/candidate-manifest.json"
   ssh "${SSH_TARGET}" "sudo cat -- '${REMOTE_RELEASE_DIR}/.vkpi-release.json'" >"${BOOTSTRAP_CANDIDATE_MANIFEST}"
-  chmod 600 -- "${BOOTSTRAP_CANDIDATE_MANIFEST}"
+  chmod 600 "${BOOTSTRAP_CANDIDATE_MANIFEST}"
   "${PROJECT_ROOT}/.venv/bin/python" \
     "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-candidate \
     --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
@@ -1636,7 +1636,7 @@ else
     exit 1
   fi
 fi
-chmod 700 -- "${POST_DEPLOY_EVIDENCE_DIR}"
+chmod 700 "${POST_DEPLOY_EVIDENCE_DIR}"
 
 LOCAL_LOG_BASELINE="${POST_DEPLOY_EVIDENCE_DIR}/runtime-log-baseline.json"
 LOCAL_LOG_CANARY="${POST_DEPLOY_EVIDENCE_DIR}/runtime-log-canary.json"
@@ -1732,7 +1732,7 @@ fi
   --expected-worker-boot-nonce-sha256 "${WORKER_BOOT_NONCE_SHA256}" \
   --worker-not-before "${WORKER_RESTART_NOT_BEFORE}" \
   ${JOURNAL_SYSTEMD_UNIT_FLAGS}
-chmod 600 -- "${LOCAL_LOG_BASELINE}" "${LOCAL_LOG_CANARY}" \
+chmod 600 "${LOCAL_LOG_BASELINE}" "${LOCAL_LOG_CANARY}" \
   "${LOCAL_ACCEPTANCE_REPORT}" "${LOCAL_BROWSER_CAPTURE}" "${LOCAL_BROWSER_REPORT}"
 
 LOCAL_ASSET="$(grep -o 'app-[A-Za-z0-9_-]*\.js' frontend/dist/index.html | head -1)"

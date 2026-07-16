@@ -42,6 +42,10 @@ def test_every_release_entrypoint_delegates_to_the_canonical_gate() -> None:
     assert makefile.split("verify:\n", 1)[1].strip() == "@bash scripts/verify.sh"
     assert "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1" in deploy
     assert 'bash "${PROJECT_ROOT}/scripts/verify.sh"' in deploy
+    # BSD chmod (the local deployment controller runs on macOS) does not
+    # accept GNU-style ``--`` after the mode and would abort before upload.
+    assert "chmod 700 --" not in deploy
+    assert "chmod 600 --" not in deploy
     assert "bash ./scripts/verify.sh" in runbook
     assert "only canonical repository/release gate" in runbook
 
