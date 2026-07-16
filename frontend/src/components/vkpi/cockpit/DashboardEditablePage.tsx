@@ -154,7 +154,8 @@ export function DashboardEditablePage(props: any) {
       ? "无信号"
       : sourceHealth?.available
         ? sourceHealth.label
-        : "实时";
+        // sourceHealth 不可用≠数据实时;诚实口径与 EventRadarCoverage「来源状态未知」对齐,禁伪装成「实时」。
+        : "状态未知";
 
   const openBoard = (key: string) => {
     if (onNavigate) onNavigate(key);
