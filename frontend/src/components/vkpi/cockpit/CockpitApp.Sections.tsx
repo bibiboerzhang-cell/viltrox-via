@@ -40,7 +40,10 @@ const KPIDetailModal = React.lazy(() => import("./components/modals/KPIDetailMod
 const ProjectDetailModal = React.lazy(() => import("./components/modals/ProjectDetailModal").then((module) => ({ default: module.ProjectDetailModal })));
 const SignalDetailModal = React.lazy(() => import("./components/modals/SignalDetailModal").then((module) => ({ default: module.SignalDetailModal })));
 const TeamModal = React.lazy(() => import("./components/modals/TeamModal").then((module) => ({ default: module.TeamModal })));
-const VKPI_KOL_WORKFLOW_GUIDE_URL = "/assets/vkpi_kol_workflow_cloud_demo_2026-06-30.pdf?v=20260630-1115";
+// 内部工作流 PDF 已移出构建产物(dist 减重 7.8MB),原件在仓库 docs/assets/ 下。
+// 死链留档:/assets/vkpi_kol_workflow_cloud_demo_2026-06-30.pdf?v=20260630-1115
+// 若日后需要重新对外提供,应走后端受控下载而非 public/ 静态目录。
+const VKPI_KOL_WORKFLOW_GUIDE_URL: string | null = null;
 
 function guardedLazyModal(name: string, onDismiss: () => void, node: React.ReactNode) {
   return e(
@@ -51,6 +54,7 @@ function guardedLazyModal(name: string, onDismiss: () => void, node: React.React
 }
 
 function openKolWorkflowGuide() {
+  if (!VKPI_KOL_WORKFLOW_GUIDE_URL) return; // PDF 已移出 dist,链接置空;HelpPopover 侧会显示为禁用项
   const guideWindow = window.open(VKPI_KOL_WORKFLOW_GUIDE_URL, "_blank", "noopener,noreferrer");
   if (!guideWindow) window.location.assign(VKPI_KOL_WORKFLOW_GUIDE_URL);
 }
@@ -177,7 +181,8 @@ export function CockpitOverlays(p: any) {
     e(AnimatePresence, { key: "ov-help" }, showHelp && e(HelpPopover, {
       onClose: () => setShowHelp(false),
       anchorRef: helpBtnRef, t,
-      onOpenDocs: openKolWorkflowGuide,
+      // PDF 已移出构建产物;传 undefined 让 HelpPopover 将「文档 & 指南」渲染为禁用项(disabled: !onOpenDocs)
+      onOpenDocs: VKPI_KOL_WORKFLOW_GUIDE_URL ? openKolWorkflowGuide : undefined,
       onOpenShortcuts: () => setShowShortcuts(true),
       onOpenFeedback: () => setShowFeedback(true),
     })),
