@@ -1786,7 +1786,7 @@ fi
 chmod 600 "${LOCAL_LOG_BASELINE}" "${LOCAL_LOG_CANARY}" \
   "${LOCAL_ACCEPTANCE_REPORT}" "${LOCAL_BROWSER_CAPTURE}" "${LOCAL_BROWSER_REPORT}"
 
-LOCAL_ASSET="$(grep -o 'app-[A-Za-z0-9_-]*\.js' frontend/dist/index.html | head -1)"
+LOCAL_ASSET="$(grep -o 'app-[A-Za-z0-9_-]*\.js' "${DEPLOY_CANDIDATE_DIR}/frontend/dist/index.html" | head -1)"
 REMOTE_ASSET="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && grep -o 'app-[A-Za-z0-9_-]*\\.js' frontend/dist/index.html | head -1")"
 
 echo "local_asset=${LOCAL_ASSET}"

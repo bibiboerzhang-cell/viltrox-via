@@ -213,6 +213,16 @@ def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> Non
     assert calls[0] < gate < calls[1] < remote_create < rsync < calls[2] < remote_stamp_check
     assert '-- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"' in deploy
     assert "printf '%s\\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA" not in deploy
+    assert (
+        'LOCAL_ASSET="$(grep -o \'app-[A-Za-z0-9_-]*\\.js\' '
+        '"${DEPLOY_CANDIDATE_DIR}/frontend/dist/index.html" | head -1)"'
+        in deploy
+    )
+    assert (
+        'LOCAL_ASSET="$(grep -o \'app-[A-Za-z0-9_-]*\\.js\' '
+        'frontend/dist/index.html | head -1)"'
+        not in deploy
+    )
 
 
 def test_deploy_remote_python_cannot_write_bytecode_into_release() -> None:
