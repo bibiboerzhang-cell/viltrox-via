@@ -169,6 +169,20 @@ export function escapeMapHtml(value: unknown) {
   })[character] || character);
 }
 
+// 地图打点/连线的颜色最终喂给 Leaflet(canvas circleMarker 的 2D 上下文、SVG polyline
+// 属性),这些出口不解析 CSS var(),必须给具体色值 —— 这是 canvas 场景的硬限制,
+// 没法像普通 DOM 一样直接写 var(--ds-accent)。所以运行时从 :root 计算样式读 token,
+// 主题切换后重渲染即取到新值;读不到(测试 jsdom 无样式表/极早期渲染)才退回原写死兜底色。
+export function readMapCssToken(name: string, fallback: string) {
+  try {
+    if (typeof window === "undefined" || typeof document === "undefined") return fallback;
+    const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function safeMapColor(value: unknown, fallback = "#a855f7") {
   const candidate = String(value ?? "").trim();
   if (/^#[0-9a-f]{3,8}$/i.test(candidate)) return candidate;
@@ -324,7 +338,10 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
       clearDisplayLayers();
 
       const zoom = map.getZoom();
-      const networkColor = safeMapColor(accentColor, "#3f9bff");
+      // 兜底色改为运行时读 token(--ds-accent / --ds-accent-2),原 hex 只在读不到时垫底。
+      const accentFallback = readMapCssToken("--ds-accent", "#3f9bff");
+      const accent2Fallback = readMapCssToken("--ds-accent-2", "#a855f7");
+      const networkColor = safeMapColor(accentColor, accentFallback);
       if (shouldShowNetworkLines(zoom, sourcePins)) {
         nearestPinEdges(sourcePins).forEach(([from, to]) => {
           const points: [number, number][] = [
@@ -363,7 +380,7 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
         const action = clusterClickAction(cluster);
         if (action !== "pin") {
           const first = cluster.members[0] || {};
-          const color = safeMapColor(first.color || accentColor, "#a855f7");
+          const color = safeMapColor(first.color || accentColor, accent2Fallback);
           const countLabel = cluster.count > 999 ? "999+" : String(cluster.count);
           const marker = L.marker([cluster.lat, cluster.lng], {
             icon: L.divIcon({
@@ -407,7 +424,7 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
         }
 
         const p = cluster.members[0];
-        const color = safeMapColor(p.color || accentColor, "#a855f7");
+        const color = safeMapColor(p.color || accentColor, accent2Fallback);
 
         // Thousands of HTML divIcon nodes make a national map janky. Leaflet's
         // canvas renderer keeps the same click/tooltip behaviour at high volume;
