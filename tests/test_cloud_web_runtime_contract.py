@@ -90,7 +90,7 @@ def test_deploy_uses_atomic_release_and_fail_closed_migration_contract() -> None
     install_at = deploy.index("sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}")
     restart_at = deploy.index("sudo systemctl restart '${SERVICE_NAME}'", install_at)
     assert sync_at < prepare_at < activate_at < install_at < restart_at
-    assert './ "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"' in deploy
+    assert '-- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"' in deploy
     assert './ "${SSH_TARGET}:${REMOTE_ROOT}/"' not in deploy
     assert "REMOTE_CURRENT_DIR=\"${REMOTE_ROOT}/current\"" in deploy
     assert "atomic_release_layout.py' restore" in deploy
@@ -119,16 +119,55 @@ def test_deploy_rsync_excludes_local_cache_artifacts_not_runtime_payload() -> No
 
     sync_at = deploy.index("rsync -az --delete")
     sync_end = deploy.index(
-        './ "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"',
+        '-- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"',
         sync_at,
     )
     sync = deploy[sync_at:sync_end]
 
     for cache_pattern in (
-        "__pycache__/",
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "runtime",
+        "uploads",
+        "frames",
+        "backups",
+        "creator_profiles",
+        "__pycache__",
         "*.pyc",
         "*.pyo",
-        ".pytest_cache/",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".vite",
+        ".claude",
+        ".codegraph",
+        ".codex-backups",
+        ".integration",
+        ".state",
+        "coverage",
+        "artifacts",
+        "exports",
+        "output",
+        "outputs",
+        "tmp",
+        "reports/generated",
+        ".env",
+        ".env.*",
+        "id_ed25519",
+        "id_rsa",
+        "submissions.db",
+        "submissions.db-shm",
+        "submissions.db-wal",
+        "*.dump",
+        "*.key",
+        "*.log",
+        "*.p12",
+        "*.pem",
+        "*.pfx",
+        "*.sqlite",
+        "*.sqlite3",
         ".DS_Store",
     ):
         assert f"--exclude '{cache_pattern}'" in sync
@@ -141,8 +180,39 @@ def test_deploy_rsync_excludes_local_cache_artifacts_not_runtime_payload() -> No
         "backend/",
         "frontend/dist/",
         "scripts/",
+        "reports/vkpi_*.html",
+        "reports/vkpi_*.md",
     ):
         assert f"--exclude '{required_payload_pattern}'" not in sync
+
+
+def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    assert "VKPI_DEPLOY_CANDIDATE_DIR and VKPI_DEPLOY_CANDIDATE_MANIFEST are mandatory" in deploy
+    verify_command = deploy.split("verify_deploy_candidate()", 1)[1].split("}\n", 1)[0]
+    for required in (
+        "freeze_worktree_candidate.py",
+        "verify-deploy-source",
+        '--manifest "${DEPLOY_CANDIDATE_MANIFEST}"',
+        '--snapshot "${DEPLOY_CANDIDATE_DIR}"',
+        '--expected-head "${LOCAL_GIT_SHA}"',
+        '--expected-branch "${LOCAL_GIT_BRANCH}"',
+    ):
+        assert required in verify_command
+
+    calls = [
+        match.start()
+        for match in re.finditer(r"^verify_deploy_candidate$", deploy, re.MULTILINE)
+    ]
+    assert len(calls) == 3
+    gate = deploy.index("gate: strict code + runtime trust verification")
+    remote_create = deploy.index('ssh "${SSH_TARGET}" "sudo install -d')
+    rsync = deploy.index("rsync -az --delete", remote_create)
+    remote_stamp_check = deploy.index("Uploaded candidate build SHA mismatch", rsync)
+    assert calls[0] < gate < calls[1] < remote_create < rsync < calls[2] < remote_stamp_check
+    assert '-- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"' in deploy
+    assert "printf '%s\\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA" not in deploy
 
 
 def test_deploy_remote_python_cannot_write_bytecode_into_release() -> None:

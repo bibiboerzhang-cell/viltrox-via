@@ -323,6 +323,30 @@ def _inventory_candidate(root: Path) -> list[FileEntry]:
     return entries
 
 
+def _physical_special_paths(root: Path) -> list[str]:
+    """List unsupported physical nodes without following candidate symlinks."""
+
+    special: list[str] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise FreezeError(f"candidate physical tree cannot be scanned: {directory}") from exc
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise FreezeError(f"candidate physical node cannot be inspected: {path}") from exc
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(path)
+            elif not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+                special.append(path.relative_to(root).as_posix())
+    return sorted(special)
+
+
 @contextmanager
 def _borrow_dependencies(snapshot: Path, source: Path) -> Iterator[None]:
     links = (
@@ -717,6 +741,94 @@ def verify_manifest(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
+    """Bind one verified snapshot to the exact Git identity being deployed."""
+
+    expected_head = str(args.expected_head).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_head):
+        raise FreezeError("expected deploy Git SHA must be a lowercase 40-character digest")
+    expected_branch = str(args.expected_branch)
+    if not expected_branch or any(character in expected_branch for character in "\r\n\0"):
+        raise FreezeError("expected deploy Git branch is invalid")
+
+    manifest_path = Path(args.manifest).resolve()
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FreezeError(f"invalid manifest: {manifest_path}") from exc
+    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
+        raise FreezeError("manifest schema mismatch")
+
+    candidate = payload.get("candidate")
+    source = payload.get("source")
+    build = payload.get("build")
+    identity = build.get("identity") if isinstance(build, dict) else None
+    if not isinstance(candidate, dict) or not isinstance(source, dict):
+        raise FreezeError("deploy candidate source binding is missing")
+    if not isinstance(identity, dict):
+        raise FreezeError("deploy candidate build identity is missing")
+
+    raw_snapshot = Path(args.snapshot)
+    if raw_snapshot.is_symlink() or not raw_snapshot.is_dir():
+        raise FreezeError("deploy candidate snapshot is missing or unsafe")
+    snapshot = raw_snapshot.resolve()
+    recorded_snapshot_raw = candidate.get("snapshot_path")
+    if not isinstance(recorded_snapshot_raw, str) or not recorded_snapshot_raw:
+        raise FreezeError("deploy candidate snapshot path is missing")
+    recorded_snapshot = Path(recorded_snapshot_raw).resolve()
+    if recorded_snapshot != snapshot:
+        raise FreezeError("deploy candidate snapshot canonical path mismatch")
+    if source.get("worktree_dirty") is not False:
+        raise FreezeError("deploy candidate was frozen from a dirty worktree")
+    if source.get("head") != expected_head:
+        raise FreezeError("deploy candidate source HEAD mismatch")
+    if identity.get("git_sha") != expected_head:
+        raise FreezeError("deploy candidate build identity Git SHA mismatch")
+    if source.get("branch") != expected_branch:
+        raise FreezeError("deploy candidate source branch mismatch")
+    if identity.get("git_branch") != expected_branch:
+        raise FreezeError("deploy candidate build identity Git branch mismatch")
+
+    special_paths = _physical_special_paths(snapshot)
+    if special_paths:
+        raise FreezeError(
+            "deploy candidate contains unsupported special file: "
+            + ", ".join(special_paths[:10])
+        )
+
+    build_identity = BuildIdentity(
+        git_sha=str(identity.get("git_sha", "")),
+        git_branch=str(identity.get("git_branch", "")),
+        build_time=str(identity.get("build_time", "")),
+    )
+    expected_stamps = {
+        "BUILD_GIT_SHA": build_identity.git_sha,
+        "BUILD_GIT_BRANCH": build_identity.git_branch,
+        "BUILD_TIME": build_identity.build_time,
+    }
+    for name, expected in expected_stamps.items():
+        path = snapshot / name
+        if path.is_symlink() or not path.is_file():
+            raise FreezeError(f"deploy candidate build stamp is missing or unsafe: {name}")
+        try:
+            observed = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as exc:
+            raise FreezeError(f"deploy candidate build stamp is unreadable: {name}") from exc
+        if observed != expected:
+            raise FreezeError(f"deploy candidate build stamp mismatch: {name}")
+
+    result = verify_manifest(
+        argparse.Namespace(manifest=str(manifest_path), snapshot=str(snapshot))
+    )
+    result.update(
+        {
+            "build_git_sha": identity.get("git_sha"),
+            "source_git_sha": source.get("head"),
+        }
+    )
+    return result
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     subparsers = result.add_subparsers(dest="command", required=True)
@@ -731,6 +843,12 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--manifest", required=True)
     verify.add_argument("--snapshot")
     verify.set_defaults(action=verify_manifest)
+    deploy_source = subparsers.add_parser("verify-deploy-source")
+    deploy_source.add_argument("--manifest", required=True)
+    deploy_source.add_argument("--snapshot", required=True)
+    deploy_source.add_argument("--expected-head", required=True)
+    deploy_source.add_argument("--expected-branch", required=True)
+    deploy_source.set_defaults(action=verify_deploy_source)
     return result
 
 

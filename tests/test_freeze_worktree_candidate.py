@@ -11,6 +11,7 @@ import pytest
 from scripts.ops.freeze_worktree_candidate import (
     FreezeError,
     freeze_candidate,
+    verify_deploy_source,
     verify_manifest,
 )
 
@@ -171,6 +172,91 @@ def test_offline_verify_detects_candidate_tamper(tmp_path: Path) -> None:
     with pytest.raises(FreezeError, match="digest mismatch"):
         verify_manifest(
             Namespace(manifest=str(output.with_suffix(".manifest.json")), snapshot=None)
+        )
+
+
+def test_deploy_source_binds_snapshot_and_both_git_identities(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+    manifest = output.with_suffix(".manifest.json")
+    expected_head = str(payload["source"]["head"])
+    expected_branch = str(payload["source"]["branch"])
+
+    result = verify_deploy_source(
+        Namespace(
+            manifest=str(manifest),
+            snapshot=str(output),
+            expected_head=expected_head,
+            expected_branch=expected_branch,
+        )
+    )
+    assert result["pass"] is True
+    assert result["source_git_sha"] == expected_head
+    assert result["build_git_sha"] == expected_head
+
+    with pytest.raises(FreezeError, match="source HEAD mismatch"):
+        verify_deploy_source(
+            Namespace(
+                manifest=str(manifest),
+                snapshot=str(output),
+                expected_head="f" * 40,
+                expected_branch=expected_branch,
+            )
+        )
+
+    other_snapshot = tmp_path / "other-candidate"
+    other_snapshot.mkdir()
+    with pytest.raises(FreezeError, match="canonical path mismatch"):
+        verify_deploy_source(
+            Namespace(
+                manifest=str(manifest),
+                snapshot=str(other_snapshot),
+                expected_head=expected_head,
+                expected_branch=expected_branch,
+            )
+        )
+
+
+def test_deploy_source_fails_closed_on_special_file_inside_excluded_cache(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+    special = output / ".codegraph" / "daemon.sock"
+    special.parent.mkdir()
+    os.mkfifo(special)
+
+    with pytest.raises(FreezeError, match="contains unsupported special file"):
+        verify_deploy_source(
+            Namespace(
+                manifest=str(output.with_suffix(".manifest.json")),
+                snapshot=str(output),
+                expected_head=str(payload["source"]["head"]),
+                expected_branch=str(payload["source"]["branch"]),
+            )
+        )
+
+
+def test_deploy_source_rejects_candidate_frozen_from_dirty_worktree(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+    assert payload["source"]["worktree_dirty"] is True
+
+    with pytest.raises(FreezeError, match="frozen from a dirty worktree"):
+        verify_deploy_source(
+            Namespace(
+                manifest=str(output.with_suffix(".manifest.json")),
+                snapshot=str(output),
+                expected_head=str(payload["source"]["head"]),
+                expected_branch=str(payload["source"]["branch"]),
+            )
         )
 
 

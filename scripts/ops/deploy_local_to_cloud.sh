@@ -20,11 +20,32 @@ assert_clean_worktree() {
 assert_clean_worktree
 LOCAL_GIT_SHA="$(git rev-parse --verify HEAD)"
 LOCAL_GIT_BRANCH="$(git branch --show-current)"
+if [ -z "${LOCAL_GIT_BRANCH}" ]; then
+  LOCAL_GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+fi
+DEPLOY_CANDIDATE_DIR="${VKPI_DEPLOY_CANDIDATE_DIR:-}"
+DEPLOY_CANDIDATE_MANIFEST="${VKPI_DEPLOY_CANDIDATE_MANIFEST:-}"
+if [ -z "${DEPLOY_CANDIDATE_DIR}" ] || [ -z "${DEPLOY_CANDIDATE_MANIFEST}" ]; then
+  echo "VKPI_DEPLOY_CANDIDATE_DIR and VKPI_DEPLOY_CANDIDATE_MANIFEST are mandatory." >&2
+  exit 1
+fi
+
+verify_deploy_candidate() {
+  "${PROJECT_ROOT}/.venv/bin/python" -B \
+    "${PROJECT_ROOT}/scripts/ops/freeze_worktree_candidate.py" \
+    verify-deploy-source \
+    --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
+    --snapshot "${DEPLOY_CANDIDATE_DIR}" \
+    --expected-head "${LOCAL_GIT_SHA}" \
+    --expected-branch "${LOCAL_GIT_BRANCH}" >/dev/null
+}
+
 LOCAL_HEALTH_ENV_FILE="${VKPI_HEALTH_ENV_FILE:-}"
 if [ -z "${LOCAL_HEALTH_ENV_FILE}" ]; then
   echo "VKPI_HEALTH_ENV_FILE must explicitly name the protected local health-token dotenv." >&2
   exit 1
 fi
+verify_deploy_candidate
 
 assert_deploy_source_unchanged() {
   local current_head
@@ -1249,10 +1270,9 @@ PY
   fi
 fi
 
-LOCAL_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
 # A local gate/build/backup must not have changed the payload or HEAD.
 assert_deploy_source_unchanged
+verify_deploy_candidate
 
 # Create a new immutable destination first.  The running services continue to
 # resolve the old current symlink until the complete payload is sealed and the
@@ -1262,33 +1282,62 @@ rsync -az --delete \
   --no-owner \
   --no-group \
   --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
-  --exclude '.git/' \
-  --exclude '.venv/' \
-  --exclude '__pycache__/' \
+  --exclude '.git' \
+  --exclude '.venv' \
+  --exclude 'venv' \
+  --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude '*.pyo' \
-  --exclude '.pytest_cache/' \
+  --exclude '.pytest_cache' \
+  --exclude '.mypy_cache' \
+  --exclude '.ruff_cache' \
+  --exclude '.vite' \
+  --exclude '.claude' \
+  --exclude '.codegraph' \
+  --exclude '.codex-backups' \
+  --exclude '.integration' \
+  --exclude '.state' \
+  --exclude '.coverage' \
+  --exclude 'coverage' \
   --exclude '.DS_Store' \
-  --exclude 'frontend/node_modules/' \
-  --exclude 'node_modules/' \
-  --exclude 'uploads/' \
-  --exclude 'frames/' \
-  --exclude 'creator_profiles/' \
-  --exclude 'runtime/' \
-  --exclude 'backups/' \
+  --exclude 'node_modules' \
+  --exclude 'uploads' \
+  --exclude 'frames' \
+  --exclude 'creator_profiles' \
+  --exclude 'runtime' \
+  --exclude 'backups' \
   --exclude '.env' \
   --exclude '.env.*' \
+  --exclude 'deploy/env' \
+  --exclude 'artifacts' \
+  --exclude 'exports' \
+  --exclude 'output' \
+  --exclude 'outputs' \
+  --exclude 'tmp' \
   --exclude 'submissions.db' \
+  --exclude 'submissions.db-shm' \
+  --exclude 'submissions.db-wal' \
+  --exclude 'id_ed25519' \
+  --exclude 'id_rsa' \
+  --exclude '*.dump' \
+  --exclude '*.key' \
+  --exclude '*.log' \
+  --exclude '*.p12' \
+  --exclude '*.pem' \
+  --exclude '*.pfx' \
+  --exclude '*.sqlite' \
+  --exclude '*.sqlite3' \
   --exclude 'video-production-platform/' \
-  --exclude 'reports/vkpi_*.html' \
-  --exclude 'reports/vkpi_*.md' \
-  ./ "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"
+  --exclude 'reports/generated' \
+  -- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"
 
-# If the source changed during rsync, do not stamp or restart the remote tree as
-# though it represented the captured HEAD.
+# If either the reviewed candidate or the worktree identity changed during
+# rsync, do not seal or restart the remote tree as though it represented the
+# verified immutable source.
+verify_deploy_candidate
 assert_deploy_source_unchanged
 
-ssh "${SSH_TARGET}" "cd '${REMOTE_RELEASE_DIR}' && printf '%s\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA && printf '%s\n' '${LOCAL_GIT_BRANCH}' > BUILD_GIT_BRANCH && printf '%s\n' '${LOCAL_BUILD_TIME}' > BUILD_TIME"
+ssh "${SSH_TARGET}" "cd '${REMOTE_RELEASE_DIR}' && [ \"\$(cat -- BUILD_GIT_SHA)\" = '${LOCAL_GIT_SHA}' ] || { echo 'Uploaded candidate build SHA mismatch.' >&2; exit 1; }"
 
 # Seal the release and prove every runtime dependency before current can move.
 # Package installation during deployment is forbidden: the shared venv is an
