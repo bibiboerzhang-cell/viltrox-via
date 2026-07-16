@@ -435,6 +435,28 @@ def test_deploy_mints_browser_token_only_after_remote_identity_and_never_persist
     assert "VKPI_BROWSER_GATE_TOKEN and" not in deploy
 
 
+def test_remote_release_acceptance_uses_the_production_nonroot_runtime_contract() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    acceptance = deploy.split(
+        "# Repeat the complete manifest-driven read-only API acceptance",
+        1,
+    )[1].split("# A caller may supply an explicit reviewed token", 1)[0]
+
+    assert "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i" in acceptance
+    for required in (
+        "ENVIRONMENT=production",
+        "V2_PRODUCTION_MODE=1",
+        "APP_ROLE=admin-web",
+        "DB_RUNTIME_BACKEND=postgres",
+        "LOCAL_RUNTIME_FORCE_STACK=0",
+        "LOCAL_ENV_FILE='${REMOTE_ROOT}/.env'",
+        "RUNTIME_ROOT='${REMOTE_ROOT}/runtime'",
+        "PYTHONDONTWRITEBYTECODE=1",
+    ):
+        assert required in acceptance
+    assert "scripts/local_release_acceptance.py" in acceptance
+
+
 def test_deploy_browser_gate_runs_reviewed_21_page_and_network_contract() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     capture = _read("scripts/capture_browser_console_cdp.mjs")

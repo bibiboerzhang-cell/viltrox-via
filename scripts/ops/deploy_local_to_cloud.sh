@@ -1704,7 +1704,7 @@ ssh "${SSH_TARGET}" "cat -- '${REMOTE_LOG_BASELINE}'" >"${LOCAL_LOG_BASELINE}"
 
 # Repeat the complete manifest-driven read-only API acceptance against the
 # restarted remote service; a local pre-deploy 41/41+ receipt is not transferable.
-ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null"
+ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-acceptance-home TMPDIR=/tmp ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web DB_RUNTIME_BACKEND=postgres LOCAL_RUNTIME_FORCE_STACK=0 LOCAL_ENV_FILE='${REMOTE_ROOT}/.env' RUNTIME_ROOT='${REMOTE_ROOT}/runtime' PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null"
 ssh "${SSH_TARGET}" "cat -- '${REMOTE_ACCEPTANCE_REPORT}'" >"${LOCAL_ACCEPTANCE_REPORT}"
 "${PROJECT_ROOT}/.venv/bin/python" - "${LOCAL_ACCEPTANCE_REPORT}" <<'PY'
 import json
