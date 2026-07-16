@@ -316,6 +316,26 @@ def test_deploy_stages_writable_release_under_root_owned_nonreusable_parent() ->
     assert parent_at < refuse_at < staging_at < rsync_at < seal_at < verify_at < prepare_at
 
 
+def test_first_atomic_bootstrap_provisions_only_safe_job_results_before_seal() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    bootstrap = deploy.split(
+        "# it.  Provision only the absent non-secret job-results directory needed by",
+        1,
+    )[1].split("\nelse\n", 1)[0]
+
+    parent_guard = bootstrap.index("bootstrap shared runtime parent is unsafe")
+    provision = bootstrap.index(
+        "sudo install -d -o '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' -m 0750"
+    )
+    child_guard = bootstrap.index("bootstrap job-results directory is unsafe")
+    seal = bootstrap.index("atomic_release_layout.py' seal")
+    assert parent_guard < provision < child_guard < seal
+    assert "[ ! -d \\\"\\${runtime_dir}\\\" ] || [ -L \\\"\\${runtime_dir}\\\" ]" in bootstrap
+    assert "[ ! -e \\\"\\${job_results_dir}\\\" ] && [ ! -L \\\"\\${job_results_dir}\\\" ]" in bootstrap
+    assert "${REMOTE_APP_USER}:${REMOTE_APP_GROUP}:755" in bootstrap
+    assert "${REMOTE_APP_USER}:${REMOTE_APP_GROUP}:750" in bootstrap
+
+
 def test_deploy_mints_browser_token_only_after_remote_identity_and_never_persists_it() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
