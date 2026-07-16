@@ -60,6 +60,9 @@ TASK_MODEL_BINDING = {
     "ai_today_evidence_strategy": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     "contract_pdf_extract": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     "invoice_extract": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
+    # 情绪批注(sentiment_annotate.py 申报 task_binding 但此前漏登记,
+    # 严格边界下恒 task_binding_model_mismatch —— 2026-07-16 回补实弹坐实)。
+    "vkpi_sentiment_annotate": "google/gemini-3.5-flash",
 }
 
 TASK_MODEL_ENV_KEYS = {
@@ -76,6 +79,10 @@ TASK_MODEL_ENV_KEYS = {
     "kol_content_fit_analysis": ("OPENAI_MODEL", None),
     "kol_product_fit_reason": ("OPENAI_MODEL", None),
     "kol_outreach_pack": ("CLAUDE_MODEL", None),
+    "vkpi_sentiment_annotate": (
+        "VKPI_SENTIMENT_ANNOTATE_MODEL",
+        "VKPI_SENTIMENT_ANNOTATE_PROVIDER",
+    ),
 }
 
 

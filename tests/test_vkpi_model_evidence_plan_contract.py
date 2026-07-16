@@ -52,12 +52,12 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
     manifest = plan["execution_manifest"]
     rows = {row["binding"]: row for row in manifest["bindings"]}
 
-    assert manifest["task_binding_count"] == 17
+    assert manifest["task_binding_count"] == 18
     assert manifest["unique_binding_count"] == 8
     assert manifest["minimum_actual_evaluation_cases_per_task"] == 30
-    assert manifest["minimum_possible_generation_calls"] == 510
-    assert manifest["provider_generation_calls_ceiling"] == 518
-    assert manifest["known_text_only_cost_subtotal_usd"] == 6.1218
+    assert manifest["minimum_possible_generation_calls"] == 540
+    assert manifest["provider_generation_calls_ceiling"] == 548
+    assert manifest["known_text_only_cost_subtotal_usd"] == 6.3513
     assert rows["openai/gpt-5.4-mini"]["required_calls"] == {
         "actual_evaluation_cases": 120,
         "actual_evaluation_cases_per_task": {
