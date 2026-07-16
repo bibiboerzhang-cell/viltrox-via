@@ -223,8 +223,11 @@ def marketing_brain_refresh(staff=Depends(require_tab("vkpi", "write"))) -> dict
 
 
 @router.post("/cycle/run")
-def agent_cycle_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
-    """阶段②·Agent 建议链 Durable Workflow:生成今日建议→汇总→留痕(可恢复;执行仍需人审)。"""
+def agent_cycle_run(staff=Depends(require_manager_tab("vkpi", "write"))) -> dict[str, Any]:
+    """阶段②·Agent 建议链 Durable Workflow:生成今日建议→汇总→留痕(可恢复;执行仍需人审)。
+
+    点火烧真实 LLM 预算,收口为管理层专属(2026-07 审计:全员恒真开放属预算越权面)。
+    """
     from app.domains.actions import agent_cycle_workflow
 
     return agent_cycle_workflow.start_agent_cycle(staff)
@@ -233,7 +236,7 @@ def agent_cycle_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, An
 @router.post("/cycle/{run_id}/resume")
 def agent_cycle_resume(
     run_id: int,
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     """Resume the same failed, paused, or lease-expired Agent cycle run."""
 
