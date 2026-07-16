@@ -7,7 +7,10 @@
 """
 from __future__ import annotations
 
+import urllib.parse
+
 from app.api.routers import media as media_router
+from app.domains.media import cache_core as media_cache_core
 from app.domains.channels import posts as channel_posts_module
 from app.domains.media import cache as media_cache
 
@@ -73,6 +76,28 @@ def test_eu_tiktok_media_host_is_explicitly_allowlisted_for_same_origin_proxy():
 
     assert normalized == url
     assert host == "p16-sign-va.tiktokcdn-eu.com"
+
+
+def test_both_youtube_thumbnail_hosts_are_explicitly_allowlisted_for_same_origin_proxy():
+    for url in (
+        "https://i.ytimg.com/vi/abc12345678/maxresdefault.jpg",
+        "https://img.youtube.com/vi/abc12345678/hqdefault.jpg",
+    ):
+        normalized, host = media_router._allowed_external_image_url(url)
+
+        assert normalized == url
+        assert host in {"i.ytimg.com", "img.youtube.com"}
+
+
+def test_both_youtube_thumbnail_hosts_are_allowlisted_for_cache_warmup():
+    for url in (
+        "https://i.ytimg.com/vi/abc12345678/maxresdefault.jpg",
+        "https://img.youtube.com/vi/abc12345678/hqdefault.jpg",
+    ):
+        assert media_cache_core._normalize_image_url(url) == (
+            url,
+            urllib.parse.urlparse(url).hostname,
+        )
 
 
 # --- 播放数诚实口径 ---

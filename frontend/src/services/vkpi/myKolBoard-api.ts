@@ -137,7 +137,7 @@ export interface VkpiRecentVideoItem extends VkpiKolPoolVideoRow {
   /** 收藏集 KOL 展示名(board-ext 下发;逐 KOL 端点行缺席时由调用方补) */
   kol_name?: string;
   kol_handle?: string;
-  /** youtube 官方缩略图(content_url 派生;i.ytimg 直连域) */
+  /** YouTube 官方缩略图(content_url 派生;ytimg/img.youtube 经同源 image-proxy) */
   youtube_thumbnail_url?: string | null;
   /** 毒缓存自愈链产物,链序 cached → raw → youtube;null = 三路皆无,前端诚实占位 */
   best_thumbnail?: string | null;

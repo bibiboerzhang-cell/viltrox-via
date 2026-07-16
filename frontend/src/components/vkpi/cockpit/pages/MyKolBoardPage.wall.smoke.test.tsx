@@ -110,7 +110,9 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     // 点卡=原帖链接(新开页);缩略图=best_thumbnail 真图,其余三路皆无 → 诚实 ▶ 占位
     expect(wallCards()[0].getAttribute("href")).toBe("https://youtu.be/w1");
     expect(wallCards()[0].getAttribute("target")).toBe("_blank");
-    expect(wallCards()[0].querySelector("img")?.getAttribute("src")).toBe("https://img.youtube.com/vi/abcdefghijk/hqdefault.jpg");
+    expect(wallCards()[0].querySelector("img")?.getAttribute("src")).toBe(
+      `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent("https://img.youtube.com/vi/abcdefghijk/hqdefault.jpg")}`,
+    );
     expect(wallCards()[1].querySelector("img")).toBeNull();
     // 播放读数诚实:NULL → 未实测(≠ 0;regex 会撞 SrcChip 口径行,收敛到卡本体)
     expect(wallCards()[1].textContent).toContain("▶ 未实测");
@@ -127,6 +129,18 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
       expect(wallCards().length).toBe(14);
       expect(screen.queryByText(/查看更多/)).toBeNull();
     });
+  });
+
+  it("同源代理返回 1x1 失败占位时显示诚实 ▶，不把透明 SVG 当真缩略图", async () => {
+    renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    const image = wallCards()[0].querySelector("img") as HTMLImageElement;
+    expect(image).toBeTruthy();
+    Object.defineProperty(image, "naturalWidth", { configurable: true, value: 1 });
+    Object.defineProperty(image, "naturalHeight", { configurable: true, value: 1 });
+    fireEvent.load(image);
+    expect(wallCards()[0].querySelector("img")).toBeNull();
+    expect(wallCards()[0].querySelector("[title='缩略图加载失败(不摆假图)']")).toBeTruthy();
   });
 
   it("仅 V 相关 + 播放排序:未判定隐藏;实测播放降序、未实测排最后(不当 0 混序)", async () => {

@@ -29,7 +29,7 @@ export interface CreativeSegmentVideo {
   thumbnail_url?: string | null;
   /** 本地图缓存(毒缓存自愈后才算真图);形如 /api/vkpi-media/image-cache/<digest> */
   cached_thumbnail_url?: string | null;
-  /** youtube 官方缩略图(content_url 派生;i.ytimg 直连域,零代理) */
+  /** YouTube 官方缩略图(content_url 派生;ytimg/img.youtube 经同源 image-proxy) */
   youtube_thumbnail_url?: string | null;
   /** 链序 cached → raw → youtube;null = 三路皆无,前端诚实占位 */
   best_thumbnail?: string | null;

@@ -19,7 +19,7 @@ gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
 
-APP_URL = "http://127.0.0.1:8102/#cockpit"
+APP_URL = "http://127.0.0.1:8102/"
 APP_ORIGIN = "http://127.0.0.1:8102"
 
 
@@ -45,7 +45,7 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             "same_origin_api_idle": True,
             "same_origin_api_inflight": 0,
             "ready_state": "complete",
-            "final_url": f"{APP_ORIGIN}/?cockpit={contract[0]}#cockpit",
+            "final_url": f"{APP_ORIGIN}/?cockpit={contract[0]}",
             "elapsed_ms": 100,
         }
         for family, contract in gate.REQUIRED_PAGE_FAMILIES.items()

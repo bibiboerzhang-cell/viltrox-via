@@ -18,6 +18,11 @@ describe('media proxy URL normalization', () => {
     expect(proxiedImageUrl('/api/vkpi-media/image-cache/deadbeef')).toBe('/api/vkpi-media/image-cache/deadbeef');
   });
 
+  it('routes YouTube thumbnails through the same-origin proxy so transient edge 404s stay non-blocking', () => {
+    const raw = 'https://i.ytimg.com/vi/snvnP6LTzEE/maxresdefault.jpg';
+    expect(proxiedImageUrl(raw)).toBe(`/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(raw)}`);
+  });
+
   it('normalizes protocol-relative video URLs for proxy and redirect candidates', () => {
     const raw = '//v16-webapp-prime.tiktokcdn-us.com/video/test.mp4';
     const absolute = `https:${raw}`;

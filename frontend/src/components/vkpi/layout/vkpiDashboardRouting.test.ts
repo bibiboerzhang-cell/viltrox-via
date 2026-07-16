@@ -136,6 +136,12 @@ describe("getInitialVkpiPage / writeVkpiHash 触 window", () => {
     writeVkpiHash("projects");
     expect(window.location.hash).toBe("#projects");
   });
+  it("Dashboard 使用正式根入口并清理遗留 #cockpit", () => {
+    window.history.replaceState(null, "", "/#cockpit");
+    expect(writeVkpiHash("cockpit")).toBe(true);
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("");
+  });
   it("writeVkpiHash 只替换 hash，保留 pathname 和 Cockpit 深链 query", () => {
     window.history.replaceState(null, "", "/workspace?cockpit=dealers&source=release#cockpit");
 

@@ -424,7 +424,9 @@ async function waitForExit(child, timeoutMs) {
 function pageUrl(baseUrl, navKey) {
   const url = new URL(baseUrl);
   url.searchParams.set("cockpit", navKey);
-  if (!url.hash) url.hash = "cockpit";
+  // The public Dashboard is canonical at `/`; the inner cockpit page is
+  // selected by the reviewed query contract and does not need #cockpit.
+  if (url.hash === "#cockpit") url.hash = "";
   return url.href;
 }
 

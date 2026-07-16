@@ -13,10 +13,15 @@ const IMAGE_PROXY_HOSTS = [
   'redd.it',
   'redditmedia.com',
   'twimg.com',
+  // YouTube thumbnails are not stable enough to hot-link directly: the same
+  // maxres URL can transiently return 404 at the browser edge.  Keep them on
+  // the authenticated same-origin proxy so upstream failures become the
+  // existing honest, non-cacheable media fallback instead of console noise.
+  'ytimg.com',
+  'img.youtube.com',
 ];
 
 const DIRECT_IMAGE_HOSTS = [
-  'ytimg.com',
   'ggpht.com',
   'googleusercontent.com',
 ];

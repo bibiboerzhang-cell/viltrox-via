@@ -273,7 +273,7 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
 
     block = deploy[function_at:remote_state_at]
     for required in (
-        'PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/#cockpit"',
+        'PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/"',
         "create_local_auth_context(900)",
         "scripts/capture_browser_console_cdp.mjs",
         "scripts/verify_browser_console_capture.py",

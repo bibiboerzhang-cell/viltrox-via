@@ -109,12 +109,14 @@ export function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKe
 
 export function writeVkpiHash(page: VkpiPageKey) {
   if (typeof window === 'undefined') return false;
-  const nextHash = `#${page}`;
+  // Dashboard 是正式根入口：保留页面状态，但不把实现细节 #cockpit
+  // 暴露在地址栏。其余页面继续使用 hash 深链，刷新/复制链接仍可直达。
+  const nextHash = page === DEFAULT_MANAGER_PAGE ? '' : `#${page}`;
   // replaceState 不会原生触发 hashchange，所以只在真实变化后补发一次。
   // 相同 hash 若继续派发，会让监听器 write -> dispatch -> write 无限递归。
   if (window.location.hash === nextHash) return false;
   // 只替换 hash，保留 Cockpit 深链中的 pathname 和 query（例如
-  // /?cockpit=dealers#cockpit）。若只写 nextHash，replaceState 会把 query 一并丢掉，
+  // /?cockpit=dealers）。若只写 nextHash，replaceState 会把 query 一并丢掉，
   // 导致内层 CockpitApp 读不到目标页而回落 Dashboard。
   const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
   window.history.replaceState(null, '', nextUrl);

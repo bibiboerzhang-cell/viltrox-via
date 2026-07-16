@@ -792,7 +792,11 @@ function WallThumb({ video }: { video: VkpiRecentVideoItem }) {
       </span>
     );
   }
-  return <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setFailed(true)} />;
+  const handleLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget;
+    if (image.naturalWidth > 0 && image.naturalHeight > 0 && image.naturalWidth <= 2 && image.naturalHeight <= 2) setFailed(true);
+  };
+  return <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setFailed(true)} onLoad={handleLoad} />;
 }
 
 function WallVideoCard({ video, tier, fallbackKolName }: { video: VkpiRecentVideoItem; tier: VContentTier; fallbackKolName?: string }) {
