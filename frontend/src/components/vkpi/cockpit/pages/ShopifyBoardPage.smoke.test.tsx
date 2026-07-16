@@ -68,7 +68,7 @@ const SUMMARY_OK = {
   ok: true,
   count: 2,
   items: [
-    { kol_pool_id: 101, kol_name: "Alpha Creator", kol_handle: "@alpha", kol_platform: "youtube", affiliate_id: "a1", ref_code: "alpha10", coupon: "ALPHA10", commission_rate: "10%", status: "approved", tracking_url: "https://viltroxvia.com/?ref=alpha10", clicks: 100, orders: 6, gmv_usd: 6495.49, commission_usd: 649.55, currency: "USD", partial: false },
+    { kol_pool_id: 101, kol_name: "Alpha Creator", kol_handle: "@alpha", kol_platform: "youtube", kol_avatar: "https://scontent-ord5-1.cdninstagram.com/v/avatar.jpg", affiliate_id: "a1", ref_code: "alpha10", coupon: "ALPHA10", commission_rate: "10%", status: "approved", tracking_url: "https://viltroxvia.com/?ref=alpha10", clicks: 100, orders: 6, gmv_usd: 6495.49, commission_usd: 649.55, currency: "USD", partial: false },
     { kol_pool_id: 102, kol_name: "Beta Creator", kol_handle: "@beta", kol_platform: "tiktok", affiliate_id: "b2", ref_code: "beta10", coupon: "", commission_rate: "10%", status: "approved", tracking_url: "", clicks: 20, orders: 1, gmv_usd: 100, commission_usd: 10, currency: "USD", partial: true },
   ],
   totals: { kol_count: 2, clicks: 120, orders: 7, gmv_usd: 6595.49, commission_usd: 659.55 },
@@ -204,6 +204,11 @@ describe("ShopifyBoardPage 旧功能零丢失", () => {
   it("联盟归因汇总:totals 条真值 + 行(partial ⚠)+ 搜索提交带参重拉 + 同步刷新 POST sync-metrics", async () => {
     renderBoard();
     expect(await screen.findByText("Alpha Creator")).toBeTruthy();
+    const avatar = screen.getByAltText("Alpha Creator");
+    expect(avatar.getAttribute("src")).toBe(
+      `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent("https://scontent-ord5-1.cdninstagram.com/v/avatar.jpg")}`,
+    );
+    expect(document.querySelector('img[src^="https://scontent-ord5-1.cdninstagram.com"]')).toBeNull();
     // totals 条(gmv_usd 已美元直读)
     expect(screen.getByText("总点击")).toBeTruthy();
     expect(screen.getByText("120")).toBeTruthy();

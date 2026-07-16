@@ -10,6 +10,7 @@ import React from "react";
 import { Link2, Loader2, PackageCheck, Plug, RefreshCw, Search, Table2 } from "lucide-react";
 import type { ShopifyProviderStatus } from "../../../domains/attribution";
 import type { PromoAttributionRow } from "../../../services/vkpi/shopifyHub-api";
+import { Avatar } from "../shared/Avatar";
 import { Card, EnvRow, FieldInput, StatusPill } from "./ShopifyHubPage.Sections";
 import { fmtMoney, pickNum, pickStr, type Row } from "./ShopifyHubPage.helpers";
 
@@ -424,9 +425,7 @@ export function TrackRegion(props: TrackRegionProps): React.ReactElement {
                         e(
                           "div",
                           { className: "flex items-center gap-2" },
-                          avatar
-                            ? e("img", { src: avatar, className: "w-6 h-6 rounded-full object-cover shrink-0", referrerPolicy: "no-referrer" })
-                            : e("div", { className: "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0", style: { background: "linear-gradient(135deg,#a855f7,#06b6d4)" } }, (name || "K").charAt(0)),
+                          e(Avatar, { name: name || "K", src: avatar, size: "xs" }),
                           e(
                             "div",
                             { className: "min-w-0" },

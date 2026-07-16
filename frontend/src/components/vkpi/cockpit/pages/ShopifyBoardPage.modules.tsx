@@ -5,6 +5,7 @@ import { platformBadge } from "./MarketVoicePage.dialogs";
 import { fmtUsd2 } from "../../../../services/vkpi/projectsBoard-api";
 import { GOAFF_SOURCE_LABEL, GOAFF_STATUS_META, asUsd } from "../../../../services/vkpi/shopifyBoard-api";
 import type { GoaffproStatus, GoaffproSummaryRow, GoaffproSummaryTotals } from "../../../../services/vkpi/goaffpro-api";
+import { Avatar } from "../../shared/Avatar";
 
 // Shopify 板块页 · 图形件(金样板 MarketVoicePage.modules / ProjectsBoardPage.charts 同构)。
 //   ShopifyKpiBand   四卡:归因收入(对账净额)/ 归因明细(行数)/ 联盟推广(GOAFFPRO
@@ -233,13 +234,7 @@ export function TrackRowLine({ item, index, onOpen }: { item: GoaffproSummaryRow
       <span className="min-w-[46px] flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-center text-[8.5px] font-semibold text-ink-2">
         {platformBadge(String(item.kol_platform || ""))}
       </span>
-      {item.kol_avatar ? (
-        <img src={String(item.kol_avatar)} alt="" referrerPolicy="no-referrer" className="h-6 w-6 flex-none rounded-full object-cover" />
-      ) : (
-        <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-accent-soft text-[10px] font-bold text-accent">
-          {(name || "K").charAt(0)}
-        </span>
-      )}
+      <Avatar name={name || "K"} src={String(item.kol_avatar || "")} size="xs" />
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">
         {name}
         {item.partial ? (
