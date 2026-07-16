@@ -817,7 +817,7 @@ def _running_job_heartbeat(
         thread.join(timeout=2)
 
 
-def _execute_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
+def _execute_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> str:
     """Execute one job inside an explicit domain-DB scope.
 
     The claim/lease connection is the dedicated autocommit worker connection.
@@ -868,6 +868,7 @@ def _execute_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> 
                 fence,
                 "completed" if status == "done" else "failed",
             )
+            return status
         except ApifyBudgetBlocked:
             if fence:
                 finalize_provider_execution_claim(provider_task_id, fence, "blocked")
@@ -956,8 +957,20 @@ def run_worker() -> None:
                             _requeue_job(conn, int(job["id"]), "worker stop requested before processing")
                             break
                         try:
-                            _execute_claimed_job(conn, job)
-                            logger.info("apify_jobs job done | id=%s", job["id"])
+                            final_status = _execute_claimed_job(conn, job)
+                            # 执行体内部限流/租约冲突会 requeue 后正常返回(行仍是
+                            # queued),此前无条件打 "job done" 曾把审计骗成同 job
+                            # 反复执行 21 次 —— 按终态区分日志口径。
+                            if final_status == "queued":
+                                logger.info(
+                                    "apify_jobs job requeued by executor | id=%s", job["id"]
+                                )
+                            else:
+                                logger.info(
+                                    "apify_jobs job done | id=%s status=%s",
+                                    job["id"],
+                                    final_status or "unknown",
+                                )
                         except ApifyExecutionClaimBlocked as exc:
                             logger.warning(
                                 "apify_jobs job left unexecuted behind live provider fence | id=%s error=%s",
