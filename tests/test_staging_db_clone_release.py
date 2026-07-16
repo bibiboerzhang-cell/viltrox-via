@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pwd
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +37,38 @@ def _write_env(path: Path, database: str, *, app_sha: str = "old") -> None:
     )
 
 
+def _rollback_dir(root: Path, release_id: str) -> Path:
+    return root / ".release-controller" / "rollbacks" / release_id
+
+
+def _make_rollback_capture(root: Path, release_id: str) -> Path:
+    root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    controller = root / ".release-controller"
+    rollbacks = controller / "rollbacks"
+    rollback = rollbacks / release_id
+    for directory in (controller, rollbacks, rollback):
+        if not directory.exists():
+            directory.mkdir(mode=0o700)
+        directory.chmod(0o700)
+    metadata_payload = (
+        json.dumps(
+            {"schema": 3, "release_id": release_id},
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    metadata = rollback / "metadata.json"
+    digest = rollback / "metadata.sha256"
+    metadata.write_bytes(metadata_payload)
+    digest.write_text(
+        hashlib.sha256(metadata_payload).hexdigest() + "\n",
+        encoding="ascii",
+    )
+    metadata.chmod(0o600)
+    digest.chmod(0o600)
+    return rollback
+
+
 def _activated_release(
     root: Path,
     *,
@@ -66,34 +99,21 @@ def _activated_release(
     current.symlink_to(Path("releases") / release_id, target_is_directory=True)
     _write_env(root / ".env", target_database, app_sha=release_id)
     fingerprint = hashlib.sha256((root / ".env").read_bytes()).hexdigest()
-    receipt = (
-        root
-        / "runtime"
-        / "ops"
-        / "deploy-rollbacks"
-        / release_id
-        / "database-clone.json"
+    _make_rollback_capture(root, release_id)
+    receipt_kwargs = {
+        "root": root,
+        "release_id": release_id,
+        "source_database": source_database,
+        "target_database": target_database,
+        "env_fingerprint_before": "0" * 64,
+        "env_fingerprint_clone": fingerprint,
+        "migration_version": "252_vkpi_advisor_turn_claims.sql",
+    }
+    staging_db_clone.write_release_receipt(
+        **receipt_kwargs,
+        state="migrated-not-activated",
     )
-    receipt.parent.mkdir(parents=True)
-    receipt.write_text(
-        json.dumps(
-            {
-                "schema": 1,
-                "release_id": release_id,
-                "database_strategy": "staging-clone",
-                "source_database": source_database,
-                "target_database": target_database,
-                "env_fingerprint_before": "0" * 64,
-                "env_fingerprint_clone": fingerprint,
-                "migration_version": "252_vkpi_advisor_turn_claims.sql",
-                "state": "activated",
-                "rollback_env_fingerprint": None,
-                "secrets_included": False,
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    staging_db_clone.write_release_receipt(**receipt_kwargs, state="activated")
     return target_database, release
 
 
@@ -293,8 +313,7 @@ def test_clone_a_app_only_b_migration_clone_c_preserves_database_lineage(
     assert proof_b["source_release_id"] == "release-a"
     assert proof_b["active_release_id"] == "release-b"
     assert not (
-        root
-        / "runtime/ops/deploy-rollbacks/release-b/database-clone.json"
+        _rollback_dir(root, "release-b") / "database-clone.json"
     ).exists()
     manifest_b = json.loads(
         (release_b / ".vkpi-release.json").read_text(encoding="utf-8")
@@ -352,14 +371,7 @@ def test_active_clone_requires_matching_activated_receipt(tmp_path: Path) -> Non
         release_id="release-one",
         source_database=staging_db_clone.SOURCE_DATABASE,
     )
-    receipt_path = (
-        root
-        / "runtime"
-        / "ops"
-        / "deploy-rollbacks"
-        / "release-one"
-        / "database-clone.json"
-    )
+    receipt_path = _rollback_dir(root, "release-one") / "database-clone.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     receipt["state"] = "rollback-restored"
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
@@ -374,7 +386,7 @@ def test_clone_receipt_state_machine_cannot_reactivate_a_rolled_back_release(
     root = tmp_path / "app"
     release_id = "release-receipt"
     target = staging_db_clone.clone_name_for_release(release_id)
-    (root / "runtime/ops/deploy-rollbacks" / release_id).mkdir(parents=True)
+    _make_rollback_capture(root, release_id)
     kwargs = {
         "root": root,
         "release_id": release_id,
@@ -401,6 +413,123 @@ def test_clone_receipt_state_machine_cannot_reactivate_a_rolled_back_release(
         rollback_env_fingerprint="a" * 64,
     )
     with pytest.raises(staging_db_clone.CloneError, match="state transition"):
+        staging_db_clone.write_release_receipt(**kwargs, state="activated")
+
+
+def test_clone_receipt_is_root_controller_owned_and_not_app_runtime_writable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "app"
+    release_id = "release-secure-receipt"
+    target = staging_db_clone.clone_name_for_release(release_id)
+    rollback = _make_rollback_capture(root, release_id)
+
+    receipt = staging_db_clone.write_release_receipt(
+        root=root,
+        release_id=release_id,
+        source_database=staging_db_clone.SOURCE_DATABASE,
+        target_database=target,
+        env_fingerprint_before="a" * 64,
+        env_fingerprint_clone="b" * 64,
+        migration_version="252_vkpi_advisor_turn_claims.sql",
+        state="migrated-not-activated",
+    )
+
+    assert receipt == rollback / "database-clone.json"
+    for directory in (
+        root / ".release-controller",
+        root / ".release-controller/rollbacks",
+        rollback,
+    ):
+        info = directory.lstat()
+        assert stat.S_ISDIR(info.st_mode)
+        assert info.st_uid == os.geteuid()
+        assert stat.S_IMODE(info.st_mode) == 0o700
+    info = receipt.lstat()
+    assert stat.S_ISREG(info.st_mode)
+    assert info.st_uid == os.geteuid()
+    assert info.st_nlink == 1
+    assert stat.S_IMODE(info.st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    ("attack", "error"),
+    [
+        ("controller-mode", "mode must be 0700"),
+        ("rollbacks-symlink", "must be a real directory"),
+        ("metadata-tamper", "metadata hash mismatch"),
+    ],
+)
+def test_clone_receipt_rejects_untrusted_rollback_capture(
+    tmp_path: Path,
+    attack: str,
+    error: str,
+) -> None:
+    root = tmp_path / "app"
+    release_id = "release-untrusted-capture"
+    target = staging_db_clone.clone_name_for_release(release_id)
+    rollback = _make_rollback_capture(root, release_id)
+    if attack == "controller-mode":
+        (root / ".release-controller").chmod(0o755)
+    elif attack == "rollbacks-symlink":
+        rollbacks = root / ".release-controller/rollbacks"
+        for child in rollback.iterdir():
+            child.unlink()
+        rollback.rmdir()
+        rollbacks.rmdir()
+        attacker = tmp_path / "attacker-rollbacks"
+        attacker.mkdir(mode=0o700)
+        rollbacks.symlink_to(attacker, target_is_directory=True)
+    else:
+        (rollback / "metadata.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(staging_db_clone.CloneError, match=error):
+        staging_db_clone.write_release_receipt(
+            root=root,
+            release_id=release_id,
+            source_database=staging_db_clone.SOURCE_DATABASE,
+            target_database=target,
+            env_fingerprint_before="a" * 64,
+            env_fingerprint_clone="b" * 64,
+            migration_version="252_vkpi_advisor_turn_claims.sql",
+            state="migrated-not-activated",
+        )
+
+
+def test_clone_receipt_rejects_symlink_and_hardlink_forgery(tmp_path: Path) -> None:
+    root = tmp_path / "app"
+    release_id = "release-forgery"
+    target = staging_db_clone.clone_name_for_release(release_id)
+    rollback = _make_rollback_capture(root, release_id)
+    receipt = rollback / "database-clone.json"
+    attacker = tmp_path / "attacker-receipt"
+    attacker.write_text("{}\n", encoding="utf-8")
+    attacker.chmod(0o600)
+    receipt.symlink_to(attacker)
+
+    kwargs = {
+        "root": root,
+        "release_id": release_id,
+        "source_database": staging_db_clone.SOURCE_DATABASE,
+        "target_database": target,
+        "env_fingerprint_before": "a" * 64,
+        "env_fingerprint_clone": "b" * 64,
+        "migration_version": "252_vkpi_advisor_turn_claims.sql",
+    }
+    with pytest.raises(staging_db_clone.CloneError, match="single-link"):
+        staging_db_clone.write_release_receipt(
+            **kwargs,
+            state="migrated-not-activated",
+        )
+
+    receipt.unlink()
+    staging_db_clone.write_release_receipt(
+        **kwargs,
+        state="migrated-not-activated",
+    )
+    hardlink = tmp_path / "receipt-hardlink"
+    os.link(receipt, hardlink)
+    with pytest.raises(staging_db_clone.CloneError, match="single-link"):
         staging_db_clone.write_release_receipt(**kwargs, state="activated")
 
 

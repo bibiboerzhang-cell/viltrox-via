@@ -63,7 +63,7 @@ ReadWritePaths=/opt/viltrox-2.0/uploads
 ReadWritePaths=/opt/viltrox-2.0/runtime
 ReadWritePaths=/opt/viltrox-2.0/frames
 ReadWritePaths=/opt/viltrox-2.0/creator_profiles
-ReadOnlyPaths=-/opt/viltrox-2.0/runtime/ops/deploy-rollbacks
+ReadOnlyPaths=-/opt/viltrox-2.0/.release-controller
 InaccessiblePaths=/opt/viltrox-2.0/backups
 
 [Install]

@@ -20,6 +20,11 @@ assert_clean_worktree() {
 assert_clean_worktree
 LOCAL_GIT_SHA="$(git rev-parse --verify HEAD)"
 LOCAL_GIT_BRANCH="$(git branch --show-current)"
+LOCAL_HEALTH_ENV_FILE="${VKPI_HEALTH_ENV_FILE:-}"
+if [ -z "${LOCAL_HEALTH_ENV_FILE}" ]; then
+  echo "VKPI_HEALTH_ENV_FILE must explicitly name the protected local health-token dotenv." >&2
+  exit 1
+fi
 
 assert_deploy_source_unchanged() {
   local current_head
@@ -36,6 +41,7 @@ assert_deploy_source_unchanged() {
 #       + 千行卫兵 + 运行态 sha 对齐。任何一步失败都不允许 rsync 上云。
 echo "[deploy] gate: strict code + runtime trust verification(全绿才继续)..."
 if ! VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1 \
+  OPS_HEALTH_TOKEN= VKPI_HEALTH_ENV_FILE="${LOCAL_HEALTH_ENV_FILE}" \
   VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE=0 VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY=0 \
   bash "${PROJECT_ROOT}/scripts/verify.sh"; then
   echo "[deploy] verify.sh 非零退出 —— 部署中止。先把 verify 修绿再出海。" >&2
@@ -93,6 +99,16 @@ PREDEPLOY_MIGRATION=""
 PENDING_MIGRATIONS=""
 FORWARD_COMPATIBILITY_DECLARATION="${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}"
 STAGING_DB_CLONE_MODE="${VKPI_STAGING_DB_CLONE:-0}"
+FIRST_ATOMIC_BOOTSTRAP_PLAN="${VKPI_FIRST_ATOMIC_BOOTSTRAP_PLAN:-}"
+FIRST_ATOMIC_BOOTSTRAP_CONFIRM="${VKPI_FIRST_ATOMIC_BOOTSTRAP_CONFIRM:-}"
+FIRST_ATOMIC_BOOTSTRAP_MODE=0
+FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER="/etc/vkpi/first-atomic-bootstrap-accepted.json"
+FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP=""
+FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256=""
+FIRST_ATOMIC_BOOTSTRAP_SERVER_SHA=""
+FIRST_ATOMIC_BOOTSTRAP_CLIENT_SHA=""
+FIRST_ATOMIC_BOOTSTRAP_ROOT_SHA=""
+FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR=""
 STAGING_SOURCE_DATABASE=""
 STAGING_CLONE_DATABASE=""
 STAGING_REDIS_WORKER_SERVICE="vkpi-redis-worker.service"
@@ -121,6 +137,14 @@ SYNC_SERVICE_ACTIVE_STATE=""
 SYNC_SERVICE_UNIT_FILE_STATE=""
 SYNC_TIMER_ACTIVE_STATE=""
 SYNC_TIMER_UNIT_FILE_STATE=""
+
+if [ -n "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" ] || [ -n "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" ]; then
+  if [ -z "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" ] || [ -z "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" ]; then
+    echo "VKPI_FIRST_ATOMIC_BOOTSTRAP_PLAN and VKPI_FIRST_ATOMIC_BOOTSTRAP_CONFIRM must be supplied together." >&2
+    exit 1
+  fi
+  FIRST_ATOMIC_BOOTSTRAP_MODE=1
+fi
 
 if ! [[ "${SERVICE_NAME}" =~ ^[A-Za-z0-9@_.-]+\.service$ ]]; then
   echo "SERVICE_NAME must be a systemd service unit name." >&2
@@ -165,6 +189,24 @@ if [ "${REMOTE_ROOT}" = "/opt/viltrox-2.0" ] \
   && [ "${SERVICE_NAME}" = "viltrox-2.0-test.service" ] \
   && [ "${REMOTE_SERVICE_UNIT_RELATIVE}" = "scripts/ops/systemd/viltrox-2.0-test.service" ]; then
   VILTROXTEST_RELEASE_SCOPE=1
+fi
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  if [ "${VILTROXTEST_RELEASE_SCOPE}" != "1" ]; then
+    echo "The first atomic bootstrap is restricted to the reviewed viltroxtest release scope." >&2
+    exit 1
+  fi
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    echo "The first atomic bootstrap requires VKPI_STAGING_DB_CLONE=1." >&2
+    exit 1
+  fi
+  if [ "${SKIP_BACKUP:-0}" = "1" ]; then
+    echo "SKIP_BACKUP=1 is forbidden for the first atomic bootstrap." >&2
+    exit 1
+  fi
+  if [ -n "${FORWARD_COMPATIBILITY_DECLARATION}" ]; then
+    echo "The first atomic bootstrap forbids an in-place forward-compatibility declaration." >&2
+    exit 1
+  fi
 fi
 viltroxtest_browser_gate_is_exact() {
   "${PROJECT_ROOT}/.venv/bin/python" - "${POST_DEPLOY_BROWSER_URL}" <<'PY'
@@ -509,7 +551,58 @@ attempt_automatic_rollback() {
     echo "[deploy] CRITICAL: rollback health reported an unexpected DB migration: ${rollback_migration}" >&2
     return 1
   fi
-  if ! printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
+  if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+    local rollback_preflight rollback_anchor rollback_health_file rollback_preflight_status
+    rollback_preflight="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/rollback-preflight.json"
+    rollback_anchor="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/rollback-anchor.json"
+    rollback_health_file="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/rollback-health.json"
+    printf '%s\n' "${rollback_health}" >"${rollback_health_file}"
+    chmod 600 -- "${rollback_health_file}"
+    if "${PROJECT_ROOT}/.venv/bin/python" \
+      "${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py" \
+      --ssh-target "${SSH_TARGET}" \
+      --root "${REMOTE_ROOT}" \
+      --app-user "${REMOTE_APP_USER}" \
+      --remote-python "${REMOTE_ROOT}/.venv/bin/python" \
+      --health-url "${HEALTH_URL}" \
+      --expected-migration "${LATEST_MIGRATION}" \
+      >"${rollback_preflight}"; then
+      rollback_preflight_status=0
+    else
+      rollback_preflight_status=$?
+    fi
+    chmod 600 -- "${rollback_preflight}"
+    if [ "${rollback_preflight_status}" -ne 2 ]; then
+      echo "[deploy] CRITICAL: restored legacy preflight no longer has the exact planned six blockers." >&2
+      return 1
+    fi
+    if ! ssh "${SSH_TARGET}" \
+      "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - collect-anchor --root '${REMOTE_ROOT}' --backup-stamp '${FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP}' --success-marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}'" \
+      <"${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
+      >"${rollback_anchor}"; then
+      echo "[deploy] CRITICAL: restored legacy filesystem anchor could not be collected." >&2
+      return 1
+    fi
+    chmod 600 -- "${rollback_anchor}"
+    if ! "${PROJECT_ROOT}/.venv/bin/python" \
+      "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-rollback \
+      --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
+      --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
+      --preflight "${rollback_preflight}" \
+      --health "${rollback_health_file}" \
+      --anchor "${rollback_anchor}" \
+      --ssh-target "${SSH_TARGET}" \
+      --root "${REMOTE_ROOT}" \
+      --service "${SERVICE_NAME}" \
+      --health-url "${HEALTH_URL}" \
+      --release-id "${RELEASE_ID}" \
+      --git-sha "${LOCAL_GIT_SHA}" \
+      --target-migration "${LATEST_MIGRATION}" \
+      --pending-migrations "${PENDING_MIGRATIONS}" >/dev/null; then
+      echo "[deploy] CRITICAL: restored pointers, units, environment, recovery evidence, or split legacy SHA anchor drifted." >&2
+      return 1
+    fi
+  elif ! printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
     "${PROJECT_ROOT}/scripts/verify_runtime_health.py" \
     --strict-deploy \
     --expected-head "${PREDEPLOY_APP_SHA}" \
@@ -561,6 +654,9 @@ cleanup_post_deploy_evidence() {
   fi
   if [ -d "${POST_DEPLOY_EVIDENCE_DIR}" ]; then
     echo "[deploy] post-restart evidence retained: ${POST_DEPLOY_EVIDENCE_DIR}" >&2
+  fi
+  if [ -n "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}" ]; then
+    rm -rf -- "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}"
   fi
   return "${original_rc}"
 }
@@ -638,6 +734,66 @@ fetch_predeploy_runtime_health() {
     < "${PROJECT_ROOT}/scripts/ops/fetch_runtime_health.py"
 }
 
+harden_first_atomic_root() {
+  # The legacy host historically let the application user own REMOTE_ROOT.
+  # A root-owned 0700 release controller is not a security boundary while its
+  # parent can still be renamed by that user. Make this a one-way reliability
+  # prerequisite: rollback never downgrades the root to app-writable ownership.
+  ssh "${SSH_TARGET}" \
+    "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}' '${REMOTE_APP_USER}' '${REMOTE_APP_GROUP}'" <<'PY'
+from __future__ import annotations
+
+import grp
+import os
+from pathlib import Path
+import pwd
+import stat
+import sys
+
+root = Path(sys.argv[1])
+app_uid = pwd.getpwnam(sys.argv[2]).pw_uid
+app_gid = grp.getgrnam(sys.argv[3]).gr_gid
+before = root.lstat()
+if not stat.S_ISDIR(before.st_mode) or root.is_symlink():
+    raise SystemExit("application root must be a real directory")
+allowed = {
+    (app_uid, app_gid, 0o755),
+    (0, app_gid, 0o755),
+}
+if (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) not in allowed:
+    raise SystemExit("application root does not match the reviewed legacy or hardened shape")
+parent = root.parent
+parent_info = parent.lstat()
+if (
+    not stat.S_ISDIR(parent_info.st_mode)
+    or parent.is_symlink()
+    or parent_info.st_uid != 0
+    or stat.S_IMODE(parent_info.st_mode) & 0o022
+):
+    raise SystemExit("application root parent is not a trusted root-owned directory")
+os.chown(root, 0, app_gid, follow_symlinks=False)
+os.chmod(root, 0o755, follow_symlinks=False)
+for directory in (root, parent):
+    descriptor = os.open(
+        directory,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+after = root.lstat()
+if (
+    not stat.S_ISDIR(after.st_mode)
+    or after.st_uid != 0
+    or after.st_gid != app_gid
+    or stat.S_IMODE(after.st_mode) != 0o755
+):
+    raise SystemExit("application root hardening postcondition failed")
+sys.stdout.write("application_root_hardening=verified\n")
+PY
+}
+
 LATEST_MIGRATION="$(find "${PROJECT_ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
 if [ -z "${LATEST_MIGRATION}" ]; then
   echo "Refusing deploy because the local migration manifest is empty." >&2
@@ -666,31 +822,78 @@ if ! [[ "${PREDEPLOY_APP_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ -z "${PREDEPLOY_MIGRATI
   echo "Refusing deploy because pre-deploy app SHA or migration identity is untrusted." >&2
   exit 1
 fi
-# The pre-deploy state is the automatic rollback anchor.  It must already be a
-# strict, internally aligned web/client/seven-worker runtime; otherwise a failed
-# first rollout could restore bytes successfully yet be impossible to accept.
-# Deliberately provide no legacy mismatch bypass: bootstrap must first establish
-# an aligned, reviewed anchor (or add a separately reviewed exact-state contract).
-if ! printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
-  "${PROJECT_ROOT}/scripts/verify_runtime_health.py" \
-  --strict-deploy \
-  --expected-head "${PREDEPLOY_APP_SHA}" \
-  --expected-migration "${PREDEPLOY_MIGRATION}" \
-  --require-worker \
-  --expected-worker-count "${EXPECTED_WORKER_COUNT}" \
-  --worker-not-before "1970-01-01T00:00:00Z" \
-  --max-worker-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
-  echo "Refusing deploy because the pre-deploy rollback anchor is not a strict aligned web/client/seven-worker runtime." >&2
-  exit 1
+# Every normal deploy keeps the strict aligned rollback anchor and has no legacy mismatch bypass.
+# The one-time
+# legacy bootstrap is not a boolean bypass: it is accepted only later by the
+# separately hashed plan whose old server/client identities are bound exactly.
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" != "1" ]; then
+  if ! printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
+    "${PROJECT_ROOT}/scripts/verify_runtime_health.py" \
+    --strict-deploy \
+    --expected-head "${PREDEPLOY_APP_SHA}" \
+    --expected-migration "${PREDEPLOY_MIGRATION}" \
+    --require-worker \
+    --expected-worker-count "${EXPECTED_WORKER_COUNT}" \
+    --worker-not-before "1970-01-01T00:00:00Z" \
+    --max-worker-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
+    echo "Refusing deploy because the pre-deploy rollback anchor is not a strict aligned web/client/seven-worker runtime." >&2
+    exit 1
+  fi
 fi
 if [ "${VILTROXTEST_RELEASE_SCOPE}" = "1" ]; then
   if ! REMOTE_PREDEPLOY_DB_STATE_JSON="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}/.env'" <<'PY'
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+def secure_controller_directory(path, label):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        raise SystemExit(f"{label} is missing") from None
+    if not stat.S_ISDIR(info.st_mode):
+        raise SystemExit(f"{label} must be a real directory")
+    if info.st_uid != os.geteuid():
+        raise SystemExit(f"{label} owner is not the release controller")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        raise SystemExit(f"{label} mode must be 0700")
+    return path
+
+def read_controller_file(path, label):
+    try:
+        initial = path.lstat()
+    except FileNotFoundError:
+        raise SystemExit(f"{label} is missing") from None
+    if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
+        raise SystemExit(f"{label} must be a regular single-link file")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (info.st_dev, info.st_ino) != (initial.st_dev, initial.st_ino)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise SystemExit(f"{label} is not a secure controller file")
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 path = Path(sys.argv[1])
 if not path.is_file() or path.is_symlink():
@@ -783,13 +986,40 @@ elif clone_re.fullmatch(database_name):
         or owner_manifest.get("target_database") != database_name
     ):
         raise SystemExit("database owner release manifest identity mismatch")
-    receipt_path = root / "runtime" / "ops" / "deploy-rollbacks" / database_owner_release_id / "database-clone.json"
-    if not receipt_path.is_file():
-        raise SystemExit("active clone receipt is missing")
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    controller = secure_controller_directory(
+        root / ".release-controller", "release controller directory"
+    )
+    rollbacks = secure_controller_directory(
+        controller / "rollbacks", "release rollback directory"
+    )
+    rollback_dir = secure_controller_directory(
+        rollbacks / database_owner_release_id,
+        "release rollback capture directory",
+    )
+    metadata_digest = read_controller_file(
+        rollback_dir / "metadata.sha256", "rollback metadata digest"
+    ).decode("ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", metadata_digest):
+        raise SystemExit("rollback metadata digest is invalid")
+    metadata_payload = read_controller_file(
+        rollback_dir / "metadata.json", "rollback metadata"
+    )
+    if hashlib.sha256(metadata_payload).hexdigest() != metadata_digest:
+        raise SystemExit("rollback metadata hash mismatch")
+    rollback_metadata = json.loads(metadata_payload.decode("utf-8"))
+    if (
+        rollback_metadata.get("schema") != 3
+        or rollback_metadata.get("release_id") != database_owner_release_id
+    ):
+        raise SystemExit("rollback capture does not belong to the database owner release")
+    receipt_path = rollback_dir / "database-clone.json"
+    receipt = json.loads(
+        read_controller_file(receipt_path, "database clone receipt").decode("utf-8")
+    )
     if (
         receipt.get("release_id") != database_owner_release_id
         or receipt.get("database_strategy") != "staging-clone"
+        or receipt.get("source_database") != owner_manifest.get("source_database")
         or receipt.get("target_database") != database_name
         or receipt.get("state") != "activated"
         or receipt.get("secrets_included") is not False
@@ -881,6 +1111,90 @@ elif [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ]; then
   DATABASE_OWNER_RELEASE_ID="${PREDEPLOY_DATABASE_OWNER_RELEASE_ID}"
 fi
 
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  if [ "${STAGING_SOURCE_KIND}" != "legacy-base" ] \
+    || [ "${PREDEPLOY_DATABASE_NAME}" != "viltrox2_test" ] \
+    || [ -z "${PENDING_MIGRATIONS}" ]; then
+    echo "The first atomic bootstrap requires the untouched legacy database source and at least one pending migration." >&2
+    exit 1
+  fi
+
+  FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP="$(
+    "${PROJECT_ROOT}/.venv/bin/python" \
+      "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" plan-field \
+      --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
+      --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
+      --field recovery.backup_stamp
+  )"
+  FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vkpi-first-atomic-bootstrap.XXXXXX")"
+  chmod 700 -- "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}"
+  BOOTSTRAP_PREFLIGHT_JSON="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/preflight.json"
+  BOOTSTRAP_HEALTH_JSON="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/health.json"
+  BOOTSTRAP_ANCHOR_JSON="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/anchor.json"
+  printf '%s\n' "${REMOTE_PREDEPLOY_HEALTH_JSON}" >"${BOOTSTRAP_HEALTH_JSON}"
+  chmod 600 -- "${BOOTSTRAP_HEALTH_JSON}"
+
+  if "${PROJECT_ROOT}/.venv/bin/python" \
+    "${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py" \
+    --ssh-target "${SSH_TARGET}" \
+    --root "${REMOTE_ROOT}" \
+    --app-user "${REMOTE_APP_USER}" \
+    --remote-python "${REMOTE_ROOT}/.venv/bin/python" \
+    --health-url "${HEALTH_URL}" \
+    --expected-migration "${LATEST_MIGRATION}" \
+    >"${BOOTSTRAP_PREFLIGHT_JSON}"; then
+    bootstrap_preflight_status=0
+  else
+    bootstrap_preflight_status=$?
+  fi
+  chmod 600 -- "${BOOTSTRAP_PREFLIGHT_JSON}"
+  if [ "${bootstrap_preflight_status}" -ne 2 ]; then
+    echo "The first atomic bootstrap requires the exact reviewed six-blocker legacy preflight state." >&2
+    exit 1
+  fi
+
+  ssh "${SSH_TARGET}" \
+    "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - collect-anchor --root '${REMOTE_ROOT}' --backup-stamp '${FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP}' --success-marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}'" \
+    <"${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
+    >"${BOOTSTRAP_ANCHOR_JSON}"
+  chmod 600 -- "${BOOTSTRAP_ANCHOR_JSON}"
+
+  FIRST_ATOMIC_BOOTSTRAP_SUMMARY="$(
+    "${PROJECT_ROOT}/.venv/bin/python" \
+      "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-plan \
+      --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
+      --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
+      --preflight "${BOOTSTRAP_PREFLIGHT_JSON}" \
+      --health "${BOOTSTRAP_HEALTH_JSON}" \
+      --anchor "${BOOTSTRAP_ANCHOR_JSON}" \
+      --ssh-target "${SSH_TARGET}" \
+      --root "${REMOTE_ROOT}" \
+      --service "${SERVICE_NAME}" \
+      --health-url "${HEALTH_URL}" \
+      --release-id "${RELEASE_ID}" \
+      --git-sha "${LOCAL_GIT_SHA}" \
+      --target-migration "${LATEST_MIGRATION}" \
+      --pending-migrations "${PENDING_MIGRATIONS}"
+  )"
+  read -r FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256 FIRST_ATOMIC_BOOTSTRAP_SERVER_SHA \
+    FIRST_ATOMIC_BOOTSTRAP_CLIENT_SHA FIRST_ATOMIC_BOOTSTRAP_ROOT_SHA \
+    bootstrap_database bootstrap_migration bootstrap_env_sha < <(
+      printf '%s' "${FIRST_ATOMIC_BOOTSTRAP_SUMMARY}" | "${PROJECT_ROOT}/.venv/bin/python" -c \
+        'import json,sys; p=json.load(sys.stdin); print(p["plan_sha256"],p["server_git_sha"],p["client_git_sha"],p["root_build_git_sha"],p["database_name"],p["db_migration"],p["environment_sha256"])'
+    )
+  if [ "${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}" != "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" ] \
+    || [ "${FIRST_ATOMIC_BOOTSTRAP_SERVER_SHA}" != "${PREDEPLOY_APP_SHA}" ] \
+    || [ "${bootstrap_database}" != "${PREDEPLOY_DATABASE_NAME}" ] \
+    || [ "${bootstrap_migration}" != "${PREDEPLOY_MIGRATION}" ] \
+    || [ "${bootstrap_env_sha}" != "${PREDEPLOY_ENV_SHA256}" ]; then
+    echo "The first atomic bootstrap live anchor changed during verification." >&2
+    exit 1
+  fi
+  STAGING_BACKUP_VERIFIED=1
+  echo "[deploy] first atomic bootstrap plan verified: ${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}"
+  harden_first_atomic_root
+fi
+
 # Freeze timer-triggered writers before the potentially long build, backup and
 # release staging interval.  The formal fleet quiesce reasserts the mask before
 # any shared environment/database/current-pointer mutation.
@@ -890,7 +1204,15 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   npm --prefix frontend run build
 fi
 
-if [ "${SKIP_BACKUP:-0}" != "1" ]; then
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  # The signed-off plan already binds a verified, encrypted, off-host backup by
+  # three independent SHA-256 values.  Re-running the backup here would create
+  # an unplanned recovery anchor and is therefore forbidden rather than useful.
+  [ "${STAGING_BACKUP_VERIFIED}" = "1" ] || {
+    echo "The first atomic bootstrap recovery set was not verified." >&2
+    exit 1
+  }
+elif [ "${SKIP_BACKUP:-0}" != "1" ]; then
   if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     STAGING_BACKUP_STAMP="${RELEASE_ID}-preclone"
     STAGING_BACKUP_DIR="${PROJECT_ROOT}/runtime/prod-sync/${STAGING_BACKUP_STAMP}"
@@ -975,7 +1297,23 @@ ssh "${SSH_TARGET}" "cd '${REMOTE_RELEASE_DIR}' && printf '%s\n' '${LOCAL_GIT_SH
 # redundancy is intentional: helpers run before and after sealing, and neither
 # a sudo environment policy nor a future env -i refactor may recreate bytecode
 # inside the immutable release/current tree and invalidate its payload digest.
-ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  # The legacy .env is intentionally still writable until prepare has captured
+  # it.  Seal first, then harden .env and run the deferred worker permission
+  # checks while the complete consumer fleet is stopped.
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '' --database-strategy 'staging-clone' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
+  BOOTSTRAP_CANDIDATE_MANIFEST="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/candidate-manifest.json"
+  ssh "${SSH_TARGET}" "sudo cat -- '${REMOTE_RELEASE_DIR}/.vkpi-release.json'" >"${BOOTSTRAP_CANDIDATE_MANIFEST}"
+  chmod 600 -- "${BOOTSTRAP_CANDIDATE_MANIFEST}"
+  "${PROJECT_ROOT}/.venv/bin/python" \
+    "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-candidate \
+    --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
+    --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
+    --manifest "${BOOTSTRAP_CANDIDATE_MANIFEST}" \
+    --target-database "${STAGING_CLONE_DATABASE}" >/dev/null
+else
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
+fi
 
 # Capture the exact effective env/units and establish previous before changing
 # shared configuration or the active application pointer.
@@ -1055,11 +1393,30 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' verify-migration --target-db '${STAGING_CLONE_DATABASE}' --expected-version '${LATEST_MIGRATION}' >/dev/null"
 fi
 
-ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
-from pathlib import Path
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  ssh "${SSH_TARGET}" "sudo chown root:'${REMOTE_APP_GROUP}' '${REMOTE_ROOT}/.env' && sudo chmod 0640 '${REMOTE_ROOT}/.env'"
+fi
+ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}/.env' '${REMOTE_RELEASE_DIR}' '${FIRST_ATOMIC_BOOTSTRAP_MODE}' '${REMOTE_APP_GROUP}' <<'PY'
+from __future__ import annotations
 
-path = Path('${REMOTE_ROOT}/.env')
-release = Path('${REMOTE_RELEASE_DIR}')
+import grp
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+release = Path(sys.argv[2])
+bootstrap = sys.argv[3] == '1'
+group_name = sys.argv[4]
+before = path.lstat()
+if not stat.S_ISREG(before.st_mode) or path.is_symlink() or before.st_nlink != 1:
+    raise SystemExit('shared environment file is unsafe')
+raw = path.read_bytes()
+if len(raw) > 1024 * 1024:
+    raise SystemExit('shared environment file is unexpectedly large')
+lines = raw.decode('utf-8').splitlines()
 git_sha = (release / 'BUILD_GIT_SHA').read_text(encoding='utf-8').strip()
 updates = {
     'APP_GIT_SHA': git_sha,
@@ -1067,16 +1424,14 @@ updates = {
     'APP_GIT_BRANCH': (release / 'BUILD_GIT_BRANCH').read_text(encoding='utf-8').strip(),
     'APP_BUILD_TIME': (release / 'BUILD_TIME').read_text(encoding='utf-8').strip(),
 }
-if path.exists():
-    lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
-else:
-    lines = []
-seen = set()
-out = []
+seen: set[str] = set()
+out: list[str] = []
 for line in lines:
     if '=' in line and not line.lstrip().startswith('#'):
         key = line.split('=', 1)[0].strip()
         if key in updates:
+            if key in seen:
+                raise SystemExit('duplicate application build stamp in shared environment')
             out.append(f'{key}={updates[key]}')
             seen.add(key)
             continue
@@ -1084,9 +1439,46 @@ for line in lines:
 for key, value in updates.items():
     if key not in seen:
         out.append(f'{key}={value}')
-path.write_text('\\n'.join(out) + '\\n', encoding='utf-8')
+payload = ('\\n'.join(out) + '\\n').encode('utf-8')
+uid, gid, mode = before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)
+if bootstrap:
+    uid, gid, mode = 0, grp.getgrnam(group_name).gr_gid, 0o640
+    if (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) != (uid, gid, mode):
+        raise SystemExit('bootstrap environment hardening did not reach root:app-group 0640')
+descriptor, temporary_name = tempfile.mkstemp(prefix='.env.build-stamp.', dir=path.parent)
+temporary = Path(temporary_name)
+try:
+    os.fchmod(descriptor, mode)
+    os.fchown(descriptor, uid, gid)
+    with os.fdopen(descriptor, 'wb', closefd=False) as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.close(descriptor)
+    descriptor = -1
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+    temporary.unlink(missing_ok=True)
+after = path.lstat()
+if (
+    not stat.S_ISREG(after.st_mode)
+    or after.st_nlink != 1
+    or (after.st_uid, after.st_gid, stat.S_IMODE(after.st_mode)) != (uid, gid, mode)
+):
+    raise SystemExit('atomic application build stamp metadata mismatch')
 PY
 "
+
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results'"
+fi
 
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
@@ -1358,5 +1750,8 @@ read -r -a PRIVATE_SURFACE_URL_LIST <<< "${PRIVATE_SURFACE_URLS}"
   "${PRIVATE_SURFACE_URL_LIST[@]}"
 
 restore_remote_sync_unit_state
+if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py' write-success-marker --marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}' --plan-sha256 '${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' >/dev/null"
+fi
 DEPLOY_ACCEPTED=1
 echo "[deploy] retained post-restart evidence: ${POST_DEPLOY_EVIDENCE_DIR}"

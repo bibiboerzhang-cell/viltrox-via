@@ -308,8 +308,30 @@ run_step "line guard >1000 (whitelist=legacy 6)" line_guard_1000
 # heartbeat/scheduler 不可信都会失败；部署入口强制启用该模式。
 runtime_sha_aligned() {
   local url="${VKPI_HEALTH_URL:-http://localhost:8102/health}"
-  local body
-  body="$(curl -s --max-time 3 "$url" 2>/dev/null || true)"
+  local body=""
+  if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
+    # Strict runtime evidence is private in production.  Keep the token out of
+    # argv/stdout and delegate its protected-file/inherited-env handling to the
+    # reviewed loopback-only probe.  The probe fails closed when neither source
+    # is explicitly available.
+    local health_fetch_args=(
+      "$ROOT/scripts/ops/fetch_runtime_health.py"
+      --url "$url"
+      --timeout-seconds 3
+    )
+    if [ -n "${VKPI_HEALTH_ENV_FILE:-}" ]; then
+      health_fetch_args+=(--env-file "$VKPI_HEALTH_ENV_FILE")
+    fi
+    if ! body="$("$PYTHON_BIN" "${health_fetch_args[@]}")"; then
+      RUNTIME_VERIFICATION_STATE="failed"
+      echo "[verify] ${url} 私有运行态读取失败，严格运行态门禁失败。" >&2
+      return 1
+    fi
+  else
+    # Development/static compatibility: an optional local service may still
+    # expose the historical unauthenticated health contract.
+    body="$(curl -s --max-time 3 "$url" 2>/dev/null || true)"
+  fi
   if [ -z "$body" ]; then
     RUNTIME_VERIFICATION_STATE="unavailable"
     if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then

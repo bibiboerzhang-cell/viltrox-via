@@ -47,7 +47,7 @@ def test_cloud_web_unit_uses_bounded_gunicorn_concurrency() -> None:
     assert "AmbientCapabilities=\n" in unit
     assert "ReadOnlyPaths=/opt/viltrox-2.0/current" in unit
     assert "ReadOnlyPaths=/opt/viltrox-2.0/.env" in unit
-    assert "ReadOnlyPaths=-/opt/viltrox-2.0/runtime/ops/deploy-rollbacks" in unit
+    assert "ReadOnlyPaths=-/opt/viltrox-2.0/.release-controller" in unit
     assert "InaccessiblePaths=/opt/viltrox-2.0/backups" in unit
     assert {
         line.split("=", 1)[1]
@@ -100,6 +100,18 @@ def test_deploy_uses_atomic_release_and_fail_closed_migration_contract() -> None
     assert "database is never auto-restored" in deploy
     assert "-m pip install" not in deploy
     assert "-m yt_dlp --version" in deploy
+
+
+def test_deploy_proves_clone_receipt_from_root_owned_release_controller() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    assert 'root / ".release-controller"' in deploy
+    assert 'rollback_dir / "database-clone.json"' in deploy
+    assert 'rollback_dir / "metadata.sha256"' in deploy
+    assert 'rollback_dir / "metadata.json"' in deploy
+    assert 'getattr(os, "O_NOFOLLOW", 0)' in deploy
+    assert "info.st_nlink != 1" in deploy
+    assert "stat.S_IMODE(info.st_mode) != 0o600" in deploy
 
 
 def test_deploy_rsync_excludes_local_cache_artifacts_not_runtime_payload() -> None:

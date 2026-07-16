@@ -42,6 +42,32 @@ def _run(
     return result
 
 
+def _rollback_dir(root: Path, release_id: str) -> Path:
+    return root / ".release-controller" / "rollbacks" / release_id
+
+
+def _rollback_metadata(root: Path, release_id: str) -> dict[str, object]:
+    return json.loads(
+        (_rollback_dir(root, release_id) / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def _rewrite_rollback_metadata(
+    root: Path,
+    release_id: str,
+    metadata: dict[str, object],
+) -> None:
+    payload = (json.dumps(metadata, sort_keys=True) + "\n").encode("utf-8")
+    rollback_dir = _rollback_dir(root, release_id)
+    (rollback_dir / "metadata.json").write_bytes(payload)
+    (rollback_dir / "metadata.sha256").write_text(
+        hashlib.sha256(payload).hexdigest() + "\n",
+        encoding="ascii",
+    )
+
+
 def _fake_systemctl(tmp_path: Path, *, active: str, enabled: str) -> tuple[Path, dict[str, str]]:
     executable = tmp_path / "systemctl"
     executable.write_text(
@@ -167,7 +193,7 @@ def _release(
     return release
 
 
-def _prepare(root: Path, unit_dir: Path, release_id: str) -> None:
+def _prepare_args(root: Path, unit_dir: Path, release_id: str) -> list[str]:
     args = [
         "prepare",
         "--root",
@@ -183,12 +209,21 @@ def _prepare(root: Path, unit_dir: Path, release_id: str) -> None:
     ]
     for name in UNITS:
         args.extend(("--unit-name", name))
-    _run(*args)
+    return args
 
 
-def test_first_release_never_overwrites_flat_tree_and_restore_is_atomic(tmp_path: Path) -> None:
+def _prepare(root: Path, unit_dir: Path, release_id: str) -> None:
+    _run(*_prepare_args(root, unit_dir, release_id))
+
+
+def test_first_release_restores_absent_pointers_and_retains_legacy_audit_snapshot(
+    tmp_path: Path,
+) -> None:
     root, unit_dir = _layout(tmp_path)
     release_id = "release-1"
+    required_unit = unit_dir / UNITS[0]
+    required_unit.chmod(0o640)
+    required_unit_info = required_unit.stat()
     release = _release(root, release_id, "1" * 40)
 
     _prepare(root, unit_dir, release_id)
@@ -196,6 +231,35 @@ def test_first_release_never_overwrites_flat_tree_and_restore_is_atomic(tmp_path
     assert legacy.name == f"legacy-before-{release_id}"
     assert (root / "legacy.txt").read_text(encoding="utf-8") == "old-running-tree\n"
     assert (legacy / "legacy.txt").read_text(encoding="utf-8") == "old-running-tree\n"
+    rollback = _rollback_metadata(root, release_id)
+    assert rollback["schema"] == 3
+    assert rollback["original_current_release"] is None
+    assert rollback["original_previous_release"] is None
+    assert Path(rollback["legacy_snapshot_release"]).resolve() == legacy
+    controller = root / ".release-controller"
+    rollback_dir = _rollback_dir(root, release_id)
+    assert stat.S_IMODE(controller.stat().st_mode) == 0o700
+    assert stat.S_IMODE((controller / "rollbacks").stat().st_mode) == 0o700
+    assert stat.S_IMODE(rollback_dir.stat().st_mode) == 0o700
+    assert controller.stat().st_uid == os.geteuid()
+    for capture in (
+        rollback_dir / ".env",
+        rollback_dir / "metadata.json",
+        rollback_dir / "metadata.sha256",
+        rollback_dir / "units" / UNITS[0],
+    ):
+        info = capture.stat()
+        assert info.st_uid == os.geteuid()
+        assert info.st_nlink == 1
+        assert stat.S_IMODE(info.st_mode) == 0o600
+    required_metadata = rollback["unit_files"][UNITS[0]]
+    assert required_metadata == {
+        "uid": required_unit_info.st_uid,
+        "gid": required_unit_info.st_gid,
+        "mode": 0o640,
+        "sha256": hashlib.sha256(required_unit.read_bytes()).hexdigest(),
+    }
+    assert not (legacy / ".release-controller").exists()
 
     _run("activate", "--root", str(root), "--release-id", release_id)
     assert (root / "current").resolve() == release.resolve()
@@ -229,6 +293,8 @@ def test_first_release_never_overwrites_flat_tree_and_restore_is_atomic(tmp_path
     (root / ".env").write_text("APP_GIT_SHA=new\n", encoding="utf-8")
     for name in UNITS:
         (unit_dir / name).write_text(f"new:{name}\n", encoding="utf-8")
+    changed_unit_alias = unit_dir / ".required-unit.changed-inode"
+    os.link(required_unit, changed_unit_alias)
     _run(
         "restore",
         "--root",
@@ -238,11 +304,22 @@ def test_first_release_never_overwrites_flat_tree_and_restore_is_atomic(tmp_path
         "--unit-dir",
         str(unit_dir),
     )
-    assert (root / "current").resolve() == legacy
+    assert not (root / "current").exists()
+    assert not (root / "current").is_symlink()
     assert not (root / "previous").exists()
+    assert not (root / "previous").is_symlink()
+    assert legacy.is_dir()
+    assert (legacy / ".vkpi-release.json").is_file()
     assert (root / ".env").read_text(encoding="utf-8") == "APP_GIT_SHA=old\nSECRET=preserved\n"
     for name in UNITS:
         assert (unit_dir / name).read_text(encoding="utf-8") == f"old:{name}\n"
+    restored_unit_info = required_unit.stat()
+    assert restored_unit_info.st_uid == required_unit_info.st_uid
+    assert restored_unit_info.st_gid == required_unit_info.st_gid
+    assert stat.S_IMODE(restored_unit_info.st_mode) == 0o640
+    assert changed_unit_alias.read_text(encoding="utf-8") == f"new:{UNITS[0]}\n"
+    assert changed_unit_alias.stat().st_ino != restored_unit_info.st_ino
+    assert not list(unit_dir.glob(".*.service.restore-*.tmp"))
 
 
 def test_sealed_payload_tamper_is_rejected_before_prepare_or_activate(tmp_path: Path) -> None:
@@ -339,6 +416,10 @@ def test_later_release_restores_current_and_prior_previous_pointer(tmp_path: Pat
 
     _prepare(root, unit_dir, "release-2")
     assert (root / "previous").resolve() == first.resolve()
+    rollback = _rollback_metadata(root, "release-2")
+    assert Path(rollback["original_current_release"]).resolve() == first.resolve()
+    assert Path(rollback["original_previous_release"]).resolve() == legacy.resolve()
+    assert rollback["legacy_snapshot_release"] is None
     _run("activate", "--root", str(root), "--release-id", "release-2")
     _run(
         "restore",
@@ -351,6 +432,344 @@ def test_later_release_restores_current_and_prior_previous_pointer(tmp_path: Pat
     )
     assert (root / "current").resolve() == first.resolve()
     assert (root / "previous").resolve() == legacy.resolve()
+
+
+def test_env_restore_is_hash_bound_atomic_and_restores_owner_and_mode(
+    tmp_path: Path,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = "release-env-atomic"
+    env_file = root / ".env"
+    env_file.chmod(0o640)
+    original = env_file.read_bytes()
+    original_info = env_file.stat()
+    release = _release(root, release_id, "a" * 40)
+
+    _prepare(root, unit_dir, release_id)
+    metadata = _rollback_metadata(root, release_id)
+    assert metadata["environment_file"] == {
+        "uid": original_info.st_uid,
+        "gid": original_info.st_gid,
+        "mode": 0o640,
+        "sha256": hashlib.sha256(original).hexdigest(),
+    }
+
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    changed = b"APP_GIT_SHA=new\nSECRET=changed\n"
+    env_file.write_bytes(changed)
+    env_file.chmod(0o600)
+    old_inode_alias = root / ".env.changed-inode"
+    os.link(env_file, old_inode_alias)
+
+    _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+    )
+
+    restored = env_file.stat()
+    assert env_file.read_bytes() == original
+    assert restored.st_uid == original_info.st_uid
+    assert restored.st_gid == original_info.st_gid
+    assert stat.S_IMODE(restored.st_mode) == 0o640
+    assert old_inode_alias.read_bytes() == changed
+    assert old_inode_alias.stat().st_ino != restored.st_ino
+    assert not list(root.glob(".env.restore-*.tmp"))
+    assert not (root / "current").exists()
+    assert not (root / "previous").exists()
+    assert release.is_dir()
+
+
+def test_env_restore_rejects_tampered_capture_before_pointer_or_env_mutation(
+    tmp_path: Path,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = "release-env-tampered"
+    release = _release(root, release_id, "b" * 40)
+    _prepare(root, unit_dir, release_id)
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    (root / ".env").write_text("APP_GIT_SHA=still-new\n", encoding="utf-8")
+    backup = _rollback_dir(root, release_id) / ".env"
+    backup.write_text("tampered rollback capture\n", encoding="utf-8")
+
+    restored = _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        check=False,
+    )
+
+    assert restored.returncode != 0
+    assert "rollback environment capture hash mismatch" in restored.stderr
+    assert (root / "current").resolve() == release.resolve()
+    assert (root / ".env").read_text(encoding="utf-8") == "APP_GIT_SHA=still-new\n"
+
+
+def test_env_restore_rejects_hard_linked_capture(tmp_path: Path) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = "release-env-hardlink"
+    release = _release(root, release_id, "c" * 40)
+    _prepare(root, unit_dir, release_id)
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    backup = _rollback_dir(root, release_id) / ".env"
+    os.link(backup, backup.with_name(".env-alias"))
+
+    restored = _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        check=False,
+    )
+
+    assert restored.returncode != 0
+    assert "regular single-link file" in restored.stderr
+    assert (root / "current").resolve() == release.resolve()
+
+
+def test_schema2_rollback_fails_closed_without_mutating_runtime(tmp_path: Path) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = "release-schema2"
+    release = _release(root, release_id, "d" * 40)
+    _prepare(root, unit_dir, release_id)
+    metadata = _rollback_metadata(root, release_id)
+    metadata["schema"] = 2
+    _rewrite_rollback_metadata(root, release_id, metadata)
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    (root / ".env").write_text("APP_GIT_SHA=schema2-new\n", encoding="utf-8")
+
+    restored = _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        check=False,
+    )
+
+    assert restored.returncode != 0
+    assert "schema 2" in restored.stderr
+    assert "automatic restore is refused" in restored.stderr
+    assert (root / "current").resolve() == release.resolve()
+    assert (root / ".env").read_text(encoding="utf-8") == "APP_GIT_SHA=schema2-new\n"
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        pytest.param(
+            "root-mode",
+            "application root must be controller-owned",
+            id="root-unsafe-mode",
+        ),
+        pytest.param("controller-symlink", "must be a real directory", id="controller-symlink"),
+        pytest.param("controller-mode", "mode must be 0700", id="controller-mode"),
+        pytest.param("rollbacks-symlink", "must be a real directory", id="rollbacks-symlink"),
+        pytest.param("rollbacks-mode", "mode must be 0700", id="rollbacks-mode"),
+    ],
+)
+def test_prepare_rejects_untrusted_controller_parent_before_legacy_snapshot(
+    tmp_path: Path,
+    attack: str,
+    expected: str,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = f"release-{attack}"
+    _release(root, release_id, "e" * 40)
+    controller = root / ".release-controller"
+    attacker = tmp_path / f"attacker-{attack}"
+    attacker.mkdir()
+    if attack == "root-mode":
+        root.chmod(0o775)
+    elif attack == "controller-symlink":
+        controller.symlink_to(attacker, target_is_directory=True)
+    else:
+        controller.mkdir(mode=0o700)
+        controller.chmod(0o700)
+        if attack == "controller-mode":
+            controller.chmod(0o755)
+        elif attack == "rollbacks-symlink":
+            (controller / "rollbacks").symlink_to(attacker, target_is_directory=True)
+        else:
+            (controller / "rollbacks").mkdir(mode=0o700)
+            (controller / "rollbacks").chmod(0o755)
+
+    prepared = _run(*_prepare_args(root, unit_dir, release_id), check=False)
+
+    assert prepared.returncode != 0
+    assert expected in prepared.stderr
+    assert not (root / "current").exists()
+    assert not (root / "previous").exists()
+    assert not (root / "releases" / f"legacy-before-{release_id}").exists()
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        pytest.param("tamper", "rollback metadata hash mismatch", id="tamper"),
+        pytest.param("hardlink", "regular single-link file", id="hardlink"),
+        pytest.param("symlink", "regular single-link file", id="symlink"),
+        pytest.param("mode", "mode must be 0600", id="unsafe-mode"),
+    ],
+)
+def test_restore_rejects_untrusted_metadata_before_runtime_mutation(
+    tmp_path: Path,
+    attack: str,
+    expected: str,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = f"release-metadata-{attack}"
+    release = _release(root, release_id, "f" * 40)
+    _prepare(root, unit_dir, release_id)
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    metadata_path = _rollback_dir(root, release_id) / "metadata.json"
+    if attack == "tamper":
+        metadata_path.write_bytes(metadata_path.read_bytes() + b" ")
+    elif attack == "hardlink":
+        os.link(metadata_path, metadata_path.with_name("metadata.alias"))
+    elif attack == "symlink":
+        alternate = tmp_path / "attacker-metadata.json"
+        alternate.write_bytes(metadata_path.read_bytes())
+        metadata_path.unlink()
+        metadata_path.symlink_to(alternate)
+    else:
+        metadata_path.chmod(0o644)
+    (root / ".env").write_text("APP_GIT_SHA=metadata-new\n", encoding="utf-8")
+    installed = unit_dir / UNITS[0]
+    installed.write_text("new installed unit\n", encoding="utf-8")
+
+    restored = _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        check=False,
+    )
+
+    assert restored.returncode != 0
+    assert expected in restored.stderr
+    assert (root / "current").resolve() == release.resolve()
+    assert (root / ".env").read_text(encoding="utf-8") == "APP_GIT_SHA=metadata-new\n"
+    assert installed.read_text(encoding="utf-8") == "new installed unit\n"
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        pytest.param("tamper", "hash mismatch", id="tamper"),
+        pytest.param("hardlink", "regular single-link file", id="hardlink"),
+        pytest.param("symlink", "regular single-link file", id="symlink"),
+    ],
+)
+def test_restore_rejects_untrusted_unit_capture_before_runtime_mutation(
+    tmp_path: Path,
+    attack: str,
+    expected: str,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = f"release-unit-capture-{attack}"
+    release = _release(root, release_id, "1" * 40)
+    _prepare(root, unit_dir, release_id)
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    backup = _rollback_dir(root, release_id) / "units" / UNITS[0]
+    if attack == "tamper":
+        backup.write_text("tampered unit capture\n", encoding="utf-8")
+    elif attack == "hardlink":
+        os.link(backup, backup.with_name(f"{UNITS[0]}.alias"))
+    else:
+        backup.unlink()
+        backup.symlink_to(root / ".env")
+    (root / ".env").write_text("APP_GIT_SHA=unit-capture-new\n", encoding="utf-8")
+    installed = unit_dir / UNITS[0]
+    installed.write_text("new installed unit\n", encoding="utf-8")
+
+    restored = _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        check=False,
+    )
+
+    assert restored.returncode != 0
+    assert expected in restored.stderr
+    assert (root / "current").resolve() == release.resolve()
+    assert (root / ".env").read_text(encoding="utf-8") == "APP_GIT_SHA=unit-capture-new\n"
+    assert installed.read_text(encoding="utf-8") == "new installed unit\n"
+
+
+def test_restore_refuses_installed_unit_symlink_before_runtime_mutation(
+    tmp_path: Path,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = "release-installed-unit-symlink"
+    release = _release(root, release_id, "2" * 40)
+    _prepare(root, unit_dir, release_id)
+    _run("activate", "--root", str(root), "--release-id", release_id)
+    installed = unit_dir / UNITS[0]
+    attacker = tmp_path / "attacker-installed-unit"
+    attacker.write_text("do not overwrite\n", encoding="utf-8")
+    installed.unlink()
+    installed.symlink_to(attacker)
+    (root / ".env").write_text("APP_GIT_SHA=installed-symlink-new\n", encoding="utf-8")
+
+    restored = _run(
+        "restore",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        check=False,
+    )
+
+    assert restored.returncode != 0
+    assert "refusing symlink installed unit target" in restored.stderr
+    assert (root / "current").resolve() == release.resolve()
+    assert installed.is_symlink()
+    assert attacker.read_text(encoding="utf-8") == "do not overwrite\n"
+    assert (root / ".env").read_text(encoding="utf-8") == (
+        "APP_GIT_SHA=installed-symlink-new\n"
+    )
+
+
+def test_prepare_refuses_required_installed_unit_symlink(tmp_path: Path) -> None:
+    root, unit_dir = _layout(tmp_path)
+    release_id = "release-source-unit-symlink"
+    _release(root, release_id, "3" * 40)
+    installed = unit_dir / UNITS[0]
+    attacker = tmp_path / "attacker-source-unit"
+    attacker.write_text("attacker unit\n", encoding="utf-8")
+    installed.unlink()
+    installed.symlink_to(attacker)
+
+    prepared = _run(*_prepare_args(root, unit_dir, release_id), check=False)
+
+    assert prepared.returncode != 0
+    assert "required installed unit" in prepared.stderr
+    assert "regular single-link file" in prepared.stderr
+    assert not (root / ".release-controller").exists()
+    assert not (root / "previous").exists()
 
 
 def test_optional_unit_absent_bootstrap_is_removed_on_restore(tmp_path: Path) -> None:
@@ -377,14 +796,7 @@ def test_optional_unit_absent_bootstrap_is_removed_on_restore(tmp_path: Path) ->
     for name in UNITS:
         args.extend(("--unit-name", name))
     _run(*args)
-    rollback = json.loads(
-        (
-            root
-            / "runtime/ops/deploy-rollbacks"
-            / release_id
-            / "metadata.json"
-        ).read_text(encoding="utf-8")
-    )
+    rollback = _rollback_metadata(root, release_id)
     assert rollback["optional_unit_states"] == {
         REDIS_WORKER_UNIT: {
             "present": False,
@@ -422,7 +834,10 @@ def test_optional_unit_present_is_restored_byte_for_byte(tmp_path: Path) -> None
     release_id = "release-optional-present"
     _release(root, release_id, "5" * 40)
     original = b"[Unit]\nDescription=old redis worker\n"
-    (unit_dir / REDIS_WORKER_UNIT).write_bytes(original)
+    optional_unit = unit_dir / REDIS_WORKER_UNIT
+    optional_unit.write_bytes(original)
+    optional_unit.chmod(0o600)
+    optional_info = optional_unit.stat()
     args = [
         "prepare",
         "--root",
@@ -443,14 +858,7 @@ def test_optional_unit_present_is_restored_byte_for_byte(tmp_path: Path) -> None
     for name in UNITS:
         args.extend(("--unit-name", name))
     _run(*args)
-    rollback = json.loads(
-        (
-            root
-            / "runtime/ops/deploy-rollbacks"
-            / release_id
-            / "metadata.json"
-        ).read_text(encoding="utf-8")
-    )
+    rollback = _rollback_metadata(root, release_id)
     assert rollback["optional_unit_states"] == {
         REDIS_WORKER_UNIT: {
             "present": True,
@@ -458,6 +866,12 @@ def test_optional_unit_present_is_restored_byte_for_byte(tmp_path: Path) -> None
             "enabled": True,
             "masked": False,
         }
+    }
+    assert rollback["unit_files"][REDIS_WORKER_UNIT] == {
+        "uid": optional_info.st_uid,
+        "gid": optional_info.st_gid,
+        "mode": 0o600,
+        "sha256": hashlib.sha256(original).hexdigest(),
     }
     captured = _run(
         "rollback-unit-state",
@@ -470,7 +884,8 @@ def test_optional_unit_present_is_restored_byte_for_byte(tmp_path: Path) -> None
     )
     assert captured.stdout.strip() == "present:active:enabled:unmasked"
 
-    (unit_dir / REDIS_WORKER_UNIT).write_text("new worker unit\n", encoding="utf-8")
+    optional_unit.write_text("new worker unit\n", encoding="utf-8")
+    optional_unit.chmod(0o644)
     _run(
         "restore",
         "--root",
@@ -480,7 +895,11 @@ def test_optional_unit_present_is_restored_byte_for_byte(tmp_path: Path) -> None
         "--unit-dir",
         str(unit_dir),
     )
-    assert (unit_dir / REDIS_WORKER_UNIT).read_bytes() == original
+    assert optional_unit.read_bytes() == original
+    restored_info = optional_unit.stat()
+    assert restored_info.st_uid == optional_info.st_uid
+    assert restored_info.st_gid == optional_info.st_gid
+    assert stat.S_IMODE(restored_info.st_mode) == 0o600
 
 
 def test_optional_unit_present_inactive_disabled_receipt_and_restore(tmp_path: Path) -> None:
@@ -767,16 +1186,7 @@ def test_staging_clone_release_records_database_lineage_without_forward_claim(
     _run(*prepare_args)
 
     manifest = json.loads((release / ".vkpi-release.json").read_text(encoding="utf-8"))
-    rollback = json.loads(
-        (
-            root
-            / "runtime"
-            / "ops"
-            / "deploy-rollbacks"
-            / release_id
-            / "metadata.json"
-        ).read_text(encoding="utf-8")
-    )
+    rollback = _rollback_metadata(root, release_id)
     for payload in (manifest, rollback):
         assert payload["database_strategy"] == "staging-clone"
         assert payload["source_database"] == "viltrox2_test"
@@ -850,13 +1260,7 @@ def test_app_only_clone_reuse_restore_is_symmetric(tmp_path: Path) -> None:
     for unit in UNITS:
         args.extend(("--unit-name", unit))
     _run(*args)
-    rollback_path = (
-        root
-        / "runtime/ops/deploy-rollbacks"
-        / app_release_id
-        / "metadata.json"
-    )
-    rollback = json.loads(rollback_path.read_text(encoding="utf-8"))
+    rollback = _rollback_metadata(root, app_release_id)
     assert rollback["database_strategy"] == "reuse-active-clone"
     assert rollback["database_owner_release_id"] == owner_release_id
     assert rollback["database_rollback"] == "restore-captured-env-on-reused-database"

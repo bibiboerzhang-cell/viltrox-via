@@ -175,6 +175,41 @@ def test_strict_runtime_gate_supports_a_rotating_multi_worker_fleet() -> None:
     assert '--worker-not-before "$VKPI_WORKER_NOT_BEFORE"' in strict_block
 
 
+def test_strict_runtime_health_uses_private_probe_and_optional_mode_keeps_legacy_curl() -> None:
+    gate = _read("scripts/verify.sh")
+    runtime_at = gate.index("runtime_sha_aligned()")
+    body_check_at = gate.index('if [ -z "$body" ]; then', runtime_at)
+    fetch_block = gate[runtime_at:body_check_at]
+    strict_at = fetch_block.index(
+        'if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then'
+    )
+    optional_at = fetch_block.index("else\n", strict_at)
+    strict_block = fetch_block[strict_at:optional_at]
+    optional_block = fetch_block[optional_at:]
+
+    assert "scripts/ops/fetch_runtime_health.py" in strict_block
+    assert "VKPI_HEALTH_ENV_FILE" in strict_block
+    assert '--env-file "$VKPI_HEALTH_ENV_FILE"' in strict_block
+    assert "curl " not in strict_block
+    assert 'curl -s --max-time 3 "$url"' in optional_block
+
+
+def test_cloud_deploy_requires_explicit_local_health_secret_source() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    source_guard_at = deploy.index('LOCAL_HEALTH_ENV_FILE="${VKPI_HEALTH_ENV_FILE:-}"')
+    gate_at = deploy.index(
+        "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
+    )
+    assert source_guard_at < gate_at
+    source_guard = deploy[source_guard_at:gate_at]
+    assert 'if [ -z "${LOCAL_HEALTH_ENV_FILE}" ]; then' in source_guard
+    assert "must explicitly name the protected local health-token dotenv" in source_guard
+
+    gate_block = deploy[gate_at:deploy.index("SSH_TARGET=", gate_at)]
+    assert 'OPS_HEALTH_TOKEN= VKPI_HEALTH_ENV_FILE="${LOCAL_HEALTH_ENV_FILE}"' in gate_block
+    assert "x-ops-token" not in gate_block
+
+
 def test_reviewed_warning_ratchet_is_fail_closed_and_not_raised_to_current_debt(
     tmp_path: Path,
 ) -> None:

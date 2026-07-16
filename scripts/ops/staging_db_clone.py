@@ -24,6 +24,7 @@ import os
 import pwd
 import re
 import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -37,10 +38,175 @@ MIN_DISK_HEADROOM_BYTES = 1024**3
 RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DATABASE_IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+RELEASE_CONTROLLER_NAME = ".release-controller"
+CONTROLLER_DIRECTORY_MODE = 0o700
+CONTROLLER_FILE_MODE = 0o600
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class CloneError(RuntimeError):
     """A fail-closed staging clone contract violation."""
+
+
+def _secure_directory(path: Path, *, label: str) -> Path:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        raise CloneError(f"{label} is missing: {path}") from exc
+    if not stat.S_ISDIR(info.st_mode):
+        raise CloneError(f"{label} must be a real directory: {path}")
+    if info.st_uid != os.geteuid():
+        raise CloneError(f"{label} owner is not the release controller: {path}")
+    if stat.S_IMODE(info.st_mode) != CONTROLLER_DIRECTORY_MODE:
+        raise CloneError(f"{label} mode must be 0700: {path}")
+    return path
+
+
+def _read_secure_controller_file(path: Path, *, label: str) -> bytes:
+    try:
+        initial = path.lstat()
+    except FileNotFoundError as exc:
+        raise CloneError(f"{label} is missing: {path}") from exc
+    if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
+        raise CloneError(f"{label} must be a regular single-link file: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or (info.st_dev, info.st_ino) != (initial.st_dev, initial.st_ino)
+        ):
+            raise CloneError(f"{label} must be a stable regular single-link file: {path}")
+        if info.st_uid != os.geteuid():
+            raise CloneError(f"{label} owner is not the release controller: {path}")
+        if stat.S_IMODE(info.st_mode) != CONTROLLER_FILE_MODE:
+            raise CloneError(f"{label} mode must be 0600: {path}")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rollback_receipt_directory(root: Path, release_id: str) -> Path:
+    if not RELEASE_ID_RE.fullmatch(release_id) or release_id in {".", ".."}:
+        raise CloneError("release id is not a safe release directory name")
+    root = root.absolute()
+    try:
+        root_info = root.lstat()
+    except FileNotFoundError as exc:
+        raise CloneError(f"application root is missing: {root}") from exc
+    if not stat.S_ISDIR(root_info.st_mode):
+        raise CloneError(f"application root must be a real directory: {root}")
+    if root_info.st_uid != os.geteuid() or stat.S_IMODE(root_info.st_mode) & 0o022:
+        raise CloneError(
+            "application root must be controller-owned and not group/world writable"
+        )
+
+    controller = _secure_directory(
+        root / RELEASE_CONTROLLER_NAME,
+        label="release controller directory",
+    )
+    rollbacks = _secure_directory(
+        controller / "rollbacks",
+        label="release rollback directory",
+    )
+    rollback_dir = _secure_directory(
+        rollbacks / release_id,
+        label="release rollback capture directory",
+    )
+
+    digest_payload = _read_secure_controller_file(
+        rollback_dir / "metadata.sha256",
+        label="rollback metadata digest",
+    )
+    try:
+        expected_digest = digest_payload.decode("ascii").strip()
+    except UnicodeDecodeError as exc:
+        raise CloneError("rollback metadata digest is invalid") from exc
+    if not SHA256_RE.fullmatch(expected_digest):
+        raise CloneError("rollback metadata digest is invalid")
+    metadata_payload = _read_secure_controller_file(
+        rollback_dir / "metadata.json",
+        label="rollback metadata",
+    )
+    if hashlib.sha256(metadata_payload).hexdigest() != expected_digest:
+        raise CloneError("rollback metadata hash mismatch")
+    try:
+        metadata = json.loads(metadata_payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CloneError("rollback metadata payload is invalid") from exc
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("schema") != 3
+        or metadata.get("release_id") != release_id
+    ):
+        raise CloneError("rollback capture does not belong to the release")
+    return rollback_dir
+
+
+def _write_new_secure_file(path: Path, payload: bytes, *, label: str) -> None:
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(path, flags, CONTROLLER_FILE_MODE)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fchmod(handle.fileno(), CONTROLLER_FILE_MODE)
+            os.fsync(handle.fileno())
+    finally:
+        os.close(descriptor)
+    installed = _read_secure_controller_file(path, label=label)
+    if installed != payload:
+        raise CloneError(f"{label} write verification failed")
+    _fsync_directory(path.parent)
+
+
+def _replace_secure_file(path: Path, payload: bytes, *, label: str) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.tmp-",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    replaced = False
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fchmod(handle.fileno(), CONTROLLER_FILE_MODE)
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        replaced = True
+        installed = _read_secure_controller_file(path, label=label)
+        if installed != payload:
+            raise CloneError(f"{label} replacement verification failed")
+        _fsync_directory(path.parent)
+    finally:
+        if not replaced:
+            temporary.unlink(missing_ok=True)
 
 
 def clone_name_for_release(release_id: str) -> str:
@@ -422,16 +588,8 @@ def write_release_receipt(
     if state != "rollback-restored" and rollback_env_fingerprint:
         raise CloneError("non-rollback receipt must not declare a rollback env fingerprint")
 
-    receipt_path = (
-        root.resolve()
-        / "runtime"
-        / "ops"
-        / "deploy-rollbacks"
-        / release_id
-        / "database-clone.json"
-    )
-    if not receipt_path.parent.is_dir():
-        raise CloneError("atomic rollback capture is missing for clone receipt")
+    rollback_dir = _rollback_receipt_directory(root, release_id)
+    receipt_path = rollback_dir / "database-clone.json"
     payload = {
         "schema": 1,
         "release_id": release_id,
@@ -445,10 +603,15 @@ def write_release_receipt(
         "rollback_env_fingerprint": rollback_env_fingerprint or None,
         "secrets_included": False,
     }
-    if receipt_path.exists():
+    payload_bytes = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
+    if receipt_path.exists() or receipt_path.is_symlink():
         try:
-            existing = json.loads(receipt_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
+            existing_payload = _read_secure_controller_file(
+                receipt_path,
+                label="database clone receipt",
+            )
+            existing = json.loads(existing_payload.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError, TypeError):
             raise CloneError("existing clone receipt is invalid") from None
         immutable_keys = {
             "release_id",
@@ -470,14 +633,21 @@ def write_release_receipt(
         old_state = str(existing.get("state") or "")
         if state == old_state and existing != payload:
             raise CloneError("existing clone receipt idempotent state mismatch")
+        if state == old_state:
+            return receipt_path
         if state != old_state and state not in allowed_transitions.get(old_state, set()):
             raise CloneError(f"invalid clone receipt state transition: {old_state}")
-    temporary = receipt_path.with_name(
-        f".{receipt_path.name}.tmp-{os.getpid()}"
-    )
-    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, receipt_path)
+        _replace_secure_file(
+            receipt_path,
+            payload_bytes,
+            label="database clone receipt",
+        )
+    else:
+        _write_new_secure_file(
+            receipt_path,
+            payload_bytes,
+            label="database clone receipt",
+        )
     return receipt_path
 
 
@@ -569,19 +739,15 @@ def prove_active_source(*, root: Path, expected_database: str) -> dict[str, str]
     ):
         raise CloneError("database owner release manifest does not prove the clone")
 
-    receipt_path = (
-        root
-        / "runtime"
-        / "ops"
-        / "deploy-rollbacks"
-        / database_owner_release_id
-        / "database-clone.json"
-    )
-    if not receipt_path.is_file():
-        raise CloneError("active clone source receipt is missing")
+    rollback_dir = _rollback_receipt_directory(root, database_owner_release_id)
+    receipt_path = rollback_dir / "database-clone.json"
     try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+        receipt_payload = _read_secure_controller_file(
+            receipt_path,
+            label="database clone receipt",
+        )
+        receipt = json.loads(receipt_payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, TypeError):
         raise CloneError("active clone source receipt is invalid") from None
     if (
         receipt.get("release_id") != database_owner_release_id

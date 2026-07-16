@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from urllib.request import Request
 
 import pytest
@@ -81,6 +82,42 @@ def test_fetch_reads_remote_secret_and_sends_header_without_returning_it(
     assert "top-secret" not in json.dumps(result)
 
 
+def test_fetch_accepts_inherited_token_without_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("OPS_HEALTH_TOKEN", "inherited-secret")
+    observed: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, *, timeout: float):
+        observed["token"] = request.get_header("X-ops-token")
+        observed["timeout"] = timeout
+        return _Response({"status": "ok", "build": {"git_sha": "a" * 40}})
+
+    monkeypatch.setattr(probe, "urlopen", fake_urlopen)
+
+    assert probe.main(["--url", "http://localhost:8102/health"]) == 0
+    captured = capsys.readouterr()
+    assert observed == {"token": "inherited-secret", "timeout": 3.0}
+    assert json.loads(captured.out)["status"] == "ok"
+    assert "inherited-secret" not in captured.out
+    assert captured.err == ""
+
+
+def test_fetch_without_inherited_token_or_env_file_fails_before_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPS_HEALTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        probe,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network touched")),
+    )
+
+    with pytest.raises(ValueError, match="inherited or supplied"):
+        probe.fetch_runtime_health(url="http://localhost:8102/health")
+
+
 def test_fetch_rejects_missing_token_before_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -114,7 +151,7 @@ def test_fetch_rejects_symlink_token_source(
         probe.fetch_runtime_health(url="http://localhost:8001/health", env_file=linked)
 
 
-@pytest.mark.parametrize("mode", [0o644, 0o640])
+@pytest.mark.parametrize("mode", [0o644, 0o660])
 def test_fetch_rejects_non_private_token_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -125,8 +162,115 @@ def test_fetch_rejects_non_private_token_source(
     env_file.chmod(mode)
     monkeypatch.delenv("OPS_HEALTH_TOKEN", raising=False)
 
-    with pytest.raises(ValueError, match="owner-only"):
+    with pytest.raises(ValueError, match="trusted-owner/private-group"):
         probe.fetch_runtime_health(url="http://localhost:8001/health", env_file=env_file)
+
+
+def test_fetch_accepts_root_owned_trusted_group_0640_production_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPS_HEALTH_TOKEN=production-secret\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    real_fstat = os.fstat
+
+    def production_fstat(descriptor: int):
+        actual = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=(actual.st_mode & ~0o7777) | 0o640,
+            st_uid=0,
+            st_gid=4242,
+            st_nlink=1,
+            st_size=actual.st_size,
+        )
+
+    monkeypatch.delenv("OPS_HEALTH_TOKEN", raising=False)
+    monkeypatch.setattr(probe.os, "fstat", production_fstat)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 4243)
+    monkeypatch.setattr(probe.os, "getegid", lambda: 4242)
+    monkeypatch.setattr(probe.os, "getgroups", lambda: [4242])
+    monkeypatch.setattr(
+        probe,
+        "urlopen",
+        lambda request, *, timeout: _Response(
+            {
+                "status": "ok",
+                "observed_token": request.get_header("X-ops-token") == "production-secret",
+            }
+        ),
+    )
+
+    result = probe.fetch_runtime_health(
+        url="http://127.0.0.1:8001/health",
+        env_file=env_file,
+    )
+
+    assert result == {"status": "ok", "observed_token": True}
+
+
+def test_fetch_rejects_root_owned_0640_when_group_is_not_trusted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPS_HEALTH_TOKEN=production-secret\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    real_fstat = os.fstat
+
+    def untrusted_fstat(descriptor: int):
+        actual = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=(actual.st_mode & ~0o7777) | 0o640,
+            st_uid=0,
+            st_gid=9999,
+            st_nlink=1,
+            st_size=actual.st_size,
+        )
+
+    monkeypatch.delenv("OPS_HEALTH_TOKEN", raising=False)
+    monkeypatch.setattr(probe.os, "fstat", untrusted_fstat)
+    monkeypatch.setattr(probe.os, "geteuid", lambda: 4243)
+    monkeypatch.setattr(probe.os, "getegid", lambda: 4242)
+    monkeypatch.setattr(probe.os, "getgroups", lambda: [4242])
+
+    with pytest.raises(ValueError, match="trusted-owner/private-group"):
+        probe.fetch_runtime_health(
+            url="http://127.0.0.1:8001/health",
+            env_file=env_file,
+        )
+
+
+def test_fetch_rejects_current_owner_0640_when_exposed_to_untrusted_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPS_HEALTH_TOKEN=production-secret\n", encoding="utf-8")
+    env_file.chmod(0o640)
+    real_fstat = os.fstat
+    effective_uid = os.geteuid()
+
+    def untrusted_fstat(descriptor: int):
+        actual = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=(actual.st_mode & ~0o7777) | 0o640,
+            st_uid=effective_uid,
+            st_gid=9999,
+            st_nlink=1,
+            st_size=actual.st_size,
+        )
+
+    monkeypatch.delenv("OPS_HEALTH_TOKEN", raising=False)
+    monkeypatch.setattr(probe.os, "fstat", untrusted_fstat)
+    monkeypatch.setattr(probe.os, "getegid", lambda: 4242)
+    monkeypatch.setattr(probe.os, "getgroups", lambda: [4242])
+
+    with pytest.raises(ValueError, match="trusted-owner/private-group"):
+        probe.fetch_runtime_health(
+            url="http://127.0.0.1:8001/health",
+            env_file=env_file,
+        )
 
 
 def test_fetch_rejects_hardlinked_token_source(

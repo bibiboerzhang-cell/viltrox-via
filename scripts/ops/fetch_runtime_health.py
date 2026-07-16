@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fetch private runtime health without exposing the remote ops token.
+"""Fetch private runtime health without exposing the ops token.
 
-The token is read only on the target host from its protected dotenv file.  The
-helper accepts only the loopback ``/health`` endpoint and emits the response
-JSON body, never the token itself.
+The token is inherited or read from an explicitly supplied protected dotenv.
+The helper accepts only the loopback ``/health`` endpoint and emits the
+response JSON body, never the token itself.
 """
 from __future__ import annotations
 import sys as _stdout_sys
@@ -50,6 +50,7 @@ from dotenv import dotenv_values
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+_SAFE_ENV_MODES = {0o400, 0o440, 0o600, 0o640}
 
 
 def _validated_health_url(value: str) -> str:
@@ -66,10 +67,14 @@ def _validated_health_url(value: str) -> str:
     return parsed.geturl()
 
 
-def _read_ops_token(env_file: Path) -> str:
+def _read_ops_token(env_file: Path | None) -> str:
     inherited = str(os.getenv("OPS_HEALTH_TOKEN") or "").strip()
     if inherited:
         return inherited
+    if env_file is None:
+        raise ValueError(
+            "OPS_HEALTH_TOKEN must be inherited or supplied by an explicit --env-file"
+        )
     path = Path(env_file).expanduser()
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -79,14 +84,35 @@ def _read_ops_token(env_file: Path) -> str:
     descriptor = os.open(path, flags)
     try:
         metadata = os.fstat(descriptor)
+        effective_uid = os.geteuid() if hasattr(os, "geteuid") else os.getuid()
+        effective_gid = os.getegid() if hasattr(os, "getegid") else os.getgid()
+        trusted_groups = {effective_gid, *getattr(os, "getgroups", lambda: [])()}
+        mode = stat.S_IMODE(metadata.st_mode)
+        owner_is_trusted = metadata.st_uid in {0, effective_uid}
+        trusted_group_read = bool(mode & stat.S_IRGRP) and metadata.st_gid in trusted_groups
+        # Local development uses <current-user>:<group> 0600. Production is
+        # deliberately hardened to root:viltrox 0640 and the probe executes as
+        # viltrox. Accept only those two trust shapes (plus their read-only
+        # variants); never accept group write/execute or any world access.
+        if metadata.st_uid == effective_uid:
+            access_shape_is_trusted = mode in {0o400, 0o600}
+        else:
+            access_shape_is_trusted = (
+                owner_is_trusted
+                and mode in {0o440, 0o640}
+                and trusted_group_read
+            )
         if (
             not stat.S_ISREG(metadata.st_mode)
-            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
-            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or mode not in _SAFE_ENV_MODES
+            or not access_shape_is_trusted
             or metadata.st_nlink != 1
             or metadata.st_size > 64 * 1024
         ):
-            raise ValueError("health token source must be owner-only, single-link, and regular")
+            raise ValueError(
+                "health token source must be trusted-owner/private-group, "
+                "single-link, and regular"
+            )
         chunks: list[bytes] = []
         remaining = 64 * 1024 + 1
         while remaining > 0:
@@ -107,7 +133,12 @@ def _read_ops_token(env_file: Path) -> str:
     return token
 
 
-def fetch_runtime_health(*, url: str, env_file: Path, timeout_seconds: float = 3.0) -> dict[str, Any]:
+def fetch_runtime_health(
+    *,
+    url: str,
+    env_file: Path | None = None,
+    timeout_seconds: float = 3.0,
+) -> dict[str, Any]:
     safe_url = _validated_health_url(url)
     token = _read_ops_token(env_file)
     request = Request(
@@ -128,7 +159,14 @@ def fetch_runtime_health(*, url: str, env_file: Path, timeout_seconds: float = 3
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fetch authenticated loopback runtime health JSON.")
     parser.add_argument("--url", required=True)
-    parser.add_argument("--env-file", type=Path, required=True)
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help=(
+            "protected dotenv containing OPS_HEALTH_TOKEN (0600 owner file or "
+            "root:trusted-group 0640); optional only when OPS_HEALTH_TOKEN is inherited"
+        ),
+    )
     parser.add_argument("--timeout-seconds", type=float, default=3.0)
     args = parser.parse_args(argv)
     try:
