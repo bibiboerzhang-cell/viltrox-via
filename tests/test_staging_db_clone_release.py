@@ -235,6 +235,64 @@ def test_disk_gate_requires_source_size_plus_one_gibibyte() -> None:
         )
 
 
+def test_source_connection_drain_waits_for_a_transient_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.counts = iter((1, 0))
+            self.executions: list[tuple[str, tuple[str]]] = []
+
+        def execute(self, query: str, params: tuple[str]) -> None:
+            self.executions.append((query, params))
+
+        def fetchone(self) -> tuple[int]:
+            return (next(self.counts),)
+
+    cursor = Cursor()
+    sleeps: list[float] = []
+    ticks = iter((100.0, 100.0))
+    monkeypatch.setattr(staging_db_clone.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(staging_db_clone.time, "sleep", sleeps.append)
+
+    staging_db_clone._wait_for_source_connections_to_drain(
+        cursor,
+        source=staging_db_clone.SOURCE_DATABASE,
+    )
+
+    assert len(cursor.executions) == 2
+    assert all(
+        params == (staging_db_clone.SOURCE_DATABASE,)
+        for _query, params in cursor.executions
+    )
+    assert sleeps == [staging_db_clone.SOURCE_CONNECTION_DRAIN_POLL_SECONDS]
+
+
+def test_source_connection_drain_remains_fail_closed_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Cursor:
+        def execute(self, _query: str, _params: tuple[str]) -> None:
+            return None
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    ticks = iter((200.0, 210.0))
+    monkeypatch.setattr(staging_db_clone.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        staging_db_clone.time,
+        "sleep",
+        lambda _seconds: pytest.fail("timeout path must not sleep past its deadline"),
+    )
+
+    with pytest.raises(staging_db_clone.CloneError, match=r"10s drain grace: count=1"):
+        staging_db_clone._wait_for_source_connections_to_drain(
+            Cursor(),
+            source=staging_db_clone.SOURCE_DATABASE,
+        )
+
+
 def test_clone_mode_rejects_pool_url_that_could_bypass_database_switch(
     tmp_path: Path,
 ) -> None:

@@ -27,6 +27,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -35,6 +36,8 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 SOURCE_DATABASE = "viltrox2_test"
 CLONE_PREFIX = "viltrox2_test_release_"
 MIN_DISK_HEADROOM_BYTES = 1024**3
+SOURCE_CONNECTION_DRAIN_TIMEOUT_SECONDS = 10.0
+SOURCE_CONNECTION_DRAIN_POLL_SECONDS = 0.25
 RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DATABASE_IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -395,6 +398,39 @@ def _admin_connection(*, database: str = "postgres") -> Any:
     return psycopg.connect(dbname=database, autocommit=True)
 
 
+def _wait_for_source_connections_to_drain(
+    cursor: Any,
+    *,
+    source: str,
+    timeout_seconds: float = SOURCE_CONNECTION_DRAIN_TIMEOUT_SECONDS,
+    poll_seconds: float = SOURCE_CONNECTION_DRAIN_POLL_SECONDS,
+) -> None:
+    """Wait briefly for PostgreSQL client backends to close after service stop.
+
+    ``systemctl stop`` waits for the application processes, but PostgreSQL can
+    retain their closing backend for a short interval.  A single instantaneous
+    count therefore creates a deployment race.  This remains fail-closed: it
+    never terminates sessions and never proceeds while one remains.
+    """
+
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        cursor.execute(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = %s",
+            (source,),
+        )
+        active_connections = int(cursor.fetchone()[0])
+        if active_connections == 0:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CloneError(
+                "source database still has active connections after service stop "
+                f"and {timeout_seconds:g}s drain grace: count={active_connections}"
+            )
+        time.sleep(min(poll_seconds, remaining))
+
+
 def create_clone(*, source: str, target: str) -> dict[str, int | str]:
     validate_source_database(source)
     validate_clone_name(target)
@@ -418,16 +454,7 @@ def create_clone(*, source: str, target: str) -> dict[str, int | str]:
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target,))
             if cur.fetchone() is not None:
                 raise CloneError("release-specific clone database already exists")
-            cur.execute(
-                "SELECT count(*) FROM pg_stat_activity WHERE datname = %s",
-                (source,),
-            )
-            active_connections = int(cur.fetchone()[0])
-            if active_connections:
-                raise CloneError(
-                    "source database still has active connections after service stop: "
-                    f"count={active_connections}"
-                )
+            _wait_for_source_connections_to_drain(cur, source=source)
             cur.execute("SHOW data_directory")
             data_directory = Path(str(cur.fetchone()[0]))
             free_bytes = int(shutil.disk_usage(data_directory).free)
