@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test for V-KPI Link Center detail/click/order/archive flow."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -312,8 +313,12 @@ class Smoke:
 def main() -> None:
     ensure_vkpi_schema()
     smoke = Smoke()
-    result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    try:
+        result = smoke.run()
+    finally:
+        # 失败也清理，禁止 link/order smoke 行进入真实业务统计。
+        smoke.cleanup()
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

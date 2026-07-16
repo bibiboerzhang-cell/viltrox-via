@@ -8,6 +8,7 @@ Validates the backend contract before adding more UI around "mine/team/all":
 - returned list payloads expose scope metadata for the frontend
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -205,7 +206,7 @@ class Smoke:
             denied = True
         assert denied, "operator A should not mutate staff B project"
 
-        print("VKPI_SCOPE_COLLABORATION_CONTRACT_SMOKE_OK")
+        stdout_out("VKPI_SCOPE_COLLABORATION_CONTRACT_SMOKE_OK")
 
 
 if __name__ == "__main__":

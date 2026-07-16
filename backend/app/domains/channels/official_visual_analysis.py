@@ -136,6 +136,15 @@ def _resolve_direct_video_url(content_url: str, platform: str) -> dict[str, Any]
     - APIFY_TOKEN 缺 → blocked(配置问题,非内容失败,不浪费 Gemini 预算);
     - 超时 / 解析失败 / 拿不到 video_url → failed(可续,下轮重试)。
     返回 {ok, status('ready'|'blocked'|'failed'), reason, direct_video_url}。"""
+    from app.platform.apify_budget import current_apify_execution_context
+
+    if current_apify_execution_context() is None:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "reason": "durable_execution_context_required",
+            "direct_video_url": "",
+        }
     if not os.environ.get("APIFY_TOKEN", "").strip():
         return {"ok": False, "status": "blocked", "reason": "apify_not_configured", "direct_video_url": ""}
 
@@ -143,7 +152,11 @@ def _resolve_direct_video_url(content_url: str, platform: str) -> dict[str, Any]
 
     async def _run() -> dict[str, Any]:
         return await asyncio.wait_for(
-            apify_scraper.scrape_with_apify(content_url, platform),
+            apify_scraper.scrape_with_apify(
+                content_url,
+                platform,
+                timeout_secs=_MEDIA_RESOLVE_TIMEOUT_SECONDS,
+            ),
             timeout=_MEDIA_RESOLVE_TIMEOUT_SECONDS,
         )
 

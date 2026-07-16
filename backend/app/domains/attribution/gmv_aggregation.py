@@ -11,6 +11,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains import business_truth
 from app.domains.access import scope
 
 logger = get_logger(__name__)
@@ -33,13 +34,28 @@ def aggregate_link_gmv(*, staff: dict[str, Any] | None = None, limit: int = 200)
     try:
         rows = conn.execute(
             f"""
+            WITH click_agg AS (
+              SELECT ck.link_id, COUNT(*) AS clicks
+              FROM vkpi_link_clicks ck
+              WHERE COALESCE(ck.is_bot, 0) = 0
+              GROUP BY ck.link_id
+            ), sales_agg AS (
+              SELECT s.link_id,
+                     COUNT(*) AS orders,
+                     COALESCE(SUM(s.revenue_cents), 0) AS revenue_cents,
+                     COALESCE(SUM(s.commission_cents), 0) AS commission_cents
+              FROM vkpi_sales_attributions s
+              WHERE {business_truth.verified_shopify_attribution_sql('s')}
+              GROUP BY s.link_id
+            )
             SELECT l.id AS link_id, l.slug, l.platform, l.kol_id, l.project_id, l.campaign_name,
-              COALESCE((SELECT COUNT(*) FROM vkpi_link_clicks ck
-                        WHERE ck.link_id = l.id AND COALESCE(ck.is_bot, 0) = 0), 0) AS clicks,
-              COALESCE((SELECT COUNT(*) FROM vkpi_sales_attributions s WHERE s.link_id = l.id), 0) AS orders,
-              COALESCE((SELECT SUM(s.revenue_cents) FROM vkpi_sales_attributions s WHERE s.link_id = l.id), 0) AS revenue_cents,
-              COALESCE((SELECT SUM(s.commission_cents) FROM vkpi_sales_attributions s WHERE s.link_id = l.id), 0) AS commission_cents
+              COALESCE(ck.clicks, 0) AS clicks,
+              COALESCE(sa.orders, 0) AS orders,
+              COALESCE(sa.revenue_cents, 0) AS revenue_cents,
+              COALESCE(sa.commission_cents, 0) AS commission_cents
             FROM vkpi_links l
+            LEFT JOIN click_agg ck ON ck.link_id = l.id
+            LEFT JOIN sales_agg sa ON sa.link_id = l.id
             {where}
             ORDER BY revenue_cents DESC, clicks DESC
             LIMIT ?

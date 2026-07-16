@@ -18,6 +18,7 @@
   --dry-run   显式 dry-run(与 --live 互斥,防手滑)
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -53,10 +54,10 @@ def run_from_args(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.dry_run and args.live:
-        print("--dry-run 与 --live 互斥:去掉一个再来。", file=sys.stderr)
+        stdout_out("--dry-run 与 --live 互斥:去掉一个再来。", file=sys.stderr)
         return 2
     result = run_from_args(args)
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

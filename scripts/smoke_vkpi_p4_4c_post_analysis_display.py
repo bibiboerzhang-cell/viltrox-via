@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """P4.4C smoke: post analysis result stays structured and honest."""
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def main() -> None:
     assert_contains(css, ".da-post-analysis__card", "structured analysis cards should be styled")
     assert_contains(css, ".da-post-analysis__raw", "raw response details should be styled")
 
-    print("VKPI_P4_4C_POST_ANALYSIS_DISPLAY_SMOKE_OK")
+    stdout_out("VKPI_P4_4C_POST_ANALYSIS_DISPLAY_SMOKE_OK")
 
 
 if __name__ == "__main__":

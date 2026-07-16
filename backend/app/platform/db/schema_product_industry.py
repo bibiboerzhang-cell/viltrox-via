@@ -123,6 +123,7 @@ def ensure_vkpi_product_industry_schema() -> None:
             language TEXT DEFAULT '',
             email TEXT DEFAULT '',
             other_contacts_json TEXT NOT NULL DEFAULT '[]',
+            contact_source TEXT NOT NULL DEFAULT '',
             followers INTEGER,
             following INTEGER,
             posts_count INTEGER,
@@ -142,12 +143,14 @@ def ensure_vkpi_product_industry_schema() -> None:
             potential_concerns_json TEXT NOT NULL DEFAULT '[]',
             recommended_product_lines_json TEXT NOT NULL DEFAULT '[]',
             linked_main_kol_id INTEGER,
+            duplicate_of_id INTEGER,
             sync_status TEXT NOT NULL DEFAULT 'imported',
             source_type TEXT NOT NULL DEFAULT 'manual',
             source_ref TEXT DEFAULT '',
             raw_platform_data TEXT NOT NULL DEFAULT '{}',
             created_by_staff_id INTEGER,
             last_seen_at TEXT,
+            last_video_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(platform, handle)
@@ -156,6 +159,52 @@ def ensure_vkpi_product_industry_schema() -> None:
             ON vkpi_kol_pool(platform, handle);
         CREATE INDEX IF NOT EXISTS idx_vkpi_kol_pool_score
             ON vkpi_kol_pool(viltrox_fit_score DESC);
+
+        CREATE TABLE IF NOT EXISTS vkpi_kol_video_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_pool_id INTEGER NOT NULL,
+            project_id INTEGER,
+            content_url TEXT NOT NULL UNIQUE,
+            platform TEXT DEFAULT '',
+            title TEXT DEFAULT '',
+            video_title TEXT DEFAULT '',
+            thumbnail_url TEXT DEFAULT '',
+            view_count INTEGER,
+            like_count INTEGER,
+            comment_count INTEGER,
+            share_count INTEGER,
+            duration_seconds INTEGER,
+            publish_date TEXT,
+            posted_at TEXT,
+            evidence_type TEXT NOT NULL DEFAULT 'video',
+            image_urls TEXT NOT NULL DEFAULT '[]',
+            source TEXT NOT NULL DEFAULT '',
+            source_ref TEXT DEFAULT '',
+            confidence TEXT DEFAULT 'high',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_vkpi_kol_video_evidence_pool
+            ON vkpi_kol_video_evidence(kol_pool_id);
+
+        CREATE TABLE IF NOT EXISTS vkpi_kol_llm_deep_analysis_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_pool_id INTEGER NOT NULL,
+            source_url TEXT NOT NULL,
+            source_evidence_id INTEGER,
+            analysis_kind TEXT NOT NULL,
+            llm_v6_fit REAL,
+            llm_dimensions_11 TEXT NOT NULL DEFAULT '{}',
+            method TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            confidence REAL,
+            source_cache_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'ready',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_vkpi_kol_llm_deep_results_pool
+            ON vkpi_kol_llm_deep_analysis_results(kol_pool_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS vkpi_kol_pool_aliases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -588,5 +637,16 @@ def ensure_vkpi_product_industry_schema() -> None:
         VALUES ('rule_v0', 'rule', 'active', datetime('now'), '{}');
         """
     )
+    pool_columns = {
+        str(row["name"] if "name" in row.keys() else row[1])
+        for row in conn.execute("PRAGMA table_info(vkpi_kol_pool)").fetchall()
+    }
+    for column_name, column_ddl in {
+        "contact_source": "TEXT NOT NULL DEFAULT ''",
+        "duplicate_of_id": "INTEGER",
+        "last_video_at": "TEXT",
+    }.items():
+        if column_name not in pool_columns:
+            conn.execute(f"ALTER TABLE vkpi_kol_pool ADD COLUMN {column_name} {column_ddl}")
     conn.commit()
     _SCHEMA_READY = True

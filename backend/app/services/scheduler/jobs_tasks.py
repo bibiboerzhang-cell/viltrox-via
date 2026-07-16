@@ -11,10 +11,62 @@ LLM 绝不写 viltrox_fit_score。
 from __future__ import annotations
 
 import asyncio
+import os
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+COMPOSITE_MORNING_SYNC_ENV = "VKPI_COMPOSITE_MORNING_SYNC_ENABLED"
+
+
+def _composite_morning_sync_enabled() -> bool:
+    """Require both deployment intent and the scheduler registry switch.
+
+    ``ENABLE_SCHEDULER=1`` only starts the scheduler fleet.  It must never imply
+    permission to run the broad morning bundle (channels + industry accounts +
+    product monitors + staff digest).  Missing/invalid config therefore fails
+    closed before the database registry is consulted.
+    """
+
+    deployment_enabled = str(
+        os.environ.get(COMPOSITE_MORNING_SYNC_ENV) or ""
+    ).strip().lower()
+    if deployment_enabled not in {"1", "true", "yes", "on"}:
+        return False
+    return _scheduler_task_enabled("vkpi_morning_sync")
+
+
+async def _with_durable_queue(operation):
+    """Run a short queue operation and always release its Redis client."""
+    from app.services.jobs.queue import build_job_queue
+
+    queue = build_job_queue()
+    if queue is None:
+        raise RuntimeError("durable job queue unavailable")
+    try:
+        return await operation(queue)
+    finally:
+        await queue.close()
+
+
+async def _enqueue_provider_job(
+    job_type: str,
+    payload: dict,
+    *,
+    lock_key: str,
+    timeout_seconds: int,
+) -> str:
+    async def operation(queue):
+        return await queue.enqueue(
+            job_type,
+            payload,
+            lock_key=lock_key,
+            timeout_seconds=timeout_seconds,
+        )
+
+    return await _with_durable_queue(operation)
 
 
 # ──────────────────────────────────────────────
@@ -30,8 +82,8 @@ async def job_verification_scan_check():
     """
     try:
         from app.services.verification.scanner import cron_scan_check
-        result = await cron_scan_check()
-        if result and result.get("scanned", 0) > 0:
+        result = await _with_durable_queue(cron_scan_check)
+        if result and result.get("queued"):
             logger.info("scheduler.verification_scan", extra={"result": result})
     except Exception:
         logger.exception("scheduler.verification_scan_failed")
@@ -85,19 +137,13 @@ async def job_provider_health_check():
 async def job_bh_daily_snapshot():
     """每天 03:00 UTC 抓一次 B&H Viltrox 商品快照"""
     try:
-        from app.services.intelligence import (
-            fetch_bh_viltrox_products,
-            save_bh_snapshot,
+        task_id = await _enqueue_provider_job(
+            "intel_bh_refresh",
+            {"max_items": 100, "requested_by": "scheduler"},
+            lock_key="intel_bh_refresh:daily",
+            timeout_seconds=1800,
         )
-
-        logger.info("scheduler.bh_snapshot_started")
-        products = await fetch_bh_viltrox_products(max_items=100)
-
-        if products:
-            saved = await save_bh_snapshot(products)
-            logger.info("scheduler.bh_snapshot_complete", extra={"saved": saved})
-        else:
-            logger.warning("scheduler.bh_snapshot_empty")
+        logger.info("scheduler.bh_snapshot_queued", extra={"job_id": task_id})
     except Exception:
         logger.exception("scheduler.bh_snapshot_failed")
 
@@ -105,21 +151,13 @@ async def job_bh_daily_snapshot():
 async def job_via_daily_learning():
     """每天抓官方 Viltrox 渠道 + B&H 快照, 回灌 Via 学习库"""
     try:
-        from app.services.memory import run_via_daily_learning
-
-        logger.info("scheduler.via_learning_started")
-        result = await run_via_daily_learning()
-        if result.get("skipped"):
-            logger.info("scheduler.via_learning_skipped", extra={"reason": result.get("reason")})
-        else:
-            logger.info(
-                "scheduler.via_learning_complete",
-                extra={
-                    "accounts": len(result.get("official_accounts", [])),
-                    "comments": sum(item.get("comments", 0) for item in result.get("comment_sources", [])),
-                    "bh_fetched": result.get("bh", {}).get("fetched", 0),
-                },
-            )
+        task_id = await _enqueue_provider_job(
+            "intel_via_learning",
+            {"requested_by": "scheduler"},
+            lock_key="intel_via_learning:daily",
+            timeout_seconds=3600,
+        )
+        logger.info("scheduler.via_learning_queued", extra={"job_id": task_id})
     except Exception:
         logger.exception("scheduler.via_learning_failed")
 
@@ -282,7 +320,17 @@ async def job_vkpi_channels_sync():
 
 
 async def job_vkpi_morning_sync():
-    """Daily 08:00 China sync for channels, product monitor, and per-staff outreach digest."""
+    """Run the composite 08:00 sync only after both explicit safety gates open."""
+    if not _composite_morning_sync_enabled():
+        logger.info(
+            "scheduler.vkpi_morning_sync_skipped",
+            extra={
+                "reason": "composite_morning_sync_gate_closed",
+                "required_env": COMPOSITE_MORNING_SYNC_ENV,
+                "required_registry_task": "vkpi_morning_sync",
+            },
+        )
+        return
     try:
         from app.domains.sync import cron
 
@@ -367,19 +415,22 @@ async def job_vkpi_comment_sentiment_refresh():
     if not _scheduler_task_enabled("vkpi_comment_sentiment_refresh"):
         return
     try:
-        from app.domains.comments import intelligence
-
-        result = await asyncio.to_thread(
-            intelligence.process_recent_posts,
-            days=7,
-            limit=50,
-            collect_comments=True,
-            analyze_sentiment=True,
-            classify_pillar=True,
+        task_id = await _enqueue_provider_job(
+            "comment_intelligence_recent",
+            {
+                "days": 7,
+                "limit": 50,
+                "collect_comments": True,
+                "analyze_sentiment": True,
+                "classify_pillar": True,
+                "requested_by": "scheduler",
+            },
+            lock_key="comment_intelligence_recent:all:7",
+            timeout_seconds=7200,
         )
         logger.info(
-            "scheduler.comment_sentiment_refresh",
-            extra={"processed": (result or {}).get("processed") if isinstance(result, dict) else None},
+            "scheduler.comment_sentiment_refresh_queued",
+            extra={"job_id": task_id},
         )
     except Exception:
         logger.exception("scheduler.comment_sentiment_refresh_failed")
@@ -645,12 +696,14 @@ async def job_kol_auto_poll():
 
         res = await asyncio.to_thread(auto_poll.enqueue_auto_poll, None)
         logger.info("scheduler.kol_auto_poll", extra={"status": str(res.get("status")), "enqueued": res.get("enqueued_count")})
-        # 用透 Apify:若启用富集,顺带批量富集收藏/高价值 KOL(双门控 + 硬上限,防烧钱)。
-        from app.domains.discovery import apify_enrich
-
-        enr = await asyncio.to_thread(apify_enrich.enrich_candidates, 10)
-        if enr.get("enriched"):
-            logger.info("scheduler.kol_auto_poll_enrich", extra={"enriched": enr.get("enriched")})
+        # Paid enrichment is a separate centrally fenced durable job.
+        enrich_job_id = await _enqueue_provider_job(
+            "kol_apify_enrich_candidates",
+            {"limit": 10, "requested_by": "scheduler"},
+            lock_key="kol_apify_enrich_candidates:auto_poll",
+            timeout_seconds=3600,
+        )
+        logger.info("scheduler.kol_auto_poll_enrich_queued", extra={"job_id": enrich_job_id})
         _record_scheduler_run("kol_auto_poll", ok=True)
     except Exception as exc:
         logger.exception("scheduler.kol_auto_poll_failed")

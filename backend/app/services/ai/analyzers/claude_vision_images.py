@@ -6,6 +6,7 @@ import re
 
 from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.platform import llm_production
 from app.services.ai.analyzers.claude_vision_client import _build_anthropic_client
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
 from app.services.ai.retry import call_ai_with_retry
@@ -98,10 +99,26 @@ def _analyze_images_batch(images_b64: list, title: str, platform: str, profile_h
 
         resp = call_ai_with_retry(
             "claude_vision.image_batch",
-            lambda: client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=2000,
+            lambda: None,
+            attempt_fn=lambda attempt, total: llm_production.generate_anthropic_messages(
+                client=client,
                 messages=[{"role": "user", "content": content}],
+                model=CLAUDE_MODEL,
+                purpose="audit_vision_fallback",
+                max_output_tokens=2000,
+                cost_tag="cron:audit_vision_fallback",
+                metadata={
+                    "task_binding": "audit_vision_fallback",
+                    "surface": "audit_pipeline",
+                    "phase": "vision_fallback",
+                    "subphase": "image_batch",
+                    "attempt_index": attempt,
+                    "attempt_total": total,
+                    "target_type": "image_batch",
+                    "batch_size": min(len(images_b64), 10),
+                    "platform": str(platform or "")[:80],
+                    "target_label": str(title or f"{platform} image batch")[:160],
+                },
             ),
         )
         raw = resp.content[0].text.strip()

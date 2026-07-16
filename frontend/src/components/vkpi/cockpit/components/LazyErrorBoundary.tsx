@@ -41,13 +41,20 @@ export class LazyErrorBoundary extends React.Component<any, any> {
     if (!error) return this.props.children;
     const chunk = isChunkError(error);
     const name = this.props.name || "页面";
+    const overlay = this.props.variant === "overlay";
     const reload = () => {
       try { window.sessionStorage.removeItem("vkpi:chunk-reload-once"); } catch (_) {}
       window.location.reload();
     };
     return React.createElement(
       "div",
-      { className: "min-h-[60vh] p-8 flex flex-col items-center justify-center text-center" },
+      {
+        className: overlay
+          ? "fixed inset-0 z-[1400] flex items-center justify-center bg-black/65 p-5 text-center backdrop-blur-sm"
+          : "min-h-[60vh] p-8 flex flex-col items-center justify-center text-center",
+        role: overlay ? "dialog" : "alert",
+        "aria-label": `${name} 加载失败`,
+      },
       React.createElement(
         "div",
         { className: "rounded-2xl border border-white/[0.08] bg-white/[0.02] p-8 max-w-md w-full" },
@@ -64,9 +71,18 @@ export class LazyErrorBoundary extends React.Component<any, any> {
             String((error && error.message) || error).slice(0, 240)
           ),
         React.createElement(
-          "button",
-          { onClick: reload, className: "px-4 py-2 rounded-lg bg-purple-500/90 hover:bg-purple-500 text-white text-[12px] font-medium" },
-          "刷新页面"
+          "div",
+          { className: "flex items-center justify-center gap-2" },
+          typeof this.props.onDismiss === "function" && React.createElement(
+            "button",
+            { onClick: this.props.onDismiss, className: "px-4 py-2 rounded-lg border border-white/10 bg-white/5 text-slate-200 text-[12px] font-medium" },
+            "关闭"
+          ),
+          React.createElement(
+            "button",
+            { onClick: reload, className: "px-4 py-2 rounded-lg bg-purple-500/90 hover:bg-purple-500 text-white text-[12px] font-medium" },
+            "刷新页面"
+          )
         )
       )
     );

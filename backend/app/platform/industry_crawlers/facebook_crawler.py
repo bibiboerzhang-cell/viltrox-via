@@ -38,6 +38,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_lifecycle import close_apify_client
+
 
 DEFAULT_PAGES_ACTOR = "apify~facebook-pages-scraper"
 DEFAULT_POSTS_ACTOR = "apify~facebook-posts-scraper"
@@ -115,6 +118,7 @@ class FacebookCrawler:
             }
 
         # Step 1: Fetch Page profile
+        client: Any | None = None
         try:
             client = ApifyClient(self.apify_token)
             
@@ -128,7 +132,12 @@ class FacebookCrawler:
                     "apifyProxyGroups": ["RESIDENTIAL"],
                 },
             }
-            run = client.actor(self.pages_actor).call(
+            run = call_apify_actor(
+                client,
+                self.pages_actor,
+                platform="facebook",
+                operation="crawl_page_pages_actor",
+                source="industry_crawlers",
                 run_input=pages_input,
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
@@ -165,7 +174,12 @@ class FacebookCrawler:
                     "apifyProxyGroups": ["RESIDENTIAL"],
                 },
             }
-            posts_run = client.actor(self.posts_actor).call(
+            posts_run = call_apify_actor(
+                client,
+                self.posts_actor,
+                platform="facebook",
+                operation="crawl_page_posts_actor",
+                source="industry_crawlers",
                 run_input=posts_input,
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
@@ -196,6 +210,8 @@ class FacebookCrawler:
                 "post_count": len(post_items),
             }
 
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "provider": "apify"}
         except Exception as exc:
             return {
                 "items": [],
@@ -204,6 +220,8 @@ class FacebookCrawler:
                 "provider": "apify",
                 "error": str(exc)[:500],
             }
+        finally:
+            close_apify_client(client)
 
     def _crawl_brand_mentions_via_apify(
         self, query: str, limit: int
@@ -366,9 +384,15 @@ class FacebookCrawler:
             }
 
         actor_id = (os.environ.get("APIFY_FACEBOOK_COMMENTS_ACTOR_ID") or "apify~facebook-comments-scraper").replace("/", "~")
+        client: Any | None = None
         try:
             client = ApifyClient(self.apify_token)
-            run = client.actor(actor_id).call(
+            run = call_apify_actor(
+                client,
+                actor_id,
+                platform="facebook",
+                operation="crawl_post_comments",
+                source="industry_crawlers",
                 run_input={
                     "startUrls": [{"url": post_url}],
                     "resultsLimit": max(1, min(100, int(max_results or 100))),
@@ -392,6 +416,8 @@ class FacebookCrawler:
                 "provider": "apify",
                 "raw": {"actor_id": actor_id, "post_url": post_url},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id, "post_url": post_url}}
         except Exception as exc:  # pragma: no cover - live provider path
             return {
                 "items": [],
@@ -401,6 +427,8 @@ class FacebookCrawler:
                 "error": str(exc)[:500],
                 "raw": {"actor_id": actor_id, "post_url": post_url},
             }
+        finally:
+            close_apify_client(client)
 
     # ─── Helpers ────────────────────────────────────────────────
 

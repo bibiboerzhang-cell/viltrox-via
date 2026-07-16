@@ -2,6 +2,8 @@
 """Read final_v1 worker queue/cache/cost status."""
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import json
 import sys
@@ -29,14 +31,14 @@ def _fetch_all(conn: psycopg.Connection[Any], sql: str, params: dict[str, Any] |
 
 
 def _print_table(title: str, rows: list[dict[str, Any]]) -> None:
-    print(f"\n{title}")
+    out(f"\n{title}")
     if not rows:
-        print("(none)")
+        out("(none)")
         return
     keys = list(rows[0].keys())
-    print("\t".join(keys))
+    out("\t".join(keys))
     for row in rows:
-        print("\t".join(str(row.get(key) if row.get(key) is not None else "") for key in keys))
+        out("\t".join(str(row.get(key) if row.get(key) is not None else "") for key in keys))
 
 
 def main() -> None:

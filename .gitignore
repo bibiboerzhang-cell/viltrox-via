@@ -84,7 +84,11 @@ backup_*/
 *.before-*
 # 生成的文档/导出物(不跟踪,不挡部署)
 output/
+outputs/
 exports/
+
+# 一次性旧轮次/外部产品报告保留在本机，不进入 V-KPI 发布快照。
+docs/*2026-07-13.md
 
 # 非 V-KPI 子项目(独立)
 video-production-platform/

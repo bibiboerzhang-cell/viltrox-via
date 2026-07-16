@@ -17,8 +17,11 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'industryData',
   'industryBoard',
   'dataExport',
+  'dataQuery',
+  'marketTrends',
   'learning',
   'capabilities',
+  'skillStudio',
   'discovery2',
   'dataAnalysis',
   'analytics',
@@ -29,6 +32,13 @@ const VKPI_PAGE_KEYS = new Set<VkpiPageKey>([
   'audit',
   'settings',
 ]);
+
+const VKPI_PAGE_ALIASES: Record<string, VkpiPageKey> = {
+  // Repair Center was frozen and removed. Keep old task/hash targets useful by
+  // sending them to the live operations and data-quality surface.
+  repairCenter: 'dataQuality',
+  ops: 'dataQuality',
+};
 
 // 成员默认可达页面(单一事实来源,2026-06-14 RBAC UX 决策):
 // - cockpit:成员默认落地页 = 公司官方账号聚合看板 + Events / MY KOL / 项目宿主(公共资产 + 本人数据)。
@@ -66,7 +76,8 @@ export function cleanVkpiPageCandidate(value: string): string {
 }
 
 export function normalizeVkpiPage(value: string, viewMode: 'manager' | 'employee'): VkpiPageKey {
-  const page = cleanVkpiPageCandidate(value);
+  const candidate = cleanVkpiPageCandidate(value);
+  const page: string = VKPI_PAGE_ALIASES[candidate] || candidate;
   if (viewMode === 'manager' && (page === 'command' || page === 'dashboard')) return DEFAULT_MANAGER_PAGE;
   if (viewMode === 'employee' && (page === 'dashboard' || page === DEFAULT_MANAGER_PAGE)) return DEFAULT_EMPLOYEE_PAGE;
   if (viewMode === 'employee' && isVkpiPageKey(page) && !EMPLOYEE_ALLOWED_PAGES.has(page)) return DEFAULT_EMPLOYEE_PAGE;
@@ -97,11 +108,13 @@ export function getInitialVkpiPage(viewMode: 'manager' | 'employee'): VkpiPageKe
 }
 
 export function writeVkpiHash(page: VkpiPageKey) {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return false;
   const nextHash = `#${page}`;
-  if (window.location.hash !== nextHash) {
-    window.history.replaceState(null, '', nextHash);
-  }
+  // replaceState 不会原生触发 hashchange，所以只在真实变化后补发一次。
+  // 相同 hash 若继续派发，会让监听器 write -> dispatch -> write 无限递归。
+  if (window.location.hash === nextHash) return false;
+  window.history.replaceState(null, '', nextHash);
   const event = typeof HashChangeEvent === 'function' ? new HashChangeEvent('hashchange') : new Event('hashchange');
   window.dispatchEvent(event);
+  return true;
 }

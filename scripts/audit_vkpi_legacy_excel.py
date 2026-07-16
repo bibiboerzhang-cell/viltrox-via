@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -102,11 +104,11 @@ def main() -> int:
         try:
             ensure_legacy_staging_schema()
             if args.resolve_batch:
-                print(format_resolution_summary(resolve_batch(args.resolve_batch)))
+                out(format_resolution_summary(resolve_batch(args.resolve_batch)))
             elif args.inspect_resolution:
-                print(format_resolution_summary(inspect_resolution(args.inspect_resolution)))
+                out(format_resolution_summary(inspect_resolution(args.inspect_resolution)))
             elif args.list_pending_reviews:
-                print(
+                out(
                     format_pending_reviews(
                         list_pending_reviews(
                             args.list_pending_reviews,
@@ -117,9 +119,9 @@ def main() -> int:
                     )
                 )
             elif args.show_entity:
-                print(format_entity_detail(show_entity(args.show_entity, ref_limit=max(1, int(args.limit or 50)))))
+                out(format_entity_detail(show_entity(args.show_entity, ref_limit=max(1, int(args.limit or 50)))))
             elif args.decide_resolution:
-                print(
+                out(
                     format_decision_result(
                         decide_resolution(
                             args.decide_resolution,
@@ -132,7 +134,7 @@ def main() -> int:
                     )
                 )
             elif args.bulk_decide:
-                print(
+                out(
                     format_bulk_decision_result(
                         bulk_decide(
                             args.bulk_decide,
@@ -145,9 +147,9 @@ def main() -> int:
                     )
                 )
             elif args.review_progress:
-                print(format_review_progress(review_progress(args.review_progress)))
+                out(format_review_progress(review_progress(args.review_progress)))
             elif args.dry_run_kol_pool_commit:
-                print(
+                out(
                     format_kol_pool_commit_plan(
                         dry_run_kol_pool_commit(
                             args.dry_run_kol_pool_commit,
@@ -158,7 +160,7 @@ def main() -> int:
                 )
             elif args.commit_kol_pool_batch:
                 if not args.commit:
-                    print(
+                    out(
                         format_kol_pool_commit_plan(
                             dry_run_kol_pool_commit(
                                 args.commit_kol_pool_batch,
@@ -167,9 +169,9 @@ def main() -> int:
                             )
                         )
                     )
-                    print("Add --commit to apply P2D commit.")
+                    out("Add --commit to apply P2D commit.")
                 else:
-                    print(
+                    out(
                         format_kol_pool_commit_plan(
                             commit_kol_pool_batch(
                                 args.commit_kol_pool_batch,
@@ -180,7 +182,7 @@ def main() -> int:
                     )
             elif args.rollback_kol_pool_commit:
                 if not args.commit:
-                    print(
+                    out(
                         format_kol_pool_rollback(
                             preview_kol_pool_rollback(
                                 args.rollback_kol_pool_commit,
@@ -190,7 +192,7 @@ def main() -> int:
                         )
                     )
                 else:
-                    print(
+                    out(
                         format_kol_pool_rollback(
                             rollback_kol_pool_commit(
                                 args.rollback_kol_pool_commit,
@@ -200,27 +202,27 @@ def main() -> int:
                         )
                     )
             elif args.inspect_batch:
-                print(format_batch_summary(inspect_batch(args.inspect_batch)))
+                out(format_batch_summary(inspect_batch(args.inspect_batch)))
             else:
                 result = rollback_staging_batch(args.rollback_batch)
-                print(f"batch_uid={result['batch_uid']}")
-                print(f"status={result['status']}")
-                print(f"rolled_back_rows={result['rolled_back_rows']}")
+                out(f"batch_uid={result['batch_uid']}")
+                out(f"status={result['status']}")
+                out(f"rolled_back_rows={result['rolled_back_rows']}")
         except Exception as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            out(f"ERROR: {exc}", file=sys.stderr)
             return 2
         finally:
             asyncio.run(close_db_runtime())
         return 0
 
     if not args.input:
-        print("ERROR: input is required unless a batch command is used", file=sys.stderr)
+        out("ERROR: input is required unless a batch command is used", file=sys.stderr)
         return 2
 
     try:
         result = audit_legacy_file(args.input, sheet_name=args.sheet, max_rows=max(0, int(args.max_rows or 0)))
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        out(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
     paths: dict[str, str] = {}
@@ -229,17 +231,17 @@ def main() -> int:
         result["outputs"] = paths
 
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     else:
         summary = result.get("summary") or {}
-        print(f"source={result.get('source', {}).get('path', '')}")
-        print(f"total_rows={summary.get('total_rows', 0)}")
-        print(f"recognizable_kol_rows={summary.get('recognizable_kol_rows', 0)}")
-        print(f"duplicate_groups={summary.get('duplicate_groups', 0)}")
-        print(f"manual_review_rows={summary.get('manual_review_rows', 0)}")
-        print(f"high_risk_rows={summary.get('high_risk_rows', 0)}")
+        out(f"source={result.get('source', {}).get('path', '')}")
+        out(f"total_rows={summary.get('total_rows', 0)}")
+        out(f"recognizable_kol_rows={summary.get('recognizable_kol_rows', 0)}")
+        out(f"duplicate_groups={summary.get('duplicate_groups', 0)}")
+        out(f"manual_review_rows={summary.get('manual_review_rows', 0)}")
+        out(f"high_risk_rows={summary.get('high_risk_rows', 0)}")
         for key, value in paths.items():
-            print(f"{key}={value}")
+            out(f"{key}={value}")
     if args.stage:
         try:
             ensure_legacy_staging_schema()
@@ -249,9 +251,9 @@ def main() -> int:
                 sheet_name=args.sheet,
                 max_rows=max(0, int(args.max_rows or 0)),
             )
-            print(format_batch_summary(staged))
+            out(format_batch_summary(staged))
         except Exception as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            out(f"ERROR: {exc}", file=sys.stderr)
             return 2
         finally:
             asyncio.run(close_db_runtime())

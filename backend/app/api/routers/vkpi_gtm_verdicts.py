@@ -23,7 +23,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.api.dependencies.manager_guard import require_manager_tab
+from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
+from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -63,7 +64,9 @@ def get_pending_verdicts(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """待裁决清单(全只读):到期未裁决的 bet + 裁决任务/结果行线索。"""
-    del staff
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM pending verdicts")
+    if scope_unavailable is not None:
+        return {**scope_unavailable, "items": [], "count": 0}
     from app.domains.market_brain import verdict_flow
 
     try:
@@ -77,12 +80,16 @@ def get_pending_verdicts(
 def decide_verdict(
     verdict_id: int,
     body: DecideBody,
-    staff=Depends(require_manager_tab("vkpi", "write")),
+    staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """人工裁决(唯一写 decision 的入口):decided 即 finalized,已裁决行拒绝改判。
 
     管理层闸(owner+manager):裁决直接改判权重回流,员工 vkpi:write 不够 → 403。
     """
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM verdict decision")
+    if scope_unavailable is not None:
+        return scope_unavailable
+    require_manager_staff(staff)
     from app.domains.market_brain import verdict_flow
 
     id_type = str(body.id_type or "inbox").strip().lower()
@@ -110,7 +117,9 @@ def get_gtm_outcomes(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """GTM 结果总账只读列表(附 by_decision 分布与 finalized 计数)。"""
-    del staff
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM outcomes")
+    if scope_unavailable is not None:
+        return {**scope_unavailable, "items": [], "count": 0}
     from app.domains.market_brain import verdict_flow
 
     try:

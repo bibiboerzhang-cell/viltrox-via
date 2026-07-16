@@ -6,6 +6,8 @@ metadata from FastAPI router files so P4.2B can do the human audit.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import ast
 import csv
 import json
@@ -352,10 +354,10 @@ def main() -> None:
     _write_csv(csv_path, rows)
     _write_summary(summary_path, rows, jsonl_path, csv_path)
 
-    print(f"rows={len(rows)}")
-    print(f"jsonl={jsonl_path}")
-    print(f"csv={csv_path}")
-    print(f"summary={summary_path}")
+    out(f"rows={len(rows)}")
+    out(f"jsonl={jsonl_path}")
+    out(f"csv={csv_path}")
+    out(f"summary={summary_path}")
 
 
 if __name__ == "__main__":

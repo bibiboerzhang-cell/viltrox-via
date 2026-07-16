@@ -98,7 +98,11 @@ def _shopify_readiness() -> dict[str, Any]:
     except Exception as exc:
         logger.warning("indie_site_actions shopify connection_status failed (conn_status=%s): %s", conn_status, exc)
 
-    order_count = _count("SELECT COUNT(*) AS n FROM vkpi_shopify_orders")
+    order_count = _count(
+        "SELECT COUNT(*) AS n FROM vkpi_shopify_orders "
+        "WHERE LOWER(COALESCE(financial_status,'')) "
+        "IN ('paid','partially_paid','partially_refunded')"
+    )
     if order_count is None:
         data_status = "data_missing"
         note = "vkpi_shopify_orders 表不可读,真实订单数未知。"

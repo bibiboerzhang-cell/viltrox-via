@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -85,7 +84,23 @@ def _keyword_match(text: str, keyword: str) -> bool:
         return False
     if key.startswith("@") or " " in key:
         return key in lowered
-    return re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", lowered) is not None
+    # This helper sits on the hottest path of Category Tracks and Industry
+    # Benchmark (hundreds of thousands of calls per GTM cold build).  The old
+    # per-call regular expression only enforced ASCII alpha-numeric boundaries;
+    # a bounded ``str.find`` loop preserves that exact contract without paying
+    # regex dispatch for every brand/term candidate.
+    start = 0
+    key_len = len(key)
+    while True:
+        index = lowered.find(key, start)
+        if index < 0:
+            return False
+        end = index + key_len
+        left_ok = index == 0 or lowered[index - 1] not in "abcdefghijklmnopqrstuvwxyz0123456789"
+        right_ok = end == len(lowered) or lowered[end] not in "abcdefghijklmnopqrstuvwxyz0123456789"
+        if left_ok and right_ok:
+            return True
+        start = index + 1
 
 
 def _first_text(*values: Any) -> str:

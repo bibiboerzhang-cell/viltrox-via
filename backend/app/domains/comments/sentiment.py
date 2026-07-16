@@ -3,13 +3,14 @@ backend/app/domains/comments/sentiment.py
 
 P1.4: Multi-dimensional sentiment analysis service.
 
-Routes comments through llm_gateway.invoke() to produce:
+Routes comments through the exact-model ``llm_production`` boundary to produce:
   - sentiment: positive/neutral/negative
   - emotion: joy/surprise/curiosity/frustration/anger/sadness/disgust/fear/neutral
   - brand_attitude: advocate/supportive/neutral/critical/hostile/irrelevant
 
 Compatible with V-KPI ABCD/D infrastructure:
-  - llm_gateway.invoke() for LLM (4 provider fallback)
+  - one exact provider/model per call (no silent cross-model fallback)
+  - strict JSON contract before persistence
   - Budget control (LLM_MONTHLY_BUDGET_USD)
   - audit log via record_call
   - Force offline smoke (VKPI_LLM_GATEWAY_FORCE_OFFLINE)
@@ -22,8 +23,9 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.db.connection import get_conn
-from app.platform import llm_gateway
+from app.core.config import CLAUDE_MODEL, GEMINI_MODEL, OPENAI_MODEL
+from app.db.connection import get_conn, is_postgres_runtime
+from app.platform import llm_production
 
 
 PROMPT_VERSION = "v1.0"
@@ -88,29 +90,54 @@ def _now_iso() -> str:
 def ensure_vkpi_sentiment_schema() -> None:
     """Create P1.4 sentiment tables when migration runner has not applied them."""
     conn = get_conn()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_sentiment_results (
-          id BIGSERIAL PRIMARY KEY,
-          comment_id BIGINT NOT NULL,
-          sentiment VARCHAR(20),
-          sentiment_confidence NUMERIC(3,2),
-          emotion VARCHAR(20),
-          emotion_confidence NUMERIC(3,2),
-          brand_attitude VARCHAR(20),
-          brand_attitude_confidence NUMERIC(3,2),
-          llm_provider VARCHAR(50),
-          llm_model VARCHAR(100),
-          prompt_version VARCHAR(20) NOT NULL,
-          language_detected VARCHAR(10),
-          input_tokens INT DEFAULT 0,
-          output_tokens INT DEFAULT 0,
-          cost_cents INT DEFAULT 0,
-          analyzed_at TIMESTAMPTZ DEFAULT NOW(),
-          CONSTRAINT vkpi_sentiment_uniq UNIQUE (comment_id, prompt_version)
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_sentiment_results (
+              id BIGSERIAL PRIMARY KEY,
+              comment_id BIGINT NOT NULL,
+              sentiment VARCHAR(20),
+              sentiment_confidence NUMERIC(3,2),
+              emotion VARCHAR(20),
+              emotion_confidence NUMERIC(3,2),
+              brand_attitude VARCHAR(20),
+              brand_attitude_confidence NUMERIC(3,2),
+              llm_provider VARCHAR(50),
+              llm_model VARCHAR(100),
+              prompt_version VARCHAR(20) NOT NULL,
+              language_detected VARCHAR(10),
+              input_tokens INT DEFAULT 0,
+              output_tokens INT DEFAULT 0,
+              cost_cents INT DEFAULT 0,
+              analyzed_at TIMESTAMPTZ DEFAULT NOW(),
+              CONSTRAINT vkpi_sentiment_uniq UNIQUE (comment_id, prompt_version)
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_sentiment_results (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              comment_id INTEGER NOT NULL,
+              sentiment TEXT,
+              sentiment_confidence NUMERIC,
+              emotion TEXT,
+              emotion_confidence NUMERIC,
+              brand_attitude TEXT,
+              brand_attitude_confidence NUMERIC,
+              llm_provider TEXT,
+              llm_model TEXT,
+              prompt_version TEXT NOT NULL,
+              language_detected TEXT,
+              input_tokens INTEGER DEFAULT 0,
+              output_tokens INTEGER DEFAULT 0,
+              cost_cents INTEGER DEFAULT 0,
+              analyzed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              CONSTRAINT vkpi_sentiment_uniq UNIQUE (comment_id, prompt_version)
+            )
+            """
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_sentiment_comment ON vkpi_sentiment_results(comment_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_sentiment_brand ON vkpi_sentiment_results(brand_attitude, analyzed_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_sentiment_negative ON vkpi_sentiment_results(analyzed_at DESC) WHERE sentiment = 'negative'")
@@ -205,6 +232,173 @@ def _parse_llm_response(text: str) -> dict:
         return {}
 
 
+def _sentiment_llm_binding() -> tuple[str, str]:
+    """Resolve one exact configured binding without an implicit provider chain."""
+    explicit_provider = str(os.environ.get("VKPI_SENTIMENT_PREFERRED_PROVIDER") or "").strip()
+    provider = (explicit_provider or "openai").lower()
+    provider = {"gemini": "google", "claude": "anthropic"}.get(provider, provider)
+    models = {
+        "openai": os.environ.get("VKPI_OPENAI_MODEL") or OPENAI_MODEL,
+        "google": os.environ.get("VKPI_GEMINI_MODEL") or GEMINI_MODEL,
+        "anthropic": os.environ.get("VKPI_CLAUDE_MODEL") or CLAUDE_MODEL,
+    }
+    if provider not in models:
+        raise ValueError("binding_invalid")
+    return provider, str(models[provider]).strip()
+
+
+def _confidence_value(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and 0.0 <= float(value) <= 1.0
+    )
+
+
+def _valid_sentiment_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("sentiment") or "").lower() not in SENTIMENT_VALUES:
+        return False
+    if str(value.get("emotion") or "").lower() not in EMOTION_VALUES:
+        return False
+    if str(value.get("brand_attitude") or "").lower() not in BRAND_ATTITUDE_VALUES:
+        return False
+    if not all(
+        _confidence_value(value.get(key))
+        for key in (
+            "sentiment_confidence",
+            "emotion_confidence",
+            "brand_attitude_confidence",
+        )
+    ):
+        return False
+    language = value.get("language_detected")
+    return isinstance(language, str) and 1 <= len(language.strip()) <= 10
+
+
+def _run_sentiment_llm(
+    prompt: str,
+    *,
+    comment_id: int,
+    staff: dict | None,
+) -> dict[str, Any]:
+    """Run the governed call; a blocked/invalid result becomes rule_v0 neutral."""
+    try:
+        provider, model = _sentiment_llm_binding()
+    except ValueError:
+        return {
+            "status": "fallback_to_rule",
+            "provider": "rule_v0",
+            "model": "rule_v0",
+            "json": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_cents": 0,
+            "reason": "binding_invalid",
+            "source_status": "binding_invalid",
+            "requested_provider": str(
+                os.environ.get("VKPI_SENTIMENT_PREFERRED_PROVIDER") or ""
+            ).strip().lower()[:80],
+            "requested_model": "",
+        }
+    try:
+        response = llm_production.generate_json(
+            prompt,
+            provider=provider,
+            model=model,
+            purpose="vkpi_sentiment",
+            max_output_tokens=200,
+            cost_tag="vkpi_sentiment",
+            triggered_by="comments.sentiment.analyze_comment",
+            staff=staff,
+            required_keys=(
+                "sentiment",
+                "sentiment_confidence",
+                "emotion",
+                "emotion_confidence",
+                "brand_attitude",
+                "brand_attitude_confidence",
+                "language_detected",
+            ),
+            validator=_valid_sentiment_payload,
+            deadline_seconds=45.0,
+            metadata={
+                "surface": "comment_intelligence",
+                "comment_id": int(comment_id),
+                "phase": "comment_intelligence",
+                "subphase": "sentiment",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": f"comment:{int(comment_id)}",
+            },
+        )
+    except Exception as exc:
+        response = {
+            "status": "exception",
+            "reason": f"{type(exc).__name__}: {str(exc)[:180]}",
+        }
+    payload = response.get("json") if isinstance(response, dict) else None
+    status = str(response.get("status") or "")
+    actual_provider = str(response.get("provider") or "").strip().lower()
+    actual_model = str(response.get("model") or "").strip()
+    if status == "success" and actual_provider == provider and actual_model == model and _valid_sentiment_payload(payload):
+        return response
+    failure = response.get("failure") if isinstance(response.get("failure"), dict) else {}
+    if status == "success" and actual_provider != provider:
+        reason = "exact_provider_mismatch"
+    elif status == "success" and actual_model != model:
+        reason = "exact_model_mismatch"
+    elif status == "success":
+        reason = "response_contract_invalid"
+    else:
+        reason = str(
+            failure.get("code")
+            or response.get("failure_code")
+            or response.get("reason")
+            or status
+            or "llm_unavailable"
+        )[:180]
+    return {
+        "status": "fallback_to_rule",
+        "provider": "rule_v0",
+        "model": "rule_v0",
+        "json": None,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_cents": 0,
+        "reason": reason,
+        "source_status": status or "invalid_result",
+        "requested_provider": provider,
+        "requested_model": model,
+    }
+
+
+def _degraded_sentiment_result(comment_id: int, response: dict[str, Any]) -> dict[str, Any]:
+    """Return an honest, retryable neutral view without writing an analysis row."""
+    fallback = _validate_response({})
+    return {
+        "comment_id": int(comment_id),
+        "status": "degraded",
+        "method": "deterministic_fallback",
+        "persisted": False,
+        "retryable": True,
+        "reason": str(response.get("reason") or "llm_unavailable")[:180],
+        "sentiment": fallback["sentiment"],
+        "emotion": fallback["emotion"],
+        "brand_attitude": fallback["brand_attitude"],
+        "confidence": {
+            "sentiment": fallback["sentiment_confidence"],
+            "emotion": fallback["emotion_confidence"],
+            "brand_attitude": fallback["brand_attitude_confidence"],
+        },
+        "language_detected": fallback["language_detected"],
+        "llm_provider": "rule_v0",
+        "llm_model": "rule_v0",
+        "cost_cents": 0,
+    }
+
+
 def analyze_comment(
     comment_id: int,
     *,
@@ -223,7 +417,7 @@ def analyze_comment(
         "confidence": dict,
         "language_detected": str,
         "llm_provider": str,
-        "status": "ok" / "skip" / "fail" / "duplicate",
+        "status": "ok" / "degraded" / "fail" / "duplicate",
       }
     """
     ensure_vkpi_sentiment_schema()
@@ -232,10 +426,21 @@ def analyze_comment(
     # Check if already analyzed (unless forced)
     if not force_reanalyze:
         existing = conn.execute(
-            "SELECT id FROM vkpi_sentiment_results WHERE comment_id=? AND prompt_version=?",
+            "SELECT id, llm_provider, llm_model FROM vkpi_sentiment_results "
+            "WHERE comment_id=? AND prompt_version=?",
             (comment_id, PROMPT_VERSION),
         ).fetchone()
-        if existing:
+        # Older releases persisted AI-off neutral placeholders as rule_v0/rule_v0.
+        # They are not a completed analysis and must not block a later real model.
+        try:
+            existing_provider = str(existing["llm_provider"] or "").strip().lower() if existing else ""
+            existing_model = str(existing["llm_model"] or "").strip().lower() if existing else ""
+        except (KeyError, IndexError, TypeError):
+            existing_provider = existing_model = ""
+        retryable_placeholder = bool(
+            existing and existing_provider == "rule_v0" and existing_model == "rule_v0"
+        )
+        if existing and not retryable_placeholder:
             return {
                 "comment_id": comment_id,
                 "status": "duplicate",
@@ -284,25 +489,16 @@ def analyze_comment(
         language_hint=comment["language_detected"] or "auto",
     )
     
-    # Call LLM via gateway
-    response = llm_gateway.invoke(
-        prompt,
-        purpose="vkpi_sentiment",
-        max_output_tokens=200,
-        preferred_provider=os.environ.get("VKPI_SENTIMENT_PREFERRED_PROVIDER") or None,
-        staff=staff,
-    )
-    
-    # Current llm_gateway returns status=success for provider calls and
-    # status=fallback_to_rule when budget/offline gates block spend. The
-    # fallback path is still a valid deterministic neutral result for smoke and
-    # no-budget runs.
+    response = _run_sentiment_llm(prompt, comment_id=comment_id, staff=staff)
+
+    # AI-off/readiness/budget/contract failures retain the deterministic neutral
+    # result instead of pretending a model completed or switching models.
     response_status = str(response.get("status") or "")
     if response_status == "success":
-        parsed = _parse_llm_response(response.get("text", ""))
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
         validated = _validate_response(parsed)
     elif response_status == "fallback_to_rule":
-        validated = _validate_response({})
+        return _degraded_sentiment_result(comment_id, response)
     else:
         return {
             "comment_id": comment_id,
@@ -353,6 +549,12 @@ def _persist_result(
           emotion_confidence = EXCLUDED.emotion_confidence,
           brand_attitude = EXCLUDED.brand_attitude,
           brand_attitude_confidence = EXCLUDED.brand_attitude_confidence,
+          llm_provider = EXCLUDED.llm_provider,
+          llm_model = EXCLUDED.llm_model,
+          language_detected = EXCLUDED.language_detected,
+          input_tokens = EXCLUDED.input_tokens,
+          output_tokens = EXCLUDED.output_tokens,
+          cost_cents = EXCLUDED.cost_cents,
           analyzed_at = EXCLUDED.analyzed_at
         """,
         (
@@ -407,13 +609,28 @@ def analyze_batch(
     for cid in comment_ids:
         try:
             result = analyze_comment(cid, staff=staff)
-            status = result.get("status", "unknown")
+            if not isinstance(result, dict):
+                result = {
+                    "comment_id": cid,
+                    "status": "unknown",
+                    "error": "sentiment analysis returned a non-object result",
+                }
+            status = str(result.get("status") or "unknown").strip().lower()
             summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
-            if status == "fail":
-                summary["errors"].append(result)
+            if status not in {"ok", "duplicate"}:
+                error_item = dict(result)
+                error_item.setdefault("comment_id", cid)
+                error_item["status"] = status
+                error_item.setdefault(
+                    "error",
+                    str(error_item.get("reason") or f"sentiment analysis {status}"),
+                )
+                summary["errors"].append(error_item)
         except Exception as exc:
             summary["by_status"]["exception"] = summary["by_status"].get("exception", 0) + 1
-            summary["errors"].append({"comment_id": cid, "error": str(exc)})
+            summary["errors"].append(
+                {"comment_id": cid, "status": "exception", "error": str(exc)}
+            )
     
     return summary
 
@@ -430,7 +647,11 @@ def backfill_historical(
     conn = get_conn()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     
-    where = ["c.fetched_at >= ?", "s.id IS NULL"]
+    where = [
+        "c.fetched_at >= ?",
+        "(s.id IS NULL OR (COALESCE(s.llm_provider, '') = 'rule_v0' "
+        "AND COALESCE(s.llm_model, '') = 'rule_v0'))",
+    ]
     params: list = [cutoff]
     if platform:
         where.append("c.platform = ?")

@@ -5,6 +5,7 @@ This does not replace browser QA. It protects the product-scope controls and
 non-ambiguous staff-count labels from being removed in future UI edits.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -60,4 +61,4 @@ missing_css = [term for term in required_css_terms if term not in css]
 if missing_css:
     raise SystemExit(f"missing digest CSS contracts: {missing_css}")
 
-print("VKPI_P3_11C_DAILY_TOP100_UI_CONTRACT_OK")
+stdout_out("VKPI_P3_11C_DAILY_TOP100_UI_CONTRACT_OK")

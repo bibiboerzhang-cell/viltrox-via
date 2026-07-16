@@ -13,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from fastapi import Request
 
 from app.db.connection import get_conn
-from app.domains import audit
+from app.domains import audit, business_truth
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
@@ -237,8 +237,10 @@ def link_orders(link_id: int, *, staff: dict[str, Any] | None = None, limit: int
     sales = [
         dict(item)
         for item in conn.execute(
-            """
+            f"""
             SELECT sa.*,
+                   CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                        THEN 1 ELSE 0 END AS is_verified_business_truth,
                    p.project_name,
                    k.channel_name AS kol_name,
                    os.shopify_order_id,
@@ -263,6 +265,12 @@ def link_orders(link_id: int, *, staff: dict[str, Any] | None = None, limit: int
             (int(link_id), order_limit_i),
         ).fetchall()
     ]
+    for item in sales:
+        item["business_truth_status"] = (
+            "provider_verified"
+            if int(item.get("is_verified_business_truth") or 0) == 1
+            else "reference_only"
+        )
     orders = [
         {
             "sales_attribution_id": item.get("id"),
@@ -286,18 +294,30 @@ def link_orders(link_id: int, *, staff: dict[str, Any] | None = None, limit: int
             "kol_id": item.get("kol_id"),
             "kol_name": item.get("kol_name"),
             "staff_id": item.get("staff_id"),
+            "is_verified_business_truth": item.get("is_verified_business_truth"),
+            "business_truth_status": item.get("business_truth_status"),
         }
         for item in sales
         if item.get("shopify_order_snapshot_id") or item.get("order_id") or item.get("source_ref")
     ]
-    revenue_cents = sum(_int(item.get("revenue_cents")) for item in sales)
+    verified_sales = [
+        item for item in sales
+        if int(item.get("is_verified_business_truth") or 0) == 1
+    ]
+    verified_orders = [
+        item for item in orders
+        if int(item.get("is_verified_business_truth") or 0) == 1
+    ]
+    revenue_cents = sum(_int(item.get("revenue_cents")) for item in verified_sales)
     return {
         "link_id": int(link_id),
         "sales_attributions": sales,
         "orders": orders,
         "summary": {
-            "order_count": len(orders),
+            "order_count": len(verified_orders),
             "attribution_count": len(sales),
+            "verified_attribution_count": len(verified_sales),
+            "reference_attribution_count": len(sales) - len(verified_sales),
             "revenue_cents": revenue_cents,
         },
     }

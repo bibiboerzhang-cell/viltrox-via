@@ -1,7 +1,7 @@
 """V-KPI KOL lifecycle, claim, and link center routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
 from app.domains import attribution as attribution_domain
@@ -24,7 +24,7 @@ def natural_kol_search(body: dict, staff=Depends(require_tab("vkpi", "read"))):
 
 
 @router.post("/kols/lookup")
-async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
+async def lookup_kol(request: Request, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     """Resolve a KOL and optionally scan/analyze.
 
     The response carries ``search_session_id`` (and ``task_id``) so the client
@@ -32,7 +32,33 @@ async def lookup_kol(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     page navigation, and the run shows up on the 任务进度 board with live stages.
     """
     try:
-        return await kol_domain.lookup_with_context(body or {}, staff=staff)
+        payload = dict(body or {})
+        scan_requested = bool(payload.get("scan_account") or payload.get("scan_if_missing"))
+        if scan_requested and getattr(request.app.state, "job_queue", None) is None:
+            raise HTTPException(status_code=503, detail="durable job queue unavailable")
+        # Identity + stored dossier are immediate. Provider scan/analyze is a
+        # progressive follow-up so a lookup request cannot hold a paid actor.
+        if scan_requested:
+            payload["scan_account"] = False
+            payload["scan_if_missing"] = False
+        result = await kol_domain.lookup_with_context(payload, staff=staff)
+        kol = result.get("kol") if isinstance(result.get("kol"), dict) else {}
+        kol_id = int(kol.get("id") or 0)
+        if scan_requested and kol_id:
+            task_id = await request.app.state.job_queue.enqueue(
+                "kol_dossier_scan",
+                {
+                    "kol_id": kol_id,
+                    "max_posts": max(1, min(int(body.get("max_posts") or 24), 80)),
+                    "staff": dict(staff or {}),
+                    "product_sku": str(body.get("product_sku") or ""),
+                    "surface": "kol_lookup",
+                },
+                lock_key=f"kol_dossier_scan:{kol_id}",
+                timeout_seconds=1800,
+            )
+            result["scan_result"] = {"status": "queued", "job_id": task_id, "progressive": True}
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -180,14 +206,30 @@ def update_kol(kol_id: int, body: dict, staff=Depends(require_tab("vkpi", "write
 
 
 @router.post("/kols/{kol_id}/scan-account")
-async def scan_kol(kol_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+async def scan_kol(
+    request: Request,
+    kol_id: int,
+    body: dict | None = None,
+    staff=Depends(require_tab("vkpi", "write")),
+):
     payload = body or {}
     try:
-        return await kol_domain.scan_account_for_request(
-            int(kol_id),
-            max_posts=max(1, min(int(payload.get("max_posts") or 24), 80)),
-            staff=staff,
+        assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+        queue = getattr(request.app.state, "job_queue", None)
+        if queue is None:
+            raise HTTPException(status_code=503, detail="durable job queue unavailable")
+        task_id = await queue.enqueue(
+            "kol_dossier_scan",
+            {
+                "kol_id": int(kol_id),
+                "max_posts": max(1, min(int(payload.get("max_posts") or 24), 80)),
+                "staff": dict(staff or {}),
+                "surface": "vkpi_kol_links",
+            },
+            lock_key=f"kol_dossier_scan:{int(kol_id)}",
+            timeout_seconds=1800,
         )
+        return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 

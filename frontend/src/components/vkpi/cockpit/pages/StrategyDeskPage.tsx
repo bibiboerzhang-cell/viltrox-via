@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw, X } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { apiFetch } from "../../../../services/http";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { ModuleProvModal } from "./MarketVoicePage.dialogs";
@@ -93,7 +94,7 @@ function useStrategyRemote<T extends { status?: string }>(apiToken: string, path
   return { data, loading, error };
 }
 
-export function StrategyDeskPage({ apiToken = "", brand = "" }: { apiToken?: string; brand?: string }) {
+export function StrategyDeskPage({ apiToken = "", brand = "", embeddedModuleKey }: { apiToken?: string; brand?: string; embeddedModuleKey?: string }) {
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
   const [provKey, setProvKey] = React.useState<string | null>(null);
@@ -392,6 +393,10 @@ export function StrategyDeskPage({ apiToken = "", brand = "" }: { apiToken?: str
     { key: "ful", label: "履约对账", description: "闭环步骤留痕 + 计划 vs 实际逐条样例", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 24, render: renderFul },
     { key: "lessons", label: "教训与数据荒", description: "已沉淀教训 top5 + 哪本账还空着直说", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 5, maxHeight: 24, render: renderLessons },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="战略台" />;
+  }
 
   return (
     <div className="p-4 md:px-[22px] md:py-[15px]">

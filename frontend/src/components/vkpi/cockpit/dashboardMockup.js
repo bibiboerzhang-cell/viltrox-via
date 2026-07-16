@@ -139,7 +139,7 @@ var root=document.documentElement, body=document.body;
   // ==== 模块定义 ====
   var MODS={
     kpi:{title:null,span:12,body:function(){var seg=function(k,l){return '<button data-sc="'+k+'"'+(scope===k?' class="on"':'')+'>'+l+'</button>';};
-      return '<div class="kpihead"><div class="kh-l"><span class="kh-t">绩效总览</span><span class="kh-b">6 指标</span></div><div class="kpiseg">'+seg('all','全部')+seg('personal','KOL')+seg('company','公司账号')+'</div><span class="kh-live"><i></i>实时</span></div>'
+      return '<div class="kpihead"><div class="kh-l"><span class="kh-t">增长总览</span><span class="kh-b">6 指标</span></div><div class="kpiseg">'+seg('all','全部')+seg('personal','KOL')+seg('company','公司账号')+'</div><span class="kh-live"><i></i>实时</span></div>'
       +'<div class="kpis">'+(KPI_DATA[scope]||KPI_DATA.all).map(function(k,i){var pend=k[2]==='--';return '<div class="kpi'+(pend?' pend':'')+'" data-metric="'+MKEYS[i]+'"><div class="k"><span class="dot '+k[1]+'"></span>'+k[0]+'<span class="kgo">›</span></div><div class="v mono">'+k[2]+k[3]+' '+k[4]+'</div>'+(pend?'<div class="spempty"></div><div class="pt">'+(k[0].indexOf('GMV')>=0?'待 Shopify 订单接入':'待成本与订单接入')+'</div>':'<svg class="sp" data-d="'+k[5]+'" data-c="'+k[6]+'" viewBox="0 0 240 30" preserveAspectRatio="none"></svg>')+'</div>';}).join('')+'</div>';}},
     cc:{title:'Marketing Command Center',cnt:'US',span:8,tex:1,body:function(){return '<div class="cc"><svg viewBox="0 0 720 330" id="ccsvg"></svg>'
       +'<div class="ov"><div class="t">Marketing Command Center</div><div class="s mono">KOL POOL · 331 · US 覆盖 24 城</div></div>'
@@ -295,7 +295,7 @@ var root=document.documentElement, body=document.body;
   document.getElementById('themeSeg').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;root.setAttribute('data-theme',b.dataset.t);sync();draw();});
   sync();
   // ==== 视角切换(全部/个人/公司)——重渲染 KPI 带 ====
-  // 视角切换(全部 / KOL / 公司账号)已移入「绩效总览」卡头,见 board 点击委托
+  // 视角切换(全部 / KOL / 公司账号)已移入「增长总览」卡头,见 board 点击委托
 
   // ==== 图形绘制 ====
   function nglow(c){var g=cur('--nglow');return g&&g!=='0px'?'filter:drop-shadow(0 0 '+g+' '+c+')':'';}

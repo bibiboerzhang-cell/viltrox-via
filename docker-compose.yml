@@ -31,7 +31,7 @@ services:
       # 用 trust 保持与本地 `postgresql://postgres@host/viltrox2`(无口令)一致。
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "54329:5432"
+      - "127.0.0.1:54329:5432"
     volumes:
       - vkpi_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -46,7 +46,7 @@ services:
     container_name: vkpi-redis
     command: ["redis-server", "--port", "6380", "--appendonly", "yes"]
     ports:
-      - "6380:6380"
+      - "127.0.0.1:6380:6380"
     volumes:
       - vkpi_redis_data:/data
     healthcheck:
@@ -78,7 +78,7 @@ services:
       --host 0.0.0.0 --port 8102
       --app-dir /app/backend
     ports:
-      - "8102:8102"
+      - "127.0.0.1:8102:8102"
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
       VITE_API_PROXY_TARGET: http://backend:8102
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       - backend
     restart: unless-stopped

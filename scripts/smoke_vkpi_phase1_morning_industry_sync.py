@@ -6,6 +6,7 @@ The morning sync must skip it as not_configured and must not create fake
 snapshots or fake posts.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import asyncio
 import os
@@ -71,7 +72,7 @@ def main() -> None:
         post_count = get_conn().execute("SELECT COUNT(*) AS c FROM vkpi_industry_posts WHERE account_id=?", (int(account["id"]),)).fetchone()["c"]
         assert int(snapshot_count) == 0, "not_configured morning sync must not create fake snapshot"
         assert int(post_count) == 0, "not_configured morning sync must not create fake posts"
-        print("VKPI_PHASE1_MORNING_INDUSTRY_SYNC_SMOKE_OK")
+        stdout_out("VKPI_PHASE1_MORNING_INDUSTRY_SYNC_SMOKE_OK")
     finally:
         _cleanup(marker)
 

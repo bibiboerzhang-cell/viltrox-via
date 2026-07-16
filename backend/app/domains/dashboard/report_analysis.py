@@ -2,9 +2,9 @@
 经营深度分析(执行摘要 / 亮点 / 风险 / 建议 / 市场·竞品·社区洞察)。按需触发(点按钮),非定时。
 
 红线 / 安全:
-- LLM 调用前过预算闸 `check_budget("dashboard:report_analysis", est)`(硬上限,见 migration 153 seed);
-  调用后 `record_cost`。超限 → 回退不调用,诚实返回 budget_blocked。
-- Claude 优先(报告分析=对所给数据做推理,要稳定、不要接地噪声);Gemini 兜底。两者均自带代理。
+- LLM 调用前过本域预算闸;每个精确模型调用再由 llm_production 原子预留/结算。
+  超限或未有运行证据 → 回退不调用,诚实返回 budget_blocked/analysis_unavailable。
+- Claude 优先、Gemini 仅由本调用方显式兜底;单次调用禁止静默跨模型 fallback。
 - 同一份报告内容(hash 命中且当天)直接复用上次分析,避免重复点按钮重复花预算。
 - 只写本域表 `vkpi_report_analysis`,绝不碰 vkpi_kol_pool / viltrox_fit_score / 指纹 / rule_v0。
 - 只读所给的 report_text(前端拼好的真实数据),不自己另查数,杜绝编造。
@@ -16,11 +16,12 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from app.core.config import CLAUDE_MODEL
+from app.core.config import CLAUDE_MODEL, GEMINI_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
 from app.domains.market.ai_today import _parse_json  # 复用已加固的 JSON 抽取(去 ```fence / 抽 {..})
+from app.platform import llm_production
 
 logger = get_logger(__name__)
 
@@ -58,39 +59,63 @@ def _hash(period: str, language: str, report_text: str) -> str:
 
 
 def _generate(prompt: str) -> tuple[str, str]:
-    """Claude 优先(报告分析要稳、对所给数据推理);失败回退 Gemini。返回 (文本, 模型标签)。"""
-    # 1) Claude —— 纯推理,无接地噪声,给老板看的报告要稳定可复现。
-    try:
-        from app.services.ai.clients.claude_client import get_claude_client
-        from app.services.ai.retry import call_ai_with_retry
+    """Run two explicit exact-model attempts through the production boundary."""
 
-        client = get_claude_client()
-        resp = call_ai_with_retry(
-            "dashboard.report_analysis",
-            lambda: client.messages.create(
-                model=CLAUDE_MODEL, max_tokens=2500, messages=[{"role": "user", "content": prompt}]
-            ),
+    def usable_payload(value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        normalized = _normalize(value)
+        return bool(normalized["executive_summary"] or normalized["highlights"])
+
+    candidates = (
+        ("anthropic", CLAUDE_MODEL, "claude", "primary"),
+        ("google", GEMINI_MODEL, "gemini", "explicit_fallback"),
+    )
+    for provider, model, label, stage in candidates:
+        try:
+            result = llm_production.generate_json(
+                prompt,
+                provider=provider,
+                model=model,
+                purpose="dashboard.report_analysis",
+                max_output_tokens=2500,
+                cost_tag=_BUDGET_SCOPE,
+                validator=usable_payload,
+                deadline_seconds=75.0,
+                metadata={
+                    "surface": "dashboard_report_analysis",
+                    "model_stage": stage,
+                    "explicit_cross_model_fallback": stage == "explicit_fallback",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "report_analysis.strict_model_failed",
+                extra={"provider": provider, "model": model, "stage": stage},
+                exc_info=True,
+            )
+            continue
+        payload = result.get("json") if isinstance(result, dict) else None
+        if (
+            str(result.get("status") or "") == "success"
+            and str(result.get("provider") or "").strip().lower() == provider
+            and usable_payload(payload)
+        ):
+            actual_model = str(result.get("model") or model).strip() or model
+            return json.dumps(payload, ensure_ascii=False), f"{label}:{actual_model}"
+        logger.info(
+            "report_analysis.strict_model_unavailable",
+            extra={
+                "provider": provider,
+                "model": model,
+                "stage": stage,
+                "status": (
+                    str(result.get("status") or "failed")
+                    if isinstance(result, dict)
+                    else "invalid_result"
+                ),
+            },
         )
-        text = (resp.content[0].text or "").strip() if resp and getattr(resp, "content", None) else ""
-        if text:
-            return text, f"claude:{CLAUDE_MODEL}"
-    except Exception:
-        logger.warning("report_analysis.claude_failed_fallback_gemini", exc_info=True)
-    # 2) Gemini 兜底(无 google_search,纯推理)。
-    try:
-        import app.core.config  # noqa: F401  触发 .env 加载
-        import app.services.ai.clients.gemini_client as gc
-
-        from app.core.config import GEMINI_MODEL
-
-        client = getattr(gc, "gemini_client", None)
-        if client is not None:
-            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-            text = (getattr(resp, "text", "") or "").strip()
-            if text:
-                return text, f"gemini:{GEMINI_MODEL}"
-    except Exception:
-        logger.warning("report_analysis.gemini_failed", exc_info=True)
     return "", ""
 
 
@@ -183,10 +208,7 @@ def analyze(report_text: str, period: str = "monthly", language: str = "zh") -> 
         logger.warning("report_analysis.parse_empty")
         return {"available": False, "reason": "analysis_unavailable"}
 
-    try:
-        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
-    except Exception:
-        logger.debug("report_analysis.record_cost_failed", exc_info=True)
+    # Cost is settled exactly once by llm_production's atomic reservation.
 
     # 4) 存库(缓存 + 留痕)。
     try:

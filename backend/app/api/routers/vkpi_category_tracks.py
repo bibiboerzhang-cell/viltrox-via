@@ -16,10 +16,37 @@ from fastapi import APIRouter, Depends
 
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
+from app.services.cache import cache_get_or_build
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-category-tracks"])
+_STRATEGY_READ_CACHE_TTL_SEC = 30
+
+
+def _organization_id_for_cache(staff: dict | None) -> int:
+    raw = (staff or {}).get("organization_id")
+    try:
+        if int(raw or 0) > 0:
+            return int(raw)
+    except (TypeError, ValueError):
+        pass
+    from app.domains.platform.tenancy import current_org_id
+
+    return max(1, int(current_org_id(staff)))
+
+
+def _build_for_organization(organization_id: int) -> dict:
+    from app.domains.market import category_tracks
+    from app.domains.platform.tenancy import default_organization_id
+
+    if organization_id != default_organization_id():
+        return {
+            "status": "scope_unavailable",
+            "reason": "赛道聚合的底层评论/证据/目录尚未完成多租户字段收窄，未返回默认工作区数据。",
+            "organization_id": organization_id,
+        }
+    return category_tracks.tracks()
 
 
 @router.get("/strategy/category-tracks")
@@ -27,11 +54,13 @@ def get_category_tracks(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """新赛道机会矩阵:下一个该进的品类/焦段赛道(全只读,不写库,零 LLM)。"""
-    del staff
-    from app.domains.market import category_tracks
-
     try:
-        return category_tracks.tracks()
+        organization_id = _organization_id_for_cache(staff)
+        return cache_get_or_build(
+            f"vkpi_strategy:category_tracks:v2:org:{organization_id}",
+            lambda: _build_for_organization(organization_id),
+            ttl=_STRATEGY_READ_CACHE_TTL_SEC,
+        )
     except Exception as exc:  # noqa: BLE001 — 聚合失败不炸接口,诚实回原因
         logger.warning("category_tracks failed: %s", exc)
         return {"status": "error", "reason": str(exc)[:300]}

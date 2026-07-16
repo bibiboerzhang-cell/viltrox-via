@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a no-write market signal package from a provider smoke report."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -78,7 +79,7 @@ def main() -> int:
     md_path = out_dir / f"{prefix}.md"
     json_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(_render_markdown(package), encoding="utf-8")
-    print(
+    stdout_out(
         json.dumps(
             {
                 "json_path": str(json_path.resolve()),

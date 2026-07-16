@@ -18,18 +18,118 @@ services/scheduler/jobs.py — APScheduler 定时任务定义
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from app.core.config import VIA_ENABLE_DAILY_LEARNING
+from app.core.config import APP_ROLE, MIGRATION_RUNNER_APP_ROLE, VIA_ENABLE_DAILY_LEARNING
 from app.core.logging import get_logger
+from app.services.scheduler.fleet_guard import (
+    SchedulerFleetController,
+    SchedulerLeaderLease,
+    guard_scheduled_callable,
+    recover_stale_scheduled_fires,
+    scheduled_fire_context,
+    scheduler_instance_id,
+)
 
 logger = get_logger(__name__)
+_SCHEDULER_INSTANCE_ID = scheduler_instance_id()
 
 try:
+    from apscheduler.executors.asyncio import AsyncIOExecutor
+    from apscheduler.executors.base import run_job as _apscheduler_run_job
+    from apscheduler.executors.base_py3 import run_coroutine_job as _apscheduler_run_coroutine_job
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.interval import IntervalTrigger
     from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.util import iscoroutinefunction_partial
+
+    def _run_job_with_planned_fire(
+        job: Any,
+        jobstore_alias: str,
+        run_times: list[Any],
+        logger_name: str,
+    ) -> list[Any]:
+        events: list[Any] = []
+        for run_time in run_times:
+            with scheduled_fire_context(run_time):
+                events.extend(
+                    _apscheduler_run_job(
+                        job,
+                        jobstore_alias,
+                        [run_time],
+                        logger_name,
+                    )
+                )
+        return events
+
+    async def _run_coroutine_job_with_planned_fire(
+        job: Any,
+        jobstore_alias: str,
+        run_times: list[Any],
+        logger_name: str,
+    ) -> list[Any]:
+        events: list[Any] = []
+        for run_time in run_times:
+            with scheduled_fire_context(run_time):
+                events.extend(
+                    await _apscheduler_run_coroutine_job(
+                        job,
+                        jobstore_alias,
+                        [run_time],
+                        logger_name,
+                    )
+                )
+        return events
+
+    class FleetSafeAsyncIOExecutor(AsyncIOExecutor):
+        """Default executor that preserves APScheduler's planned fire identity."""
+
+        def _do_submit_job(self, job: Any, run_times: list[Any]) -> None:
+            def callback(future: Any) -> None:
+                self._pending_futures.discard(future)
+                try:
+                    events = future.result()
+                except BaseException:
+                    self._run_job_error(job.id, *sys.exc_info()[1:])
+                else:
+                    self._run_job_success(job.id, events)
+
+            if iscoroutinefunction_partial(job.func):
+                coroutine = _run_coroutine_job_with_planned_fire(
+                    job,
+                    job._jobstore_alias,
+                    run_times,
+                    self._logger.name,
+                )
+                future = self._eventloop.create_task(coroutine)
+            else:
+                future = self._eventloop.run_in_executor(
+                    None,
+                    _run_job_with_planned_fire,
+                    job,
+                    job._jobstore_alias,
+                    run_times,
+                    self._logger.name,
+                )
+
+            future.add_done_callback(callback)
+            self._pending_futures.add(future)
+
+    class FleetSafeAsyncIOScheduler(AsyncIOScheduler):
+        """Memory scheduler whose callbacks all use the durable fire ledger."""
+
+        def add_job(self, func: Any, trigger: Any = None, *args: Any, **kwargs: Any):
+            task_key = str(kwargs.get("id") or getattr(func, "__name__", "scheduled_job"))
+            guarded = guard_scheduled_callable(
+                task_key,
+                func,
+                owner_id=_SCHEDULER_INSTANCE_ID,
+            )
+            return super().add_job(guarded, trigger, *args, **kwargs)
+
     _APSCHEDULER_AVAILABLE = True
 except ImportError:
     _APSCHEDULER_AVAILABLE = False
@@ -37,6 +137,8 @@ except ImportError:
 
 
 _scheduler: Optional[Any] = None
+_fleet_controller: SchedulerFleetController | None = None
+_fleet_monitor_task: asyncio.Task[Any] | None = None
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 US_PACIFIC_TZ = ZoneInfo("America/Los_Angeles")  # 每日官号报告第二轮(美西早6点,自动随 PDT/PST 切换)
 
@@ -110,7 +212,36 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_worker_lease_expire_stale,
 )
 from app.services.scheduler.jobs_pool_dedupe import job_kol_pool_dedupe_reconcile  # noqa: F401
+from app.services.scheduler.jobs_tasks_events import job_vkpi_dealer_activity_candidate_sync  # noqa: F401
+from app.services.scheduler.jobs_tasks_products import job_vkpi_official_catalog_sync  # noqa: F401
 from app.services.monitoring.runtime import job_runtime_metrics_snapshot  # noqa: F401
+
+
+def _scheduler_fire_recovery_interval_seconds() -> int:
+    raw = str(os.environ.get("VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS") or "60").strip()
+    try:
+        seconds = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS must be an integer"
+        ) from exc
+    if seconds < 30 or seconds > 3600:
+        raise RuntimeError(
+            "VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS must be between 30 and 3600"
+        )
+    return seconds
+
+
+def job_scheduler_fire_stale_recovery() -> dict[str, Any]:
+    """Fail-closed stale-fire reconciliation; never replays the original fire."""
+
+    recovered = recover_stale_scheduled_fires(_SCHEDULER_INSTANCE_ID)
+    return {
+        "status": "ok",
+        "recovered_total": len(recovered),
+        "automatic_replay": False,
+        "claim_ids": [item.claim_id for item in recovered],
+    }
 
 
 # ──────────────────────────────────────────────
@@ -118,8 +249,8 @@ from app.services.monitoring.runtime import job_runtime_metrics_snapshot  # noqa
 # ──────────────────────────────────────────────
 
 
-async def start_scheduler() -> None:
-    """在 lifespan startup 调用"""
+async def _start_scheduler_local() -> None:
+    """Start this process's scheduler after fleet leadership is acquired."""
     global _scheduler
     
     if not _APSCHEDULER_AVAILABLE:
@@ -129,7 +260,9 @@ async def start_scheduler() -> None:
     if _scheduler is not None:
         return
     
-    _scheduler = AsyncIOScheduler()
+    _scheduler = FleetSafeAsyncIOScheduler(
+        executors={"default": FleetSafeAsyncIOExecutor()},
+    )
     
     # ── Job 1: verification scan check ──
     _scheduler.add_job(
@@ -483,11 +616,14 @@ async def start_scheduler() -> None:
         max_instances=1,
         coalesce=True,
     )
+    # Composite channel/industry/product/digest bundle.  Registration is inert:
+    # the callable requires VKPI_COMPOSITE_MORNING_SYNC_ENABLED=1 *and* the
+    # scheduler_tasks.vkpi_morning_sync registry row enabled (migration 264).
     _scheduler.add_job(
         job_vkpi_morning_sync,
         trigger=CronTrigger(hour=8, minute=0, timezone=CHINA_TZ),
         id="vkpi_morning_sync",
-        name="V-KPI 08:00 China daily KOL/channel/product sync + staff top-100 digest",
+        name="V-KPI gated 08:00 composite channel/industry/product sync + staff digest",
         max_instances=1,
         coalesce=True,
     )
@@ -693,6 +829,30 @@ async def start_scheduler() -> None:
         coalesce=True,
     )
 
+    # viltrox.com public Shopify catalog; execution is gated by scheduler_tasks.
+    _scheduler.add_job(
+        job_vkpi_official_catalog_sync,
+        trigger=CronTrigger(hour=3, minute=20, timezone=CHINA_TZ),
+        id="vkpi_official_catalog_sync",
+        name="Daily viltrox.com official product catalog sync",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    # Approved US Dealer public activity feeds -> pending Event candidates.
+    # Registry task defaults OFF; source activation/passport/feed gates remain
+    # mandatory and this job never promotes candidates or writes business Events.
+    _scheduler.add_job(
+        job_vkpi_dealer_activity_candidate_sync,
+        trigger=IntervalTrigger(minutes=30),
+        id="vkpi_dealer_activity_candidate_sync",
+        name="Approved Dealer activities to Event candidate review queue",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+    )
+
     # ── 可观测性:进程内请求指标每 5 分钟快照落库(persistent_cache,重启不丢)──
     # 常开、轻量(读进程内计数器 + 两行 cache upsert),空库安全空跑;只读端点见 ops.py。
     _scheduler.add_job(
@@ -700,6 +860,18 @@ async def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=5),
         id="runtime_metrics_snapshot",
         name="Persist in-process request metrics snapshot every 5 min",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Fail-closed cleanup for callbacks whose process died while status was
+    # running.  It is itself fleet-leader-only, guarded by the same durable
+    # planned-fire wrapper, bounded per pass, and never replays old side effects.
+    _scheduler.add_job(
+        job_scheduler_fire_stale_recovery,
+        trigger=IntervalTrigger(seconds=_scheduler_fire_recovery_interval_seconds()),
+        id="scheduler_fire_stale_recovery",
+        name="Terminalize provably stale scheduler fires without replay",
         max_instances=1,
         coalesce=True,
     )
@@ -713,22 +885,95 @@ async def start_scheduler() -> None:
     logger.info("scheduler.job_enabled", extra={"job": "confirm_partial_awards"})
 
 
-async def stop_scheduler() -> None:
-    """在 lifespan shutdown 调用"""
+async def _stop_scheduler_local() -> None:
+    """Stop only this process's in-memory scheduler."""
     global _scheduler
     if _scheduler is not None:
-        _scheduler.shutdown(wait=False)
-        _scheduler = None
+        scheduler, _scheduler = _scheduler, None
+        if bool(getattr(scheduler, "running", False)):
+            # ``AsyncIOScheduler.shutdown`` schedules its real shutdown with
+            # call_soon_threadsafe().  Pause synchronously first, then wait for
+            # the state transition before the fleet controller releases the
+            # advisory lock to a replacement leader.
+            scheduler.pause()
+            scheduler.shutdown(wait=False)
+            for _ in range(20):
+                if not bool(getattr(scheduler, "running", False)):
+                    break
+                await asyncio.sleep(0)
+            if bool(getattr(scheduler, "running", False)):
+                raise RuntimeError("scheduler shutdown was not acknowledged")
         logger.info("scheduler.stopped")
+
+
+def _scheduler_leader_lease() -> SchedulerLeaderLease:
+    return SchedulerLeaderLease(identity=_SCHEDULER_INSTANCE_ID)
+
+
+async def start_scheduler() -> None:
+    """Start a fleet monitor; only the PostgreSQL advisory-lock leader runs jobs."""
+    global _fleet_controller, _fleet_monitor_task
+    if APP_ROLE == MIGRATION_RUNNER_APP_ROLE:
+        raise RuntimeError(
+            "APP_ROLE='migration-runner' cannot start scheduler or provider jobs"
+        )
+    if not _APSCHEDULER_AVAILABLE:
+        logger.warning("scheduler.start_skipped")
+        return
+    if _fleet_controller is not None:
+        return
+
+    monitor_seconds = float(os.environ.get("VKPI_SCHEDULER_LEADER_POLL_SECONDS", "5") or 5)
+    controller = SchedulerFleetController(
+        identity=_SCHEDULER_INSTANCE_ID,
+        lease_factory=_scheduler_leader_lease,
+        on_promote=_start_scheduler_local,
+        on_demote=_stop_scheduler_local,
+        monitor_seconds=monitor_seconds,
+    )
+    _fleet_controller = controller
+    try:
+        await controller.tick()
+    except BaseException:
+        _fleet_controller = None
+        raise
+    _fleet_monitor_task = asyncio.create_task(
+        controller.run(),
+        name="vkpi-scheduler-fleet-monitor",
+    )
+    logger.info("scheduler.fleet_monitor_started", extra=controller.status())
+
+
+async def stop_scheduler() -> None:
+    """Stop the fleet monitor and release leadership before process shutdown."""
+    global _fleet_controller, _fleet_monitor_task
+    controller = _fleet_controller
+    monitor_task = _fleet_monitor_task
+    _fleet_controller = None
+    _fleet_monitor_task = None
+    try:
+        if controller is not None:
+            await controller.shutdown()
+        else:
+            await _stop_scheduler_local()
+    finally:
+        if monitor_task is not None and monitor_task is not asyncio.current_task():
+            await asyncio.gather(monitor_task, return_exceptions=True)
 
 
 def get_scheduler_status() -> dict:
     """状态查询"""
+    fleet = _fleet_controller.status() if _fleet_controller is not None else {
+        "identity": _SCHEDULER_INSTANCE_ID,
+        "is_leader": False,
+        "backend": "not_started",
+    }
     if _scheduler is None:
         return {
             "running": False,
             "jobs": [],
             "available": _APSCHEDULER_AVAILABLE,
+            "fleet": fleet,
         }
     
     jobs = []
@@ -744,6 +989,7 @@ def get_scheduler_status() -> dict:
         "running": _scheduler.running,
         "jobs": jobs,
         "available": _APSCHEDULER_AVAILABLE,
+        "fleet": fleet,
     }
 
 

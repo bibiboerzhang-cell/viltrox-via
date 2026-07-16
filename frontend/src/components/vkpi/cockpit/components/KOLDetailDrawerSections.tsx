@@ -3,7 +3,7 @@
 // 红线:本文件绝不渲染 viltrox_fit_score / 不读写评分;长期记忆区严格逐字搬运。
 
 import React from "react";
-import { Activity, AlertTriangle, BadgeCheck, Check, ExternalLink, Flame, Heart, Layers, Link2, MapPin, MoreHorizontal, RefreshCw, Send, Shield, ShoppingBag, Sparkles, Star, Target, UserPlus, Video, Zap, X } from "lucide-react";
+import { Activity, AlertTriangle, BadgeCheck, Check, ExternalLink, Flame, Heart, Layers, Link2, MapPin, RefreshCw, Send, Shield, ShoppingBag, Sparkles, Star, Target, Video, Zap, X } from "lucide-react";
 import { AudienceTypeChip } from "./AudienceTypeChip";
 import { CandidateKindChip } from "./CandidateKindChip";
 import { GeoTierChip } from "./GeoTierChip";
@@ -47,7 +47,8 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
       e(CandidateKindChip, { kind: item.candidate_kind }),
       e(PlatformPill, { platform: item.platform }),
       e(AudienceTypeChip, { type: item.audience_type }),
-      e(GeoTierChip, { tier: item.geo_tier }),
+      // 旧搜索会话曾把未知国家缓存成 X；只有明确的 CN 才允许显示中国标签。
+      e(GeoTierChip, { tier: item.country === "CN" ? "X" : item.geo_tier === "X" ? null : item.geo_tier }),
       item.country && e("span", { className: "text-[10px] text-slate-500 inline-flex items-center gap-1" },
         e(MapPin, { size: 9 }),
         item.country
@@ -114,13 +115,7 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
           "  ·  发现于 ", item.discovered_at || "—",
           "  ·  validation_score ", item.validation_score
         ),
-      ),
-      item.candidate_kind === "new_promoted" && e("button", {
-        onClick: (ev: any) => ev.stopPropagation(),
-        disabled: true,
-        className: "flex items-center gap-1 rounded-md px-2.5 py-1 text-[10px] font-medium text-slate-400 shrink-0 cursor-not-allowed",
-        style: { background: "rgba(148,163,184,0.14)" }
-      }, e(UserPlus, { size: 10 }), "待接入写入")
+      )
     )
   );
 }
@@ -640,7 +635,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
 // 【C2 行动条粘性】主操作行(加入收藏/添加联系方式/入主表)必须始终钉在抽屉视口底部:
 // 抽屉本体是 flex-col(footer 在滚动区之外)天然不滚走,这里再加 sticky bottom-0 + 不透明背景
 // + z 提层做双保险 —— 未来若有人把 footer 挪进滚动区,主操作行也不会被内容顶走。
-// 次级行(AI深度分析/打开主页/更多)仍在本组件内原位跟随,不单独提层。
+// 次级行(AI深度分析/打开主页)仍在本组件内原位跟随,不单独提层。
 export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis, buildFullState = "idle", onBuildFullProfile }: any) {
   return e("div", { className: "sticky bottom-0 z-20 bg-[#0a1020] px-5 py-3 border-t border-white/[0.06]" },
     // 主操作 3 按钮
@@ -695,11 +690,6 @@ export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onP
         href: item.profile_url, target: "_blank", rel: "noreferrer",
         className: "flex items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-400 hover:bg-white/[0.04] hover:text-white"
       }, e(ExternalLink, { size: 10 }), "打开主页"),
-      e("button", {
-        disabled: true,
-        className: "flex cursor-not-allowed items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-500 opacity-70",
-        title: "待接入: 更多操作需要明确菜单项和权限"
-      }, e(MoreHorizontal, { size: 10 }), "更多 · 待接入"),
     ),
     videoEnqueueState.message && e("div", {
       className: "mt-1 text-center text-[10px] leading-snug " + (

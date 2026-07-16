@@ -1,0 +1,21 @@
+{
+  "records": [
+    {
+      "storeId": "om-nyc-001",
+      "organization": "Example Camera Group",
+      "name": "Example Camera Downtown",
+      "address": {
+        "address1": "123 Broadway",
+        "city": "New York",
+        "state": "NY",
+        "postal_code": "10006",
+        "country_code": "US"
+      },
+      "phoneNumber": "+1 212 555 0199",
+      "website": "https://example-camera.invalid/locations/downtown",
+      "source_url": "https://example-camera.invalid/locations/downtown",
+      "latitude": 40.7087,
+      "longitude": -74.0119
+    }
+  ]
+}

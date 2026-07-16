@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Check whether V-KPI media cache can safely write to Cloudflare R2."""
 from __future__ import annotations
+import sys as _stdout_sys
+from pathlib import Path as _StdoutPath
+
+_STDOUT_UTILS_DIR = _StdoutPath(__file__).resolve().parents[1]
+if str(_STDOUT_UTILS_DIR) not in _stdout_sys.path:
+    _stdout_sys.path.insert(1, str(_STDOUT_UTILS_DIR))
+from stdout_utils import out as stdout_out  # noqa: E402
 
 import argparse
 import json
@@ -190,7 +197,7 @@ def main() -> int:
     }
     if args.remote:
         result["remote"] = check_remote(args.remote, args.remote_root)
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     remote = result.get("remote") if isinstance(result.get("remote"), dict) else {}
     local_ready = bool(result["local"].get("ready_for_new_uploads"))  # type: ignore[index, union-attr]
     remote_ready = bool(remote.get("ready_for_new_uploads")) if remote else True

@@ -11,6 +11,16 @@ from app.db.connection import get_conn, is_postgres_runtime
 _SCHEMA_READY = False
 
 
+def _ensure_sqlite_column(conn: object, table: str, column: str, declaration: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    names = {
+        str(row["name"] if hasattr(row, "keys") and "name" in row.keys() else row[1])
+        for row in rows
+    }
+    if column not in names:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
 def ensure_vkpi_lineage_schema() -> None:
     global _SCHEMA_READY
     if _SCHEMA_READY or is_postgres_runtime():
@@ -50,6 +60,9 @@ def ensure_vkpi_lineage_schema() -> None:
             unit TEXT NOT NULL DEFAULT '',
             calculation_json TEXT NOT NULL DEFAULT '{}',
             source_count INTEGER NOT NULL DEFAULT 0,
+            data_status TEXT,
+            confidence REAL,
+            is_partial INTEGER,
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_vkpi_metric_values_run
@@ -85,5 +98,11 @@ def ensure_vkpi_lineage_schema() -> None:
             ON vkpi_metric_sources(staff_id);
         """
     )
+    for column, declaration in (
+        ("data_status", "TEXT"),
+        ("confidence", "REAL"),
+        ("is_partial", "INTEGER"),
+    ):
+        _ensure_sqlite_column(conn, "vkpi_metric_values", column, declaration)
     conn.commit()
     _SCHEMA_READY = True

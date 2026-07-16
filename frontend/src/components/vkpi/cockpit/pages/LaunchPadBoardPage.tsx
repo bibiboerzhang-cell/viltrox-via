@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
 import { ModuleProvModal } from "./MarketVoicePage.dialogs";
 import {
@@ -104,7 +105,7 @@ function useEndpoint<T>(apiToken: string, version: number, fetcher: (token: stri
   return { data, error };
 }
 
-export function LaunchPadBoardPage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
+export function LaunchPadBoardPage({ apiToken = "", onNavigate, embeddedModuleKey }: { apiToken?: string; onNavigate?: (navKey: string) => void; embeddedModuleKey?: string }) {
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
 
@@ -490,6 +491,10 @@ export function LaunchPadBoardPage({ apiToken = "", onNavigate }: { apiToken?: s
     { key: "stages", label: "履约阶段", description: "指派行按归一阶段条形", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 9, minHeight: 4, maxHeight: 20, render: renderStages },
     { key: "materials", label: "物料覆盖", description: "三源盘点 · 静态标日期非实时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderMaterials },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="发射台" />;
+  }
 
   const postItem = postIdx != null && posts ? posts[postIdx] : null;
   const approvalItem = approvalIdx != null && approvals ? approvals[approvalIdx] : null;

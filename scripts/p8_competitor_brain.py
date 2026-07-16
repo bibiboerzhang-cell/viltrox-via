@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -66,9 +68,9 @@ def main() -> int:
                 limit=args.suggestion_limit,
             )
             if args.json:
-                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
             else:
-                print(format_review_suggestions(payload))
+                out(format_review_suggestions(payload))
             return 0
         if args.apply_suggestions:
             payload = apply_competitor_signal_review_suggestions(
@@ -79,11 +81,11 @@ def main() -> int:
                 dry_run=not args.confirm,
             )
             if args.json:
-                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
             else:
-                print(format_apply_suggestions(payload))
+                out(format_apply_suggestions(payload))
                 if payload.get("dry_run"):
-                    print("Add --confirm to write these decisions.")
+                    out("Add --confirm to write these decisions.")
             return 0
         if args.review_signal:
             result = review_competitor_signal(
@@ -94,30 +96,30 @@ def main() -> int:
                 dry_run=not args.apply_review,
             )
             if args.json:
-                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
             else:
-                print(f"signal_id={int(result.get('id') or 0)}")
-                print(f"brand={result.get('brand') or ''}")
-                print(f"previous_status={result.get('previous_status') or ''}")
-                print(f"review_status={result.get('review_status') or ''}")
-                print(f"dry_run={str(bool(result.get('dry_run'))).lower()}")
-                print(f"write_db={str(bool(result.get('write_db'))).lower()}")
+                out(f"signal_id={int(result.get('id') or 0)}")
+                out(f"brand={result.get('brand') or ''}")
+                out(f"previous_status={result.get('previous_status') or ''}")
+                out(f"review_status={result.get('review_status') or ''}")
+                out(f"dry_run={str(bool(result.get('dry_run'))).lower()}")
+                out(f"write_db={str(bool(result.get('write_db'))).lower()}")
                 if result.get("dry_run"):
-                    print("Add --apply-review to write this decision.")
+                    out("Add --apply-review to write this decision.")
             return 0
         if args.commit_signals:
             if not args.confirm:
                 raise ValueError("--commit-signals requires --confirm")
             result = commit_competitor_signals(limit=args.limit, committed_by=args.committed_by)
             if args.json:
-                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
             else:
-                print(f"scenario={result.get('scenario', '')}")
-                print(f"run_uid={result.get('run_uid', '')}")
-                print(f"run_id={int(result.get('run_id') or 0)}")
-                print(f"inserted_signals={int(result.get('inserted_signals') or 0)}")
-                print(f"provider_calls={str(bool(result.get('provider_calls'))).lower()}")
-                print(f"write_db={str(bool(result.get('write_db'))).lower()}")
+                out(f"scenario={result.get('scenario', '')}")
+                out(f"run_uid={result.get('run_uid', '')}")
+                out(f"run_id={int(result.get('run_id') or 0)}")
+                out(f"inserted_signals={int(result.get('inserted_signals') or 0)}")
+                out(f"provider_calls={str(bool(result.get('provider_calls'))).lower()}")
+                out(f"write_db={str(bool(result.get('write_db'))).lower()}")
             return 0
         payload = build_competitor_brain_preview(
             limit=args.limit,
@@ -125,16 +127,16 @@ def main() -> int:
             md_out=args.md_out,
         )
         if args.json:
-            print(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))
+            out(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))
         else:
-            print(format_preview_summary(payload))
+            out(format_preview_summary(payload))
             if args.json_out:
-                print(f"json_out={args.json_out}")
+                out(f"json_out={args.json_out}")
             if args.md_out:
-                print(f"md_out={args.md_out}")
+                out(f"md_out={args.md_out}")
         return 0
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        out(f"ERROR: {exc}", file=sys.stderr)
         return 2
     finally:
         asyncio.run(close_db_runtime())

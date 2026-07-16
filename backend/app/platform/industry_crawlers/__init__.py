@@ -40,6 +40,13 @@ from .reddit_crawler import RedditCrawler
 from .facebook_crawler import FacebookCrawler
 
 from app.core.logging import get_logger
+from app.platform.apify_lifecycle import (
+    close_apify_client,
+    close_apify_client_async,
+    managed_apify_client,
+    managed_apify_client_async,
+    register_apify_client_shutdown,
+)
 
 logger = get_logger(__name__)
 
@@ -150,6 +157,11 @@ __all__ = [
     "TwitchCrawler",
     "RedditCrawler",
     "FacebookCrawler",
+    "close_apify_client",
+    "close_apify_client_async",
+    "managed_apify_client",
+    "managed_apify_client_async",
+    "register_apify_client_shutdown",
     "get_crawler",
     "supported_platforms",
     "is_supported",

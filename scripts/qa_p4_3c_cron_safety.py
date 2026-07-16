@@ -7,6 +7,8 @@ rollup, or broad sync job is executed.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import csv
 import sys
 import time
@@ -219,11 +221,11 @@ def main() -> int:
             _cleanup(user_id, staff_id)
     _write_outputs(results, marker)
     failed = [row for row in results if row["result"] != "PASS"]
-    print(f"P4_3C_CRON_SAFETY_QA {'PASS' if not failed else 'FAIL'} {len(results) - len(failed)}/{len(results)}")
-    print(f"report={OUT_MD}")
+    out(f"P4_3C_CRON_SAFETY_QA {'PASS' if not failed else 'FAIL'} {len(results) - len(failed)}/{len(results)}")
+    out(f"report={OUT_MD}")
     if failed:
         for row in failed:
-            print(f"FAIL {row['case']}: {row['evidence']}")
+            out(f"FAIL {row['case']}: {row['evidence']}")
         return 1
     return 0
 

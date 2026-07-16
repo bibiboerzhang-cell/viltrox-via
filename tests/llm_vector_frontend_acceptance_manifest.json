@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "name": "frontend_llm_vector_reliability_acceptance",
+  "provider_execution": "forbidden",
+  "credentials_required": false,
+  "enforced_env": {
+    "VKPI_LLM_GATEWAY_FORCE_OFFLINE": "1"
+  },
+  "invariants": {
+    "bounded_timeout": "Synchronous provider work has a deterministic deadline or injected timeout degrades without escaping.",
+    "stable_non_500": "Provider, vector, and optional enrichment failures return a stable 2xx degraded payload or a structured 502/503 detail object.",
+    "no_false_ready": "Fallback, empty, partial, queued, invalid, and ungrounded results never claim ready, analyzed, or llm_used.",
+    "no_raw_exception": "Frontend payloads contain fixed reason codes and never copy provider bodies, exception strings, tracebacks, or secrets."
+  },
+  "excluded_owners": [
+    "frontend/src/components/vkpi/report-v2",
+    "backend/app/api/routers/vkpi_reports.py",
+    "backend/app/domains/reports",
+    "backend/app/core/model_registry.py",
+    "backend/app/platform/models/registry.py"
+  ],
+  "families": {
+    "intelligent_ask": {
+      "direct_tests": [
+        "tests/test_vkpi_intelligent_llm_resilience.py",
+        "tests/test_vkpi_intelligent_truthfulness.py"
+      ]
+    },
+    "kol_deep_analysis": {
+      "direct_tests": [
+        "tests/test_vkpi_audience_llm_resilience.py",
+        "tests/test_vkpi_kol_operation_error_contract.py",
+        "tests/test_vkpi_kol_pool_error_redaction.py",
+        "tests/test_llm_vector_frontend_acceptance.py"
+      ]
+    },
+    "audience": {
+      "direct_tests": [
+        "tests/test_vkpi_audience_llm_resilience.py",
+        "tests/test_llm_vector_frontend_acceptance.py"
+      ]
+    },
+    "collaboration_outreach": {
+      "direct_tests": [
+        "tests/test_llm_vector_frontend_acceptance.py"
+      ]
+    },
+    "url_profile_discovery": {
+      "direct_tests": [
+        "tests/test_kol_url_deferred_queue.py",
+        "tests/test_vkpi_kol_smart_search_pipeline.py",
+        "tests/test_llm_vector_frontend_acceptance.py"
+      ]
+    },
+    "vector_semantic_search": {
+      "direct_tests": [
+        "tests/test_profile_recall_embed_transport.py",
+        "tests/test_vkpi_search_retrieval.py",
+        "tests/test_via_vector_memory_http.py",
+        "tests/test_llm_vector_frontend_acceptance.py"
+      ]
+    },
+    "ai_today_evidence": {
+      "direct_tests": [
+        "tests/test_ai_today_evidence.py",
+        "tests/test_ai_today_grounding_contract.py",
+        "tests/test_llm_vector_frontend_acceptance.py"
+      ]
+    }
+  },
+  "paths": [
+    {
+      "id": "intelligent.ask",
+      "family": "intelligent_ask",
+      "method": "POST",
+      "route": "/api/admin/vkpi/intelligent/ask",
+      "frontend_source": "frontend/src/services/vkpi/intelligent-api.ts",
+      "frontend_marker": "/api/admin/vkpi/intelligent/ask",
+      "backend_owner": "backend/app/api/routers/vkpi_intelligent.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "intelligent.stats",
+      "family": "intelligent_ask",
+      "method": "GET",
+      "route": "/api/admin/vkpi/intelligent/stats",
+      "frontend_source": "frontend/src/services/vkpi/intelligent-api.ts",
+      "frontend_marker": "/api/admin/vkpi/intelligent/stats",
+      "backend_owner": "backend/app/api/routers/vkpi_intelligent.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "intelligent.suggestions",
+      "family": "intelligent_ask",
+      "method": "GET",
+      "route": "/api/admin/vkpi/intelligent/suggestions",
+      "frontend_source": "frontend/src/services/vkpi/intelligent-api.ts",
+      "frontend_marker": "/api/admin/vkpi/intelligent/suggestions",
+      "backend_owner": "backend/app/api/routers/vkpi_intelligent.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.detail_bundle",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/detail-bundle",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/detail-bundle?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "kol.llm_deep_analysis",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/llm-deep-analysis",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/llm-deep-analysis?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.content_fit",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/content-fit",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/content-fit",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "read_or_queue",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.analysis_cache",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/analysis-cache",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/api/admin/vkpi/analysis-cache?",
+      "backend_owner": "backend/app/api/routers/vkpi_projects.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "kol.video_analysis_enqueue",
+      "family": "kol_deep_analysis",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/enqueue-video-analysis",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/enqueue-video-analysis`",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.video_analysis_needs",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/needs-analysis",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-pool/needs-analysis?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.video_analysis_batch",
+      "family": "kol_deep_analysis",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/enqueue-video-analysis-batch",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-pool/enqueue-video-analysis-batch",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.video_analysis_all",
+      "family": "kol_deep_analysis",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/enqueue-all-videos",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/enqueue-all-videos`",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "kol.evidence_summary",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/evidence-summary",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/evidence-summary?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "kol.ai_brief",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/ai-brief",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/ai-brief?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "kol.gemini_preflight",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/gemini-preflight",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/gemini-preflight?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "preflight_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "kol.gemini_go_no_go",
+      "family": "kol_deep_analysis",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/gemini-go-no-go",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.detail.ts",
+      "frontend_marker": "/gemini-go-no-go?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "preflight_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "audience.refresh",
+      "family": "audience",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/audience-stats/refresh",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/audience-stats/refresh`",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "bounded_sync_or_queue",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "outreach.pack_read",
+      "family": "collaboration_outreach",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/outreach-pack",
+      "frontend_source": "frontend/src/services/vkpi/kolOutreach-api.ts",
+      "frontend_marker": "/outreach-pack`",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "outreach.pack_generate",
+      "family": "collaboration_outreach",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/outreach-pack",
+      "frontend_source": "frontend/src/services/vkpi/kolOutreach-api.ts",
+      "frontend_marker": "/outreach-pack`",
+      "backend_owner": "backend/app/domains/kol/outreach_pack.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "outreach.optimize",
+      "family": "collaboration_outreach",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/outreach-optimize",
+      "frontend_source": "frontend/src/components/vkpi/cockpit/components/modals/ContactModal.tsx",
+      "frontend_marker": "/api/admin/vkpi/kol-pool/outreach-optimize",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_jobs.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "outreach.session_generate",
+      "family": "collaboration_outreach",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-search-sessions/{session_id}/generate-outreach",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.search.ts",
+      "frontend_marker": "generate-outreach",
+      "backend_owner": "backend/app/domains/projects/outreach.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "outreach.project_enqueue",
+      "family": "collaboration_outreach",
+      "method": "POST",
+      "route": "/api/marketing/kol-pool/outreach-draft/enqueue",
+      "frontend_source": "frontend/src/services/vkpi/projects-api.ts",
+      "frontend_marker": "/api/marketing/kol-pool/outreach-draft/enqueue",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_jobs.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "outreach.project_read",
+      "family": "collaboration_outreach",
+      "method": "GET",
+      "route": "/api/marketing/kol-pool/{kol_pool_id}/outreach-draft",
+      "frontend_source": "frontend/src/services/vkpi/projects-api.ts",
+      "frontend_marker": "/outreach-draft`",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "read_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.url_deep_crawl",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-url-deep-crawl",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.search.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-url-deep-crawl",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_search.py",
+      "provider_mode": "bounded_sync_or_queue",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "discovery.smart_search",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-smart-search",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.search.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-smart-search",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_search.py",
+      "provider_mode": "bounded_sync_or_queue",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "discovery.profile_advance",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-smart-search/profile-advance-job",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.search.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-smart-search/profile-advance-job",
+      "backend_owner": "backend/app/domains/kol/profile_discovery_pipeline.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "discovery.platform_search",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/kol/search/platform",
+      "frontend_source": "frontend/src/services/vkpi/search-api.ts",
+      "frontend_marker": "/api/admin/kol/search/platform",
+      "backend_owner": "backend/app/api/routers/kol_ops.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "discovery.analyze_url",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/kol/tools/analyze-url",
+      "frontend_source": "frontend/src/services/vkpi/industry-api.ts",
+      "frontend_marker": "/api/admin/kol/tools/analyze-url",
+      "backend_owner": "backend/app/services/kol/content_analyzer.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "discovery.federated_search",
+      "family": "url_profile_discovery",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-pool/discovery/federated-search",
+      "frontend_source": "frontend/src/services/vkpi/agentOps-api.ts",
+      "frontend_marker": "/discovery/federated-search?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.enroll",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/discovery/enroll",
+      "frontend_source": "frontend/src/services/vkpi/agentOps-api.ts",
+      "frontend_marker": "/discovery/enroll?",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.profile_crawl_enqueue",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/enqueue-profile-crawl",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/enqueue-profile-crawl`",
+      "backend_owner": "backend/app/api/routers/vkpi_projects.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.profile_deep_crawl_enqueue",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_jobs.py",
+      "provider_mode": "queue_only",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.enrich_one",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/enrich",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/enrich`",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.enrich_batch",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/batch-enrich",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-pool/batch-enrich",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_jobs.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "family"
+    },
+    {
+      "id": "discovery.translate_bio",
+      "family": "url_profile_discovery",
+      "method": "POST",
+      "route": "/api/admin/vkpi/kol-pool/translate-bio",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-pool/translate-bio",
+      "backend_owner": "backend/app/api/routers/vkpi_kol_pool_intel.py",
+      "provider_mode": "bounded_sync",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "vector.kol_recall",
+      "family": "vector_semantic_search",
+      "method": "GET",
+      "route": "/api/admin/vkpi/kol-recall",
+      "frontend_source": "frontend/src/services/vkpi/kolPool-api.search.ts",
+      "frontend_marker": "/api/admin/vkpi/kol-recall?",
+      "backend_owner": "backend/app/domains/kol/profile_recall.py",
+      "provider_mode": "bounded_sync_with_deterministic_fallback",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "vector.semantic_recall",
+      "family": "vector_semantic_search",
+      "method": "GET",
+      "route": "/api/admin/vkpi/recall/semantic",
+      "frontend_source": "frontend/src/components/vkpi/cockpit/components/SemanticRecallCard.tsx",
+      "frontend_marker": "/api/admin/vkpi/recall/semantic?",
+      "backend_owner": "backend/app/domains/kol/recall_pipeline.py",
+      "provider_mode": "bounded_sync_with_deterministic_fallback",
+      "contracts": ["bounded_timeout", "stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    },
+    {
+      "id": "ai_today.hot_evidence",
+      "family": "ai_today_evidence",
+      "method": "GET",
+      "route": "/api/admin/vkpi/dashboard/ai-today-hot",
+      "frontend_source": "frontend/src/components/vkpi/cockpit/api.ts",
+      "frontend_marker": "/api/admin/vkpi/dashboard/ai-today-hot",
+      "backend_owner": "backend/app/domains/market/ai_today.py",
+      "provider_mode": "read_only_grounded_cache",
+      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
+      "coverage": "direct"
+    }
+  ],
+  "known_gaps": [
+    "Family coverage exercises provider and queue failures at representative boundaries; read-only aggregation endpoints marked family are not each executed through FastAPI dependency wiring.",
+    "Browser abort and reverse-proxy timeout behavior is outside this provider-free pytest contract.",
+    "Via vector memory is covered as an indirect vector dependency; no VKPI frontend source directly calls /api/via in this workspace."
+  ]
+}

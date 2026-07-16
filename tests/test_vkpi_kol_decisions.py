@@ -1,16 +1,87 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.kol import decision_audit as kol_decisions
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
+import app.platform.db.schema_audit as audit_schema
 
 
 MARKER = "vkpi-kol-decision-unit"
 EMAIL = "vkpi-kol-decision-unit@example.com"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _kol_decision_test_db(tmp_path_factory: pytest.TempPathFactory):
+    """Keep append-only decision tests on a private SQLite audit ledger."""
+    db_path = (tmp_path_factory.mktemp("kol-decisions") / "decisions.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_audit_ready = audit_schema._SCHEMA_READY
+
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    audit_schema._SCHEMA_READY = False
+
+    conn = get_conn()
+    try:
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT DEFAULT 'pending',
+                role TEXT DEFAULT 'creator',
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                role TEXT NOT NULL DEFAULT 'readonly',
+                permissions_json TEXT NOT NULL DEFAULT '{}',
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER NOT NULL DEFAULT 0,
+                email_domain_verified INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE vkpi_kol_pool (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT,
+                handle TEXT,
+                display_name TEXT,
+                profile_url TEXT,
+                followers INTEGER DEFAULT 0
+            );
+            """
+        )
+        kol_decisions.ensure_kol_decision_schema()
+        kol_decisions.ensure_kol_decision_followup_schema()
+        ensure_vkpi_audit_schema()
+        conn.commit()
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        audit_schema._SCHEMA_READY = old_audit_ready
 
 
 def _cleanup() -> None:

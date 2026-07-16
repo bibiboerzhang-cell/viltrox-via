@@ -6,10 +6,16 @@ Audit page and project detail timelines can show a single audit source.
 """
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
 
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.projects import workflow
+from app.platform.db import schema as vkpi_schema
+from app.platform.db import schema_audit as vkpi_audit_schema
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 
@@ -20,10 +26,68 @@ PRODUCT_SKU = "VKPI-WORKFLOW-AUDIT-SKU"
 
 
 @pytest.fixture(autouse=True)
-def _ensure_schemas():
+def _workflow_project_audit_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Exercise project/audit writes on a module-private SQLite database."""
+    db_connection.close_db_runtime_sync()
+    db_path = (tmp_path / "vkpi-workflow-project-audit.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    monkeypatch.setattr(db_connection, "DB_PATH", db_path)
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_URL", "")
+    monkeypatch.setattr(vkpi_schema, "_SCHEMA_READY", False)
+    monkeypatch.setattr(vkpi_audit_schema, "_SCHEMA_READY", False)
+
+    setup = sqlite3.connect(str(db_path))
+    try:
+        setup.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT,
+                role TEXT,
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                role TEXT,
+                permissions_json TEXT DEFAULT '{}',
+                mfa_enabled INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER DEFAULT 0,
+                email_domain_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE kols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                channel_url TEXT,
+                platform TEXT NOT NULL,
+                assigned_staff_id INTEGER,
+                created_by_staff_id INTEGER,
+                follower_count INTEGER DEFAULT 0,
+                avg_views INTEGER DEFAULT 0
+            );
+            """
+        )
+        setup.commit()
+    finally:
+        setup.close()
+
     ensure_vkpi_schema()
     ensure_vkpi_audit_schema()
-    yield
+    actual_path = Path(str(get_conn().execute("PRAGMA database_list").fetchone()["file"])).resolve()
+    assert actual_path == db_path
+    try:
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
 
 
 def _staff_context(staff_id: int) -> dict[str, object]:

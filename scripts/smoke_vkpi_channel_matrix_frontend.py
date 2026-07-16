@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static smoke for the employee-platform official channel matrix."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -118,7 +119,7 @@ def main() -> None:
     assert ".vkpi-traffic-post__media" in read("frontend/src/components/vkpi/styles/vkpi-settings-traffic.css"), "views evidence media CSS missing"
     assert "Execution Rules" in doc and "Level 1 Platform Matrix" in doc, "execution contract doc missing"
 
-    print("VKPI_CHANNEL_MATRIX_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_CHANNEL_MATRIX_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

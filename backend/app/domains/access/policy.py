@@ -55,6 +55,7 @@ ScopeDenied = scope.ScopeDenied
 __all__ = [
     "ScopeDenied",
     "require_project_read",
+    "require_projects_read",
     "require_project_write",
     "require_event_read",
     "require_event_write",
@@ -79,6 +80,14 @@ def require_project_read(target_id: int, staff: dict[str, Any] | None) -> None:
     """
     try:
         scope.assert_project_access(int(target_id), staff, write=False)
+    except scope.ScopeDenied as exc:
+        raise _reraise("project", "read", exc) from exc
+
+
+def require_projects_read(target_ids: list[int] | tuple[int, ...] | set[int], staff: dict[str, Any] | None) -> None:
+    """Gate a bounded project set without repeating the scalar DB reads."""
+    try:
+        scope.assert_project_access_many(target_ids, staff, write=False)
     except scope.ScopeDenied as exc:
         raise _reraise("project", "read", exc) from exc
 

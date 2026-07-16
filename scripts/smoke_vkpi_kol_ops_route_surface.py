@@ -5,6 +5,7 @@ This smoke is intentionally structural. It prevents future file-splitting work
 from accidentally dropping or double-prefixing public KOL Ops endpoints.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import sys
@@ -74,7 +75,7 @@ def main() -> int:
         "duplicate_dashboard_paths": duplicate_dashboard_paths,
         "modules": loaded_modules,
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    stdout_out(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if ok else 1
 
 

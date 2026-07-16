@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains import audit
+from app.domains import audit, business_truth
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_p5_selected import ensure_vkpi_p5_selected_schema
 from app.domains.projects.workflow_common import staff_id as resolve_staff_id
@@ -114,10 +114,12 @@ def campaign_progress(campaign_id: int) -> dict[str, Any]:
     if not campaign:
         raise LookupError("campaign not found")
     rows = get_conn().execute(
-        """
+        f"""
         SELECT p.*, k.channel_name AS kol_name,
-               COALESCE((SELECT SUM(revenue_cents) FROM vkpi_sales_attributions a WHERE a.project_id=p.id),0) AS revenue_cents,
-               COALESCE((SELECT SUM(amount_cents) FROM vkpi_cost_ledger c WHERE c.project_id=p.id AND c.status!='void'),0) AS cost_cents
+               COALESCE((SELECT SUM(revenue_cents) FROM vkpi_sales_attributions a
+                         WHERE a.project_id=p.id AND {business_truth.verified_shopify_attribution_sql('a')}),0) AS revenue_cents,
+               COALESCE((SELECT SUM(amount_cents) FROM vkpi_cost_ledger c
+                         WHERE c.project_id=p.id AND {business_truth.approved_actual_cost_sql('c')}),0) AS cost_cents
         FROM vkpi_campaign_projects cp
         JOIN vkpi_projects p ON p.id = cp.project_id
         LEFT JOIN kols k ON k.id = p.kol_id
@@ -180,7 +182,7 @@ def _spent_by_pool(pool_id: int) -> int:
         JOIN vkpi_cost_ledger cl
           ON (ba.project_id IS NOT NULL AND cl.project_id = ba.project_id)
           OR (ba.staff_id IS NOT NULL AND cl.staff_id = ba.staff_id)
-        WHERE ba.budget_pool_id=? AND cl.status='actual'
+        WHERE ba.budget_pool_id=? AND cl.status='actual' AND cl.approved_at IS NOT NULL
         """,
         (int(pool_id),),
     ).fetchone()
@@ -265,7 +267,10 @@ def initiate_offboarding(staff_id: int, *, new_owner_staff_id: int | None = None
                 extra={"staff_id": int(staff_id), "error": error_text},
             )
         channels = {"n": 0}
-    actual_costs = conn.execute("SELECT COUNT(*) AS n FROM vkpi_cost_ledger WHERE staff_id=? AND status='actual'", (int(staff_id),)).fetchone()
+    actual_costs = conn.execute(
+        "SELECT COUNT(*) AS n FROM vkpi_cost_ledger WHERE staff_id=? AND status='actual' AND approved_at IS NOT NULL",
+        (int(staff_id),),
+    ).fetchone()
     uid = f"off-{secrets.token_hex(8)}"
     conn.execute(
         """

@@ -1,4 +1,4 @@
-// P5 系统健康条(诚实化 2026-06-14):队列 / 今日 LLM 成本 / 数据新鲜度 / Worker 状态。
+// P5 系统健康条(诚实化 2026-06-14):队列 / 今日 LLM 网关留痕 / 数据新鲜度 / Worker 状态。
 // 数据全部来自真实只读端点 GET /api/admin/vkpi/dashboard/system-health;
 // 任何字段 available=false 时显示「待接入」,绝不编造数字。
 
@@ -109,7 +109,7 @@ export function SystemHealthBar({ apiToken }: any) {
     );
   }
 
-  // 今日 LLM 成本
+  // 今日 LLM 网关留痕(vkpi_llm_calls)
   let llmCell;
   if (!health) {
     llmCell = error ? PENDING : e("span", { className: "text-slate-500" }, "—");
@@ -235,7 +235,7 @@ export function SystemHealthBar({ apiToken }: any) {
     ),
     e("div", { className: "flex items-stretch flex-wrap divide-x divide-white/[0.05] border-l border-white/[0.05]" },
       e(Cell, { icon: Server, label: "队列 完成/失败/阻塞" }, queueCell),
-      e(Cell, { icon: DollarSign, label: "今日 LLM 成本" }, llmCell),
+      e(Cell, { icon: DollarSign, label: "今日 LLM 网关留痕" }, llmCell),
       // P3:数据新鲜度是系统诊断,移出业务主页(归 Settings/Diagnostics);freshCell 计算保留以备后台用。
       e(Cell, { icon: worker.online ? Activity : AlertTriangle, label: "Worker 状态", accent: workerAccent }, workerCell)
     )

@@ -113,23 +113,23 @@ function isRecentTask(task: AsyncTask): boolean {
 }
 
 export async function listTasks(token: string, filters: { status?: AsyncTaskStatus[] } = {}) {
-  const statuses = filters.status?.length ? filters.status : DEFAULT_TASK_STATUSES;
-  const responses = await Promise.all(
-    Array.from(new Set(statuses)).map((status) =>
-      apiFetch<{ tasks?: Row[]; items?: Row[] }>(
-        `/api/marketing/tasks?status=${encodeURIComponent(status)}`,
-        {},
-        token,
-      ),
-    ),
+  const statuses = new Set(filters.status?.length ? filters.status : DEFAULT_TASK_STATUSES);
+  // The backend already supports an unfiltered bounded list.  Fetch it once
+  // and filter locally instead of polling one request per status (10 requests
+  // every three seconds), which amplified cold-login and Dealers page load into
+  // connection-pool starvation.
+  const response = await apiFetch<{ tasks?: Row[]; items?: Row[] }>(
+    "/api/marketing/tasks?limit=200",
+    {},
+    token,
   );
   const tasksById = new Map<string, AsyncTask>();
-  responses.forEach((response) => {
-    const rows = response.tasks || response.items || [];
-    rows.forEach((row) => {
-      const task = normalizeAsyncTask(row);
-      if (task && isRecentTask(task)) tasksById.set(task.task_id, task);
-    });
+  const rows = response.tasks || response.items || [];
+  rows.forEach((row) => {
+    const task = normalizeAsyncTask(row);
+    if (task && statuses.has(task.status) && isRecentTask(task)) {
+      tasksById.set(task.task_id, task);
+    }
   });
   return Array.from(tasksById.values()).sort((a, b) => {
     const aTime = new Date(a.created_at || a.finished_at || 0).getTime();

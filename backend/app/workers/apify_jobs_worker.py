@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import random
 import re
+import secrets
 import signal
 import socket
 import sys
@@ -31,10 +33,37 @@ from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
 from app.domains.local_workers.registry import SAFE_TASK_TYPES as LOCAL_EXCLUSIVE_JOB_TYPES
 from app.platform import llm_gateway
+from app.platform.apify_budget import (
+    ApifyBudgetBlocked,
+    ApifyExecutionClaimBlocked,
+    ApifyProviderReplayBlocked,
+    acquire_provider_execution_claim,
+    apify_execution_context,
+    finalize_provider_execution_claim,
+)
+from app.platform.llm_local_evaluation import (
+    LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
+    LOCAL_EVALUATION_DERIVE_METHOD,
+    LOCAL_EVALUATION_EXECUTION_CLASS,
+    verify_job_local_evaluation_capability,
+)
 from app.services.media.video_download import download_direct_video_url
 from app.domains.media.cache import cache_local_video_file
 from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
+from .apify_job_lane import (
+    claim_lane_sql,
+    normalize_claim_lane,
+    queue_lane_sql_expression,
+    queue_priority_sql_expression,
+    queue_service_priority_sql_expression,
+)
+from .apify_job_resource_slots import (
+    RESOURCE_SLOT_SCOPE,
+    acquire_resource_slot,
+    resource_group_for_job,
+    resource_slot_limits,
+)
 from .apify_jobs_worker_helpers import (
     _float_or_none,
     _iso_or_none,
@@ -75,16 +104,23 @@ WORKER_DB_RECONNECT_SECONDS = max(2, int(os.environ.get("APIFY_WORKER_DB_RECONNE
 # T5 真实存活:每轮 poll(含空闲)向 vkpi_worker_heartbeat UPSERT 一行,
 # system_health._worker_online 据此判在线(MAX 全表聚合,与名字无关);逻辑 worker 名可经 env 覆盖。
 # 默认带主机名:多机/多车道认领时心跳行与 lease_owner 可辨,不再互相覆盖。
-_DEFAULT_WORKER_NAME = f"apify_jobs_worker-{socket.gethostname()}"
+_DEFAULT_WORKER_NAME = f"apify_jobs_worker-{socket.gethostname()}-{os.getpid()}"
 WORKER_HEARTBEAT_NAME = os.environ.get("APIFY_WORKER_HEARTBEAT_NAME", _DEFAULT_WORKER_NAME).strip() or _DEFAULT_WORKER_NAME
-# 车道过滤:interactive=只认领交互档(无 batch 标记);all=全量(默认,行为不变)。
-# 值域是代码内白名单,拼接进 SQL 的片段为常量,无注入面。
-CLAIM_LANE = os.environ.get("APIFY_WORKER_CLAIM_LANE", "all").strip().lower()
-CLAIM_LANE_SQL = (
-    "AND COALESCE(payload->>'batch', '') NOT IN ('on_demand_batch', 'recent', 'remaining')"
-    if CLAIM_LANE == "interactive"
-    else ""
+_WORKER_GIT_SHA_RAW = str(os.environ.get("APP_GIT_SHA") or "").strip().lower()
+WORKER_GIT_SHA = _WORKER_GIT_SHA_RAW if re.fullmatch(r"[0-9a-f]{40}", _WORKER_GIT_SHA_RAW) else ""
+_WORKER_BOOT_NONCE = str(os.environ.get("VKPI_WORKER_BOOT_NONCE") or "").strip() or secrets.token_urlsafe(32)
+WORKER_BOOT_NONCE_SHA256 = hashlib.sha256(_WORKER_BOOT_NONCE.encode("utf-8")).hexdigest()
+WORKER_STARTED_AT = str(os.environ.get("VKPI_WORKER_STARTED_AT") or "").strip() or (
+    datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 )
+# 车道过滤:interactive/batch 互斥;all 仅作单 worker 兼容默认。
+# 未知值 fail-fast,避免配置拼错意外退化为抢全队列。
+CLAIM_LANE = normalize_claim_lane(os.environ.get("APIFY_WORKER_CLAIM_LANE", "all"))
+CLAIM_LANE_SQL = claim_lane_sql(CLAIM_LANE)
+QUEUE_LANE_SQL = queue_lane_sql_expression("payload")
+QUEUE_PRIORITY_SQL = queue_priority_sql_expression("payload")
+QUEUE_SERVICE_PRIORITY_SQL = queue_service_priority_sql_expression("job_type", "created_at")
+RESOURCE_SLOT_LIMITS = resource_slot_limits(os.environ)
 # 双认领毒化防护(2026-07-07):本地算力 worker 领活只打 payload.local_lease_id 标记
 # (见 domains/local_workers/registry.py,绝不动 status),主 worker 若无视该标记
 # 会把同一行抢去双跑。两道过滤:
@@ -104,14 +140,18 @@ CLAIM_SELECT_SQL = f"""
     FROM apify_jobs
     WHERE status = 'queued'
       AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+      AND NOT EXISTS (
+        SELECT 1
+        FROM vkpi_provider_execution_claims AS provider_claim
+        WHERE provider_claim.task_id = CONCAT('apify-job:', apify_jobs.id::text)
+          AND provider_claim.state = 'active'
+          AND provider_claim.lease_expires_at > NOW()
+      )
       {CLAIM_LANE_SQL}
       {CLAIM_LOCAL_GUARD_SQL}
     ORDER BY
-      CASE
-        WHEN payload->>'batch' = 'on_demand_batch' THEN 1
-        WHEN payload->>'batch' IN ('recent', 'remaining') THEN 2
-        ELSE 0
-      END,
+      {QUEUE_PRIORITY_SQL},
+      {QUEUE_SERVICE_PRIORITY_SQL},
       COALESCE(next_retry_at, created_at), created_at, id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
@@ -149,11 +189,24 @@ FINAL_V1_KEYFRAME_QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
 GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1", FINAL_V1_KEYFRAME_QA_DERIVE_METHOD}
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
 WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models()
+# Worker processes are always production by default.  A persisted, server-
+# signed job capability is the only mechanism that can authorize the narrow
+# local evaluation branch for one job; an environment flag cannot reinterpret
+# an old queue.
+WORKER_LLM_EXECUTION_CLASS = llm_gateway.PRODUCTION_EXECUTION_CLASS
+# One exact worker model is both preflighted and executed.  The former default
+# fallback list (3-flash-preview -> 2.5-flash) let a preflight for one binding
+# authorize a different provider request.
+FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models(
+    [WORKER_GEMINI_MODEL]
+)
 FINAL_V1_KEYFRAME_QA_MODEL = os.environ.get("GEMINI_FINAL_V1_QA_MODEL", "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
 _stop_event = threading.Event()
 _gemini_qps_lock = threading.Lock()
 _last_gemini_call_started_at = 0.0
+_GEMINI_QPS_SCOPE = "vkpi_apify_worker_provider_rate"
+_GEMINI_QPS_KEY = "google_gemini"
+_GEMINI_QPS_CACHE_KEY = "vkpi:worker-rate:google-gemini"
 
 
 def _request_stop(_signum: int, _frame: Any) -> None:
@@ -169,15 +222,72 @@ def _provider_retry_delay_seconds(next_attempt: int) -> int:
     return int(min(PROVIDER_RETRY_MAX_DELAY_SECONDS, round(base_delay + jitter)))
 
 
-def _respect_gemini_qps() -> None:
+def _respect_gemini_qps(conn: psycopg.Connection[Any]) -> None:
+    """Pace Gemini job starts across the whole PostgreSQL-backed fleet.
+
+    A process-local monotonic clock is insufficient once multiple workers are
+    enabled.  The advisory lock serializes the short decision window and
+    ``persistent_cache`` carries the last start time between processes.  The
+    first call after an idle period starts immediately; subsequent calls wait
+    only the remaining interval.  If the shared state is unavailable, retain
+    the older process-local limiter as a fail-soft fallback instead of
+    removing throttling entirely.
+    """
+
     global _last_gemini_call_started_at
     if GEMINI_MIN_INTERVAL_SECONDS <= 0:
         return
+    shared_locked = False
+    try:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT pg_advisory_lock(hashtext(%s), hashtext(%s)) AS locked",
+                (_GEMINI_QPS_SCOPE, _GEMINI_QPS_KEY),
+            )
+            cur.fetchone()
+            shared_locked = True
+            cur.execute(
+                "SELECT EXTRACT(EPOCH FROM clock_timestamp()) AS now_epoch, value_json "
+                "FROM persistent_cache WHERE cache_key=%s",
+                (_GEMINI_QPS_CACHE_KEY,),
+            )
+            row = cur.fetchone() or {}
+            now_epoch = float(row.get("now_epoch") or time.time())
+            state = _loads(row.get("value_json"), {})
+            last_epoch = float(state.get("last_started_at_epoch") or 0.0)
+            wait_seconds = max(0.0, last_epoch + GEMINI_MIN_INTERVAL_SECONDS - now_epoch)
+            if wait_seconds > 0:
+                logger.info("gemini fleet qps throttle sleep | seconds=%.2f", wait_seconds)
+                time.sleep(wait_seconds)
+            cur.execute("SELECT EXTRACT(EPOCH FROM clock_timestamp()) AS now_epoch")
+            started_row = cur.fetchone() or {}
+            started_epoch = float(started_row.get("now_epoch") or time.time())
+            cur.execute(
+                """
+                INSERT INTO persistent_cache (cache_key, value_json, expires_at, created_at)
+                VALUES (%s, %s, NOW() + INTERVAL '1 day', NOW())
+                ON CONFLICT (cache_key) DO UPDATE
+                SET value_json=EXCLUDED.value_json,
+                    expires_at=EXCLUDED.expires_at,
+                    created_at=EXCLUDED.created_at
+                """,
+                (_GEMINI_QPS_CACHE_KEY, _json({"last_started_at_epoch": started_epoch})),
+            )
+        return
+    except Exception:
+        logger.warning("gemini fleet qps state unavailable; using process-local throttle", exc_info=True)
+    finally:
+        if shared_locked:
+            try:
+                _advisory_unlock(conn, _GEMINI_QPS_SCOPE, _GEMINI_QPS_KEY)
+            except Exception:
+                logger.warning("gemini fleet qps advisory unlock failed", exc_info=True)
+
     with _gemini_qps_lock:
         now = time.monotonic()
         wait_seconds = (_last_gemini_call_started_at + GEMINI_MIN_INTERVAL_SECONDS) - now
         if wait_seconds > 0:
-            logger.info("gemini qps throttle sleep | seconds=%.2f", wait_seconds)
+            logger.info("gemini process qps throttle sleep | seconds=%.2f", wait_seconds)
             time.sleep(wait_seconds)
             now = time.monotonic()
         _last_gemini_call_started_at = now
@@ -251,9 +361,25 @@ from app.workers.apify_jobs_worker_session import (  # noqa: E402
 )
 
 
-def _finish_skipped(conn: psycopg.Connection[Any], job_id: int, reason: str) -> None:
-    analysis_summary: dict[str, Any] | None = None
-    if "skipped_existing_analysis_cache" in str(reason or ""):
+def _finish_skipped(
+    conn: psycopg.Connection[Any],
+    job_id: int,
+    reason: str,
+    *,
+    evaluation_only: bool = False,
+) -> None:
+    analysis_summary: dict[str, Any] | None = (
+        {
+            "evaluation_only": True,
+            "production_authorized": False,
+            "claim_status": "descriptive_only",
+            "model_readiness_status": "evaluation_only_not_production_ready",
+            "cache_derive_method": LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
+        }
+        if evaluation_only
+        else None
+    )
+    if not evaluation_only and "skipped_existing_analysis_cache" in str(reason or ""):
         try:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute("SELECT payload FROM apify_jobs WHERE id=%s LIMIT 1", (int(job_id),))
@@ -357,6 +483,7 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _process_account_dossier_extract,
     _process_contract_invoice_extract,
     _process_contract_polish,
+    _process_kol_audience_stats_refresh,
     _process_kol_auto_poll,
     _process_kol_content_fit_analysis,
     _process_kol_outreach_draft,
@@ -370,6 +497,7 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _process_smart_search_profile_advance,
     _resolve_job_staff,
 )
+from app.workers.apify_jobs_worker_video_url import _process_video_url_resolve  # noqa: E402
 
 # 2026-07-11 未知 job_type 防线:_process_job 显式分支簇之外,只有 'video' 一种 job_type
 # 合法落 _target 兜底分支(video_analysis_enqueue.py 唯一以裸 target/derive_method 入队)。
@@ -388,6 +516,7 @@ from app.workers.apify_jobs_worker_prep import (  # noqa: E402
     _extract_keyframes_for_qa,
     _gemini_worker_overrides,
     _google_allowed,
+    _google_execution_authorization,
     _llm_budget_preflight,
     _load_video_evidence,
     _log_budget_preflight_record_only,
@@ -399,6 +528,7 @@ from app.workers.apify_jobs_worker_prep import (  # noqa: E402
 # 成本/定价核算已抽到 apify_jobs_cost.py(行为不变,re-export 兜住调用点)。
 from app.workers.apify_jobs_cost import (  # noqa: E402
     _anthropic_cost,
+    _authoritative_gemini_cost,
     _gemini_cost,
     _gemini_input_cost_usd,
     _gemini_output_rate_usd_per_mtok,
@@ -435,6 +565,7 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
 
 
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
+    lease_owner = f"{WORKER_HEARTBEAT_NAME}:{os.getpid()}"
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(CLAIM_SELECT_SQL)
@@ -456,280 +587,126 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
                 """,
                 # Fabric 增量1:claim 即写显式租约(owner=worker:pid,TTL=STALE_RECLAIM_SECONDS,
                 # 与今天 reclaim 时序一致)。本增量只「写」租约,reclaim 仍判 updated_at,零行为变更。
-                (f"{WORKER_HEARTBEAT_NAME}:{os.getpid()}", STALE_RECLAIM_SECONDS, job["id"]),
+                (lease_owner, STALE_RECLAIM_SECONDS, job["id"]),
             )
             claimed = dict(job)
+            claimed["lease_owner"] = lease_owner
     _sync_search_session_job(conn, int(claimed["id"]), raw_status="running")
     return claimed
 
 
 def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
-    if str(job.get("job_type") or "").strip().lower() == "session_advance":
+    job_type = str(job.get("job_type") or "").strip().lower()
+    if job_type == "session_advance":
         _process_session_advance(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "smart_search_profile_advance":
+    if job_type == "smart_search_profile_advance":
         _process_smart_search_profile_advance(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "kol_content_fit_analysis":
+    if job_type == "kol_content_fit_analysis":
         _process_kol_content_fit_analysis(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "account_dossier_extract":
+    if job_type == "account_dossier_extract":
         _process_account_dossier_extract(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "project_contract_extract":
+    if job_type == "project_contract_extract":
         _process_project_contract_extract(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "project_retrospective_aggregate":
+    if job_type == "project_retrospective_aggregate":
         _process_project_retrospective(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "kol_profile_deep_crawl":
+    if job_type == "video_url_resolve":
+        _process_video_url_resolve(conn, job, payload)
+        return
+    if job_type == "kol_profile_deep_crawl":
         _process_kol_profile_deep_crawl(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "kol_pool_comments_collect":
+    if job_type == "kol_pool_comments_collect":
         _process_kol_pool_comments_collect(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "official_channel_comments_collect":
+    if job_type == "kol_audience_stats_refresh":
+        _process_kol_audience_stats_refresh(conn, job, payload)
+        return
+    if job_type == "official_channel_comments_collect":
         _process_official_channel_comments_collect(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "kol_outreach_draft":
+    if job_type == "kol_outreach_draft":
         _process_kol_outreach_draft(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "contract_invoice_extract":
+    if job_type == "contract_invoice_extract":
         _process_contract_invoice_extract(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "contract_polish":
+    if job_type == "contract_polish":
         _process_contract_polish(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "logistics_track_sync":
+    if job_type == "logistics_track_sync":
         _process_logistics_track_sync(conn, job, payload)
         return
-    if str(job.get("job_type") or "").strip().lower() == "kol_auto_poll":
+    if job_type == "kol_auto_poll":
         _process_kol_auto_poll(conn, job, payload)
         return
-    # 未知 job_type 防线(2026-07-11):显式分支簇没接住、又不是合法兜底类型('video')的,
-    # 一律 blocked 而非滑进下方 derive_method='mock' 的假成功路径(写 mock cache + done)。
-    job_type = str(job.get("job_type") or "").strip().lower()
     if job_type not in TARGET_FALLBACK_JOB_TYPES:
         _block_job(conn, int(job["id"]), "unknown_job_type", {"job_type": job_type})
         return
     target_type, target_id = _target(payload)
     if not target_type or not target_id:
         raise ValueError("payload must include target_type and target_id")
-    derive_method = _derive_method(payload)
-    if derive_method != "mock":
-        if target_type not in LLM_TARGET_TYPES:
-            _block_job(conn, int(job["id"]), "unsupported_llm_target_type", {"target_type": target_type})
+
+    from app.workers.apify_jobs_worker_runtime import process_job_impl
+
+    process_job_impl(conn, job, globals())
+
+
+def _process_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
+    """Run one claimed row behind its reviewed cross-process resource cap.
+
+    Row claiming already prevents duplicate ownership.  This additional guard
+    bounds provider-heavy families when more than one worker process is
+    intentionally enabled.  Slot exhaustion requeues with jitter and performs
+    no provider call.  The existing per-target and LLM locks remain in force.
+    """
+
+    job_lock = str(int(job["id"]))
+    if not _advisory_lock(conn, "vkpi_apify_job_execution", job_lock):
+        _requeue_job(
+            conn,
+            int(job["id"]),
+            "job execution lease is still held by another worker",
+            retry_delay_seconds=random.uniform(5.0, 10.0),
+        )
+        return
+    try:
+        resource_group = resource_group_for_job(job)
+        if resource_group is None:
+            _process_job(conn, job)
             return
-        target_lock = f"{target_type}:{target_id}:{derive_method}"
-        if not _advisory_lock(conn, "vkpi_analysis_worker_target", target_lock):
-            _requeue_job(conn, int(job["id"]), "analysis target already in progress", retry_delay_seconds=random.uniform(2.0, 5.0))
+        limit = RESOURCE_SLOT_LIMITS[resource_group]
+        slot_key = acquire_resource_slot(
+            resource_group,
+            limit,
+            try_lock=lambda scope, key: _advisory_lock(conn, scope, key),
+        )
+        if slot_key is None:
+            _requeue_job(
+                conn,
+                int(job["id"]),
+                f"{resource_group} concurrency limit reached",
+                retry_delay_seconds=random.uniform(5.0, 10.0),
+            )
             return
-        slot = _acquire_llm_slot(conn)
         try:
-            if slot is None:
-                _requeue_job(conn, int(job["id"]), "llm concurrency limit reached", retry_delay_seconds=random.uniform(5.0, 10.0))
-                return
-            if _analysis_cache_exists(conn, target_type, target_id, derive_method):
-                _finish_skipped(conn, int(job["id"]), "skipped_existing_analysis_cache")
-                return
-            preflight = _llm_budget_preflight(job, payload)
-            allowed, reason, estimated_cost = _google_allowed(preflight)
-            _log_budget_preflight_record_only(
-                job=job,
-                provider="google",
-                allowed=allowed,
-                reason=reason,
-                estimated_cost=estimated_cost,
-                stage=derive_method,
-            )
-            if not allowed:
-                # 护栏② 主线 enforce:撞 cap 拦在 _process_gemini_video 之前(finally 正常释放 slot/lock)
-                _block_job(
-                    conn,
-                    int(job["id"]),
-                    "budget_guard_blocked",
-                    {
-                        "provider": "google",
-                        "stage": derive_method,
-                        "reason_detail": reason,
-                        "estimated_cost_usd": estimated_cost,
-                    },
-                )
-                return
-            if derive_method in GEMINI_VIDEO_DERIVE_METHODS:
-                _respect_gemini_qps()
-                _process_gemini_video(conn, job, payload, estimated_cost)
-                return
-            _block_job(conn, int(job["id"]), "unsupported_llm_derive_method", {"derive_method": derive_method})
-            return
+            _process_job(conn, job)
         finally:
-            if slot is not None:
-                _advisory_unlock(conn, "vkpi_analysis_worker_llm_slot", slot)
-            _advisory_unlock(conn, "vkpi_analysis_worker_target", target_lock)
-    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
-    triggered_by_user_id = int(triggered_by) if triggered_by not in (None, "") else None
-    result = _mock_result(job, payload)
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO vkpi_analysis_cache (
-                  target_type, target_id, model, derive_method, result, cost,
-                  status, triggered_by_user_id, created_at, updated_at
-                )
-                VALUES (%s, %s, 'mock', 'mock', %s::jsonb, 0, 'ready', %s, NOW(), NOW())
-                ON CONFLICT (target_type, target_id, derive_method)
-                DO UPDATE SET
-                  model = EXCLUDED.model,
-                  result = EXCLUDED.result,
-                  cost = EXCLUDED.cost,
-                  status = 'ready',
-                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
-                  updated_at = NOW()
-                RETURNING id
-                """,
-                (target_type, target_id, _json(result), triggered_by_user_id),
-            )
-            cache_row = cur.fetchone()
-            cache_id = int(cache_row[0]) if cache_row else None
-            cur.execute(
-                """
-                UPDATE apify_jobs
-                SET status='done',
-                    last_error=NULL,
-                    last_error_category=NULL,
-                    next_retry_at=NULL,
-                    updated_at=NOW()
-                WHERE id=%s
-                """,
-                (job["id"],),
-            )
-    _sync_search_session_job(
-        conn,
-        int(job["id"]),
-        raw_status="done",
-        analysis_summary=_search_session_analysis_summary_from_result(
-            cache_id=cache_id,
-            derive_method=derive_method,
-            target_type=target_type,
-            target_id=target_id,
-            evidence={"id": target_id},
-            result=result,
-            cost=0.0,
-        ),
-    )
+            _advisory_unlock(conn, RESOURCE_SLOT_SCOPE, slot_key)
+    finally:
+        _advisory_unlock(conn, "vkpi_apify_job_execution", job_lock)
 
 
 def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> None:
-    if str(exc).strip() == "gemini_call_timeout":
-        message = "gemini_call_timeout"
-    else:
-        message = _redact_sensitive_text(f"{type(exc).__name__}: {exc}")
-    category = _error_category(message)
-    # 10E 失败池分流:把细类映射成处置动作。'retry' 类(timeout/proxy/限流/媒体解析/被回收)
-    # 在仍有重试预算时重新 queued;'triage' 类(no_data/auth/下架/代码错)直接标 status='triage'
-    # 待人工;unknown → 落 'failed'。last_error_category 始终写明确细类,不再留 null。
-    #
-    # 早退缺口修复(失败池排水):此前「retry 类但重试预算耗尽」会掉进最后的 else 落 'failed',
-    # 永远绕过 triage 引擎,死在死信池里(审计:192 download + 152 media_resolve 全卡这条路)。
-    # 改为:retry 类一旦耗尽,不再落 'failed',而是和 triage 类一样停 status='triage' —— 让所有
-    # 「值得再看一眼」的失败都汇入同一个 triage 面待裁决(人工放量 / 离线排水重置后再跑),
-    # 而非分裂成两套死信池。只有 unknown / 不认识的类别仍保守落 'failed'(可能藏永久错)。
-    disposition = _failure_disposition(category)
-    # provider_pressure 保留它专属的更宽重试预算(5 次 + 指数退避);其余可重试类用通用预算闸。
-    if category == "provider_pressure":
-        retry_budget = PROVIDER_RETRY_MAX_ATTEMPTS
-    else:
-        retry_budget = MAX_JOB_ATTEMPTS
-    raw_status = "failed"
-    sync_reason = message
-    with conn.transaction():
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT attempts FROM apify_jobs WHERE id=%s FOR UPDATE", (job_id,))
-            row = cur.fetchone() or {}
-            next_attempt = int(row.get("attempts") or 0) + 1
-            # retry 类预算耗尽 → 走 triage(而非 failed);triage 类与「耗尽的 retry 类」共用 triage 落点。
-            send_to_triage = disposition == "triage" or (disposition == "retry" and next_attempt >= retry_budget)
-            if disposition == "retry" and next_attempt < retry_budget:
-                delay_seconds = _provider_retry_delay_seconds(next_attempt)
-                cur.execute(
-                    """
-                    UPDATE apify_jobs
-                    SET status='queued',
-                        attempts=%s,
-                        last_error=%s,
-                        last_error_category=%s,
-                        next_retry_at=NOW() + make_interval(secs => %s),
-                        updated_at=NOW()
-                    WHERE id=%s
-                    RETURNING next_retry_at
-                    """,
-                    (next_attempt, message, category, delay_seconds, job_id),
-                )
-                retry_row = cur.fetchone() or {}
-                raw_status = "queued"
-                sync_reason = _provider_retry_reason(message, next_retry_at=retry_row.get("next_retry_at"))
-                logger.warning(
-                    "apify_jobs failure requeued | id=%s category=%s attempt=%s delay_seconds=%s next_retry_at=%s",
-                    job_id,
-                    category,
-                    next_attempt,
-                    delay_seconds,
-                    retry_row.get("next_retry_at"),
-                )
-            elif send_to_triage:
-                # 两类汇入 triage：①不可重试类(凭证/改代码/确认下架);②可重试类但预算耗尽
-                # （再自动跑没用，但仍可由人工/离线排水重置 attempts 后放量）。都停 status='triage'
-                # 待裁决，不再消耗重试预算。
-                cur.execute(
-                    """
-                    UPDATE apify_jobs
-                    SET status='triage',
-                        attempts=%s,
-                        last_error=%s,
-                        last_error_category=%s,
-                        next_retry_at=NULL,
-                        updated_at=NOW()
-                    WHERE id=%s
-                    """,
-                    (next_attempt, message, category, job_id),
-                )
-                raw_status = "failed"
-                logger.warning(
-                    "apify_jobs failure sent to triage | id=%s category=%s disposition=%s attempt=%s budget=%s exhausted=%s",
-                    job_id,
-                    category,
-                    disposition,
-                    next_attempt,
-                    retry_budget,
-                    disposition == "retry",
-                )
-            else:
-                # 只剩 unknown / 不认识的类别落到这里:保守标 failed(可能藏永久错),
-                # 留给离线排水层重新派生类别后再定夺。retry 类已不会再走到这条分支。
-                cur.execute(
-                    """
-                    UPDATE apify_jobs
-                    SET status='failed',
-                        attempts=%s,
-                        last_error=%s,
-                        last_error_category=%s,
-                        next_retry_at=NULL,
-                        updated_at=NOW()
-                    WHERE id=%s
-                    """,
-                    (next_attempt, message, category, job_id),
-                )
-                logger.warning(
-                    "apify_jobs failure marked failed | id=%s category=%s disposition=%s attempt=%s budget=%s",
-                    job_id,
-                    category,
-                    disposition,
-                    next_attempt,
-                    retry_budget,
-                )
-    _sync_search_session_job(conn, job_id, raw_status=raw_status, reason=sync_reason)
+    from app.workers.apify_jobs_worker_runtime import fail_job_impl
+
+    fail_job_impl(conn, job_id, exc, globals())
 
 
 def _upsert_worker_heartbeat(conn: psycopg.Connection[Any]) -> None:
@@ -742,20 +719,38 @@ def _upsert_worker_heartbeat(conn: psycopg.Connection[Any]) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO vkpi_worker_heartbeat (worker_name, last_heartbeat_at, pid, updated_at)
-                VALUES (%s, NOW(), %s, NOW())
+                INSERT INTO vkpi_worker_heartbeat (
+                    worker_name, last_heartbeat_at, pid, updated_at,
+                    worker_git_sha, boot_nonce_sha256, started_at
+                )
+                VALUES (%s, NOW(), %s, NOW(), %s, %s, %s)
                 ON CONFLICT (worker_name) DO UPDATE
                 SET last_heartbeat_at = EXCLUDED.last_heartbeat_at,
                     pid = EXCLUDED.pid,
-                    updated_at = EXCLUDED.updated_at
+                    updated_at = EXCLUDED.updated_at,
+                    worker_git_sha = EXCLUDED.worker_git_sha,
+                    boot_nonce_sha256 = EXCLUDED.boot_nonce_sha256,
+                    started_at = EXCLUDED.started_at
                 """,
-                (WORKER_HEARTBEAT_NAME, os.getpid()),
+                (
+                    WORKER_HEARTBEAT_NAME,
+                    os.getpid(),
+                    WORKER_GIT_SHA or None,
+                    WORKER_BOOT_NONCE_SHA256,
+                    WORKER_STARTED_AT,
+                ),
             )
     except Exception as exc:
         logger.warning("apify_jobs worker heartbeat upsert failed | name=%s error=%s", WORKER_HEARTBEAT_NAME, exc)
 
 
-def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
+def _heartbeat_running_job(
+    job_id: int,
+    lease_owner: str,
+    provider_task_id: str,
+    provider_fence_token: int,
+    stop_signal: threading.Event,
+) -> None:
     while not stop_signal.wait(RUNNING_HEARTBEAT_SECONDS):
         try:
             with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
@@ -764,19 +759,52 @@ def _heartbeat_running_job(job_id: int, stop_signal: threading.Event) -> None:
                         # Fabric 增量1:心跳同时续租约(updated_at 仍写 → 不动今天的 reclaim 判据)。
                         "UPDATE apify_jobs SET updated_at=NOW(), "
                         "lease_expires_at=NOW() + make_interval(secs => %s) "
-                        "WHERE id=%s AND status='running'",
-                        (STALE_RECLAIM_SECONDS, job_id),
+                        "WHERE id=%s AND status='running' AND lease_owner=%s",
+                        (STALE_RECLAIM_SECONDS, job_id, lease_owner),
                     )
+                    cur.execute(
+                        """
+                        UPDATE vkpi_provider_execution_claims
+                        SET lease_expires_at=NOW() + make_interval(secs => %s),
+                            updated_at=NOW()
+                        WHERE task_id=%s AND fence_token=%s AND lease_owner=%s
+                          AND state='active' AND lease_expires_at>NOW()
+                        """,
+                        (
+                            STALE_RECLAIM_SECONDS,
+                            provider_task_id,
+                            provider_fence_token,
+                            lease_owner,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        logger.error(
+                            "apify_jobs provider fence renewal lost | id=%s task_id=%s fence=%s",
+                            job_id,
+                            provider_task_id,
+                            provider_fence_token,
+                        )
+                # Long provider jobs can legitimately run well beyond the
+                # two-minute liveness window.  Keep the process heartbeat on
+                # the same independent timer as the job lease so the UI and
+                # release gate do not report a working worker as offline while
+                # the main poll loop is blocked inside _process_job().
+                _upsert_worker_heartbeat(conn)
         except Exception as exc:
             logger.warning("apify_jobs running heartbeat failed | id=%s error=%s", job_id, exc)
 
 
 @contextmanager
-def _running_job_heartbeat(job_id: int):
+def _running_job_heartbeat(
+    job_id: int,
+    lease_owner: str,
+    provider_task_id: str,
+    provider_fence_token: int,
+):
     stop_signal = threading.Event()
     thread = threading.Thread(
         target=_heartbeat_running_job,
-        args=(job_id, stop_signal),
+        args=(job_id, lease_owner, provider_task_id, provider_fence_token, stop_signal),
         name=f"apify-job-heartbeat-{job_id}",
         daemon=True,
     )
@@ -788,10 +816,81 @@ def _running_job_heartbeat(job_id: int):
         thread.join(timeout=2)
 
 
+def _execute_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
+    """Execute one job inside an explicit domain-DB scope.
+
+    The claim/lease connection is the dedicated autocommit worker connection.
+    Domain helpers that call ``get_conn()`` use the scoped pooled connection,
+    which is rolled back and returned on both success and exception.  This
+    prevents a worker thread-local read transaction from surviving into the
+    next job indefinitely.
+    """
+
+    job_id = int(job["id"])
+    lease_owner = str(job.get("lease_owner") or "").strip()
+    provider_task_id = f"apify-job:{job_id}"
+    fence = 0
+    with db_connection_sync_scope():
+        try:
+            fence = acquire_provider_execution_claim(
+                provider_task_id,
+                lease_owner,
+                job_type=str(job.get("job_type") or ""),
+                lease_seconds=STALE_RECLAIM_SECONDS,
+            )
+            with apify_execution_context(provider_task_id, fence):
+                with _running_job_heartbeat(
+                    job_id,
+                    lease_owner,
+                    provider_task_id,
+                    fence,
+                ):
+                    _process_claimed_job(conn, job)
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT status, last_error FROM apify_jobs WHERE id=%s", (job_id,))
+                status_row = cur.fetchone() or {}
+                status = str(status_row.get("status") or "").lower()
+            # One terminal reducer boundary for every handler.  Individual
+            # handlers may still publish a richer analysis payload earlier,
+            # but a handler that only persists ``done``/``blocked``/``failed``
+            # can no longer leave its Smart Search item (and therefore the
+            # whole session) permanently ``running``.
+            if status in {"done", "blocked", "failed", "triage"}:
+                _sync_search_session_job(
+                    conn,
+                    job_id,
+                    raw_status=status,
+                    reason=str(status_row.get("last_error") or ""),
+                )
+            finalize_provider_execution_claim(
+                provider_task_id,
+                fence,
+                "completed" if status == "done" else "failed",
+            )
+        except ApifyBudgetBlocked:
+            if fence:
+                finalize_provider_execution_claim(provider_task_id, fence, "blocked")
+            raise
+        except ApifyProviderReplayBlocked:
+            if fence:
+                finalize_provider_execution_claim(provider_task_id, fence, "unknown")
+            raise
+        except ApifyExecutionClaimBlocked:
+            # A live owner is execution state, not a provider failure.  The
+            # claim SQL normally prevents this branch; keep it non-terminal if
+            # a race still occurs between row claim and fence acquisition.
+            raise
+        except Exception:
+            if fence:
+                finalize_provider_execution_claim(provider_task_id, fence, "failed")
+            raise
+
+
 # 失败领养 / 陈旧 running 回收运维簇整簇已抽到 apify_jobs_worker_maintenance.py
 # (函数体逐字不变,re-export 兜住所有调用点)。本 import 在上面重试常量定义之后。
 from app.workers.apify_jobs_worker_maintenance import (  # noqa: E402
     _adopt_recent_provider_pressure_failures,
+    _reconcile_terminal_search_session_jobs,
     _reclaim_stale_running_jobs,
 )
 
@@ -808,7 +907,11 @@ def run_worker() -> None:
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
     logger.info(
-        "apify_jobs worker started | poll_seconds=%s stale_minutes=%s resolve_timeout_sec=%s gemini_timeout_sec=%s llm_concurrency=%s gemini_qps=%s gemini_min_interval_sec=%s provider_retry_max_attempts=%s provider_retry_base_sec=%s provider_retry_max_delay_sec=%s provider_retry_adopt_window_min=%s",
+        "apify_jobs worker started | name=%s lane=%s llm_execution_class=%s gemini_model=%s poll_seconds=%s stale_minutes=%s resolve_timeout_sec=%s gemini_timeout_sec=%s llm_concurrency=%s gemini_qps=%s gemini_min_interval_sec=%s resource_slots=%s provider_retry_max_attempts=%s provider_retry_base_sec=%s provider_retry_max_delay_sec=%s provider_retry_adopt_window_min=%s",
+        WORKER_HEARTBEAT_NAME,
+        CLAIM_LANE,
+        WORKER_LLM_EXECUTION_CLASS,
+        WORKER_GEMINI_MODEL,
         POLL_SECONDS,
         STALE_RUNNING_MINUTES,
         MEDIA_RESOLVE_TIMEOUT_SECONDS,
@@ -816,6 +919,7 @@ def run_worker() -> None:
         LLM_CONCURRENCY_LIMIT,
         GEMINI_QPS_LIMIT,
         GEMINI_MIN_INTERVAL_SECONDS,
+        RESOURCE_SLOT_LIMITS,
         PROVIDER_RETRY_MAX_ATTEMPTS,
         PROVIDER_RETRY_BASE_SECONDS,
         PROVIDER_RETRY_MAX_DELAY_SECONDS,
@@ -829,6 +933,11 @@ def run_worker() -> None:
                 with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
                     _reclaim_stale_running_jobs(conn)
                     _adopt_recent_provider_pressure_failures(conn)
+                    # Repair sessions left running by older worker versions
+                    # whose downstream jobs are already terminal.  The query
+                    # is bounded and only targets currently-running sessions;
+                    # the reducer itself is idempotent.
+                    _reconcile_terminal_search_session_jobs(conn)
                     last_reclaim = time.monotonic()
                     _upsert_worker_heartbeat(conn)
                     while not _stop_event.is_set():
@@ -846,9 +955,20 @@ def run_worker() -> None:
                             _requeue_job(conn, int(job["id"]), "worker stop requested before processing")
                             break
                         try:
-                            with _running_job_heartbeat(int(job["id"])):
-                                _process_job(conn, job)
+                            _execute_claimed_job(conn, job)
                             logger.info("apify_jobs job done | id=%s", job["id"])
+                        except ApifyExecutionClaimBlocked as exc:
+                            logger.warning(
+                                "apify_jobs job left unexecuted behind live provider fence | id=%s error=%s",
+                                job.get("id"),
+                                _redact_sensitive_text(str(exc)),
+                            )
+                            _requeue_job(
+                                conn,
+                                int(job["id"]),
+                                "provider execution lease remains active",
+                                retry_delay_seconds=random.uniform(5.0, 10.0),
+                            )
                         except Exception as exc:
                             logger.error(
                                 "apify_jobs job failed | id=%s category=%s error=%s",

@@ -6,8 +6,9 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from app.core.model_registry import current_task_model_binding, split_binding
 from app.db.connection import get_conn
-from app.platform import llm_gateway
+from app.platform import llm_production
 from app.domains.recommendations.new_launch_match import (
     _country_key,
     _entity_payload,
@@ -40,6 +41,32 @@ from app.domains.recommendations.new_launch_match import (
 
 SCENARIO = "kol_product_fit"
 REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
+REASON_MODEL_TASK = "kol_product_fit_reason"
+
+
+def _reason_model_binding() -> tuple[str, str]:
+    return split_binding(current_task_model_binding().get(REASON_MODEL_TASK) or "")
+
+
+def _reason_failure_code(value: Any) -> str:
+    result = value if isinstance(value, dict) else {}
+    failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    return str(
+        failure.get("code")
+        or result.get("failure_code")
+        or result.get("reason")
+        or latest.get("status")
+        or "llm_unavailable"
+    )[:120]
+
+
+def _valid_reason_payload(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(value.get(key), str) and bool(str(value.get(key) or "").strip())
+        for key in ("short_reason", "pitch_angle", "caution_note")
+    )
 
 
 def _pool_by_id(pool_map: dict[str, dict[str, Any]]) -> dict[int, dict[str, Any]]:
@@ -365,31 +392,73 @@ def _parse_reason_text(text: str) -> dict[str, str] | None:
 
 
 def _attach_reason(payload: dict[str, Any], item: dict[str, Any]) -> None:
-    response = llm_gateway.invoke(
-        _reason_prompt(payload, item),
-        purpose="p4_recommendation_reasons",
-        max_output_tokens=220,
-        cost_tag=REASON_BUDGET_SCOPE,
-        metadata={
-            "scenario": SCENARIO,
-            "kol_entity_uid": (payload.get("kol") or {}).get("kol_entity_uid"),
-            "product_family_uid": item.get("product_family_uid"),
-            "rank": item.get("rank"),
-        },
+    provider, model = _reason_model_binding()
+    target_label = _text(
+        item.get("product_family_name") or item.get("product_family_uid")
     )
-    parsed = _parse_reason_text(str(response.get("text") or "")) if response.get("status") == "success" else None
-    if parsed and all(parsed.values()):
-        reason = parsed
+    try:
+        response = llm_production.generate_json(
+            _reason_prompt(payload, item),
+            provider=provider,
+            model=model,
+            purpose="p4_recommendation_reasons",
+            max_output_tokens=220,
+            cost_tag=REASON_BUDGET_SCOPE,
+            triggered_by=REASON_MODEL_TASK,
+            required_keys=("short_reason", "pitch_angle", "caution_note"),
+            validator=_valid_reason_payload,
+            metadata={
+                "task_binding": REASON_MODEL_TASK,
+                "scenario": SCENARIO,
+                "kol_entity_uid": (payload.get("kol") or {}).get("kol_entity_uid"),
+                "product_family_uid": item.get("product_family_uid"),
+                "rank": item.get("rank"),
+                "phase": "kol_recommendation",
+                "subphase": "product_fit_reason",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": target_label,
+            },
+        )
+    except Exception as exc:  # deterministic recommendation remains usable
+        response = {"status": "unavailable", "failure": {"code": type(exc).__name__}}
+    candidate = response.get("json") if isinstance(response, dict) else None
+    exact_response = (
+        str(response.get("status") or "") == "success"
+        and str(response.get("provider") or "").strip().lower() == provider
+        and str(response.get("model") or "").strip() == model
+    )
+    if exact_response and _valid_reason_payload(candidate):
+        reason = {
+            "short_reason": _text(candidate.get("short_reason")),
+            "pitch_angle": _text(candidate.get("pitch_angle")),
+            "caution_note": _text(candidate.get("caution_note")),
+        }
         mode = "llm"
+        provenance_provider = provider
+        provenance_model = model
+        status = "success"
+        fallback_reason = ""
     else:
         reason = _deterministic_reason(payload, item)
         mode = "deterministic_fallback"
+        provenance_provider = "rule_v0"
+        provenance_model = "rule_v0"
+        response_status = str(response.get("status") or "unavailable")
+        # A deterministic reason is usable UI copy, not a successful LLM result.
+        status = "degraded" if response_status == "success" else response_status
+        fallback_reason = (
+            "exact_model_or_json_contract_mismatch"
+            if response_status == "success"
+            else _reason_failure_code(response)
+        )
     item["recommendation_reason"] = {
         "mode": mode,
-        "provider": response.get("provider") or "rule_v0",
-        "model": response.get("model") or "rule_v0",
-        "status": response.get("status") or "",
-        "fallback_reason": response.get("reason") or "",
+        "provider": provenance_provider,
+        "model": provenance_model,
+        "requested_binding": f"{provider}/{model}",
+        "status": status,
+        "fallback_reason": fallback_reason,
         **reason,
     }
 
@@ -399,12 +468,12 @@ def render_markdown(payload: dict[str, Any]) -> str:
     kol = payload.get("kol") or {}
     distribution = payload.get("score_distribution") or {}
     lines = [
-        "# P4-6 KOL Product Fit Dry-Run",
+        "# P4-6 KOL Product Fit Preview",
         "",
         f"**KOL:** {kol.get('platform', '')}:{kol.get('handle', '')}",
         f"**Display name:** {kol.get('display_name', '')}",
         f"**Generated at:** {payload.get('generated_at', '')}",
-        "**Mode:** dry_run",
+        f"**Mode:** {payload.get('mode', 'dry_run')}",
         f"**Provider calls allowed:** {str(bool(payload.get('provider_calls_allowed'))).lower()}",
         f"**Budget scope:** {(payload.get('budget_guard') or {}).get('scope', '')}",
         "",

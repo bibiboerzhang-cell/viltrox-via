@@ -68,4 +68,42 @@ describe("DashboardTaskQueueCard", () => {
     expect(await screen.findByText("Worker 离线 · 2 等待")).toBeInTheDocument();
     expect(screen.getByText("等待 Worker 上线")).toBeInTheDocument();
   });
+
+  it("compact 跑中任务显示身份；超历史均时保持不定态而不是伪装成 0%", async () => {
+    fetchProgressCenter.mockResolvedValue({
+      status: "ready",
+      generated_at: "2026-07-14T04:00:00Z",
+      counts: { running: 1, queued: 0, active_total: 1, recent_total: 0 },
+      running: [{
+        id: "2241",
+        source: "apify_jobs",
+        kind: "评论采集",
+        job_type: "kol_comments_collect",
+        label: "dianakenyeres",
+        status: "running",
+        stage: "search",
+        stage_label: "抓取",
+        created_at: "2026-07-14T03:00:00Z",
+        updated_at: "2026-07-14T03:59:30Z",
+        masked: false,
+        progress_pct: null,
+        progress_estimated: false,
+        progress_overdue: true,
+        progress_label: "已超历史均时",
+        eta_seconds: null,
+      }],
+      queued: [],
+      recent_done: [],
+      stage_flow: [],
+      diagnostics: { worker_online: true },
+    });
+
+    const { container } = render(<DashboardTaskQueueCard apiToken="token" compact />);
+
+    expect(await screen.findByText("评论采集 · dianakenyeres")).toBeInTheDocument();
+    expect(screen.getByText("#2241")).toBeInTheDocument();
+    expect(screen.getByText("超均时")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("0%");
+    expect(container.querySelector(".vkpi-dashboard-task-queue__bar i")).toHaveClass("is-indeterminate");
+  });
 });

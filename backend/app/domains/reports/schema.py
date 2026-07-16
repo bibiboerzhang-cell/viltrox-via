@@ -6,6 +6,23 @@ from app.db.connection import get_conn, is_postgres_runtime
 _SCHEMA_READY = False
 
 
+def _ensure_sqlite_column(conn: object, table: str, column: str, declaration: str) -> None:
+    """Add columns to pre-existing local/test tables created before this schema guard.
+
+    PostgreSQL receives these columns through migration 256.  SQLite's
+    ``CREATE TABLE IF NOT EXISTS`` does not evolve an existing table, so the
+    local runtime needs the same additive compatibility step.
+    """
+
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    names = {
+        str(row["name"] if hasattr(row, "keys") and "name" in row.keys() else row[1])
+        for row in rows
+    }
+    if column not in names:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
 def ensure_vkpi_reports_schema() -> None:
     global _SCHEMA_READY
     if _SCHEMA_READY or is_postgres_runtime():
@@ -27,7 +44,11 @@ def ensure_vkpi_reports_schema() -> None:
             status TEXT NOT NULL DEFAULT 'pending',
             error_message TEXT DEFAULT '',
             summary_text TEXT DEFAULT '',
-            metadata_json TEXT NOT NULL DEFAULT '{}'
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            truth_invalidated_at TEXT,
+            truth_invalidation_reason TEXT NOT NULL DEFAULT '',
+            truth_invalidation_migration INTEGER,
+            truth_restorable INTEGER NOT NULL DEFAULT 1
         );
         CREATE INDEX IF NOT EXISTS idx_vkpi_report_runs_type_time
             ON vkpi_report_runs(report_type, triggered_at DESC);
@@ -76,5 +97,12 @@ def ensure_vkpi_reports_schema() -> None:
             ON vkpi_export_jobs(status, triggered_at DESC);
         """
     )
+    for column, declaration in (
+        ("truth_invalidated_at", "TEXT"),
+        ("truth_invalidation_reason", "TEXT NOT NULL DEFAULT ''"),
+        ("truth_invalidation_migration", "INTEGER"),
+        ("truth_restorable", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        _ensure_sqlite_column(conn, "vkpi_report_runs", column, declaration)
     conn.commit()
     _SCHEMA_READY = True

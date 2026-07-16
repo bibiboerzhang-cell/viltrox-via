@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Sparkles,
 } from "lucide-react";
+import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { useT } from "../lib/i18n";
 import "./ai-evidence-cards.css";
 
@@ -202,7 +203,6 @@ export function AIIntelligenceCard({
   const sources = Array.isArray(model.sources) ? model.sources : [];
   const featuredVideo = videos[0] || null;
   const [featuredMediaFailed, setFeaturedMediaFailed] = React.useState(false);
-  React.useEffect(() => setFeaturedMediaFailed(false), [featuredVideo?.thumbnail_url]);
 
   const isStale = Boolean(model.isStale);
   const freshnessStatus = String(model.freshnessStatus || "unknown");
@@ -241,7 +241,14 @@ export function AIIntelligenceCard({
 
   const video = featuredVideo || {};
   const videoUrl = String(video.content_url || video.url || "");
-  const thumbnailUrl = String(video.thumbnail_url || "");
+  const thumbnailUrl = proxiedImageUrl(
+    video.cached_thumbnail_url
+      || video.best_thumbnail
+      || video.thumbnail_url
+      || video.youtube_thumbnail_url
+      || "",
+  );
+  React.useEffect(() => setFeaturedMediaFailed(false), [thumbnailUrl]);
   const sourceRefs = Array.isArray(video.source_refs) ? video.source_refs : [];
   const videoPlatform = platformLabel(video);
   const videoFormat = contentFormat(video);
@@ -332,7 +339,13 @@ export function AIIntelligenceCard({
                     onError={() => setFeaturedMediaFailed(true)}
                   />
                 ) : (
-                  <span className="absolute inset-0 flex items-center justify-center text-muted"><Film size={18} /></span>
+                  <span
+                    className="absolute inset-0 flex items-center justify-center text-muted"
+                    role="img"
+                    aria-label={featuredMediaFailed ? "缩略图加载失败，未使用原始平台图片" : "该外部样例无可用缩略图"}
+                  >
+                    <Film size={18} />
+                  </span>
                 )}
                 <span className="absolute inset-0 flex items-center justify-center bg-black/10">
                   <span className="flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-black/60 text-white">
@@ -340,7 +353,7 @@ export function AIIntelligenceCard({
                   </span>
                 </span>
                 <span className="absolute bottom-1 left-1 rounded border border-white/20 bg-black/65 px-1 py-px text-[8px] text-white">
-                  {thumbnailUrl ? "缩略图" : "无预览"}
+                  {thumbnailUrl && !featuredMediaFailed ? "缩略图" : featuredMediaFailed ? "缩略图不可用" : "无预览"}
                 </span>
               </button>
 

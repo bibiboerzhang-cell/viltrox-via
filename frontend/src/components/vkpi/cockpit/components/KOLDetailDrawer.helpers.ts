@@ -224,6 +224,32 @@ export function evidenceIdOf(video: any) {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+const TERMINAL_ANALYSIS_POLL_STATES = new Set([
+  "blocked", "failed", "error", "cancelled", "canceled", "not_requested",
+]);
+
+export function videoAnalysisPollSnapshot(payload: any) {
+  const state = String(
+    payload?.analysis_job?.state || payload?.analysis_job?.status || payload?.state || "unknown",
+  ).toLowerCase();
+  return {
+    evidenceId: Number(payload?.target_id || 0),
+    state,
+    ready: state === "ready",
+    terminal: TERMINAL_ANALYSIS_POLL_STATES.has(state),
+    reason: String(
+      payload?.analysis_job?.reason_detail
+      || payload?.analysis_job?.reason
+      || payload?.analysis_job?.error_category
+      || state,
+    ),
+  };
+}
+
+export function videoAnalysisPollDelayMs(elapsedMs: number) {
+  return elapsedMs < 120_000 ? 2_500 : 10_000;
+}
+
 export function videoString(video: any, keys: any, fallback = "") {
   const source = recordOr(video);
   for (const key of keys) {

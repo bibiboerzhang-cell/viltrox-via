@@ -52,7 +52,7 @@ def _top_by_fit(conn: Any, lim: int) -> list[dict[str, Any]]:
         WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM vkpi_kol_fit_snapshot)
           AND fit_score IS NOT NULL
         ORDER BY fit_score DESC
-        LIMIT %s
+        LIMIT ?
         """,
         (lim,),
     ).fetchall()
@@ -109,7 +109,7 @@ def compute_top_movers(limit: int = 8) -> dict[str, Any]:
           AND cur.fit_score IS NOT NULL AND p.fit_score IS NOT NULL
           AND cur.fit_score <> p.fit_score
         ORDER BY ABS(cur.fit_score - p.fit_score) DESC
-        LIMIT %s
+        LIMIT ?
         """,
         (lim,),
     ).fetchall()

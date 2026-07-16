@@ -13,7 +13,7 @@ export function MarketCoverageCard({ items, onGoDiscover }: any) {
   const [showAll, setShowAll] = useState(false);
   const [showGaps, setShowGaps] = useState(false);
   
-  // 聚合所有 KOL 的 country reach
+  // 聚合 estimated_country_reach 代理信号。一个 KOL 可贡献多个国家，不能冒充主档案国家去重计数。
   const countryStats = useMemo(() => {
     const stats: Record<string, any> = {};
     items.forEach((kol: any) => {
@@ -47,7 +47,7 @@ export function MarketCoverageCard({ items, onGoDiscover }: any) {
     e("div", { className: "px-4 py-2.5 border-b border-white/[0.06] flex items-center justify-between" },
       e("div", { className: "flex items-center gap-2" },
         e("div", { className: "rounded-md p-1", style: { background: "rgba(6,182,212,0.15)" } }, e(Globe2, { size: 11, className: "text-cyan-400" })),
-        e("h3", { className: "text-[11px] font-semibold text-white" }, "海外市场覆盖"),
+        e("h3", { className: "text-[11px] font-semibold text-white" }, "估算受众覆盖"),
         e("span", { className: "text-[10px] text-slate-500" }, "· " + countryStats.length + " 国 · " + gaps.length + " 缺口"),
       ),
       e("button", { 
@@ -69,7 +69,7 @@ export function MarketCoverageCard({ items, onGoDiscover }: any) {
           ),
           e("div", { className: "w-[50px] shrink-0 text-slate-300 tabular-nums" },
             e("span", { className: "text-white font-medium" }, s.kol_count),
-            e("span", { className: "text-slate-500 ml-1" }, "KOL")
+            e("span", { className: "text-slate-500 ml-1" }, "KOL信号")
           ),
           e("div", { className: "flex-1 min-w-0" },
             e("div", { className: "geo-bar-bg" },
@@ -101,7 +101,7 @@ export function MarketCoverageCard({ items, onGoDiscover }: any) {
         gaps.map((g: any) => e("div", { key: g.country, className: "flex items-center gap-2 text-[10px] py-1" },
           e("span", { style: { fontSize: 12 } }, g.info.flag),
           e("span", { className: "text-white font-medium w-[24px]" }, g.country),
-          e("span", { className: "text-slate-400 flex-1" }, g.info.name, " · " + g.current + " KOL · 建议补 " + g.suggest + " 个"),
+          e("span", { className: "text-slate-400 flex-1" }, g.info.name, " · " + g.current + " 个代理信号 · 建议补 " + g.suggest + " 个"),
           e("button", { onClick: () => onGoDiscover?.(g.country), title: `按 ${g.info.name} 过滤并切到发现模式`,  className: "px-2 py-0.5 rounded text-[10px] border border-amber-500/30 bg-amber-500/[0.08] text-amber-300 hover:bg-amber-500/[0.15]" },
             "去发现"
           )

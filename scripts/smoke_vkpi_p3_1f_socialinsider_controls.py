@@ -5,6 +5,7 @@ Locks the first usable dashboard control layer: date range, compare, group-by,
 KPI/chart selector, and chart visibility wired to real component state.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def main() -> None:
     require_contains(CSS, ".da-filter-accordion")
     require_contains(CSS, "width: min(520px, 94vw)")
 
-    print("VKPI_P3_1F_SOCIALINSIDER_CONTROLS_SMOKE_OK")
+    stdout_out("VKPI_P3_1F_SOCIALINSIDER_CONTROLS_SMOKE_OK")
 
 
 if __name__ == "__main__":

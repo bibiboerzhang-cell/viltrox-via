@@ -4,14 +4,23 @@ services/cache/memory_cache.py — Redis-backed cache with memory fallback for l
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import inspect
 import json
 import time
 import threading
+import weakref
 from functools import wraps
 from typing import Any, Callable, Optional
 
-from app.core.config import REDIS_CACHE_DEFAULT_TTL_SEC, REDIS_CACHE_PREFIX, REDIS_URL
+from app.core.config import (
+    REDIS_CACHE_DEFAULT_TTL_SEC,
+    REDIS_CACHE_PREFIX,
+    REDIS_URL,
+    VKPI_MEMORY_CACHE_MAX_BYTES,
+    VKPI_MEMORY_CACHE_MAX_ENTRIES,
+    VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES,
+)
 from app.core.logging import get_logger
 
 try:
@@ -23,6 +32,8 @@ logger = get_logger(__name__)
 
 _cache: dict[str, dict] = {}
 _lock = threading.RLock()
+_build_locks_guard = threading.Lock()
+_build_locks: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 _stats = {
     "hits": 0,
     "misses": 0,
@@ -31,11 +42,24 @@ _stats = {
     "backend": "memory",
 }
 _redis_client = None
+_redis_retry_after_monotonic = 0.0
+_REDIS_FAILURE_COOLDOWN_SEC = 2.0
+
+# The strategy aggregations protected by ``cache_get_or_build`` currently take
+# about 2-3 seconds on the local data set.  Keep the distributed lease well
+# above that observed tail while bounding how long a request may wait for a
+# peer process.  If the peer is genuinely stuck, the caller is allowed to
+# rebuild after the blocking timeout instead of hanging the endpoint.
+_BUILD_LOCK_LEASE_SEC = 30
+_BUILD_LOCK_BLOCKING_TIMEOUT_SEC = 8
 
 
 def _get_redis():
     global _redis_client
+    if time.monotonic() < _redis_retry_after_monotonic:
+        return None
     if _redis_client is not None:
+        _stats["backend"] = "redis"
         return _redis_client
     if not REDIS_URL or Redis is None:
         return None
@@ -48,6 +72,25 @@ def _get_redis():
         _stats["backend"] = "memory"
         _redis_client = None
         return None
+
+
+def _mark_redis_failure() -> None:
+    """Open a short per-process circuit so fallback can absorb an outage.
+
+    In particular, a Redis deployment may still answer GET while rejecting
+    SETEX (read-only replica, failover, quota).  Without this circuit the
+    healthy miss would correctly reject stale fallback but then rebuild on
+    every request.  During the bounded cooldown this worker serves its local
+    TTL copy; after cooldown Redis becomes authoritative again.
+    """
+
+    global _redis_retry_after_monotonic
+    with _lock:
+        _redis_retry_after_monotonic = max(
+            _redis_retry_after_monotonic,
+            time.monotonic() + _REDIS_FAILURE_COOLDOWN_SEC,
+        )
+        _stats["backend"] = "redis_circuit_open_memory_fallback"
 
 
 def _full_key(key: str) -> str:
@@ -83,33 +126,126 @@ def _deserialize(value: bytes | None) -> Any:
     return json.loads(value.decode("utf-8"))
 
 
+def _memory_get(key: str) -> tuple[bool, Any]:
+    """Return a live process-local fallback entry without changing hit stats."""
+    with _lock:
+        entry = _cache.get(key)
+        if entry is None:
+            return False, None
+        if entry["expires"] < time.time():
+            del _cache[key]
+            _stats["evictions"] += 1
+            return False, None
+        # Dict insertion order is used as a small, dependency-free LRU queue.
+        # Refreshing the entry prevents a hot authorization-scoped result from
+        # being discarded before a cold, one-off parameterized preview.
+        _cache.pop(key)
+        _cache[key] = entry
+        return True, entry["value"]
+
+
+def _memory_entry_size(entry: dict[str, Any]) -> int:
+    size = entry.get("size_bytes")
+    if isinstance(size, int) and size >= 0:
+        return size
+    try:
+        return len(_serialize(entry.get("value")))
+    except (TypeError, ValueError):
+        # Directly injected legacy/test entries that cannot be serialized are
+        # treated as over-sized, so capacity enforcement fails closed.
+        return VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES + 1
+
+
+def _memory_set(key: str, value: Any, serialized: bytes, ttl: int) -> bool:
+    """Store a bounded process-local fallback entry.
+
+    Redis remains the authoritative cache when healthy.  This fallback exists
+    for local development and short Redis outages, so it must never become an
+    unbounded sink for high-cardinality request parameters.
+    """
+
+    incoming_bytes = len(serialized)
+    if incoming_bytes > VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES:
+        with _lock:
+            if _cache.pop(key, None) is not None:
+                _stats["evictions"] += 1
+        logger.warning(
+            "cache.memory_entry_too_large",
+            extra={"key": key, "size_bytes": incoming_bytes},
+        )
+        return False
+
+    now = time.time()
+    with _lock:
+        previous = _cache.pop(key, None)
+        expired_keys = [
+            existing_key
+            for existing_key, entry in _cache.items()
+            if entry["expires"] < now
+        ]
+        for expired_key in expired_keys:
+            del _cache[expired_key]
+            _stats["evictions"] += 1
+
+        current_bytes = sum(_memory_entry_size(entry) for entry in _cache.values())
+        while _cache and (
+            len(_cache) >= VKPI_MEMORY_CACHE_MAX_ENTRIES
+            or current_bytes + incoming_bytes > VKPI_MEMORY_CACHE_MAX_BYTES
+        ):
+            oldest_key = next(iter(_cache))
+            evicted = _cache.pop(oldest_key)
+            current_bytes -= _memory_entry_size(evicted)
+            _stats["evictions"] += 1
+
+        if incoming_bytes > VKPI_MEMORY_CACHE_MAX_BYTES:
+            if previous is not None:
+                # Do not resurrect the previous value after an explicit set;
+                # the caller still receives the freshly built response.
+                _stats["evictions"] += 1
+            return False
+
+        _cache[key] = {
+            "value": value,
+            "expires": now + ttl,
+            "size_bytes": incoming_bytes,
+        }
+        return True
+
+
 def cache_get(key: str) -> Optional[Any]:
     client = _get_redis()
     if client is not None:
         try:
             value = client.get(_full_key(key))
-            if value is None:
-                _stats["misses"] += 1
-                return None
-            _stats["hits"] += 1
-            return _deserialize(value)
+            if value is not None:
+                _stats["hits"] += 1
+                return _deserialize(value)
         except Exception:
             logger.warning("cache.redis_get_failed", extra={"key": key}, exc_info=True)
-            _stats["misses"] += 1
-            return None
+            _mark_redis_failure()
 
-    with _lock:
-        entry = _cache.get(key)
-        if entry is None:
-            _stats["misses"] += 1
-            return None
-        if entry["expires"] < time.time():
-            del _cache[key]
-            _stats["misses"] += 1
-            _stats["evictions"] += 1
-            return None
+            # Redis could not answer, so the process-local fallback is the
+            # only bounded-degradation source available to this worker.
+            found, fallback = _memory_get(key)
+            if found:
+                _stats["hits"] += 1
+                _stats["backend"] = "redis_with_memory_fallback"
+                return fallback
+
+        # A *healthy* Redis miss is authoritative.  Reading an old local
+        # fallback here would resurrect data after another process called
+        # cache_delete/cache_clear.  A value whose prior SETEX failed may be
+        # rebuilt once when Redis recovers; correctness wins over that small
+        # amount of duplicate work.
+        _stats["misses"] += 1
+        return None
+
+    found, fallback = _memory_get(key)
+    if found:
         _stats["hits"] += 1
-        return entry["value"]
+        return fallback
+    _stats["misses"] += 1
+    return None
 
 
 async def cache_get_async(key: str) -> Optional[Any]:
@@ -129,16 +265,105 @@ def cache_set(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> N
     if client is not None:
         try:
             client.setex(_full_key(key), int(ttl), serialized)
+            # Do not retain an older fallback copy after Redis recovered. A
+            # later healthy Redis miss must not resurrect stale process data.
+            with _lock:
+                _cache.pop(key, None)
             _stats["sets"] += 1
             return
         except Exception:
             logger.warning("cache.redis_set_failed", extra={"key": key, "ttl": int(ttl)}, exc_info=True)
+            _mark_redis_failure()
+    if not _memory_set(key, value, serialized, int(ttl)):
+        return
     with _lock:
-        _cache[key] = {
-            "value": value,
-            "expires": time.time() + ttl,
-        }
         _stats["sets"] += 1
+
+
+@contextmanager
+def _distributed_build_lock(key: str):
+    """Yield whether this process owns Redis' token-safe build lock.
+
+    redis-py's ``Lock`` uses an ownership token when releasing the lock, so an
+    expired owner cannot delete a newer process' lease.  Failure to create or
+    acquire the lock is a cache-degradation event, not an endpoint failure;
+    the process-local lock still prevents a same-worker stampede.
+    """
+
+    client = _get_redis()
+    if client is None:
+        yield False
+        return
+
+    lock = None
+    acquired = False
+    try:
+        lock = client.lock(
+            _full_key(f"build_lock:{key}"),
+            timeout=_BUILD_LOCK_LEASE_SEC,
+            blocking_timeout=_BUILD_LOCK_BLOCKING_TIMEOUT_SEC,
+        )
+        acquired = bool(lock.acquire(blocking=True))
+    except Exception:
+        logger.warning("cache.redis_build_lock_failed", extra={"key": key}, exc_info=True)
+        _mark_redis_failure()
+
+    try:
+        yield acquired
+    finally:
+        if acquired and lock is not None:
+            try:
+                lock.release()
+            except Exception:
+                # Lease expiry or Redis loss must not replace a successfully
+                # built read response with a 500. SETEX already published the
+                # cache value when possible.
+                logger.warning("cache.redis_build_unlock_failed", extra={"key": key}, exc_info=True)
+                _mark_redis_failure()
+
+
+def cache_get_or_build(
+    key: str,
+    builder: Callable[[], Any],
+    ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC,
+    *,
+    cache_if: Callable[[Any], bool] | None = None,
+) -> Any:
+    """Return a cached value or collapse concurrent cold builds.
+
+    The second cache read inside the per-key lock prevents a request burst from
+    repeating the same expensive read-only aggregation.  When Redis is
+    available, a token-safe bounded lock collapses cold misses across web
+    workers as well.  Redis/lock failure falls back to one build per process.
+    """
+
+    cached_value = cache_get(key)
+    if cached_value is not None:
+        return cached_value
+
+    with _build_locks_guard:
+        build_lock = _build_locks.get(key)
+        if build_lock is None:
+            build_lock = threading.Lock()
+            _build_locks[key] = build_lock
+
+    with build_lock:
+        cached_value = cache_get(key)
+        if cached_value is not None:
+            return cached_value
+        with _distributed_build_lock(key):
+            # A different process may have populated Redis while this worker
+            # waited for the distributed lock.
+            cached_value = cache_get(key)
+            if cached_value is not None:
+                return cached_value
+            value = builder()
+            # Read aggregators may return an honest 200 error/degraded payload
+            # instead of raising.  Callers can keep that fail-soft contract
+            # without pinning the failure for the full TTL.
+            if cache_if is None or bool(cache_if(value)):
+                cache_set(key, value, ttl=ttl)
+            return value
 
 
 async def cache_set_async(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> None:
@@ -146,41 +371,40 @@ async def cache_set_async(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_T
 
 
 def cache_delete(key: str) -> bool:
+    redis_deleted = False
     client = _get_redis()
     if client is not None:
         try:
-            return bool(client.delete(_full_key(key)))
+            redis_deleted = bool(client.delete(_full_key(key)))
         except Exception:
             logger.warning("cache.redis_delete_failed", extra={"key": key}, exc_info=True)
-            return False
+            _mark_redis_failure()
     with _lock:
-        if key in _cache:
-            del _cache[key]
-            return True
-        return False
+        memory_deleted = _cache.pop(key, None) is not None
+    return redis_deleted or memory_deleted
 
 
 def cache_clear(prefix: str = "") -> int:
+    redis_deleted = 0
     client = _get_redis()
     if client is not None:
         try:
             pattern = _full_key(prefix + "*") if prefix else _full_key("*")
-            deleted = 0
             for key in client.scan_iter(match=pattern):
-                deleted += int(client.delete(key) or 0)
-            return deleted
+                redis_deleted += int(client.delete(key) or 0)
         except Exception:
             logger.warning("cache.redis_clear_failed", extra={"prefix": prefix}, exc_info=True)
-            return 0
+            _mark_redis_failure()
     with _lock:
         if not prefix:
-            n = len(_cache)
+            memory_deleted = len(_cache)
             _cache.clear()
-            return n
-        keys_to_del = [k for k in _cache if k.startswith(prefix)]
-        for k in keys_to_del:
-            del _cache[k]
-        return len(keys_to_del)
+        else:
+            keys_to_del = [k for k in _cache if k.startswith(prefix)]
+            for k in keys_to_del:
+                del _cache[k]
+            memory_deleted = len(keys_to_del)
+    return redis_deleted + memory_deleted
 
 
 def get_cache_stats() -> dict:
@@ -190,6 +414,14 @@ def get_cache_stats() -> dict:
     data = {
         **_stats,
         "size": len(_cache) if client is None else None,
+        "size_bytes": (
+            sum(_memory_entry_size(entry) for entry in _cache.values())
+            if client is None
+            else None
+        ),
+        "memory_max_entries": VKPI_MEMORY_CACHE_MAX_ENTRIES,
+        "memory_max_bytes": VKPI_MEMORY_CACHE_MAX_BYTES,
+        "memory_max_entry_bytes": VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES,
         "hit_rate": round(hit_rate, 3),
         "prefix": REDIS_CACHE_PREFIX,
     }
@@ -200,6 +432,7 @@ def get_cache_stats() -> dict:
             }
         except Exception:
             logger.warning("cache.redis_info_failed", exc_info=True)
+            _mark_redis_failure()
     return data
 
 

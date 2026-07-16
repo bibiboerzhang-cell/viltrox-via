@@ -11,6 +11,7 @@ The live path is explicit, uses platform-specific profile URLs, bypasses local
 Settings gates with force_local=True, and never prints provider keys.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -340,8 +341,8 @@ class Smoke:
 
 def main() -> None:
     result = Smoke().run()
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    print("VKPI_P2_29_OTHER_PLATFORM_REFRESH_SMOKE_OK")
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    stdout_out("VKPI_P2_29_OTHER_PLATFORM_REFRESH_SMOKE_OK")
 
 
 if __name__ == "__main__":

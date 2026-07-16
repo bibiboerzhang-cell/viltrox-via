@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, BookOpen, ExternalLink, ShoppingCart, Sparkles, Video } from 'lucide-react';
+import { BarChart3, BookOpen, ExternalLink, RefreshCw, ShoppingCart, Sparkles, Video } from 'lucide-react';
 import { runSkill, type SkillRunResult } from '../../../../../services/vkpi/skills-api';
 import { formatLargeNum, formatMoneyShort, healthColor } from '../projectDeliverableStyle';
 import type { VkpiProjectRow } from '../../../vkpiTypes';
@@ -29,6 +29,8 @@ export function CampaignRetrospectiveTab({
   videoAnalysisLoading,
   videoAnalysisError,
   videoQaError,
+  videoAnalysisAutoRefreshStopped,
+  onRefreshVideoAnalysis,
   retrospective,
   retrospectiveLastJob,
   retrospectiveGenerating,
@@ -46,6 +48,8 @@ export function CampaignRetrospectiveTab({
   videoAnalysisLoading?: boolean;
   videoAnalysisError?: string;
   videoQaError?: string;
+  videoAnalysisAutoRefreshStopped?: string;
+  onRefreshVideoAnalysis?: () => void;
   retrospective?: { result?: VkpiProjectRetrospectiveResult; model?: string; updated_at?: string } | null;
   retrospectiveLastJob?: { status?: string; last_error?: string | null } | null;
   retrospectiveGenerating?: boolean;
@@ -197,7 +201,7 @@ export function CampaignRetrospectiveTab({
               {[
                 ['成品视频', analysisSummary?.evidence_count ?? 0, '#06b6d4'],
                 ['已分析', analysisSummary?.ready_count ?? 0, '#10b981'],
-                ['队列中', analysisSummary?.pending_count ?? 0, '#facc15'],
+                ['处理中', analysisSummary?.pending_count ?? 0, '#facc15'],
                 ['后续维度', '沟通/合同/时效/反馈', '#a855f7'],
               ].map(([label, value, color]) => (
                 <div key={label as string} className="rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">
@@ -208,6 +212,20 @@ export function CampaignRetrospectiveTab({
             </div>
             {videoAnalysisError ? <div className="mt-2 text-[10px] text-rose-300">final_v1 缓存读取失败：{videoAnalysisError}</div> : null}
             {videoQaError ? <div className="mt-1 text-[10px] text-amber-300">关键帧 QA 读取失败：{videoQaError}</div> : null}
+            <div className="mt-2 flex items-center gap-2">
+              {onRefreshVideoAnalysis ? (
+                <button
+                  type="button"
+                  onClick={onRefreshVideoAnalysis}
+                  className="inline-flex items-center gap-1 rounded border border-white/[0.08] bg-white/[0.03] px-2 py-1 text-[10px] text-slate-300 hover:text-white"
+                  title="只重新读取缓存与任务状态，不会新建分析任务"
+                >
+                  <RefreshCw size={10} /> 刷新状态
+                </button>
+              ) : null}
+              <span className="text-[9.5px] text-slate-500">仅刷新状态，不会触发新分析。</span>
+            </div>
+            {videoAnalysisAutoRefreshStopped ? <div className="mt-1 text-[10px] text-amber-300">{videoAnalysisAutoRefreshStopped}</div> : null}
 
             {canRunRoiSkill ? (
               <RoiReviewSkillBlock result={roiResult} busy={roiBusy} error={roiError} onRun={handleRunRoiSkill} />

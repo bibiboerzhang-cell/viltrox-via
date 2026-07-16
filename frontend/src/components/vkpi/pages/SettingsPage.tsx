@@ -37,6 +37,7 @@ import {
   type SettingsModuleKey,
 } from './settings/SettingsPage.fragments';
 import { SettingsCompanyZone, SettingsPersonalZone } from './settings/SettingsPage.Zones';
+import { CostLedgerCard, HealthSentinelCard } from './settings/SettingsOperationalCards';
 import { computeSettingsDerived, resolveDrawerMember } from './settings/SettingsPage.helpers';
 import { createSettingsActions } from './settings/SettingsPage.actions';
 import {
@@ -46,247 +47,295 @@ import {
   rowEnabled,
 } from '../../../domains/settings';
 import type { BackendBuildInfo } from '../../../domains/settings';
-import { formatLocal } from '../lib/timeLocal';
+import { humanizeLlmReason } from '../cockpit/llmReasonCopy';
 
-// ── C1 数据健康哨兵 ──────────────────────────────────────────
-// 10 项黄金链路日检:绿/黄/红点 + label + detail + 检查时间 + 手动运行。
-// 只读展示 + 手动触发;后端 /ops/health-sentinel 落 persistent_cache,调度每日 09:30 自动跑。
-interface SentinelCheck {
-  key: string;
-  label: string;
-  status: 'ok' | 'warn' | 'fail' | string;
-  detail: string;
-  checked_at?: string;
+// 生产就绪只读视图：只消费后端已经过密钥脱敏的 readiness audit，
+// 不做探针、不调用 provider，也不把“已注册 / 已配置”冒充为可用。
+interface LlmReadinessEvidenceSource {
+  source?: string;
+  parsed?: boolean;
+  error?: string | null;
+  binding_count?: number;
+  secret_values_exposed?: boolean;
 }
 
-interface SentinelResult {
-  available?: boolean;
-  reason?: string;
-  ran_at?: string;
-  trigger?: string;
-  summary?: { ok?: number; warn?: number; fail?: number; total?: number };
-  checks?: SentinelCheck[];
+interface LlmReadinessAudit {
+  candidate_count?: number;
+  configured_count?: number;
+  probed_count?: number;
+  evaluated_count?: number;
+  production_ready_count?: number;
+  blocked_count?: number;
+  evidence_source?: LlmReadinessEvidenceSource;
+  attestation_trust_roots?: {
+    exact_probe?: { configured?: boolean; declared_key_count?: number; valid_key_count?: number };
+    evaluation?: { configured?: boolean; declared_key_count?: number; valid_key_count?: number };
+    distinct_key_ids?: boolean;
+    distinct_public_keys?: boolean;
+    ready_to_verify_signed_evidence?: boolean;
+    runtime_can_extend_trust_roots?: boolean;
+    release_review_required?: boolean;
+    failure_reasons?: string[];
+  };
 }
 
-// 2026-07-11 样式回归修:状态点走 --ds-* 语义色 token,6 主题(3 风格×明暗)自洽,不写死 hex。
-const SENTINEL_DOT_COLOR: Record<string, string> = {
-  ok: 'var(--ds-good)',
-  warn: 'var(--ds-warn)',
-  fail: 'var(--ds-crit)',
+interface LlmRuntimeGate {
+  code?: string;
+  category?: string;
+  failure_reasons?: string[];
+}
+
+interface LlmTaskReadiness {
+  binding?: string;
+  state?: string;
+  configured?: boolean;
+  probed?: boolean;
+  evaluated?: boolean;
+  production_ready?: boolean;
+  failure_reasons?: string[];
+  runtime_gate?: LlmRuntimeGate;
+  probe?: {
+    attestation_verified?: boolean;
+    as_of?: string | null;
+  };
+  evaluation?: {
+    attestation_verified?: boolean;
+    sample_count?: number;
+    as_of?: string | null;
+    success_rate?: number | null;
+    structured_valid_rate?: number | null;
+    factual_valid_rate?: number | null;
+    source_valid_rate?: number | null;
+    safety_valid_rate?: number | null;
+    latency_ms?: { p95?: number | null };
+  };
+  thresholds?: {
+    minimum_eval_samples?: number;
+    maximum_p95_latency_ms?: number;
+  };
+}
+
+interface LlmSystemModelsResponse {
+  status?: string;
+  claim_status?: string;
+  available_models_semantics?: string;
+  readiness_audit?: LlmReadinessAudit;
+  task_model_readiness?: Record<string, LlmTaskReadiness>;
+}
+
+const LLM_TASK_LABELS: Record<string, string> = {
+  audit_pre_filter: '提报预筛',
+  audit_video_analysis: '视频 AI 分析',
+  audit_vision_fallback: '视觉回退分析',
+  audit_deep_score: '深度评分',
+  deepsight_strategy: '策略洞察',
+  deepsight_market_empath: '市场共情',
+  deepsight_opportunity: '机会洞察',
+  via_chat: 'AI 顾问对话',
+  via_persona_summary: '用户记忆摘要',
+  kol_audience_analysis: 'KOL 受众分析',
+  kol_content_fit_analysis: 'KOL 内容契合',
+  kol_product_fit_reason: 'KOL 产品推荐理由',
+  kol_outreach_pack: 'KOL 外联包',
 };
 
-function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
-  const [result, setResult] = useState<SentinelResult | null>(null);
+function llmTaskState(row: LlmTaskReadiness): string {
+  if (row.production_ready === true) return '生产就绪';
+  if (row.configured === true || row.state === 'configured') return '已配置 · 未就绪';
+  return '未配置 · 未就绪';
+}
+
+function llmPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value))) return '—';
+  return `${(Number(value) * 100).toFixed(0)}%`;
+}
+
+export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) {
+  const [result, setResult] = useState<LlmSystemModelsResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!apiToken) return;
-    let alive = true;
-    setLoading(true);
-    apiFetch<SentinelResult>('/api/admin/vkpi/ops/health-sentinel', { timeoutMs: 15000 }, apiToken)
-      .then((res) => {
-        if (alive) setResult(res || null);
-      })
-      .catch((err) => {
-        if (alive) setError(err instanceof Error ? err.message : '哨兵结果读取失败');
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => { alive = false; };
-  }, [apiToken]);
-
-  const runNow = async () => {
-    if (!apiToken || running) return;
-    setRunning(true);
-    setError('');
-    try {
-      // 手动跑一轮(10 项纯 SELECT 检查,通常几秒;留足超时)。
-      const res = await apiFetch<SentinelResult>(
-        '/api/admin/vkpi/ops/health-sentinel/run',
-        { method: 'POST', timeoutMs: 60000 },
-        apiToken,
-      );
-      setResult({ available: true, ...res });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '哨兵运行失败');
-    } finally {
-      setRunning(false);
+    if (!apiToken) {
+      setResult(null);
+      setLoading(false);
+      setError('');
+      return;
     }
-  };
-
-  const checks = (result?.checks || []) as SentinelCheck[];
-  const summary = result?.summary || {};
-  const hasData = Boolean(result?.available !== false && checks.length);
-
-  return (
-    <section className="vkpi-card" style={{ marginBottom: 16, padding: '14px 16px' }}>
-      <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <strong style={{ fontSize: 14 }}>数据健康哨兵</strong>
-          <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
-            {hasData
-              ? `10 项黄金链路 · 正常 ${summary.ok ?? 0} / 留意 ${summary.warn ?? 0} / 失败 ${summary.fail ?? 0} · 上次运行 ${formatLocal(result?.ran_at)}`
-              : loading
-                ? '读取中…'
-                : '尚未运行过(每日 09:30 自动跑,或手动运行一次)'}
-          </span>
-        </div>
-        <button type="button" className="vkpi-btn" disabled={running || !apiToken} onClick={() => void runNow()}>
-          {running ? '检查中…' : '手动运行'}
-        </button>
-      </div>
-      {error ? <div className="vkpi-inline-message is-error" style={{ marginTop: 8 }}>{error}</div> : null}
-      {hasData ? (
-        <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
-          {checks.map((check) => (
-            <div key={check.key} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
-              <span
-                aria-label={check.status}
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  flex: '0 0 auto',
-                  background: SENTINEL_DOT_COLOR[check.status] || 'var(--ds-muted)',
-                }}
-              />
-              <span style={{ minWidth: 170, fontWeight: 500 }}>{check.label}</span>
-              <span className="text-muted" style={{ flex: 1 }}>{check.detail}</span>
-              <span className="text-muted" style={{ flex: '0 0 auto', fontSize: 11 }}>
-                {formatLocal(check.checked_at)}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-// ── C5 成本记账(内部口径)──────────────────────────────────
-// 今日/本月 Apify+LLM 消耗 + top actor + 记账覆盖盲区提示。
-// 后端 /ops/cost-ledger 只读聚合 vkpi_ai_cost_ledger;精确=usageTotalUsd(平台用量),
-// 付费 actor 费按内部价目表估算(estimated);权威账单以 Apify console 为准。
-interface CostBucket {
-  apify_usd?: number;
-  apify_calls?: number;
-  llm_usd?: number;
-  llm_calls?: number;
-  total_usd?: number;
-}
-
-interface CostActorRow {
-  actor_id?: string;
-  runs?: number;
-  cost_usd?: number;
-}
-
-interface CostCoverage {
-  apify_runs?: number;
-  unified_entries?: number;
-  estimated_entries?: number;
-  zero_cost_entries?: number;
-  unified_ratio?: number | null;
-}
-
-interface CostOverview {
-  generated_at?: string;
-  today?: CostBucket;
-  month?: CostBucket;
-  top_actors_today?: CostActorRow[];
-  top_actors_month?: CostActorRow[];
-  coverage?: CostCoverage;
-  note?: string;
-}
-
-const usd = (value?: number) => `$${Number(value ?? 0).toFixed(2)}`;
-
-function CostLedgerCard({ apiToken }: { apiToken?: string }) {
-  const [overview, setOverview] = useState<CostOverview | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!apiToken) return;
+    const controller = new AbortController();
     let alive = true;
     setLoading(true);
-    apiFetch<CostOverview>('/api/admin/vkpi/ops/cost-ledger', { timeoutMs: 15000 }, apiToken)
-      .then((res) => {
-        if (alive) setOverview(res || null);
+    setError('');
+    apiFetch<LlmSystemModelsResponse>(
+      '/api/admin/system/models',
+      { timeoutMs: 15000, signal: controller.signal },
+      apiToken,
+    )
+      .then((response) => {
+        if (alive) setResult(response || null);
       })
-      .catch((err) => {
-        if (alive) setError(err instanceof Error ? err.message : '成本记账读取失败');
+      .catch((cause) => {
+        if (!alive) return;
+        setResult(null);
+        setError(cause instanceof Error ? cause.message : 'LLM 生产就绪证据读取失败');
       })
       .finally(() => {
         if (alive) setLoading(false);
       });
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [apiToken]);
 
-  const today = overview?.today || {};
-  const month = overview?.month || {};
-  const coverage = overview?.coverage || {};
-  const topActors = (overview?.top_actors_month || []).slice(0, 5);
-  const apifyRuns = coverage.apify_runs ?? 0;
-  const unified = coverage.unified_entries ?? 0;
-  const stats: Array<{ label: string; value: string; sub: string }> = [
-    { label: '今日 Apify', value: usd(today.apify_usd), sub: `${today.apify_calls ?? 0} 次调用` },
-    { label: '今日 LLM', value: usd(today.llm_usd), sub: `${today.llm_calls ?? 0} 次调用` },
-    { label: '本月 Apify', value: usd(month.apify_usd), sub: `${month.apify_calls ?? 0} 次调用` },
-    { label: '本月 LLM', value: usd(month.llm_usd), sub: `${month.llm_calls ?? 0} 次调用` },
+  const audit = result?.readiness_audit;
+  const taskEntries = Object.entries(result?.task_model_readiness || {});
+  const taskRows = taskEntries.map(([, row]) => row);
+  const taskReadyCount = taskRows.filter((row) => row?.production_ready === true).length;
+  const taskBlockedCount = taskRows.length - taskReadyCount;
+  const candidateCount = Number(audit?.candidate_count ?? 0);
+  const configuredCount = Number(audit?.configured_count ?? 0);
+  const probedCount = Number(audit?.probed_count ?? 0);
+  const evaluatedCount = Number(audit?.evaluated_count ?? 0);
+  const readyCount = Number(audit?.production_ready_count ?? 0);
+  const blockedCount = Number(audit?.blocked_count ?? Math.max(candidateCount - readyCount, 0));
+  const evidence = audit?.evidence_source;
+  const hasAudit = Boolean(audit);
+  const evidenceSource = String(evidence?.source || 'not_configured');
+  const evidenceStatus = evidence?.parsed === true
+    ? `已解析 ${Number(evidence?.binding_count ?? 0)} 个绑定`
+    : '未解析';
+  const trustRoots = audit?.attestation_trust_roots;
+  const trustRootFailures = trustRoots?.failure_reasons || [];
+  const stats = [
+    { label: '候选注册', value: candidateCount },
+    { label: '环境凭据已配置', value: `${configuredCount}/${candidateCount}` },
+    { label: '精确模型探针', value: `${probedCount}/${candidateCount}` },
+    { label: '真实评测', value: `${evaluatedCount}/${candidateCount}` },
+    { label: '生产闸门通过', value: readyCount },
+    { label: '生产闸门阻断', value: blockedCount },
+    { label: '任务绑定', value: `${taskReadyCount} 通过 / ${taskBlockedCount} 阻断` },
   ];
 
   return (
-    <section className="vkpi-card" style={{ marginBottom: 16, padding: '14px 16px' }}>
+    <section className="vkpi-card" style={{ marginBottom: 16, padding: '14px 16px' }} aria-labelledby="llm-readiness-title">
       <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
-          <strong style={{ fontSize: 14 }}>成本记账(内部口径)</strong>
+          <strong id="llm-readiness-title" style={{ fontSize: 14 }}>LLM 生产就绪</strong>
           <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
-            {overview
-              ? `本月合计 ${usd(month.total_usd)} · 统计时间 ${formatLocal(overview.generated_at)}`
-              : loading
-                ? '读取中…'
-                : '暂无记账数据'}
+            {loading
+              ? '读取生产证据中…'
+              : hasAudit
+                ? readyCount > 0
+                  ? `已有 ${readyCount} 个精确模型绑定通过当前证据闸门`
+                  : '尚无精确模型绑定通过当前生产闸门'
+                : '不可核验'}
           </span>
         </div>
       </div>
-      {error ? <div className="vkpi-inline-message is-error" style={{ marginTop: 8 }}>{error}</div> : null}
-      {overview ? (
+
+      {!apiToken ? (
+        <div className="vkpi-inline-message" style={{ marginTop: 8 }}>不可核验：缺少管理员会话。</div>
+      ) : null}
+      {error ? (
+        <div className="vkpi-inline-message is-error" style={{ marginTop: 8 }}>不可核验：{error}</div>
+      ) : null}
+
+      {hasAudit ? (
         <>
-          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
+          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             {stats.map((item) => (
               <div key={item.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'color-mix(in srgb, var(--ds-text) 6%, transparent)' }}>
                 <div className="text-muted" style={{ fontSize: 11 }}>{item.label}</div>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{item.value}</div>
-                <div className="text-muted" style={{ fontSize: 11 }}>{item.sub}</div>
               </div>
             ))}
           </div>
-          {topActors.length ? (
-            <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
-              <div className="text-muted" style={{ fontSize: 11, fontWeight: 500 }}>本月 Top Actor</div>
-              {topActors.map((actor) => (
-                <div key={actor.actor_id} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
-                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {actor.actor_id}
-                  </span>
-                  <span className="text-muted" style={{ flex: '0 0 auto' }}>{actor.runs ?? 0} 次</span>
-                  <span style={{ flex: '0 0 auto', fontWeight: 500 }}>{usd(actor.cost_usd)}</span>
-                </div>
-              ))}
+          <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+            证据来源：{evidenceSource} · {evidenceStatus}
+            {evidence?.error ? ` · 证据错误：${evidence.error}` : ''}
+          </div>
+          {trustRoots ? (
+            <div
+              className={`vkpi-inline-message${trustRoots.ready_to_verify_signed_evidence ? '' : ' is-error'}`}
+              data-testid="llm-trust-root-status"
+              style={{ marginTop: 8, fontSize: 11, lineHeight: 1.6 }}
+            >
+              独立签名信任根：精确探针 {Number(trustRoots.exact_probe?.valid_key_count ?? 0)} 个 · 真实评测 {Number(trustRoots.evaluation?.valid_key_count ?? 0)} 个。
+              {trustRoots.ready_to_verify_signed_evidence
+                ? '已具备校验独立签名证据的基础条件。'
+                : '尚不具备校验条件；必须由发布审核提供两套不同公钥，运行时不能自行添加。'}
+              {trustRootFailures.length ? (
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  {trustRootFailures.map((reason) => {
+                    const copy = humanizeLlmReason(reason, '签名信任根未通过发布审核。');
+                    return <li key={reason}>{copy.message} <code>{reason}</code></li>;
+                  })}
+                </ul>
+              ) : null}
             </div>
           ) : null}
-          <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
-            记账收口覆盖(本月):{unified}/{apifyRuns} 笔 Apify run 走统一记账口
-            {coverage.estimated_entries ? ` · 估算 ${coverage.estimated_entries} 笔` : ''}
-            {coverage.zero_cost_entries ? ` · 零成本盲区 ${coverage.zero_cost_entries} 笔` : ''}
-            。{overview.note || '内部口径,权威账单以 Apify console 为准。'}
-          </div>
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+              逐任务真实状态（{taskReadyCount}/{taskRows.length} 通过）
+            </summary>
+            <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
+              {taskEntries.map(([task, row]) => {
+                const reasons = row.runtime_gate?.failure_reasons || row.failure_reasons || [];
+                const evaluation = row.evaluation || {};
+                const minimumSamples = Number(row.thresholds?.minimum_eval_samples ?? 30);
+                const rawP95 = evaluation.latency_ms?.p95;
+                const p95 = rawP95 == null ? null : Number(rawP95);
+                const maximumP95 = Number(row.thresholds?.maximum_p95_latency_ms ?? 15000);
+                return (
+                  <article
+                    key={task}
+                    data-testid={`llm-task-${task}`}
+                    style={{ padding: '9px 10px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--ds-text) 12%, transparent)' }}
+                  >
+                    <div className="flex items-center justify-between" style={{ gap: 10, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 12 }}>{LLM_TASK_LABELS[task] || task}</strong>
+                      <span style={{ fontSize: 11 }}>{llmTaskState(row)}</span>
+                    </div>
+                    <div className="text-muted" style={{ marginTop: 4, fontSize: 10, overflowWrap: 'anywhere' }}>
+                      {task} · {row.binding || '未绑定'}
+                    </div>
+                    <div className="text-muted" style={{ marginTop: 5, fontSize: 10, lineHeight: 1.55 }}>
+                      精确探针：{row.probed ? '通过' : '未通过'}（签名 {row.probe?.attestation_verified ? '已核验' : '未核验'}）
+                      {' · '}真实评测：{row.evaluated ? '通过' : '未通过'}（{Number(evaluation.sample_count ?? 0)}/{minimumSamples} 条）
+                      {' · '}P95：{p95 != null && Number.isFinite(p95) ? `${Math.round(p95)}ms` : '—'} / ≤{Math.round(maximumP95)}ms
+                      {' · '}五项率：{[
+                        evaluation.success_rate,
+                        evaluation.structured_valid_rate,
+                        evaluation.factual_valid_rate,
+                        evaluation.source_valid_rate,
+                        evaluation.safety_valid_rate,
+                      ].map(llmPercent).join(' / ')}
+                    </div>
+                    {reasons.length ? (
+                      <ul style={{ margin: '5px 0 0', paddingLeft: 18, fontSize: 10, lineHeight: 1.55 }}>
+                        {reasons.map((reason) => {
+                          const copy = humanizeLlmReason(reason, '该精确模型尚未通过生产证据闸门。');
+                          return <li key={reason}>{copy.message} <code>{reason}</code></li>;
+                        })}
+                      </ul>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </details>
         </>
       ) : null}
+
+      <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+        已注册 / 已配置不等于可用；仅 production_ready 表示该精确绑定满足当前证据闸门。
+        “环境凭据已配置”只表示运行环境检测到对应 provider 凭据，不表示设置页已保存、账号已授权或精确模型可调用。
+        本卡片只读，不会调用外部模型；AI 未就绪或关闭时，基础数据流程继续可用。
+        {result?.available_models_semantics === 'registered_candidates_only_not_verified_availability'
+          ? ' 当前模型清单仅代表候选注册，不代表供应商已授权或模型真实可调用。'
+          : ''}
+      </div>
     </section>
   );
 }
@@ -296,7 +345,8 @@ interface SettingsPageProps {
   viewMode: 'manager' | 'employee';
   apiToken?: string;
   // 授权页 V1:头像菜单「成员与授权」直达设置页 staff 区(默认仍落 status)。
-  initialSection?: 'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification';
+  initialSection?: SettingsModuleKey;
+  onOpenBusinessArea?: (area: 'shopify' | 'dealers' | 'events' | 'gtmCommand') => void;
   onInviteStaff?: (payload: { email: string; name?: string; role: string; vkpiPermission: 'none' | 'read' | 'write'; permissions?: StaffPermissionMap; permissionTemplate?: string }) => Promise<void>;
   onUpdateStaffPermission?: (staffId: string, permission: 'none' | 'read' | 'write') => Promise<void>;
   onUpsertProductCost?: (payload: { productSku: string; productName?: string; unitCostUsd: number; note?: string; active?: boolean }) => Promise<void>;
@@ -304,7 +354,7 @@ interface SettingsPageProps {
   onRefreshData?: () => void | Promise<void>;
 }
 
-export function SettingsPage({ data, viewMode, apiToken, initialSection, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
+export function SettingsPage({ data, viewMode, apiToken, initialSection, onOpenBusinessArea, onInviteStaff, onUpsertProductCost, onRefreshData }: SettingsPageProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState('employee');
@@ -335,7 +385,7 @@ export function SettingsPage({ data, viewMode, apiToken, initialSection, onInvit
   const [keyDraft, setKeyDraft] = useState<{ account_name: string; provider: string; key: string; daily_quota: string; enabled: boolean }>({ account_name: '', provider: 'gemini', key: '', daily_quota: '', enabled: true });
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'status' | 'sku' | 'staff' | 'funds' | 'rules' | 'scheduler' | 'apikeys' | 'goaffpro' | 'preference' | 'notification' | null>(initialSection ?? 'status');
+  const [expandedSection, setExpandedSection] = useState<SettingsModuleKey | null>(initialSection ?? 'status');
 
   // 2026-07-03 账号授权空白根治:成员名单此前只搭启动大批量(5s 静默超时+缓存投毒)。
   // 现打开设置页即直拉一次,拉到就覆盖 props 里的名单;失败保留 props(不降级)。
@@ -430,23 +480,28 @@ export function SettingsPage({ data, viewMode, apiToken, initialSection, onInvit
     setQuietHoursEnd(String(s.quiet_hours_end || ''));
   };
 
-  const reloadVersionStatus = async () => {
+  const reloadVersionStatus = async (signal?: AbortSignal) => {
     setFrontendAsset(currentFrontendAsset());
     setVersionCheckedAt(new Date().toISOString());
     try {
       const response = await fetch(buildApiUrl(`/health?client_build=${encodeURIComponent(frontendBuildInfo.gitSha)}`), {
         credentials: 'same-origin',
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        signal,
       });
       const payload = response.ok ? await response.json() : null;
+      if (signal?.aborted) return;
       setBackendBuild(payload?.build || null);
     } catch {
+      if (signal?.aborted) return;
       setBackendBuild(null);
     }
   };
 
   useEffect(() => {
-    void reloadVersionStatus();
+    const controller = new AbortController();
+    void reloadVersionStatus(controller.signal);
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -636,6 +691,7 @@ export function SettingsPage({ data, viewMode, apiToken, initialSection, onInvit
       <SettingsLoadingStrip settingsLoading={settingsLoading} catalogLoading={productCatalogLoading} />
       <HealthSentinelCard apiToken={apiToken} />
       <CostLedgerCard apiToken={apiToken} />
+      <LlmProductionReadinessCard apiToken={apiToken} />
       <div className="vkpi-settings-clean">
         <SettingsCompanyZone
           renderModule={renderSettingsModule}
@@ -676,6 +732,8 @@ export function SettingsPage({ data, viewMode, apiToken, initialSection, onInvit
           versionCheckedAt={versionCheckedAt}
           versionSummary={versionSummary}
           onReloadVersionStatus={() => void reloadVersionStatus()}
+          onOpenBusinessArea={onOpenBusinessArea}
+          onOpenCostModule={() => setExpandedSection('sku')}
           skuCount={skuCount}
           lensCount={lensCount}
           lightingCount={lightingCount}

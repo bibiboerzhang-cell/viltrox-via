@@ -4,6 +4,7 @@
 兼容 R58A 单文件 + R58B 拆分两种结构: 检查整个 data-analysis 目录而非单文件。
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -188,7 +189,7 @@ def main() -> None:
     if missing_apis:
         raise AssertionError(f"data-analysis 缺少 API 接入: {missing_apis}")
 
-    print("VKPI_DATA_ANALYSIS_PANEL_SMOKE_OK")
+    stdout_out("VKPI_DATA_ANALYSIS_PANEL_SMOKE_OK")
 
 
 if __name__ == "__main__":

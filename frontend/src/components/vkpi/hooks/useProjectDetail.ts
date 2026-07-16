@@ -16,6 +16,8 @@ interface ProjectDetailState {
   notFound: boolean;
 }
 
+const PROJECT_ASSIGNMENT_PAGE_SIZE = 50;
+
 function centsToUsd(value: unknown): number {
   return safeNumber(value) / 100;
 }
@@ -282,6 +284,8 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     error: '',
     notFound: false,
   });
+  const [loadingMoreAssignments, setLoadingMoreAssignments] = useState(false);
+  const [assignmentLoadError, setAssignmentLoadError] = useState('');
 
   // 跨项目切换防串数据:projectId 变化的瞬间必须先清掉旧 detail 再进 loading,
   // 否则新项目请求返回前会短暂渲染上一个项目的数据。
@@ -292,6 +296,8 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     loadedProjectIdRef.current = projectId;
     if (!projectId) {
       setState({ detail: null, loading: false, error: '', notFound: false });
+      setLoadingMoreAssignments(false);
+      setAssignmentLoadError('');
       return;
     }
     if (!apiToken) {
@@ -308,7 +314,8 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     setState((current) => (projectChanged
       ? { detail: null, loading: true, error: '', notFound: false }
       : { ...current, loading: true, error: '', notFound: false }));
-    getProjectDetail(apiToken, projectId)
+    setAssignmentLoadError('');
+    getProjectDetail(apiToken, projectId, { mode: 'summary', assignmentLimit: PROJECT_ASSIGNMENT_PAGE_SIZE })
       .then((detail) => {
         if (cancelled) return;
         setState({ detail, loading: false, error: '', notFound: false });
@@ -334,7 +341,7 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
   ), [fallbackProject, state.detail]);
   const participatingRows = useMemo(() => {
     if (!state.detail || !project) return [];
-    const rawRows = state.detail.participating_kols || state.detail.project_kol_assignments || [];
+    const rawRows = state.detail.project_kol_assignments || state.detail.participating_kols || [];
     return rawRows.map((item, index) => assignmentToProjectRow(item, state.detail as VkpiProjectDetail, project, index));
   }, [project, state.detail]);
   const refresh = useCallback(async () => {
@@ -342,10 +349,11 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     // 乐观 override 提前撤销致阶段闪回。改为真取数;失败保留旧 detail(不清屏)。
     if (!apiToken || !projectId) return;
     try {
-      const detail = await getProjectDetail(apiToken, projectId);
+      const detail = await getProjectDetail(apiToken, projectId, { mode: 'summary', assignmentLimit: PROJECT_ASSIGNMENT_PAGE_SIZE });
       // 请求期间已切到别的项目:丢弃过期结果,避免旧项目数据串台。
       if (loadedProjectIdRef.current !== projectId) return;
       setState({ detail, loading: false, error: '', notFound: false });
+      setAssignmentLoadError('');
     } catch (error) {
       if (loadedProjectIdRef.current !== projectId) return;
       const message = error instanceof Error ? error.message : '项目详情刷新失败';
@@ -353,10 +361,56 @@ export function useProjectDetail({ apiToken, projectId, fallbackProject }: UsePr
     }
   }, [apiToken, projectId]);
 
+  const loadMoreAssignments = useCallback(async () => {
+    const cursor = state.detail?.assignment_page?.next_cursor;
+    if (!apiToken || !projectId || !cursor || loadingMoreAssignments) return;
+    setLoadingMoreAssignments(true);
+    setAssignmentLoadError('');
+    try {
+      const next = await getProjectDetail(apiToken, projectId, {
+        mode: 'summary',
+        assignmentLimit: PROJECT_ASSIGNMENT_PAGE_SIZE,
+        assignmentCursor: cursor,
+      });
+      if (loadedProjectIdRef.current !== projectId) return;
+      setState((current) => {
+        if (!current.detail) return current;
+        const currentRows = current.detail.project_kol_assignments || current.detail.participating_kols || [];
+        const nextRows = next.project_kol_assignments || next.participating_kols || [];
+        const seen = new Set(currentRows.map((row) => String(row.assignment_id ?? row.id ?? '')));
+        const merged = [...currentRows];
+        for (const row of nextRows) {
+          const key = String(row.assignment_id ?? row.id ?? '');
+          if (key && seen.has(key)) continue;
+          if (key) seen.add(key);
+          merged.push(row);
+        }
+        return {
+          ...current,
+          detail: {
+            ...current.detail,
+            ...next,
+            participating_kols: undefined,
+            project_kol_assignments: merged,
+          },
+        };
+      });
+    } catch (error) {
+      if (loadedProjectIdRef.current !== projectId) return;
+      setAssignmentLoadError(error instanceof Error ? error.message : '更多 KOL 加载失败');
+    } finally {
+      if (loadedProjectIdRef.current === projectId) setLoadingMoreAssignments(false);
+    }
+  }, [apiToken, loadingMoreAssignments, projectId, state.detail?.assignment_page?.next_cursor]);
+
   return {
     ...state,
     project,
     participatingRows,
+    assignmentPage: state.detail?.assignment_page,
+    loadingMoreAssignments,
+    assignmentLoadError,
+    loadMoreAssignments,
     refresh,
   };
 }

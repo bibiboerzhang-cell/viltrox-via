@@ -105,6 +105,7 @@ export function useMetricEvidence({
   const [lineageInfo, setLineageInfo] = useState<VkpiDrilldownResponse['run'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [usedFallback, setUsedFallback] = useState(true);
+  const [lineageDataStatus, setLineageDataStatus] = useState('');
   const [officialViewsMatrix, setOfficialViewsMatrix] = useState<VkpiOfficialViewsPlatform[]>([]);
 
   useEffect(() => {
@@ -112,6 +113,7 @@ export function useMetricEvidence({
       setRows([]);
       setLineageInfo(null);
       setUsedFallback(false);
+      setLineageDataStatus('');
       setLoading(false);
       setOfficialViewsMatrix([]);
       return;
@@ -120,6 +122,7 @@ export function useMetricEvidence({
       setRows(fallbackRows(metric, fallbackEvidence));
       setLineageInfo(null);
       setUsedFallback(true);
+      setLineageDataStatus('');
       setLoading(false);
       setOfficialViewsMatrix([]);
       return;
@@ -128,6 +131,7 @@ export function useMetricEvidence({
     let cancelled = false;
     setLoading(true);
     setUsedFallback(false);
+    setLineageDataStatus('');
     if (metric !== 'views') setOfficialViewsMatrix([]);
     const request = metricValueId
       ? drilldownByValueId(apiToken, metricValueId, { limit: 200 })
@@ -156,6 +160,14 @@ export function useMetricEvidence({
           return;
         }
         const response = lineageResult.response;
+        const responseDataStatus = String(response.value?.data_status || '').trim().toLowerCase();
+        setLineageDataStatus(responseDataStatus);
+        if (responseDataStatus === 'unavailable' || responseDataStatus === 'stale' || response.empty_reason === 'metric_unavailable') {
+          setRows([]);
+          setLineageInfo(response.run);
+          setUsedFallback(false);
+          return;
+        }
         const lineageRows =
           response.empty_reason || !response.value || !response.rows.length
             ? []
@@ -175,6 +187,7 @@ export function useMetricEvidence({
         if (cancelled) return;
         setRows(fallbackRows(metric, fallbackEvidence));
         setLineageInfo(null);
+        setLineageDataStatus('');
         setUsedFallback(true);
         setOfficialViewsMatrix([]);
       })
@@ -192,6 +205,7 @@ export function useMetricEvidence({
     lineageInfo,
     loading,
     usedFallback,
+    lineageDataStatus,
     officialViewsMatrix,
   };
 }

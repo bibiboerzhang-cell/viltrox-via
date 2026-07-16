@@ -494,10 +494,13 @@ def _conversion_side(conn: Any, *, kol_pool_id: int | None, sku: str | None) -> 
         tuple(link_params),
     )
 
-    order_where = ""
+    order_where = (
+        " WHERE LOWER(COALESCE(financial_status,'')) "
+        "IN ('paid','partially_paid','partially_refunded')"
+    )
     order_params: list[Any] = []
     if kol_pool_id is not None:
-        order_where = " WHERE attributed_kol_pool_id = ?"
+        order_where += " AND attributed_kol_pool_id = ?"
         order_params.append(int(kol_pool_id))
     sources["vkpi_shopify_orders"] = _one(
         "vkpi_shopify_orders",

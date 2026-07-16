@@ -6,6 +6,7 @@ respect that ownership before falling back to round-robin distribution, while
 still keeping each suggestion assigned once per digest date.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -190,7 +191,7 @@ def main() -> None:
         status = analytics.daily_staff_outreach_digest_status(target_date=target_date, limit=100, staff=manager, product_sku=product_sku)
         assert status["duplicate_suggestion_count"] == 0, status
         assert status["assignment_strategy"] == "owner_first_then_round_robin", status
-        print("VKPI_DAILY_DIGEST_OWNER_ASSIGNMENT_SMOKE_OK")
+        stdout_out("VKPI_DAILY_DIGEST_OWNER_ASSIGNMENT_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(user_ids, staff_ids, product_sku)

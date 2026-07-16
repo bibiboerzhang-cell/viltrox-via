@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.platform.apify_budget import call_apify_actor
+from app.platform.apify_lifecycle import register_apify_client_shutdown
 from app.services.ai.retry import call_ai_with_retry
 from app.services.intelligence.lens_monitor import filter_videos_by_date, search_market_videos
 
@@ -32,7 +34,9 @@ logger = get_logger(__name__)
 try:
     from apify_client import ApifyClient
     _APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
-    _apify: Optional[ApifyClient] = ApifyClient(_APIFY_TOKEN) if _APIFY_TOKEN else None
+    _apify: Optional[ApifyClient] = (
+        register_apify_client_shutdown(ApifyClient(_APIFY_TOKEN)) if _APIFY_TOKEN else None
+    )
 except ImportError:
     _apify = None
 
@@ -84,7 +88,12 @@ async def search_youtube_videos(query: str, max_results: int = 20) -> list[dict]
                 "maxResultsShorts": 0,
                 "maxResultStreams": 0,
             }
-            run = _apify.actor("streamers/youtube-scraper").call(
+            run = call_apify_actor(
+                _apify,
+                "streamers/youtube-scraper",
+                platform="youtube",
+                operation="lens_compare_search",
+                source="intelligence.lens_compare",
                 run_input=run_input,
                 timeout_secs=180,
             )
@@ -418,13 +427,4 @@ async def compare_two_lenses(
 # 测试入口
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
-    async def main():
-        logger.info("lens_compare.demo_started")
-        result = await compare_two_lenses(
-            "viltrox 16mm f1.8",
-            "sigma 16mm f1.4",
-            max_videos=10,
-        )
-        logger.info("lens_compare.demo_result", extra={"result": json.dumps(result, ensure_ascii=False)})
-    
-    asyncio.run(main())
+    raise SystemExit("Direct provider demo is disabled; enqueue intel_lens_compare through the durable job queue.")

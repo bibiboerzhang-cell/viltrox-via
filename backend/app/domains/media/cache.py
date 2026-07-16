@@ -25,6 +25,8 @@ from app.domains.media.cache_core import (
     _atomic_write_text,
     _cache_paths,
     _cached_asset_url_by_digest,
+    _cached_asset_url_for_item,
+    _fresh_presigned_asset_url,
     _head_content_length,
     _normalize_image_url,
     _normalize_video_url,
@@ -33,6 +35,7 @@ from app.domains.media.cache_core import (
     _read_json_file,
     _record_media_cache_asset,
     _sha256_file,
+    _safe_public_asset_url,
     _text,
     _upload_to_r2_if_enabled,
     _utcnow,
@@ -237,24 +240,40 @@ def cached_video_redirect_url(digest: str) -> str:
 
 
 def cached_video_url_for_item(platform: str, video_id: str) -> str | None:
-    sidecar_path = _video_item_sidecar_path(platform, video_id)
-    if not sidecar_path.exists():
+    platform_key = str(platform or "").strip().lower()
+    video_key = str(video_id or "").strip()
+    if platform_key not in ITEM_VIDEO_CACHE_PLATFORMS or not video_key or len(video_key) > 240:
         return None
+    sidecar_path = _video_item_sidecar_path(platform_key, video_key)
+    if not sidecar_path.exists():
+        return _cached_asset_url_for_item(platform_key, video_key) or None
     sidecar = _read_json_file(sidecar_path)
     if not sidecar:
-        return None
-    digest = _text(sidecar.get("digest"))
-    cached_url = _text(sidecar.get("cached_url"))
-    if not digest or not cached_url:
-        return None
-    if not (VIDEO_CACHE_DIR / digest).exists():
-        sidecar_url = _text(sidecar.get("cache_url"))
-        r2_url = sidecar_url if sidecar_url and not sidecar_url.startswith("/api/") else ""
-        r2_url = r2_url or _cached_asset_url_by_digest("video", digest) or _r2_public_url(_text(sidecar.get("r2_key")))
-        if _text(sidecar.get("storage_backend")) == "r2" and r2_url:
-            return r2_url
-        return None
-    return cached_url
+        return _cached_asset_url_for_item(platform_key, video_key) or None
+    digest = _text(sidecar.get("digest")).lower()
+    valid_digest = len(digest) == 64 and not any(ch not in "0123456789abcdef" for ch in digest)
+    if valid_digest and (VIDEO_CACHE_DIR / digest).is_file():
+        return f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+    if _text(sidecar.get("storage_backend")).lower() == "r2":
+        # Sidecars are persistent. Never replay a possibly expired presigned
+        # URL; a miss here falls through to DB/r2_key for a fresh presign.
+        sidecar_url = _safe_public_asset_url(sidecar.get("cached_url") or sidecar.get("cache_url"))
+        if sidecar_url and not sidecar_url.startswith("/"):
+            return sidecar_url
+        if valid_digest:
+            r2_url = _cached_asset_url_by_digest("video", digest)
+            if r2_url:
+                return r2_url
+        public_url = _safe_public_asset_url(_r2_public_url(_text(sidecar.get("r2_key"))))
+        if public_url:
+            return public_url
+        fresh_url = _fresh_presigned_asset_url(
+            _text(sidecar.get("r2_key")),
+            stage="sidecar_presign",
+        )
+        if fresh_url:
+            return fresh_url
+    return _cached_asset_url_for_item(platform_key, video_key) or None
 
 
 def cache_video_for_item(

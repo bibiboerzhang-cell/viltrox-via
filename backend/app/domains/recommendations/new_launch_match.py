@@ -13,10 +13,11 @@ import secrets
 from pathlib import Path
 from typing import Any
 
+from app.core.model_registry import current_task_model_binding, split_binding
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import memory
-from app.platform import llm_gateway
+from app.platform import llm_production
 from app.domains.costs.budget_guard import check_budget, get_budget_status
 from app.domains.recommendations.new_launch_match_format import format_preview_summary, render_markdown
 
@@ -29,14 +30,21 @@ logger = get_logger(__name__)
 
 from app.domains.recommendations.new_launch_match_helpers import *  # noqa: F403
 
-# 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸):与 KOL 发现/召回侧同一实现
-# (discovery_filters 叶子模块,无回环)。推荐刷新产出 vkpi_kol_recommendations 前的候选层
-# FILTER,零触评分公式。_reach_display_state 三态:low_reach(实时判据/补全后 low_reach 标)
-# 与 unknown(followers 未知,「分析后再 po」)都不进推荐产出;pool 缺行(legacy 无池身)放行。
-from app.domains.kol.discovery_filters import (  # noqa: E402
-    _reach_display_state,
-    _reach_floor_reason,
-)
+# 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸):与 KOL 发现/召回侧同一实现。
+# 这里必须延迟进入 app.domains.kol:Python 在加载 discovery_filters 之前会先执行 KOL
+# package facade，而 facade 的 profile/product-fit 路径会反向导入本模块。模块顶层导入会让
+# clean-process 的 recommendation 公共导出看到 partially initialized new_launch_match。
+# 运行评分时本模块已完整初始化，延迟调用仍复用同一个 discovery_filters 真源。
+def _reach_display_state(row: dict[str, Any]) -> str:
+    from app.domains.kol.discovery_filters import _reach_display_state as implementation
+
+    return implementation(row)
+
+
+def _reach_floor_reason(row: dict[str, Any]) -> str:
+    from app.domains.kol.discovery_filters import _reach_floor_reason as implementation
+
+    return implementation(row)
 
 def _json_write(path: str, payload: dict[str, Any]) -> None:
     if not path:
@@ -298,20 +306,104 @@ def _parse_reason_text(text: str) -> dict[str, str] | None:
     }
 
 
-def _attach_reason(payload: dict[str, Any], item: dict[str, Any]) -> None:
-    response = llm_gateway.invoke(
-        _reason_prompt(payload, item),
-        purpose="p4_recommendation_reasons",
-        max_output_tokens=220,
-        cost_tag=REASON_BUDGET_SCOPE,
-        metadata={
-            "scenario": SCENARIO,
-            "kol_entity_uid": item.get("kol_entity_uid"),
-            "rank": item.get("rank"),
-            "product_query": payload.get("product_query"),
-        },
+def _reason_binding() -> tuple[str, str]:
+    return split_binding(current_task_model_binding().get("kol_product_fit_reason") or "")
+
+
+def _valid_reason_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for key in ("short_reason", "pitch_angle", "caution_note"):
+        text = value.get(key)
+        if not isinstance(text, str) or not text.strip() or len(text.strip()) > 1600:
+            return False
+    return True
+
+
+def _failure_code(value: Any) -> str:
+    result = value if isinstance(value, dict) else {}
+    failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    return str(
+        failure.get("code")
+        or result.get("failure_code")
+        or result.get("reason")
+        or latest.get("status")
+        or result.get("status")
+        or "llm_unavailable"
+    )[:120]
+
+
+def _preview_execution_policy(*, with_llm_reasons: bool, reason_limit: int, returned_count: int) -> dict[str, Any]:
+    planned = max(0, min(int(reason_limit or 0), int(returned_count or 0))) if with_llm_reasons else 0
+    provider_calls_allowed = planned > 0
+    return {
+        "mode": "ai_enriched_preview" if provider_calls_allowed else "dry_run",
+        "provider_calls_allowed": provider_calls_allowed,
+        "provider_calls_planned": planned,
+        "provider_call_scope": "recommendation_reason_only" if provider_calls_allowed else "none",
+        "deterministic_ranking": True,
+        "business_actions_executed": False,
+    }
+
+
+def _attach_reason(
+    payload: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    attempt_index: int = 1,
+    total: int = 1,
+) -> None:
+    provider, model = _reason_binding()
+    try:
+        response = llm_production.generate_json(
+            _reason_prompt(payload, item),
+            provider=provider,
+            model=model,
+            purpose="p4_recommendation_reasons",
+            max_output_tokens=220,
+            cost_tag=REASON_BUDGET_SCOPE,
+            triggered_by="new_launch_match",
+            required_keys=("short_reason", "pitch_angle", "caution_note"),
+            validator=_valid_reason_payload,
+            metadata={
+                "task_binding": "kol_product_fit_reason",
+                "surface": "new_launch_match",
+                "scenario": SCENARIO,
+                "kol_entity_uid": item.get("kol_entity_uid"),
+                "rank": item.get("rank"),
+                "product_query": payload.get("product_query"),
+                "phase": "recommendation",
+                "subphase": "reason_generation",
+                "attempt_index": max(1, int(attempt_index)),
+                "total": max(1, int(total)),
+                "target_label": item.get("handle") or item.get("display_name") or item.get("kol_entity_uid"),
+            },
+        )
+    except Exception as exc:  # strict AI-off/readiness failure retains deterministic ranking and reason
+        response = {
+            "status": "failed",
+            "reason": str(exc)[:120] or type(exc).__name__,
+            "provider": "rule_v0",
+            "model": "rule_v0",
+            "json": None,
+        }
+    candidate = response.get("json") if isinstance(response, dict) else None
+    parsed = (
+        {
+            "short_reason": _text(candidate.get("short_reason")),
+            "pitch_angle": _text(candidate.get("pitch_angle")),
+            "caution_note": _text(candidate.get("caution_note")),
+        }
+        if (
+            str(response.get("status") or "") == "success"
+            and str(response.get("provider") or "").strip().lower() == provider
+            and str(response.get("model") or "").strip() == model
+            and _valid_reason_payload(candidate)
+        )
+        else None
     )
-    parsed = _parse_reason_text(str(response.get("text") or "")) if response.get("status") == "success" else None
     if parsed and all(parsed.values()):
         reason = parsed
         mode = "llm"
@@ -323,7 +415,7 @@ def _attach_reason(payload: dict[str, Any], item: dict[str, Any]) -> None:
         "provider": response.get("provider") or "rule_v0",
         "model": response.get("model") or "rule_v0",
         "status": response.get("status") or "",
-        "fallback_reason": response.get("reason") or "",
+        "fallback_reason": "" if mode == "llm" else _failure_code(response),
         **reason,
     }
 
@@ -662,6 +754,12 @@ def build_new_launch_match_preview(
     returned = eligible[:safe_limit]
     median = _median_score(returned)
     markdown_display = [item for item in returned if float(item["score"]) >= median]
+    execution_policy = _preview_execution_policy(
+        with_llm_reasons=with_llm_reasons,
+        reason_limit=reason_limit,
+        returned_count=len(returned),
+    )
+    reason_items = returned[: execution_policy["provider_calls_planned"]]
     reasons_attached = 0
     summary = {
         "total_candidates_evaluated": len(kol_rows),
@@ -681,18 +779,23 @@ def build_new_launch_match_preview(
     }
     payload = {
         "scenario": SCENARIO,
-        "mode": "dry_run",
+        "mode": execution_policy["mode"],
         "generated_at": _iso(now),
         "product_query": product_query,
         "target_family_uid": target_family["entity_uid"],
         "target_family_name": target_family.get("display_name") or "",
-        "provider_calls_allowed": False,
+        "provider_calls_allowed": execution_policy["provider_calls_allowed"],
+        "execution_policy": execution_policy,
         "budget_guard": {
             "scope": BUDGET_SCOPE,
             "estimated_cost_usd": 0.0,
             "allowed": bool(cost_ok),
             "recorded_cost": False,
             "configured": bool(budget_status.get("configured")),
+            "llm_reason_scope": REASON_BUDGET_SCOPE,
+            "llm_reason_calls_planned": execution_policy["provider_calls_planned"],
+            "llm_reason_atomic_reservation_per_call": True,
+            "llm_reason_requires_configured_budget": True,
         },
         "summary": summary,
         "score_distribution": _distribution(returned),
@@ -700,8 +803,8 @@ def build_new_launch_match_preview(
         "markdown_items": markdown_display,
     }
     if with_llm_reasons:
-        for item in returned[: max(0, min(int(reason_limit or 0), len(returned)))]:
-            _attach_reason(payload, item)
+        for attempt_index, item in enumerate(reason_items, start=1):
+            _attach_reason(payload, item, attempt_index=attempt_index, total=len(reason_items))
             reasons_attached += 1
         summary["reasons_attached"] = reasons_attached
     if persist_run:

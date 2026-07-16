@@ -6,6 +6,7 @@ without live crawlers: a real product_sku is registered as monitored, a scoped
 suggestion is assigned once, and all marker data is cleaned up.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -162,7 +163,7 @@ def main() -> None:
         result = analytics.generate_daily_staff_outreach_digest(target_date="2099-02-11", limit=100, staff=manager, product_sku=product_sku)
         assert result["items_total"] == 1, result
         assert result["duplicate_suggestion_count"] == 0, result
-        print("VKPI_DAILY_TOP100_SOURCE_TRIGGER_SMOKE_OK")
+        stdout_out("VKPI_DAILY_TOP100_SOURCE_TRIGGER_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(marker, product_sku, user_id, staff_id)

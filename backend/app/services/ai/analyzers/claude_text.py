@@ -3,12 +3,15 @@ services/ai/analyzers/claude_text.py — Claude 文本/字幕内容分析
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 from typing import Dict
 
 from app.core.config import CLAUDE_MODEL
+from app.core.constants import USER_AGENT
 from app.core.logging import get_logger
+from app.platform import llm_production
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE, get_claude_client
 from app.services.ai.retry import call_ai_with_retry
 from app.services.scoring.core import compute_weighted_scores
@@ -112,12 +115,31 @@ Analyze this content and respond ONLY with valid JSON:
   "marketing_notes": "中文转化潜力评估"
 }}"""
 
-        resp = call_ai_with_retry(
+        strict_response = call_ai_with_retry(
             "claude_text.content",
-            lambda: client.messages.create(
+            # Compatibility placeholder for the legacy zero-argument retry
+            # surface. Production I/O is owned by the attempt-aware strict
+            # boundary below.
+            lambda: None,
+            attempt_fn=lambda attempt, total: llm_production.generate_text(
+                prompt,
+                provider="anthropic",
                 model=CLAUDE_MODEL,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
+                purpose="audit_deep_score",
+                max_output_tokens=2000,
+                cost_tag="cron:audit_deep_score",
+                metadata={
+                    "task_binding": "audit_deep_score",
+                    "surface": "audit_pipeline",
+                    "phase": "deep_score",
+                    "subphase": "text_content_analysis",
+                    "attempt_index": attempt,
+                    "attempt_total": total,
+                    "target_type": "content_url",
+                    "target_id": str(url or "")[:160],
+                    "platform": str(platform or "")[:80],
+                    "target_label": str(title or url or "content")[:160],
+                },
             ),
         )
 
@@ -136,23 +158,40 @@ Analyze this content and respond ONLY with valid JSON:
                     if og_image.endswith(".png"): media_type = "image/png"
                     elif og_image.endswith(".webp"): media_type = "image/webp"
 
+                    vision_messages = [{"role": "user", "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
+                        {"type": "text", "text": (
+                            f"This is the thumbnail/cover image from a {platform} post.\n"
+                            "Look for: VILTROX logo/text on lens, camera body, lens markings, "
+                            "focal length numbers, aperture markings, VCM/APO text, orange accent ring.\n"
+                            "Respond JSON only: {\"viltrox_detected\":true/false,\"camera_body\":\"or null\","
+                            "\"viltrox_lens\":\"or null\",\"other_lens\":\"or null\","
+                            "\"gear_combo\":\"or empty\",\"content_genre\":\"or empty\","
+                            "\"thumbnail_summary\":\"one sentence describing the image\"}"
+                        )}
+                    ]}]
                     vision_resp = call_ai_with_retry(
                         "claude_text.thumbnail",
-                        lambda: client.messages.create(
+                        lambda: None,
+                        attempt_fn=lambda attempt, total: llm_production.generate_anthropic_messages(
+                            client=client,
+                            messages=vision_messages,
                             model=CLAUDE_MODEL,
-                            max_tokens=600,
-                            messages=[{"role": "user", "content": [
-                                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_b64}},
-                                {"type": "text", "text": (
-                                    f"This is the thumbnail/cover image from a {platform} post.\n"
-                                    "Look for: VILTROX logo/text on lens, camera body, lens markings, "
-                                    "focal length numbers, aperture markings, VCM/APO text, orange accent ring.\n"
-                                    "Respond JSON only: {\"viltrox_detected\":true/false,\"camera_body\":\"or null\","
-                                    "\"viltrox_lens\":\"or null\",\"other_lens\":\"or null\","
-                                    "\"gear_combo\":\"or empty\",\"content_genre\":\"or empty\","
-                                    "\"thumbnail_summary\":\"one sentence describing the image\"}"
-                                )}
-                            ]}],
+                            purpose="audit_deep_score",
+                            max_output_tokens=600,
+                            cost_tag="cron:audit_deep_score",
+                            metadata={
+                                "task_binding": "audit_deep_score",
+                                "surface": "audit_pipeline",
+                                "phase": "deep_score",
+                                "subphase": "thumbnail_vision",
+                                "attempt_index": attempt,
+                                "attempt_total": total,
+                                "target_type": "content_url",
+                                "target_id": str(url or "")[:160],
+                                "platform": str(platform or "")[:80],
+                                "target_label": str(title or url or "thumbnail")[:160],
+                            },
                         ),
                     )
                     vraw = vision_resp.content[0].text.strip()
@@ -164,7 +203,7 @@ Analyze this content and respond ONLY with valid JSON:
                     )
             except Exception as e:
                 logger.warning("claude_text.thumbnail_vision_failed", extra={"error": str(e)})
-        raw = resp.content[0].text.strip()
+        raw = str(strict_response.get("text") or "").strip()
         raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
         if not raw.endswith('}'): raw = raw[:raw.rfind('}')+1] if '}' in raw else raw+'}'
         analysis = json.loads(raw)

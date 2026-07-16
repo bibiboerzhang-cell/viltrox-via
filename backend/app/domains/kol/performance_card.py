@@ -21,6 +21,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains import business_truth
 
 logger = get_logger(__name__)
 
@@ -106,7 +107,7 @@ def _load_evidence_rows(conn: Any, kol_pool_id: int, limit: int = 500) -> list[d
 def _deep_analyzed_count(conn: Any, kol_pool_id: int) -> int:
     try:
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS n
             FROM vkpi_analysis_cache ac
             JOIN vkpi_kol_video_evidence e ON e.id::text = ac.target_id
@@ -215,6 +216,7 @@ def _shopify_block(conn: Any, kol_pool_id: int) -> dict[str, Any]:
             SELECT COUNT(*) AS orders, COALESCE(SUM(total_price_cents), 0) AS gmv_cents
             FROM vkpi_shopify_orders
             WHERE attributed_kol_pool_id = ?
+              AND LOWER(COALESCE(financial_status,'')) IN ('paid','partially_paid','partially_refunded')
             """,
             (int(kol_pool_id),),
         ).fetchone()
@@ -236,14 +238,16 @@ def _short_links_block(conn: Any, linked_main_kol_id: Any) -> dict[str, Any]:
         return {"available": False, "links": 0, "clicks": 0, "orders": 0, "reason": "短链表未建"}
     try:
         row = conn.execute(
-            """
+            f"""
             SELECT
               (SELECT COUNT(*) FROM vkpi_links l WHERE l.kol_id = ?) AS links,
               (SELECT COUNT(*) FROM vkpi_link_clicks ck
                  JOIN vkpi_links l2 ON l2.id = ck.link_id
                  WHERE l2.kol_id = ? AND COALESCE(ck.is_bot, 0) = 0) AS clicks,
               (SELECT COUNT(*) FROM vkpi_sales_attributions s
-                 JOIN vkpi_links l3 ON l3.id = s.link_id WHERE l3.kol_id = ?) AS orders
+                 JOIN vkpi_links l3 ON l3.id = s.link_id
+                 WHERE l3.kol_id = ?
+                   AND {business_truth.verified_shopify_attribution_sql('s')}) AS orders
             """,
             (main_id, main_id, main_id),
         ).fetchone()

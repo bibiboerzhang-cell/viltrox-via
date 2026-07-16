@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from . import cost_policy, quality_policy, registry
 from .registry import ModelSpec
+from .runtime import response_model_matches
 
 
 from app.core.logging import get_logger
@@ -85,6 +86,10 @@ def _normalised_weights(req: RouteRequest) -> tuple[float, float, float]:
 
 
 def _passes_hard_filters(model: ModelSpec, req: RouteRequest) -> bool:
+    # A catalog entry is not an executable route.  Qwen/local_vLLM stay visible
+    # for planning but cannot be selected until a real transport is configured.
+    if not model.transport_ready:
+        return False
     if model.key in req.deny_models:
         return False
     if model.is_local and not req.allow_local:
@@ -129,16 +134,19 @@ def _rank(models: list[ModelSpec], req: RouteRequest) -> list[ModelSpec]:
 def route(req: RouteRequest) -> RouteDecision:
     """Pick a primary model + fallback chain for the request (pure, no I/O)."""
     all_models = registry.list_models()
+    ready_models = [model for model in all_models if model.transport_ready]
     candidates = [m for m in all_models if _passes_hard_filters(m, req)]
     degraded = not candidates
     if degraded:
         # Nothing met the floors — degrade to the cheapest non-denied model so
         # the caller still gets a decision. Prefer local/free when allowed.
-        pool = [m for m in all_models if m.key not in req.deny_models]
+        pool = [m for m in ready_models if m.key not in req.deny_models]
         if req.allow_local is False:
             pool = [m for m in pool if not m.is_local]
         if not pool:
-            pool = list(all_models)
+            # Preserve the router's no-raise behaviour, but never revive a
+            # transport-disabled model just to satisfy a deny list.
+            pool = list(ready_models)
         candidates = sorted(
             pool,
             key=lambda m: (cost_policy.blended_cost_cents(m), -m.quality, m.key),
@@ -168,9 +176,10 @@ def route_and_invoke(
     """Route, then delegate the real call to llm_gateway.invoke.
 
     The router chooses the model; transport / budget / ledger all stay in the
-    existing gateway. We pass the chosen model's ``gateway_provider`` as
-    ``preferred_provider`` so the gateway uses its own configured-provider and
-    fallback machinery. We do NOT re-implement any provider here.
+    existing gateway. We pass both the chosen model's ``gateway_provider`` and
+    concrete ``model_id`` so the transport executes the model the router
+    selected. The gateway applies that model id only to the preferred provider;
+    provider fallback retains each provider's configured default.
 
     Import of llm_gateway is lazy so importing this package never drags in the
     gateway's heavy deps (DB / schema) at module load.
@@ -178,20 +187,38 @@ def route_and_invoke(
     from app.platform import llm_gateway  # lazy: keep router import-light
 
     decision = route(req)
+    # Production routing owns the budget boundary.  Callers cannot downgrade
+    # atomicity through ``gateway_kwargs`` while still using this entrypoint.
+    gateway_kwargs.pop("enforce_atomic_reservation", None)
     result = llm_gateway.invoke(
         prompt,
         purpose=purpose or req.skill,
         max_output_tokens=max_output_tokens,
         preferred_provider=decision.primary.gateway_provider,
+        model_override=decision.primary.model_id,
+        model_fallbacks=[
+            (model.gateway_provider, model.model_id)
+            for model in decision.fallback_chain
+        ],
+        require_runtime_verified=True,
+        enforce_atomic_reservation=True,
         **gateway_kwargs,
     )
     # Annotate with the routing decision for observability (non-breaking add).
     if isinstance(result, dict):
+        actual_model_id = str(result.get("model") or "").strip()
+        requested_model_id = decision.primary.model_id.strip()
+        model_matches = response_model_matches(requested_model_id, actual_model_id)
         result.setdefault("router", {})
         result["router"] = {
             "skill": decision.skill,
             "model_key": decision.primary.key,
             "model_id": decision.primary.model_id,
+            "actual_model_id": actual_model_id,
+            "exact_model_match": (
+                str(result.get("provider") or "") == decision.primary.gateway_provider
+                and model_matches
+            ),
             "gateway_provider": decision.primary.gateway_provider,
             "fallback_chain": [m.key for m in decision.fallback_chain],
             "degraded": decision.degraded,

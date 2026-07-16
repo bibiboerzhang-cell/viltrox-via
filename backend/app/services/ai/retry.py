@@ -78,13 +78,25 @@ def call_ai_with_retry(
     *,
     attempts: int = 3,
     base_delay_sec: float = 0.4,
+    attempt_fn: Callable[[int, int], T] | None = None,
 ) -> T:
+    """Call one provider function with the existing bounded retry policy.
+
+    ``attempt_fn`` is an opt-in migration seam for strict provider boundaries
+    that must persist the real attempt index before network I/O. Legacy callers
+    continue to use the zero-argument ``fn`` unchanged.
+    """
+
     last_exc: Exception | None = None
     safe_attempts = max(1, int(attempts or 1))
     started_at = time.time()
     for attempt in range(1, safe_attempts + 1):
         try:
-            response = fn()
+            response = (
+                attempt_fn(attempt, safe_attempts)
+                if attempt_fn is not None
+                else fn()
+            )
             _record_usage(label, started_at, response=response)
             return response
         except Exception as exc:

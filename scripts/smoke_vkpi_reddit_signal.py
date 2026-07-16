@@ -8,6 +8,7 @@ Default behavior is deliberately conservative:
   - Apify fallback disabled unless --allow-apify is passed
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import hashlib
@@ -270,7 +271,7 @@ def main() -> int:
         allow_apify=bool(args.allow_apify),
         out_dir=Path(args.out_dir),
     )
-    print(
+    stdout_out(
         json.dumps(
             {
                 "json_path": result["json_path"],

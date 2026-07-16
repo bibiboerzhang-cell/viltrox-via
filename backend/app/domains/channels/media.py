@@ -17,6 +17,7 @@ def _looks_like_image_media_url(url: str, *, key_hint: str = "") -> bool:
         "ytimg.com",
         "googleusercontent.com",
         "tiktokcdn.com",
+        "tiktokcdn-eu.com",
         "byteoversea.com",
         "apifyusercontent.com",
         "redd.it",

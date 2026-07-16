@@ -160,7 +160,7 @@ describe("normalizeDashboardSourceHealth 数据源透明度", () => {
   it("区分接口在线、接口异常与尚未接入的指标能力", () => {
     const out = normalizeDashboardSourceHealth({
       _sources: {
-        dashboard: { ok: true, label: "绩效总览" },
+        dashboard: { ok: true, label: "增长总览" },
         distribution: { ok: false, label: "KOL 地图" },
       },
     });
@@ -228,7 +228,7 @@ describe("Dashboard 公司账号真实指标契约", () => {
           },
         },
       },
-      _sources: { dashboard: { ok: true, label: "绩效总览" } },
+      _sources: { dashboard: { ok: true, label: "增长总览" } },
     }, []);
 
     const metric = (id: string) => out.metrics.find((item: { id: string }) => item.id === id);

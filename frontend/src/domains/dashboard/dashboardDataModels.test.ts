@@ -101,12 +101,19 @@ describe("buildDashboardProductRoi", () => {
     expect(items[0].product).toBe("镜头");
     expect(items[0].roi).toBe(3);
   });
-  it("cost=0 时 roi=0(不除零)", () => {
+  it("缺少成本来源时 roi=null,不把未知冒充 0", () => {
     const items = buildDashboardProductRoi([{ product_name: "X", sales_cents: 100 }]);
+    expect(items[0].roi).toBeNull();
+  });
+  it("明确存在零成本来源时 roi=0", () => {
+    const items = buildDashboardProductRoi([
+      { product_name: "X", sales_cents: 100, cost_cents: 0, cost_source_count: 1 },
+    ]);
     expect(items[0].roi).toBe(0);
   });
   it("空输入返回占位行", () => {
     expect(buildDashboardProductRoi([])[0].product).toBe("暂无项目数据");
+    expect(buildDashboardProductRoi([])[0].roi).toBeNull();
   });
 });
 

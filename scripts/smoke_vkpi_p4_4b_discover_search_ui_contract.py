@@ -7,6 +7,7 @@ click path, but these checks prevent regressions in the exact issues reported:
 - missing KOL + no auto-create should show an explicit warning
 - existing KOL card text should not overlap avatar/logo area
 """
+from stdout_utils import out as stdout_out
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +35,7 @@ def main() -> None:
     require(CSS, ".vkpi-inline-message.is-warn", "warning inline message style")
     require(CSS, ".vkpi-info-block strong { overflow-wrap: anywhere", "long result value wrapping")
 
-    print("VKPI_P4_4B_DISCOVER_SEARCH_UI_CONTRACT_OK")
+    stdout_out("VKPI_P4_4B_DISCOVER_SEARCH_UI_CONTRACT_OK")
 
 
 if __name__ == "__main__":

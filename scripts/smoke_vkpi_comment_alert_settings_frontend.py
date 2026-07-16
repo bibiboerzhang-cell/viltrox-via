@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static smoke for P2.10 comment alert threshold settings UI/API wiring."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def main() -> None:
     assert "CommentAlertThresholdCard" in settings_page and "saveCommentAlertSettings" in settings_page, "SettingsPage threshold wiring missing"
     assert "评论风险告警" in controls and "min_hostile" in controls, "threshold settings UI missing"
 
-    print("VKPI_COMMENT_ALERT_SETTINGS_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_COMMENT_ALERT_SETTINGS_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

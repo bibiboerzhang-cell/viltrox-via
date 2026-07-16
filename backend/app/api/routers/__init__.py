@@ -22,6 +22,8 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_analytics_export",
     # P1 智能可见周:Intelligent 问答三车道 / 思考流 / 评论区销售员(路由自带 prefix)
     "vkpi_intelligent",
+    # 私有 Marketing Advisor:会话持久化 / 用户确认记忆 / 业务动作仅草稿。
+    "vkpi_marketing_advisor",
     "vkpi_activity",
     "vkpi_reply_queue",
     # 第2轮 档案工程:招牌画像 / 周期+竞争 / SKU 360°
@@ -93,6 +95,8 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_data_quality",
     "vkpi_evidence_assets",
     "vkpi_events",
+    "vkpi_event_radar",
+    "vkpi_source_passports",
     "vkpi_inventory",
     "vkpi_dealers",
     "vkpi_shopify",

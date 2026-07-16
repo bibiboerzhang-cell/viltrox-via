@@ -35,6 +35,7 @@ ALLOWED_TABLES: frozenset[str] = frozenset(
         "vkpi_content_posts",
         "vkpi_kol_claims",
         "vkpi_channel_metrics",
+        "vkpi_kol_pool",
         "vkpi_projects",
     }
 )
@@ -154,6 +155,17 @@ def _b_kol_content_roi(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...], list[
     return sql, (cutoff, MAX_ROWS), cols
 
 
+def _b_kol_pool_overview(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...], list[str]]:
+    cols = ["total_kols", "platforms", "total_followers"]
+    sql = (
+        "SELECT COUNT(*) AS total_kols, "
+        "COUNT(DISTINCT NULLIF(TRIM(platform), '')) AS platforms, "
+        "COALESCE(SUM(followers), 0) AS total_followers "
+        "FROM vkpi_kol_pool"
+    )
+    return sql, (), cols
+
+
 def _b_country_growth(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...], list[str]]:
     cutoff = ctx["cutoff_iso"]
     country = ctx.get("country")
@@ -240,11 +252,36 @@ INTENTS: tuple[Intent, ...] = (
         uses_range=True,
     ),
     Intent(
+        key="kol_pool_overview",
+        title="KOL 池规模概览",
+        description="返回当前 KOL 池账号总数、平台数与粉丝总量。",
+        examples=(
+            "KOL Pool 现在有多少人",
+            "KOL池有多少账号",
+            "KOL 池规模",
+            "how many kols in pool",
+        ),
+        keywords=(
+            "kol pool",
+            "kol池",
+            "kol 池",
+            "kol账号总数",
+            "kol 账号总数",
+            "池子规模",
+            "pool size",
+            "kols in pool",
+            "how many kols",
+        ),
+        columns=("total_kols", "platforms", "total_followers"),
+        build=_b_kol_pool_overview,
+        uses_range=False,
+    ),
+    Intent(
         key="kol_content_roi",
         title="KOL内容ROI排名",
         description="按 KOL 聚合区间内内容贴的曝光/互动,降序排名。",
         examples=("KOL内容ROI排名", "哪个达人内容效果最好", "kol content roi", "达人贴文表现排行"),
-        keywords=("roi", "内容", "排名", "效果", "表现", "达人", "kol", "贴文", "曝光", "互动", "ranking"),
+        keywords=("roi", "内容", "排名", "效果", "表现", "贴文", "曝光", "互动", "ranking"),
         columns=("kol_id", "channel_name", "posts", "total_views", "total_likes", "total_comments"),
         build=_b_kol_content_roi,
         uses_range=True,

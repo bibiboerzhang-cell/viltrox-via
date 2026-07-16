@@ -24,6 +24,7 @@ from typing import Any, Callable, Optional
 
 from app.core.logging import get_logger
 from app.core.config import (
+    APP_ROLE,
     DB_RUNTIME_URL,
     DB_BUSY_TIMEOUT_MS,
     DB_CACHE_SIZE_KB,
@@ -33,6 +34,7 @@ from app.core.config import (
     DB_USE_PGBOUNCER,
     DB_WAL_AUTOCHECKPOINT,
     IS_PRODUCTION,
+    MIGRATION_RUNNER_APP_ROLE,
     POSTGRES_POOL_MAX_SIZE,
     POSTGRES_POOL_MIN_SIZE,
     POSTGRES_POOL_TIMEOUT_SEC,
@@ -50,6 +52,7 @@ _scoped_conn: ContextVar[Any | None] = ContextVar("viltrox_db_scoped_conn", defa
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _MIGRATIONS_DIR = _PROJECT_ROOT / "migrations"
 _ENV_PATH = _PROJECT_ROOT / ".env"
+_PRODUCTION_SQLITE_PATH = (_PROJECT_ROOT / "submissions.db").resolve()
 # 迁移序列从 migrations/ 目录按文件名排序推导（不再手写 tuple），这样新增的
 # NNN_*.sql 会自动登记，根治「手动 apply 了文件却忘记加进 manifest → 全新库缺表」
 # 的反复漂移（例如 199_vkpi_skill_runs 就踩过这坑）。排除两类：
@@ -67,6 +70,28 @@ _MIGRATION_EXCLUDE = frozenset(
     }
 )
 
+# Migration 234 is the first release that is expected to run under the
+# transaction and fleet-wide advisory lock owned by ``_run_postgres_migrations``.
+# A forward file that commits independently would release that lock while a
+# second Gunicorn process is waiting, exposing partially recorded schema state.
+_RUNNER_OWNED_TRANSACTION_MIN_VERSION = 234
+_FORWARD_TRANSACTION_CONTROL_RE = re.compile(
+    r"(?mi)^\s*(?:BEGIN(?:\s+TRANSACTION)?|COMMIT(?:\s+TRANSACTION)?)\s*;"
+)
+
+
+def _validate_runner_owned_transactions(names: Sequence[str]) -> None:
+    for name in names:
+        match = re.match(r"^(\d{3})", name)
+        if match is None or int(match.group(1)) < _RUNNER_OWNED_TRANSACTION_MIN_VERSION:
+            continue
+        path = _MIGRATIONS_DIR / name
+        if _FORWARD_TRANSACTION_CONTROL_RE.search(path.read_text(encoding="utf-8")):
+            raise RuntimeError(
+                "Forward migration contains transaction control owned by the "
+                f"Postgres migration runner: {name}"
+            )
+
 
 def _discover_postgres_migrations() -> tuple[str, ...]:
     names = sorted(
@@ -74,6 +99,7 @@ def _discover_postgres_migrations() -> tuple[str, ...]:
         for path in _MIGRATIONS_DIR.glob("*.sql")
         if not path.name.endswith("_down.sql") and path.name not in _MIGRATION_EXCLUDE
     )
+    _validate_runner_owned_transactions(names)
     return tuple(names)
 
 
@@ -91,6 +117,103 @@ except Exception:
 
 _PG_POOL: Any | None = None
 _POOL_LOCK = threading.Lock()
+
+_DB_STARTUP_MODE_ENV = "VKPI_DB_STARTUP_MODE"
+_DB_STARTUP_MODE_FULL = "full"
+_DB_STARTUP_MODE_MIGRATIONS_ONLY = "migrations-only"
+_VALID_DB_STARTUP_MODES = frozenset(
+    {
+        _DB_STARTUP_MODE_FULL,
+        _DB_STARTUP_MODE_MIGRATIONS_ONLY,
+    }
+)
+_DB_STARTUP_STATUS_LOCK = threading.Lock()
+_DB_STARTUP_STATUS: dict[str, Any] = {
+    "mode": "uninitialized",
+    "backend": DB_RUNTIME_BACKEND,
+    "state": "not_started",
+    "schema_migrations": "not_started",
+    "default_admin_bootstrap": "not_started",
+    "runtime_seeders": "not_started",
+    "non_migration_startup_writes": "not_started",
+    "started_at": None,
+    "completed_at": None,
+    "failed_stage": None,
+    "error_type": None,
+}
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _resolve_db_startup_mode() -> str:
+    """Return the exact startup mode, rejecting typos instead of falling back to writes."""
+
+    mode = os.environ.get(_DB_STARTUP_MODE_ENV, _DB_STARTUP_MODE_FULL).strip().lower()
+    if mode not in _VALID_DB_STARTUP_MODES:
+        raise RuntimeError(
+            f"Unsupported {_DB_STARTUP_MODE_ENV}={mode!r}; "
+            f"expected one of {sorted(_VALID_DB_STARTUP_MODES)}"
+        )
+    if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY and APP_ROLE != MIGRATION_RUNNER_APP_ROLE:
+        raise RuntimeError(
+            f"{_DB_STARTUP_MODE_ENV}={mode!r} requires "
+            f"APP_ROLE={MIGRATION_RUNNER_APP_ROLE!r}"
+        )
+    if APP_ROLE == MIGRATION_RUNNER_APP_ROLE and mode != _DB_STARTUP_MODE_MIGRATIONS_ONLY:
+        raise RuntimeError(
+            f"APP_ROLE={MIGRATION_RUNNER_APP_ROLE!r} requires "
+            f"{_DB_STARTUP_MODE_ENV}={_DB_STARTUP_MODE_MIGRATIONS_ONLY!r}"
+        )
+    return mode
+
+
+def _reset_db_startup_status(*, mode: str, backend: str) -> None:
+    with _DB_STARTUP_STATUS_LOCK:
+        _DB_STARTUP_STATUS.update(
+            {
+                "mode": mode,
+                "backend": backend,
+                "state": "running",
+                "schema_migrations": "not_started",
+                "default_admin_bootstrap": "not_started",
+                "runtime_seeders": "not_started",
+                "non_migration_startup_writes": "not_started",
+                "started_at": _utc_timestamp(),
+                "completed_at": None,
+                "failed_stage": None,
+                "error_type": None,
+            }
+        )
+
+
+def _update_db_startup_status(**changes: Any) -> None:
+    with _DB_STARTUP_STATUS_LOCK:
+        _DB_STARTUP_STATUS.update(changes)
+
+
+def get_db_startup_status() -> dict[str, Any]:
+    """Return a health-safe snapshot of this process's database startup stages."""
+
+    with _DB_STARTUP_STATUS_LOCK:
+        return dict(_DB_STARTUP_STATUS)
+
+
+async def _run_db_startup_stage(stage: str, fn: Callable[[], None]) -> None:
+    _update_db_startup_status(**{stage: "running"})
+    try:
+        await asyncio.to_thread(fn)
+    except Exception as exc:
+        _update_db_startup_status(
+            state="failed",
+            failed_stage=stage,
+            error_type=type(exc).__name__,
+            **{stage: "failed"},
+        )
+        logger.exception("db.startup.stage_failed | stage=%s", stage)
+        raise
+    _update_db_startup_status(**{stage: "completed"})
 
 
 class _ScopedConnectionHandle:
@@ -177,6 +300,8 @@ def is_postgres_runtime() -> bool:
 
 def _get_pg_pool():
     global _PG_POOL
+    if os.environ.get("VKPI_PYTEST_HERMETIC", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError("Hermetic pytest runtime forbids PostgreSQL connections")
     if not is_postgres_runtime():
         return None
     # pool_selfheal(2026-07-02):deep_crawl 内核收尾会 close_db_runtime 关掉全局池,
@@ -261,7 +386,13 @@ class PostgresCompatCursor:
             rows.extend(fetched)
         if not rows:
             return []
-        return [CompatRow(self._columns(), [_normalize_pg_value(value) for value in row]) for row in rows]
+        # ``cursor.description`` is invariant for a result set, but psycopg
+        # materializes Column wrappers every time it is accessed.  Large GTM
+        # reads used to rebuild the same projection once per row (10k+ times),
+        # spending more CPU on metadata than on row conversion.  Resolve the
+        # projection once without changing CompatRow values or ordering.
+        columns = self._columns()
+        return [CompatRow(columns, [_normalize_pg_value(value) for value in row]) for row in rows]
 
     def close(self) -> None:
         self._cursor.close()
@@ -305,6 +436,11 @@ class PostgresCompatConnection:
 
 
 def _build_sqlite_conn() -> sqlite3.Connection:
+    if (
+        os.environ.get("VKPI_PYTEST_HERMETIC", "").strip().lower() in {"1", "true", "yes", "on"}
+        and Path(DB_PATH).resolve() == _PRODUCTION_SQLITE_PATH
+    ):
+        raise RuntimeError("Hermetic pytest runtime refuses repository submissions.db")
     conn = sqlite3.connect(
         str(DB_PATH),
         check_same_thread=False,
@@ -375,14 +511,57 @@ def _run_runtime_seeders() -> None:
 
 
 async def init_db_runtime() -> None:
+    mode = _resolve_db_startup_mode()
+    backend = "postgres" if is_postgres_runtime() else "sqlite"
+    _reset_db_startup_status(mode=mode, backend=backend)
+    logger.info("db.startup.mode_selected | mode=%s | backend=%s", mode, backend)
+
     if not is_postgres_runtime():
-        await asyncio.to_thread(_bootstrap_sqlite_runtime)
-        await asyncio.to_thread(_run_runtime_seeders)
+        if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY:
+            _update_db_startup_status(
+                state="failed",
+                failed_stage="mode_validation",
+                error_type="RuntimeError",
+            )
+            raise RuntimeError(
+                f"{_DB_STARTUP_MODE_ENV}={_DB_STARTUP_MODE_MIGRATIONS_ONLY!r} requires the Postgres runtime; "
+                "the SQLite schema bootstrap also performs non-migration default-admin writes"
+            )
+        await _run_db_startup_stage("schema_migrations", _bootstrap_sqlite_runtime)
+        _update_db_startup_status(default_admin_bootstrap="included_in_sqlite_bootstrap")
+        await _run_db_startup_stage("runtime_seeders", _run_runtime_seeders)
+        _update_db_startup_status(
+            state="completed",
+            non_migration_startup_writes="executed",
+            completed_at=_utc_timestamp(),
+        )
         return
+
     _get_pg_pool()
-    await asyncio.to_thread(_run_postgres_migrations)
-    await asyncio.to_thread(_bootstrap_default_admin)
-    await asyncio.to_thread(_run_runtime_seeders)
+    await _run_db_startup_stage("schema_migrations", _run_postgres_migrations)
+
+    if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY:
+        _update_db_startup_status(
+            state="completed",
+            default_admin_bootstrap="skipped_explicitly",
+            runtime_seeders="skipped_explicitly",
+            non_migration_startup_writes="skipped_explicitly",
+            completed_at=_utc_timestamp(),
+        )
+        logger.warning(
+            "db.startup.non_migration_writes_skipped | mode=%s | "
+            "default_admin_bootstrap=skipped | runtime_seeders=skipped",
+            mode,
+        )
+        return
+
+    await _run_db_startup_stage("default_admin_bootstrap", _bootstrap_default_admin)
+    await _run_db_startup_stage("runtime_seeders", _run_runtime_seeders)
+    _update_db_startup_status(
+        state="completed",
+        non_migration_startup_writes="executed",
+        completed_at=_utc_timestamp(),
+    )
 
 
 def close_db_runtime_sync() -> None:
@@ -506,17 +685,41 @@ def _bootstrap_default_admin() -> None:
             admin_row = cur.fetchone()
             if admin_row:
                 admin_user_id = int(admin_row[0])
-                cur.execute("SELECT id FROM staff WHERE user_id = %s LIMIT 1", (admin_user_id,))
-                if cur.fetchone() is None:
+                cur.execute("SELECT id FROM staff WHERE user_id = %s ORDER BY id DESC LIMIT 1", (admin_user_id,))
+                staff_row = cur.fetchone()
+                if staff_row is None:
                     cur.execute(
                         """
                         INSERT INTO staff (
                             user_id, role, permissions_json, mfa_enabled, active,
                             invited_by, invited_at, accepted_at, is_owner, email_domain_verified
                         ) VALUES (%s, 'admin', %s, 0, 1, %s, now(), now(), 1, 1)
+                        RETURNING id
                         """,
                         (admin_user_id, json.dumps({"vkpi": "write"}), admin_user_id),
                     )
+                    staff_row = cur.fetchone()
+                if staff_row is None:
+                    raise RuntimeError("default Postgres admin staff bootstrap failed")
+                admin_staff_id = int(staff_row[0])
+                cur.execute(
+                    """
+                    UPDATE staff
+                    SET role = 'admin', active = 1, is_owner = 1,
+                        email_domain_verified = 1
+                    WHERE id = %s
+                    """,
+                    (admin_staff_id,),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO organization_members (organization_id, staff_id, role)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (organization_id, staff_id)
+                    DO UPDATE SET role = EXCLUDED.role
+                    """,
+                    (1, admin_staff_id, "owner"),
+                )
         conn.commit()
 
 
@@ -558,6 +761,24 @@ def db_connection_sync_scope() -> Iterator[Any]:
         conn = _build_sqlite_conn()
         _db_local.conn = conn
     yield conn
+
+
+@contextmanager
+def db_connection_sync_reusing_scope() -> Iterator[Any]:
+    """Reuse an active request scope, otherwise create a bounded sync scope.
+
+    Authentication runs both inside the request-wide DB middleware and from
+    standalone helpers.  Always opening a nested pool lease inside a request
+    can starve a small pool during a cold-token burst: every request queues for
+    its second lease while an outer lease remains checked out.  This helper
+    keeps standalone callers bounded without acquiring a second connection
+    when the current context already owns a request-scoped handle.
+    """
+    if is_postgres_runtime() and isinstance(_scoped_conn.get(), _ScopedConnectionHandle):
+        yield None
+        return
+    with db_connection_sync_scope() as conn:
+        yield conn
 
 
 def get_conn() -> Any:
@@ -632,11 +853,13 @@ def get_db_actor_stats() -> dict[str, Any]:
             "running": pool is not None,
             "runtime_backend": "postgres",
             "pool": stats,
+            "startup": get_db_startup_status(),
         }
     return {
         "mode": "sqlite_local",
         "running": True,
         "runtime_backend": "sqlite",
+        "startup": get_db_startup_status(),
     }
 
 
@@ -678,11 +901,13 @@ def probe_postgres_connectivity() -> dict[str, Any]:
 __all__ = [
     "CompatRow",
     "db_connection_scope",
+    "db_connection_sync_reusing_scope",
     "db_connection_sync_scope",
     "db_read",
     "db_write",
     "get_conn",
     "get_db_actor_stats",
+    "get_db_startup_status",
     "init_db_runtime",
     "close_db_runtime",
     "close_db_runtime_sync",

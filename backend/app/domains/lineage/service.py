@@ -24,10 +24,6 @@ from app.domains.lineage.store import (
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.lineage.schema import ensure_vkpi_lineage_schema
 
-# GET /dashboard 幂等门:同 scope+窗口的 ready run 若在此秒数内已生成,直接复用不重算,
-# 把 generate_run 的写入收敛到「过期才刷」而非每次页面加载(去写化)。
-_DASHBOARD_RUN_REUSE_SEC = 300
-
 def _existing_staff_id(conn: Any, value: Any) -> int | None:
     sid = _int(value)
     if sid <= 0:
@@ -131,7 +127,14 @@ def generate_run(
         result = _compute_derived(metric_key, computed)
         value_id = _persist_value(conn, run_id=run_id, metric_key=metric_key, result=result, now=now)
         # derived metrics reference the underlying value rows
-        _persist_derived_sources(conn, value_id=value_id, computed=computed, metric_key=metric_key, now=now)
+        if str(result.get("data_status") or "").strip().lower() == "real":
+            _persist_derived_sources(
+                conn,
+                value_id=value_id,
+                computed=computed,
+                metric_key=metric_key,
+                now=now,
+            )
         metric_count += 1
 
     # 4. mark run ready
@@ -161,14 +164,14 @@ def dashboard_metrics(
     staff_id: int | None = None,
     generated_by_staff_id: int | None = None,
 ) -> dict[str, Any]:
-    """Generate (or reuse) a current dashboard snapshot and return UI-ready values.
+    """Read the latest matching dashboard snapshot and return UI-ready values.
 
     Dashboard reads are lineage-first: every visible metric carries the
-    metric_value_id used by the Evidence Drawer. To keep GET /dashboard read-mostly
-    we apply an idempotency gate — if a ``ready`` run for the same scope and window
-    was generated within ``_DASHBOARD_RUN_REUSE_SEC`` we reuse it instead of writing
-    a fresh run on every page load. Only when no fresh run exists do we compute one,
-    which still keeps deleted projects / voided costs from leaking beyond the window.
+    metric_value_id used by the Evidence Drawer. GET callers must remain strictly
+    read-only, so this function never creates a lineage run. Snapshot creation stays
+    behind the explicit POST /lineage/runs and scheduled refresh paths. When no run
+    exists for the exact scope/window, the dashboard keeps rendering its primary
+    data and exposes an empty lineage attachment until a refresh is performed.
     """
     scoped_staff_id = scope_service.effective_staff_id(staff, staff_id)
     scope_type = "staff" if scoped_staff_id else "all"
@@ -177,23 +180,23 @@ def dashboard_metrics(
         scope_type=scope_type,
         scope_id=scoped_staff_id,
         period_days=period,
-        max_age_seconds=_DASHBOARD_RUN_REUSE_SEC,
+        max_age_seconds=None,
     )
     if not run_id:
-        run_meta = generate_run(
-            period_days=period,
-            scope_type=scope_type,
-            scope_id=scoped_staff_id,
-            trigger_source="dashboard",
-            generated_by_staff_id=generated_by_staff_id,
-            metadata={"lineage_first": True},
-        )
-        run_id = int(run_meta["run_id"])
+        return {
+            "run": {},
+            "metrics": [],
+            "status": "lineage_snapshot_pending",
+            "refresh_path": "/api/admin/vkpi/lineage/runs",
+        }
     run = get_run(run_id, staff=staff)
     values = []
     for row in run.get("values") or []:
         item = dict(row)
         metric_key = str(item.get("metric_key") or "")
+        data_status = str(item.get("data_status") or "").strip().lower()
+        unavailable = data_status in {"unavailable", "stale"}
+        retained_source_count = _int(item.get("source_count"))
         values.append({
             "metric_key": metric_key,
             "metricValueId": _int(item.get("id")),
@@ -201,7 +204,11 @@ def dashboard_metrics(
             "value_numeric": item.get("value_numeric"),
             "currency": item.get("currency") or "",
             "unit": item.get("unit") or "",
-            "source_count": _int(item.get("source_count")),
+            "source_count": 0 if unavailable else retained_source_count,
+            "retained_source_count": retained_source_count if unavailable else 0,
+            "data_status": data_status,
+            "confidence": item.get("confidence"),
+            "is_partial": bool(item.get("is_partial")),
             "calculation": _safe_json(item.get("calculation_json")),
             "drilldown_url": f"/api/admin/vkpi/lineage/values/{_int(item.get('id'))}/drilldown",
         })

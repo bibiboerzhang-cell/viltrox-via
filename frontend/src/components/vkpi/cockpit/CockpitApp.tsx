@@ -6,7 +6,7 @@ import { useTheme } from "../../../app/providers/ThemeProvider";
 // 车道B LazyMotion 瘦身:全 cockpit 树只用 m.*(motion.* 已全量替换),features 在此顶层
 // 注入一次。选 domMax 而非 domAnimation:FloatingCard 的 drag 与 ActivityFeed 的 layout
 // 动画都要 domMax 才生效(domAnimation 会静默砍掉拖拽 = 功能回退,不只是动效)。
-import { AnimatePresence, LazyMotion, domMax, m } from "framer-motion";
+import { LazyMotion, domMax, m } from "framer-motion";
 // 死 import 清理(2026-07-12):18 个 lucide 图标 + 12 个卡组件簇 + KPI_SCOPES 全为拆分残留
 // (正文零引用,图标/卡片实际消费方在 CockpitTopbar / CockpitApp.Sections / DashboardReplicaPage)。
 import "./styles/mockup.css";
@@ -20,13 +20,13 @@ import { usePermissions } from "../../../hooks/usePermissions";
 import { useBrowserAssist, isBrowserAssistEnabled } from "../../../lib/browserAssist/enable";
 import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 // 模态 / popover / ReportPanel / SettingsPage / logout/resolve/staff-group api 已随 CockpitOverlays 抽到 CockpitApp.Sections.tsx。
-import { buildApiUrl } from "../../../services/http";
 import { listEvents } from "../../../services/vkpi/events-api";
 import { getDealerLocations } from "../../../services/vkpi/dealers-api";
 import { normalizeEventsHierarchy, normalizeDealersHierarchy } from "./normalizers";
 import { I18nContext, makeT } from "./lib/i18n";
 import { loadKpiScopeForStaff, saveKpiScopeForStaff } from "./lib/kpiScopeStorage";
 import { loadStoredState, saveStoredState } from "./lib/storage";
+import { resolveDashboardMapSelection } from "./mapViewSelection";
 import { useCockpitRuntime } from "./useCockpitRuntime";
 import { createProject, deleteProject, updateProject } from "../../../services/vkpi/projects-api";
 import { addProjectCost } from "../../../services/vkpi/cost-api";
@@ -49,61 +49,16 @@ import {
   buildVenueOptions,
 } from "./CockpitApp.helpers";
 import { CockpitOverlays } from "./CockpitApp.Sections";
+import * as lazyBoards from "./CockpitApp.lazyBoards";
+import {
+  useCockpitNavigationEvents,
+  useCockpitPresenceHeartbeat,
+  useCockpitVersionBadge,
+} from "./CockpitApp.shellHooks";
 
 const e = React.createElement;
-// lazy 收尾(2026-07-12):KOL Pool / Shopify / Dealers 三板块由静态 import 改 React.lazy,
-// 与其余板块同款(挂载处 LazyErrorBoundary+Suspense),首屏 chunk 不再背三页。
-const KOLPoolPage = React.lazy(() => import("./pages/KolPoolBoardPage").then((module) => ({ default: module.KolPoolBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 cockpit/KOLPoolPage.tsx
-const ShopifyBoardPage = React.lazy(() => import("./pages/ShopifyBoardPage").then((module) => ({ default: module.ShopifyBoardPage })));
-// 旧页 ../pages/ShopifyHubPage.tsx 已退役于 4bcc5c68c 后收尾波(2026-07-12),从 git 历史找回;ShopifyConnectPage 与 ShopifyHubPage.Parts 仍被 ShopifyBoardPage.embeds 内嵌使用,保留。
-const DealerMapPage = React.lazy(() => import("./pages/DealersBoardPage").then((module) => ({ default: module.DealersBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/DealerMapPage.tsx(RealMap 共用件保留)
-// MY KOL 改版 M1(2026-07-11):导航项改挂板块页范式新族 MyKolBoardPage(可编辑看板)。
-// 旧页 pages/myKol/MyKolPage.tsx 已退役于 4bcc5c68c 后收尾波(2026-07-12),从 git 历史找回;MyKolPage.Sections/.helpers 仍被 MyKolBoardPage 族消费,保留。
-const MyKolBoardPage = React.lazy(() => import("./pages/MyKolBoardPage").then((module) => ({ default: module.MyKolBoardPage })));
-const LegacyProjectsPage = React.lazy(() => import("./pages/ProjectsBoardPage").then((module) => ({ default: module.ProjectsBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/ProjectsPage.tsx(.Sections/.helpers/.types 仍被 ProjectsBoardPage 族消费,保留)
-const EventsMockupPage = React.lazy(() => import("./pages/EventsBoardPage").then((module) => ({ default: module.EventsBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/events/EventsMockupPage.tsx(+pages/EventsPage.tsx;EventDetailView/modals/tabs 仍被 EventsBoardPage.embeds 消费,保留)
-// L1(2026-06-30):Wave1-4 已建运维页接进 cockpit 壳(原硬白名单够不到 → 点不到)。
-const DataQualityPage = React.lazy(() => import("../pages/DataQualityPage").then((module) => ({ default: module.DataQualityPage })));
-const DataQueryPage = React.lazy(() => import("../pages/DataQueryPage").then((module) => ({ default: module.DataQueryPage })));
-const MarketTrendsPage = React.lazy(() => import("../pages/MarketTrendsPage").then((module) => ({ default: module.MarketTrendsPage })));
-const SkillStudioPage = React.lazy(() => import("../pages/SkillStudioPage").then((module) => ({ default: module.SkillStudioPage })));
-const IntelligentPage = React.lazy(() => import("./pages/IntelligentBoardPage").then((module) => ({ default: module.IntelligentBoardPage })));
-// 回滚垫:改回 ./pages/IntelligentPage + module.IntelligentPage 即回旧问答页
-const ReplyQueuePage = React.lazy(() => import("./pages/ReplyQueueBoardPage").then((module) => ({ default: module.ReplyQueueBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ../pages/ReplyQueuePage.tsx
-// 第2轮 档案工程:SKU 360°(产品视角)+ KOL 完整档案(八层组装页)
-const Sku360Page = React.lazy(() => import("./pages/Sku360BoardPage").then((module) => ({ default: module.Sku360BoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/Sku360Page.tsx
-const KolProfilePage = React.lazy(() => import("./pages/KolProfileBoardPage").then((module) => ({ default: module.KolProfileBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/KolProfilePage.tsx
-// 第4轮 发射台:新品 SKU 一键六输出全案
-const LaunchPadPage = React.lazy(() => import("./pages/LaunchPadBoardPage").then((module) => ({ default: module.LaunchPadBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/LaunchPadPage.tsx
-// 第5轮 自治层:驾照板 + 市场之声月报
-const AutonomyBoardPage = React.lazy(() => import("./pages/AutonomyDrivePage").then((module) => ({ default: module.AutonomyDrivePage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/AutonomyBoardPage.tsx(五面板共用件仍被 AutonomyDrivePage.embeds 消费,保留)
-const MarketVoicePage = React.lazy(() => import("./pages/MarketVoicePage").then((module) => ({ default: module.MarketVoicePage })));
-// 第6轮 P6 飞轮:段级创意资产库
-const CreativeLibraryPage = React.lazy(() => import("./pages/CreativeLibraryBoardPage").then((module) => ({ default: module.CreativeLibraryBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/CreativeLibraryPage.tsx
-// 战略大脑波:战略台(对照/赛道/模拟/表现 四块合屏)
-const StrategyBoardPage = React.lazy(() => import("./pages/StrategyDeskPage").then((module) => ({ default: module.StrategyDeskPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/StrategyBoardPage.tsx(StrategySimPanel 仍被 StrategyDeskPage.perf 消费,保留)
-// GTM-1 总脑:上市增长指挥图
-const GtmCommandPage = React.lazy(() => import("./pages/GtmCommandBoardPage").then((module) => ({ default: module.GtmCommandBoardPage })));
-// 旧页已退役于 4bcc5c68c 后收尾波(2026-07-12),如需恢复从 git 历史找回 ./pages/GtmCommandPage.tsx(.Command/.Sections 仍被 GtmCommandBoardPage 族消费,保留)
-
-// L1:cockpit 壳可达的板块 key 白名单(原硬编码在 useState 初值里;运维页加入后集中维护)。
-const COCKPIT_BOARDS = [
-  "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers",
-  "triage", "dataQuery", "marketTrends", "skillStudio",
-  "intelligent", "replyQueue",
-  "sku360", "kolProfile", "launchpad", "autonomy", "marketVoice", "creativeLibrary", "strategyBoard", "gtmCommand",
-] as const;
+const { COCKPIT_BOARDS, KOLPoolPage, ShopifyBoardPage, DealerMapPage, MyKolBoardPage, LegacyProjectsPage,
+  EventsMockupPage, DataQualityPage, DataQueryPage, MarketTrendsPage, SkillStudioPage, IntelligentPage, ReplyQueuePage, Sku360Page, KolProfilePage, LaunchPadPage, AutonomyBoardPage, MarketVoicePage, CreativeLibraryPage, StrategyBoardPage, GtmCommandPage } = lazyBoards;
 
 export function CockpitApp(props: any = {}) {
   const {
@@ -150,9 +105,7 @@ export function CockpitApp(props: any = {}) {
     const frame = window.requestAnimationFrame(resetPageScroll);
     return () => window.cancelAnimationFrame(frame);
   }, [activeNav]);
-  // 主题统一(2026-07):cockpit 不再自持 theme,改吃全局 ThemeProvider(<html> data-theme/
-  // data-style,localStorage vkpi-ui-pref-v1),让 玻璃/仪器/单色 × 明暗 与全站一致。
-  // setTheme 桥接:兼容「传值」与「函数式更新」两种既有调用(侧栏传值 / 用户菜单函数式)。
+  // Cockpit shares the global style/theme preference and keeps both setter forms compatible.
   const { theme: gTheme, setTheme: gSetTheme } = useTheme();
   const theme = gTheme;
   const setTheme = useCallback((next: any) => {
@@ -166,93 +119,11 @@ export function CockpitApp(props: any = {}) {
     if (!boardPerms.canViewBoard(activeNav)) setActiveNav("dashboard");
   }, [activeNav]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 浏览器内本地协助:员工开着页面时后台领「安全轻活」(评论清洗等)在本机算,分担服务器算力。
-  // 默认关(deploy dark),localStorage/构建期开关开启;只领纯计算任务、只在页面可见时跑、失败静默。
+  // Local browser assist is opt-in and only handles safe compute while the page is visible.
   useBrowserAssist(isBrowserAssistEnabled());
 
-  // 版本徽标:启动时拉一次 /health,展示 server 短 sha 与前后端同步状态(纯只读,失败静默)
-  const [versionBadge, setVersionBadge] = useState<any>(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(buildApiUrl("/health"), { credentials: "same-origin" });
-        if (!res.ok) return;
-        const data = await res.json();
-        const build = (data && data.build) || {};
-        if (!cancelled) {
-          setVersionBadge({
-            shortSha: String(build.git_short_sha || "").slice(0, 8),
-            inSync: Boolean(build.client_matches_server),
-            hasClient: Boolean(build.client_build),
-          });
-        }
-      } catch {
-        /* /health 不可达时静默,不影响壳层 */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  // 在线状态(presence)心跳:挂载即打一次,之后每 60s ping /me(后端节流 >50s 才写库),
-  // 维持自己的 last_seen_at 在 5 分钟在线窗口内。纯只读副作用,失败静默。
-  useEffect(() => {
-    if (!apiToken) return;
-    let stopped = false;
-    const beat = () => {
-      fetch(buildApiUrl("/api/auth/me"), {
-        credentials: "same-origin",
-        headers: { Authorization: `Bearer ${apiToken}` },
-      }).catch(() => { /* 静默 */ });
-    };
-    beat();
-    const id = setInterval(() => { if (!stopped) beat(); }, 60000);
-    return () => { stopped = true; clearInterval(id); };
-  }, [apiToken]);
-
-  useEffect(() => {
-    const handleOpenKolSearchSession = () => {
-      setActiveNav("kol-pool");
-    };
-    // 从哪发起回哪去(2026-06-12):账号分析任务点开切回 MY KOL(行定位由 MyKolPage 自取 pending key)
-    const handleOpenMyKolKol = () => {
-      setActiveNav("my-kol");
-    };
-    // 2026-06-12 波5 R5:泳道 target_type=project 的任务点开 → 直达项目详情(复用 Active Campaigns 同款管道)
-    const handleOpenProjectTask = (event: any) => {
-      const projectId = String(event?.detail?.projectId || "");
-      if (projectId) setOpenLegacyProjectId(projectId);
-      setActiveNav("projects");
-    };
-    // item1(2026-06-16):video/账号档案任务点开 → 切到 KOL Pool 板块(pending id 由 board 写 localStorage,
-    // KOLPoolPage 挂载后消费并按 id 开抽屉)。
-    const handleOpenKolPoolItem = () => {
-      setActiveNav("kol-pool");
-    };
-    // 顶栏全局搜索(2026-07 P0 接真):关键词已写 localStorage,这里只负责切板块;
-    // KOLPoolPage 挂载/事件时消费 vkpi:pending-kolpool-search 并填入本地筛选。
-    const handleOpenKolPoolSearch = () => {
-      setActiveNav("kol-pool");
-    };
-    // 第2轮 档案工程:任意处派发 vkpi:open-kol-profile(id 先写 sessionStorage vkpi:kol-profile-id)→ 切档案页。
-    const handleOpenKolProfile = () => {
-      setActiveNav("kolProfile");
-    };
-    window.addEventListener("vkpi:open-kol-profile", handleOpenKolProfile);
-    window.addEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
-    window.addEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
-    window.addEventListener("vkpi:open-project-task", handleOpenProjectTask);
-    window.addEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
-    window.addEventListener("vkpi:open-kol-pool-search", handleOpenKolPoolSearch);
-    return () => {
-      window.removeEventListener("vkpi:open-kol-profile", handleOpenKolProfile);
-      window.removeEventListener("vkpi:open-kol-search-session", handleOpenKolSearchSession);
-      window.removeEventListener("vkpi:open-mykol-kol", handleOpenMyKolKol);
-      window.removeEventListener("vkpi:open-project-task", handleOpenProjectTask);
-      window.removeEventListener("vkpi:open-kol-pool-item", handleOpenKolPoolItem);
-      window.removeEventListener("vkpi:open-kol-pool-search", handleOpenKolPoolSearch);
-    };
-  }, []);
+  const versionBadge = useCockpitVersionBadge();
+  useCockpitPresenceHeartbeat(apiToken);
   
   // 层级 state
   const [viewMode, setViewMode]   = useState(stored.viewMode || null);
@@ -264,6 +135,7 @@ export function CockpitApp(props: any = {}) {
   const [selectedPin, setSelectedPin] = useState<any>(null);
   const [selectedLegacyProject, setSelectedLegacyProject] = useState<any>(null);
   const [openLegacyProjectId, setOpenLegacyProjectId] = useState("");
+  useCockpitNavigationEvents({ setActiveNav, setOpenLegacyProjectId });
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [selectedKpi, setSelectedKpi] = useState<any>(null);
   const [previewEvent, setPreviewEvent] = useState<any>(null);
@@ -272,6 +144,8 @@ export function CockpitApp(props: any = {}) {
   // 2026-06-14 诚实化:Upcoming Events 卡接真实 /api/admin/vkpi/events,不再传空数组。
   const [eventRows, setEventRows] = useState<any[]>([]);
   const [dealerPins, setDealerPins] = useState<any[]>([]);
+  const [eventMapRequest, setEventMapRequest] = useState({ loading: Boolean(apiToken), error: "" });
+  const [dealerMapRequest, setDealerMapRequest] = useState({ loading: Boolean(apiToken), error: "" });
   // D4 核对(2026-07-02):KPI scope(All/KOL/公司)已有持久化 —— 初始化读 loadStoredState().kpiScope,
   // 变更由下方 saveStoredState effect 写进 localStorage["vkpi-dashboard-state-v1"] 统一状态包;
   // 无需再开独立的 "vkpi:kpi-scope" 键(避免双份来源打架)。
@@ -467,9 +341,7 @@ export function CockpitApp(props: any = {}) {
     saveStoredState({ collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope });
   }, [collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope]);
 
-  // 四-map:KOLs 模式的分布数据(/dashboard/kol-distribution-pack → mapHierarchy)是真算出来的,
-  // 有真数据就点亮该模式(available=true);Dealers / Customer Heatmap / Events 仍诚实禁用——
-  // 它们各自要 Shopify / dealer / events-on-map 端点(Wave 2),保持 WAITING/待接入 徽标。
+  // 地图模式只由真实层级/坐标数据点亮。请求状态单独保留，避免把“仍在加载”误判为空。
   const kolHierarchyReady = Boolean(
     dashboardRuntime.mapHierarchy && Object.keys(dashboardRuntime.mapHierarchy).length > 0,
   );
@@ -483,15 +355,21 @@ export function CockpitApp(props: any = {}) {
     ...VIEW_MODES,
     kols: {
       ...VIEW_MODES.kols,
-      desc: kolHierarchyReady ? "真实 KOL Pool 国家分布" : "KOL 分布数据待接入",
+      desc: kolHierarchyReady ? "KOL 档案主国家分布（单档案单主国家）" : "KOL 档案主国家待接入",
       hierarchy: dashboardRuntime.mapHierarchy || {},
       available: kolHierarchyReady,
+      loading: !kolHierarchyReady && (dashboardLoading || kolPoolLoading),
+      error: !kolHierarchyReady && !dashboardLoading && !kolPoolLoading
+        ? [dashboardError, kolPoolError].filter(Boolean).join("；")
+        : "",
     },
     dealers: {
       ...VIEW_MODES.dealers,
       desc: dealersGeoCount > 0 ? `${Object.keys((dealersHierarchy as any).US?.cities || {}).length} 城有经销商` : "经销商填经纬度后自动上图",
       hierarchy: dealersHierarchy,
       available: dealersGeoCount > 0,
+      loading: dealersGeoCount === 0 && dealerMapRequest.loading,
+      error: dealersGeoCount === 0 ? dealerMapRequest.error : "",
     },
     customer: {
       ...VIEW_MODES.customer,
@@ -503,17 +381,53 @@ export function CockpitApp(props: any = {}) {
       desc: eventsGeoCount > 0 ? `${eventsGeoCount} 地有定位活动` : "活动填城市/国家后自动上图",
       hierarchy: eventsHierarchy,
       available: eventsGeoCount > 0,
+      loading: eventsGeoCount === 0 && eventMapRequest.loading,
+      error: eventsGeoCount === 0 ? eventMapRequest.error : "",
     },
-  }), [dashboardRuntime.mapHierarchy, kolHierarchyReady, eventsHierarchy, eventsGeoCount, dealersHierarchy, dealersGeoCount]);
-  const currentMode = viewMode ? (runtimeViewModes as any)[viewMode] : null;
+  }), [
+    dashboardRuntime.mapHierarchy,
+    kolHierarchyReady,
+    dashboardLoading,
+    kolPoolLoading,
+    dashboardError,
+    kolPoolError,
+    eventsHierarchy,
+    eventsGeoCount,
+    eventMapRequest,
+    dealersHierarchy,
+    dealersGeoCount,
+    dealerMapRequest,
+  ]);
+  const mapSelection = useMemo(
+    () => resolveDashboardMapSelection(viewMode, runtimeViewModes),
+    [viewMode, runtimeViewModes],
+  );
+  const effectiveViewMode = mapSelection.mode;
+  const currentMode = effectiveViewMode ? (runtimeViewModes as any)[effectiveViewMode] : null;
   const isAvailable = currentMode?.available;
   const hierarchy = currentMode?.hierarchy || {};
 
+  // Persist an automatic fallback only after source readiness is known. A valid user choice is retained.
+  useEffect(() => {
+    if (mapSelection.pending || effectiveViewMode === viewMode) return;
+    setViewMode(effectiveViewMode);
+    setCountry("");
+    setCity("");
+    setItem("");
+    setVenue("");
+  }, [effectiveViewMode, mapSelection.pending, viewMode]);
+
   // Country options
-  const countryOptions = useMemo(() => buildCountryOptions({ currentMode, hierarchy, viewMode }), [currentMode, hierarchy, viewMode]);
+  const countryOptions = useMemo(
+    () => buildCountryOptions({ currentMode, hierarchy, viewMode: effectiveViewMode || "" }),
+    [currentMode, hierarchy, effectiveViewMode],
+  );
 
   // City options
-  const cityOptions = useMemo(() => buildCityOptions({ country, hierarchy, viewMode }), [country, hierarchy, viewMode]);
+  const cityOptions = useMemo(
+    () => buildCityOptions({ country, hierarchy, viewMode: effectiveViewMode || "" }),
+    [country, hierarchy, effectiveViewMode],
+  );
 
   // Item options(KOL / Store)
   const itemOptions = useMemo(() => buildItemOptions({ city, country, hierarchy }), [city, country, hierarchy]);
@@ -577,39 +491,82 @@ export function CockpitApp(props: any = {}) {
 
   // Top List 数据(根据当前层级动态生成)
   const topListData = useMemo(
-    () => buildTopListData({ currentMode, country, city, item, hierarchy, viewMode }),
-    [currentMode, country, city, item, hierarchy, viewMode],
+    () => buildTopListData({ currentMode, country, city, item, hierarchy, viewMode: effectiveViewMode || "" }),
+    [currentMode, country, city, item, hierarchy, effectiveViewMode],
   );
 
   // 2026-06-14 诚实化:拉真实 events(只读,失败/无 token 静默置空,绝不硬编码假活动)。
   useEffect(() => {
     if (!apiToken) {
       setEventRows([]);
+      setEventMapRequest({ loading: false, error: "" });
       return;
     }
     let cancelled = false;
+    setEventMapRequest({ loading: true, error: "" });
     listEvents(apiToken, { limit: 100 })
       .then((res) => {
         if (cancelled) return;
         setEventRows(Array.isArray(res?.items) ? res.items : []);
+        setEventMapRequest({ loading: false, error: "" });
       })
-      .catch(() => {
-        if (!cancelled) setEventRows([]);
+      .catch((error) => {
+        if (!cancelled) {
+          setEventRows([]);
+          setEventMapRequest({
+            loading: false,
+            error: error instanceof Error ? error.message : "Events map API 加载失败",
+          });
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [apiToken]);
 
+  const dealerBoardOwnsLocations = activeNav === "dealers";
+
   // 经销商位置(主页地球 dealers 层):拉 /dealers/locations 扁平 pin;失败/无 token 静默置空。
   useEffect(() => {
-    if (!apiToken) { setDealerPins([]); return; }
+    if (!apiToken) {
+      setDealerPins([]);
+      setDealerMapRequest({ loading: false, error: "" });
+      return;
+    }
+    // Dealers 页自己按模块装载 locations，此时外壳再拉一次只会放大首屏并挤占 DB 连接。
+    // 离开 Dealers 后 effect 会重跑，再为 Dashboard 地球层补数。
+    if (dealerBoardOwnsLocations) {
+      setDealerMapRequest({ loading: false, error: "" });
+      return;
+    }
     let cancelled = false;
-    getDealerLocations(apiToken)
-      .then((res) => { if (!cancelled) setDealerPins(Array.isArray(res?.pins) ? res.pins : []); })
-      .catch(() => { if (!cancelled) setDealerPins([]); });
-    return () => { cancelled = true; };
-  }, [apiToken]);
+    const controller = new AbortController();
+    setDealerMapRequest({ loading: true, error: "" });
+    // Defer the network start one microtask: React StrictMode performs setup -> cleanup ->
+    // setup synchronously, so the discarded setup is cancelled before it can hit the API.
+    // A real navigation/unmount after the request starts is still aborted by the controller.
+    Promise.resolve()
+      .then(() => (cancelled ? null : getDealerLocations(apiToken, { signal: controller.signal })))
+      .then((res) => {
+        if (!cancelled && res) {
+          setDealerPins(Array.isArray(res?.pins) ? res.pins : []);
+          setDealerMapRequest({ loading: false, error: "" });
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDealerPins([]);
+          setDealerMapRequest({
+            loading: false,
+            error: error instanceof Error ? error.message : "Dealers map API 加载失败",
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [apiToken, dealerBoardOwnsLocations]);
 
   // mappedEvents / upcomingEvents / eventPins 已上移到 pins useMemo 之前(被 pins 引用,
   // 必须先于其定义,否则 events 视图下 pins 工厂触发 eventPins 的 TDZ)。
@@ -688,13 +645,15 @@ export function CockpitApp(props: any = {}) {
         }),
 
         // ─── ROUTING ───
-        e(AnimatePresence, { mode: "wait", initial: false },
-          e(m.div, {
+        // Safari can leave an AnimatePresence exit mounted forever around lazy
+        // boards (topbar changes while the previous page remains). Route stages
+        // therefore replace by key immediately; only the incoming 180ms motion
+        // remains, so navigation cannot be held hostage by an exit callback.
+        e(m.div, {
             key: activeNav,
             className: `vkpi-page-stage vkpi-page-stage--${activeNav} min-h-[calc(100vh-4rem)]`,
             initial: { opacity: 0, y: 14 },
             animate: { opacity: 1, y: 0 },
-            exit: { opacity: 0, y: -10 },
             transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] },
           },
             activeNav === "kol-pool" && e(LazyErrorBoundary, { name: "KolPool" },
@@ -711,56 +670,61 @@ export function CockpitApp(props: any = {}) {
               )
             ),
 
-            activeNav === "my-kol" && e(React.Suspense, {
-              fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "MY KOL 加载中...")
-            },
-              e(MyKolBoardPage, {
-                apiToken,
-                viewMode: appViewMode,
-                data: dashboardData,
-                userName,
-                userRole,
-                onRefreshData,
-                onSelectPage: handleReplicaSelectPage,
-                // K3 内容播放实测:复用主控已拉的 evidence_metrics(零重复请求/零 lineage 隐藏写入)
-                metrics: dashboardRuntime.metrics,
-              })
+            activeNav === "my-kol" && e(LazyErrorBoundary, { name: "MY KOL" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "MY KOL 加载中...")
+              },
+                e(MyKolBoardPage, {
+                  apiToken,
+                  viewMode: appViewMode,
+                  data: dashboardData,
+                  userName,
+                  userRole,
+                  onRefreshData,
+                  onSelectPage: handleReplicaSelectPage,
+                  // K3 内容播放实测:复用主控已拉的 evidence_metrics(零重复请求/零 lineage 隐藏写入)
+                  metrics: dashboardRuntime.metrics,
+                })
+              )
             ),
 
-            activeNav === "projects" && e(React.Suspense, {
-              fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Projects 加载中...")
-            },
-              e(LegacyProjectsPage as React.ComponentType<any>, {
-                data: dashboardData,
-                filteredProjects: dashboardData.projects || [],
-                selectedProjectId: selectedLegacyProject?.id,
-                selectedProject: selectedLegacyProject || (dashboardData.projects || [])[0],
-                openProjectId: openLegacyProjectId,
-                // consume-reset(2026-07-12):消费后清空,否则同一项目二次 ⌘K/泳道点开时
-                // openProjectId 不变 → 页内 effect 不re-run = 死点击(Events 管道 onConsumeInitialEvent 同款)。
-                onConsumeOpenProject: () => setOpenLegacyProjectId(""),
-                viewMode: appViewMode,
-                apiToken,
-                onSelectProject: setSelectedLegacyProject,
-                // 2026-06-12 波5 R3:此前为空函数死点击;最小接真 → 跳 KOL Pool 页
-                onOpenKolProfile: () => {
-                  saveStoredState({ activeNav: "kol-pool" });
-                  setActiveNav("kol-pool");
-                },
-                onOpenStaffProfile: () => undefined,
-                onSelectPage: handleReplicaSelectPage,
-                onToggleView,
-                onRefreshData,
-                onLookupKol,
-                onUpsertProjectTerms,
-                onUploadEvidenceFile,
-                onAddProjectShipment,
-                onMoveProjectStage,
-                onCreateProject: handleReplicaCreateProject,
-                onUpdateProject: handleReplicaUpdateProject,
-                onDeleteProject: handleReplicaDeleteProject,
-                onAddProjectCost: handleReplicaAddProjectCost,
-              })
+            activeNav === "projects" && e(LazyErrorBoundary, { name: "Projects" },
+              e(React.Suspense, {
+                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Projects 加载中...")
+              },
+                e(LegacyProjectsPage as React.ComponentType<any>, {
+                  data: dashboardData,
+                  filteredProjects: dashboardData.projects || [],
+                  selectedProjectId: selectedLegacyProject?.id,
+                  selectedProject: selectedLegacyProject || (dashboardData.projects || [])[0],
+                  openProjectId: openLegacyProjectId,
+                  // consume-reset(2026-07-12):消费后清空,否则同一项目二次 ⌘K/泳道点开时
+                  // openProjectId 不变 → 页内 effect 不re-run = 死点击(Events 管道 onConsumeInitialEvent 同款)。
+                  onConsumeOpenProject: () => setOpenLegacyProjectId(""),
+                  viewMode: appViewMode,
+                  apiToken,
+                  onSelectProject: setSelectedLegacyProject,
+                  // 2026-06-12 波5 R3:此前为空函数死点击;最小接真 → 跳 KOL Pool 页
+                  onOpenKolProfile: () => {
+                    saveStoredState({ activeNav: "kol-pool" });
+                    setActiveNav("kol-pool");
+                  },
+                  // 员工档案抽屉尚未接入 Cockpit；不传空回调，避免负责人入口呈现为可点击真空操作。
+                  onOpenStaffProfile: undefined,
+                  onSelectPage: handleReplicaSelectPage,
+                  onToggleView,
+                  onRefreshData,
+                  onLookupKol,
+                  onUpsertProjectTerms,
+                  onUploadEvidenceFile,
+                  onAddProjectShipment,
+                  onMoveProjectStage,
+                  onCreateProject: handleReplicaCreateProject,
+                  onUpdateProject: handleReplicaUpdateProject,
+                  onDeleteProject: handleReplicaDeleteProject,
+                  onAddProjectCost: handleReplicaAddProjectCost,
+                })
+              )
             ),
 
             activeNav === "events" && e(LazyErrorBoundary, { name: "Events" },
@@ -921,18 +885,66 @@ export function CockpitApp(props: any = {}) {
 
             activeNav === "dashboard" && e(DashboardReplicaPage, {
               dashboardEditing,
+              dashboardStorageScope: currentUser?.id ? `staff-${currentUser.id}` : "staff-unresolved",
               onNavigate: setActiveNav,
               // 跨板块拉卡(task #76):palette 按板块可见权限过滤(侧栏 canViewBoard 同源)
               canViewBoard: boardPerms.canViewBoard,
+              // 全盘跨页模块:源页面依赖 CockpitApp 运行态的四个板块显式透传；
+              // 其余板块仍由模块自身按 apiToken 取数。不给伪造 fallback。
+              crossBoardPageProps: {
+                "kol-pool": {
+                  items: kolPoolRows,
+                  loading: kolPoolLoading,
+                  error: kolPoolError,
+                  staff: uiStaff,
+                },
+                "my-kol": {
+                  viewMode: appViewMode,
+                  data: dashboardData,
+                  userName,
+                  userRole,
+                  onRefreshData,
+                  onSelectPage: handleReplicaSelectPage,
+                  metrics: dashboardRuntime.metrics,
+                },
+                projects: {
+                  data: dashboardData,
+                  filteredProjects: dashboardData.projects || [],
+                  selectedProjectId: selectedLegacyProject?.id,
+                  selectedProject: selectedLegacyProject || (dashboardData.projects || [])[0],
+                  viewMode: appViewMode,
+                  onSelectProject: setSelectedLegacyProject,
+                  onOpenKolProfile: () => setActiveNav("kol-pool"),
+                  onSelectPage: handleReplicaSelectPage,
+                  onToggleView,
+                  onRefreshData,
+                  onLookupKol,
+                  onUpsertProjectTerms,
+                  onUploadEvidenceFile,
+                  onAddProjectShipment,
+                  onMoveProjectStage,
+                  onCreateProject: handleReplicaCreateProject,
+                  onUpdateProject: handleReplicaUpdateProject,
+                  onDeleteProject: handleReplicaDeleteProject,
+                  onAddProjectCost: handleReplicaAddProjectCost,
+                },
+                events: {
+                  userName,
+                  staff: uiStaff,
+                  currentUser,
+                },
+              },
               // P2 穿透:设置/成员与授权全屏浮层打开时,dashboard 浮卡/地图 overlay 不渲染
               showSettingsModal: showSettingsModal || showMembersAuth,
               kpiScope, setKpiScope, t, setSelectedKpi, globeContainerRef, isAvailable, pins, currentMode,
               venue, item, city, country, setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange,
-              setVenue, setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
+              setVenue, setSelectedPin, viewMode: effectiveViewMode, setViewMode, countryOptions, cityOptions, itemOptions, venueOptions,
               breadcrumb, goBack, topListData, setSelectedEvent, setSelectedSignal, setShowAllSignals, setShowAIConfirm,
               setAiRegenerating, aiRegenerating, setSelectedMover, setShowAllMovers, setSelectedProject, setShowAllProjects,
               setSelectedPublish, setShowFullCalendar, focusTarget,
               viewModes: runtimeViewModes,
+              mapSelectionLoading: mapSelection.pending,
+              mapSelectionError: mapSelection.error,
               metrics: dashboardRuntime.metrics,
               sourceHealth: dashboardRuntime.sourceHealth,
               campaigns: dashboardRuntime.campaigns,
@@ -968,7 +980,6 @@ export function CockpitApp(props: any = {}) {
               },
             })
           )
-        )
     )
   )
   )

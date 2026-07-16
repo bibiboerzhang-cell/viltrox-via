@@ -61,6 +61,9 @@ SYSTEM_PERMISSION_KEYS = [
     "system.members",
 ]
 
+CONTACT_REVEAL_PERMISSION_KEY = "contacts.reveal"
+_CONTACT_REVEAL_ROLES = {"admin", "staff"}
+
 OWNER_ONLY_SYSTEM_KEYS = {
     "system.api_keys",
     "system.models",
@@ -77,10 +80,10 @@ _LEVEL_RANK = {"none": 0, "read": 1, "write": 2, "admin": 3}
 # 2026-06-16 二次口径(用户):非 owner 默认只剩「邀请人/成员工作界面」——把 系统设置(system)/
 # 用量预算(system.usage)/运行诊断(runtime) 移出默认清单,改 owner 按需授权(抽屉里仍是三态、
 # 默认无)。OWNER_ONLY_SYSTEM_KEYS(api_keys/models/members/restart)同样不在此列。
+# 2026-07-12 P0:vkpi 恢复三态；显式 none 必须保持 none，不能在归一化时重新提升。
 DEFAULT_VISIBLE_KEYS = (
     "overview",
     "kol_ops",
-    "vkpi",
     "activities",
     "analytics",
     "insights",
@@ -222,7 +225,8 @@ def normalize_permissions(raw: Any, role: str = "readonly", *, owner: bool = Fal
             # R59-FW-PERM: write 或 admin 都触发降级
             if current in {"write", "admin"}:
                 merged[key] = "read" if key in {"system.api_keys", "system.models"} else "none"
-        # C7「两态·默认显示」:业务模块对非 owner 至少 read(none/缺省/非法值 → read)。
+        # C7「两态·默认显示」:清单内业务模块对非 owner 至少 read；vkpi 不在清单内，
+        # 因而显式 none 会原样保留。
         for key in DEFAULT_VISIBLE_KEYS:
             if _LEVEL_RANK.get(str(merged.get(key, "none")).lower(), 0) < 1:
                 merged[key] = "read"
@@ -259,6 +263,44 @@ def check_system_permission(staff: dict[str, Any], permission_key: str, level: s
     return _level_allows(perms.get(key, "none"), level)
 
 
+def check_contact_reveal_permission(staff: dict[str, Any] | None) -> bool:
+    """Return whether a staff context may request plaintext KOL contacts.
+
+    This permission is deliberately independent from ``vkpi:read/write``.  Old
+    permission rows that do not contain ``contacts.reveal`` therefore fail
+    closed.  Owner, the explicit ``admin``/``staff`` roles, and a caller with
+    either ``vkpi:admin`` or an explicit reveal grant are trusted to request a
+    reveal; the contact boundary still requires a successful audit write before
+    returning plaintext.
+    """
+    context = staff if isinstance(staff, dict) else {}
+    if is_owner(context):
+        return True
+    role = str(context.get("role") or "").strip().lower()
+    if role in _CONTACT_REVEAL_ROLES or check_tab_permission(context, "vkpi", "admin"):
+        return True
+
+    explicit: dict[str, Any] = {}
+    for raw in (context.get("permissions_json"), context.get("permissions")):
+        if isinstance(raw, dict):
+            explicit.update(raw)
+        else:
+            explicit.update(_parse_permissions(raw))
+    value = explicit.get(CONTACT_REVEAL_PERMISSION_KEY)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {
+        "1",
+        "allow",
+        "allowed",
+        "read",
+        "reveal",
+        "true",
+        "write",
+        "admin",
+    }
+
+
 def staff_context_for_user(user: dict[str, Any] | None) -> dict[str, Any]:
     if not user:
         return {}
@@ -270,12 +312,26 @@ def staff_context_for_user(user: dict[str, Any] | None) -> dict[str, Any]:
         "role": str(user.get("role") or "readonly"),
         "is_owner": 1 if owner else 0,
         "permissions_json": "{}",
+        "organization_scope_status": "staff_missing",
     }
     try:
         conn = get_conn()
         row = conn.execute(
             """
-            SELECT s.*, u.email AS email, u.name AS name
+            SELECT
+                s.*,
+                u.email AS email,
+                u.name AS name,
+                (
+                    SELECT MIN(om.organization_id)
+                    FROM organization_members AS om
+                    WHERE om.staff_id = s.id
+                ) AS resolved_organization_id,
+                (
+                    SELECT COUNT(DISTINCT om.organization_id)
+                    FROM organization_members AS om
+                    WHERE om.staff_id = s.id
+                ) AS organization_membership_count
             FROM staff s
             LEFT JOIN users u ON u.id = s.user_id
             WHERE s.user_id = ?
@@ -286,8 +342,27 @@ def staff_context_for_user(user: dict[str, Any] | None) -> dict[str, Any]:
         ).fetchone()
         if row:
             base.update(dict(row))
+            try:
+                membership_count = int(base.pop("organization_membership_count", 0) or 0)
+                organization_id = int(base.pop("resolved_organization_id", 0) or 0)
+            except (TypeError, ValueError):
+                membership_count = 0
+                organization_id = 0
+            if membership_count == 1 and organization_id > 0:
+                base["organization_id"] = organization_id
+                base["organization_scope_status"] = "resolved"
+            elif membership_count > 1:
+                # The current request context has no tenant selector.  Multiple
+                # memberships therefore cannot be resolved safely.
+                base.pop("organization_id", None)
+                base["organization_scope_status"] = "ambiguous"
+            else:
+                base.pop("organization_id", None)
+                base["organization_scope_status"] = "membership_missing"
     except Exception:
         logger.debug("permissions.staff_context_lookup_failed", exc_info=True)
+        base.pop("organization_id", None)
+        base["organization_scope_status"] = "lookup_failed"
     owner = owner or is_owner(base)
     permissions = normalize_permissions(
         base.get("permissions_json"),

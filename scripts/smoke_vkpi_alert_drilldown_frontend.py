@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static smoke for P2.11 alert drilldown UI."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def main() -> None:
     assert "Flagged Comments" in drawer and "Source Post" in drawer and "Raw Metadata" in drawer, "drawer evidence sections missing"
     assert ".vkpi-alert-source-list" in css, "alert source CSS missing"
 
-    print("VKPI_ALERT_DRILLDOWN_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_ALERT_DRILLDOWN_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

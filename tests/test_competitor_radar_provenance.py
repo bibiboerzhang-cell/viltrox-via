@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -143,10 +143,12 @@ def test_generate_grounded_three_tuple_adds_provenance(monkeypatch) -> None:
                 {
                     "items": [
                         {
+                            "signal_type": "competitor",
                             "brand": "Sigma",
                             "title": "Legacy radar item",
                             "summary": "Old shape remains readable",
                             "impact": "Opportunity",
+                            "content_origin": "external",
                             "source_platform": "website",
                             "source_url": "https://petapixel.com/sigma-grounded",
                             "published_at": "2026-07-09T12:00:00Z",
@@ -161,7 +163,9 @@ def test_generate_grounded_three_tuple_adds_provenance(monkeypatch) -> None:
 
     result = competitor_radar.generate_competitor_radar()
 
-    assert result == {"status": "ok", "items": 1}
+    assert result["status"] == "ok"
+    assert result["result_status"] == "ready"
+    assert result["items"] == 1
     assert conn.insert_params is not None
     payload = json.loads(str(conn.insert_params[0]))
     item = payload["items"][0]
@@ -183,7 +187,23 @@ def test_generate_does_not_persist_legacy_ungrounded_result(monkeypatch) -> None
         competitor_radar,
         "_generate",
         lambda _prompt: (
-            json.dumps({"items": [{"brand": "Sigma", "title": "Unverified item"}]}),
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Sigma",
+                            "title": "Unverified item",
+                            "summary": "Complete item without retained grounding",
+                            "impact": "Needs verification",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "https://example.com/unverified",
+                            "published_at": "2026-07-09T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
             "legacy:model",
         ),
     )
@@ -191,6 +211,7 @@ def test_generate_does_not_persist_legacy_ungrounded_result(monkeypatch) -> None
     result = competitor_radar.generate_competitor_radar()
 
     assert result["status"] == "ungrounded"
+    assert result["result_status"] == "degraded"
     assert result["reason"] == "no_grounded_citations"
     assert conn.insert_params is None
 
@@ -240,6 +261,8 @@ def test_get_preserves_old_fields_and_orders_external_before_unknown_and_owned(m
     result = competitor_radar.get_competitor_radar()
 
     assert result["available"] is True
+    assert result["status"] == "degraded"
+    assert result["is_ready"] is False
     items = result["content"]["items"]
     assert [item["title"] for item in items] == ["External article", "Legacy unknown", "Owned post"]
     assert [item["content_origin"] for item in items] == ["external", "unknown", "owned"]
@@ -256,3 +279,146 @@ def test_get_preserves_old_fields_and_orders_external_before_unknown_and_owned(m
             "published_at",
             "observed_at",
         }.issubset(item)
+
+
+def test_generate_rejects_items_string_without_character_coercion(monkeypatch) -> None:
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps({"items": "not-a-list"}),
+            "gemini:test+google_search",
+            [{"url": "https://example.com/source", "relation_type": "grounding"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "invalid"
+    assert result["reason"] == "invalid_result_contract"
+    assert "items:expected_list" in result["validation_errors"]
+    assert conn.insert_params is None
+
+
+def test_generate_rejects_item_url_not_present_in_grounding(monkeypatch) -> None:
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Sigma",
+                            "title": "Grounding mismatch",
+                            "summary": "The item URL is not among provider citations",
+                            "impact": "Must not be persisted",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "https://example.com/item",
+                            "published_at": "2026-07-09T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "gemini:test+google_search",
+            [{"url": "https://example.com/different", "relation_type": "grounding"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "degraded"
+    assert result["reason"] == "item_source_not_grounded"
+    assert conn.insert_params is None
+
+
+def test_generate_rejects_malformed_source_url(monkeypatch) -> None:
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Sigma",
+                            "title": "Malformed URL",
+                            "summary": "Invalid source URL",
+                            "impact": "Must not be persisted",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "javascript:alert(1)",
+                        }
+                    ]
+                }
+            ),
+            "gemini:test+google_search",
+            [{"url": "https://example.com/source", "relation_type": "grounding"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "invalid"
+    assert any("invalid_public_http_url" in error for error in result["validation_errors"])
+    assert conn.insert_params is None
+
+
+def test_stale_complete_radar_cannot_report_ready(monkeypatch) -> None:
+    generated_at = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    source_url = "https://example.com/sigma"
+    row = {
+        "snapshot_date": generated_at[:10],
+        "model": "gemini:test+google_search",
+        "created_at": generated_at,
+        "content_json": json.dumps(
+            {
+                "generated_at": generated_at,
+                "items": [
+                    {
+                        "signal_type": "competitor",
+                        "brand": "Sigma",
+                        "title": "Complete stale item",
+                        "summary": "The item satisfies the structural contract",
+                        "impact": "Recheck before acting",
+                        "content_origin": "external",
+                        "source_platform": "website",
+                        "source_url": source_url,
+                        "published_at": generated_at,
+                    }
+                ],
+                "sources": [
+                    {
+                        "title": "Sigma source",
+                        "url": source_url,
+                        "provider": "google_search",
+                        "relation_type": "grounding",
+                    }
+                ],
+            }
+        ),
+    }
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: _Conn(row))
+    monkeypatch.setattr(competitor_radar, "_market_sources", lambda *_args, **_kwargs: [])
+
+    result = competitor_radar.get_competitor_radar()
+
+    assert result["available"] is True
+    assert result["freshness_status"] == "stale"
+    assert result["status"] == "degraded"
+    assert result["is_ready"] is False

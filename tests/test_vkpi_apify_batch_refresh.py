@@ -1,6 +1,7 @@
 import asyncio
 
 import app.domains.sync.apify_batch_refresh as apify_batch_refresh
+from app.platform.apify_budget import apify_execution_context
 
 
 def test_parse_chunk_overrides_only_accepts_supported_platforms() -> None:
@@ -159,7 +160,12 @@ def test_execute_apify_batch_plan_summarizes_mocked_runs(monkeypatch) -> None:
         ],
     }
 
-    result = asyncio.run(apify_batch_refresh.execute_apify_batch_plan(plan, allow_provider_calls=True, api_token="test"))
+    with apify_execution_context("test-apify-batch", 1):
+        result = asyncio.run(
+            apify_batch_refresh.execute_apify_batch_plan(
+                plan, allow_provider_calls=True, api_token="test"
+            )
+        )
 
     assert sorted(calls) == ["instagram-1", "tiktok-1"]
     assert result["executed"] is True

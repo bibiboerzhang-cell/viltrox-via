@@ -1,12 +1,9 @@
-// Verbatim from vkpi_v6.15.7_integrated.html
-
-
 import React from "react";
 import { m } from "framer-motion";
-import { Share2, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
@@ -20,6 +17,8 @@ import {
   evidenceIdOf,
   isImageEvidence,
   recordOr,
+  videoAnalysisPollDelayMs,
+  videoAnalysisPollSnapshot,
   videoAnalysisSources,
 } from "./KOLDetailDrawer.helpers";
 import {
@@ -37,6 +36,7 @@ import { RateCardPanel } from "./RateCardPanel";
 import { AudienceGeoPanel } from "./AudienceGeoPanel";
 import { OutreachCriticSignalCard } from "./OutreachCriticSignalCard";
 import { SafetyAuthenticityPanel } from "./SafetyAuthenticityPanel";
+import { DRAWER_TABS, KOLDrawerBriefSkill, KOLDrawerCoopActions, KOLDrawerViewerContextBar, readStoredDrawerTab, storeDrawerTab } from "./KOLDetailDrawer.Subsections";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -59,26 +59,9 @@ export { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOL
 
 const e = React.createElement;
 
-// D2:CopyValueButton / GoaffproLinkCard / GoaffproLinkSection 已抽出至共享文件 ../../shared/GoaffproLinkSection(供 MY KOL 详情复用),渲染调用见下方。
-
 // 【C1 Tab 化】抽屉内容区四 tab:按「用户看数据的心智」把既有 section 分组渲染(零改各 section 内部)。
 // 概览=这人是谁/分数为何/内容速览;深度分析=LLM/视频深析产物;受众=粉丝画像;合作=推进合作的动作面。
 // 头部身份卡与底部粘性行动条在 tab 结构之外,全 tab 常驻。tab 选择记忆到 localStorage(跨 KOL/会话)。
-const DRAWER_TABS: Array<{ key: string; label: string }> = [
-  { key: "overview", label: "概览" },
-  { key: "deep", label: "深度分析" },
-  { key: "audience", label: "受众" },
-  { key: "coop", label: "合作" },
-];
-const DRAWER_TAB_STORAGE_KEY = "vkpi:drawer-active-tab";
-function readStoredDrawerTab(): string {
-  try {
-    const raw = window.localStorage.getItem(DRAWER_TAB_STORAGE_KEY);
-    if (raw && DRAWER_TABS.some((tab) => tab.key === raw)) return raw;
-  } catch { /* 隐私模式读失败按默认「概览」 */ }
-  return "overview";
-}
-
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
@@ -127,7 +110,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const handleSelectTab = React.useCallback((key: string) => {
     setActiveTab(key);
     try {
-      window.localStorage.setItem(DRAWER_TAB_STORAGE_KEY, key);
+      storeDrawerTab(key);
     } catch { /* 写失败不阻塞切换,本次会话内 state 仍生效 */ }
   }, []);
   const [dimensions11, setDimensions11] = React.useState<any>(null);
@@ -137,6 +120,163 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const [videoEnqueueState, setVideoEnqueueState] = React.useState<any>({ status: "idle", message: "" });
   // 全视频跑:该 KOL 全部视频证据各入队一条 final_v1,发完综合评估。独立于上面的单代表作入队。
   const [allVideosState, setAllVideosState] = React.useState<any>({ status: "idle", message: "" });
+  const itemIdentity = String(item?.id || "");
+  const itemIdentityRef = React.useRef(itemIdentity);
+  itemIdentityRef.current = itemIdentity;
+  type VideoPollMode = "single" | "all";
+  const videoEnqueueGenerationRef = React.useRef<Record<VideoPollMode, number>>({ single: 0, all: 0 });
+  const videoAnalysisPollRef = React.useRef<Record<VideoPollMode, { timer: ReturnType<typeof setTimeout> | null; generation: number; startedAt: number }>>({
+    single: { timer: null, generation: 0, startedAt: 0 },
+    all: { timer: null, generation: 0, startedAt: 0 },
+  });
+  const videoReadyCountRef = React.useRef(0);
+  const clearVideoAnalysisPoll = React.useCallback((mode?: VideoPollMode) => {
+    const modes: VideoPollMode[] = mode ? [mode] : ["single", "all"];
+    modes.forEach((key) => {
+      const controller = videoAnalysisPollRef.current[key];
+      if (controller.timer) clearTimeout(controller.timer);
+      controller.timer = null;
+      controller.generation += 1;
+    });
+  }, []);
+  const reloadDetailSafely = React.useCallback(async () => {
+    if (typeof onReloadDetail !== "function") return;
+    try {
+      await onReloadDetail();
+    } catch {
+      // 下一轮仍可继续；真实错误由详情加载态展示，不在这里伪造终态。
+    }
+  }, [onReloadDetail]);
+  const startVideoAnalysisPoll = React.useCallback((options: {
+    evidenceId?: number | null;
+    evidenceIds?: number[];
+    targetReady?: number | null;
+    initialReady?: number;
+    initialTerminal?: number;
+    terminalReasons?: string[];
+    itemIdentity: string;
+    mode: VideoPollMode;
+  }) => {
+    if (
+      !apiToken
+      || !options.itemIdentity
+      || itemIdentityRef.current !== options.itemIdentity
+      || typeof onReloadDetail !== "function"
+    ) return false;
+    clearVideoAnalysisPoll(options.mode);
+    const controller = videoAnalysisPollRef.current[options.mode];
+    const generation = controller.generation;
+    const startedAt = Date.now();
+    const pendingEvidenceIds = new Set((options.evidenceIds || []).filter((id) => Number.isFinite(id) && id > 0));
+    let readyCount = Math.max(0, Number(options.initialReady || 0));
+    let terminalCount = Math.max(0, Number(options.initialTerminal || 0));
+    const terminalReasons = [...(options.terminalReasons || [])];
+    controller.startedAt = startedAt;
+    const isCurrent = () => (
+      generation === controller.generation
+      && itemIdentityRef.current === options.itemIdentity
+    );
+    const schedule = (callback: () => void) => {
+      const elapsed = Date.now() - startedAt;
+      controller.timer = setTimeout(callback, videoAnalysisPollDelayMs(elapsed));
+    };
+    const poll = async () => {
+      if (!isCurrent()) return;
+      let shouldReloadDetail = false;
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= 30 * 60_000) {
+        clearVideoAnalysisPoll(options.mode);
+        const message = "后台任务仍未形成终态，已停止自动刷新；可点“刷新状态”继续核验。";
+        if (options.mode === "single") setVideoEnqueueState({ status: "paused", message });
+        else setAllVideosState({ status: "paused", message });
+        return;
+      }
+      if (options.mode === "single" && options.evidenceId) {
+        try {
+          const payload = await getKolVideoAnalysisCache(
+            apiToken,
+            options.evidenceId,
+            "video_analysis_final_v1",
+            { allowLocalEvaluationFallback: false },
+          );
+          if (!isCurrent()) return;
+          const snapshot = videoAnalysisPollSnapshot(payload);
+          const state = snapshot.state;
+          if (state === "ready") {
+            await reloadDetailSafely();
+            if (!isCurrent()) return;
+            clearVideoAnalysisPoll(options.mode);
+            setVideoEnqueueState({ status: "already_analyzed", message: "视频深析已完成并自动回填。" });
+            return;
+          }
+          if (["blocked", "failed", "error", "cancelled", "canceled"].includes(state)) {
+            await reloadDetailSafely();
+            if (!isCurrent()) return;
+            clearVideoAnalysisPoll(options.mode);
+            setVideoEnqueueState({ status: state, message: `视频深析未完成：${snapshot.reason}` });
+            return;
+          }
+        } catch {
+          // 短暂读失败不冒充任务失败；继续有界重试。
+        }
+      } else if (options.mode === "all" && pendingEvidenceIds.size > 0) {
+        const evidenceIds = [...pendingEvidenceIds];
+        let batchItems: any[] = [];
+        try {
+          const batch = await getKolVideoAnalysisBatch(
+            apiToken,
+            evidenceIds,
+            "video_analysis_final_v1",
+          );
+          batchItems = Array.isArray(batch?.items) ? batch.items : [];
+        } catch {
+          // 短暂读失败不冒充任务失败；继续有界重试。
+        }
+        if (!isCurrent()) return;
+        batchItems.forEach((payload) => {
+          const snapshot = videoAnalysisPollSnapshot(payload);
+          const evidenceId = snapshot.evidenceId;
+          if (!pendingEvidenceIds.has(evidenceId)) return;
+          if (snapshot.ready) {
+            pendingEvidenceIds.delete(evidenceId);
+            readyCount += 1;
+            shouldReloadDetail = true;
+          } else if (snapshot.terminal) {
+            pendingEvidenceIds.delete(evidenceId);
+            terminalCount += 1;
+            terminalReasons.push(snapshot.reason);
+            shouldReloadDetail = true;
+          }
+        });
+        if (pendingEvidenceIds.size === 0) {
+          await reloadDetailSafely();
+          if (!isCurrent()) return;
+          clearVideoAnalysisPoll(options.mode);
+          const terminalSuffix = terminalCount
+            ? `，${terminalCount} 条未完成${terminalReasons.length ? `（${[...new Set(terminalReasons)].slice(0, 3).join("、")}）` : ""}`
+            : "";
+          setAllVideosState({
+            status: terminalCount ? "partial" : "done",
+            message: `全视频深析终态：${readyCount} 条就绪${terminalSuffix}。`,
+          });
+          return;
+        }
+      } else if (options.targetReady && videoReadyCountRef.current >= options.targetReady) {
+        clearVideoAnalysisPoll(options.mode);
+        setAllVideosState({ status: "done", message: `已自动回填 ${videoReadyCountRef.current} 条视频深析结果。` });
+        return;
+      } else if (options.targetReady) {
+        // 旧服务端没有返回 evidence id 时，只能通过重拉 detail
+        // 观察 ready_count；新服务端的有界 batch 路径不需要空转重拉。
+        shouldReloadDetail = true;
+      }
+      if (shouldReloadDetail) await reloadDetailSafely();
+      if (isCurrent()) schedule(() => void poll());
+    };
+    if (isCurrent()) void reloadDetailSafely();
+    schedule(() => void poll());
+    return true;
+  }, [apiToken, onReloadDetail, clearVideoAnalysisPoll, reloadDetailSafely]);
   const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState<any>(null);
   // 地基B 内容契合深析(content_fit_v1):默认只读缓存;点击才按需触发深析(不烧 LLM 直到点击)。
   const [contentFit, setContentFit] = React.useState<any>(null);
@@ -390,7 +530,18 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   }, [apiToken, item?.id, detailBundle]);
 
   React.useEffect(() => {
+    const ready = Number(recordOr(videoAnalysisSummary).ready_count);
+    videoReadyCountRef.current = Number.isFinite(ready) ? ready : 0;
+  }, [videoAnalysisSummary]);
+
+  React.useEffect(() => () => clearVideoAnalysisPoll(), [item?.id, clearVideoAnalysisPoll]);
+
+  React.useEffect(() => {
+    videoEnqueueGenerationRef.current.single += 1;
+    videoEnqueueGenerationRef.current.all += 1;
     setVideoEnqueueState({ status: "idle", message: "" });
+    setAllVideosState({ status: "idle", message: "" });
+    videoReadyCountRef.current = 0;
     setActiveRepresentativeVideo(null);
     // 换 KOL 时清掉上一条的 brief skill 结果,避免串号。
     setBriefResult(null);
@@ -528,16 +679,28 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       : "暂无可分析的 video evidence");
   const handleVideoAnalysisEnqueue = () => {
     if (!apiToken || !item.id || !primaryVideoEvidenceId || videoEnqueueBusy) return;
+    clearVideoAnalysisPoll("single");
+    const operationItemIdentity = String(item.id);
+    const operationGeneration = videoEnqueueGenerationRef.current.single + 1;
+    videoEnqueueGenerationRef.current.single = operationGeneration;
+    const isCurrentOperation = () => (
+      itemIdentityRef.current === operationItemIdentity
+      && videoEnqueueGenerationRef.current.single === operationGeneration
+    );
     setVideoEnqueueState({ status: "loading", message: "正在把 evidence #" + primaryVideoEvidenceId + " 加入深析队列" });
     void enqueueVideoAnalysis(apiToken, item.id, primaryVideoEvidenceId)
       .then((payload) => {
+        if (!isCurrentOperation()) return;
         const status = String(payload?.status || "");
         if (status === "queued") {
           setVideoEnqueueState({ status, message: "已入队；左侧任务进度看板会自动显示" });
+          startVideoAnalysisPoll({ evidenceId: primaryVideoEvidenceId, itemIdentity: operationItemIdentity, mode: "single" });
         } else if (status === "already_analyzed") {
           setVideoEnqueueState({ status, message: "这条 evidence 已有 final_v1 深析结果" });
+          void reloadDetailSafely();
         } else if (status === "already_queued") {
           setVideoEnqueueState({ status, message: "这条 evidence 已在队列中，避免重复入队" });
+          startVideoAnalysisPoll({ evidenceId: primaryVideoEvidenceId, itemIdentity: operationItemIdentity, mode: "single" });
         } else if (status === "budget_denied") {
           setVideoEnqueueState({ status, message: "预算闸门拒绝，本次未入队" });
         } else {
@@ -545,11 +708,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         }
       })
       .catch((error) => {
+        if (!isCurrentOperation()) return;
         const message = error?.message ? String(error.message) : "入队失败";
         setVideoEnqueueState({ status: "error", message });
       });
   };
-  const allVideosBusy = allVideosState.status === "loading";
+  const allVideosBusy = ["loading", "processing", "queued", "already_queued"].includes(allVideosState.status);
   // 【A2】抓取按钮态:入队请求中/轮询中都算忙(按钮 disabled + 文案「抓取中…」)。
   const crawlBusy = profileCrawlState.status === "loading" || profileCrawlState.status === "crawling";
   // 「无视频证据」判定:detail_bundle 已到 → 以 item.video_evidence 与 video_analysis.items 双空为准;
@@ -563,9 +727,18 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   const noEvidenceKnown = bundleReadyForEvidence ? bundleNoEvidence : allVideosState.status === "no_evidence";
   const handleEnqueueAllVideos = () => {
     if (!apiToken || !item.id || allVideosBusy) return;
+    clearVideoAnalysisPoll("all");
+    const operationItemIdentity = String(item.id);
+    const operationGeneration = videoEnqueueGenerationRef.current.all + 1;
+    videoEnqueueGenerationRef.current.all = operationGeneration;
+    const isCurrentOperation = () => (
+      itemIdentityRef.current === operationItemIdentity
+      && videoEnqueueGenerationRef.current.all === operationGeneration
+    );
     setAllVideosState({ status: "loading", message: "正在把该 KOL 的全部视频证据加入深析队列…" });
     void enqueueAllKolVideos(apiToken, item.id)
       .then((payload: any) => {
+        if (!isCurrentOperation()) return;
         const status = String(payload?.status || "");
         if (status === "no_evidence") {
           // 【A2】后端确认无证据 → 自动转为抓取(account_deep),不让用户对着死路按钮干瞪眼。
@@ -576,9 +749,70 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         const queued = Number(payload?.queued || 0);
         const skipped = Number(payload?.skipped || 0);
         const total = Number(payload?.evidence_total || payload?.requested || 0);
-        setAllVideosState({ status: "done", message: `全视频跑:共 ${total} 条,入队 ${queued},跳过 ${skipped}(已分析/在队);进度见左侧看板` });
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        const activeEvidenceIds: number[] = [];
+        let initialReady = 0;
+        let initialTerminal = 0;
+        const terminalReasons: string[] = [];
+        items.forEach((rawItem: any) => {
+          const resultStatus = String(rawItem?.status || "").toLowerCase();
+          const evidenceId = Number(rawItem?.evidence_id || 0);
+          if (["queued", "already_queued"].includes(resultStatus) && evidenceId > 0) {
+            activeEvidenceIds.push(evidenceId);
+          } else if (["already_analyzed", "already_evaluated"].includes(resultStatus)) {
+            initialReady += 1;
+          } else if ([
+            "ai_disabled",
+            "budget_denied",
+            "unsupported_platform",
+            "skipped_non_video",
+            "invalid_item",
+            "not_found",
+            "error",
+            "blocked",
+            "failed",
+          ].includes(resultStatus)) {
+            initialTerminal += 1;
+            terminalReasons.push(String(rawItem?.reason || rawItem?.provider_gate_reason || resultStatus));
+          }
+        });
+        if (activeEvidenceIds.length > 0) {
+          setAllVideosState({
+            status: "processing",
+            message: `全视频跑：共 ${total} 条，${activeEvidenceIds.length} 条处理中，${initialReady} 条已有结果，${initialTerminal} 条已终止。`,
+          });
+          startVideoAnalysisPoll({
+            evidenceIds: [...new Set(activeEvidenceIds)],
+            initialReady,
+            initialTerminal,
+            terminalReasons,
+            itemIdentity: operationItemIdentity,
+            mode: "all",
+          });
+        } else if (items.length > 0) {
+          const terminalSuffix = initialTerminal
+            ? `，${initialTerminal} 条未完成${terminalReasons.length ? `（${[...new Set(terminalReasons)].slice(0, 3).join("、")}）` : ""}`
+            : "";
+          setAllVideosState({
+            status: initialTerminal ? "partial" : "done",
+            message: `全视频深析终态：${initialReady} 条就绪${terminalSuffix}。`,
+          });
+          void reloadDetailSafely();
+        } else if (queued > 0) {
+          // 兼容尚未回传 items 的旧服务端；新服务端按 evidence id 逐条收敛。
+          setAllVideosState({ status: "processing", message: `全视频跑:共 ${total} 条,入队 ${queued},跳过 ${skipped};正在核验终态。` });
+          startVideoAnalysisPoll({
+            targetReady: videoReadyCountRef.current + queued,
+            itemIdentity: operationItemIdentity,
+            mode: "all",
+          });
+        } else {
+          setAllVideosState({ status: "done", message: `全视频跑:共 ${total} 条,入队 ${queued},跳过 ${skipped}。` });
+          void reloadDetailSafely();
+        }
       })
       .catch((error: any) => {
+        if (!isCurrentOperation()) return;
         setAllVideosState({ status: "error", message: error?.message ? String(error.message) : "全视频入队失败" });
       });
   };
@@ -605,30 +839,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose }),
 
     // ── 【M3/M5】观看者上下文条:来自谁的共享 + 认领状态/释放(有数据才渲染,全 tab 常驻)──
-    (viewerCtx?.share_origin || viewerCtx?.claim || releaseMsg) && e("div", {
-      className: "flex flex-wrap items-center gap-1.5 border-b border-white/[0.06] px-5 py-1.5",
-    },
-      viewerCtx?.share_origin && e("span", {
-        className: "rounded border border-purple-400/30 bg-purple-400/[0.08] px-1.5 py-0.5 text-[9px] font-medium text-purple-200",
-        title: "该 KOL 经共享池(P-GROUP-7)共享给你 · 只读可见,非本人收藏"
-          + (viewerCtx.share_origin.created_at ? " · " + String(viewerCtx.share_origin.created_at).slice(0, 10) : ""),
-      }, "来自 " + (viewerCtx.share_origin.shared_by_name || "未知成员") + " 的共享"),
-      viewerCtx?.claim && e("span", {
-        className: "rounded border border-amber-400/25 bg-amber-400/[0.06] px-1.5 py-0.5 text-[9px] text-amber-200",
-        title: "active 认领(vkpi_kol_claims)"
-          + (viewerCtx.claim.expires_at ? " · 到期 " + String(viewerCtx.claim.expires_at).slice(0, 10) : ""),
-      }, "已认领 · " + (viewerCtx.claim.staff_name || ("成员 " + (viewerCtx.claim.staff_id ?? "—")))),
-      viewerCtx?.claim?.can_release && e("button", {
-        type: "button",
-        disabled: releaseBusy,
-        onClick: handleReleaseClaim,
-        className: "rounded border border-amber-400/40 px-1.5 py-0.5 text-[9px] font-medium text-amber-300 transition-colors hover:bg-amber-400/[0.10] disabled:opacity-50",
-        title: "释放认领:取消认领回池,他人可再认领(认领人本人或管理层可操作)",
-      }, releaseBusy ? "释放中…" : "释放"),
-      releaseMsg && e("span", {
-        className: "text-[9px] " + (releaseMsg.startsWith("释放失败") ? "text-rose-300" : "text-emerald-300"),
-      }, releaseMsg)
-    ),
+    e(KOLDrawerViewerContextBar, {
+      viewerCtx,
+      releaseBusy,
+      releaseMsg,
+      onRelease: handleReleaseClaim,
+    }),
 
     // ─── Scroll content ───
     // 【C1 Tab 化】既有 section 一列不变,只按 activeTab 过滤渲染对应集合(不动各 section 内部);
@@ -674,7 +890,14 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       // ══ Tab「深度分析」:视频深析产物 + LLM 判断 + 档案 + 内容契合 ══
       activeTab === "deep" && e(React.Fragment, null,
         // 【A3】抓取中把轮询态透传给深析结果区标题旁的小徽标(复用组件内已有轮询态,零全局依赖)。
-        e(KOLVideoAnalysisPanel, { apiToken, videos: videoAnalysisVideos, preloadedBundles: preloadedVideoAnalysisBundles, summary: videoAnalysisSummary, crawling: crawlBusy }),
+        e(KOLVideoAnalysisPanel, {
+          apiToken,
+          videos: videoAnalysisVideos,
+          preloadedBundles: preloadedVideoAnalysisBundles,
+          summary: videoAnalysisSummary,
+          crawling: crawlBusy,
+          onRefresh: reloadDetailSafely,
+        }),
         // ── 全视频跑:该 KOL 全部视频证据各入队一条 final_v1 → 发完综合评估 ──
         // 【A2】无 evidence 时本按钮变「一键抓取」:点击入队 profile 深爬(account_deep 级联),
         // 按钮态「抓取中…」+ 30s×10 轮询 onReloadDetail 等证据落地;已入队/已有证据都给人话反馈。
@@ -745,31 +968,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         }),
         // ── D2 生成追踪链(GOAFFPRO):一键给该 KOL 建 affiliate + 追踪链 + 优惠码(KOL 零注册)──
         e(GoaffproLinkSection, { apiToken, kolPoolId: item?.id }),
-        // ── P-GROUP-7 共享给成员:把这条 My KOL 显式共享给某成员(只读授予,落 vkpi_kol_pool_members)──
-        apiToken && item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
-          e("button", {
-            type: "button",
-            onClick: () => setShareOpen(true),
-            className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-400/25 bg-purple-400/[0.06] px-3 py-2 text-[11px] font-medium text-purple-200 transition-colors hover:bg-purple-400/[0.12]",
-          },
-            e(Share2, { size: 12 }),
-            "共享给成员"
-          )
-        ),
-        // ── 第2轮 查看完整档案:跳八层组装页(id 走 sessionStorage,CockpitApp 监听切板块)──
-        item?.id && e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
-          e("button", {
-            type: "button",
-            onClick: () => {
-              window.sessionStorage.setItem("vkpi:kol-profile-id", String(item.id));
-              window.dispatchEvent(new CustomEvent("vkpi:open-kol-profile"));
-            },
-            className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12]",
-          },
-            e(Sparkles, { size: 12 }),
-            "查看完整档案"
-          )
-        ),
+        // ── P-GROUP-7 共享成员 + 查看完整档案：纯行动区抽出，状态/路由契约不变。──
+        e(KOLDrawerCoopActions, { apiToken, item, onOpenShare: () => setShareOpen(true) }),
       ),
     ),
     
@@ -795,64 +995,5 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       apiToken,
       onClose: () => setShareOpen(false),
     })
-  );
-}
-
-// ── N2 跑 Skill 区块:brief_generate 触发按钮 + loading/错误/结果三态渲染 ──
-function KOLDrawerBriefSkill({ result, busy, error, onRun }: {
-  result: SkillRunResult | null;
-  busy: boolean;
-  error: string;
-  onRun: () => void;
-}) {
-  const output = (result && typeof result.output === "object" ? result.output : null) as Record<string, unknown> | null;
-  const brief = (output && typeof output.brief === "object" ? output.brief : null) as Record<string, unknown> | null;
-  const list = (value: unknown): string[] => (Array.isArray(value) ? value.map((x) => String(x)).filter(Boolean) : []);
-  const hook = brief && typeof brief.hook === "string" ? brief.hook : "";
-  const talkingPoints = brief ? list(brief.talking_points) : [];
-  const dos = brief ? list(brief.do) : [];
-  const donts = brief ? list(brief.dont) : [];
-  const deliverables = brief ? list(brief.deliverables) : [];
-  const okFalse = output ? output.ok === false : false;
-  const showResult = Boolean(result) && Boolean(brief) && !okFalse;
-
-  const renderListBlock = (label: string, items: string[], color: string) =>
-    items.length > 0 && e("div", { key: label },
-      e("div", { className: "text-[9px] mb-1", style: { color } }, label),
-      e("ul", { className: "space-y-0.5" },
-        items.map((it, i) => e("li", { key: i, className: "text-[10px] text-slate-300 leading-snug" }, "· " + it)),
-      ),
-    );
-
-  return e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
-    e("div", { className: "flex items-center justify-between gap-2 mb-1.5" },
-      e("div", { className: "text-[11px] font-semibold text-white" }, "合作 Brief 草案 · Skill"),
-      result?.skill_run_id != null && e("span", {
-        className: "text-[9px] px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400",
-      }, "run #" + result.skill_run_id),
-    ),
-    e("button", {
-      type: "button",
-      disabled: busy,
-      onClick: onRun,
-      className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-emerald-400/25 bg-emerald-400/[0.06] px-3 py-2 text-[11px] font-medium text-emerald-200 transition-colors hover:bg-emerald-400/[0.12] disabled:opacity-50",
-    },
-      e(Sparkles, { size: 12 }),
-      busy ? "跑 Skill 中…" : (showResult ? "重新生成 Brief" : "跑 Skill·生成合作 Brief"),
-    ),
-    error && e("div", { className: "mt-1.5 text-[9.5px] leading-relaxed text-rose-300" }, error),
-    showResult && e("div", { className: "mt-2 rounded-md border border-white/[0.05] bg-black/20 p-2.5 space-y-2" },
-      hook && e("div", null,
-        e("div", { className: "text-[9px] text-emerald-300 mb-0.5" }, "开场钩子"),
-        e("div", { className: "text-[10.5px] text-slate-200 leading-relaxed" }, hook),
-      ),
-      renderListBlock("内容要点", talkingPoints, "#06b6d4"),
-      renderListBlock("建议做", dos, "#10b981"),
-      renderListBlock("避免", donts, "#fb7185"),
-      renderListBlock("交付物", deliverables, "#a855f7"),
-      output && typeof output.model_used === "string" && e("div", {
-        className: "text-[9px] text-slate-500 pt-1",
-      }, "模型 " + output.model_used + " · 草案仅供人审后编辑"),
-    ),
   );
 }

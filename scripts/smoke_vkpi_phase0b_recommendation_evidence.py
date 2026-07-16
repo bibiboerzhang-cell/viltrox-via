@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test Product Analysis recommendation evidence/source rows."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import secrets
@@ -162,7 +163,7 @@ def main() -> None:
         assert int(closed_loop["outcome"]["project_created"] or 0) == 1, closed_loop["outcome"]
         assert closed_loop["projects"], closed_loop
         assert closed_loop["links"], closed_loop
-        print("VKPI_PHASE0B_RECOMMENDATION_EVIDENCE_SMOKE_OK")
+        stdout_out("VKPI_PHASE0B_RECOMMENDATION_EVIDENCE_SMOKE_OK")
     finally:
         residue = cleanup(created, staff_id)
         assert all(value == 0 for value in residue.values()), residue

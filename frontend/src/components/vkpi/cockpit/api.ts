@@ -90,7 +90,7 @@ export async function fetchCockpitDashboardBundle(
     aiTodayHot,
     competitorRadar,
     _sources: {
-      dashboard: { ok: dashboardResult.ok, label: "绩效总览" },
+      dashboard: { ok: dashboardResult.ok, label: "增长总览" },
       distribution: { ok: distributionResult.ok, label: "KOL 地图" },
       recentContent: { ok: recentContentResult.ok, label: "近期内容" },
       copilotBrief: { ok: copilotBriefResult.ok, label: "Copilot 简报" },

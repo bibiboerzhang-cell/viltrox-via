@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.domains import business_truth
 from app.domains.commerce import shopify_connect, shopify_discounts, shopify_orders
 
 
@@ -36,25 +37,42 @@ def _guard(fn, *args, **kwargs):
 @router.post("/orders")
 def ingest_orders(
     body=Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_tab("vkpi", "admin")),
 ):
-    """Ingest one order (dict) or a batch (list, or {"orders": [...]}). Idempotent."""
+    """Record an authorized *manual* repair batch; never provider-confirmed GMV.
+
+    Live provider orders enter through signed webhook/sync adapters.  This route
+    is deliberately owner/admin-only, feature-gated, and requires an
+    ``authorization_evidence`` object.  Rows are stamped
+    ``manual_pending_verification`` and are excluded from GMV.
+    """
     orders: list[dict]
-    if isinstance(body, list):
-        orders = [o for o in body if isinstance(o, dict)]
-    elif isinstance(body, dict):
+    if isinstance(body, dict):
         raw = body.get("orders")
         if isinstance(raw, list):
             orders = [o for o in raw if isinstance(o, dict)]
         else:
-            orders = [body]
+            orders = [{key: value for key, value in body.items() if key != "authorization_evidence"}]
     else:
-        raise HTTPException(status_code=400, detail="body must be an order object or a list of orders")
+        raise HTTPException(status_code=400, detail="body must be an object with authorization_evidence")
 
     if not orders:
         raise HTTPException(status_code=400, detail="no order payload provided")
-
-    return _guard(shopify_orders.ingest_orders, orders)
+    try:
+        authorization = business_truth.require_authorization_evidence(
+            body,
+            staff=staff,
+            action="shopify_manual_order_repair",
+        )
+    except business_truth.BusinessTruthWriteBlocked as exc:
+        status_code = 409 if exc.reason == "feature_disabled" else 400
+        raise HTTPException(status_code=status_code, detail={"reason": exc.reason, "message": str(exc)}) from exc
+    return _guard(
+        shopify_orders.ingest_orders,
+        orders,
+        ingest_class="manual_unverified",
+        authorization_evidence=authorization,
+    )
 
 
 @router.get("/gmv")
@@ -94,6 +112,19 @@ def get_shopify_creds(
 ):
     """Masked Shopify connection status {shop_domain, token_configured, ..., source}."""
     return _guard(shopify_connect.connection_status)
+
+
+@router.post("/probe")
+def probe_shopify_connection(
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    """Explicit read-only Shopify Admin API canary.
+
+    Saving a token is configuration only.  This endpoint is the separate,
+    operator-triggered proof step that may advance the encrypted credential row
+    to ``connected`` after Shopify returns a valid shop identity.
+    """
+    return _guard(shopify_connect.probe_connection)
 
 
 @router.post("/webhooks/register")

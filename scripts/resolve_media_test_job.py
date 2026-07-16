@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Resolve one video evidence media URL without downloading or analyzing it."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -26,7 +27,7 @@ def main() -> None:
         evidence = _load_video_evidence(conn, args.target_id)
         resolved = _resolve_video_media(evidence)
 
-    print(
+    stdout_out(
         json.dumps(
             {
                 "target_id": str(args.target_id),

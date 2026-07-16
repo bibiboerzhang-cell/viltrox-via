@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P2.10 configurable comment alert thresholds."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -170,7 +171,7 @@ def main() -> None:
         metadata = str(row["metadata_json"] or "")
         assert '"min_hostile": 1' in metadata, metadata
 
-        print("VKPI_COMMENT_ALERT_THRESHOLDS_SMOKE_OK")
+        stdout_out("VKPI_COMMENT_ALERT_THRESHOLDS_SMOKE_OK")
     finally:
         try:
             if original:

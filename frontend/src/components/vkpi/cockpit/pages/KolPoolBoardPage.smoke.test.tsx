@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // KOL 池改版冒烟(金样板 MarketVoicePage/MyKolBoardPage/KolProfileBoardPage.smoke 同构):
 // - 页壳:pagehead(KOL 池 + KOL 数/数据截至真值徽 + 编辑布局钮)+ 可编辑看板;
@@ -19,7 +19,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 //   addKolsToProject 既有端点,快捷小窗)一键可达,不用先开抽屉;
 // - 零丢失:找达人(SmartKolInputPanel 内嵌,触达二段闸行为零改动)/ 待深析
 //   (needs-analysis 清单 + 批量入队)/ 任务进度(TaskProgressBoard 内嵌)/
-//   海外市场覆盖(MarketCoverageCard 内嵌)/ 推荐卡片流 + 筛选次级展开 /
+//   估算受众覆盖(MarketCoverageCard 内嵌)/ 推荐卡片流 + 筛选次级展开 /
 //   详情抽屉 · 联系弹窗 · 全量大窗页级 overlay;
 // - 跨页事件:vkpi:open-kol-pool-search 消费 pending 关键词 → 填筛选并展开;
 //   vkpi:open-kol-pool-item 消费 pending id → 开抽屉(拉 detail-bundle);
@@ -91,14 +91,14 @@ const BUNDLE_OK = {
   video_analysis: { items: [], summary: { evidence_count: 5, ready_count: 3 } },
 };
 
-function routeApi(overrides: { summary?: unknown } = {}) {
+function routeApi(overrides: { summary?: unknown; history?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
     if (p.includes("/kol-pool/favorites")) return { items: [] };
     if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
     if (p.includes("/kol-pool/summary")) return overrides.summary ?? SUMMARY_OK;
     if (p.includes("/detail-bundle")) return BUNDLE_OK;
-    if (p.includes("/kol-search-history")) return { items: [] };
+    if (p.includes("/kol-search-history")) return overrides.history ?? { items: [] };
     if (p.includes("/task-queue")) return { active: [], recent: [], counts: { active_total: 0, queued: 0 } };
     if (p.includes("/signature")) return { status: "empty" };
     if (p.includes("/cooperation")) return { status: "none", events: [] };
@@ -173,7 +173,7 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
 
   it("默认布局九模块在场;kinds/table=palette 备选不进默认;图形三件真值;零丢失接线", async () => {
     renderBoard();
-    for (const title of ["池子指标带", "找达人", "推荐 · 卡片流", "Fit 分布", "平台分布", "发现转化 · 近30天", "任务进度", "待深析", "海外市场覆盖"]) {
+    for (const title of ["池子指标带", "找达人", "推荐 · 卡片流", "Fit 分布", "平台分布", "发现转化 · 近30天", "任务进度", "待深析", "估算受众覆盖"]) {
       expect(screen.getAllByText(title).length).toBeGreaterThan(0);
     }
     // kinds(经典指标条)与 table 撤出默认布局(palette 备选);KPIBar 旧卡不再默认挂载
@@ -186,6 +186,9 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     expect(screen.getByText("80-89 分")).toBeTruthy();
     expect(screen.getByText("50-59 分")).toBeTruthy();
     expect(screen.getAllByText("未评分").length).toBeGreaterThan(0);
+    // null 必须进入未评分桶；Number(null) 会变成 0，曾导致全池错误堆入 0-9。
+    expect(document.querySelector('[title*="匹配分 0-9 区间"]')?.textContent).toContain("0 · 0%");
+    expect(document.querySelector('[title*="匹配分为空的诚实桶"]')?.textContent).toContain("1 · 33.3%");
 
     // 平台分布真值:三行三平台(前端聚合)
     for (const label of ["YouTube", "Instagram", "TikTok"]) {
@@ -217,6 +220,40 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     for (const seg of ["/kol-pool/needs-analysis", "/kol-pool/favorites", "/kol-pool/summary"]) {
       expect(calledPaths.some((p) => p.includes(seg))).toBe(true);
     }
+  });
+
+  it("找达人只允许点击查找触发;回车不执行;服务端历史读取 50 条并可回溯会话", async () => {
+    routeApi({
+      history: {
+        items: [{
+          id: 778,
+          query_text: "35mm 低光人像 YouTube 摄影师",
+          query_type: "text_recall",
+          status: "ready",
+          item_count: 12,
+          created_at: "2026-07-12T12:00:00Z",
+          updated_at: "2026-07-12T12:05:00Z",
+        }],
+      },
+    });
+    renderBoard();
+
+    const input = screen.getByTestId("smart-kol-input");
+    fireEvent.change(input, { target: { value: "85mm portrait creator" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    expect(apiFetchMock.mock.calls.some((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search")).toBe(false);
+
+    fireEvent.click(screen.getByTestId("smart-kol-run"));
+    await waitFor(() => {
+      expect(apiFetchMock.mock.calls.some((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search")).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(apiFetchMock.mock.calls.some((call) => String(call[0]).includes("/kol-search-history?limit=50"))).toBe(true);
+    });
+    fireEvent.click(await screen.findByText("历史记录"));
+    expect(await screen.findByText("35mm 低光人像 YouTube 摄影师")).toBeTruthy();
+    expect(screen.getByText(/会话 #778 · 12 个结果/)).toBeTruthy();
   });
 
   it("卡片流工具行「全部 N」钮 → 全量大窗(kinds 撤默认后的接棒入口);点卡片 → 详情抽屉", async () => {
@@ -264,7 +301,9 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     expect(await screen.findByText("收起筛选 · 排序")).toBeTruthy();
 
     window.localStorage.setItem("vkpi:pending-kolpool-open-id", "101");
-    window.dispatchEvent(new CustomEvent("vkpi:open-kol-pool-item"));
+    act(() => {
+      window.dispatchEvent(new CustomEvent("vkpi:open-kol-pool-item"));
+    });
     await waitFor(() => {
       expect(window.localStorage.getItem("vkpi:pending-kolpool-open-id")).toBeNull();
       const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));

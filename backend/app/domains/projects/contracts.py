@@ -464,7 +464,23 @@ def contract_download_url(project_id: int, contract_id: int, *, staff: dict[str,
     return {"contract_id": int(contract_id), "r2_key": contract.get("r2_key"), "url": get_presigned_url(str(contract.get("r2_key") or ""))}
 
 
-def delete_contract(project_id: int, contract_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def delete_contract(
+    project_id: int,
+    contract_id: int,
+    *,
+    authorization_evidence: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # This path can void an approved actual cash fee and therefore change ROI.
+    # Re-check the business-truth gate in the domain boundary so an internal
+    # caller cannot bypass the guarded HTTP route.
+    from app.domains import business_truth
+
+    authorization = business_truth.require_authorization_evidence(
+        {"authorization_evidence": authorization_evidence or {}},
+        staff=staff,
+        action="contract_delete",
+    )
     contract = get_contract(project_id, contract_id, staff=staff, write=True)
     conn = get_conn()
     # 批B #2(2026-06-12):删除合同(含已确认)时联动作废其签约费账本行——
@@ -479,7 +495,14 @@ def delete_contract(project_id: int, contract_id: int, *, staff: dict[str, Any] 
     voided_cost_ids: list[int] = []
     for fee_row in fee_rows:
         fee_item = dict(fee_row)
-        cost_ledger.void_cost(int(fee_item["id"]), {"reason": f"contract_deleted:{int(contract_id)}"}, staff=staff)
+        cost_ledger.void_cost(
+            int(fee_item["id"]),
+            {
+                "reason": f"contract_deleted:{int(contract_id)}",
+                "authorization_evidence": authorization,
+            },
+            staff=staff,
+        )
         old_meta = fee_item.get("metadata_json")
         if isinstance(old_meta, str):
             try:
@@ -533,6 +556,7 @@ def delete_contract(project_id: int, contract_id: int, *, staff: dict[str, Any] 
             "r2_deleted": r2_deleted,
             "status_before": contract.get("status"),
             "voided_cost_ids": voided_cost_ids,
+            "authorization_ref": authorization.get("authorization_ref"),
         },
     )
     return {"deleted": True, "contract_id": int(contract_id), "r2_deleted": r2_deleted, "voided_cost_ids": voided_cost_ids}

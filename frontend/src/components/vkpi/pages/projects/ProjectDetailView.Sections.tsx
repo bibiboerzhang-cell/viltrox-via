@@ -73,6 +73,9 @@ export interface ProjectDetailTabContentProps {
   goaffByKol: Record<string, { clicks: number; orders: number; gmv: number }>;
   expandedRows: Set<string>;
   movingRowId: string;
+  assignmentPage?: VkpiProjectDetail['assignment_page'];
+  loadingMoreAssignments?: boolean;
+  assignmentLoadError?: string;
   platformOptions: VkpiPlatform[];
   tableQuery: string;
   tableStage: string;
@@ -91,14 +94,17 @@ export interface ProjectDetailTabContentProps {
   videoAnalysisLoading: boolean;
   videoAnalysisError: string;
   videoQaError: string;
+  videoAnalysisAutoRefreshStopped: string;
   retrospective: VkpiProjectRetrospectiveResponse | null;
   retroBusy: boolean;
   evidenceCountForRow: (row: VkpiProjectRow) => number;
   trackingForRow: (row: VkpiProjectRow) => TrackingState;
   shopifyLinkForRow: (row: VkpiProjectRow) => string;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
+  onRefreshVideoAnalysis: () => void;
   onAddKol: () => void;
   onMoveRowStage: (row: VkpiProjectRow) => void;
+  onLoadMoreAssignments?: () => void | Promise<void>;
   onOpenContactModal: (row: VkpiProjectRow) => void;
   onOpenScreenshotModal: (target: ScreenshotTarget) => void;
   onOpenStageActionModal: (row: VkpiProjectRow, action: 'stalled' | 'lost' | 'released' | 'cancelled') => void;
@@ -253,6 +259,9 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
     goaffByKol,
     expandedRows,
     movingRowId,
+    assignmentPage,
+    loadingMoreAssignments,
+    assignmentLoadError,
     platformOptions,
     tableQuery,
     tableStage,
@@ -271,14 +280,17 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
     videoAnalysisLoading,
     videoAnalysisError,
     videoQaError,
+    videoAnalysisAutoRefreshStopped,
     retrospective,
     retroBusy,
     evidenceCountForRow,
     trackingForRow,
     shopifyLinkForRow,
     onOpenKolProfile,
+    onRefreshVideoAnalysis,
     onAddKol,
     onMoveRowStage,
+    onLoadMoreAssignments,
     onOpenContactModal,
     onOpenScreenshotModal,
     onOpenStageActionModal,
@@ -317,6 +329,11 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
           evidenceCountForRow={evidenceCountForRow}
           filteredRows={filteredRows}
           movingRowId={movingRowId}
+          assignmentPage={assignmentPage}
+          assignmentLoadedCount={rows.length}
+          loadingMoreAssignments={loadingMoreAssignments}
+          assignmentLoadError={assignmentLoadError}
+          onLoadMoreAssignments={onLoadMoreAssignments}
           onAddKol={onAddKol}
           onMoveRowStage={onMoveRowStage}
           onOpenContactModal={onOpenContactModal}
@@ -394,6 +411,8 @@ export function ProjectDetailTabContent(props: ProjectDetailTabContentProps) {
             videoAnalysisLoading={videoAnalysisLoading}
             videoAnalysisError={videoAnalysisError}
             videoQaError={videoQaError}
+            videoAnalysisAutoRefreshStopped={videoAnalysisAutoRefreshStopped}
+            onRefreshVideoAnalysis={onRefreshVideoAnalysis}
             retrospective={retrospective?.retrospective || null}
             retrospectiveLastJob={retrospective?.last_job || null}
             retrospectiveGenerating={retroBusy || Boolean(retrospective?.active_job)}

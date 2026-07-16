@@ -6,7 +6,7 @@ import {
 import DeleteConfirmModal from "../modals/DeleteConfirmModal";
 import ExpenseEntryModal, { type ExpenseFormSubmit } from "../modals/ExpenseEntryModal";
 import { EXPENSE_CATEGORIES } from "../shared/constants";
-import { fmtMoney, fmtMoneyShort, sum } from "../shared/helpers";
+import { fmtMoney, fmtMoneyShort, percentOf, sum } from "../shared/helpers";
 import { ownerById } from "../shared/lookups";
 import type { BudgetCell, CurrentUserVm, EventVm, ExpenseVm, UiStaff } from "../shared/types";
 
@@ -58,6 +58,7 @@ export default function BudgetExpensesTab({ ev, currentUser, staff = [], token, 
   const categoryEntries = Object.entries(ev.budgetByCategory) as Array<[string, BudgetCell]>;
   const totalSpent = sum(ev.budgetByCategory, "spent");
   const totalPlan = ev.budgetTotal;
+  const totalPct = percentOf(totalSpent, totalPlan);
 
   return e("div", { className: "p-5" },
     (error || opError) && e("div", { className: "mb-3 px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-[11px] text-rose-200" }, "⚠ ", opError || error),
@@ -69,7 +70,7 @@ export default function BudgetExpensesTab({ ev, currentUser, staff = [], token, 
           e("h3", { className: "text-[12.5px] font-semibold text-white" }, "预算 vs 实际支出"),
           e("div", { className: "text-[10px] text-slate-400" },
             "总 ", e("span", { className: "text-white tabular-nums" }, fmtMoneyShort(totalSpent)), " / ", fmtMoneyShort(totalPlan),
-            " · ", Math.round(totalSpent / totalPlan * 100), "%"
+            totalPct == null ? " · 未设预算" : ` · ${totalPct}%`
           )
         ),
         e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] overflow-hidden" },
@@ -120,12 +121,12 @@ export default function BudgetExpensesTab({ ev, currentUser, staff = [], token, 
           ),
           e("div", { className: "h-1.5 rounded-full bg-white/[0.04] overflow-hidden" },
             e("div", { className: "h-full rounded-full", style: {
-              width: Math.min(100, totalSpent/totalPlan*100) + "%",
+              width: Math.min(100, totalPct ?? 0) + "%",
               background: "linear-gradient(90deg, #a855f7, #06b6d4)"
             } })
           ),
           e("div", { className: "text-[10px] text-slate-400 mt-1" },
-            "已使用 ", Math.round(totalSpent/totalPlan*100), "% · 剩余 ", fmtMoney(totalPlan - totalSpent)
+            totalPct == null ? "未设预算；支出仅作流水记录" : `已使用 ${totalPct}% · 剩余 ${fmtMoney(totalPlan - totalSpent)}`
           )
         )
       ),

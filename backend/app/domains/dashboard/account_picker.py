@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.services.cache.memory_cache import cache_get, cache_set
 
 # dashboard 聚合 30s 短缓存。键必含 staff_scope_id(见 _dash_cache_key)——
@@ -201,14 +202,14 @@ def build_dashboard_account_counts() -> dict[str, int]:
 
 
 def _shopify_configured() -> bool:
-    """True when the Shopify Admin API env vars are present (no fabrication)."""
-    import os
+    """True when the canonical encrypted-DB-or-env resolver has credentials."""
+    try:
+        from app.domains.commerce import shopify_connect
 
-    shop_domain = str(os.environ.get("SHOPIFY_SHOP_DOMAIN") or "").strip()
-    access_token = str(
-        os.environ.get("SHOPIFY_ADMIN_ACCESS_TOKEN") or os.environ.get("SHOPIFY_API_ACCESS_TOKEN") or ""
-    ).strip()
-    return bool(shop_domain and access_token)
+        status = shopify_connect.connection_status()
+        return bool(status.get("shop_domain") and status.get("token_configured"))
+    except Exception:
+        return False
 
 
 def _shopify_orders_gmv_cents(conn: Any) -> int:
@@ -237,8 +238,8 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
 
     GMV  = SUM(vkpi_sales_attributions.revenue_cents) WHERE source_platform='shopify'
            AND confidence='confirmed'.
-    cost = SUM(vkpi_cost_ledger.amount_cents) WHERE status != 'void' (the same
-           formula the metric-lineage layer uses for marketing cost).
+    cost = SUM(vkpi_cost_ledger.amount_cents) WHERE status='actual' and an
+           auditable approval/verified auto-post timestamp exists.
     ROI  = (gmv - cost) / cost when cost > 0, else None.
 
     The dashboard account-picker scope (v_dashboard_account_pool.source_id) maps to
@@ -258,12 +259,12 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
     # Group by currency so mixed-currency confirmed rows are not added together (no FX table);
     # report the dominant currency only. NULLIF on the TEXT currency column (not a timestamptz).
     gmv_rows = conn.execute(
-        """
+        f"""
         SELECT COALESCE(NULLIF(currency, ''), 'USD') AS currency,
                COALESCE(SUM(revenue_cents), 0) AS gmv_cents,
                COUNT(*) AS order_count
         FROM vkpi_sales_attributions
-        WHERE source_platform = 'shopify'
+        WHERE {business_truth.verified_shopify_attribution_sql()}
           AND confidence = 'confirmed'
         GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
         ORDER BY gmv_cents DESC
@@ -273,7 +274,7 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
         """
         SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents
         FROM vkpi_cost_ledger
-        WHERE status != 'void'
+        WHERE status = 'actual' AND approved_at IS NOT NULL
         """
     ).fetchone()
 
@@ -320,7 +321,7 @@ def _build_attributed_gmv_roi() -> dict[str, Any]:
         gmv_source = "not_connected"
 
     if avg_roi is not None and has_gmv:
-        roi_source = "(gmv-cost)/cost · vkpi_cost_ledger[status!=void]"
+        roi_source = "(gmv-cost)/cost · vkpi_cost_ledger[actual+approved_at]"
     elif _shopify_configured():
         roi_source = "awaiting_data"
     else:
@@ -377,7 +378,10 @@ def _build_dashboard_kpi_impl(
             CASE
                 WHEN COALESCE(SUM(COALESCE(total_views, 0)), 0) > 0 THEN
                     (
-                        SUM(COALESCE(total_likes, 0) + COALESCE(total_comments, 0) + COALESCE(total_shares, 0))::numeric
+                            CAST(
+                                SUM(COALESCE(total_likes, 0) + COALESCE(total_comments, 0) + COALESCE(total_shares, 0))
+                                AS NUMERIC
+                            )
                         / NULLIF(SUM(COALESCE(total_views, 0)), 0)
                     ) * 100
                 ELSE COALESCE(AVG(NULLIF(engagement_rate, 0)), 0)

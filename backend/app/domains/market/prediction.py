@@ -11,6 +11,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains import business_truth
 
 logger = get_logger(__name__)
 
@@ -82,7 +83,9 @@ def predict_opportunities(*, window_days: int = 30, limit: int = 10, staff: dict
         logger.debug("prediction.movers_failed", exc_info=True)
 
     has_sales = table_exists("vkpi_sales_attributions") and bool(
-        get_conn().execute("SELECT 1 FROM vkpi_sales_attributions LIMIT 1").fetchone()
+        get_conn().execute(
+            f"SELECT 1 FROM vkpi_sales_attributions WHERE {business_truth.verified_shopify_attribution_sql()} LIMIT 1"
+        ).fetchone()
     )
     cap = "high" if has_sales else "medium"  # 无真销量 → confidence 封顶 medium
 

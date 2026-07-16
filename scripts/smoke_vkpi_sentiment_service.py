@@ -6,6 +6,7 @@ then verifies that analyze_comment() still writes a neutral sentiment result and
 links vkpi_comments.sentiment_id. It must not consume provider quota.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -76,7 +77,7 @@ def main() -> None:
         if not isinstance(stats.get("by_sentiment"), list):
             raise AssertionError(f"stats shape invalid: {stats}")
 
-        print("VKPI_SENTIMENT_SERVICE_SMOKE_OK")
+        stdout_out("VKPI_SENTIMENT_SERVICE_SMOKE_OK")
     finally:
         if comment_id is not None:
             conn.execute("DELETE FROM vkpi_sentiment_results WHERE comment_id = ?", (comment_id,))

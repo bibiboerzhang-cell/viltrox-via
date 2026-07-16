@@ -1,0 +1,3 @@
+-- Truth invalidation is intentionally irreversible.  Historical rows and
+-- files remain retained for audit, but a rollback must not make withdrawn
+-- financial claims downloadable again.

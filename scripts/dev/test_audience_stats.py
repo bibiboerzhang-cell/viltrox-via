@@ -20,6 +20,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(1, str(ROOT / "scripts"))
+
+from stdout_utils import out  # noqa: E402
 
 
 def _load_env() -> None:
@@ -46,15 +49,15 @@ failures: list[str] = []
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     line = f"{PASS if condition else FAIL} {name}" + (f" — {detail}" if detail else "")
-    print(line)
+    out(line)
     if not condition:
         failures.append(name)
 
 
 def section(title: str) -> None:
-    print("\n" + "=" * 62)
-    print(title)
-    print("=" * 62)
+    out("\n" + "=" * 62)
+    out(title)
+    out("=" * 62)
 
 
 # ── A. 单元级(mock 数据)──
@@ -119,7 +122,7 @@ check("A4c prior 独有国 JP 以半权进入", jp.get("pct") == 15.0, str(jp))
 check("A4d shrinkage 元数据", shrunk["shrinkage"]["applied"] is True and shrunk["shrinkage"]["weight"] == 0.5)
 noprior = aud._apply_shrinkage(payload_fresh(), None, n=50)
 check("A4e 无先验跳过(原样返回)", noprior["shrinkage"]["applied"] is False and noprior["gender"]["male_pct"] == 80.0)
-print(f"  A 段耗时 {time.time() - t0:.2f}s")
+out(f"  A 段耗时 {time.time() - t0:.2f}s")
 
 # ── B. YouTube 真数据 ──
 section("B. YouTube 真数据(Data API;被墙自动换代理重试)")
@@ -131,32 +134,32 @@ row = conn.execute(
 ).fetchone()
 yt_id = int(dict(row)["id"]) if row else 0
 yt_handle = str(dict(row)["handle"]) if row else "@CurrenSheldon"
-print(f"  目标 KOL:kol_pool_id={yt_id} handle={yt_handle}")
+out(f"  目标 KOL:kol_pool_id={yt_id} handle={yt_handle}")
 t0 = time.time()
 result = aud.refresh_audience_stats(yt_id) if yt_id else {"status": "skipped", "reason": "no youtube kol in pool"}
 if result.get("status") == "network_error":
     proxy = (os.environ.get("YTDLP_PROXY") or "").strip()
     if proxy and not (os.environ.get("HTTPS_PROXY") or "").strip():
-        print(f"  直连失败({str(result.get('reason'))[:120]}),带 HTTPS_PROXY={proxy.split('@')[-1]} 重试…")
+        out(f"  直连失败({str(result.get('reason'))[:120]}),带 HTTPS_PROXY={proxy.split('@')[-1]} 重试…")
         os.environ["HTTPS_PROXY"] = proxy
         os.environ["https_proxy"] = proxy
         result = aud.refresh_audience_stats(yt_id)
-print(f"  B 段耗时 {time.time() - t0:.2f}s status={result.get('status')}")
+out(f"  B 段耗时 {time.time() - t0:.2f}s status={result.get('status')}")
 if result.get("status") == "ok":
     audp = result.get("audience") or {}
-    print(f"  样本 {audp.get('sample_size')} 评论者 / 扫描 {audp.get('comments_scanned')} 评论 / 置信 {audp.get('confidence')}")
-    print(f"  性别 {audp.get('gender')}")
-    print(f"  Top countries {audp.get('top_countries')}")
-    print(f"  语言 {(audp.get('languages') or [])[:5]}")
-    print(f"  覆盖 {audp.get('coverage')} / 收缩 {audp.get('shrinkage')}")
+    out(f"  样本 {audp.get('sample_size')} 评论者 / 扫描 {audp.get('comments_scanned')} 评论 / 置信 {audp.get('confidence')}")
+    out(f"  性别 {audp.get('gender')}")
+    out(f"  Top countries {audp.get('top_countries')}")
+    out(f"  语言 {(audp.get('languages') or [])[:5]}")
+    out(f"  覆盖 {audp.get('coverage')} / 收缩 {audp.get('shrinkage')}")
     check("B1 YT 真数据聚合成功", int(audp.get("sample_size") or 0) > 0)
     cached = conn.execute("SELECT COUNT(*) AS n FROM vkpi_commenter_profiles WHERE platform=?", ("youtube",)).fetchone()
     check("B2 身份缓存已落表", int(dict(cached)["n"]) > 0, f"{dict(cached)['n']} rows")
 elif result.get("status") == "network_error":
-    print("  [SKIP-honest] YouTube API 直连与代理均不通 —— 需在服务器跑数据测试。")
-    print(f"  reason: {str(result.get('reason'))[:200]}")
+    out("  [SKIP-honest] YouTube API 直连与代理均不通 —— 需在服务器跑数据测试。")
+    out(f"  reason: {str(result.get('reason'))[:200]}")
 else:
-    print(f"  [SKIP-honest] {result.get('status')}: {str(result.get('reason'))[:200]}")
+    out(f"  [SKIP-honest] {result.get('status')}: {str(result.get('reason'))[:200]}")
 
 # ── C. Instagram 真数据(库里已有评论的 KOL)──
 section("C. Instagram 真数据(vkpi_comments 评论桥)")
@@ -168,23 +171,23 @@ ig_row = conn.execute(
 ).fetchone()
 if ig_row:
     ig_id = int(dict(ig_row)["id"])
-    print(f"  目标 KOL:kol_pool_id={ig_id}(库存评论 {dict(ig_row)['n']} 条)")
+    out(f"  目标 KOL:kol_pool_id={ig_id}(库存评论 {dict(ig_row)['n']} 条)")
     t0 = time.time()
     result = aud.refresh_audience_stats(ig_id, enqueue_if_missing=False)
-    print(f"  C 段耗时 {time.time() - t0:.2f}s status={result.get('status')}")
+    out(f"  C 段耗时 {time.time() - t0:.2f}s status={result.get('status')}")
     if result.get("status") == "ok":
         audp = result.get("audience") or {}
-        print(f"  样本 {audp.get('sample_size')} 评论者 / 置信 {audp.get('confidence')}")
-        print(f"  性别 {audp.get('gender')}")
-        print(f"  Top countries {audp.get('top_countries')}")
-        print(f"  语言 {(audp.get('languages') or [])[:5]}")
-        print(f"  覆盖 {audp.get('coverage')}(IG 无自报路,declared 恒 0 —— 口径一致,置信自然降档)")
+        out(f"  样本 {audp.get('sample_size')} 评论者 / 置信 {audp.get('confidence')}")
+        out(f"  性别 {audp.get('gender')}")
+        out(f"  Top countries {audp.get('top_countries')}")
+        out(f"  语言 {(audp.get('languages') or [])[:5]}")
+        out(f"  覆盖 {audp.get('coverage')}(IG 无自报路,declared 恒 0 —— 口径一致,置信自然降档)")
         check("C1 IG 真聚合成功", int(audp.get("sample_size") or 0) > 0)
         check("C2 IG declared_pct=0(无自报信号)", float(audp.get("coverage", {}).get("declared_pct") or 0) == 0.0)
     else:
         check("C1 IG 真聚合成功", False, f"{result.get('status')}: {str(result.get('reason'))[:160]}")
 else:
-    print("  [SKIP-honest] 库里没有任何 IG KOL 挂到已抓评论 —— IG 真聚合需先抓评论。")
+    out("  [SKIP-honest] 库里没有任何 IG KOL 挂到已抓评论 —— IG 真聚合需先抓评论。")
 
 # ── D. TikTok pending_comments 分支 ──
 section("D. TikTok(无评论 -> pending_comments;测试不真入队,保 Apify 预算)")
@@ -193,18 +196,18 @@ tt_row = conn.execute(
 ).fetchone()
 if tt_row:
     tt_id = int(dict(tt_row)["id"])
-    print(f"  目标 KOL:kol_pool_id={tt_id} handle={dict(tt_row)['handle']}")
+    out(f"  目标 KOL:kol_pool_id={tt_id} handle={dict(tt_row)['handle']}")
     result = aud.refresh_audience_stats(tt_id, enqueue_if_missing=False)
-    print(f"  status={result.get('status')} comments_found={result.get('comments_found')}")
+    out(f"  status={result.get('status')} comments_found={result.get('comments_found')}")
     check("D1 评论不足返回 pending_comments", result.get("status") == "pending_comments", str(result.get("status")))
     check("D2 enqueue_if_missing=False 时不入队", result.get("enqueued") is False)
-    print("  (生产端点默认 enqueue_if_missing=True:会真入队抓评论并返回 enqueued=true)")
+    out("  (生产端点默认 enqueue_if_missing=True:会真入队抓评论并返回 enqueued=true)")
 else:
-    print("  [SKIP] 库里无 tiktok KOL。")
+    out("  [SKIP] 库里无 tiktok KOL。")
 
 # ── 汇总 ──
 section("汇总")
 if failures:
-    print(f"FAILED {len(failures)}: {failures}")
+    out(f"FAILED {len(failures)}: {failures}")
     sys.exit(1)
-print("单元级 mock 全绿;真数据段结果见上(网络不可达时已诚实标注)。")
+out("单元级 mock 全绿;真数据段结果见上(网络不可达时已诚实标注)。")

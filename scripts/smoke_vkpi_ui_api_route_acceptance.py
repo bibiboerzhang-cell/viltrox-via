@@ -12,6 +12,8 @@ calls. Set VKPI_P2_13_PROBE=1 for a small live provider probe pass.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import json
 import os
 import re
@@ -235,10 +237,10 @@ def main() -> None:
         try:
             smoke.cleanup()
         finally:
-            print(f"VKPI_UI_API_ROUTE_ACCEPTANCE_SMOKE_FAIL: {_redact(str(exc))}", file=sys.stderr)
+            out(f"VKPI_UI_API_ROUTE_ACCEPTANCE_SMOKE_FAIL: {_redact(str(exc))}", file=sys.stderr)
         raise
-    print(_json_dumps(result))
-    print("VKPI_UI_API_ROUTE_ACCEPTANCE_SMOKE_OK")
+    out(_json_dumps(result))
+    out("VKPI_UI_API_ROUTE_ACCEPTANCE_SMOKE_OK")
 
 
 if __name__ == "__main__":

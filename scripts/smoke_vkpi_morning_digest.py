@@ -6,6 +6,7 @@ This smoke uses the digest-only cron branch with temporary rows so it never
 touches real staff digests or external platform syncs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import asyncio
 import json
@@ -145,7 +146,7 @@ def main() -> None:
 
         assert str(jobs.CHINA_TZ) == "Asia/Shanghai"
         assert hasattr(jobs, "job_vkpi_morning_sync")
-        print("VKPI_MORNING_DIGEST_SMOKE_OK")
+        stdout_out("VKPI_MORNING_DIGEST_SMOKE_OK")
     finally:
         _cleanup(marker, user_id, staff_id, suggestion_id)
 

@@ -33,6 +33,8 @@ class ModelSpec:
     context_tokens: int
     typical_latency_ms: int
     is_local: bool = False
+    endpoint_family: str = ""
+    transport_ready: bool = True
     tags: tuple[str, ...] = field(default_factory=tuple)
 
     def cost_per_million_blended(self, *, input_weight: float = 0.7) -> float:
@@ -61,39 +63,42 @@ _REGISTRY: dict[str, ModelSpec] = {
         model_id="gpt-5.4-mini",
         quality=0.86,
         speed=0.62,
-        input_cents_per_million=25,
-        output_cents_per_million=200,
+        input_cents_per_million=75,
+        output_cents_per_million=450,
         context_tokens=128_000,
         typical_latency_ms=2600,
         is_local=False,
+        endpoint_family="openai_responses",
         tags=("general", "reasoning", "tools"),
     ),
     GEMINI: ModelSpec(
         key=GEMINI,
         display_name="Google Gemini Flash",
         gateway_provider="google",
-        model_id="gemini-flash-latest",
+        model_id="gemini-3.5-flash",
         quality=0.74,
         speed=0.90,
-        input_cents_per_million=7,
-        output_cents_per_million=30,
+        input_cents_per_million=150,
+        output_cents_per_million=900,
         context_tokens=1_000_000,
         typical_latency_ms=1200,
         is_local=False,
-        tags=("general", "cheap", "long-context", "fast"),
+        endpoint_family="google_generate_content",
+        tags=("general", "stable", "long-context", "fast"),
     ),
     CLAUDE: ModelSpec(
         key=CLAUDE,
         display_name="Anthropic Claude",
         gateway_provider="anthropic",
-        model_id="claude-latest",
+        model_id="claude-sonnet-4-6",
         quality=0.92,
         speed=0.58,
-        input_cents_per_million=25,
-        output_cents_per_million=125,
+        input_cents_per_million=300,
+        output_cents_per_million=1500,
         context_tokens=200_000,
         typical_latency_ms=3000,
         is_local=False,
+        endpoint_family="anthropic_messages",
         tags=("general", "reasoning", "long-context", "writing"),
     ),
     QWEN: ModelSpec(
@@ -108,6 +113,8 @@ _REGISTRY: dict[str, ModelSpec] = {
         context_tokens=131_000,
         typical_latency_ms=1800,
         is_local=False,
+        endpoint_family="openai_compatible_unconfigured",
+        transport_ready=False,
         tags=("general", "cheap", "multilingual"),
     ),
     LOCAL_VLLM: ModelSpec(
@@ -122,6 +129,8 @@ _REGISTRY: dict[str, ModelSpec] = {
         context_tokens=32_000,
         typical_latency_ms=900,
         is_local=True,
+        endpoint_family="local_vllm_unconfigured",
+        transport_ready=False,
         tags=("local", "free", "private"),
     ),
 }
@@ -146,3 +155,8 @@ def models_for_provider(gateway_provider: str) -> list[ModelSpec]:
 def local_models() -> list[ModelSpec]:
     """Self-hosted / zero-cost models."""
     return [m for m in _REGISTRY.values() if m.is_local]
+
+
+def transport_ready_models() -> list[ModelSpec]:
+    """Models with a concrete, configured gateway transport implementation."""
+    return [m for m in _REGISTRY.values() if m.transport_ready]

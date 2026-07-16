@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import os
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -43,7 +44,12 @@ def apify_usage_recent(window_sec: float) -> float:
     if not token:
         return -1.0
     try:
-        req = urllib.request.Request(f"https://api.apify.com/v2/actor-runs?limit=40&desc=true&token={token}")
+        query = urllib.parse.urlencode({"limit": 40, "desc": "true"})
+        req = urllib.request.Request(
+            f"https://api.apify.com/v2/actor-runs?{query}",
+            headers={"Authorization": f"Bearer {token}"},
+            method="GET",
+        )
         runs = json.loads(urllib.request.urlopen(req, timeout=30).read()).get("data", {}).get("items", [])
         cutoff = time.time() - window_sec - 120
         total = 0.0

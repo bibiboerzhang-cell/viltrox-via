@@ -90,7 +90,11 @@ def ignite_profile_buildout(
         from app.domains.kol import url_deep_crawl
 
         crawl = url_deep_crawl.enqueue_profile_deep_crawl_job(
-            url, kol_pool_id=int(kol_pool_id), max_posts=3 if full else 1, staff=None
+            url,
+            kol_pool_id=int(kol_pool_id),
+            max_posts=3 if full else 1,
+            staff=None,
+            queue_lane="interactive" if source == "manual_build_full" else "batch",
         )
         result["deep_crawl"] = {"status": str((crawl or {}).get("status") or "queued")}
         if full:

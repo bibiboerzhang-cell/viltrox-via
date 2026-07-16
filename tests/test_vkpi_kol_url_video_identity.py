@@ -1,3 +1,5 @@
+from app.domains.kol import url_deep_crawl
+from app.domains.kol.search_sessions_attach import _url_result_item
 from app.domains.kol.url_deep_crawl import (
     _filter_incremental_profile_videos,
     _max_posts,
@@ -77,3 +79,75 @@ def test_profile_history_incremental_filter_keeps_only_new_videos():
         "https://www.youtube.com/watch?v=new2",
     ]
     assert skipped == 1
+
+
+def test_video_plan_reuses_stored_youtube_evidence_before_provider(monkeypatch):
+    classified = url_deep_crawl.classify_url(
+        "https://youtu.be/ObmYbT4OUXM?si=-awTJASHMutDqwRD"
+    )
+    monkeypatch.setattr(
+        url_deep_crawl,
+        "find_video_evidence_by_url",
+        lambda _url: {
+            "id": 3955,
+            "kol_pool_id": 14061,
+            "platform": "youtube",
+            "content_url": "https://www.youtube.com/watch?v=ObmYbT4OUXM",
+            "title": "Stored video",
+            "view_count": 147772,
+            "channel_id": "UCtWLGD1JkD-LEymBfLf5yKw",
+            "channel_name": "InfiCheesy",
+            "scrape_source": "youtube_api",
+            "scrape_status": "success",
+        },
+    )
+    monkeypatch.setattr(
+        url_deep_crawl,
+        "_fetch_video_metadata",
+        lambda _url: (_ for _ in ()).throw(AssertionError("provider must not run")),
+    )
+    monkeypatch.setattr(
+        url_deep_crawl,
+        "_match_pool",
+        lambda creator: [
+            {
+                "kol_pool_id": 14061,
+                "platform": creator.platform,
+                "handle": "UCtWLGD1JkD-LEymBfLf5yKw",
+                "display_name": "InfiCheesy",
+                "profile_url": creator.normalized_url,
+                "match_source": "platform_channel_id",
+                "match_priority": 1,
+            }
+        ],
+    )
+
+    flow, matches = url_deep_crawl._video_flow_plan(classified, [])
+
+    assert matches[0]["kol_pool_id"] == 14061
+    assert flow["status"] == "ready_to_execute"
+    assert flow["creator_resolution_status"] == "resolved"
+    assert flow["creator_identity"]["channel_id"] == "UCtWLGD1JkD-LEymBfLf5yKw"
+    assert flow["creator_identity"]["display_name"] == "InfiCheesy"
+    assert flow["video_metadata"]["view_count"] == 147772
+    assert flow["evidence_id"] == 3955
+    assert flow["evidence_lookup_source"] == "stored_video_evidence"
+    assert flow["provider_calls_performed"] is False
+
+    item = _url_result_item(
+        1,
+        {
+            "url": {"normalized": classified.normalized_url},
+            "url_type": "video",
+            "platform": "youtube",
+            "video_id": classified.video_id,
+            "in_pool": True,
+            "matched_kol_pool_id": 14061,
+            "creator_identity": flow["creator_identity"],
+            "video_metadata": flow["video_metadata"],
+            "video_flow": flow,
+        },
+    )
+    assert item["status"] == "identified"
+    assert item["kol_pool_id"] == 14061
+    assert item["evidence_id"] == 3955

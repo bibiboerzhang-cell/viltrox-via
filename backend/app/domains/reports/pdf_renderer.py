@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
+import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Iterator
 
-from jinja2 import Template
+from jinja2 import Environment
 
 from app.core.logging import get_logger
 
@@ -120,18 +123,33 @@ td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; }
 </body>
 </html>"""
 
+_TEMPLATE_ENV = Environment(autoescape=True)
+_REPORT_TEMPLATE = _TEMPLATE_ENV.from_string(REPORT_HTML_TEMPLATE)
 
-def report_storage_dir() -> Path:
+
+def configured_report_storage_path() -> Path:
+    """Return the configured absolute storage path without touching disk."""
     raw = os.environ.get("VKPI_REPORT_STORAGE_PATH") or "runtime/vkpi-reports"
     path = Path(raw)
     if not path.is_absolute():
         path = Path.cwd() / path
+    return path
+
+
+def report_storage_dir() -> Path:
+    path = configured_report_storage_path()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def render_report_html(context: dict[str, Any]) -> str:
-    return Template(REPORT_HTML_TEMPLATE).render(**context)
+    return _REPORT_TEMPLATE.render(**context)
+
+
+def _deny_report_resource(url: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    """Reports are self-contained; fail closed on file, network, or data URLs."""
+    del _args, _kwargs
+    raise ValueError(f"report resource loading is disabled: {str(url).split(':', 1)[0] or 'relative'}")
 
 
 def render_pdf_bytes(html: str) -> bytes:
@@ -139,19 +157,302 @@ def render_pdf_bytes(html: str) -> bytes:
         from weasyprint import HTML
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("WeasyPrint is not installed or system libraries are missing") from exc
-    return HTML(string=html, base_url=str(Path.cwd())).write_pdf()
+    return HTML(string=html, url_fetcher=_deny_report_resource).write_pdf()
+
+
+def _safe_filename(filename: str) -> str:
+    clean = str(filename or "").strip()
+    if not clean or clean in {".", ".."}:
+        raise ValueError("report filename is required")
+    path = Path(clean)
+    if path.is_absolute() or path.name != clean or "/" in clean or "\\" in clean:
+        raise ValueError("report filename must not contain a path")
+    return clean
+
+
+def _direct_stored_path(file_path: str | Path) -> tuple[Path, Path]:
+    """Return the canonical storage root and a lexical direct child.
+
+    The final component is deliberately *not* resolved: resolving it would
+    follow a symlink before the caller has a chance to reject it.  Resolving
+    only the parent also lets configured storage paths use an absolute alias
+    while still requiring the DB value to name exactly one direct child.
+    """
+    raw = str(file_path or "").strip()
+    candidate = Path(raw)
+    if not raw or not candidate.is_absolute():
+        raise ValueError("stored report path must be absolute")
+    if candidate.name in {"", ".", ".."} or ".." in candidate.parts:
+        raise ValueError("stored report path must be a direct child")
+
+    # Reads/removals must never create a missing storage directory.  Only the
+    # publication path (report_storage_dir/store_bytes) is allowed to mkdir.
+    configured_root = configured_report_storage_path()
+    lexical_root = Path(os.path.abspath(str(configured_root)))
+    lexical_parent = Path(os.path.abspath(str(candidate.parent)))
+    if lexical_parent != lexical_root:
+        raise ValueError("stored report path is outside report storage or not a direct child")
+
+    root = configured_root.resolve(strict=True)
+    try:
+        parent = candidate.parent.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("stored report path parent is unavailable") from exc
+    if parent != root:
+        raise ValueError("stored report path is outside report storage or not a direct child")
+    return root, root / candidate.name
+
+
+def resolve_stored_path(file_path: str | Path) -> Path:
+    """Validate an existing regular, non-symlink direct storage child.
+
+    This helper is suitable for immediate local maintenance operations.  HTTP
+    downloads must use :func:`open_stored_file`, which removes the remaining
+    lstat/open time-of-check/time-of-use window by validating the opened fd.
+    """
+    _root, candidate = _direct_stored_path(file_path)
+    try:
+        info = candidate.lstat()
+    except OSError as exc:
+        raise ValueError("stored report file is unavailable") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise ValueError("stored report file must not be a symlink")
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("stored report file must be regular")
+    return candidate
+
+
+@dataclass
+class OpenedStoredFile:
+    """An already validated report file whose descriptor owns the bytes read."""
+
+    path: Path
+    size: int
+    _handle: BinaryIO = field(repr=False)
+
+    @property
+    def closed(self) -> bool:
+        return self._handle.closed
+
+    def close(self) -> None:
+        # IOBase.close() is idempotent, which is important because both the
+        # iterator and the response-level cancellation cleanup call this.
+        self._handle.close()
+
+    def iter_bytes(self, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+        try:
+            while True:
+                chunk = self._handle.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            self.close()
+
+
+def verify_opened_file(
+    opened: OpenedStoredFile,
+    *,
+    expected_size: Any = None,
+    expected_sha256: str = "",
+) -> None:
+    """Verify stored bytes before an HTTP response or destructive cleanup.
+
+    The descriptor remains the authority throughout verification, so replacing
+    the pathname cannot redirect either the digest calculation or the later
+    stream.  Legacy rows may omit size/SHA metadata; in that case the regular
+    file + no-follow checks performed by :func:`open_stored_file` remain the
+    fail-closed boundary available without a schema migration.
+    """
+    size: int | None
+    if expected_size in (None, ""):
+        size = None
+    else:
+        try:
+            size = int(expected_size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("stored report size metadata is invalid") from exc
+        if size < 0:
+            raise ValueError("stored report size metadata is invalid")
+    if size is not None and opened.size != size:
+        raise ValueError("stored report size mismatch")
+
+    digest = str(expected_sha256 or "").strip().lower()
+    if not digest:
+        return
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise ValueError("stored report digest metadata is invalid")
+
+    try:
+        opened._handle.seek(0)
+        hasher = hashlib.sha256()
+        while True:
+            chunk = opened._handle.read(64 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+        if hasher.hexdigest() != digest:
+            raise ValueError("stored report digest mismatch")
+    finally:
+        # A successful validation must leave the descriptor ready to stream;
+        # a failed validation is closed by the caller's exception path.
+        opened._handle.seek(0)
+
+
+def open_stored_file(file_path: str | Path) -> OpenedStoredFile:
+    """Open one storage child without following links and validate its fd.
+
+    Opening relative to an already-open directory descriptor prevents path
+    replacement after validation from redirecting the download.  ``O_NONBLOCK``
+    also prevents a swapped FIFO from hanging the request before ``fstat`` can
+    reject it.
+    """
+    root, candidate = _direct_stored_path(file_path)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:  # pragma: no cover - supported deployment platforms
+        raise OSError("secure no-follow file opening is unavailable")
+
+    common_flags = getattr(os, "O_CLOEXEC", 0) | no_follow
+    directory_fd = os.open(
+        str(root),
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | common_flags,
+    )
+    file_fd: int | None = None
+    try:
+        file_fd = os.open(
+            candidate.name,
+            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | common_flags,
+            dir_fd=directory_fd,
+        )
+        info = os.fstat(file_fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("stored report file must be regular")
+        handle = os.fdopen(file_fd, "rb", closefd=True)
+        file_fd = None
+        return OpenedStoredFile(path=candidate, size=info.st_size, _handle=handle)
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(directory_fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after publishing or removing a report."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(str(path), flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _remove_published_path_if_owned(path: Path, *, device: int, inode: int) -> None:
+    """Best-effort rollback without unlinking a path another writer replaced."""
+    try:
+        current = path.lstat()
+        if current.st_dev != device or current.st_ino != inode:
+            return
+        path.unlink()
+        _fsync_directory(path.parent)
+    except FileNotFoundError:
+        return
+
+
+def remove_stored_file(
+    file_path: str | Path,
+    *,
+    expected_size: Any = None,
+    expected_sha256: str = "",
+) -> bool:
+    """Remove one validated direct child and durably persist the unlink.
+
+    The opened descriptor and the final lstat must identify the same inode.
+    This prevents a stale cleanup attempt from deleting a path that was already
+    replaced before validation.  The storage directory is application-owned;
+    callers must still serialize same-name writers because POSIX has no atomic
+    unlink-if-inode-matches primitive.
+    """
+    opened = open_stored_file(file_path)
+    try:
+        verify_opened_file(
+            opened,
+            expected_size=expected_size,
+            expected_sha256=expected_sha256,
+        )
+        descriptor_info = os.fstat(opened._handle.fileno())
+        current = opened.path.lstat()
+        if (
+            current.st_dev != descriptor_info.st_dev
+            or current.st_ino != descriptor_info.st_ino
+            or not stat.S_ISREG(current.st_mode)
+        ):
+            raise ValueError("stored report path changed during cleanup")
+        opened.path.unlink()
+        _fsync_directory(opened.path.parent)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        opened.close()
 
 
 def store_bytes(content: bytes, *, filename: str) -> dict[str, Any]:
-    path = report_storage_dir() / filename
-    path.write_bytes(content)
+    root = report_storage_dir()
+    path = root / _safe_filename(filename)
     digest = hashlib.sha256(content).hexdigest()
-    return {
-        "file_path": str(path),
-        "file_size_bytes": len(content),
-        "sha256_hex": digest,
-        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
+    fd, raw_temp_path = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(root),
+    )
+    temp_path = Path(raw_temp_path)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        # Validate the staged bytes before making the filename visible.  This
+        # catches short writes/corruption without ever exposing a partial report.
+        staged_size = temp_path.stat().st_size
+        staged_digest = hashlib.sha256(temp_path.read_bytes()).hexdigest()
+        if staged_size != len(content) or staged_digest != digest:
+            raise OSError("staged report validation failed")
+
+        # link(2) is an atomic no-clobber publish on the same filesystem:
+        # exactly one concurrent writer can create the final directory entry.
+        # Unlike replace(), an existing file (including a broken symlink) raises
+        # EEXIST instead of being overwritten.
+        staged_stat = temp_path.stat()
+        try:
+            os.link(temp_path, path)
+        except FileExistsError as exc:
+            raise FileExistsError(f"report file already exists: {path.name}") from exc
+        try:
+            # Remove the staging name before the durability barrier so this one
+            # directory fsync persists both creation of the final name and
+            # deletion of the temporary name.  The final hard link continues
+            # to own the already-fsynced bytes.
+            temp_path.unlink()
+            _fsync_directory(root)
+        except Exception:
+            _remove_published_path_if_owned(
+                path,
+                device=staged_stat.st_dev,
+                inode=staged_stat.st_ino,
+            )
+            raise
+        return {
+            "file_path": str(path),
+            "file_size_bytes": staged_size,
+            "sha256_hex": staged_digest,
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    finally:
+        # On success the final hard link owns the bytes; this removes only this
+        # invocation's uniquely named staging link.  On failure it removes the
+        # unpublished temporary file.
+        temp_path.unlink(missing_ok=True)
 
 
 def render_and_store_pdf(context: dict[str, Any], *, filename: str) -> dict[str, Any]:

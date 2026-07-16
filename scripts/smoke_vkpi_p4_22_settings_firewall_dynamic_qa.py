@@ -10,6 +10,7 @@ This smoke intentionally uses the running local backend over HTTP. It verifies:
 All test data is marker-scoped and cleaned up before exit.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import sys
@@ -245,7 +246,7 @@ def main() -> None:
         flag = _one("SELECT * FROM vkpi_feature_flags WHERE flag_key=?", (FLAG_KEY,))
         _assert(not _truthy(flag.get("enabled")), "legacy settings endpoint should persist false", flag)
 
-        print(
+        stdout_out(
             json.dumps(
                 {
                     "ok": True,
@@ -264,7 +265,7 @@ def main() -> None:
                 ensure_ascii=False,
             )
         )
-        print("VKPI_P4_22_SETTINGS_FIREWALL_DYNAMIC_QA_OK")
+        stdout_out("VKPI_P4_22_SETTINGS_FIREWALL_DYNAMIC_QA_OK")
     finally:
         _cleanup(
             [admin_user_id, employee_user_id],

@@ -40,6 +40,8 @@ interface KolPoolV2PageProps {
   onSignOut?: () => Promise<void> | void;
 }
 
+type QuickMetricFilter = 'all' | 'new7d' | 'missing' | 'highTrend';
+
 function metricValue(ready: boolean, value: string, empty = '无信号'): string {
   if (!ready) return '--';
   return value === '0' ? empty : value;
@@ -155,7 +157,7 @@ function KolPoolDetailDrawer({
           <h2>{kolDisplayName(item)}</h2>
           <p>{textValue(item.platform, '未知平台')} · {textValue(item.country, '地区暂无数据')}</p>
         </div>
-        <button type="button" onClick={onClose} aria-label="关闭">×</button>
+        <button type="button" onClick={onClose} title="关闭 KOL 详情" aria-label="关闭">×</button>
       </header>
 
       <section className="kol-pool-v2-detail-hero">
@@ -180,7 +182,12 @@ function KolPoolDetailDrawer({
         <h3>下一步</h3>
         {gaps.length ? <p>数据缺口：{gaps.join(' / ')}。当前不做假评分。</p> : <p>核心字段已可读，可进入人工复核。</p>}
         {deriveMainClass(item) === 'legacy' ? (
-          <button type="button" onClick={onPromote} disabled={promoting}>
+          <button
+            type="button"
+            onClick={onPromote}
+            disabled={promoting}
+            title={promoting ? '正在转入主库' : '将该候选转入 KOL 主库'}
+          >
             {promoting ? '处理中...' : '转入主库'}
           </button>
         ) : <span className="kol-pool-v2-chip is-green">已链接主库 #{item.linked_main_kol_id}</span>}
@@ -214,7 +221,7 @@ export function KolPoolV2Page({
   const [platform, setPlatform] = useState('');
   const [country, setCountry] = useState('');
   const [classFilter, setClassFilter] = useState<CandidateClass | ''>('');
-  const [searchMode, setSearchMode] = useState<'balanced' | 'precision' | 'discovery'>('balanced');
+  const [quickMetricFilter, setQuickMetricFilter] = useState<QuickMetricFilter>('all');
   const [sortBy, setSortBy] = useState('fit');
   const [selectedItem, setSelectedItem] = useState<KolPoolV2Item | null>(null);
   const [evidence, setEvidence] = useState<VkpiKolPoolEvidenceSummary | null>(null);
@@ -299,6 +306,15 @@ export function KolPoolV2Page({
       if (platform && String(item.platform).toLowerCase() !== platform) return false;
       if (country && String(item.country || '').toLowerCase() !== country) return false;
       if (classFilter && deriveCandidateClass(item) !== classFilter) return false;
+      if (quickMetricFilter === 'new7d') {
+        const age = daysSince(item.created_at);
+        if (age === null || age > 7) return false;
+      }
+      if (quickMetricFilter === 'missing' && dataGaps(item).length === 0) return false;
+      if (quickMetricFilter === 'highTrend') {
+        const score = numberValue(item.trend_score);
+        if (score === null ? !item.trend_topic : score < 70) return false;
+      }
       if (!q) return true;
       return [item.handle, item.display_name, item.bio, item.country, item.source_type].join(' ').toLowerCase().includes(q);
     });
@@ -308,7 +324,7 @@ export function KolPoolV2Page({
       if (sortBy === 'er') return (numberValue(b.real_engagement_rate ?? b.engagement_rate) ?? -1) - (numberValue(a.real_engagement_rate ?? a.engagement_rate) ?? -1);
       return (numberValue(b.viltrox_fit_score) ?? -1) - (numberValue(a.viltrox_fit_score) ?? -1);
     });
-  }, [classFilter, country, items, platform, search, sortBy]);
+  }, [classFilter, country, items, platform, quickMetricFilter, search, sortBy]);
 
   const poolSummary = useMemo(() => summarizeKolPool(items), [items]);
   const countries = useMemo(() => summaryRows(summary).slice(0, 5), [summary]);
@@ -328,6 +344,22 @@ export function KolPoolV2Page({
     const score = numberValue(item.trend_score);
     return score !== null ? score >= 70 : Boolean(item.trend_topic);
   }).length;
+  const resetFilters = () => {
+    setPlatform('');
+    setCountry('');
+    setClassFilter('');
+    setQuickMetricFilter('all');
+    setSearch('');
+  };
+  const filteredLabel = quickMetricFilter === 'new7d'
+    ? '近 7 天新发现'
+    : quickMetricFilter === 'missing'
+      ? '待补全'
+    : quickMetricFilter === 'highTrend'
+      ? '本周高 Trend'
+      : classFilter
+        ? CANDIDATE_CLASS_INFO[classFilter].label
+        : '全部候选';
 
   return (
     <div className="kol-pool-v2">
@@ -355,12 +387,35 @@ export function KolPoolV2Page({
       </header>
 
       <section className="kol-pool-v2-kpis">
-        <button type="button" onClick={() => setClassFilter('')}><span>Pool 总数</span><b>{metricValue(loaded, formatCount(poolSummary.total))}</b><em>kol-pool list</em></button>
-        <button type="button"><span>新发现</span><b>{compactMetric(loaded, hasCreatedAt, formatCount(new7dCount))}</b><em>{hasCreatedAt ? 'created_at · 7d' : '暂无信号'}</em></button>
-        <button type="button" onClick={() => setClassFilter('legacy-stale')}><span>待补全</span><b>{metricValue(loaded, formatCount(poolSummary.missing))}</b><em>不假造完整度</em></button>
-        <button type="button"><span>平均 V6 Fit</span><b>{poolSummary.avgFit === null ? '--' : formatScore(poolSummary.avgFit)}</b><em>{poolSummary.avgFit === null ? '数据不足' : '真实字段'}</em></button>
-        <button type="button"><span>本周高 Trend</span><b>{compactMetric(loaded, hasTrendSignal, formatCount(highTrendCount))}</b><em>{hasTrendSignal ? 'trend_score / trend_topic' : '暂无信号'}</em></button>
-        <button type="button"><span>月度估算 Reach</span><b>--</b><em>预览 · 未开放</em></button>
+        <button type="button" onClick={resetFilters} title="清除筛选并显示当前已加载的全部 KOL"><span>Pool 总数</span><b>{metricValue(loaded, formatCount(poolSummary.total))}</b><em>kol-pool list</em></button>
+        <button
+          type="button"
+          onClick={() => { setClassFilter(''); setQuickMetricFilter('new7d'); }}
+          disabled={!loaded || !hasCreatedAt}
+          aria-pressed={quickMetricFilter === 'new7d'}
+          title={!loaded ? 'KOL Pool 尚未加载' : hasCreatedAt ? '筛选近 7 天创建的 KOL' : '接口未返回 created_at，无法筛选新发现'}
+        ><span>新发现</span><b>{compactMetric(loaded, hasCreatedAt, formatCount(new7dCount))}</b><em>{hasCreatedAt ? 'created_at · 7d' : '暂无信号'}</em></button>
+        <button
+          type="button"
+          onClick={() => { setClassFilter(''); setQuickMetricFilter('missing'); }}
+          disabled={!loaded}
+          aria-pressed={quickMetricFilter === 'missing'}
+          title={loaded ? '筛选缺少头像、平均播放、互动率或适配度的 KOL' : 'KOL Pool 尚未加载'}
+        ><span>待补全</span><b>{metricValue(loaded, formatCount(poolSummary.missing))}</b><em>不假造完整度</em></button>
+        <button
+          type="button"
+          onClick={() => setSortBy('fit')}
+          disabled={poolSummary.avgFit === null}
+          title={poolSummary.avgFit === null ? '没有 V6 Fit 数据，无法排序' : '按真实 V6 Fit 从高到低排序'}
+        ><span>平均 V6 Fit</span><b>{poolSummary.avgFit === null ? '--' : formatScore(poolSummary.avgFit)}</b><em>{poolSummary.avgFit === null ? '数据不足' : '点击按 Fit 排序'}</em></button>
+        <button
+          type="button"
+          onClick={() => { setClassFilter(''); setQuickMetricFilter('highTrend'); }}
+          disabled={!loaded || !hasTrendSignal}
+          aria-pressed={quickMetricFilter === 'highTrend'}
+          title={!loaded ? 'KOL Pool 尚未加载' : hasTrendSignal ? '筛选 trend_score 不低于 70 或带趋势主题的 KOL' : '接口未返回 Trend 信号，无法筛选'}
+        ><span>本周高 Trend</span><b>{compactMetric(loaded, hasTrendSignal, formatCount(highTrendCount))}</b><em>{hasTrendSignal ? 'trend_score / trend_topic' : '暂无信号'}</em></button>
+        <button type="button" disabled title="Reach 估算口径尚未接入，当前不可操作"><span>月度估算 Reach</span><b>--</b><em>预览 · 未开放</em></button>
       </section>
 
       <KolPoolTrendPulse />
@@ -387,23 +442,35 @@ export function KolPoolV2Page({
             <button
               key={mode.key}
               type="button"
-              className={searchMode === mode.key ? 'is-active' : ''}
-              title="当前仅保留前端状态，真实配比等待搜索端点支持"
-              onClick={() => setSearchMode(mode.key as typeof searchMode)}
+              className={mode.key === 'balanced' ? 'is-active' : ''}
+              title="搜索端点尚未支持配比参数，当前模式不可切换"
+              disabled
             >
               <b>{mode.label}</b><span>{mode.hint}</span>
             </button>
           ))}
         </div>
-        <button type="button" onClick={() => void loadPool()} disabled={loading}>{loading ? '读取中...' : '读取最新'}</button>
+        <button
+          type="button"
+          onClick={() => void loadPool()}
+          disabled={loading || !apiToken}
+          title={!apiToken ? '登录后才能读取 KOL Pool' : loading ? '正在读取 KOL Pool' : '按当前搜索和排序条件重新读取真实 API'}
+        >{loading ? '读取中...' : '读取最新'}</button>
       </section>
 
       <section className="kol-pool-v2-classbar">
-        <button type="button" className={!classFilter ? 'is-active' : ''} onClick={() => setClassFilter('')}>
+        <button type="button" className={!classFilter && quickMetricFilter === 'all' ? 'is-active' : ''} onClick={() => { setQuickMetricFilter('all'); setClassFilter(''); }} disabled={!loaded} title={loaded ? '显示全部候选分类' : 'KOL Pool 尚未加载'}>
           全部 <span>{loaded ? items.length : '--'}</span>
         </button>
         {(Object.keys(CANDIDATE_CLASS_INFO) as CandidateClass[]).map((key) => (
-          <button key={key} type="button" className={classFilter === key ? 'is-active' : ''} onClick={() => setClassFilter(classFilter === key ? '' : key)}>
+          <button
+            key={key}
+            type="button"
+            className={classFilter === key ? 'is-active' : ''}
+            onClick={() => { setQuickMetricFilter('all'); setClassFilter(classFilter === key ? '' : key); }}
+            disabled={!loaded}
+            title={loaded ? `筛选 ${CANDIDATE_CLASS_INFO[key].label}` : 'KOL Pool 尚未加载'}
+          >
             {CANDIDATE_CLASS_INFO[key].label} <span>{loaded ? classCounts[key] : '--'}</span>
           </button>
         ))}
@@ -424,7 +491,7 @@ export function KolPoolV2Page({
           <option value="views">平均播放</option>
           <option value="er">Real ER</option>
         </select>
-        <button type="button" onClick={() => { setPlatform(''); setCountry(''); setClassFilter(''); setSearch(''); }}>清空筛选</button>
+        <button type="button" onClick={resetFilters} title="清空搜索、平台、国家、分类和快捷指标筛选">清空筛选</button>
       </section>
 
       {error ? <div className="kol-pool-v2-alert">{error}</div> : null}
@@ -432,7 +499,7 @@ export function KolPoolV2Page({
       <section className="kol-pool-v2-table-card">
         <div className="kol-pool-v2-table-head">
           <span>显示 {loaded ? filteredItems.length : '--'} / {loaded ? items.length : '--'} 个 KOL</span>
-          <b>{classFilter ? CANDIDATE_CLASS_INFO[classFilter].label : '全部候选'}</b>
+          <b>{filteredLabel}</b>
         </div>
         <div className="kol-pool-v2-table-wrap">
           <table>

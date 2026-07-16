@@ -17,6 +17,8 @@ from typing import Any
 
 
 from app.core.coerce import _text
+from app.platform.apify_budget import current_apify_execution_context
+from app.platform.apify_lifecycle import managed_apify_client
 
 
 def _compact_int(value: Any) -> int | None:
@@ -133,15 +135,22 @@ def _youtube_api_metadata(video_url: str) -> dict[str, Any]:
     params = urllib.parse.urlencode({
         "part": "snippet,statistics,contentDetails",
         "id": video_id,
-        "key": api_key,
     })
     request_url = f"https://www.googleapis.com/youtube/v3/videos?{params}"
+    request = urllib.request.Request(
+        request_url,
+        headers={"X-Goog-Api-Key": api_key},
+        method="GET",
+    )
     try:
-        with urllib.request.urlopen(request_url, timeout=25) as response:
+        with urllib.request.urlopen(request, timeout=25) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"youtube_api_http_{exc.code}:{body}") from exc
+        # Provider bodies can echo request details.  Keep the exact credential
+        # out of raised exceptions because callers may persist or log them.
+        safe_body = body.replace(api_key, "[redacted]")
+        raise RuntimeError(f"youtube_api_http_{exc.code}:{safe_body}") from exc
     items = payload.get("items") or []
     if not items:
         raise LookupError("youtube video not found")
@@ -379,51 +388,90 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
     except ImportError as exc:  # pragma: no cover - environment dependency
         raise RuntimeError("apify-client is not installed") from exc
     actor_id = _apify_actor_for(platform)
-    client = ApifyClient(token)
     run_input = _apify_input(platform, video_url)
     attempts = _apify_scrape_attempts()
     last_reason = "Apify returned no items"
     # 反爬重试:每次 actor.call 都是全新 session,_apify_input 已注入(默认住宅)代理组。
     # 错误哨兵(run SUCCEEDED 但 item 只有 error/errorDescription,平台拦截/私密/已删)或空结果 → 换次重跑;
     # 全部尝试仍失败 → 抬成显式失败带真因(绝不把失败谎报成 scrape_status=success,误导排查)。
-    for _ in range(attempts):
-        run = client.actor(actor_id).call(run_input=run_input, timeout_secs=300)
-        dataset_id = run.get("defaultDatasetId")
-        items = client.dataset(dataset_id).list_items(limit=5).items if dataset_id else []
-        # C5 成本记账收口:重试每一跑都计费,逐 run 记账(幂等 by run_id;失败绝不影响抓取)。
-        try:
-            from app.domains.costs.budget_guard import record_apify_run
+    with managed_apify_client(ApifyClient(token)) as client:
+        for _ in range(attempts):
+            from app.platform.apify_budget import call_apify_actor
 
-            record_apify_run(
-                run,
-                actor_id=actor_id,
+            run = call_apify_actor(
+                client,
+                actor_id,
                 platform=platform,
                 operation="evidence_video_metadata",
                 source="workflow_evidence_video_metadata",
-                dataset_item_count=len(items),
+                run_input=run_input,
+                timeout_secs=300,
             )
-        except Exception:
-            # 本模块按设计只依赖标准库(无模块级 logger)→ 就地取 stdlib logger,不破坏搬迁约定。
-            import logging
+            dataset_id = run.get("defaultDatasetId")
+            items = client.dataset(dataset_id).list_items(limit=5).items if dataset_id else []
+            # C5 成本记账收口:重试每一跑都计费,逐 run 记账(幂等 by run_id;失败绝不影响抓取)。
+            try:
+                from app.domains.costs.budget_guard import record_apify_run
 
-            logging.getLogger(__name__).warning("evidence video metadata cost record failed", exc_info=True)
-        if not items:
-            last_reason = "Apify returned no items"
-            continue
-        first = dict(items[0])
-        if not _apify_item_is_real(first):
-            last_reason = _text(first.get("errorDescription")) or _text(first.get("error")) or "Apify returned no usable item"
-            continue
-        metadata = _apify_item_metadata(platform, video_url, first, _text(run.get("id")))
-        metadata["scrape_error"] = ""
-        return metadata
+                record_apify_run(
+                    run,
+                    actor_id=actor_id,
+                    platform=platform,
+                    operation="evidence_video_metadata",
+                    source="workflow_evidence_video_metadata",
+                    dataset_item_count=len(items),
+                )
+            except Exception:
+                # 本模块按设计只依赖标准库(无模块级 logger)→ 就地取 stdlib logger,不破坏搬迁约定。
+                import logging
+
+                logging.getLogger(__name__).warning("evidence video metadata cost record failed", exc_info=True)
+            if not items:
+                last_reason = "Apify returned no items"
+                continue
+            first = dict(items[0])
+            if not _apify_item_is_real(first):
+                last_reason = _text(first.get("errorDescription")) or _text(first.get("error")) or "Apify returned no usable item"
+                continue
+            metadata = _apify_item_metadata(platform, video_url, first, _text(run.get("id")))
+            metadata["scrape_error"] = ""
+            return metadata
     raise LookupError(f"{platform}_scrape_unavailable: {last_reason}"[:240])
+
+
+def _deferred_video_metadata(platform: str, video_url: str, reason: str) -> dict[str, Any]:
+    """Truthful non-provider placeholder for web/read-side callers."""
+    return {
+        "platform": platform,
+        "content_url": video_url,
+        "title": "",
+        "description": "",
+        "view_count": None,
+        "like_count": None,
+        "comment_count": None,
+        "share_count": None,
+        "publish_date": None,
+        "posted_at": None,
+        "duration_seconds": None,
+        "thumbnail_url": "",
+        "channel_id": "",
+        "channel_name": "",
+        "scrape_source": "deferred",
+        "scrape_status": "pending",
+        "scrape_error": str(reason or "provider_refresh_requires_background_job")[:240],
+    }
 
 
 def _fetch_video_metadata(video_url: str) -> dict[str, Any]:
     platform = _detect_video_platform(video_url)
     if platform == "unknown":
         raise ValueError("unsupported or unknown video platform")
+    if current_apify_execution_context() is None:
+        return _deferred_video_metadata(
+            platform,
+            video_url,
+            "provider_refresh_requires_background_job",
+        )
     if platform == "youtube":
         try:
             return _youtube_api_metadata(video_url)

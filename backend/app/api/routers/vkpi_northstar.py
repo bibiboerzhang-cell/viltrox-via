@@ -19,6 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
+from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -118,7 +119,9 @@ def _build_northstar() -> dict[str, Any]:
 @router.get("/gtm/northstar")
 def get_gtm_northstar(staff=Depends(require_tab("vkpi", "read"))) -> dict:
     """90 天北极星三指标(全只读,真库现查,不写库)。"""
-    del staff  # 权限已由 require_tab 校验;全局口径无 scope 二次过滤。
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM northstar")
+    if scope_unavailable is not None:
+        return scope_unavailable
     try:
         return _build_northstar()
     except Exception as exc:  # noqa: BLE001 — 聚合失败不炸接口,诚实回原因

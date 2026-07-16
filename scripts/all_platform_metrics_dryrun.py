@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import csv
 import datetime as dt
 import json
@@ -450,7 +452,7 @@ def main() -> None:
             batch = platform_candidates[index : index + 50]
             if not batch:
                 continue
-            print(f"[{platform}] batch {index // 50 + 1}: {len(batch)} urls", flush=True)
+            out(f"[{platform}] batch {index // 50 + 1}: {len(batch)} urls", flush=True)
             mapped, info = call_actor(client, platform, batch)
             runs.append(info)
             for item in mapped:
@@ -473,9 +475,9 @@ def main() -> None:
             }
         )
     csv_path, report_path = write_outputs(output_rows, runs, global_stats)
-    print(f"CSV={csv_path}")
-    print(f"REPORT={report_path}")
-    print(report_path.read_text())
+    out(f"CSV={csv_path}")
+    out(f"REPORT={report_path}")
+    out(report_path.read_text())
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Persist reviewed market-signal candidates into competitor signal queue."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -37,7 +38,7 @@ def main() -> int:
         committed_by=args.committed_by,
     )
     paths = write_competitor_signal_write_report(result, out_dir=args.out_dir)
-    print(
+    stdout_out(
         json.dumps(
             {
                 **paths,

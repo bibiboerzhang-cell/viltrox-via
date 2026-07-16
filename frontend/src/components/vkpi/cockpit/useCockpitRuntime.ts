@@ -5,7 +5,10 @@ import { toCockpitKolPoolRows } from "./kolPoolRuntime";
 import { readCachedResource, writeCachedResource } from "./lib/resourceCache";
 import { normalizeAlerts, normalizeCurrentUser, normalizeCockpitDashboard } from "./normalizers";
 
-const KOL_POOL_CACHE_KEY = "cockpit.kol_pool.rows.v1";
+// Bump this key whenever the normalized KOL row shape changes. Reusing the
+// previous key can briefly render stale rows (for example, missing fit scores)
+// after a release even though the database and API already contain the data.
+const KOL_POOL_CACHE_KEY = "cockpit.kol_pool.rows.v3";
 const DASHBOARD_CACHE_KEY = "cockpit.dashboard.bundle.v1";
 const KOL_POOL_REFRESH_MS = 10 * 60 * 1000;
 const DASHBOARD_REFRESH_MS = 90 * 1000;

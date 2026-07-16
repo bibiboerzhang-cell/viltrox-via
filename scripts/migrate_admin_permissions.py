@@ -36,6 +36,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.db.connection import get_conn
@@ -95,12 +97,12 @@ def main() -> None:
     conn = get_conn()
     
     # 1. 找所有 role="admin" 的 staff (active 且非 owner)
-    print("═══════════════════════════════════════")
-    print("  R59-FW-PERM: admin permissions migration")
-    print("═══════════════════════════════════════")
-    print()
-    print(f"模式: {'DRY-RUN (不写库)' if args.dry_run else 'APPLY (实际执行)'}")
-    print()
+    out("═══════════════════════════════════════")
+    out("  R59-FW-PERM: admin permissions migration")
+    out("═══════════════════════════════════════")
+    out()
+    out(f"模式: {'DRY-RUN (不写库)' if args.dry_run else 'APPLY (实际执行)'}")
+    out()
     
     rows = conn.execute(
         """
@@ -117,15 +119,15 @@ def main() -> None:
     ).fetchall()
     
     if not rows:
-        print("[info] 没有 active admin role staff,无需迁移")
-        print()
-        print("═══════════════════════════════════════")
-        print("  完成: 影响 0 个 staff")
-        print("═══════════════════════════════════════")
+        out("[info] 没有 active admin role staff,无需迁移")
+        out()
+        out("═══════════════════════════════════════")
+        out("  完成: 影响 0 个 staff")
+        out("═══════════════════════════════════════")
         return
     
-    print(f"[info] 找到 {len(rows)} 个 active admin role staff")
-    print()
+    out(f"[info] 找到 {len(rows)} 个 active admin role staff")
+    out()
     
     # 2. 分析每个 staff 的迁移影响
     affected = []
@@ -153,42 +155,42 @@ def main() -> None:
         affected.append((staff_id, email, current, upgraded, changes))
     
     # 3. 打印影响报告
-    print("─── 跳过 (owner) ───")
+    out("─── 跳过 (owner) ───")
     for sid, email in skipped_owner:
-        print(f"  staff_id={sid} email={email} (owner bypass)")
-    print(f"  小计: {len(skipped_owner)} 个")
-    print()
+        out(f"  staff_id={sid} email={email} (owner bypass)")
+    out(f"  小计: {len(skipped_owner)} 个")
+    out()
     
-    print("─── 跳过 (无变化) ───")
+    out("─── 跳过 (无变化) ───")
     for sid, email in skipped_no_change:
-        print(f"  staff_id={sid} email={email}")
-    print(f"  小计: {len(skipped_no_change)} 个")
-    print()
+        out(f"  staff_id={sid} email={email}")
+    out(f"  小计: {len(skipped_no_change)} 个")
+    out()
     
-    print("─── 待迁移 ───")
+    out("─── 待迁移 ───")
     for sid, email, before, after, changes in affected:
-        print(f"  staff_id={sid} email={email}")
+        out(f"  staff_id={sid} email={email}")
         for change in changes:
-            print(f"    {change}")
-    print(f"  小计: {len(affected)} 个")
-    print()
+            out(f"    {change}")
+    out(f"  小计: {len(affected)} 个")
+    out()
     
     if not affected:
-        print("═══════════════════════════════════════")
-        print("  完成: 没有 staff 需要迁移")
-        print("═══════════════════════════════════════")
+        out("═══════════════════════════════════════")
+        out("  完成: 没有 staff 需要迁移")
+        out("═══════════════════════════════════════")
         return
     
     # 4. dry-run 不写库,直接退出
     if args.dry_run:
-        print("═══════════════════════════════════════")
-        print(f"  DRY-RUN 完成: {len(affected)} 个 staff 待迁移")
-        print(f"  实际执行请加 --apply")
-        print("═══════════════════════════════════════")
+        out("═══════════════════════════════════════")
+        out(f"  DRY-RUN 完成: {len(affected)} 个 staff 待迁移")
+        out(f"  实际执行请加 --apply")
+        out("═══════════════════════════════════════")
         return
     
     # 5. apply 模式 - 真实写入
-    print("─── APPLY 实际执行 ───")
+    out("─── APPLY 实际执行 ───")
     success = 0
     failed = 0
     
@@ -199,17 +201,17 @@ def main() -> None:
                 (json.dumps(after, ensure_ascii=False), sid),
             )
             success += 1
-            print(f"  ✓ staff_id={sid} email={email} 已升级")
+            out(f"  ✓ staff_id={sid} email={email} 已升级")
         except Exception as exc:
             failed += 1
-            print(f"  ✗ staff_id={sid} email={email} 失败: {exc}")
+            out(f"  ✗ staff_id={sid} email={email} 失败: {exc}")
     
     conn.commit()
     
-    print()
-    print("═══════════════════════════════════════")
-    print(f"  迁移完成: 成功 {success} / 失败 {failed}")
-    print("═══════════════════════════════════════")
+    out()
+    out("═══════════════════════════════════════")
+    out(f"  迁移完成: 成功 {success} / 失败 {failed}")
+    out("═══════════════════════════════════════")
     
     if failed > 0:
         sys.exit(1)

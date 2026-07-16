@@ -10,8 +10,6 @@ import { AllMoversModal } from "./components/modals/AllMoversModal";
 import { AllNotificationsModal } from "./components/modals/AllNotificationsModal";
 import { AllProjectsModal } from "./components/modals/AllProjectsModal";
 import { AllRemindersModal } from "./components/modals/AllRemindersModal";
-import { EditGroupModal } from "./components/modals/EditGroupModal";
-import { EventDetailModal } from "./components/modals/EventDetailModal";
 import { EventPreviewModal } from "./components/modals/EventPreviewModal";
 import { FeedbackModal } from "./components/modals/FeedbackModal";
 import { FullCalendarModal } from "./components/modals/FullCalendarModal";
@@ -24,22 +22,33 @@ import { ReportPanel } from "./components/ReportPanel";
 import { SettingsPage } from "../pages/SettingsPage";
 import { AuthorizationOverlay } from "../pages/settings/AuthorizationOverlay";
 import { ShortcutsModal } from "./components/modals/ShortcutsModal";
-import { SignalDetailModal } from "./components/modals/SignalDetailModal";
 import { SignalsAllModal } from "./components/modals/SignalsAllModal";
-import { TeamModal } from "./components/modals/TeamModal";
 import { HelpPopover } from "./components/popovers/HelpPopover";
 import { NotificationsPopover } from "./components/popovers/NotificationsPopover";
 import { UserMenuPopover } from "./components/popovers/UserMenuPopover";
 import { WorkRemindersPopover } from "./components/popovers/WorkRemindersPopover";
+import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 import { logoutCockpit, resolveCockpitAlert } from "./api";
 import { saveStoredState } from "./lib/storage";
 import { createStaffGroup, updateStaffGroup } from "../../../services/vkpi/groups-api";
 
 const e = React.createElement;
 const AITodayEvidenceModal = React.lazy(() => import("./components/modals/AITodayEvidenceModal").then((module) => ({ default: module.AITodayEvidenceModal })));
+const EditGroupModal = React.lazy(() => import("./components/modals/EditGroupModal").then((module) => ({ default: module.EditGroupModal })));
+const EventDetailModal = React.lazy(() => import("./components/modals/EventDetailModal").then((module) => ({ default: module.EventDetailModal })));
 const KPIDetailModal = React.lazy(() => import("./components/modals/KPIDetailModal").then((module) => ({ default: module.KPIDetailModal })));
 const ProjectDetailModal = React.lazy(() => import("./components/modals/ProjectDetailModal").then((module) => ({ default: module.ProjectDetailModal })));
+const SignalDetailModal = React.lazy(() => import("./components/modals/SignalDetailModal").then((module) => ({ default: module.SignalDetailModal })));
+const TeamModal = React.lazy(() => import("./components/modals/TeamModal").then((module) => ({ default: module.TeamModal })));
 const VKPI_KOL_WORKFLOW_GUIDE_URL = "/assets/vkpi_kol_workflow_cloud_demo_2026-06-30.pdf?v=20260630-1115";
+
+function guardedLazyModal(name: string, onDismiss: () => void, node: React.ReactNode) {
+  return e(
+    LazyErrorBoundary,
+    { name, variant: "overlay", onDismiss },
+    e(React.Suspense, { fallback: null }, node),
+  );
+}
 
 function openKolWorkflowGuide() {
   const guideWindow = window.open(VKPI_KOL_WORKFLOW_GUIDE_URL, "_blank", "noopener,noreferrer");
@@ -92,7 +101,7 @@ export function CockpitOverlays(p: any) {
         setActiveNav("kol-pool");
       },
     })),
-    e(AnimatePresence, { key: "ov-event" }, selectedEvent && e(EventDetailModal, {
+    e(AnimatePresence, { key: "ov-event" }, selectedEvent && guardedLazyModal("活动详情", () => setSelectedEvent(null), e(EventDetailModal, {
       event: selectedEvent,
       onClose: () => setSelectedEvent(null),
       // 「编辑方案 / 查看完整报告」→ 跳真实 Events 页并自动打开该活动详情(含真实 tab + 编辑)。
@@ -101,8 +110,8 @@ export function CockpitOverlays(p: any) {
         setSelectedEvent(null);
         openEventsPage(id);
       },
-    })),
-    e(AnimatePresence, { key: "ov-kpi" }, selectedKpi && e(React.Suspense, { fallback: null }, e(KPIDetailModal, {
+    }))),
+    e(AnimatePresence, { key: "ov-kpi" }, selectedKpi && guardedLazyModal("KPI 详情", () => setSelectedKpi(null), e(KPIDetailModal, {
       kpiId: selectedKpi,
       initialScope: kpiScope,
       // 【D4】per-staff scope 记忆:弹窗内切 scope 也按 staff id 存,防同浏览器多账号串号。
@@ -118,9 +127,9 @@ export function CockpitOverlays(p: any) {
     // V6.10: Report Panel
     e(AnimatePresence, { key: "ov-report" }, reportOpen && e(ReportPanel, { onClose: () => setReportOpen(false), data: reportData, apiToken })),
     // V6.11: Signal Detail Modal
-    e(AnimatePresence, { key: "ov-signal" }, selectedSignal && e(SignalDetailModal, { alert: selectedSignal, onClose: () => setSelectedSignal(null) })),
+    e(AnimatePresence, { key: "ov-signal" }, selectedSignal && guardedLazyModal("信号详情", () => setSelectedSignal(null), e(SignalDetailModal, { alert: selectedSignal, onClose: () => setSelectedSignal(null) }))),
     // V6.13: 新 modal mounts
-    e(AnimatePresence, { key: "ov-project" }, selectedProject && e(React.Suspense, { fallback: null }, e(ProjectDetailModal, {
+    e(AnimatePresence, { key: "ov-project" }, selectedProject && guardedLazyModal("项目详情", () => setSelectedProject(null), e(ProjectDetailModal, {
       project: selectedProject,
       staff: uiStaff,
       apiToken,
@@ -155,7 +164,7 @@ export function CockpitOverlays(p: any) {
       onClose: () => setShowAllSignals(false),
       onAlertClick: (a: any) => { setShowAllSignals(false); setSelectedSignal(a); }
     })),
-    e(AnimatePresence, { key: "ov-aiconfirm" }, showAIConfirm && e(React.Suspense, { fallback: null }, e(AITodayEvidenceModal, {
+    e(AnimatePresence, { key: "ov-aiconfirm" }, showAIConfirm && guardedLazyModal("AI Today 证据", () => setShowAIConfirm(false), e(AITodayEvidenceModal, {
       insight: dashboardRuntime.aiInsight,
       onClose: () => setShowAIConfirm(false),
       onOpenKolPool: () => {
@@ -207,7 +216,7 @@ export function CockpitOverlays(p: any) {
     })),
     // V6.14.2: 7 子 modals
     e(AnimatePresence, { key: "ov-profile" }, showProfile && e(ProfileModal, { user: currentUser, onClose: () => setShowProfile(false), t, apiToken })),
-    e(AnimatePresence, { key: "ov-team" }, showTeam && e(TeamModal, {
+    e(AnimatePresence, { key: "ov-team" }, showTeam && guardedLazyModal("团队", () => setShowTeam(false), e(TeamModal, {
       user: currentUser, staff: uiStaff, groups: staffGroups, apiToken,
       onClose: () => setShowTeam(false),
       onImpersonate: (s: any) => setViewingAs(s),
@@ -215,7 +224,7 @@ export function CockpitOverlays(p: any) {
       onOpenNewGroup: () => openGroupEditor("new"),
       onRefreshGroups: refreshStaffGroups,
       t
-    })),
+    }))),
     showSettingsModal && e("div", { key: "ov-settings", className: "cockpit-settings-dark vkpi-settings-surface fixed inset-0 z-[1000] overflow-auto" },
       e("button", {
         type: "button",
@@ -231,6 +240,11 @@ export function CockpitOverlays(p: any) {
         viewMode: appViewMode === "employee" ? "employee" : "manager",
         apiToken,
         initialSection: settingsInitialSection || undefined,
+        onOpenBusinessArea: (area: "shopify" | "dealers" | "events" | "gtmCommand") => {
+          setShowSettingsModal(false);
+          saveStoredState({ activeNav: area });
+          setActiveNav(area);
+        },
         onRefreshData,
       })
     ),
@@ -292,7 +306,7 @@ export function CockpitOverlays(p: any) {
         setActiveNav(tab);
       }
     })),
-    e(AnimatePresence, { key: "ov-editgroup" }, showEditGroup && e(EditGroupModal, {
+    e(AnimatePresence, { key: "ov-editgroup" }, showEditGroup && guardedLazyModal("编辑分组", () => setShowEditGroup(false), e(EditGroupModal, {
       groupName: editGroupName,
       mode: editGroupMode,
       staff: uiStaff,
@@ -343,7 +357,7 @@ export function CockpitOverlays(p: any) {
           });
         }
       }
-    })),
+    }))),
     // V6.9: Event preview modal (二次点击逻辑)
     e(AnimatePresence, { key: "ov-preview" }, previewEvent && e(EventPreviewModal, {
       event: previewEvent,

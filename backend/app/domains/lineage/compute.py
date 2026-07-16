@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domains import business_truth
 from app.domains.lineage.definitions import METRICS
 from app.domains.lineage.common import _float, _int
 
@@ -89,6 +90,7 @@ def _compute_gmv(conn, period_start, period_end, scope_type, scope_id) -> dict[s
         FROM vkpi_sales_attributions sa
         LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
         WHERE COALESCE(sa.occurred_at, sa.imported_at, sa.created_at) BETWEEN ? AND ?
+        AND {business_truth.verified_shopify_attribution_sql('sa')}
         {_active_project_filter('sa')}
         {where_extra}
         ORDER BY sa.occurred_at DESC, sa.id DESC
@@ -141,11 +143,20 @@ def _compute_gmv(conn, period_start, period_end, scope_type, scope_id) -> dict[s
             },
         })
 
+    has_sources = bool(sources)
     return {
-        "value_numeric": total,
+        "value_numeric": total if has_sources else None,
         "currency": "USD",
         "unit": "cents",
-        "calculation": {"formula": METRICS["gmv"]["formula"], "row_count": len(sources), "total_cents": total},
+        "data_status": "real" if has_sources else "awaiting_source",
+        "confidence": 1.0 if has_sources else 0.0,
+        "is_partial": not has_sources,
+        "calculation": {
+            "formula": METRICS["gmv"]["formula"],
+            "row_count": len(sources),
+            "total_cents": total if has_sources else None,
+            "empty_reason": "no_provider_verified_shopify_rows" if not has_sources else "",
+        },
         "sources": sources,
     }
 
@@ -156,7 +167,7 @@ def _compute_cost(conn, period_start, period_end, scope_type, scope_id) -> dict[
         SELECT id, project_id, kol_id, staff_id, cost_type, amount_cents,
                currency, status, incurred_at, source_ref, note
         FROM vkpi_cost_ledger c
-        WHERE status != 'void'
+        WHERE {business_truth.approved_actual_cost_sql('c')}
           AND incurred_at BETWEEN ? AND ?
         {_active_project_filter('c')}
         {where_extra}
@@ -189,11 +200,20 @@ def _compute_cost(conn, period_start, period_end, scope_type, scope_id) -> dict[
             },
         })
 
+    has_sources = bool(sources)
     return {
-        "value_numeric": total,
+        "value_numeric": total if has_sources else None,
         "currency": "USD",
         "unit": "cents",
-        "calculation": {"formula": METRICS["cost"]["formula"], "row_count": len(sources), "total_cents": total},
+        "data_status": "real" if has_sources else "awaiting_source",
+        "confidence": 1.0 if has_sources else 0.0,
+        "is_partial": not has_sources,
+        "calculation": {
+            "formula": METRICS["cost"]["formula"],
+            "row_count": len(sources),
+            "total_cents": total if has_sources else None,
+            "empty_reason": "no_approved_actual_cost_rows" if not has_sources else "",
+        },
         "sources": sources,
     }
 
@@ -608,22 +628,77 @@ def _compute_alerts(conn, period_start, period_end, scope_type, scope_id) -> dic
     }
 
 def _compute_derived(metric_key: str, computed: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    gmv = _float(computed.get("gmv", {}).get("value_numeric"))
-    cost = _float(computed.get("cost", {}).get("value_numeric"))
+    gmv_input = computed.get("gmv") or {}
+    cost_input = computed.get("cost") or {}
+    gmv_raw = gmv_input.get("value_numeric")
+    cost_raw = cost_input.get("value_numeric")
+    inputs_real = (
+        str(gmv_input.get("data_status") or "").lower() == "real"
+        and str(cost_input.get("data_status") or "").lower() == "real"
+        and gmv_raw is not None
+        and cost_raw is not None
+    )
+    gmv = _float(gmv_raw) if gmv_raw is not None else None
+    cost = _float(cost_raw) if cost_raw is not None else None
+    if not inputs_real:
+        return {
+            "value_numeric": None,
+            "currency": "USD" if metric_key == "net_contribution" else "",
+            "unit": "cents" if metric_key == "net_contribution" else "ratio",
+            "data_status": "awaiting_source",
+            "confidence": 0.0,
+            "is_partial": True,
+            "calculation": {
+                "formula": METRICS[metric_key]["formula"],
+                "gmv_cents": gmv,
+                "cost_cents": cost,
+                "empty_reason": "canonical_inputs_unavailable",
+            },
+            "sources": [],
+        }
     if metric_key == "net_contribution":
         return {
-            "value_numeric": gmv - cost,
+            "value_numeric": float(gmv) - float(cost),
             "currency": "USD",
             "unit": "cents",
+            "data_status": "real",
+            "confidence": min(
+                _float(gmv_input.get("confidence"), 1.0),
+                _float(cost_input.get("confidence"), 1.0),
+            ),
+            "is_partial": False,
             "calculation": {"formula": "gmv - cost", "gmv_cents": gmv, "cost_cents": cost},
             "sources": [],
         }
     if metric_key == "roi":
-        roi = round(gmv / cost, 4) if cost else 0
+        if not cost or float(cost) <= 0:
+            return {
+                "value_numeric": None,
+                "currency": "",
+                "unit": "ratio",
+                "data_status": "unavailable",
+                "confidence": 0.0,
+                "is_partial": True,
+                "calculation": {
+                    "formula": METRICS["roi"]["formula"],
+                    "gmv_cents": gmv,
+                    "cost_cents": cost,
+                    "roi": None,
+                    "empty_reason": "zero_cost_denominator",
+                },
+                "sources": [],
+            }
+        roi = round(float(gmv) / float(cost), 4)
         return {
             "value_numeric": roi,
             "currency": "",
             "unit": "ratio",
+            "data_status": "real",
+            "confidence": min(
+                _float(gmv_input.get("confidence"), 1.0),
+                _float(cost_input.get("confidence"), 1.0),
+            ),
+            "is_partial": False,
             "calculation": {"formula": "gmv / cost", "gmv_cents": gmv, "cost_cents": cost, "roi": roi},
             "sources": [],
         }

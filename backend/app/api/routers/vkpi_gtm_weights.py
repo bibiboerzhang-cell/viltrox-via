@@ -24,6 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -87,7 +88,9 @@ def preview_weight_changes(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """权重回流预览:全 dry_run,零写库;逐条展示会回流什么、为何 hold(样本闸/未裁决)。"""
-    del staff
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM weight preview")
+    if scope_unavailable is not None:
+        return {**scope_unavailable, "items": [], "count": 0}
     from app.db.connection import get_conn, table_exists
     from app.domains.market_brain import weight_feedback
 
@@ -144,7 +147,9 @@ def get_verdict_context(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """裁决一屏读数:当时预期 vs 三窗实际(自动回填部分)+ 权重回流预览。全只读。"""
-    del staff
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM verdict context")
+    if scope_unavailable is not None:
+        return scope_unavailable
     from app.db.connection import get_conn, table_exists
     from app.domains.market_brain import weight_feedback
 
@@ -178,7 +183,7 @@ def get_verdict_context(
     try:
         weight_preview = weight_feedback.apply_weight_change(data, dry_run=True)
     except Exception as exc:  # noqa: BLE001 — 预览失败不阻塞裁决读数
-        logger.warning("gtm verdict context weight preview failed id=%s: %s", outcome_id, exc)
+        logger.warning("gtm verdict context weight preview failed id=%s: %s", verdict_id, exc)
         weight_preview = {"ok": False, "reason": str(exc)[:200]}
     return {
         "available": True,

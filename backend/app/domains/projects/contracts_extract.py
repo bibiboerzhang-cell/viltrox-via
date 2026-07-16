@@ -7,8 +7,10 @@ Re-exported by contracts.py so existing call sites and imports stay unchanged.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,92 @@ CONTRACT_BUDGET_SCOPE = "cron:vkpi_contract_extract"
 CONTRACT_SINGLE_CALL_SCOPE = "single_call_contract"
 # 签署版关联键(批E,2026-06-12):存于 raw_extracted_json,提取/失败回写时必须保留。
 CONTRACT_LINK_KEYS = ("signed_version_of", "superseded_by")
+
+# A contract extraction is useful only when at least one of these core facts is
+# non-empty, correctly typed, and backed by both confidence and evidence.
+CONTRACT_MINIMUM_VALID_FIELDS = frozenset(
+    {
+        "fee_amount",
+        "contract_duration",
+        "start_date",
+        "end_date",
+        "platforms",
+        "deliverable_count",
+        "deliverables",
+        "must_include",
+        "usage_rights",
+        "exclusivity",
+        "buyout_rights",
+        "breach_terms",
+        "payment_terms",
+        "cancellation_terms",
+        "revision_terms",
+        "promised_publish_deadline",
+    }
+)
+CONTRACT_BUSINESS_FIELDS = (
+    "fee_amount",
+    "fee_currency",
+    "contract_duration",
+    "start_date",
+    "end_date",
+    "platforms",
+    "deliverable_count",
+    "deliverables",
+    "must_include",
+    "usage_rights",
+    "exclusivity",
+    "buyout_rights",
+    "breach_terms",
+    "payment_terms",
+    "cancellation_terms",
+    "revision_terms",
+    "promised_publish_deadline",
+)
+CONTRACT_TEXT_FIELDS = frozenset(
+    {
+        "fee_currency",
+        "contract_duration",
+        "usage_rights",
+        "exclusivity",
+        "buyout_rights",
+        "breach_terms",
+        "payment_terms",
+        "cancellation_terms",
+        "revision_terms",
+    }
+)
+CONTRACT_STORAGE_COLUMNS = {
+    "fee_amount": ("fee_amount",),
+    "fee_currency": ("fee_currency",),
+    "contract_duration": ("contract_duration",),
+    "start_date": ("start_date",),
+    "end_date": ("end_date",),
+    "platforms": ("platforms_json", "promised_platforms_json"),
+    "deliverable_count": ("deliverable_count",),
+    "deliverables": ("deliverables_json", "promised_deliverables_json"),
+    "must_include": ("must_include_json", "promised_must_include_json"),
+    "usage_rights": ("usage_rights",),
+    "exclusivity": ("exclusivity",),
+    "buyout_rights": ("buyout_rights",),
+    "breach_terms": ("breach_terms",),
+    "payment_terms": ("payment_terms",),
+    "cancellation_terms": ("cancellation_terms",),
+    "revision_terms": ("revision_terms",),
+    "promised_publish_deadline": ("promised_publish_deadline",),
+}
+# One document quote can legitimately support closely coupled fields.
+CONTRACT_EVIDENCE_ALIASES = {
+    "fee_currency": ("fee_currency", "fee_amount"),
+    "platforms": ("platforms", "deliverables"),
+    "deliverable_count": ("deliverable_count", "deliverables"),
+    "must_include": ("must_include", "deliverables"),
+    "promised_publish_deadline": ("promised_publish_deadline", "deliverables"),
+}
+
+
+class ContractExtractionValidationError(ValueError):
+    pass
 
 
 def _json(value: Any) -> str:
@@ -61,6 +149,207 @@ def _list(value: Any) -> list[Any]:
     if value in (None, ""):
         return []
     return [value]
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _meaningful(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set)):
+        return any(_meaningful(item) for item in value)
+    if isinstance(value, dict):
+        return any(_meaningful(item) for item in value.values())
+    return True
+
+
+def _valid_evidence(value: Any) -> bool:
+    return isinstance(value, (str, list, dict)) and _meaningful(value)
+
+
+def _normalized_business_field(field: str, value: Any) -> Any:
+    if field == "fee_amount":
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("must be a number or null")
+        amount = float(value)
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("must be a finite non-negative number")
+        return amount
+
+    if field == "deliverable_count":
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise TypeError("must be a non-negative integer or null")
+        return int(value)
+
+    if field in {"start_date", "end_date"}:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("must be an ISO date string or null")
+        if not value.strip():
+            return None
+        normalized = _date(value)
+        if not normalized:
+            raise ValueError("must contain an ISO date")
+        try:
+            date.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError("must contain a valid ISO date") from exc
+        return normalized
+
+    if field == "promised_publish_deadline":
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("must be an ISO date/time string or null")
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("must be a valid ISO date/time") from exc
+        return normalized
+
+    if field in CONTRACT_TEXT_FIELDS:
+        if not isinstance(value, str):
+            raise TypeError("must be a string")
+        return value.strip()
+
+    if field in {"platforms", "must_include"}:
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise TypeError("must be a list of strings")
+        return [item.strip() for item in value if item.strip()]
+
+    if field == "deliverables":
+        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+            raise TypeError("must be a list of objects")
+        for item in value:
+            for text_field in ("platform", "content_type", "notes"):
+                if text_field in item and not isinstance(item[text_field], str):
+                    raise TypeError(f"{text_field} must be a string")
+            quantity = item.get("quantity")
+            if quantity is not None and (
+                isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0
+            ):
+                raise TypeError("quantity must be a non-negative integer or null")
+            deadline = item.get("deadline")
+            if deadline is not None and not isinstance(deadline, str):
+                raise TypeError("deadline must be a string or null")
+        return value
+
+    raise KeyError(field)
+
+
+def _validated_extraction_data(extraction: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:
+    if not isinstance(extraction, dict) or extraction.get("ok") is False:
+        raise ContractExtractionValidationError("contract_extraction_invalid_envelope")
+    data = extraction.get("extracted")
+    if not isinstance(data, dict) or not data:
+        raise ContractExtractionValidationError("contract_extraction_empty_object")
+
+    invalid_fields: list[str] = []
+    normalized: dict[str, Any] = {}
+    for field in CONTRACT_BUSINESS_FIELDS:
+        if field not in data:
+            continue
+        try:
+            normalized[field] = _normalized_business_field(field, data[field])
+        except (TypeError, ValueError):
+            invalid_fields.append(field)
+
+    if "summary" in data and not isinstance(data["summary"], str):
+        invalid_fields.append("summary")
+    for field in ("risk_flags", "missing_or_unclear_fields"):
+        if field in data and not isinstance(data[field], list):
+            invalid_fields.append(field)
+
+    confidence = data.get("field_confidence")
+    evidence = data.get("evidence")
+    if not isinstance(confidence, dict):
+        invalid_fields.append("field_confidence")
+        confidence = {}
+    if not isinstance(evidence, dict):
+        invalid_fields.append("evidence")
+        evidence = {}
+
+    for field, value in confidence.items():
+        if not isinstance(field, str) or isinstance(value, bool) or not isinstance(value, (int, float)):
+            invalid_fields.append(f"field_confidence.{field}")
+            continue
+        numeric = float(value)
+        if not math.isfinite(numeric) or numeric < 0 or numeric > 1:
+            invalid_fields.append(f"field_confidence.{field}")
+    for field, value in evidence.items():
+        if not isinstance(field, str) or (value not in (None, "", [], {}) and not isinstance(value, (str, list, dict))):
+            invalid_fields.append(f"evidence.{field}")
+
+    if invalid_fields:
+        names = ",".join(sorted(set(invalid_fields)))
+        raise ContractExtractionValidationError(f"contract_extraction_invalid_fields:{names}")
+
+    supported: dict[str, Any] = {}
+    supported_confidence: dict[str, float] = {}
+    for field, value in normalized.items():
+        if not _meaningful(value):
+            continue
+        confidence_value = confidence.get(field)
+        if isinstance(confidence_value, bool) or not isinstance(confidence_value, (int, float)):
+            continue
+        numeric_confidence = float(confidence_value)
+        if numeric_confidence <= 0:
+            continue
+        evidence_keys = CONTRACT_EVIDENCE_ALIASES.get(field, (field,))
+        if not any(_valid_evidence(evidence.get(key)) for key in evidence_keys):
+            continue
+        supported[field] = value
+        supported_confidence[field] = numeric_confidence
+
+    if not CONTRACT_MINIMUM_VALID_FIELDS.intersection(supported):
+        raise ContractExtractionValidationError("contract_extraction_no_evidence_backed_business_fields")
+    return data, supported, supported_confidence
+
+
+def _protected_business_fields(current: dict[str, Any]) -> set[str]:
+    manual = _json_object(current.get("manual_overrides_json"))
+    confirmed = _json_object(current.get("field_confirmed_json"))
+    if manual.get("all") or confirmed.get("all"):
+        return set(CONTRACT_BUSINESS_FIELDS)
+
+    protected: set[str] = set()
+    for field, columns in CONTRACT_STORAGE_COLUMNS.items():
+        aliases = {field, *columns, *(column.removesuffix("_json") for column in columns)}
+        if any(alias in manual for alias in aliases) or any(confirmed.get(alias) for alias in aliases):
+            protected.add(field)
+    return protected
+
+
+def _append_field_updates(updates: list[str], params: list[Any], field: str, value: Any) -> None:
+    columns = CONTRACT_STORAGE_COLUMNS[field]
+    if field in {"platforms", "deliverables", "must_include"}:
+        for column in columns:
+            updates.append(f"{column}=CASE WHEN status='confirmed' THEN {column} ELSE ?::jsonb END")
+            params.append(_json(value))
+        return
+    for column in columns:
+        updates.append(f"{column}=CASE WHEN status='confirmed' THEN {column} ELSE ? END")
+        params.append(value)
 
 
 def _assignment_context(conn: Any, project_id: int, assignment_id: int | None, kol_pool_id: int | None) -> dict[str, Any]:
@@ -197,22 +486,25 @@ def _existing_link_keys(conn: Any, contract_id: int, project_id: int) -> dict[st
 
 
 def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[str, Any] | None, extraction: dict[str, Any]) -> dict[str, Any]:
-    data = extraction.get("extracted") if isinstance(extraction.get("extracted"), dict) else {}
-    confidence = data.get("field_confidence") if isinstance(data.get("field_confidence"), dict) else {}
+    try:
+        data, supported_fields, confidence = _validated_extraction_data(extraction)
+    except ContractExtractionValidationError as exc:
+        _mark_failed(conn, contract_id, project_id, str(exc))
+        raise
     # 签署版关联键保留(批E):本函数整体覆盖 raw_extracted_json,merge 回关联键。
     data = {**data, **_existing_link_keys(conn, int(contract_id), int(project_id))}
-    deliverables = _list(data.get("deliverables"))
-    platforms = _list(data.get("platforms"))
-    must_include = _list(data.get("must_include"))
-    fee_amount = _float_or_none(data.get("fee_amount"))
     now = utcnow()
     # 批B #3(2026-06-12):异步提取不得覆盖人工确认——status='confirmed' 时只存提取结果
     # (raw/confidence 提取字段),不降级状态、不覆盖人工确认过的业务字段,留 audit。
     current = conn.execute(
-        "SELECT status FROM vkpi_project_contracts WHERE id=? AND project_id=?",
+        """
+        SELECT status, manual_overrides_json, field_confirmed_json
+        FROM vkpi_project_contracts WHERE id=? AND project_id=?
+        """,
         (int(contract_id), int(project_id)),
     ).fetchone()
-    is_confirmed = bool(current and str(dict(current).get("status") or "") == "confirmed")
+    current_data = dict(current) if current else {}
+    is_confirmed = str(current_data.get("status") or "") == "confirmed"
     if is_confirmed:
         conn.execute(
             """
@@ -231,47 +523,30 @@ def _apply_extraction(conn: Any, contract_id: int, project_id: int, staff: dict[
             metadata={"project_id": int(project_id), "contract_id": int(contract_id), "status": "confirmed"},
         )
     else:
+        protected_fields = _protected_business_fields(current_data)
+        updates = [
+            "status=CASE WHEN status='confirmed' THEN status ELSE 'extracted' END",
+            "extraction_status='ready'",
+        ]
+        params: list[Any] = []
+        for field in CONTRACT_BUSINESS_FIELDS:
+            if field in supported_fields and field not in protected_fields:
+                _append_field_updates(updates, params, field, supported_fields[field])
+        updates.extend(
+            [
+                "raw_extracted_json=?::jsonb",
+                "field_confidence_json=?::jsonb",
+                "updated_at=?",
+            ]
+        )
+        params.extend((_json(data), _json(confidence), now, int(contract_id), int(project_id)))
         conn.execute(
-            """
+            f"""
             UPDATE vkpi_project_contracts
-            SET status='extracted', extraction_status='ready',
-                fee_amount=?, fee_currency=?, contract_duration=?, start_date=?, end_date=?,
-                platforms_json=?::jsonb, deliverable_count=?, deliverables_json=?::jsonb,
-                must_include_json=?::jsonb, usage_rights=?, exclusivity=?, buyout_rights=?,
-                breach_terms=?, payment_terms=?, cancellation_terms=?, revision_terms=?,
-                raw_extracted_json=?::jsonb, field_confidence_json=?::jsonb,
-                promised_platforms_json=?::jsonb, promised_deliverables_json=?::jsonb,
-                promised_publish_deadline=?, promised_must_include_json=?::jsonb,
-                updated_at=?
+            SET {", ".join(updates)}
             WHERE id=? AND project_id=?
             """,
-            (
-                fee_amount,
-                str(data.get("fee_currency") or "USD"),
-                str(data.get("contract_duration") or ""),
-                _date(data.get("start_date")),
-                _date(data.get("end_date")),
-                _json(platforms),
-                _int(data.get("deliverable_count")) or (len(deliverables) if deliverables else None),
-                _json(deliverables),
-                _json(must_include),
-                str(data.get("usage_rights") or ""),
-                str(data.get("exclusivity") or ""),
-                str(data.get("buyout_rights") or ""),
-                str(data.get("breach_terms") or ""),
-                str(data.get("payment_terms") or ""),
-                str(data.get("cancellation_terms") or ""),
-                str(data.get("revision_terms") or ""),
-                _json(data),
-                _json(confidence),
-                _json(platforms),
-                _json(deliverables),
-                data.get("promised_publish_deadline") or None,
-                _json(must_include),
-                now,
-                int(contract_id),
-                int(project_id),
-            ),
+            tuple(params),
         )
     cost = _record_contract_cost(contract_id, project_id, staff, extraction)
     conn.execute(

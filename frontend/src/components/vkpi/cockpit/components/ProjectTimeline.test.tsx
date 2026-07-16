@@ -36,8 +36,8 @@ describe("ProjectTimeline 渲染 smoke", () => {
     });
     render(<ProjectTimeline apiToken="tok" projectId="42" />);
 
-    expect(await screen.findByText(/履约时间线/)).toBeInTheDocument();
-    expect(screen.getByText(/当前阶段:shipped/)).toBeInTheDocument();
+    // Wait for the resolved banner, not the initial "加载履约时间线…" text.
+    expect(await screen.findByText(/当前阶段:shipped/)).toBeInTheDocument();
     // 阶段标签渲染
     expect(screen.getByText("已联系")).toBeInTheDocument();
     expect(screen.getByText("已寄样")).toBeInTheDocument();

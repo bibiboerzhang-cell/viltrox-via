@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run V-KPI market signal classifier v0 as a dry-run report."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -22,7 +23,7 @@ def main() -> int:
 
     payload = build_market_signal_classification(limit=args.limit, run_id=args.run_id)
     paths = write_classification_report(payload, out_dir=args.out_dir)
-    print(
+    stdout_out(
         json.dumps(
             {
                 **paths,

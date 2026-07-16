@@ -5,6 +5,7 @@ Forces LLM gateway offline and verifies classify_post() still creates a
 deterministic primary pillar row via rule fallback. No provider quota is used.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -101,7 +102,7 @@ def main() -> None:
         if len(listed.get("pillars") or []) < 17:
             raise AssertionError("default pillar seeds missing")
 
-        print("VKPI_PILLARS_SERVICE_SMOKE_OK")
+        stdout_out("VKPI_PILLARS_SERVICE_SMOKE_OK")
     finally:
         if post_id is not None:
             conn.execute("DELETE FROM vkpi_post_pillars WHERE post_id = ? AND post_table = ?", (post_id, "industry_posts"))

@@ -24,6 +24,8 @@ compat 红线(与 voice_report_ext / my_kol_board_ext_sql 同款):
 """
 from __future__ import annotations
 
+from app.domains import business_truth
+
 # ── 护栏常量(测试直接断言;SQL LIMIT ? + Python 切片双封顶)────────────────
 SERIES_ROWS_LIMIT = 400        # 日聚合 GROUP BY 行封顶(日轴最长 366 天 + 余量)
 SERIES_MAX_DAYS = 370          # 日轴长度 Python 层封顶
@@ -90,22 +92,24 @@ CONTENT_POSTED_COUNT_SQL = """
       AND published_at < CAST(? AS TIMESTAMPTZ)
 """
 
-ATTR_REVENUE_DAY_SQL = """
+ATTR_REVENUE_DAY_SQL = f"""
     SELECT CAST((occurred_at AT TIME ZONE 'UTC') AS DATE) AS day,
            COALESCE(SUM(revenue_cents), 0) AS n
     FROM vkpi_sales_attributions
     WHERE occurred_at >= CAST(? AS TIMESTAMPTZ)
       AND occurred_at < CAST(? AS TIMESTAMPTZ)
+      AND {business_truth.verified_shopify_attribution_sql()}
     GROUP BY 1
     ORDER BY 1
     LIMIT ?
 """
 
-ATTR_REVENUE_SUM_SQL = """
+ATTR_REVENUE_SUM_SQL = f"""
     SELECT COALESCE(SUM(revenue_cents), 0) AS n
     FROM vkpi_sales_attributions
     WHERE occurred_at >= CAST(? AS TIMESTAMPTZ)
       AND occurred_at < CAST(? AS TIMESTAMPTZ)
+      AND {business_truth.verified_shopify_attribution_sql()}
 """
 
 # ── events ─────────────────────────────────────────────────────────────

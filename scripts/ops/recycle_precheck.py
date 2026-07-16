@@ -16,8 +16,11 @@ _REPO = pathlib.Path(__file__).resolve().parents[2]
 for candidate in (_REPO / "backend", _REPO):
     if candidate.exists() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
+if str(_REPO / "scripts") not in sys.path:
+    sys.path.insert(1, str(_REPO / "scripts"))
 
 from app.services.scraping.availability import probe_video_availability  # noqa: E402
+from stdout_utils import out  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,7 +45,7 @@ def _read_rows(limit: int) -> list[tuple[str, str]]:
             continue
         parts = line.split("\t")
         if len(parts) < 2:
-            print(f"skip malformed line: {line[:120]}", file=sys.stderr)
+            out(f"skip malformed line: {line[:120]}", file=sys.stderr)
             continue
         rows.append((parts[0].strip(), parts[-1].strip()))
         if limit and len(rows) >= limit:
@@ -85,7 +88,7 @@ def main() -> int:
             time.sleep(gap)
         result = probe_video_availability(url, timeout=args.timeout)
         verdicts.append((job_id, result))
-        print(
+        out(
             f"[{index + 1}/{len(rows)}] job={job_id} -> {result.status}"
             f" ({result.http_code} {result.reason})",
             file=sys.stderr,
@@ -115,8 +118,8 @@ def main() -> int:
     if not summary:
         summary = "no input rows"
     (outdir / "summary.txt").write_text(summary + "\n", encoding="utf-8")
-    print("\n== precheck summary ==\n" + summary)
-    print(f"artifacts -> {outdir}")
+    out("\n== precheck summary ==\n" + summary)
+    out(f"artifacts -> {outdir}")
     return 0
 
 

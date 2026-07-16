@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -106,16 +108,16 @@ def _verify_update_restore(batch_uid: str) -> dict[str, int]:
 
 
 def _print_state(prefix: str, state: dict[str, Any]) -> None:
-    print(f"{prefix}.batch_status={state['batch_status']}")
-    print(f"{prefix}.committed_rows={state['committed_rows']}")
-    print(f"{prefix}.rolled_back_rows={state['rolled_back_rows']}")
-    print(f"{prefix}.rollback_until={state['rollback_until']}")
-    print(f"{prefix}.pool_total={state['pool_total']}")
-    print(f"{prefix}.pool_legacy_source={state['pool_legacy_source']}")
-    print(f"{prefix}.pool_imported={state['pool_imported']}")
-    print(f"{prefix}.pool_needs_human_review={state['pool_needs_human_review']}")
+    out(f"{prefix}.batch_status={state['batch_status']}")
+    out(f"{prefix}.committed_rows={state['committed_rows']}")
+    out(f"{prefix}.rolled_back_rows={state['rolled_back_rows']}")
+    out(f"{prefix}.rollback_until={state['rollback_until']}")
+    out(f"{prefix}.pool_total={state['pool_total']}")
+    out(f"{prefix}.pool_legacy_source={state['pool_legacy_source']}")
+    out(f"{prefix}.pool_imported={state['pool_imported']}")
+    out(f"{prefix}.pool_needs_human_review={state['pool_needs_human_review']}")
     for key, value in sorted(state["refs"].items()):
-        print(f"{prefix}.refs.{key}={value}")
+        out(f"{prefix}.refs.{key}={value}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,30 +134,30 @@ def main() -> int:
     try:
         _print_state("before", _state(args.batch_uid))
         preview = preview_kol_pool_rollback(args.batch_uid, sample_limit=3, force=bool(args.force_rollback))
-        print(f"preview.rollback_refs_count={preview['rollback_refs_count']}")
-        print(f"preview.insert_refs={preview['insert_refs']}")
-        print(f"preview.update_refs={preview['update_refs']}")
-        print(f"preview.rollback_allowed={str(bool(preview['rollback_allowed'])).lower()}")
-        print(f"preview.rollback_window_reason={preview['rollback_window_reason']}")
+        out(f"preview.rollback_refs_count={preview['rollback_refs_count']}")
+        out(f"preview.insert_refs={preview['insert_refs']}")
+        out(f"preview.update_refs={preview['update_refs']}")
+        out(f"preview.rollback_allowed={str(bool(preview['rollback_allowed'])).lower()}")
+        out(f"preview.rollback_window_reason={preview['rollback_window_reason']}")
         if not args.execute:
             return 0
         if not args.commit:
             raise RuntimeError("--execute requires --commit")
 
         rolled_back = rollback_kol_pool_commit(args.batch_uid, force=bool(args.force_rollback), sample_limit=3)
-        print(f"rollback.rolled_back_refs={rolled_back['rolled_back_refs']}")
+        out(f"rollback.rolled_back_refs={rolled_back['rolled_back_refs']}")
         _print_state("after_rollback", _state(args.batch_uid))
         restore = _verify_update_restore(args.batch_uid)
-        print(f"after_rollback.update_restore_checked={restore['update_restore_checked']}")
-        print(f"after_rollback.update_restore_mismatches={restore['update_restore_mismatches']}")
+        out(f"after_rollback.update_restore_checked={restore['update_restore_checked']}")
+        out(f"after_rollback.update_restore_mismatches={restore['update_restore_mismatches']}")
 
         committed = commit_kol_pool_batch(args.batch_uid, sample_limit=3)
-        print(f"recommit.committed_refs_count={committed['committed_refs_count']}")
-        print(f"recommit.committed_refs_total={committed.get('committed_refs_total', 0)}")
+        out(f"recommit.committed_refs_count={committed['committed_refs_count']}")
+        out(f"recommit.committed_refs_total={committed.get('committed_refs_total', 0)}")
         _print_state("final", _state(args.batch_uid))
         return 0
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        out(f"ERROR: {exc}", file=sys.stderr)
         return 2
     finally:
         asyncio.run(close_db_runtime())

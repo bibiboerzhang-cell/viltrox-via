@@ -36,7 +36,10 @@ from app.domains.kol.pool_common import (
 )
 from app.domains.kol.profile_basics import write_kol_profile_basics
 from app.domains.kol.video_analysis_enqueue import _enqueue_final_v1_video_analysis
-from app.domains.kol.video_evidence import ensure_video_evidence_from_url
+from app.domains.kol.video_evidence import (
+    ensure_video_evidence_from_url,
+    find_video_evidence_by_url,
+)
 from app.domains.kol.video_evidence_sources import profile_crawl_source
 from app.domains.projects.workflow_evidence import _fetch_video_metadata
 from app.platform.industry_crawlers.instagram_crawler import InstagramCrawler
@@ -385,21 +388,41 @@ def _video_flow_plan(
     creator_identity = _creator_identity_from_classified(classified)
     matches = initial_matches
     error = ""
+    provider_called = False
+    stored_evidence: dict[str, Any] | None = None
 
     try:
-        metadata = _fetch_video_metadata(classified.normalized_url)
-        provider_source = str(metadata.get("scrape_source") or "").strip()
+        stored_evidence = find_video_evidence_by_url(classified.normalized_url)
+    except Exception:
+        # A missing/old local evidence schema must not break URL classification;
+        # the normal deferred provider path below remains available.
+        logger.debug("url deep crawl stored video evidence lookup failed", exc_info=True)
+
+    try:
+        if stored_evidence:
+            metadata = _video_metadata_from_stored_evidence(stored_evidence)
+            provider_source = "stored_video_evidence"
+        else:
+            metadata = _fetch_video_metadata(classified.normalized_url)
+            provider_source = str(metadata.get("scrape_source") or "").strip()
+            provider_called = str(metadata.get("scrape_status") or "").lower() != "pending"
         metadata_identity = _creator_identity_from_video_metadata(classified, metadata)
         if metadata_identity:
             creator_identity = metadata_identity
         creator_classified = _classified_from_creator_identity(classified, creator_identity)
         if creator_classified:
             matches = _match_pool(creator_classified)
+        if not matches and stored_evidence:
+            evidence_match = _pool_candidate_from_stored_evidence(stored_evidence)
+            if evidence_match:
+                matches = [evidence_match]
     except Exception as exc:
-        error = str(exc)[:500]
+        logger.warning("url deep crawl video metadata failed", exc_info=True)
+        error = "video_metadata_unavailable"
 
     resolved = _has_matchable_creator_identity(creator_identity)
-    status = "ready_to_execute" if resolved else "creator_unresolved"
+    provider_deferred = str(metadata.get("scrape_status") or "").lower() == "pending"
+    status = "provider_refresh_pending" if provider_deferred else ("ready_to_execute" if resolved else "creator_unresolved")
     if error and not metadata:
         status = "metadata_failed"
 
@@ -407,20 +430,68 @@ def _video_flow_plan(
         {
             "status": status,
             "operation": "video_creator_resolve",
-            "provider_calls_performed": True,
+            "provider_calls_performed": provider_called,
             "provider_source": provider_source or None,
             "creator_resolution_status": "resolved" if resolved else "unresolved",
             "creator_identity": creator_identity or None,
             "video_metadata": _public_video_metadata(metadata) if metadata else None,
+            "evidence_id": _int_or_none((stored_evidence or {}).get("id")),
+            "evidence_lookup_source": "stored_video_evidence" if stored_evidence else None,
             "metadata_error": error or None,
             "would_write": False,
-            "would_enqueue_worker": False,
+            "would_enqueue_worker": provider_deferred,
             "business_tables_written": False,
             "llm_calls_performed": False,
             "viltrox_fit_touched": False,
         },
         matches,
     )
+
+
+def _video_metadata_from_stored_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Project one stored evidence row into the public video-metadata shape."""
+
+    return {
+        "platform": evidence.get("platform"),
+        "content_url": evidence.get("content_url"),
+        "title": evidence.get("title") or evidence.get("video_title"),
+        "view_count": evidence.get("view_count"),
+        "like_count": evidence.get("like_count"),
+        "comment_count": evidence.get("comment_count"),
+        "share_count": evidence.get("share_count"),
+        "publish_date": evidence.get("publish_date") or evidence.get("posted_at"),
+        "posted_at": evidence.get("posted_at"),
+        "duration_seconds": evidence.get("duration_seconds"),
+        "thumbnail_url": evidence.get("thumbnail_url"),
+        "media_kind": evidence.get("media_kind"),
+        "image_urls": evidence.get("image_urls"),
+        "channel_id": evidence.get("channel_id"),
+        "channel_name": evidence.get("channel_name"),
+        "scrape_source": evidence.get("scrape_source") or "stored_video_evidence",
+        "scrape_status": evidence.get("scrape_status") or "success",
+        "scrape_error": evidence.get("scrape_error"),
+    }
+
+
+def _pool_candidate_from_stored_evidence(evidence: dict[str, Any]) -> dict[str, Any] | None:
+    """Use the evidence FK as a truthful fallback when old rows lack channel IDs."""
+
+    kol_pool_id = _int_or_none(evidence.get("kol_pool_id"))
+    if not kol_pool_id:
+        return None
+    for row in _pool_rows():
+        if _int_or_none(row.get("id")) != kol_pool_id:
+            continue
+        return {
+            "kol_pool_id": kol_pool_id,
+            "platform": _normalise_platform(row.get("platform")),
+            "handle": row.get("handle") or "",
+            "display_name": row.get("display_name") or evidence.get("channel_name") or "",
+            "profile_url": row.get("profile_url") or "",
+            "match_source": "video_evidence",
+            "match_priority": 0,
+        }
+    return None
 
 
 def _creator_identity_from_classified(classified: ClassifiedUrl) -> dict[str, Any]:
@@ -706,5 +777,13 @@ def _next_action(
 from app.domains.kol.url_deep_crawl_queue import (  # noqa: F401,E402
     DEEP_CRAWL_JOB_TYPE,
     enqueue_profile_deep_crawl_job,
+    enqueue_stored_video_analysis_job,
+    profile_deep_crawl_is_fresh,
     run_profile_deep_crawl_for_job,
+)
+
+from app.domains.kol.video_url_resolver import (  # noqa: F401,E402
+    VIDEO_URL_RESOLVE_JOB_TYPE,
+    enqueue_video_url_resolve_job,
+    run_video_url_resolve_for_job,
 )

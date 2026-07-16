@@ -44,7 +44,7 @@ const LANES_TRIM = [
 ].join(" ");
 
 /* ---- MarketCoverageCard:外壳(rounded-xl border bg backdrop-blur)压平;头行里
-   icon 盒 + h3「海外市场覆盖」隐藏,「· N 国 · N 缺口」读数与「查看全部」钮保留;
+   icon 盒 + h3「估算受众覆盖」隐藏,「· N 国 · N 缺口」读数与「查看全部」钮保留;
    头/行区横向 padding 收敛对齐卡体。 ---- */
 const COVERAGE_TRIM = [
   "[&.vkpi-embed[data-embed]>div]:!rounded-none [&.vkpi-embed[data-embed]>div]:!border-0",

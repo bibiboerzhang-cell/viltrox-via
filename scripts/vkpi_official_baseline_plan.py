@@ -6,6 +6,7 @@ matrix and prints a controlled crawl plan for the one-time baseline plus the
 daily recent refresh that should follow it.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -228,9 +229,9 @@ def main() -> None:
     try:
         plan = build_plan()
         if args.json:
-            print(json.dumps(plan, ensure_ascii=False, indent=2))
+            stdout_out(json.dumps(plan, ensure_ascii=False, indent=2))
         else:
-            print(_markdown(plan))
+            stdout_out(_markdown(plan))
     finally:
         try:
             from app.db.connection import close_db_runtime  # noqa: WPS433

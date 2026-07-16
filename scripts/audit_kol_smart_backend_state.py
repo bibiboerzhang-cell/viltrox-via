@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
@@ -658,78 +660,78 @@ def print_report(state: dict[str, Any]) -> None:
     queue = state["queue"]
     tiktok_resolver = state.get("tiktok_video_resolver") if isinstance(state.get("tiktok_video_resolver"), dict) else {}
     url_state = state["url_classifier"]
-    print("V-KPI KOL smart backend audit")
-    print(f"branch: {state['git']['branch']} sha: {state['git']['short_sha']}")
-    print(f"code_chain_estimate: {score['code_chain_estimate']}")
-    print(f"materialized_data_layers_estimate: {score['materialized_data_layers_estimate']}%")
-    print(
+    out("V-KPI KOL smart backend audit")
+    out(f"branch: {state['git']['branch']} sha: {state['git']['short_sha']}")
+    out(f"code_chain_estimate: {score['code_chain_estimate']}")
+    out(f"materialized_data_layers_estimate: {score['materialized_data_layers_estimate']}%")
+    out(
         "projected_materialized_data_layers_if_ready_backfills_committed: "
         f"{score['projected_materialized_data_layers_if_ready_backfills_committed']}%"
     )
-    print("deep_results:")
-    print(f"  final_v1_ready: {deep['final_v1_ready']}")
-    print(f"  video_deep_ready: {deep['video_deep_ready']}")
-    print(f"  projected_video_deep_ready: {score['projected_video_deep_ready']}")
-    print(f"  missing_video_deep_count: {deep['missing_video_deep_count']}")
-    print(f"  missing_video_deep_writable_count: {deep.get('missing_video_deep_writable_count', 0)}")
-    print(f"  profile_llm_ready: {deep['profile_llm_ready']}")
-    print(f"  projected_profile_llm_ready: {score['projected_profile_llm_ready']}")
+    out("deep_results:")
+    out(f"  final_v1_ready: {deep['final_v1_ready']}")
+    out(f"  video_deep_ready: {deep['video_deep_ready']}")
+    out(f"  projected_video_deep_ready: {score['projected_video_deep_ready']}")
+    out(f"  missing_video_deep_count: {deep['missing_video_deep_count']}")
+    out(f"  missing_video_deep_writable_count: {deep.get('missing_video_deep_writable_count', 0)}")
+    out(f"  profile_llm_ready: {deep['profile_llm_ready']}")
+    out(f"  projected_profile_llm_ready: {score['projected_profile_llm_ready']}")
     profile_projection = deep.get("profile_llm_projection") if isinstance(deep.get("profile_llm_projection"), dict) else {}
-    print("profile_llm_projection:")
-    print(f"  candidates: {profile_projection.get('candidates', 0)}")
-    print(f"  ready: {profile_projection.get('ready', 0)}")
-    print(f"  ready_insert: {profile_projection.get('ready_insert', 0)}")
-    print(f"  ready_update: {profile_projection.get('ready_update', 0)}")
-    print(f"  skipped: {profile_projection.get('skipped', 0)}")
-    print("search:")
-    print(f"  sessions: {search['search_sessions']}")
-    print(f"  items: {search['search_session_items']}")
-    print(f"  url_deep_crawl_runs: {search['url_deep_crawl_runs']}")
-    print("queue:")
-    print(f"  active_total: {queue['active_total']}")
+    out("profile_llm_projection:")
+    out(f"  candidates: {profile_projection.get('candidates', 0)}")
+    out(f"  ready: {profile_projection.get('ready', 0)}")
+    out(f"  ready_insert: {profile_projection.get('ready_insert', 0)}")
+    out(f"  ready_update: {profile_projection.get('ready_update', 0)}")
+    out(f"  skipped: {profile_projection.get('skipped', 0)}")
+    out("search:")
+    out(f"  sessions: {search['search_sessions']}")
+    out(f"  items: {search['search_session_items']}")
+    out(f"  url_deep_crawl_runs: {search['url_deep_crawl_runs']}")
+    out("queue:")
+    out(f"  active_total: {queue['active_total']}")
     queue_load_smoke = state.get("queue_load_smoke") if isinstance(state.get("queue_load_smoke"), dict) else {}
-    print("queue_load_smoke:")
-    print(f"  status: {queue_load_smoke.get('status', 'missing')}")
-    print(f"  pass: {queue_load_smoke.get('pass', False)}")
-    print(f"  users: {queue_load_smoke.get('users', 0)}")
-    print(f"  ordered: {queue_load_smoke.get('ordered', False)}")
-    print(f"  provider_calls_performed: {queue_load_smoke.get('provider_calls_performed', False)}")
-    print(f"  persistent_write: {queue_load_smoke.get('persistent_write', False)}")
+    out("queue_load_smoke:")
+    out(f"  status: {queue_load_smoke.get('status', 'missing')}")
+    out(f"  pass: {queue_load_smoke.get('pass', False)}")
+    out(f"  users: {queue_load_smoke.get('users', 0)}")
+    out(f"  ordered: {queue_load_smoke.get('ordered', False)}")
+    out(f"  provider_calls_performed: {queue_load_smoke.get('provider_calls_performed', False)}")
+    out(f"  persistent_write: {queue_load_smoke.get('persistent_write', False)}")
     if queue_load_smoke.get("report_path"):
-        print(f"  report_path: {queue_load_smoke.get('report_path')}")
-    print("tiktok_video_resolver:")
-    print(f"  evidence_total: {tiktok_resolver.get('evidence_total', 0)}")
-    print(f"  final_v1_failed: {tiktok_resolver.get('final_v1_failed', 0)}")
-    print(f"  r2_cached_tiktok_assets: {tiktok_resolver.get('r2_cached_tiktok_assets', 0)}")
-    print(f"  r2_exact_source_url_hits: {tiktok_resolver.get('r2_exact_source_url_hits', 0)}")
-    print(f"  r2_external_id_hits: {tiktok_resolver.get('r2_external_id_hits', 0)}")
+        out(f"  report_path: {queue_load_smoke.get('report_path')}")
+    out("tiktok_video_resolver:")
+    out(f"  evidence_total: {tiktok_resolver.get('evidence_total', 0)}")
+    out(f"  final_v1_failed: {tiktok_resolver.get('final_v1_failed', 0)}")
+    out(f"  r2_cached_tiktok_assets: {tiktok_resolver.get('r2_cached_tiktok_assets', 0)}")
+    out(f"  r2_exact_source_url_hits: {tiktok_resolver.get('r2_exact_source_url_hits', 0)}")
+    out(f"  r2_external_id_hits: {tiktok_resolver.get('r2_external_id_hits', 0)}")
     if tiktok_resolver.get("diagnosis"):
-        print(f"  diagnosis: {tiktok_resolver.get('diagnosis')}")
-    print("url_classifier:")
-    print(f"  evidence_with_url: {url_state['evidence_with_url']}")
-    print(f"  not_classified_as_video: {url_state['not_classified_as_video']}")
-    print(f"  platform_mismatch_count: {url_state['platform_mismatch_count']}")
-    print("remaining_blockers:")
+        out(f"  diagnosis: {tiktok_resolver.get('diagnosis')}")
+    out("url_classifier:")
+    out(f"  evidence_with_url: {url_state['evidence_with_url']}")
+    out(f"  not_classified_as_video: {url_state['not_classified_as_video']}")
+    out(f"  platform_mismatch_count: {url_state['platform_mismatch_count']}")
+    out("remaining_blockers:")
     for item in score["remaining_blockers"]:
-        print(f"  - {item}")
+        out(f"  - {item}")
     if deep["missing_video_deep"]:
-        print("missing_video_deep:")
+        out("missing_video_deep:")
         for item in deep["missing_video_deep"][:20]:
-            print(
+            out(
                 f"  cache={item['cache_id']} evidence={item['evidence_id']} "
                 f"kol={item['kol_pool_id']} handle={item['handle']}"
             )
     if deep.get("missing_video_deep_writable"):
-        print("missing_video_deep_writable:")
+        out("missing_video_deep_writable:")
         for item in deep["missing_video_deep_writable"][:20]:
-            print(
+            out(
                 f"  cache={item['cache_id']} evidence={item['evidence_id']} "
                 f"kol={item['kol_pool_id']} handle={item['handle']}"
             )
     if deep.get("missing_video_deep_skipped"):
-        print("missing_video_deep_skipped:")
+        out("missing_video_deep_skipped:")
         for item in deep["missing_video_deep_skipped"][:20]:
-            print(
+            out(
                 f"  cache={item['cache_id']} evidence={item['evidence_id']} "
                 f"kol={item['kol_pool_id']} handle={item['handle']} reason={item.get('reason')}"
             )
@@ -757,8 +759,8 @@ def main() -> None:
     state["score"] = score_summary(state)
     print_report(state)
     if args.json:
-        print("audit_json:")
-        print(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+        out("audit_json:")
+        out(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True, default=str))
 
 
 if __name__ == "__main__":

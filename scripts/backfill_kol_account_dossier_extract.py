@@ -19,6 +19,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
@@ -200,32 +202,32 @@ def print_report(plan: list[dict[str, Any]], *, commit: bool) -> None:
     for item in ready:
         for gap in item.get("gaps") or []:
             gap_counts[str(gap)] += 1
-    print(f"mode: {'commit' if commit else 'dry-run (no writes)'}")
-    print(f"analysis_kind: {ANALYSIS_KIND}")
-    print(f"method: {METHOD}")
-    print(f"candidates: {len(plan)}")
-    print(f"ready: {len(ready)}")
-    print(f"skipped: {len(skipped)}")
-    print(f"would_insert: {action_counts.get('insert', 0)}")
-    print(f"would_update: {action_counts.get('update', 0)}")
-    print("score_distribution:")
+    out(f"mode: {'commit' if commit else 'dry-run (no writes)'}")
+    out(f"analysis_kind: {ANALYSIS_KIND}")
+    out(f"method: {METHOD}")
+    out(f"candidates: {len(plan)}")
+    out(f"ready: {len(ready)}")
+    out(f"skipped: {len(skipped)}")
+    out(f"would_insert: {action_counts.get('insert', 0)}")
+    out(f"would_update: {action_counts.get('update', 0)}")
+    out("score_distribution:")
     for key in ("null", "0", "1-39", "40-59", "60-74", "75-89", "90-100"):
-        print(f"  {key}: {score_buckets.get(key, 0)}")
-    print("top_gaps:")
+        out(f"  {key}: {score_buckets.get(key, 0)}")
+    out("top_gaps:")
     for key, value in gap_counts.most_common(12):
-        print(f"  {key}: {value}")
-    print("sample_ready:")
+        out(f"  {key}: {value}")
+    out("sample_ready:")
     for item in ready[:20]:
-        print(
+        out(
             "  "
             f"{item.get('action')} kol={item.get('kol_pool_id')} "
             f"score={item.get('llm_v6_fit')} confidence={item.get('confidence')} "
             f"videos={item.get('video_count')} analyzed={item.get('analyzed_final_v1_count')} "
             f"qa={item.get('qa_count')} deep={item.get('deep_result_count')}"
         )
-    print("sample_skipped:")
+    out("sample_skipped:")
     for item in skipped[:20]:
-        print(f"  kol={item.get('kol_pool_id')} reason={item.get('reason') or item.get('status')}")
+        out(f"  kol={item.get('kol_pool_id')} reason={item.get('reason') or item.get('status')}")
 
 
 def write_plan(conn: psycopg.Connection[Any], plan: list[dict[str, Any]]) -> dict[str, Any]:
@@ -271,14 +273,14 @@ def main() -> None:
         plan = build_plan(conn, kol_ids)
         print_report(plan, commit=bool(args.commit))
         if args.json:
-            print("plan_json:")
-            print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
+            out("plan_json:")
+            out(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
         if not args.commit:
             return
         result = write_plan(conn, plan)
         conn.commit()
-        print("write_result:")
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        out("write_result:")
+        out(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":

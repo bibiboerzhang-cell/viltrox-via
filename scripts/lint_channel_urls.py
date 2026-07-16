@@ -16,6 +16,8 @@ from typing import Any
 import psycopg2
 import psycopg2.extras
 
+from stdout_utils import out
+
 
 BUCKETS = [
     ("clean_youtube_channel", "桶 1 - clean_youtube_channel"),
@@ -110,14 +112,14 @@ def classify_url(url: str) -> str:
 
 
 def print_bucket(label: str, rows: list[PoolRow]) -> None:
-    print(f"[{label}] {len(rows)} 条")
+    out(f"[{label}] {len(rows)} 条")
     if not rows:
-        print("  无")
-        print("")
+        out("  无")
+        out("")
         return
     for row in rows:
-        print(f"  {row.id} | {row.display_name} | {row.handle} | {row.profile_url}")
-    print("")
+        out(f"  {row.id} | {row.display_name} | {row.handle} | {row.profile_url}")
+    out("")
 
 
 def expected_type_for_bucket(bucket: str) -> str | None:
@@ -136,19 +138,19 @@ def main() -> int:
     for row in rows:
         grouped[classify_url(row.profile_url)].append(row)
 
-    print("============================================================")
-    print("vkpi_kol_pool channel URL lint report")
-    print("============================================================")
-    print(f"needs_scrape=TRUE rows: {len(rows)}")
-    print("URL fields detected: profile_url")
-    print("")
+    out("============================================================")
+    out("vkpi_kol_pool channel URL lint report")
+    out("============================================================")
+    out(f"needs_scrape=TRUE rows: {len(rows)}")
+    out("URL fields detected: profile_url")
+    out("")
 
     for key, label in BUCKETS:
         print_bucket(label, grouped[key])
 
-    print("汇总表")
-    print("| 桶 | 数量 | Step 4a 适用？ | Step 4b/4c 处理？|")
-    print("| --- | ---: | --- | --- |")
+    out("汇总表")
+    out("| 桶 | 数量 | Step 4a 适用？ | Step 4b/4c 处理？|")
+    out("| --- | ---: | --- | --- |")
     summary = {
         "clean_youtube_channel": ("✅", "-"),
         "clean_instagram": ("❌ Step 4b", "✅"),
@@ -161,7 +163,7 @@ def main() -> int:
     }
     for key, _ in BUCKETS:
         step4a, later = summary[key]
-        print(f"| {key} | {len(grouped[key])} | {step4a} | {later} |")
+        out(f"| {key} | {len(grouped[key])} | {step4a} | {later} |")
 
     conflicts: list[tuple[PoolRow, str, str]] = []
     for key, bucket_rows in grouped.items():
@@ -173,13 +175,13 @@ def main() -> int:
             if actual != expected:
                 conflicts.append((row, expected, row.dashboard_account_type or "-"))
 
-    print("")
-    print("type 冲突清单")
+    out("")
+    out("type 冲突清单")
     if not conflicts:
-        print("  无")
+        out("  无")
     else:
         for row, expected, actual in conflicts:
-            print(
+            out(
                 f"  {row.id} | {row.display_name} | expected={expected} | "
                 f"actual={actual} | {row.profile_url}"
             )

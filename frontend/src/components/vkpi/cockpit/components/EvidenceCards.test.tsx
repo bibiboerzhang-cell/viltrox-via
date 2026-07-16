@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AIIntelligenceCard } from "./AIIntelligenceCard";
 import { SignalsAlertsCard } from "./SignalsAlertsCard";
@@ -85,6 +85,49 @@ describe("external evidence dashboard cards", () => {
     expect(screen.getByText("vkpi_kol_video_evidence:42")).toBeTruthy();
     expect(screen.getByRole("link", { name: /打开原帖/ })).toHaveAttribute("href", "https://youtube.com/shorts/demo42");
     expect(screen.getByText("未保留市场来源")).toBeTruthy();
+  });
+
+  it("AI 卡优先使用已缓存缩略图", () => {
+    const insight = {
+      ...baseInsight,
+      recommendedVideos: [{
+        platform: "instagram",
+        content_url: "https://www.instagram.com/reel/demo/",
+        content_origin: "external",
+        cached_thumbnail_url: "/api/vkpi-media/image-cache/cached-demo",
+        thumbnail_url: "https://scontent-ord5-3.cdninstagram.com/raw.jpg",
+      }],
+    };
+    const { container } = render(<AIIntelligenceCard insight={insight} onApprove={vi.fn()} />);
+
+    expect(container.querySelector("img")).toHaveAttribute("src", "/api/vkpi-media/image-cache/cached-demo");
+  });
+
+  it("AI 卡不直出 Instagram CDN，代理失败后仅显示诚实占位", () => {
+    const rawThumbnail = "https://scontent-ord5-3.cdninstagram.com/raw.jpg";
+    const insight = {
+      ...baseInsight,
+      recommendedVideos: [{
+        platform: "instagram",
+        content_url: "https://www.instagram.com/reel/demo/",
+        content_origin: "external",
+        thumbnail_url: rawThumbnail,
+      }],
+    };
+    const { container } = render(<AIIntelligenceCard insight={insight} onApprove={vi.fn()} />);
+
+    const image = container.querySelector("img");
+    expect(image).toHaveAttribute(
+      "src",
+      `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(rawThumbnail)}`,
+    );
+    expect(image).not.toHaveAttribute("src", rawThumbnail);
+
+    fireEvent.error(image as HTMLImageElement);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByRole("img", { name: "缩略图加载失败，未使用原始平台图片" })).toBeTruthy();
+    expect(screen.getByText("缩略图不可用")).toBeTruthy();
   });
 
   it("Signals 卡覆盖四个平台并诚实显示缺失新鲜度和来源", () => {

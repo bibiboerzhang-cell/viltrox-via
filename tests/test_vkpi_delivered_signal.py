@@ -11,8 +11,11 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.projects import stage_canonical
 from app.domains.projects.workflow_common import normalize_stage
@@ -22,6 +25,10 @@ from app.domains.projects.workflow_evidence import (
 )
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
+from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
+import app.platform.db.schema as vkpi_schema
+import app.platform.db.schema_audit as audit_schema
+import app.platform.db.schema_product_industry as product_industry_schema
 
 
 MARKER = "VKPI-DELIVERED-SIGNAL-TEST"
@@ -30,11 +37,103 @@ PROJECT_UID = "VKPI-DELIVERED-SIGNAL-PROJECT"
 TRACKING = "VKPI-DLV-TRACK-001"
 
 
-@pytest.fixture(autouse=True)
-def _ensure_schemas():
-    ensure_vkpi_schema()
-    ensure_vkpi_audit_schema()
-    yield
+@pytest.fixture(scope="module", autouse=True)
+def _delivered_signal_test_db(tmp_path_factory: pytest.TempPathFactory):
+    """Run fulfilment SQL against a private SQLite schema, never business data."""
+    db_path = (tmp_path_factory.mktemp("delivered-signal") / "delivered.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_vkpi_ready = vkpi_schema._SCHEMA_READY
+    old_audit_ready = audit_schema._SCHEMA_READY
+    old_product_industry_ready = product_industry_schema._SCHEMA_READY
+
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    vkpi_schema._SCHEMA_READY = False
+    audit_schema._SCHEMA_READY = False
+    product_industry_schema._SCHEMA_READY = False
+
+    conn = get_conn()
+    try:
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT DEFAULT 'pending',
+                role TEXT DEFAULT 'creator',
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                role TEXT NOT NULL DEFAULT 'readonly',
+                permissions_json TEXT NOT NULL DEFAULT '{}',
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER NOT NULL DEFAULT 0,
+                email_domain_verified INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE kols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                channel_url TEXT,
+                platform TEXT NOT NULL,
+                assigned_staff_id INTEGER,
+                created_by_staff_id INTEGER,
+                follower_count INTEGER DEFAULT 0,
+                avg_views INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        ensure_vkpi_schema()
+        ensure_vkpi_audit_schema()
+        ensure_vkpi_product_industry_schema()
+        conn.executescript(
+            """
+            CREATE TABLE vkpi_project_kol_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                kol_pool_id INTEGER NOT NULL,
+                stage TEXT NOT NULL,
+                stage_status TEXT DEFAULT 'active',
+                assigned_staff_id INTEGER,
+                tracking_number TEXT,
+                is_placeholder_tracking INTEGER DEFAULT 0,
+                source TEXT DEFAULT 'test',
+                source_ref TEXT,
+                excel_progress TEXT,
+                metadata_json TEXT DEFAULT '{}',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_id, kol_pool_id)
+            );
+            """
+        )
+        conn.commit()
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        vkpi_schema._SCHEMA_READY = old_vkpi_ready
+        audit_schema._SCHEMA_READY = old_audit_ready
+        product_industry_schema._SCHEMA_READY = old_product_industry_ready
 
 
 @pytest.fixture

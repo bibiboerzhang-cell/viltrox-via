@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test recommendation -> main KOL -> claim -> project bridge."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -346,7 +347,7 @@ def main() -> None:
         assert outcome and int(outcome["was_claimed"]) == 1 and int(outcome["project_created"]) == 1, dict(outcome or {})
         rec = get_conn().execute("SELECT * FROM vkpi_kol_recommendations WHERE id=?", (rec_id,)).fetchone()
         assert rec and int(rec["linked_main_kol_id"]) == kol_id and rec["status"] == "project_created", dict(rec or {})
-        print(json.dumps({
+        stdout_out(json.dumps({
             "ok": True,
             "marker": marker,
             "recommendation_id": rec_id,
@@ -359,7 +360,7 @@ def main() -> None:
         }, indent=2, ensure_ascii=False))
     finally:
         residue = _cleanup(created, user_id, staff_id)
-        print(json.dumps({"residue": residue}, indent=2, ensure_ascii=False))
+        stdout_out(json.dumps({"residue": residue}, indent=2, ensure_ascii=False))
         assert all(value == 0 for value in residue.values()), residue
 
 

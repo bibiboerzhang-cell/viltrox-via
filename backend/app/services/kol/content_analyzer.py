@@ -34,6 +34,22 @@ def _clean_text(value: Any, limit: int = 4000) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _public_scrape(scrape: dict[str, Any]) -> dict[str, Any]:
+    public = dict(scrape or {})
+    for key in ("exception", "raw_error", "traceback"):
+        public.pop(key, None)
+    if public.get("error"):
+        public["error"] = "url_scrape_failed"
+    return public
+
+
+def _public_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
+    public = dict(analysis or {})
+    for key in ("error", "errors", "exception", "traceback"):
+        public.pop(key, None)
+    return public
+
+
 def _published_at(value: Any, fallback: Any = None) -> str | None:
     raw = value if value not in (None, "") else fallback
     if raw in (None, ""):
@@ -106,7 +122,13 @@ def _analysis_summary(analysis: dict[str, Any], scrape: dict[str, Any]) -> str:
         text = _clean_text(part, 800)
         if text:
             return text
-    return "已完成 URL 元数据抓取与 AI 分析，但模型没有返回摘要。"
+    return "已完成 URL 元数据抓取；AI 分析暂未返回可验证摘要。"
+
+
+def _analysis_result_status(scrape: dict[str, Any], analysis: dict[str, Any]) -> str:
+    if bool(analysis.get("analyzed")):
+        return "done"
+    return "partial" if bool(scrape.get("scraped_ok")) else "failed"
 
 
 def _analysis_providers(result: dict[str, Any]) -> list[str]:
@@ -145,14 +167,16 @@ def _result_payload(
     result = {
         "content_id": int(content_id),
         "status": status,
+        "analysis_status": "ready" if bool(analysis.get("analyzed")) else "unavailable",
+        "analysis_reason": "" if bool(analysis.get("analyzed")) else "provider_unavailable",
         "quality_score": score,
         "summary": summary,
         "topics": topics,
         "metrics": {"views": views, "likes": likes, "comments": comments, "shares": shares},
         "method": str(analysis.get("method") or scrape.get("scraper") or "scrape"),
         "layers_used": analysis.get("layers_used") or [],
-        "analysis": analysis,
-        "scrape": scrape,
+        "analysis": _public_analysis(analysis),
+        "scrape": _public_scrape(scrape),
         "suggested_kol": {
             "channel_name": owner or _clean_text(scrape.get("title") or "URL creator", 120),
             "channel_url": _clean_text(scrape.get("owner_url") or scrape.get("channel_url") or scrape.get("source_url") or scrape.get("url") or "", 1200),
@@ -202,12 +226,17 @@ def _mark_failed(content_id: int, error: str, scrape: dict[str, Any] | None = No
         ),
     )
     conn.commit()
-    return {"content_id": int(content_id), "status": "failed", "error": error, "scrape": scrape or {}}
+    return {
+        "content_id": int(content_id),
+        "status": "failed",
+        "error": "url_scrape_failed",
+        "scrape": _public_scrape(scrape or {}),
+    }
 
 
 def _persist_success(content: dict[str, Any], scrape: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
     content_id = int(content["id"])
-    result = _result_payload(content_id, scrape, analysis, status="done" if analysis.get("analyzed") or scrape.get("scraped_ok") else "partial", fallback=content)
+    result = _result_payload(content_id, scrape, analysis, status=_analysis_result_status(scrape, analysis), fallback=content)
     metrics = result["metrics"]
     views = _int(metrics.get("views"))
     likes = _int(metrics.get("likes"))
@@ -267,14 +296,15 @@ async def analyze_kol_url_standalone(url: str, platform_hint: str = "", creator_
     if platform_hint and not scrape.get("platform"):
         scrape["platform"] = platform_hint
     if not scrape.get("scraped_ok"):
+        logger.warning("standalone URL scrape failed | error=%s", str(scrape.get("error") or "")[:300])
         return {
             "content_id": 0,
             "status": "failed",
-            "error": str(scrape.get("error") or "scrape failed"),
-            "scrape": scrape,
+            "error": "url_scrape_failed",
+            "scrape": _public_scrape(scrape),
             "steps": [
                 {"label": "校验链接", "status": "done"},
-                {"label": "Apify / 平台抓取", "status": "failed", "detail": str(scrape.get("error") or "scrape failed")},
+                {"label": "Apify / 平台抓取", "status": "failed", "detail": "url_scrape_failed"},
                 {"label": "三模型分析", "status": "skipped"},
             ],
         }
@@ -288,11 +318,17 @@ async def analyze_kol_url_standalone(url: str, platform_hint: str = "", creator_
         creator_handle=str(creator_handle or scrape.get("owner") or ""),
         direct_video_url=str(scrape.get("video_url") or ""),
     )
-    result = _result_payload(0, scrape, analysis or {}, status="done")
+    analysis_payload = analysis or {}
+    result = _result_payload(0, scrape, analysis_payload, status=_analysis_result_status(scrape, analysis_payload))
+    analysis_ready = bool(analysis_payload.get("analyzed"))
     result["steps"] = [
         {"label": "校验链接", "status": "done"},
         {"label": "Apify / 平台抓取", "status": "done", "detail": str(scrape.get("scraper") or scrape.get("platform") or "")},
-        {"label": "GPT + Gemini + Claude 分析", "status": "done", "detail": " / ".join(_analysis_providers(result) or [str(result.get("method") or "analysis")])},
+        {
+            "label": "GPT + Gemini + Claude 分析",
+            "status": "done" if analysis_ready else "skipped",
+            "detail": " / ".join(_analysis_providers(result)) if analysis_ready else "provider_unavailable",
+        },
         {"label": "生成可入库 KOL", "status": "done"},
     ]
     result["providers"] = _analysis_providers(result)

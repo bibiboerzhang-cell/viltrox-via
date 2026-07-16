@@ -7,6 +7,7 @@ Set VKPI_P2_27_LIVE=1 to run one real provider call through
 collect_account_snapshot(force_local=True) without changing Settings budgets.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -237,8 +238,8 @@ class Smoke:
 
 def main() -> None:
     result = Smoke().run()
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    print("VKPI_P2_27_SINGLE_ACCOUNT_REFRESH_SMOKE_OK")
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    stdout_out("VKPI_P2_27_SINGLE_ACCOUNT_REFRESH_SMOKE_OK")
 
 
 if __name__ == "__main__":

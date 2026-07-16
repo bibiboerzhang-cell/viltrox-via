@@ -80,6 +80,23 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["时间", "存 UTC · 按浏览器时区显示(绝对时间戳)"],
     ],
   },
+  advisor: {
+    label: "marketing-advisor · 服务端持久化",
+    rows: [
+      ["会话归属", "vkpi_advisor_threads/messages · organization_id + staff_id 双重隔离"],
+      ["顾问回答", "POST /api/admin/vkpi/marketing-advisor/threads/{id}/messages · 未就绪时 HTTP 200 诚实降级"],
+      ["动作边界", "外发/联系/写业务/费用只落 vkpi_advisor_action_drafts，不可执行"],
+      ["证据口径", "结论保留 provider/status/provenance；无真实数据时继续 descriptive_only"],
+    ],
+  },
+  memory: {
+    label: "advisor-memory · 当前员工",
+    rows: [
+      ["私有范围", "vkpi_advisor_memory_* · 仅当前 organization_id + staff_id 可读写"],
+      ["学习机制", "用户输入→候选→用户显式确认→生效 fact；禁止静默自动记忆"],
+      ["控制", "记忆总开关可暂停/恢复，单条 fact 也可暂停/恢复，变更入审计事件"],
+    ],
+  },
 };
 
 export const PROV_TITLES: Record<string, string> = {
@@ -87,6 +104,8 @@ export const PROV_TITLES: Record<string, string> = {
   qa: "问答",
   sugg: "建议问题",
   history: "历史会话",
+  advisor: "AI 营销顾问",
+  memory: "我的记忆与学习",
 };
 
 /* ============ 本机留痕仓:localStorage(仅成功回答;失败/加载中不入仓) ============ */

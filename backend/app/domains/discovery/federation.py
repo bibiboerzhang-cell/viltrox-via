@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.platform.apify_budget import call_apify_actor, current_apify_execution_context
 
 logger = get_logger(__name__)
 
@@ -52,6 +53,13 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
 
     env 门控:仅当 VKPI_APIFY_SEARCH_ACTOR 设了 actor 才跑(避免意外 Apify 计费);未设 → not_configured。
     """
+    # Read/user request paths may inspect the internal pool immediately, but a
+    # paid provider run is only legal inside a centrally claimed durable job.
+    # Returning a typed deferred status keeps preview/search routes useful and
+    # avoids leaking ``durable_execution_context_required`` to the UI.
+    if current_apify_execution_context() is None:
+        return [], "background_refresh_required"
+
     import json
     import os
 
@@ -80,7 +88,14 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
     out: list[dict[str, Any]] = []
     for platform, actor in actors.items():
         try:
-            run = apify_svc._client.actor(actor).call(run_input={"searchQueries": [query], "maxResults": per})
+            run = call_apify_actor(
+                apify_svc._client,
+                actor,
+                platform=platform,
+                operation="federation_search",
+                source="discovery.federation",
+                run_input={"searchQueries": [query], "maxResults": per},
+            )
             # C5 成本记账收口:联邦搜索 run 统一记账(幂等 by run_id;失败绝不影响搜索)。
             try:
                 from app.domains.costs.budget_guard import record_apify_run

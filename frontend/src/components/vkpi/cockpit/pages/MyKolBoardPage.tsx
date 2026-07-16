@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { getMyKolAggregate, type VkpiMyKolAggregateResponse } from "../../../../services/vkpi/kol-api";
 import { useOfficialChannelMatrix } from "../../pages/channels/useOfficialChannelMatrix";
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
@@ -76,6 +77,7 @@ import {
 // v1→v2(2026-07-12):默认布局插入「内容墙」行(contentWall 8 + viewsTop 4),
 // 旧本机布局不含新模块 → bump 键让全员看到新默认(手动改过布局的本机记忆一并重置)。
 const STORAGE_KEY = "vkpi-my-kol-layout-v2";
+const MY_KOL_PAGE_SIZE = 50;
 
 // 默认布局(12 列 · 设计单定稿七行;2026-07-12 两刀:team 12→8 腾出 span4 给
 // 「分析动态」小模组;library 下一行加「内容墙」(收藏集最近采集视频网格)+
@@ -113,6 +115,7 @@ interface MyKolBoardPageProps {
   onSelectPage?: (page: VkpiPageKey) => void;
   /** CockpitApp dashboardRuntime.metrics(normalizeDashboardMetrics 产物);K3 取 exposure.all */
   metrics?: Row[];
+  embeddedModuleKey?: string;
 }
 
 export function MyKolBoardPage({
@@ -123,6 +126,7 @@ export function MyKolBoardPage({
   onRefreshData,
   onSelectPage,
   metrics,
+  embeddedModuleKey,
 }: MyKolBoardPageProps) {
   const isManager = viewMode === "manager";
   const [editing, setEditing] = React.useState(false);
@@ -132,6 +136,8 @@ export function MyKolBoardPage({
   const [agg, setAgg] = React.useState<VkpiMyKolAggregateResponse | null>(null);
   const [aggLoading, setAggLoading] = React.useState(false);
   const [aggError, setAggError] = React.useState("");
+  const [aggLoadingMore, setAggLoadingMore] = React.useState(false);
+  const [aggLoadMoreError, setAggLoadMoreError] = React.useState("");
 
   // K4 官号粉丝 + team/official 模块共用一份矩阵(hook 自带 30s 内存缓存 + localStorage SWR)
   const matrix = useOfficialChannelMatrix(apiToken || undefined);
@@ -168,7 +174,11 @@ export function MyKolBoardPage({
     let alive = true;
     setAggLoading(true);
     setAggError("");
-    getMyKolAggregate(apiToken, isManager ? { scope: "team" } : {})
+    getMyKolAggregate(apiToken, {
+      ...(isManager ? { scope: "team" as const } : {}),
+      mode: "summary",
+      favoritesLimit: MY_KOL_PAGE_SIZE,
+    })
       .then((res) => {
         if (alive) setAgg(res && typeof res === "object" ? res : null);
       })
@@ -183,6 +193,39 @@ export function MyKolBoardPage({
       alive = false;
     };
   }, [apiToken, isManager, reloadTick]);
+
+  const loadMoreFavorites = React.useCallback(async () => {
+    const cursor = agg?.pool_favorites_page?.next_cursor;
+    if (!apiToken || !cursor || aggLoadingMore) return;
+    setAggLoadingMore(true);
+    setAggLoadMoreError("");
+    try {
+      const next = await getMyKolAggregate(apiToken, {
+        ...(isManager ? { scope: "team" as const } : {}),
+        mode: "summary",
+        favoritesLimit: MY_KOL_PAGE_SIZE,
+        favoritesCursor: cursor,
+      });
+      setAgg((current) => {
+        if (!current) return next;
+        const existing = current.pool_favorites || [];
+        const seen = new Set(existing.map((row) => String(row.kol_pool_id ?? row.id ?? "")));
+        const merged = [...existing];
+        for (const row of next.pool_favorites || []) {
+          const key = String(row.kol_pool_id ?? row.id ?? "");
+          if (key && seen.has(key)) continue;
+          if (key) seen.add(key);
+          merged.push(row);
+        }
+        return { ...current, ...next, pool_favorites: merged };
+      });
+    } catch (err) {
+      const detail = (err as { detail?: unknown; message?: unknown }) || {};
+      setAggLoadMoreError(String(detail.detail || detail.message || "更多 KOL 加载失败"));
+    } finally {
+      setAggLoadingMore(false);
+    }
+  }, [agg?.pool_favorites_page?.next_cursor, aggLoadingMore, apiToken, isManager]);
 
   const kpi = (agg?.kpi_summary || null) as Record<string, number> | null;
   const kolCount = kpi && Number.isFinite(Number(kpi.favorites_count)) ? Number(kpi.favorites_count) : null;
@@ -353,7 +396,7 @@ export function MyKolBoardPage({
           ? [["board-ext", `读取失败:${extError} —— V 计数/名单缺席不编数`]]
           : [];
     return (
-      <ModuleCard {...cardProps("library", "KOL 库", agg ? libraryRows.length.toLocaleString() : undefined, extraRows)}>
+      <ModuleCard {...cardProps("library", "KOL 库", kolCount != null ? kolCount.toLocaleString() : undefined, extraRows)}>
         {kpiGate() ?? (
           <KolLibraryModule
             apiToken={apiToken}
@@ -367,6 +410,10 @@ export function MyKolBoardPage({
             isManager={isManager}
             staffOptions={staffOptions}
             projects={data?.projects || []}
+            page={agg?.pool_favorites_page}
+            loadingMore={aggLoadingMore}
+            loadMoreError={aggLoadMoreError}
+            onLoadMore={loadMoreFavorites}
             onActionDone={() => {
               setReloadTick((tick) => tick + 1);
               if (onRefreshData) onRefreshData();
@@ -529,6 +576,10 @@ export function MyKolBoardPage({
     // 功能已被新版行式库+详情弹窗零丢失覆盖)。想临时找回:恢复下一行 + embeds 的 renderLibClassic。
     // { key: "libclassic", label: "经典视图 · KOL 库", description: "升级前两栏库整体内嵌", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 36, render: renderLibClassic },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="MY KOL" />;
+  }
 
   // 员工视角:默认布局里的 risk/rollup 会被 EditableDashboardBoard 的 moduleMap 过滤
   // (定义缺席 → 布局项丢弃),这里再显式滤一遍,语义自证 + 不依赖板组件实现细节。

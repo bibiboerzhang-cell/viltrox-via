@@ -4,6 +4,8 @@ from __future__ import annotations
 from functools import partial
 from typing import Any, Awaitable, Callable
 
+from fastapi import HTTPException
+
 from app.db.connection import db_read, db_write
 from app.services.ai.analyzers.claude_vision import analyze_video_with_claude, analyze_url_content_smart
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
@@ -48,6 +50,11 @@ async def run_audit_sync(
         response["deprecated_sync"] = True
         response["message"] = "Synchronous audit is deprecated; request was queued instead."
         return response
+
+    # The historical inline path can transitively invoke paid scrapers/LLMs.
+    # Production must expose the durable v2 enqueue path instead of silently
+    # doing provider work in the web process.
+    raise HTTPException(status_code=503, detail="durable job queue unavailable")
 
     current_uid = current_user["id"] if current_user else None
     extracted_handle = ""

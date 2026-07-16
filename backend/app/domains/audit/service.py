@@ -42,8 +42,14 @@ def _clean_staff_id(value: Any) -> int:
         return 0
 
 
-def _last_id(table: str, uid_col: str = "id", uid_value: Any | None = None) -> int:
-    conn = get_conn()
+def _last_id(
+    table: str,
+    uid_col: str = "id",
+    uid_value: Any | None = None,
+    *,
+    conn: Any | None = None,
+) -> int:
+    conn = conn if conn is not None else get_conn()
     if uid_value is not None:
         row = conn.execute(f"SELECT id FROM {table} WHERE {uid_col}=? ORDER BY id DESC LIMIT 1", (uid_value,)).fetchone()
     else:
@@ -167,12 +173,16 @@ def log_business_event(
     target_id: str | int = "",
     detail: str = "",
     metadata: dict[str, Any] | None = None,
+    conn: Any | None = None,
+    commit: bool = True,
+    ensure_schema: bool = True,
 ) -> dict[str, Any]:
     if not staff_id:
         return {"skipped": True, "reason": "missing_staff"}
-    ensure_vkpi_audit_schema()
-    conn = get_conn()
-    conn.execute(
+    if ensure_schema:
+        ensure_vkpi_audit_schema()
+    active_conn = conn if conn is not None else get_conn()
+    active_conn.execute(
         """
         INSERT INTO vkpi_business_audit_logs
             (staff_id, action_type, target_type, target_id, detail, metadata_json, created_at)
@@ -180,8 +190,9 @@ def log_business_event(
         """,
         (int(staff_id), action_type, target_type, str(target_id or ""), detail, _json(metadata), _utcnow()),
     )
-    conn.commit()
-    return {"id": _last_id("vkpi_business_audit_logs"), "status": "logged"}
+    if commit:
+        active_conn.commit()
+    return {"id": _last_id("vkpi_business_audit_logs", conn=active_conn), "status": "logged"}
 
 
 def _where(filters: dict[str, Any], time_col: str = "created_at") -> tuple[str, list[Any]]:

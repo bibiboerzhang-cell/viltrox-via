@@ -270,16 +270,23 @@ def verify_meta_challenge(query: QueryParams) -> str:
 
 def verify_webhook_request(platform: str, headers: Headers, raw_body: bytes, client_host: str = "") -> str:
     client = (client_host or "").strip().lower()
-    shared = headers.get("x-viltrox-ingest-secret", "") or headers.get("x-ingest-secret", "")
-    if PLATFORM_INGEST_SHARED_SECRET:
-        valid_shared = [PLATFORM_INGEST_SHARED_SECRET, *PLATFORM_INGEST_SHARED_SECRET_PREVIOUS]
-        if _safe_compare_any(shared, valid_shared):
-            return "shared-secret"
-        raise PermissionError("invalid shared secret")
 
-    if platform == "shopify" and SHOPIFY_WEBHOOK_SECRET:
+    # Shopify money events are a stricter trust boundary than the generic
+    # ingestion adapters below.  A fleet shared secret or a loopback client
+    # proves only that the request reached our infrastructure; neither proves
+    # that Shopify emitted the order/refund.  Always require Shopify's native
+    # HMAC before a caller can reach the financial attribution adapter.
+    if platform == "shopify":
+        try:
+            from app.domains.commerce import shopify_connect
+
+            shopify_secret = str(shopify_connect.get_credentials().get("webhook_secret") or "").strip()
+        except Exception:
+            shopify_secret = str(SHOPIFY_WEBHOOK_SECRET or "").strip()
+        if not shopify_secret:
+            raise RuntimeError("shopify webhook secret not configured")
         provided = headers.get("x-shopify-hmac-sha256", "").strip()
-        valid_shopify = [SHOPIFY_WEBHOOK_SECRET, *SHOPIFY_WEBHOOK_SECRET_PREVIOUS]
+        valid_shopify = [shopify_secret, *SHOPIFY_WEBHOOK_SECRET_PREVIOUS]
         for candidate_secret in valid_shopify:
             digest = base64.b64encode(
                 hmac.new(
@@ -291,6 +298,15 @@ def verify_webhook_request(platform: str, headers: Headers, raw_body: bytes, cli
             if _safe_compare(provided, digest):
                 return "shopify-hmac"
         raise PermissionError("invalid shopify hmac")
+
+    shared = headers.get("x-viltrox-ingest-secret", "") or headers.get("x-ingest-secret", "")
+    # A configured shared secret must not shadow a provider's native signature.
+    # Only select this mode when the caller actually sends the shared header.
+    if PLATFORM_INGEST_SHARED_SECRET and shared:
+        valid_shared = [PLATFORM_INGEST_SHARED_SECRET, *PLATFORM_INGEST_SHARED_SECRET_PREVIOUS]
+        if _safe_compare_any(shared, valid_shared):
+            return "shared-secret"
+        raise PermissionError("invalid shared secret")
 
     if platform in {"facebook", "instagram"} and META_APP_SECRET:
         provided = headers.get("x-hub-signature-256", "").strip()

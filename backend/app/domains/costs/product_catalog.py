@@ -109,7 +109,11 @@ def list_product_catalog(
     query: str = "",
     status: str = "",
 ) -> dict[str, Any]:
-    ensure_product_catalog_schema()
+    # Runtime migrations own schema creation.  This helper is used by multiple
+    # GET/read aggregators (including GTM Preview), so issuing CREATE/ALTER and
+    # COMMIT here both violated the read-only contract and could self-deadlock
+    # when independent readers were concurrent.  Import/sync write paths still
+    # call ``ensure_product_catalog_schema`` explicitly before mutation.
     where: list[str] = []
     params: list[Any] = []
     normalized_categories = [str(item).strip() for item in (categories or []) if str(item).strip()]

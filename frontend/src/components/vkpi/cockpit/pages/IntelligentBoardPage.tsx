@@ -1,6 +1,8 @@
 import React from "react";
 import { PencilLine } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
+import { decodeDashboardLayoutPreference, encodeDashboardLayoutPreference } from "../dashboardPreferenceStore";
 import {
   askIntelligent,
   fetchIntelligentStats,
@@ -25,6 +27,7 @@ import {
   type AskHistoryEntry,
 } from "./IntelligentBoardPage.modules";
 import { EvidenceModal, HistoryDetailModal, HistoryListModal, IntelligentProvModal } from "./IntelligentBoardPage.dialogs";
+import { AdvisorMemoryBody, MarketingAdvisorBody } from "./MarketingAdvisorWorkspace";
 
 // Intelligent 问答 → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 手法)。
 //   旧 IntelligentPage 全功能块零丢失:问答输入(Enter/按钮/思考中)、无 token 与空问题
@@ -42,21 +45,64 @@ import { EvidenceModal, HistoryDetailModal, HistoryListModal, IntelligentProvMod
 //   可跳 KOL 档案,无库内引用如实明标(综合正文不读库 —— 口径精准不冒充)、
 //   历史会话模块(本机留痕 行式 + 全量弹窗 + 详情 ‹ #n/N › + ↑↓ 连续翻 + 重新提问/
 //   删除/两步清空)、建议问题模块、可编辑看板(注册表 + palette)、SrcChip 溯源可点进。
-// 红线:纯读展示(唯一写 = 本机 localStorage 留痕),绝不写 viltrox fit 分 / 不触
-//   rule_v0;颜色全 token 零写死色;零 opacity 修饰类;时间 = 绝对时间戳(存 UTC
+// 红线:旧问答与本机历史保持原有读路径;新增顾问/记忆只写按 org + staff
+//   校验的专用服务端表,外发/业务写入/费用动作只能生成草稿;绝不写
+//   viltrox fit 分 / 不触 rule_v0;颜色全 token 零写死色;时间 = 绝对时间戳(存 UTC
 //   显示按浏览器时区);端点失败 = 诚实错误卡。布局只走本机 storageKey,不传 apiToken
 //   给 EditableDashboardBoard(其账户级持久化写死 dashboard_layout_v1 键,金样板同注释)。
 
 const STORAGE_KEY = "vkpi-intelligent-layout-v1";
+const ADVISOR_LAYOUT_MIGRATION_KEY = `${STORAGE_KEY}:advisor-memory-added-v1`;
 const FACE_ROWS = 6; // 历史会话卡面收敛条数(全量走弹窗)
 
 // 默认布局(12 列 · 默认简四卡):kpiI(12) → qa(8) + [sugg(4) / history(4)]
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiI", span: 12 },
+  { moduleKey: "advisor", span: 8 },
+  { moduleKey: "memory", span: 4 },
   { moduleKey: "qa", span: 8 },
   { moduleKey: "sugg", span: 4 },
   { moduleKey: "history", span: 4 },
 ];
+
+function migrateAdvisorModulesIntoStoredLayout() {
+  if (typeof window === "undefined") return;
+  try {
+    if (window.localStorage.getItem(ADVISOR_LAYOUT_MIGRATION_KEY) === "1") return;
+    const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "null");
+    const items = decodeDashboardLayoutPreference<Record<string, unknown>>(raw);
+    if (items !== null) {
+      const moduleKeys = new Set(items.map((item) => String(item.moduleKey ?? item.type ?? "")));
+      const bottom = items.reduce((value, item) => {
+        const y = Number(item.y ?? item.row ?? 0);
+        const height = Number(item.height ?? item.h ?? 9);
+        return Math.max(value, (Number.isFinite(y) ? y : 0) + (Number.isFinite(height) ? height : 9));
+      }, 0);
+      const additions: Array<Record<string, unknown>> = [];
+      if (!moduleKeys.has("advisor")) {
+        additions.push({ instanceId: "migration-advisor-v1", moduleKey: "advisor", span: 8, height: 13, x: 0, y: bottom });
+      }
+      if (!moduleKeys.has("memory")) {
+        additions.push({ instanceId: "migration-memory-v1", moduleKey: "memory", span: 4, height: 13, x: 8, y: bottom });
+      }
+      if (additions.length > 0) {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(encodeDashboardLayoutPreference([...items, ...additions])));
+      }
+    }
+    // A separate marker means a user can deliberately remove either module
+    // later without the app silently adding it back on every visit.
+    window.localStorage.setItem(ADVISOR_LAYOUT_MIGRATION_KEY, "1");
+  } catch {
+    // Storage-disabled browsers still receive the fresh default layout.
+  }
+}
+
+function useAdvisorLayoutMigration() {
+  React.useState(() => {
+    migrateAdvisorModulesIntoStoredLayout();
+    return true;
+  });
+}
 
 // demo .ph-b:pagehead 药丸徽(金样板同款)
 const PH_BADGE =
@@ -74,10 +120,13 @@ interface ThreadEntry {
 export function IntelligentBoardPage({
   apiToken = "",
   onNavigate,
+  embeddedModuleKey,
 }: {
   apiToken?: string;
   onNavigate?: (navKey: string) => void;
+  embeddedModuleKey?: string;
 }) {
+  useAdvisorLayoutMigration();
   const [editing, setEditing] = React.useState(false);
 
   // 问答主体:输入 + 本会话对话流(新在前;旧页单答案卡 → 多轮上屏,单飞防并发同旧页)
@@ -412,13 +461,33 @@ export function IntelligentBoardPage({
     return <ModuleCard {...cardProps("history", "历史会话", history.length > 0 ? `${history.length}` : undefined)}>{body}</ModuleCard>;
   };
 
+  // 服务端持久化营销顾问 + 当前员工私有记忆。两者均按 org/staff 隔离；
+  // 个人记忆必须候选→显式确认，外发/写业务/费用动作只能留草稿。
+  const renderAdvisor = () => (
+    <ModuleCard {...cardProps("advisor", "顾问")}>
+      <MarketingAdvisorBody apiToken={apiToken} />
+    </ModuleCard>
+  );
+
+  const renderMemory = () => (
+    <ModuleCard {...cardProps("memory", "记忆")}>
+      <AdvisorMemoryBody apiToken={apiToken} />
+    </ModuleCard>
+  );
+
   /* ---------- 模块注册表(palette 全量可选;默认简四卡全进默认布局) ---------- */
   const modules: DashboardModuleDefinition[] = [
     { key: "kpiI", label: "问答总览带", description: "会话数 / 今日问答 / 命中引用率(本机)+ 综合回答(服务端 14 天趋势)", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
+    { key: "advisor", label: "AI 营销顾问", description: "持久会话 · KOL/产品/项目/活动/Dealer 直接咨询 · 动作只生成草稿", category: "核心模块", defaultSpan: 8, minSpan: 5, defaultHeight: 13, minHeight: 8, maxHeight: 30, render: renderAdvisor },
+    { key: "memory", label: "我的记忆与学习", description: "当前员工私有记忆 · 候选必须显式确认 · 可暂停/恢复", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 13, minHeight: 8, maxHeight: 30, render: renderMemory },
     { key: "qa", label: "问答", description: "输入提问 + 对话流 · 回答旁引用真来源可点,无来源如实标", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 7, maxHeight: 30, render: renderQa },
     { key: "sugg", label: "建议问题", description: "当日异动种 chips · 点一条直接提问", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 5, minHeight: 3, maxHeight: 12, render: renderSugg },
     { key: "history", label: "历史会话", description: "本机留痕一行一条 · 点开连续翻 · 可重新提问", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 24, render: renderHistory },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="Intelligent 问答" />;
+  }
 
   const histEntry = histIndex != null ? history[histIndex] : null;
 

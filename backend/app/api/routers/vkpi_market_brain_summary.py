@@ -16,14 +16,53 @@ market/trends 有隐藏写入,一律不碰);响应无 private 字段(评分明�
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
+from app.domains.market_brain.read_cache import cacheable_payload, freshness_version
+from app.services.cache import cache_get_or_build
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-market-brain"])
+_GTM_READ_CACHE_TTL_SEC = 30
+
+
+def _organization_id_for_cache(staff: dict | None) -> int:
+    raw = (staff or {}).get("organization_id")
+    try:
+        if int(raw or 0) > 0:
+            return int(raw)
+    except (TypeError, ValueError):
+        pass
+    return 0
+
+
+def _summary_cache_key(staff: dict | None) -> str:
+    """Partition the cached card by tenant and the Action Inbox read scope."""
+    from app.domains.access import scope
+    from app.domains.market_brain.summary import METHOD
+
+    organization_id = _organization_id_for_cache(staff)
+    data_version = freshness_version(METHOD, ttl_seconds=_GTM_READ_CACHE_TTL_SEC)
+    authorization = [
+        max(0, int(scope.actor_staff_id(staff))),
+        scope.role_key(staff),
+        bool(scope.is_owner(staff)),
+        bool(scope.can_view_all(staff)),
+    ]
+    auth_digest = hashlib.sha256(
+        json.dumps(authorization, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    return (
+        f"vkpi_gtm:summary:v3:data:{data_version}:"
+        f"org:{organization_id}:auth:{auth_digest}"
+    )
 
 
 @router.get("/market-brain/summary")
@@ -33,8 +72,16 @@ def get_market_brain_summary(
     """GTM 总脑页五卡数据,前端一次请求(全只读,不写库)。"""
     from app.domains.market_brain import summary
 
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="summary")
+    if scope_unavailable is not None:
+        return scope_unavailable
     try:
-        return summary.build_summary(staff)
+        return cache_get_or_build(
+            _summary_cache_key(staff),
+            lambda: summary.build_summary(staff),
+            ttl=_GTM_READ_CACHE_TTL_SEC,
+            cache_if=cacheable_payload,
+        )
     except Exception as exc:  # noqa: BLE001 — 聚合失败不炸接口,诚实回原因
         logger.warning("market_brain summary failed: %s", exc, exc_info=True)
         return {"status": "error", "reason": str(exc)[:300]}

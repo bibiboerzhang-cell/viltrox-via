@@ -11,7 +11,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.db.repositories.viltrox_matrix import get_latest_viltrox_scan_bundle
-from app.services.ai.retry import call_ai_with_retry
+from app.platform.llm_production import generate_text
 from app.services.intelligence.viltrox_matrix import build_viltrox_overview
 
 logger = get_logger(__name__)
@@ -169,27 +169,25 @@ def list_insights() -> dict:
 
 
 async def regenerate_insights() -> dict:
-    try:
-        from app.services.ai.claude_client import get_claude_client
-    except ImportError:
-        return list_insights()
-
     matrix = get_matrix()
     posts = list_posts(limit=30)
     prompt = _brand_prompt(matrix, posts)
     try:
-        client = get_claude_client()
         response = await asyncio.to_thread(
-            lambda: call_ai_with_retry(
-                "intelligence.brand.claude",
-                lambda: client.messages.create(
-                    model="claude-opus-4-7",
-                    max_tokens=2048,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
+            lambda: generate_text(
+                prompt,
+                provider="anthropic",
+                model="claude-opus-4-7",
+                purpose="intelligence_brand",
+                max_output_tokens=2048,
             )
         )
-        parsed = json.loads(response.content[0].text)
+        parsed = json.loads(str(response.get("text") or ""))
+        generated_insights = parsed.get("insights") if isinstance(parsed, dict) else None
+        if not isinstance(generated_insights, list) or not all(
+            isinstance(insight, dict) for insight in generated_insights
+        ):
+            raise ValueError("Claude response must contain a list of insight objects")
     except Exception as exc:
         logger.exception("brand insight generation failed: %s", exc)
         return list_insights()
@@ -201,7 +199,7 @@ async def regenerate_insights() -> dict:
     )
     now = datetime.utcnow().isoformat()
     expires = (datetime.utcnow() + timedelta(days=7)).isoformat()
-    for ins in parsed.get("insights", []):
+    for ins in generated_insights:
         conn.execute(
             """INSERT INTO ai_insights (
                 module, category, severity, insight_type, title, body,

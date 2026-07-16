@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,8 +11,7 @@ SOURCE = ROOT / "shared" / "contracts.json"
 TARGET = ROOT / "frontend" / "src" / "lib" / "contracts.generated.ts"
 
 
-def main() -> None:
-    payload = json.loads(SOURCE.read_text(encoding="utf-8"))
+def render_contracts(payload: dict) -> str:
     actor_tiers = payload["actor_tiers"]
     role_keys = payload["role_keys"]
     surface_keys = payload["surface_keys"]
@@ -46,8 +47,32 @@ def main() -> None:
             "",
         ]
     )
-    TARGET.write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Fail when the checked-in TypeScript contract differs; never write files.",
+    )
+    args = parser.parse_args()
+
+    rendered = render_contracts(json.loads(SOURCE.read_text(encoding="utf-8")))
+    if args.check:
+        current = TARGET.read_text(encoding="utf-8") if TARGET.exists() else ""
+        if current != rendered:
+            sys.stderr.write(
+                "frontend/src/lib/contracts.generated.ts is stale; "
+                "run scripts/generate_frontend_contracts.py and review the diff.\n"
+            )
+            return 1
+        return 0
+
+    TARGET.write_text(rendered, encoding="utf-8")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -41,10 +41,10 @@ def get_semantic_recall(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — 增益块失败不炸接口,诚实回原因
-        logger.warning("semantic_recall failed for query=%s: %s", text[:80], exc)
+        logger.warning("semantic_recall failed for query=%s", text[:80], exc_info=True)
         return {
             "status": "error",
-            "reason": str(exc)[:300],
+            "reason": "semantic_recall_unavailable",
             "items": [],
             "stages": {
                 "recall": {"method": "none", "candidates": 0},

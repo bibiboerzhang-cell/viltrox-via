@@ -6,6 +6,7 @@ stores the returned URLs through the project detail message/content/terms/
 shipment APIs and verifies GET /projects/{id} reads them back.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -310,8 +311,8 @@ class Smoke:
 
 def main() -> None:
     result = Smoke().run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    print("VKPI_P2_26_PROJECT_ATTACHMENTS_SMOKE_OK")
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out("VKPI_P2_26_PROJECT_ATTACHMENTS_SMOKE_OK")
 
 
 if __name__ == "__main__":

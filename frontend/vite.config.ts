@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(configDir, "..");
+const robotsPolicy = "noindex, nofollow, noarchive, nosnippet, noimageindex";
 
 function gitValue(args: string): string {
   try {
@@ -51,6 +52,27 @@ export default defineConfig(({ command }) => {
             type: "asset",
             fileName: "build-info.json",
             source: `${JSON.stringify(buildInfo, null, 2)}\n`,
+          });
+        },
+      },
+      {
+        name: "vkpi-private-dev-surface",
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            response.setHeader("X-Robots-Tag", robotsPolicy);
+            const pathname = String(request.url || "").split("?", 1)[0];
+            if (
+              pathname === "/docs" ||
+              pathname === "/redoc" ||
+              pathname === "/openapi.json" ||
+              pathname === "/assets/__private_surface_probe_missing__.js"
+            ) {
+              response.statusCode = 404;
+              response.setHeader("Content-Type", "application/json; charset=utf-8");
+              response.end('{"detail":"Not Found"}');
+              return;
+            }
+            next();
           });
         },
       },
@@ -126,8 +148,85 @@ export default defineConfig(({ command }) => {
             ) {
               return "vkpi-cockpit-core";
             }
+            // KOL 视频深析渲染器 + 纯 helper 同时被搜索结果和档案抽屉复用，
+            // 而且只向下依赖 services/shared/vendor，不回引任何上层 KOL UI。单独归组
+            // 可给 workbench 的单 chunk 红线留出稳定余量，同时保持两条按需路径复用同一份实现。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/KOLVideoAnalysisPanel.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer.helpers.ts") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.helpers.ts") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.derivers.ts")
+            ) {
+              return "vkpi-kol-analysis-core";
+            }
+            // 评论正文只在已解析的视频 evidence 上读取，账号分析总览只在 profile
+            // URL 命中入库 KOL 后出现。两者都通过 React.lazy 按需加载；让 Rollup
+            // 保留真实异步边界，避免重新聚合进所有 KOL 搜索/档案共用的 workbench。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.UrlSummary.Comments.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.UrlSummary.AccountOverview.tsx")
+            ) {
+              return undefined;
+            }
+            // KOL 搜索与档案抽屉共同复用视频深析渲染原子，属于同一套按需工作台。
+            // 两个家族放在同一块可保留这条复用边，同时避免整套 KOL 深析 UI 被塞进
+            // 所有 cockpit 页面共享的 widgets chunk；KolSearchHistoryPanel 一并归组，
+            // 防止其对 SmartKolInputPanel.Sections 的复用产生 widgets -> workbench 回边。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer") ||
+              id.includes("/src/components/vkpi/cockpit/components/KOLDrawer") ||
+              id.includes("/src/components/vkpi/cockpit/components/KOLVideoAnalysisPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/KolSearchHistoryPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/MarketCoverageCard") ||
+              id.includes("/src/components/vkpi/cockpit/components/KOLTable") ||
+              id.includes("/src/components/vkpi/cockpit/components/KolRecommendationCards") ||
+              id.includes("/src/components/vkpi/cockpit/components/FilterBar") ||
+              id.includes("/src/components/vkpi/cockpit/components/SearchProgressBar") ||
+              id.includes("/src/components/vkpi/cockpit/components/KPAvatar") ||
+              id.includes("/src/components/vkpi/cockpit/components/DeviceSummary") ||
+              id.includes("/src/components/vkpi/cockpit/components/RefreshStateStripe") ||
+              id.includes("/src/components/vkpi/cockpit/components/TrendDot") ||
+              id.includes("/src/components/vkpi/cockpit/components/V6FitBar") ||
+              id.includes("/src/components/vkpi/cockpit/components/KPIBar") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/ContactModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/KolPoolAllModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/AudienceTypeChip") ||
+              id.includes("/src/components/vkpi/cockpit/components/CandidateKindChip") ||
+              id.includes("/src/components/vkpi/cockpit/components/GeoTierChip") ||
+              id.includes("/src/components/vkpi/cockpit/components/PlatformPill") ||
+              id.includes("/src/components/vkpi/cockpit/components/SignaturePanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/AudienceGeoPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/CommerceSignalsPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/FocalMatrixPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/QualityCompliancePanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/SimilarVideosPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/ForecastPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/RateCardPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/OutreachCriticSignalCard") ||
+              id.includes("/src/components/vkpi/cockpit/components/SafetyAuthenticityPanel")
+            ) {
+              return "vkpi-kol-workbench";
+            }
             // ③ cockpit 部件层(原主 chunk 近半体量):components/ 全目录 + 它运行时 import 的
             //    4 个 vkpi/shared 叶子件(不带走它们会形成 主chunk↔widgets 双向边 = 成环)。
+            // 纯叶子可视化层:仅依赖 React/vendor/services/core,不回引其他 cockpit 组件。
+            // 先于 components/ 总规则归组,为 600KB 红线保留稳定增长余量。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/ui/") ||
+              id.includes("/src/components/vkpi/cockpit/components/viz/") ||
+              id.includes("/src/components/vkpi/cockpit/components/provenance/") ||
+              id.includes("/src/components/vkpi/cockpit/components/AnimatedNumber.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/Globe.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/RealMap.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/NorthStarGauges.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/StrategySimPanel.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/VerdictPanel.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/MissReviewPanel.tsx") ||
+              id.includes("/src/components/vkpi/cockpit/components/ShadowEvalPanel.tsx")
+            ) {
+              return "vkpi-cockpit-viz";
+            }
             //    豁免三件重货(ReportPanel / TaskProgressBoard / SmartKolInputPanel 家族):
             //    它们只被装配区(CockpitApp*/KOLPoolPage/CockpitSidebar)import,widgets 内部零引用,
             //    留给 rollup 自动归位(跟随装配 chunk)—— 既控 widgets 体量,又不可能成环。
@@ -136,14 +235,29 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/TaskProgressBoard") ||
               id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/modals/AITodayEvidenceModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/EditGroupModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/EventDetailModal") ||
               id.includes("/src/components/vkpi/cockpit/components/modals/KPIDetailModal") ||
               id.includes("/src/components/vkpi/cockpit/components/modals/ProjectDetailModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/SignalDetailModal") ||
+              id.includes("/src/components/vkpi/cockpit/components/modals/TeamModal") ||
               id.includes("/src/components/vkpi/cockpit/components/BrandPulsePanel") ||
               id.includes("/src/components/vkpi/cockpit/components/CommentOpportunitiesPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/GiftedFunnelPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/MorningBriefCard") ||
               id.includes("/src/components/vkpi/cockpit/components/SemanticRecallCard") ||
-              id.includes("/src/components/vkpi/cockpit/components/WorkerDevicesPanel")
+              id.includes("/src/components/vkpi/cockpit/components/WorkerDevicesPanel") ||
+              // These panels each belong to one lazy board family. Keeping them
+              // out of the always-shared widgets chunk lets Rollup attach them to
+              // the owning route rather than charging every initial navigation.
+              id.includes("/src/components/vkpi/cockpit/components/ProjectTimeline") ||
+              id.includes("/src/components/vkpi/cockpit/components/PredictionLedgerPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/WeeklyScorecardPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/AgentLoopPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/DealerFitPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/OfficialPlannerPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/IndieSitePanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/ChannelMixPanel")
             ) {
               return undefined;
             }

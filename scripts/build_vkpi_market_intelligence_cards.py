@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build UI-safe IntelligenceCard payloads from market intelligence artifacts."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -35,7 +36,7 @@ def main() -> int:
         brand_limit=args.brand_limit,
     )
     paths = write_market_intelligence_cards(payload, out_dir=args.out_dir)
-    print(
+    stdout_out(
         json.dumps(
             {
                 **paths,

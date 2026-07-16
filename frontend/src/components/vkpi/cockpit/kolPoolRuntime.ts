@@ -13,8 +13,13 @@ function normalizePercent(value?: number | null) {
   return Math.abs(value) <= 1 ? value * 100 : value;
 }
 
-function numberOrNull(value?: number) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function numberOrNull(value?: unknown) {
+  const numeric = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value.replace(/,/g, ""))
+      : NaN;
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function valueFrom(item: Record<string, unknown>, keys: string[]) {
@@ -242,7 +247,8 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       // Audience Stats·估算 BETA 面板数据源(此前 audience_* 键被本固定键白名单滤掉,面板永远饿死)。
       audience_estimated: audienceEstimated,
       audience_languages: (raw.audience_languages && typeof raw.audience_languages === "object") ? raw.audience_languages : null,
-      geo_tier: GEO_A.has(country) ? "A" : GEO_B.has(country) ? "B" : country ? "C" : "X",
+      // X 专指中国大陆；国家缺失必须保持未知，不能伪装成 CN。
+      geo_tier: country === "CN" ? "X" : GEO_A.has(country) ? "A" : GEO_B.has(country) ? "B" : country ? "C" : null,
       geo_distribution: country ? [{ country, share: 1 }] : [],
       trend_resonance: trendScore == null ? null : trendScore / 100,
       trend_hits: raw.trend_hits ? parseList(raw.trend_hits) : [],

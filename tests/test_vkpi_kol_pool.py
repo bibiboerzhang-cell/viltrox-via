@@ -1,11 +1,16 @@
 """Tests for V-KPI KOL Pool helpers and DB lifecycle."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from app.api.routers import kol_ops_schema
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.kol import pool as kol_pool
 from app.domains.kol.pool_common import _country_code, _country_name
+from app.platform.db import schema_product_industry as product_industry_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
@@ -13,10 +18,88 @@ MARKER = "vkpi-kol-pool-unit"
 EMAIL = "vkpi-kol-pool-unit@example.com"
 
 
-@pytest.fixture(autouse=True)
-def _ensure_schema():
-    ensure_vkpi_product_industry_schema()
-    yield
+@pytest.fixture(scope="module", autouse=True)
+def _kol_pool_test_db(tmp_path_factory: pytest.TempPathFactory):
+    """Run this module against a private SQLite database.
+
+    These tests exercise the production KOL Pool schema guard and real SQL,
+    while the identity tables it depends on are owned by other schema layers.
+    Seed only those three base tables here so this module never inherits the
+    repository ``submissions.db`` or another test module's schema state.
+    """
+    db_path = (tmp_path_factory.mktemp("kol-pool") / "kol-pool.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_product_ready = product_industry_schema._SCHEMA_READY
+    old_kol_ready = kol_ops_schema._SCHEMA_READY
+
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    product_industry_schema._SCHEMA_READY = False
+    kol_ops_schema._SCHEMA_READY = False
+    kol_pool._clear_kol_pool_read_cache()
+
+    conn = get_conn()
+    try:
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT DEFAULT 'pending',
+                role TEXT DEFAULT 'creator',
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                role TEXT NOT NULL DEFAULT 'readonly',
+                permissions_json TEXT NOT NULL DEFAULT '{}',
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER NOT NULL DEFAULT 0,
+                email_domain_verified INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE kols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                channel_url TEXT,
+                platform TEXT NOT NULL,
+                country TEXT,
+                follower_count INTEGER DEFAULT 0,
+                avg_views INTEGER DEFAULT 0,
+                contact_status TEXT DEFAULT 'cold',
+                notes TEXT,
+                assigned_staff_id INTEGER,
+                created_by_staff_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        ensure_vkpi_product_industry_schema()
+        conn.commit()
+        yield db_path
+    finally:
+        kol_pool._clear_kol_pool_read_cache()
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        product_industry_schema._SCHEMA_READY = old_product_ready
+        kol_ops_schema._SCHEMA_READY = old_kol_ready
 
 
 def _staff_context(staff_id: int) -> dict[str, object]:
@@ -145,8 +228,19 @@ def test_list_pool_omits_heavy_raw_platform_data_but_detail_keeps_it(seeded_staf
     assert "raw_platform_data" not in listed["items"][0]
 
     row_id = int(listed["items"][0]["id"])
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_video_evidence
+          (kol_pool_id, content_url, platform, title, view_count, evidence_type, source)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (row_id, "https://youtube.com/watch?v=abcdefghijk", "youtube", "Evidence", 42, "video", "unit"),
+    )
+    conn.commit()
     detail = kol_pool.get_item(row_id)["item"]
     assert detail["raw_platform_data"] == raw_json
+    assert detail["video_evidence"][0]["content_url"] == "https://youtube.com/watch?v=abcdefghijk"
+    assert detail["video_evidence"][0]["view_count"] == 42
 
 
 def test_import_items_dedups_by_platform_handle_and_updates_row(seeded_staff):

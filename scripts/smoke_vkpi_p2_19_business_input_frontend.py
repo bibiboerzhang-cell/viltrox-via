@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static smoke for P2.19 project input and evidence upload UX."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def main() -> None:
     assert forms.count('type="file"') >= 4, "project detail evidence file inputs missing"
     assert "entityType: 'project'" in forms and "entityId: projectId" in forms, "upload metadata missing project scope"
 
-    print("VKPI_P2_19_BUSINESS_INPUT_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_P2_19_BUSINESS_INPUT_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

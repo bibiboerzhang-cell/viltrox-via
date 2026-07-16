@@ -6,6 +6,7 @@ reported first, before browser QA spends time on a broken build.
 """
 
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -131,7 +132,7 @@ def main() -> None:
     assert_contains(media_fields, "source_video_url", "media field mapping must include downloaded source video URL")
     assert_contains(media_fields, "shortCodeUrl", "media field mapping must include Instagram original URLs")
 
-    print("VKPI_P3_2_FULL_QA_AUDIT_SMOKE_OK")
+    stdout_out("VKPI_P3_2_FULL_QA_AUDIT_SMOKE_OK")
 
 
 if __name__ == "__main__":

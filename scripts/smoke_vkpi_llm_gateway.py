@@ -5,6 +5,7 @@ This smoke must not call external LLM providers. It forces offline mode and
 verifies fallback, ledger writes, stats fields, and score compatibility.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -90,8 +91,8 @@ def main() -> None:
 
     residue = _cleanup()
     _assert(residue == 0, "smoke residue not cleaned", residue)
-    print(json.dumps({"ok": True, "marker": MARKER, "providers": providers}, ensure_ascii=False))
-    print("VKPI_LLM_GATEWAY_SMOKE_OK")
+    stdout_out(json.dumps({"ok": True, "marker": MARKER, "providers": providers}, ensure_ascii=False))
+    stdout_out("VKPI_LLM_GATEWAY_SMOKE_OK")
 
 
 if __name__ == "__main__":

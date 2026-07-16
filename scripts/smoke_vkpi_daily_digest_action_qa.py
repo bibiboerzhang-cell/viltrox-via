@@ -7,6 +7,7 @@ This covers the user-facing P3.7H flow:
 - dismissing a suggestion removes it from the next generated digest
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -197,7 +198,7 @@ def main() -> None:
         assert status["fallback_assignment_count"] == 0, status
         cleanup = _cleanup(marker, user_id, staff_id, product_sku)
         assert sum(cleanup.values()) == 0, cleanup
-        print("VKPI_DAILY_DIGEST_ACTION_QA_SMOKE_OK")
+        stdout_out("VKPI_DAILY_DIGEST_ACTION_QA_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(marker, user_id, staff_id, product_sku)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P2.3 comment intelligence overview."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -139,7 +140,7 @@ def main() -> None:
         if not distributions.get("pillars"):
             raise AssertionError(f"overview missing pillar distribution: {overview}")
 
-        print("VKPI_COMMENT_INTELLIGENCE_OVERVIEW_SMOKE_OK")
+        stdout_out("VKPI_COMMENT_INTELLIGENCE_OVERVIEW_SMOKE_OK")
     finally:
         for run_id in run_ids:
             conn.execute("DELETE FROM vkpi_comment_intelligence_runs WHERE id = ?", (run_id,))

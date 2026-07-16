@@ -21,6 +21,24 @@ from .registry import (
     get_model,
     models_for_provider,
     local_models,
+    transport_ready_models,
+)
+from .runtime import ResolvedModelBinding, resolve_model_binding
+from .readiness import (
+    MODEL_READINESS_VERSION,
+    MODEL_PROBE_EVIDENCE_VERSION,
+    ReadinessThresholds,
+    TRUSTED_EXACT_PROBE_ED25519_PUBLIC_KEYS,
+    assess_model_readiness,
+    build_model_readiness_catalog,
+    exact_binding_readiness_from_environment,
+    model_attestation_trust_root_status,
+)
+from .evaluation_artifact import (
+    MODEL_EVALUATION_ARTIFACT_VERSION,
+    TRUSTED_EVALUATION_ED25519_PUBLIC_KEYS,
+    build_model_evaluation_artifact,
+    verify_model_evaluation_artifact,
 )
 from .router import (
     RouteRequest,
@@ -35,6 +53,21 @@ __all__ = [
     "get_model",
     "models_for_provider",
     "local_models",
+    "transport_ready_models",
+    "ResolvedModelBinding",
+    "resolve_model_binding",
+    "MODEL_READINESS_VERSION",
+    "MODEL_PROBE_EVIDENCE_VERSION",
+    "ReadinessThresholds",
+    "TRUSTED_EXACT_PROBE_ED25519_PUBLIC_KEYS",
+    "assess_model_readiness",
+    "build_model_readiness_catalog",
+    "exact_binding_readiness_from_environment",
+    "model_attestation_trust_root_status",
+    "MODEL_EVALUATION_ARTIFACT_VERSION",
+    "TRUSTED_EVALUATION_ED25519_PUBLIC_KEYS",
+    "build_model_evaluation_artifact",
+    "verify_model_evaluation_artifact",
     "RouteRequest",
     "RouteDecision",
     "route",

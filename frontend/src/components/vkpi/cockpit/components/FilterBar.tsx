@@ -2,13 +2,12 @@
 
 
 import React, { useState } from "react";
-import { AlertTriangle, Check, ChevronRight, Globe2, Loader2, MapPin, Search, Star, Target, Upload } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Globe2, MapPin, Search, Star, Target, X } from "lucide-react";
 import { COUNTRY_INFO } from "../data/countryInfo";
 
 const e = React.createElement;
 
 export function FilterBar({ search, setSearch, country, setCountry, audienceType, setAudienceType, trendLevel, setTrendLevel, sortBy, setSortBy, hasViltrox, setHasViltrox, hasCompetitor, setHasCompetitor, searchMode, setSearchMode, kindFilter, setKindFilter, kindCounts, myListFilter, setMyListFilter, myListCount }: any) {
-  const [localApplying, setLocalApplying] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const advancedActive = Boolean(country || audienceType || trendLevel || hasViltrox || hasCompetitor || sortBy !== "v6_fit");
@@ -18,12 +17,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
     "Real ER ≥ 5% · 升级窗口 high",
     "命中本周 #side-by-side 的全域 KOL",
   ];
-  const applyLocalSearch = (q?: any) => {
-    if (q !== undefined) setSearch(q);
-    setLocalApplying(true);
-    setTimeout(() => setLocalApplying(false), 300);
-  };
-  
+
   // 【K1 接真 2026-07-02】三档不再是展示占位:切换会真实改变「找达人」smart 搜索请求参数
   // (SmartKolInputPanel.queueTextAdvance 的映射表,数字与此处 hint/title 一致):
   //   balanced  平衡: 库内召回 创作者8+测评7 / 全网发现 30(每平台 12)
@@ -50,31 +44,27 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
       // flex-wrap + min-w-0:窄屏时模式档位换行而非被挤出视口右侧(UI 红圈:箭头+平衡档溢出屏幕)。
       e("div", { className: "flex items-center gap-2 flex-wrap" },
         e("div", {
-          className: "relative min-w-0 flex-1 basis-64 transition-all duration-200",
-          style: localApplying 
-            ? { boxShadow: "0 0 0 1px rgba(168,85,247,0.5), 0 0 16px rgba(168,85,247,0.25)" }
-            : {}
+          className: "relative min-w-0 flex-1 basis-64"
         },
           e(Search, { 
             size: 13, 
-            className: "absolute left-3 top-1/2 -translate-y-1/2 transition-colors", 
-            style: { color: localApplying ? "#c4b5fd" : "rgba(168,85,247,0.7)" } 
+            className: "absolute left-3 top-1/2 -translate-y-1/2",
+            style: { color: "rgba(168,85,247,0.7)" }
           }),
           e("input", {
             type: "text", value: search, onChange: (ev: any) => setSearch(ev.target.value),
-            onKeyDown: (ev: any) => { if (ev.key === "Enter") applyLocalSearch(); },
-            placeholder: "输入关键词、@handle 或 URL,在本地 KOL Pool 内筛选...",
-            className: "w-full rounded-md border border-white/[0.075] bg-white/[0.018] py-1.5 pl-9 pr-11 text-[12px] text-white outline-none placeholder-slate-500 focus:border-purple-500/40"
+            onKeyDown: (ev: any) => { if (ev.key === "Enter") ev.preventDefault(); },
+            placeholder: "输入即筛选关键词、@handle 或 URL...",
+            title: "输入内容会立即筛选当前 KOL Pool；回车不会发起新的搜索任务",
+            className: "w-full rounded-md border border-white/[0.075] bg-white/[0.018] py-1.5 pl-9 pr-9 text-[12px] text-white outline-none placeholder-slate-500 focus:border-purple-500/40"
           }),
-          e("button", {
-            onClick: () => applyLocalSearch(),
-            disabled: localApplying,
-            className: "absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center h-6 w-6 rounded-md bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-60",
-            title: "本地筛选(Enter)"
-          }, localApplying 
-            ? e(Loader2, { size: 12, className: "animate-spin" })
-            : e(ChevronRight, { size: 13 })
-          )
+          search && e("button", {
+            type: "button",
+            onClick: () => setSearch(""),
+            className: "absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-white/[0.05] hover:text-white",
+            title: "清除本地筛选",
+            "aria-label": "清除本地筛选"
+          }, e(X, { size: 12 }))
         ),
         // ── 搜索模式(K1 已接真:切换真实改变 smart 搜索的召回/发现配额,按钮恢复可点)──
           e("div", {
@@ -94,12 +84,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
             e("span", { className: "font-medium" }, m.label),
             searchMode === m.key && e("span", { className: "ml-1 text-[8.5px] opacity-80" }, m.hint)
           ))
-        ),
-        e("button", {
-          disabled: true,
-          title: "待接入: 需要导入预览 API，不执行批量导入",
-          className: "hidden cursor-not-allowed items-center gap-1.5 rounded-md border border-white/[0.075] px-2.5 py-1.5 text-[10.5px] text-slate-500 opacity-70 shrink-0 xl:flex"
-        }, e(Upload, { size: 11 }), "一键导入 · 待接入")
+        )
       ),
       e("div", { className: "flex items-center gap-1.5 flex-wrap pl-1" },
         e("button", {
@@ -112,7 +97,7 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
         ),
         examplesOpen && exampleChips.map((c, i) => e("button", {
           key: i,
-          onClick: () => applyLocalSearch(c),
+          onClick: () => setSearch(c),
           className: "px-2 py-0.5 rounded text-[10px] border border-white/[0.06] bg-white/[0.015] text-slate-400 hover:bg-purple-500/[0.08] hover:border-purple-500/30 hover:text-purple-200 transition-colors"
         }, c))
       )

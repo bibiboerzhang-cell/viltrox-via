@@ -9,8 +9,8 @@ vkpi_sentiment_results 并回填 vkpi_comments.sentiment_id。
 安全护栏(全部默认最保守):
 - annotate_batch(dry_run=True) 是默认:只统计待处理量 + 预估 token/成本,零 LLM、零落库。
 - 每次运行硬上限条数:env VKPI_SENTIMENT_ANNOTATE_MAX_PER_RUN(默认 200)。
-- 走 llm_gateway.invoke(预算闸/HTTPS_PROXY 代理/台账全沿用,绝不绕过);
-  gateway 返回 fallback_to_rule(预算闸拦/无 key)→ 立即停跑,绝不写「假中性」占坑
+- 走 llm_production.generate_json(精确模型/运行就绪/原子预留/台账全沿用,绝不绕过);
+  严格边界返回降级(预算闸拦/无 key/运行证据不足)→ 立即停跑,绝不写「假中性」占坑
   (占坑会把 sentiment_id 填上,永远挡住真批注)。
 - 结果缓存:选中评论若已有 vkpi_sentiment_results 行(任意 prompt_version,如单发路径写过),
   直接回链 sentiment_id,不再烧 LLM;写入侧 ON CONFLICT (comment_id, prompt_version) 幂等。
@@ -36,9 +36,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.config import CLAUDE_MODEL, GEMINI_MODEL, OPENAI_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.platform import llm_gateway
+from app.platform import llm_gateway, llm_production
 
 logger = get_logger("viltrox.domains.market.sentiment_annotate")
 
@@ -53,6 +54,7 @@ DEFAULT_PACK_SIZE = 40               # 一次调用打包条数(25-50 区间取�
 COMMENT_CHAR_CAP = 400               # 单条评论截断,控 input token
 OUTPUT_TOKENS_PER_COMMENT = 60       # 预算 max_output_tokens 用(实付按真用量,上限放宽零成本)
 OUTPUT_TOKENS_SLACK = 60
+MODEL_ENV = "VKPI_SENTIMENT_ANNOTATE_MODEL"
 
 LABEL_MAP = {
     "pos": "positive", "positive": "positive",
@@ -96,6 +98,22 @@ def _estimate_cost_usd(input_tokens: int, output_tokens: int, provider: str = DE
     return (int(input_tokens or 0) * in_rate + int(output_tokens or 0) * out_rate) / 100.0 / 1_000_000
 
 
+def _sentiment_binding() -> tuple[str, str]:
+    """Resolve one explicit provider/model pair; never return a fallback chain."""
+
+    provider = str(os.environ.get("VKPI_SENTIMENT_ANNOTATE_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+    provider = {"gemini": "google", "claude": "anthropic"}.get(provider, provider)
+    defaults = {
+        "google": GEMINI_MODEL,
+        "openai": OPENAI_MODEL,
+        "anthropic": CLAUDE_MODEL,
+    }
+    model = str(os.environ.get(MODEL_ENV) or defaults.get(provider) or "").strip()
+    if not provider or not model:
+        raise ValueError("unsupported_sentiment_model_binding")
+    return provider, model
+
+
 def _count_pending(conn: Any) -> int:
     row = conn.execute(f"SELECT COUNT(*) AS n FROM vkpi_comments WHERE {_PENDING_WHERE}").fetchone()
     return int(dict(row).get("n") or 0) if row else 0
@@ -132,7 +150,7 @@ def _existing_result_ids(conn: Any, comment_ids: list[int]) -> dict[int, int]:
 
 
 def build_packed_prompt(items: list[dict[str, Any]]) -> str:
-    """打包 prompt:头部指令一次,评论逐行 [id] text。返回严格 JSON 数组。"""
+    """打包 prompt:头部指令一次,评论逐行 [id] text。返回带 items 的严格 JSON 对象。"""
     lines = []
     for it in items:
         text = " ".join(str(it.get("comment_text") or "").split())[:COMMENT_CHAR_CAP]
@@ -141,18 +159,71 @@ def build_packed_prompt(items: list[dict[str, Any]]) -> str:
     return (
         "You are a sentiment annotator for Viltrox, a camera lens brand, analyzing social media comments.\n"
         f"Below are {len(items)} comments, one per line, formatted as: [id] text\n\n"
-        "For EACH comment return exactly one JSON object:\n"
+        "For EACH comment return exactly one JSON object inside the top-level items array:\n"
         '  {"id": <id>, "score": <float from -1 (very negative) to 1 (very positive)>, '
         '"label": "pos"|"neg"|"neu", "aspects": [<0-3 short lowercase english aspect keywords, '
         'e.g. "autofocus", "price", "build quality">]}\n\n'
         "Rules:\n"
-        "- Respond with ONE valid JSON array only. No markdown, no preamble, no trailing text.\n"
+        '- Respond with ONE valid JSON object shaped as {"items": [/* entries */]}. '
+        "No markdown, no preamble, no trailing text.\n"
         f"- Exactly {len(items)} objects; ids must match the input ids.\n"
         "- label must agree with score sign (score>0.15 pos, score<-0.15 neg, else neu).\n"
         "- Comments may be in any language; annotate meaning, not language.\n\n"
         "Comments:\n"
         f"{body}"
     )
+
+
+def _valid_batch_payload(value: Any, expected_ids: set[int]) -> bool:
+    """Strict provider contract: complete, unique, typed rows for this exact pack."""
+
+    if not isinstance(value, dict) or set(value) != {"items"}:
+        return False
+    entries = value.get("items")
+    if not isinstance(entries, list) or len(entries) != len(expected_ids):
+        return False
+    seen: set[int] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or not {"id", "score", "label", "aspects"}.issubset(entry):
+            return False
+        try:
+            comment_id = int(entry.get("id"))
+        except (TypeError, ValueError):
+            return False
+        if comment_id not in expected_ids or comment_id in seen:
+            return False
+        seen.add(comment_id)
+        score = entry.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not -1 <= float(score) <= 1:
+            return False
+        label = str(entry.get("label") or "").strip().lower()
+        sentiment = LABEL_MAP.get(label)
+        expected_sentiment = "positive" if float(score) > 0.15 else "negative" if float(score) < -0.15 else "neutral"
+        if sentiment != expected_sentiment:
+            return False
+        aspects = entry.get("aspects")
+        if (
+            not isinstance(aspects, list)
+            or len(aspects) > 3
+            or any(not isinstance(item, str) or not item.strip() or len(item.strip()) > 80 for item in aspects)
+        ):
+            return False
+    return seen == expected_ids
+
+
+def _failure_code(value: Any) -> str:
+    result = value if isinstance(value, dict) else {}
+    failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    return str(
+        failure.get("code")
+        or result.get("failure_code")
+        or result.get("reason")
+        or latest.get("status")
+        or result.get("status")
+        or "llm_unavailable"
+    )[:120]
 
 
 def parse_batch_response(text: str, expected_ids: set[int]) -> dict[int, dict[str, Any]]:
@@ -294,10 +365,19 @@ def annotate_batch(
 
     est_in = sum(_est_tokens(p) for p in prompts)
     est_out = len(llm_items) * OUTPUT_TOKENS_PER_COMMENT + len(chunks) * OUTPUT_TOKENS_SLACK
+    try:
+        provider_pref, model_pref = _sentiment_binding()
+        binding_error = ""
+    except ValueError as exc:
+        provider_pref = str(os.environ.get("VKPI_SENTIMENT_ANNOTATE_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+        model_pref = str(os.environ.get(MODEL_ENV) or "").strip()
+        binding_error = str(exc)
     summary: dict[str, Any] = {
         "mode": "dry_run" if dry_run else "live",
         "prompt_version": PROMPT_VERSION,
-        "preferred_provider": os.environ.get("VKPI_SENTIMENT_ANNOTATE_PROVIDER") or DEFAULT_PROVIDER,
+        "preferred_provider": provider_pref,
+        "preferred_model": model_pref,
+        "binding_error": binding_error,
         "pending_total": pending_total,
         "selected": len(rows),
         "reusable_from_cache": len(reuse_map),
@@ -307,7 +387,7 @@ def annotate_batch(
         "estimated_input_tokens": est_in,
         "estimated_output_tokens": est_out,
         "estimated_cost_usd": round(
-            _estimate_cost_usd(est_in, est_out, os.environ.get("VKPI_SENTIMENT_ANNOTATE_PROVIDER") or DEFAULT_PROVIDER), 6
+            _estimate_cost_usd(est_in, est_out, provider_pref), 6
         ),
     }
     if dry_run:
@@ -315,7 +395,6 @@ def annotate_batch(
         return summary
 
     # ── 真跑 ────────────────────────────────────────────────────────────
-    provider_pref = summary["preferred_provider"]
     annotated = 0
     linked_from_cache = 0
     skipped_unparsed = 0
@@ -331,28 +410,57 @@ def annotate_batch(
         )
         linked_from_cache += 1
 
-    for chunk, prompt in zip(chunks, prompts):
+    for attempt_index, (chunk, prompt) in enumerate(zip(chunks, prompts), start=1):
         expected = {int(it["id"]) for it in chunk}
         max_out = min(4000, len(chunk) * OUTPUT_TOKENS_PER_COMMENT + OUTPUT_TOKENS_SLACK)
-        response = llm_gateway.invoke(
-            prompt,
-            purpose=PURPOSE,
-            max_output_tokens=max_out,
-            preferred_provider=provider_pref,
-            staff=staff,
-            metadata={"pipeline": "sentiment_annotate_v0g", "pack": len(chunk)},
-        )
+        try:
+            response = llm_production.generate_json(
+                prompt,
+                provider=provider_pref,
+                model=model_pref,
+                purpose=PURPOSE,
+                max_output_tokens=max_out,
+                triggered_by="scheduler:vkpi_sentiment_annotate",
+                staff=staff,
+                required_keys=("items",),
+                validator=lambda value, ids=expected: _valid_batch_payload(value, ids),
+                metadata={
+                    "task_binding": "vkpi_sentiment_annotate",
+                    "surface": "market_sentiment",
+                    "pipeline": "sentiment_annotate_v0g",
+                    "pack": len(chunk),
+                    "phase": "analysis",
+                    "subphase": "sentiment_annotation",
+                    "attempt_index": attempt_index,
+                    "total": len(chunks),
+                    "target_label": f"comments {min(expected)}-{max(expected)}",
+                },
+            )
+        except Exception as exc:  # strict AI-off/readiness failure; base pipeline remains usable
+            response = {
+                "status": "failed",
+                "reason": str(exc)[:120] or type(exc).__name__,
+                "provider": "rule_v0",
+                "model": "rule_v0",
+                "json": None,
+            }
         status = str(response.get("status") or "")
-        if status != "success":
+        if (
+            status != "success"
+            or str(response.get("provider") or "").strip().lower() != provider_pref
+            or str(response.get("model") or "").strip() != model_pref
+            or not _valid_batch_payload(response.get("json"), expected)
+        ):
             # fallback_to_rule = 预算闸/无 key/全 provider 失败 → 停跑。绝不写假中性占坑
             # (占坑会填掉 sentiment_id,永久挡住真批注)。
-            halted_reason = str(response.get("reason") or response.get("error") or status or "llm_unavailable")
+            halted_reason = _failure_code(response)
             logger.warning(
                 "sentiment_annotate.halted",
                 extra={"reason": halted_reason, "annotated_so_far": annotated},
             )
             break
-        parsed = parse_batch_response(response.get("text") or "", expected)
+        payload = response.get("json") or {}
+        parsed = parse_batch_response(json.dumps(payload.get("items") or [], ensure_ascii=False), expected)
         providers_used.add(str(response.get("provider") or "unknown"))
         n = max(1, len(parsed))
         in_share = int(response.get("input_tokens") or 0) // n

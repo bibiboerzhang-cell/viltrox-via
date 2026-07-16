@@ -13,10 +13,16 @@ DB 走 get_conn(? 占位)应用路径,镜像 events/inventory service。
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains import business_truth
+
+
+PROVIDER_FINANCIAL_STATUSES = frozenset({"paid", "partially_paid", "partially_refunded"})
+MANUAL_PENDING_STATUS = "manual_pending_verification"
 
 
 def _now() -> datetime:
@@ -124,7 +130,13 @@ def _primary_currency(by_currency: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def ingest_order(payload: dict[str, Any]) -> dict[str, Any]:
+def ingest_order(
+    payload: dict[str, Any],
+    *,
+    ingest_class: str = "manual_unverified",
+    authorization_evidence: dict[str, Any] | None = None,
+    provider_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Idempotent upsert of one Shopify order, keyed on (shop_domain, order_id).
 
     Accepts either a normalized payload (total_price_cents, ordered_at, ...) or a
@@ -152,10 +164,36 @@ def ingest_order(payload: dict[str, Any]) -> dict[str, Any]:
 
     total_price_cents = _price_cents(payload)
     currency = _str_or_none(payload.get("currency") or payload.get("currency_code"))
-    financial_status = _str_or_none(payload.get("financial_status"))
+    provider_requested = str(ingest_class or "").strip().lower() == "provider_verified"
+    provider_evidence = provider_evidence if isinstance(provider_evidence, dict) else {}
+    provider_auth_mode = str(provider_evidence.get("auth_mode") or "").strip().lower()
+    raw_payload_hash = str(provider_evidence.get("raw_payload_hash") or "").strip().lower()
+    if provider_requested and (
+        provider_auth_mode != "shopify-hmac"
+        or len(raw_payload_hash) != 64
+        or any(ch not in "0123456789abcdef" for ch in raw_payload_hash)
+    ):
+        raise ValueError("provider_verified Shopify order requires native HMAC evidence and raw payload hash")
+    cancelled_at = _str_or_none(payload.get("cancelled_at") or payload.get("canceled_at"))
+    provider_verified = bool(provider_requested and not cancelled_at)
+    financial_status = (
+        _str_or_none(payload.get("financial_status"))
+        if provider_verified
+        else MANUAL_PENDING_STATUS
+    )
     discount_code = _discount_code(payload)
     customer_email = _str_or_none(payload.get("customer_email") or payload.get("email"))
-    line_items_json = _dumps(payload.get("line_items_json") or payload.get("line_items"))
+    line_items = payload.get("line_items_json") or payload.get("line_items")
+    if not provider_verified:
+        # Reuse the existing JSON evidence column without changing the line-item
+        # shape for provider rows.  This audit marker is never used to promote
+        # the order into GMV; only a signed provider adapter may do that.
+        line_items = {
+            "items": line_items if isinstance(line_items, list) else [],
+            "ingest_class": "manual_unverified",
+            "authorization_evidence": authorization_evidence or {},
+        }
+    line_items_json = _dumps(line_items)
     attributed_kol_pool_id = payload.get("attributed_kol_pool_id")
     attributed_kol_pool_id = (
         _as_int(attributed_kol_pool_id) if attributed_kol_pool_id not in (None, "") else None
@@ -168,8 +206,9 @@ def ingest_order(payload: dict[str, Any]) -> dict[str, Any]:
         INSERT INTO vkpi_shopify_orders
           (shop_domain, order_id, total_price_cents, currency, financial_status,
            discount_code, customer_email, line_items_json, attributed_kol_pool_id,
-           ordered_at, ingested_at)
-        VALUES (?,?,?,?,?,?,?,?::jsonb,?,?, NOW())
+           ordered_at, provider_auth_mode, provider_verified_at, raw_payload_hash,
+           cancelled_at, ingested_at)
+        VALUES (?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?, NOW())
         ON CONFLICT (shop_domain, order_id) DO UPDATE SET
             total_price_cents = excluded.total_price_cents,
             currency = excluded.currency,
@@ -181,6 +220,10 @@ def ingest_order(payload: dict[str, Any]) -> dict[str, Any]:
                 excluded.attributed_kol_pool_id, vkpi_shopify_orders.attributed_kol_pool_id
             ),
             ordered_at = excluded.ordered_at,
+            provider_auth_mode = excluded.provider_auth_mode,
+            provider_verified_at = excluded.provider_verified_at,
+            raw_payload_hash = excluded.raw_payload_hash,
+            cancelled_at = excluded.cancelled_at,
             ingested_at = NOW()
         """,
         (
@@ -194,23 +237,50 @@ def ingest_order(payload: dict[str, Any]) -> dict[str, Any]:
             line_items_json,
             attributed_kol_pool_id,
             ordered_at,
+            provider_auth_mode if provider_verified else "manual_unverified",
+            _str_or_none(provider_evidence.get("verified_at")) or (_now().isoformat() if provider_verified else None),
+            raw_payload_hash if provider_verified else hashlib.sha256(_dumps(payload).encode("utf-8")).hexdigest(),
+            cancelled_at,
         ),
     )
     conn.commit()
-    return {"ok": True, "shop_domain": shop_domain, "order_id": order_id}
+    return {
+        "ok": True,
+        "shop_domain": shop_domain,
+        "order_id": order_id,
+        "ingest_class": "provider_verified" if provider_verified else "manual_unverified",
+        "financial_status": financial_status,
+        "counts_toward_gmv": bool(provider_verified and financial_status in PROVIDER_FINANCIAL_STATUSES),
+    }
 
 
-def ingest_orders(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+def ingest_orders(
+    payloads: list[dict[str, Any]],
+    *,
+    ingest_class: str = "manual_unverified",
+    authorization_evidence: dict[str, Any] | None = None,
+    provider_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Batch wrapper around ingest_order. Returns {ingested, errors:[...]}."""
     ingested = 0
     errors: list[dict[str, Any]] = []
     for idx, payload in enumerate(payloads or []):
         try:
-            ingest_order(payload)
+            ingest_order(
+                payload,
+                ingest_class=ingest_class,
+                authorization_evidence=authorization_evidence,
+                provider_evidence=provider_evidence,
+            )
             ingested += 1
         except ValueError as exc:
             errors.append({"index": idx, "error": str(exc)})
-    return {"ingested": ingested, "errors": errors}
+    return {
+        "ingested": ingested,
+        "errors": errors,
+        "ingest_class": "provider_verified" if ingest_class == "provider_verified" else "manual_unverified",
+        "counts_toward_gmv": ingest_class == "provider_verified",
+    }
 
 
 def _attribution_gmv_cents(
@@ -235,7 +305,7 @@ def _attribution_gmv_cents(
     Returns {gmv_cents, order_count, currency, by_currency, mixed_currency} for the dominant
     currency (no cross-currency addition). Empty ledger -> {0, 0, None, [], False}.
     """
-    where: list[str] = ["source_platform = 'shopify'", "confidence IN ('confirmed','refund')"]
+    where: list[str] = [business_truth.verified_shopify_attribution_sql()]
     params: list[Any] = []
 
     if window_days is not None:
@@ -315,7 +385,16 @@ def summarize_gmv(
     mixed_currency flags that other currencies exist. Both ledgers empty -> all 0 so the dashboard
     stays honest 待接入.
     """
-    where: list[str] = []
+    # Only provider financial states count.  Human repair rows are stamped
+    # manual_pending_verification and remain visible for audit but never become
+    # GMV merely because somebody typed a Shopify-looking source/order id.
+    where: list[str] = [
+        "lower(COALESCE(financial_status, '')) IN ('paid','partially_paid','partially_refunded')",
+        "provider_auth_mode='shopify-hmac'",
+        "provider_verified_at IS NOT NULL",
+        "NULLIF(TRIM(COALESCE(raw_payload_hash,'')),'') IS NOT NULL",
+        "cancelled_at IS NULL",
+    ]
     params: list[Any] = []
 
     if window_days is not None:

@@ -22,11 +22,12 @@ export interface XbCardProps {
   /** 来源板块名(卡头小徽文案,NAV_ITEMS label 同文;点击跳源板块) */
   boardLabel: string;
   onOpenBoard: () => void;
+  statusLabel?: string;
   children: React.ReactNode;
 }
 
 /** ModuleCard 同构卡壳 + 来源板块徽(徽在 SrcChip 左侧,点击 = 跳源板块)。 */
-export function XbCard({ title, cnt, srcLabel, srcRows, boardLabel, onOpenBoard, children }: XbCardProps) {
+export function XbCard({ title, cnt, srcLabel, srcRows, boardLabel, onOpenBoard, statusLabel = "实时", children }: XbCardProps) {
   return (
     <section className="ds-mod ds-rise flex h-full min-h-0 flex-col">
       <header className="flex flex-none items-center justify-between gap-2.5 px-4 pb-2 pt-[13px]">
@@ -49,7 +50,7 @@ export function XbCard({ title, cnt, srcLabel, srcRows, boardLabel, onOpenBoard,
           </button>
           <SrcChip label={srcLabel} rows={srcRows} />
           {/* 数据为挂载时实取 → 诚实「实时」eyebrow(ModuleCard 同款固定件) */}
-          <span className="text-[9.5px] font-semibold uppercase tracking-[0.16em] text-muted">实时</span>
+          <span className="text-[9.5px] font-semibold uppercase tracking-[0.16em] text-muted">{statusLabel}</span>
         </span>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">{children}</div>

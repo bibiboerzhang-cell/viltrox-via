@@ -6,6 +6,7 @@ raw/profile URL/display fields, writes only missing country values, and creates
 a JSON backup before --commit writes.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -223,7 +224,7 @@ def main() -> int:
         "samples": planned[:20],
         "skipped_samples": skipped[:10],
     }
-    print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
+    stdout_out(json.dumps(output, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

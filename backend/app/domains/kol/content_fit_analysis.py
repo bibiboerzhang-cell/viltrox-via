@@ -7,14 +7,14 @@
 (layer1 画面/scene_timeline 分镜/story、viltrox/competitor 识别、marketing_value)
 ② 粉丝评论情报(vkpi_comments,post_table=vkpi_kol_video_evidence)
 ③ 规则版 dimensions_11
-汇总后交给 llm_gateway.invoke(Claude/GPT 非 flash)产出结构化判断,落 cache 复用。
+汇总后交给严格的 llm_production 精确模型边界产出结构化判断,落 cache 复用。
 
 红线(逐条):
   - **绝不**读/写/并入 viltrox_fit_score、viltrox_fit_reason;本模块零触 rule_v0 打分公式。
   - 完全独立的 cache 命名空间:target_type='kol'、derive_method='content_fit_v1',
     与 outreach_draft(target_type='kol_pool')、video 分析(target_type='video')互不重叠。
   - **不**新跑 Gemini 视频分析(那是另一条重链 video_analysis_enqueue);只**读**已有 final_v1。
-  - 预算走闸:LLM 经 llm_gateway.invoke(护栏①/budget_guard 台账),不绕过。
+  - 预算走闸:LLM 经 llm_production(运行就绪+原子预留+单次模型锁定),不绕过。
   - 无视频证据 → 诚实返回 status='insufficient_evidence',**不**写 cache、**不**烧 LLM、不杜撰。
   - vkpi_analysis_cache.status CHECK 仅允许 ready/stale —— insufficient_evidence 只存在于返回
     payload,绝不写入 status 列(写库恒 status='ready',业务态在 result.verdict_status)。
@@ -27,8 +27,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.model_registry import current_task_model_binding, split_binding
 from app.db.connection import get_conn
-from app.platform import llm_gateway
+from app.platform import llm_production
 
 logger = get_logger("viltrox.domains.kol.content_fit_analysis")
 
@@ -46,8 +47,8 @@ MAX_COMMENTS = 30
 MAX_OUTPUT_TOKENS = 1400
 LLM_PURPOSE = "vkpi_kol_content_fit"
 LLM_COST_TAG = "vkpi_kol_content_fit"
-# 主依据是画面/故事 → 必须非 flash(flash 会截断长 final_v1 上下文)。openai/anthropic 皆可。
-PREFERRED_PROVIDER = "openai"  # GPT:走代理可达、长上下文稳;anthropic 本环境被墙、google=flash 会截断长 final_v1
+MODEL_TASK = "kol_content_fit_analysis"
+MAX_MODEL_ATTEMPTS = 3
 
 
 def _utcnow() -> str:
@@ -67,6 +68,195 @@ def _loads(value: Any) -> Any:
 
 def _text(value: Any, limit: int = 600) -> str:
     return str(value or "").strip()[:limit]
+
+
+def _model_binding() -> tuple[str, str]:
+    """Return the reviewed exact binding; registration is not an availability claim."""
+    return split_binding(current_task_model_binding().get(MODEL_TASK) or "")
+
+
+_NON_RETRYABLE_ERROR_MARKERS = (
+    "readiness",
+    "production_ready",
+    "budget",
+    "not_configured",
+    "model_binding",
+    "invalid_api_key",
+    "unauthorized",
+    "forbidden",
+    "permission",
+    "credential",
+    "ai_disabled",
+)
+_RETRYABLE_ERROR_MARKERS = (
+    "timeout",
+    "deadline",
+    "rate_limit",
+    "ratelimit",
+    "rate limit",
+    "too_many_requests",
+    "too many requests",
+    "429",
+    "throttl",
+    "provider_unavailable",
+    "upstream",
+    "connection",
+    "network",
+    "reset by peer",
+    "temporarily unavailable",
+)
+_REPAIRABLE_RESPONSE_MARKERS = (
+    "parse_failure",
+    "validation_failure",
+    "empty_response",
+)
+_GENERIC_REPAIRABLE_RESPONSE_MARKERS = ("schema_failure",)
+
+
+def _error_candidates(value: Any, *, depth: int = 0) -> list[str]:
+    """Extract bounded provider error codes/messages, including nested errors."""
+    if depth > 8:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text[:240]] if text else []
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [str(value)]
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in reversed(value[-5:]):
+            out.extend(_error_candidates(item, depth=depth + 1))
+        return out
+    if not isinstance(value, dict):
+        return []
+    out = []
+    priority_keys = (
+        "code",
+        "error_code",
+        "failure_code",
+        "type",
+        "status",
+        "reason",
+        "message",
+        "error",
+        "detail",
+        "cause",
+    )
+    for key in priority_keys:
+        if key in value:
+            out.extend(_error_candidates(value.get(key), depth=depth + 1))
+    for key, nested in value.items():
+        if key not in priority_keys and isinstance(nested, (dict, list)):
+            out.extend(_error_candidates(nested, depth=depth + 1))
+    return out
+
+
+def _classified_error(candidates: list[str], markers: tuple[str, ...]) -> str:
+    for candidate in candidates:
+        lowered = candidate.lower()
+        matched = next((marker for marker in markers if marker in lowered), "")
+        if not matched:
+            continue
+        compact = candidate[:120]
+        if compact and all(char.isalnum() or char in "_.:-" for char in compact):
+            return compact
+        if matched in {
+            "rate_limit",
+            "ratelimit",
+            "rate limit",
+            "too_many_requests",
+            "too many requests",
+            "429",
+            "throttl",
+        }:
+            return "rate_limit"
+        if matched in {"timeout", "deadline"}:
+            return "timeout"
+        if matched in {"connection", "network", "reset by peer"}:
+            return "connection_error"
+        if matched in {"provider_unavailable", "upstream", "temporarily unavailable"}:
+            return "provider_unavailable"
+        if matched in {"invalid_api_key", "unauthorized", "forbidden", "permission", "credential"}:
+            return "provider_auth_failed"
+        if matched == "budget":
+            return "budget_exceeded"
+        if matched in {"readiness", "production_ready", "model_binding"}:
+            return "readiness_not_production_ready"
+        if matched == "not_configured":
+            return "not_configured"
+        if matched == "ai_disabled":
+            return "ai_disabled"
+        return "llm_unavailable"
+    return ""
+
+
+def _failure_code(value: Any) -> str:
+    result = value if isinstance(value, dict) else {}
+    failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+    top_level = [
+        str(item).strip()
+        for item in (
+            failure.get("code"),
+            result.get("failure_code"),
+            result.get("reason"),
+        )
+        if str(item or "").strip()
+    ]
+    nested = _error_candidates(result.get("errors"))
+    # Readiness/budget/auth failures are terminal even if a nested transport
+    # message also exists. Otherwise surface nested transient causes so an
+    # exact-model retry is not suppressed by a generic provider_failed shell.
+    terminal = _classified_error(top_level + nested, _NON_RETRYABLE_ERROR_MARKERS)
+    if terminal:
+        return terminal
+    transient = _classified_error(nested + top_level, _RETRYABLE_ERROR_MARKERS)
+    if transient:
+        return transient
+    repairable = _classified_error(nested + top_level, _REPAIRABLE_RESPONSE_MARKERS)
+    if repairable:
+        return repairable
+    generic_repairable = _classified_error(
+        nested + top_level,
+        _GENERIC_REPAIRABLE_RESPONSE_MARKERS,
+    )
+    if generic_repairable:
+        return generic_repairable
+    return str((top_level + nested + ["llm_unavailable"])[0])[:120]
+
+
+def _retryable_failure(value: Any) -> bool:
+    code = _failure_code(value).lower()
+    if any(marker in code for marker in _NON_RETRYABLE_ERROR_MARKERS):
+        return False
+    return any(
+        marker in code
+        for marker in (
+            *_RETRYABLE_ERROR_MARKERS,
+            *_REPAIRABLE_RESPONSE_MARKERS,
+            *_GENERIC_REPAIRABLE_RESPONSE_MARKERS,
+        )
+    )
+
+
+def _valid_content_fit_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("fit_verdict") or "") not in {"fit", "partial_fit", "not_fit"}:
+        return False
+    for key in ("creator_type", "content_summary", "audience_signal"):
+        if not isinstance(value.get(key), str) or not str(value.get(key) or "").strip():
+            return False
+    reasons = value.get("fit_reasons")
+    if not isinstance(reasons, list) or not 1 <= len(reasons) <= 8:
+        return False
+    if not all(isinstance(item, str) and item.strip() for item in reasons):
+        return False
+    confidence = value.get("confidence")
+    return (
+        not isinstance(confidence, bool)
+        and isinstance(confidence, (int, float))
+        and 0.0 <= float(confidence) <= 1.0
+    )
 
 
 # ── 只读：KOL 基本信息 ──────────────────────────────────────────────
@@ -447,11 +637,11 @@ def analyze_content_fit(
     """内容契合深析主入口。
 
     读 ① 全部视频 final_v1 Gemini 分析 ② 粉丝评论 ③ dimensions_11,汇总后经
-    llm_gateway.invoke(非 flash)产结构化判断,落 cache 复用。
+    llm_production 精确绑定产出结构化判断,落 cache 复用。
 
     - force=False 且已有 ready cache → 直接返回缓存(不烧 LLM)。
     - 无视频证据 → status='insufficient_evidence',不写 cache、不烧 LLM(诚实)。
-    - 红线:零触 viltrox_fit_score;预算走 llm_gateway 闸。
+    - 红线:零触 viltrox_fit_score;预算走运行就绪+原子预留闸。
     """
     kid = int(kol_pool_id)
     conn = get_conn()
@@ -485,48 +675,71 @@ def analyze_content_fit(
 
     prompt = _build_prompt(kol, product, videos, comments, dimensions)
     triggered_by_user_id = (staff or {}).get("user_id")
-    # provider 在本环境间歇掉线(Remote end closed / 超时),单次调用 ~50% 落 rule_v0;
-    # 重试至多 3 次到拿到 success+text 为止(纯重试,不绕预算闸、不改红线)。
+    provider, model = _model_binding()
     resp: dict[str, Any] = {}
-    for _attempt in range(3):
-        resp = llm_gateway.invoke(
-            prompt,
-            purpose=LLM_PURPOSE,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            preferred_provider=PREFERRED_PROVIDER,
-            cost_tag=LLM_COST_TAG,
-            staff=staff or {},
-            metadata={
-                "kol_pool_id": kid,
-                "video_count": len(videos),
-                "comment_count": len(comments),
-                "product_mode": product.get("mode"),
-                "attempt": _attempt + 1,
-            },
+    parsed: dict[str, Any] | None = None
+    for attempt_index in range(1, MAX_MODEL_ATTEMPTS + 1):
+        try:
+            resp = llm_production.generate_json(
+                prompt,
+                provider=provider,
+                model=model,
+                purpose=LLM_PURPOSE,
+                max_output_tokens=MAX_OUTPUT_TOKENS,
+                cost_tag=LLM_COST_TAG,
+                triggered_by=triggered_by_user_id or MODEL_TASK,
+                staff=staff or {},
+                required_keys=(
+                    "creator_type",
+                    "content_summary",
+                    "audience_signal",
+                    "fit_verdict",
+                    "fit_reasons",
+                    "confidence",
+                ),
+                validator=_valid_content_fit_payload,
+                metadata={
+                    "task_binding": MODEL_TASK,
+                    "kol_pool_id": kid,
+                    "video_count": len(videos),
+                    "comment_count": len(comments),
+                    "product_mode": product.get("mode"),
+                    "phase": "kol_analysis",
+                    "subphase": "content_fit",
+                    "attempt_index": attempt_index,
+                    "total": MAX_MODEL_ATTEMPTS,
+                    "target_label": _text(kol.get("handle") or kol.get("display_name"), 120),
+                },
+            )
+        except Exception as exc:  # fail closed; the queue worker may retry later
+            logger.warning("vkpi.content_fit.strict_llm_failed", exc_info=True)
+            resp = {"status": "unavailable", "failure": {"code": type(exc).__name__}}
+        candidate = resp.get("json") if isinstance(resp, dict) else None
+        exact_response = (
+            str(resp.get("status") or "") == "success"
+            and str(resp.get("provider") or "").strip().lower() == provider
+            and str(resp.get("model") or "").strip() == model
         )
-        if str(resp.get("status") or "") == "success" and str(resp.get("text") or "").strip():
+        if exact_response and _valid_content_fit_payload(candidate):
+            parsed = candidate
+            break
+        if exact_response:
+            # A structurally invalid response may be retried, but every attempt keeps
+            # the same exact binding and gets its own atomic reservation/progress row.
+            continue
+        if not _retryable_failure(resp):
             break
 
-    text = str(resp.get("text") or "").strip()
-    if resp.get("status") != "success" or not text:
-        # LLM 没产出:诚实返回,不写 cache(不把 rule_v0 空壳冒充深析)。
+    if parsed is None:
+        # 未就绪/预算拦截/契约错误均诚实返回,不写 cache,不把 rule_v0 冒充深析。
+        reason = _failure_code(resp)
+        if str(resp.get("status") or "") == "success":
+            reason = "exact_model_or_json_contract_mismatch"
         return {
             "state": "llm_failed",
             "status": "llm_failed",
             "kol_pool_id": kid,
-            "reason": str(resp.get("status") or "llm_no_text"),
-            "video_count": len(videos),
-            "comment_count": len(comments),
-            "cached": False,
-        }
-
-    parsed = _parse_llm_json(text)
-    if not parsed:
-        return {
-            "state": "llm_failed",
-            "status": "llm_failed",
-            "kol_pool_id": kid,
-            "reason": "llm_json_malformed",
+            "reason": reason,
             "video_count": len(videos),
             "comment_count": len(comments),
             "cached": False,
@@ -549,9 +762,10 @@ def analyze_content_fit(
         },
         "product_context": product,
         "provenance": {
-            "model": resp.get("model"),
-            "provider": resp.get("provider"),
-            "fallback_used": bool(resp.get("fallback_used")),
+            "model": model,
+            "provider": provider,
+            "task_binding": MODEL_TASK,
+            "fallback_used": False,
             "generated_at": _utcnow(),
         },
     }
@@ -560,7 +774,7 @@ def analyze_content_fit(
         conn,
         kid,
         result,
-        model=str(resp.get("model") or "llm_gateway"),
+        model=model,
         cost_usd=(
             float(resp.get("cost_micro_usd")) / 1_000_000.0
             if resp.get("cost_micro_usd") is not None
@@ -573,7 +787,7 @@ def analyze_content_fit(
         "state": "ready",
         "kol_pool_id": kid,
         "result": result,
-        "model": resp.get("model"),
+        "model": model,
         "cost": float(resp.get("cost_cents") or 0) / 100.0,
         "updated_at": result["provenance"]["generated_at"],
         "cached": False,

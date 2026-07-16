@@ -351,7 +351,7 @@ export function buildTopListData({ currentMode, country, city, item, hierarchy, 
       ? Math.max(1, Object.values(hierarchy).reduce((sum: number, node) => sum + (Number(node.count) || 0), 0))
       : 100;
     return {
-      title: viewMode === "kols" ? "Top Regions by KOL Count" : "Top Regions by Revenue",
+      title: viewMode === "kols" ? "Top Profile Countries by KOL Count" : "Top Regions by Revenue",
       items: Object.entries(hierarchy)
         .slice()
         .sort(([, a], [, b]) => (b.count || parseFloat((b.revenue || "$0").replace(/[$k,M]/g, "")) || 0) - (a.count || parseFloat((a.revenue || "$0").replace(/[$k,M]/g, "")) || 0))

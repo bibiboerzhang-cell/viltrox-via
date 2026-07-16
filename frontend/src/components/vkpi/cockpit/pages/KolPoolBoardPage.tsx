@@ -2,6 +2,7 @@ import React from "react";
 import { PencilLine } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { KOLDetailDrawer } from "../components/KOLDetailDrawer";
 import { ContactModal } from "../components/modals/ContactModal";
 import { KolPoolAllModal } from "../components/modals/KolPoolAllModal";
@@ -44,7 +45,7 @@ import {
 //   + 备选卡保留);智能入口 SmartKolInputPanel(URL/建档/视频分析/语义召回 + 触达二段闸
 //   折叠计数 + 历史条 + 发现流勾选收藏/生成话术/立项草案)→ smart 模块(embeds 包装,
 //   行为一根手指未动);待分析折叠区(needs-analysis + 批量入队)→ needs 模块真身;
-//   海外市场覆盖 MarketCoverageCard(缺口「去发现」联动 country+探索模式)→ coverage 模块;
+//   估算受众覆盖 MarketCoverageCard(缺口「去发现」联动 country+探索模式)→ coverage 模块;
 //   推荐卡片流 + FilterBar 次级展开 + SearchProgressBar → recs 模块(筛选状态 page 层共享);
 //   表格视图 KOLTable → table 模块(palette 备选,旧页默认收起 → 默认布局不含);
 //   Pool 总数大窗 KolPoolAllModal / 详情抽屉 KOLDetailDrawer(收藏/联系/补全/翻译/评论/
@@ -99,12 +100,14 @@ export function KolPoolBoardPage({
   error = "",
   apiToken = "",
   staff = [],
+  embeddedModuleKey,
 }: {
   items?: Row[];
   loading?: boolean;
   error?: string;
   apiToken?: string;
   staff?: Row[];
+  embeddedModuleKey?: string;
 }) {
   const poolItems = React.useMemo(() => (Array.isArray(sourceItems) ? sourceItems : []), [sourceItems]);
   const [editing, setEditing] = React.useState(false);
@@ -317,7 +320,7 @@ export function KolPoolBoardPage({
   );
 
   const renderCoverage = () => (
-    <ModuleCard {...cardProps("coverage", "海外市场覆盖")}>
+    <ModuleCard {...cardProps("coverage", "估算受众覆盖")}>
       {poolGate() ?? (
         <CoverageEmbed
           items={poolItems}
@@ -352,11 +355,15 @@ export function KolPoolBoardPage({
     { key: "funnel", label: "发现转化 · 近30天", description: "发现 → 自动入库 → 已深析 → 已收藏 四段(同窗计数)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFunnel },
     { key: "lanes", label: "任务进度", description: "搜索/分析任务真实泳道 + 排队区 · 失败可重试(内嵌)", category: "实时模块", defaultSpan: 12, minSpan: 4, defaultHeight: 12, minHeight: 6, maxHeight: 28, render: renderLanes },
     { key: "needs", label: "待深析", description: "有视频没分析的 KOL 清单 · 一键全部分析", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 5, maxHeight: 24, render: renderNeeds },
-    { key: "coverage", label: "海外市场覆盖", description: "国家覆盖条形 + 配置缺口 · 一键去发现(内嵌)", category: "业务板块", defaultSpan: 12, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 22, render: renderCoverage },
+    { key: "coverage", label: "估算受众覆盖", description: "estimated_country_reach 代理信号 · 多国可重复计数 · 配置缺口一键去发现", category: "业务板块", defaultSpan: 12, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 22, render: renderCoverage },
     // ↓ palette 备选(不进默认布局)
     { key: "kinds", label: "经典指标条", description: "旧版五卡(总数开大窗/分类筛选/均 Fit/播放汇总)· 独有信息已由筛选条/工具行/Fit 分布接棒", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 14, render: renderKinds },
     { key: "table", label: "表格视图", description: "全列表格 · 与卡片流同一份筛选排序 · 点行开抽屉", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 14, minHeight: 6, maxHeight: 32, render: renderTable },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="KOL Pool" />;
+  }
 
   return (
     <div className="p-4 md:px-[22px] md:py-[15px]">

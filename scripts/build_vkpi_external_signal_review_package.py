@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a no-write review package from external Google/RSS smoke reports."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -29,7 +30,7 @@ def main() -> int:
 
     payload = build_external_signal_review_package_from_files(args.external_smoke_json)
     paths = write_external_signal_review_package_report(payload, out_dir=args.out_dir)
-    print(
+    stdout_out(
         json.dumps(
             {
                 **paths,

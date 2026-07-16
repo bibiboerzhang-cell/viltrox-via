@@ -4,7 +4,7 @@ generate_outreach(kol_pool_ids, brief=..., product=..., staff=...) → 给选中
 个性化合作邀约话术 + 一份 SOW(合作范围)草案,供运营人审后手动外发。
 
 红线(强约束):
-- 走 llm_gateway.invoke(内置预算闸 + 代理);预算关/被拦 → 回退 rule_v0 时 honestly 标
+- 走 llm_production.generate_json(精确模型 + 原子预算预留);预算关/被拦 → 回退 rule_v0 时 honestly 标
   llm_used=False 并给确定性模板,绝不把 planner fallback 文本当话术。
 - 只「生成草案」:不发邮件、不写业务表、不承诺价格(SOW 报酬留 placeholder)、零触 viltrox_fit_score。
 - N 封有上限(控成本),超出诚实截断并记录。
@@ -15,9 +15,11 @@ import json
 import re
 from typing import Any
 
+from app.core.config import CLAUDE_MODEL, GEMINI_MODEL, OPENAI_MODEL
 from app.core.logging import get_logger
+from app.core.model_registry import current_task_model_binding, split_binding
 from app.db.connection import get_conn
-from app.platform import llm_gateway
+from app.platform import llm_gateway, llm_production
 
 logger = get_logger(__name__)
 
@@ -32,6 +34,63 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _stable_fallback_reason(response: dict[str, Any]) -> str:
+    failure = response.get("failure") if isinstance(response.get("failure"), dict) else {}
+    errors = response.get("errors") if isinstance(response.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    reason = _text(
+        failure.get("code")
+        or response.get("failure_code")
+        or response.get("reason")
+        or latest.get("status")
+    ).lower()
+    if "timeout" in reason or "deadline" in reason:
+        return "llm_timeout_used_template"
+    if reason in {"all_providers_failed", "budget_exceeded", "not_configured", "provider_unavailable"}:
+        return reason
+    return "llm_unavailable_used_template"
+
+
+def _outreach_binding(preferred_provider: str | None) -> tuple[str, str]:
+    provider = _text(preferred_provider).lower()
+    explicit = {
+        "openai": OPENAI_MODEL,
+        "anthropic": CLAUDE_MODEL,
+        "google": GEMINI_MODEL,
+        "gemini": GEMINI_MODEL,
+    }
+    if provider in explicit:
+        return ("google" if provider == "gemini" else provider), explicit[provider]
+    return split_binding(current_task_model_binding().get("kol_outreach_pack") or "")
+
+
+def _valid_outreach_payload(value: Any, expected_ids: set[int]) -> bool:
+    if not isinstance(value, dict):
+        return False
+    messages = value.get("messages")
+    sow = value.get("sow_draft")
+    if not isinstance(messages, list) or not messages or len(messages) > len(expected_ids):
+        return False
+    seen: set[int] = set()
+    for item in messages:
+        if not isinstance(item, dict):
+            return False
+        kid = _int_or_none(item.get("kol_pool_id"))
+        if kid not in expected_ids or kid in seen:
+            return False
+        seen.add(kid)
+        if not _text(item.get("subject")) or not _text(item.get("body")):
+            return False
+    if not isinstance(sow, dict):
+        return False
+    if not all(_text(sow.get(key)) for key in ("scope", "timeline", "usage_rights", "compensation")):
+        return False
+    deliverables = sow.get("deliverables")
+    return isinstance(deliverables, list) and bool(deliverables) and all(
+        isinstance(item, str) and bool(item.strip()) for item in deliverables
+    )
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -175,26 +234,52 @@ Return JSON with keys:
 For compensation, output a neutral placeholder like "to be discussed" — never commit a number.
 """
 
-    response = llm_gateway.invoke(
-        prompt,
-        purpose="kol_outreach_draft",
-        max_output_tokens=min(4000, 600 + 240 * len(creators)),
-        preferred_provider=preferred_provider,
-        cost_tag="kol_outreach_draft",
-        metadata={
-            "creator_count": len(creators),
-            "positioning": positioning[:120],
-            "search_session_id": brief.get("search_session_id"),
-        },
-        staff=staff,
+    provider, model = _outreach_binding(preferred_provider)
+    expected_ids = {int(c["id"]) for c in creators}
+    try:
+        response = llm_production.generate_json(
+            prompt,
+            provider=provider,
+            model=model,
+            purpose="kol_outreach_draft",
+            max_output_tokens=min(4000, 600 + 240 * len(creators)),
+            cost_tag="kol_outreach_draft",
+            triggered_by=(staff or {}).get("user_id") or "projects.outreach",
+            staff=staff,
+            required_keys=("messages", "sow_draft"),
+            validator=lambda value: _valid_outreach_payload(value, expected_ids),
+            deadline_seconds=75.0,
+            metadata={
+                "task_binding": "kol_outreach_pack",
+                "creator_count": len(creators),
+                "positioning": positioning[:120],
+                "search_session_id": brief.get("search_session_id"),
+                "phase": "project_outreach",
+                "subphase": "draft_messages_and_sow",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": f"creators:{len(creators)}",
+            },
+        )
+    except Exception:  # noqa: BLE001 - deterministic templates are the fallback contract
+        logger.warning("project outreach provider failed; using templates", exc_info=True)
+        response = {"status": "unavailable", "provider": "rule_v0", "model": "", "reason": "provider_exception"}
+    if not isinstance(response, dict):
+        response = {"status": "unavailable", "provider": "rule_v0", "model": "", "reason": "invalid_gateway_response"}
+    response_provider = _text(response.get("provider")).lower()
+    response_model = _text(response.get("model"))
+    candidate = response.get("json") if isinstance(response, dict) else None
+    llm_candidate = bool(
+        response.get("status") == "success"
+        and response_provider == provider
+        and response_model == model
+        and _valid_outreach_payload(candidate, expected_ids)
     )
-    provider = _text(response.get("provider"))
-    llm_used = provider not in ("", "rule_v0")
-    parsed = _extract_json(_text(response.get("text"))) if llm_used else {}
+    parsed = candidate if llm_candidate and isinstance(candidate, dict) else {}
 
     by_id = {c["id"]: c for c in creators}
     messages: list[dict[str, Any]] = []
-    if llm_used and isinstance(parsed.get("messages"), list):
+    if llm_candidate and isinstance(parsed.get("messages"), list):
         for raw in parsed["messages"]:
             if not isinstance(raw, dict):
                 continue
@@ -220,7 +305,7 @@ For compensation, output a neutral placeholder like "to be discussed" — never 
             messages.append(_template_message(c, positioning, persona))
 
     sow_draft: dict[str, Any] = {}
-    if llm_used and isinstance(parsed.get("sow_draft"), dict):
+    if llm_candidate and isinstance(parsed.get("sow_draft"), dict):
         s = parsed["sow_draft"]
         sow_draft = {
             "scope": _text(s.get("scope")),
@@ -234,12 +319,16 @@ For compensation, output a neutral placeholder like "to be discussed" — never 
     if not sow_draft.get("scope"):
         sow_draft = _template_sow(positioning, persona, len(creators))
 
+    llm_used = any(bool(message.get("personalized")) for message in messages) or bool(
+        llm_candidate and isinstance(parsed.get("sow_draft"), dict) and _text(parsed["sow_draft"].get("scope"))
+    )
+
     return {
         "ok": True,
         "llm_used": llm_used,
-        "provider": provider,
-        "model": _text(response.get("model")),
-        "reason": "" if llm_used else _text(response.get("reason")) or "llm_unavailable_used_template",
+        "provider": response_provider,
+        "model": response_model,
+        "reason": "" if llm_used else _stable_fallback_reason(response),
         "messages": messages,
         "sow_draft": sow_draft,
         "creator_count": len(creators),

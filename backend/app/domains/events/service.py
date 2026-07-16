@@ -2,7 +2,7 @@
 
 迁移 122 的 4 表(vkpi_events / vkpi_event_tasks / vkpi_event_expenses / vkpi_event_kol_invites)。
 id 用 VARCHAR(前端 evt_/tsk_ 串生成)。DB 走 get_conn(? 占位)应用路径。
-员工 scope:非管理层只看自己 owner/team_ids 的活动;管理层看全部(复用 access/scope.py)。
+员工 scope:非管理层只看当前组织内自己 owner/team_ids 的活动;管理层看当前组织全部。
 绝不碰 viltrox_fit_score / rule_v0;与 KOL Pool 物理隔离。
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.access import scope
 
 from app.core.logging import get_logger
@@ -125,6 +125,31 @@ def _can_view_all(staff: dict[str, Any] | None) -> bool:
         return False
 
 
+def _event_visibility_sql() -> str:
+    """Return the employee visibility predicate for the active DB dialect.
+
+    PostgreSQL stores ``team_ids`` as jsonb.  Hermetic/local SQLite stores the
+    same logical value as JSON text and must not receive PostgreSQL's ``@>`` or
+    ``to_jsonb`` operators.  ``json_each`` preserves exact integer membership
+    semantics; unlike ``LIKE '%1%'`` it cannot confuse staff 1 with staff 10.
+    Both variants deliberately keep the same three bind parameters:
+    owner/team/share staff id.
+    """
+    if is_postgres_runtime():
+        return (
+            "(owner_id = ? OR team_ids @> to_jsonb(?::bigint) "
+            "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
+            "OR COALESCE(is_public, FALSE) = TRUE)"
+        )
+    return (
+        "(owner_id = ? OR EXISTS ("
+        "SELECT 1 FROM json_each(CASE WHEN json_valid(team_ids) THEN team_ids ELSE '[]' END) AS event_team "
+        "WHERE CAST(event_team.value AS INTEGER) = ?"
+        ") OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
+        "OR COALESCE(is_public, 0) = 1)"
+    )
+
+
 # 数值列范围:越界会直撞 INTEGER / NUMERIC(p,s) 列上限触发 PG 原生 500(并把整行/DETAIL
 # 泄露给客户端),故写前先把越界收敛成 ValueError → 路由 _guard 映射 400。
 _INT32_MAX = 2_147_483_647
@@ -171,12 +196,29 @@ def _validate_event_numeric(payload: dict[str, Any]) -> None:
             raise ValueError(f"{key} out of range [{flo}, {fhi}]")
 
 
-def _assert_event_exists(conn: Any, event_id: str) -> None:
-    """子资源(task/expense/kol/material/product)写前校验父活动存在:不存在则 LookupError
-    (路由 _guard 映射 404),避免直撞外键违约的 500 + PG DETAIL 泄露。"""
-    row = conn.execute("SELECT id FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+def _assert_event_exists(
+    conn: Any,
+    event_id: str,
+    staff: dict[str, Any] | None,
+) -> tuple[int, bool]:
+    """Require the parent Event inside the actor's current organization.
+
+    Child tables still use the legacy globally-unique ``event_id`` key, so the
+    parent is the tenancy boundary.  On pre-244 schemas only default org 1 may
+    use the legacy lookup; non-default workspaces fail closed in
+    ``event_organization_context``.
+    """
+    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT id FROM vkpi_events WHERE id = ? AND organization_id = ?",
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT id FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
     if row is None:
         raise LookupError("event not found")
+    return organization_id, organization_scoped
 
 
 def _validate_id_len(value: str) -> str:
@@ -220,14 +262,22 @@ def _merge_invited_kols(conn: Any, event_id: Any, stored_json: Any) -> list[dict
 
 
 def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, Any]:
-    """列活动:管理层看全部;员工只看自己 owner 或在 team_ids 里的。"""
+    """列活动:管理层看当前组织全部;员工只看当前组织内 own/team/share/public。"""
     conn = get_conn()
+    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
     safe_limit = max(1, min(int(limit or 200), 500))
     if _can_view_all(staff):
-        rows = conn.execute(
-            "SELECT * FROM vkpi_events ORDER BY start_date DESC, created_at DESC LIMIT ?",
-            (safe_limit,),
-        ).fetchall()
+        if organization_scoped:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE organization_id = ? "
+                "ORDER BY start_date DESC, created_at DESC LIMIT ?",
+                (organization_id, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events ORDER BY start_date DESC, created_at DESC LIMIT ?",
+                (safe_limit,),
+            ).fetchall()
     else:
         sid = _staff_id(staff)
         # 员工:owner_id 是自己 或 team_ids(jsonb 数组)含自己。
@@ -237,14 +287,19 @@ def list_events(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
         # 公司公共活动接线(2026-06-14,ADDITIVE,迁移 133 is_public):再 OR 进
         # 「COALESCE(is_public,FALSE)=TRUE」——public 活动对所有员工可见。只「加宽」读,
         # 写仍由 assert_event_access 严格 gate(public 不放开写)。镜像 scope.project_filter。
-        rows = conn.execute(
-            "SELECT * FROM vkpi_events "
-            "WHERE owner_id = ? OR team_ids @> to_jsonb(?::bigint) "
-            "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
-            "OR COALESCE(is_public, FALSE) = TRUE "
-            "ORDER BY start_date DESC, created_at DESC LIMIT ?",
-            (sid, sid, sid, safe_limit),
-        ).fetchall()
+        visibility = _event_visibility_sql()
+        if organization_scoped:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE organization_id = ? AND " + visibility + " "
+                "ORDER BY start_date DESC, created_at DESC LIMIT ?",
+                (organization_id, sid, sid, sid, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE " + visibility + " "
+                "ORDER BY start_date DESC, created_at DESC LIMIT ?",
+                (sid, sid, sid, safe_limit),
+            ).fetchall()
     items = [_event_row(r) for r in rows]
     for it in items:
         it["invited_kols_json"] = _merge_invited_kols(conn, it.get("id"), it.get("invited_kols_json"))
@@ -255,24 +310,37 @@ def list_upcoming_events(staff: dict[str, Any] | None, *, limit: int = 50) -> di
     """upcoming/进行中活动(end_date >= 今天),给 dashboard 地图 + 报告「活动进度」用。
     员工 scope 同 list_events;返回精简形(location + budget + status,无 tasks/expenses)。"""
     conn = get_conn()
+    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
     safe_limit = max(1, min(int(limit or 50), 200))
     if _can_view_all(staff):
-        rows = conn.execute(
-            "SELECT * FROM vkpi_events WHERE end_date >= CURRENT_DATE "
-            "ORDER BY start_date ASC, created_at ASC LIMIT ?",
-            (safe_limit,),
-        ).fetchall()
+        if organization_scoped:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE organization_id = ? AND end_date >= CURRENT_DATE "
+                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
+                (organization_id, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE end_date >= CURRENT_DATE "
+                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
+                (safe_limit,),
+            ).fetchall()
     else:
         sid = _staff_id(staff)
-        rows = conn.execute(
-            "SELECT * FROM vkpi_events "
-            "WHERE end_date >= CURRENT_DATE AND ("
-            "owner_id = ? OR team_ids @> to_jsonb(?::bigint) "
-            "OR id IN (SELECT event_id FROM vkpi_event_members WHERE staff_id = ?) "
-            "OR COALESCE(is_public, FALSE) = TRUE) "
-            "ORDER BY start_date ASC, created_at ASC LIMIT ?",
-            (sid, sid, sid, safe_limit),
-        ).fetchall()
+        visibility = _event_visibility_sql()
+        if organization_scoped:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE organization_id = ? "
+                "AND end_date >= CURRENT_DATE AND " + visibility + " "
+                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
+                (organization_id, sid, sid, sid, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM vkpi_events WHERE end_date >= CURRENT_DATE AND " + visibility + " "
+                "ORDER BY start_date ASC, created_at ASC LIMIT ?",
+                (sid, sid, sid, safe_limit),
+            ).fetchall()
     items: list[dict[str, Any]] = []
     for r in rows:
         row = _event_row(r)
@@ -297,7 +365,14 @@ def list_upcoming_events(staff: dict[str, Any] | None, *, limit: int = 50) -> di
 def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     """单活动 + 内嵌 tasks/expenses/invites(供详情页一次拉取)。"""
     conn = get_conn()
-    row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?",
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
     if not row:
         return {"item": None, "tasks": [], "expenses": [], "invites": [], "materials": [], "products": []}
     tasks = conn.execute(
@@ -331,6 +406,7 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
 def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     _validate_event_numeric(payload)  # health_score/budget_total/location_lat/lng 越界 → 400,不撞列上限 500
     conn = get_conn()
+    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
     eid = _validate_id_len(str(payload.get("id") or _gen_id("evt")))  # VARCHAR(64) 超长 → 400
     owner_id = payload.get("owner_id") or _staff_id(staff)
     # owner_id → staff(id) 外键。给了却不存在会撞 FK 违约 500 + DETAIL 泄露;写前校验 → 400。
@@ -342,22 +418,23 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
             raise ValueError("owner_id must be an integer") from exc
         if conn.execute("SELECT 1 FROM staff WHERE id = ?", (owner_id_int,)).fetchone() is None:
             raise ValueError("owner_id not found")
+        if not scope.staff_belongs_to_event_organization(conn, owner_id_int, organization_id):
+            raise ValueError("owner_id organization mismatch")
         owner_id = owner_id_int
-    conn.execute(
-        """
-        INSERT INTO vkpi_events
-          (id, title, type_key, status, health_score, note, start_date, end_date,
-           location_name, location_city, location_country, location_lat, location_lng,
-           budget_total, budget_json, owner_id, team_ids, related_project_ids, invited_kols_json,
-           product_sku, product_name, retrospective, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?::jsonb,?::jsonb,?::jsonb,?,?,?, NOW(), NOW())
-        """,
-        (
+    team_ids = payload.get("team_ids") or ([owner_id] if owner_id else [])
+    if not isinstance(team_ids, list):
+        raise ValueError("team_ids must be a list")
+    for team_staff_id in team_ids:
+        if not scope.staff_belongs_to_event_organization(conn, team_staff_id, organization_id):
+            raise ValueError("team member organization mismatch")
+    values = (
             eid,
             str(payload.get("title") or "未命名活动"),
             str(payload.get("type_key") or "other"),
             str(payload.get("status") or "planning"),
-            int(payload.get("health_score") or 100),
+            # Unknown is not perfect: only persist a health score when the caller
+            # explicitly provides one. Existing rows are intentionally untouched.
+            int(payload["health_score"]) if payload.get("health_score") is not None else None,
             str(payload.get("note") or ""),
             _normalize_due_date(payload.get("start_date")) or str(_now().date()),
             _normalize_due_date(payload.get("end_date")) or str(_now().date()),
@@ -369,16 +446,44 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
             int(payload.get("budget_total") or 0),
             _dumps(payload.get("budget_json") or {}),
             owner_id,
-            _dumps(payload.get("team_ids") or ([owner_id] if owner_id else [])),
+            _dumps(team_ids),
             _dumps(payload.get("related_project_ids") or []),
             _dumps(payload.get("invited_kols_json") or []),
             str(payload.get("product_sku") or ""),
             str(payload.get("product_name") or ""),
             str(payload.get("retrospective") or ""),
-        ),
-    )
+        )
+    if organization_scoped:
+        conn.execute(
+            """
+            INSERT INTO vkpi_events
+              (organization_id, id, title, type_key, status, health_score, note, start_date, end_date,
+               location_name, location_city, location_country, location_lat, location_lng,
+               budget_total, budget_json, owner_id, team_ids, related_project_ids, invited_kols_json,
+               product_sku, product_name, retrospective, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?::jsonb,?::jsonb,?::jsonb,?,?,?, NOW(), NOW())
+            """,
+            (organization_id, *values),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO vkpi_events
+              (id, title, type_key, status, health_score, note, start_date, end_date,
+               location_name, location_city, location_country, location_lat, location_lng,
+               budget_total, budget_json, owner_id, team_ids, related_project_ids, invited_kols_json,
+               product_sku, product_name, retrospective, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?::jsonb,?::jsonb,?::jsonb,?,?,?, NOW(), NOW())
+            """,
+            values,
+        )
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (eid,)).fetchone()
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?", (eid, organization_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (eid,)).fetchone()
     return {"item": _event_row(row)}
 
 
@@ -395,6 +500,7 @@ _EVENT_JSON_FIELDS = {"budget_json", "team_ids", "related_project_ids", "invited
 def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     _validate_event_numeric(payload)  # 数值越界 → 400,不撞 INTEGER/NUMERIC 列上限触发 500
     conn = get_conn()
+    organization_id, organization_scoped = _assert_event_exists(conn, event_id, staff)
     sets: list[str] = []
     vals: list[Any] = []
     for key, caster in _EVENT_UPDATABLE.items():
@@ -415,51 +521,124 @@ def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
             vals.append(caster(v) if (caster and v is not None) else v)
     for key in _EVENT_JSON_FIELDS:
         if key in payload:
+            if key == "team_ids":
+                if not isinstance(payload[key], list):
+                    raise ValueError("team_ids must be a list")
+                for team_staff_id in payload[key]:
+                    if not scope.staff_belongs_to_event_organization(conn, team_staff_id, organization_id):
+                        raise ValueError("team member organization mismatch")
             sets.append(f"{key} = ?::jsonb")
             vals.append(_dumps(payload[key]))
     if not sets:
-        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+        if organization_scoped:
+            row = conn.execute(
+                "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?",
+                (str(event_id), organization_id),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
         return {"item": _event_row(row) if row else None}
     sets.append("updated_at = NOW()")
-    vals.append(str(event_id))
-    conn.execute(f"UPDATE vkpi_events SET {', '.join(sets)} WHERE id = ?", tuple(vals))
+    if organization_scoped:
+        vals.extend([str(event_id), organization_id])
+        conn.execute(
+            f"UPDATE vkpi_events SET {', '.join(sets)} WHERE id = ? AND organization_id = ?", tuple(vals)
+        )
+    else:
+        vals.append(str(event_id))
+        conn.execute(f"UPDATE vkpi_events SET {', '.join(sets)} WHERE id = ?", tuple(vals))
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?",
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
     return {"item": _event_row(row) if row else None}
 
 
 def delete_event(event_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    conn.execute("DELETE FROM vkpi_events WHERE id = ?", (str(event_id),))
+    organization_id, organization_scoped = _assert_event_exists(conn, event_id, staff)
+    if organization_scoped:
+        conn.execute(
+            "DELETE FROM vkpi_events WHERE id = ? AND organization_id = ?", (str(event_id), organization_id)
+        )
+    else:
+        conn.execute("DELETE FROM vkpi_events WHERE id = ?", (str(event_id),))
     conn.commit()
     return {"ok": True, "id": str(event_id)}
 
 
 # ── 多人协作:team members ──────────────────────────────────────────────────
-def _set_team(conn: Any, event_id: str, team: list[Any]) -> dict[str, Any]:
-    conn.execute(
-        "UPDATE vkpi_events SET team_ids = ?::jsonb, updated_at = NOW() WHERE id = ?",
-        (_dumps(team), str(event_id)),
-    )
+def _set_team(
+    conn: Any,
+    event_id: str,
+    team: list[Any],
+    organization_id: int,
+    organization_scoped: bool,
+) -> dict[str, Any]:
+    if organization_scoped:
+        conn.execute(
+            "UPDATE vkpi_events SET team_ids = ?::jsonb, updated_at = NOW() "
+            "WHERE id = ? AND organization_id = ?",
+            (_dumps(team), str(event_id), organization_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE vkpi_events SET team_ids = ?::jsonb, updated_at = NOW() WHERE id = ?",
+            (_dumps(team), str(event_id)),
+        )
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?",
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
     return {"item": _event_row(row) if row else None}
 
 
 def add_member(event_id: str, user_id: Any, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    row = conn.execute("SELECT team_ids FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+    organization_id, organization_scoped = _assert_event_exists(conn, event_id, staff)
+    if not scope.staff_belongs_to_event_organization(conn, user_id, organization_id):
+        raise ValueError("team member organization mismatch")
+    lock = " FOR UPDATE" if is_postgres_runtime() else ""
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT team_ids FROM vkpi_events WHERE id = ? AND organization_id = ?" + lock,
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT team_ids FROM vkpi_events WHERE id = ?" + lock,
+            (str(event_id),),
+        ).fetchone()
     team = _loads(dict(row).get("team_ids"), []) if row else []
     if user_id not in team:
         team.append(user_id)
-    return _set_team(conn, event_id, team)
+    return _set_team(conn, event_id, team, organization_id, organization_scoped)
 
 
 def remove_member(event_id: str, user_id: Any, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    row = conn.execute("SELECT team_ids FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
+    organization_id, organization_scoped = _assert_event_exists(conn, event_id, staff)
+    lock = " FOR UPDATE" if is_postgres_runtime() else ""
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT team_ids FROM vkpi_events WHERE id = ? AND organization_id = ?" + lock,
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT team_ids FROM vkpi_events WHERE id = ?" + lock,
+            (str(event_id),),
+        ).fetchone()
     team = [u for u in (_loads(dict(row).get("team_ids"), []) if row else []) if str(u) != str(user_id)]
-    return _set_team(conn, event_id, team)
+    return _set_team(conn, event_id, team, organization_id, organization_scoped)
 
 
 # ── Tasks(含 collaborators / done_by 多人协作)──────────────────────────────
@@ -490,7 +669,7 @@ def _normalize_due_date(raw: Any) -> str | None:
 
 def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
+    _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
     tid = _validate_id_len(str(payload.get("id") or _gen_id("tsk")))  # VARCHAR(64) 超长 → 400
     conn.execute(
         """
@@ -512,6 +691,7 @@ def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | Non
 
 def update_task(event_id: str, task_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     sets: list[str] = []
     vals: list[Any] = []
     for key in ("title", "phase", "owner", "due_date", "kind"):
@@ -536,12 +716,15 @@ def update_task(event_id: str, task_id: str, payload: dict[str, Any], staff: dic
     vals.extend([str(task_id), str(event_id)])
     conn.execute(f"UPDATE vkpi_event_tasks SET {', '.join(sets)} WHERE id = ? AND event_id = ?", tuple(vals))
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_event_tasks WHERE id = ?", (str(task_id),)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM vkpi_event_tasks WHERE id = ? AND event_id = ?", (str(task_id), str(event_id))
+    ).fetchone()
     return {"item": _task_row(row) if row else None}
 
 
 def delete_task(event_id: str, task_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     conn.execute("DELETE FROM vkpi_event_tasks WHERE id = ? AND event_id = ?", (str(task_id), str(event_id)))
     conn.commit()
     return {"ok": True, "id": str(task_id)}
@@ -550,7 +733,7 @@ def delete_task(event_id: str, task_id: str, staff: dict[str, Any] | None) -> di
 # ── Expenses ────────────────────────────────────────────────────────────────
 def add_expense(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
+    _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
     _validate_event_numeric(payload)  # amount 越界 → 400,不撞 int32 列上限 500
     xid = _validate_id_len(str(payload.get("id") or _gen_id("exp")))  # VARCHAR(64) 超长 → 400
     conn.execute(
@@ -572,6 +755,7 @@ def add_expense(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | 
 
 def delete_expense(event_id: str, expense_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     conn.execute("DELETE FROM vkpi_event_expenses WHERE id = ? AND event_id = ?", (str(expense_id), str(event_id)))
     conn.commit()
     return {"ok": True, "id": str(expense_id)}
@@ -580,7 +764,7 @@ def delete_expense(event_id: str, expense_id: str, staff: dict[str, Any] | None)
 # ── KOL invites ─────────────────────────────────────────────────────────────
 def invite_kol(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
+    _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
     iid = _validate_id_len(str(payload.get("id") or _gen_id("inv")))  # VARCHAR(64) 超长 → 400
     conn.execute(
         """
@@ -600,6 +784,7 @@ def invite_kol(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | N
 
 def remove_kol(event_id: str, invite_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     conn.execute("DELETE FROM vkpi_event_kol_invites WHERE id = ? AND event_id = ?", (str(invite_id), str(event_id)))
     conn.commit()
     return {"ok": True, "id": str(invite_id)}
@@ -608,7 +793,7 @@ def remove_kol(event_id: str, invite_id: str, staff: dict[str, Any] | None) -> d
 # ── Materials(活动营销物料,逐项落库)──────────────────────────────────────────
 def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
+    _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     mid = _validate_id_len(str(payload.get("id") or _gen_id("mat")))  # VARCHAR(64) 超长 → 400
     conn.execute(
@@ -633,6 +818,7 @@ def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
 def update_material(event_id: str, material_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     sets: list[str] = []
     vals: list[Any] = []
     for key in ("name", "category", "source", "status", "owner", "note", "alert"):
@@ -657,12 +843,16 @@ def update_material(event_id: str, material_id: str, payload: dict[str, Any], st
     vals.extend([str(material_id), str(event_id)])
     conn.execute(f"UPDATE vkpi_event_materials SET {', '.join(sets)} WHERE id = ? AND event_id = ?", tuple(vals))
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_event_materials WHERE id = ?", (str(material_id),)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM vkpi_event_materials WHERE id = ? AND event_id = ?",
+        (str(material_id), str(event_id)),
+    ).fetchone()
     return {"item": _material_row(row) if row else None}
 
 
 def delete_material(event_id: str, material_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     conn.execute("DELETE FROM vkpi_event_materials WHERE id = ? AND event_id = ?", (str(material_id), str(event_id)))
     conn.commit()
     return {"ok": True, "id": str(material_id)}
@@ -671,7 +861,7 @@ def delete_material(event_id: str, material_id: str, staff: dict[str, Any] | Non
 # ── Products(活动产品准备,逐项落库)──────────────────────────────────────────
 def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
-    _assert_event_exists(conn, event_id)  # 父活动不存在 → 404,不撞 FK 违约 500
+    _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     pid = _validate_id_len(str(payload.get("id") or _gen_id("pp")))  # VARCHAR(64) 超长 → 400
     ra = payload.get("returnAfter")
@@ -699,6 +889,7 @@ def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | 
 def update_product(event_id: str, product_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     sets: list[str] = []
     vals: list[Any] = []
     for key in ("name", "category", "source", "status", "owner", "note"):
@@ -729,12 +920,16 @@ def update_product(event_id: str, product_id: str, payload: dict[str, Any], staf
     vals.extend([str(product_id), str(event_id)])
     conn.execute(f"UPDATE vkpi_event_products SET {', '.join(sets)} WHERE id = ? AND event_id = ?", tuple(vals))
     conn.commit()
-    row = conn.execute("SELECT * FROM vkpi_event_products WHERE id = ?", (str(product_id),)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM vkpi_event_products WHERE id = ? AND event_id = ?",
+        (str(product_id), str(event_id)),
+    ).fetchone()
     return {"item": _product_row(row) if row else None}
 
 
 def delete_product(event_id: str, product_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
+    _assert_event_exists(conn, event_id, staff)
     conn.execute("DELETE FROM vkpi_event_products WHERE id = ? AND event_id = ?", (str(product_id), str(event_id)))
     conn.commit()
     return {"ok": True, "id": str(product_id)}

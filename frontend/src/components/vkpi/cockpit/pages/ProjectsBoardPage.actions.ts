@@ -33,26 +33,88 @@ import type { ProjectsPageProps } from "../../pages/ProjectsPage.types";
 
 export type Row = Record<string, any>;
 
+// React 18 development StrictMode replays effects.  The read-only endpoint hook used to
+// start a second request during that replay while merely marking the first callback dead.
+// Reuse the still-running request for the same stable fetcher/token/version instead.  The
+// WeakMap keeps this scoped to each caller's useCallback identity and releases it with the
+// component; version changes (manual refresh/write-after-read) intentionally create a new
+// request.
+const endpointInflight = new WeakMap<Function, Map<string, Promise<unknown>>>();
+
+function sharedEndpointRequest<T>(
+  fetcher: (token: string) => Promise<T>,
+  apiToken: string,
+  version: number,
+): Promise<T> {
+  let requests = endpointInflight.get(fetcher);
+  if (!requests) {
+    requests = new Map<string, Promise<unknown>>();
+    endpointInflight.set(fetcher, requests);
+  }
+  const key = `${apiToken}\u0000${version}`;
+  const existing = requests.get(key);
+  if (existing) return existing as Promise<T>;
+
+  // Defer the actual call one microtask so StrictMode's setup-cleanup-setup pass can join
+  // deterministically even when a test/mock fetcher resolves synchronously.
+  let request: Promise<T>;
+  request = Promise.resolve()
+    .then(() => fetcher(apiToken))
+    .finally(() => {
+      if (requests?.get(key) === request) requests.delete(key);
+    });
+  requests.set(key, request);
+  return request;
+}
+
 /** 只读端点装载(端点失败 = error 原文;version 自增 = 重拉服务器真数)。 */
 export function useEndpoint<T>(apiToken: string, version: number, fetcher: (token: string) => Promise<T>) {
-  const [data, setData] = React.useState<T | null>(null);
-  const [error, setError] = React.useState("");
+  const [result, setResult] = React.useState<{ token: string; data: T | null; error: string }>({
+    token: apiToken,
+    data: null,
+    error: "",
+  });
+  // Never render data resolved for a previous authenticated principal.  The effect cleanup
+  // prevents late writes, while this render-time scope check also closes the frame between a
+  // token prop change and the next effect (and the indefinitely-stale case when the new read
+  // fails).
+  const scopedResult = result.token === apiToken
+    ? result
+    : { token: apiToken, data: null as T | null, error: "" };
   React.useEffect(() => {
-    if (!apiToken) return;
+    if (!apiToken) {
+      setResult((current) => (
+        current.token === "" && current.data == null && !current.error
+          ? current
+          : { token: "", data: null, error: "" }
+      ));
+      return;
+    }
     let alive = true;
-    setError("");
-    fetcher(apiToken)
+    setResult((current) => (
+      current.token === apiToken
+        ? { ...current, error: "" }
+        : { token: apiToken, data: null, error: "" }
+    ));
+    sharedEndpointRequest(fetcher, apiToken, version)
       .then((res) => {
-        if (alive) setData((res as T) ?? null);
+        if (alive) setResult({ token: apiToken, data: (res as T) ?? null, error: "" });
       })
       .catch((err: any) => {
-        if (alive) setError(String(err?.detail || err?.message || "读取失败"));
+        if (alive) {
+          const message = String(err?.detail || err?.message || "读取失败");
+          setResult((current) => (
+            current.token === apiToken
+              ? { ...current, error: message }
+              : { token: apiToken, data: null, error: message }
+          ));
+        }
       });
     return () => {
       alive = false;
     };
   }, [apiToken, version, fetcher]);
-  return { data, error };
+  return { data: scopedResult.data, error: scopedResult.error };
 }
 
 export interface RetroReceipt {

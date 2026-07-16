@@ -6,6 +6,7 @@ uses isolated marker data. It deliberately avoids running real cron jobs and
 restores global model registry state after the model activation probe.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import csv
 import json
@@ -345,7 +346,7 @@ def main() -> int:
             _restore_model_registry(model_before, model_version)
         _cleanup_marker(marker, ids)
     _write_outputs(results, marker, backup_path)
-    print(json.dumps({"marker": marker, "checks": len(results), "pass": sum(1 for r in results if r["result"] == "PASS"), "outputs": [str(OUT_MD), str(OUT_CSV)]}, ensure_ascii=False))
+    stdout_out(json.dumps({"marker": marker, "checks": len(results), "pass": sum(1 for r in results if r["result"] == "PASS"), "outputs": [str(OUT_MD), str(OUT_CSV)]}, ensure_ascii=False))
     return 0 if all(row["result"] == "PASS" for row in results) else 1
 
 

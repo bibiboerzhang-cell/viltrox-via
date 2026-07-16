@@ -19,6 +19,8 @@ import os
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 
@@ -41,7 +43,7 @@ def main():
         supported_platforms,
     )
 
-    print("[1] Crawler registration...")
+    out("[1] Crawler registration...")
     if not is_supported("facebook"):
         failures.append("facebook not in supported_platforms()")
     if "facebook" not in supported_platforms():
@@ -50,25 +52,25 @@ def main():
     crawler = get_crawler("facebook")
     if crawler is None:
         failures.append("get_crawler('facebook') returned None")
-        print("  FAIL")
+        out("  FAIL")
         for f in failures:
-            print(f"    - {f}")
+            out(f"    - {f}")
         sys.exit(1)
-    print("  ✓ facebook registered")
+    out("  ✓ facebook registered")
 
-    print("[2] configured (no env)...")
+    out("[2] configured (no env)...")
     if crawler.configured:
         failures.append("crawler.configured should be False with no env")
     else:
-        print("  ✓ False")
+        out("  ✓ False")
 
-    print("[3] primary_path with no env...")
+    out("[3] primary_path with no env...")
     if crawler.primary_path != "none":
         failures.append(f"primary_path='none' expected, got '{crawler.primary_path}'")
     else:
-        print("  ✓ 'none'")
+        out("  ✓ 'none'")
 
-    print("[4] crawl_page_profile graceful...")
+    out("[4] crawl_page_profile graceful...")
     result = crawler.crawl_page_profile(
         "https://www.facebook.com/ViltroxLens/", max_posts=5
     )
@@ -78,26 +80,26 @@ def main():
         )
     if result.get("items"):
         failures.append(f"Expected empty items, got {len(result.get('items', []))}")
-    print("  ✓ not_configured")
+    out("  ✓ not_configured")
 
-    print("[5] crawl_brand_mentions returns not_supported...")
+    out("[5] crawl_brand_mentions returns not_supported...")
     result = crawler.crawl_brand_mentions("viltrox", limit=10)
     # Either not_configured OR not_supported (in P1.2 brand search is limited)
     if result.get("provider_status") not in ("not_supported", "not_configured", "skip"):
         failures.append(
             f"Expected not_supported/not_configured, got '{result.get('provider_status')}'"
         )
-    print("  ✓ graceful")
+    out("  ✓ graceful")
 
-    print("[6] crawl_video_comments returns not_configured without token...")
+    out("[6] crawl_video_comments returns not_configured without token...")
     result = crawler.crawl_video_comments("post_id_test", max_results=10)
     if result.get("provider_status") != "not_configured":
         failures.append(
             f"Expected not_configured, got '{result.get('provider_status')}'"
         )
-    print("  ✓ not_configured")
+    out("  ✓ not_configured")
 
-    print("[7] _normalize_page_url cases...")
+    out("[7] _normalize_page_url cases...")
     cases = [
         ("https://www.facebook.com/ViltroxLens/", "https://www.facebook.com/ViltroxLens"),
         ("https://www.facebook.com/ViltroxLens", "https://www.facebook.com/ViltroxLens"),
@@ -111,9 +113,9 @@ def main():
             failures.append(
                 f"_normalize_page_url({input_val!r}) = {result!r}, expected {expected!r}"
             )
-    print(f"  ✓ {len(cases)} cases")
+    out(f"  ✓ {len(cases)} cases")
 
-    print("[8] V-KPI unified interface...")
+    out("[8] V-KPI unified interface...")
     result = crawler.crawl_channel_profile("ViltroxLens", max_posts=3)
     if result.get("provider_status") not in ("not_configured", "skip"):
         failures.append(
@@ -127,9 +129,9 @@ def main():
         failures.append(
             "crawl_channel_videos should respect not_configured"
         )
-    print("  ✓ unified interface")
+    out("  ✓ unified interface")
 
-    print("[9] Empty input handling...")
+    out("[9] Empty input handling...")
     result = crawler.crawl_page_profile("", max_posts=5)
     if result.get("provider_status") not in ("error", "not_configured"):
         failures.append("Empty page_url should error")
@@ -137,9 +139,9 @@ def main():
     result = crawler.crawl_brand_mentions("", limit=5)
     if result.get("provider_status") not in ("error", "not_configured", "not_supported"):
         failures.append("Empty query should error")
-    print("  ✓ empty inputs")
+    out("  ✓ empty inputs")
 
-    print("[10] handle_to_page_url...")
+    out("[10] handle_to_page_url...")
     result = crawler._handle_to_page_url("ViltroxLens")
     if result != "https://www.facebook.com/ViltroxLens":
         failures.append(f"handle conversion failed: {result}")
@@ -147,17 +149,17 @@ def main():
     result = crawler._handle_to_page_url("", channel_id="ViltroxLens")
     if result != "https://www.facebook.com/ViltroxLens":
         failures.append(f"channel_id fallback failed: {result}")
-    print("  ✓ handle conversion")
+    out("  ✓ handle conversion")
 
     # Final
-    print()
+    out()
     if failures:
-        print(f"FAIL: {len(failures)} issues:")
+        out(f"FAIL: {len(failures)} issues:")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("VKPI_FACEBOOK_OFFLINE_SMOKE_OK")
+        out("VKPI_FACEBOOK_OFFLINE_SMOKE_OK")
 
 
 if __name__ == "__main__":

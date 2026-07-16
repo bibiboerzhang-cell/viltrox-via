@@ -9,7 +9,6 @@ import os
 from typing import Any
 
 from app.services.system import provider_health
-from app.services.system.secrets_admin import provider_env_keys, provider_key_prefix
 
 
 PROVIDER_LABELS = {
@@ -21,20 +20,34 @@ PROVIDER_LABELS = {
     "resend": "Resend",
 }
 
+# Keep the settings surface aligned with the authoritative model-readiness
+# credential check.  Google SDK deployments commonly use any one of these
+# names; treating only GEMINI_API_KEY as configured created a contradictory UI
+# where six Google models were configured while the Gemini provider card said
+# "not configured".
+PROVIDER_CREDENTIAL_ENVS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "google": (
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+    ),
+    "openai": ("OPENAI_API_KEY",),
+    "apify": ("APIFY_TOKEN",),
+    "youtube": ("YOUTUBE_API_KEY",),
+    "resend": ("RESEND_API_KEY",),
+}
+
 
 def _configured(provider: str) -> bool:
-    try:
-        env_key, _previous = provider_env_keys(provider)
-    except ValueError:
-        return False
-    return bool(os.environ.get(env_key, "").strip())
+    names = PROVIDER_CREDENTIAL_ENVS.get(str(provider or "").strip().lower(), ())
+    return any(bool(str(os.environ.get(name) or "").strip()) for name in names)
 
 
 def _mask(provider: str) -> str:
-    try:
-        return provider_key_prefix(provider)
-    except ValueError:
-        return ""
+    # Never derive a public value from a credential.  This fixed marker also
+    # works when Google uses an accepted alias instead of GEMINI_API_KEY.
+    return "configured" if _configured(provider) else ""
 
 
 def provider_statuses() -> dict[str, Any]:

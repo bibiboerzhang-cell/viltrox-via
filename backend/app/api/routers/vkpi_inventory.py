@@ -10,6 +10,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.domains import business_truth
+from app.domains.access import scope
 from app.domains.events import inventory_service
 
 
@@ -25,6 +27,39 @@ def _guard(fn, *args, **kwargs):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — surface DB/serialize errors as 500 with msg
         raise HTTPException(status_code=500, detail=f"inventory error: {exc}") from exc
+
+
+def _bounded_body(body: dict, allowed: set[str]) -> None:
+    unknown = sorted(set(body or {}) - allowed)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail="unsupported request fields: " + ", ".join(unknown),
+        )
+
+
+def _authorization_or_http(body: dict, *, staff: dict, action: str) -> dict:
+    try:
+        return business_truth.require_authorization_evidence(body, staff=staff, action=action)
+    except business_truth.BusinessTruthWriteBlocked as exc:
+        status_code = 409 if exc.reason == "feature_disabled" else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason": exc.reason, "message": str(exc)},
+        ) from exc
+
+
+def _verification_guard(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except inventory_service.InventoryVerificationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── Inventory CRUD ──────────────────────────────────────────────────────────
@@ -88,6 +123,72 @@ def list_item_movements(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     return _guard(inventory_service.list_movements, sku, limit)
+
+
+@router.post("/{sku}/verify")
+def verify_quantity(
+    sku: str,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    """Bind an existing unchanged quantity to a source receipt; never sets qty."""
+
+    payload = body or {}
+    _bounded_body(
+        payload,
+        {
+            "source_type",
+            "source_ref",
+            "source_observed_at",
+            "evidence_sha256",
+            "expected_id",
+            "expected_qty",
+            "expected_row_version",
+            "expected_updated_at",
+            "authorization_evidence",
+        },
+    )
+    authorization = _authorization_or_http(
+        payload, staff=staff, action="inventory_quantity_verify"
+    )
+    return _verification_guard(
+        inventory_service.verify_quantity,
+        sku,
+        payload,
+        authorization_evidence=authorization,
+        staff=staff,
+    )
+
+
+@router.post("/{sku}/verification/revoke")
+def revoke_quantity_verification(
+    sku: str,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    """Invalidate a quantity receipt without changing the stored quantity."""
+
+    payload = body or {}
+    _bounded_body(
+        payload,
+        {
+            "expected_id",
+            "expected_qty",
+            "expected_row_version",
+            "expected_updated_at",
+            "authorization_evidence",
+        },
+    )
+    authorization = _authorization_or_http(
+        payload, staff=staff, action="inventory_quantity_verification_revoke"
+    )
+    return _verification_guard(
+        inventory_service.revoke_quantity_verification,
+        sku,
+        payload,
+        authorization_evidence=authorization,
+        staff=staff,
+    )
 
 
 @router.patch("/{sku}")

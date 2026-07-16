@@ -1,10 +1,16 @@
 """Tests for KOL lifecycle centralized audit parity."""
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
 
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.kol import claims as kol_claims
+from app.platform.db import schema as vkpi_schema
+from app.platform.db import schema_audit as vkpi_audit_schema
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.services.vkpi.schema_audit import ensure_vkpi_audit_schema
 
@@ -15,10 +21,97 @@ ASSIGNEE_EMAIL = "vkpi-step14-assignee@example.com"
 
 
 @pytest.fixture(autouse=True)
-def _ensure_schemas():
+def _kol_lifecycle_audit_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Exercise lifecycle SQL on a private SQLite database only.
+
+    The V-KPI guards own the ``vkpi_*`` tables, but deliberately do not own
+    the legacy users/staff/kols tables.  Define only the legacy columns used by
+    this lifecycle, then run the real V-KPI and audit guards for everything
+    domain-owned.
+    """
+    db_connection.close_db_runtime_sync()
+    db_path = (tmp_path / "vkpi-kol-lifecycle-audit.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    monkeypatch.setattr(db_connection, "DB_PATH", db_path)
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_URL", "")
+    monkeypatch.setattr(vkpi_schema, "_SCHEMA_READY", False)
+    monkeypatch.setattr(vkpi_audit_schema, "_SCHEMA_READY", False)
+
+    setup = sqlite3.connect(str(db_path))
+    try:
+        setup.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT,
+                role TEXT,
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                role TEXT,
+                permissions_json TEXT DEFAULT '{}',
+                mfa_enabled INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER DEFAULT 0,
+                email_domain_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE kols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                channel_url TEXT,
+                platform TEXT NOT NULL,
+                country TEXT,
+                niche TEXT,
+                project_name TEXT,
+                owner_name TEXT,
+                media_name TEXT,
+                duplicate_flag TEXT,
+                scale_tier TEXT,
+                content_type TEXT,
+                approval_note TEXT,
+                channel_tags TEXT,
+                affiliate_id TEXT,
+                affiliate_link TEXT,
+                discount_code TEXT,
+                amazon_link TEXT,
+                short_link TEXT,
+                primary_category TEXT,
+                promoted_product TEXT,
+                follower_count INTEGER DEFAULT 0,
+                avg_views INTEGER DEFAULT 0,
+                contact_email TEXT,
+                contact_phone TEXT,
+                contact_status TEXT DEFAULT 'cold',
+                notes TEXT,
+                assigned_staff_id INTEGER,
+                created_by_staff_id INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        setup.commit()
+    finally:
+        setup.close()
+
     ensure_vkpi_schema()
     ensure_vkpi_audit_schema()
-    yield
+    actual_path = Path(str(get_conn().execute("PRAGMA database_list").fetchone()["file"])).resolve()
+    assert actual_path == db_path
+    try:
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
 
 
 def _staff_context(staff_id: int, *, role: str = "admin", is_owner: bool = True) -> dict[str, object]:

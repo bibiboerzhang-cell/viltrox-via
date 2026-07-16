@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
@@ -17,6 +18,7 @@ from app.domains.projects.workflow import staff_id as resolve_staff_id
 ProgressCallback = Callable[[int, str], None]
 CancelCheck = Callable[[], bool]
 logger = get_logger(__name__)
+_BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 class CancelledException(Exception):
@@ -38,8 +40,13 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _today() -> str:
-    return date.today().isoformat()
+def _today(now: datetime | None = None) -> str:
+    """Return the declared V-KPI business day, independent of host timezone."""
+
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant.astimezone(_BUSINESS_TIMEZONE).date().isoformat()
 
 
 def _json(value: Any) -> str:

@@ -24,6 +24,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(1, str(ROOT / "scripts"))
+
+from stdout_utils import out  # noqa: E402
 
 
 def _load_env() -> None:
@@ -51,37 +54,37 @@ failures: list[str] = []
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     line = f"{PASS if condition else FAIL} {name}" + (f" — {detail}" if detail else "")
-    print(line)
+    out(line)
     if not condition:
         failures.append(name)
 
 
 def section(title: str) -> None:
-    print("\n" + "=" * 62)
-    print(title)
-    print("=" * 62)
+    out("\n" + "=" * 62)
+    out(title)
+    out("=" * 62)
 
 
 def print_audience_blocks(payload: dict) -> None:
-    print(f"  性别(原始) {payload.get('gender')}")
-    print(f"  性别(归一) {payload.get('gender_normalized')}")
-    print(f"  年龄 {payload.get('age_bins')}")
-    print(f"  Top countries {payload.get('top_countries')}")
-    print(f"  语言 {(payload.get('languages') or [])[:5]}")
-    print(f"  创作者浓度 {payload.get('creator_density')}")
-    print(f"  覆盖 {payload.get('coverage')} 置信 {payload.get('confidence')}")
-    print(f"  年龄路覆盖 {payload.get('age_coverage')}")
+    out(f"  性别(原始) {payload.get('gender')}")
+    out(f"  性别(归一) {payload.get('gender_normalized')}")
+    out(f"  年龄 {payload.get('age_bins')}")
+    out(f"  Top countries {payload.get('top_countries')}")
+    out(f"  语言 {(payload.get('languages') or [])[:5]}")
+    out(f"  创作者浓度 {payload.get('creator_density')}")
+    out(f"  覆盖 {payload.get('coverage')} 置信 {payload.get('confidence')}")
+    out(f"  年龄路覆盖 {payload.get('age_coverage')}")
     intel = payload.get("comment_intel") or {}
-    print(f"  comment_intel 样本 {intel.get('sample_size')} 源 {intel.get('source')}")
-    print(f"    购买意向 {(intel.get('purchase_intent') or {}).get('count')} 条 "
+    out(f"  comment_intel 样本 {intel.get('sample_size')} 源 {intel.get('source')}")
+    out(f"    购买意向 {(intel.get('purchase_intent') or {}).get('count')} 条 "
           f"{(intel.get('purchase_intent') or {}).get('pct')}% 样本 {(intel.get('purchase_intent') or {}).get('samples')}")
-    print(f"    品牌提及 {[(b.get('brand'), b.get('count')) for b in intel.get('brand_mentions') or []]}")
+    out(f"    品牌提及 {[(b.get('brand'), b.get('count')) for b in intel.get('brand_mentions') or []]}")
     ah = intel.get("active_hours") or {}
-    print(f"    活跃时段 top={ah.get('top_hours')} 峰值 {ah.get('peak_hour_comment_count')} 条 建议 {ah.get('suggestion')}")
-    print(f"    互动 {intel.get('engagement')}")
-    print(f"    铁粉 {[(f.get('handle'), f.get('count')) for f in (intel.get('superfans') or [])[:5]]}")
+    out(f"    活跃时段 top={ah.get('top_hours')} 峰值 {ah.get('peak_hour_comment_count')} 条 建议 {ah.get('suggestion')}")
+    out(f"    互动 {intel.get('engagement')}")
+    out(f"    铁粉 {[(f.get('handle'), f.get('count')) for f in (intel.get('superfans') or [])[:5]]}")
     ov = payload.get("overlap") or {}
-    print(f"  overlap 自有评论者 {ov.get('self_commenters')} 条目 {ov.get('items')}")
+    out(f"  overlap 自有评论者 {ov.get('self_commenters')} 条目 {ov.get('items')}")
 
 
 # ══ A. 单元级 mock ══
@@ -159,7 +162,7 @@ check("A5h 互动:2.5 评论/视频 · 回复率 20% · 赞中位 3", en["commen
 sf = intel["superfans"]
 check("A5i 铁粉 alice x3 带代表评论", sf and sf[0]["handle"] == "alice" and sf[0]["count"] == 3 and bool(sf[0]["sample"]), str(sf[:1]))
 check("A5j 空集诚实", ci.analyze_comments([])["sample_size"] == 0)
-print(f"  A 段耗时 {time.time() - t0:.2f}s")
+out(f"  A 段耗时 {time.time() - t0:.2f}s")
 
 # ══ B. YouTube 真数据(watchluke;Gemini 总调用 <=3)══
 # 环境变量 AUD_TEST_SKIP_B=1 可跳过本段(B 段含真 LLM 调用;重复跑闸门时省额度)。
@@ -167,10 +170,10 @@ section("B. YouTube 真数据 watchluke(A 路真调,总调用不超 3 次)")
 row = conn.execute("SELECT id, handle FROM vkpi_kol_pool WHERE platform='youtube' AND handle='watchluke' LIMIT 1").fetchone()
 yt_id = int(dict(row)["id"]) if row else 0
 if os.environ.get("AUD_TEST_SKIP_B"):
-    print("  [SKIP] AUD_TEST_SKIP_B=1(省 LLM 额度;完整跑法去掉该环境变量)")
+    out("  [SKIP] AUD_TEST_SKIP_B=1(省 LLM 额度;完整跑法去掉该环境变量)")
     yt_id = 0
 elif not yt_id:
-    print("  [SKIP] watchluke 不在库")
+    out("  [SKIP] watchluke 不在库")
 else:
     # LLM 预检(1 次小调用):direct 不通则换 YTDLP_PROXY 重试;都不通 -> 刷新时关掉 A 路。
     from app.platform import llm_gateway
@@ -185,16 +188,16 @@ else:
     if not llm_viable:
         proxy = (os.environ.get("YTDLP_PROXY") or "").strip()
         if proxy and not (os.environ.get("HTTPS_PROXY") or "").strip():
-            print(f"  LLM 直连不通,带代理重试(HTTPS_PROXY={proxy.split('@')[-1]})")
+            out(f"  LLM 直连不通,带代理重试(HTTPS_PROXY={proxy.split('@')[-1]})")
             os.environ["HTTPS_PROXY"] = proxy
             os.environ["https_proxy"] = proxy
             llm_calls_used += 1
             llm_viable = _llm_ok()
-    print(f"  LLM 预检:{'可用' if llm_viable else '不可用(A 路将跳过,不阻断)'}(已用 {llm_calls_used} 次调用)")
+    out(f"  LLM 预检:{'可用' if llm_viable else '不可用(A 路将跳过,不阻断)'}(已用 {llm_calls_used} 次调用)")
     batches = min(2, max(0, 3 - llm_calls_used)) if llm_viable else 0
     t0 = time.time()
     result = aud.refresh_audience_stats(yt_id, llm_max_batches=batches)
-    print(f"  B 段刷新耗时 {time.time() - t0:.2f}s status={result.get('status')} (A 路批次上限 {batches})")
+    out(f"  B 段刷新耗时 {time.time() - t0:.2f}s status={result.get('status')} (A 路批次上限 {batches})")
     if result.get("status") == "ok":
         payload = result["audience"]
         print_audience_blocks(payload)
@@ -207,10 +210,10 @@ else:
               int(dict(conn.execute("SELECT COUNT(*) AS n FROM vkpi_commenter_profiles WHERE platform='youtube' AND subscriber_count IS NOT NULL").fetchone())["n"]) > 0)
         check("B5 comment_intel 出块(API 评论源)", (payload.get("comment_intel") or {}).get("source") == "youtube_api_sample")
         aged = int(dict(conn.execute("SELECT COUNT(*) AS n FROM vkpi_commenter_profiles WHERE platform='youtube' AND age_bucket IS NOT NULL AND age_bucket<>''").fetchone())["n"])
-        print(f"  身份缓存中已有年龄桶的评论者:{aged}")
+        out(f"  身份缓存中已有年龄桶的评论者:{aged}")
         check("B6 年龄桶写入缓存", aged > 0 or not llm_viable, f"aged={aged}")
     else:
-        print(f"  [SKIP-honest] {result.get('status')}: {str(result.get('reason'))[:200]} —— 需在服务器跑数据测试")
+        out(f"  [SKIP-honest] {result.get('status')}: {str(result.get('reason'))[:200]} —— 需在服务器跑数据测试")
 
 # ══ C. Instagram 真数据(库存评论,零 Apify,llm_max_batches=0)══
 section("C. Instagram 真数据(库存评论;A 路关闭省额度)")
@@ -224,7 +227,7 @@ if ig_row:
     ig_id = int(dict(ig_row)["id"])
     t0 = time.time()
     result = aud.refresh_audience_stats(ig_id, enqueue_if_missing=False, llm_max_batches=0)
-    print(f"  kol_pool_id={ig_id} 耗时 {time.time() - t0:.2f}s status={result.get('status')}")
+    out(f"  kol_pool_id={ig_id} 耗时 {time.time() - t0:.2f}s status={result.get('status')}")
     if result.get("status") == "ok":
         payload = result["audience"]
         print_audience_blocks(payload)
@@ -234,13 +237,13 @@ if ig_row:
     else:
         check("C1 IG v2 刷新成功", False, str(result.get("status")))
 else:
-    print("  [SKIP] 库里没有挂到评论的 IG KOL")
+    out("  [SKIP] 库里没有挂到评论的 IG KOL")
 
 # ══ D. 共同粉丝 overlap 直接验证 ══
 section("D. 共同粉丝 overlap(库内直接验证 + 全库最强共享对复现)")
 if ig_row:
     ov = ci.compute_audience_overlap(int(dict(ig_row)["id"]), conn=conn)
-    print(f"  KOL #{dict(ig_row)['id']}: self={ov.get('self_commenters')} peers_checked={ov.get('peers_checked')} items={ov.get('items')}")
+    out(f"  KOL #{dict(ig_row)['id']}: self={ov.get('self_commenters')} peers_checked={ov.get('peers_checked')} items={ov.get('items')}")
     check("D1 overlap 结构完整", isinstance(ov.get("items"), list) and int(ov.get("self_commenters") or 0) > 0)
 # 全库扫描:官号 + evidence 桥 + kol_comments(dossier 仓)全集合的最强共享对
 # (复现「跨账号存在共享评论者/最强一对共享 N 人」量级)
@@ -274,14 +277,14 @@ for i in range(len(keys)):
         if shared >= 2:
             pairs.append((shared, keys[i], keys[j]))
 pairs.sort(reverse=True)
-print(f"  全库评论者集合 {len(keys)} 个;共享>=2 的账号对 {len(pairs)} 对")
+out(f"  全库评论者集合 {len(keys)} 个;共享>=2 的账号对 {len(pairs)} 对")
 for shared, a, b in pairs[:3]:
-    print(f"    最强共享对:{a} <-> {b} 共享 {shared} 位评论者")
+    out(f"    最强共享对:{a} <-> {b} 共享 {shared} 位评论者")
 check("D2 全库存在共享评论者对(机制可复现)", len(pairs) >= 1, f"pairs={len(pairs)} 最强共享 {pairs[0][0] if pairs else 0} 人")
 
 # ══ 汇总 ══
 section("汇总")
 if failures:
-    print(f"FAILED {len(failures)}: {failures}")
+    out(f"FAILED {len(failures)}: {failures}")
     sys.exit(1)
-print("单元级 mock 全绿;真数据段结果见上(网络/额度不可达处已诚实标注)。")
+out("单元级 mock 全绿;真数据段结果见上(网络/额度不可达处已诚实标注)。")

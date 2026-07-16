@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -51,30 +53,30 @@ def parse_args() -> argparse.Namespace:
 
 
 def _print_summary(result: dict) -> None:
-    print(f"source_ref={result.get('source_ref', '')}")
+    out(f"source_ref={result.get('source_ref', '')}")
     for key, value in sorted((result.get("entities") or {}).items()):
-        print(f"entities.{key}={int(value)}")
+        out(f"entities.{key}={int(value)}")
     for key, value in sorted((result.get("facts") or {}).items()):
-        print(f"facts.{key}={int(value)}")
-    print(f"links={int(result.get('links', 0))}")
-    print(f"snapshots={int(result.get('snapshots', 0))}")
+        out(f"facts.{key}={int(value)}")
+    out(f"links={int(result.get('links', 0))}")
+    out(f"snapshots={int(result.get('snapshots', 0))}")
     if result.get("batch_uid"):
-        print(f"batch_uid={result['batch_uid']}")
+        out(f"batch_uid={result['batch_uid']}")
     if result.get("snapshot_uid"):
-        print(f"snapshot_uid={result['snapshot_uid']}")
+        out(f"snapshot_uid={result['snapshot_uid']}")
     for key, value in sorted((result.get("build_counts") or {}).items()):
-        print(f"build.{key}={int(value)}")
+        out(f"build.{key}={int(value)}")
 
 
 def _print_candidate_result(result: dict) -> None:
-    print(f"product_query={result.get('product_query', '')}")
-    print(f"matched_products={len(result.get('matched_products') or [])}")
-    print(f"matched_families={len(result.get('matched_families') or [])}")
-    print(f"total_candidates={int(result.get('total') or 0)}")
+    out(f"product_query={result.get('product_query', '')}")
+    out(f"matched_products={len(result.get('matched_products') or [])}")
+    out(f"matched_families={len(result.get('matched_families') or [])}")
+    out(f"total_candidates={int(result.get('total') or 0)}")
     for idx, item in enumerate(result.get("items") or [], start=1):
         entity = item.get("entity") or {}
         features = item.get("features") or {}
-        print(
+        out(
             f"{idx}. entity_uid={entity.get('entity_uid', '')} "
             f"platform={features.get('platform', '')} "
             f"handle={features.get('handle', '')} "
@@ -87,40 +89,40 @@ def _print_candidate_result(result: dict) -> None:
 
 
 def _print_product_families(result: dict) -> None:
-    print(f"query={result.get('query', '')}")
-    print(f"total_families={int(result.get('total_families') or 0)}")
-    print(f"matched_families={int(result.get('matched_families') or 0)}")
+    out(f"query={result.get('query', '')}")
+    out(f"total_families={int(result.get('total_families') or 0)}")
+    out(f"matched_families={int(result.get('matched_families') or 0)}")
     for idx, item in enumerate(result.get("items") or [], start=1):
-        print(
+        out(
             f"{idx}. family_uid={item.get('entity_uid', '')} "
             f"name={item.get('display_name', '')} "
             f"members={int(item.get('member_count') or 0)} "
             f"cooperations={int(item.get('cooperation_count') or 0)}"
         )
         for member in (item.get("members") or [])[:3]:
-            print(f"   - product={member.get('display_name', '')} links={int(member.get('link_count') or 0)}")
+            out(f"   - product={member.get('display_name', '')} links={int(member.get('link_count') or 0)}")
 
 
 def _print_market_signals(result: dict) -> None:
-    print(f"query={result.get('query', '')}")
-    print(f"signal_type={result.get('signal_type', '')}")
+    out(f"query={result.get('query', '')}")
+    out(f"signal_type={result.get('signal_type', '')}")
     if "total_signals" in result:
-        print(f"total_signals={int(result.get('total_signals') or 0)}")
+        out(f"total_signals={int(result.get('total_signals') or 0)}")
     if result.get("signals"):
         for key, value in sorted((result.get("signals") or {}).items()):
-            print(f"signals.{key}={int(value)}")
+            out(f"signals.{key}={int(value)}")
     if result.get("target_entity_types"):
         for key, value in sorted((result.get("target_entity_types") or {}).items()):
-            print(f"targets.{key}={int(value)}")
+            out(f"targets.{key}={int(value)}")
     if result.get("attachment"):
         for key, value in sorted((result.get("attachment") or {}).items()):
-            print(f"attachment.{key}={int(value)}")
+            out(f"attachment.{key}={int(value)}")
     if "total_returned" in result:
-        print(f"total_returned={int(result.get('total_returned') or 0)}")
+        out(f"total_returned={int(result.get('total_returned') or 0)}")
     for idx, item in enumerate(result.get("items") or [], start=1):
         entity = item.get("entity") or {}
         fact = item.get("fact") or {}
-        print(
+        out(
             f"{idx}. type={item.get('signal_type', '')} "
             f"date={item.get('signal_date', '')} "
             f"target={entity.get('entity_type', '')}:{entity.get('display_name', '')} "
@@ -130,10 +132,10 @@ def _print_market_signals(result: dict) -> None:
 
 
 def _print_readiness(result: dict) -> None:
-    print(f"status={result.get('status', '')}")
-    print(f"provider_calls_allowed={str(bool(result.get('provider_calls_allowed'))).lower()}")
+    out(f"status={result.get('status', '')}")
+    out(f"provider_calls_allowed={str(bool(result.get('provider_calls_allowed'))).lower()}")
     for gate in result.get("gates") or []:
-        print(
+        out(
             f"gate.{gate.get('key', '')}={gate.get('status', '')} "
             f"severity={gate.get('severity', '')} "
             f"actual={int(gate.get('actual') or 0)} "
@@ -142,21 +144,21 @@ def _print_readiness(result: dict) -> None:
     counts = result.get("counts") or {}
     for group in ("entities", "facts", "links", "feedback", "product_normalization_status", "market_signals"):
         for key, value in sorted((counts.get(group) or {}).items()):
-            print(f"{group}.{key}={int(value)}")
+            out(f"{group}.{key}={int(value)}")
 
 
 def _print_feedback(result: dict) -> None:
     filters = result.get("filters") or {}
-    print(f"status_filter={filters.get('status', '')}")
-    print(f"entity_uid_filter={filters.get('entity_uid', '')}")
-    print(f"feedback_type_filter={filters.get('feedback_type', '')}")
+    out(f"status_filter={filters.get('status', '')}")
+    out(f"entity_uid_filter={filters.get('entity_uid', '')}")
+    out(f"feedback_type_filter={filters.get('feedback_type', '')}")
     for key, value in sorted((result.get("counts") or {}).items()):
-        print(f"feedback.{key}={int(value)}")
+        out(f"feedback.{key}={int(value)}")
     items = result.get("items") or []
-    print(f"returned={len(items)}")
+    out(f"returned={len(items)}")
     for idx, item in enumerate(items, start=1):
         entity = item.get("entity") or {}
-        print(
+        out(
             f"{idx}. feedback_uid={item.get('feedback_uid', '')} "
             f"status={item.get('status', '')} "
             f"type={item.get('feedback_type', '')} "
@@ -168,26 +170,26 @@ def _print_feedback(result: dict) -> None:
 def _print_kol_memory(result: dict) -> None:
     entity = result.get("entity") or {}
     features = result.get("features") or {}
-    print(f"entity_uid={entity.get('entity_uid', '')}")
-    print(f"display_name={entity.get('display_name', '')}")
-    print(f"platform={features.get('platform', '')}")
-    print(f"handle={features.get('handle', '')}")
-    print(f"product_count={int(features.get('product_count') or 0)}")
-    print(f"cooperation_count={int(features.get('cooperation_count') or 0)}")
-    print(f"risk_flag_count={int(features.get('risk_flag_count') or 0)}")
-    print(f"sync_status={features.get('sync_status', '')}")
-    print(f"product_links={len(result.get('product_links') or [])}")
+    out(f"entity_uid={entity.get('entity_uid', '')}")
+    out(f"display_name={entity.get('display_name', '')}")
+    out(f"platform={features.get('platform', '')}")
+    out(f"handle={features.get('handle', '')}")
+    out(f"product_count={int(features.get('product_count') or 0)}")
+    out(f"cooperation_count={int(features.get('cooperation_count') or 0)}")
+    out(f"risk_flag_count={int(features.get('risk_flag_count') or 0)}")
+    out(f"sync_status={features.get('sync_status', '')}")
+    out(f"product_links={len(result.get('product_links') or [])}")
     for idx, link in enumerate((result.get("product_links") or [])[:10], start=1):
         product = link.get("product") or {}
-        print(f"{idx}. product={product.get('display_name', '')} source_ref={link.get('source_ref', '')}")
+        out(f"{idx}. product={product.get('display_name', '')} source_ref={link.get('source_ref', '')}")
 
 
 def _print_fit_features(result: dict) -> None:
     entity = result.get("entity") or {}
     features = result.get("features") or {}
-    print(f"entity_uid={entity.get('entity_uid', '')}")
-    print(f"product_query={result.get('product_query', '')}")
-    print(f"memory_score={int(result.get('memory_score') or 0)}")
+    out(f"entity_uid={entity.get('entity_uid', '')}")
+    out(f"product_query={result.get('product_query', '')}")
+    out(f"memory_score={int(result.get('memory_score') or 0)}")
     for key in (
         "platform",
         "handle",
@@ -203,8 +205,8 @@ def _print_fit_features(result: dict) -> None:
         "risk_flag_count",
         "evidence_count",
     ):
-        print(f"{key}={features.get(key, '')}")
-    print(f"warnings={','.join(result.get('warnings') or [])}")
+        out(f"{key}={features.get(key, '')}")
+    out(f"warnings={','.join(result.get('warnings') or [])}")
 
 
 def main() -> int:
@@ -259,31 +261,31 @@ def main() -> int:
                 source_ref = f"legacy_batch:{args.batch_uid}"
             result = memory.summary(source_ref=source_ref)
         if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         elif args.readiness:
             _print_readiness(result)
         elif args.feedback_list:
             _print_feedback(result)
         elif args.resolve_feedback:
             if result.get("dry_run"):
-                print("[DRY-RUN] Feedback update not applied.")
-                print(f"feedback_uid={result.get('feedback_uid', '')}")
-                print(f"would_set_status={result.get('would_set_status', '')}")
-                print(f"resolution_action={result.get('resolution_action', '')}")
-                print(f"resolution_note={result.get('resolution_note', '')}")
-                print("Add --commit to apply.")
+                out("[DRY-RUN] Feedback update not applied.")
+                out(f"feedback_uid={result.get('feedback_uid', '')}")
+                out(f"would_set_status={result.get('would_set_status', '')}")
+                out(f"resolution_action={result.get('resolution_action', '')}")
+                out(f"resolution_note={result.get('resolution_note', '')}")
+                out("Add --commit to apply.")
             else:
                 _print_feedback({"items": [result.get("item")], "counts": {}, "filters": {}})
         elif args.build_product_families or args.product_families is not None:
             _print_product_families(result)
             if result.get("build_counts"):
                 for key, value in sorted((result.get("build_counts") or {}).items()):
-                    print(f"build.{key}={int(value)}")
+                    out(f"build.{key}={int(value)}")
         elif args.build_market_memory:
             _print_market_signals(result)
             if result.get("build_counts"):
                 for key, value in sorted((result.get("build_counts") or {}).items()):
-                    print(f"build.{key}={int(value)}")
+                    out(f"build.{key}={int(value)}")
         elif args.market_signals is not None:
             _print_market_signals(result)
         elif args.product_kol_candidates:
@@ -296,7 +298,7 @@ def main() -> int:
             _print_summary(result)
         return 0
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        out(f"ERROR: {exc}", file=sys.stderr)
         return 2
     finally:
         asyncio.run(close_db_runtime())

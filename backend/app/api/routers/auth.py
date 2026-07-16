@@ -8,9 +8,11 @@ from datetime import datetime
 from functools import partial
 import secrets
 
-from fastapi import APIRouter, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
+from app.api.dependencies.auth import get_user_required
 from app.core.config import UPLOAD_DIR
 from app.core.config import IS_PRODUCTION
 from app.db.connection import db_read, db_write, get_conn, is_postgres_runtime
@@ -40,6 +42,54 @@ AVATAR_DIR = UPLOAD_DIR / "staff_avatars"
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_AVATAR_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 MAX_AVATAR_BYTES = 3 * 1024 * 1024
+
+
+class SseTicketRequest(BaseModel):
+    endpoint: str
+
+
+@router.post("/sse-ticket")
+async def create_sse_ticket(
+    body: SseTicketRequest,
+    response: Response,
+    user=Depends(get_user_required),
+):
+    """Prepare one authenticated EventSource connection without exposing a JWT.
+
+    The opaque ticket is set only as an HttpOnly, endpoint-scoped cookie; it is
+    never present in the JSON payload or URL and is consumed once.
+    """
+    from app.services.auth.sse_tickets import (
+        SseTicketStoreUnavailable,
+        issue_sse_ticket,
+        normalize_sse_endpoint,
+        ticket_cookie_name,
+        ticket_ttl_seconds,
+    )
+
+    user_id = int(user.get("id") or 0)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        endpoint = normalize_sse_endpoint(body.endpoint)
+        ticket = issue_sse_ticket(user_id=user_id, endpoint=endpoint)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except SseTicketStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Realtime authentication unavailable") from None
+    ttl = ticket_ttl_seconds()
+    response.set_cookie(
+        key=ticket_cookie_name(endpoint),
+        value=ticket,
+        max_age=ttl,
+        httponly=True,
+        secure=bool(IS_PRODUCTION),
+        samesite="lax",
+        path=endpoint,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {"status": "ready", "expires_in": ttl}
 
 
 def _client_ip(request: Request) -> str:

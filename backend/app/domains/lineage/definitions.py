@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-DEFINITION_VERSION = "v3"
+DEFINITION_VERSION = "v4"
 
 METRICS: dict[str, dict[str, Any]] = {
     "gmv": {
@@ -23,7 +23,13 @@ METRICS: dict[str, dict[str, Any]] = {
         "label_zh": "本周销售额",
         "unit": "cents",
         "currency": "USD",
-        "formula": "SUM(vkpi_sales_attributions.revenue_cents) WHERE occurred_at IN [period]",
+        "formula": (
+            "SUM(vkpi_sales_attributions.revenue_cents) WHERE occurred_at IN [period] "
+            "AND source_platform='shopify' AND confidence IN ('confirmed','refund') "
+            "AND linked snapshot has provider_auth_mode='shopify-hmac', "
+            "provider_verified_at, raw_payload_hash, eligible financial_status, and is not cancelled; "
+            "no verified rows => awaiting_source (not zero)"
+        ),
         "drilldown_source": "sales_attribution",
         "evidence_type_default": "shopify_order",
     },
@@ -32,7 +38,11 @@ METRICS: dict[str, dict[str, Any]] = {
         "label_zh": "成本",
         "unit": "cents",
         "currency": "USD",
-        "formula": "SUM(vkpi_cost_ledger.amount_cents) WHERE status != 'void' AND incurred_at IN [period]",
+        "formula": (
+            "SUM(vkpi_cost_ledger.amount_cents) WHERE status='actual' "
+            "AND approved_at IS NOT NULL AND incurred_at IN [period]; "
+            "no approved actual rows => awaiting_source (not zero)"
+        ),
         "drilldown_source": "cost_ledger",
         "evidence_type_default": "cost_invoice",
     },
@@ -41,7 +51,7 @@ METRICS: dict[str, dict[str, Any]] = {
         "label_zh": "净贡献",
         "unit": "cents",
         "currency": "USD",
-        "formula": "gmv - cost",
+        "formula": "gmv - cost only when both canonical inputs are real; otherwise unavailable",
         "drilldown_source": "derived",
         "evidence_type_default": "",
     },
@@ -50,7 +60,7 @@ METRICS: dict[str, dict[str, Any]] = {
         "label_zh": "ROI",
         "unit": "ratio",
         "currency": "",
-        "formula": "gmv / cost when cost > 0 else 0",
+        "formula": "gmv / cost only when both inputs are real and cost > 0; otherwise unavailable (never synthetic zero)",
         "drilldown_source": "derived",
         "evidence_type_default": "",
     },

@@ -8,6 +8,7 @@ Validates the management path added after the user-facing P3.17 feedback widget:
 - database row reflects the admin action
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import time
@@ -179,7 +180,7 @@ def main() -> int:
     smoke = Smoke()
     try:
         result = smoke.run()
-        print("VKPI_P3_18_FEEDBACK_ADMIN_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
+        stdout_out("VKPI_P3_18_FEEDBACK_ADMIN_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     finally:
         smoke.cleanup()

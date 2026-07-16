@@ -7,6 +7,8 @@ read or write V6 Fit score fields and does not alter KOL Pool ordering.
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import hashlib
 import json
@@ -169,12 +171,12 @@ def apply_migration() -> None:
             cur.execute("SELECT pg_advisory_xact_lock(hashtext('viltrox_schema_migrations'))")
             cur.execute("SELECT 1 FROM schema_migrations WHERE version_key = %s", (MIGRATION_NAME,))
             if cur.fetchone():
-                print(f"migration already applied: {MIGRATION_NAME}")
+                out(f"migration already applied: {MIGRATION_NAME}")
                 return
             cur.execute(sql)
             cur.execute("INSERT INTO schema_migrations(version_key) VALUES (%s)", (MIGRATION_NAME,))
         conn.commit()
-    print(f"migration applied: {MIGRATION_NAME}")
+    out(f"migration applied: {MIGRATION_NAME}")
 
 
 def fetch_profile_docs() -> list[ProfileDoc]:
@@ -379,7 +381,7 @@ def fetch_profile_docs() -> list[ProfileDoc]:
     if len(docs) + len(thin_skipped) != len(TARGET_KOL_IDS):
         raise RuntimeError(f"expected {len(TARGET_KOL_IDS)} docs, got {len(docs)} (+{len(thin_skipped)} thin-skipped)")
     if thin_skipped:
-        print(f"skipped {len(thin_skipped)} thin profiles: {thin_skipped[:20]}...")
+        out(f"skipped {len(thin_skipped)} thin profiles: {thin_skipped[:20]}...")
     return docs
 
 
@@ -407,13 +409,13 @@ def ensure_collection(client: QdrantClient) -> None:
             collection_name=COLLECTION_NAME,
             vectors_config=qdrant_models.VectorParams(size=VECTOR_SIZE, distance=qdrant_models.Distance.COSINE),
         )
-        print(f"qdrant collection created: {COLLECTION_NAME} size={VECTOR_SIZE} distance=cosine")
+        out(f"qdrant collection created: {COLLECTION_NAME} size={VECTOR_SIZE} distance=cosine")
         return
     info = client.get_collection(COLLECTION_NAME)
     size = vector_size_from_collection(info)
     if size and size != VECTOR_SIZE:
         raise RuntimeError(f"qdrant collection {COLLECTION_NAME} has vector size {size}, expected {VECTOR_SIZE}")
-    print(f"qdrant collection exists: {COLLECTION_NAME} size={size or VECTOR_SIZE} distance=cosine")
+    out(f"qdrant collection exists: {COLLECTION_NAME} size={size or VECTOR_SIZE} distance=cosine")
 
 
 def embed_texts(client: OpenAI, texts: list[str]) -> tuple[list[list[float]], int, Decimal]:
@@ -570,7 +572,7 @@ def build_index() -> None:
             raise
 
     count = qclient.count(collection_name=COLLECTION_NAME, exact=True).count
-    print(f"build complete: run_id={run_id} docs={len(docs)} qdrant_count={count} tokens={tokens} cost_usd={cost}")
+    out(f"build complete: run_id={run_id} docs={len(docs)} qdrant_count={count} tokens={tokens} cost_usd={cost}")
 
 
 def search_points(client: QdrantClient, query_vector: list[float], limit: int) -> list[Any]:
@@ -610,14 +612,14 @@ def recall() -> None:
     query_texts = [PRODUCT_QUERY_TEXTS["35mm_f12_lab"], PRODUCT_QUERY_TEXTS["35mm_f17_air"]]
     vectors, tokens, cost = embed_texts(oclient, query_texts)
     labels = ["35mm F1.2 LAB", "35mm F1.7 AIR"]
-    print(f"recall query embeddings: queries={len(query_texts)} tokens={tokens} cost_usd={cost}")
+    out(f"recall query embeddings: queries={len(query_texts)} tokens={tokens} cost_usd={cost}")
     for label, vector in zip(labels, vectors, strict=True):
-        print(f"\n=== {label} Top 10 ({METHOD}) ===")
+        out(f"\n=== {label} Top 10 ({METHOD}) ===")
         hits = search_points(qclient, vector, 10)
         for idx, hit in enumerate(hits, start=1):
             payload = dict(getattr(hit, "payload", None) or {})
             score = float(getattr(hit, "score", 0.0) or 0.0)
-            print(
+            out(
                 f"{idx:02d}. kol_pool_id={payload.get('kol_pool_id')} "
                 f"handle={payload.get('handle') or ''} "
                 f"display={payload.get('display_name') or ''} "
@@ -632,9 +634,9 @@ def show_stats() -> None:
     by_sufficiency = defaultdict(int)
     for doc in docs:
         by_sufficiency[doc.sufficiency] += 1
-    print(f"target_docs={len(docs)}")
-    print("sufficiency=" + json.dumps(dict(sorted(by_sufficiency.items())), ensure_ascii=False))
-    print(f"chars={sum(len(text) for text in texts)} estimated_tokens={estimate_tokens(texts)} estimated_cost_usd={cost_for_tokens(estimate_tokens(texts))}")
+    out(f"target_docs={len(docs)}")
+    out("sufficiency=" + json.dumps(dict(sorted(by_sufficiency.items())), ensure_ascii=False))
+    out(f"chars={sum(len(text) for text in texts)} estimated_tokens={estimate_tokens(texts)} estimated_cost_usd={cost_for_tokens(estimate_tokens(texts))}")
 
 
 def main() -> int:
@@ -657,5 +659,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        out(f"ERROR: {exc}", file=sys.stderr)
         raise

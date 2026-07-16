@@ -26,6 +26,12 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol import search_sessions
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
+from app.domains.tasks.search_session_lineage import (
+    attach_search_session_lineage_to_job,
+    with_search_session_lineage,
+)
+from app.platform import llm_gateway
 
 logger = get_logger("viltrox.domains.kol.content_fit_enqueue")
 
@@ -35,6 +41,51 @@ DEFAULT_TOP_N = 6
 MAX_TOP_N = 12
 VIDEO_DERIVE_METHOD = "video_analysis_final_v1"
 CONTENT_FIT_DERIVE_METHOD = "content_fit_v1"
+CONTENT_FIT_LLM_PURPOSE = "vkpi_kol_content_fit"
+CONTENT_FIT_LLM_PROVIDER = "openai"
+CONTENT_FIT_LLM_MAX_OUTPUT_TOKENS = 1400
+CONTENT_FIT_LLM_COST_TAG = "vkpi_kol_content_fit"
+
+
+def _content_fit_ai_readiness() -> dict[str, Any]:
+    """Read-only authorization check matching the content-fit LLM call chain."""
+
+    try:
+        preflight = llm_gateway.budget_preflight(
+            "content fit readiness preflight",
+            purpose=CONTENT_FIT_LLM_PURPOSE,
+            max_output_tokens=CONTENT_FIT_LLM_MAX_OUTPUT_TOKENS,
+            preferred_provider=CONTENT_FIT_LLM_PROVIDER,
+            cost_tag=CONTENT_FIT_LLM_COST_TAG,
+            require_configured=False,
+        )
+    except Exception:
+        logger.warning("vkpi.content_fit_enqueue.readiness_probe_failed", exc_info=True)
+        preflight = {
+            "provider_calls_allowed": False,
+            "provider_gate_reason": "readiness_check_failed",
+            "model_readiness_status": "not_ready",
+        }
+    allowed = bool(preflight.get("provider_calls_allowed"))
+    gate_reason = str(preflight.get("provider_gate_reason") or "provider_calls_blocked")
+    return {
+        "allowed": allowed,
+        "gate_reason": gate_reason,
+        "model_readiness_status": str(
+            preflight.get("model_readiness_status")
+            or ("production_ready" if allowed else "not_ready")
+        ),
+        "ai_analysis": {
+            "state": "queued" if allowed else "not_requested",
+            "reason": "analysis_authorized" if allowed else "ai_disabled",
+            "gate_reason": gate_reason,
+            "model_readiness_status": str(
+                preflight.get("model_readiness_status")
+                or ("production_ready" if allowed else "not_ready")
+            ),
+            "provider_calls_allowed": allowed,
+        },
+    }
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -228,10 +279,12 @@ def enqueue_content_fit_for_session(
     has_evidence = _ids_with_video_evidence(conn, pool_ids)
     has_fit = _ids_with_existing_fit(conn, pool_ids)
     already_queued = _already_queued_ids(conn, sid, pool_ids)
+    readiness = _content_fit_ai_readiness()
 
     enqueued: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     exposure: list[dict[str, Any]] = []
+    ai_disabled_count = 0
 
     for cand in candidates:
         kid = _int(cand.get("kol_pool_id"))
@@ -253,11 +306,22 @@ def enqueue_content_fit_for_session(
         if kid not in has_evidence:
             skipped.append({"kol_pool_id": kid, "reason": "no_ready_video_analysis_evidence"})
             continue
+        if not readiness["allowed"]:
+            ai_disabled_count += 1
+            skipped.append(
+                {
+                    "kol_pool_id": kid,
+                    "reason": "ai_disabled",
+                    "provider_gate_reason": readiness["gate_reason"],
+                }
+            )
+            continue
         if kid in already_queued:
             skipped.append({"kol_pool_id": kid, "reason": "already_queued_in_session"})
             continue
 
-        payload = {
+        payload = with_search_session_lineage({
+            "queue_lane": "batch",
             "target_type": "kol",
             "target_id": str(kid),
             "derive_method": CONTENT_FIT_DERIVE_METHOD,
@@ -270,24 +334,41 @@ def enqueue_content_fit_for_session(
             "summary": f"内容契合深析 · KOL {kid}",
             "triggered_by_user_id": triggered_by_user_id,
             "viltrox_fit_score_untouched": True,
-        }
+        },
+            search_session_id=sid,
+            search_session_item_id=_int(cand.get("id")) or None,
+            role="content_fit",
+        )
         try:
-            row = conn.execute(
-                """
-                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-                VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-                RETURNING id
-                """,
-                (CONTENT_FIT_JOB_TYPE, search_sessions._json_dumps(payload)),
-            ).fetchone()
+            row, inserted = enqueue_active_apify_job(
+                conn,
+                job_type=CONTENT_FIT_JOB_TYPE,
+                payload=payload,
+                idempotency_key=active_job_idempotency_key(CONTENT_FIT_JOB_TYPE, kid),
+            )
             conn.commit()
-            enqueued.append({"kol_pool_id": kid, "job_id": (dict(row).get("id") if row else None)})
+            if inserted:
+                enqueued.append({"kol_pool_id": kid, "job_id": row.get("id")})
+            else:
+                linked = attach_search_session_lineage_to_job(conn, row.get("id"), payload)
+                if linked:
+                    conn.commit()
+                skipped.append({"kol_pool_id": kid, "job_id": row.get("id"), "reason": "already_queued_race"})
         except Exception as exc:
             logger.warning("vkpi.content_fit_enqueue.insert_failed kid=%s err=%s", kid, exc, exc_info=True)
             skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed", "error": str(exc)[:300]})
 
+    status = "queued" if enqueued else "ai_disabled" if ai_disabled_count else "nothing_to_queue"
+    ai_analysis = dict(readiness["ai_analysis"])
+    if enqueued:
+        ai_analysis.update({"state": "queued", "reason": "analysis_queued"})
+    elif not ai_disabled_count:
+        ai_analysis.update({"state": "not_requested", "reason": "no_eligible_candidate"})
     return {
-        "status": "queued" if enqueued else "nothing_to_queue",
+        "status": status,
+        "state": "not_requested" if status == "ai_disabled" else status,
+        "stage": "ai_disabled" if status == "ai_disabled" else "analysis",
+        "terminal": status in {"ai_disabled", "nothing_to_queue"},
         "session_id": sid,
         "top_n": safe_top_n,
         "candidate_count": len(candidates),
@@ -296,6 +377,10 @@ def enqueue_content_fit_for_session(
         "skipped": skipped,
         "exposure_potential": exposure,
         "job_type": CONTENT_FIT_JOB_TYPE,
+        "ai_disabled_count": ai_disabled_count,
+        "provider_gate_reason": readiness["gate_reason"],
+        "model_readiness_status": readiness["model_readiness_status"],
+        "ai_analysis": ai_analysis,
         "write_db": bool(enqueued),
         "writes": ["apify_jobs"] if enqueued else [],
         "viltrox_fit_score_untouched": True,
@@ -325,6 +410,26 @@ def enqueue_content_fit_on_demand(
         if cached and str(cached.get("state") or "") not in ("missing", ""):
             return cached
 
+    readiness = _content_fit_ai_readiness()
+    if not readiness["allowed"]:
+        return {
+            "status": "ai_disabled",
+            "state": "not_requested",
+            "stage": "ai_disabled",
+            "terminal": True,
+            "kol_pool_id": kid,
+            "job_id": None,
+            "job_type": CONTENT_FIT_JOB_TYPE,
+            "reason": "ai_disabled",
+            "provider_gate_reason": readiness["gate_reason"],
+            "model_readiness_status": readiness["model_readiness_status"],
+            "ai_analysis": readiness["ai_analysis"],
+            "provider_calls": False,
+            "write_db": False,
+            "writes": [],
+            "viltrox_fit_score_untouched": True,
+        }
+
     existing = conn.execute(
         """
         SELECT id, status FROM apify_jobs
@@ -344,11 +449,17 @@ def enqueue_content_fit_on_demand(
             "kol_pool_id": kid,
             "job_id": int(row.get("id")) if row.get("id") is not None else None,
             "job_type": CONTENT_FIT_JOB_TYPE,
+            "ai_analysis": {
+                **readiness["ai_analysis"],
+                "state": "queued",
+                "reason": "already_queued",
+            },
             "viltrox_fit_score_untouched": True,
         }
 
     triggered_by_user_id = (staff or {}).get("user_id") if isinstance(staff, dict) else None
     payload = {
+        "queue_lane": "interactive",
         "kol_pool_id": kid,
         "target_type": "kol",
         "target_id": str(kid),
@@ -361,25 +472,28 @@ def enqueue_content_fit_on_demand(
         "viltrox_fit_score_untouched": True,
         "query_text": f"content fit - kol_pool #{kid}",
     }
-    inserted = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id
-        """,
-        (CONTENT_FIT_JOB_TYPE, search_sessions._json_dumps(payload)),
-    ).fetchone()
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type=CONTENT_FIT_JOB_TYPE,
+        payload=payload,
+        idempotency_key=active_job_idempotency_key(CONTENT_FIT_JOB_TYPE, kid),
+    )
     conn.commit()
-    job_id = (dict(inserted).get("id") if inserted else None)
+    job_id = job.get("id")
     return {
-        "status": "queued",
+        "status": "queued" if inserted else ("already_running" if job.get("status") == "running" else "already_queued"),
         "state": "queued",
         "kol_pool_id": kid,
         "job_id": int(job_id) if job_id is not None else None,
         "job_type": CONTENT_FIT_JOB_TYPE,
+        "ai_analysis": {
+            **readiness["ai_analysis"],
+            "state": "queued",
+            "reason": "analysis_queued" if inserted else "already_queued",
+        },
         "force": bool(force),
-        "write_db": True,
-        "writes": ["apify_jobs"],
+        "write_db": inserted,
+        "writes": ["apify_jobs"] if inserted else [],
         "viltrox_fit_score_untouched": True,
     }
 

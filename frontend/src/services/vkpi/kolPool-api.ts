@@ -3,6 +3,7 @@ import type {
   Row,
   VkpiKolPoolItem,
   VkpiKolVideoAnalysisCacheResponse,
+  VkpiKolVideoAnalysisBatchResponse,
   VkpiVideoAnalysisEnqueueResponse,
   VkpiKolPoolRefreshState,
   VkpiKolPoolWorkspaceResponse,
@@ -14,6 +15,7 @@ export type {
   VkpiKolPoolItem,
   VkpiKolVideoAnalysisCacheEntry,
   VkpiKolVideoAnalysisCacheResponse,
+  VkpiKolVideoAnalysisBatchResponse,
   VkpiVideoAnalysisEnqueueResponse,
   VkpiKolLlmDeepAnalysisResult,
   VkpiKolLlmDeepAnalysisResponse,
@@ -31,6 +33,7 @@ export type {
   VkpiKolSearchSessionRef,
   VkpiKolSearchSessionItem,
   VkpiKolSearchHistoryItem,
+  VkpiKolSearchHistoryArchiveResponse,
   VkpiKolSearchHistoryResponse,
   VkpiKolUrlDeepCrawlResponse,
   VkpiKolSmartSearchResponse,
@@ -82,6 +85,9 @@ export {
   smartKolSearch,
   smartKolSearchProfileAdvanceJob,
   listKolSearchHistory,
+  archiveKolSearchHistorySession,
+  archiveAllKolSearchHistory,
+  restoreKolSearchHistorySession,
   getKolRecommendationCard,
   getKolTwin,
   getKolSearchSession,
@@ -96,6 +102,7 @@ export async function getKolVideoAnalysisCache(
   token: string,
   evidenceId: string | number,
   deriveMethod: string,
+  options: { allowLocalEvaluationFallback?: boolean } = {},
 ): Promise<VkpiKolVideoAnalysisCacheResponse> {
   const params = new URLSearchParams({
     target_type: "video",
@@ -103,9 +110,32 @@ export async function getKolVideoAnalysisCache(
     derive_method: deriveMethod,
     _ts: String(Date.now()),
   });
+  if (options.allowLocalEvaluationFallback === false) {
+    params.set("allow_local_evaluation_fallback", "false");
+  }
   return apiFetch<VkpiKolVideoAnalysisCacheResponse>(
     `/api/admin/vkpi/analysis-cache?${params.toString()}`,
     { cache: "no-store" },
+    token,
+  );
+}
+
+export async function getKolVideoAnalysisBatch(
+  token: string,
+  evidenceIds: Array<string | number>,
+  deriveMethod: string,
+): Promise<VkpiKolVideoAnalysisBatchResponse> {
+  return apiFetch<VkpiKolVideoAnalysisBatchResponse>(
+    "/api/admin/vkpi/analysis-cache/batch",
+    {
+      method: "POST",
+      body: jsonBody({
+        target_type: "video",
+        target_ids: evidenceIds.map(String),
+        derive_method: deriveMethod,
+      }),
+      cache: "no-store",
+    },
     token,
   );
 }
@@ -114,12 +144,16 @@ export async function enqueueVideoAnalysis(
   token: string,
   kolPoolId: string | number,
   evidenceId: string | number,
+  options: { localEvaluation?: boolean } = {},
 ): Promise<VkpiVideoAnalysisEnqueueResponse> {
   return apiFetch<VkpiVideoAnalysisEnqueueResponse>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-video-analysis`,
     {
       method: "POST",
-      body: jsonBody({ evidence_id: evidenceId }),
+      body: jsonBody({
+        evidence_id: evidenceId,
+        ...(options.localEvaluation === true ? { local_evaluation: true } : {}),
+      }),
     },
     token,
   );
@@ -148,8 +182,42 @@ export async function enqueueVideoAnalysisBatch(
 export async function enqueueAllKolVideos(
   token: string,
   kolPoolId: string | number,
-): Promise<{ status?: string; queued?: number; skipped?: number; errors?: number; evidence_total?: number; requested?: number; reason?: string }> {
-  return apiFetch<{ status?: string; queued?: number; skipped?: number; errors?: number; evidence_total?: number; requested?: number; reason?: string }>(
+): Promise<{
+  status?: string;
+  queued?: number;
+  skipped?: number;
+  errors?: number;
+  ai_disabled?: number;
+  evidence_total?: number;
+  requested?: number;
+  reason?: string;
+  items?: Array<{
+    status?: string;
+    kol_pool_id?: number;
+    evidence_id?: number;
+    reason?: string;
+    provider_gate_reason?: string;
+    job?: Record<string, unknown> | null;
+  }>;
+}> {
+  return apiFetch<{
+    status?: string;
+    queued?: number;
+    skipped?: number;
+    errors?: number;
+    ai_disabled?: number;
+    evidence_total?: number;
+    requested?: number;
+    reason?: string;
+    items?: Array<{
+      status?: string;
+      kol_pool_id?: number;
+      evidence_id?: number;
+      reason?: string;
+      provider_gate_reason?: string;
+      job?: Record<string, unknown> | null;
+    }>;
+  }>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-all-videos`,
     { method: "POST" },
     token,

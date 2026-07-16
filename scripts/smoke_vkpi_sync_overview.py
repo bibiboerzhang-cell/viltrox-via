@@ -10,6 +10,8 @@ R60 smoke: 验证 sync overview 聚合工作.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import json
 import os
 import sys
@@ -49,13 +51,13 @@ def main() -> None:
         from app.core.security import make_token
         token = make_token(user_id, "admin")
     except Exception as exc:
-        print(f"[token] failed: {exc}")
+        out(f"[token] failed: {exc}")
         sys.exit(1)
     
     failures: list[str] = []
     
     # ── 场景 1: GET /sync/overview 返回完整结构 ──
-    print("[1/4] GET /sync/overview 返回完整结构")
+    out("[1/4] GET /sync/overview 返回完整结构")
     
     resp = _get_json(f"{BASE_URL}/api/admin/vkpi/sync/overview", token)
     
@@ -68,10 +70,10 @@ def main() -> None:
         if missing:
             failures.append(f"场景 1: 缺字段 {missing}")
         else:
-            print(f"   PASS: 5 个 section 都返回")
+            out(f"   PASS: 5 个 section 都返回")
     
     # ── 场景 2: industry.platforms 聚合正确 ──
-    print("[2/4] industry.platforms 数组结构")
+    out("[2/4] industry.platforms 数组结构")
     
     if resp.get("status_code") == 200:
         industry = resp["body"].get("industry") or {}
@@ -88,10 +90,10 @@ def main() -> None:
                     failures.append(f"场景 2: platform 行缺字段 {missing_p}: {p}")
                     break
             else:
-                print(f"   PASS: platforms[{len(industry['platforms'])}] 结构完整")
+                out(f"   PASS: platforms[{len(industry['platforms'])}] 结构完整")
     
     # ── 场景 3: summary.overall_health 字段 ──
-    print("[3/4] summary.overall_health 是合法值")
+    out("[3/4] summary.overall_health 是合法值")
     
     if resp.get("status_code") == 200:
         summary = resp["body"].get("summary") or {}
@@ -103,10 +105,10 @@ def main() -> None:
         elif "checked_at" not in summary:
             failures.append("场景 3: summary 缺 checked_at 字段")
         else:
-            print(f"   PASS: overall_health={health}, issues={len(summary['issues'])}")
+            out(f"   PASS: overall_health={health}, issues={len(summary['issues'])}")
     
     # ── 场景 4: GET /sync/industry/failures ──
-    print("[4/4] GET /sync/industry/failures")
+    out("[4/4] GET /sync/industry/failures")
     
     resp_fail = _get_json(f"{BASE_URL}/api/admin/vkpi/sync/industry/failures?limit=20", token)
     
@@ -119,19 +121,19 @@ def main() -> None:
         elif not isinstance(body["failures"], list):
             failures.append(f"场景 4: failures 不是 list")
         else:
-            print(f"   PASS: failures count={len(body['failures'])}")
+            out(f"   PASS: failures count={len(body['failures'])}")
     
     # ── cleanup ──
     if cleanup_admin and staff_id:
         cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
     
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_SYNC_OVERVIEW_SMOKE_OK")
+        out("\nVKPI_SYNC_OVERVIEW_SMOKE_OK")
         sys.exit(0)
 
 

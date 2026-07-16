@@ -7,6 +7,7 @@ channels, and audit rows. This smoke keeps all records under a unique marker and
 removes them before exit.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -308,7 +309,7 @@ def main() -> None:
     ensure_vkpi_channels_schema()
     smoke = Smoke()
     result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

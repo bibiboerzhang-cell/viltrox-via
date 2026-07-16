@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import app.domains.sync.refresh_tier as refresh_tier
+from app.platform.apify_lifecycle import close_apify_client
 
 
 SUPPORTED_BATCH_PLATFORMS = {"instagram", "youtube", "facebook", "reddit", "x", "tiktok"}
@@ -568,9 +569,17 @@ def run_apify_batch(
     actor_id = _text(batch.get("actor_id"))
     run_input = batch.get("run_input") if isinstance(batch.get("run_input"), dict) else {}
     targets = [target for target in (batch.get("targets") or []) if isinstance(target, dict)]
+    client: Any | None = None
     try:
         client = ApifyClient(token)
-        run = client.actor(actor_id).call(
+        from app.platform.apify_budget import call_apify_actor
+
+        run = call_apify_actor(
+            client,
+            actor_id,
+            platform=str(batch.get("platform") or ""),
+            operation="apify_batch_refresh",
+            source="sync.apify_batch_refresh",
             run_input=run_input,
             timeout_secs=max(30, min(1800, _int(timeout_secs, DEFAULT_RUN_TIMEOUT_SECONDS))),
             wait_secs=max(30, min(1800, _int(timeout_secs, DEFAULT_RUN_TIMEOUT_SECONDS))),
@@ -642,6 +651,8 @@ def run_apify_batch(
             "mapped": {"matched": [], "unmatched": [], "matched_count": 0, "unmatched_count": 0},
             "error": f"{type(exc).__name__}: {str(exc)[:500]}",
         }
+    finally:
+        close_apify_client(client)
 
 
 async def execute_apify_batch_plan(
@@ -663,6 +674,19 @@ async def execute_apify_batch_plan(
             "max_concurrent_runs": max_concurrent_runs(plan.get("max_concurrent_runs")),
             "summary": summary,
             "retry_plan": retry_plan,
+            "results": [],
+        }
+    from app.platform.apify_budget import current_apify_execution_context
+
+    if current_apify_execution_context() is None:
+        summary = summarize_batch_execution(plan, [], executed=False)
+        return {
+            "executed": False,
+            "reason": "durable_worker_required",
+            "batch_count": len(batches),
+            "max_concurrent_runs": max_concurrent_runs(plan.get("max_concurrent_runs")),
+            "summary": summary,
+            "retry_plan": build_retry_plan(plan, summary),
             "results": [],
         }
     sem = asyncio.Semaphore(max_concurrent_runs(plan.get("max_concurrent_runs")))

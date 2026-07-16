@@ -16,6 +16,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -57,6 +59,7 @@ class ClaimSqlGuardShapeTests(unittest.TestCase):
         self.assertEqual(tuple(worker.LOCAL_EXCLUSIVE_JOB_TYPES), tuple(SAFE_TASK_TYPES))
 
 
+@pytest.mark.pg
 class ClaimSqlGuardBehaviorTests(unittest.TestCase):
     """真 PG 行为断言:TEMP TABLE 遮蔽真表,跑 worker 同一份 CLAIM_SELECT_SQL。"""
 

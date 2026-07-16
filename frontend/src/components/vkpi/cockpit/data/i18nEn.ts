@@ -169,7 +169,7 @@ export const I18N_EN = {
   "Distribution of all 1,023 KOLs across regions": "Distribution of all 1,023 KOLs across regions",
   "VIEWING": "VIEWING", "COUNTRY": "COUNTRY", "All Countries": "All Countries",
   "KOLs": "KOLs", "Revenue": "Revenue",
-  "Top Regions by KOL Count": "Top Regions by KOL Count",
+  "Top Profile Countries by KOL Count": "Top Profile Countries by KOL Count",
   "Top Regions by Revenue": "Top Regions by Revenue",
   "Upcoming Events": "Upcoming Events", "Revenue by Source": "Revenue by Source",
   // V6.14.4

@@ -5,6 +5,8 @@
   .venv/bin/python scripts/brain_report.py report     # 跑增量(明早跑这个)
 基线存 runtime/brain_baseline.json。零写业务表,纯只读 + 一个 JSON 快照。
 """
+from stdout_utils import out
+
 import json
 import sys
 from pathlib import Path
@@ -49,16 +51,16 @@ def _snapshot() -> dict:
 def snapshot() -> None:
     BASELINE.parent.mkdir(parents=True, exist_ok=True)
     BASELINE.write_text(json.dumps(_snapshot(), ensure_ascii=False, indent=2))
-    print(f"基线已记 → {BASELINE}")
+    out(f"基线已记 → {BASELINE}")
 
 
 def report() -> None:
     if not BASELINE.exists():
-        print("无基线,先跑 snapshot")
+        out("无基线,先跑 snapshot")
         return
     base = json.loads(BASELINE.read_text())
     now = _snapshot()
-    print("=== 大脑昨夜干了什么(增量)===")
+    out("=== 大脑昨夜干了什么(增量)===")
     for name, tbl, _ in TARGETS:
         b, n = base.get(tbl), now.get(tbl)
         if b is None or n is None:
@@ -66,10 +68,10 @@ def report() -> None:
         delta = n - b
         mark = "  " if delta == 0 else "+ "
         if tbl == "vkpi_ai_cost_ledger":
-            print(f"{mark}{name}: 花了 ${delta:.2f}(累计 ${n:.2f})")
+            out(f"{mark}{name}: 花了 ${delta:.2f}(累计 ${n:.2f})")
         elif delta != 0:
-            print(f"{mark}{name}: +{int(delta)}(共 {int(n)})")
-    print("\n(零增量的项已隐藏。要看全量再跑 snapshot 重置基线。)")
+            out(f"{mark}{name}: +{int(delta)}(共 {int(n)})")
+    out("\n(零增量的项已隐藏。要看全量再跑 snapshot 重置基线。)")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from app.core.config import (
     VIA_OFFICIAL_YOUTUBE_HANDLE,
 )
 from app.core.logging import get_logger
+from app.platform.apify_budget import call_apify_actor
 from app.services.scraping.apify import _apify_available, _client
 
 logger = get_logger(__name__)
@@ -56,7 +57,7 @@ async def fetch_viltrox_youtube_comments(
 
     try:
         def _fetch_videos():
-            run = _client.actor("streamers/youtube-channel-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
+            run = call_apify_actor(_client, "streamers/youtube-channel-scraper", platform="youtube", operation="viltrox_channel_videos", source="services.scraping.apify_viltrox_comments", timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "startUrls": [{"url": f"https://www.youtube.com/@{channel_handle}/videos"}],
                 "maxResults": max_videos,
             })
@@ -78,7 +79,7 @@ async def fetch_viltrox_youtube_comments(
 
     try:
         def _fetch_comments():
-            run = _client.actor("streamers/youtube-comments-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
+            run = call_apify_actor(_client, "streamers/youtube-comments-scraper", platform="youtube", operation="viltrox_video_comments", source="services.scraping.apify_viltrox_comments", timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "startUrls": video_urls,
                 "maxComments": max_comments_per_video,
             })
@@ -107,7 +108,7 @@ async def fetch_viltrox_instagram_comments(
 
     try:
         def _fetch_posts():
-            run = _client.actor("apify/instagram-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
+            run = call_apify_actor(_client, "apify/instagram-scraper", platform="instagram", operation="viltrox_posts", source="services.scraping.apify_viltrox_comments", timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "directUrls": [f"https://www.instagram.com/{account_handle}/"],
                 "resultsType": "posts",
                 "resultsLimit": max_posts,
@@ -126,7 +127,7 @@ async def fetch_viltrox_instagram_comments(
             return []
 
         def _fetch_comments():
-            run = _client.actor("apify/instagram-comment-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
+            run = call_apify_actor(_client, "apify/instagram-comment-scraper", platform="instagram", operation="viltrox_post_comments", source="services.scraping.apify_viltrox_comments", timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "directUrls": post_urls,
                 "resultsLimit": max_comments_per_post,
             })
@@ -155,7 +156,7 @@ async def fetch_viltrox_tiktok_comments(
 
     try:
         def _fetch_videos():
-            run = _client.actor("clockworks/free-tiktok-scraper").call(timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
+            run = call_apify_actor(_client, "clockworks/free-tiktok-scraper", platform="tiktok", operation="viltrox_videos", source="services.scraping.apify_viltrox_comments", timeout_secs=_APIFY_CALL_TIMEOUT_SECS, run_input={
                 "profiles": [profile_handle],
                 "resultsPerPage": max_videos,
                 "shouldDownloadVideos": False,

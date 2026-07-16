@@ -7,6 +7,7 @@ that account/post tabs can open the single-post drawer instead of leaving dead
 buttons.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 from pathlib import Path
@@ -91,7 +92,7 @@ def main() -> None:
     ]:
         assert_contains(media_router, needle, media_router_path)
 
-    print(json.dumps({"ok": True, "marker": "VKPI_P4_4_MEDIA_UX_CONTRACT_SMOKE_OK"}, ensure_ascii=False))
+    stdout_out(json.dumps({"ok": True, "marker": "VKPI_P4_4_MEDIA_UX_CONTRACT_SMOKE_OK"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -55,6 +55,8 @@ async def analyze_youtube_with_gemini(
     schema_version: str = "legacy",
     performance_context: dict[str, Any] | None = None,
     final_v1_models: list[str] | str | None = None,
+    models: list[str] | str | None = None,
+    llm_context: dict[str, Any] | None = None,
 ) -> dict:
     """
     Gemini YouTube analysis via File API:
@@ -68,6 +70,7 @@ async def analyze_youtube_with_gemini(
         ProviderPressureExhausted,
         _final_v1_cache_config,
         _is_provider_pressure_error,
+        _strict_generate_content,
         _video_generate_config,
         final_v1_gemini_models,
     )
@@ -81,6 +84,8 @@ async def analyze_youtube_with_gemini(
         "camera_body": None, "viltrox_lens": None, "other_lens": None,
         "viltrox_detected": False, "viltrox_products_all": [],
         "marketing_potential": "", "marketing_notes": "",
+        "llm_attempts": [],
+        "cost_authority": "llm_production_google_generate_content_v1",
         "error": None,
     }
     if not GEMINI_AVAILABLE or not gemini_client:
@@ -156,8 +161,13 @@ async def analyze_youtube_with_gemini(
         "gemini-3.1-pro-preview",    # BACKUP — highest accuracy, long videos
         "gemini-2.5-flash",          # FALLBACK — stable GA tier
     ]
-    if is_final_v1:
+    if models is not None:
+        GEMINI_MODELS = final_v1_gemini_models(models)
+    elif is_final_v1:
         GEMINI_MODELS = final_v1_gemini_models(final_v1_models)
+    attempt_total = len(GEMINI_MODELS) * (
+        2 if "youtu.be" in url or "youtube.com" in url else 1
+    )
 
     # ===== FAST PATH: YouTube direct URL (no download, no upload) =====
     # Gemini 3 supports passing YouTube URLs directly via file_uri.
@@ -180,7 +190,7 @@ async def analyze_youtube_with_gemini(
             _fast_path_err = None
 
             # Try analyzing with Gemini 3 models directly (no upload, no polling)
-            for model_name in GEMINI_MODELS:
+            for attempt_index, model_name in enumerate(GEMINI_MODELS, start=1):
                 try:
                     cache_config = None
                     cache_info: dict[str, Any] = {}
@@ -204,7 +214,18 @@ async def analyze_youtube_with_gemini(
                         }
                         if request_config:
                             kwargs["config"] = request_config
-                        return gemini_client.models.generate_content(**kwargs)
+                        return _strict_generate_content(
+                            model_name=m,
+                            contents=kwargs["contents"],
+                            config=kwargs.get("config"),
+                            prompt=request_prompt,
+                            performance_context=performance_context,
+                            llm_context=llm_context,
+                            subphase="youtube_uri_fast_generation",
+                            attempt_index=attempt_index,
+                            attempt_total=attempt_total,
+                            attempt_log=result["llm_attempts"],
+                        )
                     resp = await asyncio.to_thread(_analyze_direct)
                     usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
@@ -451,7 +472,7 @@ async def analyze_youtube_with_gemini(
             _active_file_name = gemini_file.name
             MODELS = GEMINI_MODELS
             last_err = ""
-            for model_name in MODELS:
+            for model_offset, model_name in enumerate(MODELS, start=1):
                 try:
                     cache_config = None
                     cache_info: dict[str, Any] = {}
@@ -474,7 +495,18 @@ async def analyze_youtube_with_gemini(
                         }
                         if request_config:
                             kwargs["config"] = request_config
-                        return gemini_client.models.generate_content(**kwargs)
+                        return _strict_generate_content(
+                            model_name=m,
+                            contents=kwargs["contents"],
+                            config=kwargs.get("config"),
+                            prompt=request_prompt,
+                            performance_context=performance_context,
+                            llm_context=llm_context,
+                            subphase="youtube_file_fallback_generation",
+                            attempt_index=len(GEMINI_MODELS) + model_offset,
+                            attempt_total=attempt_total,
+                            attempt_log=result["llm_attempts"],
+                        )
                     resp = await asyncio.to_thread(_analyze)
                     usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()

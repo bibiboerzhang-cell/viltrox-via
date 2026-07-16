@@ -75,6 +75,31 @@ def _clean_text(value: Any, limit: int = 240) -> str:
     return text[:limit]
 
 
+def _stable_failure_reason(exc: BaseException, *, operation: str) -> str:
+    """Map implementation failures to frontend-safe, deterministic reason codes."""
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    if "timeout" in name or "timeout" in message or "deadline" in message:
+        return f"{operation}_timeout"
+    return f"{operation}_unavailable"
+
+
+def _stable_gateway_reason(value: Any) -> str:
+    reason = str(value or "").strip().lower()
+    if "timeout" in reason or "deadline" in reason:
+        return "llm_timeout"
+    allowed = {
+        "all_providers_failed",
+        "budget_exceeded",
+        "empty_response",
+        "invalid_json",
+        "not_configured",
+        "parse_failure",
+        "provider_unavailable",
+    }
+    return reason if reason in allowed else "llm_unavailable"
+
+
 def _float(value: Any) -> float:
     try:
         parsed = float(value)
@@ -495,8 +520,8 @@ def _budget_gate_note() -> str:
     """
     try:
         from app.domains.costs.budget_guard import check_budget
-    except Exception as exc:
-        return f"budget_guard_unavailable: {exc}"[:80]
+    except Exception:
+        return "budget_guard_unavailable"
     for scope in (RERANK_COST_TAG, "monthly_total"):
         try:
             if not check_budget(scope, 0.0, require_configured=False):
@@ -510,8 +535,8 @@ def _invoke_rerank_llm(query_text: str, top_items: list[dict[str, Any]]) -> tupl
     """LLM 打相关分 + 逐人一句为何合适;不可用/解析失败 → ({}, 诚实原因)。"""
     try:
         from app.platform import llm_gateway
-    except Exception as exc:
-        return {}, f"gateway_unavailable: {exc}"[:80]
+    except Exception:
+        return {}, "gateway_unavailable"
     lines: list[str] = []
     for i, item in enumerate(top_items):
         # blurb 压到 150 字符/人:thinking 模型思考 token 吃输出预算是常态(final_v1
@@ -533,15 +558,18 @@ def _invoke_rerank_llm(query_text: str, top_items: list[dict[str, Any]]) -> tupl
         + " Output STRICTLY one JSON array, no prose, reply starts with [\n\n"
         + "\n".join(lines)
     )
-    resp = llm_gateway.invoke(
-        prompt,
-        purpose=RERANK_PURPOSE,
-        max_output_tokens=4000,  # gateway 上限;给足输出预算防 thinking 截断(scored=1/20 实测教训)
-        cost_tag=RERANK_COST_TAG,
-    )
+    try:
+        resp = llm_gateway.invoke(
+            prompt,
+            purpose=RERANK_PURPOSE,
+            max_output_tokens=4000,  # gateway 上限;给足输出预算防 thinking 截断(scored=1/20 实测教训)
+            cost_tag=RERANK_COST_TAG,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional rerank must preserve coarse results
+        logger.warning("semantic_recall rerank provider failed", exc_info=True)
+        return {}, _stable_failure_reason(exc, operation="llm")
     if str(resp.get("model") or "") == "rule_v0" or str(resp.get("status") or "") != "success":
-        reason = _clean_text(resp.get("reason") or resp.get("status") or "llm_unusable", 60)
-        return {}, f"llm_unusable:{reason}"
+        return {}, _stable_gateway_reason(resp.get("reason") or resp.get("status"))
     parsed = _parse_rerank_array(str(resp.get("text") or ""))
     scores: dict[int, dict[str, Any]] = {}
     for obj in parsed:
@@ -692,8 +720,8 @@ def semantic_recall(
     try:
         candidates, embedding_meta = _embedding_recall(db, query, RECALL_CANDIDATE_LIMIT, embed_fn=embed_fn)
     except Exception as exc:  # noqa: BLE001 — 无网/无 key/预算闸/Qdrant 缺,全走降级
-        degraded_reason = _clean_text(str(exc), 120) or "embedding_unavailable"
-        logger.warning("semantic_recall embedding degraded: %s", degraded_reason)
+        degraded_reason = _stable_failure_reason(exc, operation="embedding")
+        logger.warning("semantic_recall embedding degraded reason=%s", degraded_reason, exc_info=True)
         recall_method = RECALL_METHOD_FALLBACK
         candidates = _ngram_recall(db, query, RECALL_CANDIDATE_LIMIT)
 

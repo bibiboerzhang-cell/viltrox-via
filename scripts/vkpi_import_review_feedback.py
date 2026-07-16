@@ -1,5 +1,6 @@
 """Import filled P13 recommendation review CSV into vkpi_recommendation_feedback."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -165,7 +166,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         result = import_feedback(Path(args.csv_path), dry_run=not args.commit)
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0 if result["error_count"] == 0 else 1
     finally:
         asyncio.run(close_db_runtime())

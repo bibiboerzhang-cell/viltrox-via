@@ -5,6 +5,7 @@ This script is intentionally narrow: it verifies the v3 closure list only.
 Amazon and other v4 work are not part of this gate.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -125,7 +126,7 @@ def main() -> int:
         },
         "results": results,
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if ok else 1
 
 

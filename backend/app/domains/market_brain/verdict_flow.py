@@ -615,6 +615,23 @@ def record_verdict(
 
     conn.commit()  # 结果行先落定,再 best-effort 关任务(关任务失败不影响 finalized)
     task_closed = _close_verdict_task(conn, bet_inbox_id) if bet_inbox_id else False
+    evidence_row = conn.execute(
+        f"""
+        SELECT actual_result, window_7d, window_14d, window_28d
+        FROM {_OUTCOMES}
+        WHERE id = ?
+        """,
+        (final_id,),
+    ).fetchone()
+    from app.domains.market_brain.data_readiness import (
+        build_learning_readiness,
+        has_observed_outcome_evidence,
+    )
+
+    evidence_backed = has_observed_outcome_evidence(dict(evidence_row or {}))
+
+    readiness = build_learning_readiness(conn=conn)
+    claimable = evidence_backed and bool(readiness.get("claimable"))
 
     logger.info(
         "verdict_flow.verdict_recorded",
@@ -626,12 +643,21 @@ def record_verdict(
         "outcome_id": final_id,
         "decision": dec,
         "finalized": True,
+        "evidence_backed": evidence_backed,
+        "claimable": claimable,
+        "claim_status": (
+            "validated" if claimable
+            else "observed_outcome" if evidence_backed
+            else "human_verdict_only"
+        ),
+        "data_readiness": readiness,
         "decided_at": now_iso,
         "decided_by": actor,
         "bet_inbox_id": bet_inbox_id,
         "verdict_task_closed": task_closed,
         "weight_change_recorded": wc is not None,
-        "note": "decided 即 finalized;next_weight_change 仅结构化记录,真回流走 recommendation_feedback 链(样本闸 5)。",
+        "note": "decided 即 finalized;无 actual/window 证据时仅算人工裁决,不背书业务效果;"
+                "next_weight_change 真回流仍走 recommendation_feedback 链(样本闸 5)。",
     }
 
 
@@ -686,6 +712,12 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
     if not table_exists(_OUTCOMES):
         return {"status": "empty", "reason": "migration_217_not_applied", "items": [], "count": 0}
     conn = get_conn()
+    from app.domains.market_brain.data_readiness import (
+        build_learning_readiness,
+        has_observed_outcome_evidence,
+        outcome_evidence_sql,
+    )
+
     safe_limit = max(1, min(int(limit or 50), 200))
 
     where = ""
@@ -721,13 +753,48 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
                     "window_28d", "next_weight_change"):
             if row.get(key) is not None:
                 row[key] = _loads(row.get(key))
+        evidence_backed = has_observed_outcome_evidence(row)
+        finalized = (
+            _text(row.get("decision"), 20) in DECISIONS
+            and bool(row.get("decided_at"))
+            and _int_or_none(row.get("decided_by")) is not None
+        )
+        row["finalized"] = finalized
+        row["evidence_backed"] = evidence_backed
+        row["claimable"] = finalized and evidence_backed
         items.append(row)
 
     stats_rows = conn.execute(
         f"SELECT decision, COUNT(*) AS n FROM {_OUTCOMES} GROUP BY decision"
     ).fetchall()
     by_decision = {str(dict(r)["decision"]): int(dict(r)["n"]) for r in stats_rows}
-    finalized = sum(n for k, n in by_decision.items() if k != "open")
+    decision_labeled = sum(n for k, n in by_decision.items() if k != "open")
+    observed_outcome_sql = outcome_evidence_sql()
+    final_stats_row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) FILTER (
+                WHERE decision <> 'open'
+                  AND decided_at IS NOT NULL
+                  AND decided_by IS NOT NULL
+            ) AS finalized,
+            COUNT(*) FILTER (
+                WHERE decision <> 'open'
+                  AND decided_at IS NOT NULL
+                  AND decided_by IS NOT NULL
+                  AND ({observed_outcome_sql})
+            ) AS evidence_backed
+        FROM {_OUTCOMES}
+        """
+    ).fetchone()
+    final_stats = dict(final_stats_row or {})
+    finalized = int(final_stats.get("finalized") or 0)
+    evidence_backed = int(final_stats.get("evidence_backed") or 0)
+    readiness = build_learning_readiness(conn=conn)
+    for item in items:
+        item["claimable"] = bool(readiness.get("claimable")) and bool(
+            item.get("finalized") and item.get("evidence_backed")
+        )
 
     return {
         "status": "ready",
@@ -735,7 +802,11 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
         "items": items,
         "by_decision": by_decision,
         "finalized_count": finalized,
-        "note": "总账只读;KOL 明细留 recommendation_outcomes,经 kol_pool_id/action_inbox_id 桥接。",
+        "decision_labeled_count": decision_labeled,
+        "evidence_backed_finalized_count": evidence_backed,
+        "claimable": bool(readiness.get("claimable")),
+        "data_readiness": readiness,
+        "note": "总账只读;decision 标签不等于业务效果证据,只有人工 finalized + actual/window 才计 evidence-backed。",
     }
 
 

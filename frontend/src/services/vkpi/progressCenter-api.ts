@@ -21,9 +21,30 @@ export interface ProgressTask {
   updated_at: string | null;
   masked: boolean;
   progress_pct: number | null;
+  /** 时间/历史均时推算，不是 Provider 返回的真实完成比例。 */
+  progress_estimated?: boolean;
+  /** 已运行超过近 7 天同类型均时；此时 progress_pct 必须为 null。 */
+  progress_overdue?: boolean;
+  progress_label?: string | null;
   eta_seconds?: number | null;
   queue_position?: number | null;
   ahead_count?: number | null;
+  provider?: string | null;
+  model?: string | null;
+  purpose?: string | null;
+  task_binding?: string | null;
+  fallback_used?: boolean;
+  fallback_mode?: "rule_v0" | "provider_fallback" | "safe_fallback" | string | null;
+  reason_code?: string | null;
+  reason_category?: string | null;
+  reason_retryable?: boolean;
+  error_category?: string | null;
+  next_retry_at?: string | null;
+  parent_job_id?: string | number | null;
+  phase?: string | null;
+  subphase?: string | null;
+  attempt_index?: number | null;
+  attempt_total?: number | null;
 }
 
 export interface ProgressRecentDone {
@@ -35,6 +56,22 @@ export interface ProgressRecentDone {
   finished_at: string | null;
   has_error: boolean;
   masked: boolean;
+  job_type?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  purpose?: string | null;
+  task_binding?: string | null;
+  fallback_used?: boolean;
+  fallback_mode?: "rule_v0" | "provider_fallback" | "safe_fallback" | string | null;
+  reason_code?: string | null;
+  reason_category?: string | null;
+  reason_retryable?: boolean;
+  error_category?: string | null;
+  parent_job_id?: string | number | null;
+  phase?: string | null;
+  subphase?: string | null;
+  attempt_index?: number | null;
+  attempt_total?: number | null;
 }
 
 export interface ProgressCenterData {
@@ -44,9 +81,16 @@ export interface ProgressCenterData {
   running: ProgressTask[];
   queued: ProgressTask[];
   recent_done: ProgressRecentDone[];
+  /** Gateway 结果及严格 reservation 的最近状态；不代表绕过 Gateway 的裸调用。 */
+  recent_llm: ProgressRecentDone[];
   stage_flow: Array<{ stage: string; label: string }>;
   diagnostics: {
     worker_online: boolean | null;
+    llm_visibility?:
+      | "gateway_outcomes_plus_strict_reservations"
+      | "gateway_outcomes_only_reservation_schema_unavailable"
+      | string;
+    llm_reservation_schema_available?: boolean;
   };
 }
 
@@ -73,6 +117,7 @@ export async function fetchProgressCenter(
     running: Array.isArray(res?.running) ? (res.running as ProgressTask[]) : [],
     queued: Array.isArray(res?.queued) ? (res.queued as ProgressTask[]) : [],
     recent_done: Array.isArray(res?.recent_done) ? (res.recent_done as ProgressRecentDone[]) : [],
+    recent_llm: Array.isArray(res?.recent_llm) ? (res.recent_llm as ProgressRecentDone[]) : [],
     stage_flow: Array.isArray(res?.stage_flow)
       ? (res.stage_flow as Array<{ stage: string; label: string }>)
       : [
@@ -85,6 +130,13 @@ export async function fetchProgressCenter(
       worker_online: typeof res?.diagnostics?.worker_online === "boolean"
         ? res.diagnostics.worker_online
         : null,
+      llm_visibility: typeof res?.diagnostics?.llm_visibility === "string"
+        ? res.diagnostics.llm_visibility
+        : undefined,
+      llm_reservation_schema_available:
+        typeof res?.diagnostics?.llm_reservation_schema_available === "boolean"
+          ? res.diagnostics.llm_reservation_schema_available
+          : undefined,
     },
   };
 }

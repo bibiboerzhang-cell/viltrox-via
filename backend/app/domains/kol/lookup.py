@@ -26,8 +26,17 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
 
     tracker = LookupTracker(body=body or {}, staff=staff)
     tracker.open()
+    reveal_contacts = False
+
+    def _project(payload: dict[str, Any]) -> dict[str, Any]:
+        if reveal_contacts:
+            return dict(payload or {})
+        from app.domains.kol.contact_access import mask_contact_payload
+
+        return mask_contact_payload(payload or {})
 
     def _with_session(payload: dict[str, Any]) -> dict[str, Any]:
+        payload = _project(payload)
         if tracker.session_id:
             payload["search_session_id"] = tracker.session_id
             payload["task_id"] = tracker.task_id
@@ -47,10 +56,20 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
         # 未命中真实 KOL:无 dossier/scan,记为 ready(查询本身成功,只是未匹配)。
         tracker.finish(
             status="ready",
-            result=result,
+            result=_project(result),
             summary={"matched": False, "stage": STAGE_SEARCH},
         )
         return _with_session(result)
+
+    from app.domains.kol.contact_access import authorize_plaintext_contacts
+
+    reveal_contacts = authorize_plaintext_contacts(
+        staff,
+        resource_type="kol",
+        resource_id=kol_id,
+        page_path="/kols/lookup",
+        metadata={"surface": "lookup"},
+    )
 
     try:
         claims_domain.assert_kol_access(kol_id, staff, allow_unclaimed=True)
@@ -62,7 +81,7 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
         result["access_message"] = reason
         tracker.finish(
             status="failed",
-            result=result,
+            result=_project(result),
             reason=reason,
             summary={"matched": True, "access_status": "claimed_by_other"},
         )
@@ -100,7 +119,7 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
             result["analysis_result"] = analysis_result
         tracker.finish(
             status="failed",
-            result=result,
+            result=_project(result),
             reason=str(exc) or "account scan/analyze failed",
             summary={"matched": True, "scan_requested": scan_requested},
         )
@@ -113,7 +132,7 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
 
     tracker.finish(
         status=terminal_status,
-        result=result,
+        result=_project(result),
         reason=terminal_reason,
         summary={
             "matched": True,

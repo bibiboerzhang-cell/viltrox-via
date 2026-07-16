@@ -277,10 +277,14 @@ async def job_vkpi_official_visual_scan():
     if not _scheduler_task_enabled("vkpi_official_visual_scan"):
         return
     try:
-        import asyncio
-        from app.domains.channels import official_visual_analysis
+        from .jobs_tasks import _enqueue_provider_job
 
-        result = await asyncio.to_thread(official_visual_analysis.process_pending_official_visuals, max_total=4)
-        logger.info("scheduler.vkpi_official_visual_scan", extra={"processed": result.get("processed")})
+        task_id = await _enqueue_provider_job(
+            "official_visual_scan",
+            {"max_total": 4, "requested_by": "scheduler"},
+            lock_key="official_visual_scan:scheduled",
+            timeout_seconds=3600,
+        )
+        logger.info("scheduler.vkpi_official_visual_scan_queued", extra={"job_id": task_id})
     except Exception:
         logger.exception("scheduler.vkpi_official_visual_scan_failed")

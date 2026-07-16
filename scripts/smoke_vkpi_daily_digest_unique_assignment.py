@@ -5,6 +5,7 @@ The digest is a work queue. One suggestion must not be assigned to multiple
 staff members on the same day, otherwise outreach can duplicate.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -176,7 +177,7 @@ def main() -> None:
         after = analytics.daily_staff_outreach_digest_status(target_date=target_date, limit=100, staff=manager, product_sku=product_sku)
         assert after["items_total"] == int(result["items_total"]), after
         assert after["duplicate_suggestion_count"] == 0, after
-        print("VKPI_DAILY_DIGEST_UNIQUE_ASSIGNMENT_SMOKE_OK")
+        stdout_out("VKPI_DAILY_DIGEST_UNIQUE_ASSIGNMENT_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(user_ids, staff_ids, pool_ids, product_sku)

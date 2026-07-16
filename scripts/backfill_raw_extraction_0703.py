@@ -28,6 +28,7 @@
   .venv/bin/python scripts/backfill_raw_extraction_0703.py --limit 500           # 每阶段最多 500 行
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -407,7 +408,7 @@ def main() -> int:
             except Exception:
                 pass
             report[name] = {"error": str(exc)[:500]}
-    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+    stdout_out(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

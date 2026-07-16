@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/runtime_env.sh"
+if [[ -z "${PYTHON_BIN:-}" && -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT/.venv/bin/python"
+fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 WORKER_CLUSTER_TIER="${WORKER_CLUSTER_TIER:-60}"
@@ -44,6 +47,11 @@ STARTED_PIDS=()
 for index in $(seq 1 "$WORKER_SERVICE_PROCESSES"); do
   log_file="$RUNTIME_LOGS/worker-${index}.log"
   pid_file="$RUNTIME_LOGS/worker-${index}.pid"
+  if [[ "$WORKER_SERVICE_PROCESSES" == "1" ]]; then
+    heartbeat_name="${VKPI_REDIS_WORKER_HEARTBEAT_NAME:-redis-worker-main}"
+  else
+    heartbeat_name="${VKPI_REDIS_WORKER_HEARTBEAT_NAME:-redis-worker-local-${index}}"
+  fi
   if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
     echo "worker-$index already running with pid $(cat "$pid_file")"
     continue
@@ -63,7 +71,14 @@ for index in $(seq 1 "$WORKER_SERVICE_PROCESSES"); do
     export WORKER_CLUSTER_TIER="$WORKER_CLUSTER_TIER"
     export WORKER_SERVICE_PROCESSES="$WORKER_SERVICE_PROCESSES"
     export WORKER_ASYNC_CONSUMERS="$WORKER_ASYNC_CONSUMERS"
-    exec nohup "$PYTHON_BIN" -m app.workers.worker_main
+    export VKPI_REDIS_WORKER_HEARTBEAT_NAME="$heartbeat_name"
+    # ``nohup`` only ignores SIGHUP.  PTY/task runners may still reap the
+    # launch process group after this script returns, so give every worker its
+    # own session before replacing the wrapper with the real runtime.  This is
+    # the same lifecycle contract used by start_worker.sh for Apify lanes.
+    exec nohup "$PYTHON_BIN" -c \
+      'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+      "$PYTHON_BIN" -m app.workers.worker_main
   ) >>"$log_file" 2>&1 &
   pid="$!"
   echo "$pid" >"$pid_file"

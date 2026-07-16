@@ -8,6 +8,7 @@ three S2/N3 alert primitives for human review:
 - daily cost
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -327,9 +328,9 @@ def main() -> None:
         cost_danger_usd=args.cost_danger_usd,
     )
     if args.markdown:
-        print(format_markdown(payload), end="")
+        stdout_out(format_markdown(payload), end="")
     else:
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        stdout_out(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

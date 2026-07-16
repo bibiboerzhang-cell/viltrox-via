@@ -18,19 +18,21 @@ Apify Actor:
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import urllib.parse
-import urllib.request
 from typing import Any
 
 from app.core.logging import get_logger
+from app.platform.apify_budget import (
+    ApifyBudgetBlocked,
+    ApifyProviderReplayBlocked,
+    call_apify_actor,
+)
 
 logger = get_logger(__name__)
 
 
-APIFY_API_BASE = "https://api.apify.com/v2"
 DEFAULT_ACTOR_ID = "zhorex~rednote-xiaohongshu-scraper"
 DEFAULT_RUN_TIMEOUT_SECONDS = 180
 
@@ -99,32 +101,38 @@ class XiaohongshuCrawler:
     def _start_run(self, input_payload: dict[str, Any]) -> dict[str, Any]:
         if not self.configured:
             return self._not_configured("apify_run")
-        
-        actor_path = self.actor_id.replace("/", "~")
-        url = f"{APIFY_API_BASE}/acts/{actor_path}/run-sync-get-dataset-items?token={self.api_token}"
-        
+
+        client: Any | None = None
         try:
-            data = json.dumps(input_payload).encode("utf-8")
-            request = urllib.request.Request(
-                url, data=data, method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "ViltroxMarketing/1.0",
-                },
+            from apify_client import ApifyClient  # type: ignore
+
+            client = ApifyClient(self.api_token)
+            run = call_apify_actor(
+                client,
+                self.actor_id.replace("/", "~"),
+                platform="xiaohongshu",
+                operation="run_sync_get_dataset_items",
+                source="industry_crawlers",
+                run_input=input_payload,
+                timeout_secs=self.run_timeout_seconds,
+                wait_secs=self.run_timeout_seconds,
             )
-            with urllib.request.urlopen(request, timeout=self.run_timeout_seconds) as response:  # nosec B310
-                body = response.read().decode("utf-8")
-            
-            payload = json.loads(body or "[]")
-            items = payload if isinstance(payload, list) else (payload.get("items") or [])
-            # C5 成本记账收口:run-sync HTTP 拿不到 run 对象 → run=None 口径记账
-            # (pricing_basis=no_run_object,盲区在成本卡如实可见;失败绝不影响抓取)。
+            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                return {
+                    "provider": "xiaohongshu",
+                    "provider_status": "error",
+                    "sync_status": "error",
+                    "items": [],
+                    "error": f"Xiaohongshu actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                    "raw": {"actor_id": self.actor_id, "input": input_payload},
+                }
+            dataset_id = str(run.get("defaultDatasetId") or "")
+            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
             try:
                 from app.domains.costs.budget_guard import record_apify_run
 
                 record_apify_run(
-                    None,
+                    run,
                     actor_id=self.actor_id,
                     platform="xiaohongshu",
                     operation="run_sync_dataset_items",
@@ -140,15 +148,23 @@ class XiaohongshuCrawler:
                 "items": items,
                 "raw": {"actor_id": self.actor_id, "input": input_payload},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "raw": {"actor_id": self.actor_id}}
+        except ApifyProviderReplayBlocked as exc:
+            return {"provider": "xiaohongshu", "provider_status": "blocked", "sync_status": "blocked", "code": exc.code, "items": [], "raw": {"actor_id": self.actor_id}}
         except Exception as exc:  # pragma: no cover
             return {
                 "provider": "xiaohongshu",
                 "provider_status": "error",
                 "sync_status": "error",
                 "items": [],
-                "error": str(exc),
+                "error": str(exc).replace(self.api_token, "[redacted]")[:500],
                 "raw": {"actor_id": self.actor_id},
             }
+        finally:
+            from . import close_apify_client
+
+            close_apify_client(client)
 
     def crawl_channel_profile(
         self,

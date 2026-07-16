@@ -216,6 +216,9 @@ def ensure_vkpi_schema() -> None:
             financial_status TEXT DEFAULT '',
             fulfillment_status TEXT DEFAULT '',
             refund_status TEXT DEFAULT '',
+            cancelled_at TEXT,
+            provider_auth_mode TEXT NOT NULL DEFAULT 'legacy_unverified',
+            provider_verified_at TEXT,
             discount_codes_json TEXT NOT NULL DEFAULT '[]',
             landing_site TEXT DEFAULT '',
             note_attributes_json TEXT NOT NULL DEFAULT '{}',
@@ -438,6 +441,14 @@ def ensure_vkpi_schema() -> None:
         """
     )
     _ensure_column(conn, "vkpi_sales_attributions", "shopify_order_snapshot_id", "INTEGER")
+    _ensure_column(conn, "vkpi_shopify_order_snapshots", "cancelled_at", "TEXT")
+    _ensure_column(
+        conn,
+        "vkpi_shopify_order_snapshots",
+        "provider_auth_mode",
+        "TEXT NOT NULL DEFAULT 'legacy_unverified'",
+    )
+    _ensure_column(conn, "vkpi_shopify_order_snapshots", "provider_verified_at", "TEXT")
     if _table_columns(conn, "kols"):
         _ensure_column(conn, "kols", "avatar_url", "TEXT DEFAULT ''")
         _ensure_column(conn, "kols", "profile_url", "TEXT DEFAULT ''")

@@ -8,17 +8,23 @@ Classifies posts into 1 primary + 0-2 secondary pillars across:
   - Layer 2 (photography/cinema)
   - Layer 3 (data-driven, team adds later)
 
-Uses llm_gateway.invoke() (4 provider fallback).
+Uses one exact-model ``llm_production`` call with a strict JSON contract.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.db.connection import get_conn
-from app.platform import llm_gateway
+from app.core.config import OPENAI_MODEL
+from app.core.logging import get_logger
+from app.db.connection import get_conn, is_postgres_runtime
+from app.platform import llm_production
+
+
+logger = get_logger(__name__)
 
 
 PROMPT_VERSION = "v1.0"
@@ -91,37 +97,70 @@ PILLAR_SEEDS = [
 def ensure_vkpi_pillar_schema() -> None:
     """Create P1.5 pillar tables and seed defaults when migrations are absent."""
     conn = get_conn()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_pillars (
-          id SERIAL PRIMARY KEY,
-          pillar_key VARCHAR(50) UNIQUE NOT NULL,
-          display_name VARCHAR(100) NOT NULL,
-          description TEXT,
-          layer SMALLINT NOT NULL,
-          is_active BOOLEAN DEFAULT TRUE,
-          display_order INT DEFAULT 0,
-          created_at TIMESTAMPTZ DEFAULT NOW()
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_pillars (
+              id SERIAL PRIMARY KEY,
+              pillar_key VARCHAR(50) UNIQUE NOT NULL,
+              display_name VARCHAR(100) NOT NULL,
+              description TEXT,
+              layer SMALLINT NOT NULL,
+              is_active BOOLEAN DEFAULT TRUE,
+              display_order INT DEFAULT 0,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_post_pillars (
-          id BIGSERIAL PRIMARY KEY,
-          post_id BIGINT NOT NULL,
-          post_table VARCHAR(50) NOT NULL,
-          pillar_id INT NOT NULL REFERENCES vkpi_pillars(id),
-          is_primary BOOLEAN DEFAULT FALSE,
-          confidence NUMERIC(3,2),
-          llm_provider VARCHAR(50),
-          llm_model VARCHAR(100),
-          prompt_version VARCHAR(20),
-          classified_at TIMESTAMPTZ DEFAULT NOW(),
-          CONSTRAINT vkpi_post_pillar_uniq UNIQUE (post_id, post_table, pillar_id, prompt_version)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_post_pillars (
+              id BIGSERIAL PRIMARY KEY,
+              post_id BIGINT NOT NULL,
+              post_table VARCHAR(50) NOT NULL,
+              pillar_id INT NOT NULL REFERENCES vkpi_pillars(id),
+              is_primary BOOLEAN DEFAULT FALSE,
+              confidence NUMERIC(3,2),
+              llm_provider VARCHAR(50),
+              llm_model VARCHAR(100),
+              prompt_version VARCHAR(20),
+              classified_at TIMESTAMPTZ DEFAULT NOW(),
+              CONSTRAINT vkpi_post_pillar_uniq UNIQUE (post_id, post_table, pillar_id, prompt_version)
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_pillars (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              pillar_key TEXT UNIQUE NOT NULL,
+              display_name TEXT NOT NULL,
+              description TEXT,
+              layer INTEGER NOT NULL,
+              is_active INTEGER DEFAULT 1,
+              display_order INTEGER DEFAULT 0,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_post_pillars (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              post_id INTEGER NOT NULL,
+              post_table TEXT NOT NULL,
+              pillar_id INTEGER NOT NULL REFERENCES vkpi_pillars(id),
+              is_primary INTEGER DEFAULT 0,
+              confidence NUMERIC,
+              llm_provider TEXT,
+              llm_model TEXT,
+              prompt_version TEXT,
+              classified_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              CONSTRAINT vkpi_post_pillar_uniq UNIQUE (post_id, post_table, pillar_id, prompt_version)
+            )
+            """
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_post_pillars_post ON vkpi_post_pillars(post_id, post_table)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_post_pillars_pillar ON vkpi_post_pillars(pillar_id, classified_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_post_pillars_primary ON vkpi_post_pillars(post_id, post_table) WHERE is_primary")
@@ -279,6 +318,144 @@ def _validate_response(parsed: dict, valid_keys: set[str]) -> dict:
     }
 
 
+def _pillar_llm_binding() -> tuple[str, str]:
+    """Return one exact classification binding; never a provider chain."""
+    return "openai", (os.environ.get("VKPI_OPENAI_MODEL") or OPENAI_MODEL).strip()
+
+
+def _valid_confidence(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and 0.0 <= float(value) <= 1.0
+    )
+
+
+def _valid_pillar_payload(value: Any, valid_keys: set[str]) -> bool:
+    if not isinstance(value, dict):
+        return False
+    primary = str(value.get("primary_pillar") or "").strip().lower()
+    if primary not in valid_keys or not _valid_confidence(value.get("primary_confidence")):
+        return False
+    secondary = value.get("secondary_pillars")
+    secondary_confidences = value.get("secondary_confidences")
+    if not isinstance(secondary, list) or len(secondary) > 2:
+        return False
+    if not isinstance(secondary_confidences, list) or len(secondary_confidences) != len(secondary):
+        return False
+    normalized = [str(item or "").strip().lower() for item in secondary]
+    if any(item not in valid_keys or item == primary for item in normalized):
+        return False
+    if len(set(normalized)) != len(normalized):
+        return False
+    if not all(_valid_confidence(item) for item in secondary_confidences):
+        return False
+    reasoning = value.get("reasoning")
+    return isinstance(reasoning, str) and bool(reasoning.strip()) and len(reasoning.strip()) <= 600
+
+
+def _run_pillar_llm(
+    prompt: str,
+    *,
+    post_id: int,
+    post_table: str,
+    valid_keys: set[str],
+    staff: dict | None,
+) -> dict[str, Any]:
+    """Run governed classification or return the existing rule fallback."""
+    provider, model = _pillar_llm_binding()
+    try:
+        response = llm_production.generate_json(
+            prompt,
+            provider=provider,
+            model=model,
+            purpose="vkpi_pillar",
+            max_output_tokens=200,
+            cost_tag="vkpi_pillar",
+            triggered_by="content.pillars.classify_post",
+            staff=staff,
+            required_keys=(
+                "primary_pillar",
+                "primary_confidence",
+                "secondary_pillars",
+                "secondary_confidences",
+                "reasoning",
+            ),
+            validator=lambda value: _valid_pillar_payload(value, valid_keys),
+            deadline_seconds=45.0,
+            metadata={
+                "surface": "content_intelligence",
+                "post_id": int(post_id),
+                "post_table": post_table,
+                "phase": "content_intelligence",
+                "subphase": "pillar_classification",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": f"{post_table}:{int(post_id)}",
+            },
+        )
+    except Exception as exc:
+        response = {
+            "status": "exception",
+            "reason": f"{type(exc).__name__}: {str(exc)[:180]}",
+        }
+    payload = response.get("json") if isinstance(response, dict) else None
+    status = str(response.get("status") or "")
+    actual_provider = str(response.get("provider") or "").strip().lower()
+    actual_model = str(response.get("model") or "").strip()
+    if status == "success" and actual_provider == provider and actual_model == model and _valid_pillar_payload(payload, valid_keys):
+        return response
+    failure = response.get("failure") if isinstance(response.get("failure"), dict) else {}
+    if status == "success" and actual_provider != provider:
+        reason = "exact_provider_mismatch"
+    elif status == "success" and actual_model != model:
+        reason = "exact_model_mismatch"
+    elif status == "success":
+        reason = "response_contract_invalid"
+    else:
+        reason = str(
+            failure.get("code")
+            or response.get("failure_code")
+            or response.get("reason")
+            or status
+            or "llm_unavailable"
+        )[:180]
+    return {
+        "status": "fallback_to_rule",
+        "provider": "rule_v0",
+        "model": "rule_v0",
+        "json": None,
+        "reason": reason,
+        "source_status": status or "invalid_result",
+        "requested_provider": provider,
+        "requested_model": model,
+    }
+
+
+def _degraded_pillar_result(
+    post_id: int,
+    post_table: str,
+    response: dict[str, Any],
+    valid_keys: set[str],
+) -> dict[str, Any]:
+    """Return a retryable fallback classification without persisting it."""
+    fallback = _validate_response({}, valid_keys)
+    return {
+        "post_id": int(post_id),
+        "post_table": post_table,
+        "status": "degraded",
+        "method": "deterministic_fallback",
+        "persisted": False,
+        "retryable": True,
+        "reason": str(response.get("reason") or "llm_unavailable")[:180],
+        "primary_pillar": fallback["primary_pillar"],
+        "primary_confidence": fallback["primary_confidence"],
+        "secondary_pillars": fallback["secondary_pillars"],
+        "llm_provider": "rule_v0",
+        "llm_model": "rule_v0",
+    }
+
+
 def classify_post(
     post_id: int,
     post_table: str = "industry_posts",
@@ -290,17 +467,30 @@ def classify_post(
     ensure_vkpi_pillar_schema()
     conn = get_conn()
     
-    # Skip if already classified (unless forced)
+    # Skip completed model/rule classifications unless forced. Older releases
+    # persisted AI-off placeholders as rule_v0/rule_v0; those remain retryable.
+    replace_placeholder = False
     if not force_reclassify:
         existing = conn.execute(
             """
-            SELECT COUNT(*) as n 
+            SELECT COUNT(*) AS n,
+                   SUM(
+                     CASE WHEN COALESCE(llm_provider, '') = 'rule_v0'
+                                AND COALESCE(llm_model, '') = 'rule_v0'
+                          THEN 0 ELSE 1 END
+                   ) AS durable_n
             FROM vkpi_post_pillars 
             WHERE post_id = ? AND post_table = ? AND prompt_version = ?
             """,
             (post_id, post_table, PROMPT_VERSION),
         ).fetchone()
-        if existing and existing["n"] > 0:
+        existing_n = int(existing["n"] or 0) if existing else 0
+        try:
+            durable_n = int(existing["durable_n"] or 0) if existing else 0
+        except (KeyError, IndexError, TypeError):
+            durable_n = existing_n
+        replace_placeholder = bool(existing_n > 0 and durable_n == 0)
+        if existing_n > 0 and not replace_placeholder:
             return {
                 "post_id": post_id,
                 "post_table": post_table,
@@ -326,20 +516,20 @@ def classify_post(
     # Build prompt
     prompt = _build_prompt(post)
     
-    # LLM call
-    response = llm_gateway.invoke(
+    response = _run_pillar_llm(
         prompt,
-        purpose="vkpi_pillar",
-        max_output_tokens=200,
+        post_id=post_id,
+        post_table=post_table,
+        valid_keys=valid_keys,
         staff=staff,
     )
     
     response_status = str(response.get("status") or "")
     if response_status == "success":
-        parsed = _parse_response(response.get("text", ""))
+        parsed = response.get("json") if isinstance(response.get("json"), dict) else {}
         validated = _validate_response(parsed, valid_keys)
     elif response_status == "fallback_to_rule":
-        validated = _validate_response({}, valid_keys)
+        return _degraded_pillar_result(post_id, post_table, response, valid_keys)
     else:
         return {
             "post_id": post_id,
@@ -355,6 +545,7 @@ def classify_post(
         result=validated,
         llm_provider=response.get("provider", "unknown"),
         llm_model=response.get("model", "unknown"),
+        replace_existing=bool(force_reclassify or replace_placeholder),
     )
 
 
@@ -365,11 +556,14 @@ def _persist_classification(
     result: dict,
     llm_provider: str,
     llm_model: str,
+    replace_existing: bool = False,
 ) -> dict:
     """Write classification to vkpi_post_pillars."""
     ensure_vkpi_pillar_schema()
-    conn = get_conn()
-    
+
+    # Resolve every FK before the replacement transaction. _pillar_id_by_key
+    # runs schema compatibility checks that may commit, so calling it after the
+    # DELETE would break the all-or-nothing force-reclassify contract.
     # Primary pillar
     primary_id = _pillar_id_by_key(result["primary_pillar"])
     if primary_id is None:
@@ -378,44 +572,75 @@ def _persist_classification(
             "status": "fail",
             "error": f"primary pillar '{result['primary_pillar']}' not in DB",
         }
-    
-    conn.execute(
-        """
-        INSERT INTO vkpi_post_pillars (
-          post_id, post_table, pillar_id, is_primary, confidence,
-          llm_provider, llm_model, prompt_version, classified_at
-        ) VALUES (?, ?, ?, TRUE, ?, ?, ?, ?, ?)
-        ON CONFLICT (post_id, post_table, pillar_id, prompt_version) DO NOTHING
-        """,
-        (
-            post_id, post_table, primary_id,
-            result["primary_confidence"],
-            llm_provider, llm_model, PROMPT_VERSION, _now_iso(),
-        ),
-    )
-    
-    # Secondary pillars
+    secondary_rows: list[tuple[int, float]] = []
     for sec_key, sec_conf in zip(
         result["secondary_pillars"], result["secondary_confidences"]
     ):
         sec_id = _pillar_id_by_key(sec_key)
-        if sec_id is None:
-            continue
+        if sec_id is not None:
+            secondary_rows.append((int(sec_id), float(sec_conf)))
+
+    conn = get_conn()
+    try:
+        if replace_existing:
+            conn.execute(
+                """
+                DELETE FROM vkpi_post_pillars
+                WHERE post_id = ? AND post_table = ? AND prompt_version = ?
+                """,
+                (post_id, post_table, PROMPT_VERSION),
+            )
         conn.execute(
             """
             INSERT INTO vkpi_post_pillars (
               post_id, post_table, pillar_id, is_primary, confidence,
               llm_provider, llm_model, prompt_version, classified_at
-            ) VALUES (?, ?, ?, FALSE, ?, ?, ?, ?, ?)
-            ON CONFLICT (post_id, post_table, pillar_id, prompt_version) DO NOTHING
+            ) VALUES (?, ?, ?, TRUE, ?, ?, ?, ?, ?)
+            ON CONFLICT (post_id, post_table, pillar_id, prompt_version) DO UPDATE SET
+              is_primary = EXCLUDED.is_primary,
+              confidence = EXCLUDED.confidence,
+              llm_provider = EXCLUDED.llm_provider,
+              llm_model = EXCLUDED.llm_model,
+              classified_at = EXCLUDED.classified_at
             """,
             (
-                post_id, post_table, sec_id, sec_conf,
+                post_id, post_table, primary_id,
+                result["primary_confidence"],
                 llm_provider, llm_model, PROMPT_VERSION, _now_iso(),
             ),
         )
-    
-    conn.commit()
+
+        # Secondary pillars
+        for sec_id, sec_conf in secondary_rows:
+            conn.execute(
+                """
+                INSERT INTO vkpi_post_pillars (
+                  post_id, post_table, pillar_id, is_primary, confidence,
+                  llm_provider, llm_model, prompt_version, classified_at
+                ) VALUES (?, ?, ?, FALSE, ?, ?, ?, ?, ?)
+                ON CONFLICT (post_id, post_table, pillar_id, prompt_version) DO UPDATE SET
+                  is_primary = EXCLUDED.is_primary,
+                  confidence = EXCLUDED.confidence,
+                  llm_provider = EXCLUDED.llm_provider,
+                  llm_model = EXCLUDED.llm_model,
+                  classified_at = EXCLUDED.classified_at
+                """,
+                (
+                    post_id, post_table, sec_id, sec_conf,
+                    llm_provider, llm_model, PROMPT_VERSION, _now_iso(),
+                ),
+            )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.warning(
+                "content.pillars.persist_rollback_failed",
+                extra={"post_id": int(post_id), "post_table": post_table},
+                exc_info=True,
+            )
+        raise
 
     return {
         "post_id": post_id,

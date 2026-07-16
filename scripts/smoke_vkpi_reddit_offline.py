@@ -25,6 +25,8 @@ import os
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 
@@ -48,7 +50,7 @@ def main():
     )
 
     # Test 1: Registration
-    print("[1] Crawler registration...")
+    out("[1] Crawler registration...")
     if not is_supported("reddit"):
         failures.append("reddit not in supported_platforms()")
     if "reddit" not in supported_platforms():
@@ -57,30 +59,30 @@ def main():
     crawler = get_crawler("reddit")
     if crawler is None:
         failures.append("get_crawler('reddit') returned None")
-        print("  FAIL: cannot get crawler instance")
+        out("  FAIL: cannot get crawler instance")
         for f in failures:
-            print(f"    - {f}")
+            out(f"    - {f}")
         sys.exit(1)
-    print("  ✓ reddit registered")
+    out("  ✓ reddit registered")
 
     # Test 2: configured property (no token)
-    print("[2] configured property (no env)...")
+    out("[2] configured property (no env)...")
     if crawler.configured:
         failures.append("crawler.configured should be False with no env")
     else:
-        print("  ✓ configured=False as expected")
+        out("  ✓ configured=False as expected")
 
     # Test 3: primary_path
-    print("[3] primary_path with no env...")
+    out("[3] primary_path with no env...")
     if crawler.primary_path != "none":
         failures.append(
             f"primary_path should be 'none', got '{crawler.primary_path}'"
         )
     else:
-        print("  ✓ primary_path='none'")
+        out("  ✓ primary_path='none'")
 
     # Test 4: crawl_subreddit graceful degradation
-    print("[4] crawl_subreddit with no config...")
+    out("[4] crawl_subreddit with no config...")
     result = crawler.crawl_subreddit("cinematography", limit=5)
     if result.get("provider_status") != "not_configured":
         failures.append(
@@ -95,28 +97,28 @@ def main():
         failures.append(
             f"Expected sync_status='skip', got '{result.get('sync_status')}'"
         )
-    print("  ✓ graceful not_configured")
+    out("  ✓ graceful not_configured")
 
     # Test 5: crawl_brand_mentions graceful
-    print("[5] crawl_brand_mentions with no config...")
+    out("[5] crawl_brand_mentions with no config...")
     result = crawler.crawl_brand_mentions("viltrox", limit=10)
     if result.get("provider_status") not in ("not_configured", "skip"):
         failures.append(
             f"Expected not_configured, got '{result.get('provider_status')}'"
         )
-    print("  ✓ graceful")
+    out("  ✓ graceful")
 
     # Test 6: crawl_post_comments graceful
-    print("[6] crawl_post_comments with no config...")
+    out("[6] crawl_post_comments with no config...")
     result = crawler.crawl_post_comments("abc123", max_depth=3)
     if result.get("provider_status") not in ("not_configured", "skip"):
         failures.append(
             f"Expected not_configured, got '{result.get('provider_status')}'"
         )
-    print("  ✓ graceful")
+    out("  ✓ graceful")
 
     # Test 7: _normalize_subreddit_name
-    print("[7] subreddit name normalization...")
+    out("[7] subreddit name normalization...")
     cases = [
         ("cinematography", "cinematography"),
         ("/r/cinematography", "cinematography"),
@@ -137,10 +139,10 @@ def main():
                 f"_normalize_subreddit_name({input_val!r}) = "
                 f"{result!r}, expected {expected!r}"
             )
-    print(f"  ✓ {len(cases)} cases passed")
+    out(f"  ✓ {len(cases)} cases passed")
 
     # Test 8: _normalize_post_id
-    print("[8] post id normalization...")
+    out("[8] post id normalization...")
     cases = [
         ("abc123", "abc123"),
         ("t3_abc123", "abc123"),
@@ -156,10 +158,10 @@ def main():
                 f"_normalize_post_id({input_val!r}) = "
                 f"{result!r}, expected {expected!r}"
             )
-    print(f"  ✓ {len(cases)} cases passed")
+    out(f"  ✓ {len(cases)} cases passed")
 
     # Test 9: V-KPI unified interface
-    print("[9] V-KPI unified interface...")
+    out("[9] V-KPI unified interface...")
     result = crawler.crawl_channel_profile(
         "https://reddit.com/r/cinematography/", max_posts=3
     )
@@ -181,10 +183,10 @@ def main():
         failures.append(
             "crawl_video_comments should respect not_configured"
         )
-    print("  ✓ unified interface respects not_configured")
+    out("  ✓ unified interface respects not_configured")
 
     # Test 10: Empty input handling
-    print("[10] Empty input handling...")
+    out("[10] Empty input handling...")
     result = crawler.crawl_subreddit("", limit=5)
     if result.get("provider_status") not in ("error", "not_configured"):
         failures.append(
@@ -202,17 +204,17 @@ def main():
         failures.append(
             "Empty post_id should return error or not_configured"
         )
-    print("  ✓ empty inputs handled")
+    out("  ✓ empty inputs handled")
 
     # Final
-    print()
+    out()
     if failures:
-        print(f"FAIL: {len(failures)} issues:")
+        out(f"FAIL: {len(failures)} issues:")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("VKPI_REDDIT_OFFLINE_SMOKE_OK")
+        out("VKPI_REDDIT_OFFLINE_SMOKE_OK")
 
 
 if __name__ == "__main__":

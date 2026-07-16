@@ -1,0 +1,86 @@
+[Unit]
+Description=V-KPI scheduler-off staging Web canary
+Documentation=file:/opt/viltrox-2.0-staging/current/.vkpi-release.json
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=viltrox
+Group=viltrox
+UMask=0027
+# This is an isolated atomic root.  atomic_release_layout.py owns current and
+# must point it at one already sealed
+# /opt/viltrox-2.0-staging/releases/<release-id> directory.  The production
+# root, pointers, environment, service, workers and timers are unrelated.
+WorkingDirectory=/opt/viltrox-2.0-staging/current
+EnvironmentFile=/opt/viltrox-2.0-staging/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=RUNTIME_ENV_QUIET=1
+Environment=HOME=/tmp/vkpi-staging-web-home
+Environment=XDG_CACHE_HOME=/tmp/vkpi-staging-web-cache
+Environment=TMPDIR=/tmp
+RuntimeDirectory=vkpi-staging-web
+RuntimeDirectoryMode=0750
+
+# Fail closed if the staging pointer, immutable manifest or shared environment
+# is absent, unreadable, or writable by the non-root application identity.
+# The deploy gate must additionally run atomic_release_layout.py verify-seal
+# before starting this unit; these checks defend the systemd restart path.
+ExecStartPre=/usr/bin/test -L /opt/viltrox-2.0-staging/current
+ExecStartPre=/usr/bin/test -f /opt/viltrox-2.0-staging/current/.vkpi-release.json
+ExecStartPre=/usr/bin/test -r /opt/viltrox-2.0-staging/current/.vkpi-release.json
+ExecStartPre=/usr/bin/test ! -w /opt/viltrox-2.0-staging/current/.vkpi-release.json
+ExecStartPre=/usr/bin/test -r /opt/viltrox-2.0-staging/.env
+ExecStartPre=/usr/bin/test ! -w /opt/viltrox-2.0-staging/.env
+ExecStartPre=/opt/viltrox-2.0-staging/.venv/bin/python /opt/viltrox-2.0-staging/current/scripts/ops/staging_web_preflight.py --root /opt/viltrox-2.0-staging --app-user viltrox --expected-owner-uid 0 --expected-owner-gid 0 --env-owner-uid 0
+
+# EnvironmentFile values can override Environment= declarations.  Put every
+# process-role and safety invariant after /usr/bin/env so a stale production
+# .env cannot enable a scheduler, browser daemon, cleanup loop or orchestrator.
+# Gunicorn is started directly because start_admin.sh's production contract is
+# intentionally the existing scheduler owner on port 8001.
+ExecStart=/usr/bin/env APP_GIT_SHA= APP_GIT_BRANCH= APP_BUILD_TIME= APP_ROLE=admin-web ENVIRONMENT=production DB_RUNTIME_BACKEND=postgres LOCAL_RUNTIME_FORCE_STACK=0 RUNTIME_ENV_QUIET=1 HOST=127.0.0.1 PORT=8002 BIND=127.0.0.1:8002 WORKERS=2 WEB_CONCURRENCY=2 ADMIN_DAEMON=0 ENABLE_LOCAL_ORCHESTRATOR=0 ENABLE_SCHEDULER=0 ENABLE_BROWSER=0 ENABLE_UPLOAD_CLEANUP=0 POSTGRES_POOL_MIN_SIZE=2 POSTGRES_POOL_MAX_SIZE=4 POSTGRES_POOL_TIMEOUT_SEC=30 PIDFILE=/run/vkpi-staging-web/gunicorn.pid HOME=/tmp/vkpi-staging-web-home XDG_CACHE_HOME=/tmp/vkpi-staging-web-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/viltrox-2.0-staging/current/backend /opt/viltrox-2.0-staging/.venv/bin/python -m gunicorn app.main:app -c /opt/viltrox-2.0-staging/current/deploy/gunicorn_config.py --pythonpath /opt/viltrox-2.0-staging/current/backend --access-logfile - --error-logfile -
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viltrox-2.0-staging-web
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/viltrox-2.0-staging/releases
+ReadOnlyPaths=/opt/viltrox-2.0-staging/current
+ReadOnlyPaths=/opt/viltrox-2.0-staging/.env
+ReadOnlyPaths=-/opt/viltrox-2.0-staging/.env.production
+ReadWritePaths=/opt/viltrox-2.0-staging/uploads
+ReadWritePaths=/opt/viltrox-2.0-staging/runtime
+ReadWritePaths=/opt/viltrox-2.0-staging/frames
+ReadWritePaths=/opt/viltrox-2.0-staging/creator_profiles
+InaccessiblePaths=/opt/viltrox-2.0-staging/backups
+
+[Install]
+WantedBy=multi-user.target

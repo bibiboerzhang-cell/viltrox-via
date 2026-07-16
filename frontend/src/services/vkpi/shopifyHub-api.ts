@@ -37,7 +37,7 @@ export async function saveShopifyCreds(
     {
       method: "POST",
       body: jsonBody({
-        store_domain: storeDomain,
+        shop_domain: storeDomain,
         access_token: accessToken,
         webhook_secret: webhookSecret,
       }),

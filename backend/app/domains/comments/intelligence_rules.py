@@ -117,7 +117,8 @@ def rule_v0_comment_summary(*, cutoff: str, sample_limit: int) -> dict[str, Any]
         """,
         (cutoff,),
     ).fetchone()
-    cached = int((cached_row or {}).get("n") or 0)
+    cached_item = dict(cached_row) if cached_row else {}
+    cached = int(cached_item.get("n") or 0)
     rows = conn.execute(
         """
         SELECT id, post_id, post_table, external_post_id, platform, external_comment_id,

@@ -147,7 +147,11 @@ export function ShopifyConnectPage({ apiToken = "" }: { apiToken?: string } = {}
   }, [apiToken, loadStatus]);
 
   const configured = status?.provider_status === "configured";
-  const env = status?.env_vars || {};
+  const env = {
+    SHOPIFY_SHOP_DOMAIN: Boolean(status?.credential_fields?.shop_domain),
+    SHOPIFY_ADMIN_ACCESS_TOKEN: Boolean(status?.credential_fields?.access_token),
+    SHOPIFY_WEBHOOK_SECRET: Boolean(status?.credential_fields?.webhook_secret),
+  };
   const runs: ShopifySyncRun[] = status?.sync_runs || [];
   const ordersWebhook = webhookUrl(status?.webhooks?.orders_create || "/api/vkpi/webhooks/shopify/orders");
   const refundsWebhook = webhookUrl(status?.webhooks?.orders_refund_create || "/api/vkpi/webhooks/shopify/refunds");

@@ -12,6 +12,8 @@ shared helpers. Endpoint guard failures are hard failures.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import ast
 import json
@@ -251,13 +253,13 @@ def main() -> int:
 
     report = run_audit()
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        out(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
-        print("VKPI_SCOPE_AUDIT", json.dumps(report["summary"], ensure_ascii=False, sort_keys=True))
+        out("VKPI_SCOPE_AUDIT", json.dumps(report["summary"], ensure_ascii=False, sort_keys=True))
         if report["routers"]["unguarded_admin_endpoints"]:
-            print("UNGUARDED_ADMIN_ENDPOINTS", json.dumps(report["routers"]["unguarded_admin_endpoints"], ensure_ascii=False, sort_keys=True))
+            out("UNGUARDED_ADMIN_ENDPOINTS", json.dumps(report["routers"]["unguarded_admin_endpoints"], ensure_ascii=False, sort_keys=True))
         if report["services"]["advisory_scope_warnings"]:
-            print("ADVISORY_SCOPE_WARNINGS", json.dumps(report["services"]["advisory_scope_warnings"][:20], ensure_ascii=False, sort_keys=True))
+            out("ADVISORY_SCOPE_WARNINGS", json.dumps(report["services"]["advisory_scope_warnings"][:20], ensure_ascii=False, sort_keys=True))
     if not report["ok"]:
         return 1
     if args.fail_on_advisory and report["services"]["advisory_scope_warnings"]:

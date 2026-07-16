@@ -85,26 +85,26 @@ const baseProps = {
 };
 
 describe("DashboardReplicaPage render smoke", () => {
-  it("挂载不抛错 → 绩效总览标题在", async () => {
+  it("挂载不抛错 → 增长总览标题在", async () => {
     render(<DashboardReplicaPage {...baseProps} />);
-    expect(await screen.findByText("绩效总览")).toBeInTheDocument();
+    expect(await screen.findByText("增长总览")).toBeInTheDocument();
   });
 
   it("无 error boundary 文案", async () => {
     render(<DashboardReplicaPage {...baseProps} />);
-    await screen.findByText("绩效总览");
+    await screen.findByText("增长总览");
     expect(screen.queryByText(/出错了|Something went wrong/)).not.toBeInTheDocument();
   });
 
   it("dashboardLoading=true → 标题仍在,副标题显示读取中", async () => {
     render(<DashboardReplicaPage {...baseProps} dashboardLoading={true} />);
-    expect(await screen.findByText("绩效总览")).toBeInTheDocument();
+    expect(await screen.findByText("增长总览")).toBeInTheDocument();
     expect(screen.getByText("读取中")).toBeInTheDocument();
   });
 
   it("dashboardError 非空 → 副标题显示无信号", async () => {
     render(<DashboardReplicaPage {...baseProps} dashboardError="boom" />);
-    await screen.findByText("绩效总览");
+    await screen.findByText("增长总览");
     expect(screen.getByRole("status", { name: "KPI data status" })).toHaveTextContent("无信号");
   });
 

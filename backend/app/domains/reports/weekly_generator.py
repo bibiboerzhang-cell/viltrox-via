@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Mapping
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.access import scope
-from app.platform import llm_gateway
+from app.domains.reports.report_helpers import (
+    _explicit_report_model_policy,
+    _invoke_exact_report_model,
+)
 from app.domains.reports.weekly_templates import (
     PROMPT_VERSION,
     TEMPLATES,
@@ -59,6 +62,13 @@ def ensure_vkpi_weekly_reports_schema() -> None:
           status VARCHAR(20) DEFAULT 'draft',
           sent_at TIMESTAMPTZ,
           delivery_channels TEXT,
+          truth_invalidated_at TIMESTAMPTZ,
+          truth_invalidation_reason TEXT NOT NULL DEFAULT '',
+          truth_invalidation_migration INT,
+          truth_restorable BOOLEAN NOT NULL DEFAULT TRUE,
+          source_data_status VARCHAR(30) NOT NULL DEFAULT 'awaiting_source',
+          source_count INT NOT NULL DEFAULT 0,
+          source_is_partial BOOLEAN NOT NULL DEFAULT TRUE,
           generated_at TIMESTAMPTZ DEFAULT NOW(),
           CONSTRAINT vkpi_weekly_reports_uniq UNIQUE (staff_id, layer, template_key, period_start)
         )
@@ -67,6 +77,27 @@ def ensure_vkpi_weekly_reports_schema() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_weekly_reports_period ON vkpi_weekly_reports(period_start DESC, period_end DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_weekly_reports_staff ON vkpi_weekly_reports(staff_id, period_start DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_weekly_reports_status ON vkpi_weekly_reports(status, generated_at DESC)")
+    # CREATE TABLE IF NOT EXISTS does not evolve an already-created SQLite
+    # table.  The production PostgreSQL path is handled by migration 256; this
+    # guarded compatibility loop keeps local/tests on the same typed contract.
+    if not is_postgres_runtime():
+        columns = {
+            str(row["name"] if hasattr(row, "keys") and "name" in row.keys() else row[1])
+            for row in conn.execute("PRAGMA table_info(vkpi_weekly_reports)").fetchall()
+        }
+        for column, declaration in (
+            ("truth_invalidated_at", "TEXT"),
+            ("truth_invalidation_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("truth_invalidation_migration", "INTEGER"),
+            ("truth_restorable", "INTEGER NOT NULL DEFAULT 1"),
+            ("source_data_status", "TEXT NOT NULL DEFAULT 'awaiting_source'"),
+            ("source_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("source_is_partial", "INTEGER NOT NULL DEFAULT 1"),
+        ):
+            if column not in columns:
+                conn.execute(
+                    f"ALTER TABLE vkpi_weekly_reports ADD COLUMN {column} {declaration}"
+                )
     conn.commit()
 
 
@@ -75,6 +106,43 @@ def _safe_section(label: str, fn) -> str:
         return fn()
     except Exception as exc:
         return f"({label} unavailable: {str(exc)[:120]})"
+
+
+def _source_truth_from_policy(policy_payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Reduce explicit source checks to the persisted public truth contract.
+
+    Report body availability and source truth are intentionally independent:
+    deterministic markdown can remain readable while its business claims stay
+    awaiting_source.  Only non-empty, all-real, passed source checks may become
+    ``real``.
+    """
+
+    checks = policy_payload.get("checks") if isinstance(policy_payload, Mapping) else {}
+    source_check = checks.get("sources") if isinstance(checks, Mapping) else {}
+    raw_items = source_check.get("items") if isinstance(source_check, Mapping) else []
+    items = [dict(item) for item in raw_items if isinstance(item, Mapping)] if isinstance(raw_items, list) else []
+    trusted_count = sum(
+        max(0, int(item.get("source_count") or 0))
+        for item in items
+        if str(item.get("data_status") or "").strip().lower() == "real"
+    )
+    all_real = bool(items) and all(
+        str(item.get("data_status") or "").strip().lower() == "real"
+        and int(item.get("source_count") or 0) > 0
+        for item in items
+    )
+    passed = source_check.get("passed") is True if isinstance(source_check, Mapping) else False
+    if passed and all_real and trusted_count > 0:
+        status = "real"
+    elif trusted_count > 0:
+        status = "partial"
+    else:
+        status = "awaiting_source"
+    return {
+        "source_data_status": status,
+        "source_count": trusted_count,
+        "source_is_partial": status != "real",
+    }
 
 
 def _staff_role_for_templates(role: str, *, is_owner: bool = False) -> str:
@@ -365,6 +433,7 @@ def generate_for_template(
     template_key: str,
     period_start: date,
     period_end: date,
+    model_policy_input: Mapping[str, Any] | None = None,
 ) -> dict:
     """Generate single report for staff + template."""
     ensure_vkpi_weekly_reports_schema()
@@ -394,7 +463,7 @@ def generate_for_template(
     if staff_id:
         staff_row = conn.execute(
             """
-            SELECT s.id, s.role, s.is_owner, COALESCE(u.name, u.email, 'Staff ' || s.id::TEXT) AS name
+            SELECT s.id, s.role, s.is_owner, COALESCE(u.name, 'Staff ' || s.id::TEXT) AS name
             FROM staff s
             LEFT JOIN users u ON u.id = s.user_id
             WHERE s.id = ?
@@ -425,13 +494,36 @@ def generate_for_template(
         data_context=data_context,
     )
     
-    # LLM call
+    # Model-policy gate.  The legacy text context has no structured provenance,
+    # so provider execution remains blocked unless a trusted internal caller
+    # supplies explicit readiness/source evidence and runtime verification also
+    # passes the shared exact-model contract.
     template = TEMPLATES[template_key]
-    response = llm_gateway.invoke(
+    model_decision = _explicit_report_model_policy(model_policy_input)
+    policy_payload = model_decision.to_dict()
+    source_truth = _source_truth_from_policy(policy_payload)
+    response = _invoke_exact_report_model(
         prompt,
+        decision=model_decision,
         purpose="vkpi_weekly_report",
         max_output_tokens=template["max_output_tokens"],
+        metadata={
+            "template_key": template_key,
+            "period_start": _format_date(period_start),
+            "period_end": _format_date(period_end),
+        },
     )
+    if response is None:
+        response = {
+            "status": "fallback_to_rule",
+            "text": "",
+            "provider": "rule_v0",
+            "model": "deterministic_descriptive",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_cents": 0,
+            "reason": "report_model_policy_blocked",
+        }
     
     response_status = str(response.get("status") or "")
     if response_status not in {"success", "fallback_to_rule"}:
@@ -448,7 +540,10 @@ def generate_for_template(
         _format_date(period_start),
         _format_date(period_end),
     )
-    body = response.get("text", "") or ("LLM fallback summary generated from grounded context.\n\n" + data_context[:3000])
+    body = response.get("text", "") or (
+        "Deterministic descriptive report generated from grounded context.\n\n"
+        + data_context[:3000]
+    )
     
     cursor = conn.execute(
         """
@@ -458,8 +553,8 @@ def generate_for_template(
           title, body_md,
           llm_provider, llm_model, prompt_version,
           input_tokens, output_tokens, cost_cents,
-          status, generated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, source_data_status, source_count, source_is_partial, generated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             staff_id, template["layer"], template_key,
@@ -468,7 +563,11 @@ def generate_for_template(
             response.get("provider"), response.get("model"), PROMPT_VERSION,
             response.get("input_tokens", 0), response.get("output_tokens", 0),
             response.get("cost_cents", 0),
-            "draft", _now_iso(),
+            "draft",
+            source_truth["source_data_status"],
+            source_truth["source_count"],
+            source_truth["source_is_partial"],
+            _now_iso(),
         ),
     )
     
@@ -481,6 +580,8 @@ def generate_for_template(
         "title": title,
         "cost_cents": response.get("cost_cents", 0),
         "provider": response.get("provider"),
+        "claim_level": model_decision.claim_level,
+        "model_policy": policy_payload,
     }
 
 
@@ -496,7 +597,7 @@ def generate_for_staff(
     conn = get_conn()
     staff_row = conn.execute(
         """
-        SELECT s.id, s.role, s.is_owner, COALESCE(u.name, u.email, 'Staff ' || s.id::TEXT) AS name
+        SELECT s.id, s.role, s.is_owner, COALESCE(u.name, 'Staff ' || s.id::TEXT) AS name
         FROM staff s
         LEFT JOIN users u ON u.id = s.user_id
         WHERE s.id = ?
@@ -548,7 +649,7 @@ def generate_for_all_staff(
     conn = get_conn()
     staff_rows = conn.execute(
         """
-        SELECT s.id, s.role, s.is_owner, COALESCE(u.name, u.email, 'Staff ' || s.id::TEXT) AS name
+        SELECT s.id, s.role, s.is_owner, COALESCE(u.name, 'Staff ' || s.id::TEXT) AS name
         FROM staff s
         LEFT JOIN users u ON u.id = s.user_id
         WHERE COALESCE(s.active, 1) IN (1, TRUE)
@@ -608,6 +709,38 @@ def _report_readable(report: dict, staff: dict[str, Any] | None) -> bool:
     return report_staff_id == scope.actor_staff_id(staff)
 
 
+def _public_report(report: dict[str, Any], *, include_body: bool) -> dict[str, Any]:
+    """Serialize a weekly artifact without leaking withdrawn markdown."""
+
+    item = dict(report)
+    invalidated = (
+        str(item.get("status") or "").strip().lower() == "invalidated"
+        or bool(item.get("truth_invalidated_at"))
+        or int(item.get("truth_invalidation_migration") or 0) == 256
+    )
+    item["truth_invalidated"] = invalidated
+    item["truth_invalidation_reason"] = (
+        str(item.get("truth_invalidation_reason") or "").strip()
+        if invalidated
+        else ""
+    )
+    stored_status = str(item.get("source_data_status") or "").strip().lower()
+    stored_source_count = int(item.get("source_count") or 0)
+    if invalidated:
+        public_status = "unavailable"
+    elif stored_status == "real" and stored_source_count > 0:
+        public_status = "real"
+    elif stored_status == "partial" and stored_source_count > 0:
+        public_status = "partial"
+    else:
+        public_status = "awaiting_source"
+    item["data_status"] = public_status
+    item["is_partial"] = bool(item.get("source_is_partial")) or public_status != "real"
+    if invalidated or not include_body:
+        item.pop("body_md", None)
+    return item
+
+
 def get_report(report_id: int, *, staff: dict[str, Any] | None = None) -> dict:
     """Get full report by ID, enforcing the weekly-report read ruling."""
     ensure_vkpi_weekly_reports_schema()
@@ -615,7 +748,10 @@ def get_report(report_id: int, *, staff: dict[str, Any] | None = None) -> dict:
     row = conn.execute(
         """
         SELECT id, staff_id, layer, template_key, period_start, period_end,
-               title, body_md, llm_provider, status, cost_cents, generated_at
+               title, body_md, llm_provider, status, cost_cents, generated_at,
+               truth_invalidated_at, truth_invalidation_reason,
+               truth_invalidation_migration, truth_restorable,
+               source_data_status, source_count, source_is_partial
         FROM vkpi_weekly_reports WHERE id = ?
         """,
         (report_id,),
@@ -625,7 +761,7 @@ def get_report(report_id: int, *, staff: dict[str, Any] | None = None) -> dict:
     report = dict(row)
     if not _report_readable(report, staff):
         raise scope.ScopeDenied("weekly report scope denied")
-    return report
+    return _public_report(report, include_body=True)
 
 
 def list_reports(
@@ -660,7 +796,10 @@ def list_reports(
     rows = conn.execute(
         f"""
         SELECT id, staff_id, layer, template_key, period_start, period_end,
-               title, status, cost_cents, generated_at
+               title, status, cost_cents, generated_at,
+               truth_invalidated_at, truth_invalidation_reason,
+               truth_invalidation_migration, truth_restorable,
+               source_data_status, source_count, source_is_partial
         FROM vkpi_weekly_reports
         WHERE {where_sql}
         ORDER BY period_start DESC, staff_id ASC
@@ -671,5 +810,5 @@ def list_reports(
 
     return {
         "count": len(rows),
-        "reports": [dict(r) for r in rows],
+        "reports": [_public_report(dict(r), include_body=False) for r in rows],
     }

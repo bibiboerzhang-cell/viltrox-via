@@ -31,6 +31,167 @@ VIDEO_FINAL_LAYERS = (
     "layer6_flags_and_scores",
 )
 
+FINAL_V1_COMPLETED_STATUSES = frozenset({"complete", "completed", "ready", "success", "succeeded"})
+
+
+class InvalidFinalV1ResultError(RuntimeError):
+    """The provider returned JSON, but not a cacheable final_v1 analysis."""
+
+
+def _nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _meaningful_list(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if _nonempty_text(item):
+            return True
+        if isinstance(item, dict) and any(_nonempty_text(field) for field in item.values()):
+            return True
+    return False
+
+
+def _final_v1_has_core_content(payload: dict[str, Any]) -> bool:
+    layer1 = payload.get("layer1_visual_content") if isinstance(payload.get("layer1_visual_content"), dict) else {}
+    if _nonempty_text(layer1.get("content_summary")):
+        return True
+    timeline = layer1.get("scene_timeline") if isinstance(layer1.get("scene_timeline"), list) else []
+    if any(isinstance(item, dict) and _nonempty_text(item.get("what")) for item in timeline):
+        return True
+
+    product = layer1.get("product_presence") if isinstance(layer1.get("product_presence"), dict) else {}
+    if any(
+        _meaningful_list(product.get(key))
+        for key in ("products", "selling_points_shown", "missing_proof")
+    ) or _nonempty_text(product.get("notes")):
+        return True
+    competitors = layer1.get("competitor_presence") if isinstance(layer1.get("competitor_presence"), list) else []
+    if any(
+        isinstance(item, dict) and (_nonempty_text(item.get("brand")) or _nonempty_text(item.get("scene")))
+        for item in competitors
+    ):
+        return True
+    production = (
+        layer1.get("production_observations")
+        if isinstance(layer1.get("production_observations"), dict)
+        else {}
+    )
+    production_fields = ("composition", "lighting", "color_grade", "professional_level", "notes")
+    if any(_nonempty_text(production.get(key)) for key in production_fields):
+        return True
+
+    analysis_fields = {
+        "layer2_viewer_emotion": ("one_sentence_viewer_feeling", "memory_points"),
+        "layer3_three_values": ("material_source_vs_distribution_channel",),
+        "layer4_attribution": ("attribution_risk", "what_to_request_to_verify_lens"),
+        "layer5_recommendations": ("why", "next_brief_adjustments", "must_request_from_kol"),
+        "layer6_flags_and_scores": ("final_verdict", "key_hook"),
+    }
+    for layer_name, fields in analysis_fields.items():
+        layer = payload.get(layer_name) if isinstance(payload.get(layer_name), dict) else {}
+        for field in fields:
+            value = layer.get(field)
+            if _nonempty_text(value) or _meaningful_list(value):
+                return True
+    return False
+
+
+def _meaningful_evidence_value(value: Any) -> bool:
+    if _nonempty_text(value):
+        return True
+    if isinstance(value, list):
+        return any(_meaningful_evidence_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(
+            _meaningful_evidence_value(item)
+            for key, item in value.items()
+            if key not in {"subtitle_used", "confidence", "score"}
+        )
+    return False
+
+
+def _final_v1_has_evidence(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_final_v1_has_evidence(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    for key, item in value.items():
+        if key == "evidence" and _meaningful_evidence_value(item):
+            return True
+        if key == "scene_timeline" and isinstance(item, list):
+            if any(
+                isinstance(scene, dict)
+                and _nonempty_text(scene.get("timestamp"))
+                and _nonempty_text(scene.get("what"))
+                for scene in item
+            ):
+                return True
+        if _final_v1_has_evidence(item):
+            return True
+    return False
+
+
+def _final_v1_payload_validation_errors(payload: Any) -> list[str]:
+    if not isinstance(payload, dict) or not payload:
+        return ["empty_payload", "missing_core_content", "missing_evidence"]
+    errors: list[str] = []
+    if not _final_v1_has_core_content(payload):
+        errors.append("missing_core_content")
+    if not _final_v1_has_evidence(payload):
+        errors.append("missing_evidence")
+    return errors
+
+
+def validate_final_v1_result(raw: Any, *, allow_legacy_status: bool = True) -> list[str]:
+    """Return reasons why a normalized final_v1 result must not enter ready cache."""
+    if not isinstance(raw, dict):
+        return ["result_not_object"]
+    errors: list[str] = []
+    if raw.get("analyzed") is not True:
+        errors.append("missing_completion_state")
+    status = str(raw.get("status") or "").strip().lower()
+    if status and status not in FINAL_V1_COMPLETED_STATUSES:
+        errors.append(f"invalid_status:{status}")
+    elif not status and not allow_legacy_status:
+        errors.append("missing_status")
+
+    provenance = raw.get("provenance") if isinstance(raw.get("provenance"), dict) else {}
+    if not _nonempty_text(raw.get("model")) and not _nonempty_text(provenance.get("model")):
+        errors.append("missing_model")
+    if not _nonempty_text(raw.get("method")) and not _nonempty_text(provenance.get("method")):
+        errors.append("missing_provenance_method")
+
+    payload = raw.get("video_analysis_final_v1")
+    if not isinstance(payload, dict):
+        payload = raw if any(layer in raw for layer in VIDEO_FINAL_LAYERS) else {}
+    errors.extend(_final_v1_payload_validation_errors(payload))
+    return list(dict.fromkeys(errors))
+
+
+def mark_invalid_final_v1_result(raw: dict[str, Any], errors: list[str]) -> str:
+    detail = ",".join(errors) or "unknown_validation_error"
+    message = f"invalid_result: final_v1 validation failed ({detail})"
+    raw.update({"analyzed": False, "status": "invalid_result", "error": message})
+    return message
+
+
+def ensure_final_v1_result_cacheable(raw: dict[str, Any]) -> None:
+    """Validate at the cache boundary and upgrade valid legacy envelopes in place."""
+    errors = validate_final_v1_result(raw, allow_legacy_status=True)
+    if errors:
+        raise InvalidFinalV1ResultError(mark_invalid_final_v1_result(raw, errors))
+    raw.setdefault("status", "completed")
+    raw.setdefault(
+        "provenance",
+        {
+            "provider": "gemini",
+            "model": str(raw.get("model") or "").strip(),
+            "method": str(raw.get("method") or "").strip(),
+        },
+    )
+
 
 def _response_usage_metadata(resp: Any) -> dict[str, Any]:
     usage = getattr(resp, "usage_metadata", None)
@@ -40,9 +201,11 @@ def _response_usage_metadata(resp: Any) -> dict[str, Any]:
         return usage
     if hasattr(usage, "model_dump"):
         try:
-            return usage.model_dump(mode="json", exclude_none=True)
+            dumped = usage.model_dump(mode="json", exclude_none=True)
         except Exception:
-            pass
+            dumped = None
+        if isinstance(dumped, dict):
+            return dumped
     fields = (
         "prompt_token_count",
         "candidates_token_count",
@@ -75,6 +238,10 @@ def _parse_json_response_text(text: str) -> dict[str, Any]:
 
 
 def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:
+    errors = _final_v1_payload_validation_errors(parsed)
+    if errors:
+        detail = ",".join(errors)
+        raise InvalidFinalV1ResultError(f"invalid_result: final_v1 validation failed ({detail})")
     payload: dict[str, Any] = {"schema_version": "video_analysis_final_v1"}
     for layer in VIDEO_FINAL_LAYERS:
         value = parsed.get(layer) if isinstance(parsed.get(layer), dict) else {}
@@ -216,6 +383,16 @@ def _apply_final_v1_result(
     usage_metadata: dict[str, Any],
     subtitle_used: bool,
 ) -> None:
+    candidate = {
+        "analyzed": True,
+        "status": "completed",
+        "method": method,
+        "model": model,
+        "video_analysis_final_v1": parsed,
+    }
+    errors = validate_final_v1_result(candidate, allow_legacy_status=False)
+    if errors:
+        raise InvalidFinalV1ResultError(mark_invalid_final_v1_result(result, errors))
     payload = _normalise_final_v1_result(parsed, subtitle_used=subtitle_used)
     layer1 = payload["layer1_visual_content"]
     layer6 = payload["layer6_flags_and_scores"]
@@ -226,8 +403,15 @@ def _apply_final_v1_result(
     result.update(
         {
             "analyzed": True,
+            "status": "completed",
+            "error": None,
             "method": method,
             "model": model,
+            "provenance": {
+                "provider": "gemini",
+                "model": model,
+                "method": method,
+            },
             "usage_metadata": usage_metadata,
             "schema_version": "video_analysis_final_v1",
             "video_analysis_final_v1": payload,

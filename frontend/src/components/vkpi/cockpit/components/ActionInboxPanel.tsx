@@ -36,9 +36,13 @@ import {
   executeAction,
   listActionInbox,
   listRecentExecutionLedger,
+  reconcileAction,
   snoozeAction,
 } from "../../../../services/vkpi/actionInbox-api";
-import type { ActionInboxTodaySummary } from "../../../../services/vkpi/actionInbox-api";
+import type {
+  ActionInboxTodaySummary,
+  ActionReconcileDecision,
+} from "../../../../services/vkpi/actionInbox-api";
 
 const e = React.createElement;
 
@@ -52,11 +56,28 @@ const EXEC_REASON: Record<string, string> = {
   budget_hard_stop: "超出单次预算上限",
   touches_v6_fit_violation: "命中 fit 红线,已拦截",
   validation_failed: "执行前校验未通过",
+  execution_finalize_failed: "执行结果未能安全落账,必须人工核对",
+  execution_claim_lost: "执行状态发生变化,必须人工核对",
   deep_missing_no_profile_url: "缺主页 URL,无法深析",
   kol_profile_no_profile_url: "缺主页 URL,无法补全",
   failed_retry_not_in_failed_state: "任务非失败态,无需重试",
   content_candidate_no_post_id: "缺内容贴 ID",
 };
+
+type ReconciliationDraft = {
+  decision: ActionReconcileDecision;
+  reason: string;
+  evidence: string;
+  correlationId: string;
+};
+
+function reconciliationCorrelation(actionId: number): string {
+  const random =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `action-${actionId}-${random}`;
+}
 
 // 9 类 → 中文标签 + 图标 + 强调色
 const CATEGORY_META = {
@@ -148,6 +169,8 @@ export function ActionInboxPanel({
   const COLLAPSED_COUNT = 3;
   // 闭环波 L4:gtm_verdict 条目「去裁决」展开态(per-id;内嵌 VerdictPanel)。
   const [verdictOpen, setVerdictOpen] = React.useState<Record<string, boolean>>({});
+  const [reconcileOpen, setReconcileOpen] = React.useState<Record<string, boolean>>({});
+  const [reconcileDrafts, setReconcileDrafts] = React.useState<Record<string, ReconciliationDraft>>({});
 
   const load = React.useCallback(() => {
     if (!apiToken) {
@@ -157,18 +180,20 @@ export function ActionInboxPanel({
     }
     setLoading(true);
     setError("");
-    // suggested = 待人审;approved = 已审批待执行(让「执行」第二步跨刷新仍可见——
-    // approved 态后端不会重新生成,只在此显式拉取)。两者按 id 去重合并。
+    // suggested = 待人审;approved = 已审批待执行;executing = 外部副作用结果待人工核对。
+    // 三者按 id 去重合并,executing 绝不能因刷新或执行请求失败而从界面消失。
     Promise.all([
       listActionInbox(apiToken, { limit }),
       listActionInbox(apiToken, { limit, status: "approved" }),
+      listActionInbox(apiToken, { limit, status: "executing" }),
     ])
-      .then(([sug, appr]) => {
+      .then(([sug, appr, executing]) => {
         const seen = new Set<any>();
         const merged: any[] = [];
         for (const it of [
           ...(Array.isArray(sug?.items) ? sug.items : []),
           ...(Array.isArray(appr?.items) ? appr.items : []),
+          ...(Array.isArray(executing?.items) ? executing.items : []),
         ]) {
           if (it && !seen.has(it.id)) {
             seen.add(it.id);
@@ -181,10 +206,10 @@ export function ActionInboxPanel({
             (b?.category === "gtm_verdict" ? 1 : 0) - (a?.category === "gtm_verdict" ? 1 : 0),
         );
         setItems(merged);
-        setScope(sug?.scope || appr?.scope || "");
-        setAvailable(sug?.available !== false);
+        setScope(sug?.scope || appr?.scope || executing?.scope || "");
+        setAvailable(sug?.available !== false && appr?.available !== false && executing?.available !== false);
         // 当天闭环计数:两个响应同源(scope 一致),取任一存在的即可。
-        setTodaySummary(sug?.today_summary ?? appr?.today_summary ?? null);
+        setTodaySummary(sug?.today_summary ?? appr?.today_summary ?? executing?.today_summary ?? null);
       })
       .catch((err) => {
         setError(err?.message || "加载失败");
@@ -204,6 +229,10 @@ export function ActionInboxPanel({
   // 本地置态:approve 后不移除,改 status=approved 让「执行」第二步钮露出(两步分明)。
   const setItemStatus = React.useCallback((id: any, status: string) => {
     setItems((prev) => prev.map((it: any) => (it.id === id ? { ...it, status } : it)));
+  }, []);
+
+  const setItemPatch = React.useCallback((id: any, patch: Record<string, unknown>) => {
+    setItems((prev) => prev.map((it: any) => (it.id === id ? { ...it, ...patch } : it)));
   }, []);
 
   // 灌水可见化:操作成功后乐观自增当天计数(下次 load 会被后端真值校正)。
@@ -273,9 +302,19 @@ export function ActionInboxPanel({
               if (ledgerOpen) loadLedger();
               return;
             }
-            // failed → 终态,移除并报因;skipped → 保留(仍 approved,可重试)并报因。
+            // 外部副作用可能已经发生但终态落账失败:保留 executing,禁止自动重试,转人工对账。
             const why = EXEC_REASON[res?.reason] || res?.reason || "执行未生效";
             setActionError(why);
+            if (res?.detail?.manual_reconciliation_required) {
+              setItemPatch(it.id, {
+                status: "executing",
+                manual_reconciliation_required: true,
+                reconciliation_overdue: false,
+                execution_age_seconds: 0,
+              });
+              return;
+            }
+            // 已确认并落账的 failed 是终态;skipped 仍保留 approved。
             if (outcome === "failed") removeItem(it.id);
             return;
           }
@@ -292,7 +331,11 @@ export function ActionInboxPanel({
             removeItem(it.id);
           }
         })
-        .catch((err: any) => setActionError(err?.message || "操作失败"))
+        .catch((err: any) => {
+          setActionError(err?.message || "操作失败");
+          // 网络失败时无法断言外部动作未发生,立即从后端重读 executing 真值。
+          if (kind === "execute") load();
+        })
         .finally(() =>
           setBusy((b) => {
             const next = { ...b };
@@ -301,7 +344,101 @@ export function ActionInboxPanel({
           }),
         );
     },
-    [apiToken, busy, removeItem, setItemStatus, bumpToday, ledgerOpen, loadLedger],
+    [apiToken, busy, removeItem, setItemStatus, setItemPatch, bumpToday, ledgerOpen, loadLedger, load],
+  );
+
+  const toggleReconciliation = React.useCallback((it: any) => {
+    const key = String(it.id);
+    setReconcileOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+    setReconcileDrafts((prev) =>
+      prev[key]
+        ? prev
+        : {
+            ...prev,
+            [key]: {
+              decision: "unknown",
+              reason: "",
+              evidence: "",
+              correlationId: reconciliationCorrelation(Number(it.id)),
+            },
+          },
+    );
+  }, []);
+
+  const updateReconciliationDraft = React.useCallback(
+    (id: any, patch: Partial<ReconciliationDraft>) => {
+      const key = String(id);
+      setReconcileDrafts((prev) => {
+        const current = prev[key] ?? {
+          decision: "unknown",
+          reason: "",
+          evidence: "",
+          correlationId: reconciliationCorrelation(Number(id)),
+        };
+        return { ...prev, [key]: { ...current, ...patch } };
+      });
+    },
+    [],
+  );
+
+  const submitReconciliation = React.useCallback(
+    (it: any) => {
+      if (!apiToken || !it || busy[it.id]) return;
+      const key = String(it.id);
+      const draft = reconcileDrafts[key];
+      const evidence = String(draft?.evidence || "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((reference) => ({ source: "manual", reference }));
+      if (!draft?.reason.trim() || evidence.length === 0 || !draft.correlationId) {
+        setActionError("人工对账必须填写原因并提供至少一条证据");
+        return;
+      }
+      setBusy((prev) => ({ ...prev, [it.id]: "reconcile" }));
+      setActionError("");
+      reconcileAction(apiToken, Number(it.id), {
+        decision: draft.decision,
+        reason: draft.reason.trim(),
+        evidence,
+        correlation_id: draft.correlationId,
+      })
+        .then((res) => {
+          const label =
+            res.decision === "succeeded" ? "确认成功" : res.decision === "failed" ? "确认失败" : "仍未知";
+          setOkNote(`人工对账 · ${label} · 台账#${res.ledger_id}`);
+          setReconcileOpen((prev) => ({ ...prev, [key]: false }));
+          if (res.status === "executing") {
+            setItemPatch(it.id, {
+              status: "executing",
+              manual_reconciliation_required: true,
+              result_checklist_json: {
+                ...(it.result_checklist_json || {}),
+                manual_reconciliation: {
+                  decision: res.decision,
+                  correlation_id: res.correlation_id,
+                },
+              },
+            });
+          } else {
+            removeItem(it.id);
+            if (res.status === "executed") bumpToday("today_executed_count");
+          }
+          if (ledgerOpen) loadLedger();
+        })
+        .catch((err: any) => {
+          setActionError(err?.message || "人工对账失败");
+          load();
+        })
+        .finally(() =>
+          setBusy((prev) => {
+            const next = { ...prev };
+            delete next[it.id];
+            return next;
+          }),
+        );
+    },
+    [apiToken, busy, reconcileDrafts, setItemPatch, removeItem, bumpToday, ledgerOpen, loadLedger, load],
   );
 
   // GTM-Loop:gtm_bet 无自动执行器 —— approved 后人在线下做完业务动作,在此「标记已执行」。
@@ -357,6 +494,31 @@ export function ActionInboxPanel({
     const b = busy[it.id];
     const spin = (k: string) =>
       b === k ? e(Loader2, { size: 9, className: "animate-spin" }) : null;
+
+    if (it.status === "executing") {
+      return e(
+        "div",
+        { className: "mt-1.5 flex flex-wrap items-center gap-1.5" },
+        e(
+          "button",
+          {
+            type: "button",
+            disabled: Boolean(b),
+            onClick: () => toggleReconciliation(it),
+            className:
+              "flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-200 transition-colors hover:bg-amber-500/20 disabled:opacity-40",
+          },
+          spin("reconcile") || e(FileCheck, { size: 9 }),
+          reconcileOpen[String(it.id)] ? "收起对账" : "人工对账",
+        ),
+        e(
+          "span",
+          { className: `text-[8px] ${it.reconciliation_overdue ? "text-red-300" : "text-amber-300/80"}` },
+          it.reconciliation_overdue ? "已超时 · 待人工核对" : "执行结果待人工核对",
+        ),
+        e("span", { className: "text-[8px] text-muted" }, "禁止自动重试"),
+      );
+    }
 
     // 闭环波 L4:裁决任务不可跳过 —— 不给忽略/稍后,只给「去裁决」(展开内嵌裁决一屏)。
     if (it.category === "gtm_verdict") {
@@ -494,6 +656,73 @@ export function ActionInboxPanel({
     );
   };
 
+  const renderReconciliationForm = (it: any) => {
+    const key = String(it.id);
+    if (it.status !== "executing" || !reconcileOpen[key]) return null;
+    const draft = reconcileDrafts[key] || {
+      decision: "unknown" as ActionReconcileDecision,
+      reason: "",
+      evidence: "",
+      correlationId: reconciliationCorrelation(Number(it.id)),
+    };
+    const canSubmit = Boolean(draft.reason.trim() && draft.evidence.trim() && !busy[it.id]);
+    return e(
+      "div",
+      {
+        className:
+          "mt-2 space-y-1.5 rounded border border-amber-500/20 bg-amber-500/[0.05] p-2",
+      },
+      e("div", { className: "text-[9px] font-medium text-amber-200" }, "人工对账记录"),
+      e(
+        "select",
+        {
+          "aria-label": "对账结论",
+          value: draft.decision,
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+            updateReconciliationDraft(it.id, { decision: event.target.value as ActionReconcileDecision }),
+          className: "h-7 w-full rounded border border-line bg-panel px-2 text-[10px] text-ink",
+        },
+        e("option", { value: "unknown" }, "仍未知 · 保留执行中"),
+        e("option", { value: "succeeded" }, "确认成功 · 进入已执行"),
+        e("option", { value: "failed" }, "确认失败 · 进入失败"),
+      ),
+      e("input", {
+        "aria-label": "对账原因",
+        value: draft.reason,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+          updateReconciliationDraft(it.id, { reason: event.target.value }),
+        placeholder: "判断原因(必填)",
+        maxLength: 500,
+        className: "h-7 w-full rounded border border-line bg-panel px-2 text-[10px] text-ink placeholder:text-muted",
+      }),
+      e("textarea", {
+        "aria-label": "对账证据",
+        value: draft.evidence,
+        onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) =>
+          updateReconciliationDraft(it.id, { evidence: event.target.value }),
+        placeholder: "每行一条证据 URL、订单号、日志号或截图编号(必填)",
+        rows: 2,
+        className: "w-full resize-y rounded border border-line bg-panel px-2 py-1 text-[10px] text-ink placeholder:text-muted",
+      }),
+      e(
+        "div",
+        { className: "flex items-center justify-between gap-2" },
+        e("span", { className: "min-w-0 truncate text-[8px] text-muted" }, `关联:${draft.correlationId}`),
+        e(
+          "button",
+          {
+            type: "button",
+            disabled: !canSubmit,
+            onClick: () => submitReconciliation(it),
+            className:
+              "shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[9px] text-amber-200 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40",
+          },
+          busy[it.id] === "reconcile" ? "提交中…" : "提交对账",
+        ),
+      ),
+    );
+  };
+
   let body;
   if (loading && items.length === 0) {
     body = e(
@@ -599,6 +828,7 @@ export function ActionInboxPanel({
             : null,
           // 操作区:suggested → 通过/稍后/忽略(提醒类只「知道了/稍后」);approved → 执行。
           renderActions(it),
+          renderReconciliationForm(it),
           // 闭环波 L4:gtm_verdict 展开 → 内嵌裁决一屏(裁决成功后移出列表 + 绿条回执)。
           it.category === "gtm_verdict" && verdictOpen[it.id]
             ? e(VerdictPanel, {

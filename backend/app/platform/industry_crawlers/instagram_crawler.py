@@ -25,6 +25,8 @@ import re
 import urllib.parse
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+
 
 DEFAULT_ACTOR_ID = "apify~instagram-profile-scraper"
 DEFAULT_POSTS_ACTOR_ID = "apify~instagram-scraper"
@@ -113,13 +115,19 @@ class InstagramCrawler:
         if not self.configured:
             return self._not_configured("apify_run")
 
+        client: Any | None = None
         try:
             from apify_client import ApifyClient  # type: ignore
 
             selected_actor_id = actor_id or self.actor_id
             actor_path = selected_actor_id.replace("/", "~")
             client = ApifyClient(self.api_token)
-            run = client.actor(actor_path).call(
+            run = call_apify_actor(
+                client,
+                actor_path,
+                platform="instagram",
+                operation="start_run",
+                source="industry_crawlers",
                 run_input=input_payload,
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
@@ -144,6 +152,8 @@ class InstagramCrawler:
                 "items": items,
                 "raw": {"actor_id": selected_actor_id, "input": input_payload},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id or self.actor_id}}
         except ImportError:
             return {
                 "provider": "instagram",
@@ -162,6 +172,10 @@ class InstagramCrawler:
                 "error": str(exc),
                 "raw": {"actor_id": actor_id or self.actor_id},
             }
+        finally:
+            from . import close_apify_client
+
+            close_apify_client(client)
     # ─── 公开接口 (与 YouTubeCrawler 对齐) ─────────
 
     def crawl_channel_profile(
@@ -280,9 +294,15 @@ class InstagramCrawler:
             }
 
         actor_id = (os.environ.get("APIFY_INSTAGRAM_COMMENT_ACTOR_ID") or "apify~instagram-comment-scraper").replace("/", "~")
+        client: Any | None = None
         try:
             client = ApifyClient(self.api_token)
-            run = client.actor(actor_id).call(
+            run = call_apify_actor(
+                client,
+                actor_id,
+                platform="instagram",
+                operation="crawl_video_comments",
+                source="industry_crawlers",
                 run_input={
                     "directUrls": [post_url],
                     "resultsLimit": max(1, min(100, int(max_results or 50))),
@@ -302,6 +322,8 @@ class InstagramCrawler:
                 "items": items,
                 "raw": {"actor_id": actor_id, "post_url": post_url},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id, "post_url": post_url}}
         except Exception as exc:  # pragma: no cover - live provider path
             return {
                 "provider": "instagram",
@@ -311,6 +333,10 @@ class InstagramCrawler:
                 "error": str(exc)[:500],
                 "raw": {"actor_id": actor_id, "post_url": post_url},
             }
+        finally:
+            from . import close_apify_client
+
+            close_apify_client(client)
 
     @staticmethod
     def _comment_url(video_id_or_url: str) -> str:

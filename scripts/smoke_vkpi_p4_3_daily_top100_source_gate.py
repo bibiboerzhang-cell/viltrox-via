@@ -6,6 +6,7 @@ generate new digest rows. It only verifies that the current local environment
 still has a real monitored-product source for Daily Top100.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -53,7 +54,7 @@ def main() -> None:
             "state": state,
         }
 
-        print(
+        stdout_out(
             json.dumps(
                 {
                     "ok": True,

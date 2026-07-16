@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { useEventStreamOrPoll } from "./useEventStreamOrPoll";
+import { prepareSseStream } from "../../../services/sse-api";
+
+vi.mock("../../../services/sse-api", () => ({
+  prepareSseStream: vi.fn(async (url: string) => url),
+}));
+
+const prepareSseStreamMock = vi.mocked(prepareSseStream);
 
 // SSE 优先 + 轮询兜底基元冒烟:
 //  - 无 streamUrl → 立即轮询一拍(兜底路径,行为与切换前一致);
@@ -15,6 +22,10 @@ describe("useEventStreamOrPoll", () => {
     vi.restoreAllMocks();
     // 还原真实 EventSource(jsdom 下通常为 undefined)。
     (globalThis as { EventSource?: unknown }).EventSource = realES;
+  });
+
+  beforeEach(() => {
+    prepareSseStreamMock.mockImplementation(async (url: string) => url);
   });
 
   describe("轮询兜底(无 streamUrl)", () => {
@@ -63,32 +74,44 @@ describe("useEventStreamOrPoll", () => {
       (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource as unknown as typeof EventSource;
     });
 
-    it("订阅 SSE、播种首屏、收到事件后重拉", () => {
+    it("先签发一次性 ticket 再订阅 SSE，URL 不含长期 token", async () => {
       const pollFn = vi.fn();
       renderHook(() =>
-        useEventStreamOrPoll({ pollFn, streamUrl: "/stream", events: ["update"] }),
+        useEventStreamOrPoll({ pollFn, streamUrl: "/stream", streamToken: "long-jwt", events: ["update"] }),
       );
-      // 建立了一条连接 + 播种一拍。
-      expect(instances).toHaveLength(1);
+      expect(prepareSseStreamMock).toHaveBeenCalledWith("/stream", "long-jwt");
+      await waitFor(() => expect(instances).toHaveLength(1));
+      expect(instances[0].url).toBe("/stream");
+      expect(instances[0].url).not.toContain("access_token");
       expect(pollFn).toHaveBeenCalledTimes(1);
       // 收到事件 → 再拉一拍。
       instances[0].emit("update");
       expect(pollFn).toHaveBeenCalledTimes(2);
     });
 
-    it("onerror → 静默回退轮询(补一拍),不抛", () => {
+    it("onerror → 静默回退轮询(补一拍),不抛", async () => {
       const pollFn = vi.fn();
       renderHook(() => useEventStreamOrPoll({ pollFn, streamUrl: "/stream" }));
       expect(pollFn).toHaveBeenCalledTimes(1); // 播种
+      await waitFor(() => expect(instances).toHaveLength(1));
       expect(() => instances[0].onerror?.({})).not.toThrow();
       expect(instances[0].closed).toBe(true);
       // 回退轮询立即补一拍。
       expect(pollFn).toHaveBeenCalledTimes(2);
     });
 
-    it("卸载时关闭连接", () => {
+    it("签发失败时不建流并回退轮询", async () => {
+      prepareSseStreamMock.mockRejectedValueOnce(new Error("unavailable"));
+      const pollFn = vi.fn();
+      renderHook(() => useEventStreamOrPoll({ pollFn, streamUrl: "/stream" }));
+      await waitFor(() => expect(pollFn).toHaveBeenCalledTimes(2));
+      expect(instances).toHaveLength(0);
+    });
+
+    it("卸载时关闭连接", async () => {
       const pollFn = vi.fn();
       const { unmount } = renderHook(() => useEventStreamOrPoll({ pollFn, streamUrl: "/stream" }));
+      await waitFor(() => expect(instances).toHaveLength(1));
       unmount();
       expect(instances[0].closed).toBe(true);
     });

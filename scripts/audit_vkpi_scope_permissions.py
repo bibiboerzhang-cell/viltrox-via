@@ -7,6 +7,8 @@ unguarded, and where data-scope helpers are used.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import ast
 import json
 import re
@@ -160,18 +162,18 @@ def audit() -> dict[str, Any]:
 def main() -> int:
     result = audit()
     if "--json" in sys.argv:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        out(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        print(f"status={result['status']}")
-        print(f"endpoints={result['endpoint_count']}")
-        print(f"guarded={result['guarded_endpoint_count']}")
-        print(f"public_allowlisted={result['public_allowlisted_count']}")
-        print(f"unguarded={result['unguarded_endpoint_count']}")
+        out(f"status={result['status']}")
+        out(f"endpoints={result['endpoint_count']}")
+        out(f"guarded={result['guarded_endpoint_count']}")
+        out(f"public_allowlisted={result['public_allowlisted_count']}")
+        out(f"unguarded={result['unguarded_endpoint_count']}")
         if result["unguarded_endpoints"]:
-            print("unguarded endpoints:")
+            out("unguarded endpoints:")
             for item in result["unguarded_endpoints"]:
-                print(f"- {item['file']}:{item['line']} {item['method']} {item['path']} -> {item['function']}")
-        print(f"scoped_services={result['scoped_service_file_count']}/{result['service_file_count']}")
+                out(f"- {item['file']}:{item['line']} {item['method']} {item['path']} -> {item['function']}")
+        out(f"scoped_services={result['scoped_service_file_count']}/{result['service_file_count']}")
     return 0 if result["status"] == "pass" else 1
 
 

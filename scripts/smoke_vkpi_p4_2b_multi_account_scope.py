@@ -8,6 +8,7 @@ records through HTTP, then verifies:
 - manager can see all rows and intentionally filter by staff_id.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import time
@@ -268,7 +269,7 @@ def main() -> int:
     smoke = Smoke()
     try:
         result = smoke.run()
-        print("VKPI_P4_2B_MULTI_ACCOUNT_SCOPE_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
+        stdout_out("VKPI_P4_2B_MULTI_ACCOUNT_SCOPE_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     finally:
         smoke.cleanup()

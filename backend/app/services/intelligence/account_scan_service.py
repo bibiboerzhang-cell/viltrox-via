@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import time
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List
 
 from app.core.logging import get_logger
+from app.platform.apify_budget import (
+    ApifyBudgetBlocked,
+    ApifyExecutionClaimBlocked,
+    ApifyProviderReplayBlocked,
+    call_apify_actor,
+)
 from app.services.intelligence.account_scan_helpers import *  # noqa: F403
 
 logger = get_logger(__name__)
@@ -33,7 +40,14 @@ async def _run_actor(actor_id: str, payload: Dict[str, Any], timeout: int = 600)
 
     def go() -> List[Dict[str, Any]]:
         logger.info("scanner.actor_started", extra={"actor_id": actor_id})
-        run = client.actor(actor_id).call(run_input=payload, timeout_secs=timeout)
+        run = call_apify_actor(
+            client,
+            actor_id,
+            operation="account_scan",
+            source="intelligence.account_scan_service",
+            run_input=payload,
+            timeout_secs=timeout,
+        )
         items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
         logger.info("scanner.actor_complete", extra={"actor_id": actor_id, "item_count": len(items)})
         # C5 成本记账收口:矩阵扫描全部 actor run 走此共用 runner,统一记账
@@ -55,6 +69,8 @@ async def _run_actor(actor_id: str, payload: Dict[str, Any], timeout: int = 600)
 
     try:
         return await asyncio.to_thread(go)
+    except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+        raise
     except Exception as exc:
         logger.warning("scanner.actor_failed", extra={"actor_id": actor_id, "error": str(exc)})
         return []
@@ -107,6 +123,31 @@ def _instagram_hashtags(query: str, *, max_tags: int = 5) -> List[str]:
         # have so IG still gets a real hashtag instead of returning empty.
         tags = fallback[:max_tags]
     return tags
+
+
+def _short_search_queries(query: str, *, max_queries: int = 4) -> List[str]:
+    """Turn a planner's comma-separated persona list into short search intents.
+
+    TikTok's keyword actor performs poorly when it receives the whole planner
+    sentence as one exact query. The returned list is bounded and deterministic;
+    callers divide the original result budget across these variants.
+    """
+    chunks = [" ".join(part.split()) for part in re.split(r"[,;|，；]+", query or "") if part.strip()]
+    if len(chunks) <= 1:
+        words = (query or "").split()
+        chunks = [" ".join(words[index:index + 5]) for index in range(0, len(words), 5)] or [query]
+    out: List[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        value = " ".join(chunk.split()[:8]).strip()[:100]
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+        if len(out) >= max_queries:
+            break
+    return out or [" ".join((query or "").split())[:100]]
 
 
 async def scan_instagram_account(handle: str, max_posts: int = 1000) -> Dict[str, Any]:
@@ -552,6 +593,7 @@ async def search_platform_content(
         return {"status": "provider_unavailable", "items": [], "message": "APIFY_TOKEN is not configured"}
 
     search_query = _market_query(normalized_query, market)
+    provider_queries = [search_query]
 
     # YouTube fast path: YouTube Data API search.list (~1s) before the slow Apify actor
     # (10-60s cold start). 命中即返回归一化候选;无 key / 配额耗尽 / 错误 → None,落回下方
@@ -574,9 +616,10 @@ async def search_platform_content(
         }
     elif normalized_platform == "tiktok":
         actor_id = "clockworks/free-tiktok-scraper"
+        provider_queries = _short_search_queries(search_query)
         payload = {
-            "searchQueries": [search_query],
-            "resultsPerPage": safe_limit,
+            "searchQueries": provider_queries,
+            "resultsPerPage": max(3, (safe_limit + len(provider_queries) - 1) // len(provider_queries)),
             "shouldDownloadVideos": False,
             "shouldDownloadCovers": False,
         }
@@ -743,6 +786,7 @@ async def search_platform_content(
             "actor_id": actor_id,
             "requested": safe_limit,
             "returned": len(items),
+            "provider_queries": provider_queries,
             "searched_at": started_at,
         },
     }
@@ -771,6 +815,8 @@ async def scan_matrix(accounts: List[Dict[str, Any]], max_posts_per_account: int
             result = await scan_account(platform, handle, max_posts_per_account)
             result["account_name"] = name
             results.append(result)
+        except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
         except Exception as exc:
             results.append(
                 {

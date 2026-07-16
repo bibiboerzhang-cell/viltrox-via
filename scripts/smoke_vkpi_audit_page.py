@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test for V-KPI Audit overview and management-only access."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -232,7 +233,7 @@ class Smoke:
 def main() -> None:
     smoke = Smoke()
     result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

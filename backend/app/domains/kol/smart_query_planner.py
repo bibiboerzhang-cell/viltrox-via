@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 
 
 SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
+PLAN_DERIVE_METHOD = "smart_query_plan_v2_catalog_guard"
 
 # 第一轮产品深度分析的首选 provider。可被 body.llm_provider 覆盖。
 # 注:本环境实测 api.anthropic.com 直连被对端关闭、api.openai.com 直连 SSL 握手失败,
@@ -131,6 +132,31 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         "model": "rule_v0",
         "fallback_used": True,
         "provider_calls_performed": False,
+    }
+
+
+def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, Any]:
+    """Stop an explicit but unresolved product request before any provider call."""
+    return {
+        "status": "needs_clarification",
+        "original_query": _text(query),
+        "search_query": "",
+        "product_focus": [],
+        "target_persona": "",
+        "avoid_types": [],
+        "product_positioning": "",
+        "platforms": ["youtube", "instagram", "tiktok"],
+        "market": "US",
+        "creator_quota": 0,
+        "reviewer_quota": 0,
+        "include_new_discovery": False,
+        "new_discovery_limit": 0,
+        "reason": "explicit_product_not_in_catalog",
+        "provider": "product_catalog_guard",
+        "model": "product_catalog_guard",
+        "fallback_used": False,
+        "provider_calls_performed": False,
+        "clarification": clarification,
     }
 
 
@@ -315,6 +341,66 @@ def _plan_from_product_persona(
     }
 
 
+def plan_text_query_provider_free(
+    query: str,
+    *,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the first-screen search plan without contacting an LLM provider.
+
+    The HTTP search route uses this bounded plan only for its immediate pool
+    preview.  The durable worker still calls :func:`plan_text_query` before the
+    full recall/discovery pipeline, so the richer provider-backed plan is not
+    lost; it is merely moved out of the request latency path.
+    """
+
+    body = body or {}
+    query_text = _text(query)
+    if not query_text:
+        return _fallback_plan(query_text, reason="empty_query")
+
+    try:
+        resolved_product = product_resolver.resolve_product(query_text)
+    except Exception:
+        resolved_product = None
+
+    if not resolved_product:
+        try:
+            clarification = product_resolver.unresolved_product_request(query_text)
+        except Exception:
+            clarification = None
+        if clarification:
+            return _clarification_plan(query_text, clarification)
+        return _fallback_plan(query_text, reason="provider_free_initial")
+
+    persona_plan = _plan_from_product_persona(query_text, resolved_product, body)
+    if persona_plan is not None:
+        return {
+            **persona_plan,
+            "plan_stage": "initial_provider_free",
+            "provider_calls_performed": False,
+        }
+
+    # No materialized persona yet: retain the existing category-aware English
+    # fallback, but never fall through to llm_gateway.invoke on the request.
+    plan = _normalise_plan(
+        query_text,
+        {},
+        {"provider": "rule_v0", "model": "rule_v0", "status": "fallback"},
+        resolved_product,
+    )
+    return {
+        **plan,
+        "market": _text(plan.get("market")) or "US",
+        "reason": "provider_free_product_fallback",
+        "provider": "rule_v0",
+        "model": "rule_v0",
+        "fallback_used": True,
+        "provider_calls_performed": False,
+        "plan_stage": "initial_provider_free",
+    }
+
+
 def _plan_text_query_impl(
     query: str,
     *,
@@ -337,6 +423,14 @@ def _plan_text_query_impl(
         resolved_product = product_resolver.resolve_product(query_text)
     except Exception:
         resolved_product = None
+
+    if not resolved_product:
+        try:
+            clarification = product_resolver.unresolved_product_request(query_text)
+        except Exception:
+            clarification = None
+        if clarification:
+            return _clarification_plan(query_text, clarification)
 
     # 收口路①-1:解析到 SKU 后,优先读已填充的产品知识库 persona(地基A)。命中即直接拿
     # ideal_persona / avoid_types / ideal_creator_types / verticals,跳过 on-the-fly LLM(更稳更快、
@@ -414,7 +508,7 @@ Rules:
 
 
 # ── Wave2-#4 规划缓存(2026-07-02):同 query 7 天内直接回缓存,检索同步段 8s -> <0.1s。
-# 键=md5(归一化 query);存 vkpi_analysis_cache(search_plan/smart_query_plan_v1)。
+# 键=md5(归一化 query);v2 使目录闸上线前缓存的错误产品计划立即失效。
 # fallback 计划(带 reason)不缓存;读写任何异常都静默回退真算。红线:不触 viltrox_fit_score。
 def plan_text_query(
     query: str,
@@ -430,7 +524,7 @@ def plan_text_query(
     try:
         from app.domains.analysis.cache_repo import get_analysis_cache_entry as _gc
 
-        _e = _gc("search_plan", _qkey, derive_method="smart_query_plan_v1")
+        _e = _gc("search_plan", _qkey, derive_method=PLAN_DERIVE_METHOD)
         if _e and _e.get("status") == "ready":
             _u = str(_e.get("updated_at") or "")
             _t = _dt.fromisoformat(_u.replace("Z", "+00:00")) if _u else None
@@ -461,7 +555,7 @@ def plan_text_query(
                 ON CONFLICT (target_type, target_id, derive_method)
                 DO UPDATE SET result = EXCLUDED.result, status = 'ready', updated_at = NOW()
                 """,
-                ("search_plan", _qkey, "plan_cache", "smart_query_plan_v1",
+                ("search_plan", _qkey, "plan_cache", PLAN_DERIVE_METHOD,
                  _pj.dumps(_plan, ensure_ascii=False), 0),
             )
             _cc.commit()

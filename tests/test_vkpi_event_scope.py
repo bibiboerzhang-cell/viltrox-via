@@ -16,6 +16,7 @@ import sqlite3
 import pytest
 
 from app.domains.access import scope
+from app.domains.events import service
 
 
 # ── fakes ───────────────────────────────────────────────────────────────────
@@ -137,6 +138,34 @@ def test_list_events_includes_shared_event_via_members():
     assert _visible_event_ids_sqlite(conn, staff(id=20)) == {"evt_B"}
 
 
+def test_real_list_events_uses_exact_sqlite_json_membership(monkeypatch):
+    """Exercise the production query instead of the historical LIKE mirror."""
+    conn = _seed_events_sqlite()
+    # A distinct id proves exact JSON membership: staff 1 must not match [10].
+    conn.execute(
+        "INSERT INTO vkpi_events (id, owner_id, team_ids, start_date, created_at) VALUES (?,?,?,?,?)",
+        ("evt_team_10", 20, json.dumps([10]), "2026-06-03", "2026-06-03"),
+    )
+    conn.execute(
+        "INSERT INTO vkpi_events (id, owner_id, team_ids, start_date, created_at) VALUES (?,?,?,?,?)",
+        ("evt_invalid_team_json", 20, "not-json", "2026-06-04", "2026-06-04"),
+    )
+    conn.commit()
+    monkeypatch.setattr(service, "get_conn", lambda: conn)
+    monkeypatch.setattr(service, "is_postgres_runtime", lambda: False)
+    monkeypatch.setattr(scope, "event_organization_context", lambda _staff, _conn: (1, False))
+
+    visible_for_10 = {item["id"] for item in service.list_events(staff(id=10))["items"]}
+    visible_for_1 = {item["id"] for item in service.list_events(staff(id=1))["items"]}
+
+    assert "evt_team_10" in visible_for_10
+    assert "evt_team_10" not in visible_for_1
+    assert "evt_invalid_team_json" not in visible_for_10
+    executed_sql = service._event_visibility_sql()
+    assert "json_each" in executed_sql
+    assert "@>" not in executed_sql
+
+
 # ── (c)/(d)/(e) assert_event_access 写收口 ────────────────────────────────────
 def test_assert_event_access_shared_viewer_can_read_not_write(monkeypatch):
     # (c) viewer 共享成员:读放行,写 ScopeDenied。活动 owner=20,actor=10(非 owner/team)。
@@ -203,7 +232,9 @@ def test_assert_event_access_missing_event_row_passes(monkeypatch):
     conn = _RoutingConn(event_row=None, member_row=None)
     monkeypatch.setattr(scope, "get_conn", lambda: conn)
 
-    scope.assert_event_access("evt_missing", staff(id=99), write=True)
+    # Authenticated dependencies attach the active workspace explicitly; the
+    # missing business row must not be confused with a missing staff identity.
+    scope.assert_event_access("evt_missing", staff(id=99, organization_id=1), write=True)
 
 
 # ── (f)/(g) 公司公共活动接线(2026-06-14,ADDITIVE,迁移 133 is_public)──────────

@@ -9,6 +9,8 @@ This script is intentionally conservative:
 """
 from __future__ import annotations
 
+from stdout_utils import out as stdout_out
+
 import argparse
 import json
 import os
@@ -301,22 +303,22 @@ def main() -> int:
         result["audit_after"] = audit_state(limit=args.limit) if args.apply else None
 
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     else:
         audit = result["audit"]
-        print(f"status={audit['status']}")
-        print(f"blockers={','.join(audit['blockers']) or 'none'}")
-        print(f"monitored_products={audit['monitored_products_count']} enabled={audit['enabled_monitored_products_count']}")
-        print(f"bridge_or_blank_suggestions={audit['bridge_or_blank_suggestion_count']}")
-        print("product_candidates:")
+        stdout_out(f"status={audit['status']}")
+        stdout_out(f"blockers={','.join(audit['blockers']) or 'none'}")
+        stdout_out(f"monitored_products={audit['monitored_products_count']} enabled={audit['enabled_monitored_products_count']}")
+        stdout_out(f"bridge_or_blank_suggestions={audit['bridge_or_blank_suggestion_count']}")
+        stdout_out("product_candidates:")
         for item in audit["product_candidates"][: args.limit]:
-            print(f"- {item['product_sku']} | {item['product_name']} | {item['source']} | evidence={item['evidence_count']}")
-        print("next_actions:")
+            stdout_out(f"- {item['product_sku']} | {item['product_name']} | {item['source']} | evidence={item['evidence_count']}")
+        stdout_out("next_actions:")
         for action in audit["next_actions"]:
-            print(f"- {action}")
+            stdout_out(f"- {action}")
         if "repair" in result:
             repair = result["repair"]
-            print(f"repair_apply={repair['apply']} planned={len(repair['planned'])} applied={len(repair['applied'])} skipped={len(repair['skipped'])}")
+            stdout_out(f"repair_apply={repair['apply']} planned={len(repair['planned'])} applied={len(repair['applied'])} skipped={len(repair['skipped'])}")
     return 0
 
 

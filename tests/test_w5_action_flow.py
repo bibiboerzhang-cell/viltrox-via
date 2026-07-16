@@ -48,7 +48,31 @@ _BEARER = {"Authorization": "Bearer w5-flow-token"}
 
 
 @pytest.fixture()
-def actor_client():
+def action_flow_db(hermetic_action_db):
+    """Extend the per-test Action schema with the read-only fit-score surface.
+
+    The fixture supplied by ``conftest`` points ``get_conn`` at a unique temp
+    SQLite file and creates only the two Action tables.  This flow also proves
+    that execution does not mutate fit scores, so add the smallest possible
+    local table instead of reading the repository database.
+    """
+    from app.db.connection import get_conn
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_kol_pool (
+            id INTEGER PRIMARY KEY,
+            viltrox_fit_score REAL
+        )
+        """
+    )
+    conn.commit()
+    return hermetic_action_db
+
+
+@pytest.fixture()
+def actor_client(action_flow_db):
     """伪造为 _ACTOR 身份的 TestClient(中间件 + 依赖双 seam),teardown 还原。"""
     import app.main as main_mod
     from app.main import app
@@ -79,7 +103,7 @@ def actor_client():
 
 
 @pytest.fixture()
-def seeded_action():
+def seeded_action(action_flow_db):
     """自播一行 owner==actor 的 suggested kol_profile 动作;yield id;后置清 inbox + ledger。"""
     from app.db.connection import get_conn
 
@@ -92,9 +116,9 @@ def seeded_action():
            suggested_endpoint, requires_approval, owner_staff_id, reason,
            payload_json, status, created_at, updated_at)
         VALUES (?, 'kol_profile', 'W5 flow probe', 'detail', 'low', 'kol', '',
-                '', true, ?, '', '{}'::jsonb, 'suggested', NOW(), NOW())
+                '', 1, ?, '', ?, 'suggested', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        (dedupe, _ACTOR_STAFF_ID),
+        (dedupe, _ACTOR_STAFF_ID, "{}"),
     )
     conn.commit()
     action_id = int(

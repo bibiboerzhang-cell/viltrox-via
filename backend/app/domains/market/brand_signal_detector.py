@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol.competitor_text import (
     _extract_posts,
     _post_date,
@@ -79,37 +79,67 @@ def _table_exists(table_name: str) -> bool:
 
 
 def _ensure_brand_signal_table() -> None:
-    get_conn().execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_brand_signal (
-            id BIGSERIAL PRIMARY KEY,
-            signal_uid TEXT NOT NULL UNIQUE,
-            kol_entity_uid TEXT NOT NULL DEFAULT '',
-            post_uid TEXT NOT NULL DEFAULT '',
-            source_table TEXT NOT NULL DEFAULT '',
-            source_id BIGINT,
-            post_url TEXT DEFAULT '',
-            platform TEXT DEFAULT '',
-            published_at TIMESTAMPTZ,
-            analysis_scope TEXT NOT NULL DEFAULT 'current_year',
-            signal_type TEXT NOT NULL,
-            brand_name TEXT NOT NULL,
-            brand_role TEXT NOT NULL,
-            signal_strength TEXT NOT NULL DEFAULT 'medium',
-            evidence_json TEXT NOT NULL DEFAULT '{}',
-            detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            is_new BOOLEAN NOT NULL DEFAULT TRUE,
-            reviewed_at TIMESTAMPTZ,
-            reviewed_by INTEGER,
-            action_taken TEXT DEFAULT '',
-            UNIQUE(kol_entity_uid, post_uid, signal_type, brand_name)
+    conn = get_conn()
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_brand_signal (
+                id BIGSERIAL PRIMARY KEY,
+                signal_uid TEXT NOT NULL UNIQUE,
+                kol_entity_uid TEXT NOT NULL DEFAULT '',
+                post_uid TEXT NOT NULL DEFAULT '',
+                source_table TEXT NOT NULL DEFAULT '',
+                source_id BIGINT,
+                post_url TEXT DEFAULT '',
+                platform TEXT DEFAULT '',
+                published_at TIMESTAMPTZ,
+                analysis_scope TEXT NOT NULL DEFAULT 'current_year',
+                signal_type TEXT NOT NULL,
+                brand_name TEXT NOT NULL,
+                brand_role TEXT NOT NULL,
+                signal_strength TEXT NOT NULL DEFAULT 'medium',
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                is_new BOOLEAN NOT NULL DEFAULT TRUE,
+                reviewed_at TIMESTAMPTZ,
+                reviewed_by INTEGER,
+                action_taken TEXT DEFAULT '',
+                UNIQUE(kol_entity_uid, post_uid, signal_type, brand_name)
+            )
+            """
         )
-        """
-    )
-    get_conn().execute("CREATE INDEX IF NOT EXISTS idx_vkpi_brand_signal_new ON vkpi_brand_signal(is_new, detected_at DESC)")
-    get_conn().execute("CREATE INDEX IF NOT EXISTS idx_vkpi_brand_signal_kol ON vkpi_brand_signal(kol_entity_uid, detected_at DESC)")
-    get_conn().execute("CREATE INDEX IF NOT EXISTS idx_vkpi_brand_signal_type ON vkpi_brand_signal(signal_type, brand_role, detected_at DESC)")
-    get_conn().commit()
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_brand_signal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_uid TEXT NOT NULL UNIQUE,
+                kol_entity_uid TEXT NOT NULL DEFAULT '',
+                post_uid TEXT NOT NULL DEFAULT '',
+                source_table TEXT NOT NULL DEFAULT '',
+                source_id INTEGER,
+                post_url TEXT DEFAULT '',
+                platform TEXT DEFAULT '',
+                published_at TEXT,
+                analysis_scope TEXT NOT NULL DEFAULT 'current_year',
+                signal_type TEXT NOT NULL,
+                brand_name TEXT NOT NULL,
+                brand_role TEXT NOT NULL,
+                signal_strength TEXT NOT NULL DEFAULT 'medium',
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                is_new INTEGER NOT NULL DEFAULT 1,
+                reviewed_at TEXT,
+                reviewed_by INTEGER,
+                action_taken TEXT DEFAULT '',
+                UNIQUE(kol_entity_uid, post_uid, signal_type, brand_name)
+            )
+            """
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_brand_signal_new ON vkpi_brand_signal(is_new, detected_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_brand_signal_kol ON vkpi_brand_signal(kol_entity_uid, detected_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_brand_signal_type ON vkpi_brand_signal(signal_type, brand_role, detected_at DESC)")
+    conn.commit()
 
 
 def _safe_limit(value: Any, default: int = 200, ceiling: int = 2000) -> int:

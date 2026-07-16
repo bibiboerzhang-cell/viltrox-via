@@ -45,160 +45,27 @@ def _synced_result() -> dict[str, object]:
     return {"sync_status": "synced", "provider_status": "synced"}
 
 
-def test_kol_light_refresh_records_completed_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows = _rows(3)
-    events = _install_harness(monkeypatch, rows)
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", lambda *_args, **_kwargs: _synced_result())
-
-    result = daily_sync.run_kol_pool_light_refresh({"run_id": "unit-run-complete"})
-
-    assert result["refreshed"] == 3
-    assert result["errors"] == 0
-    assert events["start"][0]["run_id"] == "unit-run-complete"
-    assert events["finish"][0]["status"] == "completed"
-    assert events["finish"][0]["last_success_index"] == 3
-    assert not events["interrupt"]
-
-
-def test_kol_light_refresh_fail_fast_on_connection_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    class ClosedConnectionError(Exception):
-        sqlstate = "08003"
-
-    rows = _rows(3)
-    events = _install_harness(monkeypatch, rows)
-
-    def enrich(kol_pool_id: int, **_kwargs: object) -> dict[str, object]:
-        if kol_pool_id == 2:
-            raise ClosedConnectionError("the connection is closed")
-        return _synced_result()
-
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", enrich)
-
-    with pytest.raises(daily_sync.SyncFailFast) as exc_info:
-        daily_sync.run_kol_pool_light_refresh({"run_id": "unit-run-closed"})
-
-    assert exc_info.value.exit_code == 75
-    assert events["interrupt"][0]["run_id"] == "unit-run-closed"
-    assert events["interrupt"][0]["interrupted_at_index"] == 2
-    assert events["interrupt"][0]["interrupted_kol_pool_id"] == 2
-    assert events["interrupt"][0]["last_success_index"] == 1
-    assert events["interrupt"][0]["error_type"] == "db_connection_lost"
-    assert events["interrupt"][0]["reason"] == "connection_closed"
-
-
-def test_kol_light_refresh_fail_fast_on_admin_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
-    class AdminShutdown(Exception):
-        sqlstate = "57P01"
-
-    rows = _rows(3)
-    events = _install_harness(monkeypatch, rows)
-
-    def enrich(kol_pool_id: int, **_kwargs: object) -> dict[str, object]:
-        if kol_pool_id == 2:
-            raise AdminShutdown("terminating connection due to administrator command")
-        return _synced_result()
-
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", enrich)
-
-    with pytest.raises(daily_sync.SyncFailFast) as exc_info:
-        daily_sync.run_kol_pool_light_refresh({"run_id": "unit-run-admin"})
-
-    assert exc_info.value.exit_code == 75
-    assert events["interrupt"][0]["interrupted_at_index"] == 2
-    assert events["interrupt"][0]["interrupted_kol_pool_id"] == 2
-    assert events["interrupt"][0]["last_success_index"] == 1
-    assert events["interrupt"][0]["error_type"] == "db_connection_lost"
-    assert events["interrupt"][0]["reason"] == "admin_shutdown"
-    assert events["interrupt"][0]["error_class"] == "AdminShutdown"
-
-
-def test_kol_light_refresh_provider_error_continues_and_records_error_context(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_provider_error_classifier_remains_available_for_worker_failures() -> None:
     assert daily_sync._classify_sync_error(asyncio.TimeoutError("api timed out"))[0] == "provider_timeout"
     assert daily_sync._classify_sync_error(concurrent.futures.TimeoutError("worker timed out"))[0] == "provider_timeout"
 
+
+def test_kol_light_refresh_is_read_only_planner_and_requires_durable_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = _rows(3)
     events = _install_harness(monkeypatch, rows)
+    monkeypatch.setattr(
+        daily_sync.kol_pool,
+        "enrich_item",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("direct provider execution must not run")),
+    )
 
-    def enrich(kol_pool_id: int, **_kwargs: object) -> dict[str, object]:
-        if kol_pool_id == 2:
-            raise TimeoutError("provider timeout")
-        return _synced_result()
+    result = daily_sync.run_kol_pool_light_refresh({"run_id": "unit-run-fenced"})
 
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", enrich)
-
-    result = daily_sync.run_kol_pool_light_refresh({"run_id": "unit-run-provider"})
-
-    assert result["refreshed"] == 2
-    assert result["errors"] == 1
-    assert result["error_sample"][0]["kol_pool_id"] == 2
-    assert result["error_sample"][0]["error_class"] == "TimeoutError"
-    assert result["error_sample"][0]["error_type"] == "provider_timeout"
-    assert events["finish"][0]["status"] == "completed"
-    assert events["finish"][0]["last_success_index"] == 3
-    assert not events["interrupt"]
-
-
-def test_kol_light_refresh_stops_when_provider_error_threshold_reached(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows = _rows(4)
-    events = _install_harness(monkeypatch, rows)
-
-    def enrich(kol_pool_id: int, **_kwargs: object) -> dict[str, object]:
-        if kol_pool_id in {2, 3, 4}:
-            raise TimeoutError(f"provider timeout {kol_pool_id}")
-        return _synced_result()
-
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", enrich)
-
-    with pytest.raises(daily_sync.SyncFailFast) as exc_info:
-        daily_sync.run_kol_pool_light_refresh({
-            "run_id": "unit-run-provider-threshold",
-            "kol_error_stop_threshold": 2,
-        })
-
-    assert exc_info.value.exit_code == 75
-    assert "provider_error_threshold_exceeded" in str(exc_info.value)
-    assert events["interrupt"][0]["run_id"] == "unit-run-provider-threshold"
-    assert events["interrupt"][0]["interrupted_at_index"] == 3
-    assert events["interrupt"][0]["interrupted_kol_pool_id"] == 3
-    assert events["interrupt"][0]["reason"] == "provider_error_threshold_exceeded"
-    assert events["interrupt"][0]["error_type"] == "provider_timeout"
+    assert result["status"] == "durable_queue_required"
+    assert result["requested"] == 3
+    assert not events["start"]
     assert not events["finish"]
-
-
-def test_kol_light_refresh_interrupt_record_failure_emits_stderr_json_and_exits_75(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    class ClosedConnectionError(Exception):
-        sqlstate = "08006"
-
-    rows = _rows(2)
-    _install_harness(monkeypatch, rows)
-
-    def enrich(kol_pool_id: int, **_kwargs: object) -> dict[str, object]:
-        if kol_pool_id == 2:
-            raise ClosedConnectionError("server closed the connection")
-        return _synced_result()
-
-    def fail_record(**_kwargs: object) -> bool:
-        raise RuntimeError("interrupt table unavailable")
-
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", enrich)
-    monkeypatch.setattr(daily_sync, "record_sync_interrupt", fail_record)
-
-    with pytest.raises(daily_sync.SyncFailFast) as exc_info:
-        daily_sync.run_kol_pool_light_refresh({"run_id": "unit-run-record-fail"})
-
-    assert exc_info.value.exit_code == 75
-    stderr = capsys.readouterr().err.strip().splitlines()
-    assert stderr
-    event = json.loads(stderr[-1])
-    assert event["event"] == "vkpi_sync_interrupt_record_failed"
-    assert event["run_id"] == "unit-run-record-fail"
-    assert event["interrupted_at_index"] == 2
-    assert event["interrupted_kol_pool_id"] == 2
-    assert event["error_type"] == "db_connection_lost"
-    assert "interrupt table unavailable" in event["record_error"]
+    assert not events["interrupt"]
 
 
 def test_sync_health_blocks_next_run_when_failure_rate_exceeds_threshold() -> None:
@@ -363,9 +230,11 @@ def test_kol_light_refresh_uses_qualified_selector(monkeypatch: pytest.MonkeyPat
         },
     )
     monkeypatch.setattr(daily_sync.refresh_tier, "qualified_refresh_rows", lambda **_kwargs: rows)
-    marked: list[dict[str, object]] = []
-    monkeypatch.setattr(daily_sync.refresh_tier, "mark_kol_refreshed", lambda kol_pool_id, **kwargs: marked.append({"id": kol_pool_id, **kwargs}))
-    monkeypatch.setattr(daily_sync.kol_pool, "enrich_item", lambda *_args, **_kwargs: _synced_result())
+    monkeypatch.setattr(
+        daily_sync.kol_pool,
+        "enrich_item",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("direct provider execution must not run")),
+    )
 
     result = daily_sync.run_kol_pool_light_refresh({
         "run_id": "unit-qualified",
@@ -374,11 +243,9 @@ def test_kol_light_refresh_uses_qualified_selector(monkeypatch: pytest.MonkeyPat
     })
 
     assert result["selector"] == "qualified"
-    assert result["tiers"] == ["hot"]
+    assert result["status"] == "durable_queue_required"
     assert result["requested"] == 1
-    assert result["refreshed"] == 1
-    assert marked == [{"id": 7, "status": "synced"}]
-    assert events["finish"][0]["last_success_index"] == 1
+    assert not events["finish"]
 
 
 def test_daily_sync_qualified_selector_dry_run_can_plan_without_operator_enable(monkeypatch: pytest.MonkeyPatch) -> None:

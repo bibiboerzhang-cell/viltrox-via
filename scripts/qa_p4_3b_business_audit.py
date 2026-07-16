@@ -5,6 +5,7 @@ This script exercises the real FastAPI route/auth/service path with isolated
 marker data, then asserts each mutation writes vkpi_business_audit_logs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import csv
 import json
@@ -339,7 +340,7 @@ def main() -> int:
         "fail": sum(1 for row in results if row["result"] == "FAIL"),
         "outputs": [str(OUT_MD), str(OUT_CSV)],
     }
-    print(json.dumps(payload, ensure_ascii=False))
+    stdout_out(json.dumps(payload, ensure_ascii=False))
     return 0 if all(row["result"] == "PASS" for row in results) else 1
 
 

@@ -18,6 +18,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -66,6 +68,7 @@ def test_aggregate_stream_routes_mounted():
     assert "/api/admin/vkpi/activity/stream" in paths
 
 
+@pytest.mark.pg
 def test_progress_center_stream_first_frame():
     from app.api.routers.vkpi_progress_center import stream_progress_center
 
@@ -79,6 +82,7 @@ def test_progress_center_stream_first_frame():
     assert isinstance(payload.get("running"), list)
 
 
+@pytest.mark.pg
 def test_activity_stream_first_frame():
     from app.api.routers.vkpi_activity import stream_activity
 

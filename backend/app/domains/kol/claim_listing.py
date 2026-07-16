@@ -134,4 +134,10 @@ def list_kols(
         """,
         (*params, limit_i),
     ).fetchall()
-    return {"kols": [dict(row) for row in rows], "scope": scope.scope_context(staff, staff_id)}
+    from app.domains.kol.pool_common import mask_pool_item
+
+    return {
+        # Bulk roster responses expose contact availability but never plaintext.
+        "kols": [mask_pool_item(dict(row)) for row in rows],
+        "scope": scope.scope_context(staff, staff_id),
+    }

@@ -5,6 +5,7 @@ Forces LLM gateway offline and verifies generate_for_staff() creates draft
 weekly reports from grounded data context without consuming provider quota.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -76,7 +77,7 @@ def main() -> None:
         if listed.get("count", 0) < 1:
             raise AssertionError(f"list_reports did not return generated reports: {listed}")
 
-        print("VKPI_WEEKLY_REPORTS_SERVICE_SMOKE_OK")
+        stdout_out("VKPI_WEEKLY_REPORTS_SERVICE_SMOKE_OK")
     finally:
         if staff_id is not None:
             conn.execute("DELETE FROM vkpi_weekly_reports WHERE staff_id = ?", (staff_id,))

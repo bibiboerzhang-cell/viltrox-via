@@ -32,6 +32,8 @@ _ADMIN_STAFF = {
     "is_owner": 1,
     "permissions": {"vkpi": "admin"},
     "email": "admin@u3.test",
+    "organization_id": 1,
+    "organization_scope_status": "resolved",
 }
 
 

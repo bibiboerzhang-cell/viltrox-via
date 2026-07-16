@@ -127,8 +127,62 @@ scripts/ops/report_vkpi_plan_status.py --out runtime/vkpi-plan-status/latest.md
 Before deploy:
 
 ```bash
-bash ./scripts/verify_repo.sh
+bash ./scripts/verify.sh
 ```
+
+`scripts/verify.sh` is the only canonical repository/release gate. GitHub CI's
+legacy-compatible `scripts/verify_repo.sh`, `make verify`, and the guarded
+deploy entrypoint delegate to that same implementation. The gate verifies the
+checked-in frontend contract without regenerating it, compiles Python in memory,
+and builds frontend assets in an isolated temporary directory; it does not
+overwrite `frontend/dist`, generated contracts, the database, or runtime state.
+The reviewed hardening-warning ratchet remains 895 and is deliberately red while
+the current warning debt exceeds it; increasing the ceiling merely to pass a
+release is prohibited.
+
+### 4.0 Strict extension-free browser-console gate
+
+The default `bash ./scripts/verify.sh` path **does not start Chrome**. It records
+the browser-console step as `not_requested`, and even a successful strict
+runtime/API run is reported as `RUNTIME GREEN`, not full browser release
+acceptance.
+
+Run the live browser-console gate only for an authenticated release candidate.
+Load a short-lived token into the environment without putting it on the command
+line, then run:
+
+```bash
+test -n "${VKPI_BROWSER_GATE_TOKEN:?load a short-lived token into the environment first}"
+export VKPI_BROWSER_GATE_TOKEN
+export VKPI_BROWSER_GATE_URL='http://127.0.0.1:8102/#cockpit'
+
+VKPI_VERIFY_REQUIRE_RUNTIME=1 \
+VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE=1 \
+VKPI_BROWSER_CONSOLE_EVIDENCE_DIR="$PWD/runtime/ops/browser-console-$(date -u +%Y%m%dT%H%M%SZ)" \
+bash ./scripts/verify.sh
+
+unset VKPI_BROWSER_GATE_TOKEN
+```
+
+Optional overrides are `VKPI_CHROME_PATH` (default is the macOS Google Chrome
+binary) and `VKPI_BROWSER_GATE_SETTLE_MS` (1,000–60,000 ms). The strict step
+runs only after repository checks, runtime trust, and read-only endpoint
+acceptance are green. It launches a script-owned Chromium process with a fresh
+ephemeral profile and both extension-disable flags; it never attaches to the
+user's normal Chrome profile.
+
+Authentication proof is active, not declarative: the final same-origin page
+must call `/api/auth/me` with the environment token and receive HTTP 2xx,
+`status=success`, and a user object. The final DOM must contain
+`.cockpit-shell main` and no password input. The capture persists only status
+and boolean proof fields—never the token or user payload.
+
+With `VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE=1`, any missing URL/token/Chrome,
+earlier gate failure, missing capture/report, non-live receipt, failed auth/DOM
+proof, extension context, or blocking console event exits non-zero. A stale or
+fixture report cannot satisfy the gate. Raw `capture.json` and sanitized
+`gate-report.json` are mode `0600`; restrict the evidence directory because raw
+console text may still contain application data.
 
 For Postgres environments:
 
@@ -250,6 +304,24 @@ Use the guarded deploy script:
 ```bash
 scripts/ops/deploy_local_to_cloud.sh
 ```
+
+The deploy entrypoint forces `VKPI_VERIFY_REQUIRE_RUNTIME=1` and
+`VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1` on the same canonical gate. Before any
+backup, rsync, restart, or remote mutation it rejects tracked, staged, or
+untracked drift, then
+requires the local `/health` response to match the current HEAD and frontend
+build, the applied migration
+manifest to be current, and the Worker heartbeat/scheduler trust fields to be
+fresh. The same strict gate then runs the manifest-driven local release
+acceptance: every required endpoint is a loopback `GET`, all 21 page families
+must be represented, and any required endpoint failure blocks deployment. Set
+`VKPI_VERIFY_ACCEPTANCE_JSON_OUT=/absolute/path/report.json` when a durable JSON
+receipt is required. A normal `bash scripts/verify.sh` may still finish as `STATIC GREEN` when
+the local service is unavailable for CI; `STATIC GREEN` is not deploy approval.
+The deploy entrypoint deliberately does not start a browser by default. To make
+browser-console proof part of that pre-mutation gate, export the URL, short-lived
+token, evidence directory, and `VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE=1` before
+invoking the deploy script; the environment is inherited by the canonical gate.
 
 To let the script decide safely after A2 daily sync, use the wrapper:
 

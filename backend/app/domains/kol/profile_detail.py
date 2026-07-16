@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.domains.kol import claim_access
 from app.domains.kol import profile_assembly
 from app.domains.kol import profile_scope
@@ -116,7 +117,9 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
                    os.refund_status,
                    os.total_cents,
                    os.landing_site,
-                   os.raw_payload_hash
+                   os.raw_payload_hash,
+                   CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                        THEN 1 ELSE 0 END AS is_verified_business_truth
             FROM vkpi_sales_attributions sa
             LEFT JOIN vkpi_links l ON l.id = sa.link_id
             LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
@@ -142,7 +145,9 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
                os.total_cents AS shopify_total_cents,
                os.currency AS shopify_currency,
                os.landing_site AS shopify_landing_site,
-               os.raw_payload_hash AS shopify_raw_payload_hash
+               os.raw_payload_hash AS shopify_raw_payload_hash,
+               CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                    THEN 1 ELSE 0 END AS is_verified_business_truth
         FROM vkpi_sales_attributions sa
         LEFT JOIN vkpi_projects p ON p.id = sa.project_id
         LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
@@ -152,6 +157,9 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         """,
         (int(kol_id), *sale_scope_params),
     ):
+        item["business_truth_status"] = (
+            "provider_verified" if _int(item.get("is_verified_business_truth")) == 1 else "reference_only"
+        )
         if item.get("shopify_order_snapshot_id"):
             item["order_snapshot"] = {
                 "id": item.get("shopify_order_snapshot_id"),
@@ -172,7 +180,9 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
     cost_scope_sql, cost_scope_params = project_scope_clause("cl.project_id")
     costs = _rows_or_empty(
         f"""
-        SELECT cl.*, p.project_name
+        SELECT cl.*, p.project_name,
+               CASE WHEN {business_truth.approved_actual_cost_sql('cl')}
+                    THEN 1 ELSE 0 END AS is_approved_actual
         FROM vkpi_cost_ledger cl
         LEFT JOIN vkpi_projects p ON p.id = cl.project_id
         WHERE cl.kol_id=? {cost_scope_sql}
@@ -191,6 +201,7 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         LEFT JOIN staff st ON st.id = kl.staff_id
         LEFT JOIN users u ON u.id = st.user_id
         WHERE kl.kol_id=? {kpi_scope_sql}
+          AND {business_truth.current_kpi_ledger_sql('kl')}
         ORDER BY kl.ledger_date DESC, kl.id DESC
         LIMIT 100
         """,
@@ -337,8 +348,25 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         (int(kol_id),),
     )
     raw_report = _safe_json_loads(report.get("raw_json"), {}) if report else {}
-    revenue_cents = sum(_int(item.get("revenue_cents")) for item in sales)
-    cost_cents = sum(_int(item.get("amount_cents")) for item in costs if str(item.get("status") or "") != "void")
+    for item in link_orders:
+        item["business_truth_status"] = (
+            "provider_verified" if _int(item.get("is_verified_business_truth")) == 1 else "reference_only"
+        )
+    for item in costs:
+        item["business_truth_status"] = (
+            "approved_actual" if _int(item.get("is_approved_actual")) == 1 else "reference_only"
+        )
+    verified_link_orders = [item for item in link_orders if _int(item.get("is_verified_business_truth")) == 1]
+    revenue_cents = sum(
+        _int(item.get("revenue_cents"))
+        for item in sales
+        if _int(item.get("is_verified_business_truth")) == 1
+    )
+    cost_cents = sum(
+        _int(item.get("amount_cents"))
+        for item in costs
+        if _int(item.get("is_approved_actual")) == 1
+    )
     contact_links = _safe_json_loads(kol.get("contact_links_json"), [])
     contact_raw = _safe_json_loads(kol.get("contact_raw_json"), {})
     activity_timeline = profile_assembly.build_activity_timeline(
@@ -352,7 +380,7 @@ def profile(kol_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, An
         link_clicks=link_clicks,
         audit_events=audit_events,
     )
-    link_summary = profile_assembly.build_link_summary(links, link_clicks, link_orders)
+    link_summary = profile_assembly.build_link_summary(links, link_clicks, verified_link_orders)
     return {
         "kol": kol,
         "active_claim": active_claim,

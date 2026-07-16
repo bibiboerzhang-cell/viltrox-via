@@ -40,7 +40,8 @@ export interface EventVm {
   title: string;
   typeKey: string;
   status: string;
-  healthScore: number;
+  /** Nullable until an operator or a sourced scoring process actually assesses it. */
+  healthScore: number | null;
   startDate: string;
   endDate: string;
   location: EventLocationVm;
@@ -119,6 +120,8 @@ export interface StockItem {
   sku: string;
   note?: string;
   isSample?: boolean;
+  quantityStatus?: string;
+  quantitySource?: string;
 }
 
 /** 库存分组成员。 */

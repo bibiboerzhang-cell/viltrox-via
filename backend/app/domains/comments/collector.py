@@ -26,9 +26,18 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.platform.industry_crawlers import get_crawler
 from app.domains.comments.compat import resolve_post_for_comments
+from app.domains.comments.job_identity import comments_freshness_hours, comments_job_identity, normalize_evidence_ids
+from app.domains.comments.language_detection import detect_comment_language
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
+from app.domains.tasks.search_session_lineage import (
+    attach_search_session_lineage_to_job,
+    inherit_search_session_lineage,
+    merge_search_session_lineages,
+    with_search_session_lineage,
+)
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -54,62 +63,117 @@ DEFAULT_MONTHLY_BUDGET_USD = 50
 def ensure_vkpi_comments_schema() -> None:
     """Create P1.3 comment tables when the migration has not been run yet."""
     conn = get_conn()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_comments (
-          id BIGSERIAL PRIMARY KEY,
-          account_id BIGINT,
-          post_id BIGINT,
-          post_table VARCHAR(50) DEFAULT 'industry_posts',
-          external_post_id VARCHAR(200),
-          platform VARCHAR(50) NOT NULL,
-          external_comment_id VARCHAR(200) NOT NULL,
-          comment_text TEXT,
-          language_detected VARCHAR(10),
-          author_handle VARCHAR(200),
-          author_id VARCHAR(200),
-          is_op BOOLEAN DEFAULT FALSE,
-          parent_comment_id VARCHAR(200),
-          depth SMALLINT DEFAULT 0,
-          likes_count INT DEFAULT 0,
-          reply_count INT DEFAULT 0,
-          created_at TIMESTAMPTZ,
-          fetched_at TIMESTAMPTZ DEFAULT NOW(),
-          sentiment_id BIGINT,
-          pillar_id INT,
-          raw_data_json TEXT,
-          author_avatar_url TEXT,
-          CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_comments (
+              id BIGSERIAL PRIMARY KEY,
+              account_id BIGINT,
+              post_id BIGINT,
+              post_table VARCHAR(50) DEFAULT 'industry_posts',
+              external_post_id VARCHAR(200),
+              platform VARCHAR(50) NOT NULL,
+              external_comment_id VARCHAR(200) NOT NULL,
+              comment_text TEXT,
+              language_detected VARCHAR(10),
+              author_handle VARCHAR(200),
+              author_id VARCHAR(200),
+              is_op BOOLEAN DEFAULT FALSE,
+              parent_comment_id VARCHAR(200),
+              depth SMALLINT DEFAULT 0,
+              likes_count INT DEFAULT 0,
+              reply_count INT DEFAULT 0,
+              created_at TIMESTAMPTZ,
+              fetched_at TIMESTAMPTZ DEFAULT NOW(),
+              sentiment_id BIGINT,
+              pillar_id INT,
+              raw_data_json TEXT,
+              author_avatar_url TEXT,
+              CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
+            )
+            """
         )
-        """
-    )
-    # C6 零新抓提列(migration 208):评论者头像 URL 列。旧库自愈补列,保证下方 INSERT 不因缺列崩。
-    conn.execute("ALTER TABLE vkpi_comments ADD COLUMN IF NOT EXISTS author_avatar_url TEXT")
+        # C6 零新抓提列(migration 208):评论者头像 URL 列。旧库自愈补列,保证下方 INSERT 不因缺列崩。
+        conn.execute("ALTER TABLE vkpi_comments ADD COLUMN IF NOT EXISTS author_avatar_url TEXT")
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_comments (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              account_id INTEGER,
+              post_id INTEGER,
+              post_table TEXT DEFAULT 'industry_posts',
+              external_post_id TEXT,
+              platform TEXT NOT NULL,
+              external_comment_id TEXT NOT NULL,
+              comment_text TEXT,
+              language_detected TEXT,
+              author_handle TEXT,
+              author_id TEXT,
+              is_op INTEGER DEFAULT 0,
+              parent_comment_id TEXT,
+              depth INTEGER DEFAULT 0,
+              likes_count INTEGER DEFAULT 0,
+              reply_count INTEGER DEFAULT 0,
+              created_at TEXT,
+              fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              sentiment_id INTEGER,
+              pillar_id INTEGER,
+              raw_data_json TEXT,
+              author_avatar_url TEXT,
+              CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
+            )
+            """
+        )
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(vkpi_comments)").fetchall()}
+        if "author_avatar_url" not in columns:
+            conn.execute("ALTER TABLE vkpi_comments ADD COLUMN author_avatar_url TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_account ON vkpi_comments(account_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_post ON vkpi_comments(post_id, post_table)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_platform ON vkpi_comments(platform)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_external_post ON vkpi_comments(platform, external_post_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_sentiment_pending ON vkpi_comments(id) WHERE sentiment_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_pillar_pending ON vkpi_comments(id) WHERE pillar_id IS NULL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_comments_collection_runs (
-          id BIGSERIAL PRIMARY KEY,
-          post_id BIGINT,
-          post_table VARCHAR(50),
-          platform VARCHAR(50) NOT NULL,
-          status VARCHAR(20) NOT NULL,
-          fetched_count INT DEFAULT 0,
-          new_count INT DEFAULT 0,
-          duplicate_count INT DEFAULT 0,
-          error_message TEXT,
-          cost_cents INT DEFAULT 0,
-          staff_id INT,
-          triggered_by VARCHAR(50),
-          created_at TIMESTAMPTZ DEFAULT NOW()
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_comments_collection_runs (
+              id BIGSERIAL PRIMARY KEY,
+              post_id BIGINT,
+              post_table VARCHAR(50),
+              platform VARCHAR(50) NOT NULL,
+              status VARCHAR(20) NOT NULL,
+              fetched_count INT DEFAULT 0,
+              new_count INT DEFAULT 0,
+              duplicate_count INT DEFAULT 0,
+              error_message TEXT,
+              cost_cents INT DEFAULT 0,
+              staff_id INT,
+              triggered_by VARCHAR(50),
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_comments_collection_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              post_id INTEGER,
+              post_table TEXT,
+              platform TEXT NOT NULL,
+              status TEXT NOT NULL,
+              fetched_count INTEGER DEFAULT 0,
+              new_count INTEGER DEFAULT 0,
+              duplicate_count INTEGER DEFAULT 0,
+              error_message TEXT,
+              cost_cents INTEGER DEFAULT 0,
+              staff_id INTEGER,
+              triggered_by TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_runs_platform_time ON vkpi_comments_collection_runs(platform, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_runs_post ON vkpi_comments_collection_runs(post_id, post_table)")
     conn.commit()
@@ -127,25 +191,7 @@ def _resolve_post(post_id: int, post_table: str) -> dict | None:
 def _detect_comment_language(text: str) -> str | None:
     """单条评论语言判别:优先 langdetect(拉丁语系精判,seed 固定保证可复现),
     缺库/判失败退 audience_language 的零成本启发式;都不中返回 None(诚实未知)。"""
-    t = str(text or "").strip()
-    if len(t) < 3:
-        return None
-    try:
-        from langdetect import DetectorFactory, detect  # type: ignore
-
-        DetectorFactory.seed = 0
-        code = str(detect(t) or "").strip().lower()
-        if code and code != "unknown":
-            return code[:10]
-    except Exception:
-        logger.debug("langdetect 探测失败,退下一级语言检测(best-effort)", exc_info=True)
-    try:
-        from app.domains.kol.audience_language import detect_lang
-
-        code = detect_lang(t)
-        return code if code and code != "und" else None
-    except Exception:
-        return None
+    return detect_comment_language(text, logger=logger)
 
 
 def _standardize_comment(
@@ -697,8 +743,8 @@ def stats(*, days: int = 30) -> dict:
 
 
 # ============ KOL Pool evidence 评论(2026-06-12 裁令"评论的展示也要有")============
-
 POOL_COMMENTS_JOB_TYPE = "kol_pool_comments_collect"
+POOL_AUDIENCE_REFRESH_JOB_TYPE = "kol_audience_stats_refresh"
 POOL_EVIDENCE_POST_TABLE = "vkpi_kol_video_evidence"
 
 
@@ -708,60 +754,187 @@ def enqueue_kol_pool_comments_job(
     evidence_ids: list[int] | None = None,
     max_comments: int | None = None,
     staff: dict | None = None,
+    force_refresh: bool = False,
+    queue_lane: str = "interactive",
+    search_session_id: int | None = None,
+    search_session_item_id: int | None = None,
+    parent_job_id: int | None = None,
 ) -> dict:
-    """KOL Pool 收藏行的评论采集入 apify_jobs(泳道可见;幂等:同 KOL 已有活跃任务则返回)。"""
-    import json as _json
-
+    """Queue one evidence-versioned job with DB-serialized active duplicates.
+    A successful job for the same exact evidence set is reused within the freshness window unless ``force_refresh``
+    is explicit; force never bypasses an already-active job.
+    """
     from app.db.connection import get_conn as _get_conn
-
+    normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
+    if normalized_queue_lane not in {"interactive", "batch"}:
+        raise ValueError("queue_lane must be interactive or batch")
     conn = _get_conn()
     kol = conn.execute(
         "SELECT id, handle, display_name FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
     ).fetchone()
     if not kol:
         raise LookupError("kol pool item not found")
+    resolved_evidence_ids = normalize_evidence_ids(evidence_ids)
+    if not resolved_evidence_ids:
+        rows = conn.execute(
+            """
+            SELECT id FROM vkpi_kol_video_evidence
+            WHERE kol_pool_id=? AND is_active IS NOT FALSE
+              AND COALESCE(evidence_type,'video')='video'
+            ORDER BY COALESCE(view_count,0) DESC, id DESC LIMIT 20
+            """,
+            (int(kol_pool_id),),
+        ).fetchall()
+        resolved_evidence_ids = normalize_evidence_ids(dict(row).get("id") for row in rows)
+    idempotency_key, data_version = comments_job_identity(int(kol_pool_id), resolved_evidence_ids)
+    lineage_payload = with_search_session_lineage(
+        {},
+        search_session_id=search_session_id,
+        search_session_item_id=search_session_item_id,
+        role="comments",
+        parent_job_id=parent_job_id,
+    )
     active = conn.execute(
         """
         SELECT id FROM apify_jobs
-        WHERE job_type=? AND status IN ('queued','running')
-          AND payload->>'kol_pool_id'=? LIMIT 1
+        WHERE status IN ('queued','running')
+          AND (idempotency_key=? OR (idempotency_key IS NULL AND job_type=? AND payload->>'kol_pool_id'=? ))
+        ORDER BY id DESC LIMIT 1
         """,
-        (POOL_COMMENTS_JOB_TYPE, str(int(kol_pool_id))),
+        (idempotency_key, POOL_COMMENTS_JOB_TYPE, str(int(kol_pool_id))),
     ).fetchone()
     if active:
-        return {"status": "already_queued", "job_id": int(dict(active)["id"])}
+        active_id = int(dict(active)["id"])
+        linked = attach_search_session_lineage_to_job(conn, active_id, lineage_payload)
+        if linked:
+            conn.commit()
+        return {
+            "status": "already_queued",
+            "job_id": active_id,
+            "lineage_linked": bool(linked),
+        }
+    freshness_hours = comments_freshness_hours()
+    if not bool(force_refresh):
+        fresh = conn.execute(
+            """
+            SELECT id, updated_at FROM apify_jobs
+            WHERE idempotency_key=? AND status='done' AND updated_at >= NOW() - make_interval(hours => ?)
+            ORDER BY updated_at DESC, id DESC LIMIT 1
+            """,
+            (idempotency_key, freshness_hours),
+        ).fetchone()
+        if fresh:
+            fresh_id = int(dict(fresh)["id"])
+            linked = attach_search_session_lineage_to_job(conn, fresh_id, lineage_payload)
+            if linked:
+                conn.commit()
+            return {
+                "status": "recently_done",
+                "job_id": fresh_id,
+                "data_version": data_version,
+                "freshness_hours": freshness_hours,
+                "lineage_linked": bool(linked),
+            }
     name = str(dict(kol).get("handle") or dict(kol).get("display_name") or kol_pool_id)
-    payload = {
+    payload = with_search_session_lineage({
+        "queue_lane": normalized_queue_lane,
         "kol_pool_id": int(kol_pool_id),
-        "evidence_ids": [int(e) for e in evidence_ids] if evidence_ids else None,
+        "evidence_ids": resolved_evidence_ids,
+        "evidence_set_hash": data_version,
+        "freshness_hours": freshness_hours,
+        "force_refresh": bool(force_refresh),
         "max_comments": int(max_comments) if max_comments else None,
         "query_text": f"评论采集 · {name}"[:96],
         "target_type": "kol_profile",
         "target_id": int(kol_pool_id),
         "triggered_by_user_id": (staff or {}).get("user_id"),
         "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
-    }
-    job = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id
-        """,
-        (POOL_COMMENTS_JOB_TYPE, _json.dumps(payload, ensure_ascii=False)),
-    ).fetchone()
+    },
+        search_session_id=search_session_id,
+        search_session_item_id=search_session_item_id,
+        role="comments",
+        parent_job_id=parent_job_id,
+    )
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type=POOL_COMMENTS_JOB_TYPE,
+        payload=payload,
+        idempotency_key=idempotency_key,
+    )
     conn.commit()
-    return {"status": "queued", "job_id": int(dict(job)["id"]) if job else None}
+    return {
+        "status": "queued" if inserted else "already_queued",
+        "job_id": int(job["id"]),
+        "data_version": data_version,
+        "freshness_hours": freshness_hours,
+    }
+
+
+def enqueue_kol_audience_stats_refresh_job(
+    kol_pool_id: int,
+    *,
+    source_comments_job_id: int | None = None,
+    staff: dict | None = None,
+    lineage_payload: dict[str, Any] | None = None,
+) -> dict:
+    """Queue one durable audience refresh without widening provider concurrency.
+
+    Idempotency is scoped to the KOL while the refresh is active.  The source
+    comment job remains provenance only, so retries or overlapping comment
+    batches cannot create multiple concurrent audience refreshes.
+    """
+    from app.db.connection import get_conn as _get_conn
+
+    normalized_kol_pool_id = int(kol_pool_id or 0)
+    if normalized_kol_pool_id <= 0:
+        raise ValueError("kol_pool_id required")
+    inherited_lineage = inherit_search_session_lineage(
+        lineage_payload,
+        role="audience",
+        parent_job_id=source_comments_job_id,
+    )
+    payload = merge_search_session_lineages({
+        "queue_lane": "batch",
+        "kol_pool_id": normalized_kol_pool_id,
+        "target_type": "kol_profile",
+        "target_id": normalized_kol_pool_id,
+        "query_text": f"受众刷新 · KOL #{normalized_kol_pool_id}"[:96],
+        "source_comments_job_id": (
+            int(source_comments_job_id) if source_comments_job_id else None
+        ),
+        "triggered_by_user_id": (staff or {}).get("user_id"),
+        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+    }, [inherited_lineage])
+    conn = _get_conn()
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type=POOL_AUDIENCE_REFRESH_JOB_TYPE,
+        payload=payload,
+        idempotency_key=active_job_idempotency_key(
+            POOL_AUDIENCE_REFRESH_JOB_TYPE,
+            normalized_kol_pool_id,
+        ),
+    )
+    if not inserted and inherited_lineage:
+        attach_search_session_lineage_to_job(conn, job.get("id"), inherited_lineage)
+    conn.commit()
+    return {
+        "status": "queued" if inserted else "already_queued",
+        "job_id": int(job["id"]),
+        "queue_lane": "batch",
+    }
 
 
 def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -> dict:
     """worker 入口:对该 KOL 的 evidence 逐帖采评论(复用 collect_post_comments 全套机器)。"""
     from app.db.connection import get_conn as _get_conn
-
     kol_pool_id = int(payload.get("kol_pool_id") or 0)
     if not kol_pool_id:
         raise ValueError("kol_pool_id required")
     evidence_ids = payload.get("evidence_ids")
-    if not evidence_ids:
+    # New versioned jobs snapshot the exact evidence set (including []). Old
+    # historical jobs omit the field/hold NULL and keep the legacy late bind.
+    if evidence_ids is None:
         rows = _get_conn().execute(
             """
             SELECT id FROM vkpi_kol_video_evidence
@@ -798,22 +971,6 @@ def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -
             kol_pool_id, len(results), ok_count, new_total,
             [(r.get("evidence_id"), r.get("status"), (r.get("error") or "")[:60]) for r in skipped][:5],
         )
-    # 受众情报 v2:评论采集成功后 best-effort 刷新受众画像(新抓评论的 KOL 自动有全套画像)。
-    # enqueue_if_missing=False:此处已在评论任务尾部,评论仍不足时绝不递归再入队(防自触发环)。
-    # try/except 不阻断评论任务本身;失败只留日志。红线:零触 viltrox_fit_score。
-    # 守卫放宽:只要有帖可看(results 非空)就尝试刷新——YouTube 走 Data API 采样,
-    # 本地评论 0 新增也能出画像;旧守卫 ok_count>0 让 0 新评论的 YT 号受众永不刷新。
-    if ok_count or results:
-        try:
-            from app.domains.kol.audience_stats import refresh_audience_stats
-
-            audience_result = refresh_audience_stats(kol_pool_id, enqueue_if_missing=False)
-            logger.info(
-                "audience_stats 自动刷新 | kol_pool #%s status=%s sample=%s",
-                kol_pool_id, audience_result.get("status"), audience_result.get("sample_size"),
-            )
-        except Exception:
-            logger.warning("audience_stats 自动刷新失败 kol_pool #%s(不阻断评论任务)", kol_pool_id, exc_info=True)
     return {
         "status": "ready" if ok_count or not results else "blocked:all_posts_failed",
         "kol_pool_id": kol_pool_id,
@@ -825,70 +982,14 @@ def run_kol_pool_comments_for_job(payload: dict, *, staff: dict | None = None) -
 
 
 def list_pool_video_comments(kol_pool_id: int, *, evidence_id: int, limit: int = 100) -> dict:
-    """读端:该 evidence 视频的已采评论。字段对齐前端 mapCommentRows。
+    """Return persisted comments for one pool video, including the dossier bridge."""
 
-    两源合一:
-      1) 主源 vkpi_comments[post_table=evidence](KOL Pool 内置评论采集写入)。
-      2) 主源为空时回退 kol_comments(account_dossier 账号扫描写入);经
-         list_kol_comments 的 _post_lookup_kol_ids 桥把 kol_pool_id 解析到主
-         kols.id,并按本视频 content_url 精确匹配 post_url —— 不混入其它视频。
-    回退只在主源为空时触发,严格只增不减;source 字段标注命中源便于排查。
-    """
-    from app.db.connection import get_conn as _get_conn
+    from app.domains.comments.collector_read import list_pool_video_comments_impl
 
-    conn = _get_conn()
-    owner = conn.execute(
-        "SELECT kol_pool_id, content_url FROM vkpi_kol_video_evidence WHERE id=?",
-        (int(evidence_id),),
-    ).fetchone()
-    if not owner or int(dict(owner)["kol_pool_id"] or 0) != int(kol_pool_id):
-        raise LookupError("evidence not found for this kol")
-    post_url = str(dict(owner).get("content_url") or "")
-    safe_limit = max(1, min(500, int(limit or 100)))
-    rows = conn.execute(
-        """
-        SELECT id, comment_text, author_handle, likes_count AS like_count,
-               reply_count, created_at, platform
-        FROM vkpi_comments
-        WHERE post_table=? AND post_id=?
-        ORDER BY COALESCE(likes_count,0) DESC, id ASC
-        LIMIT ?
-        """,
-        (POOL_EVIDENCE_POST_TABLE, int(evidence_id), safe_limit),
-    ).fetchall()
-    items = []
-    for row in rows:
-        item = dict(row)
-        item["post_url"] = post_url
-        items.append(item)
-    source = "pool_evidence"
-    if not items and post_url:
-        # 回退:池内采集尚未跑过 → 读 account_dossier 桥下、同一视频(content_url)的评论
-        try:
-            from app.services.kol.account_dossier import list_kol_comments
-
-            bridged = list_kol_comments(
-                int(kol_pool_id), limit=safe_limit, offset=0, post_url=post_url
-            )
-            for row in bridged.get("items", []) or []:
-                items.append(
-                    {
-                        "id": row.get("id"),
-                        "comment_text": row.get("comment_text"),
-                        "author_handle": row.get("author_handle"),
-                        "like_count": row.get("like_count"),
-                        "reply_count": None,
-                        "created_at": row.get("created_at"),
-                        "platform": row.get("platform"),
-                        "post_url": row.get("post_url") or post_url,
-                    }
-                )
-            if items:
-                source = "kol_comments_bridge"
-        except Exception:
-            logger.exception(
-                "list_pool_video_comments bridge fallback failed kol=%s evidence=%s",
-                kol_pool_id,
-                evidence_id,
-            )
-    return {"items": items, "page": {"total": len(items), "next_offset": 0}, "source": source}
+    return list_pool_video_comments_impl(
+        kol_pool_id,
+        evidence_id=evidence_id,
+        limit=limit,
+        post_table=POOL_EVIDENCE_POST_TABLE,
+        logger=logger,
+    )

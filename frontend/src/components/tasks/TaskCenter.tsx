@@ -16,6 +16,7 @@ import {
   retryTask as retryAsyncTask,
   TERMINAL_STATUSES,
 } from '../../domains/tasks';
+import { prepareSseStream } from '../../services/sse-api';
 import './TaskCenter.css';
 
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -96,9 +97,14 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   const watchersRef = useRef<Map<string, Set<WatcherCallbacks>>>(new Map());
   const previousTasksRef = useRef<Map<string, AsyncTask>>(new Map());
   const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
+  const connectingTaskIdsRef = useRef<Set<string>>(new Set());
+  const activeTaskIdsRef = useRef<Set<string>>(new Set());
+  const apiTokenRef = useRef(apiToken);
   const inFlightRef = useRef(false);
 
   const activeTasks = useMemo(() => tasks.filter((task) => !isTerminalTask(task)), [tasks]);
+  apiTokenRef.current = apiToken;
+  activeTaskIdsRef.current = new Set(activeTasks.map((task) => task.task_id).filter(Boolean));
   const completedTasks = useMemo(() => tasks.filter((task) => completedStatusSet.has(task.status)), [tasks]);
   const failedTasks = useMemo(() => tasks.filter((task) => failedStatusSet.has(task.status)), [tasks]);
 
@@ -202,29 +208,48 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
       }
     });
     activeIds.forEach((taskId) => {
-      if (eventSourcesRef.current.has(taskId)) return;
-      const source = new EventSource(buildTaskEventStreamUrl(taskId), { withCredentials: true });
-      const refresh = () => {
-        void refreshTasks();
-      };
-      const refreshAndClose = () => {
-        void refreshTasks();
-        closeEventSource(taskId);
-      };
-      source.addEventListener('status_update', refresh);
-      source.addEventListener('result_ready', refreshAndClose);
-      source.addEventListener('failed', refreshAndClose);
-      source.addEventListener('final_result', refreshAndClose);
-      source.onerror = () => {
-        closeEventSource(taskId);
-      };
-      eventSourcesRef.current.set(taskId, source);
+      if (eventSourcesRef.current.has(taskId) || connectingTaskIdsRef.current.has(taskId)) return;
+      const streamUrl = buildTaskEventStreamUrl(taskId);
+      const issuedForToken = apiTokenRef.current;
+      connectingTaskIdsRef.current.add(taskId);
+      void prepareSseStream(streamUrl, issuedForToken)
+        .then((authorizedUrl) => {
+          if (
+            !activeTaskIdsRef.current.has(taskId)
+            || apiTokenRef.current !== issuedForToken
+            || eventSourcesRef.current.has(taskId)
+          ) return;
+          const source = new EventSource(authorizedUrl, { withCredentials: true });
+          const refresh = () => {
+            void refreshTasks();
+          };
+          const refreshAndClose = () => {
+            void refreshTasks();
+            closeEventSource(taskId);
+          };
+          source.addEventListener('status_update', refresh);
+          source.addEventListener('result_ready', refreshAndClose);
+          source.addEventListener('failed', refreshAndClose);
+          source.addEventListener('final_result', refreshAndClose);
+          source.onerror = () => {
+            closeEventSource(taskId);
+          };
+          eventSourcesRef.current.set(taskId, source);
+        })
+        .catch(() => {
+          // Existing task polling remains active as the transparent fallback.
+        })
+        .finally(() => {
+          connectingTaskIdsRef.current.delete(taskId);
+        });
     });
-  }, [activeTasks, closeEventSource, realtimeReady, refreshTasks]);
+  }, [activeTasks, apiToken, closeEventSource, realtimeReady, refreshTasks]);
 
   useEffect(() => {
     return () => {
       watchersRef.current.clear();
+      activeTaskIdsRef.current.clear();
+      connectingTaskIdsRef.current.clear();
       eventSourcesRef.current.forEach((source) => source.close());
       eventSourcesRef.current.clear();
     };

@@ -5,6 +5,7 @@ Default mode is read-only. Use ``--commit`` only after backup-first production
 preflight, because it creates/updates ``vkpi_kol_refresh_tier`` rows.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -88,7 +89,7 @@ def main() -> int:
                 max_concurrent=max(1, min(3, int(args.max_concurrent_runs or 2))),
                 chunk_overrides=_chunk_overrides(args.chunk_sizes),
             )
-        print(json.dumps(output, ensure_ascii=False, default=str, indent=2))
+        stdout_out(json.dumps(output, ensure_ascii=False, default=str, indent=2))
         return 1 if result.get("error_count") else 0
     finally:
         asyncio.run(close_db_runtime())

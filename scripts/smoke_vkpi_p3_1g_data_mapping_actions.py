@@ -9,6 +9,7 @@ Covers the bugs this round fixed:
 - Visible placeholder/TODO/fake tag controls are removed from the account tabs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -80,7 +81,7 @@ def main() -> None:
 
     require_contains(CSS, ".da-post-card__avatar img")
 
-    print("VKPI_P3_1G_DATA_MAPPING_ACTIONS_SMOKE_OK")
+    stdout_out("VKPI_P3_1G_DATA_MAPPING_ACTIONS_SMOKE_OK")
 
 
 if __name__ == "__main__":

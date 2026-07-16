@@ -14,18 +14,29 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.core.logging import get_logger
+from app.domains.comments.job_identity import comments_freshness_hours, comments_job_identity, normalize_evidence_ids
 from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
+from app.domains.kol.search_progress_contract import completion_contract
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key
+from app.domains.tasks.search_session_lineage import search_session_lineages
 from app.workers.apify_jobs_worker_helpers import (
     _as_dict,
-    _compact_text,
     _derive_method,
-    _final_v1_payload,
     _int_or_none,
     _json,
     _loads,
-    _score_confidence,
-    _score_value,
     _target,
+)
+from app.workers.apify_jobs_worker_lineage import (
+    _LINEAGE_STAGE_ROLES,
+    _item_profile_state,
+    _lineage_item_state,
+    _lineage_jobs_for_item,
+    _lineage_role_state,
+)
+from app.workers.apify_jobs_worker_session_analysis import (
+    _score_entry,
+    _search_session_analysis_summary_from_result,
 )
 
 
@@ -43,91 +54,9 @@ def _search_session_job_state(raw_status: str, reason: str = "") -> tuple[str, s
         if "skipped_existing_analysis_cache" in reason_text:
             return "already_analyzed", "summary"
         return "ready", "summary"
-    if status in {"failed", "blocked"}:
+    if status in {"failed", "blocked", "triage"}:
         return "failed", "analysis"
     return "unknown", "analysis"
-
-
-def _score_entry(layer6: dict[str, Any], key: str) -> dict[str, Any] | None:
-    scores = _as_dict(layer6.get("scores"))
-    raw = scores.get(key)
-    if raw is None and key == "marketing_value_score":
-        raw = layer6.get("marketing_value_score")
-    value = _score_value(raw)
-    if value is None:
-        return None
-    entry: dict[str, Any] = {"score": value}
-    confidence = _score_confidence(raw)
-    if confidence is not None:
-        entry["confidence"] = confidence
-    if isinstance(raw, dict):
-        for meta_key in ("rationale", "reason", "evidence"):
-            if raw.get(meta_key) is not None:
-                entry[meta_key] = _compact_text(raw.get(meta_key), 420)
-    return entry
-
-
-def _search_session_analysis_summary_from_result(
-    *,
-    cache_id: int | None,
-    derive_method: str,
-    target_type: str,
-    target_id: str,
-    evidence: dict[str, Any] | None,
-    result: dict[str, Any],
-    cost: float | None = None,
-) -> dict[str, Any] | None:
-    if derive_method != "video_analysis_final_v1" or target_type != "video":
-        return None
-    payload = _final_v1_payload(result)
-    layer1 = _as_dict(payload.get("layer1_visual_content"))
-    layer5 = _as_dict(payload.get("layer5_recommendations"))
-    layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
-    cost_info = _as_dict(payload.get("cost"))
-    marketing = _score_entry(layer6, "marketing_value_score")
-    if not marketing:
-        return {
-            "status": "ready",
-            "derive_method": derive_method,
-            "cache_id": cache_id,
-            "source_evidence_id": _int_or_none(target_id),
-            "missing": "marketing_value_score",
-        }
-    score_keys = (
-        "content_quality_score",
-        "viewer_heart_score",
-        "channel_value_score",
-        "asset_reuse_score",
-        "product_proof_score",
-        "marketing_value_score",
-    )
-    scores = {key: entry for key in score_keys if (entry := _score_entry(layer6, key))}
-    evidence = evidence or {}
-    return {
-        "status": "ready",
-        "derive_method": derive_method,
-        "cache_id": cache_id,
-        "source_evidence_id": _int_or_none(target_id),
-        "kol_pool_id": _int_or_none(evidence.get("kol_pool_id") or _as_dict(payload.get("source")).get("kol_pool_id")),
-        "source_url": evidence.get("content_url") or _as_dict(payload.get("source")).get("url"),
-        "title": _compact_text(evidence.get("title") or evidence.get("video_title") or _as_dict(payload.get("source")).get("title"), 320),
-        "llm_v6_fit": marketing.get("score"),
-        "confidence": marketing.get("confidence"),
-        "scores": scores,
-        "summary": _compact_text(layer1.get("content_summary") or layer6.get("key_hook") or layer6.get("final_verdict"), 700),
-        "recommendations": {
-            "cooperation_recommendation": layer5.get("cooperation_recommendation"),
-            "buyout_or_license_recommendation": layer5.get("buyout_or_license_recommendation"),
-            "why": layer5.get("why"),
-        },
-        "risk": {
-            "risk_flags": layer6.get("risk_flags"),
-            "final_verdict": layer6.get("final_verdict"),
-            "key_hook": layer6.get("key_hook"),
-        },
-        "cost": cost,
-        "latency_ms": _int_or_none(cost_info.get("latency_ms")),
-    }
 
 
 def _session_url_enrichment_error(payload: dict[str, Any]) -> str:
@@ -261,21 +190,127 @@ def _rebuild_search_session_summary(
             "job_status": payload.get("job_status") if isinstance(payload, dict) else None,
             "job_last_error": payload.get("job_last_error") if isinstance(payload, dict) else None,
             "analysis": payload.get("analysis") if isinstance(payload, dict) else None,
+            "profile_status": str(_item_profile_state(payload).get("status") or "").strip().lower()
+            if isinstance(payload, dict)
+            else "",
+            "downstream": payload.get("downstream_jobs") if isinstance(payload, dict) else None,
             "updated_at": row.get("updated_at").isoformat() if hasattr(row.get("updated_at"), "isoformat") else row.get("updated_at"),
         }
         items.append(item)
     counts = _search_session_item_counts(items)
     primary = next((item for item in items if str(item.get("item_type") or "").startswith("url_")), items[0] if items else {})
+    progress = current_summary.get("progress") if isinstance(current_summary.get("progress"), dict) else {}
+    has_progressive_contract = any(item.get("profile_status") or item.get("downstream") for item in items)
+    profile_ready = sum(1 for item in items if item.get("profile_status") in {"ready", "already_analyzed"})
+    profile_failed = sum(
+        1
+        for item in items
+        if "failed" in str(item.get("profile_status") or "")
+        or item.get("profile_status") in {"error", "crawl_failed", "unsupported"}
+    )
+    if not has_progressive_contract:
+        profile_ready = int(counts.get("ready") or 0)
+        profile_failed = int((counts.get("by_status") or {}).get("failed") or 0)
+    stage_progress: dict[str, dict[str, int]] = {}
+    total = int(progress.get("total") or len(items))
+    for role in _LINEAGE_STAGE_ROLES:
+        role_states: list[str] = []
+        for item in items:
+            downstream = item.get("downstream") if isinstance(item.get("downstream"), dict) else {}
+            state = str(_as_dict(downstream.get(role)).get("state") or "not_requested").strip().lower()
+            role_states.append(state if state in {"ready", "active", "failed", "not_requested"} else "failed")
+        stage_progress[role] = {
+            "ready": sum(1 for state in role_states if state == "ready"),
+            "active": sum(1 for state in role_states if state == "active"),
+            "failed": sum(1 for state in role_states if state == "failed"),
+            "not_requested": max(0, total - sum(1 for state in role_states if state != "not_requested")),
+        }
+    active_downstream = sum(stage["active"] for stage in stage_progress.values())
+    terminal_item_count = sum(
+        int((counts.get("by_status") or {}).get(status) or 0)
+        for status in ("ready", "already_analyzed", "partial", "failed", "skipped", "blocked", "cancelled", "canceled")
+    )
+    profile_active_states = {"", "unknown", "planned", "pending", "queued", "running", "retrying", "processing"}
+    item_terminal_states = {"ready", "already_analyzed", "partial", "failed", "skipped", "blocked", "cancelled", "canceled"}
+    profile_terminal_count = terminal_item_count
+    profile_succeeded_count = profile_ready
+    if has_progressive_contract:
+        profile_terminal_count = sum(
+            1
+            for item in items
+            if str(item.get("profile_status") or "").strip().lower() not in profile_active_states
+            or (
+                not str(item.get("profile_status") or "").strip()
+                and str(item.get("status") or "").strip().lower() in item_terminal_states
+            )
+        )
+        profile_succeeded_count = sum(
+            1
+            for item in items
+            if (
+                str(item.get("profile_status") or "").strip().lower() not in profile_active_states
+                and "failed" not in str(item.get("profile_status") or "").strip().lower()
+                and str(item.get("profile_status") or "").strip().lower()
+                not in {"error", "crawl_failed", "unsupported"}
+            )
+            or (
+                not str(item.get("profile_status") or "").strip()
+                and str(item.get("status") or "").strip().lower() in {"ready", "already_analyzed", "partial"}
+            )
+        )
+    profile_terminal_count = min(
+        total,
+        max(profile_terminal_count, int(progress.get("profile_completed") or 0)),
+    )
+    profile_succeeded_count = max(
+        profile_succeeded_count,
+        min(profile_terminal_count, int(progress.get("profile_succeeded") or 0)),
+    )
+    progress = {
+        **progress,
+        "base": max(int(progress.get("base") or 0), len(items)),
+        "total": total,
+        "profile_ready": profile_ready,
+        "profile_failed": profile_failed,
+        "profile_completed": profile_terminal_count,
+        "profile_succeeded": profile_succeeded_count,
+        "profile_remaining": max(0, total - profile_terminal_count),
+        "complete_ready": int(counts.get("ready") or 0),
+        "complete_partial": int((counts.get("by_status") or {}).get("partial") or 0),
+    }
+    if has_progressive_contract:
+        progress.update(
+            {
+                "video": stage_progress["video"],
+                "comments": stage_progress["comments"],
+                "audience": stage_progress["audience"],
+            }
+        )
+    phase = "profile" if session_status == "running" else ("complete" if session_status == "ready" else "partial")
+    contract = completion_contract(
+        base_count=int(progress.get("base") or 0),
+        total=total,
+        terminal_count=terminal_item_count,
+        ready_count=profile_ready,
+        profile_failed=profile_failed,
+        active_tasks=active_downstream,
+        stage_progress=stage_progress if has_progressive_contract else None,
+    )
+    progress.update(contract)
     summary = {
         **current_summary,
+        "phase": phase,
+        "progress": progress,
         "item_status": primary.get("status"),
         "job_status": primary.get("job_status"),
         "job_last_error": primary.get("job_last_error"),
         "analysis": primary.get("analysis"),
         "counts": counts,
         "items_written": len(items),
-        "terminal_synced_at": datetime.now(timezone.utc).isoformat(),
+        **contract,
     }
+    if session_status != "running":
+        summary["terminal_synced_at"] = datetime.now(timezone.utc).isoformat()
     cur.execute(
         """
         UPDATE vkpi_kol_search_sessions
@@ -442,6 +477,7 @@ def _enqueue_content_fit_after_final_v1(
             except Exception:
                 product_sku = None
             payload = {
+                "queue_lane": "batch",
                 "kol_pool_id": int(kol_pool_id),
                 "product_sku": product_sku,
                 "derive_method": "content_fit_v1",
@@ -451,17 +487,31 @@ def _enqueue_content_fit_after_final_v1(
                 "viltrox_fit_score_untouched": True,
                 "query_text": f"content fit - kol_pool #{kol_pool_id}",
             }
+            idempotency_key = active_job_idempotency_key("kol_content_fit_analysis", kol_pool_id)
             cur.execute(
                 """
-                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-                VALUES ('kol_content_fit_analysis', %s::jsonb, 'queued', NOW(), NOW())
+                INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
+                VALUES ('kol_content_fit_analysis', %s::jsonb, %s, 'queued', NOW(), NOW())
+                ON CONFLICT (idempotency_key)
+                  WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
+                    AND status IN ('queued', 'running')
+                DO NOTHING
                 RETURNING id, status
                 """,
-                (_json(payload),),
+                (_json(payload), idempotency_key),
             )
             row = cur.fetchone() or {}
+            inserted = bool(row)
+            if not row:
+                cur.execute(
+                    """SELECT id, status FROM apify_jobs
+                       WHERE idempotency_key=%s AND status IN ('queued', 'running')
+                       ORDER BY id DESC LIMIT 1""",
+                    (idempotency_key,),
+                )
+                row = cur.fetchone() or {}
     return {
-        "status": "queued",
+        "status": "queued" if inserted else ("already_running" if row.get("status") == "running" else "already_queued"),
         "job_id": int(row["id"]) if row.get("id") is not None else None,
         "kol_pool_id": kol_pool_id,
         "product_sku": product_sku,
@@ -508,6 +558,7 @@ def _enqueue_account_dossier_extract_after_final_v1(
                     "kol_pool_id": kol_pool_id,
                 }
             payload = {
+                "queue_lane": "batch",
                 "target_type": "kol_pool",
                 "target_id": str(kol_pool_id),
                 "derive_method": "kol_account_dossier_extract_v1",
@@ -519,17 +570,31 @@ def _enqueue_account_dossier_extract_after_final_v1(
                 "source_evidence_id": deep_result.get("source_evidence_id"),
                 "query_text": f"account dossier - kol_pool #{kol_pool_id}",
             }
+            idempotency_key = active_job_idempotency_key("account_dossier_extract", kol_pool_id)
             cur.execute(
                 """
-                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-                VALUES ('account_dossier_extract', %s::jsonb, 'queued', NOW(), NOW())
+                INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
+                VALUES ('account_dossier_extract', %s::jsonb, %s, 'queued', NOW(), NOW())
+                ON CONFLICT (idempotency_key)
+                  WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
+                    AND status IN ('queued', 'running')
+                DO NOTHING
                 RETURNING id, status, created_at, updated_at
                 """,
-                (_json(payload),),
+                (_json(payload), idempotency_key),
             )
             row = cur.fetchone() or {}
+            inserted = bool(row)
+            if not row:
+                cur.execute(
+                    """SELECT id, status, created_at, updated_at FROM apify_jobs
+                       WHERE idempotency_key=%s AND status IN ('queued', 'running')
+                       ORDER BY id DESC LIMIT 1""",
+                    (idempotency_key,),
+                )
+                row = cur.fetchone() or {}
     return {
-        "status": "queued",
+        "status": "queued" if inserted else ("already_running" if row.get("status") == "running" else "already_queued"),
         "job_id": int(row["id"]) if row.get("id") is not None else None,
         "kol_pool_id": kol_pool_id,
     }
@@ -584,14 +649,28 @@ def _enqueue_comments_collect_after_final_v1(
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
+                SELECT id FROM vkpi_kol_video_evidence
+                WHERE kol_pool_id=%s AND is_active IS NOT FALSE
+                  AND COALESCE(evidence_type,'video')='video'
+                ORDER BY COALESCE(view_count,0) DESC, id DESC LIMIT 20
+                """,
+                (int(kol_pool_id),),
+            )
+            evidence_ids = normalize_evidence_ids((row or {}).get("id") for row in (cur.fetchall() or []))
+            idempotency_key, data_version = comments_job_identity(int(kol_pool_id), evidence_ids)
+            cur.execute(
+                """
                 SELECT id, status FROM apify_jobs
                 WHERE job_type='kol_pool_comments_collect'
                   AND status IN ('queued', 'running')
-                  AND payload->>'kol_pool_id'=%s
+                  AND (
+                    idempotency_key=%s
+                    OR (idempotency_key IS NULL AND payload->>'kol_pool_id'=%s)
+                  )
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
                 """,
-                (str(kol_pool_id),),
+                (idempotency_key, str(kol_pool_id)),
             )
             existing = cur.fetchone()
             if existing:
@@ -600,11 +679,34 @@ def _enqueue_comments_collect_after_final_v1(
                     "job_id": int(existing["id"]),
                     "kol_pool_id": kol_pool_id,
                 }
+            freshness_hours = comments_freshness_hours()
+            cur.execute(
+                """
+                SELECT id, status FROM apify_jobs
+                WHERE idempotency_key=%s AND status='done'
+                  AND updated_at >= NOW() - make_interval(hours => %s)
+                ORDER BY updated_at DESC, id DESC LIMIT 1
+                """,
+                (idempotency_key, freshness_hours),
+            )
+            fresh = cur.fetchone()
+            if fresh:
+                return {
+                    "status": "recently_done",
+                    "job_id": int(fresh["id"]),
+                    "kol_pool_id": kol_pool_id,
+                    "data_version": data_version,
+                    "freshness_hours": freshness_hours,
+                }
             payload = {
+                "queue_lane": "batch",
                 "kol_pool_id": int(kol_pool_id),
                 "target_type": "kol_profile",
                 "target_id": int(kol_pool_id),
-                "evidence_ids": None,
+                "evidence_ids": evidence_ids,
+                "evidence_set_hash": data_version,
+                "freshness_hours": freshness_hours,
+                "force_refresh": False,
                 "max_comments": None,
                 "query_text": f"评论采集 · kol_pool #{kol_pool_id}",
                 "source": "final_v1_worker_followup",
@@ -613,15 +715,28 @@ def _enqueue_comments_collect_after_final_v1(
             }
             cur.execute(
                 """
-                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-                VALUES ('kol_pool_comments_collect', %s::jsonb, 'queued', NOW(), NOW())
+                INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
+                VALUES ('kol_pool_comments_collect', %s::jsonb, %s, 'queued', NOW(), NOW())
+                ON CONFLICT (idempotency_key)
+                  WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
+                    AND status IN ('queued', 'running')
+                DO NOTHING
                 RETURNING id, status
                 """,
-                (_json(payload),),
+                (_json(payload), idempotency_key),
             )
             row = cur.fetchone() or {}
+            inserted = bool(row)
+            if not row:
+                cur.execute(
+                    """SELECT id, status FROM apify_jobs
+                       WHERE idempotency_key=%s AND status IN ('queued', 'running')
+                       ORDER BY id DESC LIMIT 1""",
+                    (idempotency_key,),
+                )
+                row = cur.fetchone() or {}
     return {
-        "status": "queued",
+        "status": "queued" if inserted else ("already_running" if row.get("status") == "running" else "already_queued"),
         "job_id": int(row["id"]) if row.get("id") is not None else None,
         "kol_pool_id": kol_pool_id,
     }
@@ -634,17 +749,19 @@ def _sync_search_session_job(
     raw_status: str,
     reason: str = "",
     analysis_summary: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     try:
-        _sync_search_session_job_impl(
+        synced_count = _sync_search_session_job_impl(
             conn,
             job_id,
             raw_status=raw_status,
             reason=reason,
             analysis_summary=analysis_summary,
         )
+        return int(synced_count or 0) > 0
     except Exception as exc:
         logger.warning("search session job sync failed | job_id=%s status=%s error=%s", job_id, raw_status, exc)
+        return False
 
 
 def _sync_search_session_job_impl(
@@ -654,86 +771,156 @@ def _sync_search_session_job_impl(
     raw_status: str,
     reason: str = "",
     analysis_summary: dict[str, Any] | None = None,
-) -> None:
+) -> int:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT id, payload, last_error FROM apify_jobs WHERE id=%s", (int(job_id),))
         row = cur.fetchone()
     if not row:
-        return
+        return 0
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else _loads(row.get("payload"), {})
     if not isinstance(payload, dict):
-        return
-    session_id = _int_or_none(payload.get("search_session_id"))
-    item_id = _int_or_none(payload.get("search_session_item_id"))
-    if not session_id or not item_id:
-        return
-    item_status, stage = _search_session_job_state(raw_status, reason or row.get("last_error") or "")
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            """
-            SELECT payload_json
-            FROM vkpi_kol_search_session_items
-            WHERE id=%s
-              AND session_id=%s
-            LIMIT 1
-            """,
-            (int(item_id), int(session_id)),
+        return 0
+    lineages = search_session_lineages(payload)
+    if not lineages:
+        return 0
+    unique_lineages: dict[tuple[int, int], set[str]] = {}
+    for entry in lineages:
+        session_id = _int_or_none(entry.get("search_session_id"))
+        item_id = _int_or_none(entry.get("search_session_item_id"))
+        if not session_id or not item_id:
+            continue
+        unique_lineages.setdefault((int(session_id), int(item_id)), set()).add(
+            str(entry.get("role") or "").strip().lower()
         )
-        item_row = cur.fetchone() or {}
-    existing_payload = item_row.get("payload_json") if isinstance(item_row.get("payload_json"), dict) else _loads(item_row.get("payload_json"), {})
-    if not isinstance(existing_payload, dict):
-        existing_payload = {}
-    enrichment_error = _session_url_enrichment_error(existing_payload)
-    if item_status in {"ready", "already_analyzed"} and enrichment_error:
-        item_status = "partial"
-        stage = "summary"
-    if analysis_summary is None and item_status in {"ready", "already_analyzed", "partial"}:
-        analysis_summary = _search_session_analysis_summary_from_ready_cache(conn, payload)
-    payload["search_session_item_status"] = item_status
-    payload["search_session_stage"] = stage
-    payload["search_session_last_job_status"] = raw_status
-    payload["search_session_last_error"] = str(enrichment_error or reason or row.get("last_error") or "")[:500]
-    if analysis_summary:
-        payload["search_session_cache_id"] = analysis_summary.get("cache_id")
-        payload["search_session_analysis_status"] = analysis_summary.get("status")
-    item_patch: dict[str, Any] = {
-        "job_status": raw_status,
-        "job_last_error": str(enrichment_error or reason or row.get("last_error") or "")[:1000],
-        "job_updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if analysis_summary:
-        item_patch["analysis"] = analysis_summary
-    with conn.transaction():
+    if not unique_lineages:
+        return 0
+
+    synced_items: list[dict[str, Any]] = []
+    current_analysis_summary = analysis_summary
+    for (session_id, item_id), roles in unique_lineages.items():
+        resolver_projection: dict[str, Any] = {}
+        if "resolver" in roles:
+            from app.domains.kol.video_url_resolver import video_url_session_sync_projection
+
+            resolver_projection = video_url_session_sync_projection(payload)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                UPDATE vkpi_kol_search_session_items
-                SET status=%s,
-                    stage=%s,
-                    payload_json = payload_json || %s::jsonb,
-                    updated_at=NOW()
+                SELECT payload_json
+                FROM vkpi_kol_search_session_items
                 WHERE id=%s
                   AND session_id=%s
+                LIMIT 1
                 """,
-                (
-                    item_status,
-                    stage,
-                    _json(item_patch),
-                    int(item_id),
-                    int(session_id),
-                ),
+                (int(item_id), int(session_id)),
             )
-            cur.execute(
-                """
-                SELECT status, stage
-                FROM vkpi_kol_search_session_items
-                WHERE session_id=%s
-                """,
-                (int(session_id),),
+            item_row = cur.fetchone() or {}
+        if not item_row:
+            continue
+        existing_payload = item_row.get("payload_json") if isinstance(item_row.get("payload_json"), dict) else _loads(item_row.get("payload_json"), {})
+        if not isinstance(existing_payload, dict):
+            existing_payload = {}
+        enrichment_error = _session_url_enrichment_error(existing_payload)
+        progressive = any(roles)
+        downstream: dict[str, Any] | None = None
+        required_tasks_complete = False
+        if progressive:
+            state = _lineage_item_state(
+                existing_payload,
+                _lineage_jobs_for_item(conn, session_id=int(session_id), item_id=int(item_id)),
             )
-            session_status = _search_session_status_from_items([dict(item) for item in (cur.fetchall() or [])])
-            _rebuild_search_session_summary(cur, session_id=int(session_id), session_status=session_status)
+            item_status = str(state.get("item_status") or "partial")
+            stage = str(state.get("stage") or "analysis")
+            downstream = state.get("downstream") if isinstance(state.get("downstream"), dict) else {}
+            required_tasks_complete = bool(state.get("required_tasks_complete"))
+        else:
+            item_status, stage = _search_session_job_state(raw_status, reason or row.get("last_error") or "")
+        if item_status in {"ready", "already_analyzed"} and enrichment_error:
+            item_status = "partial"
+            stage = "summary"
+            required_tasks_complete = False
+        if current_analysis_summary is None and item_status in {"ready", "already_analyzed", "partial"}:
+            current_analysis_summary = _search_session_analysis_summary_from_ready_cache(conn, payload)
+        item_error = str(enrichment_error or reason or row.get("last_error") or "")[:1000]
+        item_patch: dict[str, Any] = {
+            "job_status": raw_status,
+            "job_last_error": item_error,
+            "job_updated_at": datetime.now(timezone.utc).isoformat(),
+            "required_tasks_complete": required_tasks_complete,
+        }
+        if downstream is not None:
+            item_patch["downstream_jobs"] = downstream
+        if current_analysis_summary:
+            item_patch["analysis"] = current_analysis_summary
+        if resolver_projection:
+            item_patch.update(resolver_projection.get("payload_patch") or {})
+        if downstream is not None:
+            from app.domains.kol.video_url_resolver import reconcile_video_url_ai_progress
+
+            progress_source = {**existing_payload, **(resolver_projection.get("payload_patch") or {})}
+            reconciled_progress = reconcile_video_url_ai_progress(progress_source, downstream)
+            if reconciled_progress:
+                item_patch["video_url_resolution"] = reconciled_progress
+                compact_video_flow = _as_dict(progress_source.get("video_flow"))
+                item_patch["video_flow"] = {**compact_video_flow, "resolution_progress": reconciled_progress}
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    """
+                    UPDATE vkpi_kol_search_session_items
+                    SET status=%s,
+                        stage=%s,
+                        kol_pool_id=COALESCE(%s, kol_pool_id),
+                        evidence_id=COALESCE(%s, evidence_id),
+                        payload_json = payload_json || %s::jsonb,
+                        updated_at=NOW()
+                    WHERE id=%s
+                      AND session_id=%s
+                    """,
+                    (
+                        item_status,
+                        stage,
+                        resolver_projection.get("kol_pool_id"),
+                        resolver_projection.get("evidence_id"),
+                        _json(item_patch),
+                        int(item_id),
+                        int(session_id),
+                    ),
+                )
+                cur.execute(
+                    """
+                    SELECT status, stage
+                    FROM vkpi_kol_search_session_items
+                    WHERE session_id=%s
+                    """,
+                    (int(session_id),),
+                )
+                session_status = _search_session_status_from_items([dict(item) for item in (cur.fetchall() or [])])
+                _rebuild_search_session_summary(cur, session_id=int(session_id), session_status=session_status)
+        synced_items.append(
+            {
+                "search_session_id": int(session_id),
+                "search_session_item_id": int(item_id),
+                "status": item_status,
+                "stage": stage,
+            }
+        )
+
+    if not synced_items:
+        return 0
+    payload["search_session_item_statuses"] = synced_items
+    payload["search_session_last_job_status"] = raw_status
+    payload["search_session_last_error"] = str(reason or row.get("last_error") or "")[:500]
+    first = synced_items[0]
+    payload["search_session_item_status"] = first["status"]
+    payload["search_session_stage"] = first["stage"]
+    if current_analysis_summary:
+        payload["search_session_cache_id"] = current_analysis_summary.get("cache_id")
+        payload["search_session_analysis_status"] = current_analysis_summary.get("status")
+    with conn.transaction():
+        with conn.cursor() as cur:
             cur.execute(
                 "UPDATE apify_jobs SET payload=%s::jsonb WHERE id=%s",
                 (_json(payload), int(job_id)),
             )
+    return len(synced_items)

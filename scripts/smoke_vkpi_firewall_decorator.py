@@ -13,6 +13,8 @@ R59 smoke: 验证防火墙装饰器拦截 + 通过 + force bypass 三种行为.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import os
 import sys
 import time
@@ -61,7 +63,7 @@ def main() -> None:
     failures: list[str] = []
     
     # ── 场景 1: 平台 crawl 未开 → 拒 ──
-    print("[1/5] 平台 crawl=0 → 应拒")
+    out("[1/5] 平台 crawl=0 → 应拒")
     _set_platform("instagram", crawl_enabled=0, monthly_budget_usd=0)
     result = check_firewall(platform="instagram", action="crawl")
     if result["allowed"]:
@@ -69,10 +71,10 @@ def main() -> None:
     elif result["reason"] != "platform_crawl_disabled":
         failures.append(f"场景 1 reason 错: 期望 platform_crawl_disabled,实际 {result['reason']}")
     else:
-        print(f"   PASS: 拒绝 reason={result['reason']}")
+        out(f"   PASS: 拒绝 reason={result['reason']}")
     
     # ── 场景 2: crawl 开了,budget=0 → 拒 ──
-    print("[2/5] crawl=1 但 budget=0 → 应拒")
+    out("[2/5] crawl=1 但 budget=0 → 应拒")
     _set_platform("instagram", crawl_enabled=1, monthly_budget_usd=0)
     result = check_firewall(platform="instagram", action="crawl", require_budget=True)
     if result["allowed"]:
@@ -80,31 +82,31 @@ def main() -> None:
     elif result["reason"] != "platform_budget_zero":
         failures.append(f"场景 2 reason 错: 期望 platform_budget_zero,实际 {result['reason']}")
     else:
-        print(f"   PASS: 拒绝 reason={result['reason']}")
+        out(f"   PASS: 拒绝 reason={result['reason']}")
     
     # ── 场景 3: 全部满足 → 通过 ──
-    print("[3/5] crawl=1 + budget>0 → 应通过")
+    out("[3/5] crawl=1 + budget>0 → 应通过")
     _set_platform("instagram", crawl_enabled=1, monthly_budget_usd=100)
     result = check_firewall(platform="instagram", action="crawl", require_budget=True)
     if not result["allowed"]:
         failures.append(f"场景 3 失败: 期望通过,实际拒 {result}")
     else:
-        print(f"   PASS: 通过 reason={result['reason']}")
+        out(f"   PASS: 通过 reason={result['reason']}")
     
     # ── 场景 4: 装饰器拦截 ──
-    print("[4/5] 装饰器在 budget=0 时拦截调用")
+    out("[4/5] 装饰器在 budget=0 时拦截调用")
     _set_platform("instagram", crawl_enabled=1, monthly_budget_usd=0)
     try:
         fake_instagram_crawl(staff={"id": 1}, body={})
         failures.append("场景 4 失败: 装饰器没抛 HTTPException")
     except Exception as exc:
         if "firewall_blocked" in str(exc) or "503" in str(exc) or hasattr(exc, "status_code"):
-            print(f"   PASS: 装饰器拦截 -> {type(exc).__name__}")
+            out(f"   PASS: 装饰器拦截 -> {type(exc).__name__}")
         else:
             failures.append(f"场景 4 失败: 抛了非预期异常 {type(exc).__name__}: {exc}")
     
     # ── 场景 5: owner force=true bypass ──
-    print("[5/5] owner 用 force=true bypass")
+    out("[5/5] owner 用 force=true bypass")
     # 先把 budget 设回 0,确保正常会被拦
     _set_platform("instagram", crawl_enabled=1, monthly_budget_usd=0)
     try:
@@ -113,7 +115,7 @@ def main() -> None:
             body={"force": True},
         )
         if result.get("called"):
-            print("   PASS: force=true bypass 成功")
+            out("   PASS: force=true bypass 成功")
         else:
             failures.append(f"场景 5 失败: bypass 后没返回业务结果 {result}")
     except Exception as exc:
@@ -124,12 +126,12 @@ def main() -> None:
     
     # ── 总结 ──
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_FIREWALL_DECORATOR_SMOKE_OK")
+        out("\nVKPI_FIREWALL_DECORATOR_SMOKE_OK")
         sys.exit(0)
 
 

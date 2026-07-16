@@ -21,6 +21,10 @@ from app.db.connection import db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.services.media.video_download import download_direct_video_url
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
+from app.services.ai.analyzers.gemini_video_results import (
+    InvalidFinalV1ResultError,
+    ensure_final_v1_result_cacheable,
+)
 from app.workers.apify_jobs_worker_helpers import (
     _derive_method,
     _int_or_none,
@@ -32,6 +36,7 @@ from app.workers.apify_jobs_worker_helpers import (
 )
 from app.workers.apify_jobs_cost import (
     _anthropic_cost,
+    _authoritative_gemini_cost,
     _gemini_cost,
     _openai_cost,
 )
@@ -52,6 +57,75 @@ from app.workers.apify_jobs_worker_session import (
 logger = get_logger(__name__)
 
 
+def _llm_execution_metadata(raw: dict[str, Any]) -> dict[str, Any]:
+    value = raw.get("llm_execution") if isinstance(raw.get("llm_execution"), dict) else {}
+    execution_class = str(
+        value.get("execution_class") or WORKER_LLM_EXECUTION_CLASS
+    )
+    evaluation_only = execution_class == "local_evaluation"
+    production_authorized = bool(value.get("production_authorized")) and not evaluation_only
+    requested_model = str(value.get("model") or WORKER_GEMINI_MODEL)
+    reported_model = str(value.get("reported_model") or raw.get("model") or "")
+    return {
+        "binding": str(value.get("binding") or f"google/{WORKER_GEMINI_MODEL}"),
+        "model": requested_model,
+        "reported_model": reported_model or None,
+        "model_match": bool(reported_model and reported_model == requested_model),
+        "execution_class": execution_class,
+        "authorization_scope": (
+            "evaluation_only"
+            if evaluation_only
+            else "production"
+            if production_authorized
+            else str(value.get("authorization_scope") or "blocked")
+        ),
+        "evaluation_only": evaluation_only,
+        "production_authorized": production_authorized,
+        # Model readiness and content claims are orthogonal.  No model result
+        # promotes a descriptive content claim to a validated business claim.
+        "claim_status": "descriptive_only",
+        "model_readiness_status": str(
+            value.get("model_readiness_status")
+            or (
+                "evaluation_only_not_production_ready"
+                if evaluation_only
+                else "production_ready"
+                if production_authorized
+                else "not_ready"
+            )
+        ),
+        "base_derive_method": str(
+            value.get("base_derive_method") or "video_analysis_final_v1"
+        ),
+        "cache_derive_method": str(
+            value.get("cache_derive_method")
+            or (
+                "video_analysis_final_v1__local_eval"
+                if evaluation_only
+                else value.get("base_derive_method")
+                or "video_analysis_final_v1"
+            )
+        ),
+    }
+
+
+def _gemini_analyzer_payload(
+    payload: dict[str, Any], derive_method: str
+) -> dict[str, Any]:
+    exact = {
+        **payload,
+        "gemini_model": WORKER_GEMINI_MODEL,
+        "gemini_models": [WORKER_GEMINI_MODEL],
+    }
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        exact["gemini_final_v1_models"] = (
+            gemini_video_analyzer.final_v1_gemini_models(
+                [WORKER_GEMINI_MODEL]
+            )
+        )
+    return exact
+
+
 def _shape_gemini_result(
     *,
     job: dict[str, Any],
@@ -63,14 +137,41 @@ def _shape_gemini_result(
     latency_ms: int,
     derive_method: str,
 ) -> dict[str, Any]:
+    execution = _llm_execution_metadata(raw)
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
         final = raw.get("video_analysis_final_v1") if isinstance(raw.get("video_analysis_final_v1"), dict) else {}
         model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
         segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
         shaped: dict[str, Any] = {
             "schema_version": "video_analysis_final_v1",
+            "status": "completed",
             "mock": False,
             "analysis_method": derive_method,
+            "model": model_name,
+            "provenance": {
+                **(
+                    raw.get("provenance")
+                    if isinstance(raw.get("provenance"), dict)
+                    else {
+                        "provider": "gemini",
+                        "model": model_name,
+                        "method": str(raw.get("method") or "gemini_video"),
+                    }
+                ),
+                "binding": execution["binding"],
+                "execution_class": execution["execution_class"],
+                "evaluation_only": execution["evaluation_only"],
+                "production_authorized": execution["production_authorized"],
+                "claim_status": execution["claim_status"],
+                "model_readiness_status": execution["model_readiness_status"],
+                "base_derive_method": execution["base_derive_method"],
+                "cache_derive_method": execution["cache_derive_method"],
+            },
+            "llm_execution": execution,
+            "evaluation_only": execution["evaluation_only"],
+            "production_authorized": execution["production_authorized"],
+            "claim_status": execution["claim_status"],
+            "model_readiness_status": execution["model_readiness_status"],
             "job_id": job.get("id"),
             "target_type": "video",
             "target_id": str(evidence.get("id")),
@@ -127,6 +228,10 @@ def _shape_gemini_result(
             "schema_version": "video_analysis_v2",
             "mock": False,
             "analysis_method": derive_method,
+            "llm_execution": execution,
+            "evaluation_only": execution["evaluation_only"],
+            "production_authorized": execution["production_authorized"],
+            "claim_status": execution["claim_status"],
             "job_id": job.get("id"),
             "target_type": "video",
             "target_id": str(evidence.get("id")),
@@ -168,6 +273,10 @@ def _shape_gemini_result(
     return {
         "mock": False,
         "analysis_method": "gemini",
+        "llm_execution": execution,
+        "evaluation_only": execution["evaluation_only"],
+        "production_authorized": execution["production_authorized"],
+        "claim_status": execution["claim_status"],
         "job_id": job.get("id"),
         "target_type": "video",
         "target_id": str(evidence.get("id")),
@@ -221,6 +330,20 @@ def _record_gemini_cost(
     preflight_cost: float,
 ) -> dict[str, Any]:
     triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    execution = _llm_execution_metadata(raw)
+    if raw.get("cost_authority") == "llm_production_google_generate_content_v1":
+        attempts = raw.get("llm_attempts") if isinstance(raw.get("llm_attempts"), list) else []
+        return {
+            "recorded": True,
+            "authority": "llm_production_google_generate_content_v1",
+            "outer_ledger_write": False,
+            "scopes_updated": [],
+            "attempts": len(attempts),
+            "cost_usd": cost,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "model_name": str(raw.get("model") or raw.get("method") or "gemini_video"),
+        }
     with db_connection_sync_scope():
         return budget_guard.record_cost(
             scope=LLM_BUDGET_SCOPE,
@@ -240,6 +363,15 @@ def _record_gemini_cost(
                 "latency_ms": latency_ms,
                 "triggered_by_user_id": triggered_by,
                 "error": _redact_sensitive_text(raw.get("error") or ""),
+                "binding": execution["binding"],
+                "execution_class": execution["execution_class"],
+                "authorization_scope": execution["authorization_scope"],
+                "evaluation_only": execution["evaluation_only"],
+                "production_authorized": execution["production_authorized"],
+                "claim_status": execution["claim_status"],
+                "model_readiness_status": execution["model_readiness_status"],
+                "base_derive_method": execution["base_derive_method"],
+                "cache_derive_method": execution["cache_derive_method"],
             },
             extra_scopes=["monthly_total", "single_call", "provider:gemini"],
         )
@@ -332,6 +464,8 @@ def _write_gemini_cache(
     latency_ms: int,
     derive_method: str,
 ) -> None:
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        ensure_final_v1_result_cacheable(raw)
     target_type, target_id = _target(payload)
     triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
     shaped = _shape_gemini_result(
@@ -343,6 +477,12 @@ def _write_gemini_cache(
         preflight_cost=preflight_cost,
         latency_ms=latency_ms,
         derive_method=derive_method,
+    )
+    execution = _llm_execution_metadata(raw)
+    cache_derive_method = (
+        execution["cache_derive_method"]
+        if execution["evaluation_only"]
+        else derive_method
     )
     with conn.transaction():
         with conn.cursor() as cur:
@@ -367,7 +507,7 @@ def _write_gemini_cache(
                     target_type,
                     target_id,
                     str(raw.get("model") or raw.get("method") or "gemini_video"),
-                    derive_method,
+                    cache_derive_method,
                     _json(shaped),
                     cost,
                     _int_or_none(triggered_by),
@@ -387,6 +527,24 @@ def _write_gemini_cache(
                 """,
                 (job["id"],),
             )
+    if execution["evaluation_only"]:
+        _sync_search_session_job(
+            conn,
+            int(job["id"]),
+            raw_status="done",
+            analysis_summary={
+                "cache_id": cache_id,
+                "derive_method": cache_derive_method,
+                "base_derive_method": derive_method,
+                "target_type": target_type,
+                "target_id": target_id,
+                "evaluation_only": True,
+                "production_authorized": False,
+                "claim_status": "descriptive_only",
+                "model_readiness_status": execution["model_readiness_status"],
+            },
+        )
+        return
     deep_result = _sync_deep_analysis_result_from_cache(
         conn,
         cache_id=cache_id,
@@ -486,14 +644,34 @@ def _process_gemini_video(
         str(evidence.get("content_url") or "")[:120],
     )
     started = time.monotonic()
-    analyzer_payload = payload
-    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
-        analyzer_payload = {
-            **payload,
-            "gemini_final_v1_models": gemini_video_analyzer.final_v1_gemini_models(
-                payload.get("gemini_final_v1_models") or FINAL_V1_GEMINI_MODELS
-            ),
-        }
+    # The child process forces every generateContent call to this exact model;
+    # final_v1 receives the same one-model chain, so cache setup cannot drift.
+    analyzer_payload = _gemini_analyzer_payload(payload, derive_method)
+    authorization = (
+        payload.get("_llm_execution")
+        if isinstance(payload.get("_llm_execution"), dict)
+        else {}
+    )
+    analyzer_payload["llm_context"] = {
+        "purpose": "audit_video_analysis",
+        "cost_tag": LLM_BUDGET_SCOPE,
+        "triggered_by": payload.get(
+            "triggered_by_user_id", payload.get("user_id")
+        ),
+        "execution_class": str(
+            authorization.get("execution_class") or WORKER_LLM_EXECUTION_CLASS
+        ),
+        "metadata": {
+            "surface": "apify_jobs_worker",
+            "task_binding": "audit_video_analysis",
+            "parent_job_id": job.get("id"),
+            "target_type": target_type,
+            "target_id": target_id,
+            "platform": platform,
+            "phase": "video_analysis",
+            "target_label": f"video:{target_id}",
+        },
+    }
     if platform in {"instagram", "tiktok"}:
         resolved = _resolve_video_media(evidence)
         if str(resolved.get("status") or "") == "blocked":
@@ -583,6 +761,19 @@ def _process_gemini_video(
             platform=platform,
         )
     latency_ms = int((time.monotonic() - started) * 1000)
+    reported_model = str(raw.get("model") or "")
+    if raw.get("analyzed") and reported_model != WORKER_GEMINI_MODEL:
+        raise RuntimeError(
+            "model_binding_mismatch:"
+            f"expected=google/{WORKER_GEMINI_MODEL}:reported={reported_model or 'missing'}"
+        )
+    raw["llm_execution"] = {
+        **authorization,
+        "binding": f"google/{WORKER_GEMINI_MODEL}",
+        "model": WORKER_GEMINI_MODEL,
+        "reported_model": reported_model or None,
+        "model_match": bool(reported_model == WORKER_GEMINI_MODEL),
+    }
     logger.info(
         "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",
         job.get("id"),
@@ -590,7 +781,16 @@ def _process_gemini_video(
         raw.get("method"),
         latency_ms,
     )
-    cost, cost_basis, tokens_in, tokens_out = _gemini_cost(raw, preflight_cost)
+    validation_error: InvalidFinalV1ResultError | None = None
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS and raw.get("analyzed"):
+        try:
+            ensure_final_v1_result_cacheable(raw)
+        except InvalidFinalV1ResultError as exc:
+            validation_error = exc
+    cost, cost_basis, tokens_in, tokens_out = _authoritative_gemini_cost(
+        raw,
+        preflight_cost,
+    )
     ledger = _record_gemini_cost(
         job=job,
         payload=payload,
@@ -602,6 +802,8 @@ def _process_gemini_video(
         latency_ms=latency_ms,
         preflight_cost=preflight_cost,
     )
+    if validation_error is not None:
+        raise validation_error
     if not raw.get("analyzed"):
         raw_error = str(raw.get("error") or "not_analyzed")
         if raw_error == "gemini_call_timeout":
@@ -618,6 +820,12 @@ def _process_gemini_video(
         preflight_cost=preflight_cost,
         latency_ms=latency_ms,
         derive_method=derive_method,
+    )
+    execution = _llm_execution_metadata(raw)
+    cache_derive_method = (
+        execution["cache_derive_method"]
+        if execution["evaluation_only"]
+        else derive_method
     )
     with conn.transaction():
         with conn.cursor() as cur:
@@ -642,7 +850,7 @@ def _process_gemini_video(
                     target_type,
                     target_id,
                     str(raw.get("model") or raw.get("method") or "gemini_video"),
-                    derive_method,
+                    cache_derive_method,
                     _json(shaped),
                     cost,
                     triggered_by_user_id,
@@ -662,6 +870,28 @@ def _process_gemini_video(
                 """,
                 (job["id"],),
             )
+    if execution["evaluation_only"]:
+        # Local evidence is physically/logically isolated from production
+        # final_v1 and never seeds deep-result, dossier, fit, QA or judge
+        # follow-ups.  The URL session receives only a labelled pointer so the
+        # UI can show the result without promoting it into production facts.
+        _sync_search_session_job(
+            conn,
+            int(job["id"]),
+            raw_status="done",
+            analysis_summary={
+                "cache_id": cache_id,
+                "derive_method": cache_derive_method,
+                "base_derive_method": derive_method,
+                "target_type": target_type,
+                "target_id": target_id,
+                "evaluation_only": True,
+                "production_authorized": False,
+                "claim_status": "descriptive_only",
+                "model_readiness_status": execution["model_readiness_status"],
+            },
+        )
+        return
     deep_result = _sync_deep_analysis_result_from_cache(
         conn,
         cache_id=cache_id,
@@ -715,6 +945,8 @@ from app.workers.apify_jobs_worker import (  # noqa: E402
     GEMINI_VIDEO_FINAL_DERIVE_METHODS,
     GEMINI_VIDEO_V2_DERIVE_METHODS,
     LLM_BUDGET_SCOPE,
+    WORKER_GEMINI_MODEL,
+    WORKER_LLM_EXECUTION_CLASS,
     _block_job,
     _extract_keyframes_for_qa,
     _gemini_worker_overrides,

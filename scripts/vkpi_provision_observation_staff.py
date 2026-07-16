@@ -8,6 +8,8 @@ CSV or explicit --staff rows from a real team roster.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import csv
 import hashlib
@@ -385,17 +387,17 @@ def main() -> int:
         )
     except Exception as exc:
         error = {"status": "error", "message": str(exc), "mode": "apply" if args.apply else "dry_run"}
-        print(json.dumps(error, ensure_ascii=False, sort_keys=True) if args.json else f"VKPI_OBSERVATION_STAFF_PROVISIONING_ERROR {json.dumps(error, ensure_ascii=False, sort_keys=True)}")
+        out(json.dumps(error, ensure_ascii=False, sort_keys=True) if args.json else f"VKPI_OBSERVATION_STAFF_PROVISIONING_ERROR {json.dumps(error, ensure_ascii=False, sort_keys=True)}")
         return 2
     text = json.dumps(result, ensure_ascii=False, sort_keys=True, indent=None if args.json else 2)
     if args.json:
-        print(text)
+        out(text)
     else:
-        print("VKPI_OBSERVATION_STAFF_PROVISIONING", text)
+        out("VKPI_OBSERVATION_STAFF_PROVISIONING", text)
         if not args.apply:
-            print("Dry-run only. Review output, then rerun with --apply.")
+            out("Dry-run only. Review output, then rerun with --apply.")
         if args.apply and args.generate_passwords and not args.show_passwords:
-            print("Generated passwords were hidden. Use --show-passwords only in a private terminal if needed.")
+            out("Generated passwords were hidden. Use --show-passwords only in a private terminal if needed.")
     return 0
 
 

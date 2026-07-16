@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
 import { ModuleProvModal } from "./MarketVoicePage.dialogs";
 import { ContentSchedBody, PostRowLine } from "./LaunchPadBoardPage.ops";
@@ -109,6 +110,7 @@ export function ProjectsBoardPage({
   onToggleView,
   onRefreshData,
   apiToken,
+  embeddedModuleKey,
 }: ProjectsPageProps) {
   // 履约待办卡片消费 admin 端点,token 优先用页面下传的 apiToken,缺失时回退到 useAuth(旧页同款)。
   const { token: authToken } = useAuth();
@@ -425,6 +427,10 @@ export function ProjectsBoardPage({
     void onRefreshData?.();
   };
 
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="Projects" />;
+  }
+
   if (detailProjectId) {
     const detailProjectForView = projectDetailState.project;
     const focusMatched = Boolean(
@@ -450,6 +456,10 @@ export function ProjectsBoardPage({
             project={detailProjectForView}
             projects={filteredProjects.map((project) => (project.id === detailProjectForView.id ? detailProjectForView : project))}
             participatingRows={projectDetailState.participatingRows}
+            assignmentPage={projectDetailState.assignmentPage}
+            loadingMoreAssignments={projectDetailState.loadingMoreAssignments}
+            assignmentLoadError={projectDetailState.assignmentLoadError}
+            onLoadMoreAssignments={projectDetailState.loadMoreAssignments}
             costRows={projectDetailState.detail?.costs || []}
             productUnitCosts={productUnitCosts}
             staff={data.staffMembers}

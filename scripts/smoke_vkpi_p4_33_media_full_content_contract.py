@@ -6,6 +6,7 @@ that the data-analysis page loads the maximum supported post window and keeps th
 Top/All toggles plus post detail entries wired.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 from pathlib import Path
@@ -94,7 +95,7 @@ def main() -> None:
     ]:
         require(industry, needle, industry_rel)
 
-    print(json.dumps({"ok": True, "marker": "VKPI_P4_33_MEDIA_FULL_CONTENT_CONTRACT_OK"}, ensure_ascii=False))
+    stdout_out(json.dumps({"ok": True, "marker": "VKPI_P4_33_MEDIA_FULL_CONTENT_CONTRACT_OK"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

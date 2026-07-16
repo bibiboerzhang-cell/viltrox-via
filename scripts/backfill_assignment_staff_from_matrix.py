@@ -22,6 +22,7 @@ from typing import Any
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from rapidfuzz import fuzz, process
+from stdout_utils import out
 
 from app.core.permissions import default_permissions_for_role
 from app.core.security import hash_password
@@ -335,11 +336,11 @@ def apply_assignments(conn, chosen: dict[int, AssignmentHit]) -> int:
 
 
 def print_counter(title: str, counter: Counter, *, limit: int = 20) -> None:
-    print(title)
+    out(title)
     for key, count in counter.most_common(limit):
-        print(f"  {key}: {count}")
+        out(f"  {key}: {count}")
     if len(counter) > limit:
-        print(f"  ... {len(counter) - limit} more")
+        out(f"  ... {len(counter) - limit} more")
 
 
 def main() -> None:
@@ -368,53 +369,53 @@ def main() -> None:
             assignments=assignments,
         )
 
-        print("=" * 72)
-        print("A-3.5 assignment staff backfill report")
-        print("=" * 72)
-        print(f"matrix: {args.matrix}")
-        print(f"matrix rows: {len(rows)}")
-        print(f"valid staff names: {len(valid_staff)}")
-        print(f"commit_staff: {args.commit_staff}")
-        print(f"commit_assignments: {args.commit_assignments}")
-        print()
+        out("=" * 72)
+        out("A-3.5 assignment staff backfill report")
+        out("=" * 72)
+        out(f"matrix: {args.matrix}")
+        out(f"matrix rows: {len(rows)}")
+        out(f"valid staff names: {len(valid_staff)}")
+        out(f"commit_staff: {args.commit_staff}")
+        out(f"commit_assignments: {args.commit_assignments}")
+        out()
 
-        print("[staff mapping]")
+        out("[staff mapping]")
         for name in valid_staff:
             staff = staff_by_name.get(name, {})
             marker = "existing" if not staff.get("created") and not staff.get("pending_create") else "created" if staff.get("created") else "pending_create"
-            print(f"  {name} -> staff_id={staff.get('staff_id')} email={staff.get('email')} {marker}")
+            out(f"  {name} -> staff_id={staff.get('staff_id')} email={staff.get('email')} {marker}")
         print_counter("[invalid/blank staff values skipped]", invalid_staff_counter, limit=30)
-        print()
+        out()
 
-        print("[assignment dry-run]")
-        print(f"  assignments total: {len(assignments)}")
-        print(f"  assignments matched for staff update: {len(chosen)}")
-        print(f"  assignment staff conflicts: {len({hit.assignment_id for hit in conflicts})}")
+        out("[assignment dry-run]")
+        out(f"  assignments total: {len(assignments)}")
+        out(f"  assignments matched for staff update: {len(chosen)}")
+        out(f"  assignment staff conflicts: {len({hit.assignment_id for hit in conflicts})}")
         for reason, counter in failures.items():
             print_counter(f"  failures.{reason}", counter, limit=10)
         print_counter("  planned staff distribution", Counter(hit.staff_name for hit in chosen.values()), limit=30)
-        print()
+        out()
 
-        print(f"[sample {args.sample}]")
+        out(f"[sample {args.sample}]")
         for hit in list(chosen.values())[: args.sample]:
-            print(
+            out(
                 "  "
                 f"assignment={hit.assignment_id} project={hit.project_name} "
                 f"kol={hit.kol_name} staff={hit.staff_name}/{hit.staff_id} "
                 f"match={hit.match_confidence}:{hit.matched_via} row={hit.matrix_row}"
             )
-        print()
+        out()
 
         print_counter("[current db assigned_staff distribution before assignment commit]", current_assignment_distribution(conn), limit=30)
 
         if args.commit_assignments:
             updated = apply_assignments(conn, chosen)
-            print()
-            print(f"[commit] updated assignments: {updated}")
+            out()
+            out(f"[commit] updated assignments: {updated}")
             print_counter("[current db assigned_staff distribution after assignment commit]", current_assignment_distribution(conn), limit=30)
         else:
-            print()
-            print("[dry-run] assignment updates not written. Re-run with --commit-assignments after review.")
+            out()
+            out("[dry-run] assignment updates not written. Re-run with --commit-assignments after review.")
     finally:
         conn.close()
 

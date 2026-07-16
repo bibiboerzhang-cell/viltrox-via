@@ -11,7 +11,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
+from app.core.logging import get_logger
 from app.api.dependencies.perms import require_tab
+from app.domains.audit.decorator import audit_action
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
@@ -23,13 +25,175 @@ from app.domains.projects import outreach as project_outreach
 
 from app.api.routers.vkpi_kol_pool_helpers import (
     _attach_smart_recall_session,
-    _attach_smart_url_session,
     _int_or_none,
     _looks_like_url,
     _smart_query_type,
 )
+from app.api.routers.vkpi_kol_pool_search_responses import (
+    _body_bool,
+    _pending_enrichment_state,
+    _text_response_status,
+    _url_response_status,
+)
 
 router = APIRouter(tags=["vkpi-kol-pool"])
+logger = get_logger(__name__)
+
+
+def _service_unavailable(reason: str, operation: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "status": "unavailable",
+            "reason": reason,
+            "operation": operation,
+            "retryable": True,
+        },
+    )
+
+
+def _run_url_deep_crawl(
+    body: dict,
+    *,
+    staff: dict,
+    default_defer_profile: bool,
+    default_create_session: bool,
+    default_source: str,
+) -> dict:
+    session_id = body.get("session_id")
+    try:
+        session_id_int = int(session_id) if session_id else None
+    except (TypeError, ValueError):
+        raise ValueError("session_id must be an integer") from None
+
+    execute = _body_bool(body, "execute")
+    del default_defer_profile  # all provider-capable execute paths are now durable
+    classified = kol_url_deep_crawl.classify_url(str(body.get("url") or "")) if execute else None
+    defer_provider = bool(
+        classified
+        and classified.url_type in {"profile", "video"}
+        and classified.platform in kol_url_deep_crawl.SUPPORTED_PLATFORMS
+    )
+    crawl_body = {**body, "execute": False} if defer_provider else body
+    result = kol_url_deep_crawl.dry_run_url_deep_crawl(crawl_body)
+
+    session = kol_search_sessions.ensure_session_for_result(
+        session_id=session_id_int,
+        create=_body_bool(body, "create_session", default=default_create_session),
+        query_text=str(body.get("url") or ""),
+        query_type=(
+            "url_video"
+            if result.get("url_type") == "video"
+            else "url_profile"
+            if result.get("url_type") == "profile"
+            else "unknown"
+        ),
+        source=str(body.get("source") or default_source),
+        input_payload={key: value for key, value in body.items() if key != "api_token"},
+        staff=staff,
+    )
+    if defer_provider:
+        matched_kol_pool_id = _int_or_none(result.get("matched_kol_pool_id"))
+        is_profile = bool(classified and classified.url_type == "profile")
+        video_flow = result.get("video_flow") if isinstance(result.get("video_flow"), dict) else {}
+        stored_evidence_id = _int_or_none(video_flow.get("evidence_id"))
+        reused_stored_video = bool(not is_profile and matched_kol_pool_id and stored_evidence_id)
+        if reused_stored_video:
+            queued = kol_url_deep_crawl.enqueue_stored_video_analysis_job(
+                kol_pool_id=int(matched_kol_pool_id),
+                evidence_id=int(stored_evidence_id),
+                staff=staff,
+                search_session_id=_int_or_none((session or {}).get("id")),
+                source=str(body.get("source") or f"{default_source}_existing_video"),
+                local_evaluation=body.get("local_evaluation") is True,
+            )
+        elif is_profile and kol_url_deep_crawl.profile_deep_crawl_is_fresh(matched_kol_pool_id):
+            queued = {"status": "already_fresh", "job_id": None}
+        elif not is_profile:
+            # A video URL is never a profile-crawl target.  Resolve unseen
+            # native videos in their own durable provider-fenced job; only the
+            # worker may create evidence and reach the gated final_v1 enqueue.
+            queued = kol_url_deep_crawl.enqueue_video_url_resolve_job(
+                str(body.get("url") or ""),
+                staff=staff,
+                search_session_id=_int_or_none((session or {}).get("id")),
+                source=str(body.get("source") or f"{default_source}_video_resolve"),
+                max_posts=int(body.get("max_posts") or 3),
+                local_evaluation=body.get("local_evaluation") is True,
+            )
+        else:
+            queued = kol_url_deep_crawl.enqueue_profile_deep_crawl_job(
+                str(body.get("url") or ""),
+                kol_pool_id=matched_kol_pool_id,
+                max_posts=int(body.get("max_posts") or 3),
+                mode=str(body.get("mode") or "account_deep"),
+                representative_video_limit=int(body.get("representative_video_limit") or 1),
+                staff=staff,
+                search_session_id=_int_or_none((session or {}).get("id")),
+                source=str(body.get("source") or f"{default_source}_deferred"),
+            )
+        flow_key = "profile_flow" if is_profile else "video_flow"
+        profile_flow = result.get(flow_key) if isinstance(result.get(flow_key), dict) else {}
+        already_fresh = queued.get("status") == "already_fresh"
+        queue_active = queued.get("status") in {"queued", "already_queued"}
+        video_resolver_queued = bool(not is_profile and not reused_stored_video)
+        enrichment = (
+            None
+            if already_fresh or reused_stored_video or video_resolver_queued
+            else _pending_enrichment_state()
+        )
+        direct_video_ai = queued.get("ai_analysis") if isinstance(queued.get("ai_analysis"), dict) else None
+        direct_video_status = str(queued.get("status") or "") if not is_profile else ""
+        result.update(
+            {
+                "dry_run": False,
+                "execute": True,
+                "deferred_to_queue": queue_active,
+                "writes_performed": bool(queued.get("write_db")) if reused_stored_video else queue_active,
+                "provider_calls_performed": False,
+                "worker_touched": queue_active,
+                "enrichment": enrichment,
+                flow_key: {
+                    **profile_flow,
+                    "status": "ready" if already_fresh else direct_video_status or str(queued.get("status") or "queued"),
+                    "operation": (
+                        "reuse_recent_profile"
+                        if already_fresh
+                        else "existing_creator_video_analysis"
+                        if reused_stored_video
+                        else "profile_deep_crawl_queue"
+                        if is_profile
+                        else "video_url_resolve_queue"
+                    ),
+                    "job_id": queued.get("job_id"),
+                    "evidence_id": stored_evidence_id or profile_flow.get("evidence_id"),
+                    "enqueue_result": queued if not is_profile else profile_flow.get("enqueue_result"),
+                    "resolution_progress": queued.get("resolution_progress") if video_resolver_queued else profile_flow.get("resolution_progress"),
+                    "ai_analysis": direct_video_ai or profile_flow.get("ai_analysis"),
+                    "enrichment": enrichment,
+                    "message": (
+                        "账号资料在 24 小时内已更新，直接复用现有档案。"
+                        if already_fresh
+                        else "已复用本地视频证据并排入 final_v1 深析。"
+                        if reused_stored_video and queue_active
+                        else "已复用本地视频证据；AI 深析当前未启用，本轮没有创建模型任务。"
+                        if reused_stored_video and direct_video_status in {"ai_disabled", "not_requested"}
+                        else "已复用本地视频证据与现有分析。"
+                        if reused_stored_video
+                        else "已进入视频 URL 专用队列；将按解析视频、识别作者、缓存媒体、AI 分析分阶段回填。"
+                        if video_resolver_queued
+                        else "已进入后台队列；抓取、联系方式、受众和视频分析结果会分阶段回填。"
+                    ),
+                    "crawl_performed": False,
+                    "business_tables_written": bool(queued.get("write_db")) if reused_stored_video else False,
+                    "worker_touched": queue_active,
+                },
+            }
+        )
+    result["status"] = _url_response_status(result)
+    if session:
+        result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
+    return result
 
 
 @router.post("/kol-search-sessions")
@@ -71,6 +235,7 @@ def list_kol_search_history(
     status: str = Query(default=""),
     query_type: str = Query(default=""),
     item_limit: int = Query(default=5, ge=0, le=10),
+    archived: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return compact smart-search history with item previews and status counts.
@@ -84,7 +249,58 @@ def list_kol_search_history(
             query_type=query_type,
             item_limit=item_limit,
             staff=staff,
+            archived=archived,
         )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.delete("/kol-search-history")
+@audit_action(action_type="kol_search_history_clear", target_type="kol_search_history")
+def archive_kol_search_history(
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Soft-archive the current staff member's terminal search history."""
+    try:
+        return kol_search_sessions.archive_history_sessions(staff=staff)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.delete("/kol-search-history/{session_id}")
+@audit_action(action_type="kol_search_history_archive", target_type="kol_search_session")
+def archive_kol_search_history_session(
+    session_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Soft-archive one terminal search session owned by the current staff member."""
+    try:
+        return kol_search_sessions.archive_history_session(int(session_id), staff=staff)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/kol-search-history/{session_id}/restore")
+@audit_action(action_type="kol_search_history_restore", target_type="kol_search_session")
+def restore_kol_search_history_session(
+    session_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Restore one archived search session owned by the current staff member."""
+    try:
+        return kol_search_sessions.restore_history_session(int(session_id), staff=staff)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -95,9 +311,8 @@ def get_kol_search_session(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return one KOL search session with its candidate items."""
-    del staff
     try:
-        return kol_search_sessions.get_session(int(session_id))
+        return kol_search_sessions.get_session(int(session_id), staff=staff, scope_to_staff=True)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -165,7 +380,7 @@ def estimate_kol_search_session_cost(
     只读估算:费率档 × 平台 → 预算区间;风险只读展示信号,零触 viltrox_fit_score。
     """
     try:
-        session = kol_search_sessions.get_session(int(session_id))
+        session = kol_search_sessions.get_session(int(session_id), staff=staff, scope_to_staff=True)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -192,11 +407,11 @@ def generate_kol_search_session_outreach(
     走 llm_gateway(预算闸 + 代理);仅草案——绝不外发、不承诺价格、零触 viltrox_fit_score。
     """
     try:
-        session = kol_search_sessions.get_session(int(session_id))
+        session = kol_search_sessions.get_session(int(session_id), staff=staff, scope_to_staff=True)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("outreach_session_unavailable", "generate_outreach") from exc
     raw_ids = body.get("kol_pool_ids") if isinstance(body, dict) else None
     if not isinstance(raw_ids, list) or not raw_ids:
         raw_ids = session.get("approved_kol_ids") or []
@@ -216,13 +431,17 @@ def generate_kol_search_session_outreach(
         "target_persona": brief_in.get("target_persona") or body.get("target_persona") or plan.get("target_persona") or query_text,
         "search_session_id": int(session_id),
     }
-    return project_outreach.generate_outreach(
-        raw_ids,
-        brief=merged_brief,
-        product={"product_name": body.get("product_name") or ""},
-        staff=staff,
-        preferred_provider=body.get("llm_provider"),
-    )
+    try:
+        return project_outreach.generate_outreach(
+            raw_ids,
+            brief=merged_brief,
+            product={"product_name": body.get("product_name") or ""},
+            staff=staff,
+            preferred_provider=body.get("llm_provider"),
+        )
+    except Exception as exc:  # noqa: BLE001 - provider/domain failures must not become 500
+        logger.warning("kol search outreach generation failed session_id=%s", session_id, exc_info=True)
+        raise _service_unavailable("outreach_generation_unavailable", "generate_outreach") from exc
 
 
 @router.post("/kol-search-sessions/{session_id}/items/{item_id}/profile-crawl")
@@ -233,8 +452,30 @@ def execute_kol_search_session_item_profile_crawl(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Plan or execute safe profile crawl for a discovery session item."""
-    del staff
     try:
+        if _body_bool(body, "execute"):
+            queued = kol_profile_discovery.enqueue_search_session_advance(
+                session_id=int(session_id),
+                body={
+                    **(body or {}),
+                    "item_ids": [int(item_id)],
+                    "limit": 1,
+                    "mode": str(body.get("mode") or "account_deep"),
+                },
+                staff=staff,
+            )
+            is_pending = queued.get("status") in {"queued", "already_queued"}
+            return {
+                "status": queued.get("status"),
+                "execute": True,
+                "deferred_to_queue": is_pending,
+                "session_id": int(session_id),
+                "item_id": int(item_id),
+                "advance_job": queued,
+                "enrichment": _pending_enrichment_state() if is_pending else None,
+                "provider_calls_performed": False,
+                "viltrox_fit_score_untouched": True,
+            }
         return kol_profile_discovery.execute_profile_crawl_for_session_item(
             session_id=int(session_id),
             item_id=int(item_id),
@@ -245,7 +486,7 @@ def execute_kol_search_session_item_profile_crawl(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("profile_crawl_unavailable", "profile_crawl") from exc
 
 
 @router.post("/kol-search-sessions/{session_id}/advance")
@@ -255,8 +496,20 @@ def advance_kol_search_session_items(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Plan or execute ordered profile crawl for discovery items in one session."""
-    del staff
     try:
+        if _body_bool(body, "execute"):
+            queued = kol_profile_discovery.enqueue_search_session_advance(
+                session_id=int(session_id),
+                body=body or {},
+                staff=staff,
+            )
+            is_pending = queued.get("status") in {"queued", "already_queued"}
+            return {
+                **queued,
+                "execute": True,
+                "deferred_to_queue": is_pending,
+                "enrichment": _pending_enrichment_state() if is_pending else None,
+            }
         return kol_profile_discovery.advance_search_session_items(
             session_id=int(session_id),
             body=body or {},
@@ -266,7 +519,7 @@ def advance_kol_search_session_items(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("profile_advance_unavailable", "profile_advance") from exc
 
 
 @router.post("/kol-search-sessions/{session_id}/advance-job")
@@ -287,7 +540,7 @@ def enqueue_kol_search_session_advance(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("profile_advance_queue_unavailable", "profile_advance_queue") from exc
 
 
 @router.post("/kol-search-sessions/{session_id}/advance-job/cancel")
@@ -308,7 +561,7 @@ def cancel_kol_search_session_advance(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("profile_advance_cancel_unavailable", "profile_advance_cancel") from exc
 
 
 @router.post("/kol-smart-search")
@@ -334,28 +587,90 @@ async def smart_kol_search(
 
     try:
         if branch == "url":
-            crawl_body = {
-                **body,
-                "url": query_text,
-                "create_session": False,
-            }
-            result = kol_url_deep_crawl.dry_run_url_deep_crawl(crawl_body)
-            result = _attach_smart_url_session(body=body, result=result, query_text=query_text, staff=staff)
+            result = _run_url_deep_crawl(
+                {
+                    **body,
+                    "url": query_text,
+                },
+                staff=staff,
+                default_defer_profile=True,
+                default_create_session=True,
+                default_source="kol_smart_search",
+            )
             return {
-                "status": "ready",
+                "status": _url_response_status(result),
                 "mode": "url",
                 "query_type": _smart_query_type(branch="url", result=result),
                 "branch": "kol_url_deep_crawl",
                 "result": result,
                 "search_session": result.get("search_session"),
-                "provider_calls": bool(result.get("provider_calls") or result.get("llm_calls_performed")),
+                "provider_calls": bool(
+                    result.get("provider_calls_performed") or result.get("llm_calls_performed")
+                ),
                 "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
             }
 
         recall_query = str(body.get("query_text") or query_text).strip()
-        # 问题5 性能:plan_text_query(同步 LLM,冷启可达 15s)+ recall(同步 embedding+Qdrant)
-        # 此前直接在事件循环线程跑,阻塞同进程其他请求。卸到线程池,首屏不再被冷启 LLM 卡死。
-        llm_query_plan = await run_in_threadpool(kol_smart_query_planner.plan_text_query, recall_query, body=body, staff=staff)
+        # 先持久化可见会话,再做任何基础召回。前端紧接着调用
+        # profile-advance-job 创建后台任务;worker 中才跑完整 plan_text_query。
+        # 这里只用产品知识库/规则初始计划 + 本地 pool 文本召回,请求侧
+        # 不再触发 LLM、embedding 或 LLM rerank。
+        initial_session: dict | None = None
+        if _body_bool(body, "create_session", default=True):
+            initial_session = await run_in_threadpool(
+                kol_search_sessions.ensure_session_for_result,
+                session_id=_int_or_none(body.get("session_id")),
+                create=True,
+                query_text=recall_query,
+                query_type="text_recall",
+                source=str(body.get("source") or "kol_smart_search"),
+                input_payload={key: value for key, value in body.items() if key != "api_token"},
+                staff=staff,
+            )
+        initial_session_id = _int_or_none((initial_session or {}).get("id"))
+        session_body = {
+            **body,
+            **(
+                {"session_id": initial_session_id, "create_session": False}
+                if initial_session_id
+                else {}
+            ),
+        }
+        llm_query_plan = await run_in_threadpool(
+            kol_smart_query_planner.plan_text_query_provider_free,
+            recall_query,
+            body=body,
+        )
+        if str(llm_query_plan.get("status") or "") == "needs_clarification":
+            empty_result = {
+                "method": "product_catalog_guard",
+                "items": [],
+                "buckets": {"creator": [], "reviewer": []},
+                "diagnostics": {"candidate_count": 0, "returned_count": 0},
+                "llm_query_plan": llm_query_plan,
+                "original_query_text": recall_query,
+                "effective_query_text": "",
+            }
+            empty_result = _attach_smart_recall_session(
+                body=session_body,
+                result=empty_result,
+                query_text=recall_query,
+                staff=staff,
+            )
+            return {
+                "status": "needs_clarification",
+                "mode": "text",
+                "query_type": "text_recall",
+                "branch": "product_catalog_guard",
+                "result": empty_result,
+                "search_session": empty_result.get("search_session"),
+                "provider_calls": False,
+                "provider_note": "explicit product did not match the catalog; no LLM or discovery provider was called",
+                "llm_query_plan": llm_query_plan,
+                "new_discovery": None,
+                "viltrox_fit_score_untouched": True,
+                "new_discovery_status": "not_requested",
+            }
         effective_query = str(llm_query_plan.get("search_query") or recall_query).strip()
         result = await run_in_threadpool(
             kol_profile_recall.recall_kol_profiles,
@@ -374,11 +689,24 @@ async def smart_kol_search(
             exclude_chinese=bool(body.get("exclude_chinese", True)),
             product_focus=llm_query_plan.get("product_focus"),
             target_persona=str(llm_query_plan.get("target_persona") or ""),
+            provider_free=True,
+        )
+        result = kol_profile_discovery.filter_recall_result_platforms(
+            result,
+            body.get("platforms")
+            or body.get("new_discovery_platforms")
+            or body.get("discovery_platforms")
+            or body.get("platform"),
         )
         result["llm_query_plan"] = llm_query_plan
         result["original_query_text"] = recall_query
         result["effective_query_text"] = effective_query
-        result = _attach_smart_recall_session(body=body, result=result, query_text=recall_query, staff=staff)
+        result = _attach_smart_recall_session(
+            body=session_body,
+            result=result,
+            query_text=recall_query,
+            staff=staff,
+        )
         discovery_payload: dict | None = None
         include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
         execute_new_discovery = bool(body.get("execute_new_discovery"))
@@ -387,21 +715,25 @@ async def smart_kol_search(
             discovery_platforms = body.get("new_discovery_platforms") or body.get("discovery_platforms")
             platform_hint = str(body.get("platform") or "")
             if execute_new_discovery:
-                discovery_payload = await kol_profile_discovery.discover_new_creators(
-                    query_text=effective_query,
-                    platforms=discovery_platforms,  # 2026-07-02:仅认用户显式选择;缺省交 _platforms 三平台兜底(不再被 LLM 规划锁两平台)
-                    platform_hint=platform_hint,
-                    market=str(body.get("market") or body.get("country") or llm_query_plan.get("market") or ""),
-                    limit=discovery_limit,
-                    per_platform_limit=int(body.get("new_discovery_per_platform_limit") or discovery_limit),
+                queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
+                    query_text=recall_query,
+                    body={
+                        **body,
+                        "original_query_text": recall_query,
+                        "include_new_discovery": True,
+                        "new_discovery_limit": discovery_limit,
+                        "new_discovery_platforms": discovery_platforms,
+                        "platform": platform_hint,
+                    },
+                    staff=staff,
                 )
-                search_session = result.get("search_session") if isinstance(result.get("search_session"), dict) else {}
-                session_id = _int_or_none(search_session.get("session_id") or search_session.get("id"))
-                if session_id:
-                    result["new_discovery_session"] = kol_search_sessions.attach_new_discovery_result(
-                        int(session_id),
-                        discovery_payload,
-                    )
+                discovery_payload = {
+                    "status": queued.get("status") or "queued",
+                    "deferred_to_queue": True,
+                    "job_id": queued.get("job_id") or (queued.get("job") or {}).get("id"),
+                    "progressive": True,
+                    "provider_calls_performed": False,
+                }
             else:
                 discovery_payload = kol_profile_discovery.discovery_plan(
                     query_text=effective_query,
@@ -410,14 +742,14 @@ async def smart_kol_search(
                     limit=discovery_limit,
                 )
         return {
-            "status": "ready",
+            "status": _text_response_status(result, discovery_payload),
             "mode": "text",
             "query_type": "text_recall",
             "branch": "kol_recall",
             "result": result,
             "search_session": result.get("search_session"),
-            "provider_calls": True,
-            "provider_note": "text search uses LLM query planning plus OpenAI embedding recall; costs are recorded in ledgers",
+            "provider_calls": False,
+            "provider_note": "initial recall is provider-free; full LLM planning and vector/provider stages run in the queued worker",
             "llm_query_plan": llm_query_plan,
             "new_discovery": discovery_payload,
             "viltrox_fit_score_untouched": True,
@@ -428,7 +760,19 @@ async def smart_kol_search(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("kol_search_unavailable", "kol_smart_search") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "kol_smart_search failed branch=%s input=%s",
+            branch,
+            query_text[:160],
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="KOL 搜索服务暂时不可用，当前任务未被标记为完成；请稍后重试。",
+        ) from exc
 
 
 @router.post("/kol-smart-search/profile-advance-job")
@@ -448,8 +792,9 @@ async def smart_kol_search_profile_advance_job(
         raise HTTPException(status_code=400, detail="input is required")
     if _looks_like_url(query_text):
         raise HTTPException(status_code=400, detail="profile-advance-job accepts text needs only; use kol-url-deep-crawl for URLs")
-    queue_pipeline_raw = body.get("queue_pipeline", True)
-    queue_pipeline = str(queue_pipeline_raw).strip().lower() not in {"0", "false", "no", "off", "sync"}
+    # Legacy ``queue_pipeline=false|sync`` is intentionally ignored.  A normal
+    # web request must never execute planner/discovery providers inline.
+    queue_pipeline = True
 
     try:
         if queue_pipeline:
@@ -478,92 +823,20 @@ async def smart_kol_search_profile_advance_job(
                 "viltrox_fit_score_untouched": True,
             }
 
-        # 非队列(显式 sync 模式,低频/调试):此路本就同步,保留请求内 planner+recall。
-        llm_query_plan = await run_in_threadpool(kol_smart_query_planner.plan_text_query, query_text, body=body, staff=staff)
-        effective_query = str(llm_query_plan.get("search_query") or query_text).strip()
-        recall_result = kol_profile_recall.recall_kol_profiles(
-            query_text=effective_query,
-            product_sku=str(body.get("product_sku") or ""),
-            candidate_limit=int(body.get("candidate_limit") or 100),
-            limit=int(body.get("limit") or 30),
-            creator_quota=int(body.get("creator_quota") or llm_query_plan.get("creator_quota") or 15),
-            reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
-            ratio_policy=str(body.get("ratio_policy") or "soft"),
-            mixed_policy=str(body.get("mixed_policy") or "dominant"),
-            dedupe=bool(body.get("dedupe", True)),
-            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
-            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
-            type_boost_enabled=bool(body.get("type_boost_enabled", True)),
-            exclude_chinese=bool(body.get("exclude_chinese", True)),
-            product_focus=llm_query_plan.get("product_focus"),
-            target_persona=str(llm_query_plan.get("target_persona") or ""),
-        )
-        recall_result["llm_query_plan"] = llm_query_plan
-        recall_result["original_query_text"] = query_text
-        recall_result["effective_query_text"] = effective_query
-        recall_result = _attach_smart_recall_session(
-            body={**body, "create_session": True, "source": body.get("source") or "kol_smart_search_profile_advance"},
-            result=recall_result,
-            query_text=query_text,
-            staff=staff,
-        )
-        search_session = recall_result.get("search_session") if isinstance(recall_result.get("search_session"), dict) else {}
-        session_id = _int_or_none(search_session.get("session_id") or search_session.get("id"))
-        if not session_id:
-            raise RuntimeError("smart search session was not created")
-
-        include_new_discovery = bool(body.get("include_new_discovery", True))
-        new_discovery: dict | None = None
-        if include_new_discovery:
-            discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
-            new_discovery = await kol_profile_discovery.discover_new_creators(
-                query_text=effective_query,
-                platforms=body.get("new_discovery_platforms") or body.get("discovery_platforms") or llm_query_plan.get("platforms"),
-                platform_hint=str(body.get("platform") or ""),
-                market=str(body.get("market") or body.get("country") or llm_query_plan.get("market") or ""),
-                limit=discovery_limit,
-                per_platform_limit=int(body.get("new_discovery_per_platform_limit") or discovery_limit),
-            )
-            recall_result["new_discovery_session"] = kol_search_sessions.attach_new_discovery_result(
-                int(session_id),
-                new_discovery,
-            )
-
-        advance_job = kol_profile_discovery.enqueue_search_session_advance(
-            session_id=int(session_id),
-            body={
-                "limit": int(body.get("advance_limit") or body.get("profile_advance_limit") or 15),
-                "max_posts": int(body.get("max_posts") or 12),
-                "mode": str(body.get("advance_mode") or body.get("mode") or "account_deep"),
-                "representative_video_limit": body.get("representative_video_limit"),
-                "item_types": body.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
-                "include_completed": bool(body.get("include_completed")),
-            },
-            staff=staff,
-        )
-        return {
-            "status": "queued" if advance_job.get("status") in {"queued", "already_queued"} else advance_job.get("status"),
-            "mode": "text",
-            "query_type": "text_recall",
-            "branch": "kol_recall_profile_advance",
-            "query": query_text,
-            "result": recall_result,
-            "search_session": recall_result.get("search_session"),
-            "new_discovery": new_discovery,
-            "advance_job": advance_job,
-            "provider_calls": True,
-            "provider_note": "text recall/new discovery may call provider APIs; profile advancement is queued on apify_jobs",
-            "write_db": True,
-            "writes": ["vkpi_kol_search_sessions", "vkpi_kol_search_session_items", "apify_jobs"],
-            "viltrox_fit_score_changed_ids": [],
-            "viltrox_fit_score_untouched": True,
-        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("profile_advance_unavailable", "profile_advance") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("kol_smart_search_profile_advance failed input=%s", query_text[:160])
+        raise HTTPException(
+            status_code=503,
+            detail="KOL 深析队列暂时不可用，当前任务未被标记为完成；请稍后重试。",
+        ) from exc
 
 
 @router.get("/kol-recall")
@@ -626,7 +899,15 @@ def recall_kol_profiles(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("kol_recall_unavailable", "kol_recall") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("kol_recall failed query=%s", query_text[:160])
+        raise HTTPException(
+            status_code=503,
+            detail="KOL 召回服务暂时不可用，当前结果未被标记为完成；请稍后重试。",
+        ) from exc
 
 
 @router.post("/kol-url-deep-crawl")
@@ -636,28 +917,27 @@ def dry_run_kol_url_deep_crawl(
 ) -> dict:
     """Classify a pasted URL and optionally execute the resolved URL workflow."""
     try:
-        result = kol_url_deep_crawl.dry_run_url_deep_crawl(body)
-        session_id = body.get("session_id")
-        try:
-            session_id_int = int(session_id) if session_id else None
-        except (TypeError, ValueError):
-            raise ValueError("session_id must be an integer") from None
-        create_session = bool(body.get("create_session"))
-        session = kol_search_sessions.ensure_session_for_result(
-            session_id=session_id_int,
-            create=create_session,
-            query_text=str(body.get("url") or ""),
-            query_type="url_video" if result.get("url_type") == "video" else "url_profile" if result.get("url_type") == "profile" else "unknown",
-            source="kol_url_deep_crawl",
-            input_payload={key: value for key, value in body.items() if key != "api_token"},
+        return _run_url_deep_crawl(
+            body,
             staff=staff,
+            default_defer_profile=True,
+            default_create_session=False,
+            default_source="kol_url_deep_crawl",
         )
-        if session:
-            result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
-        return result
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise _service_unavailable("url_deep_crawl_unavailable", "url_deep_crawl") from exc
+    except Exception as exc:
+        logger.exception(
+            "kol_url_deep_crawl request failed url=%s execute=%s deferred=%s",
+            str(body.get("url") or "")[:160],
+            bool(body.get("execute")),
+            bool(body.get("defer_to_queue")),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="账号抓取服务暂时不可用，任务未被标记为完成；请稍后重试。",
+        ) from exc

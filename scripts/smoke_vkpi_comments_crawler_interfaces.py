@@ -7,6 +7,8 @@ making external API calls.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import os
 import sys
 from pathlib import Path
@@ -49,12 +51,12 @@ def main() -> None:
             failures.append(f"{platform}: offline path returned items")
 
     if failures:
-        print("FAIL")
+        out("FAIL")
         for failure in failures:
-            print(f"  - {failure}")
+            out(f"  - {failure}")
         sys.exit(1)
 
-    print("VKPI_COMMENTS_CRAWLER_INTERFACES_SMOKE_OK")
+    out("VKPI_COMMENTS_CRAWLER_INTERFACES_SMOKE_OK")
 
 
 if __name__ == "__main__":

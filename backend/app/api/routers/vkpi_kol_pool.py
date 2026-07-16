@@ -19,6 +19,7 @@ R59: 独立 KOL Pool 路由 + 防火墙 + 审计装饰器集成示范.
 from __future__ import annotations
 
 import os
+import uuid
 from urllib.parse import urlparse
 
 from app.core.logging import get_logger
@@ -34,6 +35,7 @@ from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import history_match as kol_history_match
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
+from app.domains.kol.pool_common import CONTACT_VISIBILITY_MASKED
 from app.domains.kol import profile_discovery as kol_profile_discovery
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.search_sessions as kol_search_sessions
@@ -53,6 +55,72 @@ from app.domains.access.firewall import firewall_check
 
 
 logger = get_logger(__name__)
+
+
+def _kol_operation_error(operation: str, exc: Exception) -> HTTPException:
+    """Map KOL writes to stable client errors without exposing internals."""
+    correlation_id = uuid.uuid4().hex
+    class_name = type(exc).__name__.lower()
+    message = str(exc).lower()
+
+    if isinstance(exc, LookupError):
+        status_code, code, retryable = 404, f"{operation}_not_found", False
+        public_message = "请求的 KOL 或视频证据不存在。"
+    elif isinstance(exc, ValueError):
+        status_code, code, retryable = 422, f"{operation}_invalid_request", False
+        public_message = "请求参数无效，请检查后重试。"
+    elif (
+        "integrity" in class_name
+        or "uniqueviolation" in class_name
+        or any(token in message for token in ("already linked", "conflict", "duplicate", "changed_ids", "rolled back"))
+    ):
+        status_code, code, retryable = 409, f"{operation}_conflict", False
+        public_message = "当前数据状态与该操作冲突，请刷新后核对。"
+    elif isinstance(exc, RuntimeError) or any(
+        token in class_name for token in ("operationalerror", "interfaceerror", "databaseerror", "timeouterror")
+    ):
+        status_code, code, retryable = 503, f"{operation}_queue_unavailable", True
+        public_message = "任务队列暂时不可用，操作未完成，请稍后重试。"
+    else:
+        status_code, code, retryable = 500, f"{operation}_internal_error", False
+        public_message = "操作未完成，请联系管理员并提供错误编号。"
+
+    if status_code >= 500:
+        logger.exception("kol operation failed operation=%s correlation_id=%s", operation, correlation_id)
+    else:
+        logger.info(
+            "kol operation rejected operation=%s status=%s correlation_id=%s exception=%s",
+            operation,
+            status_code,
+            correlation_id,
+            type(exc).__name__,
+        )
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "code": code,
+            "message": public_message,
+            "retryable": retryable,
+            "correlation_id": correlation_id,
+        },
+    )
+
+
+def _sanitize_batch_enqueue_result(result: dict) -> dict:
+    items = result.get("items")
+    if not isinstance(items, list):
+        return result
+    sanitized: list[dict] = []
+    for raw_item in items:
+        item = dict(raw_item) if isinstance(raw_item, dict) else {"status": "error"}
+        if item.get("status") == "error":
+            item.pop("reason", None)
+            item.update({"code": "video_analysis_item_failed", "retryable": True})
+        elif item.get("status") == "not_found":
+            item.pop("reason", None)
+            item.update({"code": "video_evidence_not_found", "retryable": False})
+        sanitized.append(item)
+    return {**result, "items": sanitized}
 
 
 def _record_pool_feedback_signal(
@@ -132,6 +200,9 @@ async def list_pool(
         data_status=data_status,
         sort_by=sort_by,
         enrichable=enrichable,
+        # Bulk surfaces never disclose plaintext contacts. Authorized users use
+        # the single-KOL audited contact boundary instead.
+        contact_visibility=CONTACT_VISIBILITY_MASKED,
     )
     refresh_state = None
     items = result.get("items") if isinstance(result, dict) else []
@@ -182,7 +253,6 @@ def get_pool_workspace(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """One read-only KOL Pool workspace bundle for 100-user-friendly page boot."""
-    del staff
     return kol_pool.workspace(
         limit=limit,
         offset=offset,
@@ -192,6 +262,7 @@ def get_pool_workspace(
         data_status=data_status,
         sort_by=sort_by,
         enrichable=enrichable,
+        contact_visibility=CONTACT_VISIBILITY_MASKED,
     )
 
 
@@ -224,18 +295,67 @@ def kol_pool_discovery_providers(staff=Depends(require_tab("vkpi", "read"))) -> 
 
 @router.get("/kol-pool/discovery/federated-search")
 def kol_pool_federated_search(q: str, limit: int = 20, staff=Depends(require_tab("vkpi", "read"))) -> dict:
-    """联邦发现:跨启用源召回候选 KOL → 归一去重(商业源未配置则诚实 not_configured)。"""
+    """联邦发现即时预览。
+
+    读路径只查自有/已物化数据；付费外部源返回
+    ``background_refresh_required``，由 refresh 写路径持久化排队。
+    """
     from app.domains.discovery import federation
 
-    return federation.federated_search(q, limit=int(limit), staff=staff)
+    result = federation.federated_search(q, limit=int(limit), staff=staff)
+    result["execution_mode"] = "preview_only"
+    return result
+
+
+@router.post("/kol-pool/discovery/federated-search/refresh")
+async def kol_pool_federated_search_refresh(
+    request: Request,
+    q: str,
+    limit: int = 20,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """持久化刷新联邦外部源；结果由通用任务进度/结果端点读取。"""
+    query = str(q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="q required")
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    safe_limit = max(1, min(int(limit or 20), 100))
+    task_id = await queue.enqueue(
+        "discovery_federated_search",
+        {"query": query, "limit": safe_limit, "staff": dict(staff or {})},
+        lock_key=f"discovery_federated_search:{query.casefold()}:{safe_limit}",
+        timeout_seconds=1200,
+    )
+    return {
+        "status": "queued",
+        "job_id": task_id,
+        "progressive": True,
+        "initial_stage": "queued",
+    }
 
 
 @router.post("/kol-pool/onboarding-sweep")
-def kol_onboarding_sweep(q: str, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+async def kol_onboarding_sweep(
+    request: Request,
+    q: str,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
     """阶段②·KOL 建档 Durable Workflow:联邦发现+落库→富集→记忆(可恢复,串起 Apify 线)。"""
-    from app.domains.kol import onboarding_workflow
-
-    return onboarding_workflow.start_kol_onboarding(q, staff)
+    query = str(q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="q required")
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "kol_onboarding",
+        {"query": query, "staff": dict(staff or {})},
+        lock_key=f"kol_onboarding:{query.casefold()}",
+        timeout_seconds=3600,
+    )
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/kol-pool/discovery/enroll")
@@ -255,11 +375,22 @@ def kol_pool_enrichment(kol_pool_id: int, staff=Depends(require_tab("vkpi", "rea
 
 
 @router.post("/kol-pool/{kol_pool_id}/enrich-via-apify")
-def kol_pool_enrich_via_apify(kol_pool_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict:
+async def kol_pool_enrich_via_apify(
+    request: Request,
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
     """把 Apify 用透:抓该 KOL 公开数据 → 存富集证据(env 门控防意外计费)。"""
-    from app.domains.discovery import apify_enrich
-
-    return apify_enrich.enrich_kol(int(kol_pool_id))
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "kol_apify_enrich",
+        {"kol_pool_id": int(kol_pool_id), "force": True, "staff": dict(staff or {})},
+        lock_key=f"kol_apify_enrich:{int(kol_pool_id)}",
+        timeout_seconds=1200,
+    )
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.get("/kol-pool/auto-poll/status")
@@ -342,7 +473,7 @@ def list_kol_pool_needs_analysis(
     try:
         return kol_video_analysis_enqueue.list_kols_needing_video_analysis(limit=limit)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"needs-analysis error: {exc}") from exc
+        raise _kol_operation_error("needs_analysis", exc) from exc
 
 
 @router.get("/kol-pool/resolve")
@@ -486,17 +617,19 @@ def enqueue_pool_item_video_analysis(
     try:
         evidence_id_int = int(evidence_id)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="evidence_id required") from exc
+        raise _kol_operation_error("video_analysis_enqueue", ValueError("invalid evidence_id")) from exc
     try:
         return kol_video_analysis_enqueue.enqueue_final_v1_video_analysis(
             kol_pool_id=int(kol_pool_id),
             evidence_id=evidence_id_int,
             staff=staff,
+            # Deliberately strict: only a JSON boolean true requests the
+            # separately-labelled local evaluation lane.  Ordinary retries,
+            # old clients and truthy strings remain production jobs.
+            local_evaluation=body.get("local_evaluation") is True,
         )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _kol_operation_error("video_analysis_enqueue", exc) from exc
 
 
 @router.post("/kol-pool/enqueue-video-analysis-batch")
@@ -507,16 +640,15 @@ def enqueue_pool_video_analysis_batch(
     """Queue multiple final_v1 video analysis jobs; independent from V6 Fit."""
     raw_items = body.get("items")
     if not isinstance(raw_items, list) or not raw_items:
-        raise HTTPException(status_code=400, detail="items required")
+        raise _kol_operation_error("video_analysis_batch_enqueue", ValueError("invalid items"))
     try:
-        return kol_video_analysis_enqueue.enqueue_final_v1_video_analysis_batch(
+        result = kol_video_analysis_enqueue.enqueue_final_v1_video_analysis_batch(
             items=raw_items,
             staff=staff,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return _sanitize_batch_enqueue_result(result)
+    except Exception as exc:
+        raise _kol_operation_error("video_analysis_batch_enqueue", exc) from exc
 
 
 @router.post("/kol-pool/{kol_pool_id}/enqueue-all-videos")
@@ -530,10 +662,8 @@ def enqueue_pool_all_videos(
             kol_pool_id=int(kol_pool_id),
             staff=staff,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _kol_operation_error("video_analysis_all_enqueue", exc) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/main-candidates")
@@ -593,16 +723,17 @@ def promote_to_main_kol(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """自动匹配或创建 kols 主表记录并链接，替代前端手动输入 ID。"""
+    mode = str(body.get("mode") or "match_or_create")
+    if mode not in {"match_or_create", "match_only"}:
+        raise _kol_operation_error("kol_promote", ValueError("invalid promote mode"))
     try:
         result = kol_pool.promote_to_main(
             int(kol_pool_id),
             staff=staff,
-            mode=str(body.get("mode") or "match_or_create"),
+            mode=mode,
         )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _kol_operation_error("kol_promote", exc) from exc
     _record_pool_feedback_signal(int(kol_pool_id), "promote", staff=staff, note=str(body.get("note") or ""))
     return result
 
@@ -612,24 +743,30 @@ def promote_to_main_kol(
     action_type="kol_pool_enrich",
     target_type="kol_pool",
     target_id_extractor=lambda result, kwargs: str(kwargs.get("kol_pool_id") or ""),
-    detail_extractor=lambda result, kwargs: f"enriched pool_id={kwargs.get('kol_pool_id')} status={result.get('sync_status')}",
+    detail_extractor=lambda result, kwargs: f"enrich queued pool_id={kwargs.get('kol_pool_id')} status={result.get('status')}",
 )
-def enrich_pool_item(
+async def enrich_pool_item(
+    request: Request,
     kol_pool_id: int,
     body: dict = Body(default_factory=dict),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """用真实平台 crawler 补齐单条候选的头像/播放/互动/适配度。"""
+    """持久队列补齐单条候选的真实平台资料。"""
     try:
-        return kol_pool.enrich_item(
+        queue = getattr(request.app.state, "job_queue", None)
+        return await task_enqueue.enqueue_kol_pool_on_demand_refresh(
+            queue,
             int(kol_pool_id),
-            max_posts=max(1, min(int(body.get("max_posts") or 12), 50)),
+            reason="manual_api_enrich",
+            max_posts=max(1, min(int(body.get("max_posts") or 3), 3)),
             staff=staff,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # ─── Write endpoints (装饰器集成示范) ────────────────
@@ -788,6 +925,3 @@ def unfavorite_kol_pool_item(
     if result.get("status") == "unfavorited":
         _record_pool_feedback_signal(int(kol_pool_id), "unfavorite", staff=staff)
     return result
-
-
-

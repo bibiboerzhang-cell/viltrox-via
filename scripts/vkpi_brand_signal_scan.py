@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dry-run or commit V-KPI brand signals from cached local data only."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -33,7 +34,7 @@ def main() -> int:
             limit=args.limit,
             write_db=args.write_db,
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0
     finally:
         asyncio.run(close_db_runtime())

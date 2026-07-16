@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import os
 import re
 import sys
@@ -73,33 +75,33 @@ def main() -> int:
     assets = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_ASSETS
     max_kb = float(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_MAX_KB
     if not assets.is_dir():
-        print(f"[chunk-graph] FAIL: assets 目录不存在:{assets}")
+        out(f"[chunk-graph] FAIL: assets 目录不存在:{assets}")
         return 1
     graph, sizes = build_graph(assets)
     if not sizes:
-        print(f"[chunk-graph] FAIL: {assets} 下没有 JS chunk(先跑 npm run build)")
+        out(f"[chunk-graph] FAIL: {assets} 下没有 JS chunk(先跑 npm run build)")
         return 1
     edge_count = sum(len(v) for v in graph.values())
-    print(f"[chunk-graph] chunks={len(sizes)} static-edges={edge_count} max={max(sizes.values()):.1f}KB (limit {max_kb:.0f}KB)")
+    out(f"[chunk-graph] chunks={len(sizes)} static-edges={edge_count} max={max(sizes.values()):.1f}KB (limit {max_kb:.0f}KB)")
     for name, kb in sorted(sizes.items(), key=lambda kv: -kv[1])[:8]:
-        print(f"[chunk-graph]   {kb:8.1f}KB  {name}")
+        out(f"[chunk-graph]   {kb:8.1f}KB  {name}")
 
     ok = True
     oversize = sorted(((f, kb) for f, kb in sizes.items() if kb > max_kb), key=lambda kv: -kv[1])
     if oversize:
-        print(f"[chunk-graph] FAIL: 超过 {max_kb:.0f}KB 的 chunk:")
+        out(f"[chunk-graph] FAIL: 超过 {max_kb:.0f}KB 的 chunk:")
         for name, kb in oversize:
-            print(f"[chunk-graph]   {kb:8.1f}KB  {name}")
+            out(f"[chunk-graph]   {kb:8.1f}KB  {name}")
         ok = False
     else:
-        print(f"[chunk-graph] OK: 所有 chunk <= {max_kb:.0f}KB")
+        out(f"[chunk-graph] OK: 所有 chunk <= {max_kb:.0f}KB")
 
     cycle = find_cycle(graph)
     if cycle:
-        print(f"[chunk-graph] FAIL: chunk 静态 import 成环(R3 级运行时炸弹): {' -> '.join(cycle)}")
+        out(f"[chunk-graph] FAIL: chunk 静态 import 成环(R3 级运行时炸弹): {' -> '.join(cycle)}")
         ok = False
     else:
-        print("[chunk-graph] OK: chunk 静态 import 图无环(DAG)")
+        out("[chunk-graph] OK: chunk 静态 import 图无环(DAG)")
     return 0 if ok else 1
 
 

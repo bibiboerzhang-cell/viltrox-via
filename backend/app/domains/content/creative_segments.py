@@ -163,7 +163,12 @@ def _tags(keys: list[str], label_map: dict[str, str]) -> list[dict[str, str]]:
 # ── 数据装载(全只读;JOIN 口径抄 signature_profile._load_final_v1_rows)──
 
 
-def _load_final_v1_rows(conn: Any, scan_limit: int = _SCAN_LIMIT) -> list[dict[str, Any]]:
+def _load_final_v1_rows(
+    conn: Any,
+    scan_limit: int = _SCAN_LIMIT,
+    *,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     """全库 ready 的 final_v1 深析 + evidence 表现数据 + KOL 归属,按播放数降序。"""
     rows = conn.execute(
         """
@@ -186,11 +191,27 @@ def _load_final_v1_rows(conn: Any, scan_limit: int = _SCAN_LIMIT) -> list[dict[s
           AND ac.derive_method = ?
           AND ac.status = 'ready'
         ORDER BY COALESCE(e.view_count, 0) DESC, e.id DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
-        (FINAL_V1_DERIVE_METHOD, int(scan_limit)),
+        (FINAL_V1_DERIVE_METHOD, int(scan_limit), max(0, int(offset))),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _count_final_v1_rows(conn: Any) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM vkpi_analysis_cache ac
+        JOIN vkpi_kol_video_evidence e ON e.id::text = ac.target_id
+        JOIN vkpi_kol_pool k ON k.id = e.kol_pool_id
+        WHERE ac.target_type = 'video'
+          AND ac.derive_method = ?
+          AND ac.status = 'ready'
+        """,
+        (FINAL_V1_DERIVE_METHOD,),
+    ).fetchone()
+    return min(_SCAN_LIMIT, _int_or_none(dict(row).get("n") if row else 0) or 0)
 
 
 # ── 缩略图链(pool_detail 同款语义;毒缓存自愈:cached_image_url 已把
@@ -244,7 +265,11 @@ def _video_style_blob(layers: dict[str, Any]) -> str:
     return " ".join(p for p in parts if p).lower()
 
 
-def _decompose_video(row: dict[str, Any]) -> list[dict[str, Any]]:
+def _decompose_video(
+    row: dict[str, Any],
+    *,
+    include_thumbnails: bool = True,
+) -> list[dict[str, Any]]:
     """一条深析视频 → 段级条目列表;解不开 payload 诚实返回空(该视频不进索引)。"""
     root = _as_dict(_loads(row.get("result")))
     layers = _final_layers(root)
@@ -256,16 +281,17 @@ def _decompose_video(row: dict[str, Any]) -> list[dict[str, Any]]:
     eid = _int_or_none(row.get("evidence_id"))
     title = _text(row.get("title"), 160)
     title_lower = title.lower()
-    video = {
+    video: dict[str, Any] = {
         "evidence_id": eid,
         "title": title,
         "content_url": _text(row.get("content_url"), 500),
         "platform": _text(row.get("platform"), 30),
         "view_count": _int_or_none(row.get("view_count")),
         "posted_at": _iso(row.get("posted_at")),
-        # 看板缩略图(cached → raw → youtube 派生;毒缓存自愈链,失败=None 前端诚实占位)
-        **_thumbnail_fields(row),
     }
+    if include_thumbnails:
+        # 看板缩略图(cached → raw → youtube 派生;毒缓存自愈链,失败=None 前端诚实占位)
+        video.update(_thumbnail_fields(row))
     kol = {
         "kol_pool_id": _int_or_none(row.get("kol_pool_id")),
         "handle": _text(row.get("kol_handle"), 100),
@@ -437,6 +463,80 @@ def _facets(segments: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ── 主入口 ──────────────────────────────────────────────────────────
+
+
+def segment_top_items(
+    query: str = "",
+    style: str = "",
+    focal: str = "",
+    limit: int = 30,
+) -> dict[str, Any]:
+    """Return the exact top-N planning projection without building all facets.
+
+    GTM summary/preview only consume description, tags, views and platform from
+    the leading items.  The source query is already ordered by the same keys as
+    ``segment_search``; paging until N matches therefore returns the identical
+    leading slice while avoiding full-result JSON decoding, thumbnail filesystem
+    probes and facet construction.  No total-match claim is made by this view.
+    """
+    from app.db.connection import get_conn
+
+    conn = get_conn()
+    bounded_limit = max(1, min(_int_or_none(limit) or 30, _MAX_LIMIT))
+    query_token = _text(query, 120).lower()
+    style_token = _text(style, 60).lower()
+    focal_input = _text(focal, 20)
+    focal_token = _normalize_focal(focal_input)
+    available_videos = _count_final_v1_rows(conn)
+    if available_videos <= 0:
+        return {
+            "status": "empty",
+            "reason": "深析库为空(vkpi_analysis_cache 无 ready 的 final_v1 视频),段级资产无从索引 — 先跑「KOL深度分析理解」。",
+            "filters": {"query": query_token, "style": style_token, "focal": focal_token or focal_input},
+            "scanned_videos": 0,
+            "returned": 0,
+            "items": [],
+        }
+
+    page_size = max(16, min(64, bounded_limit * 2))
+    selected: list[dict[str, Any]] = []
+    offset = 0
+    while offset < available_videos and len(selected) < bounded_limit:
+        rows = _load_final_v1_rows(
+            conn,
+            min(page_size, available_videos - offset),
+            offset=offset,
+        )
+        if not rows:
+            break
+        for row in rows:
+            for segment in _decompose_video(row, include_thumbnails=False):
+                if _matches(segment, query_token, style_token, focal_token):
+                    selected.append(segment)
+                    if len(selected) >= bounded_limit:
+                        break
+            if len(selected) >= bounded_limit:
+                break
+        offset += len(rows)
+
+    items = [
+        {k: v for k, v in segment.items() if k != "_blob"}
+        for segment in selected[:bounded_limit]
+    ]
+    return {
+        "status": "ready",
+        "method": "lexicon_segments_v1",
+        "projection": "planning_core_v1",
+        "selection": "exact_top_n",
+        "filters": {"query": query_token, "style": style_token, "focal": focal_token or focal_input},
+        "scanned_videos": available_videos,
+        "returned": len(items),
+        "items": items,
+        "note": (
+            "与 segment_search 相同排序和词表过滤的精确 top-N;本投影不构建全量 facets,"
+            "不声称过滤后总命中数。"
+        ),
+    }
 
 
 def segment_search(query: str = "", style: str = "", focal: str = "", limit: int = 30) -> dict:

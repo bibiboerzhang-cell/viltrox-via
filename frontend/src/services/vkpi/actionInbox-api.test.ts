@@ -15,6 +15,7 @@ import {
   dismissAction,
   snoozeAction,
   executeAction,
+  reconcileAction,
 } from "./actionInbox-api";
 
 beforeEach(() => {
@@ -97,6 +98,24 @@ describe("execute(POST /{id}/execute)", () => {
     const [path, init, token] = apiFetch.mock.calls[0];
     expect(path).toBe("/api/admin/vkpi/actions/5/execute");
     expect(init).toEqual({ method: "POST", cache: "no-store" });
+    expect(token).toBe("tok");
+  });
+});
+
+describe("reconcile(POST /{id}/reconcile)", () => {
+  it("透传人工结论、原因、证据和 correlation id", async () => {
+    const payload = {
+      decision: "unknown" as const,
+      reason: "等待 provider 回执",
+      evidence: [{ source: "manual", reference: "log:42" }],
+      correlation_id: "action-5-correlation",
+    };
+    await reconcileAction("tok", 5, payload);
+    const [path, init, token] = apiFetch.mock.calls[0];
+    expect(path).toBe("/api/admin/vkpi/actions/5/reconcile");
+    expect(init.method).toBe("POST");
+    expect(init.cache).toBe("no-store");
+    expect(JSON.parse(init.body)).toEqual(payload);
     expect(token).toBe("tok");
   });
 });

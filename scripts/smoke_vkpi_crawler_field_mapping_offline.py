@@ -6,6 +6,7 @@ from the R-Phase2-B adapters map into industry snapshot KPI fields without
 fabricating unavailable metrics.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -289,7 +290,7 @@ def main() -> None:
     _assert_equal(youtube["views"], 987654, "youtube viewCount regression", youtube)
     _assert_equal(youtube["views_30d"], 1500, "youtube video viewCount regression", youtube)
 
-    print("VKPI_CRAWLER_FIELD_MAPPING_OFFLINE_SMOKE_OK")
+    stdout_out("VKPI_CRAWLER_FIELD_MAPPING_OFFLINE_SMOKE_OK")
 
 
 if __name__ == "__main__":

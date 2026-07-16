@@ -86,6 +86,7 @@ export function EvidenceDrawer({
   rows,
   lineageInfo,
   usedFallback,
+  dataStatus,
   loading,
   officialViewsMatrix,
   onClose,
@@ -94,6 +95,7 @@ export function EvidenceDrawer({
   rows: VkpiEvidenceRow[];
   lineageInfo?: VkpiDrilldownResponse['run'] | null;
   usedFallback?: boolean;
+  dataStatus?: string;
   loading?: boolean;
   officialViewsMatrix?: VkpiOfficialViewsPlatform[];
   onClose: () => void;
@@ -118,7 +120,10 @@ export function EvidenceDrawer({
     if (row.amountUnit === 'ratio' || metric === 'roi') return `${amount.toFixed(2)}x`;
     return numberFormatter.format(amount);
   };
-  const sourceLabel = lineageInfo
+  const unavailable = ['unavailable', 'stale'].includes(String(dataStatus || '').toLowerCase());
+  const sourceLabel = unavailable
+    ? '该快照已撤销，等待按当前真实业务口径重新计算'
+    : lineageInfo
     ? `快照 ${lineageInfo.uid} · ${lineageInfo.period_start?.slice(0, 10)} → ${lineageInfo.period_end?.slice(0, 10)} · ${lineageInfo.definition_version}`
     : usedFallback
       ? '尚未找到可用快照证据'
@@ -288,7 +293,7 @@ export function EvidenceDrawer({
       <header><div><span>证据下钻</span><h2>{title}</h2>{sourceLabel ? <small>{sourceLabel}</small> : null}</div><button type="button" onClick={onClose}>×</button></header>
       {metric === 'views' ? renderViewsBreakdown() : (
         <div className="vkpi-evidence-list">
-          {loading ? <div className="vkpi-empty-state">正在加载指标证据...</div> : rows.length ? rows.map(renderEvidenceRow) : <div className="vkpi-empty-state">当前指标没有可展示的真实证据行。请先生成 metric snapshot，或接入 Shopify / Amazon / 成本 / 内容记录。</div>}
+          {loading ? <div className="vkpi-empty-state">正在加载指标证据...</div> : rows.length ? rows.map(renderEvidenceRow) : <div className="vkpi-empty-state">{unavailable ? '旧指标证据已按新真实性口径撤销，当前不展示历史金额；请重新生成 metric snapshot。' : '当前指标没有可展示的真实证据行。请先生成 metric snapshot，或接入 Shopify / Amazon / 成本 / 内容记录。'}</div>}
         </div>
       )}
     </aside>

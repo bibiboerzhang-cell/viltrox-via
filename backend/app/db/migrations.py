@@ -713,11 +713,6 @@ def init_db():
             code = f"V_{int(r['id']):06d}"
             c.execute("UPDATE users SET creator_code=? WHERE id=?", (code, r["id"]))
 
-    # ─────────────────────────
-    # Ensure default admin account exists
-    # ─────────────────────────
-    ensure_default_admin_account(conn)
-
     conn.commit()
 
     try:
@@ -727,6 +722,12 @@ def init_db():
     except Exception:
         logger.exception("v5 migrations failed during init_db")
         raise
+
+    # The default admin must be provisioned only after v5 has created the
+    # SQLite staff table.  The helper also binds that staff identity to org 1,
+    # matching the Postgres post-migration bootstrap order.
+    ensure_default_admin_account(conn)
+    conn.commit()
 
     try:
         from app.db.migrations_activities import apply_activities_migrations

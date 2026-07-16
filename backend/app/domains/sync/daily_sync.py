@@ -208,64 +208,17 @@ def run_official_incremental(payload: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    staff = payload.get("staff") if isinstance(payload.get("staff"), dict) else _system_staff()
-    results: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    logger.info(
-        "daily sync official start requested=%s max_posts=%s platforms=%s",
-        len(selected),
-        max_posts,
-        ",".join(sorted(platforms)) if platforms else "all",
-    )
-    for index, row in enumerate(selected, start=1):
-        channel_id = _int(row.get("id"))
-        if not channel_id:
-            continue
-        label = _row_label(row)
-        logger.info("daily sync official %s/%s start channel_id=%s %s", index, len(selected), channel_id, label)
-        try:
-            result = channels.sync_now(channel_id, staff=staff, max_posts=max_posts)
-            results.append(result)
-            logger.info(
-                "daily sync official %s/%s done channel_id=%s %s status=%s posts=%s followers=%s views=%s",
-                index,
-                len(selected),
-                channel_id,
-                label,
-                result.get("sync_status"),
-                result.get("posts_count") or result.get("total_posts"),
-                result.get("followers"),
-                result.get("total_views") or result.get("views"),
-            )
-            if not _status_ok(result.get("sync_status")):
-                failures.append({
-                    "channel_id": channel_id,
-                    "platform": row.get("platform"),
-                    "handle": row.get("account_handle"),
-                    "status": result.get("sync_status"),
-                    "message": result.get("message"),
-                })
-        except Exception as exc:
-            logger.exception("daily sync official %s/%s failed channel_id=%s %s", index, len(selected), channel_id, label)
-            failures.append({
-                "channel_id": channel_id,
-                "platform": row.get("platform"),
-                "handle": row.get("account_handle"),
-                "error": f"{type(exc).__name__}: {str(exc)[:400]}",
-            })
-    logger.info(
-        "daily sync official finish requested=%s synced=%s failed=%s",
-        len(selected),
-        sum(1 for item in results if _status_ok(item.get("sync_status"))),
-        len(failures),
-    )
+    # Provider execution belongs to the durable Redis worker.  The scheduler
+    # calls cron.run_job(), which enumerates these rows and enqueues one fenced
+    # job per channel.  Keep this legacy sync entry point fail-closed so CLI or
+    # old callers cannot silently reintroduce request-process crawling.
     return {
         "dry_run": False,
+        "status": "durable_queue_required",
         "requested": len(selected),
-        "synced": sum(1 for item in results if _status_ok(item.get("sync_status"))),
-        "failed": len(failures),
         "max_posts": max_posts,
-        "failures": failures[:30],
+        "platforms": sorted(platforms) if platforms else "all",
+        "message": "use async cron.run_job('daily_incremental_sync')",
     }
 
 
@@ -316,223 +269,16 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
             "sample": rows[:10],
         }
 
-    staff = payload.get("staff") if isinstance(payload.get("staff"), dict) else _system_staff()
-    run_id = str(payload.get("run_id") or _new_run_id(job_name, stage))
-    refreshed = 0
-    partial = 0
-    last_success_index = 0
-    skipped: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-    start_sync_run(
-        run_id=run_id,
-        job_name=job_name,
-        stage=stage,
-        total_targets=len(rows),
-        payload={**payload, "run_id": run_id},
-    )
-    logger.info(
-        "daily sync kol light start run_id=%s selector=%s requested=%s source_total=%s refreshable=%s offset=%s stale_before=%s max_posts=%s source_type=%s tiers=%s platforms=%s",
-        run_id,
-        selector,
-        len(rows),
-        source_counts.get("source_total"),
-        len(rows),
-        offset,
-        stale_before or "-",
-        max_posts,
-        source_type,
-        ",".join(sorted(tiers)) if selector == "qualified" else "-",
-        ",".join(sorted(platforms)) if platforms else "all",
-    )
-    for index, row in enumerate(rows, start=1):
-        kol_pool_id = _int(row.get("id"))
-        if not kol_pool_id:
-            continue
-        label = _row_label(row)
-        logger.info("daily sync kol light %s/%s start kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
-        try:
-            result = kol_pool.enrich_item(kol_pool_id, max_posts=max_posts, staff=staff)
-            status = str(result.get("sync_status") or result.get("provider_status") or "").strip().lower()
-            if _status_ok(status):
-                refreshed += 1
-            else:
-                partial += 1
-                skipped.append({
-                    "id": kol_pool_id,
-                    "kol_pool_id": kol_pool_id,
-                    "platform": row.get("platform"),
-                    "handle": row.get("handle"),
-                    "status": status or "unknown",
-                    "message": result.get("message"),
-                })
-            if selector == "qualified":
-                refresh_tier.mark_kol_refreshed(kol_pool_id, status=status or "unknown")
-            last_success_index = index
-            if index == len(rows) or index % 10 == 0 or not _status_ok(status):
-                logger.info(
-                    "daily sync kol light progress %s/%s refreshed=%s partial=%s errors=%s last_id=%s status=%s",
-                    index,
-                    len(rows),
-                    refreshed,
-                    partial,
-                    len(errors),
-                    kol_pool_id,
-                    status or "unknown",
-                )
-        except Exception as exc:
-            error_type, reason = _classify_sync_error(exc)
-            raw_exc = _unwrap_db_exception(exc)
-            error_class = type(raw_exc).__name__
-            if error_type == "db_connection_lost":
-                summary = {
-                    "dry_run": False,
-                    "requested": len(rows),
-                    "refreshed": refreshed,
-                    "partial": partial,
-                    "errors": len(errors) + 1,
-                    "limit": limit,
-                    "offset": offset,
-                    "stale_before": stale_before,
-                    "max_posts": max_posts,
-                    "source_type": source_type,
-                    **source_counts,
-                    "refreshable_total": len(rows),
-                    "last_success_index": last_success_index,
-                    "interrupted_at_index": index,
-                    "interrupted_kol_pool_id": kol_pool_id,
-                    "reason": reason,
-                    "error_type": error_type,
-                    "error_class": error_class,
-                }
-                logger.exception("daily sync kol light %s/%s interrupted kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
-                try:
-                    record_sync_interrupt(
-                        run_id=run_id,
-                        job_name=job_name,
-                        stage=stage,
-                        total_targets=len(rows),
-                        last_success_index=last_success_index,
-                        interrupted_at_index=index,
-                        interrupted_kol_pool_id=kol_pool_id,
-                        reason=reason,
-                        error_type=error_type,
-                        error_class=error_class,
-                        error_message=str(raw_exc),
-                        traceback_text=_traceback_text(exc),
-                        payload={**payload, "run_id": run_id},
-                        summary=summary,
-                    )
-                except Exception as record_exc:
-                    _emit_interrupt_stderr({
-                        "run_id": run_id,
-                        "job_name": job_name,
-                        "stage": stage,
-                        "interrupted_at_index": index,
-                        "interrupted_kol_pool_id": kol_pool_id,
-                        "reason": reason,
-                        "error_type": error_type,
-                        "error_class": error_class,
-                        "record_error": f"{type(record_exc).__name__}: {str(record_exc)[:500]}",
-                    })
-                raise SyncFailFast(
-                    f"daily sync interrupted: {reason}",
-                    run_id=run_id,
-                    stage=stage,
-                    summary=summary,
-                ) from exc
-            logger.exception("daily sync kol light %s/%s failed kol_pool_id=%s %s", index, len(rows), kol_pool_id, label)
-            if selector == "qualified":
-                refresh_tier.mark_kol_refreshed(kol_pool_id, status="error")
-            errors.append({
-                "id": kol_pool_id,
-                "kol_pool_id": kol_pool_id,
-                "platform": row.get("platform"),
-                "handle": row.get("handle"),
-                "error": f"{type(exc).__name__}: {str(exc)[:400]}",
-                "error_class": type(exc).__name__,
-                "error_type": error_type,
-            })
-            if error_stop_threshold and len(errors) >= error_stop_threshold:
-                summary = {
-                    "dry_run": False,
-                    "requested": len(rows),
-                    "refreshed": refreshed,
-                    "partial": partial,
-                    "errors": len(errors),
-                    "limit": limit,
-                    "offset": offset,
-                    "stale_before": stale_before,
-                    "max_posts": max_posts,
-                    "error_stop_threshold": error_stop_threshold,
-                    "source_type": source_type,
-                    "selector": selector,
-                    "tiers": sorted(tiers) if selector == "qualified" else [],
-                    **source_counts,
-                    "refreshable_total": len(rows),
-                    "last_success_index": last_success_index,
-                    "interrupted_at_index": index,
-                    "interrupted_kol_pool_id": kol_pool_id,
-                    "reason": "provider_error_threshold_exceeded",
-                    "error_type": error_type,
-                    "error_class": type(exc).__name__,
-                    "error_sample": errors[:30],
-                }
-                record_sync_interrupt(
-                    run_id=run_id,
-                    job_name=job_name,
-                    stage=stage,
-                    total_targets=len(rows),
-                    last_success_index=last_success_index,
-                    interrupted_at_index=index,
-                    interrupted_kol_pool_id=kol_pool_id,
-                    reason="provider_error_threshold_exceeded",
-                    error_type=error_type,
-                    error_class=type(exc).__name__,
-                    error_message=str(exc),
-                    traceback_text=_traceback_text(exc),
-                    payload={**payload, "run_id": run_id},
-                    summary=summary,
-                )
-                raise SyncFailFast(
-                    f"daily sync interrupted: provider_error_threshold_exceeded ({len(errors)} errors)",
-                    run_id=run_id,
-                    stage=stage,
-                    summary=summary,
-                ) from exc
-    logger.info(
-        "daily sync kol light finish requested=%s refreshed=%s partial=%s errors=%s",
-        len(rows),
-        refreshed,
-        partial,
-        len(errors),
-    )
-    summary = {
+    # The async cron orchestrator queues vkpi_kol_pool_on_demand_refresh jobs.
+    # A synchronous direct call cannot carry a durable execution fence.
+    return {
         "dry_run": False,
-        "run_id": run_id,
+        "status": "durable_queue_required",
         "selector": selector,
-        "tiers": sorted(tiers) if selector == "qualified" else [],
         "requested": len(rows),
-        "refreshed": refreshed,
-        "partial": partial,
-        "errors": len(errors),
-        "limit": limit,
-        "offset": offset,
-        "stale_before": stale_before,
         "max_posts": max_posts,
-        "error_stop_threshold": error_stop_threshold,
-        "source_type": source_type,
-        **source_counts,
-        "refreshable_total": len(rows),
-        "skipped": skipped[:30],
-        "error_sample": errors[:30],
+        "message": "use async cron.run_job('daily_incremental_sync')",
     }
-    finish_sync_run(
-        run_id=run_id,
-        status="completed",
-        last_success_index=last_success_index,
-        summary=summary,
-    )
-    return summary
 
 
 def run_daily_incremental(payload: dict[str, Any] | None = None) -> dict[str, Any]:

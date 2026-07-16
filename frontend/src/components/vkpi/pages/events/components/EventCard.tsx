@@ -1,7 +1,7 @@
 import React from "react";
 import { Briefcase, Calendar, Check, Clock, MapPin, Users } from "lucide-react";
 import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants";
-import { daysUntil, fmtMoneyShort, healthColor, sum } from "../shared/helpers";
+import { eventTiming, fmtMoneyShort, healthColor, percentOf, sum } from "../shared/helpers";
 import { memberFromStaff } from "../shared/lookups";
 import type { EventVm, InvitedKolVm, UiStaff } from "../shared/types";
 
@@ -18,10 +18,16 @@ export default function EventCard({ ev, onOpen, staff = [] }: EventCardProps) {
   const statusCfg = EVENT_STATUS[ev.status] || EVENT_STATUS.planning;
   const Icon = typeCfg.icon;
   const totalSpent = sum(ev.budgetByCategory, "spent");
-  const spentPct = Math.round(totalSpent / ev.budgetTotal * 100);
-  const days = daysUntil(ev.startDate);
+  const spentPct = percentOf(totalSpent, ev.budgetTotal);
+  const timing = eventTiming(ev.startDate, ev.endDate);
   const isDone = ev.status === "done";
+  const isCancelled = ev.status === "cancelled";
+  const hasHealthScore = ev.healthScore != null && Number.isFinite(ev.healthScore);
   const hc = healthColor(ev.healthScore);
+  const outcomeParts = [
+    typeof ev.roi === "number" && Number.isFinite(ev.roi) ? `ROI ${ev.roi}x` : "",
+    typeof ev.leads === "number" && Number.isFinite(ev.leads) ? `${ev.leads} lead` : "",
+  ].filter(Boolean);
 
   const confirmedKols = ev.invitedKols.filter((k: InvitedKolVm) => k.status === "confirmed").length;
 
@@ -44,7 +50,10 @@ export default function EventCard({ ev, onOpen, staff = [] }: EventCardProps) {
           }, statusCfg.label),
           !isDone && e("span", {
             className: "text-[9.5px] text-slate-400 px-1.5 py-0.5 rounded bg-white/[0.04]"
-          }, "健康 ", e("span", { style: { color: hc } }, ev.healthScore))
+          }, "健康度 ", e("span", {
+            style: { color: hc },
+            title: hasHealthScore ? "录入值；当前接口未提供评分来源" : "尚无可核验的健康度评分",
+          }, hasHealthScore ? `录入 ${ev.healthScore}` : "待评估"))
         ),
         e("div", { className: "flex items-center gap-2 text-[10.5px] text-slate-400" },
           e(MapPin, { size: 10 }),
@@ -59,14 +68,18 @@ export default function EventCard({ ev, onOpen, staff = [] }: EventCardProps) {
     ),
 
     // 倒计时 banner (非已完成才显示)
-    !isDone && e("div", {
+    !isDone && !isCancelled && e("div", {
       className: "mb-3 px-3 py-1.5 rounded-md flex items-center justify-between",
-      style: { background: days <= 14 ? "rgba(251,191,36,0.08)" : "rgba(168,85,247,0.06)", border: `1px solid ${days <= 14 ? "rgba(251,191,36,0.20)" : "rgba(168,85,247,0.15)"}` }
+      style: timing.phase === "ended" || timing.phase === "invalid"
+        ? { background: "rgba(100,116,139,0.06)", border: "1px solid rgba(100,116,139,0.16)" }
+        : timing.phase === "ongoing" || timing.days <= 14
+          ? { background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.20)" }
+          : { background: "rgba(168,85,247,0.06)", border: "1px solid rgba(168,85,247,0.15)" }
     },
       e("div", { className: "flex items-center gap-1.5" },
-        e(Clock, { size: 11, style: { color: days <= 14 ? "#fbbf24" : "#a855f7" } }),
-        e("span", { className: "text-[10.5px] font-medium", style: { color: days <= 14 ? "#fbbf24" : "#c4b5fd" } },
-          days > 0 ? `倒计时 ${days} 天` : days === 0 ? "今天开幕!" : `进行中 ${-days} 天`)
+        e(Clock, { size: 11, style: { color: timing.phase === "ended" || timing.phase === "invalid" ? "#94a3b8" : timing.phase === "ongoing" || timing.days <= 14 ? "#fbbf24" : "#a855f7" } }),
+        e("span", { className: "text-[10.5px] font-medium", style: { color: timing.phase === "ended" || timing.phase === "invalid" ? "#94a3b8" : timing.phase === "ongoing" || timing.days <= 14 ? "#fbbf24" : "#c4b5fd" } },
+          timing.label)
       ),
       e("span", { className: "text-[9.5px] text-slate-500 tabular-nums" }, ev.startDate)
     ),
@@ -75,7 +88,8 @@ export default function EventCard({ ev, onOpen, staff = [] }: EventCardProps) {
     isDone && e("div", { className: "mb-3 px-3 py-1.5 rounded-md flex items-center justify-between", style: { background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)" } },
       e("div", { className: "flex items-center gap-1.5" },
         e(Check, { size: 11, className: "text-emerald-400" }),
-        e("span", { className: "text-[10.5px] font-medium text-emerald-300" }, `已完成 · ROI ${ev.roi}x · ${ev.leads} lead`)
+        e("span", { className: "text-[10.5px] font-medium text-emerald-300" },
+          outcomeParts.length ? `已完成 · ${outcomeParts.join(" · ")}` : "已完成 · 结果待录入")
       )
     ),
 
@@ -86,13 +100,13 @@ export default function EventCard({ ev, onOpen, staff = [] }: EventCardProps) {
           e("span", { className: "text-slate-400" }, "预算"),
           e("span", { className: "text-white tabular-nums" },
             fmtMoneyShort(totalSpent), e("span", { className: "text-slate-500" }, " / " + fmtMoneyShort(ev.budgetTotal)),
-            " (", spentPct, "%)"
+            spentPct == null ? " · 未设预算" : ` (${spentPct}%)`
           )
         ),
         e("div", { className: "h-1.5 rounded-full bg-white/[0.04] overflow-hidden" },
           e("div", { className: "h-full rounded-full transition-all", style: {
-            width: Math.min(100, spentPct) + "%",
-            background: spentPct > 100 ? "#ef4444" : spentPct > 80 ? "#fbbf24" : "#a855f7"
+            width: Math.min(100, spentPct ?? 0) + "%",
+            background: spentPct != null && spentPct > 100 ? "#ef4444" : spentPct != null && spentPct > 80 ? "#fbbf24" : "#a855f7"
           } })
         )
       )

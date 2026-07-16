@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app.core.logging import get_logger
+from app.domains import business_truth
 
 logger = get_logger(__name__)
 
@@ -389,9 +390,10 @@ def _budget_section(conn: Any, start: datetime, end: datetime) -> dict[str, Any]
     ai_calls = sum(p["calls"] for p in by_provider)
 
     biz_row = conn.execute(
-        """
+        f"""
         SELECT SUM(amount_cents) AS cents, COUNT(*) AS c FROM vkpi_cost_ledger
         WHERE incurred_at >= ? AND incurred_at < ?
+          AND {business_truth.approved_actual_cost_sql()}
         """,
         (start, end),
     ).fetchone()

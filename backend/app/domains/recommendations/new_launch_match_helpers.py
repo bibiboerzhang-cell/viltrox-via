@@ -407,7 +407,7 @@ def _kol_entities() -> list[dict[str, Any]]:
         _row_to_dict(row)
         for row in get_conn().execute(
         """
-        SELECT *
+        SELECT id, entity_uid, display_name, status, identity_json, metadata_json
         FROM vkpi_memory_entities
         WHERE entity_type='kol'
           AND status IN ('active', 'imported', 'needs_human_review')
@@ -443,7 +443,8 @@ def _legacy_entities_by_uid() -> dict[str, dict[str, Any]]:
 def _kol_facts() -> dict[int, list[dict[str, Any]]]:
     rows = get_conn().execute(
         """
-        SELECT *
+        SELECT id, entity_id, fact_type, fact_value_text, confidence_score,
+               source_ref, source_table, source_id, fact_json, observed_at
         FROM vkpi_memory_facts
         WHERE fact_type IN (
           'contact_status',
@@ -467,7 +468,8 @@ def _kol_facts() -> dict[int, list[dict[str, Any]]]:
 def _worked_links() -> dict[int, list[dict[str, Any]]]:
     rows = get_conn().execute(
         """
-        SELECT l.*,
+        SELECT l.id, l.link_uid, l.source_entity_id, l.target_entity_id,
+               l.link_type, l.confidence_score, l.source_ref, l.source_json,
                p.entity_uid AS product_uid,
                p.display_name AS product_name,
                p.identity_key AS product_key

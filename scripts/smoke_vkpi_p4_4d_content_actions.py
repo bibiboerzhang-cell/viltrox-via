@@ -6,6 +6,7 @@ account, Home only exposes a Top subset, or account metrics use aggregate rows
 as account-specific data.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 from pathlib import Path
@@ -80,7 +81,7 @@ def main() -> None:
     assert_contains(css, ".da-post-card__view-analytics:disabled", css_path)
     assert_contains(css, ".da-inline-actions", css_path)
 
-    print(json.dumps({"ok": True, "marker": "VKPI_P4_4D_CONTENT_ACTIONS_SMOKE_OK"}, ensure_ascii=False))
+    stdout_out(json.dumps({"ok": True, "marker": "VKPI_P4_4D_CONTENT_ACTIONS_SMOKE_OK"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@
   .venv/bin/python scripts/backfill_apify_raw.py --phase languages      # 单阶段
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -566,7 +567,7 @@ def main() -> int:
             except Exception:
                 pass
             report[name] = {"error": str(exc)[:500]}
-    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+    stdout_out(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

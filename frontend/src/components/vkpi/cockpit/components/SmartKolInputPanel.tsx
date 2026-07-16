@@ -13,7 +13,16 @@ import {
   type VkpiKolSmartSearchProfileAdvanceResponse,
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
-import { approveKolSearchSession, createProjectDraftFromSession, favoriteKolPool, generateKolSearchSessionOutreach, resolveKolPool } from "../../../../services/vkpi/kolPool-api";
+import {
+  approveKolSearchSession,
+  archiveAllKolSearchHistory,
+  archiveKolSearchHistorySession,
+  createProjectDraftFromSession,
+  favoriteKolPool,
+  generateKolSearchSessionOutreach,
+  resolveKolPool,
+  restoreKolSearchHistorySession,
+} from "../../../../services/vkpi/kolPool-api";
 
 // 纯函数工具已抽到 SmartKolInputPanel.helpers.ts(行为不变)。
 import {
@@ -36,6 +45,8 @@ import {
   historySessionId,
   isSearchSessionTerminal,
   looksLikeRetailer,
+  mergeKolRecallSnapshots,
+  mergeKolSearchSessionSnapshots,
   reachFloorDisplayFromSession,
   readPersistedSearchDisplay,
   recallResultFromSession,
@@ -43,6 +54,7 @@ import {
   sessionAdvanceCounts,
   sessionItems,
   sessionStatusBanner,
+  searchSessionProgress,
   urlResultFromSession,
   writePersistedSearchDisplay,
 } from "./SmartKolInputPanel.Sections";
@@ -54,13 +66,14 @@ type State = "idle" | "loading" | "ready" | "executing" | "error";
 
 // 【K1 搜索模式映射表 2026-07-02】FilterBar 三档(平衡/精准/探索)→ 全网查找请求参数。
 // 只改参数映射,不动召回算法;数字与 FilterBar 的 hint/title 一致:
-//   balanced  平衡: 库内召回 创作者8+测评7 / 全网发现 30 / 每平台 12(=原默认值)
-//   precision 精准: 库内召回 创作者10+测评5 / 全网发现 20 / 每平台 8(收窄)
-//   discovery 探索: 库内召回 创作者5+测评5  / 全网发现 40 / 每平台 15(放宽)
+//   balanced  平衡: 库内召回 创作者8+测评7 / 全网候选 45 / 每平台 20
+//   precision 精准: 库内召回 创作者10+测评5 / 全网候选 30 / 每平台 12
+//   discovery 探索: 库内召回 创作者5+测评5  / 全网候选 50 / 每平台 20
+// 候选量高于最终展示量:后端仍按相关性/地区/账号类型/触达门槛过滤,不以降质换数量。
 const SEARCH_MODE_QUOTAS: Record<string, { creatorQuota: number; reviewerQuota: number; newDiscoveryLimit: number; perPlatformLimit: number }> = {
-  balanced:  { creatorQuota: 8,  reviewerQuota: 7, newDiscoveryLimit: 30, perPlatformLimit: 12 },
-  precision: { creatorQuota: 10, reviewerQuota: 5, newDiscoveryLimit: 20, perPlatformLimit: 8 },
-  discovery: { creatorQuota: 5,  reviewerQuota: 5, newDiscoveryLimit: 40, perPlatformLimit: 15 },
+  balanced:  { creatorQuota: 8,  reviewerQuota: 7, newDiscoveryLimit: 45, perPlatformLimit: 20 },
+  precision: { creatorQuota: 10, reviewerQuota: 5, newDiscoveryLimit: 30, perPlatformLimit: 12 },
+  discovery: { creatorQuota: 5,  reviewerQuota: 5, newDiscoveryLimit: 50, perPlatformLimit: 20 },
 };
 
 // 【K7】URL 多行批量:一次输入里抠出全部 http(s) URL(空格/换行分隔);上限 10 条防误粘。
@@ -99,7 +112,10 @@ export function SmartKolInputPanel({
   const [activeSearchSession, setActiveSearchSession] = useState<VkpiKolSearchHistoryItem | null>(() => persistedDisplay?.activeSearchSession ?? null);
   const [sessionPollNotice, setSessionPollNotice] = useState("");
   const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
+  const [archivedHistoryItems, setArchivedHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyActionBusy, setHistoryActionBusy] = useState("");
+  const [historyNotice, setHistoryNotice] = useState("");
   const [error, setError] = useState("");
   // 问题2 平台选择器:默认全选已落地的 YT/IG/TikTok(FB 待 provider 落地,UI 置灰)。
   const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
@@ -289,6 +305,10 @@ export function SmartKolInputPanel({
   // .query_plan_source ∈ {llm_plan, rule_v0_fallback};仅当存在且等于 rule_v0_fallback 才提示,
   // 字段缺失/为 llm_plan 时静默不渲染(graceful absence,不编造)。
   const plannerFellBack = cleanText(activeSmartJob.query_plan_source) === "rule_v0_fallback";
+  const activeSessionProgress = useMemo(
+    () => searchSessionProgress(activeSearchSession),
+    [activeSearchSession],
+  );
   // 诚实会话横幅(排队/查找中/已完成/部分完成/未完成)——只读后端真有字段,见 sessionStatusBanner。
   // advanceResult?.status:queueTextAdvance 刚返回、尚未首拍轮询时的即时状态兜底(queued/...)。
   const sessionBanner = useMemo(
@@ -313,18 +333,79 @@ export function SmartKolInputPanel({
   const refreshHistory = useCallback(async () => {
     if (!apiToken) {
       setHistoryItems([]);
+      setArchivedHistoryItems([]);
       return;
     }
     setHistoryLoading(true);
     try {
-      const response = await listKolSearchHistory(apiToken, { limit: 20, itemLimit: 5 });
-      setHistoryItems(Array.isArray(response.items) ? response.items : []);
+      const [active, archived] = await Promise.allSettled([
+        listKolSearchHistory(apiToken, { limit: 50, itemLimit: 5, archived: false }),
+        listKolSearchHistory(apiToken, { limit: 50, itemLimit: 0, archived: true }),
+      ]);
+      if (active.status === "fulfilled") {
+        setHistoryItems(Array.isArray(active.value.items) ? active.value.items : []);
+      }
+      if (archived.status === "fulfilled") {
+        setArchivedHistoryItems(Array.isArray(archived.value.items) ? archived.value.items : []);
+      }
+      if (active.status === "rejected" && archived.status === "rejected") {
+        setHistoryNotice("历史记录暂时无法同步，主搜索功能不受影响");
+      }
     } catch {
-      // History is a convenience surface; do not interrupt the main search flow.
+      setHistoryNotice("历史记录暂时无法同步，主搜索功能不受影响");
     } finally {
       setHistoryLoading(false);
     }
   }, [apiToken]);
+
+  const archiveHistoryEntry = useCallback(async (session: VkpiKolSearchHistoryItem) => {
+    const sessionId = historySessionId(session);
+    if (!apiToken || !sessionId) return;
+    setHistoryActionBusy(`active-${sessionId}`);
+    setHistoryNotice("");
+    try {
+      await archiveKolSearchHistorySession(apiToken, sessionId);
+      setHistoryNotice("已从最近历史移除；搜索结果和任务数据仍保留，可在“已移除”中恢复");
+      await refreshHistory();
+    } catch (err) {
+      setHistoryNotice(err instanceof Error ? err.message : "移除失败，请稍后重试");
+    } finally {
+      setHistoryActionBusy("");
+    }
+  }, [apiToken, refreshHistory]);
+
+  const restoreHistoryEntry = useCallback(async (session: VkpiKolSearchHistoryItem) => {
+    const sessionId = historySessionId(session);
+    if (!apiToken || !sessionId) return;
+    setHistoryActionBusy(`archived-${sessionId}`);
+    setHistoryNotice("");
+    try {
+      await restoreKolSearchHistorySession(apiToken, sessionId);
+      setHistoryNotice("历史记录已恢复");
+      await refreshHistory();
+    } catch (err) {
+      setHistoryNotice(err instanceof Error ? err.message : "恢复失败，请稍后重试");
+    } finally {
+      setHistoryActionBusy("");
+    }
+  }, [apiToken, refreshHistory]);
+
+  const archiveCompletedHistory = useCallback(async () => {
+    if (!apiToken) return;
+    setHistoryActionBusy("all");
+    setHistoryNotice("");
+    try {
+      const response = await archiveAllKolSearchHistory(apiToken);
+      const archivedCount = Math.max(0, Number(response.archived_count) || 0);
+      const skippedCount = Math.max(0, Number(response.skipped_active_count) || 0);
+      setHistoryNotice(`已移除 ${archivedCount} 条已完成记录${skippedCount ? `；${skippedCount} 条进行中任务已保留` : ""}`);
+      await refreshHistory();
+    } catch (err) {
+      setHistoryNotice(err instanceof Error ? err.message : "清理失败，请稍后重试");
+    } finally {
+      setHistoryActionBusy("");
+    }
+  }, [apiToken, refreshHistory]);
 
   const restoreSession = useCallback((session: VkpiKolSearchHistoryItem) => {
     const query = cleanText(session.query_text);
@@ -367,20 +448,9 @@ export function SmartKolInputPanel({
       return;
     }
     setMode("text");
-    // 框3(全网发现)非破坏式覆盖:discoveryItems 派生自 activeSearchSession 的 new_creator 项;
-    // 轮询头几拍常拿到尚无发现项的会话快照(running/部分写入)。若无条件覆盖,会把已点亮的框3
-    // 刷成空 → 看起来「全网发现整块消失」。故:已有发现项时,空发现的轮询快照不覆盖会话(保住框3);
-    // 但仍合并后端最新 result_summary/status,让横幅与计数继续推进。
-    setActiveSearchSession((prev) => {
-      const prevDiscovery = discoveryItemsFromSession(prev).length;
-      const nextDiscovery = discoveryItemsFromSession(session).length;
-      // 保住已点亮的框3:新快照发现项更少时(轮询时序/异步落库导致),合并后端最新 status/summary
-      // 但保留 prev 更全的 items,绝不让更稀的快照把已显示的发现项刷没。
-      if (prevDiscovery > nextDiscovery) {
-        return { ...prev, status: session.status, result_summary: session.result_summary };
-      }
-      return session;
-    });
+    // 轮询快照会因异步写入时序出现「这一拍字段更少」。按 pool id(无 id 时 platform+handle)
+    // 做逐项、逐字段 keep-richer merge:ready/已显示字段不会被后到的稀疏快照刷掉。
+    setActiveSearchSession((prev) => mergeKolSearchSessionSnapshots(prev, session));
     // 框2(库内召回)非破坏式覆盖:run() 触发的全网发现会建一个 advance 会话并启动轮询,其 recall
     // items 由后台 worker 异步写入,轮询头几拍常拿到 running/空会话。若无条件覆盖,会把 run() 首屏已
     // 渲染的库内召回刷成空 → 看起来「用户列表整块消失」。故:空轮询不得覆盖已有的非空召回(保住首屏);
@@ -388,18 +458,7 @@ export function SmartKolInputPanel({
     // 框1(产品人群分析)保活:recallResultFromSession 不带 llm_query_plan(那只在实时 smartKolSearch
     // 响应里有),若直接替换会把已渲染的 ① PlanPills 刷没 → 单独把上次的 llm_query_plan 透传进来。
     const polledRecall = recallResultFromSession(session);
-    const polledRecallCount =
-      (polledRecall.buckets?.creator?.length || 0) + (polledRecall.buckets?.reviewer?.length || 0);
-    setRecallResult((prev) => {
-      const prevCount =
-        (prev?.buckets?.creator?.length || 0) + (prev?.buckets?.reviewer?.length || 0);
-      const prevPlan = (prev as Row | null)?.llm_query_plan;
-      const merged = prevPlan && !(polledRecall as unknown as Row).llm_query_plan
-        ? ({ ...polledRecall, llm_query_plan: prevPlan } as VkpiKolRecallResponse)
-        : polledRecall;
-      if (polledRecallCount === 0 && prevCount > 0) return prev;
-      return merged;
-    });
+    setRecallResult((prev) => mergeKolRecallSnapshots(prev, polledRecall));
     setUrlResult(null);
   }, []);
 
@@ -453,36 +512,58 @@ export function SmartKolInputPanel({
   useEffect(() => {
     if (!apiToken || !activeSearchSessionId || typeof window === "undefined") return undefined;
     let cancelled = false;
-    let terminalSince: number | null = null;  // 本会话内「首次见终态」时间(闭包,随会话重置)
+    let inFlight = false;
+    let terminalSince: number | null = null;  // 必需任务完成/终态后的稳定宽限起点(闭包,随会话重置)
     const startedAt = Date.now();
     const maxPollMs = 12 * 60 * 1000;
     const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
         const session = await getKolSearchSession(apiToken, activeSearchSessionId);
         if (cancelled) return;
         applyPolledSession(session);
-        // 发现项常在 session 状态置「终态」之后才异步落库 → 不能一见终态就停(否则框3 卡 0,正是你看到的)。
-        // 改:终态后宽限继续轮询,直到发现项真的到 / 宽限 30s 用尽 / 总超时,才真正宣告已找完。
-        const haveDiscovery = discoveryItemsFromSession(session).length > 0;
+        const progress = searchSessionProgress(session);
+        const stageText = (label: string, stage: typeof progress.video) => {
+          const suffix = [
+            stage.active > 0 ? `进行 ${stage.active}` : "",
+            stage.failed > 0 ? `失败 ${stage.failed}` : "",
+            stage.notRequested > 0 ? `未请求 ${stage.notRequested}` : "",
+          ].filter(Boolean).join("/");
+          return `${label} ${stage.ready}/${progress.target}${suffix ? `（${suffix}）` : ""}`;
+        };
+        const progressNote = progress.target > 0
+          ? progress.downstreamTracked
+            ? `阶段：${progress.phaseLabel} · ①基础 ${progress.basicVisible}/${progress.target} · ②档案 ${progress.profileReady}/${progress.target} · ③${stageText("视频", progress.video)} · ④${stageText("评论", progress.comments)} / ${stageText("受众", progress.audience)}`
+            : `阶段：${progress.phaseLabel} · 基础结果 ${progress.basicVisible}/${progress.target} · 档案补全 ${progress.profileReady}/${progress.target} · 完整分析 ${progress.deepReady}/${progress.target}${progress.deepPartial > 0 ? ` · 部分 ${progress.deepPartial}` : ""}`
+          : `阶段：${progress.phaseLabel}`;
+        setSessionPollNotice(progressNote);
+        // discovery 先到不等于整批完成。只按后端 phase/counts/必需任务终态推进；若旧后端只有
+        // session 终态，则进入 30s 宽限。这样尾随写入仍能逐卡补齐，且不会无限轮询。
         const timedOut = Date.now() - startedAt > maxPollMs;
-        if (isSearchSessionTerminal(session)) {
+        if (progress.requiredTasksComplete) {
           if (terminalSince == null) terminalSince = Date.now();
           const graceUsedUp = Date.now() - terminalSince >= 30000;
-          if (haveDiscovery || graceUsedUp || timedOut) {
+          if (graceUsedUp || timedOut) {
             setActiveSearchSessionId(null);
-            setSessionPollNotice("已找完，结果已更新");
+            setSessionPollNotice(`${progressNote} · 结果已更新`);
             void refreshHistory();
             return;
           }
-          // 终态但发现项未到 + 宽限期内 → 继续轮询
-        } else if (timedOut) {
-          setActiveSearchSessionId(null);
-          setSessionPollNotice("仍在后台查找，可从最近历史或任务里继续查看");
-          void refreshHistory();
+          // 必需任务已结束但仍在宽限期 → 继续接收尾随字段/卡片。
+        } else {
+          terminalSince = null;
+          if (timedOut) {
+            setActiveSearchSessionId(null);
+            setSessionPollNotice(`${progressNote} · 仍在后台补全，可从历史或任务里继续查看`);
+            void refreshHistory();
+          }
         }
       } catch (err) {
         if (cancelled) return;
         setSessionPollNotice(err instanceof Error ? err.message : "同步失败，稍后会自动重试");
+      } finally {
+        inFlight = false;
       }
     };
     void poll();
@@ -534,6 +615,10 @@ export function SmartKolInputPanel({
       });
       const responseMode = cleanText(response.mode);
       const isText = !(responseMode === "url" || cleanText(response.query_type).startsWith("url_"));
+      const responseRow = asRecord(response);
+      const responseResult = asRecord(response.result);
+      const responsePlan = asRecord(responseRow.llm_query_plan || responseResult.llm_query_plan);
+      const needsProductClarification = cleanText(response.status || responsePlan.status) === "needs_clarification";
       let autoProfile: VkpiKolUrlDeepCrawlResponse | null = null;
       let autoVideo: VkpiKolUrlDeepCrawlResponse | null = null;
       if (!isText) {
@@ -583,13 +668,17 @@ export function SmartKolInputPanel({
       } else {
         setMode("text");
         setRecallResult(response.result as VkpiKolRecallResponse);
+        if (needsProductClarification) {
+          const clarification = asRecord(responsePlan.clarification);
+          setSessionPollNotice(cleanText(clarification.message) || "未匹配到明确产品，请先选择正确产品。");
+        }
       }
       setState("ready");
       void refreshHistory();
       // 刀1·流3(2026-06-16)恒开:任何文字搜索都自动触发全网发现(advance-job 全量,含所选平台),
       // 不再挂在「深度查找」开关上 →「先库内召回 → 再全网发现」一步到位,本地+线上首屏同呈。
       // 预算护栏 enforce 兜底超支(已确认放行)。
-      if (isText) void queueTextAdvance(overrideQuery);
+      if (isText && !needsProductClarification) void queueTextAdvance(overrideQuery);
       // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
       if (autoProfile) void runUrlExecute(autoProfile, { auto: true });
       // 刀1·流1:video URL 自动入 evidence + 排 final_v1(不再弹「只分析此视频」二次确认)。
@@ -628,7 +717,10 @@ export function SmartKolInputPanel({
   // 不分析视频→llm_v6_fit=None,只有空 dossier)。后端 _profile_should_enqueue_representative_videos 认
   // profile_with_video;TikTok 代表视频暂被后端 skip(resolver 未修)。video 仍走 video_deep。
   // V6 Fit 由 write_kol_profile_basics 白名单兜底不触碰 viltrox_fit_score。
-  const runUrlExecute = async (source: VkpiKolUrlDeepCrawlResponse, opts: { auto?: boolean } = {}) => {
+  const runUrlExecute = async (
+    source: VkpiKolUrlDeepCrawlResponse,
+    opts: { auto?: boolean; localEvaluation?: boolean } = {},
+  ) => {
     const query = cleanText(source.url?.input || input);
     if (!apiToken || !query) return;
     const sourceProfileFlow = asRecord(source.profile_flow);
@@ -642,10 +734,12 @@ export function SmartKolInputPanel({
         maxPosts: typeof sourceProfileFlow.max_posts === "number" ? sourceProfileFlow.max_posts : 3,
         mode: executeMode,
         ...(isVideo ? {} : { representativeVideoLimit: PROFILE_REP_VIDEO_LIMIT }),
+        deferToQueue: !isVideo,
         sessionId,
         createSession: !sessionId,
         source: opts.auto ? "smart_kol_input_auto" : "smart_kol_input",
-        timeoutMs: 300000,
+        localEvaluation: opts.localEvaluation === true,
+        timeoutMs: isVideo ? 300000 : 30000,
       });
       setUrlResult(response);
       const nextSessionId = sessionIdFrom(response.search_session) || sessionId;
@@ -667,15 +761,20 @@ export function SmartKolInputPanel({
     await runUrlExecute(urlResult);
   };
 
+  const executeLocalEvaluationAction = async () => {
+    if (!urlResult || !urlCanExecute || !import.meta.env.DEV) return;
+    await runUrlExecute(urlResult, { localEvaluation: true });
+  };
+
   const queueTextAdvance = async (overrideQuery?: string) => {
     const query = cleanText(overrideQuery ?? input);
     if (!apiToken || !query || state === "executing") return;
     setState("executing");
     setError("");
     try {
-      // 2026-07-02 用户令:库内推荐 15(创作者8+测评7)/ 云端新发现 30(三平台轮转均匀,
-      // 每平台候选上限 12 留补位余量)。地区由 discoveryRegion 控制(非英语区按当地语言搜)。
-      // 【K1 接真】上述数字即「平衡」档;精准/探索按 SEARCH_MODE_QUOTAS 映射表收窄/放宽,
+      // 库内推荐与全网候选分开控量。全网先放宽候选,后端再按相关性/触达/账号类型过滤,
+      // 避免原始 25 个里补全后只剩 4 个可展示。地区由 discoveryRegion 控制。
+      // 【K1 接真】平衡/精准/探索按 SEARCH_MODE_QUOTAS 映射表收窄/放宽,
       // 只改参数不改算法。limit/advanceLimit = 创作者+测评之和,保持召回总量与配额一致。
       const quotas = SEARCH_MODE_QUOTAS[searchMode] || SEARCH_MODE_QUOTAS.balanced;
       const recallLimit = quotas.creatorQuota + quotas.reviewerQuota;
@@ -722,6 +821,17 @@ export function SmartKolInputPanel({
     await queueTextAdvance(query);
   };
 
+  // 搜索可能创建会话、抓取和分析任务，只允许显式点击按钮触发，避免输入时误按回车重复排队。
+  const runCurrentInput = () => {
+    if (isBusy || !apiToken || !cleanText(input)) return;
+    const urls = extractUrls(input);
+    if (urls.length >= 2) {
+      void runUrlBatch(urls);
+      return;
+    }
+    void run();
+  };
+
   return (
     <section
       data-testid="smart-kol-input-panel"
@@ -748,41 +858,30 @@ export function SmartKolInputPanel({
         </div>
       </div>
 
-      <form
+      <div
         className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_112px]"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (isBusy || !apiToken || !cleanText(input)) return;
-          // 【K7】多行/多 URL(≥2 个 http)→ 逐条排队分析;单条照旧走 run()。
-          const urls = extractUrls(input);
-          if (urls.length >= 2) { void runUrlBatch(urls); return; }
-          void run();
-        }}
       >
         <input
           data-testid="smart-kol-input"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !isBusy) {
-              const urls = extractUrls(input);
-              if (urls.length >= 2) { void runUrlBatch(urls); return; }
-              void run();
-            }
+            if (event.key === "Enter") event.preventDefault();
           }}
           placeholder="粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师"
           className="min-h-[40px] rounded-md border border-white/[0.075] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
         />
         <button
           data-testid="smart-kol-run"
-          type="submit"
+          type="button"
+          onClick={runCurrentInput}
           disabled={isBusy || !apiToken || !cleanText(input)}
           className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/18 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:opacity-55"
         >
           {isBusy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}
           {inferredMode === "url" ? "查看" : "查找"}
         </button>
-      </form>
+      </div>
 
       {batchNote ? (
         <div className="mt-1.5 flex items-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[10px] text-cyan-100">
@@ -806,8 +905,14 @@ export function SmartKolInputPanel({
 
       <HistoryStrip
         items={historyItems}
+        archivedItems={archivedHistoryItems}
         loading={historyLoading}
+        actionBusy={historyActionBusy}
+        notice={historyNotice}
         onOpen={(session) => void openHistorySession(session)}
+        onArchive={(session) => void archiveHistoryEntry(session)}
+        onRestore={(session) => void restoreHistoryEntry(session)}
+        onArchiveAll={() => void archiveCompletedHistory()}
       />
 
       {error ? (
@@ -821,6 +926,7 @@ export function SmartKolInputPanel({
           canExecute={urlCanExecute}
           isExecuting={state === "executing"}
           onExecute={() => void executeUrlAction()}
+          onLocalEvaluation={() => void executeLocalEvaluationAction()}
           onOpenProfile={onOpenProfile}
         />
       ) : null}
@@ -871,6 +977,7 @@ export function SmartKolInputPanel({
           pickDiscovery={pickDiscovery}
           onOpenRecallItem={onOpenRecallItem}
           sessionBanner={sessionBanner}
+          sessionProgress={activeSessionProgress}
           activeSessionCounts={activeSessionCounts}
           sessionPollNotice={sessionPollNotice}
           retrySearchSession={retrySearchSession}

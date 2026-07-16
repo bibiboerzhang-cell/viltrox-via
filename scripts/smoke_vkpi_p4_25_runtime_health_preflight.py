@@ -5,6 +5,7 @@ versioned /health payload and that the frontend build hash matches the backend
 hash before browser QA or mutation QA starts.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import subprocess
@@ -66,7 +67,7 @@ def main() -> None:
     except ValueError as exc:
         raise AssertionError(f"build_time should be ISO timestamp: {build.get('build_time')}") from exc
 
-    print(
+    stdout_out(
         json.dumps(
             {
                 "ok": True,

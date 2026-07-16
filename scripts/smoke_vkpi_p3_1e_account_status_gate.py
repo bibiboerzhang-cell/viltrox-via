@@ -7,6 +7,7 @@ status is a setup hint, while account sync/last_successful_at is authoritative
 for an already-refreshed profile.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def main() -> None:
     require_contains(DRAWER, "const apiReady = accountSyncReady || statusReady(apiStatus)")
     require_contains(DRAWER, "const apiDetail = accountSyncReady")
 
-    print("VKPI_P3_1E_ACCOUNT_STATUS_GATE_SMOKE_OK")
+    stdout_out("VKPI_P3_1E_ACCOUNT_STATUS_GATE_SMOKE_OK")
 
 
 if __name__ == "__main__":

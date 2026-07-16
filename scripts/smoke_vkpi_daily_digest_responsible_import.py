@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test for promo/CSV owner mapping into Daily Top100 assignment."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -158,7 +159,7 @@ def main() -> None:
         owned_meta = json.loads(str(owned_item["metadata_json"] or "{}"))
         assert int(owned_meta.get("assignment_staff_id") or 0) == staff_b, owned_meta
         assert owned_meta.get("assignment_reason") == "metadata.responsible_staff_id", owned_meta
-        print("VKPI_DAILY_DIGEST_RESPONSIBLE_IMPORT_SMOKE_OK")
+        stdout_out("VKPI_DAILY_DIGEST_RESPONSIBLE_IMPORT_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(marker, user_ids, staff_ids, product_sku)

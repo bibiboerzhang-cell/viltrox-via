@@ -127,7 +127,7 @@ export interface VkpiLeaderboardItem {
 
 export interface VkpiProductRoiItem {
   product: string;
-  roi: number;
+  roi: number | null;
   gmv: number;
   cost?: number;
   views?: number;
@@ -385,6 +385,14 @@ export interface VkpiProjectDetail {
   project: Record<string, unknown>;
   participating_kols?: Array<Record<string, unknown>>;
   project_kol_assignments?: Array<Record<string, unknown>>;
+  assignment_page?: {
+    mode?: 'summary';
+    limit?: number;
+    count?: number;
+    total?: number;
+    has_more?: boolean;
+    next_cursor?: string | null;
+  };
   events: Array<Record<string, unknown>>;
   links: Array<Record<string, unknown>>;
   link_clicks?: Array<Record<string, unknown>>;

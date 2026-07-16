@@ -13,7 +13,9 @@ Hard red lines honored here:
 """
 from __future__ import annotations
 
+import base64
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
@@ -34,6 +36,34 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _encode_favorites_cursor(scope_key: str, row: dict[str, Any]) -> str:
+    payload = {
+        "v": 1,
+        "scope": scope_key,
+        "sort_epoch": str(row.get("favorites_sort_epoch") or ""),
+        "kol_pool_id": _int(row.get("kol_pool_id")),
+    }
+    if not payload["sort_epoch"] or payload["kol_pool_id"] < 1:
+        raise ValueError("favorite row cannot form a stable cursor")
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_favorites_cursor(scope_key: str, cursor: str) -> tuple[Decimal, int]:
+    try:
+        padded = str(cursor or "") + "=" * (-len(str(cursor or "")) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        if int(payload.get("v") or 0) != 1 or str(payload.get("scope") or "") != scope_key:
+            raise ValueError
+        sort_epoch = Decimal(str(payload["sort_epoch"]))
+        kol_pool_id = int(payload["kol_pool_id"])
+        if not sort_epoch.is_finite() or kol_pool_id < 1:
+            raise ValueError
+        return sort_epoch, kol_pool_id
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError, InvalidOperation) as exc:
+        raise ValueError("invalid favorites cursor") from exc
 
 
 def _staff_row(conn: Any, staff_id: int) -> dict[str, Any]:
@@ -142,7 +172,13 @@ def _official_matrix(conn: Any, staff_id: int) -> dict[str, Any]:
     }
 
 
-def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
+def _pool_favorites(
+    conn: Any,
+    staff_id: int,
+    *,
+    after: tuple[Decimal, int] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     """This staff's pool favorites OR pool KOLs shared to them (P-GROUP-7) +
     active project links + public contacts.
 
@@ -159,11 +195,25 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
     UNIQUE(kol_pool_id, staff_id) 至多一条,新增两个 LEFT JOIN 不会放大行数;
     纯读,零触归属/收藏/认领。
     """
-    rows = conn.execute(
+    created_sql = "COALESCE(f.created_at, sm.created_at)"
+    sort_epoch_sql = f"EXTRACT(EPOCH FROM ({created_sql}))"
+    cursor_sql = ""
+    params: list[Any] = [staff_id, staff_id]
+    if after is not None:
+        cursor_sql = f"""
+          AND (({sort_epoch_sql}) < ? OR (({sort_epoch_sql}) = ? AND kp.id < ?))
         """
+        params.extend([after[0], after[0], after[1]])
+    limit_sql = ""
+    if limit is not None:
+        limit_sql = "LIMIT ?"
+        params.append(max(1, int(limit)))
+    rows = conn.execute(
+        f"""
         SELECT f.id AS favorite_id, kp.id AS kol_pool_id,
                COALESCE(f.note, '') AS note,
-               COALESCE(f.created_at, sm.created_at) AS created_at,
+               {created_sql} AS created_at,
+               {sort_epoch_sql} AS favorites_sort_epoch,
                (f.id IS NULL) AS is_shared,
                sm.shared_by AS shared_by_staff_id,
                COALESCE(su.name, su.email, '') AS shared_by_name,
@@ -195,20 +245,29 @@ def _pool_favorites(conn: Any, staff_id: int) -> list[dict[str, Any]]:
         LEFT JOIN users su ON su.id = sst.user_id
         WHERE (f.id IS NOT NULL OR sm.id IS NOT NULL)
           AND kp.duplicate_of_id IS NULL
-        ORDER BY COALESCE(f.created_at, sm.created_at) DESC, kp.id DESC
+          {cursor_sql}
+        ORDER BY {created_sql} DESC, kp.id DESC
+        {limit_sql}
         """,
-        (staff_id, staff_id),
+        tuple(params),
     ).fetchall()
     items: list[dict[str, Any]] = []
     for raw in rows:
         item = dict(raw)
         item["projects"] = _json(item.pop("projects_json", None), [])
         item["contacts"] = _json(item.pop("contacts_json", None), [])
+        if limit is None:
+            item.pop("favorites_sort_epoch", None)
         items.append(item)
     return items
 
 
-def _pool_favorites_team(conn: Any) -> list[dict[str, Any]]:
+def _pool_favorites_team(
+    conn: Any,
+    *,
+    after: tuple[Decimal, int] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     """管理层 scope=team 全团队收藏集:收藏 ∪ 共享(vkpi_kol_pool_members)按 KOL 去重。
 
     口径与 my_kol_board_ext._COLLECTION_COND 的管理层全团队分支(staff 参数=0)同两张表
@@ -219,11 +278,25 @@ def _pool_favorites_team(conn: Any) -> list[dict[str, Any]]:
     纯读零写;viltrox_fit_score 只读透传。SQL 无参数、无注释(compat 把注释里的
     ASCII 问号当占位符,此处口径注全部住 Python docstring)。
     """
-    rows = conn.execute(
+    created_sql = "COALESCE(MIN(f.created_at), MIN(sm.created_at))"
+    sort_epoch_sql = f"EXTRACT(EPOCH FROM ({created_sql}))"
+    having_sql = ""
+    params: list[Any] = []
+    if after is not None:
+        having_sql = f"""
+        HAVING ({sort_epoch_sql}) < ? OR (({sort_epoch_sql}) = ? AND kp.id < ?)
         """
+        params.extend([after[0], after[0], after[1]])
+    limit_sql = ""
+    if limit is not None:
+        limit_sql = "LIMIT ?"
+        params.append(max(1, int(limit)))
+    rows = conn.execute(
+        f"""
         SELECT MIN(f.id) AS favorite_id, kp.id AS kol_pool_id,
                '' AS note,
-               COALESCE(MIN(f.created_at), MIN(sm.created_at)) AS created_at,
+               {created_sql} AS created_at,
+               {sort_epoch_sql} AS favorites_sort_epoch,
                (COUNT(f.id) = 0) AS is_shared,
                NULL AS shared_by_staff_id,
                '' AS shared_by_name,
@@ -253,9 +326,11 @@ def _pool_favorites_team(conn: Any) -> list[dict[str, Any]]:
           AND kp.duplicate_of_id IS NULL
         GROUP BY kp.id, kp.platform, kp.handle, kp.display_name, kp.followers,
                  kp.viltrox_fit_score, kp.profile_url, kp.avatar_url, kp.country
-        ORDER BY COALESCE(MIN(f.created_at), MIN(sm.created_at)) DESC, kp.id DESC
+        {having_sql}
+        ORDER BY {created_sql} DESC, kp.id DESC
+        {limit_sql}
         """,
-        (),
+        tuple(params),
     ).fetchall()
     items: list[dict[str, Any]] = []
     for raw in rows:
@@ -263,8 +338,66 @@ def _pool_favorites_team(conn: Any) -> list[dict[str, Any]]:
         item["projects"] = _json(item.pop("projects_json", None), [])
         item["contacts"] = _json(item.pop("contacts_json", None), [])
         item["is_shared"] = bool(item.get("is_shared"))
+        if limit is None:
+            item.pop("favorites_sort_epoch", None)
         items.append(item)
     return items
+
+
+def _favorite_metrics(conn: Any, staff_id: int, *, team_scope: bool) -> dict[str, int]:
+    """Exact full-collection KPI counts without materializing every favorite row."""
+    if team_scope:
+        collection_scope_sql = """
+            (EXISTS (SELECT 1 FROM vkpi_kol_pool_favorites f WHERE f.kol_pool_id = kp.id)
+             OR EXISTS (SELECT 1 FROM vkpi_kol_pool_members sm WHERE sm.kol_pool_id = kp.id))
+        """
+        params: tuple[Any, ...] = ()
+    else:
+        collection_scope_sql = """
+            (EXISTS (
+                SELECT 1 FROM vkpi_kol_pool_favorites f
+                WHERE f.kol_pool_id = kp.id AND f.staff_id = ?
+             ) OR EXISTS (
+                SELECT 1 FROM vkpi_kol_pool_members sm
+                WHERE sm.kol_pool_id = kp.id AND sm.staff_id = ?
+             ))
+        """
+        params = (int(staff_id), int(staff_id))
+    row = conn.execute(
+        f"""
+        WITH collection AS (
+            SELECT kp.id AS kol_pool_id
+            FROM vkpi_kol_pool kp
+            WHERE kp.duplicate_of_id IS NULL AND {collection_scope_sql}
+        )
+        SELECT
+            COUNT(*) AS favorites_count,
+            COALESCE(SUM(CASE WHEN EXISTS (
+                SELECT 1
+                FROM vkpi_project_kol_assignments a
+                JOIN vkpi_projects p ON p.id = a.project_id
+                WHERE a.kol_pool_id = collection.kol_pool_id
+                  AND COALESCE(a.stage, '') NOT IN ('churned', 'cancelled', 'lost')
+                  AND COALESCE(p.restricted, FALSE) = FALSE
+            ) THEN 1 ELSE 0 END), 0) AS in_project_count,
+            COALESCE(SUM((
+                SELECT COUNT(*)
+                FROM vkpi_project_kol_assignments a
+                JOIN vkpi_projects p ON p.id = a.project_id
+                WHERE a.kol_pool_id = collection.kol_pool_id
+                  AND COALESCE(a.stage, '') IN ('content_posted', 'reviewed', 'published')
+                  AND COALESCE(p.restricted, FALSE) = FALSE
+            )), 0) AS published_count
+        FROM collection
+        """,
+        params,
+    ).fetchone()
+    item = dict(row) if row else {}
+    return {
+        "favorites_count": _int(item.get("favorites_count")),
+        "in_project_count": _int(item.get("in_project_count")),
+        "published_count": _int(item.get("published_count")),
+    }
 
 
 def _projects(conn: Any, staff: dict[str, Any], requested_staff_id: int | None) -> list[dict[str, Any]]:
@@ -309,16 +442,30 @@ def _kpi_summary(
     favorites: list[dict[str, Any]],
     projects: list[dict[str, Any]],
     claims: list[dict[str, Any]],
+    *,
+    favorite_metrics: dict[str, int] | None = None,
 ) -> dict[str, int]:
     """Cheap counts derived in Python from already-fetched rows (no extra queries)."""
-    favorites_count = len(favorites)
-    in_project_count = sum(1 for f in favorites if f.get("projects"))
+    favorites_count = (
+        _int(favorite_metrics.get("favorites_count"))
+        if favorite_metrics is not None
+        else len(favorites)
+    )
+    in_project_count = (
+        _int(favorite_metrics.get("in_project_count"))
+        if favorite_metrics is not None
+        else sum(1 for f in favorites if f.get("projects"))
+    )
     published_stages = {"content_posted", "reviewed", "published"}
-    published_count = sum(
-        1
-        for f in favorites
-        for pr in (f.get("projects") or [])
-        if str((pr or {}).get("stage") or "").lower() in published_stages
+    published_count = (
+        _int(favorite_metrics.get("published_count"))
+        if favorite_metrics is not None
+        else sum(
+            1
+            for f in favorites
+            for pr in (f.get("projects") or [])
+            if str((pr or {}).get("stage") or "").lower() in published_stages
+        )
     )
     claimed_count = sum(1 for c in claims if str(c.get("status") or "").lower() == "active")
     return {
@@ -337,6 +484,8 @@ def build_my_kol_aggregate(
     *,
     actor: dict[str, Any] | None = None,
     team_scope: bool = False,
+    favorites_limit: int | None = None,
+    favorites_cursor: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the full MY KOL payload for one staff member in a single bundle.
 
@@ -352,10 +501,33 @@ def build_my_kol_aggregate(
     """
     staff_id = _int(staff_id)
     staff = _staff_row(conn, staff_id)
-    favorites = _pool_favorites_team(conn) if team_scope else _pool_favorites(conn, staff_id)
+    favorite_metrics: dict[str, int] | None = None
+    favorites_has_more = False
+    favorites_next_cursor: str | None = None
+    scope_key = "team" if team_scope else f"staff:{staff_id}"
+    if favorites_limit is None:
+        favorites = _pool_favorites_team(conn) if team_scope else _pool_favorites(conn, staff_id)
+    else:
+        favorites_limit = max(1, min(int(favorites_limit), 100))
+        after = _decode_favorites_cursor(scope_key, favorites_cursor) if favorites_cursor else None
+        rows = (
+            _pool_favorites_team(conn, after=after, limit=favorites_limit + 1)
+            if team_scope
+            else _pool_favorites(conn, staff_id, after=after, limit=favorites_limit + 1)
+        )
+        favorites_has_more = len(rows) > favorites_limit
+        favorites = rows[:favorites_limit]
+        favorites_next_cursor = (
+            _encode_favorites_cursor(scope_key, favorites[-1])
+            if favorites_has_more and favorites
+            else None
+        )
+        for favorite in favorites:
+            favorite.pop("favorites_sort_epoch", None)
+        favorite_metrics = _favorite_metrics(conn, staff_id, team_scope=team_scope)
     projects = _projects(conn, actor or staff, None if team_scope else staff_id)
     claims = _claims(conn, staff_id)
-    return {
+    result = {
         "staff": staff,
         "window_days": _int(window_days, 30),
         "scope_mode": "team" if team_scope else "staff",
@@ -363,5 +535,20 @@ def build_my_kol_aggregate(
         "pool_favorites": favorites,
         "projects": projects,
         "claims": claims,
-        "kpi_summary": _kpi_summary(favorites, projects, claims),
+        "kpi_summary": _kpi_summary(
+            favorites,
+            projects,
+            claims,
+            favorite_metrics=favorite_metrics,
+        ),
     }
+    if favorites_limit is not None:
+        result["pool_favorites_page"] = {
+            "mode": "summary",
+            "limit": int(favorites_limit),
+            "count": len(favorites),
+            "total": _int((favorite_metrics or {}).get("favorites_count")),
+            "has_more": favorites_has_more,
+            "next_cursor": favorites_next_cursor,
+        }
+    return result

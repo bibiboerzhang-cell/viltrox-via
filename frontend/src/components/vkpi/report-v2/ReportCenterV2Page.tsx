@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Archive, Eye, RefreshCw, RotateCcw } from 'lucide-react';
 import type {
   VkpiDashboardData,
   VkpiMetricCard,
@@ -6,6 +7,28 @@ import type {
   VkpiPageKey,
   VkpiProjectRow,
 } from '../vkpiTypes';
+import {
+  VKPI_REPORT_SECTION_KEYS,
+  archiveVkpiReport,
+  createVkpiReportExport,
+  downloadVkpiFile,
+  generateVkpiReport,
+  listVkpiReports,
+  reportApiErrorMessage,
+  reportApiErrorStatus,
+  reportModelPolicyLabel,
+  restoreVkpiReport,
+  vkpiReportDownloadPath,
+  type VkpiGeneratedReport,
+  type VkpiReportExportFormat,
+  type VkpiReportGenerateConfig,
+  type VkpiReportHistoryItem,
+  type VkpiReportLanguage,
+  type VkpiReportLayout,
+  type VkpiReportPeriod,
+  type VkpiReportScope,
+  type VkpiReportSectionKey,
+} from '../../../services/vkpi/reports-api';
 import { Icon } from '../shared/Icon';
 import { V2ShellTopbar } from '../v2-shell/V2ShellTopbar';
 import './report-center-v2.css';
@@ -27,18 +50,17 @@ interface ReportCenterV2PageProps {
   onSignOut?: () => Promise<void> | void;
 }
 
-type ReportLanguage = 'zh' | 'en';
-type ReportPeriod = 'weekly' | 'monthly';
-type ReportFormat = 'visual' | 'markdown';
-type ReportSectionKey = 'kpiOverview' | 'attribution' | 'projects' | 'ledger' | 'risks' | 'summary';
-
-interface ReportBuilderConfig {
-  language: ReportLanguage;
-  period: ReportPeriod;
-  sections: Record<ReportSectionKey, boolean>;
+interface ReportPreview {
+  report: VkpiReportHistoryItem;
+  generated?: VkpiGeneratedReport;
 }
 
-const REPORT_SECTIONS: Array<{ key: ReportSectionKey; zh: string; en: string }> = [
+interface ReportNotice {
+  tone: 'success' | 'error' | 'permission' | 'info';
+  text: string;
+}
+
+const REPORT_SECTIONS: Array<{ key: VkpiReportSectionKey; zh: string; en: string }> = [
   { key: 'kpiOverview', zh: 'KPI 总览', en: 'KPI Overview' },
   { key: 'attribution', zh: '归因闭环', en: 'Attribution' },
   { key: 'projects', zh: '项目明细', en: 'Projects' },
@@ -47,121 +69,109 @@ const REPORT_SECTIONS: Array<{ key: ReportSectionKey; zh: string; en: string }> 
   { key: 'summary', zh: '管理摘要', en: 'Summary' },
 ];
 
-const DEFAULT_REPORT_SECTIONS: Record<ReportSectionKey, boolean> = {
-  kpiOverview: true,
-  attribution: true,
-  projects: true,
-  ledger: true,
-  risks: true,
-  summary: true,
-};
+const DEFAULT_REPORT_SECTIONS = Object.fromEntries(
+  VKPI_REPORT_SECTION_KEYS.map((key) => [key, true]),
+) as Record<VkpiReportSectionKey, boolean>;
+
+const UNKNOWN_DATA_STATUSES = new Set(['', 'unknown', 'awaiting_source', 'empty', 'unavailable']);
+
+function todayInputValue(): string {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
 
 function metricByKey(metrics: VkpiMetricCard[], key: string): VkpiMetricCard | undefined {
   return metrics.find((metric) => metric.key === key || metric.label.toLowerCase().includes(key.toLowerCase()));
 }
 
-function safeCount(value: number): string {
-  return value > 0 ? value.toLocaleString('en-US') : '--';
-}
-
 function metricValue(metric?: VkpiMetricCard): string {
-  if (!metric) return '--';
-  const clean = String(metric.value || '').trim();
-  return clean && clean !== '0' && clean !== '$0' && clean !== '0.00%' ? clean : '--';
+  if (!metric || metric.deltaLabel.includes('未生成快照')) return '待数据';
+  const clean = String(metric.value ?? '').trim();
+  if (!clean || ['--', '—', '未知', 'null', 'n/a'].includes(clean.toLowerCase())) return '待数据';
+  return clean;
 }
 
-function sectionStatus(data: VkpiDashboardData, key: ReportSectionKey): string {
+function countValue(value: number, dataStatus: VkpiDashboardData['dataStatus']): string {
+  if (value === 0 && dataStatus === 'empty') return '待数据';
+  return value.toLocaleString('en-US');
+}
+
+function sectionStatus(data: VkpiDashboardData, key: VkpiReportSectionKey): string {
   const gmv = metricByKey(data.metrics, 'gmv');
   const roi = metricByKey(data.metrics, 'roi');
-  if (key === 'kpiOverview') return data.metrics.length ? `${data.metrics.length} 指标` : '无信号';
-  if (key === 'attribution') return metricValue(gmv) !== '--' || metricValue(roi) !== '--' || data.attributions.length || data.costs.length ? '有信号' : '待 Shopify / 成本';
-  if (key === 'projects') return data.projects.length ? `${data.projects.length} 项` : '无信号';
-  if (key === 'ledger') return data.kpiLedger.length ? `${data.kpiLedger.length} 条` : '无信号';
-  if (key === 'risks') return data.alerts.length ? `${data.alerts.length} 条` : '无信号';
-  return data.weeklySummary ? '已生成' : '待生成';
+  if (key === 'kpiOverview') {
+    const known = data.metrics.filter((metric) => metricValue(metric) !== '待数据').length;
+    return known ? `${known} 指标` : '待数据';
+  }
+  if (key === 'attribution') {
+    if (metricValue(gmv) !== '待数据' || metricValue(roi) !== '待数据' || data.attributions.length || data.costs.length) return '有信号';
+    return data.dataStatus === 'empty' ? '待数据' : '0 条';
+  }
+  if (key === 'projects') return data.projects.length ? `${data.projects.length} 项` : data.dataStatus === 'empty' ? '待数据' : '0 项';
+  if (key === 'ledger') return data.kpiLedger.length ? `${data.kpiLedger.length} 条` : data.dataStatus === 'empty' ? '待数据' : '0 条';
+  if (key === 'risks') return data.alerts.length ? `${data.alerts.length} 条` : data.dataStatus === 'empty' ? '待数据' : '0 条';
+  return data.weeklySummary && data.dataStatus !== 'empty' ? '有摘要' : '待生成';
 }
 
-function reportLabel(language: ReportLanguage, zh: string, en: string): string {
-  return language === 'zh' ? zh : en;
+function serverMetricValue(metric: VkpiGeneratedReport['metrics'][number]): string {
+  if (UNKNOWN_DATA_STATUSES.has(metric.dataStatus.toLowerCase()) || metric.rawValue === null) return '待数据';
+  if (metric.value === null || String(metric.value).trim() === '') return '待数据';
+  return String(metric.value);
 }
 
-function buildReportText(data: VkpiDashboardData, viewMode: 'manager' | 'employee', config: ReportBuilderConfig): string {
-  const gmv = metricByKey(data.metrics, 'gmv');
-  const roi = metricByKey(data.metrics, 'roi');
-  const views = metricByKey(data.metrics, 'views');
-  const content = metricByKey(data.metrics, 'published_content') || metricByKey(data.metrics, '内容');
-  const language = config.language;
-  const isZh = language === 'zh';
-  const title = isZh ? `# V-KPI ${config.period === 'weekly' ? '周报' : '月报'}` : `# V-KPI ${config.period === 'weekly' ? 'Weekly' : 'Monthly'} Report`;
-  const lines = [
-    title,
-    '',
-    isZh ? `- 视角：${viewMode === 'manager' ? '管理端' : '成员端'}` : `- View: ${viewMode}`,
-    isZh ? `- 数据状态：${data.dataStatus} / ${data.dataNotice || '待接入'}` : `- Data status: ${data.dataStatus} / ${data.dataNotice || 'pending'}`,
-    isZh ? `- 模板周期：${config.period === 'weekly' ? '周报' : '月报'} · 当前数据范围：${data.rangeLabel || `${data.windowDays || '--'} 天`}` : `- Template: ${config.period} · Current range: ${data.rangeLabel || `${data.windowDays || '--'} days`}`,
-    '',
-  ];
+function reportDataStatusLabel(status: string): string {
+  const normalized = status.toLowerCase();
+  if (UNKNOWN_DATA_STATUSES.has(normalized)) return '待数据';
+  if (normalized === 'real') return '真实数据';
+  if (normalized === 'partial') return '部分数据';
+  if (normalized === 'seeded') return '种子数据';
+  return status || '待数据';
+}
 
-  if (config.sections.kpiOverview) {
-    lines.push(
-      isZh ? '## KPI 总览' : '## KPI Overview',
-      `- ${reportLabel(language, 'GMV', 'GMV')}：${metricValue(gmv)} · ${gmv?.deltaLabel || reportLabel(language, '待 Shopify 完整闭环', 'Pending Shopify')}`,
-      `- ${reportLabel(language, '平均 ROI', 'Average ROI')}：${metricValue(roi)} · ${roi?.deltaLabel || reportLabel(language, '待成本与订单归因', 'Pending cost and order attribution')}`,
-      `- ${reportLabel(language, '曝光量', 'Views')}：${metricValue(views)} · ${views?.deltaLabel || reportLabel(language, '内容曝光证据', 'Content evidence')}`,
-      `- ${reportLabel(language, '内容数', 'Content')}：${metricValue(content)} · ${content?.deltaLabel || reportLabel(language, '发布内容证据', 'Published content evidence')}`,
-      '',
-    );
-  }
+function reportStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    ready: '已就绪',
+    failed: '生成失败',
+    rendering: '生成中',
+    queued: '排队中',
+    archived: '已归档',
+  };
+  return labels[status.toLowerCase()] || status || '状态未知';
+}
 
-  if (config.sections.attribution) {
-    lines.push(
-      isZh ? '## 归因闭环' : '## Attribution',
-      isZh ? `- 短链：${safeCount(data.links.length)} / 归因：${safeCount(data.attributions.length)} / 成本：${safeCount(data.costs.length)}` : `- Links: ${safeCount(data.links.length)} / Attributions: ${safeCount(data.attributions.length)} / Costs: ${safeCount(data.costs.length)}`,
-      metricValue(gmv) === '--' ? (isZh ? '- GMV：待 Shopify 接入或无真实订单信号' : '- GMV: pending Shopify or no real order signal') : `- GMV：${metricValue(gmv)}`,
-      metricValue(roi) === '--' ? (isZh ? '- ROI：待成本与订单闭环' : '- ROI: pending cost and order loop') : `- ROI：${metricValue(roi)}`,
-      '',
-    );
-  }
+function formatMoment(value: string): string {
+  if (!value) return '待数据';
+  const moment = new Date(value);
+  if (Number.isNaN(moment.getTime())) return value.slice(0, 16).replace('T', ' ');
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(moment);
+}
 
-  if (config.sections.projects) {
-    lines.push(isZh ? '## 项目明细' : '## Projects');
-    if (data.projects.length) {
-      data.projects.slice(0, 8).forEach((project, index) => {
-        lines.push(`- ${index + 1}. ${project.campaign || project.kolName} · ${project.platform} · ${project.stage} · GMV ${project.gmv ? `$${project.gmv.toLocaleString('en-US')}` : '--'}`);
-      });
-    } else {
-      lines.push(isZh ? '- 暂无项目明细' : '- No project rows');
-    }
-    lines.push('');
-  }
+function periodRange(report: VkpiReportHistoryItem): string {
+  const start = report.periodStart.slice(0, 10);
+  const end = report.periodEnd.slice(0, 10);
+  if (!start && !end) return '日期待数据';
+  return start && end ? `${start} 至 ${end}` : start || end;
+}
 
-  if (config.sections.ledger) {
-    lines.push(isZh ? '## KPI Ledger' : '## KPI Ledger');
-    if (data.kpiLedger.length) {
-      data.kpiLedger.slice(0, 8).forEach((row, index) => {
-        lines.push(`- ${index + 1}. ${row.staffName || row.staffId || reportLabel(language, '未知成员', 'Unknown staff')} · ${row.metricLabel || row.metricKey || reportLabel(language, '动作', 'action')} · ${row.metricValue ?? '--'}`);
-      });
-    } else {
-      lines.push(isZh ? '- 暂无 Ledger 明细' : '- No ledger rows');
-    }
-    lines.push('');
-  }
+function reportTypeLabel(type: string): string {
+  return type.toLowerCase() === 'monthly' ? '月报' : type.toLowerCase() === 'weekly' ? '周报' : type || '报告';
+}
 
-  if (config.sections.risks) {
-    lines.push(isZh ? '## 风险提醒' : '## Risks');
-    if (data.alerts.length) {
-      data.alerts.slice(0, 8).forEach((alert, index) => lines.push(`- ${index + 1}. ${alert.label || alert.alertKey || alert.id} · ${alert.severity}`));
-    } else {
-      lines.push(isZh ? '- 无信号' : '- No signal');
-    }
-    lines.push('');
-  }
+function projectGmv(project: VkpiProjectRow): string {
+  return project.gmv === null ? '待数据' : `$${project.gmv.toLocaleString('en-US')}`;
+}
 
-  if (config.sections.summary) {
-    lines.push(isZh ? '## 管理摘要' : '## Summary', data.weeklySummary || (isZh ? '当前还没有生成真实周报。' : 'No real weekly summary has been generated yet.'));
-  }
-
-  return lines.join('\n');
+function ledgerMetricValue(value: unknown): string {
+  return value === null || value === undefined || value === '' ? '待数据' : String(value);
 }
 
 function ReportMetric({ label, value, meta }: { label: string; value: string; meta: string }) {
@@ -181,70 +191,262 @@ export function ReportCenterV2Page({
   userName = 'Viltrox 成员',
   userRole = '营销运营',
   userAvatar,
-  onExportPDF,
-  onExportCSV,
-  onGenerateWeeklyReport,
   onSelectProject,
   onSelectPage,
   onOpenEvidence,
   onRunKpiRollup,
   onSignOut,
 }: ReportCenterV2PageProps) {
-  const [ledgerDate, setLedgerDate] = useState(new Date().toISOString().slice(0, 10));
-  const [language, setLanguage] = useState<ReportLanguage>('zh');
-  const [period, setPeriod] = useState<ReportPeriod>('weekly');
-  const [format, setFormat] = useState<ReportFormat>('visual');
-  const [sections, setSections] = useState<Record<ReportSectionKey, boolean>>(DEFAULT_REPORT_SECTIONS);
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [exporting, setExporting] = useState<'pdf' | 'csv' | 'weekly' | null>(null);
-  const reportText = useMemo(() => buildReportText(data, viewMode, { language, period, sections }), [data, language, period, sections, viewMode]);
+  const today = useMemo(todayInputValue, []);
+  const [ledgerDate, setLedgerDate] = useState(today);
+  const [reportDate, setReportDate] = useState(today);
+  const [language, setLanguage] = useState<VkpiReportLanguage>('zh');
+  const [period, setPeriod] = useState<VkpiReportPeriod>('weekly');
+  const [format, setFormat] = useState<VkpiReportLayout>('visual');
+  const [scope, setScope] = useState<VkpiReportScope>(viewMode === 'manager' ? 'all' : 'self');
+  const [sections, setSections] = useState<Record<VkpiReportSectionKey, boolean>>(DEFAULT_REPORT_SECTIONS);
+  const [notice, setNotice] = useState<ReportNotice | null>(null);
+  const [rollupBusy, setRollupBusy] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [exporting, setExporting] = useState<VkpiReportExportFormat | null>(null);
+  const [historyArchived, setHistoryArchived] = useState(false);
+  const [history, setHistory] = useState<VkpiReportHistoryItem[]>([]);
+  const [historyCount, setHistoryCount] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [historyBusyId, setHistoryBusyId] = useState<number | null>(null);
+  const [archiveArmedId, setArchiveArmedId] = useState<number | null>(null);
+  const [preview, setPreview] = useState<ReportPreview | null>(null);
+
   const gmv = metricByKey(data.metrics, 'gmv');
   const roi = metricByKey(data.metrics, 'roi');
   const views = metricByKey(data.metrics, 'views');
   const content = metricByKey(data.metrics, 'published_content') || metricByKey(data.metrics, '内容');
-  const selectedSectionCount = Object.values(sections).filter(Boolean).length;
+  const selectedSectionKeys = useMemo(
+    () => REPORT_SECTIONS.filter((section) => sections[section.key]).map((section) => section.key),
+    [sections],
+  );
+  const config = useMemo<VkpiReportGenerateConfig>(() => ({
+    period,
+    date: reportDate,
+    language,
+    sections: selectedSectionKeys,
+    format,
+    scope,
+  }), [format, language, period, reportDate, scope, selectedSectionKeys]);
+
+  useEffect(() => {
+    if (viewMode === 'employee') setScope('self');
+  }, [viewMode]);
+
+  const setFailure = useCallback((error: unknown, fallback: string) => {
+    const status = reportApiErrorStatus(error);
+    setNotice({
+      tone: status === 401 || status === 403 ? 'permission' : 'error',
+      text: reportApiErrorMessage(error, fallback),
+    });
+  }, []);
+
+  const refreshHistory = useCallback(async (archived: boolean) => {
+    if (!apiToken) {
+      setHistory([]);
+      setHistoryCount(0);
+      setHistoryError('缺少登录凭证，无法读取报告历史。');
+      return [] as VkpiReportHistoryItem[];
+    }
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const result = await listVkpiReports(apiToken, archived);
+      setHistory(result.reports);
+      setHistoryCount(result.count);
+      return result.reports;
+    } catch (error) {
+      setHistory([]);
+      setHistoryCount(0);
+      setHistoryError(reportApiErrorMessage(error, '报告历史加载失败'));
+      return [] as VkpiReportHistoryItem[];
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [apiToken]);
+
+  useEffect(() => {
+    void refreshHistory(historyArchived);
+  }, [historyArchived, refreshHistory]);
 
   const runRollup = async () => {
     if (!onRunKpiRollup) return;
-    setBusy(true);
-    setMessage('');
+    setRollupBusy(true);
+    setNotice(null);
     try {
       await onRunKpiRollup(ledgerDate || undefined);
-      setMessage('KPI Ledger 已按真实动作重新计入。');
+      setNotice({ tone: 'success', text: 'KPI Ledger 已按真实动作重新计入。' });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'KPI 计入失败');
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'KPI 计入失败' });
     } finally {
-      setBusy(false);
+      setRollupBusy(false);
     }
   };
 
-  const copyReport = async () => {
-    await navigator.clipboard.writeText(reportText);
-    setMessage('报告文本已复制');
-    window.setTimeout(() => setMessage(''), 1800);
+  const toggleSection = (key: VkpiReportSectionKey) => {
+    setPreview(null);
+    setSections((current) => ({ ...current, [key]: !current[key] }));
   };
 
-  const runExport = async (kind: 'pdf' | 'csv' | 'weekly', handler?: () => void) => {
-    if (!handler || exporting !== null) return;
-    setExporting(kind);
+  const createPreview = (result: VkpiGeneratedReport): ReportPreview => ({
+    generated: result,
+    report: {
+      id: result.reportId ?? 0,
+      reportUid: result.reportUid || `report-${result.reportId || reportDate}`,
+      reportType: result.reportType || period,
+      periodStart: result.periodStart,
+      periodEnd: result.periodEnd || reportDate,
+      scopeType: scope,
+      scopeId: null,
+      triggeredAt: new Date().toISOString(),
+      status: result.status,
+      summary: result.summary,
+      dataStatus: result.dataStatus,
+      schemaVersion: '',
+      archivedAt: '',
+      archiveReason: '',
+      truthInvalidated: false,
+      truthInvalidationReason: '',
+      modelPolicy: result.modelPolicy,
+      claimLevel: result.claimLevel,
+    },
+  });
+
+  const runGenerate = async () => {
+    if (!apiToken) {
+      setNotice({ tone: 'permission', text: '缺少登录凭证，无法生成报告。' });
+      return;
+    }
+    if (!selectedSectionKeys.length) {
+      setNotice({ tone: 'error', text: '至少选择一个报告章节。' });
+      return;
+    }
+    setGenerating(true);
+    setNotice({ tone: 'info', text: '正在由服务端生成报告…' });
     try {
-      await handler();
+      const result = await generateVkpiReport(apiToken, config);
+      setPreview(createPreview(result));
+      setHistoryArchived(false);
+      const nextHistory = await refreshHistory(false);
+      const persisted = nextHistory.find((item) => item.id === result.reportId);
+      if (persisted) setPreview({ report: persisted, generated: result });
+      if (result.status.toLowerCase() !== 'ready') {
+        setNotice({ tone: 'error', text: `报告接口返回“${reportStatusLabel(result.status)}”，未确认生成成功。` });
+      } else if (!result.downloadUrl) {
+        setNotice({ tone: 'info', text: `报告记录已生成，但接口没有返回下载链接。${reportModelPolicyLabel(result.modelPolicy, result.claimLevel)}` });
+      } else {
+        setNotice({ tone: 'success', text: `报告已由服务端生成，文件可下载。${reportModelPolicyLabel(result.modelPolicy, result.claimLevel)}` });
+      }
+    } catch (error) {
+      setFailure(error, '报告生成失败');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const runExport = async (exportFormat: VkpiReportExportFormat) => {
+    if (!apiToken || exporting) return;
+    if (!selectedSectionKeys.length) {
+      setNotice({ tone: 'error', text: '至少选择一个报告章节。' });
+      return;
+    }
+    setExporting(exportFormat);
+    setNotice({ tone: 'info', text: `正在生成 ${exportFormat.toUpperCase()} 导出…` });
+    try {
+      const result = await createVkpiReportExport(apiToken, exportFormat, config);
+      if (!result.downloadUrl) {
+        setNotice({ tone: 'info', text: `${exportFormat.toUpperCase()} 导出任务已提交，但接口没有返回下载链接。` });
+        return;
+      }
+      await downloadVkpiFile(apiToken, result.downloadUrl, `vkpi-${period}-${reportDate}.${exportFormat}`);
+      setNotice({ tone: 'success', text: `${exportFormat.toUpperCase()} 导出已下载。` });
+    } catch (error) {
+      setFailure(error, `${exportFormat.toUpperCase()} 导出失败`);
     } finally {
       setExporting(null);
     }
   };
 
-  const toggleSection = (key: ReportSectionKey) => {
-    setSections((current) => ({ ...current, [key]: !current[key] }));
+  const copyServerSummary = async () => {
+    const summary = preview?.report.summary.trim();
+    if (!summary) {
+      setNotice({ tone: 'info', text: '当前没有服务端摘要可复制。' });
+      return;
+    }
+    await navigator.clipboard.writeText(summary);
+    setNotice({ tone: 'success', text: '服务端报告摘要已复制。' });
   };
+
+  const downloadReport = async (report: VkpiReportHistoryItem, downloadUrl = '') => {
+    if (!apiToken || report.status.toLowerCase() !== 'ready' || report.id < 1) return;
+    setHistoryBusyId(report.id);
+    setNotice({ tone: 'info', text: '正在下载报告文件…' });
+    try {
+      await downloadVkpiFile(
+        apiToken,
+        downloadUrl || vkpiReportDownloadPath(report.id, 'pdf'),
+        `${report.reportUid || `report-${report.id}`}.pdf`,
+      );
+      setNotice({ tone: 'success', text: '报告文件已下载。' });
+    } catch (error) {
+      setFailure(error, '报告下载失败');
+    } finally {
+      setHistoryBusyId(null);
+    }
+  };
+
+  const archiveReport = async (report: VkpiReportHistoryItem) => {
+    if (!apiToken) return;
+    if (archiveArmedId !== report.id) {
+      setArchiveArmedId(report.id);
+      return;
+    }
+    setHistoryBusyId(report.id);
+    setArchiveArmedId(null);
+    try {
+      await archiveVkpiReport(apiToken, report.id);
+      if (preview?.report.id === report.id) setPreview(null);
+      await refreshHistory(false);
+      setNotice({ tone: 'success', text: '报告已软归档，可在“已归档”中恢复。' });
+    } catch (error) {
+      setFailure(error, '报告归档失败');
+    } finally {
+      setHistoryBusyId(null);
+    }
+  };
+
+  const restoreReport = async (report: VkpiReportHistoryItem) => {
+    if (!apiToken) return;
+    setHistoryBusyId(report.id);
+    try {
+      await restoreVkpiReport(apiToken, report.id);
+      if (preview?.report.id === report.id) setPreview(null);
+      await refreshHistory(true);
+      setNotice({ tone: 'success', text: '报告已恢复到当前历史。' });
+    } catch (error) {
+      setFailure(error, '报告恢复失败');
+    } finally {
+      setHistoryBusyId(null);
+    }
+  };
+
+  const previewSummary = preview?.report.summary.trim()
+    || (preview?.report.status.toLowerCase() === 'failed'
+      ? '报告生成失败，服务端没有产出摘要或下载文件。'
+      : '服务端没有返回报告摘要。');
 
   return (
     <div className="report-v2">
       <V2ShellTopbar
         apiToken={apiToken}
         pageTitle="Report Center"
-        subtitle="真实数据 / 证据 / 周报 / KPI Ledger"
+        subtitle="真实数据 / 证据 / 报告历史 / KPI Ledger"
         reportLabel="Reports"
         userName={userName}
         userRole={userRole}
@@ -257,11 +459,11 @@ export function ReportCenterV2Page({
         <div>
           <span>Report Center</span>
           <h1>报表导出</h1>
-          <p>真实数据 / 证据 / 周报 / KPI Ledger</p>
+          <p>统一生成 / 真实历史 / 可恢复归档 / 鉴权下载</p>
         </div>
         <div className={`report-v2-status is-${data.dataStatus}`}>
-          <b>{data.dataStatus === 'live' ? '真实 API' : data.dataStatus === 'partial' ? '部分数据' : '无信号'}</b>
-          <span>{data.dataNotice || '待接入'}</span>
+          <b>{data.dataStatus === 'live' ? '真实 API' : data.dataStatus === 'partial' ? '部分数据' : '待数据'}</b>
+          <span>{data.dataNotice || '数据状态待确认'}</span>
         </div>
       </header>
 
@@ -270,8 +472,8 @@ export function ReportCenterV2Page({
         <ReportMetric label="平均 ROI" value={metricValue(roi)} meta={roi?.deltaLabel || '待成本与订单归因'} />
         <ReportMetric label="曝光量" value={metricValue(views)} meta={views?.deltaLabel || '内容曝光证据'} />
         <ReportMetric label="内容数" value={metricValue(content)} meta={content?.deltaLabel || '发布内容证据'} />
-        <ReportMetric label="项目" value={safeCount(data.projects.length)} meta="projects" />
-        <ReportMetric label="KPI Ledger" value={safeCount(data.kpiLedger.length)} meta="真实动作计入" />
+        <ReportMetric label="项目" value={countValue(data.projects.length, data.dataStatus)} meta="projects" />
+        <ReportMetric label="KPI Ledger" value={countValue(data.kpiLedger.length, data.dataStatus)} meta="真实动作计入" />
       </section>
 
       <section className="report-v2-builder">
@@ -279,22 +481,33 @@ export function ReportCenterV2Page({
           <div className="report-v2-control">
             <span>语言</span>
             <div>
-              <button type="button" className={language === 'zh' ? 'is-active' : ''} onClick={() => setLanguage('zh')}>中文</button>
-              <button type="button" className={language === 'en' ? 'is-active' : ''} onClick={() => setLanguage('en')}>English</button>
+              <button type="button" className={language === 'zh' ? 'is-active' : ''} onClick={() => { setLanguage('zh'); setPreview(null); }}>中文</button>
+              <button type="button" className={language === 'en' ? 'is-active' : ''} onClick={() => { setLanguage('en'); setPreview(null); }}>English</button>
             </div>
           </div>
           <div className="report-v2-control">
             <span>周期</span>
             <div>
-              <button type="button" className={period === 'weekly' ? 'is-active' : ''} onClick={() => setPeriod('weekly')}>周报</button>
-              <button type="button" className={period === 'monthly' ? 'is-active' : ''} onClick={() => setPeriod('monthly')}>月报</button>
+              <button type="button" className={period === 'weekly' ? 'is-active' : ''} onClick={() => { setPeriod('weekly'); setPreview(null); }}>周报</button>
+              <button type="button" className={period === 'monthly' ? 'is-active' : ''} onClick={() => { setPeriod('monthly'); setPreview(null); }}>月报</button>
+            </div>
+          </div>
+          <label className="report-v2-date-control">
+            <span>截止日期</span>
+            <input aria-label="报告截止日期" type="date" max={today} value={reportDate} onChange={(event) => { setReportDate(event.target.value); setPreview(null); }} />
+          </label>
+          <div className="report-v2-control">
+            <span>版式</span>
+            <div>
+              <button type="button" className={format === 'visual' ? 'is-active' : ''} onClick={() => { setFormat('visual'); setPreview(null); }}>图表版</button>
+              <button type="button" className={format === 'markdown' ? 'is-active' : ''} onClick={() => { setFormat('markdown'); setPreview(null); }}>Markdown</button>
             </div>
           </div>
           <div className="report-v2-control">
-            <span>格式</span>
+            <span>数据范围</span>
             <div>
-              <button type="button" className={format === 'visual' ? 'is-active' : ''} onClick={() => setFormat('visual')}>图表版</button>
-              <button type="button" className={format === 'markdown' ? 'is-active' : ''} onClick={() => setFormat('markdown')}>Markdown</button>
+              <button type="button" className={scope === 'self' ? 'is-active' : ''} onClick={() => { setScope('self'); setPreview(null); }}>仅本人</button>
+              <button type="button" className={scope === 'all' ? 'is-active' : ''} disabled={viewMode !== 'manager'} onClick={() => { setScope('all'); setPreview(null); }}>全部可见数据</button>
             </div>
           </div>
           <div className="report-v2-section-picker">
@@ -307,36 +520,56 @@ export function ReportCenterV2Page({
             ))}
           </div>
           <div className="report-v2-output">
-            <button type="button" onClick={() => void runExport('weekly', onGenerateWeeklyReport)} disabled={!onGenerateWeeklyReport || exporting !== null}><Icon name="spark" />{exporting === 'weekly' ? '生成中...' : '生成周报'}</button>
-            <button type="button" onClick={copyReport}><Icon name="file" />复制报告</button>
-            <button type="button" onClick={() => void runExport('pdf', onExportPDF)} disabled={!onExportPDF || exporting !== null}><Icon name="download" />{exporting === 'pdf' ? '导出中...' : '导出 PDF'}</button>
-            <button type="button" onClick={() => void runExport('csv', onExportCSV)} disabled={!onExportCSV || exporting !== null}><Icon name="download" />{exporting === 'csv' ? '导出中...' : '导出 CSV'}</button>
+            <button type="button" className="is-primary" onClick={() => void runGenerate()} disabled={generating || exporting !== null || !apiToken}><Icon name="spark" />{generating ? '生成中…' : '生成报告'}</button>
+            <button type="button" onClick={() => void copyServerSummary()} disabled={!preview?.report.summary}><Icon name="file" />复制摘要</button>
+            <button type="button" onClick={() => void runExport('pdf')} disabled={generating || exporting !== null || !apiToken}><Icon name="download" />{exporting === 'pdf' ? '导出中…' : '导出 PDF'}</button>
+            <button type="button" onClick={() => void runExport('csv')} disabled={generating || exporting !== null || !apiToken}><Icon name="table" />{exporting === 'csv' ? '导出中…' : '导出 CSV'}</button>
+            <button type="button" onClick={() => void runExport('xlsx')} disabled={generating || exporting !== null || !apiToken}><Icon name="table" />{exporting === 'xlsx' ? '导出中…' : '导出 XLSX'}</button>
+            {preview?.report.status.toLowerCase() === 'ready' && preview.report.id > 0 ? (
+              <button type="button" onClick={() => void downloadReport(preview.report, preview.generated?.downloadUrl)} disabled={historyBusyId === preview.report.id}><Icon name="download" />下载报告</button>
+            ) : null}
           </div>
           <div className="report-v2-evidence-actions">
             <button type="button" onClick={() => onOpenEvidence('gmv')}><Icon name="info" />GMV 证据</button>
             <button type="button" onClick={() => onOpenEvidence('views')}><Icon name="info" />曝光证据</button>
             {viewMode === 'manager' ? <button type="button" onClick={() => onOpenEvidence('cost')}><Icon name="info" />成本证据</button> : null}
           </div>
-          {message ? <p className="report-v2-message">{message}</p> : null}
+          {notice ? <p className={`report-v2-message is-${notice.tone}`} role={notice.tone === 'error' || notice.tone === 'permission' ? 'alert' : 'status'}>{notice.text}</p> : null}
         </aside>
 
         <article className={`report-v2-preview is-${format}`}>
           <header>
-            <span>{format === 'visual' ? '预览 · 图表版' : '预览 · Markdown'}</span>
-            <b>{selectedSectionCount} / {REPORT_SECTIONS.length} sections</b>
+            <span>{preview ? '服务端报告' : '提交前配置'}</span>
+            <b>{preview ? reportStatusLabel(preview.report.status) : `${selectedSectionKeys.length} / ${REPORT_SECTIONS.length} sections`}</b>
           </header>
-          {format === 'visual' ? (
+          {preview ? (
+            <div className="report-v2-server-preview">
+              <div className="report-v2-visual-head">
+                <span>SERVER REPORT</span>
+                <h2>{reportTypeLabel(preview.report.reportType)} · {preview.report.reportUid}</h2>
+                <p>{periodRange(preview.report)} · {reportDataStatusLabel(preview.report.dataStatus)} · {reportModelPolicyLabel(preview.generated?.modelPolicy ?? preview.report.modelPolicy, preview.generated?.claimLevel ?? preview.report.claimLevel)} · {formatMoment(preview.report.triggeredAt)}</p>
+              </div>
+              {preview.generated?.metrics.length ? (
+                <div className="report-v2-server-metrics">
+                  {preview.generated.metrics.map((metric) => (
+                    <ReportMetric key={metric.key} label={metric.label || metric.key} value={serverMetricValue(metric)} meta={metric.note || reportDataStatusLabel(metric.dataStatus)} />
+                  ))}
+                </div>
+              ) : null}
+              <pre>{previewSummary}</pre>
+            </div>
+          ) : (
             <div className="report-v2-visual">
               <div className="report-v2-visual-head">
                 <span>VILTROX MARKETING</span>
                 <h2>{language === 'zh' ? `V-KPI ${period === 'weekly' ? '周报' : '月报'}` : `V-KPI ${period === 'weekly' ? 'Weekly' : 'Monthly'} Report`}</h2>
-                <p>{data.rangeLabel} · {data.dataStatus} · {data.dataNotice || '待接入'}</p>
+                <p>{reportDate} · {scope === 'all' ? '全部可见数据' : '仅本人'} · {format === 'visual' ? '图表版' : 'Markdown'}</p>
               </div>
               <div className="report-v2-visual-kpis">
                 <ReportMetric label="GMV" value={metricValue(gmv)} meta={gmv?.deltaLabel || '待 Shopify'} />
                 <ReportMetric label="ROI" value={metricValue(roi)} meta={roi?.deltaLabel || '待成本'} />
-                <ReportMetric label="曝光" value={metricValue(views)} meta={views?.deltaLabel || '证据'} />
-                <ReportMetric label="内容" value={metricValue(content)} meta={content?.deltaLabel || '证据'} />
+                <ReportMetric label="曝光" value={metricValue(views)} meta={views?.deltaLabel || '待证据'} />
+                <ReportMetric label="内容" value={metricValue(content)} meta={content?.deltaLabel || '待证据'} />
               </div>
               <div className="report-v2-visual-sections">
                 {REPORT_SECTIONS.filter((section) => sections[section.key]).map((section) => (
@@ -346,27 +579,84 @@ export function ReportCenterV2Page({
                   </div>
                 ))}
               </div>
-              <pre>{reportText}</pre>
+              <p className="report-v2-config-note">此处只核对提交配置和当前数据状态；报告正文由服务端生成后显示。</p>
             </div>
-          ) : <pre>{reportText}</pre>}
+          )}
         </article>
+      </section>
+
+      <section className="report-v2-history">
+        <header>
+          <div>
+            <span>报告历史</span>
+            <b>{historyArchived ? '已归档' : '当前报告'} · {historyCount}</b>
+          </div>
+          <div className="report-v2-history-toolbar">
+            <div role="group" aria-label="报告历史范围">
+              <button type="button" className={!historyArchived ? 'is-active' : ''} onClick={() => { setHistoryArchived(false); setArchiveArmedId(null); }}>当前</button>
+              <button type="button" className={historyArchived ? 'is-active' : ''} onClick={() => { setHistoryArchived(true); setArchiveArmedId(null); }}>已归档</button>
+            </div>
+            <button type="button" className="is-icon" aria-label="刷新报告历史" title="刷新报告历史" onClick={() => void refreshHistory(historyArchived)} disabled={historyLoading}>
+              <RefreshCw size={16} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+        {historyError ? <p className="report-v2-history-error" role="alert">{historyError}</p> : null}
+        <div className="report-v2-history-list" aria-busy={historyLoading}>
+          {historyLoading && !history.length ? <p className="is-empty">正在读取真实报告历史…</p> : null}
+          {!historyLoading && !history.length && !historyError ? <p className="is-empty">{historyArchived ? '没有已归档报告' : '尚未生成真实报告'}</p> : null}
+          {history.map((report) => {
+            const busy = historyBusyId === report.id;
+            const isFailed = report.status.toLowerCase() === 'failed';
+            return (
+              <article key={report.id} className={preview?.report.id === report.id ? 'is-selected' : ''}>
+                <div className="report-v2-history-main">
+                  <div>
+                    <strong>{reportTypeLabel(report.reportType)} · {report.reportUid}</strong>
+                    <span>{periodRange(report)} · {formatMoment(report.triggeredAt)}</span>
+                  </div>
+                  <div className="report-v2-history-badges">
+                    <b className={`is-${report.status.toLowerCase()}`}>{reportStatusLabel(report.status)}</b>
+                    <b className={UNKNOWN_DATA_STATUSES.has(report.dataStatus.toLowerCase()) ? 'is-pending' : 'is-data'}>{reportDataStatusLabel(report.dataStatus)}</b>
+                    <b className="is-pending">{reportModelPolicyLabel(report.modelPolicy, report.claimLevel)}</b>
+                  </div>
+                </div>
+                <p>{report.truthInvalidated ? '该历史报告已因真实业务口径升级撤销，仅保留审计记录，不可恢复或下载。' : report.summary || (isFailed ? '生成失败，服务端没有产出摘要。' : '服务端没有返回摘要。')}</p>
+                <div className="report-v2-history-actions">
+                  <button type="button" onClick={() => { setPreview({ report }); setArchiveArmedId(null); }}><Eye size={15} aria-hidden="true" />重开</button>
+                  {!historyArchived && report.status.toLowerCase() === 'ready' ? (
+                    <button type="button" onClick={() => void downloadReport(report)} disabled={busy}><Icon name="download" />{busy ? '下载中…' : '下载'}</button>
+                  ) : null}
+                  {!historyArchived && ['ready', 'failed'].includes(report.status.toLowerCase()) ? (
+                    <button type="button" className={archiveArmedId === report.id ? 'is-danger-armed' : 'is-danger'} onClick={() => void archiveReport(report)} disabled={busy}>
+                      <Archive size={15} aria-hidden="true" />{archiveArmedId === report.id ? '确认归档' : '归档'}
+                    </button>
+                  ) : null}
+                  {historyArchived && !report.truthInvalidated ? (
+                    <button type="button" onClick={() => void restoreReport(report)} disabled={busy}><RotateCcw size={15} aria-hidden="true" />{busy ? '恢复中…' : '恢复'}</button>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
       </section>
 
       <section className="report-v2-grid">
         <article className="report-v2-ledger">
-          <header><span>KPI Ledger</span><b>{safeCount(data.kpiLedger.length)} 条</b></header>
+          <header><span>KPI Ledger</span><b>{countValue(data.kpiLedger.length, data.dataStatus)} 条</b></header>
           <div className="report-v2-ledger-runner">
-            <label>计入日期<input value={ledgerDate} onChange={(event) => setLedgerDate(event.target.value)} /></label>
-            <button type="button" disabled={busy || !onRunKpiRollup} onClick={() => void runRollup()}><Icon name="analytics" />{busy ? '计入中...' : '按真实动作计入'}</button>
+            <label>计入日期<input type="date" value={ledgerDate} onChange={(event) => setLedgerDate(event.target.value)} /></label>
+            <button type="button" disabled={rollupBusy || !onRunKpiRollup} onClick={() => void runRollup()}><Icon name="analytics" />{rollupBusy ? '计入中…' : '按真实动作计入'}</button>
           </div>
           <div className="report-v2-ledger-list">
             {data.kpiLedger.slice(0, 8).map((row) => (
               <div key={row.id}>
                 <strong>{row.staffName || row.staffId || '未知成员'}</strong>
-                <span>{row.metricLabel || row.metricKey || '动作'} · {row.metricValue ?? '--'}</span>
+                <span>{row.metricLabel || row.metricKey || '动作'} · {ledgerMetricValue(row.metricValue)}</span>
               </div>
             ))}
-            {!data.kpiLedger.length ? <div className="is-empty">暂无 Ledger 明细</div> : null}
+            {!data.kpiLedger.length ? <div className="is-empty">{data.dataStatus === 'empty' ? 'KPI Ledger 待数据' : '本周期 0 条 Ledger 明细'}</div> : null}
           </div>
         </article>
       </section>
@@ -374,16 +664,16 @@ export function ReportCenterV2Page({
       <section className="report-v2-table">
         <header>
           <span>导出基础明细</span>
-          <b>项目 {data.projects.length} / 短链 {data.links.length} / 归因 {data.attributions.length} / 成本 {data.costs.length}</b>
+          <b>项目 {countValue(data.projects.length, data.dataStatus)} / 短链 {countValue(data.links.length, data.dataStatus)} / 归因 {countValue(data.attributions.length, data.dataStatus)} / 成本 {countValue(data.costs.length, data.dataStatus)}</b>
         </header>
         <div>
           {data.projects.slice(0, 8).map((project) => (
             <button key={project.id} type="button" onClick={() => onSelectProject(project)}>
               <strong>{project.campaign || project.kolName}</strong>
-              <span>{project.platform} · {project.stage} · GMV {project.gmv ? `$${project.gmv.toLocaleString('en-US')}` : '--'}</span>
+              <span>{project.platform} · {project.stage} · GMV {projectGmv(project)}</span>
             </button>
           ))}
-          {!data.projects.length ? <p>暂无项目明细</p> : null}
+          {!data.projects.length ? <p>{data.dataStatus === 'empty' ? '项目明细待数据' : '本周期 0 个项目'}</p> : null}
         </div>
       </section>
     </div>

@@ -10,8 +10,39 @@ function finitePin(pin: any) {
   return Number.isFinite(Number(pin?.lat)) && Number.isFinite(Number(pin?.lng));
 }
 
-function nearestPinEdges(pins: any[]) {
+// The lines are decorative context, not business evidence.  An all-US Dealer
+// map can contain thousands of pins, so an O(n²) nearest-neighbour pass would
+// freeze the UI before Leaflet can paint the actual locations.  Keep the exact
+// small-map behaviour and fail closed (no decorative network) at large scale.
+export const MAX_NETWORK_LINE_PIN_COUNT = 250;
+export const MAX_DOM_MARKER_PIN_COUNT = 1_000;
+
+export function shouldUseCanvasMarkers(pins: any[]) {
+  return pins.filter(finitePin).length > MAX_DOM_MARKER_PIN_COUNT;
+}
+
+export function escapeMapHtml(value: unknown) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character] || character);
+}
+
+export function safeMapColor(value: unknown, fallback = "#a855f7") {
+  const candidate = String(value ?? "").trim();
+  if (/^#[0-9a-f]{3,8}$/i.test(candidate)) return candidate;
+  if (/^(?:rgb|hsl)a?\([\d\s.,%/+\-]+\)$/i.test(candidate)) return candidate;
+  if (/^var\(--[a-z0-9-]+\)$/i.test(candidate)) return candidate;
+  if (/^[a-z]{3,24}$/i.test(candidate)) return candidate;
+  return fallback;
+}
+
+export function nearestPinEdges(pins: any[]) {
   const valid = pins.filter(finitePin);
+  if (valid.length > MAX_NETWORK_LINE_PIN_COUNT) return [];
   const seen = new Set<string>();
   const edges: Array<[any, any]> = [];
   valid.forEach((pin, index) => {
@@ -58,7 +89,7 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     const initialLng = focusTarget?.lng || -95.7;
     const initialZoom = focusTarget?.zoom || defaultZoom;
     
-    const map = L.map(container).setView([initialLat, initialLng], initialZoom);
+    const map = L.map(container, { preferCanvas: true }).setView([initialLat, initialLng], initialZoom);
     
     const initialTheme = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
     const layer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${initialTheme}_all/{z}/{x}/{y}{r}.png`, {
@@ -120,7 +151,7 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
       networkRef.current.forEach((line: any) => map.removeLayer(line));
       networkRef.current = [];
 
-      const networkColor = accentColor || "#3f9bff";
+      const networkColor = safeMapColor(accentColor, "#3f9bff");
       nearestPinEdges(pins).forEach(([from, to]) => {
         const points: [number, number][] = [
           [Number(from.lat), Number(from.lng)],
@@ -145,21 +176,34 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
         networkRef.current.push(base, flow);
       });
 
-      pins.filter(finitePin).forEach((p: any) => {
-      const color = p.color || accentColor || "#a855f7";
-      
-      const icon = L.divIcon({
-        html: `<div class="vkpi-pin-wrapper" style="--pin-color: ${color}">
-                 <div class="vkpi-pin-pulse"></div>
-                 <div class="vkpi-pin-ring"></div>
-                 <div class="vkpi-pin-dot"></div>
-               </div>`,
-        className: '',
-        iconSize: [30, 30],
-        iconAnchor: [15, 15],
-      });
-      
-      const marker = L.marker([p.lat, p.lng], { icon }).addTo(map);
+      const validPins = pins.filter(finitePin);
+      const useCanvasMarkers = validPins.length > MAX_DOM_MARKER_PIN_COUNT;
+      validPins.forEach((p: any) => {
+      const color = safeMapColor(p.color || accentColor, "#a855f7");
+
+      // Thousands of HTML divIcon nodes make a national map janky. Leaflet's
+      // canvas renderer keeps the same click/tooltip behaviour at high volume;
+      // small maps retain the original branded animated marker.
+      const marker = useCanvasMarkers
+        ? L.circleMarker([Number(p.lat), Number(p.lng)], {
+            radius: 4,
+            color,
+            weight: 1,
+            fillColor: color,
+            fillOpacity: 0.82,
+          }).addTo(map)
+        : L.marker([Number(p.lat), Number(p.lng)], {
+            icon: L.divIcon({
+              html: `<div class="vkpi-pin-wrapper" style="--pin-color: ${color}">
+                       <div class="vkpi-pin-pulse"></div>
+                       <div class="vkpi-pin-ring"></div>
+                       <div class="vkpi-pin-dot"></div>
+                     </div>`,
+              className: '',
+              iconSize: [30, 30],
+              iconAnchor: [15, 15],
+            }),
+          }).addTo(map);
       
       // Hover 信息卡(DOM 覆盖层,隔离皮肤刀:头像渐变吃 token 随主题;
       // pin/连线本体的取色与渲染逻辑不动 —— 颜色由调用方传运行时 token 计算值)
@@ -181,17 +225,23 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
         : p.note || "";
       const metricLabel = p.handle ? "Reach" : Number.isFinite(Number(p.count)) ? "KOLs" : p.revenue ? "Revenue" : "Note";
       
+      const safeHandle = escapeMapHtml(handle);
+      const safeInitials = escapeMapHtml(initials);
+      const safePlatform = escapeMapHtml(platform);
+      const safeLocation = escapeMapHtml(location);
+      const safeMetrics = escapeMapHtml(metrics);
+      const safeMetricLabel = escapeMapHtml(metricLabel);
       const tooltipHtml = `
         <div class="vkpi-pin-card">
           <div class="vkpi-pin-card-header">
-            <div class="vkpi-pin-avatar" style="background: ${avatarBg}">${initials}</div>
+            <div class="vkpi-pin-avatar" style="background: ${avatarBg}">${safeInitials}</div>
             <div class="vkpi-pin-info">
-              <div class="vkpi-pin-name">${handle}</div>
-              ${platform ? `<div class="vkpi-pin-platform">${platform}</div>` : ""}
+              <div class="vkpi-pin-name">${safeHandle}</div>
+              ${platform ? `<div class="vkpi-pin-platform">${safePlatform}</div>` : ""}
             </div>
           </div>
-          ${location !== "—" ? `<div class="vkpi-pin-row"><span class="vkpi-pin-key">Location</span><span class="vkpi-pin-val">${location}</span></div>` : ""}
-          ${metrics ? `<div class="vkpi-pin-row"><span class="vkpi-pin-key">${metricLabel}</span><span class="vkpi-pin-val" style="color: ${color}">${metrics}</span></div>` : ""}
+          ${location !== "—" ? `<div class="vkpi-pin-row"><span class="vkpi-pin-key">Location</span><span class="vkpi-pin-val">${safeLocation}</span></div>` : ""}
+          ${metrics ? `<div class="vkpi-pin-row"><span class="vkpi-pin-key">${safeMetricLabel}</span><span class="vkpi-pin-val" style="color: ${color}">${safeMetrics}</span></div>` : ""}
           <div class="vkpi-pin-hint">click for details →</div>
         </div>
       `;

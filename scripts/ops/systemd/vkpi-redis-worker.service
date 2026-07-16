@@ -1,0 +1,63 @@
+[Unit]
+Description=V-KPI dedicated Redis Streams worker
+Wants=network-online.target
+After=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=viltrox
+Group=viltrox
+UMask=0027
+WorkingDirectory=/opt/viltrox-2.0/current
+EnvironmentFile=/opt/viltrox-2.0/.env
+Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=VKPI_JOB_RESULTS_DIR=/opt/viltrox-2.0/runtime/job-results
+Environment=HOME=/tmp/vkpi-redis-worker-home
+Environment=XDG_CACHE_HOME=/tmp/vkpi-redis-worker-cache
+Environment=TMPDIR=/tmp
+ExecStartPre=/usr/bin/env VKPI_JOB_RESULTS_DIR=/opt/viltrox-2.0/runtime/job-results HOME=/tmp/vkpi-redis-worker-home XDG_CACHE_HOME=/tmp/vkpi-redis-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python /opt/viltrox-2.0/current/scripts/ops/atomic_release_layout.py worker-runtime-preflight --root /opt/viltrox-2.0 --release-path /opt/viltrox-2.0/current --app-user viltrox --app-group viltrox --job-results-dir /opt/viltrox-2.0/runtime/job-results --require-sandbox-readonly
+# argv-level assignments cannot be weakened by stale values in EnvironmentFile.
+# The stale-backlog override stays off until the 16 historical messages have
+# been explicitly adjudicated; startup fails before XREADGROUP while they exist.
+ExecStart=/usr/bin/env APP_ROLE=worker ENVIRONMENT=production DB_RUNTIME_BACKEND=postgres ENABLE_LOCAL_ORCHESTRATOR=0 ENABLE_SCHEDULER=0 ENABLE_BROWSER=0 ENABLE_UPLOAD_CLEANUP=0 WORKER_SERVICE_PROCESSES=1 WORKER_ASYNC_CONSUMERS=2 VKPI_REDIS_WORKER_MAX_CONSUMERS=2 VKPI_REDIS_WORKER_HEARTBEAT_NAME=redis-worker-main VKPI_REDIS_WORKER_ALLOW_STALE_BACKLOG=0 VKPI_REDIS_WORKER_MAX_BACKLOG_AGE_HOURS=24 POSTGRES_POOL_MIN_SIZE=2 POSTGRES_POOL_MAX_SIZE=16 POSTGRES_POOL_TIMEOUT_SEC=30 VKPI_JOB_RESULTS_DIR=/opt/viltrox-2.0/runtime/job-results HOME=/tmp/vkpi-redis-worker-home XDG_CACHE_HOME=/tmp/vkpi-redis-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python -m app.workers.worker_main
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vkpi-redis-worker
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/viltrox-2.0/current
+ReadOnlyPaths=/opt/viltrox-2.0/.env
+ReadOnlyPaths=-/opt/viltrox-2.0/.env.production
+ReadWritePaths=/opt/viltrox-2.0/uploads
+ReadWritePaths=/opt/viltrox-2.0/runtime/job-results
+ReadOnlyPaths=/opt/viltrox-2.0/runtime
+ReadOnlyPaths=/opt/viltrox-2.0/frames
+ReadOnlyPaths=/opt/viltrox-2.0/creator_profiles
+InaccessiblePaths=/opt/viltrox-2.0/backups
+
+[Install]
+WantedBy=multi-user.target

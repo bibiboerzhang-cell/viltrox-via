@@ -6,6 +6,7 @@ with provider calls blocked. Real Apify calls require both ``--execute`` and
 ``--allow-provider-calls``.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -518,11 +519,39 @@ async def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     windows = safe_live_windows(args, plan)
     preflight = execution_preflight(args, plan, provider_config, windows)
     gate = provider_gate(args, plan, provider_config)
-    execution = await apify_batch_refresh.execute_apify_batch_plan(
-        plan,
-        allow_provider_calls=bool(gate["allowed"]),
-        timeout_secs=max(30, min(1800, int(args.timeout_seconds or apify_batch_refresh.DEFAULT_RUN_TIMEOUT_SECONDS))),
-    )
+    timeout_secs = max(30, min(1800, int(args.timeout_seconds or apify_batch_refresh.DEFAULT_RUN_TIMEOUT_SECONDS)))
+    if gate["allowed"]:
+        from app.services.jobs.queue import build_job_queue
+
+        queue = build_job_queue()
+        if queue is None:
+            execution = {
+                "executed": False,
+                "status": "blocked",
+                "reason": "durable_job_queue_unavailable",
+            }
+        else:
+            try:
+                task_id = await queue.enqueue(
+                    "apify_batch_refresh",
+                    {"plan": plan, "timeout_secs": timeout_secs, "requested_by": "cli"},
+                    lock_key=f"apify_batch_refresh:{str(plan.get('plan_id') or plan.get('generated_at') or 'manual')}",
+                    timeout_seconds=max(1800, timeout_secs * max(1, len(plan.get("batches") or []))),
+                )
+                execution = {
+                    "executed": False,
+                    "status": "queued",
+                    "job_id": task_id,
+                    "reason": "durable_worker_queued",
+                }
+            finally:
+                await queue.close()
+    else:
+        execution = await apify_batch_refresh.execute_apify_batch_plan(
+            plan,
+            allow_provider_calls=False,
+            timeout_secs=timeout_secs,
+        )
     if gate["requested"] and not gate["allowed"] and isinstance(execution, dict):
         execution = dict(execution)
         execution["reason"] = gate["reason"]
@@ -571,7 +600,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         result = write_artifact(await run_from_args(args), args)
-        print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+        stdout_out(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         execution = result.get("execution") if isinstance(result, dict) else {}
         provider_gate_result = result.get("provider_gate") if isinstance(result, dict) and isinstance(result.get("provider_gate"), dict) else {}
         if provider_gate_result.get("reason") == "live_target_cap_exceeded":

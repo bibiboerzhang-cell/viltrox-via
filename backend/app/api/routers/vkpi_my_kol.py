@@ -19,6 +19,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.domains.access import scope
 from app.domains.kol import my_kol_aggregate, my_kol_board_ext, risk_index
 
@@ -37,6 +38,9 @@ def my_kol_aggregate_endpoint(
     staff_id: int | None = Query(default=None, ge=1),
     window_days: int = Query(default=30, ge=1, le=365),
     scope_mode: str = Query(default="", alias="scope"),
+    mode: str = Query(default="full", pattern="^(full|summary)$"),
+    favorites_limit: int = Query(default=50, ge=1, le=100),
+    favorites_cursor: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Return the single MY KOL aggregate bundle for the scoped staff member."""
@@ -51,17 +55,28 @@ def my_kol_aggregate_endpoint(
     if not target:
         raise HTTPException(status_code=403, detail="no staff identity in scope")
     try:
+        paging = (
+            {
+                "favorites_limit": int(favorites_limit),
+                "favorites_cursor": favorites_cursor,
+            }
+            if mode == "summary"
+            else {}
+        )
         return my_kol_aggregate.build_my_kol_aggregate(
             get_conn(),
             int(target),
             window_days=int(window_days),
             actor=staff,
             team_scope=bool(team),
+            **paging,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/my-kol/board-ext")
@@ -196,7 +211,7 @@ def my_kol_contribution_rollup_endpoint(
     # 归因销售单独一支(避免与 content_posts 同表 JOIN 造成笛卡尔放大计数)。
     #   按「该负责人在管 active KOL」关联 vkpi_sales_attributions.kol_id,SUM revenue_cents。
     sales_rows = conn.execute(
-        """
+        f"""
         SELECT
             c.staff_id AS staff_id,
             COALESCE(SUM(sa.revenue_cents), 0) AS revenue_cents,
@@ -204,6 +219,7 @@ def my_kol_contribution_rollup_endpoint(
         FROM vkpi_kol_claims c
         JOIN vkpi_sales_attributions sa ON sa.kol_id = c.kol_id
         WHERE c.status = 'active'
+          AND {business_truth.verified_shopify_attribution_sql('sa')}
         GROUP BY c.staff_id
         """,
     ).fetchall()

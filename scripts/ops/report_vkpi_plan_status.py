@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Generate a compact V-KPI execution status report from repo/runtime signals."""
 from __future__ import annotations
+import sys as _stdout_sys
+from pathlib import Path as _StdoutPath
+
+_STDOUT_UTILS_DIR = _StdoutPath(__file__).resolve().parents[1]
+if str(_STDOUT_UTILS_DIR) not in _stdout_sys.path:
+    _stdout_sys.path.insert(1, str(_STDOUT_UTILS_DIR))
+from stdout_utils import out as stdout_out  # noqa: E402
 
 import argparse
 import asyncio
@@ -457,10 +464,10 @@ def main() -> int:
         "items": build_items(sync, r2, snapshot, audit),
     }
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        stdout_out(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         markdown = render_markdown(report)
-        print(markdown)
+        stdout_out(markdown)
         if args.out:
             out = ROOT / args.out
             out.parent.mkdir(parents=True, exist_ok=True)

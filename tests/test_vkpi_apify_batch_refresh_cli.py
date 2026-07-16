@@ -2,8 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
 from scripts import vkpi_apify_batch_refresh
+from app.services.jobs import queue as jobs_queue
+
+
+class _FakeDurableQueue:
+    def __init__(self) -> None:
+        self.jobs: list[tuple[str, dict, dict]] = []
+        self.closed = False
+
+    async def enqueue(self, job_type: str, payload: dict, **kwargs) -> str:
+        self.jobs.append((job_type, payload, kwargs))
+        return f"durable-job-{len(self.jobs)}"
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
@@ -77,6 +99,7 @@ def test_cli_run_blocks_provider_calls_by_default(monkeypatch) -> None:
 
 def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None:
     calls: dict[str, object] = {}
+    queue = _FakeDurableQueue()
     monkeypatch.setenv("APIFY_TOKEN", "test-token")
 
     def fake_plan(**_kwargs):
@@ -88,6 +111,7 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
 
     monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
     monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+    monkeypatch.setattr(jobs_queue, "build_job_queue", lambda: queue)
 
     execute_only = asyncio.run(vkpi_apify_batch_refresh.run_from_args(vkpi_apify_batch_refresh.parse_args(["--execute"])))
     execute_allowed = asyncio.run(vkpi_apify_batch_refresh.run_from_args(vkpi_apify_batch_refresh.parse_args(["--execute", "--allow-provider-calls"])))
@@ -95,7 +119,14 @@ def test_cli_requires_both_execute_and_allow_provider_calls(monkeypatch) -> None
     assert execute_only["provider_calls_allowed"] is False
     assert execute_only["execution"]["executed"] is False
     assert execute_allowed["provider_calls_allowed"] is True
-    assert execute_allowed["execution"]["executed"] is True
+    assert execute_allowed["execution"] == {
+        "executed": False,
+        "status": "queued",
+        "job_id": "durable-job-1",
+        "reason": "durable_worker_queued",
+    }
+    assert queue.jobs[0][0] == "apify_batch_refresh"
+    assert queue.closed is True
     assert execute_allowed["provider_gate"]["reason"] == "allowed"
     assert execute_allowed["execution_preflight"]["status"] == "ready"
     assert execute_allowed["operator_summary"]["can_execute_if_authorized"] is True
@@ -318,6 +349,7 @@ def test_execution_preflight_reports_windowed_execution_after_replan(monkeypatch
 
 def test_cli_live_window_index_executes_only_selected_window(monkeypatch) -> None:
     calls: dict[str, object] = {}
+    queue = _FakeDurableQueue()
     monkeypatch.setenv("APIFY_TOKEN", "test-token")
 
     def fake_plan(**_kwargs):
@@ -355,6 +387,7 @@ def test_cli_live_window_index_executes_only_selected_window(monkeypatch) -> Non
 
     monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "qualified_apify_batch_plan", fake_plan)
     monkeypatch.setattr(vkpi_apify_batch_refresh.apify_batch_refresh, "execute_apify_batch_plan", fake_execute)
+    monkeypatch.setattr(jobs_queue, "build_job_queue", lambda: queue)
 
     result = asyncio.run(
         vkpi_apify_batch_refresh.run_from_args(
@@ -364,10 +397,12 @@ def test_cli_live_window_index_executes_only_selected_window(monkeypatch) -> Non
         )
     )
 
-    assert calls["execute"]["allow_provider_calls"] is True
-    assert calls["plan"]["total_targets"] == 13
-    assert calls["plan"]["batch_count"] == 1
-    assert calls["plan"]["batches"][0]["batch_key"] == "youtube-2"
+    queued_plan = queue.jobs[0][1]["plan"]
+    assert queued_plan["total_targets"] == 13
+    assert queued_plan["batch_count"] == 1
+    assert queued_plan["batches"][0]["batch_key"] == "youtube-2"
+    assert queue.jobs[0][0] == "apify_batch_refresh"
+    assert queue.closed is True
     assert result["provider_calls_allowed"] is True
     assert result["provider_gate"]["reason"] == "allowed"
     assert result["window_selection"]["selected"] is True

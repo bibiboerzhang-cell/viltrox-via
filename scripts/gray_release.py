@@ -17,6 +17,8 @@ viltrox_fit_score / rule_v0 任何既有表(铁律)。
 """
 from __future__ import annotations
 
+from stdout_utils import out as stdout_out
+
 import argparse
 import sys
 from datetime import datetime, timezone
@@ -93,21 +95,21 @@ def cmd_list(conn: Any) -> int:
     rows.sort(key=lambda r: (_RISK_ORDER.get(r.get("risk_level"), 99), r.get("task_key") or ""))
 
     if not rows:
-        print("(scheduler_tasks 为空 — 检查 migration 130/141 是否已落地)")
+        stdout_out("(scheduler_tasks 为空 — 检查 migration 130/141 是否已落地)")
         return 1
 
-    print(f"scheduler_tasks: {len(rows)} 行\n")
+    stdout_out(f"scheduler_tasks: {len(rows)} 行\n")
     current_tier: str | None = None
     for r in rows:
         tier = r.get("risk_level")
         if tier != current_tier:
             current_tier = tier
             members = TIERS.get(tier or "", [])
-            print(f"== {str(tier).upper()} ({len(members)} 任务) ==")
+            stdout_out(f"== {str(tier).upper()} ({len(members)} 任务) ==")
         last_run = r.get("last_run_at")
         last_run_str = "" if last_run in (None, "") else f"  last_run={last_run}"
-        print(f"  [{_enabled_label(r.get('enabled')):>3}] {r.get('task_key')}{last_run_str}")
-    print()
+        stdout_out(f"  [{_enabled_label(r.get('enabled')):>3}] {r.get('task_key')}{last_run_str}")
+    stdout_out()
     return 0
 
 
@@ -132,13 +134,13 @@ def _apply_tier(conn: Any, tier: str, target_enabled: bool, apply: bool) -> int:
     before = _current_enabled(conn, task_keys)
 
     verb = "APPLY" if apply else "DRY-RUN"
-    print(f"[{verb}] tier={tier} → {target_label}")
+    stdout_out(f"[{verb}] tier={tier} → {target_label}")
     for key in task_keys:
         cur = _enabled_label(before.get(key)) if before.get(key) is not None else "MISSING"
-        print(f"  {key}: {cur} → {_enabled_label(int(target_enabled))}")
+        stdout_out(f"  {key}: {cur} → {_enabled_label(int(target_enabled))}")
 
     if not apply:
-        print("\n(dry-run:未写库。加 --apply 才真正执行。)")
+        stdout_out("\n(dry-run:未写库。加 --apply 才真正执行。)")
         return 0
 
     conn.execute(
@@ -146,7 +148,7 @@ def _apply_tier(conn: Any, tier: str, target_enabled: bool, apply: bool) -> int:
         (target_enabled, _utc_now(), tier),
     )
     conn.commit()
-    print(f"\n[OK] tier={tier} 已写入 enabled={'TRUE' if target_enabled else 'FALSE'} 并 commit。")
+    stdout_out(f"\n[OK] tier={tier} 已写入 enabled={'TRUE' if target_enabled else 'FALSE'} 并 commit。")
     return 0
 
 
@@ -179,14 +181,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.tier:
             # high 档红线提醒(stderr),不阻断。
             if args.tier == "high" and args.apply:
-                print(_HIGH_REDLINE, file=sys.stderr)
+                stdout_out(_HIGH_REDLINE, file=sys.stderr)
                 if not args.yes:
                     try:
                         ans = input("继续放量 high 档?输入 yes 确认: ").strip().lower()
                     except EOFError:
                         ans = ""
                     if ans != "yes":
-                        print("[ABORT] 未确认,high 档未写入。", file=sys.stderr)
+                        stdout_out("[ABORT] 未确认,high 档未写入。", file=sys.stderr)
                         return 2
             return _apply_tier(conn, args.tier, target_enabled=True, apply=args.apply)
 

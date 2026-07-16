@@ -5,19 +5,27 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 from app.api.dependencies.manager_guard import require_manager_tab as _require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 from app.core.security import get_current_user
+from app.domains import business_truth
 from app.domains import costs
 from app.domains.access import policy, scope
-from app.domains.analysis.cache_repo import get_analysis_cache_entry, list_project_video_analysis_cache
+from app.domains.analysis.cache_repo import (
+    get_analysis_cache_entry,
+    list_project_video_analysis_cache,
+)
 from app.domains.projects import automation_audit
 from app.domains.projects import contract_assist
 from app.domains.projects import contracts
 from app.domains.projects import retrospective_aggregate
 from app.domains.projects import workflow
+from app.api.routers.vkpi_projects_helpers import (
+    _material_row_to_item,
+)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-projects"])
 
@@ -41,85 +49,25 @@ from app.api.routers import vkpi_projects_fulfillment as _fulfillment_sub  # noq
 
 router.include_router(_fulfillment_sub.router)
 
+from app.api.routers import vkpi_projects_analysis as _analysis_sub  # noqa: E402
 
-def _resolve_video_cached_url(evidence_id: str) -> str | None:
-    """按 video 证据 id 解析其 R2 缓存视频地址,供前端内联播放器与分镜分析共用一条轮询。
+router.include_router(_analysis_sub.router)
+# Preserve the historical Python import surface for direct callers/tests.
+analysis_cache = _analysis_sub.analysis_cache
+analysis_cache_batch = _analysis_sub.analysis_cache_batch
 
-    背景:URL 结果卡从「会话历史」重建时会丢掉实时算出的 cached_video_url(历史里没存),
-    导致分镜出来了、播放器不出。这里在分镜分析缓存接口顺带解析:证据 -> 平台/原生短码
-    -> 现成的 cached_video_url_for_item(键与 worker 一致)。纯只读,任何异常静默返回 None,
-    绝不影响分析主体渲染,绝不触碰 viltrox_fit_score。
-    """
+
+def _business_authorization_or_http(body: dict, *, staff: dict, action: str) -> dict:
     try:
-        eid = int(str(evidence_id).strip())
-    except (TypeError, ValueError):
-        return None
-    if eid <= 0:
-        return None
-    try:
-        from app.db.connection import get_conn
-        from app.domains.kol.url_deep_crawl import classify_url
-        from app.domains.media.cache import cached_video_url_for_item
-
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT platform, content_url FROM vkpi_kol_video_evidence WHERE id = ?",
-            (eid,),
-        ).fetchone()
-        if not row:
-            return None
-        data = dict(row)
-        platform = str(data.get("platform") or "").strip().lower()
-        content_url = str(data.get("content_url") or "").strip()
-        if not platform or not content_url:
-            return None
-        classified = classify_url(content_url)
-        video_key = str(getattr(classified, "video_id", "") or "").strip()
-        if not video_key:
-            return None
-        return cached_video_url_for_item(platform, video_key)
-    except Exception:
-        return None
+        return business_truth.require_authorization_evidence(body, staff=staff, action=action)
+    except business_truth.BusinessTruthWriteBlocked as exc:
+        status_code = 409 if exc.reason == "feature_disabled" else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason": exc.reason, "message": str(exc)},
+        ) from exc
 
 
-@router.get("/analysis-cache")
-def analysis_cache(
-    target_type: str = Query(..., min_length=1),
-    target_id: str = Query(..., min_length=1),
-    derive_method: str = "",
-    staff=Depends(require_tab("vkpi", "read")),
-):
-    target_type = target_type.strip()
-    target_id = target_id.strip()
-    derive_method = derive_method.strip()
-    if not target_type or not target_id:
-        raise HTTPException(status_code=400, detail="target_type and target_id required")
-    # 批D 权限收口(2026-06-12):原 del staff 绕过项目级 scope。能映射回项目的目标
-    # (project/contract/video)走 assert_project_access;kol_pool 等无项目维度目标
-    # 维持 tab 级权限(require_tab 已生效)。
-    scoped_project_id = scope.resolve_analysis_target_project(target_type, target_id)
-    if scoped_project_id is not None:
-        try:
-            policy.require_project_read(scoped_project_id, staff)
-        except policy.ScopeDenied as exc:
-            raise _scope_403(exc) from exc
-    entry = get_analysis_cache_entry(target_type, target_id, derive_method=derive_method or None)
-    result = {
-        "target_type": target_type,
-        "target_id": target_id,
-        "derive_method": derive_method or None,
-        "state": "ready" if entry else "pending",
-        "entry": entry,
-    }
-    # 视频目标:顺带解析 R2 缓存视频地址,供前端内联播放器(与分镜分析共用同一轮询,
-    # 历史重建/实时执行都稳)。只读,缺失则不附带该字段。
-    if target_type.lower() == "video":
-        cached_video_url = _resolve_video_cached_url(target_id)
-        if cached_video_url:
-            result["cached_video_url"] = cached_video_url
-    if target_type.lower() == "contract":
-        result = _mask_payment_fields(result, staff, project_id=scoped_project_id)
-    return result
 
 
 @router.get("/projects")
@@ -288,11 +236,24 @@ def remove_project_member(project_id: int, staff_id: int, staff=Depends(require_
 
 
 @router.get("/projects/{project_id}")
-def project_detail(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
+def project_detail(
+    project_id: int,
+    mode: str = Query(default="full", pattern="^(full|summary)$"),
+    assignment_limit: int = Query(default=50, ge=1, le=100),
+    assignment_cursor: str | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+):
     try:
-        return workflow.project_detail(project_id, staff=staff)
+        return workflow.project_detail(
+            project_id,
+            staff=staff,
+            assignment_limit=assignment_limit if mode == "summary" else None,
+            assignment_cursor=assignment_cursor if mode == "summary" else None,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
@@ -506,9 +467,20 @@ def confirm_project_contract(project_id: int, contract_id: int, body: dict | Non
 
 
 @router.delete("/projects/{project_id}/contracts/{contract_id}")
-def delete_project_contract(project_id: int, contract_id: int, staff=Depends(require_tab("vkpi", "write"))):
+def delete_project_contract(
+    project_id: int,
+    contract_id: int,
+    body: dict | None = Body(default=None),
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    authorization = _business_authorization_or_http(body or {}, staff=staff, action="contract_delete")
     try:
-        return contracts.delete_contract(project_id, contract_id, staff=staff)
+        return contracts.delete_contract(
+            project_id,
+            contract_id,
+            authorization_evidence=authorization,
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -586,7 +558,14 @@ def update_project_kol_shipping(project_id: int, kol_ref: str, body: dict, staff
 
 
 @router.post("/projects/{project_id}/kols/{kol_ref}/{action_kind}")
-def project_kol_action_stub(project_id: int, kol_ref: str, action_kind: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+async def project_kol_action_stub(
+    request: Request,
+    project_id: int,
+    kol_ref: str,
+    action_kind: str,
+    body: dict,
+    staff=Depends(require_tab("vkpi", "write")),
+):
     # 残账收窄(批E,2026-06-12):兜底白名单只留 screenshot/video;
     # contract 早已走 /projects/{project_id}/contracts/upload 真归档(前端不再调旧路径),显式 410。
     if action_kind == "contract":
@@ -598,14 +577,52 @@ def project_kol_action_stub(project_id: int, kol_ref: str, action_kind: str, bod
         raise HTTPException(status_code=404, detail="unknown action")
     try:
         if action_kind == "video":
-            return workflow.record_project_kol_video(project_id, kol_ref, body, staff=staff)
-        return workflow.project_kol_action_stub(project_id, kol_ref, body, kind=action_kind, staff=staff)
+            queue = getattr(request.app.state, "job_queue", None)
+            if queue is None:
+                raise RuntimeError("durable job queue unavailable")
+            if str(getattr(queue, "backend_name", "")) == "inprocess":
+                raise RuntimeError(
+                    "durable_queue_required:inprocess_queue_has_no_provider_execution_fence"
+                )
+            result = await run_in_threadpool(
+                workflow.record_project_kol_video,
+                project_id,
+                kol_ref,
+                body,
+                staff=staff,
+            )
+            if result.get("status") == "metadata_pending":
+                evidence_id = int(((result.get("evidence") or {}).get("id")) or 0)
+                task_id = await queue.enqueue(
+                    "project_video_metadata_refresh",
+                    {"evidence_id": evidence_id, "staff": dict(staff or {})},
+                    lock_key=f"project_video_metadata_refresh:{evidence_id}",
+                    timeout_seconds=1200,
+                )
+                result.update(
+                    {
+                        "job_id": task_id,
+                        "progressive": True,
+                        "initial_stage": "metadata_pending",
+                    }
+                )
+            return result
+        return await run_in_threadpool(
+            workflow.project_kol_action_stub,
+            project_id,
+            kol_ref,
+            body,
+            kind=action_kind,
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/projects")
@@ -706,9 +723,20 @@ def publish_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi
 
 
 @router.post("/projects/{project_id}/costs")
-def add_project_cost(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def add_project_cost(project_id: int, body: dict, staff=Depends(_require_manager_tab("vkpi", "admin"))):
+    authorization = _business_authorization_or_http(body, staff=staff, action="cost_create")
     try:
-        return costs.add_cost({**body, "project_id": project_id}, staff=staff)
+        return costs.add_cost(
+            {
+                **body,
+                "project_id": project_id,
+                "metadata": {
+                    **(body.get("metadata") if isinstance(body.get("metadata"), dict) else {}),
+                    "authorization_evidence": authorization,
+                },
+            },
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -761,17 +789,6 @@ def add_project_shipment(project_id: int, body: dict, staff=Depends(require_tab(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _material_row_to_item(row: dict) -> dict:
-    """物料行出参整理:metadata_json 解成 dict,坏 JSON 容错为空对象,不让单行坏数据炸整表。"""
-    import json as _json
-
-    item = dict(row)
-    try:
-        meta = _json.loads(str(item.pop("metadata_json", None) or "{}"))
-    except Exception:
-        meta = {}
-    item["metadata"] = meta if isinstance(meta, dict) else {}
-    return item
 
 
 @router.get("/projects/{project_id}/materials")

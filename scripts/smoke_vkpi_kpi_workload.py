@@ -5,6 +5,7 @@ Uses a temporary staff/user identity so the rollup never touches real employees'
 KPI rows. Cleanup removes both original source rows and derived ledger rows.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -401,7 +402,7 @@ def main() -> None:
     ensure_vkpi_product_industry_schema()
     smoke = Smoke()
     result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

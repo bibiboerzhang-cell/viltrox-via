@@ -10,11 +10,25 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.db.connection import get_conn
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
+from app.domains.tasks.search_session_lineage import (
+    attach_search_session_lineage_to_job,
+    with_search_session_lineage,
+)
 from app.platform import llm_gateway
+from app.platform.llm_local_evaluation import (
+    LOCAL_EVALUATION_BINDING,
+    LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
+    LOCAL_EVALUATION_EXECUTION_CLASS,
+    LOCAL_EVALUATION_MODEL,
+    issue_local_evaluation_capability,
+    redact_local_evaluation_capability,
+)
 
 
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
+PRODUCTION_VIDEO_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 # 2026-07-02:默认 1200 会截断分镜 JSON(Extra data 解析失败占 unknown 失败桶大头),
 # 且本地靠 .env 覆盖 4096 而线上 .env 不随部署 → 代码默认直接提到 4096,env 仍可覆盖。
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
@@ -51,6 +65,21 @@ def _triggered_user_id(staff: dict[str, Any] | None) -> int | None:
     return None
 
 
+def _video_analysis_queue_lane(*, batch: str, local_evaluation: bool) -> str:
+    """Reserve interactive capacity for explicit single-video requests.
+
+    ``on_demand`` is the default for the single-video endpoint, while every
+    other non-empty marker belongs to a batch/background wrapper.  An explicit
+    local evaluation is always user-triggered and must not wait behind bulk
+    work, even when reached through a URL-flow wrapper with a custom marker.
+    """
+
+    marker = str(batch or "").strip().lower()
+    if local_evaluation or marker in {"", "on_demand"}:
+        return "interactive"
+    return "batch"
+
+
 def _google_budget(preflight: dict[str, Any]) -> dict[str, Any]:
     providers = preflight.get("providers") if isinstance(preflight.get("providers"), list) else []
     google = next((item for item in providers if item.get("provider") == "google"), {})
@@ -60,8 +89,32 @@ def _google_budget(preflight: dict[str, Any]) -> dict[str, Any]:
         "estimated_cost_usd": float(google.get("estimated_cost_usd") or 0.0),
         "provider": "google",
         "model": str(google.get("model") or ""),
+        "model_readiness_status": str(
+            preflight.get("model_readiness_status")
+            or google.get("model_readiness_status")
+            or "not_ready"
+        ),
         "checks": google.get("checks") if isinstance(google.get("checks"), list) else [],
         "preflight": preflight,
+    }
+
+
+def _ai_analysis_state(
+    state: str,
+    *,
+    reason: str = "",
+    gate_reason: str = "",
+    model_readiness_status: str = "",
+    provider_calls_allowed: bool = False,
+) -> dict[str, Any]:
+    """Stable, frontend-safe AI-stage contract for URL/profile/text flows."""
+
+    return {
+        "state": str(state or "not_requested"),
+        "reason": str(reason or ""),
+        "gate_reason": str(gate_reason or ""),
+        "model_readiness_status": str(model_readiness_status or "not_ready"),
+        "provider_calls_allowed": bool(provider_calls_allowed),
     }
 
 
@@ -99,24 +152,51 @@ def _load_owned_evidence(conn: Any, *, kol_pool_id: int, evidence_id: int) -> di
     return dict(row) if row else None
 
 
-def _ready_cache(conn: Any, *, evidence_id: int) -> dict[str, Any] | None:
+def _ready_cache(
+    conn: Any,
+    *,
+    evidence_id: int,
+    include_local_evaluation: bool = False,
+) -> dict[str, Any] | None:
+    methods = (
+        (FINAL_V1_DERIVE_METHOD, LOCAL_EVALUATION_CACHE_DERIVE_METHOD)
+        if include_local_evaluation
+        else (FINAL_V1_DERIVE_METHOD,)
+    )
+    placeholders = ", ".join("?" for _ in methods)
     row = conn.execute(
-        """
-        SELECT id, model, cost, status, updated_at
+        f"""
+        SELECT id, model, derive_method, cost, status, result, updated_at
         FROM vkpi_analysis_cache
         WHERE target_type='video'
           AND target_id=?
-          AND derive_method=?
+          AND derive_method IN ({placeholders})
           AND status='ready'
-        ORDER BY updated_at DESC, id DESC
+        ORDER BY
+          CASE WHEN derive_method=? THEN 0 ELSE 1 END,
+          updated_at DESC,
+          id DESC
         LIMIT 1
         """,
-        (str(evidence_id), FINAL_V1_DERIVE_METHOD),
+        (str(evidence_id), *methods, FINAL_V1_DERIVE_METHOD),
     ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    item = dict(row)
+    item["evaluation_only"] = item.get("derive_method") == LOCAL_EVALUATION_CACHE_DERIVE_METHOD
+    item.pop("result", None)
+    return item
 
 
-def _active_job(conn: Any, *, evidence_id: int) -> dict[str, Any] | None:
+def _active_job(
+    conn: Any,
+    *,
+    evidence_id: int,
+    local_evaluation: bool = False,
+) -> dict[str, Any] | None:
+    execution_class = (
+        LOCAL_EVALUATION_EXECUTION_CLASS if local_evaluation else "production"
+    )
     row = conn.execute(
         """
         SELECT id, job_type, status, created_at, updated_at
@@ -124,11 +204,12 @@ def _active_job(conn: Any, *, evidence_id: int) -> dict[str, Any] | None:
         WHERE payload->>'target_type'='video'
           AND payload->>'target_id'=?
           AND payload->>'derive_method'=?
+          AND COALESCE(payload->>'execution_class', 'production')=?
           AND status IN ('queued', 'running', 'retrying', 'processing')
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
         """,
-        (str(evidence_id), FINAL_V1_DERIVE_METHOD),
+        (str(evidence_id), FINAL_V1_DERIVE_METHOD, execution_class),
     ).fetchone()
     return dict(row) if row else None
 
@@ -142,10 +223,15 @@ def _enqueue_final_v1_video_analysis(
     source: str = "kol_pool_detail_on_demand",
     batch: str = "on_demand",
     commit: bool = True,
+    search_session_id: int | None = None,
+    search_session_item_id: int | None = None,
+    parent_job_id: int | None = None,
+    local_evaluation: bool = False,
 ) -> dict[str, Any]:
     """Enqueue one final_v1 job after ownership and duplicate checks.
 
-    Budget preflight is retained as telemetry only; it must not block user-triggered analysis.
+    Production readiness is checked before any durable paid-AI row is inserted.
+    A blocked optional AI stage returns ``ai_disabled`` while preserving base evidence.
     """
 
     kol_pool_id = int(kol_pool_id)
@@ -171,6 +257,10 @@ def _enqueue_final_v1_video_analysis(
             "provider_calls": False,
             "write_db": False,
             "reason": f"evidence_type={_etype or '-'} media_kind={_mkind or '-'}(图文/轮播,不跑视频深析)",
+            "ai_analysis": _ai_analysis_state(
+                "not_requested",
+                reason="non_video_evidence",
+            ),
         }
 
     platform = _platform_from_url(_text(evidence.get("content_url")))
@@ -183,45 +273,141 @@ def _enqueue_final_v1_video_analysis(
             "provider_calls": False,
             "write_db": False,
             "reason": "unsupported video URL host",
+            "ai_analysis": _ai_analysis_state(
+                "not_requested",
+                reason="unsupported_platform",
+            ),
         }
 
-    cache = _ready_cache(conn, evidence_id=evidence_id)
+    lineage_payload = with_search_session_lineage(
+        {},
+        search_session_id=search_session_id,
+        search_session_item_id=search_session_item_id,
+        role="video",
+        parent_job_id=parent_job_id,
+    )
+
+    cache = _ready_cache(
+        conn,
+        evidence_id=evidence_id,
+        include_local_evaluation=bool(local_evaluation),
+    )
     if cache:
         return {
-            "status": "already_analyzed",
+            "status": (
+                "already_evaluated"
+                if cache.get("evaluation_only")
+                else "already_analyzed"
+            ),
             "kol_pool_id": kol_pool_id,
             "evidence_id": evidence_id,
             "derive_method": FINAL_V1_DERIVE_METHOD,
             "cache": cache,
             "provider_calls": False,
             "write_db": False,
-        }
-
-    existing_job = _active_job(conn, evidence_id=evidence_id)
-    if existing_job:
-        return {
-            "status": "already_queued",
-            "kol_pool_id": kol_pool_id,
-            "evidence_id": evidence_id,
-            "derive_method": FINAL_V1_DERIVE_METHOD,
-            "job": existing_job,
-            "provider_calls": False,
-            "write_db": False,
+            "ai_analysis": _ai_analysis_state(
+                "ready",
+                reason="cached_analysis",
+                model_readiness_status="ready_cache",
+            ),
         }
 
     prompt = f"final_v1 on_demand video:{evidence_id} {platform}"
+    execution_class = (
+        LOCAL_EVALUATION_EXECUTION_CLASS if local_evaluation else "production"
+    )
     preflight = llm_gateway.budget_preflight(
         prompt,
         purpose="vkpi_analysis_worker",
         max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
         preferred_provider="google",
+        model_override=(LOCAL_EVALUATION_MODEL if local_evaluation else PRODUCTION_VIDEO_MODEL),
+        model_fallbacks=[],
+        execution_class=execution_class,
         cost_tag=LLM_BUDGET_SCOPE,
+        require_configured=False,
     )
     budget = _google_budget(preflight)
 
+    # A durable AI job is only useful when the exact model chain is authorized
+    # now.  Previously these rows were queued despite a failed production
+    # readiness gate, so the worker could only mark them blocked and URL/search
+    # sessions remained partial forever.  Existing profile/video evidence is
+    # still returned; the optional AI stage terminates honestly as not requested.
+    if not budget["allowed"]:
+        gate_reason = str(budget.get("reason") or "provider_calls_blocked")
+        return {
+            "status": "ai_disabled",
+            "state": "not_requested",
+            "stage": "ai_disabled",
+            "terminal": True,
+            "kol_pool_id": kol_pool_id,
+            "evidence_id": evidence_id,
+            "derive_method": FINAL_V1_DERIVE_METHOD,
+            "reason": "ai_disabled",
+            "provider_gate_reason": gate_reason,
+            "budget": {key: value for key, value in budget.items() if key != "preflight"},
+            "execution_class": execution_class,
+            "claim_status": "descriptive_only",
+            "model_readiness_status": str(budget.get("model_readiness_status") or "not_ready"),
+            "ai_analysis": _ai_analysis_state(
+                "not_requested",
+                reason="ai_disabled",
+                gate_reason=gate_reason,
+                model_readiness_status=str(budget.get("model_readiness_status") or "not_ready"),
+                provider_calls_allowed=False,
+            ),
+            "evidence": {
+                "platform": platform,
+                "title": evidence.get("title"),
+                "content_url": evidence.get("content_url"),
+                "view_count": evidence.get("view_count"),
+                "duration_seconds": evidence.get("duration_seconds"),
+            },
+            "viltrox_fit_score_changed_ids": [],
+            "provider_calls": False,
+            "write_db": False,
+            "writes": [],
+        }
+
+    existing_job = _active_job(
+        conn,
+        evidence_id=evidence_id,
+        local_evaluation=bool(local_evaluation),
+    )
+    if existing_job:
+        linked_payload = attach_search_session_lineage_to_job(
+            conn,
+            existing_job.get("id"),
+            lineage_payload,
+        )
+        if linked_payload and commit:
+            conn.commit()
+        return {
+            "status": "already_queued",
+            "kol_pool_id": kol_pool_id,
+            "evidence_id": evidence_id,
+            "derive_method": FINAL_V1_DERIVE_METHOD,
+            "job": redact_local_evaluation_capability(existing_job),
+            "provider_calls": False,
+            "write_db": bool(linked_payload),
+            "lineage_linked": bool(linked_payload),
+            "ai_analysis": _ai_analysis_state(
+                "queued",
+                reason="already_queued",
+                gate_reason=str(budget.get("reason") or "provider_calls_allowed"),
+                model_readiness_status=str(budget.get("model_readiness_status") or "production_ready"),
+                provider_calls_allowed=True,
+            ),
+        }
+
     before_fit = _fit_snapshot(conn, kol_pool_id)
     triggered_by_user_id = _triggered_user_id(staff)
-    payload = {
+    payload = with_search_session_lineage({
+        "queue_lane": _video_analysis_queue_lane(
+            batch=batch,
+            local_evaluation=bool(local_evaluation),
+        ),
         "target_type": "video",
         "target_id": str(evidence_id),
         "derive_method": FINAL_V1_DERIVE_METHOD,
@@ -235,15 +421,55 @@ def _enqueue_final_v1_video_analysis(
         "source_url": evidence.get("content_url"),
         "title": evidence.get("title"),
         "creator_handle": evidence.get("kol_handle"),
-    }
-    row = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES ('video', ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id, job_type, status, created_at, updated_at
-        """,
-        (json.dumps(payload, ensure_ascii=False, default=str),),
-    ).fetchone()
+    },
+        search_session_id=search_session_id,
+        search_session_item_id=search_session_item_id,
+        role="video",
+        parent_job_id=parent_job_id,
+    )
+    if local_evaluation:
+        payload = {
+            **payload,
+            "local_evaluation": True,
+            "execution_class": LOCAL_EVALUATION_EXECUTION_CLASS,
+            "model_binding": LOCAL_EVALUATION_BINDING,
+        }
+    row, inserted = enqueue_active_apify_job(
+        conn,
+        job_type="video",
+        payload=payload,
+        idempotency_key=active_job_idempotency_key(
+            "video-final-v1-local-evaluation"
+            if local_evaluation
+            else "video-final-v1",
+            evidence_id,
+        ),
+    )
+    if local_evaluation and inserted:
+        # Sign only after PostgreSQL assigned the durable job id.  The update is
+        # in the same transaction as the insert, so a worker can never observe
+        # the unsigned intermediate row.  Copying this capability to another
+        # queue row (even for the same target) fails the worker's job-id check.
+        try:
+            capability = issue_local_evaluation_capability(
+                job_id=int(row.get("id") or 0),
+                target_type="video",
+                target_id=str(evidence_id),
+                derive_method=FINAL_V1_DERIVE_METHOD,
+                model_binding=LOCAL_EVALUATION_BINDING,
+            )
+            payload = {**payload, "_local_evaluation_capability": capability}
+            conn.execute(
+                "UPDATE apify_jobs SET payload=?::jsonb, updated_at=NOW() WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False, default=str), int(row["id"])),
+            )
+            row = {**row, "payload": payload}
+        except Exception:
+            # Never leave an unsigned local-evaluation row pending in the
+            # caller's connection.  The worker would fail closed, but the
+            # operator would also be unable to retry because of idempotency.
+            conn.rollback()
+            raise
     after_fit = _fit_snapshot(conn, kol_pool_id)
     changed_ids = [kol_pool_id] if before_fit != after_fit else []
     if changed_ids:
@@ -252,13 +478,28 @@ def _enqueue_final_v1_video_analysis(
     if commit:
         conn.commit()
     return {
-        "status": "queued",
+        "status": "queued" if inserted else "already_queued",
         "kol_pool_id": kol_pool_id,
         "evidence_id": evidence_id,
         "derive_method": FINAL_V1_DERIVE_METHOD,
-        "job": dict(row) if row else {},
+        "job": redact_local_evaluation_capability(row),
         "budget": {key: value for key, value in budget.items() if key != "preflight"},
-        "budget_gate": "record_only",
+        "budget_gate": "enforced_at_enqueue",
+        "execution_class": execution_class,
+        "evaluation_only": bool(local_evaluation),
+        "claim_status": "descriptive_only",
+        "model_readiness_status": (
+            "evaluation_only_not_production_ready"
+            if local_evaluation
+            else str(budget.get("model_readiness_status") or "production_ready")
+        ),
+        "ai_analysis": _ai_analysis_state(
+            "queued",
+            reason="analysis_queued",
+            gate_reason=str(budget.get("reason") or "provider_calls_allowed"),
+            model_readiness_status=str(budget.get("model_readiness_status") or "production_ready"),
+            provider_calls_allowed=True,
+        ),
         "evidence": {
             "platform": platform,
             "title": evidence.get("title"),
@@ -268,8 +509,8 @@ def _enqueue_final_v1_video_analysis(
         },
         "viltrox_fit_score_changed_ids": changed_ids,
         "provider_calls": False,
-        "write_db": True,
-        "writes": ["apify_jobs"],
+        "write_db": inserted,
+        "writes": ["apify_jobs"] if inserted else [],
     }
 
 
@@ -278,6 +519,7 @@ def enqueue_final_v1_video_analysis(
     kol_pool_id: int,
     evidence_id: int,
     staff: dict[str, Any] | None = None,
+    local_evaluation: bool = False,
 ) -> dict[str, Any]:
     conn = get_conn()
     return _enqueue_final_v1_video_analysis(
@@ -285,6 +527,7 @@ def enqueue_final_v1_video_analysis(
         kol_pool_id=int(kol_pool_id),
         evidence_id=int(evidence_id),
         staff=staff,
+        local_evaluation=bool(local_evaluation),
     )
 
 
@@ -337,6 +580,7 @@ def enqueue_final_v1_video_analysis_batch(
     queued = 0
     skipped = 0
     errors = 0
+    ai_disabled = 0
     for item in normalized:
         kol_pool_id = item.get("kol_pool_id")
         evidence_id = item.get("evidence_id")
@@ -359,6 +603,8 @@ def enqueue_final_v1_video_analysis_batch(
                 queued += 1
             else:
                 skipped += 1
+                if result.get("status") == "ai_disabled":
+                    ai_disabled += 1
         except LookupError as exc:
             errors += 1
             results.append({"status": "not_found", "kol_pool_id": kol_pool_id, "evidence_id": evidence_id, "reason": str(exc)})
@@ -371,8 +617,14 @@ def enqueue_final_v1_video_analysis_batch(
         "requested": len(normalized),
         "queued": queued,
         "skipped": skipped,
+        "ai_disabled": ai_disabled,
         "errors": errors,
-        "budget_gate": "record_only",
+        "budget_gate": "enforced_at_enqueue",
+        "ai_analysis": _ai_analysis_state(
+            "queued" if queued else "not_requested",
+            reason="analysis_queued" if queued else "ai_disabled" if ai_disabled else "no_eligible_video",
+            provider_calls_allowed=queued > 0,
+        ),
         "items": results,
         "write_db": queued > 0,
         "writes": ["apify_jobs"] if queued else [],

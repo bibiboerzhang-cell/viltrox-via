@@ -17,6 +17,7 @@ MEDIA_PROXY_HOST_SUFFIXES = (
     ".googleusercontent.com",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",
+    ".tiktokcdn-eu.com",
     ".byteoversea.com",
     ".apifyusercontent.com",
     ".akamaized.net",

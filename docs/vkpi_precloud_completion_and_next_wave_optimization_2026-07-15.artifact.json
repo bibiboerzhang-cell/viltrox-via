@@ -1,0 +1,641 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "V-KPI 4.5 超级并发施工路线 V2（2026-07-15）",
+    "description": "在上一版完整审计基础上冻结的一轮式实施路线：可靠性优先，性能、Dealer 全美地图、智能体与自训练、真实业务代码入口并行，最终汇合到同一不可变 RC。",
+    "generatedAt": "2026-07-15T17:46:20Z",
+    "cards": [
+      {
+        "id": "required_endpoints",
+        "description": "隔离候选 8104 的只读本地发布验收。",
+        "dataset": "local_summary",
+        "sourceId": "local_release",
+        "metrics": [
+          { "label": "必需接口通过", "field": "required_passed", "format": "number" },
+          { "label": "必需接口总数", "field": "required_total", "format": "number" }
+        ]
+      },
+      {
+        "id": "page_families",
+        "description": "无扩展、已认证浏览器覆盖的页面族。",
+        "dataset": "browser_summary",
+        "sourceId": "browser_gate",
+        "metrics": [
+          { "label": "页面族通过", "field": "pages_passed", "format": "number" },
+          { "label": "页面族要求", "field": "pages_required", "format": "number" }
+        ]
+      },
+      {
+        "id": "local_p95",
+        "description": "48 个必需接口在一次本地只读验收中的延迟 P95；不是云端用户 SLA。",
+        "dataset": "local_summary",
+        "sourceId": "local_release",
+        "metrics": [
+          { "label": "本地接口 P95", "field": "latency_p95_ms", "format": "number", "unit": "ms" }
+        ]
+      },
+      {
+        "id": "browser_blockers",
+        "description": "最终无扩展浏览器门禁中的阻断事件。",
+        "dataset": "browser_summary",
+        "sourceId": "browser_gate",
+        "metrics": [
+          { "label": "浏览器阻断事件", "field": "blocking_events", "format": "number" }
+        ]
+      },
+      {
+        "id": "dirty_paths",
+        "description": "尚未按功能范围冻结与审查的当前工作树路径。",
+        "dataset": "repo_summary",
+        "sourceId": "repo_verify",
+        "metrics": [
+          { "label": "基线脏路径", "field": "dirty_paths", "format": "number" }
+        ]
+      },
+      {
+        "id": "llm_ready",
+        "description": "满足精确模型、签名 probe/evaluation 与 trust-root 条件的生产模型数量。",
+        "dataset": "llm_summary",
+        "sourceId": "llm_readiness",
+        "metrics": [
+          { "label": "生产就绪模型", "field": "production_ready_models", "format": "number" },
+          { "label": "候选模型", "field": "candidate_models", "format": "number" }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "latency_hotspots",
+        "title": "本地隔离候选的慢端点",
+        "subtitle": "2026-07-15 单次 GET-only 验收，单位为毫秒；用于定位，不代表云端 SLA。",
+        "type": "bar",
+        "dataset": "latency_hotspots",
+        "sourceId": "local_release",
+        "encodings": {
+          "x": { "field": "endpoint", "type": "ordinal", "label": "端点" },
+          "y": { "field": "latency_ms", "type": "quantitative", "label": "延迟", "format": "number" }
+        },
+        "yAxisTitle": "毫秒",
+        "valueFormat": "number",
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "completion_matrix",
+        "title": "当前完成与未完成矩阵",
+        "subtitle": "A=同一候选已有证据；B=可本地使用但需空态或降级；C=上云前必须清零；D=授权后闭环。",
+        "dataset": "completion_matrix",
+        "sourceId": "reconciliation",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "序", "format": "number" },
+          { "field": "area", "label": "模块", "type": "text" },
+          { "field": "state", "label": "状态", "type": "text" },
+          { "field": "current", "label": "当前真值", "type": "text" },
+          { "field": "remaining", "label": "仍缺什么", "type": "text" },
+          { "field": "release_impact", "label": "发布影响", "type": "text" }
+        ]
+      },
+      {
+        "id": "performance_review",
+        "title": "用户性能复核的当前代码核验",
+        "subtitle": "逐项区分仍存在、数字已变化和已解除门禁；历史基准未重放时不冒充当前生产收益。",
+        "dataset": "performance_review",
+        "sourceId": "performance_code_audit",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "优先级", "format": "number" },
+          { "field": "issue", "label": "问题", "type": "text" },
+          { "field": "status", "label": "当前状态", "type": "text" },
+          { "field": "evidence", "label": "当前代码证据", "type": "text" },
+          { "field": "next_action", "label": "精准修法", "type": "text" },
+          { "field": "acceptance", "label": "验收", "type": "text" }
+        ]
+      },
+      {
+        "id": "cloud_blockers",
+        "title": "上云前 10 个硬门",
+        "subtitle": "8 个云基础设施 blocker，加 2 个候选完整性硬门；普通 deploy 不得通过绕过开关规避。",
+        "dataset": "cloud_blockers",
+        "sourceId": "cloud_preflight",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "序", "format": "number" },
+          { "field": "gate", "label": "硬门", "type": "text" },
+          { "field": "current", "label": "当前状态", "type": "text" },
+          { "field": "exit", "label": "清零条件", "type": "text" },
+          { "field": "rollback", "label": "失败回滚", "type": "text" }
+        ]
+      },
+      {
+        "id": "execution_waves",
+        "title": "完整一轮的关键路径",
+        "subtitle": "从一次排查到最终 RC commit 的硬顺序；并行车道只缩短日历时间，不改变门禁。",
+        "dataset": "execution_waves",
+        "sourceId": "reconciliation",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "spacious",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "波次", "format": "number" },
+          { "field": "work", "label": "工作", "type": "text" },
+          { "field": "estimate", "label": "预计", "type": "text" },
+          { "field": "acceptance", "label": "验收门槛", "type": "text" },
+          { "field": "dependency", "label": "依赖/边界", "type": "text" }
+        ]
+      },
+      {
+        "id": "one_pass_state_machine",
+        "title": "死命令状态机",
+        "subtitle": "每个状态只进入一次；冻结后只接受安全缺陷和测试回归，不重新讨论范围。",
+        "dataset": "one_pass_state_machine",
+        "sourceId": "execution_strategy",
+        "defaultSort": { "field": "step", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "step", "label": "步", "format": "number" },
+          { "field": "phase", "label": "状态", "type": "text" },
+          { "field": "action", "label": "必须执行", "type": "text" },
+          { "field": "output", "label": "固定产物", "type": "text" },
+          { "field": "exit", "label": "退出条件", "type": "text" },
+          { "field": "hard_stop", "label": "硬停止", "type": "text" }
+        ]
+      },
+      {
+        "id": "superburst_lanes",
+        "title": "超级并发车道与文件所有权",
+        "subtitle": "8 条逻辑车道，以 4 个并发槽滚动执行；共享热点文件只有集成主线可写。",
+        "dataset": "superburst_lanes",
+        "sourceId": "execution_strategy",
+        "defaultSort": { "field": "lane", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "lane", "label": "车道", "type": "text" },
+          { "field": "slot", "label": "并发位", "type": "text" },
+          { "field": "owner_scope", "label": "唯一文件范围", "type": "text" },
+          { "field": "exact_work", "label": "施工包", "type": "text" },
+          { "field": "merge_gate", "label": "车道出口", "type": "text" },
+          { "field": "estimate", "label": "工时", "type": "text" }
+        ]
+      },
+      {
+        "id": "reliability_45_packages",
+        "title": "可靠性 4.5 施工包",
+        "subtitle": "五维各 20 分、总分至少 90；任一恢复、身份、迁移、容量硬门失败即不得标 4.5。",
+        "dataset": "reliability_45_packages",
+        "sourceId": "reliability_plan",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "序", "format": "number" },
+          { "field": "pack", "label": "包", "type": "text" },
+          { "field": "files", "label": "唯一文件所有权", "type": "text" },
+          { "field": "work", "label": "精准修改", "type": "text" },
+          { "field": "acceptance", "label": "验收数字", "type": "text" },
+          { "field": "estimate", "label": "工时", "type": "text" }
+        ]
+      },
+      {
+        "id": "dealer_v2_packages",
+        "title": "Dealer 全美地图 V2 施工包",
+        "subtitle": "首批仅 Viltrox、Nikon、Sony、Canon；全量定义为所选官方快照 100% 行对账，不冒充互联网绝对全覆盖。",
+        "dataset": "dealer_v2_packages",
+        "sourceId": "dealer_v2_audit",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "序", "format": "number" },
+          { "field": "pack", "label": "施工包", "type": "text" },
+          { "field": "code_scope", "label": "代码落点", "type": "text" },
+          { "field": "exact_work", "label": "精准修改", "type": "text" },
+          { "field": "acceptance", "label": "验收", "type": "text" }
+        ]
+      },
+      {
+        "id": "ai_learning_business_packages",
+        "title": "智能体、自训练与真实业务代码包",
+        "subtitle": "现有 Advisor/记忆骨架继续复用；学习只走离线评估和 canary，业务连接器在未授权时保持 fail-closed。",
+        "dataset": "ai_learning_business_packages",
+        "sourceId": "ai_learning_audit",
+        "defaultSort": { "field": "order", "direction": "asc" },
+        "density": "dense",
+        "layout": "full",
+        "columns": [
+          { "field": "order", "label": "序", "format": "number" },
+          { "field": "pack", "label": "施工包", "type": "text" },
+          { "field": "code_scope", "label": "代码落点", "type": "text" },
+          { "field": "exact_work", "label": "精准修改", "type": "text" },
+          { "field": "acceptance", "label": "验收", "type": "text" },
+          { "field": "external_boundary", "label": "外部边界", "type": "text" }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "repo_verify",
+        "label": "Current repository and static verification state",
+        "path": "scripts/verify.sh",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Read-only repository identity, worktree counts, diff check, and the canonical verification entrypoint.",
+          "sql": "SELECT 'codex/dashboard-real' AS branch, 'fe3871c438ff9de8884589e052d8dd8b82b94b83' AS head_sha, 795 AS tracked_changes, 499 AS untracked_paths, 1294 AS dirty_paths, 0 AS staged_paths, 0 AS conflicts, TRUE AS diff_check_passed",
+          "executed_at": "2026-07-15T17:46:20Z",
+          "tables_used": ["scripts/verify.sh", "git-index-and-working-tree"]
+        }
+      },
+      {
+        "id": "local_release",
+        "label": "Final isolated local release acceptance",
+        "path": "runtime/isolated-acceptance/20260715T064553Z/local-release-acceptance-final-after-release-redline-fixes-20260715T1710Z.json",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Reviewed GET-only, loopback-only local release acceptance for candidate migration 259.",
+          "sql": "SELECT 48 AS required_passed, 48 AS required_total, 782.7 AS latency_p95_ms, 39 AS data_real, 8 AS data_empty, 1 AS data_degraded",
+          "executed_at": "2026-07-15T17:10:48Z",
+          "tables_used": ["runtime/isolated-acceptance/20260715T064553Z/local-release-acceptance-final-after-release-redline-fixes-20260715T1710Z.json"]
+        }
+      },
+      {
+        "id": "browser_gate",
+        "label": "Final extension-free browser gate",
+        "path": "runtime/isolated-acceptance/20260715T064553Z/browser-gate-final-after-redline-fixes-20260715T1714Z/gate-report.json",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Authenticated, extension-free 21-page browser console and network gate.",
+          "sql": "SELECT 21 AS pages_passed, 21 AS pages_required, 0 AS blocking_events, 0 AS blocking_http_errors, 0 AS blocking_loading_failures, 7 AS nonblocking_aborted_fetches",
+          "executed_at": "2026-07-15T17:16:43Z",
+          "tables_used": ["runtime/isolated-acceptance/20260715T064553Z/browser-gate-final-after-redline-fixes-20260715T1714Z/gate-report.json"]
+        }
+      },
+      {
+        "id": "kol_mapping",
+        "label": "KOL URL progressive mapping browser evidence",
+        "path": "runtime/isolated-acceptance/20260715T064553Z/browser-url-result-progressive-mapping-20260715T163751Z.json",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Reviewed profile URL and video URL staged-result mapping evidence.",
+          "sql": "SELECT 'youtube_profile' AS evidence_kind, 30000 AS followers, 12 AS stored_videos, 1 AS deep_analysis_ready, 329 AS commenter_sample UNION ALL SELECT 'instagram_video', 398000, 8, 1, 0",
+          "executed_at": "2026-07-15T16:37:51Z",
+          "tables_used": ["runtime/isolated-acceptance/20260715T064553Z/browser-url-result-progressive-mapping-20260715T163751Z.json"]
+        }
+      },
+      {
+        "id": "llm_readiness",
+        "label": "Browser-observed LLM readiness state",
+        "path": "runtime/isolated-acceptance/20260715T064553Z/browser-llm-readiness-20260715T1622Z.json",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Reviewed candidate, configured, probed, evaluated and production-ready model counts.",
+          "sql": "SELECT 18 AS candidate_models, 6 AS configured_models, 0 AS probed_models, 0 AS evaluated_models, 0 AS production_ready_models, 0 AS ready_task_bindings, 13 AS blocked_task_bindings",
+          "executed_at": "2026-07-15T16:22:00Z",
+          "tables_used": ["runtime/isolated-acceptance/20260715T064553Z/browser-llm-readiness-20260715T1622Z.json"]
+        }
+      },
+      {
+        "id": "performance_code_audit",
+        "label": "User performance review reconciled with current code",
+        "path": "backend/app/domains/kol/pool.py",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Read-only line inspection and call-site counts across the current dirty tree; historical timings remain labeled as prior measurements.",
+          "sql": "SELECT 486 AS table_exists_calls, 146 AS table_exists_files, 318653 AS max_chunk_bytes, 88973 AS max_chunk_gzip9_bytes, 988 AS cockpit_app_lines, 77 AS cockpit_direct_hook_calls",
+          "executed_at": "2026-07-15T17:24:00Z",
+          "tables_used": [
+            "backend/app/domains/kol/pool.py",
+            "backend/app/domains/analysis/cache_repo.py",
+            "frontend/src/components/vkpi/cockpit/components/KOLDetailDrawer.tsx",
+            "backend/app/domains/kol/roi_aggregate.py",
+            "backend/app/domains/attribution/gmv_aggregation.py",
+            "backend/app/db/connection.py",
+            "backend/app/domains/projects/workflow_detail.py",
+            "backend/app/domains/kol/my_kol_aggregate.py",
+            "frontend/vite.config.ts",
+            "frontend/src/components/vkpi/cockpit/CockpitApp.tsx"
+          ]
+        }
+      },
+      {
+        "id": "cloud_preflight",
+        "label": "Legacy-to-atomic cloud preflight and prior cloud decision",
+        "path": "scripts/ops/legacy_to_atomic_preflight.py",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Read-only preflight contract plus the latest reviewed cloud snapshot in this task. The remote check must be rerun after remediation.",
+          "sql": "SELECT * FROM (VALUES ('release.atomic_helper_present'), ('systemd.nonroot_app_identity'), ('workers.lane_contract'), ('environment.app_readonly'), ('health.release_sha_aligned'), ('redis.aof_enabled'), ('backup.encrypted_environment_snapshot'), ('backup.off_host_receipt')) AS blockers(blocking_check_id)",
+          "tables_used": ["scripts/ops/legacy_to_atomic_preflight.py", "runtime/ops/vkpi-precloud-final-decision-20260714.json"]
+        }
+      },
+      {
+        "id": "reconciliation",
+        "label": "Cross-source release reconciliation",
+        "path": "runtime/isolated-acceptance/20260715T064553Z/local-release-acceptance-final-after-release-redline-fixes-20260715T1710Z.json",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Cross-check of repository, static gate, runtime, browser, KOL mapping, LLM readiness and cloud preflight evidence.",
+          "sql": "SELECT 48 AS required_endpoints_passed, 21 AS browser_page_families_passed, 0 AS browser_blocking_events, 1294 AS dirty_paths, 0 AS production_ready_models, 8 AS cloud_infrastructure_blockers, 2 AS release_integrity_blockers",
+          "executed_at": "2026-07-15T17:46:20Z",
+          "tables_used": [
+            "scripts/verify.sh",
+            "runtime/isolated-acceptance/20260715T064553Z/local-release-acceptance-final-after-release-redline-fixes-20260715T1710Z.json",
+            "runtime/isolated-acceptance/20260715T064553Z/browser-gate-final-after-redline-fixes-20260715T1714Z/gate-report.json",
+            "runtime/isolated-acceptance/20260715T064553Z/browser-url-result-progressive-mapping-20260715T163751Z.json",
+            "runtime/isolated-acceptance/20260715T064553Z/browser-llm-readiness-20260715T1622Z.json",
+            "scripts/ops/legacy_to_atomic_preflight.py"
+          ]
+        }
+      },
+      {
+        "id": "execution_strategy",
+        "label": "One-pass execution and parallel ownership contract",
+        "path": "scripts/verify.sh",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Frozen implementation sequencing derived from the current repository, four available concurrency slots, and one immutable release-candidate join gate.",
+          "sql": "SELECT 8 AS logical_lanes, 4 AS runtime_concurrency_slots, 1 AS integration_writer, 1 AS immutable_rc_join_gate, 1294 AS baseline_dirty_paths",
+          "executed_at": "2026-07-15T17:46:20Z",
+          "tables_used": ["scripts/verify.sh", "git-index-and-working-tree", "docs/vkpi_precloud_completion_and_next_wave_optimization_2026-07-15.artifact.json"]
+        }
+      },
+      {
+        "id": "reliability_plan",
+        "label": "Reliability 4.5 runtime and release audit",
+        "path": "scripts/ops/legacy_to_atomic_preflight.py",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Read-only reconciliation of 8102, isolated 8104, Redis persistence, fleet shape, migration identity, backup and cloud preflight requirements.",
+          "sql": "SELECT * FROM (VALUES ('8102',256,3,1,'appendonly=no'),('8104',259,1,0,'appendonly=yes'),('cloud_previous',233,NULL,NULL,'8 blockers')) AS runtime(name,migration,apify_workers,redis_workers,persistence_state)",
+          "executed_at": "2026-07-15T17:42:00Z",
+          "tables_used": ["scripts/ops/legacy_to_atomic_preflight.py", "scripts/ops/atomic_release_layout.py", "scripts/verify_runtime_health.py", "scripts/verify_redis_worker_health.py", "runtime/ops/vkpi-precloud-final-decision-20260714.json"]
+        }
+      },
+      {
+        "id": "dealer_v2_audit",
+        "label": "Dealer directory, evidence and official-source audit",
+        "path": "backend/app/domains/commerce/dealer_directory_adapters.py",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Current local Dealer facts plus reviewed official Nikon, Sony and Canon locator surfaces; Viltrox authorization remains dependent on an official/company feed.",
+          "sql": "SELECT * FROM (VALUES ('current_db','5 dealers; 3 geocoded; 0 Viltrox authorized'),('Nikon','official authorized-dealer PDF'),('Sony','official retailer directory'),('Canon','official where-to-buy; branch scope must be verified'),('Viltrox','official/company dealer feed required')) AS dealer_source(source_name,reviewed_scope)",
+          "executed_at": "2026-07-15T17:45:00Z",
+          "tables_used": ["migrations/144_vkpi_dealers.sql", "migrations/241_vkpi_dealer_source_truth.sql", "migrations/242_vkpi_dealer_public_contact.sql", "migrations/248_vkpi_dealer_event_source_passports.sql", "migrations/257_vkpi_dealer_event_candidate_staging.sql", "migrations/259_vkpi_dealer_reviewed_evidence.sql", "backend/app/domains/commerce/dealer_identity.py", "backend/app/domains/commerce/dealer_directory_adapters.py", "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf", "https://electronics.sony.com/retailers", "https://www.usa.canon.com/contact-us/where-to-buy", "https://viltrox.com/pages/refund-policy"]
+        }
+      },
+      {
+        "id": "ai_learning_audit",
+        "label": "Advisor, memory, learning and business-integration audit",
+        "path": "backend/app/domains/advisor/service.py",
+        "query": {
+          "engine": "snapshot_sql",
+          "language": "sql",
+          "description": "Read-only code and current local data audit: Advisor AI-off core exists, while production model readiness, finalized outcomes, resolved learning feedback and connected business integrations remain incomplete.",
+          "sql": "SELECT 18 AS candidate_models, 8 AS unique_production_bindings, 0 AS exact_probes, 0 AS actual_model_evaluations, 1 AS advisor_threads, 2 AS advisor_messages, 0 AS advisor_memory_facts, 0 AS via_learning_sessions, 2966 AS knowledge_entities, 15660 AS knowledge_facts, 12 AS open_memory_feedback, 804 AS recommendation_rows, 0 AS finalized_outcomes, 0 AS real_non_demo_feedback, 2168 AS forecast_rows, 2 AS forecast_rows_with_actual, 114 AS recent_events, 1.0 AS trace_rate, 0.0 AS provenance_rate, 0 AS connected_business_integrations",
+          "executed_at": "2026-07-15T17:45:00Z",
+          "tables_used": ["backend/app/domains/advisor/service.py", "backend/app/domains/advisor/repository_memory.py", "backend/app/services/via/shadow_learning.py", "backend/app/domains/learning/learning_loop.py", "backend/app/domains/settings/business_integrations.py", "frontend/src/components/vkpi/cockpit/pages/MarketingAdvisorWorkspace.tsx", "frontend/src/components/vkpi/pages/settings/SettingsBusinessIntegrationsPanel.tsx"]
+        }
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# V-KPI 4.5 超级并发施工路线 V2（2026-07-15）"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "body": "## 技术结论：沿用上一版全部优化项，但改成一次冻结、八车道施工、一个 RC 汇合\n\n- **当前能力证据不变：**8104/migration259 的静态门禁、48/48 必需接口、21/21 页面族和浏览器阻断 0 均通过；KOL 账号 URL、视频 URL、播放器、时间戳、阶段结果与历史记录已能正确映射。\n- **当前仍是云端 NO-GO：**工作树基线为 1,294 个未冻结路径；8102 是 migration256 且 Worker/Redis 拓扑较完整，8104 是 migration259 但 fleet 不完整，云端上轮为 migration233 并有 8 个基础设施 blocker。三者不能拼成一个虚假的完成态。\n- **上一版性能路线全部保留：**KOL detail N+1、bulk status、ROI/GMV 批量聚合、GTM cold/warm、Project/My KOL 分页、Worker 队列 SPT、评论批量化和 LLM 连接池继续进入施工包；附件中过时的 raw chunk 失败不再重复修。\n- **超级并发的真实形态：**逻辑上拆成 8 条独立车道，受当前 4 个并发槽限制，以 1 个集成主线 + 3 个执行槽滚动换班。共享迁移、路由注册、设置页和发布脚本只有一个写者；车道在同一个 RC 门禁汇合，避免并发覆盖。\n- **Dealer 范围已纠正：**目标是把全美线下门店作为真实地点录入地图；Nikon、Sony、Canon 官方名录用于建立品牌关系和补全实体，Viltrox 授权必须来自 Viltrox 官方/公司名录。竞品授权、网页出现 Viltrox 产品、Viltrox 官方授权是三个独立字段，绝不互相推断。\n- **4.5 顺序冻结：**先让可靠性达到可证明的 4.5；智能体、每用户记忆和自训练归为一条受治理的学习主线；Shopify、库存、成本和归因本轮只完成 fail-closed 适配器与设置入口，授权后才接真实数据。"
+      },
+      {
+        "id": "headline_metrics",
+        "type": "metric-strip",
+        "cardIds": ["required_endpoints", "page_families", "local_p95", "browser_blockers", "dirty_paths", "llm_ready"]
+      },
+      {
+        "id": "completion_intro",
+        "type": "markdown",
+        "body": "## 已完成的是隔离候选能力，不等于主本地或云端已经升级\n\n当前应使用四类状态而不是一个混合百分比：A 是同一候选已有证据，B 是本地可用但必须保持空态或降级，C 是上云前必须清零，D 是需要外部授权后才能形成真实闭环。最重要的差异是：**8104 的候选证据不能冒充 8102 已升级，更不能冒充云端已发布。**"
+      },
+      { "id": "completion_table", "type": "table", "tableId": "completion_matrix", "layout": "full" },
+      {
+        "id": "performance_intro",
+        "type": "markdown",
+        "body": "## 性能复核中，七类后端问题仍成立，两类前端结论已变化\n\n下一波最高 ROI 不是盲目增加 worker，而是先减少单请求内部的重复 SQL、独立连接和重复 HTTP。附件中的历史基准有些仍可由代码精确推出，有些必须在最终 RC 上重放；因此报告把“结构确认”和“当前速度实测”分开。chunk 已经低于预算，CockpitApp 的大文件与循环依赖应在云端首轮稳定后由 React Profiler 驱动处理。"
+      },
+      { "id": "performance_table", "type": "table", "tableId": "performance_review", "layout": "full" },
+      {
+        "id": "latency_intro",
+        "type": "markdown",
+        "body": "## 当前慢点主要集中在 GTM 聚合，而不是所有接口\n\n一次只读隔离验收中，GTM Summary 为 2,691.6 ms，GTM Preview 为 1,402.8 ms；其余高位端点约 0.78 s。两个 GTM 路由已经有 30 秒缓存和 singleflight 基础，所以精准动作不是重复“加缓存”，而是增加逐段计时与 EXPLAIN、验证共享缓存命中、区分 cold/warm，并拆开最慢聚合。目标设为 cold p95：Summary ≤1,500 ms、Preview ≤900 ms；warm ≤250 ms；全门禁 p95 ≤750 ms。"
+      },
+      { "id": "latency_chart", "type": "chart", "chartId": "latency_hotspots", "layout": "full" },
+      {
+        "id": "definitions_method",
+        "type": "markdown",
+        "body": "## 证据范围与判定方法\n\n**候选范围。**仓库为 `codex/dashboard-real`，HEAD 为 `fe3871c438ff9de8884589e052d8dd8b82b94b83`；工作区继续变化，因此 HEAD 只是基线，不代表所有未提交代码。最新完整运行证据来自 8104/migration 259 的隔离候选。\n\n**完成定义。**只有代码、运行、浏览器与版本身份指向同一候选时才计为 A。空数据诚实展示、AI readiness 失败关闭但基础流程可用计为 B。影响可回滚发布、数据迁移或运行身份的缺口计为 C。Shopify、生产 LLM 与真实 outcome 等需要授权的闭环计为 D。\n\n**生产就绪模型。**必须是精确 task/model binding，具有独立 trust root 签名的 live probe、30-case actual evaluation、预算与熔断证据；“configured”或 Stage-1 connectivity 不等于 production-ready。\n\n**本轮方法。**只读检查仓库、进程、PostgreSQL 运行身份、现有 JSON 证据与用户附件；没有部署、commit、付费 provider 调用或业务数据写入。"
+      },
+      {
+        "id": "cloud_intro",
+        "type": "markdown",
+        "body": "## 真正的上云主线是 8 个基础设施 blocker 加 2 个候选完整性硬门\n\n普通部署脚本要求已经存在严格对齐、可验证的回滚锚；当前云端拓扑不满足这个前提。正确做法是单独实现并评审一次性 exact-state bootstrap，捕获旧状态后原子修复，再回到普通 strict deploy。**不得给普通 deploy 增加 bypass。**"
+      },
+      { "id": "cloud_table", "type": "table", "tableId": "cloud_blockers", "layout": "full" },
+      {
+        "id": "one_pass_intro",
+        "type": "markdown",
+        "body": "## 执行死命令：排查一次、冻结一次、修改一次、全测一次、最终提交一次\n\nR0 结束后生成基线 JSON、文件归属清单、迁移编号分配和验收预算；此后不再循环讨论范围。并行车道只能修改冻结清单内文件，发现需求遗漏先记入下一版 backlog。唯一例外是 P0 安全缺陷或测试暴露的回归；它们由集成主线裁决并记录原因。"
+      },
+      { "id": "one_pass_table", "type": "table", "tableId": "one_pass_state_machine", "layout": "full" },
+      {
+        "id": "superburst_intro",
+        "type": "markdown",
+        "body": "## 超级迸发不是多人同时改同一文件，而是八条逻辑车道持续占满四个槽\n\n当前团队工具最多同时运行 4 个槽，所以采用 1 个集成主线加 3 个滚动执行槽。车道完成只代表局部 patch 可合并；只有集成主线能修改 `verify.sh`、发布脚本、迁移编号、路由注册和设置页总装。每 4–6 小时换班一次，空闲槽立即领取下一条无依赖车道，避免等待。"
+      },
+      { "id": "superburst_table", "type": "table", "tableId": "superburst_lanes", "layout": "full" },
+      {
+        "id": "reliability45_intro",
+        "type": "markdown",
+        "body": "## 可靠性 4.5 先行：必须在同一个候选上同时拥有新 schema、完整 fleet、恢复链和容量证据\n\n8102 的 3 Apify + 1 Redis 不能替 8104 的 migration259 作证，8104 的 48/48 也不能替主本地或云端的完整 Worker 拓扑作证。可靠性 4.5 采用五维各 20 分、总分至少 90 的评分；不可变 RC、恢复与持久化、非 root 同 SHA 拓扑、同候选 48/48+21/21、容量与 72 小时稳定性中任何硬门失败，评分直接不成立。"
+      },
+      { "id": "reliability45_table", "type": "table", "tableId": "reliability_45_packages", "layout": "full" },
+      {
+        "id": "dealer_v2_intro",
+        "type": "markdown",
+        "body": "## Dealer V2 只做全美线下地点的完整名录与地图，不再扩散来源\n\n一个物理分店只有一个 canonical location 和一个地图 pin，Nikon、Sony、Canon、Viltrox 是多条品牌关系。Nikon 官方 PDF 与 Sony 官方 retailer 目录可作为品牌来源；Canon 当前来源若只证明组织级关系，就不能直接生成分店授权；Viltrox 公开页面没有可验证的全美 Dealer 名录，因此必须预留公司 CSV/API/私有主数据入口。零售商网页出现 Viltrox 产品只记 `product_observed`，不等于授权，更不等于实时库存。"
+      },
+      { "id": "dealer_v2_table", "type": "table", "tableId": "dealer_v2_packages", "layout": "full" },
+      {
+        "id": "ai_learning_intro",
+        "type": "markdown",
+        "body": "## 智能体与自训练合为一条受治理学习链，真实业务只交付授权即接通的代码\n\nAdvisor 对话、SSE 分阶段、owner-scope、draft-only、记忆候选确认/拒绝和预算闸已经存在，不应推倒重做。下一步把会话、建议、人工决定、真实结果和反馈统一写入带 provenance 的事件链，再做离线策略学习与 shadow evaluation。第一阶段不允许模型在线自动改权重；生产 LLM 仍需逐 binding 签名 probe、30-case actual eval、预算、熔断与 canary。Shopify、库存、成本、归因则只完成 provider contract、Secret 引用、dry-run、同步回执和撤销流程，未授权保持 `awaiting_authorization`。"
+      },
+      { "id": "ai_learning_table", "type": "table", "tableId": "ai_learning_business_packages", "layout": "full" },
+      {
+        "id": "execution_intro",
+        "type": "markdown",
+        "body": "## 一轮日历计划：源码与本地验证 3–5 个工作日，完整可靠性闭环 6–8 个日历日\n\nR1/R2/R3/R5 与性能、Dealer、AI/业务叶子模块可并行；R4 迁移与回滚必须等待恢复链和不可变清单；随后才进入同 SHA 的功能、浏览器、容量和 72 小时 soak。Dealer 官方数据、生产 LLM 和 Shopify 授权不在代码工期承诺内：缺数据时交付可审计空态和待授权入口，不伪造完成。"
+      },
+      { "id": "execution_table", "type": "table", "tableId": "execution_waves", "layout": "full" },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "body": "## 不确定性与鲁棒性边界\n\n- 附件中的 145 ms、1.09 MB、607 KB、741 KB、16.8× 与 90× 是此前只读测量或合成基准；代码结构仍证明问题存在，但最终收益必须在冻结 RC 和生产规模数据上重放。\n- 最终浏览器门禁已完整通过；7 个页面切换导致的 `net::ERR_ABORTED` 是非阻断取消请求，不能描述成所有网络事件为零。\n- 8102 与 8104 分别证明不同能力，不能交叉补证；可靠性 4.5 只接受同 SHA、同 migration、同 fleet、同恢复链的证据。\n- 当前没有真实云端 32 VU 饱和、R2/Redis 恢复或 72 小时 soak 证据；压力测试每一级失败就停止升级并记录真实极限。\n- Dealer 的“全量”仅指所选官方来源某次快照 100% 行对账。美国全部相机门店的未知市场分母保持 `null`；Canon 组织关系、竞品授权、Viltrox 产品页和 Viltrox 授权不得互相推断。\n- Shopify、真实库存/成本/归因、finalized outcome、非 demo 已解决反馈、带 actual 的评估与生产 LLM 授权仍缺；代码可以完成，但没有外部数据就不能声明真实业务或 AI 4.5。"
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 只剩三项外部依赖，不再作为代码范围讨论\n\n1. **云维护与恢复责任人：**需要维护窗口、离线解密人和 off-host 存储责任人；缺任一角色，代码可完成但可靠性 4.5 不能签字。\n2. **Viltrox 官方 Dealer 数据：**公司需提供可核验 CSV/API/私有主数据或官方平台清单；未提供时状态固定为 `awaiting_company_feed`。\n3. **生产授权：**Shopify、库存、成本、归因与精确 LLM binding 的凭证、预算和 canary 许可均在设置页待授权；默认先发布 AI-off 内部测试站，不自动启用外部调用。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-15T17:46:20Z",
+    "status": "ready",
+    "datasets": {
+      "local_summary": [
+        { "required_passed": 48, "required_total": 48, "latency_p95_ms": 782.7, "data_real": 39, "data_empty": 8, "data_degraded": 1 }
+      ],
+      "browser_summary": [
+        { "pages_passed": 21, "pages_required": 21, "blocking_events": 0, "blocking_http_errors": 0, "blocking_loading_failures": 0, "nonblocking_aborted_fetches": 7 }
+      ],
+      "repo_summary": [
+        { "tracked_changes": 795, "untracked_paths": 499, "dirty_paths": 1294, "staged_paths": 0, "conflicts": 0 }
+      ],
+      "llm_summary": [
+        { "candidate_models": 18, "configured_models": 6, "probed_models": 0, "evaluated_models": 0, "production_ready_models": 0, "ready_task_bindings": 0, "blocked_task_bindings": 13 }
+      ],
+      "completion_matrix": [
+        { "order": 1, "area": "静态工程门禁", "state": "A 已完成", "current": "后端 3293 passed / 779 skipped / 45 subtests；前端 123 files / 958 tests；TS、生产构建、bundle、DAG、redline、diff check 通过。", "remaining": "779 个 PG lane 仍需在 disposable PostgreSQL 上执行为 0 skipped；工作树尚未冻结。", "release_impact": "STATIC GREEN，但不是云端许可。" },
+        { "order": 2, "area": "隔离运行验收", "state": "A 已完成", "current": "8104/migration259：48/48，21/21，real39 / empty8 / degraded1，P95 782.7 ms；GET-only、0 付费调用、0 业务写。", "remaining": "主本地 8102 仍为 migration256；云端仍为233。", "release_impact": "证明候选可运行，不证明主本地或云端已升级。" },
+        { "order": 3, "area": "浏览器与页面", "state": "A 已完成", "current": "最终无扩展门禁 21/21，阻断事件0、阻断 HTTP0、extension context0。", "remaining": "云端同 SHA 部署后必须重跑；7 个页面切换 abort 需保持非阻断。", "release_impact": "本地浏览器门通过。" },
+        { "order": 4, "area": "KOL URL、视频与历史", "state": "B 可本地使用", "current": "账号 URL 直接显示资料、已存视频与阶段结果；视频 URL 显示播放器、指标、时间戳和描述性分析；历史记录可展开。", "remaining": "生产 LLM 未就绪时深析继续诚实 blocked/degraded；0 持久化评论样本不得冒充 427 条正文。", "release_impact": "AI-off 测试站可用。" },
+        { "order": 5, "area": "LLM/AI", "state": "B 基础可用 / D 完整未完成", "current": "候选18、configured6、probed0、evaluated0、production-ready0；13 个 task binding 全 blocked；AI-off 基础流程失败关闭。", "remaining": "独立签名 trust roots、逐 binding probe、30-case actual eval、预算、熔断和云 canary。", "release_impact": "不阻塞 AI-off；阻塞 AI-enabled 生产。" },
+        { "order": 6, "area": "发布候选完整性", "state": "C 必须清零", "current": "795 个 tracked change + 499 个 untracked = 1,294 个路径；未 staged、无 conflict、diff check 通过。", "remaining": "按功能范围审查、形成 clean immutable RC 与版本清单；禁止整包盲发。", "release_impact": "当前云端 NO-GO。" },
+        { "order": 7, "area": "云基础设施与迁移", "state": "C 必须清零", "current": "8 个 preflight blocker；云 DB migration233，候选259；普通 strict deploy 缺可靠回滚锚。", "remaining": "恢复链、legacy bootstrap、233→259 clone、原子发布/回滚、同 SHA 复验。", "release_impact": "当前云端 NO-GO。" },
+        { "order": 8, "area": "真实业务闭环", "state": "D 授权后", "current": "Shopify、真实库存/成本/归因、finalized outcome、非 demo 反馈、带 actual eval 尚无可声明闭环。", "remaining": "授权后接入并积累可审计样本。", "release_impact": "不阻塞 AI-off 内测；阻塞业务效果与 4.5 声明。" },
+        { "order": 9, "area": "Dealer 全美地图", "state": "B 骨架在 / 数据未完成", "current": "主本地 migration256：5 家 public_verified、3 家有坐标、0 家 Viltrox authorized；enrichment、source passport、field evidence 均为 0。34 个目录源仍处于 disabled/hold/pending_review。", "remaining": "应用候选迁移；用 Nikon/Sony/Canon 官方名录建立实体和品牌关系；Viltrox 只认官方/公司名录；补全地址、坐标、联系方式、网站、社媒、产品证据与刷新时间。", "release_impact": "代码可先上；未达来源覆盖阈值前不得称全美覆盖或 Viltrox 授权。" },
+        { "order": 10, "area": "智能体、私有记忆与自训练", "state": "B AI-off 核心在 / D 学习闭环未完成", "current": "Advisor 对话、SSE 分阶段、owner-scope、draft-only、记忆候选确认/拒绝与预算闸已在；生产模型仍为 0 ready，真实 outcome/actual/已解决反馈不足。", "remaining": "统一 provenance 事件链、每用户记忆生命周期、离线学习数据集、逐 binding 签名评估、shadow/canary 与回滚；禁止在线自动改权重。", "release_impact": "AI-off 可用；完整智能体与自训练 4.5 需独立验收。" }
+      ],
+      "performance_review": [
+        { "order": 1, "issue": "KOL detail cache N+1", "status": "仍存在，P0", "evidence": "pool.py 600-613 每个 evidence 分别读取 final/QA；cache_repo.py 151 在未传 conn 时独立开连接。N 条约为 2N SQL + 2N 独立连接。", "next_action": "先透传请求 conn，再增加 target_ids × derive_methods 批量读取；保留 production final_v1 优先。", "acceptance": "19 条视频：总 SQL≤12、独立连接0、热态 p95≤50 ms。" },
+        { "order": 2, "issue": "全视频轮询放大", "status": "仍存在，P0；仅用户触发 pending 时", "evidence": "KOLDetailDrawer.tsx 229-238 每 2.5 秒并发请求全部 pending evidence，272 每轮又重拉 detail；20 条约 8.4 req/s。", "next_action": "增加 bulk status 端点；只在状态集合变化或终态时重拉 detail；保留取消、身份切换和 blocked 语义。", "acceptance": "每轮最多1个状态请求；无变化不重拉 detail。" },
+        { "order": 3, "issue": "高价值 KOL 榜单 N+1", "status": "仍存在，P0", "evidence": "roi_aggregate.py 105-115 每个 KOL 调 ROI 与 recommendation weight；50 条可精确推出 504 SQL，其中 252 次 table_exists。", "next_action": "用 CTE 批量聚合项目、成本、收入、funnel、outcome；保持多币种、confirmed 收入和 0.6/0.4 权重口径。", "acceptance": "50 条查询≤4；与旧实现逐字段等价。" },
+        { "order": 4, "issue": "GMV 重复扫描", "status": "仍存在，P0", "evidence": "gmv_aggregation.py 38-48 对每 link 执行1个 click和3个 sales相关子查询。", "next_action": "click_agg / sales_agg 预聚合后 JOIN；审核 verified-truth partial index，并在云上 CONCURRENTLY 建立。", "acceptance": "EXPLAIN 不再出现按 link 重复销售 SubPlan；真实 Shopify 规模复测。" },
+        { "order": 5, "issue": "table_exists 热路径", "status": "仍存在，附件数字已过时", "evidence": "当前 486 个调用点、146 个文件；附件为 506/146。", "next_action": "只先清 ROI/KOL/GMV 热路径；migration 完成后按进程缓存 schema capabilities，避免全仓一次性改造。", "acceptance": "热路径 table probe≈0；迁移/可选表测试不回归。" },
+        { "order": 6, "issue": "Project detail 无界响应", "status": "仍存在，P1", "evidence": "workflow_detail.py 251 后多组集合无分页，当前仍有9处 SELECT *；部分列表才有 LIMIT100。", "next_action": "additive v2 先返回 summary、counts、前50 KOL；activity/content/financial/audit 用 cursor。", "acceptance": "首屏≤150 KB；旧客户端兼容；响应体预算测试。" },
+        { "order": 7, "issue": "My KOL 无界聚合", "status": "仍存在，P1", "evidence": "my_kol_aggregate.py 145-188 每 KOL 两个相关 JSON 子查询；333-367 一次返回全部 favorites/projects/claims。", "next_action": "独立 kpi/count；contacts/projects 批量聚合；收藏与项目 cursor 分页。", "acceptance": "首屏50条≤150 KB；全量通过显式分页读取。" },
+        { "order": 8, "issue": "其它 N+1 与指标口径", "status": "仍存在，P1", "evidence": "creator ranking metric 未用于排序；leaderboard 1+50；insights 1+2×30；Top20%不是 percentile；UTM相关查询；retention文档与实现不一致。", "next_action": "先修正确性，再做批量化；limit≤100；加入 query-budget 与结果等价测试。", "acceptance": "指标口径测试通过；query budget 固化。" },
+        { "order": 9, "issue": "前端 raw chunk / 源码循环 / CockpitApp", "status": "raw chunk 已修；其余为 P2", "evidence": "当前共享 dist 最大块318,653B/gzip9 88,973B，低于325KiB/92KiB；DAG通过。CockpitApp 当前988行、约77个直接 Hook，循环仍在源码层。", "next_action": "上云前不扩大重构；云端稳定后先 Profiler，再 memo 边界、稳定 props、拆循环与状态下沉。", "acceptance": "Profiler 证明重渲染下降；bundle/DAG继续通过；功能不回退。" }
+      ],
+      "latency_hotspots": [
+        { "endpoint": "GTM Summary", "latency_ms": 2691.6, "run_kind": "single_local_acceptance" },
+        { "endpoint": "GTM Preview", "latency_ms": 1402.8, "run_kind": "single_local_acceptance" },
+        { "endpoint": "Strategy Tracks", "latency_ms": 782.7, "run_kind": "single_local_acceptance" },
+        { "endpoint": "SKU Profile", "latency_ms": 780.6, "run_kind": "single_local_acceptance" },
+        { "endpoint": "Industry Benchmark", "latency_ms": 297.7, "run_kind": "single_local_acceptance" },
+        { "endpoint": "Creative Search", "latency_ms": 266.5, "run_kind": "single_local_acceptance" }
+      ],
+      "cloud_blockers": [
+        { "order": 1, "gate": "候选范围冻结", "current": "1,294 个 dirty paths，非不可变 RC。", "exit": "按功能范围审查；clean HEAD；strict verify 与 SHA manifest 固定。", "rollback": "不 reset；取消候选，保留当前树。" },
+        { "order": 2, "gate": "migration 233→259", "current": "云端233；主本地256；隔离候选259。", "exit": "disposable staging clone 完整演练259并通过779个PG tests、0 skipped。", "rollback": "丢弃测试 clone；业务库不参与测试。" },
+        { "order": 3, "gate": "release.atomic_helper_present", "current": "云端 helper 缺失。", "exit": "bootstrap 安装并核对 atomic_release_layout.py hash。", "rollback": "仅删除本次安装文件。" },
+        { "order": 4, "gate": "systemd.nonroot_app_identity", "current": "worker 以 root 运行。", "exit": "核心 unit 全部 User/Group=viltrox。", "rollback": "恢复 unit fragment 与 active/enabled/masked 快照。" },
+        { "order": 5, "gate": "workers.lane_contract", "current": "6 个 bulk lane 为 all。", "exit": "1 interactive + bulk@1..6=batch；argv 和实例唯一。", "rollback": "恢复 systemd/unit 快照。" },
+        { "order": 6, "gate": "environment.app_readonly", "current": ".env 对应用可写。", "exit": "root:viltrox + 0440/0640；应用可读不可写；content hash固定。", "rollback": "恢复 owner/group/mode/content hash。" },
+        { "order": 7, "gate": "health.release_sha_aligned", "current": "云端 server/client SHA 不一致。", "exit": "前端、后端、7 workers、构建标记同一40位SHA。", "rollback": "恢复旧资产、旧SHA和旧服务状态。" },
+        { "order": 8, "gate": "redis.aof_enabled", "current": "Redis AOF关闭。", "exit": "appendonly yes；重启后 persistence healthy。", "rollback": "恢复旧Redis配置和服务状态；不删数据文件。" },
+        { "order": 9, "gate": "backup.encrypted_environment_snapshot", "current": "缺 environment.age。", "exit": "离线私钥可解密且明文hash一致；备份<24h。", "rollback": "失败即阻断，不产生不可信备份。" },
+        { "order": 10, "gate": "backup.off_host_receipt", "current": "缺异地回执。", "exit": "receipt绑定provider/object/version/size/SHA/verified_at，远端HEAD一致。", "rollback": "失败即阻断。" }
+      ],
+      "execution_waves": [
+        { "order": 0, "work": "R0 只读排查与范围冻结", "estimate": "0.5 天", "acceptance": "repo/HEAD/进程/PG/Redis/浏览器/云 preflight 只保留一份基线；1,294 路径有 owner、in/out scope 与 hash。", "dependency": "无；R0 前禁止源码写入。" },
+        { "order": 1, "work": "第一轮 4 槽并行：RC 完整性、可靠性 bootstrap/DR、性能热路径、Dealer schema", "estimate": "2–3 天", "acceptance": "每车道单测与差异预算通过；共享文件无双写；新迁移由 steward 唯一编号。", "dependency": "R0 冻结后开始。" },
+        { "order": 2, "work": "第二轮滚动并行：KOL 队列/阶段结果、Dealer ingest/API/UI、智能体学习链、业务设置入口", "estimate": "2–3 天", "acceptance": "叶子模块接口、幂等、失败关闭、字段级 provenance 与空态测试全部通过。", "dependency": "第一轮基础合同稳定；不要求外部授权。" },
+        { "order": 3, "work": "迁移、回滚与集成修复", "estimate": "1–2 天", "acceptance": "disposable clone 233→最新 migration up/down/up；PG tests 0 failed/0 skipped；旧数据兼容；无跨车道回归。", "dependency": "恢复链、迁移清单和共享路由完成。" },
+        { "order": 4, "work": "本地全门禁与压力预检", "estimate": "1 天", "acceptance": "静态门禁、48/48、21/21、browser blocking0；查询/响应/Dealer10k/Worker claim 预算通过。", "dependency": "所有实现车道汇合。" },
+        { "order": 5, "work": "生成唯一不可变 RC commit", "estimate": "0.5 天", "acceptance": "staged set=冻结 manifest；commit hash 与测试 manifest 一致；post-commit 身份复验通过。", "dependency": "本规划轮不 commit；实施轮按用户‘完工提交’仅做一次精确本地 RC commit，不自动 push。" },
+        { "order": 6, "work": "同 SHA staging 前滚→回滚→再前滚", "estimate": "1–2 天", "acceptance": "7 Apify+1 Redis、migration/SHA/boot nonce 对齐；48/48、21/21、browser blocking0。", "dependency": "需要维护窗口和明确部署授权；禁止 bypass。" },
+        { "order": 7, "work": "容量阶梯、30 分钟饱和与 72 小时 soak", "estimate": "3–5 日历日", "acceptance": "1/3/5/8/16/32 VU 各三次；5xx=0；失败档即真实上限；72h 无非预期重启、陈旧 heartbeat、持久化或校验差异。", "dependency": "生产形状 staging；外部付费 provider 默认关闭。" },
+        { "order": 8, "work": "外部数据/模型逐项激活", "estimate": "授权后滚动", "acceptance": "Viltrox feed、Shopify/库存/成本/归因、每个 LLM binding 分别 preview→shadow→canary→production。", "dependency": "不计入代码完成；无授权保持 awaiting_authorization/awaiting_company_feed。" }
+      ],
+      "one_pass_state_machine": [
+        { "step": 0, "phase": "排查", "action": "只读核验 repo、HEAD、进程、PG migration、Worker/Redis、浏览器、云 preflight、现有证据。", "output": "baseline.json、runtime-identity.json、performance-baseline.json", "exit": "所有事实带时间、SHA、端口、DB 与来源。", "hard_stop": "发现基线漂移时只允许重建一次，禁止边改边查。" },
+        { "step": 1, "phase": "定计划", "action": "冻结功能范围、8 车道、文件 owner、迁移 steward、测试预算和外部依赖。", "output": "work-package-map.json、release-manifest.json、acceptance-budget.json", "exit": "每个文件只归一个写者；所有包有入口/出口。", "hard_stop": "无法归属的文件移出本轮，不整包 stage。" },
+        { "step": 2, "phase": "精准修改", "action": "1 主线+3 执行槽持续占满；只改冻结清单，先测试再实现。", "output": "按车道隔离的 patch 与局部测试回执", "exit": "局部行为、幂等、失败关闭和兼容测试通过。", "hard_stop": "共享文件冲突、需求扩张或数据口径变更立即退回主线裁决。" },
+        { "step": 3, "phase": "修复汇合", "action": "集成主线顺序合并，统一迁移、路由、设置页和发布脚本。", "output": "集成候选与 conflict ledger", "exit": "0 冲突、0 重复迁移、0 未注册路由、0 未解释差异。", "hard_stop": "不得用跳过测试、放宽门限或 bypass 消红。" },
+        { "step": 4, "phase": "测试", "action": "单测→PG clone→静态 gate→48/48→21/21→压力→回滚→soak。", "output": "统一 acceptance bundle", "exit": "所有硬门对同一 candidate identity 通过。", "hard_stop": "任一门失败即停止后续更高风险阶段。" },
+        { "step": 5, "phase": "完工", "action": "审查 staged set、来源口径、空态、运维手册和回滚清单。", "output": "final-rc-manifest 与 release notes", "exit": "staged files=manifest；diff check、秘密扫描、版本身份通过。", "hard_stop": "含测试污染、未归属文件、凭证或不可解释数据时不提交。" },
+        { "step": 6, "phase": "提交", "action": "一次精确本地 RC commit，重启同 SHA 候选并复验身份。", "output": "immutable commit SHA", "exit": "commit 内容 hash=测试 manifest；post-commit 复验绿。", "hard_stop": "失败不 amend、不 push、不部署；回到集成修复。" }
+      ],
+      "superburst_lanes": [
+        { "lane": "L0 集成主线", "slot": "槽0 常驻", "owner_scope": "verify、migration 编号/注册、总路由、设置页总装、deploy 脚本、最终 Git", "exact_work": "冻结清单、分发包、顺序集成、统一验收、一次 RC commit。", "merge_gate": "所有车道回执齐全；共享文件仅此车道有 diff。", "estimate": "全程" },
+        { "lane": "L1 可靠性/云", "slot": "槽1 Wave A", "owner_scope": "atomic preflight/bootstrap、systemd、backup/restore、Redis AOF、health trust", "exact_work": "清 8 blocker，建立 exact-state rollback、7+1 fleet 与同 SHA health。", "merge_gate": "preflight exit0；恢复链可演练；R1–R5 测试绿。", "estimate": "2–3 天" },
+        { "lane": "L2 性能/数据库", "slot": "槽2 Wave A", "owner_scope": "KOL cache/ROI/GMV/GTM/Project/My KOL 查询与预算测试", "exact_work": "conn 复用、批查、CTE 聚合、正确性、分页、cold/warm 计时。", "merge_gate": "SQL/HTTP/响应体预算与旧结果等价。", "estimate": "2–4 天" },
+        { "lane": "L3 Worker/KOL 阶段结果", "slot": "槽3 Wave A", "owner_scope": "claim SQL、resource slots、comments collector、LLM HTTP client、KOL progress UI", "exact_work": "档内 SPT、评论多 URL/帖间并发、连接池、四阶段可见结果和 ETA。", "merge_gate": "0 重复 claim；交互优先；15 KOL 基础结果先出；压力曲线重放。", "estimate": "2–4 天" },
+        { "lane": "L4 Dealer 数据地图", "slot": "槽1 Wave B", "owner_scope": "Dealer additive schema、capture/ingest、API、地图叶子模块", "exact_work": "四源快照、实体解析、多品牌关系、字段证据、地图聚合/分页。", "merge_gate": "100% 行对账、0 重复 pin、10k 数据性能门。", "estimate": "3–5 天" },
+        { "lane": "L5 智能体/学习", "slot": "槽2 Wave B", "owner_scope": "Advisor、private memory、provenance、learning/shadow eval、model readiness", "exact_work": "统一会话→建议→决定→结果→反馈事件链；离线学习与逐 binding 门禁。", "merge_gate": "owner isolation、删除/暂停、无 demo 学习、shadow/canary/rollback 通过。", "estimate": "3–5 天" },
+        { "lane": "L6 真实业务适配器", "slot": "槽3 Wave B", "owner_scope": "Shopify/Inventory/Cost/Attribution provider contract 与叶子设置组件", "exact_work": "Secret 引用、test connection、dry-run preview、webhook/sync receipt、revoke。", "merge_gate": "0 授权时全部 fail-closed；无 mock GMV/库存/成本。", "estimate": "2–3 天" },
+        { "lane": "L7 QA/容量", "slot": "前三槽滚动接管", "owner_scope": "query/size/load/browser/migration/rollback/soak 测试与证据打包", "exact_work": "每个完成车道立即做独立复核，最终对同 RC 跑全门禁。", "merge_gate": "48/48、21/21、0 blocking、容量和72h证据齐全。", "estimate": "3–5 日历日" }
+      ],
+      "reliability_45_packages": [
+        { "order": 0, "pack": "R0 一次排查与冻结", "files": "只读；不改源码", "work": "核验 repo/进程/PG/Redis/8102/8104/云 preflight；生成唯一基线与 RC 文件归属。", "acceptance": "后续只引用一个时间戳、一个 SHA 基线、一个迁移/拓扑矩阵。", "estimate": "0.5 天" },
+        { "order": 1, "pack": "R1 RC 完整性", "files": "scripts/verify.sh；verify_repo；atomic_release_integrity/layout/units；对应 tests", "work": "审查 1,294 路径；仅冻结清单可进入 staged set；生成内容 hash manifest。", "acceptance": "staged set=manifest；0 conflict、0 意外 untracked；全静态门绿。", "estimate": "1–2 天" },
+        { "order": 2, "pack": "R2 Legacy→Atomic bootstrap", "files": "新建 legacy_to_atomic_bootstrap.py；preflight；deploy_local_to_cloud.sh；systemd units；lane env", "work": "捕获旧状态，幂等安装 atomic helper；切 non-root、env只读、1 interactive+6 batch；普通 deploy 不加 bypass。", "acceptance": "blocking_check_ids=[]；User/Group=viltrox；env root:viltrox 0440/0640；失败精确恢复旧状态。", "estimate": "2–3 天" },
+        { "order": 3, "pack": "R3 DR 与 Redis", "files": "backup_prod_vkpi.sh；postgres_restore_rehearsal.py；migration_gate；Redis 配置模板/应用器", "work": "备份 DB、runtime/media manifest、environment.age 与 off-host receipt；启用 AOF 并重启验证。", "acceptance": "备份<24h；dump hash/catalog通过；离线可解密；远端HEAD一致；AOF/RDB healthy。", "estimate": "1.5–2.5 天" },
+        { "order": 4, "pack": "R4 migration 与回滚", "files": "staging_db_clone.py；迁移234–最新；migration/staging tests；deploy 接口", "work": "disposable clone 演练 233→最新；前滚→旧 release 回滚→再次前滚；旧数据兼容。", "acceptance": "发现的 PG migration tests 全执行，0 failed/0 skipped；业务库不参与破坏性测试。", "estimate": "1–2 天" },
+        { "order": 5, "pack": "R5 Fleet/Health", "files": "main_health.py；main_worker_trust.py；Redis/Apify health；verify_runtime/redis_worker_health", "work": "把 server/client/Apify/Redis/migration/boot nonce/heartbeat 绑定到同一候选。", "acceptance": "7 Apify 名称/PID唯一；1 Redis readiness sequence≥3；全部 SHA 一致、heartbeat新鲜。", "estimate": "1–1.5 天" },
+        { "order": 6, "pack": "R6 汇合验收", "files": "local_release_acceptance；browser gate；load tests；sentinel；journal audits", "work": "对冻结 RC 跑功能、浏览器、容量、回滚与稳定性。", "acceptance": "同SHA/最新migration：48/48、21/21、blocking0；1/3/5/8/16/32VU；5xx0；30min+72h通过。", "estimate": "3–5 日历日" },
+        { "order": 7, "pack": "R7 完工提交", "files": "Git 精确清单；仅集成主线", "work": "审查 staged diff，做一次本地 RC commit；重启同 SHA 候选并做 identity-sensitive 复验。", "acceptance": "commit 内容 hash=测试 manifest；post-commit SHA/migration/fleet 全对齐。", "estimate": "0.5 天" }
+      ],
+      "dealer_v2_packages": [
+        { "order": 1, "pack": "运行一致性", "code_scope": "migration257–259；clone/up-down-up tests；runtime identity", "exact_work": "主库进入候选 schema 前先在隔离 clone 验证旧5行兼容；服务、Worker、前端和DB同 migration 后才允许导入。", "acceptance": "0 migration failure、0 skipped；旧5家不丢失；同SHA/migration。" },
+        { "order": 2, "pack": "Additive 多来源 schema", "code_scope": "新迁移；保留 vkpi_dealers；新增 source_records、brand_relationships、product_observations、contact_points、social_accounts、sync_runs", "exact_work": "一个物理分店为 canonical location；多品牌/多来源放关系表；补 geocode source/precision/confidence/time；organization_id统一BIGINT真FK。", "acceptance": "旧API兼容；跨品牌同门店只有1个stable_location_key；授权/产品/库存分表。" },
+        { "order": 3, "pack": "来源控制与设置", "code_scope": "us_coverage_source_registry.json；us_coverage_registry.py；business_integrations.py；新 SettingsDealerSourcesPanel.tsx", "exact_work": "四源独立显示条款审核、解析器版本、周期、最近成功、快照SHA、输入/拒绝/冲突与立即预检；默认关闭。", "acceptance": "四源都有明确状态；无Viltrox数据时必须 awaiting_company_feed。" },
+        { "order": 4, "pack": "官方快照捕获与适配", "code_scope": "dealer_directory_adapters.py；新 dealer_directory_capture.py；真实 fixtures；R2/受控快照区", "exact_work": "Nikon PDF、Sony官方目录、Canon where-to-buy/组织范围、Viltrox公司CSV/API分别解析；每源保留raw SHA与失败样本。", "acceptance": "输入=正常化+拒绝+重复+冲突，100%行对账；每源fixture/失败测试通过。" },
+        { "order": 5, "pack": "标准化与实体解析", "code_scope": "dealer_identity.py；新 dealer_directory_ingest.py；vkpi_dealer_identity_aliases", "exact_work": "精确地址+ZIP+电话/域名确定性合并；模糊结果只进冲突队列；(name,address)仅兼容键。", "acceptance": "同快照重跑新增canonical location=0；地图发布冲突实体=0；跨品牌0重复pin。" },
+        { "order": 6, "pack": "联系/官网/社媒/产品证据", "code_scope": "dealer enrichment 叶子模块；字段 evidence；自有网站抓取", "exact_work": "只访问门店自有页面；每字段写 observed/not_found/unavailable/conflict、evidence_url、checked_at；产品页不升级授权或库存。", "acceptance": "每字段‘值或缺失状态’覆盖100%；0无来源授权声明；30天stale。" },
+        { "order": 7, "pack": "Durable Worker 刷新", "code_scope": "queue_common.py；processor/provider_workflows/jobs_tasks/jobs；新 dealer_directory_sync", "exact_work": "按来源独立锁、snapshot SHA幂等、退避、断点、dead-letter；连续两次完整快照消失才软下线。", "acceptance": "单源失败不拖垮其他源；重复运行0重复写；历史不硬删。" },
+        { "order": 8, "pack": "API 与投影", "code_scope": "vkpi_dealers.py；dealers-api.ts", "exact_work": "增加 sources/preview/sync/sync-runs/conflicts/detail；map支持bbox/zoom/brand/relationship/freshness；名录改服务端搜索+cursor。", "acceptance": "10k记录：map p95<800ms、list/search p95<500ms、低zoom cluster≤1000。" },
+        { "order": 9, "pack": "地图/名录 UI 与门禁", "code_scope": "DealersBoardPage及embeds/modules；RealMap；设置页叶子组件", "exact_work": "品牌/关系/新鲜度/Viltrox产品与授权筛选；点击pin开详情；展示多品牌、官网、社媒、快照和核验时间。", "acceptance": "地址坐标覆盖目标≥98%；坐标合法/美国境内/来源留痕100%；首屏可交互<2.5s、筛选<300ms、0 HTTP500、0 console blocking。" }
+      ],
+      "ai_learning_business_packages": [
+        { "order": 0, "pack": "公共事件与证据契约", "code_scope": "新 vkpi_ai_learning_precloud_audit.py；公共 evidence/event envelope；一次集中迁移", "exact_work": "冻结 correlation_uid、actor_staff_uid、organization_uid、source/evidence hash、is_demo、consent、model/policy/pipeline/idempotency/time；三套表不合并，只用 envelope 串联。", "acceptance": "所有 Advisor/VIA/business 事件可由 correlation_uid 追到原始 evidence passport；迁移只编号一次。", "external_boundary": "不需要 provider 授权。" },
+        { "order": 1, "pack": "8 个生产绑定 readiness", "code_scope": "model_registry.py；models/readiness.py；evaluation_artifact.py；llm_production/preflight；evidence plan/benchmark scripts", "exact_work": "仅验证 13 任务实际使用的 8 个唯一绑定；probe/eval 两套独立 Ed25519 trust root；8 probe + 每绑定30 actual，共240 case；证据包含dataset/model/response hash、成本、时间、签名。", "acceptance": "8/8分别通过；success/structured/factual/source/safety均100%；p95≤15s；probe≤168h、eval≤7d、dataset≤90d。", "external_boundary": "需要模型凭证、专用预算和独立签名人；未具备保持 external AI disabled。" },
+        { "order": 2, "pack": "Advisor 每用户记忆", "code_scope": "MarketingAdvisorWorkspace.tsx；marketing-advisor-api；advisor/service.py；repository_memory.py；router", "exact_work": "每 turn 只生成待确认记忆候选；带 source_message、分类、置信度、过期和脱敏；确认后才入个人记忆；支持拒绝/暂停/删除/导出/保留期。", "acceptance": "organization/staff/thread 三层隔离；0 cross-user leak；删除/导出/暂停端到端通过；未确认对话不进学习集。", "external_boundary": "AI-off 下仍可用组织知识给描述性建议。" },
+        { "order": 3, "pack": "可解释建议与人工控制", "code_scope": "advisor/intelligent_bridge.py；advisor UI 建议卡；action draft workflow", "exact_work": "建议展示为什么推荐及引用的 KOL/产品/市场事实；有用/无用/错误来源反馈可关联 outcome；保持 draft_only，任何外部 action 人工确认。", "acceptance": "每条建议有来源或明确‘证据不足’；outcome_unknown 不自动重试；0 未授权外部 action。", "external_boundary": "外部写动作继续需人工批准。" },
+        { "order": 4, "pack": "Provenance、feedback 与 outcome", "code_scope": "via/session_memory.py；memory/via_learning_*；learning_loop.py；prediction_ledger.py；forecast_feedback.py；event ledger", "exact_work": "Advisor turn/feedback/outcome 映射为 decision/reward；排除 demo/test/mock；按 source_uid+evidence_hash+outcome_type 去重；建议/预测/反馈/finalized outcome 全写事件链。", "acceptance": "关键事件 provenance100%；Trace100%；12条open memory feedback清零；≥5非demo反馈、≥5 finalized outcome；≥30 prediction actual 后才谈预测效果。", "external_boundary": "需要真实人工反馈/outcome；不足时UI显示描述性/样本不足。" },
+        { "order": 5, "pack": "离线自学习与版本", "code_scope": "via/shadow_learning.py；learning/shadow_eval.py；via_learning_rollout.py；marketing brain scorecard", "exact_work": "第一阶段只学习检索权重、引用组合、模型路由、prompt/policy和个人记忆召回；每版记录训练快照hash、评估、灰度和前一版本；不改基础模型权重。", "acceptance": "retrieval shadow≥6（积极晋级18）；route shadow≥8（积极晋级20）；policy版本不可变且可原子回滚。", "external_boundary": "基础模型微调延后到500–1000条同意、去重、带outcome样本，并保留20%永久holdout。" },
+        { "order": 6, "pack": "Shadow 与分级开放", "code_scope": "VIA rollout；autonomy license；Advisor feature gate；监控/回滚", "exact_work": "AI-off→evaluation-only→shadow→5/15/30/60/100% live；每级6/10/16/24/32 live样本；策略和外部AI均可独立回滚。", "acceptance": "接受率下降>5pp且reward下降>0.04即rollback candidate；100%前连续7天无candidate；成本/错误越线自动回AI-off。", "external_boundary": "生产流量与预算需明确授权。" },
+        { "order": 7, "pack": "KOL 四阶段速度与学习解耦", "code_scope": "comments/collector.py；provider crawlers；worker slots/checkpoint；KOL progress UI；Advisor/VIA async bridge", "exact_work": "保留已完成SPT/aging/SKIP LOCKED/httpx/progressive；补IG/TT多URL actor、YT最多8路、FB最多2路、全局semaphore、逐帖checkpoint；学习异步，不反压搜索。", "acceptance": "搜索p95≤1s；首5基础≤30s；15基础≤90s；视频渐进1–3min；评论/受众后台3–8min；重试只补失败帖。", "external_boundary": "受provider限速影响；压力实测失败档即真实上限。" },
+        { "order": 8, "pack": "统一业务 Provider Adapter", "code_scope": "settings/business_integrations.py；shopify_connect/orders；attribution integrations/GMV bridge；cost ledger；inventory router", "exact_work": "统一 authorize/revoke/health/dry_run/canary/sync(cursor)/verify_webhook/map_record/reconcile；所有写入幂等、可重放、可对账。", "acceptance": "未授权0外部请求、0订单/库存/成本/GMV伪造；Shopify HMAC通过才入GMV；库存/成本带来源、币种、有效期和人工验证。", "external_boundary": "授权后才激活真实同步。" },
+        { "order": 9, "pack": "设置入口与凭证治理", "code_scope": "vkpi_settings.py；SettingsBusinessIntegrationsPanel.tsx；Secret manager引用；webhook/sync receipts", "exact_work": "显示 awaiting authorization、credential configured、last canary/success、source count、reconciliation error、revoke、provenance；应用DB不存明文密钥。", "acceptance": "0 connected时页面完整且fail-closed；撤销token/停webhook后历史证据只读保留；秘密扫描0泄露。", "external_boundary": "Shopify、库存、成本、归因可分别授权，不互相阻塞。" },
+        { "order": 10, "pack": "AI/业务 4.5 总门禁", "code_scope": "scripts/verify.sh 扩展；浏览器、DB、Worker、queue、model evidence 与业务 reconciliation gates", "exact_work": "分开计算代码能力、AI运行证据和真实业务证据；任何一类缺失不得被另一类补分。", "acceptance": "代码级约14–16人日、4槽约5–7工作日；AI运行需额外7–14天shadow/live；真实业务通常需授权后2–6周。", "external_boundary": "代码完成不等于AI或真实业务4.5。" }
+      ]
+    }
+  },
+  "sources": []
+}

@@ -459,7 +459,7 @@ SCAN_TRIGGER_THRESHOLD = 100   # pending >= 100 → 触发
 SCAN_MAX_AGE_HOURS = 24        # 最早一条 > 24h 也触发
 
 
-async def cron_scan_check():
+async def cron_scan_check(queue=None):
     """
     Cron 入口 — 每 5 分钟检查是否需要扫描.
     
@@ -470,9 +470,34 @@ async def cron_scan_check():
     state = await db_read(_load_scan_trigger_state)
     pending_count = int(state.get("pending_count") or 0)
     
+    async def _enqueue(reason: str) -> dict[str, Any]:
+        if queue is None:
+            # A scheduler/read-only caller can still inspect the trigger state,
+            # but it may never fall back to paid inline execution.
+            return {
+                "scanned": 0,
+                "queued": False,
+                "queue_required": True,
+                "trigger_reason": reason,
+                "pending": pending_count,
+            }
+        task_id = await queue.enqueue(
+            "verification_scan_pending",
+            {"requested_by": "scheduler", "trigger_reason": reason},
+            lock_key="verification_scan_pending:scheduled",
+            timeout_seconds=1800,
+        )
+        return {
+            "scanned": 0,
+            "queued": True,
+            "job_id": task_id,
+            "trigger_reason": reason,
+            "pending": pending_count,
+        }
+
     if pending_count >= SCAN_TRIGGER_THRESHOLD:
         logger.info("verification.scanner.cron_trigger_size", extra={"pending": pending_count, "threshold": SCAN_TRIGGER_THRESHOLD})
-        return await scan_pending_verifications()
+        return await _enqueue("pending_threshold")
     
     # Check 2: 时间
     if pending_count > 0:
@@ -484,7 +509,7 @@ async def cron_scan_check():
                 
                 if age_hours >= SCAN_MAX_AGE_HOURS:
                     logger.info("verification.scanner.cron_trigger_age", extra={"pending": pending_count, "age_hours": round(age_hours, 1)})
-                    return await scan_pending_verifications()
+                    return await _enqueue("oldest_age_threshold")
             except Exception:
                 logger.warning("verification.scanner.cron_parse_failed", extra={"oldest_created_at": oldest_created_at}, exc_info=True)
     

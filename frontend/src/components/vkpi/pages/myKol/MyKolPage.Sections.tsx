@@ -493,6 +493,8 @@ export function EmployeeKolLibrary({
   // aggregate 返回 projects(已解析数组),回填 projects_json 以兼容下游消费。
   const [poolFavorites, setPoolFavorites] = useState<Array<Record<string, unknown>>>([]);
   const [favError, setFavError] = useState('');
+  const [favPage, setFavPage] = useState<{ total?: number; has_more?: boolean; next_cursor?: string | null }>();
+  const [favLoadingMore, setFavLoadingMore] = useState(false);
   const [favReloadTick, setFavReloadTick] = useState(0);
   const [exporting, setExporting] = useState(false);
   // 【M3】认领可视化+释放:aggregate 同一响应就带本人 claims(vkpi_kol_claims,FK kols.id)——
@@ -526,7 +528,7 @@ export function EmployeeKolLibrary({
     if (!apiToken) return;
     let cancelled = false;
     import('../../../../services/vkpi/kol-api').then(({ getMyKolAggregate }) =>
-      getMyKolAggregate(apiToken).then((resp) => {
+      getMyKolAggregate(apiToken, { mode: 'summary', favoritesLimit: 50 }).then((resp) => {
         if (cancelled) return;
         const favorites = (resp.pool_favorites || []).map((fav) => {
           const row = fav as Record<string, unknown>;
@@ -534,12 +536,41 @@ export function EmployeeKolLibrary({
           return row.projects_json != null ? row : { ...row, projects_json: row.projects ?? [] };
         });
         setPoolFavorites(favorites as Array<Record<string, unknown>>);
+        setFavPage(resp.pool_favorites_page);
         setMyClaims(Array.isArray(resp.claims) ? (resp.claims as Array<Record<string, unknown>>) : []);
         setFavError('');
       }),
     ).catch((err) => { if (!cancelled) setFavError(String((err as Error)?.message || '收藏读取失败').slice(0, 100)); });
     return () => { cancelled = true; };
   }, [apiToken, favReloadTick]);
+
+  const loadMoreFavorites = async () => {
+    const cursor = favPage?.next_cursor;
+    if (!apiToken || !cursor || favLoadingMore) return;
+    setFavLoadingMore(true);
+    setFavError('');
+    try {
+      const { getMyKolAggregate } = await import('../../../../services/vkpi/kol-api');
+      const resp = await getMyKolAggregate(apiToken, {
+        mode: 'summary',
+        favoritesLimit: 50,
+        favoritesCursor: cursor,
+      });
+      const favorites = (resp.pool_favorites || []).map((fav) => {
+        const row = fav as Record<string, unknown>;
+        return row.projects_json != null ? row : { ...row, projects_json: row.projects ?? [] };
+      });
+      setPoolFavorites((current) => {
+        const seen = new Set(current.map((row) => String(row.kol_pool_id ?? row.id ?? '')));
+        return [...current, ...favorites.filter((row) => !seen.has(String(row.kol_pool_id ?? row.id ?? '')))];
+      });
+      setFavPage(resp.pool_favorites_page);
+    } catch (err) {
+      setFavError(String((err as Error)?.message || '更多收藏加载失败').slice(0, 100));
+    } finally {
+      setFavLoadingMore(false);
+    }
+  };
 
   // 【M3】本人 active 认领按 kol_id 建索引(claims FK 是 kols.id,与 kolOptions 行的 id 同源)。
   const myClaimByKolId = useMemo(() => {
@@ -1018,6 +1049,16 @@ export function EmployeeKolLibrary({
           </button>
         ))}
       </div>
+      {favPage ? (
+        <div style={{ margin: '8px 14px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, border: '1px solid var(--ds-line)', borderRadius: 9, padding: '7px 10px', fontSize: 10.5, color: 'var(--ds-text-3)' }}>
+          <span>收藏已渐进展示 {poolFavorites.length} / {Number(favPage.total || poolFavorites.length)} 条</span>
+          {favPage.has_more && favPage.next_cursor ? (
+            <button type="button" disabled={favLoadingMore} onClick={() => void loadMoreFavorites()} style={batchBtnStyle}>
+              {favLoadingMore ? '加载中…' : '加载更多 50 条'}
+            </button>
+          ) : <span>已到末页</span>}
+        </div>
+      ) : null}
       {filteredItems.length ? (
         <div className="mykol-library-grid">
           <div className="mykol-kol-list">

@@ -7,10 +7,11 @@ list_inbox():按 scope 读(管理层看全局,成员只看自己 owner 的;owner
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.access import scope
 from app.domains.actions.producers import PRODUCERS
 
@@ -18,6 +19,7 @@ logger = get_logger(__name__)
 
 _TABLE = "vkpi_action_inbox"
 _LEDGER = "vkpi_action_execution_ledger"
+_EXECUTION_RECONCILE_OVERDUE_SECONDS = 15 * 60
 
 
 def _dumps(value: Any) -> str:
@@ -34,6 +36,23 @@ def _loads(value: Any) -> Any:
     except Exception:
         logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         return {}
+
+
+def _sql_now() -> str:
+    return "NOW()" if is_postgres_runtime() else "CURRENT_TIMESTAMP"
+
+
+def _sql_json_param() -> str:
+    return "?::jsonb" if is_postgres_runtime() else "?"
+
+
+def _sql_is_today(column: str) -> str:
+    """Return a backend-specific predicate for a trusted timestamp column."""
+    return (
+        f"{column}::date = CURRENT_DATE"
+        if is_postgres_runtime()
+        else f"date({column}) = date('now')"
+    )
 
 
 def persist_suggestions(suggestions: list[dict[str, Any]]) -> int:
@@ -208,7 +227,7 @@ def today_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
       (mode='executed' + outcome='success' + created_at::date=CURRENT_DATE)。这是
       闭环"在转"的硬证据(execute 后立增)。成员按 JOIN inbox.owner_staff_id 收口。
     today_approved_count:今天通过人审的动作数 —— 读 vkpi_action_inbox 当天 updated_at
-      且 status 已越过 'approved' 关口(approved/executed/failed 三态之一)。
+      且 status 已越过 'approved' 关口(approved/executing/executed/failed)。
 
     红线:全程只读两张自身台账表,绝不写;不碰 viltrox_fit_score / rule_v0。
     缺表 / 任意异常 → 返回 0(诚实降级,不拖垮 inbox 列表)。
@@ -228,7 +247,7 @@ def today_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
                     f"""
                     SELECT COUNT(*) AS n FROM {_LEDGER}
                     WHERE mode = 'executed' AND outcome = 'success'
-                      AND created_at::date = CURRENT_DATE
+                      AND {_sql_is_today('created_at')}
                     """,
                 ).fetchone()
             else:
@@ -238,7 +257,7 @@ def today_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
                     SELECT COUNT(*) AS n FROM {_LEDGER} l
                     JOIN {_TABLE} a ON a.id = l.action_id
                     WHERE l.mode = 'executed' AND l.outcome = 'success'
-                      AND l.created_at::date = CURRENT_DATE
+                      AND {_sql_is_today('l.created_at')}
                       AND a.owner_staff_id = ?
                     """,
                     (actor,),
@@ -253,16 +272,16 @@ def today_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
             row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS n FROM {_TABLE}
-                WHERE status IN ('approved', 'executed', 'failed')
-                  AND updated_at::date = CURRENT_DATE
+                WHERE status IN ('approved', 'executing', 'executed', 'failed')
+                  AND {_sql_is_today('updated_at')}
                 """,
             ).fetchone()
         else:
             row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS n FROM {_TABLE}
-                WHERE status IN ('approved', 'executed', 'failed')
-                  AND updated_at::date = CURRENT_DATE
+                WHERE status IN ('approved', 'executing', 'executed', 'failed')
+                  AND {_sql_is_today('updated_at')}
                   AND owner_staff_id = ?
                 """,
                 (actor,),
@@ -328,6 +347,14 @@ def list_inbox(
         row["result_checklist_json"] = _loads(row.get("result_checklist_json"))
         row["verification_plan_json"] = _loads(row.get("verification_plan_json"))
         row["affected_tables_json"] = _loads(row.get("affected_tables_json"))
+        if str(row.get("status") or "") == "executing":
+            age_seconds = _execution_age_seconds(row.get("updated_at"))
+            row["execution_age_seconds"] = age_seconds
+            row["manual_reconciliation_required"] = True
+            row["reconciliation_overdue"] = (
+                age_seconds is not None
+                and age_seconds >= _EXECUTION_RECONCILE_OVERDUE_SECONDS
+            )
         counts[row["category"]] = counts.get(row["category"], 0) + 1
         items.append(row)
 
@@ -340,6 +367,228 @@ def list_inbox(
         # 灌水可见化:当天闭环计数(已执行 / 已批准),纯加字段、scope 同上、只读统计。
         "today_summary": today_summary(staff),
     }
+
+
+def _execution_age_seconds(value: Any) -> int | None:
+    """Return a stable age for an executing claim without trusting the client."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
+
+
+def reconcile_executing_action(
+    action_id: int,
+    staff: dict[str, Any] | None,
+    *,
+    decision: str,
+    reason: str,
+    evidence: list[dict[str, Any]],
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Manually reconcile an execution whose external result is uncertain.
+
+    The action row is locked before checking the state and correlation id.  The
+    audit ledger insert and state transition commit together, so concurrent or
+    repeated requests cannot create conflicting terminal decisions.
+    """
+    normalized_decision = str(decision or "").strip().lower()
+    normalized_reason = str(reason or "").strip()
+    normalized_correlation = str(correlation_id or "").strip()
+    normalized_evidence = [item for item in evidence if isinstance(item, dict) and item]
+    actor_id = int(scope.actor_staff_id(staff))
+
+    if normalized_decision not in {"succeeded", "failed", "unknown"}:
+        return {"ok": False, "reason": "invalid_reconciliation_decision"}
+    if not normalized_reason:
+        return {"ok": False, "reason": "reconciliation_reason_required"}
+    if not normalized_evidence:
+        return {"ok": False, "reason": "reconciliation_evidence_required"}
+    if not normalized_correlation:
+        return {"ok": False, "reason": "reconciliation_correlation_required"}
+    if actor_id <= 0:
+        return {"ok": False, "reason": "reconciliation_actor_required"}
+    if not table_exists(_TABLE) or not table_exists(_LEDGER):
+        return {"ok": False, "reason": "reconciliation_ledger_unavailable"}
+
+    target_status = {
+        "succeeded": "executed",
+        "failed": "failed",
+        "unknown": "executing",
+    }[normalized_decision]
+    ledger_outcome = {
+        "succeeded": "success",
+        "failed": "failed",
+        "unknown": "pending",
+    }[normalized_decision]
+    conn = get_conn()
+    owner_clause = ""
+    params: list[Any] = [int(action_id)]
+    if not scope.can_view_all(staff):
+        owner_clause = " AND owner_staff_id = ?"
+        params.append(actor_id)
+
+    try:
+        postgres_runtime = is_postgres_runtime()
+        if not postgres_runtime and not bool(getattr(conn, "in_transaction", False)):
+            # SQLite has no SELECT ... FOR UPDATE.  BEGIN IMMEDIATE serializes
+            # the read/check/write sequence across the per-thread test conns.
+            conn.execute("BEGIN IMMEDIATE")
+        lock_clause = " FOR UPDATE" if postgres_runtime else ""
+        row = conn.execute(
+            f"""
+            SELECT id, dedupe_key, category, suggested_endpoint, status,
+                   result_checklist_json
+            FROM {_TABLE}
+            WHERE id = ?{owner_clause}
+            {lock_clause}
+            """,
+            tuple(params),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return {"ok": False, "reason": "not_found_or_out_of_scope"}
+        action = dict(row)
+
+        existing_rows = conn.execute(
+            f"""
+            SELECT id, outcome, detail_json
+            FROM {_LEDGER}
+            WHERE action_id = ?
+              AND endpoint = 'manual:reconcile'
+            ORDER BY id DESC
+            """,
+            (int(action_id),),
+        ).fetchall()
+        existing = None
+        for candidate in existing_rows:
+            candidate_row = dict(candidate)
+            candidate_detail = _loads(candidate_row.get("detail_json"))
+            if (
+                isinstance(candidate_detail, dict)
+                and str(candidate_detail.get("correlation_id") or "") == normalized_correlation
+            ):
+                existing = candidate_row
+                break
+        if existing is not None:
+            existing_row = dict(existing)
+            existing_detail = _loads(existing_row.get("detail_json"))
+            existing_decision = str(
+                existing_detail.get("decision") if isinstance(existing_detail, dict) else ""
+            )
+            conn.rollback()
+            if existing_decision != normalized_decision:
+                return {"ok": False, "reason": "reconciliation_correlation_conflict"}
+            return {
+                "ok": True,
+                "action_id": int(action_id),
+                "decision": existing_decision,
+                "status": str(existing_detail.get("target_status") or action.get("status") or ""),
+                "ledger_id": int(existing_row["id"]),
+                "correlation_id": normalized_correlation,
+                "idempotent": True,
+            }
+
+        current_status = str(action.get("status") or "")
+        if current_status != "executing":
+            conn.rollback()
+            return {
+                "ok": False,
+                "reason": "action_not_awaiting_reconciliation",
+                "status": current_status,
+            }
+
+        audit_detail = {
+            "kind": "manual_reconciliation",
+            "audit_version": 1,
+            "decision": normalized_decision,
+            "reason": normalized_reason,
+            "evidence": normalized_evidence,
+            "correlation_id": normalized_correlation,
+            "actor": {
+                "staff_id": actor_id,
+                "role": str((staff or {}).get("role") or ""),
+            },
+            "previous_status": current_status,
+            "target_status": target_status,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        checklist_patch = {
+            "manual_reconciliation": {
+                "decision": normalized_decision,
+                "reason": normalized_reason,
+                "correlation_id": normalized_correlation,
+                "evidence_count": len(normalized_evidence),
+                "actor_staff_id": actor_id,
+            }
+        }
+        current_checklist = _loads(action.get("result_checklist_json"))
+        merged_checklist = dict(current_checklist) if isinstance(current_checklist, dict) else {}
+        merged_checklist.update(checklist_patch)
+        cursor = conn.execute(
+            f"""
+            UPDATE {_TABLE}
+            SET status = ?,
+                result_checklist_json = {_sql_json_param()},
+                updated_at = {_sql_now()}
+            WHERE id = ? AND status = 'executing'
+            """,
+            (target_status, _dumps(merged_checklist), int(action_id)),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            conn.rollback()
+            return {"ok": False, "reason": "reconciliation_state_changed"}
+
+        ledger_row = conn.execute(
+            f"""
+            INSERT INTO {_LEDGER}
+              (action_id, category, dedupe_key, actor_staff_id, mode, outcome,
+               endpoint, cost_cents, error, detail_json, created_at)
+            VALUES (?,?,?,?,'executed',?,'manual:reconcile',0,?,{_sql_json_param()},{_sql_now()})
+            RETURNING id
+            """,
+            (
+                int(action_id),
+                str(action.get("category") or ""),
+                str(action.get("dedupe_key") or ""),
+                actor_id,
+                ledger_outcome,
+                "" if normalized_decision == "succeeded" else normalized_reason,
+                _dumps(audit_detail),
+            ),
+        ).fetchone()
+        if ledger_row is None:
+            raise RuntimeError("reconciliation ledger insert returned no id")
+        ledger_id = int(dict(ledger_row)["id"])
+        conn.commit()
+        return {
+            "ok": True,
+            "action_id": int(action_id),
+            "decision": normalized_decision,
+            "status": target_status,
+            "ledger_id": ledger_id,
+            "correlation_id": normalized_correlation,
+            "idempotent": False,
+        }
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("action_inbox.reconcile_rollback_failed", exc_info=True)
+        logger.warning(
+            "action_inbox.reconcile_failed",
+            extra={"action_id": action_id, "actor_staff_id": actor_id},
+            exc_info=True,
+        )
+        return {"ok": False, "reason": "reconciliation_persist_failed"}
 
 
 # ── R7 执行台账回读(scope-gated 只读) ────────────────────────────────
@@ -460,6 +709,72 @@ def get_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str,
     return item
 
 
+def claim_action_execution(
+    action_id: int, staff: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Atomically claim one approved action for execution.
+
+    The scope predicate is part of the compare-and-set UPDATE, so a stale read
+    cannot widen access.  Only the request that changes approved -> executing
+    may run the handler; every concurrent or repeated request fails closed.
+    """
+    if not table_exists(_TABLE):
+        return {"ok": False, "reason": "migration_141_not_applied", "action_id": int(action_id)}
+
+    actor = int(scope.actor_staff_id(staff))
+    can_all = scope.can_view_all(staff)
+    if not can_all and actor <= 0:
+        return {"ok": False, "reason": "not_found_or_out_of_scope", "action_id": int(action_id)}
+
+    conn = get_conn()
+    params: list[Any] = [int(action_id)]
+    owner_clause = ""
+    if not can_all:
+        owner_clause = " AND owner_staff_id = ?"
+        params.append(actor)
+
+    try:
+        cursor = conn.execute(
+            f"""
+            UPDATE {_TABLE}
+            SET status = 'executing', updated_at = {_sql_now()}
+            WHERE id = ? AND status = 'approved'{owner_clause}
+            RETURNING id, status
+            """,
+            tuple(params),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("action_inbox.claim_rollback_failed", exc_info=True)
+        logger.warning("action_inbox.claim_failed", extra={"action_id": action_id}, exc_info=True)
+        return {
+            "ok": False,
+            "reason": "execution_claim_failed",
+            "action_id": int(action_id),
+        }
+
+    if row is not None:
+        return {"ok": True, "status": "executing", "action_id": int(action_id)}
+
+    current = get_action(action_id, staff)
+    if current is None:
+        reason = "not_found_or_out_of_scope"
+        current_status = ""
+    else:
+        reason = "execution_already_claimed"
+        current_status = str(current.get("status") or "")
+    return {
+        "ok": False,
+        "reason": reason,
+        "action_id": int(action_id),
+        "status": current_status,
+    }
+
+
 def _transition(
     action_id: int,
     to_status: str,
@@ -501,7 +816,7 @@ def _transition(
         cursor = conn.execute(
             f"""
             UPDATE {_TABLE}
-            SET status = ?, payload_json = ?::jsonb, updated_at = NOW()
+            SET status = ?, payload_json = {_sql_json_param()}, updated_at = {_sql_now()}
             WHERE id = ? AND status IN ({from_placeholders})
             """,
             (target, _dumps(merged), int(action_id), *allowed_from),
@@ -511,7 +826,7 @@ def _transition(
         cursor = conn.execute(
             f"""
             UPDATE {_TABLE}
-            SET status = ?, approval_reason = ?, updated_at = NOW()
+            SET status = ?, approval_reason = ?, updated_at = {_sql_now()}
             WHERE id = ? AND status IN ({from_placeholders})
             """,
             (target, str(approval_reason)[:2000], int(action_id), *allowed_from),
@@ -520,7 +835,7 @@ def _transition(
         cursor = conn.execute(
             f"""
             UPDATE {_TABLE}
-            SET status = ?, updated_at = NOW()
+            SET status = ?, updated_at = {_sql_now()}
             WHERE id = ? AND status IN ({from_placeholders})
             """,
             (target, int(action_id), *allowed_from),
@@ -595,7 +910,7 @@ def mark_done_action(
 
     conn = get_conn()
     cursor = conn.execute(
-        f"UPDATE {_TABLE} SET status = 'executed', updated_at = NOW() "
+        f"UPDATE {_TABLE} SET status = 'executed', updated_at = {_sql_now()} "
         f"WHERE id = ? AND status = 'approved'",
         (int(action_id),),
     )
@@ -611,7 +926,7 @@ def mark_done_action(
                 f"""
                 INSERT INTO {_LEDGER}
                   (action_id, category, dedupe_key, actor_staff_id, mode, outcome, endpoint, cost_cents, error, detail_json, created_at)
-                VALUES (?,?,?,?,'executed','success','manual:mark-done',0,'',?::jsonb,NOW())
+                VALUES (?,?,?,?,'executed','success','manual:mark-done',0,'',{_sql_json_param()},{_sql_now()})
                 RETURNING id
                 """,
                 (
@@ -641,7 +956,7 @@ def set_status(action_id: int, status: str) -> None:
     try:
         conn = get_conn()
         conn.execute(
-            f"UPDATE {_TABLE} SET status = ?, updated_at = NOW() WHERE id = ?",
+            f"UPDATE {_TABLE} SET status = ?, updated_at = {_sql_now()} WHERE id = ?",
             (str(status), int(action_id)),
         )
         conn.commit()
@@ -658,7 +973,8 @@ def set_result_checklist(action_id: int, checklist: dict[str, Any]) -> None:
     try:
         conn = get_conn()
         conn.execute(
-            f"UPDATE {_TABLE} SET result_checklist_json = ?::jsonb, updated_at = NOW() WHERE id = ?",
+            f"UPDATE {_TABLE} SET result_checklist_json = {_sql_json_param()}, "
+            f"updated_at = {_sql_now()} WHERE id = ?",
             (_dumps(checklist or {}), int(action_id)),
         )
         conn.commit()

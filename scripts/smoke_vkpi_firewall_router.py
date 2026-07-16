@@ -22,6 +22,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -54,9 +56,9 @@ def main() -> None:
     
     if seed_admin:
         user_id, staff_id = seed_admin(conn, marker=MARKER)
-        print(f"[seed] user_id={user_id} staff_id={staff_id}")
+        out(f"[seed] user_id={user_id} staff_id={staff_id}")
     else:
-        print("[seed] _smoke_seed.py missing")
+        out("[seed] _smoke_seed.py missing")
         sys.exit(1)
     
     # 拿 token (smoke 内部逻辑,这里假设有 make_token helper)
@@ -64,7 +66,7 @@ def main() -> None:
         from app.core.security import make_token
         token = make_token(user_id, "admin")
     except Exception as exc:
-        print(f"[token] failed: {exc}")
+        out(f"[token] failed: {exc}")
         sys.exit(1)
     
     failures: list[str] = []
@@ -73,7 +75,7 @@ def main() -> None:
     pre_platform = _get_platform_row(TEST_PLATFORM)
     
     # ── 场景 1: feature_flag toggle ──
-    print("[1/5] POST /feature-flags 真实写入")
+    out("[1/5] POST /feature-flags 真实写入")
     
     # 调 API
     resp = _post_json(
@@ -92,10 +94,10 @@ def main() -> None:
         elif not _truthy(row.get("enabled")):
             failures.append(f"场景 1: enabled 字段没生效 row={dict(row)}")
         else:
-            print(f"   PASS: flag {TEST_FLAG_KEY} enabled=true 真实写入")
+            out(f"   PASS: flag {TEST_FLAG_KEY} enabled=true 真实写入")
     
     # ── 场景 2: platform update ──
-    print("[2/5] POST /platform/instagram 真实写入 monthly_budget_usd")
+    out("[2/5] POST /platform/instagram 真实写入 monthly_budget_usd")
     
     target_budget = 123.45
     resp = _post_json(
@@ -112,10 +114,10 @@ def main() -> None:
         if abs(actual - target_budget) > 0.01:
             failures.append(f"场景 2: monthly_budget_usd 没生效 期望={target_budget} 实际={actual}")
         else:
-            print(f"   PASS: instagram monthly_budget_usd={actual} 真实写入")
+            out(f"   PASS: instagram monthly_budget_usd={actual} 真实写入")
     
     # ── 场景 3: budget update ──
-    print("[3/5] POST /budget/{key} 真实写入 monthly_limit_usd")
+    out("[3/5] POST /budget/{key} 真实写入 monthly_limit_usd")
     
     target_limit = 567.89
     resp = _post_json(
@@ -135,10 +137,10 @@ def main() -> None:
             if abs(actual - target_limit) > 0.01:
                 failures.append(f"场景 3: monthly_limit_usd 没生效 期望={target_limit} 实际={actual}")
             else:
-                print(f"   PASS: budget {TEST_BUDGET_KEY} monthly_limit_usd={actual} 真实写入")
+                out(f"   PASS: budget {TEST_BUDGET_KEY} monthly_limit_usd={actual} 真实写入")
     
     # ── 场景 4: 兼容旧 payload {flags: [...]} ──
-    print("[4/5] 兼容旧 payload 形状")
+    out("[4/5] 兼容旧 payload 形状")
     
     resp = _post_json(
         f"{BASE_URL}/api/admin/vkpi/settings/firewall/feature-flags",
@@ -153,31 +155,31 @@ def main() -> None:
         if _truthy(row.get("enabled") if row else None):
             failures.append(f"场景 4: enabled 应该被 toggle 为 false")
         else:
-            print(f"   PASS: 旧 payload {{flags: [...]}} 也能 toggle")
+            out(f"   PASS: 旧 payload {{flags: [...]}} 也能 toggle")
     
     # ── 场景 5: 装饰器写了 audit log ──
-    print("[5/5] @audit_action 装饰器写日志")
+    out("[5/5] @audit_action 装饰器写日志")
     
     audit_count = _count_audit("firewall_feature_flag_toggle", TEST_FLAG_KEY)
     if audit_count < 2:  # 场景 1 + 场景 4 至少 2 条
         failures.append(f"场景 5: 期望 >=2 条 audit log,实际 {audit_count}")
     else:
-        print(f"   PASS: audit log 记录了 {audit_count} 次 toggle")
+        out(f"   PASS: audit log 记录了 {audit_count} 次 toggle")
     
     # ── cleanup ──
-    print("\n[cleanup]")
+    out("\n[cleanup]")
     _cleanup_test_data(TEST_FLAG_KEY, TEST_BUDGET_KEY)
     _restore_platform(TEST_PLATFORM, pre_platform)
     if cleanup_admin and staff_id:
         cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
     
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_FIREWALL_ROUTER_SMOKE_OK")
+        out("\nVKPI_FIREWALL_ROUTER_SMOKE_OK")
         sys.exit(0)
 
 

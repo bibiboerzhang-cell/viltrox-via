@@ -13,6 +13,7 @@ int() 必炸 → 所有 inventory_low 动作永远 entity_missing,批准后也�
 只读校验路径 + sqlite 离线自建表;不碰 viltrox_fit_score / rule_v0。
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -89,9 +90,9 @@ def main() -> int:
 
     if failures:
         for f in failures:
-            print(f"FAIL: {f}")
+            stdout_out(f"FAIL: {f}")
         return 1
-    print("PASS: inventory_low 动作可过 validate_action entity_exists(str 反查),负例仍被拦。")
+    stdout_out("PASS: inventory_low 动作可过 validate_action entity_exists(str 反查),负例仍被拦。")
     return 0
 
 

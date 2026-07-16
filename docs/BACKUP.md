@@ -27,5 +27,17 @@ SSH_TARGET=viltrox bash scripts/ops/backup_prod_vkpi.sh   # ssh 到 prod 后 pg_
 - [ ] 确认每张迁移都有配套 `_down.sql`(回滚路径)。
 - [ ] 定期演练一次 `pg_restore` 到临时库,验证可恢复(非只备不验)。
 
+## migration 243→244 专用发布证据门禁
+
+migration 244 在执行前必须通过独立的离线证据门禁。它要求新的
+migration-243 dump、SHA/metadata、隔离恢复、row anchors、244 正向和
+down SQL 回滚全部绑定到同一归档；缺一项即阻断。
+
+运行：<code>python3 scripts/ops/audit_migration_243_244_release_gate.py</code>
+
+详细契约和操作顺序见
+[migration 243→244 证据门禁](runbooks/VKPI_MIGRATION_243_244_RELEASE_GATE.md)。
+门禁通过只允许申请单独授权的 canary，不自动授权或执行 migration 244。
+
 ## 自动化(可选)
 把 `backup_local_vkpi.sh` 挂到 cron / systemd timer(参考 `vkpi-sync-daily.timer` 模式)即每日自动。

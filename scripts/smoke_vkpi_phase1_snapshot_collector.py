@@ -7,6 +7,7 @@ The test verifies two critical rules:
    shape and persisted with posts.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -140,7 +141,7 @@ def main() -> None:
         assert str(snapshot.get("youtube_kpi_status") or "") == "fixture", snapshot
         post_count = get_conn().execute("SELECT COUNT(*) AS c FROM vkpi_industry_posts WHERE account_id=?", (account_id,)).fetchone()["c"]
         assert int(post_count) == 2, post_count
-        print("VKPI_PHASE1_SNAPSHOT_COLLECTOR_SMOKE_OK")
+        stdout_out("VKPI_PHASE1_SNAPSHOT_COLLECTOR_SMOKE_OK")
     finally:
         _cleanup(marker)
 

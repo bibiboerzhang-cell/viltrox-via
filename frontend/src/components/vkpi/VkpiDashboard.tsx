@@ -28,6 +28,7 @@ import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
 import { emptyDashboardData } from './data/emptyDashboardData';
+import type { VkpiManualAuthorizationEvidence } from '../../services/vkpi/cost-api';
 import { getMarketingAlertDetail, resolveMarketingAlert } from '../../domains/dashboard';
 import { getKolProfile } from '../../domains/kol';
 import { getStaffProfile } from '../../domains/settings';
@@ -74,9 +75,9 @@ export interface VkpiDashboardProps {
   onMoveProjectStage?: (projectId: string, toStage: VkpiProjectStage, note?: string, extras?: { trackingNumber?: string; sampleStatus?: string; sourceRefType?: string; sourceRefId?: string }) => Promise<void>;
   onDeleteProject?: (projectId: string, reason?: string) => Promise<void>;
   onAddProjectCost?: (payload: { projectId: string; costType: string; amountUsd: number; note?: string; sourceRef?: string; metadata?: Record<string, unknown> }) => Promise<void>;
-  onUpdateCost?: (costId: string, payload: { costType?: string; amountUsd?: number; note?: string; sourceRef?: string }) => Promise<void>;
-  onApproveCost?: (costId: string, note?: string) => Promise<void>;
-  onVoidCost?: (costId: string, reason?: string) => Promise<void>;
+  onUpdateCost?: (costId: string, payload: { costType?: string; amountUsd?: number; note?: string; sourceRef?: string; authorizationEvidence: VkpiManualAuthorizationEvidence }) => Promise<void>;
+  onApproveCost?: (costId: string, note: string, authorizationEvidence: VkpiManualAuthorizationEvidence) => Promise<void>;
+  onVoidCost?: (costId: string, reason: string, authorizationEvidence: VkpiManualAuthorizationEvidence) => Promise<void>;
   onAddProjectMessage?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onAddProjectContent?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
   onUpsertProjectTerms?: (projectId: string, payload: Record<string, unknown>) => Promise<void>;
@@ -567,6 +568,7 @@ export function VkpiDashboard({
             rows={evidenceRows}
             lineageInfo={metricEvidence.lineageInfo}
             usedFallback={metricEvidence.usedFallback}
+            dataStatus={metricEvidence.lineageDataStatus}
             loading={metricEvidence.loading}
             officialViewsMatrix={metricEvidence.officialViewsMatrix}
             onClose={() => {

@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.market_brain.parallel_reads import run_read_tasks
 
 logger = get_logger(__name__)
 
@@ -279,6 +280,27 @@ def _sku_perf_brief(sku: str) -> dict[str, Any] | None:
     }
 
 
+def _sku_perf_briefs(skus: list[str]) -> dict[str, dict[str, Any] | None]:
+    """Batch the exact aggregate projection consumed by this card."""
+    from app.domains.products.sku_performance import sku_content_aggregate_briefs
+
+    aggregates = sku_content_aggregate_briefs(skus)
+    output: dict[str, dict[str, Any] | None] = {}
+    for sku in skus:
+        aggregate = aggregates.get(sku)
+        output[sku] = (
+            {
+                "content_count": _int0(aggregate.get("content_count")),
+                "creator_count": _int0(aggregate.get("creator_count")),
+                "total_views": _int0(aggregate.get("total_views")),
+                "avg_engagement_rate": aggregate.get("avg_engagement_rate"),
+            }
+            if aggregate is not None
+            else None
+        )
+    return output
+
+
 def _product_opportunities_card(tracks_result: dict[str, Any] | None, tracks_error: str | None) -> dict[str, Any]:
     if tracks_result is None:
         return {"status": "error", "reason": "category_tracks 聚合失败:" + _text(tracks_error, 220), "items": []}
@@ -306,7 +328,21 @@ def _product_opportunities_card(tracks_result: dict[str, Any] | None, tracks_err
         except Exception as exc:  # noqa: BLE001 — persona 缺席不拖垮机会清单
             logger.warning("market_brain.summary.personas failed: %s", exc)
 
-    perf_cache: dict[str, dict[str, Any] | None] = {}
+    enrich_skus: list[str] = []
+    for _opp, skus in pre_matched:
+        if skus and skus[0] not in enrich_skus and len(enrich_skus) < SKU_PERF_ENRICH_LIMIT:
+            enrich_skus.append(skus[0])
+    try:
+        perf_cache = _sku_perf_briefs(enrich_skus)
+    except Exception as exc:  # noqa: BLE001 — 批量读失败时保留原单 SKU 诚实降级
+        logger.warning("market_brain.summary.sku_perf_batch failed: %s", exc)
+        perf_cache = {}
+        for sku in enrich_skus:
+            try:
+                perf_cache[sku] = _sku_perf_brief(sku)
+            except Exception as sku_exc:  # noqa: BLE001
+                logger.warning("market_brain.summary.sku_perf failed for %s: %s", sku, sku_exc)
+                perf_cache[sku] = None
     items: list[dict[str, Any]] = []
     for opp, skus in pre_matched:
         opportunity = opp.get("opportunity") or {}
@@ -333,13 +369,8 @@ def _product_opportunities_card(tracks_result: dict[str, Any] | None, tracks_err
         for sku in skus:
             persona_row = personas.get(sku) or {}
             angles = persona_row.get("promotion_angles_json") or []
-            # 内容表现增益:每赛道只富化首个 SKU,全局限 2 次全表扫(守 <3s 预算)
-            if sku == skus[0] and len(perf_cache) < SKU_PERF_ENRICH_LIMIT and sku not in perf_cache:
-                try:
-                    perf_cache[sku] = _sku_perf_brief(sku)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("market_brain.summary.sku_perf failed for %s: %s", sku, exc)
-                    perf_cache[sku] = None
+            # 内容表现增益:每赛道只富化首个 SKU,全局最多 2 个;
+            # 两个 SKU 共享同一次深析/标题窗口扫描。
             content_perf = perf_cache.get(sku)
             items.append({
                 "sku": sku,
@@ -582,9 +613,9 @@ def _miss_review_dropped(dropped: list[str], source_status: dict[str, Any]) -> l
 
 def _effective_styles(source_status: dict[str, Any]) -> list[str]:
     """高表现段位拍法标签:段级索引按所属视频播放数排序的 top 段聚合(相关性≠因果)。"""
-    from app.domains.content.creative_segments import segment_search
+    from app.domains.content.creative_segments import segment_top_items
 
-    result = segment_search("", "", "", limit=20)
+    result = segment_top_items("", "", "", limit=20)
     source_status["creative_segments"] = {
         "status": _text(result.get("status"), 20),
         "scanned_videos": _int0(result.get("scanned_videos")),
@@ -623,8 +654,31 @@ def _learning_digest_card() -> dict[str, Any]:
             logger.warning("market_brain.summary.learning_digest.%s failed: %s", name, exc)
             source_status[name] = {"status": "error", "reason": _text(str(exc), 200)}
 
+    from app.domains.market_brain.data_readiness import build_learning_readiness
+
+    readiness = build_learning_readiness()
+    claimable = bool(readiness.get("claimable"))
+    observed_patterns = {
+        "validated": list(validated),
+        "effective_styles": list(styles),
+        "dropped_channels": list(dropped),
+    }
+    if not claimable:
+        # Preserve raw observations for inspection, but do not publish them under
+        # fields whose names imply validated effectiveness or a business decision.
+        validated.clear()
+        styles.clear()
+        dropped.clear()
+
     pending_total = _int0(scorecard_brief.get("pending_total"))
     next_bits: list[str] = []
+    if not claimable:
+        blockers = ", ".join(_text(item, 80) for item in readiness.get("blockers") or [])
+        next_bits.append(
+            "先补真实结果、预测对答案和人工反馈"
+            + (f"({blockers})" if blockers else "")
+            + ":门禁通过前不调整推荐口径"
+        )
     if pending_total > 0:
         next_bits.append(
             f"先对答案:{pending_total} 条预测 pending 待裁决(GTM-4 裁决流)——样本充足前不改推荐口径"
@@ -639,10 +693,16 @@ def _learning_digest_card() -> dict[str, Any]:
         "validated": validated,
         "effective_styles": styles,
         "dropped_channels": dropped,
+        "observed_patterns": observed_patterns,
+        "claimable": claimable,
+        "claim_status": "validated" if claimable else "descriptive_only",
+        "data_readiness": readiness,
         "next_change": ";".join(next_bits) + "。",
         "honesty_note": (
             f"学习闭环仍在样本荒:窗口内已裁决 {judged} 条 vs pending {pending_total} 条,"
-            "结论以样本为限、只述相关不述因果;「渠道不值」口径=低命中动作组(miss_review needs_review),"
+            + ("三项 DataReadiness 已通过;" if claimable else
+               "finalized outcome / prediction eval / 真实反馈未同时达标,本卡仅展示观察样本;")
+            + "结论以样本为限、只述相关不述因果;「渠道不值」口径=低命中动作组(miss_review needs_review),"
             "非真实渠道 ROI(订单归因 GTM-4 后可用)。本卡纯读,不改任何评分、规则或推荐。"
         ),
         "sources": source_status,
@@ -670,27 +730,40 @@ def build_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
         logger.warning("market_brain.summary.tracks failed: %s", exc, exc_info=True)
         tracks_error = _text(str(exc), 300)
 
-    out: dict[str, Any] = {}
-    try:
-        out["weekly_signals"] = _weekly_signals_card(tracks_result, tracks_error)
-    except Exception as exc:  # noqa: BLE001
-        out["weekly_signals"] = _error_card("weekly_signals", exc)
-    try:
-        out["product_opportunities"] = _product_opportunities_card(tracks_result, tracks_error)
-    except Exception as exc:  # noqa: BLE001
-        out["product_opportunities"] = _error_card("product_opportunities", exc)
-    try:
-        out["recommended_actions"] = _recommended_actions_card(staff)
-    except Exception as exc:  # noqa: BLE001
-        out["recommended_actions"] = _error_card("recommended_actions", exc)
+    def _card(section: str, builder: Any) -> dict[str, Any]:
+        try:
+            return builder()
+        except Exception as exc:  # noqa: BLE001
+            return _error_card(section, exc)
+
+    # These four cards only share the already materialized tracks payload.
+    # PostgreSQL runs them on independent scoped connections; SQLite remains
+    # sequential inside run_read_tasks.  The outer endpoint cache singleflight
+    # means only one cold builder per authorization scope reaches this block.
+    out = run_read_tasks(
+        {
+            "weekly_signals": lambda: _card(
+                "weekly_signals",
+                lambda: _weekly_signals_card(tracks_result, tracks_error),
+            ),
+            "product_opportunities": lambda: _card(
+                "product_opportunities",
+                lambda: _product_opportunities_card(tracks_result, tracks_error),
+            ),
+            "recommended_actions": lambda: _card(
+                "recommended_actions",
+                lambda: _recommended_actions_card(staff),
+            ),
+            "learning_digest": lambda: _card(
+                "learning_digest",
+                _learning_digest_card,
+            ),
+        }
+    )
     try:
         out["strategy_defaults"] = _strategy_defaults_card(out.get("product_opportunities") or {})
     except Exception as exc:  # noqa: BLE001
         out["strategy_defaults"] = _error_card("strategy_defaults", exc)
-    try:
-        out["learning_digest"] = _learning_digest_card()
-    except Exception as exc:  # noqa: BLE001
-        out["learning_digest"] = _error_card("learning_digest", exc)
 
     out["method"] = METHOD
     out["generated_at"] = _utcnow_iso()

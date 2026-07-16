@@ -39,26 +39,28 @@ import os
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 # 启动检测: 没 source runtime_env.sh 时给清晰错误
 def _check_environment() -> None:
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
-        print("ERROR: DATABASE_URL 未设置")
-        print("请先运行: source scripts/runtime_env.sh")
+        out("ERROR: DATABASE_URL 未设置")
+        out("请先运行: source scripts/runtime_env.sh")
         sys.exit(2)
     if "5432" in db_url and "54329" not in db_url:
         # 检查是否有显式覆盖
         allow_nonlocal = "--allow-nonlocal-db" in sys.argv
         if not allow_nonlocal:
-            print("ERROR: DATABASE_URL 看起来连默认 5432,不是本地 54329")
-            print(f"  当前: {db_url[:80]}")
-            print("")
-            print("可能你忘了 source scripts/runtime_env.sh")
-            print("如果你确定要连这个 DB (生产/远程),加 --allow-nonlocal-db 显式覆盖")
+            out("ERROR: DATABASE_URL 看起来连默认 5432,不是本地 54329")
+            out(f"  当前: {db_url[:80]}")
+            out("")
+            out("可能你忘了 source scripts/runtime_env.sh")
+            out("如果你确定要连这个 DB (生产/远程),加 --allow-nonlocal-db 显式覆盖")
             sys.exit(2)
-        print(f"⚠️  --allow-nonlocal-db 已确认,连接非本地 DB: {db_url[:80]}")
+        out(f"⚠️  --allow-nonlocal-db 已确认,连接非本地 DB: {db_url[:80]}")
 
 
 _check_environment()
@@ -90,13 +92,13 @@ def list_platforms() -> None:
     settings = platform_settings()
     rows = settings.get("platforms") or []
     
-    print()
-    print("═══════════════════════════════════════════════")
-    print("  Platform Crawl Settings 当前状态")
-    print("═══════════════════════════════════════════════")
-    print()
-    print(f"  {'Platform':<15} {'Enabled':<8} {'Daily':<6} {'Posts':<6} {'Budget':<10} {'Status':<15} {'Crawler'}")
-    print(f"  {'-'*15} {'-'*8} {'-'*6} {'-'*6} {'-'*10} {'-'*15} {'-'*10}")
+    out()
+    out("═══════════════════════════════════════════════")
+    out("  Platform Crawl Settings 当前状态")
+    out("═══════════════════════════════════════════════")
+    out()
+    out(f"  {'Platform':<15} {'Enabled':<8} {'Daily':<6} {'Posts':<6} {'Budget':<10} {'Status':<15} {'Crawler'}")
+    out(f"  {'-'*15} {'-'*8} {'-'*6} {'-'*6} {'-'*10} {'-'*15} {'-'*10}")
     
     for row in rows:
         platform = row.get("platform", "")
@@ -114,13 +116,13 @@ def list_platforms() -> None:
         enabled_str = "✓ YES" if enabled else "  no"
         budget_str = f"${budget:.0f}/mo" if budget else "0"
         
-        print(f"  {platform:<15} {enabled_str:<8} {daily:<6} {posts:<6} {budget_str:<10} {status:<15} {crawler_status}")
+        out(f"  {platform:<15} {enabled_str:<8} {daily:<6} {posts:<6} {budget_str:<10} {status:<15} {crawler_status}")
     
-    print()
-    print(f"  Crawler registry: {supported_platforms()}")
-    print(f"  APIFY_TOKEN: {'configured' if os.environ.get('APIFY_TOKEN') else 'NOT SET'}")
-    print(f"  YOUTUBE_API_KEY: {'configured' if os.environ.get('YOUTUBE_API_KEY') else 'NOT SET'}")
-    print()
+    out()
+    out(f"  Crawler registry: {supported_platforms()}")
+    out(f"  APIFY_TOKEN: {'configured' if os.environ.get('APIFY_TOKEN') else 'NOT SET'}")
+    out(f"  YOUTUBE_API_KEY: {'configured' if os.environ.get('YOUTUBE_API_KEY') else 'NOT SET'}")
+    out()
 
 
 def show_diff(platform: str, *, enable: bool | None, disable: bool,
@@ -135,7 +137,7 @@ def show_diff(platform: str, *, enable: bool | None, disable: bool,
     ).fetchone()
     
     if not row:
-        print(f"ERROR: {platform} 不在 vkpi_platform_crawl_settings 表里")
+        out(f"ERROR: {platform} 不在 vkpi_platform_crawl_settings 表里")
         return None
     
     current = dict(row)
@@ -176,14 +178,14 @@ def show_diff(platform: str, *, enable: bool | None, disable: bool,
     if new_enabled and new_budget == 0:
         warnings.append(f"{platform} 开启但 budget=0 → provider_gate 会拒绝抓取")
     
-    print(f"\n准备更新 {platform}:")
-    print(f"  crawl_enabled:        {bool(current.get('crawl_enabled'))} → {new_enabled}")
-    print(f"  daily_account_limit:  {current.get('daily_account_limit')} → {new_daily}")
-    print(f"  posts_per_account:    {current.get('posts_per_account')} → {new_posts}")
-    print(f"  monthly_budget_usd:   ${float(current.get('monthly_budget_usd') or 0):.0f} → ${new_budget:.0f}")
+    out(f"\n准备更新 {platform}:")
+    out(f"  crawl_enabled:        {bool(current.get('crawl_enabled'))} → {new_enabled}")
+    out(f"  daily_account_limit:  {current.get('daily_account_limit')} → {new_daily}")
+    out(f"  posts_per_account:    {current.get('posts_per_account')} → {new_posts}")
+    out(f"  monthly_budget_usd:   ${float(current.get('monthly_budget_usd') or 0):.0f} → ${new_budget:.0f}")
     
     for w in warnings:
-        print(f"  ⚠️  {w}")
+        out(f"  ⚠️  {w}")
     
     payload = {
         "platforms": [{
@@ -206,11 +208,11 @@ def apply_payload(payload: dict, *, staff_id: int | None) -> None:
     """
     staff_obj = {"id": staff_id} if staff_id else None
     result = update_platform_settings(payload, staff=staff_obj)
-    print(f"\n✓ 已通过 update_platform_settings 写入")
+    out(f"\n✓ 已通过 update_platform_settings 写入")
     if staff_id:
-        print(f"  staff_id={staff_id} → audit log 已写入 vkpi_settings_change_logs")
+        out(f"  staff_id={staff_id} → audit log 已写入 vkpi_settings_change_logs")
     else:
-        print(f"  staff=None → 写库成功,但 audit 已跳过 (--no-audit 确认)")
+        out(f"  staff=None → 写库成功,但 audit 已跳过 (--no-audit 确认)")
 
 
 def main() -> None:
@@ -243,21 +245,21 @@ def main() -> None:
     
     platform = args.platform.lower()
     if platform not in SUPPORTED:
-        print(f"ERROR: {platform} 当前不支持. 已支持: {sorted(SUPPORTED)}")
+        out(f"ERROR: {platform} 当前不支持. 已支持: {sorted(SUPPORTED)}")
         sys.exit(1)
     
     if args.enable and args.disable:
-        print("ERROR: --enable 和 --disable 互斥")
+        out("ERROR: --enable 和 --disable 互斥")
         sys.exit(1)
     
     # --apply 必须 --staff-id 或 --no-audit
     if args.apply and args.staff_id is None and not args.no_audit:
-        print("ERROR: --apply 时必须传 --staff-id N (让 audit log 生效)")
-        print("       或加 --no-audit 显式跳过 (不推荐生产环境用)")
-        print("")
-        print("查看可用 staff_id:")
-        print("  PGOPTIONS='-c search_path=public' \\")
-        print('    psql "$DATABASE_URL" -c "SELECT id, full_name, email FROM vkpi_staff LIMIT 10"')
+        out("ERROR: --apply 时必须传 --staff-id N (让 audit log 生效)")
+        out("       或加 --no-audit 显式跳过 (不推荐生产环境用)")
+        out("")
+        out("查看可用 staff_id:")
+        out("  PGOPTIONS='-c search_path=public' \\")
+        out('    psql "$DATABASE_URL" -c "SELECT id, full_name, email FROM vkpi_staff LIMIT 10"')
         sys.exit(1)
     
     payload = show_diff(
@@ -275,8 +277,8 @@ def main() -> None:
     if args.apply:
         apply_payload(payload, staff_id=args.staff_id)
     else:
-        print(f"\nDRY-RUN: 未写库")
-        print(f"加 --apply --staff-id N 真实执行")
+        out(f"\nDRY-RUN: 未写库")
+        out(f"加 --apply --staff-id N 真实执行")
 
 
 if __name__ == "__main__":

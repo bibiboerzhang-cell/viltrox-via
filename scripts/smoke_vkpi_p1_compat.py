@@ -5,6 +5,7 @@ This does not install Reddit/Facebook/comments/sentiment features. It verifies
 that the shared compatibility contracts are ready before P1 packages land.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import sys
@@ -73,7 +74,7 @@ def main() -> int:
         "marker": "VKPI_P1_COMPAT_SMOKE_OK" if not failures else "VKPI_P1_COMPAT_SMOKE_FAIL",
         "failures": failures,
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    stdout_out(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if not failures else 1
 
 

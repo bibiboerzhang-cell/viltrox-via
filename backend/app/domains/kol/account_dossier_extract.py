@@ -7,7 +7,6 @@ updates vkpi_kol_pool scoring fields.
 """
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from typing import Any
 
@@ -17,6 +16,7 @@ from psycopg.types.json import Jsonb
 
 from app.db.connection import get_conn
 from app.domains.kol.account_dossier import get_kol_account_dossier
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
 
 ANALYSIS_KIND = "profile_llm"
@@ -471,6 +471,7 @@ def enqueue_account_dossier_extract_job(
         }
     staff = staff or {}
     payload = {
+        "queue_lane": "interactive",
         "target_type": "kol_pool",
         "target_id": str(int(kol_pool_id)),
         "derive_method": METHOD,
@@ -483,19 +484,17 @@ def enqueue_account_dossier_extract_job(
         "staff_id": staff.get("staff_id"),
         "preview_summary": preview.get("summary"),
     }
-    job = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id, job_type, status, payload, created_at, updated_at
-        """,
-        (JOB_TYPE, json.dumps(payload, ensure_ascii=False)),
-    ).fetchone()
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type=JOB_TYPE,
+        payload=payload,
+        idempotency_key=active_job_idempotency_key(JOB_TYPE, int(kol_pool_id)),
+    )
     conn.commit()
     return {
-        "status": "queued",
+        "status": "queued" if inserted else ("already_running" if job.get("status") == "running" else "already_queued"),
         "kol_pool_id": int(kol_pool_id),
-        "job": dict(job) if job else None,
+        "job": job,
         "preview": {
             "status": preview.get("status"),
             "summary": preview.get("summary"),

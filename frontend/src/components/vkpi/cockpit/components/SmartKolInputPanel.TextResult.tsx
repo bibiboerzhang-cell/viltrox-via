@@ -8,6 +8,8 @@ import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domai
 
 import { cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
+import type { SearchSessionProgress } from "./SmartKolInputPanel.derivers";
+import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
 
 type SessionBanner = {
   tone: string;
@@ -60,6 +62,7 @@ export function TextResultSection({
   pickDiscovery,
   onOpenRecallItem,
   sessionBanner,
+  sessionProgress,
   activeSessionCounts,
   sessionPollNotice,
   retrySearchSession,
@@ -113,6 +116,7 @@ export function TextResultSection({
   pickDiscovery: (item: any) => void;
   onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
   sessionBanner: SessionBanner;
+  sessionProgress: SearchSessionProgress;
   activeSessionCounts: Record<string, any>;
   sessionPollNotice: string;
   retrySearchSession: () => void;
@@ -125,6 +129,8 @@ export function TextResultSection({
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
   return (
     <div className="mt-3 space-y-2.5">
+      <ProgressiveSearchStageCard progress={sessionProgress} />
+
       {/* 框1 · 产品人群分析(可编辑,防 LLM 理解偏) */}
       <div className="rounded-lg border border-cyan-300/15 bg-cyan-400/[0.04] p-3">
         <div className="mb-1.5 flex items-center justify-between gap-2">

@@ -33,10 +33,18 @@ PROVIDER_ENV_KEYS = {
 
 
 def mask_secret(value: str | None) -> str:
+    """Return a non-secret configuration marker.
+
+    This helper historically returned the first 15 characters of a provider
+    credential.  Even a partial API key is secret-derived data and can leak via
+    screenshots, browser logs, support exports, or admin API responses.  Keep
+    the legacy helper/field contract, but never derive its public value from
+    the credential itself.
+    """
     raw = str(value or "").strip()
     if not raw:
         return ""
-    return f"{raw[:15]}..."
+    return "configured"
 
 
 def provider_key_prefix(provider: str) -> str:

@@ -1,0 +1,803 @@
+
+/* Route-wide Dashboard Kit migration --------------------------------------
+   Older business pages were authored against several unrelated dark themes.
+   This boundary maps those surfaces back to the active Kit tokens while
+   preserving their routes, data contracts and controls. */
+.vkpi-page-stage {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+  color: var(--ds-text);
+  background: var(--ds-workspace-surface);
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) > :is(div, main, section) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-workspace {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--ds-text) !important;
+  background: transparent !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-page-heading {
+  border-color: var(--ds-line) !important;
+  border-radius: var(--ds-radius-lg) !important;
+  color: var(--ds-text) !important;
+  background: var(--ds-card) !important;
+  box-shadow: var(--ds-shadow-sm) !important;
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) :is(input, select, textarea) {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-text) !important;
+  background-color: var(--ds-panel) !important;
+  box-shadow: none !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) :is(input, textarea)::placeholder {
+  color: var(--ds-muted) !important;
+  opacity: 1;
+}
+
+/* Tailwind-era hard-coded foregrounds. */
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-white"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-50"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-100"] {
+  color: var(--ds-text) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-200"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-300"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-gray-200"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-gray-300"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-zinc-200"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-zinc-300"] {
+  color: var(--ds-text-2) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-400"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-500"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-slate-600"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-gray-400"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-gray-500"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-zinc-400"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-zinc-500"] {
+  color: var(--ds-muted) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-sky-"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-cyan-"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-blue-"] {
+  color: var(--ds-accent) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-purple-"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-violet-"] {
+  color: var(--ds-accent-2) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-emerald-"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-green-"] {
+  color: var(--ds-good) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-amber-"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-yellow-"] {
+  color: var(--ds-warn) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-rose-"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="text-red-"] {
+  color: var(--ds-crit) !important;
+}
+
+/* Tailwind-era hard-coded surfaces. The selectors intentionally stay inside
+   non-Dashboard route boundaries so Leaflet and the command map are untouched. */
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-white/"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-black/"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-slate-9"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-gray-9"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-zinc-9"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-neutral-9"] {
+  background-color: var(--ds-card) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-\[#0"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-\[#1"] {
+  background-color: var(--ds-panel) !important;
+}
+
+/* Drawers and anchored overlays are operational surfaces, not decorative glass.
+   Keep them readable even when the dashboard panels are set very transparent. */
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-kol-detail-drawer,
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-kol-detail-drawer [class*="bg-\[#0a1020"] {
+  background-color: var(--ds-drawer-surface) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-\[linear-gradient"] {
+  background-color: var(--ds-card) !important;
+  background-image: none !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="border-white"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="border-slate"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="border-gray"],
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="border-zinc"] {
+  border-color: var(--ds-line) !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="shadow-"] {
+  --tw-shadow-color: transparent !important;
+}
+
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) :is(.rounded-2xl, .rounded-xl) {
+  border-radius: var(--ds-radius-lg) !important;
+}
+
+/* MY KOL had a separate navy/purple visual system.
+   收尾波(2026-07-12):旧页壳退役,.mykol-page/.mykol-hero 页壳换肤选择器已随
+   B 类清除;下列选择器服务仍被 MyKolBoardPage embeds 消费的旧区块,保留。 */
+.vkpi-page-stage--my-kol :is(
+  .mykol-panel,
+  .mykol-staff-card,
+  .mykol-platform-card,
+  .mykol-kol-list,
+  .mykol-content-layer,
+  .mykol-team-page-mini,
+  .mykol-managed-list,
+  .mykol-account-group,
+  .mykol-employee-content,
+  .mykol-post-card,
+  .mykol-content-modal__panel,
+  .mykol-employee-content-empty,
+  .vkpi-my-kol-content-card
+) {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-text-2) !important;
+  background: var(--ds-card) !important;
+  box-shadow: var(--ds-shadow-sm) !important;
+}
+
+.vkpi-page-stage--my-kol :is(
+  .mykol-chip-row span,
+  .mykol-platform-tags span,
+  .mykol-tabs button,
+  .mykol-toggle,
+  .mykol-team-page-mini button,
+  .mykol-content-tabs button,
+  .mykol-content-toolbar select,
+  .mykol-content-pagination button,
+  .mykol-employee-content__toolbar button,
+  .mykol-employee-content__toolbar select,
+  .mykol-employee-platform-strip button,
+  .mykol-post-card__footer button,
+  .mykol-post-card__footer a
+) {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-text-2) !important;
+  background: var(--ds-panel) !important;
+}
+
+.vkpi-page-stage--my-kol :is(.mykol-content-insights span, .mykol-employee-content__insights span) {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-muted) !important;
+  background: var(--ds-panel) !important;
+}
+
+.vkpi-page-stage--my-kol .mykol-staff-card__reach strong {
+  color: var(--ds-crit) !important;
+}
+
+.vkpi-page-stage--my-kol :is(.mykol-chip-row small, .mykol-staff-card__reach small, .mykol-managed-list button strong) {
+  color: var(--ds-good) !important;
+}
+
+/* Projects had a second, black campaign-OS theme and fixed-width hero. */
+.vkpi-page-stage--projects :is(.vkpi-workspace, .vkpi-page--projects) {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--ds-text) !important;
+  background: transparent !important;
+}
+
+.vkpi-page-stage--projects .vkpi-project-hero {
+  grid-template-columns: minmax(360px, 1fr) minmax(0, 0.95fr);
+  border-color: var(--ds-line) !important;
+  border-radius: var(--ds-radius-lg) !important;
+  background: var(--ds-card) !important;
+  box-shadow: var(--ds-shadow-sm) !important;
+}
+
+.vkpi-page-stage--projects .vkpi-project-health-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.vkpi-page-stage--projects .vkpi-project-health-card {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-text-2) !important;
+  background: var(--ds-panel) !important;
+}
+
+.vkpi-page-stage--projects .vkpi-project-health-card :is(span, em) {
+  color: var(--ds-muted) !important;
+}
+
+.vkpi-page-stage--projects .vkpi-project-health-card:nth-child(1) strong { color: var(--ds-crit) !important; }
+.vkpi-page-stage--projects .vkpi-project-health-card:nth-child(2) strong { color: var(--ds-warn) !important; }
+.vkpi-page-stage--projects .vkpi-project-health-card:nth-child(3) strong { color: var(--ds-accent) !important; }
+.vkpi-page-stage--projects .vkpi-project-health-card:nth-child(4) strong { color: var(--ds-accent-2) !important; }
+
+.vkpi-page-stage--projects .vkpi-project-filter-bar {
+  grid-template-columns: minmax(260px, 1.4fr) minmax(170px, 1fr) repeat(3, minmax(110px, 0.7fr)) auto;
+}
+
+.vkpi-page-stage--projects .vkpi-project-filter-bar > * {
+  min-width: 0;
+}
+
+.vkpi-page-stage--projects :is(
+  .vkpi-project-actions-shell,
+  .vkpi-project-filter-bar,
+  .vkpi-project-campaign-card,
+  .vkpi-project-board-empty,
+  .vkpi-campaign-detail,
+  .vkpi-campaign-panel,
+  .vkpi-campaign-table-card,
+  .vkpi-campaign-analytics-card,
+  .vkpi-campaign-finance-card,
+  .vkpi-campaign-material-card,
+  .vkpi-campaign-contract-card,
+  .vkpi-campaign-retro-card,
+  .vkpi-live-logistics-card,
+  .vkpi-project-create-modal,
+  .vkpi-project-import-modal
+) {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-text-2) !important;
+  background: var(--ds-card) !important;
+  box-shadow: var(--ds-shadow-sm) !important;
+}
+
+.vkpi-page-stage--projects :is(h1, h2, h3, h4, strong, .vkpi-project-card-title) {
+  color: var(--ds-text) !important;
+  letter-spacing: 0;
+}
+
+.vkpi-page-stage--projects :is(p, small, .vkpi-project-campaign-meta, .vkpi-project-campaign-summary) {
+  color: var(--ds-muted) !important;
+}
+
+.vkpi-page-stage--projects :is(
+  .vkpi-project-hero-button,
+  .vkpi-project-search,
+  .vkpi-project-select,
+  .vkpi-project-segment,
+  .vkpi-project-card-actions button
+) {
+  border-color: var(--ds-line) !important;
+  color: var(--ds-text-2) !important;
+  background: var(--ds-panel) !important;
+}
+
+.vkpi-page-stage--projects :is(.vkpi-project-hero-button.is-primary, .vkpi-project-new-button, .vkpi-tab-primary-action) {
+  border-color: var(--ds-accent) !important;
+  color: #fff !important;
+  background: var(--ds-accent) !important;
+}
+
+@media (max-width: 1180px) {
+  .vkpi-page-stage--projects .vkpi-project-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Dashboard Kit: real editable board ------------------------------------------------ */
+.vkpi-dashboard-canvas {
+  width: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+}
+
+.vkpi-board-edit-hint {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 38px;
+  margin-bottom: 12px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-muted);
+  background: var(--ds-accent-soft);
+  font-size: 10px;
+}
+
+.vkpi-board-edit-hint strong {
+  color: var(--ds-accent);
+}
+
+.vkpi-board-edit-hint > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.vkpi-board-edit-hint__sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  color: var(--ds-muted);
+  font-size: 9px;
+}
+
+.vkpi-board-edit-hint__sync::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.vkpi-board-edit-hint__sync.is-saved { color: var(--ds-good); }
+.vkpi-board-edit-hint__sync.is-saving,
+.vkpi-board-edit-hint__sync.is-loading { color: var(--ds-info); }
+.vkpi-board-edit-hint__sync.is-error { color: var(--ds-warn); }
+
+.vkpi-board-edit-hint button,
+.vkpi-layout-edit-button {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--ds-line) !important;
+  border-radius: var(--ds-radius-sm);
+  color: var(--ds-text-2);
+  background: var(--ds-panel) !important;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.vkpi-layout-edit-button.is-active,
+.vkpi-board-edit-hint button:hover {
+  color: var(--ds-accent);
+  border-color: var(--ds-line-strong) !important;
+  background: var(--ds-accent-soft) !important;
+}
+
+.vkpi-editable-board {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.vkpi-board-module {
+  --vkpi-module-flow-a: var(--ds-flow-blue);
+  --vkpi-module-flow-b: var(--ds-flow-violet);
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  grid-column: span var(--vkpi-module-span, 4);
+  border-radius: var(--ds-radius-lg);
+}
+
+.vkpi-board-module--actions,
+.vkpi-board-module--memo { --vkpi-module-flow-a: var(--ds-flow-cyan); --vkpi-module-flow-b: var(--ds-flow-blue); }
+.vkpi-board-module--signals { --vkpi-module-flow-a: var(--ds-flow-amber); --vkpi-module-flow-b: var(--ds-flow-rose); }
+.vkpi-board-module--v6-fit,
+.vkpi-board-module--ai-today { --vkpi-module-flow-a: var(--ds-flow-violet); --vkpi-module-flow-b: var(--ds-flow-blue); }
+.vkpi-board-module--trend,
+.vkpi-board-module--task-queue { --vkpi-module-flow-a: var(--ds-flow-blue); --vkpi-module-flow-b: var(--ds-flow-cyan); }
+
+.vkpi-board-module.is-dragging {
+  opacity: 0.42;
+}
+
+.vkpi-board-module.is-resizing {
+  z-index: 8;
+  outline-color: var(--ds-accent) !important;
+  box-shadow: 0 0 0 1px var(--ds-accent), 0 18px 48px color-mix(in srgb, var(--ds-accent) 18%, transparent);
+}
+
+.vkpi-editable-board.is-editing .vkpi-board-module {
+  outline: 1px dashed transparent;
+  outline-offset: 4px;
+}
+
+.vkpi-editable-board.is-editing .vkpi-board-module:is(
+  :hover,
+  :focus-within,
+  .is-dragging,
+  .is-resizing,
+  .react-draggable-dragging,
+  .resizing
+) {
+  outline-color: color-mix(in srgb, var(--ds-accent) 62%, transparent);
+}
+
+.vkpi-editable-board.is-editing .vkpi-board-module:is(
+  .is-dragging,
+  .is-resizing,
+  .react-draggable-dragging,
+  .resizing
+) {
+  outline-style: solid;
+  outline-color: var(--ds-accent);
+}
+
+.vkpi-board-module__content {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.vkpi-board-module__flow {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  opacity: 0.48;
+  pointer-events: none;
+  mask-image: linear-gradient(90deg, transparent 0%, #000 15%, #000 84%, transparent 100%);
+}
+
+.vkpi-board-module__flow svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 200%;
+  height: 100%;
+  overflow: visible;
+}
+
+.vkpi-board-module__flow path {
+  fill: none;
+  stroke: var(--vkpi-module-flow-a);
+  stroke-width: 1.5;
+  opacity: 0.48;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--vkpi-module-flow-a) 52%, transparent));
+}
+
+.vkpi-board-module__flow .is-secondary path {
+  stroke: var(--vkpi-module-flow-b);
+  stroke-width: 1.2;
+  opacity: 0.34;
+}
+
+[data-theme="dark"] .vkpi-board-module:is(
+  .vkpi-board-module--actions,
+  .vkpi-board-module--signals,
+  .vkpi-board-module--v6-fit,
+  .vkpi-board-module--trend,
+  .vkpi-board-module--ai-today,
+  .vkpi-board-module--task-queue,
+  .vkpi-board-module--memo
+) .vkpi-board-module__content > * {
+  background:
+    linear-gradient(148deg, color-mix(in srgb, var(--vkpi-module-flow-a) 7%, var(--ds-card)), var(--ds-card) 54%, color-mix(in srgb, var(--vkpi-module-flow-b) 8%, var(--ds-card))),
+    var(--ds-card) !important;
+}
+
+.vkpi-board-module__content > .mb-4,
+.vkpi-board-module__content > .space-y-4,
+.vkpi-board-module__content > article,
+.vkpi-board-module__content > section {
+  margin-bottom: 0 !important;
+}
+
+/* MY KOL · KOL 库模块:行数少时卡体收敛贴内容(flex 收敛)——
+   覆盖格高填充(上方 min-height:100% 通配 + ds-mod 的 h-full),卡体改
+   height:auto + max-height:100%:空底留在卡外的透明格内,「查看全量 N 条」
+   按钮自然贴在行下方不悬空;内容超过格高时仍封顶,由卡体 overflow 滚动。 */
+.vkpi-editable-board .vkpi-board-module--library .vkpi-board-module__content > * {
+  min-height: 0;
+}
+
+.vkpi-editable-board .vkpi-board-module--library .vkpi-board-module__content > .ds-mod {
+  height: auto;
+  max-height: 100%;
+}
+
+.vkpi-board-module__tools {
+  position: absolute;
+  z-index: 920;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--ds-line);
+  border-radius: 8px;
+  background: var(--ds-card);
+  box-shadow: var(--ds-shadow);
+  backdrop-filter: var(--ds-backdrop);
+}
+
+.vkpi-board-module__tools button {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--ds-muted);
+}
+
+.vkpi-board-module__tools button:hover {
+  color: var(--ds-text);
+  background: var(--ds-accent-soft);
+}
+
+.vkpi-board-module__tools .is-handle {
+  cursor: grab;
+}
+
+.vkpi-board-module__resize {
+  position: absolute;
+  z-index: 930;
+  right: 4px;
+  bottom: 4px;
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border: 1px solid var(--ds-line-strong) !important;
+  border-radius: 8px 3px 8px 3px;
+  color: var(--ds-muted);
+  background: var(--ds-card) !important;
+  box-shadow: var(--ds-shadow-sm);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.vkpi-board-module__resize:hover,
+.vkpi-board-module__resize:focus-visible {
+  color: var(--ds-accent);
+  border-color: var(--ds-accent) !important;
+}
+
+.vkpi-board-add {
+  display: flex;
+  min-height: 104px;
+  grid-column: span 12;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--ds-line-strong) !important;
+  border-radius: var(--ds-radius-lg);
+  color: var(--ds-muted);
+  background: color-mix(in srgb, var(--ds-panel) 45%, transparent) !important;
+  font-size: 11px;
+}
+
+.vkpi-board-add:hover {
+  color: var(--ds-accent);
+  border-color: var(--ds-accent) !important;
+  background: var(--ds-accent-soft) !important;
+}
+
+.vkpi-module-palette {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(2, 4, 10, 0.68);
+  backdrop-filter: blur(14px);
+}
+
+.vkpi-module-palette__dialog {
+  display: flex;
+  width: min(920px, 100%);
+  max-height: min(82vh, 820px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ds-line-strong);
+  border-radius: var(--ds-radius-lg);
+  color: var(--ds-text-2);
+  background: var(--ds-card);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.46);
+  backdrop-filter: var(--ds-backdrop);
+}
+
+[data-style="glass"] .vkpi-module-palette__dialog {
+  background: color-mix(in srgb, var(--ds-panel) 88%, transparent);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34), var(--ds-inner);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.vkpi-module-palette__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid var(--ds-line);
+}
+
+.vkpi-module-palette__head h2 {
+  margin: 5px 0 3px;
+  color: var(--ds-text);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.vkpi-module-palette__head p {
+  margin: 0;
+  color: var(--ds-muted);
+  font-size: 10px;
+}
+
+.vkpi-module-palette__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ds-accent);
+  font-family: var(--ds-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.vkpi-module-palette__head > button {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid var(--ds-line) !important;
+  border-radius: 9px;
+  color: var(--ds-muted);
+  background: var(--ds-panel) !important;
+}
+
+.vkpi-module-palette__search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  margin: 12px 22px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--ds-line);
+  border-radius: 10px;
+  color: var(--ds-muted);
+  background: var(--ds-panel);
+}
+
+.vkpi-module-palette__search:focus-within {
+  border-color: var(--ds-accent);
+  color: var(--ds-accent);
+}
+
+.vkpi-module-palette__search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--ds-text);
+  background: transparent;
+  font-size: 11px;
+}
+
+.vkpi-module-palette__search input::placeholder {
+  color: var(--ds-muted);
+}
+
+.vkpi-module-palette__search button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ds-muted);
+}
+
+.vkpi-module-palette__body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px 24px;
+}
+
+.vkpi-module-palette__section + .vkpi-module-palette__section {
+  margin-top: 20px;
+}
+
+.vkpi-module-palette__section h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 8px;
+  color: var(--ds-muted);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.vkpi-module-palette__section h3 span,
+.vkpi-module-palette__source h4 span {
+  color: var(--ds-accent);
+  font-family: var(--ds-font-mono);
+  letter-spacing: 0;
+}
+
+.vkpi-module-palette__source + .vkpi-module-palette__source {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ds-line);
+}
+
+.vkpi-module-palette__source h4 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 7px;
+  color: var(--ds-text-2);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.vkpi-module-palette__empty {
+  padding: 40px 16px;
+  border: 1px dashed var(--ds-line-strong);
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.vkpi-module-palette__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.vkpi-module-palette__grid > button {
+  display: flex;
+  min-width: 0;
+  min-height: 84px;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--ds-line) !important;
+  border-radius: var(--ds-radius-md);
+  color: var(--ds-text-2);
+  background: var(--ds-panel) !important;
+  text-align: left;
+}
+
+.vkpi-module-palette__grid > button:not(:disabled):hover {
+  border-color: var(--ds-accent) !important;
+  background: var(--ds-accent-soft) !important;
+}
+
+.vkpi-module-palette__grid > button.is-added {
+  opacity: 0.48;
+}
+
+.vkpi-module-palette__grid strong {
+  color: var(--ds-text);
+  font-size: 12px;
+}
+
+.vkpi-module-palette__grid span {
+  margin-top: 4px;
+  color: var(--ds-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.vkpi-module-palette__grid small {
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--ds-accent);
+  font-family: var(--ds-font-mono);
+  font-size: 8px;
+}

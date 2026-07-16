@@ -10,6 +10,7 @@
 6. 各组件 import 路径正确
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -150,7 +151,7 @@ def main() -> None:
         if found:
             raise AssertionError(f"tabs/{f} 品牌词残留: {found}")
 
-    print("VKPI_DATA_ANALYSIS_R58B_SMOKE_OK")
+    stdout_out("VKPI_DATA_ANALYSIS_R58B_SMOKE_OK")
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ from typing import Any
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from stdout_utils import out
+
 
 ARTIFACT_DIR = Path("artifacts")
 GENERIC_PROJECT_TERMS = {
@@ -675,34 +677,34 @@ def main() -> None:
         counts = Counter(row["decision"] for row in rows)
         safe_rows = [row for row in rows if row["decision"] == "safe_unique_assignment_project"]
         commit_rows = select_commit_rows(rows, args.commit_scope)
-        print("=" * 72)
-        print("Evidence project_id backfill")
-        print("=" * 72)
-        print(f"mode: {'COMMIT' if args.commit else 'DRY-RUN'}")
-        print(f"commit_scope: {args.commit_scope}")
-        print(f"evidence_total: {summary['evidence_total']}")
-        print(f"project_id_missing_before: {summary['missing_project_id']}")
-        print(f"safe_unique_assignment_project: {counts.get('safe_unique_assignment_project', 0)}")
-        print(f"skip_no_assignment_project: {counts.get('skip_no_assignment_project', 0)}")
-        print(f"skip_multiple_assignment_projects: {counts.get('skip_multiple_assignment_projects', 0)}")
+        out("=" * 72)
+        out("Evidence project_id backfill")
+        out("=" * 72)
+        out(f"mode: {'COMMIT' if args.commit else 'DRY-RUN'}")
+        out(f"commit_scope: {args.commit_scope}")
+        out(f"evidence_total: {summary['evidence_total']}")
+        out(f"project_id_missing_before: {summary['missing_project_id']}")
+        out(f"safe_unique_assignment_project: {counts.get('safe_unique_assignment_project', 0)}")
+        out(f"skip_no_assignment_project: {counts.get('skip_no_assignment_project', 0)}")
+        out(f"skip_multiple_assignment_projects: {counts.get('skip_multiple_assignment_projects', 0)}")
         confidence_counts = Counter(text(row.get("attribution_confidence")) or "<not_scored>" for row in safe_rows)
         for key, count in confidence_counts.most_common():
-            print(f"{key}: {count}")
-        print(f"commit_eligible_rows: {len(commit_rows)}")
+            out(f"{key}: {count}")
+        out(f"commit_eligible_rows: {len(commit_rows)}")
         if args.commit:
-            print(f"updated_rows: {updated}")
+            out(f"updated_rows: {updated}")
         else:
-            print("dry-run only: no rows were updated")
-        print(f"csv: {csv_path}")
-        print(f"report: {report_path}")
-        print(f"review_csv: {review_csv_path}")
-        print(f"review_report: {review_md_path}")
+            out("dry-run only: no rows were updated")
+        out(f"csv: {csv_path}")
+        out(f"report: {report_path}")
+        out(f"review_csv: {review_csv_path}")
+        out(f"review_report: {review_md_path}")
         for key, count in sorted(review_counts.items()):
-            print(f"{key}: {count}")
-        print()
-        print(f"[sample {args.sample}]")
+            out(f"{key}: {count}")
+        out()
+        out(f"[sample {args.sample}]")
         for row in safe_rows[: args.sample]:
-            print(
+            out(
                 f"  evidence={row['evidence_id']} -> project={row.get('project_id')} "
                 f"{row.get('project_name')} | kol={row.get('kol_name')} | "
                 f"platform={row.get('platform') or '<null>'}"

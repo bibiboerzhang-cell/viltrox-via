@@ -1,0 +1,102 @@
+{
+  "fixture_kind": "source_identity_review_only",
+  "reviewed_at": "2026-07-15T18:05:00Z",
+  "country_code": "US",
+  "contains_dealer_rows": false,
+  "contains_contact_rows": false,
+  "contains_inventory": false,
+  "network_capture": false,
+  "truth_note": "This fixture verifies publisher ownership and canonical entry identity only. It is not a captured dealer payload, terms approval, robots approval, or authorization evidence.",
+  "sources": [
+    {
+      "id": "dealer_nikon_us_authorized_imaging",
+      "publisher": "Nikon USA",
+      "canonical_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+      "source_channel": "official_public_pdf"
+    },
+    {
+      "id": "dealer_canon_us_where_to_buy",
+      "publisher": "Canon USA",
+      "canonical_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+      "source_channel": "official_public_pdf"
+    },
+    {
+      "id": "dealer_sony_us_where_to_buy",
+      "publisher": "Sony USA",
+      "canonical_url": "https://www.sony.com/electronics/support/articles/00025266",
+      "source_channel": "official_support_article"
+    },
+    {
+      "id": "dealer_fujifilm_us_shop",
+      "publisher": "FUJIFILM USA",
+      "canonical_url": "https://www.fujifilm-x.com/en-us/shop/",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_panasonic_us_authorized",
+      "publisher": "Panasonic USA",
+      "canonical_url": "https://shop.panasonic.com/pages/authorized-retailers",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_omsystem_us_locator",
+      "publisher": "OM Digital Solutions Americas",
+      "canonical_url": "https://explore.omsystem.com/us/en/store-locator/",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_leica_us_locator",
+      "publisher": "Leica Camera USA",
+      "canonical_url": "https://leica-camera.com/en-US/dealer-locator",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_blackmagic_us_resellers",
+      "publisher": "Blackmagic Design",
+      "canonical_url": "https://www.blackmagicdesign.com/resellers?country=United+States&linux=false&mac=false&view=brief&windows=true",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_tamron_americas_locator",
+      "publisher": "Tamron Americas",
+      "canonical_url": "https://www2.tamron-usa.com/dealers.aspx",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_sigma_us_authorized",
+      "publisher": "SIGMA Corporation of America",
+      "canonical_url": "https://www.sigmaphoto.com/authorized-dealers",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_hasselblad_us_locator",
+      "publisher": "Hasselblad",
+      "canonical_url": "https://www.hasselblad.com/dealers/",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_profoto_us_locator",
+      "publisher": "Profoto",
+      "canonical_url": "https://www.profoto.com/us/en/shop/find-dealer/",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_phaseone_us_partner_locator",
+      "publisher": "Phase One",
+      "canonical_url": "https://www.phaseone.com/find-phase-one/find-local-partner/",
+      "source_channel": "official_public_directory"
+    },
+    {
+      "id": "dealer_viltrox_us_company_feed",
+      "publisher": "Viltrox",
+      "canonical_url": "https://viltrox.com/",
+      "source_channel": "company_feed"
+    },
+    {
+      "id": "dealer_viltrox_us_manual_official_entry",
+      "publisher": "Viltrox",
+      "canonical_url": "https://viltrox.com/pages/contact-us",
+      "source_channel": "manual_official_entry"
+    }
+  ]
+}

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from app.core.logging import get_logger
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
@@ -61,7 +61,7 @@ def get_competitor_avoid_brands(
 @audit_action(
     action_type="kol_pool_batch_enrich",
     target_type="kol_pool",
-    detail_extractor=lambda result, kwargs: f"batch enriched {result.get('enriched', 0)} attempted {result.get('attempted', 0)}",
+    detail_extractor=lambda result, kwargs: f"batch enrich queued {result.get('queued', 0)} attempted {result.get('attempted', 0)}",
     metadata_extractor=lambda result, kwargs: {
         "attempted": result.get("attempted", 0) if isinstance(result, dict) else 0,
         "enriched": result.get("enriched", 0) if isinstance(result, dict) else 0,
@@ -71,25 +71,55 @@ def get_competitor_avoid_brands(
         "capped": result.get("capped", False) if isinstance(result, dict) else False,
     },
 )
-def batch_enrich_pool_items(
+async def batch_enrich_pool_items(
+    request: Request,
     body: dict = Body(default_factory=dict),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """小批量真实补齐候选池数据；服务端强制最多 5 条。"""
+    """小批量持久排队补齐候选池数据；请求线程不运行 crawler。"""
     from app.domains.kol import pool as kol_pool
+    import app.domains.tasks.enqueue as task_enqueue
 
     ids = body.get("ids") or []
     if ids and not isinstance(ids, list):
         raise HTTPException(status_code=400, detail="ids must be a list")
-    return kol_pool.batch_enrich_items(
-        ids=[int(value) for value in ids if str(value).strip().isdigit()] if ids else None,
-        platform=str(body.get("platform") or ""),
-        query=str(body.get("query") or ""),
-        data_status=str(body.get("data_status") or "missing"),
-        limit=max(1, min(int(body.get("limit") or 3), 5)),
-        max_posts=max(1, min(int(body.get("max_posts") or 6), 24)),
-        staff=staff,
-    )
+    safe_limit = max(1, min(int(body.get("limit") or 3), 5))
+    selected_ids = [int(value) for value in ids[:safe_limit] if str(value).strip().isdigit()]
+    if not selected_ids:
+        selected = kol_pool.list_pool(
+            limit=safe_limit,
+            platform=str(body.get("platform") or ""),
+            query=str(body.get("query") or ""),
+            data_status=str(body.get("data_status") or "missing"),
+            sort_by="missing",
+            enrichable=True,
+        )
+        selected_ids = [int(row["id"]) for row in selected.get("items") or [] if row.get("id")]
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    jobs: list[dict] = []
+    try:
+        for kol_pool_id in selected_ids:
+            queued = await task_enqueue.enqueue_kol_pool_on_demand_refresh(
+                queue,
+                kol_pool_id,
+                reason="manual_batch_enrich",
+                max_posts=max(1, min(int(body.get("max_posts") or 3), 3)),
+                staff=staff,
+            )
+            jobs.append({"kol_pool_id": kol_pool_id, **queued})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "status": "queued",
+        "attempted": len(selected_ids),
+        "queued": len(jobs),
+        "job_ids": [item.get("task_id") for item in jobs],
+        "jobs": jobs,
+        "progressive": True,
+        "capped": bool(ids and len(ids) > safe_limit),
+    }
 
 
 @router.post("/kol-pool/profile-deep-crawl/enqueue")
@@ -137,6 +167,7 @@ def enqueue_kol_pool_comments_collect(
             evidence_ids=body.get("evidence_ids") or None,
             max_comments=body.get("max_comments"),
             staff=staff,
+            force_refresh=bool(body.get("force_refresh")),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -217,16 +248,37 @@ def optimize_kol_outreach(
         f"当前主题:{subject or '(空)'}\n当前正文:\n{draft or '(空)'}\n\n"
         '只输出 JSON(不要多余文字):{"subject": "优化后主题", "body": "优化后正文(英文,保留换行)"}'
     )
-    resp = llm_gateway.invoke(
-        prompt,
-        purpose="vkpi_kol_outreach_optimize",
-        max_output_tokens=1200,
-        cost_tag="vkpi_kol_outreach_optimize",
-        staff=staff or {},
-        metadata={"kol_pool_id": int(body.get("kol_pool_id") or 0)},
-    )
+    try:
+        resp = llm_gateway.invoke(
+            prompt,
+            purpose="vkpi_kol_outreach_optimize",
+            max_output_tokens=1200,
+            cost_tag="vkpi_kol_outreach_optimize",
+            staff=staff or {},
+            metadata={"kol_pool_id": int(body.get("kol_pool_id") or 0)},
+        )
+    except Exception:  # noqa: BLE001 - return original copy with a stable retryable state
+        logger.warning("kol outreach optimize provider failed", exc_info=True)
+        return {
+            "ok": False,
+            "reason": "outreach_provider_unavailable",
+            "retryable": True,
+            "subject": subject,
+            "body": draft,
+            "model": "",
+        }
+    if not isinstance(resp, dict) or str(resp.get("status") or "") != "success" or str(resp.get("provider") or "") in {"", "rule_v0"}:
+        return {
+            "ok": False,
+            "reason": "outreach_provider_unavailable",
+            "retryable": True,
+            "subject": subject,
+            "body": draft,
+            "model": "",
+        }
     text = str(resp.get("text") or "").strip()
     out_subject, out_body = subject, draft  # 兜底原文
+    optimized = False
     try:
         cleaned = _re.sub(r"^```json\s*|```$", "", text, flags=_re.MULTILINE).strip()
         s, e = cleaned.find("{"), cleaned.rfind("}")
@@ -235,7 +287,15 @@ def optimize_kol_outreach(
             if isinstance(parsed, dict):
                 out_subject = str(parsed.get("subject") or subject).strip()
                 out_body = str(parsed.get("body") or draft).strip()
+                optimized = bool(str(parsed.get("subject") or "").strip() or str(parsed.get("body") or "").strip())
     except Exception:
         logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
-    return {"ok": bool(text), "subject": out_subject, "body": out_body, "model": resp.get("model")}
+    return {
+        "ok": optimized,
+        "reason": "" if optimized else "invalid_outreach_response",
+        "retryable": not optimized,
+        "subject": out_subject,
+        "body": out_body,
+        "model": resp.get("model") if optimized else "",
+    }

@@ -646,6 +646,8 @@ def _enqueue_official_channel_comments_job(
     channel_id: int,
     posts_per_channel: int,
     limit_per_post: int,
+    post_id: str = "",
+    url: str = "",
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """对单个官号入 apify_jobs(泳道可见;幂等:同 channel 已有活跃任务则复用)。"""
@@ -667,6 +669,8 @@ def _enqueue_official_channel_comments_job(
         "channel_id": int(channel_id),
         "posts_per_channel": int(posts_per_channel),
         "limit_per_post": int(limit_per_post),
+        "post_id": channels._text(post_id),
+        "url": channels._text(url),
         "query_text": f"官号评论批量采集 · channel {int(channel_id)}"[:96],
         "target_type": "official_channel",
         "target_id": int(channel_id),
@@ -685,6 +689,40 @@ def _enqueue_official_channel_comments_job(
     return {"status": "queued", "job_id": channels._int(dict(job)["id"]) if job else None}
 
 
+def enqueue_official_channel_comments_job(
+    channel_id: int,
+    *,
+    post_id: str = "",
+    url: str = "",
+    limit_per_post: int = 100,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue one explicit channel post without invoking its crawler in the API."""
+
+    row = channels._latest_channel_row(int(channel_id), staff=staff)
+    platform = str(row.get("platform") or "").lower()
+    if platform not in COMMENT_COLLECT_PLATFORMS:
+        return {
+            "status": "not_supported",
+            "job_id": None,
+            "channel_id": int(channel_id),
+            "platform": platform,
+        }
+    return {
+        **_enqueue_official_channel_comments_job(
+            channel_id=int(channel_id),
+            posts_per_channel=1,
+            limit_per_post=max(1, min(MAX_CHANNEL_COMMENT_CAP, int(limit_per_post or 100))),
+            post_id=post_id,
+            url=url,
+            staff=staff,
+        ),
+        "channel_id": int(channel_id),
+        "platform": platform,
+        "progressive": True,
+    }
+
+
 def run_official_channel_comments_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """worker 入口:对该官号近 N 条帖子逐条采评论(复用 collect_channel_post_comments)。
 
@@ -701,7 +739,15 @@ def run_official_channel_comments_for_job(payload: dict[str, Any], *, staff: dic
     row = channels._latest_channel_row(channel_id, staff=staff)
     platform = str(row.get("platform") or "").lower()
     posts, _source, _package_dir = channels._all_posts_for_channel(row)
-    posts = posts[:posts_per_channel]
+    requested_post_id = channels._text(payload.get("post_id"))
+    requested_url = channels._text(payload.get("url"))
+    if requested_post_id or requested_url:
+        requested_post = channels._match_post(row, requested_post_id, requested_url)
+        posts = [requested_post] if requested_post else [
+            {"id": requested_post_id or requested_url, "url": requested_url}
+        ]
+    else:
+        posts = posts[:posts_per_channel]
 
     results: list[dict[str, Any]] = []
     new_total = 0

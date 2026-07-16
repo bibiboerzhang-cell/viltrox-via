@@ -15,6 +15,7 @@ import {
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
 import type { VkpiProjectRow } from "../../vkpiTypes";
+import { proxiedImageUrl } from "../../shared/mediaProxy";
 
 // MY KOL · 库详情弹窗分区族(闭环数据补刀,2026-07-12):
 //   业务闭环 = KOL Pool 找人 → 收藏 → MY KOL(带全部采集数据)→ 入 Project。
@@ -225,6 +226,30 @@ export function sortVideosByTab(classified: ClassifiedVideo[], vOnly: boolean, t
   return base;
 }
 
+function KolVideoThumbnail({ rawUrl, title }: { rawUrl: string; title: string }) {
+  const src = proxiedImageUrl(rawUrl);
+  const [failed, setFailed] = React.useState(!src);
+  React.useEffect(() => setFailed(!src), [src]);
+
+  if (!src || failed) {
+    return <span className="text-[16px] text-muted" title={`${title} · 缩略图暂不可用`}>▶</span>;
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      className="h-full w-full object-cover"
+      onError={() => setFailed(true)}
+      onLoad={(event) => {
+        const image = event.currentTarget;
+        if (image.naturalWidth <= 2 && image.naturalHeight <= 2) setFailed(true);
+      }}
+    />
+  );
+}
+
 export function KolVideoSection({
   videos,
   queuedEvidence,
@@ -289,7 +314,7 @@ export function KolVideoSection({
             return (
               <div key={eid} className="overflow-hidden rounded-[11px] border border-line bg-panel">
                 <div className="grid h-[84px] w-full place-items-center overflow-hidden bg-card">
-                  {thumb ? <img src={thumb} alt="" loading="lazy" className="h-full w-full object-cover" /> : <span className="text-[16px] text-muted">▶</span>}
+                  <KolVideoThumbnail rawUrl={thumb} title={title} />
                 </div>
                 <div className="px-2.5 py-2">
                   <div className="truncate text-[11px] text-ink" title={title}>{title}</div>

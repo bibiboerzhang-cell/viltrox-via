@@ -78,8 +78,18 @@ async def scan_official_matrix(request_http: Request, body: dict | None = None, 
     body = body or {}
     accounts = body.get("accounts") or OFFICIAL_MATRIX
     max_posts = int(body.get("max_posts_per_account", 60))
-    concurrency = int(body.get("concurrency", 4))
-    return await scan_accounts_concurrently(accounts=accounts, max_posts_per_account=max_posts, concurrency=concurrency)
+    queue = getattr(request_http.app.state, "job_queue", None)
+    if queue is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "intel_scan_matrix",
+        {"accounts": accounts, "max_posts_per_account": max_posts},
+        lock_key="intel_scan_matrix:official",
+        timeout_seconds=3600,
+    )
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.get("/cache/stats")

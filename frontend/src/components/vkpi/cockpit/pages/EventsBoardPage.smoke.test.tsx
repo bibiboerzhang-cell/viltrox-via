@@ -6,7 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 // - 页壳:pagehead(Events · 市场活动 + 活动数药丸徽 + 公司库存/新建 Event/编辑布局钮)
 //   + 可编辑看板(布局键 vkpi-events-board-layout-v1,不传 apiToken → 绝不写账户级
 //   dashboard_layout_v1);
-// - KPI 带四卡全真值:进行中活动(未完结管线)/ 本月活动(起止与本月重叠)/
+// - KPI 带四卡全真值:未完结管线(工作流状态,不冒充日期意义上的进行中)/ 本月活动(起止与本月重叠)/
 //   物料备货(vkpi_inventory 行数)/ 费用合计(budget_json spent 合计);无历史快照
 //   → 诚实虚线不编序列;
 // - 活动看板 = 旧 EventsPage 收编:我参与的/全部 + 状态/类型/搜索过滤零丢失,
@@ -33,7 +33,7 @@ vi.mock("../../../../hooks/useAuth", () => ({
   }),
 }));
 
-import { EventsBoardPage } from "./EventsBoardPage";
+import { EventsBoardPage, canManageEventRadar } from "./EventsBoardPage";
 
 /* ---------- 日期夹具(真实今天派生,KPI 口径确定性:ev1 跨今天=本月;
    ev2 +40 天必出本月;ev3 -60 天必在本月前) ---------- */
@@ -214,6 +214,14 @@ beforeEach(() => {
 });
 
 describe("EventsBoardPage 页壳 + KPI 带(全真值)", () => {
+  it("maps the backend manager plus vkpi-write gate before rendering Event Radar actions", () => {
+    expect(canManageEventRadar({ role: "manager", permissions: { vkpi: "write" } })).toBe(true);
+    expect(canManageEventRadar({ role: "marketing-manager", permissions: { vkpi: "admin" } })).toBe(true);
+    expect(canManageEventRadar({ role: "manager", permissions: { vkpi: "read" } })).toBe(false);
+    expect(canManageEventRadar({ role: "employee", permissions: { vkpi: "admin" } })).toBe(false);
+    expect(canManageEventRadar({ role: "employee", permissions: { vkpi: "read" }, is_owner: true })).toBe(true);
+  });
+
   it("pagehead:标题 + 活动数药丸徽 + 公司库存(真计数)/新建 Event/编辑布局钮;布局零账户级写入", async () => {
     renderBoard();
     expect(await screen.findByText("Events · 市场活动")).toBeTruthy();
@@ -226,9 +234,9 @@ describe("EventsBoardPage 页壳 + KPI 带(全真值)", () => {
     expect(window.localStorage.getItem("dashboard_layout_v1")).toBeNull();
   });
 
-  it("KPI 四卡真值:进行中 2(live+planning)/ 本月 1(跨今天)/ 物料备货 2 / 费用合计 $350", async () => {
+  it("KPI 四卡真值:未完结管线 2(live+planning)/ 本月 1(跨今天)/ 物料备货 2 / 费用合计 $350", async () => {
     renderBoard();
-    expect(await kpiCardText("进行中活动")).toContain("2");
+    expect(await kpiCardText("未完结管线")).toContain("2");
     expect(await kpiCardText("本月活动")).toContain("1");
     expect(await kpiCardText("物料备货")).toContain("2");
     expect(await kpiCardText("费用合计")).toContain("$350");
@@ -243,13 +251,13 @@ describe("EventsBoardPage 页壳 + KPI 带(全真值)", () => {
       return t;
     });
     expect(text).toContain("—");
-    expect(await kpiCardText("进行中活动")).toContain("2");
+    expect(await kpiCardText("未完结管线")).toContain("2");
   });
 
   it("board-series 就绪 → 进行中/本月/费用三卡点亮真 sparkline(关联指标零环比药丸);物料备货点时无序列照旧虚线", async () => {
     routeApi({ boardSeries: () => Promise.resolve(BOARD_SERIES_OK) });
     renderBoard();
-    expect((await screen.findAllByText("进行中活动")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("未完结管线")).length).toBeGreaterThan(0);
     await waitFor(() => expect(document.querySelectorAll(".ds-kpi__spark").length).toBe(3));
     // 物料备货 = 点时库存无历史 → 唯一诚实虚线;关联指标卡零环比药丸
     expect(document.querySelectorAll(".ds-kpi__series-empty").length).toBe(1);

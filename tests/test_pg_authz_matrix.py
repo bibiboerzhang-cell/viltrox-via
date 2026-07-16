@@ -30,7 +30,10 @@ from typing import Any, Iterator
 
 import pytest
 
-pytestmark = pytest.mark.pg
+pytestmark = [
+    pytest.mark.pg,
+    pytest.mark.usefixtures("pg_test_identities"),
+]
 
 
 # ── 身份常量(真库现有行)───────────────────────────────────────────────────
@@ -271,20 +274,23 @@ def test_write_project_retrospective_generate_denied_for_other_employee(client, 
 
 
 # ── ③ staff_id hint 伪造(后端降为 own)──────────────────────────────────────
-def test_forge_staff_id_on_attribution_create_downgrades_to_own(client, tokens, seeded, admin_conn):
-    """A 建归因时把 staff_id 伪造成 B → 落库 staff_id 必须是 A 自己(不落到别人名下)。"""
+def test_forge_staff_id_on_attribution_create_is_rejected_for_employee(client, tokens, seeded, admin_conn):
+    """A 伪造 B 的 staff_id 创建人工归因 → 403 且不得落库。
+
+    人工归因现在是受管理权限和授权证据双重保护的真实业务写口，
+    普通员工不再拥有“先创建、再降级为自己”的权限。
+    """
     ref = f"{seeded['tag']}_forge"
     r = client.post(
         f"{VKPI}/attribution",
         json={"source_platform": "manual", "source_ref": ref, "staff_id": B_SID, "revenue_cents": 100},
         headers=_h(tokens, "A"),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 403, r.text
     cur = admin_conn.cursor()
     cur.execute("SELECT staff_id FROM vkpi_sales_attributions WHERE source_ref = %s", (ref,))
     row = cur.fetchone()
-    assert row is not None, "attribution was not created"
-    assert int(row[0]) == A_SID, f"staff_id hint forgery leaked: stored {row[0]}, expected own {A_SID}"
+    assert row is None, f"forged attribution unexpectedly persisted for staff_id={row[0]}"
 
 
 def test_forge_staff_id_on_attribution_list_stays_own(client, tokens, seeded):

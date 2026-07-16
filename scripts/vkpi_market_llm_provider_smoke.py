@@ -6,6 +6,7 @@ sync jobs. Use --execute-live-probe for one low-cost provider-health probe and
 --execute-llm-single for one budget-gated LLM call.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -206,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             out = Path(args.md_out)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(render_markdown(report), encoding="utf-8")
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        stdout_out(json.dumps(report, ensure_ascii=False, indent=2))
         return 0 if report.get("passed") else 2
     finally:
         asyncio.run(close_db_runtime())

@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.domains.costs import budget_guard
 from app.domains.costs.common import TYPE_ALIASES, VALID_COST_TYPES, _amount_cents
 from app.domains.costs.ledger import (
+    ProductCostVerificationConflict,
     add_cost,
     approve_cost,
     ensure_product_catalog_schema,
@@ -16,10 +17,12 @@ from app.domains.costs.ledger import (
     summarize_project,
     update_cost,
     upsert_product_cost,
+    verify_product_cost,
     void_cost,
 )
 
 __all__ = [
+    "ProductCostVerificationConflict",
     "TYPE_ALIASES",
     "VALID_COST_TYPES",
     "_amount_cents",
@@ -36,5 +39,6 @@ __all__ = [
     "summarize_project",
     "update_cost",
     "upsert_product_cost",
+    "verify_product_cost",
     "void_cost",
 ]

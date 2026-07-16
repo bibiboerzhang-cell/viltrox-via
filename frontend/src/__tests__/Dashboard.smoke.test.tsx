@@ -86,11 +86,11 @@ const baseProps = {
 };
 
 describe("Dashboard page smoke", () => {
-  it("挂载不抛 → 渲染出绩效总览，且无错误边界文案", async () => {
+  it("挂载不抛 → 渲染出增长总览，且无错误边界文案", async () => {
     expect(() =>
       render(React.createElement(DashboardReplicaPage, baseProps as any)),
     ).not.toThrow();
-    expect(await screen.findByText("绩效总览")).toBeTruthy();
+    expect(await screen.findByText("增长总览")).toBeTruthy();
     expect(screen.queryByText(/出错了|Something went wrong/)).toBeNull();
   });
 });

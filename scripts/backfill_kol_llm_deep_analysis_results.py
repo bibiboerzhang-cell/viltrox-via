@@ -19,6 +19,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
@@ -458,47 +460,47 @@ def print_report(rows: list[dict[str, Any]], prepared: list[PreparedResult], ski
     bucket_counts = Counter(_bucket(score) for score in scores)
     qa_items = [item for item in prepared if item.qa_cache_id is not None]
     kol_ids = {item.kol_pool_id for item in prepared}
-    print("mode: dry-run (no writes)")
-    print(f"source final_v1 ready rows: {len(rows)}")
-    print(f"would_write: {len(prepared)}")
-    print(f"would_insert: {action_counts.get('insert', 0)}")
-    print(f"would_update: {action_counts.get('update', 0)}")
-    print(f"skipped: {len(skipped)}")
-    print(f"with_qa: {len(qa_items)}")
-    print(f"kol_coverage_writable: {len(kol_ids)}")
+    out("mode: dry-run (no writes)")
+    out(f"source final_v1 ready rows: {len(rows)}")
+    out(f"would_write: {len(prepared)}")
+    out(f"would_insert: {action_counts.get('insert', 0)}")
+    out(f"would_update: {action_counts.get('update', 0)}")
+    out(f"skipped: {len(skipped)}")
+    out(f"with_qa: {len(qa_items)}")
+    out(f"kol_coverage_writable: {len(kol_ids)}")
     if scores:
         avg = sum(scores, Decimal("0")) / Decimal(len(scores))
-        print(f"llm_v6_fit_min: {min(scores)}")
-        print(f"llm_v6_fit_max: {max(scores)}")
-        print(f"llm_v6_fit_avg: {avg.quantize(Decimal('0.01'))}")
-    print("score_distribution:")
+        out(f"llm_v6_fit_min: {min(scores)}")
+        out(f"llm_v6_fit_max: {max(scores)}")
+        out(f"llm_v6_fit_avg: {avg.quantize(Decimal('0.01'))}")
+    out("score_distribution:")
     for key in ["0", "1-39", "40-59", "60-74", "75-89", "90-100"]:
-        print(f"  {key}: {bucket_counts.get(key, 0)}")
-    print("platform_distribution:")
+        out(f"  {key}: {bucket_counts.get(key, 0)}")
+    out("platform_distribution:")
     for key, value in sorted(platform_counts.items()):
-        print(f"  {key}: {value}")
-    print("qa_rows:")
+        out(f"  {key}: {value}")
+    out("qa_rows:")
     if qa_items:
         for item in qa_items:
-            print(
+            out(
                 f"  evidence={item.source_evidence_id} kol={item.kol_pool_id} "
                 f"handle={item.handle} final_cache={item.final_cache_id} qa_cache={item.qa_cache_id} "
                 f"score={item.llm_v6_fit}"
             )
     else:
-        print("  (none)")
-    print("skipped_rows:")
+        out("  (none)")
+    out("skipped_rows:")
     if skipped:
         for item in skipped:
-            print(
+            out(
                 f"  final_cache={item.final_cache_id} evidence={item.source_evidence_id} "
                 f"kol={item.kol_pool_id} handle={item.handle} reason={item.reason}"
             )
     else:
-        print("  (none)")
-    print("sample_writes:")
+        out("  (none)")
+    out("sample_writes:")
     for item in sorted(prepared, key=lambda row: (row.source_evidence_id, row.final_cache_id))[:12]:
-        print(
+        out(
             f"  {item.action} final_cache={item.final_cache_id} evidence={item.source_evidence_id} "
             f"kol={item.kol_pool_id} handle={item.handle} score={item.llm_v6_fit} "
             f"confidence={item.confidence if item.confidence is not None else ''}"
@@ -617,8 +619,8 @@ def main() -> None:
         if not args.commit:
             return
         result = write_results(conn, prepared, existing)
-        print("write_result:")
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        out("write_result:")
+        out(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":

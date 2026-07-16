@@ -73,6 +73,31 @@ def _gemini_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float, s
     return round(max(0.0, float(fallback_cost or 0.0)), 6), "llm_gateway_budget_preflight", 0, 0
 
 
+def _authoritative_gemini_cost(
+    result: dict[str, Any],
+    fallback_cost: float,
+) -> tuple[float, str, int, int]:
+    """Summarize strict per-attempt accounting without creating another row."""
+
+    if result.get("cost_authority") != "llm_production_google_generate_content_v1":
+        return _gemini_cost(result, fallback_cost)
+    attempts = result.get("llm_attempts") if isinstance(result.get("llm_attempts"), list) else []
+    accounted_cost = 0.0
+    tokens_in = 0
+    tokens_out = 0
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        actual = attempt.get("actual_cost_usd")
+        if isinstance(actual, (int, float)):
+            accounted_cost += max(0.0, float(actual))
+        elif str(attempt.get("state") or "") == "unknown":
+            accounted_cost += max(0.0, float(attempt.get("estimated_cost_usd") or 0.0))
+        tokens_in += max(0, int(attempt.get("input_tokens") or 0))
+        tokens_out += max(0, int(attempt.get("output_tokens") or 0))
+    return round(accounted_cost, 6), "llm_production_atomic_attempt_ledger", tokens_in, tokens_out
+
+
 def _openai_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float, str, int, int]:
     metadata = result.get("usage_metadata") if isinstance(result.get("usage_metadata"), dict) else {}
     tokens_in = _usage_count(metadata, "input_tokens", "prompt_tokens")

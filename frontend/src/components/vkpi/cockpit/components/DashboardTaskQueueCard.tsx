@@ -29,11 +29,19 @@ interface CostOverview {
 
 function taskTitle(task: ProgressTask | undefined) {
   if (!task) return "空闲 · 等待入队";
-  return String(task.label || task.kind || task.job_type || `任务 ${task.id}`);
+  const kind = String(task.kind || task.job_type || "").trim();
+  const label = String(task.label || "").trim();
+  if (kind && label && kind !== label) return `${kind} · ${label}`;
+  return label || kind || `任务 ${task.id}`;
 }
 
 function laneProgress(tasks: ProgressTask[]) {
-  const values = tasks.map((task) => Number(task.progress_pct)).filter(Number.isFinite);
+  // Number(null) === 0.  进度端点用 null 表示“已超历史均时/无法可靠估算”，
+  // 不能把它误画成 0% 后再由最小宽度伪装成 6%。
+  const values = tasks
+    .filter((task) => task.progress_pct !== null && task.progress_pct !== undefined)
+    .map((task) => Number(task.progress_pct))
+    .filter(Number.isFinite);
   if (values.length === 0) return tasks.length > 0 ? null : 0;
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
@@ -75,6 +83,7 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
   };
   const runningTotal = Number(data?.counts.running ?? running.length);
   const queueTotal = Number(data?.counts.queued ?? queued.length);
+  const currentTask = running[0];
   const workerOffline = data?.diagnostics?.worker_online === false;
   const queueBlocked = workerOffline && queueTotal > 0;
   const statusLabel = runningTotal > 0
@@ -84,6 +93,13 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
       : queueTotal > 0
         ? `${queueTotal} 排队`
         : "空闲";
+  const cardTitle = workerOffline
+    ? runningTotal > 0
+      ? "检测到跑中记录，但 Worker 心跳已过期；请按当前任务与最近更新时间核验是否仍在执行"
+      : queueBlocked
+        ? "Worker 当前离线，排队任务尚未开始"
+        : "Worker 心跳已过期"
+    : "真实任务阶段与成本账本";
   const today = cost?.today;
   const todayCalls = Number(today?.apify_calls || 0) + Number(today?.llm_calls || 0);
   const todayUsd = Number(today?.total_usd);
@@ -97,7 +113,7 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
   return (
     <article
       className={`vkpi-dashboard-task-queue ${compact ? "is-compact" : ""}`}
-      title={queueBlocked ? "Worker 当前离线，排队任务尚未开始" : "真实任务阶段与成本账本"}
+      title={cardTitle}
     >
       <header>
         <div>
@@ -106,6 +122,13 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
         </div>
         <span className={runningTotal > 0 ? "is-running" : queueBlocked ? "is-blocked" : ""}>{statusLabel}</span>
       </header>
+      {compact && currentTask ? (
+        <div className="vkpi-dashboard-task-queue__current" title={`${taskTitle(currentTask)} · #${currentTask.id}`}>
+          <span>当前</span>
+          <strong>{taskTitle(currentTask)}</strong>
+          <small>#{currentTask.id}</small>
+        </div>
+      ) : null}
       <div className="vkpi-dashboard-task-queue__lanes">
         {LANES.map((lane) => {
           const tasks = byStage[lane.key] || [];
@@ -114,8 +137,21 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
           const isBlocked = isQueuedLane && queueBlocked;
           const progress = isQueuedLane ? 0 : laneProgress(tasks);
           const topTask = tasks[0];
+          const progressText = tasks.length === 0
+            ? "--"
+            : isWaiting
+              ? String(tasks.length)
+              : topTask?.progress_overdue
+                ? "超均时"
+                : progress === null
+                  ? String(tasks.length)
+                  : `${progress}%`;
           return (
-            <div className={`vkpi-dashboard-task-queue__lane ${tasks.length > 0 ? "is-active" : "is-idle"} ${isBlocked ? "is-blocked" : ""}`} key={lane.key}>
+            <div
+              className={`vkpi-dashboard-task-queue__lane ${tasks.length > 0 ? "is-active" : "is-idle"} ${isBlocked ? "is-blocked" : ""}`}
+              key={lane.key}
+              title={topTask ? `${taskTitle(topTask)} · #${topTask.id}${topTask.progress_overdue ? " · 已超历史均时" : ""}` : undefined}
+            >
               <lane.Icon size={compact ? 11 : 12} />
               <span className="vkpi-dashboard-task-queue__name">{lane.label}</span>
               {!compact ? <span className="vkpi-dashboard-task-queue__task">{isBlocked ? "等待 Worker 上线" : taskTitle(topTask)}</span> : null}
@@ -128,7 +164,7 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
                   }}
                 />
               </span>
-              <small>{tasks.length > 0 ? isWaiting ? tasks.length : progress === null ? tasks.length : `${progress}%` : "--"}</small>
+              <small>{progressText}</small>
             </div>
           );
         })}

@@ -15,6 +15,14 @@ from app.db.connection import get_conn, table_exists
 
 logger = get_logger(__name__)
 
+_REAL_LEARNING_TARGETS = {
+    "finalized_outcomes": 100,
+    "human_feedback": 20,
+    "prediction_actual_evals": 50,
+    "human_reviewed_skill_runs": 100,
+    "executed_agent_tool_runs": 20,
+}
+
 
 def _count_by(table: str, col: str) -> dict[str, int]:
     if not table_exists(table):
@@ -25,6 +33,86 @@ def _count_by(table: str, col: str) -> dict[str, int]:
     except Exception:
         logger.debug("learning_signals.count_failed", extra={"table": table}, exc_info=True)
         return {}
+
+
+def _scalar(table: str, sql: str, params: tuple[Any, ...] = ()) -> int:
+    if not table_exists(table):
+        return 0
+    try:
+        row = get_conn().execute(sql, params).fetchone()
+        return int(dict(row).get("n") or 0) if row else 0
+    except Exception:
+        logger.debug("learning_signals.scalar_failed", extra={"table": table}, exc_info=True)
+        return 0
+
+
+def _maturity_from_truth(truth: dict[str, int]) -> str:
+    """Evidence-gated maturity; raw/test/demo rows never raise the level."""
+    if all(int(truth.get(key) or 0) >= target for key, target in _REAL_LEARNING_TARGETS.items()):
+        return "learning"
+    warming_targets = {
+        "finalized_outcomes": 5,
+        "human_feedback": 5,
+        "prediction_actual_evals": 5,
+        "human_reviewed_skill_runs": 5,
+        "executed_agent_tool_runs": 1,
+    }
+    if all(int(truth.get(key) or 0) >= target for key, target in warming_targets.items()):
+        return "warming"
+    return "cold"
+
+
+def _verified_learning_evidence() -> dict[str, int]:
+    """Count only human/actual/finalized evidence and explicitly reject test markers."""
+    finalized = _scalar(
+        "vkpi_recommendation_outcomes",
+        "SELECT COUNT(*) AS n FROM vkpi_recommendation_outcomes WHERE outcome_finalized_at IS NOT NULL",
+    )
+    feedback = _scalar(
+        "vkpi_recommendation_feedback",
+        """
+        SELECT COUNT(*) AS n
+        FROM vkpi_recommendation_feedback
+        WHERE created_by_staff_id IS NOT NULL
+          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
+          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
+          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
+          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
+        """,
+        ("%test%", "%demo%", "%smoke%", "%dry_run%"),
+    )
+    actual_evals = _scalar(
+        "vkpi_prediction_evals",
+        "SELECT COUNT(*) AS n FROM vkpi_prediction_evals WHERE actual_value IS NOT NULL",
+    )
+    reviewed_skills = _scalar(
+        "vkpi_skill_runs",
+        """
+        SELECT COUNT(*) AS n
+        FROM vkpi_skill_runs
+        WHERE (human_score IS NOT NULL OR accepted IS NOT NULL)
+          AND LOWER(COALESCE(skill_name,'')) NOT LIKE ?
+          AND LOWER(COALESCE(skill_name,'')) NOT LIKE ?
+          AND LOWER(COALESCE(business_result,'')) NOT IN (?,?,?,?,?)
+        """,
+        ("test%", "%smoke%", "pytest", "test", "demo", "dry_run", "smoke"),
+    )
+    tool_runs = _scalar(
+        "vkpi_agent_tool_run",
+        "SELECT COUNT(*) AS n FROM vkpi_agent_tool_run WHERE status='executed' AND executed_at IS NOT NULL",
+    )
+    linked_outcomes = _scalar(
+        "vkpi_agent_outcome_evaluations",
+        "SELECT COUNT(*) AS n FROM vkpi_agent_outcome_evaluations WHERE agent_action_id IS NOT NULL AND success IS NOT NULL",
+    )
+    return {
+        "finalized_outcomes": finalized,
+        "human_feedback": feedback,
+        "prediction_actual_evals": actual_evals,
+        "human_reviewed_skill_runs": reviewed_skills,
+        "executed_agent_tool_runs": tool_runs,
+        "linked_agent_outcomes": linked_outcomes,
+    }
 
 
 def get_learning_status(staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -49,18 +137,29 @@ def get_learning_status(staff: dict[str, Any] | None = None) -> dict[str, Any]:
 
     actions_total = sum(actions.values())
     feedback_total = sum(feedback.values())
-    # 学习成熟度(粗):有沉淀动作 + 有反馈 + 有漏斗 → 越成熟。纯展示信号。
-    maturity = "cold"
-    if actions_total + feedback_total >= 50 and funnel.get("published", 0) > 0:
-        maturity = "warming"
-    if actions_total + feedback_total >= 200 and funnel.get("published", 0) >= 10:
-        maturity = "learning"
+    truth = _verified_learning_evidence()
+    maturity = _maturity_from_truth(truth)
+
+    raw_skill_runs = _scalar("vkpi_skill_runs", "SELECT COUNT(*) AS n FROM vkpi_skill_runs")
+    raw_agent_evals = _scalar(
+        "vkpi_agent_outcome_evaluations",
+        "SELECT COUNT(*) AS n FROM vkpi_agent_outcome_evaluations",
+    )
 
     return {
         "status": "ok",
         "agent_actions": {"total": actions_total, "by_kind": actions},
         "memory_feedback": {"total": feedback_total, "by_type": feedback},
         "recommendation_funnel": funnel,
+        "verified_evidence": truth,
+        "targets_4_5": dict(_REAL_LEARNING_TARGETS),
+        "excluded_raw_activity": {
+            "skill_runs_total": raw_skill_runs,
+            "skill_runs_without_qualifying_human_review": max(0, raw_skill_runs - truth["human_reviewed_skill_runs"]),
+            "agent_outcome_evaluations_total": raw_agent_evals,
+            "agent_outcomes_without_linked_action_result": max(0, raw_agent_evals - truth["linked_agent_outcomes"]),
+        },
         "maturity": maturity,
-        "note": "学习闭环只读摘要;maturity 为展示信号,绝不并入 viltrox_fit_score;权重回写留②后续。",
+        "claim_status": "descriptive_only",
+        "note": "成熟度只看 finalized outcome、非演示人工反馈、actual eval、人工复核 Skill 与真实 tool run；原始/test/demo/ack 行仅作运营流水，绝不并入学习成熟度或 viltrox_fit_score。",
     }

@@ -6,6 +6,7 @@ Usage:
     PYTHONPATH=backend .venv/bin/python scripts/vkpi_sync_ack.py --target-run-id daily_incremental_sync_x --reason "manual review"
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -45,7 +46,7 @@ def main() -> int:
             result["guard"] = check_daily_sync_guard({"skip_sync_guard": False})
         except Exception as exc:
             result["guard"] = {"allowed": False, "error": f"{type(exc).__name__}: {exc}"}
-    print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     return 0
 
 

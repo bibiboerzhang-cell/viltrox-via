@@ -1,6 +1,8 @@
 """P3.6C smoke: KOL Pool batch enrich is bounded and explainable."""
 from __future__ import annotations
 
+from stdout_utils import out
+
 import sys
 import time
 from pathlib import Path
@@ -23,7 +25,7 @@ MARKER = f"vkpi-pool-batch-{int(time.time())}"
 def main() -> None:
     conn = get_conn()
     if not seed_admin:
-        print("_smoke_seed.py missing")
+        out("_smoke_seed.py missing")
         sys.exit(1)
     user_id, staff_id = seed_admin(conn, marker=MARKER)
     failures: list[str] = []
@@ -61,7 +63,7 @@ def main() -> None:
             failures.append(f"unsupported rows should be skipped, got {len(skipped)}: {result}")
         if result.get("errors"):
             failures.append(f"unsupported rows should not raise errors: {result}")
-        print(f"[batch] attempted={result.get('attempted')} skipped={len(skipped)} capped={result.get('capped')}")
+        out(f"[batch] attempted={result.get('attempted')} skipped={len(skipped)} capped={result.get('capped')}")
     finally:
         conn.execute("DELETE FROM vkpi_kol_pool WHERE source_ref=? OR handle LIKE ?", (MARKER, f"{MARKER}%"))
         conn.commit()
@@ -69,11 +71,11 @@ def main() -> None:
             cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
 
     if failures:
-        print("=== FAIL ===")
+        out("=== FAIL ===")
         for failure in failures:
-            print(f"- {failure}")
+            out(f"- {failure}")
         sys.exit(1)
-    print("VKPI_KOL_POOL_BATCH_ENRICH_GUARD_SMOKE_OK")
+    out("VKPI_KOL_POOL_BATCH_ENRICH_GUARD_SMOKE_OK")
 
 
 if __name__ == "__main__":

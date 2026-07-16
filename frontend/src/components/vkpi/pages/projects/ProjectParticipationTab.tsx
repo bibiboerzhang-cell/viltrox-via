@@ -21,8 +21,17 @@ interface ProjectParticipationTabProps {
   evidenceCountForRow: (row: VkpiProjectRow) => number;
   filteredRows: VkpiProjectRow[];
   movingRowId: string;
+  assignmentPage?: {
+    total?: number;
+    has_more?: boolean;
+    next_cursor?: string | null;
+  };
+  assignmentLoadedCount?: number;
+  loadingMoreAssignments?: boolean;
+  assignmentLoadError?: string;
   onAddKol: () => void;
   onMoveRowStage: (row: VkpiProjectRow) => void | Promise<void>;
+  onLoadMoreAssignments?: () => void | Promise<void>;
   onOpenContactModal?: (row: VkpiProjectRow) => void;
   onOpenKolProfile?: (project: VkpiProjectRow) => void | Promise<void>;
   onOpenScreenshotModal: (target: ScreenshotTarget) => void;
@@ -80,8 +89,13 @@ export function ProjectParticipationTab({
   evidenceCountForRow,
   filteredRows,
   movingRowId,
+  assignmentPage,
+  assignmentLoadedCount = 0,
+  loadingMoreAssignments = false,
+  assignmentLoadError = '',
   onAddKol,
   onMoveRowStage,
+  onLoadMoreAssignments,
   onOpenContactModal,
   onOpenKolProfile,
   onOpenScreenshotModal,
@@ -261,6 +275,24 @@ export function ProjectParticipationTab({
         {!filteredRows.length ? (
           <div className="vkpi-campaign-empty-row">
             {tableStage === '全部阶段' ? '没有匹配的 KOL。调整搜索或平台筛选后再看。' : '当前阶段暂无 KOL。可切换阶段或清除筛选后再看。'}
+          </div>
+        ) : null}
+        {assignmentPage ? (
+          <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] px-3 py-2 text-[11px] text-slate-400">
+            <span>
+              已渐进展示 {assignmentLoadedCount.toLocaleString()} / {Number(assignmentPage.total || assignmentLoadedCount).toLocaleString()} 条
+              {assignmentLoadError ? <b className="ml-2 font-normal text-amber-400">{assignmentLoadError}</b> : null}
+            </span>
+            {assignmentPage.has_more && assignmentPage.next_cursor ? (
+              <button
+                type="button"
+                disabled={loadingMoreAssignments || !onLoadMoreAssignments}
+                onClick={() => void onLoadMoreAssignments?.()}
+                className="rounded-md border border-white/[0.08] px-3 py-1.5 text-[11px] text-cyan-300 hover:bg-white/[0.04] disabled:cursor-wait disabled:opacity-50"
+              >
+                {loadingMoreAssignments ? '加载中…' : '加载更多 50 条'}
+              </button>
+            ) : <span className="text-slate-500">已到末页</span>}
           </div>
         ) : null}
       </div>

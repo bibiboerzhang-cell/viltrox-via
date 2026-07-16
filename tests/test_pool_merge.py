@@ -12,6 +12,8 @@ viltrox_fit_score(留 NULL),归并路径靠 apply_merge 自带 before/after 守�
 from __future__ import annotations
 
 import secrets
+import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +22,66 @@ from app.domains.kol import pool_merge
 
 
 MARKER = "vkpi-pool-merge-unit"
+
+
+@pytest.fixture(autouse=True)
+def hermetic_pool_merge_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Give every test its own pool schema; never read repository business rows."""
+    from app.db import connection as db_connection
+
+    db_connection.close_db_runtime_sync()
+    db_path = (tmp_path / "pool-merge.db").resolve()
+    assert db_path != (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    monkeypatch.setattr(db_connection, "DB_PATH", db_path)
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_URL", "")
+
+    setup = sqlite3.connect(str(db_path))
+    try:
+        setup.executescript(
+            """
+            CREATE TABLE vkpi_kol_pool (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pool_uid TEXT NOT NULL UNIQUE,
+                platform TEXT NOT NULL,
+                handle TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                bio TEXT NOT NULL DEFAULT '',
+                profile_url TEXT NOT NULL DEFAULT '',
+                source_ref TEXT NOT NULL DEFAULT '',
+                duplicate_of_id INTEGER,
+                viltrox_fit_score REAL,
+                viltrox_fit_reason TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE vkpi_kol_pool_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kol_pool_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,
+                handle TEXT NOT NULL,
+                profile_url TEXT NOT NULL DEFAULT '',
+                confidence REAL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(platform, handle)
+            );
+            CREATE TABLE vkpi_kol_pool_favorites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kol_pool_id INTEGER NOT NULL,
+                staff_id INTEGER NOT NULL,
+                UNIQUE(kol_pool_id, staff_id)
+            );
+            """
+        )
+        setup.commit()
+    finally:
+        setup.close()
+
+    try:
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
 
 
 def _seed_row(conn, *, platform: str, handle: str, email: str = "", bio: str = "", profile_url: str = "") -> int:

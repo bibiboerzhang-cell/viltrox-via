@@ -47,6 +47,9 @@ def _make_conn() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY, channel_id INTEGER,
             followers_delta INTEGER, views_delta_24h INTEGER, captured_at TEXT
         );
+        CREATE TABLE vkpi_kol_pool (
+            id INTEGER PRIMARY KEY, platform TEXT, followers INTEGER
+        );
         """
     )
     cur.execute("INSERT INTO kols (id, channel_name, country) VALUES (1, 'Alice', 'US')")
@@ -67,6 +70,8 @@ def _make_conn() -> sqlite3.Connection:
         "(id, channel_id, followers_delta, views_delta_24h, captured_at) "
         "VALUES (1, 1, 120, 3000, '2099-01-01T00:00:00+00:00')"
     )
+    cur.execute("INSERT INTO vkpi_kol_pool (id, platform, followers) VALUES (1, 'youtube', 1000)")
+    cur.execute("INSERT INTO vkpi_kol_pool (id, platform, followers) VALUES (2, 'instagram', 2500)")
     conn.commit()
     return conn
 
@@ -75,7 +80,12 @@ class IntentMatchTest(unittest.TestCase):
     def test_chinese_keywords_match_expected_intent(self):
         self.assertEqual(qp.match_intent("近30天送样价值是多少").key, "sample_value_30d")
         self.assertEqual(qp.match_intent("KOL内容ROI排名").key, "kol_content_roi")
+        self.assertEqual(qp.match_intent("KOL Pool 现在有多少人？").key, "kol_pool_overview")
+        self.assertEqual(qp.match_intent("KOL池有多少账号").key, "kol_pool_overview")
         self.assertEqual(qp.match_intent("已签收未发内容有哪些").key, "received_no_content")
+
+    def test_bare_kol_does_not_misclassify_as_roi(self):
+        self.assertIsNone(qp.match_intent("KOL"))
 
     def test_english_keywords_match(self):
         self.assertEqual(qp.match_intent("sample cost by sku").key, "sample_value_30d")
@@ -162,6 +172,13 @@ class StructuredResultTest(unittest.TestCase):
         self.assertEqual(r3["intent"], "active_claims_by_staff")
         self.assertTrue(len(r3["rows"]) >= 1)
         self.assertEqual(r3["rows"][0]["active_claims"], 1)
+
+    def test_kol_pool_overview_returns_current_totals(self):
+        conn = _make_conn()
+        result = qp.run(conn, question="KOL 池现在共有多少账号？")
+        self._assert_shape(result)
+        self.assertEqual(result["intent"], "kol_pool_overview")
+        self.assertEqual(result["rows"], [{"total_kols": 2, "platforms": 2, "total_followers": 3500}])
 
     def test_received_no_content_finds_pending(self):
         conn = _make_conn()

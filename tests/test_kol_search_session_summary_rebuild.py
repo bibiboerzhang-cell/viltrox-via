@@ -102,6 +102,61 @@ class KolSearchSessionSummaryRebuildTests(unittest.TestCase):
         self.assertEqual(summary["counts"]["ready"], 1)
         self.assertEqual(summary["counts"]["errors"], 1)
         self.assertEqual(summary["counts"]["executed"], 2)
+        self.assertEqual(summary["phase"], "partial")
+        self.assertEqual(
+            summary["progress"],
+            {
+                "base": 2,
+                "total": 2,
+                "profile_ready": 1,
+                "profile_failed": 1,
+                "profile_completed": 2,
+                "profile_succeeded": 1,
+                "profile_remaining": 0,
+                "complete_ready": 1,
+                "complete_partial": 0,
+                "base_complete": True,
+                "requested_tasks_terminal": True,
+                "full_analysis_complete": False,
+                "decision_eligible": False,
+                "required_tasks_complete": True,
+                "complete": True,
+            },
+        )
+
+    def test_rebuild_running_summary_has_progress_without_terminal_timestamp(self) -> None:
+        cursor = _FakeCursor(
+            current_summary={"phase": "base", "progress": {"base": 1, "total": 2}},
+            items=[
+                {
+                    "id": 11,
+                    "item_type": "recall_candidate",
+                    "status": "partial",
+                    "stage": "profile",
+                    "payload_json": {"job_status": "done"},
+                }
+            ],
+        )
+
+        worker._rebuild_search_session_summary(cursor, session_id=47, session_status="running")
+
+        assert cursor.update_params is not None
+        status, raw_summary, _session_id = cursor.update_params
+        summary = json.loads(raw_summary)
+        self.assertEqual(status, "running")
+        self.assertEqual(summary["phase"], "profile")
+        self.assertEqual(summary["progress"]["base"], 1)
+        self.assertEqual(summary["progress"]["total"], 2)
+        self.assertEqual(summary["progress"]["profile_failed"], 0)
+        self.assertEqual(summary["progress"]["profile_completed"], 1)
+        self.assertEqual(summary["progress"]["profile_remaining"], 1)
+        self.assertEqual(summary["progress"]["complete_ready"], 0)
+        self.assertEqual(summary["progress"]["complete_partial"], 1)
+        self.assertTrue(summary["progress"]["base_complete"] is False)
+        self.assertTrue(summary["progress"]["requested_tasks_terminal"] is False)
+        self.assertTrue(summary["progress"]["full_analysis_complete"] is False)
+        self.assertTrue(summary["progress"]["decision_eligible"] is False)
+        self.assertNotIn("terminal_synced_at", summary)
 
     def test_session_status_from_items_keeps_running_until_queue_drains(self) -> None:
         self.assertEqual(worker._search_session_status_from_items([{"status": "ready"}]), "ready")

@@ -8,6 +8,8 @@ Read-only P3.10D checks:
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import json
 import os
 import asyncio
@@ -181,22 +183,22 @@ def main() -> int:
     try:
         result = audit()
         if "--json" in sys.argv:
-            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
             return 0
-        print(f"cwd={result['repo']['cwd']}")
-        print(f"git_sha={result['repo']['git_short_sha']}")
-        print(f"dirty_count={result['repo']['dirty_count']}")
-        print(f"database={result['database']['current_database']}")
-        print(f"server_matches_repo={result['version']['server_matches_repo']}")
-        print(f"client_matches_server={result['version']['client_matches_server']}")
-        print(f"staff_active={result['database']['staff_active']}/{result['database']['staff_total']}")
-        print(f"monitored_products={result['database']['monitored_products']}")
-        print(f"outreach_suggestions_new={result['database']['outreach_suggestions_new']}")
-        print(f"status_conflicts={len(result['status_conflicts'])}")
+        out(f"cwd={result['repo']['cwd']}")
+        out(f"git_sha={result['repo']['git_short_sha']}")
+        out(f"dirty_count={result['repo']['dirty_count']}")
+        out(f"database={result['database']['current_database']}")
+        out(f"server_matches_repo={result['version']['server_matches_repo']}")
+        out(f"client_matches_server={result['version']['client_matches_server']}")
+        out(f"staff_active={result['database']['staff_active']}/{result['database']['staff_total']}")
+        out(f"monitored_products={result['database']['monitored_products']}")
+        out(f"outreach_suggestions_new={result['database']['outreach_suggestions_new']}")
+        out(f"status_conflicts={len(result['status_conflicts'])}")
         if result["warnings"]:
-            print("warnings:")
+            out("warnings:")
             for warning in result["warnings"]:
-                print(f"- {warning}")
+                out(f"- {warning}")
         return 0
     finally:
         asyncio.run(close_db_runtime())

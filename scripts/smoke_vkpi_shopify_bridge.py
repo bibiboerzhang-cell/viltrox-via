@@ -6,6 +6,7 @@ webhooks to the local API, verifies lineage drilldown, and cleans all rows that
 contain the smoke marker.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -299,8 +300,12 @@ def main() -> None:
     ensure_vkpi_lineage_schema()
     ensure_vkpi_reconciliation_schema()
     smoke = Smoke()
-    result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    try:
+        result = smoke.run()
+    finally:
+        # 任一中途断言/HTTP 异常也必须清掉真实本地库里的 smoke 行，避免假 GMV 留存。
+        smoke.cleanup()
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

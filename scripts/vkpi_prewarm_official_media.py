@@ -7,6 +7,7 @@ images locally, and records video URLs as an inventory by default. Use
 ``--video-mode download`` only when local video copies are explicitly needed.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -229,13 +230,13 @@ def main() -> int:
             )
             _update_metric(channel_id, summary)
         report["channels"].append(summary)
-        print(json.dumps(summary, ensure_ascii=False), flush=True)
+        stdout_out(json.dumps(summary, ensure_ascii=False), flush=True)
 
     report["finished_at"] = _utc_stamp()
     report_path = Path(args.report) if args.report else ROOT / "tmp" / "vkpi_media_cache_runs" / f"{report['started_at']}.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print(f"report={report_path}", flush=True)
+    stdout_out(f"report={report_path}", flush=True)
     return 0
 
 

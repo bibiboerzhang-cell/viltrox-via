@@ -14,6 +14,9 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_lifecycle import managed_apify_client
+
 
 def _since_to_rfc3339(since: str | None) -> str:
     """增量游标(YYYY-MM-DD 或含时间)→ RFC3339(publishedAfter 用)。
@@ -186,33 +189,40 @@ class YouTubeCrawler:
         try:
             from apify_client import ApifyClient  # type: ignore
 
-            client = ApifyClient(self.apify_token)
             actor_path = self.apify_actor_id.replace("/", "~")
-            run = client.actor(actor_path).call(
-                run_input=input_payload,
-                timeout_secs=self.run_timeout_seconds,
-                wait_secs=self.run_timeout_seconds,
-            )
-            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+            with managed_apify_client(ApifyClient(self.apify_token)) as client:
+                run = call_apify_actor(
+                    client,
+                    actor_path,
+                    platform="youtube",
+                    operation=operation,
+                    source="industry_crawlers",
+                    run_input=input_payload,
+                    timeout_secs=self.run_timeout_seconds,
+                    wait_secs=self.run_timeout_seconds,
+                )
+                if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                    return {
+                        "provider": "youtube",
+                        "provider_status": "error",
+                        "sync_status": "error",
+                        "items": [],
+                        "error": f"YouTube Apify actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                        "raw": {"actor_id": self.apify_actor_id, "input": input_payload},
+                    }
+                from . import record_apify_run_cost
+
+                record_apify_run_cost(run, platform="youtube", actor_id=self.apify_actor_id, operation="start_apify_run")
+                items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
                 return {
                     "provider": "youtube",
-                    "provider_status": "error",
-                    "sync_status": "error",
-                    "items": [],
-                    "error": f"YouTube Apify actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                    "provider_status": "ok",
+                    "sync_status": "synced",
+                    "items": [item for item in items if isinstance(item, dict)],
                     "raw": {"actor_id": self.apify_actor_id, "input": input_payload},
                 }
-            from . import record_apify_run_cost
-
-            record_apify_run_cost(run, platform="youtube", actor_id=self.apify_actor_id, operation="start_apify_run")
-            items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
-            return {
-                "provider": "youtube",
-                "provider_status": "ok",
-                "sync_status": "synced",
-                "items": [item for item in items if isinstance(item, dict)],
-                "raw": {"actor_id": self.apify_actor_id, "input": input_payload},
-            }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "provider": "youtube"}
         except ImportError:
             return {
                 "provider": "youtube",

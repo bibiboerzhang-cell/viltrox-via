@@ -42,18 +42,21 @@ _OWNER_USER = {"id": 990601, "email": "owner@mg.test", "role": "employee"}
 _OWNER_STAFF = {
     "id": 990601, "staff_id": 990601, "user_id": 990601, "role": "employee",
     "is_owner": 1, "permissions": {"vkpi": "write"}, "email": "owner@mg.test",
+    "organization_id": 1, "organization_scope_status": "resolved",
 }
 
 _MANAGER_USER = {"id": 990602, "email": "manager@mg.test", "role": "manager"}
 _MANAGER_STAFF = {
     "id": 990602, "staff_id": 990602, "user_id": 990602, "role": "manager",
     "is_owner": 0, "permissions": {"vkpi": "write"}, "email": "manager@mg.test",
+    "organization_id": 1, "organization_scope_status": "resolved",
 }
 
 _EMP_USER = {"id": 990603, "email": "emp@mg.test", "role": "employee"}
 _EMP_STAFF = {
     "id": 990603, "staff_id": 990603, "user_id": 990603, "role": "employee",
     "is_owner": 0, "permissions": {"vkpi": "write"}, "email": "emp@mg.test",
+    "organization_id": 1, "organization_scope_status": "resolved",
 }
 
 _IDENTITIES = {

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any
 
 from app.core.logging import get_logger
@@ -41,6 +42,7 @@ DEFAULT_ORG = "viltrox"
 
 # 置信度档位(DDL 口径 low / medium / high);未申报按最保守档,绝不虚标。
 DEFAULT_CONFIDENCE = "low"
+MIN_CLAIMABLE_EVALS = 5
 
 # source_step 口径(FVA 用):产生该预测的步骤;'baseline' 与 'model' 两版可对账。
 _SOURCE_STEPS = ("rule", "model", "human_override", "baseline")
@@ -69,9 +71,66 @@ def _float_or_none(value: Any) -> float | None:
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _verified_outcome_actual_binding(
+    value: Any,
+    *,
+    outcome_row: dict[str, Any],
+    outcome_id: int,
+    actual_value: float,
+) -> dict[str, Any] | None:
+    """Verify that an eval's numeric actual comes from its linked outcome.
+
+    The generic outcome ledger can hold different metrics, so callers must name
+    the exact JSON field and metric path used.  This prevents an arbitrary
+    number from becoming a claimable eval merely because it points at some
+    finalized outcome.
+    """
+    binding = _json_object(value)
+    if _int_or_none(binding.get("outcome_id")) != outcome_id:
+        return None
+    evidence_field = _text_or_none(binding.get("evidence_field"), 40)
+    if evidence_field not in {"actual_result", "window_7d", "window_14d", "window_28d"}:
+        return None
+    metric_path = _text_or_none(binding.get("metric_path"), 200)
+    if not metric_path:
+        return None
+    node: Any = _json_object(outcome_row.get(evidence_field))
+    for segment in metric_path.split("."):
+        if not segment or not isinstance(node, dict) or segment not in node:
+            return None
+        node = node[segment]
+    observed_value = _float_or_none(node)
+    declared_value = _float_or_none(binding.get("value"))
+    if observed_value is None or declared_value is None:
+        return None
+    if observed_value != actual_value or declared_value != actual_value:
+        return None
+    return {
+        **binding,
+        "outcome_id": outcome_id,
+        "evidence_field": evidence_field,
+        "metric_path": metric_path,
+        "value": actual_value,
+        "binding_status": "verified_against_outcome",
+    }
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -287,9 +346,11 @@ def record_eval(
     """结果回来后对某 run 落一条评估((org, run_id, outcome_id) 幂等)。
 
     先读回该 run 的 p10/p50/p90 → compute_eval_metrics(prev_actual 可经 kw 传入
-    判方向)。outcome_id 可空;PG 唯一约束对 NULL 不触发冲突,故用先查后写的
-    手工 UPSERT。run 不存在 → {ok: False, reason: 'run_not_found'};
-    表未建 → {ok: False, reason: 'table_missing'}。
+    判方向)。outcome_id 可空;有 outcome_id 时 actual_json 必须指向该 outcome
+    的具体 evidence_field/metric_path 且值一致,应用层验证后才写 binding_status。
+    PG 唯一约束对 NULL 不触发冲突,故用先查后写的手工 UPSERT。run 不存在 →
+    {ok: False, reason: 'run_not_found'};表未建 →
+    {ok: False, reason: 'table_missing'}。
     """
     rid = _text_or_none(run_id, 200)
     if not rid:
@@ -302,6 +363,15 @@ def record_eval(
 
     org = _text_or_none(kw.get("organization_id"), 80) or DEFAULT_ORG
     oid = _int_or_none(outcome_id)
+    act = _float_or_none(actual_value)
+    if act is None:
+        return {
+            "ok": False,
+            "id": None,
+            "deduped": False,
+            "reason": "missing_required_field",
+            "missing": ["actual_value"],
+        }
     try:
         from app.db.connection import get_conn, table_exists
 
@@ -309,6 +379,50 @@ def record_eval(
             return {"ok": False, "id": None, "deduped": False, "reason": "table_missing"}
 
         conn = get_conn()
+        verified_actual_json: dict[str, Any] | None = None
+        if oid is not None:
+            if not table_exists("vkpi_gtm_outcomes"):
+                return {"ok": False, "id": None, "deduped": False, "reason": "outcome_table_missing"}
+            outcome = conn.execute(
+                """
+                SELECT decision, decided_at, decided_by,
+                       actual_result, window_7d, window_14d, window_28d
+                FROM vkpi_gtm_outcomes
+                WHERE id = ?
+                """,
+                (oid,),
+            ).fetchone()
+            if not outcome:
+                return {"ok": False, "id": None, "deduped": False, "reason": "outcome_not_found"}
+            outcome_row = dict(outcome)
+            if (
+                _text_or_none(outcome_row.get("decision"), 20) in (None, "open")
+                or outcome_row.get("decided_at") is None
+                or _int_or_none(outcome_row.get("decided_by")) is None
+            ):
+                return {"ok": False, "id": None, "deduped": False, "reason": "outcome_not_finalized"}
+            from app.domains.market_brain.data_readiness import has_observed_outcome_evidence
+
+            if not has_observed_outcome_evidence(outcome_row):
+                return {
+                    "ok": False,
+                    "id": None,
+                    "deduped": False,
+                    "reason": "outcome_missing_observed_evidence",
+                }
+            verified_actual_json = _verified_outcome_actual_binding(
+                kw.get("actual_json"),
+                outcome_row=outcome_row,
+                outcome_id=oid,
+                actual_value=act,
+            )
+            if verified_actual_json is None:
+                return {
+                    "ok": False,
+                    "id": None,
+                    "deduped": False,
+                    "reason": "actual_evidence_binding_required",
+                }
         run = conn.execute(
             f"SELECT p10, p50, p90 FROM {RUNS_TABLE} WHERE organization_id = ? AND run_id = ?",
             (org, rid),
@@ -321,8 +435,9 @@ def record_eval(
             run_row.get("p10"), run_row.get("p50"), run_row.get("p90"),
             actual_value, kw.get("prev_actual"),
         )
-        act = _float_or_none(actual_value)
-        actual_json = _dumps(kw.get("actual_json"))
+        actual_json = _dumps(
+            verified_actual_json if verified_actual_json is not None else kw.get("actual_json")
+        )
         bucket = _text_or_none(kw.get("calibrated_bucket"), 80)
         notes = _text_or_none(kw.get("notes"), 1000)
 
@@ -449,6 +564,19 @@ def _fva_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
 # ── 纯函数:周评估汇总 ───────────────────────────────────────────────
 
 
+def _rollup_readiness(sample_size: int) -> dict[str, Any]:
+    from app.domains.market_brain.data_readiness import DataRequirement, evaluate_requirements
+
+    return evaluate_requirements([
+        DataRequirement(
+            key="prediction_evals",
+            label="prediction evaluations with actual values",
+            observed=sample_size,
+            minimum=MIN_CLAIMABLE_EVALS,
+        )
+    ]).to_dict()
+
+
 def weekly_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """一批评估行(evals 形态)→ 周指标(纯函数,空列表 n=0 全 None)。
 
@@ -463,8 +591,12 @@ def weekly_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
     rows = rows or []
     n = len(rows)
     if n == 0:
+        readiness = _rollup_readiness(0)
         return {"n": 0, "wape": None, "interval_coverage": None, "direction_hit_rate": None,
-                "wape_n": 0, "interval_n": 0, "direction_n": 0, "fva": _fva_rollup([])}
+                "wape_n": 0, "interval_n": 0, "direction_n": 0, "fva": _fva_rollup([]),
+                "claimable": False, "data_readiness": readiness,
+                "claimable_metrics": {"wape": None, "interval_coverage": None,
+                                      "direction_hit_rate": None}}
 
     err_sum = 0.0
     act_sum = 0.0
@@ -485,7 +617,7 @@ def weekly_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if direction is not None:
             direction_known.append(direction)
 
-    return {
+    result = {
         "n": n,
         "wape": round(err_sum / act_sum, 4) if wape_n > 0 and act_sum > 0 else None,
         "interval_coverage": (round(sum(interval_known) / len(interval_known), 4)
@@ -497,9 +629,26 @@ def weekly_rollup(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "direction_n": len(direction_known),
         "fva": _fva_rollup(rows),
     }
+    readiness = _rollup_readiness(wape_n)
+    result["claimable"] = bool(readiness["claimable"])
+    result["data_readiness"] = readiness
+    result["claimable_metrics"] = {
+        "wape": result["wape"] if readiness["claimable"] else None,
+        "interval_coverage": (
+            result["interval_coverage"]
+            if readiness["claimable"] and result["interval_n"] >= MIN_CLAIMABLE_EVALS
+            else None
+        ),
+        "direction_hit_rate": (
+            result["direction_hit_rate"]
+            if readiness["claimable"] and result["direction_n"] >= MIN_CLAIMABLE_EVALS
+            else None
+        ),
+    }
+    return result
 
 
 __all__ = [
     "record_prediction_run", "compute_eval_metrics", "record_eval", "weekly_rollup",
-    "RUNS_TABLE", "EVALS_TABLE", "DEFAULT_ORG",
+    "RUNS_TABLE", "EVALS_TABLE", "DEFAULT_ORG", "MIN_CLAIMABLE_EVALS",
 ]

@@ -6,6 +6,7 @@ that script can cache raw video URLs, but the frontend lookup path needs
 cache_video_for_item(platform, post_id, url) sidecars.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -198,7 +199,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
         report["channels"].append(channel_summary)
-        print(json.dumps(channel_summary, ensure_ascii=False, default=str), flush=True)
+        stdout_out(json.dumps(channel_summary, ensure_ascii=False, default=str), flush=True)
     report["finished_at"] = _utc_stamp()
     return report
 
@@ -219,7 +220,7 @@ def main() -> int:
         report_path = Path(args.report) if args.report else ROOT / "tmp" / "vkpi_video_cache_runs" / f"{report['started_at']}.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        print(f"report={report_path}", flush=True)
+        stdout_out(f"report={report_path}", flush=True)
         return 0 if not report["summary"]["failed"] else 2
     finally:
         asyncio.run(close_db_runtime())

@@ -6,6 +6,7 @@ through sentiment analysis, pillar classification, and comment pillar linking
 without external API spend.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -150,7 +151,7 @@ def main() -> None:
         if int((linked or {}).get("n") or 0) != len(comment_ids):
             raise AssertionError("comment sentiment/pillar links missing")
 
-        print("VKPI_COMMENT_INTELLIGENCE_PIPELINE_SMOKE_OK")
+        stdout_out("VKPI_COMMENT_INTELLIGENCE_PIPELINE_SMOKE_OK")
     finally:
         if post_id is not None:
             conn.execute("DELETE FROM vkpi_post_pillars WHERE post_id = ? AND post_table = ?", (post_id, "industry_posts"))

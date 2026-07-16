@@ -2,7 +2,7 @@
 
 预留 H2 多账号 key 输入位:用户 7 月手动填,系统不自动轮转(worker 未接)。
 安全契约:
-- key 单向(只写入/不回读到前端);list/upsert 响应只回 key_prefix 掩码。
+- key 单向(只写入/不回读到前端);list/upsert 响应只回是否已配置。
 - key_encrypted 仅以 Fernet 密文落库;未配置加密密钥时降级为不可逆占位(sha256
   片段),**绝不明文落库、绝不明文进日志、绝不进 git**。
 - pick_active_key() 解密仅在运行时内存返回,绝不写日志、绝不出 API(7月启用,worker 未接线)。
@@ -79,11 +79,9 @@ def _fernet() -> Any:
 
 
 def mask(plain: str) -> str:
-    """前 6 位 + '...';短于 6 则全掩。绝不打印完整 key。"""
+    """返回非敏感配置标记；绝不返回任何 secret-derived 前缀。"""
     text = str(plain or "")
-    if len(text) < 6:
-        return "***" if text else ""
-    return text[:6] + "..."
+    return "configured" if text else ""
 
 
 def encrypt_key(plain: str) -> tuple[str, str]:
@@ -175,11 +173,17 @@ def ensure_vkpi_api_key_pool_schema() -> None:
 # ---------------------------------------------------------------------------
 def _row_to_public(row: Any) -> dict[str, Any]:
     item = dict(row)
+    # Older rows may still contain a historical key prefix in key_prefix.
+    # Treat it only as a boolean signal and never serialize the stored value.
+    configured = bool(item.get("key_encrypted") or item.get("key_prefix"))
     return {
         "id": int(item.get("id") or 0),
         "account_name": item.get("account_name") or "",
         "provider": item.get("provider") or "",
-        "key_prefix": item.get("key_prefix") or "",
+        # Keep the legacy field for compatibility, but its value is a fixed
+        # status marker rather than a credential prefix.
+        "key_prefix": "configured" if configured else "",
+        "credential_status": "configured" if configured else "not_configured",
         "daily_quota": int(item.get("daily_quota") or 0),
         "enabled": bool(item.get("enabled")),
         "last_used_at": item.get("last_used_at") or None,

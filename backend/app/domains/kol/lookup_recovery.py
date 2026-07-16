@@ -78,10 +78,9 @@ def recover_session(session_id: int, *, staff: dict[str, Any] | None = None) -> 
     for parity with the route guard; visibility is already enforced by the tab
     permission and the session is the actor's own lookup record.
     """
-    del staff
     session = search_sessions.get_session(int(session_id))
     result_summary = session.get("result_summary") if isinstance(session.get("result_summary"), dict) else {}
-    return {
+    payload = {
         "status": "ready",
         "session_id": int(session_id),
         "session": session,
@@ -90,3 +89,13 @@ def recover_session(session_id: int, *, staff: dict[str, Any] | None = None) -> 
         "summary": result_summary,
         "ledger": _ledger_for_session(session),
     }
+    from app.domains.kol.contact_access import authorize_plaintext_contacts, mask_contact_payload
+
+    reveal = authorize_plaintext_contacts(
+        staff,
+        resource_type="kol_lookup",
+        resource_id=int(session_id),
+        page_path=f"/kols/lookup/sessions/{int(session_id)}",
+        metadata={"surface": "lookup_recovery"},
+    )
+    return payload if reveal else mask_contact_payload(payload)

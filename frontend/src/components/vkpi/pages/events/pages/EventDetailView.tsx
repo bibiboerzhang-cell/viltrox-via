@@ -9,7 +9,7 @@ import {
 import { ShareModal } from "../../../shared/ShareModal";
 import PlaceholderTab from "../components/PlaceholderTab";
 import { EVENT_STATUS, EVENT_TYPES } from "../shared/constants";
-import { daysUntil } from "../shared/helpers";
+import { eventTiming } from "../shared/helpers";
 import { memberFromStaff } from "../shared/lookups";
 import BudgetExpensesTab from "../tabs/BudgetExpensesTab";
 import KolsTab from "../tabs/KolsTab";
@@ -100,8 +100,9 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
   const typeCfg = EVENT_TYPES[ev.typeKey] || EVENT_TYPES.other;
   const statusCfg = EVENT_STATUS[ev.status] || EVENT_STATUS.planning;
   const Icon = typeCfg.icon;
-  const days = daysUntil(ev.startDate);
+  const timing = eventTiming(ev.startDate, ev.endDate);
   const isDone = ev.status === "done";
+  const isCancelled = ev.status === "cancelled";
 
   // 当前用户是否参与该 event
   const isParticipant = ev.teamUserIds.includes(currentUser.id);
@@ -147,10 +148,14 @@ export default function EventDetailView({ ev, onBack, currentUser, onEdit, onDel
           e("div", { className: "flex items-center gap-2 mb-1 flex-wrap" },
             e("h1", { className: "text-[18px] font-bold text-white" }, ev.title),
             e("span", { className: "text-[10px] px-1.5 py-0.5 rounded font-medium", style: { background: statusCfg.color + "20", color: statusCfg.color } }, statusCfg.label),
-            !isDone && e("span", {
+            !isDone && !isCancelled && e("span", {
               className: "text-[10px] px-1.5 py-0.5 rounded font-medium",
-              style: { background: days <= 14 ? "rgba(251,191,36,0.20)" : "rgba(168,85,247,0.18)", color: days <= 14 ? "#fbbf24" : "#c4b5fd" }
-            }, days > 0 ? `倒计时 ${days} 天` : `进行中 ${-days} 天`)
+              style: timing.phase === "ended" || timing.phase === "invalid"
+                ? { background: "rgba(100,116,139,0.18)", color: "#94a3b8" }
+                : timing.phase === "ongoing" || timing.days <= 14
+                  ? { background: "rgba(251,191,36,0.20)", color: "#fbbf24" }
+                  : { background: "rgba(168,85,247,0.18)", color: "#c4b5fd" }
+            }, timing.label)
           ),
           e("div", { className: "flex items-center gap-3 text-[11px] text-slate-400" },
             e("div", { className: "flex items-center gap-1" }, e(MapPin, { size: 11 }), ev.location.city, ", ", ev.location.country),

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P10 recommendation review-gap alert lifecycle."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import secrets
@@ -105,7 +106,7 @@ def main() -> None:
         if not closed_row or closed_row["status"] != "resolved":
             raise AssertionError(f"alert was not resolved correctly: {dict(closed_row) if closed_row else None}")
 
-        print("VKPI_RECOMMENDATION_REVIEW_GAP_ALERT_SMOKE_OK")
+        stdout_out("VKPI_RECOMMENDATION_REVIEW_GAP_ALERT_SMOKE_OK")
     finally:
         conn.execute("DELETE FROM vkpi_alerts WHERE alert_key=? OR metadata_json LIKE ?", (alert_key, f"%{marker}%"))
         for row in conn.execute(

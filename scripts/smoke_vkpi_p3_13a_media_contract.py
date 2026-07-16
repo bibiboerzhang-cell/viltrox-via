@@ -6,6 +6,7 @@ video URLs, platform-open links, and show-all controls diverging across the
 data-analysis pages.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -72,7 +73,7 @@ def main() -> None:
     require(data_utils, "post.downloadUrl", "KOL detail mapping must accept download URL")
     require(data_utils, "post.previewUrl", "KOL detail mapping must accept preview thumbnail URL")
 
-    print("VKPI_P3_13A_MEDIA_CONTRACT_SMOKE_OK")
+    stdout_out("VKPI_P3_13A_MEDIA_CONTRACT_SMOKE_OK")
 
 
 if __name__ == "__main__":

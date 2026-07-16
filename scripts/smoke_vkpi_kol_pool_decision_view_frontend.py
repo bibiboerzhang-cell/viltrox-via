@@ -5,6 +5,7 @@ Locks the candidate-pool UI so it remains a decision surface, not only a raw
 import table. Runtime API behavior is covered by KOL Pool service smokes.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def main() -> None:
     require_contains(CSS, ".vkpi-kol-pool-readiness-card")
     require_contains(CSS, ".vkpi-kol-pool-readiness-grid")
 
-    print("VKPI_KOL_POOL_DECISION_VIEW_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_KOL_POOL_DECISION_VIEW_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import app.domains.tasks.enqueue as task_enqueue
-from app.core.config import VKPI_ASYNC_ENABLED
 from app.api.dependencies.manager_guard import (
     is_manager_staff as _is_manager_staff,
     require_manager_staff as _require_manager_staff,
@@ -30,19 +29,33 @@ def _scope_403(exc: Exception) -> HTTPException:
 
 
 @router.post("/analytics/compare")
-async def analytics_compare(body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    try:
-        return await analytics.compare_products(body, staff=staff)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+async def analytics_compare(request: Request, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    if not str(body.get("product_a") or body.get("sku_a") or body.get("lens_a") or "").strip() or not str(body.get("product_b") or body.get("sku_b") or body.get("lens_b") or "").strip():
+        raise HTTPException(status_code=400, detail="product_a and product_b required")
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "vkpi_analytics_compare",
+        {"body": dict(body), "staff": dict(staff or {})},
+        timeout_seconds=1200,
+    )
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/analytics/monitor")
-async def analytics_monitor(body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    try:
-        return await analytics.monitor_product(body, staff=staff)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+async def analytics_monitor(request: Request, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+    if not str(body.get("product_sku") or body.get("query") or body.get("product") or "").strip():
+        raise HTTPException(status_code=400, detail="product_sku required")
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "vkpi_analytics_monitor",
+        {"body": dict(body), "staff": dict(staff or {})},
+        timeout_seconds=1200,
+    )
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.get("/analytics/runs")
@@ -184,10 +197,13 @@ async def sync_channel(
     staff=Depends(require_tab("vkpi", "write")),
 ):
     try:
-        if VKPI_ASYNC_ENABLED:
-            queue = getattr(request.app.state, "job_queue", None)
-            return await task_enqueue.enqueue_official_channel_sync(queue, channel_id, max_posts=max_posts, staff=staff)
-        return channels.sync_now(channel_id, staff=staff, max_posts=max_posts)
+        queue = getattr(request.app.state, "job_queue", None)
+        return await task_enqueue.enqueue_official_channel_sync(
+            queue,
+            channel_id,
+            max_posts=max_posts,
+            staff=staff,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -277,7 +293,8 @@ def official_channel_daily_report_run(
 
 
 @router.post("/channels/official-visual/scan")
-def official_visual_scan(
+async def official_visual_scan(
+    request: Request,
     max_total: int = Query(default=5, ge=1, le=30),
     staff=Depends(_require_manager_tab("vkpi", "write")),
 ):
@@ -287,9 +304,16 @@ def official_visual_scan(
     权限收口(2026-07-08):Gemini 视频画质分析烧 LLM 预算,此前只挂 ``require_tab(vkpi,write)``
     对全员恒真。现改 ``require_manager_tab``(owner+管理岗双闸):非管理层一律 403。
     """
-    from app.domains.channels import official_visual_analysis
-
-    return {"ok": True, "result": official_visual_analysis.process_pending_official_visuals(max_total=int(max_total))}
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "official_visual_scan",
+        {"max_total": int(max_total), "staff": dict(staff or {})},
+        lock_key="official_visual_scan:manual",
+        timeout_seconds=3600,
+    )
+    return {"ok": True, "status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.get("/channels/metrics-filled")
@@ -364,11 +388,11 @@ def collect_channel_post_comments(
 ):
     payload = body or {}
     try:
-        return channel_comments.collect_channel_post_comments(
+        return channel_comments.enqueue_official_channel_comments_job(
             channel_id,
             post_id=str(payload.get("post_id") or ""),
             url=str(payload.get("url") or ""),
-            limit=int(payload.get("limit") or 100),
+            limit_per_post=int(payload.get("limit") or 100),
             staff=staff,
         )
     except LookupError as exc:

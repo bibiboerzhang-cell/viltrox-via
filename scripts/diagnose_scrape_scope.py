@@ -20,6 +20,7 @@ from typing import Any
 import psycopg2
 import psycopg2.extras
 from rapidfuzz import fuzz, process
+from stdout_utils import out
 
 
 DEFAULT_CSV_PATH = Path("data/external/to_scrape_remaining.csv")
@@ -214,21 +215,21 @@ def sample_line(match: MatchResult) -> str:
 
 
 def print_samples(title: str, rows: list[MatchResult], limit: int = 5) -> None:
-    print(title)
+    out(title)
     if not rows:
-        print("  无")
+        out("  无")
         return
     for idx, row in enumerate(rows[:limit], start=1):
-        print(f"  {idx}. {sample_line(row)}")
+        out(f"  {idx}. {sample_line(row)}")
 
 
 def print_unmatched(rows: list[MatchResult]) -> None:
-    print("\n[桶 D 完整名单] CSV 有 + 库未匹配到 (fuzzy <90)")
+    out("\n[桶 D 完整名单] CSV 有 + 库未匹配到 (fuzzy <90)")
     if not rows:
-        print("  无")
+        out("  无")
         return
     for idx, row in enumerate(rows, start=1):
-        print(
+        out(
             f"  {idx}. CSV={row.csv.name} | 平台={row.csv.platform or '-'} | "
             f"对接人={row.csv.staff or '-'} | 产品={short(row.csv.products, 30)} | "
             f"best={row.best_display_name or '-'} | score={row.score:.1f}"
@@ -236,12 +237,12 @@ def print_unmatched(rows: list[MatchResult]) -> None:
 
 
 def print_extra_db(rows: list[PoolKol]) -> None:
-    print("\n[桶 E 完整名单] 库 needs_scrape=true + CSV 没有")
+    out("\n[桶 E 完整名单] 库 needs_scrape=true + CSV 没有")
     if not rows:
-        print("  无")
+        out("  无")
         return
     for idx, row in enumerate(rows, start=1):
-        print(
+        out(
             f"  {idx}. id={row.id} | {row.display_name or row.handle} | "
             f"handle={row.handle or '-'} | platform={row.platform or '-'} | "
             f"type={row.dashboard_account_type or '-'} | tier={row.tier or '-'} | "
@@ -284,31 +285,31 @@ def main() -> int:
         if row.needs_scrape and int(row.id) not in matched_pool_ids
     ]
 
-    print("============================================================")
-    print("Scrape Scope 诊断报告")
-    print("============================================================")
-    print(f"CSV: {csv_path}")
-    print(f"CSV 有效 KOL 行: {len(csv_rows)}")
-    print(f"vkpi_kol_pool 行: {len(pool_rows)}")
-    print(f"CSV match>=90: {len(matched)}")
-    print(f"CSV fuzzy<90: {len(bucket_d)}")
-    print("")
-    print(f"[桶 A] CSV 有 + 库匹配到 + needs_scrape=true: {len(bucket_a)} 条")
-    print("       -> 一致，本来就在 Step 4 抓取范围里")
-    print(f"[桶 B] CSV 有 + 库匹配到 + needs_scrape=false + has_video_evidence=true: {len(bucket_b)} 条")
-    print("       -> 库认为已有 evidence 不需要抓；CSV 认为还需要抓")
-    print(f"[桶 C] CSV 有 + 库匹配到 + needs_scrape=false + has_video_evidence=false: {len(bucket_c)} 条")
-    print("       -> ETL 漏标 needs_scrape；库里没 evidence 也没标待抓")
-    print(f"[桶 D] CSV 有 + 库未匹配到 (fuzzy <90): {len(bucket_d)} 条")
-    print("       -> 主库没有这个 KOL，名字差异太大或确实新人")
-    print(f"[桶 E] 库 needs_scrape=true + CSV 没有: {len(bucket_e)} 条")
-    print("       -> 库标了待抓但 CSV 里没有，可能是 ETL 多标")
-    print("")
+    out("============================================================")
+    out("Scrape Scope 诊断报告")
+    out("============================================================")
+    out(f"CSV: {csv_path}")
+    out(f"CSV 有效 KOL 行: {len(csv_rows)}")
+    out(f"vkpi_kol_pool 行: {len(pool_rows)}")
+    out(f"CSV match>=90: {len(matched)}")
+    out(f"CSV fuzzy<90: {len(bucket_d)}")
+    out("")
+    out(f"[桶 A] CSV 有 + 库匹配到 + needs_scrape=true: {len(bucket_a)} 条")
+    out("       -> 一致，本来就在 Step 4 抓取范围里")
+    out(f"[桶 B] CSV 有 + 库匹配到 + needs_scrape=false + has_video_evidence=true: {len(bucket_b)} 条")
+    out("       -> 库认为已有 evidence 不需要抓；CSV 认为还需要抓")
+    out(f"[桶 C] CSV 有 + 库匹配到 + needs_scrape=false + has_video_evidence=false: {len(bucket_c)} 条")
+    out("       -> ETL 漏标 needs_scrape；库里没 evidence 也没标待抓")
+    out(f"[桶 D] CSV 有 + 库未匹配到 (fuzzy <90): {len(bucket_d)} 条")
+    out("       -> 主库没有这个 KOL，名字差异太大或确实新人")
+    out(f"[桶 E] 库 needs_scrape=true + CSV 没有: {len(bucket_e)} 条")
+    out("       -> 库标了待抓但 CSV 里没有，可能是 ETL 多标")
+    out("")
     print_samples("[桶 A top 5]", bucket_a)
     print_samples("\n[桶 B top 5]", bucket_b)
     print_samples("\n[桶 C top 5]", bucket_c)
     print_samples("\n[桶 D top 5]", bucket_d)
-    print("")
+    out("")
     print_unmatched(bucket_d)
     print_extra_db(bucket_e)
     return 0

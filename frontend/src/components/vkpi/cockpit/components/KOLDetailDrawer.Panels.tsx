@@ -190,8 +190,12 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
   const cachedVideoUrl = proxiedVideoUrl(videoString(video, ["cached_video_url"]));
   const youtubeVideoId = youtubeIdForVideo(video);
   const watchUrl = videoString(video, ["watch_url", "url", "content_url"]);
+  // watch_url 可以是有效缓存播放地址；“打开原帖”必须优先保留真实 content_url，
+  // 否则缓存失效后按钮仍会指回同一条坏路由。
+  const originalPostUrl = videoString(video, ["content_url", "url"]) || watchUrl;
   const platform = normalizedVideoPlatform(video);
   const embedSrc = youtubeEmbedUrl(youtubeVideoId);
+  const [cachedVideoFailed, setCachedVideoFailed] = React.useState(false);
   // 命中条件:既能从该视频取到 evidence_id,又在 preloaded bundles 里找到同 id 且有 final_v1 的那条。
   const matchedBundle = matchAnalysisBundle(video, bundles);
   const analysisBundle = matchedBundle && recordOr(matchedBundle).finalEntry ? matchedBundle : null;
@@ -204,7 +208,11 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
-  const stage = cachedVideoUrl
+  React.useEffect(() => {
+    setCachedVideoFailed(false);
+  }, [cachedVideoUrl, originalPostUrl]);
+
+  const stage = cachedVideoUrl && !cachedVideoFailed
     ? e("video", {
           src: cachedVideoUrl,
           poster: thumbnail || undefined,
@@ -212,6 +220,7 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
           controls: true,
           autoPlay: true,
           playsInline: true,
+          onError: () => setCachedVideoFailed(true),
         })
     // P11:YouTube iframe 仅在平台确为 youtube 时渲染。IG/TikTok 即便误带到 youtubeVideoId,
     // 也绝不塞进 YouTube 播放器(否则黑屏)——无 R2 缓存时落到下方「打开原帖」兜底。
@@ -226,8 +235,8 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
             loading: "eager",
             referrerPolicy: "strict-origin-when-cross-origin",
           }),
-          watchUrl && e("a", {
-            href: watchUrl,
+          originalPostUrl && e("a", {
+            href: originalPostUrl,
             target: "_blank",
             rel: "noreferrer",
             className: "absolute bottom-3 right-3 rounded-md border border-white/12 bg-black/70 px-2 py-1 text-[10px] font-medium text-white/80 backdrop-blur hover:bg-black/85 hover:text-white",
@@ -246,14 +255,18 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
             : e(Video, { size: 36, className: "text-slate-500" }),
           e("div", null,
             e("div", { className: "text-sm font-medium text-white" },
-              platform === "instagram" || platform === "tiktok" ? "当前未命中 R2 视频缓存" : "当前没有可内嵌播放的视频缓存"
+              cachedVideoFailed
+                ? "缓存视频加载失败"
+                : platform === "instagram" || platform === "tiktok" ? "当前未命中 R2 视频缓存" : "当前没有可内嵌播放的视频缓存"
             ),
             e("div", { className: "mt-1 text-xs text-slate-500" },
-              platform === "instagram" || platform === "tiktok" ? "不会使用 YouTube 播放器；可以打开原帖查看" : "可以打开原帖查看"
+              cachedVideoFailed
+                ? "已停止使用失效缓存；可以打开原帖查看"
+                : platform === "instagram" || platform === "tiktok" ? "不会使用 YouTube 播放器；可以打开原帖查看" : "可以打开原帖查看"
             )
           ),
-          watchUrl && e("a", {
-            href: watchUrl,
+          originalPostUrl && e("a", {
+            href: originalPostUrl,
             target: "_blank",
             rel: "noreferrer",
             className: "rounded-md border border-cyan-300/25 bg-cyan-300/[0.08] px-3 py-1.5 text-xs font-medium text-cyan-100 hover:bg-cyan-300/[0.14]",
@@ -300,10 +313,10 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
               !apiToken ? "登录后读取该视频的深析缓存。" : "该视频暂无深析"
             )
       ),
-      watchUrl && e("footer", { className: "flex items-center justify-between gap-3 border-t border-white/[0.08] px-4 py-2" },
-        e("span", { className: "truncate text-[10px] text-slate-500" }, watchUrl),
+      originalPostUrl && e("footer", { className: "flex items-center justify-between gap-3 border-t border-white/[0.08] px-4 py-2" },
+        e("span", { className: "truncate text-[10px] text-slate-500" }, originalPostUrl),
         e("a", {
-          href: watchUrl,
+          href: originalPostUrl,
           target: "_blank",
           rel: "noreferrer",
           className: "shrink-0 rounded-md border border-white/[0.08] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.06] hover:text-white",

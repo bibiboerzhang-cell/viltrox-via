@@ -13,6 +13,8 @@ import time
 from typing import Any, Optional
 
 from app.core.logging import get_logger
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_lifecycle import register_apify_client_shutdown
 
 logger = get_logger(__name__)
 
@@ -20,7 +22,9 @@ logger = get_logger(__name__)
 try:
     from apify_client import ApifyClient
     _APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
-    _client: Optional[ApifyClient] = ApifyClient(_APIFY_TOKEN) if _APIFY_TOKEN else None
+    _client: Optional[ApifyClient] = (
+        register_apify_client_shutdown(ApifyClient(_APIFY_TOKEN)) if _APIFY_TOKEN else None
+    )
     if _client:
         logger.info("bh_scraper.client_ready")
     else:
@@ -140,7 +144,13 @@ async def fetch_bh_viltrox_products(
                 "searchUrls": [url],
                 "maxItems": max_items,
             }
-            run = _client.actor(actor_id).call(
+            run = call_apify_actor(
+                _client,
+                actor_id,
+                platform="bh",
+                operation="fetch_bh_products",
+                source="intelligence.bh_scraper",
+                estimated_cost_usd=0.32,
                 run_input=run_input,
                 timeout_secs=300,
             )
@@ -162,6 +172,8 @@ async def fetch_bh_viltrox_products(
                 logger.warning("bh_scraper.cost_record_failed", exc_info=True)
             logger.info("bh_scraper.category_complete", extra={"category_name": category_name, "item_count": len(items)})
             return items
+        except ApifyBudgetBlocked:
+            raise
         except Exception as e:
             logger.warning("bh_scraper.category_failed", extra={"category_name": category_name, "error": str(e)})
             return []
@@ -343,7 +355,7 @@ async def fetch_bh_reviews(
 ) -> dict:
     """抓一批产品的用户评论并 upsert 进 vkpi_bh_reviews(竞品口碑数据源)。
 
-    照 search 同款调用模式:apify_client.actor().call() + record_apify_run_cost 记账 + 超时。
+    照 search 同款调用模式:统一 fenced Actor start/wait + record_apify_run_cost 记账 + 超时。
     - 输入:产品 URL 列表;缺省时从 bh_products 表选 Viltrox 自家 + 竞品条目
       (竞品口径 = app.domains.market.content_brain.COMPETITOR_BRANDS 标题匹配)。
     - 单次上限 20 个产品(每个产品 = 1 次付费 actor call,防烧钱)。
@@ -417,7 +429,13 @@ async def fetch_bh_reviews(
         try:
             # 输入 schema 沿用占位实现的 startUrls + maxItems 口径;
             # 首次付费跑建议 scripts/run_bh_reviews_once.py --limit 1 先验证字段再放量。
-            run = _client.actor(BH_REVIEWS_ACTOR).call(
+            run = call_apify_actor(
+                _client,
+                BH_REVIEWS_ACTOR,
+                platform="bh",
+                operation="fetch_product_reviews",
+                source="intelligence.bh_scraper",
+                estimated_cost_usd=0.32,
                 run_input={"startUrls": [{"url": url}], "maxItems": limit_per_product},
                 timeout_secs=300,
             )
@@ -447,6 +465,8 @@ async def fetch_bh_reviews(
             ]
             logger.info("bh_reviews.product_complete", extra={"url": url, "review_count": len(reviews)})
             return target, reviews, cost
+        except ApifyBudgetBlocked:
+            raise
         except Exception as e:
             logger.warning("bh_reviews.product_failed", extra={"url": url, "error": str(e)})
             return target, [], 0.0
@@ -501,7 +521,13 @@ async def fetch_bh_product_reviews(product_url: str, max_reviews: int = 100) -> 
     
     try:
         def _do():
-            run = _client.actor("powerai/bhphotovideo-product-reviews-scraper").call(
+            run = call_apify_actor(
+                _client,
+                "powerai/bhphotovideo-product-reviews-scraper",
+                platform="bh",
+                operation="fetch_product_reviews_legacy",
+                source="intelligence.bh_scraper",
+                estimated_cost_usd=0.32,
                 run_input={"startUrls": [{"url": reviews_url}], "maxItems": max_reviews},
                 timeout_secs=180,
             )
@@ -544,21 +570,4 @@ async def fetch_bh_product_reviews(product_url: str, max_reviews: int = 100) -> 
 # 测试入口
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
-    async def main():
-        logger.info("bh_scraper.demo_started")
-        products = await fetch_bh_viltrox_products(max_items=100)
-        logger.info("bh_scraper.demo_product_count", extra={"count": len(products)})
-        for i, p in enumerate(products[:15]):
-            logger.info(
-                "bh_scraper.demo_product",
-                extra={
-                    "index": i + 1,
-                    "title": p.get("title", "?")[:60],
-                    "price": p.get("price", 0),
-                    "rating": p.get("rating", 0),
-                    "review_count": p.get("review_count", 0),
-                    "sku": p.get("sku", "?"),
-                },
-            )
-    
-    asyncio.run(main())
+    raise SystemExit("Direct provider demo is disabled; enqueue intel_bh_refresh through the durable job queue.")

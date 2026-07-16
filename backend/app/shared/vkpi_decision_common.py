@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains import business_truth
 from app.shared.vkpi_kpi_evidence import enrich_kpi_source_row
 
 logger = get_logger(__name__)
@@ -97,15 +98,14 @@ def _active_project_filter(alias: str) -> str:
 
 
 def _confirmed_revenue_filter(alias: str = "") -> str:
-    """确认态收入口径:只算 vkpi_sales_attributions.confidence='confirmed'。
+    """可计量收入口径:只算有签名 Shopify 快照的确认/退款行。
 
     与归因页 account_picker._build_attributed_gmv_roi(confidence='confirmed')同口径,排除
     unmatched(未匹配,实测 131199 分混入)/refund(退款)/estimated/manual 等非确认行,避免把
     未确认收入灌进 revenue/GMV 头条数。alias = vkpi_sales_attributions 的表别名(如 'sa'),
     空则不带前缀。字面量无 ASCII 问号/百分号,compat 占位层安全。
     """
-    prefix = f"{alias}." if alias else ""
-    return f"{prefix}confidence = 'confirmed'"
+    return business_truth.verified_shopify_attribution_sql(alias)
 
 
 def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 80) -> dict[str, Any]:
@@ -116,7 +116,7 @@ def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 8
     """
     grouped = _safe_rows(
         conn,
-        """
+        f"""
         SELECT metric_key,
                COUNT(*) AS source_count,
                COALESCE(SUM(metric_value), 0) AS total_value,
@@ -125,6 +125,7 @@ def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 8
                MAX(confidence) AS confidence
         FROM vkpi_kpi_ledger
         WHERE staff_id=? AND ledger_date >= ?
+          AND {business_truth.current_kpi_ledger_sql()}
         GROUP BY metric_key
         ORDER BY
             CASE
@@ -139,7 +140,7 @@ def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 8
     )
     source_rows = _safe_rows(
         conn,
-        """
+        f"""
         SELECT kl.*,
                COALESCE(k.channel_name, '') AS kol_name,
                COALESCE(k.platform, '') AS platform,
@@ -149,6 +150,7 @@ def _staff_kpi_breakdown(conn: Any, staff_id: int, *, start: str, limit: int = 8
         LEFT JOIN kols k ON k.id = kl.kol_id
         LEFT JOIN vkpi_projects p ON p.id = kl.project_id
         WHERE kl.staff_id=? AND kl.ledger_date >= ?
+          AND {business_truth.current_kpi_ledger_sql('kl')}
         ORDER BY kl.ledger_date DESC, kl.id DESC
         LIMIT ?
         """,
@@ -201,7 +203,7 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
     project_params: tuple[Any, ...] = (staff_id,) if staff_id else ()
     sales_where = "WHERE staff_id=?" if staff_id else ""
     sales_params: tuple[Any, ...] = (staff_id,) if staff_id else ()
-    cost_where = "WHERE status!='void' AND staff_id=?" if staff_id else "WHERE status!='void'"
+    cost_where = "WHERE status='actual' AND approved_at IS NOT NULL AND staff_id=?" if staff_id else "WHERE status='actual' AND approved_at IS NOT NULL"
     cost_params: tuple[Any, ...] = (staff_id,) if staff_id else ()
     link_where = "WHERE staff_id=?" if staff_id else ""
     link_params: tuple[Any, ...] = (staff_id,) if staff_id else ()
@@ -256,7 +258,7 @@ def _summary(conn, staff_id: int | None = None) -> dict[str, Any]:
             f"""
             SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents
             FROM vkpi_cost_ledger c
-            WHERE c.status!='void' AND {_active_project_filter('c')}
+            WHERE c.status='actual' AND c.approved_at IS NOT NULL AND {_active_project_filter('c')}
             {cost_staff_clause}
             """,
             cost_params,

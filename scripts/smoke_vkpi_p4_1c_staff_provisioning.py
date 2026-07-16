@@ -6,6 +6,7 @@ that those accounts can login through /api/auth/login, and that /api/auth/me
 returns staff context and permissions. Test rows are cleaned at the end.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import time
@@ -129,7 +130,7 @@ def main() -> int:
     smoke = Smoke()
     try:
         result = smoke.run()
-        print("VKPI_P4_1C_STAFF_PROVISIONING_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
+        stdout_out("VKPI_P4_1C_STAFF_PROVISIONING_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     finally:
         smoke.cleanup()

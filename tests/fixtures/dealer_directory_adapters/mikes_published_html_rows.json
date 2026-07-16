@@ -1,0 +1,22 @@
+{
+  "extraction": {
+    "media_type": "text/html",
+    "document_url": "https://mikescamera.com/contact-info",
+    "document_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "extractor": "manual-fixture-v1",
+    "rows": [
+      {
+        "source_store_id": "mikes-co-boulder",
+        "organization_name": "Mike's Camera",
+        "branch_name": "Boulder",
+        "address1": "2500 Pearl Street",
+        "city": "Boulder",
+        "state": "CO",
+        "postal_code": "80302",
+        "country_code": "US",
+        "phone": "(303) 443-1715",
+        "website": "https://mikescamera.com/contact-info"
+      }
+    ]
+  }
+}

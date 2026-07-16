@@ -84,7 +84,7 @@ def _make_client(user, staff):
 
 # ── (A) Action inbox: admin 全局 vs 成员 own-only ─────────────────────────────
 @pytest.fixture()
-def member_owned_action():
+def member_owned_action(hermetic_action_db):
     """自播成员 own 行 + 公司级行;yield 成员行 id;后置清理。
 
     用 kol_profile 类(纯提醒、requires_approval=False、不写业务数据),
@@ -103,9 +103,9 @@ def member_owned_action():
            suggested_endpoint, requires_approval, owner_staff_id, reason,
            payload_json, status, created_at, updated_at)
         VALUES (?, 'kol_profile', 'W5 role-matrix probe', 'd', 'low', 'kol', '',
-                '', true, ?, '', '{}'::jsonb, 'suggested', NOW(), NOW())
+                '', 1, ?, '', ?, 'suggested', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        (dedupe, _MEMBER_STAFF_ID),
+        (dedupe, _MEMBER_STAFF_ID, "{}"),
     )
     conn.execute(
         """
@@ -114,9 +114,9 @@ def member_owned_action():
            suggested_endpoint, requires_approval, owner_staff_id, reason,
            payload_json, status, created_at, updated_at)
         VALUES (?, 'kol_profile', 'W5 role-matrix global probe', 'd', 'low', 'kol', '',
-                '', true, NULL, '', '{}'::jsonb, 'suggested', NOW(), NOW())
+                '', 1, NULL, '', ?, 'suggested', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        (global_dedupe,),
+        (global_dedupe, "{}"),
     )
     conn.commit()
     row = conn.execute(

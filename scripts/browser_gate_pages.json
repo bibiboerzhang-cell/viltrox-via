@@ -1,0 +1,26 @@
+{
+  "schema_version": "vkpi-browser-page-manifest/v1",
+  "pages": [
+    { "family": "dashboard", "nav_key": "dashboard", "heading": "Dashboard" },
+    { "family": "kol-pool", "nav_key": "kol-pool", "heading": "KOL Pool" },
+    { "family": "my-kol", "nav_key": "my-kol", "heading": "MY KOL" },
+    { "family": "projects", "nav_key": "projects", "heading": "Projects" },
+    { "family": "events", "nav_key": "events", "heading": "Events" },
+    { "family": "shopify", "nav_key": "shopify", "heading": "Shopify" },
+    { "family": "dealers", "nav_key": "dealers", "heading": "Dealers" },
+    { "family": "triage", "nav_key": "triage", "heading": "运维 Triage" },
+    { "family": "dataQuery", "nav_key": "dataQuery", "heading": "问数" },
+    { "family": "marketTrends", "nav_key": "marketTrends", "heading": "市场趋势" },
+    { "family": "skillStudio", "nav_key": "skillStudio", "heading": "Skill Studio" },
+    { "family": "intelligent", "nav_key": "intelligent", "heading": "Intelligent 问答" },
+    { "family": "replyQueue", "nav_key": "replyQueue", "heading": "回复队列" },
+    { "family": "sku360", "nav_key": "sku360", "heading": "SKU 360°" },
+    { "family": "kolProfile", "nav_key": "kolProfile", "heading": "KOL 档案" },
+    { "family": "launchpad", "nav_key": "launchpad", "heading": "发射台" },
+    { "family": "autonomy", "nav_key": "autonomy", "heading": "自治驾照" },
+    { "family": "marketVoice", "nav_key": "marketVoice", "heading": "市场之声" },
+    { "family": "creativeLibrary", "nav_key": "creativeLibrary", "heading": "创意资产库" },
+    { "family": "strategyBoard", "nav_key": "strategyBoard", "heading": "战略台" },
+    { "family": "gtmCommand", "nav_key": "gtmCommand", "heading": "GTM Command" }
+  ]
+}

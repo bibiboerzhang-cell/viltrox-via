@@ -28,6 +28,8 @@ Safety
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import json
@@ -144,15 +146,15 @@ def main() -> int:
     planned = plan_backfill(conn)
     summary = summarize(planned)
 
-    print("=== vkpi_llm_calls cost_micro_usd backfill ===")
-    print(f"mode: {'COMMIT' if args.commit else 'DRY-RUN'}")
-    print(f"would backfill rows: {summary['rows']}")
-    print(f"total micro_usd:     {summary['total_micro_usd']}  (~${summary['total_usd']})")
-    print(f"canonical providers: {summary['canonical_providers']}")
+    out("=== vkpi_llm_calls cost_micro_usd backfill ===")
+    out(f"mode: {'COMMIT' if args.commit else 'DRY-RUN'}")
+    out(f"would backfill rows: {summary['rows']}")
+    out(f"total micro_usd:     {summary['total_micro_usd']}  (~${summary['total_usd']})")
+    out(f"canonical providers: {summary['canonical_providers']}")
     for prov, slot in sorted(summary["by_provider"].items()):
-        print(f"  {prov:10s} rows={slot['rows']:5d}  micro={slot['micro']}  (~${round(slot['micro']/1_000_000,4)})")
+        out(f"  {prov:10s} rows={slot['rows']:5d}  micro={slot['micro']}  (~${round(slot['micro']/1_000_000,4)})")
     for p in planned[: max(0, args.show)]:
-        print(
+        out(
             f"  sample {p['call_uid']}: {p['provider']} in={p['input_tokens']} out={p['output_tokens']} "
             f"-> micro={p['new_cost_micro_usd']} cents={p['new_cost_cents']}"
         )
@@ -161,14 +163,14 @@ def main() -> int:
     if args.commit and planned:
         backup_path = str(write_backup(planned, Path(args.backup_dir)))
         written = apply_backfill(conn, planned)
-        print(f"backup written: {backup_path}")
-        print(f"rows written:   {written}")
+        out(f"backup written: {backup_path}")
+        out(f"rows written:   {written}")
     elif args.commit:
-        print("nothing to commit (0 rows planned)")
+        out("nothing to commit (0 rows planned)")
     else:
-        print("dry-run only; pass --commit to write (a JSON backup is taken first).")
+        out("dry-run only; pass --commit to write (a JSON backup is taken first).")
 
-    print(
+    out(
         json.dumps(
             {
                 "mode": "commit" if args.commit else "dry_run",

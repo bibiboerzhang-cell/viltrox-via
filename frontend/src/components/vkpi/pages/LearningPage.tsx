@@ -5,7 +5,7 @@ import { getLearningStatus, getWorkspaceDigest } from "../../../services/vkpi/ag
 // 接 /agents/learning-status + /agents/workspace-digest。红线:只读;maturity 为展示信号。
 
 const MATURITY: Record<string, { label: string; cls: string }> = {
-  cold: { label: "冷启动(沉淀刚起步)", cls: "text-slate-300" },
+  cold: { label: "冷启动(缺真实结果证据)", cls: "text-slate-300" },
   warming: { label: "升温中", cls: "text-amber-300" },
   learning: { label: "在学习", cls: "text-emerald-300" },
 };
@@ -40,6 +40,9 @@ export function LearningPage({ apiToken = "" }: { apiToken?: string }) {
   const funnel = ls?.recommendation_funnel || {};
   const maturity = MATURITY[ls?.maturity] || MATURITY.cold;
   const pipeline = digest?.pipeline || {};
+  const verified = ls?.verified_evidence || {};
+  const targets = ls?.targets_4_5 || {};
+  const excluded = ls?.excluded_raw_activity || {};
 
   return (
     <div className="space-y-4 p-4">
@@ -71,6 +74,24 @@ export function LearningPage({ apiToken = "" }: { apiToken?: string }) {
             <Bar label="已达成" value={Number(funnel.agreed || 0)} />
             <Bar label="已发布" value={Number(funnel.published || 0)} />
           </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-amber-300/15 bg-amber-500/[0.05] p-3">
+        <div className="mb-2 flex items-center justify-between text-[11px]">
+          <span className="text-slate-300">真实学习证据 · 排除 test / demo / dry-run / execution ack</span>
+          <span className="text-amber-300">{ls?.claim_status || "descriptive_only"}</span>
+        </div>
+        <div className="grid grid-cols-1 gap-1 md:grid-cols-3">
+          <Bar label={`人工 finalized outcome / ${targets.finalized_outcomes ?? 100}`} value={Number(verified.finalized_outcomes || 0)} />
+          <Bar label={`非演示人工反馈 / ${targets.human_feedback ?? 20}`} value={Number(verified.human_feedback || 0)} />
+          <Bar label={`带 actual 的预测评估 / ${targets.prediction_actual_evals ?? 50}`} value={Number(verified.prediction_actual_evals || 0)} />
+          <Bar label={`人工复核 Skill / ${targets.human_reviewed_skill_runs ?? 100}`} value={Number(verified.human_reviewed_skill_runs || 0)} />
+          <Bar label={`真实 Agent tool run / ${targets.executed_agent_tool_runs ?? 20}`} value={Number(verified.executed_agent_tool_runs || 0)} />
+          <Bar label="绑定动作的结果评估" value={Number(verified.linked_agent_outcomes || 0)} />
+        </div>
+        <div className="mt-2 text-[10px] text-slate-500">
+          原始 Skill run {Number(excluded.skill_runs_total || 0)} 条、Agent eval {Number(excluded.agent_outcome_evaluations_total || 0)} 条；不满足上述证据口径的行不抬高成熟度。
         </div>
       </div>
 

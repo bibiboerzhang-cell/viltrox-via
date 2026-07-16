@@ -15,6 +15,7 @@ profileName/profileId/profileUrl —— 历史行 author_id 落空。
   .venv/bin/python scripts/backfill_comment_author_ids.py             # 落库
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -166,7 +167,7 @@ def main() -> int:
     if not args.dry_run:
         conn.commit()
 
-    print(json.dumps({
+    stdout_out(json.dumps({
         "dry_run": bool(args.dry_run),
         "scanned_missing_author_id": scanned,
         "parse_failed": parse_failed,

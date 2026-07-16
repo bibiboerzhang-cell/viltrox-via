@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P2.8 comment intelligence alerts."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -152,7 +153,7 @@ def main() -> None:
         if ci.get("count", 0) < 1:
             raise AssertionError(f"aggregate alerts missing comment intelligence: {aggregate}")
 
-        print("VKPI_COMMENT_INTELLIGENCE_ALERTS_SMOKE_OK")
+        stdout_out("VKPI_COMMENT_INTELLIGENCE_ALERTS_SMOKE_OK")
     finally:
         if alert_key:
             conn.execute("DELETE FROM vkpi_alerts WHERE alert_key = ?", (alert_key,))

@@ -7,14 +7,20 @@ import { ProjectSelect } from '../shared/ProjectSelect';
 import { AttributionTable } from '../tables/AttributionTable';
 import { PageShell } from './PageShell';
 
+type AuthorizationEvidence = {
+  authorizationRef: string;
+  reason: string;
+  confirmedByHuman: boolean;
+};
+
 interface AttributionPageProps {
   data: VkpiDashboardData;
   viewMode: 'manager' | 'employee';
   apiToken?: string;
   onOpenEvidence: (metric: VkpiMetricEvidenceKey, metricValueId?: number | null) => void;
-  onCreateAttribution?: (payload: { sourcePlatform: 'shopify' | 'amazon' | 'manual' | 'custom'; sourceRef: string; projectId?: string; linkId?: string; productSku?: string; orderId?: string; revenueUsd: number; commissionUsd?: number; confidence?: string; occurredAt?: string }) => Promise<void>;
-  onImportAmazonRows?: (payload: { projectId?: string; amazonTag?: string; asin?: string; marketplace?: string; reportDate?: string; rows: Array<Record<string, unknown>> }) => Promise<void>;
-  onUploadAmazonReport?: (payload: { projectId?: string; amazonTag?: string; asin?: string; marketplace?: string; reportDate?: string; file: File }) => Promise<void>;
+  onCreateAttribution?: (payload: { sourcePlatform: 'shopify' | 'amazon' | 'manual' | 'custom'; sourceRef: string; projectId?: string; linkId?: string; productSku?: string; orderId?: string; revenueUsd: number; commissionUsd?: number; confidence?: string; occurredAt?: string; authorizationEvidence?: AuthorizationEvidence }) => Promise<void>;
+  onImportAmazonRows?: (payload: { projectId?: string; amazonTag?: string; asin?: string; marketplace?: string; reportDate?: string; rows: Array<Record<string, unknown>>; authorizationEvidence?: AuthorizationEvidence }) => Promise<void>;
+  onUploadAmazonReport?: (payload: { projectId?: string; amazonTag?: string; asin?: string; marketplace?: string; reportDate?: string; file: File; authorizationEvidence?: AuthorizationEvidence }) => Promise<void>;
 }
 
 export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCreateAttribution, onImportAmazonRows, onUploadAmazonReport }: AttributionPageProps) {
@@ -34,9 +40,19 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
   const [amazonLoading, setAmazonLoading] = useState(false);
   const [amazonError, setAmazonError] = useState('');
   const [shopifySyncMessage, setShopifySyncMessage] = useState('');
+  const [authorizationRef, setAuthorizationRef] = useState('');
+  const [authorizationReason, setAuthorizationReason] = useState('');
+  const [authorizationConfirmed, setAuthorizationConfirmed] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const metricSourceCount = (metricKey: string) => data.metrics.find((metric) => metric.key === metricKey)?.sourceCount || 0;
+  const authorizationReady = viewMode === 'manager'
+    && Boolean(authorizationRef.trim() && authorizationReason.trim() && authorizationConfirmed);
+  const authorizationEvidence: AuthorizationEvidence = {
+    authorizationRef: authorizationRef.trim(),
+    reason: authorizationReason.trim(),
+    confirmedByHuman: authorizationConfirmed,
+  };
 
   const loadAmazonData = useCallback(async () => {
     if (!apiToken) return;
@@ -71,9 +87,10 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
         projectId: shopifyProjectId || undefined,
         orderId: shopifyOrderId || undefined,
         revenueUsd: Number(shopifyRevenue || 0),
-        confidence: 'confirmed',
+        confidence: 'pending',
+        authorizationEvidence,
       });
-      setMessage('Shopify 归因已补录。');
+      setMessage('Shopify 人工记录已保存为待核验，不计入 GMV。');
       setShopifySourceRef('');
       setShopifyOrderId('');
       setShopifyRevenue('');
@@ -98,6 +115,7 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
         marketplace: amazonMarketplace || 'US',
         reportDate: amazonReportDate || undefined,
         rows: parsed as Array<Record<string, unknown>>,
+        authorizationEvidence,
       });
       await loadAmazonData();
       setMessage('Amazon JSON 报表已导入。');
@@ -120,6 +138,7 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
         marketplace: amazonMarketplace || 'US',
         reportDate: amazonReportDate || undefined,
         file: amazonFile,
+        authorizationEvidence,
       });
       await loadAmazonData();
       setMessage('Amazon CSV/XLSX 报表已上传导入。');
@@ -150,13 +169,22 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
     <PageShell title="销售归因" description="把 Shopify / Amazon / 手工导入销售归因到短链、项目、红人、成员和 KPI。">
       <section className="vkpi-card-grid vkpi-card-grid--forms">
         <section className="vkpi-card vkpi-action-card">
+          <CardHeader title="人工业务写入授权" />
+          <div className="vkpi-form-stack">
+            <input value={authorizationRef} onChange={(event) => setAuthorizationRef(event.target.value)} placeholder="授权编号 / 工单 / 批次" />
+            <input value={authorizationReason} onChange={(event) => setAuthorizationReason(event.target.value)} placeholder="写入原因与证据来源" />
+            <label className="vkpi-help-text"><input type="checkbox" checked={authorizationConfirmed} onChange={(event) => setAuthorizationConfirmed(event.target.checked)} /> 我已人工复核此次写入</label>
+            <span className="vkpi-help-text">仅 owner/admin 且功能门禁开启后可写；人工 Shopify 补录始终不会被当成 provider-confirmed GMV。</span>
+          </div>
+        </section>
+        <section className="vkpi-card vkpi-action-card">
           <CardHeader title="Shopify 订单补录" />
           <form className="vkpi-form-stack" onSubmit={submitShopify}>
             <ProjectSelect projects={data.projects} value={shopifyProjectId} onChange={setShopifyProjectId} allowEmpty />
             <input value={shopifySourceRef} onChange={(event) => setShopifySourceRef(event.target.value)} placeholder="source_ref，例如 shopify:订单ID" />
             <input value={shopifyOrderId} onChange={(event) => setShopifyOrderId(event.target.value)} placeholder="Shopify order id（可选）" />
             <input value={shopifyRevenue} onChange={(event) => setShopifyRevenue(event.target.value)} placeholder="销售额 USD" inputMode="decimal" />
-            <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onCreateAttribution}>补录 Shopify 归因</button>
+            <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onCreateAttribution || !authorizationReady}>保存待核验 Shopify 记录</button>
           </form>
         </section>
         <section className="vkpi-card vkpi-action-card">
@@ -180,7 +208,7 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
         <section className="vkpi-card vkpi-action-card">
           <CardHeader title="Amazon 文件导入" />
           <input type="file" accept=".csv,.xlsx,.xls,.json" onChange={(event) => setAmazonFile(event.currentTarget.files?.[0] || null)} />
-          <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy || !amazonFile || !onUploadAmazonReport} onClick={() => void submitAmazonFile()}>上传并导入</button>
+          <button className="vkpi-button vkpi-button--primary" type="button" disabled={busy || !amazonFile || !onUploadAmazonReport || !authorizationReady} onClick={() => void submitAmazonFile()}>上传并导入</button>
           <span className="vkpi-help-text">支持后端已实现的 Amazon Attribution CSV/XLSX/JSON 解析。</span>
         </section>
       </section>
@@ -188,7 +216,7 @@ export function AttributionPage({ data, viewMode, apiToken, onOpenEvidence, onCr
         <CardHeader title="Amazon JSON 快速导入" />
         <form className="vkpi-form-stack" onSubmit={submitAmazonRows}>
           <textarea className="vkpi-textarea" value={amazonRowsText} onChange={(event) => setAmazonRowsText(event.target.value)} placeholder='[{"amazon_tag":"xxx","asin":"AF35","revenue_usd":123.45,"orders":2,"report_date":"2026-05-07"}]' />
-          <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onImportAmazonRows}>导入 JSON Rows</button>
+          <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !onImportAmazonRows || !authorizationReady}>导入 JSON Rows</button>
         </form>
         {message ? <div className="vkpi-inline-message">{message}</div> : null}
       </section>

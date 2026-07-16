@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.perms import require_permission
 from app.domains.comments.compat import admin_router_prefix
@@ -20,36 +20,57 @@ router = APIRouter(prefix=admin_router_prefix("comments"), tags=["vkpi-comments"
 
 
 @router.post("/collect-post/{post_id}")
-def api_collect_post_comments(
+async def api_collect_post_comments(
+    request: Request,
     post_id: int,
     post_table: str = Query("industry_posts"),
     max_comments: int | None = Query(None),
     staff: dict = Depends(require_permission("vkpi.comments.collect")),
 ) -> dict[str, Any]:
-    """Collect comments for a single post (manual trigger)."""
-    return comments_collector.collect_post_comments(
-        post_id=post_id,
-        post_table=post_table,
-        max_comments=max_comments,
-        staff=staff,
-        triggered_by="manual",
-    )
+    """Queue comments collection for a single post."""
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    try:
+        task_id = await queue.enqueue(
+            "comments_collect_post",
+            {
+                "post_id": int(post_id),
+                "post_table": post_table,
+                "max_comments": max_comments,
+                "staff": dict(staff or {}),
+                "triggered_by": "manual",
+            },
+            lock_key=f"comments_collect_post:{post_table}:{int(post_id)}",
+            timeout_seconds=1200,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/batch-collect")
-def api_batch_collect(
+async def api_batch_collect(
+    request: Request,
     platform: str = Query(""),
     days: int = Query(7, ge=1, le=30),
     limit: int = Query(100, ge=1, le=500),
     staff: dict = Depends(require_permission("vkpi.comments.batch_collect")),
 ) -> dict[str, Any]:
-    """Batch collect comments for recent posts without coverage."""
-    return comments_collector.batch_collect_pending(
-        platform=platform,
-        days=days,
-        limit=limit,
-        staff=staff,
-    )
+    """Queue a bounded recent-post comment collection batch."""
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    try:
+        task_id = await queue.enqueue(
+            "comments_batch_collect",
+            {"platform": platform, "days": days, "limit": limit, "staff": dict(staff or {})},
+            lock_key=f"comments_batch_collect:{platform or 'all'}:{days}",
+            timeout_seconds=3600,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/batch-collect-channel")

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+import socket
 
+import pytest
+
+from app.db import connection as db_connection
 from app.db.connection import get_conn
+from app.domains.kol import competitor_detector
 from app.domains.kol.competitor_detector import ensure_competitor_relation_schema
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import pool as kol_pool
@@ -11,10 +16,64 @@ from app.domains.comments import intelligence as comment_intelligence
 import app.domains.comments.sentiment as sentiment
 from app.domains.content import pillars
 from app.domains.sync.refresh_tier import ensure_refresh_tier_schema
+from app.platform import llm_gateway
+from app.platform.db import schema_product_industry
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
 MARKER = "vkpi-kol-intelligence-card-unit"
+
+
+@pytest.fixture(autouse=True)
+def _private_kol_intelligence_db(tmp_path, monkeypatch):
+    """Give the card its minimal local evidence store and forbid external I/O."""
+    db_connection.close_db_runtime_sync()
+    db_path = (tmp_path / "kol-intelligence.db").resolve()
+    assert db_path != db_connection._PRODUCTION_SQLITE_PATH
+    monkeypatch.setattr(db_connection, "DB_PATH", db_path)
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_URL", "")
+    monkeypatch.setattr(schema_product_industry, "_SCHEMA_READY", False)
+    monkeypatch.setattr(competitor_detector, "_RELATION_SCHEMA_READY", False)
+
+    def fail_provider(*_args, **_kwargs):
+        raise AssertionError("read-only KOL intelligence card must not call providers")
+
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("read-only KOL intelligence card must not call the network")
+
+    monkeypatch.setattr(llm_gateway, "invoke", fail_provider)
+    monkeypatch.setattr(comments_collector, "get_crawler", fail_provider)
+    monkeypatch.setattr(socket, "create_connection", fail_network)
+    monkeypatch.setattr(socket.socket, "connect", fail_network)
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE submissions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at TEXT NOT NULL,
+          platform TEXT,
+          url TEXT,
+          extracted_handle TEXT,
+          title TEXT,
+          detection_status TEXT,
+          final_score REAL,
+          creator_score REAL,
+          overall_score REAL,
+          memo TEXT,
+          video_analysis TEXT
+        )
+        """
+    )
+    conn.commit()
+    try:
+        yield
+    finally:
+        kol_pool._clear_kol_pool_read_cache()
+        competitor_detector._RELATION_SCHEMA_READY = False
+        schema_product_industry._SCHEMA_READY = False
+        db_connection.close_db_runtime_sync()
 
 
 def _cleanup() -> None:

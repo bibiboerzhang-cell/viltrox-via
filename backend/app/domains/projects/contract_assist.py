@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.core.config import UPLOAD_DIR
+from app.core.config import OPENAI_MODEL, UPLOAD_DIR
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import audit
@@ -36,7 +36,7 @@ from app.domains.access import scope
 from app.domains.costs import budget_guard
 from app.domains.projects import contracts as contracts_domain
 from app.domains.projects.workflow_common import _int, staff_id, utcnow
-from app.platform import llm_gateway
+from app.platform import llm_gateway, llm_production
 from app.services.ai.analyzers.claude_contract_extract import (
     DEFAULT_CONTRACT_MODEL,
     _anthropic_cost_usd,
@@ -621,6 +621,32 @@ def _polish_prompt(template_key: str, fields: dict[str, str]) -> str:
     )
 
 
+def _valid_polish_payload(value: Any, field_names: set[str]) -> bool:
+    if not isinstance(value, dict) or set(value) != field_names:
+        return False
+    return all(
+        isinstance(value.get(name), str)
+        and bool(str(value.get(name) or "").strip())
+        and len(str(value.get(name) or "").strip()) <= 4000
+        for name in field_names
+    )
+
+
+def _polish_failure_code(response: Any) -> str:
+    result = response if isinstance(response, dict) else {}
+    failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    return str(
+        failure.get("code")
+        or result.get("failure_code")
+        or result.get("reason")
+        or latest.get("status")
+        or result.get("status")
+        or "llm_unavailable"
+    )[:120]
+
+
 def enqueue_contract_polish_job(
     project_id: int,
     *,
@@ -684,22 +710,41 @@ def run_contract_polish_for_job(payload: dict[str, Any], *, staff: dict[str, Any
     if not polish_key or not clean:
         return {"status": "failed", "reason": "payload_missing_fields"}
     template_key = str(payload.get("template_key") or "").strip()
-    resp = llm_gateway.invoke(
-        _polish_prompt(template_key, clean),
-        purpose="vkpi_contract_polish",
-        max_output_tokens=POLISH_MAX_OUTPUT_TOKENS,
-        preferred_provider="openai",
-        cost_tag="vkpi_contract_polish",
-        staff=staff or {},
-        metadata={"project_id": payload.get("project_id"), "polish_key": polish_key, "template_key": template_key},
-    )
-    text = str(resp.get("text") or "").strip()
-    if resp.get("status") != "success" or not text:
-        return {"status": "failed", "reason": str(resp.get("status") or "llm_no_text")[:300]}
     try:
-        parsed = _json_loads(text)
-    except Exception:
-        return {"status": "failed", "reason": "llm_json_malformed"}
+        resp = llm_production.generate_json(
+            _polish_prompt(template_key, clean),
+            provider="openai",
+            model=OPENAI_MODEL,
+            purpose="vkpi_contract_polish",
+            max_output_tokens=POLISH_MAX_OUTPUT_TOKENS,
+            cost_tag="vkpi_contract_polish",
+            triggered_by=contracts_domain._triggered_by_user_id(staff) or "projects.contract_polish",
+            staff=staff or {},
+            required_keys=tuple(clean),
+            validator=lambda value: _valid_polish_payload(value, set(clean)),
+            deadline_seconds=75.0,
+            metadata={
+                "project_id": payload.get("project_id"),
+                "polish_key": polish_key,
+                "template_key": template_key,
+                "phase": "project_contract",
+                "subphase": "polish_terms",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": f"project:{payload.get('project_id') or '-'}",
+            },
+        )
+    except Exception as exc:  # AI-off/readiness/provider failure: never write cache
+        logger.warning("contract polish strict LLM unavailable", exc_info=True)
+        resp = {"status": "failed", "reason": str(exc)[:120] or type(exc).__name__}
+    parsed = resp.get("json") if isinstance(resp, dict) else None
+    if not (
+        resp.get("status") == "success"
+        and str(resp.get("provider") or "").strip().lower() == "openai"
+        and str(resp.get("model") or "").strip() == OPENAI_MODEL
+        and _valid_polish_payload(parsed, set(clean))
+    ):
+        return {"status": "failed", "reason": _polish_failure_code(resp)}
     polished = {
         name: str(parsed.get(name) or "").strip()[:4000]
         for name in clean

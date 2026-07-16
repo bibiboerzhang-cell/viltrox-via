@@ -9,6 +9,8 @@ GFW 无关(Apify 跑在云端)。产出供 GCE 下载器消费。
   python3 scripts/scrape_kol_metadata.py --per-kol 20          # 全量
 """
 from __future__ import annotations
+
+from stdout_utils import out as stdout_out
 import argparse, json, re, sys, time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -125,7 +127,7 @@ def main():
             if len(picked) >= args.pilot:
                 break
         kols = picked
-    print(f"🚀 metadata 抓取 {len(kols)} 个 KOL,每人前 {args.per_kol} 条视频(并发 {args.workers})→ {out}")
+    stdout_out(f"🚀 metadata 抓取 {len(kols)} 个 KOL,每人前 {args.per_kol} 条视频(并发 {args.workers})→ {out}")
     import threading
     from concurrent.futures import ThreadPoolExecutor, as_completed
     dq = (out / "download_queue.jsonl").open("w")
@@ -149,7 +151,7 @@ def main():
                 stats["done"] += 1; stats["elapsed"] += el
                 n = stats["done"]
                 if err is not None:
-                    print(f"  [{n}/{len(kols)}] ❌ KOL-{k['id']} {k['platform']}/{k['handle']}: {err}")
+                    stdout_out(f"  [{n}/{len(kols)}] ❌ KOL-{k['id']} {k['platform']}/{k['handle']}: {err}")
                     continue
                 vids, status = payload
                 kol_dir = f"KOL-{int(k['id']):06d}_{k['platform']}_{_slug(k.get('handle'))}"
@@ -163,12 +165,12 @@ def main():
                 if not vids:
                     stats["empty"] += 1
                 if n % 10 == 0 or n == len(kols):
-                    print(f"  [{n}/{len(kols)}] …累计 {stats['videos']} 视频 / 空号 {stats['empty']}")
+                    stdout_out(f"  [{n}/{len(kols)}] …累计 {stats['videos']} 视频 / 空号 {stats['empty']}")
     dq.close(); inv.close()
-    print(f"\n🎉 完成 {stats['kols']} KOL / {stats['videos']} 视频 | 空号 {stats['empty']} | 总耗 {stats['elapsed']:.0f}s")
+    stdout_out(f"\n🎉 完成 {stats['kols']} KOL / {stats['videos']} 视频 | 空号 {stats['empty']} | 总耗 {stats['elapsed']:.0f}s")
     if stats["kols"]:
-        print(f"   均 {stats['videos']/stats['kols']:.1f} 视频/KOL · {stats['elapsed']/stats['kols']:.1f}s/KOL")
-    print(f"   队列: {out}/download_queue.jsonl")
+        stdout_out(f"   均 {stats['videos']/stats['kols']:.1f} 视频/KOL · {stats['elapsed']/stats['kols']:.1f}s/KOL")
+    stdout_out(f"   队列: {out}/download_queue.jsonl")
 
 
 if __name__ == "__main__":

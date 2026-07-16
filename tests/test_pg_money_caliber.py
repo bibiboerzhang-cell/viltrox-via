@@ -31,7 +31,10 @@ import pytest
 
 from app.db import connection as dbc
 
-pytestmark = pytest.mark.pg
+pytestmark = [
+    pytest.mark.pg,
+    pytest.mark.usefixtures("pg_test_identities"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -43,11 +46,21 @@ def _scoped(conn: Any) -> Iterator[None]:
     duration of a call, so the function-under-test reads our uncommitted test
     rows inside the same rolled-back transaction (real isolation, zero commit)."""
     token = dbc._scoped_conn.set(conn)
+    previous_backend = dbc.DB_RUNTIME_BACKEND
+    previous_url = dbc.DB_RUNTIME_URL
+    # The suite is hermetic by default, even when a dedicated real-PG fixture
+    # is explicitly enabled.  The scoped connection already guarantees that
+    # production get_conn() cannot escape to another database; switch only the
+    # dialect/runtime predicate for the duration of this rolled-back fixture.
+    dbc.DB_RUNTIME_BACKEND = "postgres"
+    dbc.DB_RUNTIME_URL = "fixture://scoped-postgres"
     try:
         assert dbc.get_conn() is conn, "scoped-conn injection failed"
         assert dbc.is_postgres_runtime() is True, "expected postgres runtime"
         yield
     finally:
+        dbc.DB_RUNTIME_BACKEND = previous_backend
+        dbc.DB_RUNTIME_URL = previous_url
         dbc._scoped_conn.reset(token)
 
 
@@ -76,27 +89,59 @@ def _ins_sale(
     project_id: int | None = None,
     staff_id: int | None = None,
     commission_cents: int = 0,
+    provider_verified: bool = True,
 ) -> None:
+    snapshot_id: int | None = None
+    if provider_verified:
+        snapshot = conn.execute(
+            """
+            INSERT INTO vkpi_shopify_order_snapshots (
+                shopify_order_id, financial_status, raw_payload_hash,
+                provider_auth_mode, provider_verified_at
+            )
+            VALUES (?, 'paid', ?, 'shopify-hmac', NOW())
+            RETURNING id
+            """,
+            (_ref(), secrets.token_hex(32)),
+        ).fetchone()
+        snapshot_id = int(snapshot["id"])
     conn.execute(
         """
         INSERT INTO vkpi_sales_attributions
-            (source_platform, source_ref, project_id, staff_id,
+            (source_platform, source_ref, project_id, staff_id, shopify_order_snapshot_id,
              revenue_cents, commission_cents, currency, confidence, occurred_at)
-        VALUES ('shopify', ?, ?, ?, ?, ?, ?, ?, NOW())
+        VALUES ('shopify', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
         """,
-        (_ref(), project_id, staff_id, revenue_cents, commission_cents, currency, confidence),
+        (
+            _ref(),
+            project_id,
+            staff_id,
+            snapshot_id,
+            revenue_cents,
+            commission_cents,
+            currency,
+            confidence,
+        ),
     )
 
 
 def _ins_cost(
-    conn: Any, *, project_id: int, amount_cents: int, currency: str, status: str
+    conn: Any,
+    *,
+    project_id: int,
+    amount_cents: int,
+    currency: str,
+    status: str,
+    approved: bool | None = None,
 ) -> None:
+    is_approved = status == "actual" if approved is None else bool(approved)
     conn.execute(
         """
-        INSERT INTO vkpi_cost_ledger (project_id, cost_type, amount_cents, currency, status)
-        VALUES (?, 'other', ?, ?, ?)
+        INSERT INTO vkpi_cost_ledger
+            (project_id, cost_type, amount_cents, currency, status, approved_at)
+        VALUES (?, 'other', ?, ?, ?, CASE WHEN ? THEN NOW() ELSE NULL END)
         """,
-        (project_id, amount_cents, currency, status),
+        (project_id, amount_cents, currency, status, is_approved),
     )
 
 
@@ -107,10 +152,12 @@ def _ins_order(
         """
         INSERT INTO vkpi_shopify_orders
             (shop_domain, order_id, total_price_cents, currency, financial_status,
-             discount_code, ordered_at, ingested_at)
-        VALUES ('pgmoney.myshopify.com', ?, ?, ?, ?, ?, NOW(), NOW())
+             discount_code, ordered_at, provider_auth_mode, provider_verified_at,
+             raw_payload_hash, ingested_at)
+        VALUES ('pgmoney.myshopify.com', ?, ?, ?, ?, ?, NOW(), 'shopify-hmac',
+                NOW(), ?, NOW())
         """,
-        (_ref(), total_price_cents, currency, financial_status, discount_code),
+        (_ref(), total_price_cents, currency, financial_status, discount_code, secrets.token_hex(32)),
     )
 
 
@@ -190,6 +237,16 @@ def test_account_picker_gmv_confirmed_and_no_cross_currency(pg_compat: Any) -> N
             SELECT COALESCE(SUM(revenue_cents), 0) AS s
             FROM vkpi_sales_attributions
             WHERE source_platform = 'shopify' AND confidence = 'confirmed'
+              AND shopify_order_snapshot_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM vkpi_shopify_order_snapshots os
+                WHERE os.id=vkpi_sales_attributions.shopify_order_snapshot_id
+                  AND os.provider_auth_mode='shopify-hmac'
+                  AND os.provider_verified_at IS NOT NULL
+                  AND os.raw_payload_hash<>''
+                  AND os.financial_status='paid'
+                  AND os.cancelled_at IS NULL
+              )
               AND COALESCE(NULLIF(currency, ''), 'USD') = 'USD'
             """
         ).fetchone()["s"]
@@ -198,8 +255,20 @@ def test_account_picker_gmv_confirmed_and_no_cross_currency(pg_compat: Any) -> N
     _ins_sale(pg_compat, revenue_cents=100_000, currency="USD", confidence="confirmed")
     _ins_sale(pg_compat, revenue_cents=50_000, currency="EUR", confidence="confirmed")
     # non-confirmed noise that must be excluded:
-    _ins_sale(pg_compat, revenue_cents=999_999, currency="USD", confidence="unmatched")
-    _ins_sale(pg_compat, revenue_cents=888_888, currency="USD", confidence="refund")
+    _ins_sale(
+        pg_compat,
+        revenue_cents=999_999,
+        currency="USD",
+        confidence="unmatched",
+        provider_verified=False,
+    )
+    _ins_sale(
+        pg_compat,
+        revenue_cents=888_888,
+        currency="USD",
+        confidence="refund",
+        provider_verified=False,
+    )
 
     with _scoped(pg_compat):
         out = _build_attributed_gmv_roi()
@@ -223,6 +292,14 @@ def test_costs_summarize_project_void_and_no_cross_currency(pg_compat: Any) -> N
     _ins_cost(pg_compat, project_id=pid, amount_cents=99_999, currency="USD", status="void")
     _ins_cost(pg_compat, project_id=pid, amount_cents=88_888, currency="USD", status="estimate")
     _ins_cost(pg_compat, project_id=pid, amount_cents=77_777, currency="USD", status="pending")
+    _ins_cost(
+        pg_compat,
+        project_id=pid,
+        amount_cents=66_666,
+        currency="USD",
+        status="actual",
+        approved=False,
+    )
 
     with _scoped(pg_compat):
         out = summarize_project(pid)
@@ -250,8 +327,22 @@ def test_metrics_sum_revenue_no_cross_currency(pg_compat: Any) -> None:
     pid = _new_project(pg_compat)
     _ins_sale(pg_compat, revenue_cents=10_000, currency="USD", confidence="confirmed", project_id=pid)
     _ins_sale(pg_compat, revenue_cents=5_000, currency="EUR", confidence="confirmed", project_id=pid)
-    _ins_sale(pg_compat, revenue_cents=999_999, currency="USD", confidence="unmatched", project_id=pid)
-    _ins_sale(pg_compat, revenue_cents=888_888, currency="USD", confidence="refund", project_id=pid)
+    _ins_sale(
+        pg_compat,
+        revenue_cents=999_999,
+        currency="USD",
+        confidence="unmatched",
+        project_id=pid,
+        provider_verified=False,
+    )
+    _ins_sale(
+        pg_compat,
+        revenue_cents=888_888,
+        currency="USD",
+        confidence="refund",
+        project_id=pid,
+        provider_verified=False,
+    )
 
     with _scoped(pg_compat):
         out = magg._sum_revenue("AND project_id = ?", [pid])
@@ -274,7 +365,14 @@ def test_decision_common_summary_no_cross_currency(pg_compat: Any) -> None:
     staff_id = 7676  # real staff row; has zero existing sales/cost rows
     _ins_sale(pg_compat, revenue_cents=10_000, currency="USD", confidence="confirmed", staff_id=staff_id)
     _ins_sale(pg_compat, revenue_cents=5_000, currency="EUR", confidence="confirmed", staff_id=staff_id)
-    _ins_sale(pg_compat, revenue_cents=777_777, currency="USD", confidence="unmatched", staff_id=staff_id)
+    _ins_sale(
+        pg_compat,
+        revenue_cents=777_777,
+        currency="USD",
+        confidence="unmatched",
+        staff_id=staff_id,
+        provider_verified=False,
+    )
 
     with _scoped(pg_compat):
         out = _summary(pg_compat, staff_id=staff_id)
@@ -294,7 +392,14 @@ def test_decision_dashboard_revenue_trend_no_cross_currency(pg_compat: Any) -> N
     staff_id = 7676
     _ins_sale(pg_compat, revenue_cents=10_000, currency="USD", confidence="confirmed", staff_id=staff_id)
     _ins_sale(pg_compat, revenue_cents=5_000, currency="EUR", confidence="confirmed", staff_id=staff_id)
-    _ins_sale(pg_compat, revenue_cents=666_666, currency="USD", confidence="cancelled", staff_id=staff_id)
+    _ins_sale(
+        pg_compat,
+        revenue_cents=666_666,
+        currency="USD",
+        confidence="cancelled",
+        staff_id=staff_id,
+        provider_verified=False,
+    )
 
     with _scoped(pg_compat):
         trend = dd.revenue_trend(window_days=7, staff_id=staff_id)

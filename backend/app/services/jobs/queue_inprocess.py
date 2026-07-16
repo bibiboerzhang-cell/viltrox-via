@@ -14,6 +14,7 @@ from app.core.config import (
 from app.services.ai.orchestrator import TaskStatus, VideoJobInput
 from app.services.jobs.queue_common import (
     BaseJobQueue,
+    DURABLE_PROVIDER_JOB_TYPES,
     TRANSIENT_JOB_STATUSES,
     normalize_payload,
     utcnow,
@@ -48,6 +49,11 @@ class InProcessJobQueue(BaseJobQueue):
                 payload = VideoJobInput(**payload)
             task_id = await self._orch.enqueue(payload)
             return task_id
+
+        if str(job_type or "").strip() in DURABLE_PROVIDER_JOB_TYPES:
+            raise RuntimeError(
+                f"durable_queue_required:{job_type}:inprocess_queue_has_no_provider_execution_fence"
+            )
 
         task_id = str(uuid.uuid4())
         normalized_payload = normalize_payload(payload)

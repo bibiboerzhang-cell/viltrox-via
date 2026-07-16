@@ -1,0 +1,31 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//V-KPI offline fixture//EN
+BEGIN:VEVENT
+UID:gw-corcoran-photo-20260910@example.edu
+DTSTAMP:20260715T050000Z
+DTSTART;TZID=America/New_York:20260910T180000
+DTEND;TZID=America/New_York:20260910T200000
+SUMMARY:Corcoran Documentary Photography Lecture
+DESCRIPTION:Public lecture and portfolio discussion.
+LOCATION:Corcoran School\, Washington\, DC
+X-VKPI-CITY:Washington
+X-VKPI-STATE:DC
+X-VKPI-COUNTRY:US
+URL:https://calendar.gwu.edu/event/documentary-photography-lecture?utm_source=ical
+LAST-MODIFIED:20260714T220000Z
+END:VEVENT
+BEGIN:VEVENT
+UID:gw-corcoran-film-photo-festival-20261002@example.edu
+DTSTAMP:20260715T050000Z
+DTSTART;VALUE=DATE:20261002
+DTEND;VALUE=DATE:20261005
+SUMMARY:Corcoran Film and Photography Festival
+DESCRIPTION:Three-day student and industry festival.
+LOCATION:Corcoran School\, Washington\, DC
+X-VKPI-CITY:Washington
+X-VKPI-STATE:DC
+X-VKPI-COUNTRY:United States
+URL:https://calendar.gwu.edu/event/film-photo-festival
+END:VEVENT
+END:VCALENDAR

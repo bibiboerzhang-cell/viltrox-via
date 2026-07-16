@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline guard for Apify-style platform field mapping in KOL Pool."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from app.domains.kol import pool as kol_pool
 from app.services.vkpi.industry_snapshot_kpis import calculate_kpis
@@ -64,7 +65,7 @@ def main() -> None:
     assert_true(kol_pool._bio(profile) == "camera and macro videos", "authorMeta signature should map")
     assert_true(kol_pool._profile_url("tiktok", profile, "teleginivan") == "https://www.tiktok.com/@teleginivan", "profileUrl should map")
 
-    print("VKPI_KOL_POOL_PLATFORM_MAPPING_SMOKE_OK")
+    stdout_out("VKPI_KOL_POOL_PLATFORM_MAPPING_SMOKE_OK")
 
 
 if __name__ == "__main__":

@@ -151,6 +151,11 @@ export interface LearningDigest {
 }
 
 export interface MarketBrainSummary {
+  status: string;
+  reason: string;
+  claim_status: string;
+  organization_id: number | null;
+  organization_scope_status: string;
   weekly_signals: { items: WeeklySignalItem[]; sources_note: string; status: string };
   product_opportunities: { items: ProductOpportunityItem[]; note: string; status: string };
   recommended_actions: { items: GtmActionItem[]; note: string; status: string };
@@ -186,6 +191,11 @@ export function normalizeMarketBrainSummary(raw: unknown): MarketBrainSummary {
   const entry = asRow(sd.simulate_entry);
   const ld = asRow(data.learning_digest);
   return {
+    status: asStr(data.status),
+    reason: asStr(data.reason),
+    claim_status: asStr(data.claim_status),
+    organization_id: asNum(data.organization_id),
+    organization_scope_status: asStr(data.organization_scope_status),
     weekly_signals: {
       items: sectionItems(data.weekly_signals).map((r) => ({
         signal: asStr(r.signal || r.statement || r.text),
@@ -309,6 +319,12 @@ export interface GtmPlanMeta {
 }
 
 export interface GtmPlanPreview {
+  status: string;
+  reason: string;
+  claim_status: string;
+  organization_id: number | null;
+  organization_scope_status: string;
+  writes: boolean;
   public_plan: GtmPublicPlan;
   meta: GtmPlanMeta;
 }
@@ -390,6 +406,12 @@ export function normalizeGtmPlanPreview(raw: unknown): GtmPlanPreview {
   const thesisRow = asRow(plan.thesis);
   const meta = asRow(data.meta);
   return {
+    status: asStr(data.status),
+    reason: asStr(data.reason),
+    claim_status: asStr(data.claim_status),
+    organization_id: asNum(data.organization_id),
+    organization_scope_status: asStr(data.organization_scope_status),
+    writes: data.writes === true,
     public_plan: {
       thesis: {
         go_nogo: asStr(thesisRow.go_nogo),

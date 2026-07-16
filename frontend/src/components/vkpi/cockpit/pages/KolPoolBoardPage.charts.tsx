@@ -77,7 +77,13 @@ export function PoolFitDistBody({ items }: { items: Row[] }) {
   }));
   let unscored = 0;
   for (const it of items || []) {
-    const fit = Number((it as any)?.v6_fit);
+    const rawFit = (it as any)?.v6_fit;
+    // Number(null) and Number("") are both 0.  Treating either as a real score
+    // collapses every unscored KOL into the 0-9 bucket and presents a false
+    // distribution.  Only coerce a value after the missing-value check.
+    const fit = rawFit == null || (typeof rawFit === "string" && !rawFit.trim())
+      ? Number.NaN
+      : Number(rawFit);
     if (Number.isFinite(fit)) {
       buckets[Math.min(9, Math.max(0, Math.floor(fit / 10)))].count += 1;
     } else {

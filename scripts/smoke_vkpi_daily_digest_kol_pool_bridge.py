@@ -7,6 +7,7 @@ seeded into vkpi_outreach_suggestions with candidate_source=kol_pool_bridge so
 it is traceable and not confused with full-market crawling.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -154,7 +155,7 @@ def main() -> None:
         after = analytics.daily_staff_outreach_digest_status(limit=100, staff=manager, product_sku=product_sku)
         assert after["ready_staff_count"] == 1, after
         assert after["items_total"] >= 1, after
-        print("VKPI_DAILY_DIGEST_KOL_POOL_BRIDGE_SMOKE_OK")
+        stdout_out("VKPI_DAILY_DIGEST_KOL_POOL_BRIDGE_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(marker, user_id, staff_id, pool_id, product_sku)

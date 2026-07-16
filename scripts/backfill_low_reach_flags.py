@@ -20,6 +20,8 @@
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import os
@@ -84,7 +86,7 @@ def main() -> int:
     ).fetchone()
     null_followers = int(dict(null_row)["n"])
 
-    print(f"[before] total={total} followers<{floor}={below} followers=NULL={null_followers} 已打标={before_flagged}")
+    out(f"[before] total={total} followers<{floor}={below} followers=NULL={null_followers} 已打标={before_flagged}")
 
     rows = conn.execute(
         """
@@ -120,12 +122,12 @@ def main() -> int:
         _clear_kol_pool_read_cache()
 
     mode = "WRITE" if args.write else "DRY-RUN"
-    print(f"[{mode}] 打标={stamped} 摘标={unstamped} 不变={unchanged}")
+    out(f"[{mode}] 打标={stamped} 摘标={unstamped} 不变={unchanged}")
     if samples:
-        print("[打标样本(前 10)]")
-        print("\n".join(samples))
+        out("[打标样本(前 10)]")
+        out("\n".join(samples))
     after_flagged = flagged_count(conn) if args.write else before_flagged
-    print(f"[after] 已打标={after_flagged}(before={before_flagged})")
+    out(f"[after] 已打标={after_flagged}(before={before_flagged})")
     asyncio.run(close_db_runtime())
     return 0
 

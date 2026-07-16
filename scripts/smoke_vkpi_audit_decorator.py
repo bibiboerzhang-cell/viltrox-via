@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -68,22 +70,22 @@ def main() -> None:
     if seed_admin:
         try:
             user_id, staff_id = seed_admin(conn, marker=MARKER)
-            print(f"[seed] user_id={user_id} staff_id={staff_id}")
+            out(f"[seed] user_id={user_id} staff_id={staff_id}")
         except Exception as exc:
-            print(f"[seed] failed: {exc}")
+            out(f"[seed] failed: {exc}")
             sys.exit(1)
     else:
-        print("[seed] _smoke_seed.py missing, skip")
+        out("[seed] _smoke_seed.py missing, skip")
         sys.exit(1)
     
     # 取测试前 audit 计数
     baseline = _count_audit_logs()
-    print(f"[baseline] audit_logs count = {baseline}")
+    out(f"[baseline] audit_logs count = {baseline}")
     
     failures: list[str] = []
     
     # ── 场景 1: 成功执行,写 success 日志 ──
-    print("[1/5] 成功执行 → status=success")
+    out("[1/5] 成功执行 → status=success")
     result = fake_kol_import(staff={"id": staff_id, "is_owner": True}, kol_id=12345)
     if not result.get("imported"):
         failures.append("场景 1: 业务返回错")
@@ -98,12 +100,12 @@ def main() -> None:
             elif log.get("target_id") != "12345":
                 failures.append(f"场景 1: target_id 错 期望 12345 实际 {log.get('target_id')}")
             else:
-                print(f"   PASS: action_type={log['action_type']} target_id={log['target_id']}")
+                out(f"   PASS: action_type={log['action_type']} target_id={log['target_id']}")
     
     baseline = _count_audit_logs()
     
     # ── 场景 2: 抛异常,写 failed 日志,异常透传 ──
-    print("[2/5] 抛异常 → status=failed,异常透传")
+    out("[2/5] 抛异常 → status=failed,异常透传")
     raised = False
     try:
         fake_kol_import_fail(staff={"id": staff_id, "is_owner": True}, kol_id=99999)
@@ -128,23 +130,23 @@ def main() -> None:
             elif "simulated_failure" not in (metadata.get("error") or ""):
                 failures.append(f"场景 2: error 没记录 {metadata}")
             else:
-                print(f"   PASS: status=failed error={metadata.get('error')}")
+                out(f"   PASS: status=failed error={metadata.get('error')}")
     
     baseline = _count_audit_logs()
     
     # ── 场景 3: 默认 target_id 从 kwargs 提取 ──
-    print("[3/5] 默认 target_id 从 kwargs.kol_id 提取")
+    out("[3/5] 默认 target_id 从 kwargs.kol_id 提取")
     fake_kol_import(staff={"id": staff_id, "is_owner": True}, kol_id=77777)
     log = _latest_audit_log()
     if log.get("target_id") != "77777":
         failures.append(f"场景 3: target_id 错 {log.get('target_id')}")
     else:
-        print(f"   PASS: target_id={log['target_id']}")
+        out(f"   PASS: target_id={log['target_id']}")
     
     baseline = _count_audit_logs()
     
     # ── 场景 4: 自定义 extractor ──
-    print("[4/5] 自定义 target_id_extractor + detail_extractor")
+    out("[4/5] 自定义 target_id_extractor + detail_extractor")
     fake_kol_custom(staff={"id": staff_id, "is_owner": True}, handle="@test_user")
     log = _latest_audit_log()
     if log.get("target_id") != "custom-@test_user":
@@ -152,33 +154,33 @@ def main() -> None:
     elif "imported 5 items" not in (log.get("detail") or ""):
         failures.append(f"场景 4: 自定义 detail 错 {log.get('detail')}")
     else:
-        print(f"   PASS: target_id={log['target_id']} detail={log['detail']}")
+        out(f"   PASS: target_id={log['target_id']} detail={log['detail']}")
     
     baseline = _count_audit_logs()
     
     # ── 场景 5: staff_id=0 不写日志 ──
-    print("[5/5] staff_id=0 时跳过审计")
+    out("[5/5] staff_id=0 时跳过审计")
     fake_kol_import(staff={"id": 0}, kol_id=11111)
     new_count = _count_audit_logs()
     if new_count != baseline:
         failures.append(f"场景 5: 期望 +0 日志(staff_id=0 跳过),实际 +{new_count - baseline}")
     else:
-        print(f"   PASS: staff_id=0 时不写日志")
+        out(f"   PASS: staff_id=0 时不写日志")
     
     # ── cleanup ──
-    print("\n[cleanup]")
+    out("\n[cleanup]")
     _cleanup_audit_logs(staff_id=staff_id)
     if cleanup_admin and staff_id:
         cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
     
     # ── 总结 ──
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_AUDIT_DECORATOR_SMOKE_OK")
+        out("\nVKPI_AUDIT_DECORATOR_SMOKE_OK")
         sys.exit(0)
 
 

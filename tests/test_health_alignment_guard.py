@@ -40,8 +40,13 @@ class _Trust:
                 mock.patch.object(main, "_read_frontend_build_sha", return_value=(client_sha or "")), \
                 mock.patch.object(
                     main,
-                    "_trust_worker_sha",
-                    return_value={"worker_sha": worker_sha, "worker_sha_source": "test_injected"},
+                    "_trust_worker",
+                    return_value={
+                        "worker_sha": worker_sha,
+                        "worker_sha_source": "test_injected",
+                        "worker_online": None,
+                        "worker_heartbeat_source": "test_injected",
+                    },
                 ):
             return main._runtime_trust()
 

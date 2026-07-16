@@ -4,8 +4,10 @@ import {
   ProductCatalogPreviewCard,
   ProductCostFormCard,
 } from './SettingsAdminCards';
+import { SettingsProductCostVerificationPanel } from './SettingsProductCostVerificationPanel';
 
 interface SettingsSkuPanelProps {
+  apiToken?: string;
   costSku: string;
   costProductName: string;
   unitCostUsd: string;
@@ -27,6 +29,7 @@ interface SettingsSkuPanelProps {
 }
 
 export function SettingsSkuPanel({
+  apiToken,
   costSku,
   costProductName,
   unitCostUsd,
@@ -47,30 +50,33 @@ export function SettingsSkuPanel({
   onSubmitProductCost,
 }: SettingsSkuPanelProps) {
   return (
-    <section className="vkpi-settings-product-row">
-      <ProductCostFormCard
-        costSku={costSku}
-        costProductName={costProductName}
-        unitCostUsd={unitCostUsd}
-        costNote={costNote}
-        selectedProduct={selectedCatalogProduct}
-        busy={busy}
-        canUpsert={canUpsert}
-        onCostSkuChange={onCostSkuChange}
-        onCostProductNameChange={onCostProductNameChange}
-        onUnitCostUsdChange={onUnitCostUsdChange}
-        onCostNoteChange={onCostNoteChange}
-        onSubmit={onSubmitProductCost}
-      />
-      <ProductCatalogPreviewCard
-        products={productCatalog}
-        loading={productCatalogLoading}
-        error={productCatalogError}
-        query={productSearch}
-        selectedSku={selectedCatalogProduct?.sku}
-        onQueryChange={onProductSearchChange}
-        onSelectProduct={onSelectProduct}
-      />
-    </section>
+    <>
+      <section className="vkpi-settings-product-row">
+        <ProductCostFormCard
+          costSku={costSku}
+          costProductName={costProductName}
+          unitCostUsd={unitCostUsd}
+          costNote={costNote}
+          selectedProduct={selectedCatalogProduct}
+          busy={busy}
+          canUpsert={canUpsert}
+          onCostSkuChange={onCostSkuChange}
+          onCostProductNameChange={onCostProductNameChange}
+          onUnitCostUsdChange={onUnitCostUsdChange}
+          onCostNoteChange={onCostNoteChange}
+          onSubmit={onSubmitProductCost}
+        />
+        <ProductCatalogPreviewCard
+          products={productCatalog}
+          loading={productCatalogLoading}
+          error={productCatalogError}
+          query={productSearch}
+          selectedSku={selectedCatalogProduct?.sku}
+          onQueryChange={onProductSearchChange}
+          onSelectProduct={onSelectProduct}
+        />
+      </section>
+      <SettingsProductCostVerificationPanel apiToken={apiToken} />
+    </>
   );
 }

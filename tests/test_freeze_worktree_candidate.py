@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from argparse import Namespace
+from pathlib import Path
+
+import pytest
+
+from scripts.ops.freeze_worktree_candidate import (
+    FreezeError,
+    freeze_candidate,
+    verify_manifest,
+)
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    _write(root / ".gitignore", "runtime/\nfrontend/node_modules/\n")
+    _write(root / "backend" / "app.py", "VALUE = 1\n")
+    _write(root / "frontend" / "package.json", '{"scripts":{"build":"true"}}\n')
+    _write(
+        root / "scripts" / "verify.sh",
+        """#!/usr/bin/env bash
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+Path("verify-env.json").write_text(json.dumps({
+    "VITE_APP_GIT_SHA": os.environ.get("VITE_APP_GIT_SHA"),
+    "VITE_APP_GIT_BRANCH": os.environ.get("VITE_APP_GIT_BRANCH"),
+    "VITE_APP_BUILD_TIME": os.environ.get("VITE_APP_BUILD_TIME"),
+}, sort_keys=True), encoding="utf-8")
+PY
+exit 0
+""",
+    )
+    os.chmod(root / "scripts" / "verify.sh", 0o755)
+    _write(root / ".env", "TOKEN=must-not-copy\n")
+    _write(root / "runtime" / "state.json", "{}\n")
+    _write(root / "frontend" / "node_modules" / "ignored", "ignored\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_AUTHOR_EMAIL": "freeze@example.invalid",
+            "GIT_AUTHOR_NAME": "Freeze Test",
+            "GIT_COMMITTER_EMAIL": "freeze@example.invalid",
+            "GIT_COMMITTER_NAME": "Freeze Test",
+        }
+    )
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, env=env, check=True)
+    (root / ".venv").mkdir()
+    _write(root / "backend" / "untracked.py", "VALUE = 2\n")
+    return root
+
+
+def _freeze_args(root: Path, output: Path) -> Namespace:
+    return Namespace(
+        repo=str(root),
+        output=str(output),
+        skip_archive=False,
+        skip_build=True,
+        skip_verify=True,
+    )
+
+
+def test_freeze_and_offline_verify_excludes_runtime_dependencies_and_env(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+
+    assert (output / "backend" / "app.py").is_file()
+    assert (output / "backend" / "untracked.py").is_file()
+    assert not (output / ".env").exists()
+    assert not (output / "runtime").exists()
+    assert not (output / "frontend" / "node_modules").exists()
+    assert not (output / "frontend" / "dist").exists()
+    assert not (output / ".git").exists()
+    identity = payload["build"]["identity"]
+    assert (output / "BUILD_GIT_SHA").read_text(encoding="utf-8") == identity["git_sha"] + "\n"
+    assert (output / "BUILD_GIT_BRANCH").read_text(encoding="utf-8") == identity["git_branch"] + "\n"
+    assert (output / "BUILD_TIME").read_text(encoding="utf-8") == identity["build_time"] + "\n"
+    assert identity["git_sha"] == payload["source"]["head"]
+    assert identity["git_branch"] == payload["source"]["branch"]
+    assert payload["source"]["worktree_dirty"] is True
+    assert payload["safety"]["deployment_performed"] is False
+
+    manifest = output.with_suffix(".manifest.json")
+    result = verify_manifest(Namespace(manifest=str(manifest), snapshot=None))
+    assert result["pass"] is True
+    assert result["content_sha256"] == payload["candidate"]["content_sha256"]
+    assert json.loads(manifest.read_text(encoding="utf-8"))["schema"].endswith("/v1")
+
+
+def test_build_and_static_verify_share_exact_snapshot_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_npm = fake_bin / "npm"
+    _write(
+        fake_npm,
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+out = Path(sys.argv[sys.argv.index("--outDir") + 1])
+out.mkdir(parents=True, exist_ok=True)
+sha = os.environ["VITE_APP_GIT_SHA"]
+payload = {
+    "version": "0.0.0-test",
+    "gitSha": sha,
+    "gitShortSha": sha[:8],
+    "gitBranch": os.environ["VITE_APP_GIT_BRANCH"],
+    "builtAt": os.environ["VITE_APP_BUILD_TIME"],
+}
+(out / "index.html").write_text("<html></html>\\n", encoding="utf-8")
+(out / "build-info.json").write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+""",
+    )
+    os.chmod(fake_npm, 0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
+
+    output = tmp_path / "candidate"
+    args = _freeze_args(root, output)
+    args.skip_archive = True
+    args.skip_build = False
+    args.skip_verify = False
+    payload = freeze_candidate(args)
+    identity = payload["build"]["identity"]
+
+    build_info = json.loads(
+        (output / "frontend" / "dist" / "build-info.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    verify_env = json.loads(
+        (output / "verify-env.json").read_text(encoding="utf-8")
+    )
+    assert build_info["gitSha"] == identity["git_sha"]
+    assert build_info["gitShortSha"] == identity["git_sha"][:8]
+    assert build_info["gitBranch"] == identity["git_branch"]
+    assert build_info["builtAt"] == identity["build_time"]
+    assert verify_env == {
+        "VITE_APP_BUILD_TIME": identity["build_time"],
+        "VITE_APP_GIT_BRANCH": identity["git_branch"],
+        "VITE_APP_GIT_SHA": identity["git_sha"],
+    }
+    assert payload["build"]["build_info"] == build_info
+    assert payload["build"]["build_info_sha256"]
+
+
+def test_offline_verify_detects_candidate_tamper(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    output = tmp_path / "candidate"
+    freeze_candidate(_freeze_args(root, output))
+    _write(output / "backend" / "app.py", "VALUE = 999\n")
+
+    with pytest.raises(FreezeError, match="digest mismatch"):
+        verify_manifest(
+            Namespace(manifest=str(output.with_suffix(".manifest.json")), snapshot=None)
+        )
+
+
+def test_high_confidence_secret_fails_closed(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    private_key_marker = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
+    _write(
+        root / "backend" / "leaked.txt",
+        private_key_marker + "\nnot-a-real-key\n",
+    )
+    with pytest.raises(FreezeError, match="secret detected"):
+        freeze_candidate(_freeze_args(root, tmp_path / "candidate"))

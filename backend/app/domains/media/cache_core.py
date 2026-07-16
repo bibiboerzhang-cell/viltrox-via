@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import logging
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -44,6 +46,7 @@ ALLOWED_IMAGE_HOST_SUFFIXES = (
     ".googleusercontent.com",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",
+    ".tiktokcdn-eu.com",
     ".byteoversea.com",
     ".apifyusercontent.com",
     ".redd.it",
@@ -56,6 +59,7 @@ ALLOWED_VIDEO_HOST_SUFFIXES = (
     ".xx.fbcdn.net",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",
+    ".tiktokcdn-eu.com",
     ".byteoversea.com",
     ".akamaized.net",
     ".googlevideo.com",
@@ -145,6 +149,40 @@ def _sha256_file(path: Path) -> str:
 
 
 _MEDIA_CACHE_SCHEMA_READY = False
+
+
+def _log_r2_fallback(stage: str, exc: BaseException) -> None:
+    """Emit one sanitized cache-layer fallback event.
+
+    Transport failures are already WARNING events at the R2 boundary, so the
+    cache layer records those as INFO instead of double-counting one failed
+    upload.  Invalid configuration and unexpected exceptions remain WARNINGs.
+    Raw exception text is deliberately excluded because botocore/proxy errors
+    may contain credentials, signed URLs or private object keys.
+    """
+
+    error_type = type(exc).__name__
+    raw_category = str(getattr(exc, "category", "") or "").strip().lower()
+    category = raw_category if re.fullmatch(r"[a-z0-9_]{1,64}", raw_category) else "unexpected"
+    retryable = bool(getattr(exc, "retryable", False))
+    raw_status = getattr(exc, "status_code", None)
+    try:
+        status_code = int(raw_status) if raw_status is not None else 0
+    except (TypeError, ValueError):
+        status_code = 0
+
+    is_configuration = error_type == "R2ConfigurationError"
+    is_classified = error_type in {"R2StorageError", "R2ConfigurationError"}
+    level = logging.WARNING if is_configuration or not is_classified else logging.INFO
+    logger.log(
+        level,
+        "media.cache.r2_%s_fallback error_type=%s category=%s retryable=%s status_code=%s",
+        stage,
+        error_type,
+        category,
+        retryable,
+        status_code,
+    )
 
 
 def ensure_vkpi_media_cache_schema() -> None:
@@ -268,9 +306,61 @@ def _record_media_cache_asset(payload: dict[str, Any]) -> None:
         logger.warning("vkpi media cache asset record failed: %s", exc)
 
 
+_PRESIGNED_QUERY_KEYS = frozenset(
+    {
+        "x-amz-algorithm",
+        "x-amz-credential",
+        "x-amz-date",
+        "x-amz-expires",
+        "x-amz-security-token",
+        "x-amz-signature",
+        "x-amz-signedheaders",
+        "signature",
+        "expires",
+    }
+)
+
+
+def _safe_public_asset_url(value: Any, *, allow_presigned: bool = False) -> str:
+    """Accept public playback URLs; persisted presigned URLs are not reusable."""
+
+    raw = _text(value)[:4096]
+    if not raw:
+        return ""
+    public_prefix = f"{PUBLIC_VIDEO_CACHE_PREFIX}/"
+    if raw.startswith(public_prefix):
+        digest = raw[len(public_prefix) :]
+        return raw if len(digest) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in digest) else ""
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        return ""
+    query_keys = {
+        str(key or "").strip().lower()
+        for key, _value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    if not allow_presigned and query_keys & _PRESIGNED_QUERY_KEYS:
+        return ""
+    return raw
+
+
+def _fresh_presigned_asset_url(r2_key: str, *, stage: str) -> str:
+    if not r2_key or not _media_cache_r2_enabled():
+        return ""
+    try:
+        from app.services.media.r2 import get_presigned_url
+
+        return _safe_public_asset_url(get_presigned_url(r2_key), allow_presigned=True)
+    except Exception as exc:
+        _log_r2_fallback(stage, exc)
+        return ""
+
+
 def _cached_asset_url_by_digest(media_kind: str, digest: str) -> str:
     digest = _text(digest).lower()
-    if len(digest) != 64:
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
         return ""
     try:
         ensure_vkpi_media_cache_schema()
@@ -288,20 +378,119 @@ def _cached_asset_url_by_digest(media_kind: str, digest: str) -> str:
         return ""
     if not row:
         return ""
-    cache_url = _text(row["cache_url"])
-    if cache_url and not cache_url.startswith("/api/"):
+    cache_url = _safe_public_asset_url(row["cache_url"])
+    if cache_url and not cache_url.startswith("/"):
         return cache_url
     r2_key = _text(row["r2_key"])
-    public_url = _r2_public_url(r2_key)
+    public_url = _safe_public_asset_url(_r2_public_url(r2_key))
     if public_url:
         return public_url
-    if r2_key and _media_cache_r2_enabled():
-        try:
-            from app.services.media.r2 import get_presigned_url
+    return _fresh_presigned_asset_url(r2_key, stage="presign")
 
-            return get_presigned_url(r2_key)
-        except Exception as exc:
-            logger.warning("vkpi media cache r2 presign failed: %s", exc)
+
+def _resolved_cached_asset_row(row: Any) -> str:
+    asset = dict(row)
+    digest = _text(asset.get("digest")).lower()
+    valid_digest = len(digest) == 64 and not any(ch not in "0123456789abcdef" for ch in digest)
+    if valid_digest and (VIDEO_CACHE_DIR / digest).is_file():
+        return f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
+    if _text(asset.get("storage_backend")).lower() != "r2":
+        return ""
+    # DB cache_url is durable data.  A presigned URL in it may already be
+    # expired, so only permanent public URLs can be reused directly.
+    cache_url = _safe_public_asset_url(asset.get("cache_url"))
+    if cache_url and not cache_url.startswith("/"):
+        return cache_url
+    r2_key = _text(asset.get("r2_key"))
+    public_url = _safe_public_asset_url(_r2_public_url(r2_key))
+    if public_url:
+        return public_url
+    return _fresh_presigned_asset_url(r2_key, stage="item_presign")
+
+
+def _source_url_has_native_video_id(platform: str, source_url: Any, native_id: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(_text(source_url))
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower().removeprefix("www.")
+    if platform == "instagram":
+        if not (host == "instagram.com" or host.endswith(".instagram.com")):
+            return False
+        markers = {"p", "reel", "tv"}
+    elif platform == "tiktok":
+        if not (host == "tiktok.com" or host.endswith(".tiktok.com")):
+            return False
+        markers = {"video"}
+    else:
+        return False
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    return any(part.lower() in markers and index + 1 < len(parts) and parts[index + 1] == native_id for index, part in enumerate(parts))
+
+
+def _legacy_asset_rows_for_native_id(platform: str, native_id: str) -> list[Any]:
+    pattern = r"^[A-Za-z0-9_-]{3,96}$" if platform == "instagram" else r"^[0-9]{5,32}$"
+    if not re.fullmatch(pattern, native_id):
+        return []
+    # Escape SQL wildcard characters even though native ids are prevalidated.
+    escaped = native_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    try:
+        rows = get_conn().execute(
+            """
+            SELECT digest, cache_url, storage_backend, r2_key, source_url
+            FROM vkpi_media_cache_assets
+            WHERE media_kind='video'
+              AND platform=?
+              AND status='cached'
+              AND source_url LIKE ? ESCAPE '\\'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 24
+            """,
+            (platform, f"%{escaped}%"),
+        ).fetchall()
+    except Exception:
+        return []
+    return [row for row in rows if _source_url_has_native_video_id(platform, dict(row).get("source_url"), native_id)]
+
+
+def _cached_asset_url_for_item(platform: Any, external_id: Any) -> str:
+    """Resolve one cached item from its public identity without exposing storage internals."""
+
+    platform_key = _text(platform).lower()[:40]
+    external_key = _text(external_id)[:240]
+    if platform_key not in ITEM_VIDEO_CACHE_PLATFORMS or not external_key:
+        return ""
+    try:
+        ensure_vkpi_media_cache_schema()
+        row = get_conn().execute(
+            """
+            SELECT digest, cache_url, storage_backend, r2_key
+            FROM vkpi_media_cache_assets
+            WHERE media_kind='video'
+              AND platform=?
+              AND external_id=?
+              AND status='cached'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (platform_key, external_key),
+        ).fetchone()
+    except Exception:
+        return ""
+    if row:
+        resolved = _resolved_cached_asset_row(row)
+        if resolved:
+            return resolved
+    # Native-key lookup can recover old assets whose external_id was the
+    # numeric evidence row id.  Match the same-platform source URL path exactly
+    # in Python after an escaped, bounded SQL candidate query; no migration or
+    # alias write is performed.
+    for legacy_row in _legacy_asset_rows_for_native_id(platform_key, external_key):
+        resolved = _resolved_cached_asset_row(legacy_row)
+        if resolved:
+            return resolved
     return ""
 
 
@@ -341,7 +530,7 @@ def _upload_to_r2_if_enabled(
         _record_media_cache_asset(payload)
         return {"storage_backend": "r2", "r2_key": r2_key, "cache_url": cache_url}
     except Exception as exc:
-        logger.warning("vkpi media cache r2 upload failed: %s", exc)
+        _log_r2_fallback("upload", exc)
         return {"r2_status": "failed", "r2_error": exc.__class__.__name__}
 
 
@@ -674,5 +863,3 @@ def run_video_cache_gc(target_free_bytes: int | None = None) -> dict[str, Any]:
         "target_free_bytes": target,
         "max_total_bytes": max_total_bytes,
     }
-
-

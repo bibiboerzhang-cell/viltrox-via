@@ -5,7 +5,46 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# systemd's EnvironmentFile overrides Environment= declarations.  Capture this
+# marker before runtime_env.sh loads any file so a stale production .env cannot
+# silently turn the reviewed two-process/single-scheduler contract back off.
+SYSTEMD_ADMIN_WEB_CONTRACT="${VKPI_SYSTEMD_ADMIN_WEB_CONTRACT:-0}"
+SYSTEMD_DATABASE_URL="${DATABASE_URL:-}"
+SYSTEMD_REDIS_URL="${REDIS_URL:-}"
+if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then
+  export ENVIRONMENT=production
+  export RUNTIME_ENV_QUIET=1
+fi
 source "$ROOT/scripts/runtime_env.sh"
+
+if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then
+  # Restore the database endpoints supplied by systemd's reviewed EnvironmentFile
+  # and force only process-model/safety values.  Provider and business settings
+  # remain owned by the production environment file.
+  export DATABASE_URL="$SYSTEMD_DATABASE_URL"
+  export REDIS_URL="$SYSTEMD_REDIS_URL"
+  export APP_ROLE=admin-web
+  export ENVIRONMENT=production
+  export DB_RUNTIME_BACKEND=postgres
+  export LOCAL_RUNTIME_FORCE_STACK=0
+  export HOST=127.0.0.1
+  export PORT=8001
+  export WEB_CONCURRENCY=2
+  export ADMIN_DAEMON=0
+  export ENABLE_SCHEDULER=1
+  export ENABLE_BROWSER=0
+  export ENABLE_UPLOAD_CLEANUP=0
+  # Bound the two-process web fleet even when a stale shared .env still carries
+  # the historical 64-connection default.  Together with seven 16-connection
+  # Apify workers and one 16-connection Redis worker this caps the reviewed
+  # cloud topology at 160 connections, below PostgreSQL max_connections=200.
+  export POSTGRES_POOL_MIN_SIZE=2
+  export POSTGRES_POOL_MAX_SIZE=16
+  export POSTGRES_POOL_TIMEOUT_SEC=30
+  export RUNTIME_ENV_QUIET=1
+fi
+
 if [[ -z "${PYTHON_BIN:-}" && -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT/.venv/bin/python"
 fi
@@ -67,6 +106,11 @@ export WORKER_CONNECTIONS
 export BACKLOG
 export BIND="$HOST:$PORT"
 
+# Never print connection strings. Production URLs commonly contain database
+# or Redis credentials and startup stderr is collected by systemd/gunicorn.
+DATABASE_URL_STATE="$([[ -n "${DATABASE_URL:-}" ]] && printf 'configured' || printf 'missing')"
+REDIS_URL_STATE="$([[ -n "${REDIS_URL:-}" ]] && printf 'configured' || printf 'missing')"
+
 # ──────────────────────────────────────────────────────────
 # R58E NEW: 启动前一致性检查
 # 防止 ENVIRONMENT=local 但 DATABASE_URL 不指向 LOCAL stack
@@ -77,8 +121,8 @@ if [[ "$ENVIRONMENT" == "local" ]]; then
     echo "❌ start_admin.sh: 配置不一致拒绝启动" >&2
     echo "─────────────────────────────────────────" >&2
     echo "  ENVIRONMENT       = $ENVIRONMENT" >&2
-    echo "  DATABASE_URL      = $DATABASE_URL" >&2
-    echo "  LOCAL_DATABASE_URL = $LOCAL_DATABASE_URL" >&2
+    echo "  DATABASE_URL       = configured but differs from LOCAL_DATABASE_URL" >&2
+    echo "  LOCAL_DATABASE_URL = configured" >&2
     echo "─────────────────────────────────────────" >&2
     echo "  本地环境必须用 LOCAL stack" >&2
     echo "  如确需自定义,显式: export LOCAL_RUNTIME_FORCE_STACK=0" >&2
@@ -98,8 +142,8 @@ cat >&2 <<EOF
   APP_ROLE             = $APP_ROLE
   BIND                 = $BIND
   WORKERS              = $WORKERS
-  DATABASE_URL         = $DATABASE_URL
-  REDIS_URL            = $REDIS_URL
+  DATABASE_URL         = $DATABASE_URL_STATE
+  REDIS_URL            = $REDIS_URL_STATE
   DB_RUNTIME_BACKEND   = $DB_RUNTIME_BACKEND
   APP_GIT_SHA          = ${APP_GIT_SHA:-unknown}
   APP_BUILD_TIME       = ${APP_BUILD_TIME:-unknown}

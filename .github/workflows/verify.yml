@@ -60,5 +60,56 @@ jobs:
 
           asyncio.run(main())
           PY
-      - name: Verify repository
+      - name: Canonical repository/release gate
         run: bash ./scripts/verify_repo.sh
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: viltrox_pg_integration
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d viltrox_pg_integration"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ENVIRONMENT: test
+      PYTHONPATH: backend
+      VKPI_SKIP_DOTENV: "1"
+      VKPI_PYTEST_ALLOW_LIVE_SERVICES: "1"
+      DB_RUNTIME_BACKEND: postgres
+      DB_TARGET_BACKEND: postgres
+      DB_USE_PGBOUNCER: "0"
+      DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_pg_integration
+      LOCAL_DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_pg_integration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Initialize disposable PostgreSQL schema
+        run: |
+          python - <<'PY'
+          import asyncio
+
+          from app.db.connection import close_db_runtime, init_db_runtime
+
+          async def main() -> None:
+              await init_db_runtime()
+              await close_db_runtime()
+
+          asyncio.run(main())
+          PY
+      - name: Real PostgreSQL integration and authorization gate
+        run: python -m pytest -q -m pg --tb=short

@@ -3,8 +3,8 @@
 链路:
   screen_intents()  从 vkpi_comments 扫购买意向(多语种关键词规则)-> 入 vkpi_reply_queue(status=pending)。
   enqueue_comment() 市场之声 V0e 闭环:按 vkpi_comments.id 单条手动入队(幂等,已在队返回已有行)。
-  draft_reply(id)   RAG over 369 SKU(vkpi_products)-> llm_gateway.invoke 生成品牌口吻草稿(check_budget 先行,
-                    降级给模板)-> 写 draft_reply + status=drafted。
+  draft_reply(id)   RAG over 369 SKU(vkpi_products)-> llm_production 精确模型生成品牌口吻草稿
+                    (check_budget 先行,严格 JSON 合同,降级给模板)-> 写 draft_reply + status=drafted。
 
 v0 铁律:不自动发帖,只到 drafted;人工一键复制手动回,再 mark(replied/dismissed)。
 纪律:复用既有件(intelligence_rules 的意向词表 + _rule_tags);函数内懒 import 防缺模块炸;
@@ -12,11 +12,14 @@ v0 铁律:不自动发帖,只到 drafted;人工一键复制手动回,再 mark(re
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.config import OPENAI_MODEL
 from app.db.connection import get_conn
+from app.platform import llm_production
 
 
 def _now_iso() -> str:
@@ -360,7 +363,7 @@ def enqueue_comment(comment_id: int) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# draft_reply:RAG over 369 SKU -> llm_gateway 生成品牌口吻草稿(预算闸先行,降级模板)
+# draft_reply:RAG over 369 SKU -> llm_production 精确模型生成草稿(预算闸先行,降级模板)
 # ══════════════════════════════════════════════════════════════════════════
 def _retrieve_skus(text: str, *, top_k: int = 5) -> list[dict[str, Any]]:
     """极简 RAG:按评论文本对 vkpi_products 做关键词命中打分,取 top_k。
@@ -471,8 +474,69 @@ def _build_prompt(text: str, intent: str, skus: list[dict[str, Any]], lang: str)
         f"{lang_hint}\n\n"
         f"Buyer comment ({intent}): {text}\n\n"
         f"Relevant Viltrox catalog:\n{catalog}\n\n"
-        "Reply:"
+        'Return JSON only: {"draft_reply":"your reply"}'
     )
+
+
+def _reply_llm_binding() -> tuple[str, str]:
+    """Return one exact model binding; no in-call cross-model fallback."""
+    return "openai", (os.environ.get("VKPI_OPENAI_MODEL") or OPENAI_MODEL).strip()
+
+
+def _valid_reply_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    draft = value.get("draft_reply")
+    return isinstance(draft, str) and bool(draft.strip()) and len(draft.strip()) <= 1000
+
+
+def _generate_reply_draft(
+    *,
+    reply_id: int,
+    text: str,
+    intent: str,
+    skus: list[dict[str, Any]],
+    lang: str,
+    staff: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Generate one contract-validated draft or return an empty fallback."""
+    provider, model = _reply_llm_binding()
+    try:
+        result = llm_production.generate_json(
+            _build_prompt(text, intent, skus, lang),
+            provider=provider,
+            model=model,
+            purpose="comment_reply_draft",
+            max_output_tokens=200,
+            cost_tag="comment_reply_draft",
+            triggered_by="reply_queue.draft_reply",
+            staff=staff,
+            required_keys=("draft_reply",),
+            validator=_valid_reply_payload,
+            deadline_seconds=45.0,
+            metadata={
+                "surface": "reply_queue",
+                "reply_id": int(reply_id),
+                "intent": intent,
+                "lang": lang,
+                "phase": "comment_response",
+                "subphase": "draft_reply",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": f"reply:{int(reply_id)}",
+            },
+        )
+    except Exception:
+        return "", ""
+    payload = result.get("json") if isinstance(result, dict) else None
+    if (
+        str(result.get("status") or "") != "success"
+        or str(result.get("provider") or "").strip().lower() != provider
+        or str(result.get("model") or "").strip() != model
+        or not _valid_reply_payload(payload)
+    ):
+        return "", ""
+    return _text(payload.get("draft_reply")), provider
 
 
 def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -552,21 +616,15 @@ def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[s
         budget_ok = True
 
     if budget_ok:
-        try:
-            from app.platform import llm_gateway
-            result = llm_gateway.invoke(
-                _build_prompt(text, intent, skus, lang),
-                purpose="comment_reply_draft",
-                max_output_tokens=200,
-                cost_tag="comment_reply_draft",
-                triggered_by="reply_queue.draft_reply",
-                metadata={"reply_id": int(reply_id), "intent": intent, "lang": lang},
-            )
-            if isinstance(result, dict):
-                draft = _text(result.get("text") or result.get("output") or result.get("content"))
-                provider = _text(result.get("provider")) or "llm"
-        except Exception:
-            draft = ""
+        draft, strict_provider = _generate_reply_draft(
+            reply_id=int(reply_id),
+            text=text,
+            intent=intent,
+            skus=skus,
+            lang=lang,
+            staff=staff,
+        )
+        provider = strict_provider or "template"
 
     if not draft:
         draft = _template_reply(text, intent, skus, lang)

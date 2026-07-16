@@ -5,6 +5,7 @@ can be imported into vkpi_recommendation_feedback without violating the
 existing recommendation_id foreign key.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -100,7 +101,7 @@ def main() -> int:
             exclude_platforms=exclude_platforms or None,
         )
         out_path.write_text(csv_text, encoding="utf-8")
-        print(
+        stdout_out(
             json.dumps(
                 {
                     "ok": True,

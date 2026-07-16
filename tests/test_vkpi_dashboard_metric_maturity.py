@@ -5,7 +5,9 @@ from app.domains.dashboard.metric_maturity import (
     maturity_from_days,
     maturity_payload_for_days,
     normalize_dashboard_scope,
+    snapshot_days_by_scope,
 )
+from app.domains.dashboard import metric_maturity
 
 
 def test_maturity_label_starts_accumulating() -> None:
@@ -45,3 +47,16 @@ def test_window_metrics_remain_null_until_snapshot_mature() -> None:
     assert metrics["active_30d_by_scope"] == {"owned": None, "kol": None, "all": None}
     assert metrics["exposure_30d_by_scope"] == {"owned": None, "kol": None, "all": None}
     assert metrics["engagement_rate_by_scope"] == {"owned": None, "kol": None, "all": None}
+
+
+def test_missing_kol_snapshot_table_is_not_probed(monkeypatch) -> None:
+    queried_tables: list[str] = []
+
+    def count_days(table_name: str) -> int:
+        queried_tables.append(table_name)
+        return 12
+
+    monkeypatch.setattr(metric_maturity, "_count_distinct_snapshot_dates", count_days)
+
+    assert snapshot_days_by_scope() == {"owned": 12, "kol": 0, "all": 0}
+    assert queried_tables == ["vkpi_channel_post_metrics"]

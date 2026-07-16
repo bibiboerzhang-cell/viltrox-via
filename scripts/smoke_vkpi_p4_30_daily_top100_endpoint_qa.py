@@ -7,6 +7,7 @@
 - 只验证真实 HTTP endpoint 返回与 service 当前口径一致
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -215,7 +216,7 @@ def main() -> None:
         if digest_json.get("digest") and not isinstance(digest_json.get("items"), list):
             _fail("digest endpoint items should be a list", digest_json)
 
-        print(
+        stdout_out(
             json.dumps(
                 {
                     "ok": True,

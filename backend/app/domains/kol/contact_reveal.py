@@ -91,26 +91,33 @@ def view_kol_contact(
             "contact_masked": True,
         }
 
-    staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("user_id") or 0)
-    # 访问审计(复用既有 sensitive access 设施;keyword-only)。
-    try:
-        from app.domains.audit.service import log_sensitive_access
+    from app.domains.kol.contact_access import authorize_plaintext_contacts
 
-        log_sensitive_access(
-            staff_id=staff_id,
-            action_type="view_kol_pool_contact",
-            resource_type="kol_pool",
-            resource_id=str(int(kol_pool_id)),
-            page_path=page_path,
-            ip=ip,
-            user_agent=user_agent,
-            metadata={"revealed": ["email", "other_contacts_json"], "has_email": bool(real_email)},
-        )
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
+    authorized = authorize_plaintext_contacts(
+        staff,
+        resource_type="kol_pool",
+        resource_id=int(kol_pool_id),
+        page_path=page_path or f"/kol-pool/{int(kol_pool_id)}/contacts/reveal",
+        metadata={
+            "revealed": ["email", "other_contacts_json"],
+            "has_email": bool(real_email),
+            "ip_present": bool(ip),
+            "user_agent_present": bool(user_agent),
+        },
+    )
+    if not authorized:
+        return {
+            "status": "masked",
+            "reason": "contacts_reveal_not_authorized_or_audit_failed",
+            "kol_pool_id": int(kol_pool_id),
+            "email": _mask_email(real_email),
+            "other_contacts": _loads(_mask_contacts_json(row["other_contacts_json"])),
+            "contact_masked": True,
+        }
 
-    # 更新展开计数留痕(118 列;SQLite 幂等建)。审计写失败不阻断真值返回。
+    staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("id") or 0)
+
+    # 更新展开计数留痕(118 列;SQLite 幂等建)。明文审计已成功，此处是辅助计数。
     try:
         _ensure_contact_audit_schema()
         conn.execute(

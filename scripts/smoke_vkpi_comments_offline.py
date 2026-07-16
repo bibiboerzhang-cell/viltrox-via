@@ -21,22 +21,24 @@ import os
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 
 def main():
     failures = []
     
-    print("[1] Module import...")
+    out("[1] Module import...")
     try:
         from app.domains.comments import collector as comments_collector
-        print("  ✓ imported")
+        out("  ✓ imported")
     except Exception as exc:
         failures.append(f"Cannot import comments_collector: {exc}")
-        print("  FAIL")
+        out("  FAIL")
         sys.exit(1)
     
-    print("[2] _standardize_comment YouTube fields...")
+    out("[2] _standardize_comment YouTube fields...")
     raw = {
         "id": "yt_comment_1",
         "snippet": {
@@ -76,9 +78,9 @@ def main():
         failures.append("platform mismatch")
     if std.get("post_id") != 999:
         failures.append("post_id mismatch")
-    print("  ✓ YouTube standardization")
+    out("  ✓ YouTube standardization")
     
-    print("[3] _standardize_comment 0-as-falsy preservation...")
+    out("[3] _standardize_comment 0-as-falsy preservation...")
     raw_zero = {
         "id": "comment_0",
         "snippet": {
@@ -111,9 +113,9 @@ def main():
         failures.append(
             f"reply_count 0 not preserved: got {std_zero.get('reply_count')}"
         )
-    print("  ✓ 0 preserved (B.6-Xiaohongshu lesson applied)")
+    out("  ✓ 0 preserved (B.6-Xiaohongshu lesson applied)")
     
-    print("[4] _standardize_comment Reddit nested support...")
+    out("[4] _standardize_comment Reddit nested support...")
     raw_reddit = {
         "id": "rt_comment_1",
         "body": "Nested comment text",
@@ -142,9 +144,9 @@ def main():
         failures.append(f"Reddit is_op should be False, got {std_reddit.get('is_op')}")
     if std_reddit.get("likes_count") != 15:
         failures.append(f"Reddit score → likes_count failed")
-    print("  ✓ Reddit nested + is_op")
+    out("  ✓ Reddit nested + is_op")
     
-    print("[5] _standardize_comment text truncation...")
+    out("[5] _standardize_comment text truncation...")
     raw_long = {"id": "long_1", "text": "x" * 10000}
     std_long = comments_collector._standardize_comment(
         raw_long,
@@ -154,9 +156,9 @@ def main():
     )
     if len(std_long.get("comment_text", "")) > 5000:
         failures.append("text not truncated to 5000 chars")
-    print(f"  ✓ truncated ({len(std_long.get('comment_text', ''))} chars)")
+    out(f"  ✓ truncated ({len(std_long.get('comment_text', ''))} chars)")
     
-    print("[6] _standardize_comment missing fields graceful...")
+    out("[6] _standardize_comment missing fields graceful...")
     std_empty = comments_collector._standardize_comment(
         {},  # empty raw
         platform="tiktok",
@@ -167,19 +169,19 @@ def main():
         failures.append("Empty raw should produce None external_comment_id")
     if std_empty.get("likes_count") != 0:
         failures.append(f"Empty raw likes_count should be 0, got {std_empty.get('likes_count')}")
-    print("  ✓ empty raw handled")
+    out("  ✓ empty raw handled")
     
-    print("[7] _resolve_post for non-existent post...")
+    out("[7] _resolve_post for non-existent post...")
     try:
         result = comments_collector._resolve_post(99999999, "industry_posts")
         if result is not None:
             failures.append("Non-existent post should return None")
     except Exception as exc:
         # OK if DB not available in this smoke
-        print(f"  (DB unavailable, skipped: {exc})")
-    print("  ✓ ")
+        out(f"  (DB unavailable, skipped: {exc})")
+    out("  ✓ ")
 
-    print("[8] schema + collection run write...")
+    out("[8] schema + collection run write...")
     try:
         from app.db.connection import get_conn
 
@@ -215,19 +217,19 @@ def main():
             (0, "industry_posts", "youtube", "smoke"),
         )
         get_conn().commit()
-        print("  ✓ schema/write/cleanup")
+        out("  ✓ schema/write/cleanup")
     except Exception as exc:
         failures.append(f"schema/write failed: {exc}")
     
     # Final
-    print()
+    out()
     if failures:
-        print(f"FAIL: {len(failures)} issues:")
+        out(f"FAIL: {len(failures)} issues:")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("VKPI_COMMENTS_OFFLINE_SMOKE_OK")
+        out("VKPI_COMMENTS_OFFLINE_SMOKE_OK")
 
 
 if __name__ == "__main__":

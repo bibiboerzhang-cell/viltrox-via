@@ -22,6 +22,91 @@ from app.workers.apify_jobs_worker_session import _sync_search_session_job
 logger = get_logger(__name__)
 
 
+def _reconcile_terminal_search_session_jobs(
+    conn: psycopg.Connection[Any],
+    *,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """Replay terminal queue truth into still-running Smart Search sessions.
+
+    Older handlers could persist a terminal ``apify_jobs.status`` without
+    invoking the session reducer.  This bounded startup repair is deliberately
+    narrower than a general queue replay: it considers only terminal jobs that
+    carry explicit search-session lineage and only sessions that are still
+    marked ``running``.  Replaying the reducer is idempotent and never changes
+    queue job status or provider state.
+    """
+
+    bounded_limit = max(1, min(int(limit or 1), 5000))
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            WITH terminal_lineage AS (
+                SELECT
+                    job.id,
+                    job.status,
+                    job.last_error,
+                    CASE
+                        WHEN COALESCE(job.payload->>'search_session_id', '') ~ '^[0-9]+$'
+                        THEN (job.payload->>'search_session_id')::bigint
+                    END AS session_id
+                FROM apify_jobs AS job
+                WHERE job.status IN ('done', 'blocked', 'failed', 'triage')
+
+                UNION ALL
+
+                SELECT
+                    job.id,
+                    job.status,
+                    job.last_error,
+                    CASE
+                        WHEN COALESCE(lineage.value->>'search_session_id', '') ~ '^[0-9]+$'
+                        THEN (lineage.value->>'search_session_id')::bigint
+                    END AS session_id
+                FROM apify_jobs AS job
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    CASE
+                        WHEN jsonb_typeof(job.payload->'search_session_lineage') = 'array'
+                        THEN job.payload->'search_session_lineage'
+                        ELSE '[]'::jsonb
+                    END
+                ) AS lineage(value)
+                WHERE job.status IN ('done', 'blocked', 'failed', 'triage')
+            )
+            SELECT DISTINCT lineage.id, lineage.status, lineage.last_error
+            FROM terminal_lineage AS lineage
+            JOIN vkpi_kol_search_sessions AS session
+              ON session.id=lineage.session_id
+             AND session.status='running'
+            WHERE lineage.session_id IS NOT NULL
+            ORDER BY lineage.id
+            LIMIT %s
+            """,
+            (bounded_limit,),
+        )
+        candidates = [dict(row) for row in (cur.fetchall() or [])]
+
+    replayed: list[dict[str, Any]] = []
+    for row in candidates:
+        job_id = int(row["id"])
+        raw_status = str(row.get("status") or "failed").strip().lower()
+        if not _sync_search_session_job(
+            conn,
+            job_id,
+            raw_status=raw_status,
+            reason=str(row.get("last_error") or ""),
+        ):
+            continue
+        replayed.append(row)
+    if replayed:
+        logger.info(
+            "search session terminal repair replayed | candidates=%s replayed=%s",
+            len(candidates),
+            len(replayed),
+        )
+    return replayed
+
+
 def _reclaim_stale_running_jobs(conn: psycopg.Connection[Any]) -> list[dict[str, Any]]:
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:

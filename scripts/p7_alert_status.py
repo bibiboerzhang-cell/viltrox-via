@@ -2,6 +2,8 @@
 """Read-only P7 alert status report."""
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import json
@@ -202,9 +204,9 @@ def main() -> int:
             if args.md_out:
                 Path(args.md_out).write_text(markdown, encoding="utf-8")
             if args.json:
-                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
             else:
-                print(markdown)
+                out(markdown)
             return 0
         if args.apply_suggestions:
             payload = apply_alert_triage_suggestions(
@@ -218,20 +220,20 @@ def main() -> int:
             if args.md_out:
                 Path(args.md_out).write_text(markdown, encoding="utf-8")
             if args.json:
-                print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
             else:
-                print(markdown)
+                out(markdown)
                 if payload.get("dry_run"):
-                    print("Add --confirm to write these decisions.")
+                    out("Add --confirm to write these decisions.")
             return 0
         payload = build_status(limit=args.limit)
         markdown = format_markdown(payload)
         if args.md_out:
             Path(args.md_out).write_text(markdown, encoding="utf-8")
         if args.json:
-            print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            out(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         else:
-            print(markdown)
+            out(markdown)
         return 0
     finally:
         asyncio.run(close_db_runtime())

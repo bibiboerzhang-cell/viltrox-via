@@ -2,6 +2,33 @@ import { apiFetch, jsonBody, buildApiUrl } from "../http";
 
 type Row = Record<string, unknown>;
 
+export type BusinessIntegrationState = "connected" | "pending" | "not_configured" | "error";
+export type BusinessIntegrationDataQuality = "empty" | "unverified" | "partial" | "real";
+export type BusinessIntegrationOperatorStatus = "verified" | "awaiting_authorization" | "awaiting_configuration" | "error";
+
+export interface BusinessIntegrationCard {
+  key: "shopify" | "dealers" | "inventory" | "costs" | "attribution" | "r2" | string;
+  title: string;
+  state: BusinessIntegrationState;
+  summary: string;
+  data_quality: BusinessIntegrationDataQuality;
+  evidence: Row;
+  source: string;
+  next_action: string;
+  operator_status?: BusinessIntegrationOperatorStatus;
+  operator_label?: "已验证" | "待授权" | "待配置" | "异常" | string;
+}
+
+export interface BusinessIntegrationsStatus {
+  generated_at?: string;
+  claim_status?: "descriptive_only" | string;
+  write_performed?: boolean;
+  secrets_returned?: boolean;
+  counts?: Partial<Record<BusinessIntegrationState, number>>;
+  operator_counts?: Partial<Record<BusinessIntegrationOperatorStatus, number>>;
+  integrations?: BusinessIntegrationCard[];
+}
+
 // F3 运行态信任块:GET /health 顶层 trust 字段(server/client/worker sha · 对齐 · worker 在线 · 迁移号)。
 // /health 是公开只读端点(无需 token),直接 fetch;任何字段缺失返回 null,绝不编造。
 export interface VkpiHealthTrust {
@@ -46,6 +73,14 @@ export async function getHealthTrust(clientBuildSha?: string): Promise<VkpiHealt
 export async function getRbacStatus(token: string, includeStaff = false) {
   const suffix = includeStaff ? "?include_staff=true" : "";
   return apiFetch<Row>(`/api/admin/vkpi/access/rbac-status${suffix}`, {}, token);
+}
+
+export async function getBusinessIntegrationsStatus(token: string) {
+  return apiFetch<BusinessIntegrationsStatus>(
+    "/api/admin/vkpi/settings/business-integrations",
+    { timeoutMs: 15000 },
+    token,
+  );
 }
 
 export async function listProviderStatuses(token: string) {
@@ -96,7 +131,7 @@ export async function updateBudgetSettings(token: string, budgets: Row[]) {
   );
 }
 
-// 多账号 API key 池(设置位,7月手动填轮转)。key 单向:只写入/不回读;响应只回 key_prefix 掩码。
+// 多账号 API key 池(设置位,7月手动填轮转)。key 单向:只写入/不回读;响应只回是否已配置。
 export async function listApiKeyPool(token: string) {
   return apiFetch<{ keys?: Row[] }>("/api/admin/vkpi/settings/api-key-pool", {}, token);
 }

@@ -2,6 +2,8 @@
 """Build a read-only Google News RSS / RSS external market signal smoke report."""
 from __future__ import annotations
 
+from stdout_utils import out as stdout_out
+
 import argparse
 import json
 import sys
@@ -74,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.source_matrix:
             report = build_external_source_matrix(source_group=args.source_group)
-            print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+            stdout_out(json.dumps(report, ensure_ascii=False, indent=2, default=str))
             return 0 if report.get("passed") else 2
         if args.daily_plan:
             report = build_external_daily_candidate_plan(
@@ -95,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text(render_external_daily_candidate_plan_markdown(report), encoding="utf-8")
                 paths["md_path"] = str(out.resolve())
-            print(
+            stdout_out(
                 json.dumps(
                     {
                         **paths,
@@ -133,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(render_external_signal_smoke_markdown(report), encoding="utf-8")
             paths["md_path"] = str(out.resolve())
-        print(
+        stdout_out(
             json.dumps(
                 {
                     **paths,

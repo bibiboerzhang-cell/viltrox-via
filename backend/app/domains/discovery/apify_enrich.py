@@ -27,6 +27,14 @@ def enrich_kol(kol_pool_id: int, *, force: bool = False) -> dict[str, Any]:
         return {"status": "invalid", "reason": "kol_pool_id_required"}
     if not (force or _enabled()):
         return {"status": "disabled", "note": "设 VKPI_APIFY_ENRICH_ENABLED=1 启用(避免意外 Apify 计费)"}
+    from app.platform.apify_budget import current_apify_execution_context
+
+    if current_apify_execution_context() is None:
+        return {
+            "status": "background_refresh_required",
+            "kol_pool_id": kid,
+            "provider_calls_performed": False,
+        }
     from app.repositories.kol_pool_repo import KolPoolRepository
 
     d = KolPoolRepository().get_by_id(kid)  # L2:走 repo

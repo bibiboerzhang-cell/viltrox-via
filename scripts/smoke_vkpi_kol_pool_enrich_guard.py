@@ -1,6 +1,8 @@
 """P3.6A smoke: KOL Pool 单条补齐入口不 500,状态可解释,数据可清理。"""
 from __future__ import annotations
 
+from stdout_utils import out
+
 import sys
 import time
 from pathlib import Path
@@ -25,7 +27,7 @@ def main() -> None:
     user_id = 0
     staff_id = 0
     if not seed_admin:
-        print("_smoke_seed.py missing")
+        out("_smoke_seed.py missing")
         sys.exit(1)
     user_id, staff_id = seed_admin(conn, marker=MARKER)
     failures: list[str] = []
@@ -56,7 +58,7 @@ def main() -> None:
             updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(rows[0]["id"]),)).fetchone()
             if not updated:
                 failures.append("补齐后测试候选丢失")
-            print(f"[enrich] status={status}")
+            out(f"[enrich] status={status}")
     finally:
         conn.execute("DELETE FROM vkpi_kol_pool WHERE source_ref=? OR handle=?", (MARKER, MARKER))
         conn.commit()
@@ -64,11 +66,11 @@ def main() -> None:
             cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
 
     if failures:
-        print("=== FAIL ===")
+        out("=== FAIL ===")
         for failure in failures:
-            print(f"- {failure}")
+            out(f"- {failure}")
         sys.exit(1)
-    print("VKPI_KOL_POOL_ENRICH_GUARD_SMOKE_OK")
+    out("VKPI_KOL_POOL_ENRICH_GUARD_SMOKE_OK")
 
 
 if __name__ == "__main__":

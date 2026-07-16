@@ -193,7 +193,8 @@ def load_local_comments(kol_pool_id: int, *, conn: Any = None, limit: int = 1000
     db = conn or get_conn()
     sql_fields = "comment_text, author_handle, created_at, likes_count, parent_comment_id, post_id"
     rows = db.execute(
-        f"SELECT {sql_fields} FROM vkpi_comments WHERE account_id=? LIMIT ?",
+        f"SELECT {sql_fields} FROM vkpi_comments "
+        "WHERE account_id=? AND post_table IN ('evidence','vkpi_kol_video_evidence') LIMIT ?",
         (int(kol_pool_id), int(limit)),
     ).fetchall()
     if not rows:
@@ -229,7 +230,7 @@ def comment_intel_for_kol(kol_pool_id: int, *, conn: Any = None, limit: int = 10
     """入口:读该 KOL 本地评论 -> analyze_comments。无评论 sample_size=0。"""
     comments = load_local_comments(int(kol_pool_id), conn=conn, limit=limit)
     result = analyze_comments(comments)
-    result["source"] = "vkpi_comments"
+    result["source"] = "vkpi_comments_pool_evidence"
     result["kol_pool_id"] = int(kol_pool_id)
     return result
 
@@ -276,7 +277,7 @@ def _self_commenter_keys(db: Any, kol_pool_id: int) -> set[str]:
     keys: set[str] = set()
     rows = db.execute(
         "SELECT platform, author_handle, author_id, raw_data_json FROM vkpi_comments "
-        "WHERE account_id=? AND post_table<>'vkpi_employee_channels'",
+        "WHERE account_id=? AND post_table IN ('evidence','vkpi_kol_video_evidence')",
         (int(kol_pool_id),),
     ).fetchall()
     for r in rows:
@@ -345,7 +346,8 @@ def compute_audience_overlap(kol_pool_id: int, *, conn: Any = None, top_n: int =
     rows = db.execute(
         "SELECT c.account_id AS peer_id, c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
         "JOIN vkpi_kol_pool p ON p.id=c.account_id "
-        "WHERE c.account_id IS NOT NULL AND c.account_id<>? AND c.post_table<>'vkpi_employee_channels'",
+        "WHERE c.account_id IS NOT NULL AND c.account_id<>? "
+        "AND c.post_table IN ('evidence','vkpi_kol_video_evidence')",
         (int(kol_pool_id),),
     ).fetchall()
     for r in rows:

@@ -51,7 +51,7 @@ function useMyKolStats(apiToken?: string) {
     }
     let cancelled = false;
     import('../../../services/vkpi/kol-api')
-      .then(({ getMyKolAggregate }) => getMyKolAggregate(apiToken))
+      .then(({ getMyKolAggregate }) => getMyKolAggregate(apiToken, { mode: 'summary', favoritesLimit: 1 }))
       .then((resp) => {
         const kpi = (resp.kpi_summary || {}) as Record<string, number>;
         const next: MyKolStats = {

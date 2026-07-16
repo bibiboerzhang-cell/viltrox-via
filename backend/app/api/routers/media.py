@@ -25,10 +25,12 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.core.security import get_current_user
 from app.db.repositories.assets import get_submission_asset
+from app.services.media.access_logging import install_media_proxy_access_log_filter
 from app.services.media.storage import resolve_local_media_path
 from app.domains.media import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item, is_failure_placeholder_cache
 
 
+install_media_proxy_access_log_filter()
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 router = APIRouter(tags=["media"])
 logger = get_logger(__name__)
@@ -45,6 +47,7 @@ VKPI_IMAGE_ALLOWED_HOST_SUFFIXES = (
     ".googleusercontent.com",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",
+    ".tiktokcdn-eu.com",
     ".byteoversea.com",
     ".apifyusercontent.com",
     ".redd.it",
@@ -57,6 +60,7 @@ VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
     ".xx.fbcdn.net",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",
+    ".tiktokcdn-eu.com",
     ".byteoversea.com",
     ".akamaized.net",
     ".googlevideo.com",
@@ -67,6 +71,35 @@ VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
 )
 _SAFE_RANGE_RE = re.compile(r"^bytes=\d*-\d*$")
 _TRANSPARENT_IMAGE_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>"""
+_PRIVATE_VIDEO_CACHE_HEADERS = {
+    "Cache-Control": "private, max-age=300, must-revalidate",
+    # Range offsets refer to the stored representation.  Explicit identity
+    # prevents the app-wide GZip middleware from transforming 206 bodies and
+    # dropping Content-Length, which can break browser/CDN seeking semantics.
+    "Content-Encoding": "identity",
+    "Vary": "Cookie, Authorization",
+}
+
+
+def _require_workspace_media_access(request: Request) -> dict:
+    """Require the same HttpOnly login cookie/header used by the workspace.
+
+    Native ``<video>`` range requests cannot attach an application-managed
+    Authorization header, but they do include same-origin cookies.  The V-KPI
+    media URLs are same-origin (and the dev server proxies ``/api``), so the
+    existing login cookie is the compatible authentication boundary here.
+    """
+
+    user = get_current_user(request)
+    if not user:
+        # Private workspace middleware denies anonymous internal APIs with 403;
+        # keep the legacy non-/admin media path on the same observable contract.
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden",
+            headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization"},
+        )
+    return user
 
 
 def _load_submission_media_row(submission_id: int):
@@ -365,35 +398,39 @@ def lookup_vkpi_cached_video(
     return {"hit": bool(cached_url), "cached_url": cached_url or ""}
 
 
+@router.head("/api/admin/vkpi/media/video-cache/{digest}", include_in_schema=False)
 @router.get("/api/admin/vkpi/media/video-cache/{digest}")
-def serve_vkpi_cached_video(digest: str):
+def serve_vkpi_cached_video(digest: str, request: Request):
+    _require_workspace_media_access(request)
     cached = cached_video_file(digest)
     if not cached:
         redirect_url = cached_video_redirect_url(digest)
         if redirect_url:
-            return RedirectResponse(url=redirect_url, status_code=307, headers={"Cache-Control": "private, max-age=300"})
+            return RedirectResponse(url=redirect_url, status_code=307, headers=_PRIVATE_VIDEO_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="cached video not found")
     cache_path, content_type = cached
     return FileResponse(
         cache_path,
         media_type=content_type,
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
+        headers=_PRIVATE_VIDEO_CACHE_HEADERS,
     )
 
 
+@router.head("/api/vkpi-media/video-cache/{digest}", include_in_schema=False)
 @router.get("/api/vkpi-media/video-cache/{digest}")
-def serve_public_vkpi_cached_video(digest: str):
+def serve_public_vkpi_cached_video(digest: str, request: Request):
+    _require_workspace_media_access(request)
     cached = cached_video_file(digest)
     if not cached:
         redirect_url = cached_video_redirect_url(digest)
         if redirect_url:
-            return RedirectResponse(url=redirect_url, status_code=307, headers={"Cache-Control": "private, max-age=300"})
+            return RedirectResponse(url=redirect_url, status_code=307, headers=_PRIVATE_VIDEO_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="cached video not found")
     cache_path, content_type = cached
     return FileResponse(
         cache_path,
         media_type=content_type,
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
+        headers=_PRIVATE_VIDEO_CACHE_HEADERS,
     )
 
 

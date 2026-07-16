@@ -5,6 +5,7 @@ Default mode is read-only: parse the sheet, export cleaned owner/KOL mapping,
 and write a JSON payload that can be reviewed before any DB import.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import csv
@@ -352,7 +353,7 @@ def main() -> int:
             "skipped": result.get("skipped", 0),
             "items": len(result.get("items") or []),
         }
-    print(json.dumps({"out_dir": str(out_dir), "summary": summary, "applied": bool(result), "apply_result": apply_summary}, ensure_ascii=False, indent=2, default=str))
+    stdout_out(json.dumps({"out_dir": str(out_dir), "summary": summary, "applied": bool(result), "apply_result": apply_summary}, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

@@ -10,6 +10,8 @@ R60 smoke: 验证手动触发 sync job 工作.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import json
 import sys
 import time
@@ -48,7 +50,7 @@ def main() -> None:
         from app.core.security import make_token
         admin_token = make_token(user_id, "admin")
     except Exception as exc:
-        print(f"[token] failed: {exc}")
+        out(f"[token] failed: {exc}")
         sys.exit(1)
     
     failures: list[str] = []
@@ -57,7 +59,7 @@ def main() -> None:
     baseline_audit = _count_audit("sync_trigger")
     
     # ── 场景 1: POST /sync/trigger/alerts (轻量 job,触发开销小) ──
-    print("[1/3] POST /sync/trigger/alerts (admin token 应该通过)")
+    out("[1/3] POST /sync/trigger/alerts (admin token 应该通过)")
     
     resp = _post_json(
         f"{BASE_URL}/api/admin/vkpi/sync/trigger/alerts",
@@ -74,10 +76,10 @@ def main() -> None:
         elif body.get("job") != "alerts":
             failures.append(f"场景 1: job 字段错 {body}")
         else:
-            print(f"   PASS: alerts job 触发成功")
+            out(f"   PASS: alerts job 触发成功")
     
     # ── 场景 2: POST /sync/trigger/invalid_job 应该 400 ──
-    print("[2/3] POST /sync/trigger/invalid_job 应该 400")
+    out("[2/3] POST /sync/trigger/invalid_job 应该 400")
     
     resp_invalid = _post_json(
         f"{BASE_URL}/api/admin/vkpi/sync/trigger/totally_invalid_job",
@@ -88,16 +90,16 @@ def main() -> None:
     if resp_invalid.get("status_code") != 400:
         failures.append(f"场景 2: 期望 400,实际 {resp_invalid.get('status_code')}")
     else:
-        print(f"   PASS: invalid job 返回 400")
+        out(f"   PASS: invalid job 返回 400")
     
     # ── 场景 3: audit log 增加 ──
-    print("[3/3] audit log 记录了触发")
+    out("[3/3] audit log 记录了触发")
     
     new_count = _count_audit("sync_trigger")
     if new_count <= baseline_audit:
         failures.append(f"场景 3: 期望 audit +1,实际 {baseline_audit} → {new_count}")
     else:
-        print(f"   PASS: audit log +{new_count - baseline_audit}")
+        out(f"   PASS: audit log +{new_count - baseline_audit}")
     
     # ── cleanup ──
     _cleanup_audit("sync_trigger", staff_id)
@@ -105,12 +107,12 @@ def main() -> None:
         cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
     
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_SYNC_TRIGGER_SMOKE_OK")
+        out("\nVKPI_SYNC_TRIGGER_SMOKE_OK")
         sys.exit(0)
 
 

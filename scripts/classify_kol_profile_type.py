@@ -7,6 +7,8 @@ touch vkpi_kol_pool, viltrox_fit_score, Qdrant payloads, or ranking logic.
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import os
 import re
@@ -113,12 +115,12 @@ def apply_migration() -> None:
             cur.execute("SELECT pg_advisory_xact_lock(hashtext('viltrox_schema_migrations'))")
             cur.execute("SELECT 1 FROM schema_migrations WHERE version_key = %s", (MIGRATION_NAME,))
             if cur.fetchone():
-                print(f"migration already applied: {MIGRATION_NAME}")
+                out(f"migration already applied: {MIGRATION_NAME}")
                 return
             cur.execute(migration_path.read_text(encoding="utf-8"))
             cur.execute("INSERT INTO schema_migrations(version_key) VALUES (%s)", (MIGRATION_NAME,))
         conn.commit()
-    print(f"migration applied: {MIGRATION_NAME}")
+    out(f"migration applied: {MIGRATION_NAME}")
 
 
 def count_re(pattern: re.Pattern[str], text: str) -> int:
@@ -286,8 +288,8 @@ def write_results(results: list[TypeResult]) -> int:
 
 def print_report(results: list[TypeResult]) -> None:
     distribution = Counter(item.profile_type for item in results)
-    print(f"count={len(results)}")
-    print(
+    out(f"count={len(results)}")
+    out(
         "distribution="
         f"creator:{distribution.get('creator', 0)} "
         f"reviewer:{distribution.get('reviewer', 0)} "
@@ -304,11 +306,11 @@ def print_report(results: list[TypeResult]) -> None:
         "huntercreatesthings",
     }
     sample_ids = {4123, 4044}
-    print("samples:")
+    out("samples:")
     printed = 0
     for item in results:
         if item.handle.lower() in sample_handles or item.kol_pool_id in sample_ids:
-            print(
+            out(
                 f"{item.kol_pool_id}\t{item.handle}\t{item.display_name}\t{item.platform}\t"
                 f"{item.profile_type}\tcreator={item.creator_type_score}\t"
                 f"reviewer={item.reviewer_type_score}\t{item.type_reason}"
@@ -318,7 +320,7 @@ def print_report(results: list[TypeResult]) -> None:
         for item in results:
             if item.handle.lower() in sample_handles or item.kol_pool_id in sample_ids:
                 continue
-            print(
+            out(
                 f"{item.kol_pool_id}\t{item.handle}\t{item.display_name}\t{item.platform}\t"
                 f"{item.profile_type}\tcreator={item.creator_type_score}\t"
                 f"reviewer={item.reviewer_type_score}\t{item.type_reason}"
@@ -338,10 +340,10 @@ def main() -> int:
         return 0
     results = fetch_results()
     if len(results) != 125:
-        print(f"note: ready entries {len(results)} (cohort assumption 125 lifted 2026-07-02, full-pool ok)")
+        out(f"note: ready entries {len(results)} (cohort assumption 125 lifted 2026-07-02, full-pool ok)")
     if args.command == "write":
         updated = write_results(results)
-        print(f"updated={updated}")
+        out(f"updated={updated}")
     print_report(results)
     return 0
 
@@ -350,5 +352,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        out(f"ERROR: {exc}", file=sys.stderr)
         raise

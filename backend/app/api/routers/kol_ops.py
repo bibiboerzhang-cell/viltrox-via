@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, UploadFile, File
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.api.routers.kol_ops_helpers import (
     _clean_creator_name,
     _content_rollup_sql,
@@ -55,6 +56,19 @@ from app.api.routers.kol_ops_import import import_kols_csv_rows
 router = APIRouter(prefix="/api/admin/kol", tags=["kol-ops"], dependencies=[Depends(ensure_kol_schema)])
 router.include_router(dashboard_router)
 router.include_router(content_router)
+logger = get_logger(__name__)
+
+
+def _provider_unavailable(reason: str, operation: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "status": "unavailable",
+            "reason": reason,
+            "operation": operation,
+            "retryable": True,
+        },
+    )
 
 
 @router.get("/kols")
@@ -148,8 +162,7 @@ def list_kols(
     }
 
 
-@router.post("/search/platform")
-async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
+async def _execute_platform_search(body: dict, *, staff: dict) -> dict:
     query = str(body.get("query") or "").strip()
     platform = str(body.get("platform") or "youtube").strip().lower()
     market = str(body.get("market") or "").strip().upper()
@@ -178,12 +191,16 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
             "message": "market is in excluded region {CN/HK/TW}; no candidates persisted",
             "market": market,
         }
-    result = await search_platform_content(
-        platform,
-        query,
-        market=market,
-        max_results=_int(body.get("max_results"), 25),
-    )
+    try:
+        result = await search_platform_content(
+            platform,
+            query,
+            market=market,
+            max_results=_int(body.get("max_results"), 25),
+        )
+    except Exception as exc:  # noqa: BLE001 - provider faults are a retryable route state
+        logger.warning("kol platform search provider failed platform=%s", platform, exc_info=True)
+        raise _provider_unavailable("platform_search_unavailable", "platform_search") from exc
     result_items = [dict(item or {}) for item in (result.get("items", []) or [])]
     enriched_items = await db_write(lambda: kol_history_match.annotate_platform_items(result_items, platform=platform))
     # ③ 写入前再按 item 上可能出现的 country/region 兜底过滤(默认开),海外中文号放行。
@@ -220,6 +237,48 @@ async def search_kol_platform(body: dict, staff=Depends(require_tab("kol_ops", "
     }
 
 
+@router.post("/search/platform")
+async def search_kol_platform(
+    request: Request,
+    body: dict,
+    staff=Depends(require_tab("kol_ops", "write")),
+):
+    """Queue paid platform discovery; worker persists normalized candidates."""
+    query = str(body.get("query") or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    # Zero-provider validations remain immediate and deterministic.
+    platform = str(body.get("platform") or "youtube").strip().lower()
+    market = str(body.get("market") or "").strip().upper()
+    if platform == "douyin" or (
+        bool(body.get("exclude_chinese", True))
+        and _kol_discovery._country_in_excluded_region(market)
+    ):
+        return await _execute_platform_search(body, staff=staff)
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    try:
+        task_id = await queue.enqueue(
+            "kol_platform_search",
+            {"body": dict(body), "staff": dict(staff or {})},
+            lock_key=f"kol_platform_search:{platform}:{market}:{query.casefold()}",
+            timeout_seconds=1200,
+        )
+    except Exception as exc:  # queue faults are retryable but never expose internals
+        logger.warning("KOL platform search enqueue failed", exc_info=True)
+        raise _provider_unavailable(
+            "platform_search_unavailable", "platform_search"
+        ) from exc
+    return {
+        "status": "queued",
+        "job_id": task_id,
+        "progressive": True,
+        "initial_stage": "queued",
+        "provider_calls_performed": False,
+    }
+
+
 @router.post("/tools/analyze-url")
 async def analyze_kol_url_tool(body: dict, staff=Depends(require_tab("kol_ops", "write"))):
     url = str(body.get("url") or "").strip()
@@ -227,7 +286,11 @@ async def analyze_kol_url_tool(body: dict, staff=Depends(require_tab("kol_ops", 
     creator_handle = str(body.get("creator_handle") or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
-    result = await analyze_kol_url_standalone(url, platform_hint=platform, creator_handle=creator_handle)
+    try:
+        result = await analyze_kol_url_standalone(url, platform_hint=platform, creator_handle=creator_handle)
+    except Exception as exc:  # noqa: BLE001 - provider faults are a retryable route state
+        logger.warning("kol URL analysis provider failed", exc_info=True)
+        raise _provider_unavailable("url_analysis_unavailable", "url_analysis") from exc
     providers = result.get("providers") or []
     await db_write(
         lambda: _log_activity_commit(
@@ -436,22 +499,28 @@ def get_kol(kol_id: int, staff=Depends(require_tab("kol_ops", "read"))):
 
 
 @router.post("/kols/{kol_id}/scan-account")
-async def scan_kol_account_endpoint(kol_id: int, body: dict = Body(default={}), staff=Depends(require_tab("kol_ops", "write"))):
-    result = await scan_kol_account(int(kol_id), max_posts=_int(body.get("max_posts"), 50))
-    await db_write(
-        lambda: _log_kol_system_action(
-            staff,
-            "account_scan",
-            int(kol_id),
-            query=str(result.get("handle") or ""),
-            platform=str(result.get("platform") or ""),
-            api_provider="apify",
-            api_calls=1,
-            result_count=_int(result.get("content_count")),
-            metadata={"snapshot_id": result.get("snapshot_id"), "status": result.get("status")},
-        )
+async def scan_kol_account_endpoint(
+    request: Request,
+    kol_id: int,
+    body: dict = Body(default={}),
+    staff=Depends(require_tab("kol_ops", "write")),
+):
+    assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "kol_dossier_scan",
+        {
+            "kol_id": int(kol_id),
+            "max_posts": max(1, min(_int(body.get("max_posts"), 50), 500)),
+            "staff": dict(staff or {}),
+            "surface": "kol_ops",
+        },
+        lock_key=f"kol_dossier_scan:{int(kol_id)}",
+        timeout_seconds=1800,
     )
-    return result
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/kols/{kol_id}/analyze-account")

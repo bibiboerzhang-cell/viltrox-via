@@ -19,6 +19,24 @@ _PLATFORM_ALIASES = {
     "reddit": ("reddit",),
 }
 
+_PLATFORM_CANONICAL = {
+    "ig": "instagram",
+    "ins": "instagram",
+    "instagram": "instagram",
+    "yt": "youtube",
+    "youtube": "youtube",
+    "youtuber": "youtube",
+    "tt": "tiktok",
+    "tiktok": "tiktok",
+    "douyin": "tiktok",
+    "fb": "facebook",
+    "facebook": "facebook",
+    "twitter": "x",
+    "x": "x",
+    "x.com": "x",
+    "reddit": "reddit",
+}
+
 _REGION_ALIASES = {
     "US": ("美国", "美区", "usa", "united states", " u.s.", " us "),
     "DE": ("德国", "germany", "deutschland", " de "),
@@ -87,6 +105,18 @@ def _tokenize(text: str) -> set[str]:
     return {part for part in re.split(r"[^a-z0-9\u4e00-\u9fff]+", str(text or "").lower()) if len(part) >= 2}
 
 
+def _canonical_platform(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return _PLATFORM_CANONICAL.get(text, text)
+
+
+def _matches_platform(row: dict[str, Any], expected: str) -> bool:
+    required = _canonical_platform(expected)
+    if not required:
+        return True
+    return _canonical_platform(row.get("platform")) == required
+
+
 def _parse_natural_query(query: str, platform_hint: str = "") -> dict[str, Any]:
     q = f" {str(query or '').lower()} "
     platform = ""
@@ -95,7 +125,7 @@ def _parse_natural_query(query: str, platform_hint: str = "") -> dict[str, Any]:
             platform = candidate
             break
     if not platform and platform_hint and platform_hint != "all":
-        platform = str(platform_hint or "").lower()
+        platform = _canonical_platform(platform_hint)
 
     country = ""
     for code, aliases in _REGION_ALIASES.items():
@@ -186,8 +216,8 @@ def _natural_match_score(row: dict[str, Any], parsed: dict[str, Any]) -> tuple[i
         score += min(24, len(keyword_hits) * 8)
         reasons.append(f"关键词命中：{', '.join(keyword_hits[:4])}")
 
-    platform = str(parsed.get("platform") or "").lower()
-    if platform and platform == str(row.get("platform") or "").lower():
+    platform = _canonical_platform(parsed.get("platform"))
+    if platform and _matches_platform(row, platform):
         score += 10
         reasons.append(f"平台匹配 {platform}")
 
@@ -231,6 +261,8 @@ def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None =
     rows: list[dict[str, Any]] = []
     for raw in raw_rows:
         row = dict(raw)
+        if platform and not _matches_platform(row, platform):
+            continue
         text = _row_text(row)
         followers = _int(row.get("snapshot_follower_count"), _int(row.get("follower_count")))
         has_structured_filter = any(
@@ -263,6 +295,8 @@ def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None =
         for row in rows
     }
     for row in pool_rows:
+        if platform and not _matches_platform(row, platform):
+            continue
         key = (
             str(row.get("platform") or "").lower(),
             history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
@@ -275,10 +309,14 @@ def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None =
     notes = ["规则解析版，复用现有 kols / snapshots / reports / vkpi_kol_pool 字段；未新增后端表。"]
     if not rows:
         notes.append("没有命中时不会伪造推荐，请先补候选池或放宽关键词。")
+    from app.domains.kol.pool_common import mask_pool_item
+
     return {
         "query": query,
         "parsed": parsed,
-        "items": rows[:limit],
+        # Search is a bulk surface: expose contact availability, never the
+        # plaintext values. Single-KOL audited endpoints own disclosure.
+        "items": [mask_pool_item(item) for item in rows[:limit]],
         "method": "local_natural_search_v1_existing_kols",
         "degraded": True,
         "notes": notes,

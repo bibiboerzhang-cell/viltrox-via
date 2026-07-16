@@ -11,6 +11,15 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.kol import search_sessions
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
+from app.domains.kol.search_progress_contract import completion_contract
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
+
+
+def _pending_enrichment() -> dict[str, Any]:
+    return {
+        "contacts": {"status": "pending", "async": True},
+        "audience": {"status": "pending", "async": True},
+    }
 
 
 def enqueue_search_session_advance(
@@ -30,14 +39,29 @@ def enqueue_search_session_advance(
         body={**body, "execute": False},
     )
     if plan.get("selected", 0) <= 0:
+        search_sessions.update_session_result_summary(
+            session_id,
+            status="partial",
+            summary_patch={
+                "profile_batch_advance_job": {
+                    "status": "nothing_to_queue",
+                    "selected": 0,
+                    "eligible": plan.get("eligible"),
+                    "reason": "no eligible profile items",
+                    "viltrox_fit_score_untouched": True,
+                }
+            },
+        )
         return {
             "status": "nothing_to_queue",
             "session_id": session_id,
             "plan": plan,
             "provider_calls_performed": False,
-            "write_db": False,
+            "write_db": True,
+            "writes": ["vkpi_kol_search_sessions"],
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
+            "enrichment": None,
         }
 
     conn = get_conn()
@@ -72,12 +96,14 @@ def enqueue_search_session_advance(
             "plan": plan,
             "provider_calls_performed": False,
             "write_db": bool(queued_items and queued_items.get("updated_count")),
+            "enrichment": _pending_enrichment(),
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
         }
 
     triggered_by_user_id = _staff_user_id(staff)
     payload = {
+        "queue_lane": "interactive",
         "target_type": "search_session",
         "target_id": str(session_id),
         "derive_method": "kol_session_profile_advance",
@@ -88,22 +114,20 @@ def enqueue_search_session_advance(
         "item_types": body.get("item_types"),
         "item_ids": body.get("item_ids"),
         "include_completed": bool(body.get("include_completed")),
+        "_async_enrichment": True,
         "representative_video_limit": body.get("representative_video_limit"),
         "prompt": f"profile crawl advance session:{session_id}",
         "summary": f"profile crawl advance · session {session_id}",
         "triggered_by_user_id": triggered_by_user_id,
         "viltrox_fit_score_untouched": True,
     }
-    row = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES ('session_advance', ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id, job_type, status, created_at, updated_at
-        """,
-        (search_sessions._json_dumps(payload),),
-    ).fetchone()
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type="session_advance",
+        payload=payload,
+        idempotency_key=active_job_idempotency_key("search_session_profile_advance", session_id),
+    )
     conn.commit()
-    job = dict(row) if row else {}
     queued_items = search_sessions.mark_items_profile_queued(
         session_id,
         item_ids=[_int(item.get("item_id")) for item in plan.get("items") or []],
@@ -111,30 +135,52 @@ def enqueue_search_session_advance(
         reason="session_advance_queued",
         plan_items=plan.get("items") or [],
     )
+    selected_count = int(plan.get("selected") or 0)
+    queued_contract = completion_contract(
+        base_count=int(plan.get("eligible") or selected_count),
+        total=selected_count,
+        terminal_count=0,
+        ready_count=0,
+        active_tasks=selected_count,
+        requested_tasks_terminal=False,
+    )
     search_sessions.update_session_result_summary(
         session_id,
         status="running",
         summary_patch={
+            "phase": "profile",
+            "progress": {
+                "base": int(plan.get("eligible") or plan.get("selected") or 0),
+                "total": int(plan.get("selected") or 0),
+                "profile_ready": 0,
+                "profile_failed": 0,
+                "complete_ready": 0,
+                "complete_partial": 0,
+                **queued_contract,
+            },
+            **queued_contract,
             "profile_batch_advance_job": {
-                "status": "queued",
+                "status": "queued" if inserted else "already_queued",
                 "job_id": job.get("id"),
                 "selected": plan.get("selected"),
                 "eligible": plan.get("eligible"),
                 "overflow": plan.get("overflow"),
                 "queued_items": queued_items.get("updated_count"),
+                "enrichment": _pending_enrichment(),
                 "viltrox_fit_score_untouched": True,
             }
         },
     )
     return {
-        "status": "queued",
+        "status": "queued" if inserted else "already_queued",
         "session_id": session_id,
         "job": job,
         "queued_items": queued_items,
         "plan": plan,
         "provider_calls_performed": False,
         "write_db": True,
-        "writes": ["apify_jobs", "vkpi_kol_search_sessions", "vkpi_kol_search_session_items"],
+        "writes": (["apify_jobs"] if inserted else []) + ["vkpi_kol_search_sessions", "vkpi_kol_search_session_items"],
+        "enrichment": _pending_enrichment(),
         "viltrox_fit_score_changed_ids": [],
         "viltrox_fit_score_untouched": True,
     }
@@ -168,9 +214,17 @@ def cancel_search_session_advance(
     queued_jobs = [job for job in jobs if _text(job.get("status")).lower() == "queued"]
     running_jobs = [job for job in jobs if _text(job.get("status")).lower() == "running"]
     if not queued_jobs:
+        current_status = "partial"
+        if not running_jobs:
+            try:
+                observed = _text(search_sessions.get_session(session_id).get("status")).lower()
+                if observed in {"ready", "partial", "failed", "cancelled"}:
+                    current_status = observed
+            except Exception:
+                current_status = "partial"
         search_sessions.update_session_result_summary(
             session_id,
-            status="running" if running_jobs else "ready",
+            status="running" if running_jobs else current_status,
             summary_patch={
                 "profile_batch_advance_job": {
                     "status": "running_not_cancelled" if running_jobs else "no_queued_job",
@@ -280,6 +334,7 @@ def enqueue_smart_search_profile_advance(
     session_id = int(session["id"])
     triggered_by_user_id = _staff_user_id(staff)
     payload = {
+        "queue_lane": "interactive",
         "target_type": "search_session",
         "target_id": str(session_id),
         "derive_method": "kol_smart_search_profile_advance",
@@ -318,46 +373,82 @@ def enqueue_smart_search_profile_advance(
         "representative_video_limit": body.get("representative_video_limit"),
         "item_types": body.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
         "include_completed": bool(body.get("include_completed")),
+        "_async_enrichment": True,
         "prompt": f"smart profile advance · {query[:120]}",
         "summary": f"smart profile advance · {query[:80]}",
         "triggered_by_user_id": triggered_by_user_id,
         "viltrox_fit_score_untouched": True,
     }
     conn = get_conn()
+    idempotency_key = active_job_idempotency_key("search_session_profile_advance", session_id)
     row = conn.execute(
         """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES ('smart_search_profile_advance', ?::jsonb, 'queued', NOW(), NOW())
+        INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
+        VALUES ('smart_search_profile_advance', ?::jsonb, ?, 'queued', NOW(), NOW())
+        ON CONFLICT (idempotency_key)
+          WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
+            AND status IN ('queued', 'running')
+        DO NOTHING
         RETURNING id, job_type, status, created_at, updated_at
         """,
-        (search_sessions._json_dumps(payload),),
+        (search_sessions._json_dumps(payload), idempotency_key),
     ).fetchone()
-    conn.commit()
+    inserted = bool(row)
+    if not row:
+        row = conn.execute(
+            """SELECT id, job_type, status, created_at, updated_at FROM apify_jobs
+               WHERE idempotency_key=? AND status IN ('queued', 'running')
+               ORDER BY id DESC LIMIT 1""",
+            (idempotency_key,),
+        ).fetchone()
     job = dict(row) if row else {}
+    conn.commit()
+    queued_total = int(payload["advance_limit"])
+    queued_contract = completion_contract(
+        base_count=0,
+        total=queued_total,
+        terminal_count=0,
+        ready_count=0,
+        active_tasks=queued_total,
+        requested_tasks_terminal=False,
+    )
     search_sessions.update_session_result_summary(
         session_id,
         status="running",
         summary_patch={
+            "phase": "base",
+            "progress": {
+                "base": 0,
+                "total": queued_total,
+                "profile_ready": 0,
+                "profile_failed": 0,
+                "complete_ready": 0,
+                "complete_partial": 0,
+                **queued_contract,
+            },
+            **queued_contract,
             "smart_search_profile_advance_job": {
-                "status": "queued",
+                "status": "queued" if inserted else "already_queued",
                 "job_id": job.get("id"),
                 "query_text": query,
                 "include_new_discovery": payload["include_new_discovery"],
                 "advance_limit": payload["advance_limit"],
                 "advance_mode": payload["advance_mode"],
                 "representative_video_limit": payload["representative_video_limit"] or 1,
+                "enrichment": _pending_enrichment(),
                 "viltrox_fit_score_untouched": True,
             }
         },
     )
     return {
-        "status": "queued",
+        "status": "queued" if inserted else "already_queued",
         "session_id": session_id,
         "search_session": search_sessions.get_session(session_id),
         "job": job,
         "provider_calls_performed": False,
         "write_db": True,
-        "writes": ["vkpi_kol_search_sessions", "apify_jobs"],
+        "writes": ["vkpi_kol_search_sessions"] + (["apify_jobs"] if inserted else []),
+        "enrichment": _pending_enrichment(),
         "viltrox_fit_score_changed_ids": [],
         "viltrox_fit_score_untouched": True,
     }

@@ -18,11 +18,12 @@ import json
 import re
 from typing import Any
 
+from app.core.config import OPENAI_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.analysis import cache_repo
 from app.domains.projects.workflow_common import _int, utcnow
-from app.platform import llm_gateway
+from app.platform import llm_production
 
 logger = get_logger(__name__)
 
@@ -141,6 +142,36 @@ def _parse_llm_json(text: str) -> dict[str, Any]:
         return {}
 
 
+def _valid_retrospective_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    insight = value.get("insight_text")
+    if not isinstance(insight, str) or not insight.strip() or len(insight.strip()) > 2400:
+        return False
+    for key in ("highlights", "risks", "next_steps"):
+        items = value.get(key)
+        if not isinstance(items, list) or len(items) > 6:
+            return False
+        if not all(isinstance(item, str) and bool(item.strip()) for item in items):
+            return False
+    return True
+
+
+def _failure_code(response: Any) -> str:
+    result = response if isinstance(response, dict) else {}
+    failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
+    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    return str(
+        failure.get("code")
+        or result.get("failure_code")
+        or result.get("reason")
+        or latest.get("status")
+        or result.get("status")
+        or "llm_unavailable"
+    )[:120]
+
+
 def _active_job(conn: Any, project_id: int) -> dict[str, Any] | None:
     row = conn.execute(
         """
@@ -194,16 +225,8 @@ def enqueue_project_retrospective(project_id: int, *, staff: dict[str, Any] | No
             "job": active,
             "diagnostics": {"llm_calls": False, "worker_touched": False, "write_viltrox_fit_score": False},
         }
-    # 闸A record-only 预检(不阻断用户触发,只记 telemetry)
-    try:
-        preflight = llm_gateway.budget_preflight(
-            f"project_retrospective project:{int(project_id)}",
-            purpose="vkpi_project_retrospective",
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            cost_tag=BUDGET_SCOPE,
-        )
-    except Exception:
-        preflight = {"note": "budget_preflight_failed_record_only"}
+    # 真正预算判断必须在 worker 执行时与精确模型调用原子预留;入队端只诚实记录延后。
+    preflight = {"note": "deferred_to_worker_atomic_reservation"}
     staff = staff or {}
     payload = {
         "target_type": "project",
@@ -279,45 +302,48 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
     }
 
     prompt = _build_prompt(int(project_id), selected, totals, selected_posts)
-    resp = llm_gateway.invoke(
-        prompt,
-        purpose="vkpi_project_retrospective",
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-        # gemini-flash 的动态思考会吃光 maxOutputTokens 导致 JSON 截断(out=43→574 仍不完整);
-        # 路由到 openai(gpt-5.4-mini,非重思考、稳定返回完整 JSON)。失败仍按链回退。
-        preferred_provider="openai",
-        cost_tag=BUDGET_SCOPE,
-        staff=staff or {},
-        metadata={
-            "project_id": int(project_id),
-            "video_count": len(selected),
-            "matched_post_count": len(selected_posts),
-        },
-    )
-    text = str(resp.get("text") or "").strip()
-    if resp.get("status") != "success" or not text:
+    try:
+        resp = llm_production.generate_json(
+            prompt,
+            provider="openai",
+            model=OPENAI_MODEL,
+            purpose="vkpi_project_retrospective",
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            cost_tag=BUDGET_SCOPE,
+            triggered_by=_triggered_by_user_id(staff) or "projects.retrospective",
+            staff=staff or {},
+            required_keys=("insight_text", "highlights", "risks", "next_steps"),
+            validator=_valid_retrospective_payload,
+            deadline_seconds=90.0,
+            metadata={
+                "project_id": int(project_id),
+                "video_count": len(selected),
+                "matched_post_count": len(selected_posts),
+                "phase": "project_retrospective",
+                "subphase": "aggregate_evidence",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": f"project:{int(project_id)}",
+            },
+        )
+    except Exception as exc:  # AI-off/readiness/provider failure: never write cache
+        logger.warning("project retrospective strict LLM unavailable", exc_info=True)
+        resp = {"status": "failed", "reason": str(exc)[:120] or type(exc).__name__}
+    parsed = resp.get("json") if isinstance(resp, dict) else None
+    if not (
+        resp.get("status") == "success"
+        and str(resp.get("provider") or "").strip().lower() == "openai"
+        and str(resp.get("model") or "").strip() == OPENAI_MODEL
+        and _valid_retrospective_payload(parsed)
+    ):
         # 失败/兜底:不写 cache,只反映在 apify_jobs.status
         return {
             "status": "failed",
-            "reason": str(resp.get("status") or "llm_no_text"),
+            "reason": _failure_code(resp),
             "project_id": int(project_id),
             "provider": resp.get("provider"),
         }
-
-    parsed = _parse_llm_json(text)
     insight = str(parsed.get("insight_text") or "").strip()
-    if not insight:
-        # 解析不出结构化 insight。若模型本想返回 JSON 却被截断/损坏(text 以 '{' 开头),
-        # 不要把半截 JSON 当正文塞进 cache(会渲染成代码)——判失败,不写 cache,让用户重试。
-        if text.lstrip().startswith("{"):
-            return {
-                "status": "failed",
-                "reason": "llm_json_truncated_or_malformed",
-                "project_id": int(project_id),
-                "provider": resp.get("provider"),
-            }
-        # 纯散文模型:整段当 insight(非 JSON 输出的优雅兜底)。
-        insight = text[:600]
     result = {
         "insight_text": insight,
         "highlights": [str(x) for x in (parsed.get("highlights") or []) if str(x).strip()][:6],

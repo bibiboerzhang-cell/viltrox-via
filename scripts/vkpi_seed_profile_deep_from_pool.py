@@ -10,6 +10,7 @@ Usage:
     python -m scripts.vkpi_seed_profile_deep_from_pool --dry-run
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -132,7 +133,7 @@ def main() -> int:
     try:
         source_type = None if args.all else args.source_type
         result = seed(source_type=source_type, limit=args.limit, dry_run=args.dry_run)
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        stdout_out(json.dumps(result, indent=2, ensure_ascii=False, default=str))
         return 0 if not result.get("error_count") else 1
     finally:
         asyncio.run(close_db_runtime())

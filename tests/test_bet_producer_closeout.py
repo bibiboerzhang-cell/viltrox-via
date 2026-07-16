@@ -232,7 +232,8 @@ def test_approve_404_when_out_of_scope(monkeypatch) -> None:
         def get_action(action_id, staff):
             return None
 
-    monkeypatch.setitem(__import__("sys").modules, "app.domains.actions.inbox", _Inbox)
+    import app.domains.actions.inbox as _real_inbox
+    monkeypatch.setattr(_real_inbox, "get_action", _Inbox.get_action)
     with pytest.raises(_HTTPExc) as ei:
         vkpi_agents.bet_approve_from_inbox(7, {}, staff={"id": 1})
     assert ei.value.status_code == 404

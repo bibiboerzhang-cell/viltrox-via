@@ -44,6 +44,8 @@ def _resolve_env_path(env_file: str) -> Path:
 
 
 def _load_env(env_file: str = ".env", *, override: bool = False):
+    if os.environ.get("VKPI_SKIP_DOTENV", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
     p = _resolve_env_path(env_file)
     if p.exists():
         for line in p.read_text().splitlines():
@@ -79,6 +81,18 @@ if _env_hint != "local":
 _explicit_env_file = os.environ.get("ENV_FILE", "").strip()
 if _explicit_env_file:
     _load_env(_explicit_env_file, override=True)
+
+
+# The release database migrator is a one-shot process, not an application
+# runtime.  Resolve this intent before any path setup so importing config for a
+# read-only release cannot create uploads/frames/profile directories.
+APP_ROLE = os.environ.get("APP_ROLE", "all").strip().lower() or "all"
+DB_STARTUP_MODE = (
+    os.environ.get("VKPI_DB_STARTUP_MODE", "full").strip().lower() or "full"
+)
+MIGRATION_RUNNER_APP_ROLE = "migration-runner"
+IS_MIGRATION_RUNNER = APP_ROLE == MIGRATION_RUNNER_APP_ROLE
+IS_MIGRATIONS_ONLY_INTENT = DB_STARTUP_MODE == "migrations-only"
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -120,7 +134,7 @@ USER_CACHE_TTL_SEC = max(5, _env_int("USER_CACHE_TTL_SEC", "30"))
 # ── AI 模型配置（改 .env 就能换模型，不用动代码）──
 CLAUDE_MODEL       = os.environ.get("CLAUDE_MODEL",       "claude-sonnet-4-6")
 CLAUDE_HAIKU_MODEL = os.environ.get("CLAUDE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
-GEMINI_MODEL       = os.environ.get("GEMINI_MODEL",       "gemini-flash-latest")
+GEMINI_MODEL       = os.environ.get("GEMINI_MODEL",       "gemini-3.5-flash")
 OPENAI_MODEL       = os.environ.get("OPENAI_MODEL",       "gpt-5.4-mini")
 DEFAULT_VIA_DIALOGUE_MODEL = "gpt-5.4-mini"
 
@@ -162,10 +176,18 @@ SITE_URL   = os.environ.get("SITE_URL",   "https://www.viltroxvia.com")
 
 # ── Paths ──
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-UPLOAD_DIR  = Path("uploads");      UPLOAD_DIR.mkdir(exist_ok=True)
-FRAMES_DIR  = Path("frames");       FRAMES_DIR.mkdir(exist_ok=True)
-CREATOR_DIR = Path("creator_profiles"); CREATOR_DIR.mkdir(exist_ok=True)
-DB_PATH     = (PROJECT_ROOT / "submissions.db").resolve()
+UPLOAD_DIR = Path("uploads")
+FRAMES_DIR = Path("frames")
+CREATOR_DIR = Path("creator_profiles")
+if not (IS_MIGRATION_RUNNER or IS_MIGRATIONS_ONLY_INTENT):
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    FRAMES_DIR.mkdir(exist_ok=True)
+    CREATOR_DIR.mkdir(exist_ok=True)
+_DB_PATH_VALUE = os.environ.get("DB_PATH", "").strip()
+_DB_PATH_CANDIDATE = Path(_DB_PATH_VALUE).expanduser() if _DB_PATH_VALUE else PROJECT_ROOT / "submissions.db"
+if not _DB_PATH_CANDIDATE.is_absolute():
+    _DB_PATH_CANDIDATE = PROJECT_ROOT / _DB_PATH_CANDIDATE
+DB_PATH = _DB_PATH_CANDIDATE.resolve()
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DATABASE_POOL_URL = os.environ.get("DATABASE_POOL_URL", "").strip()
 DB_USE_PGBOUNCER = _env_flag("DB_USE_PGBOUNCER", "1" if DATABASE_POOL_URL else "0")
@@ -203,9 +225,15 @@ PLATFORM_INGEST_SOURCES = [
 ]
 
 # ── Runtime roles / queue ──
-APP_ROLE = os.environ.get("APP_ROLE", "all").strip().lower() or "all"
 REDIS_URL = os.environ.get("REDIS_URL", "").strip()
-VALID_APP_ROLES = {"all", "web", "public-web", "admin-web", "worker"}
+VALID_APP_ROLES = {
+    "all",
+    "web",
+    "public-web",
+    "admin-web",
+    "worker",
+    MIGRATION_RUNNER_APP_ROLE,
+}
 REDIS_NAMESPACE = os.environ.get("REDIS_NAMESPACE", f"{APP_STACK_NAME}:runtime").strip() or f"{APP_STACK_NAME}:runtime"
 REDIS_CACHE_PREFIX = os.environ.get("REDIS_CACHE_PREFIX", f"{REDIS_NAMESPACE}:cache").strip() or f"{REDIS_NAMESPACE}:cache"
 REDIS_RATE_LIMIT_PREFIX = os.environ.get("REDIS_RATE_LIMIT_PREFIX", f"{REDIS_NAMESPACE}:ratelimit").strip() or f"{REDIS_NAMESPACE}:ratelimit"
@@ -221,6 +249,18 @@ JOB_QUEUE_BACKPRESSURE_SOFT_LIMIT = _env_int("JOB_QUEUE_BACKPRESSURE_SOFT_LIMIT"
 JOB_QUEUE_BACKPRESSURE_HARD_LIMIT = _env_int("JOB_QUEUE_BACKPRESSURE_HARD_LIMIT", "3000")
 JOB_QUEUE_BACKPRESSURE_RETRY_AFTER_SEC = _env_int("JOB_QUEUE_BACKPRESSURE_RETRY_AFTER_SEC", "120")
 REDIS_CACHE_DEFAULT_TTL_SEC = _env_int("REDIS_CACHE_DEFAULT_TTL_SEC", "120")
+VKPI_MEMORY_CACHE_MAX_ENTRIES = max(64, _env_int("VKPI_MEMORY_CACHE_MAX_ENTRIES", "2048"))
+VKPI_MEMORY_CACHE_MAX_BYTES = max(
+    4 * 1024 * 1024,
+    _env_int("VKPI_MEMORY_CACHE_MAX_BYTES", str(64 * 1024 * 1024)),
+)
+VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES = max(
+    64 * 1024,
+    min(
+        VKPI_MEMORY_CACHE_MAX_BYTES,
+        _env_int("VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES", str(2 * 1024 * 1024)),
+    ),
+)
 POSTGRES_POOL_MIN_SIZE = _env_int("POSTGRES_POOL_MIN_SIZE", "8")
 POSTGRES_POOL_MAX_SIZE = _env_int("POSTGRES_POOL_MAX_SIZE", "64")
 POSTGRES_POOL_TIMEOUT_SEC = _env_int("POSTGRES_POOL_TIMEOUT_SEC", "20")
@@ -343,30 +383,6 @@ ADMIN_TRUSTED_ORIGINS = [
     if item.strip()
 ]
 
-if APP_ROLE not in VALID_APP_ROLES:
-    raise RuntimeError(f"Unsupported APP_ROLE={APP_ROLE!r}. Expected one of {sorted(VALID_APP_ROLES)}")
-
-if IS_PRODUCTION:
-    if APP_ROLE not in {"public-web", "admin-web", "worker"}:
-        raise RuntimeError("2.0 production requires APP_ROLE to be one of public-web/admin-web/worker")
-    if DB_RUNTIME_BACKEND != "postgres":
-        raise RuntimeError("2.0 production requires DB_RUNTIME_BACKEND=postgres")
-    if not DATABASE_URL:
-        raise RuntimeError("2.0 production requires DATABASE_URL")
-    if not REDIS_URL:
-        raise RuntimeError("2.0 production requires REDIS_URL")
-
-if DB_RUNTIME_BACKEND == "postgres" and not DATABASE_URL:
-    if IS_PRODUCTION:
-        raise RuntimeError("DATABASE_URL is required when DB_RUNTIME_BACKEND=postgres")
-    logger.warning("DB_RUNTIME_BACKEND=postgres ignored because DATABASE_URL is empty")
-    DB_RUNTIME_BACKEND = "sqlite"
-
-if DB_USE_PGBOUNCER and not DATABASE_POOL_URL:
-    if IS_PRODUCTION:
-        raise RuntimeError("DB_USE_PGBOUNCER=1 requires DATABASE_POOL_URL")
-    logger.warning("DB_USE_PGBOUNCER enabled but DATABASE_POOL_URL is empty; falling back to direct DATABASE_URL")
-
 ENABLE_LOCAL_ORCHESTRATOR = _env_flag(
     "ENABLE_LOCAL_ORCHESTRATOR",
     "1" if APP_ROLE == "all" and not REDIS_URL and not IS_PRODUCTION else "0",
@@ -383,6 +399,68 @@ ENABLE_UPLOAD_CLEANUP = _env_flag(
     "ENABLE_UPLOAD_CLEANUP",
     "1" if APP_ROLE == "all" else "0",
 )
+
+if APP_ROLE not in VALID_APP_ROLES:
+    raise RuntimeError(f"Unsupported APP_ROLE={APP_ROLE!r}. Expected one of {sorted(VALID_APP_ROLES)}")
+
+_MIGRATION_RUNNER_SIDE_EFFECTS = {
+    "ENABLE_LOCAL_ORCHESTRATOR": ENABLE_LOCAL_ORCHESTRATOR,
+    "ENABLE_BROWSER": ENABLE_BROWSER,
+    "ENABLE_SCHEDULER": ENABLE_SCHEDULER,
+    "ENABLE_UPLOAD_CLEANUP": ENABLE_UPLOAD_CLEANUP,
+}
+if IS_MIGRATION_RUNNER:
+    if DB_STARTUP_MODE != "migrations-only":
+        raise RuntimeError(
+            "APP_ROLE='migration-runner' requires "
+            "VKPI_DB_STARTUP_MODE='migrations-only'"
+        )
+    if DB_RUNTIME_BACKEND != "postgres" or not DATABASE_URL:
+        raise RuntimeError(
+            "APP_ROLE='migration-runner' requires the PostgreSQL runtime and DATABASE_URL"
+        )
+    enabled_side_effects = sorted(
+        name for name, enabled in _MIGRATION_RUNNER_SIDE_EFFECTS.items() if enabled
+    )
+    if enabled_side_effects:
+        raise RuntimeError(
+            "APP_ROLE='migration-runner' forbids application side effects: "
+            + ", ".join(enabled_side_effects)
+        )
+elif DB_STARTUP_MODE == "migrations-only":
+    raise RuntimeError(
+        "VKPI_DB_STARTUP_MODE='migrations-only' requires APP_ROLE='migration-runner'"
+    )
+
+if IS_PRODUCTION:
+    if APP_ROLE not in {
+        "public-web",
+        "admin-web",
+        "worker",
+        MIGRATION_RUNNER_APP_ROLE,
+    }:
+        raise RuntimeError(
+            "2.0 production requires APP_ROLE to be one of "
+            "public-web/admin-web/worker/migration-runner"
+        )
+    if DB_RUNTIME_BACKEND != "postgres":
+        raise RuntimeError("2.0 production requires DB_RUNTIME_BACKEND=postgres")
+    if not DATABASE_URL:
+        raise RuntimeError("2.0 production requires DATABASE_URL")
+    if not REDIS_URL and not IS_MIGRATION_RUNNER:
+        raise RuntimeError("2.0 production requires REDIS_URL")
+
+if DB_RUNTIME_BACKEND == "postgres" and not DATABASE_URL:
+    if IS_PRODUCTION or IS_MIGRATION_RUNNER:
+        raise RuntimeError("DATABASE_URL is required when DB_RUNTIME_BACKEND=postgres")
+    logger.warning("DB_RUNTIME_BACKEND=postgres ignored because DATABASE_URL is empty")
+    DB_RUNTIME_BACKEND = "sqlite"
+
+if DB_USE_PGBOUNCER and not DATABASE_POOL_URL:
+    if IS_PRODUCTION:
+        raise RuntimeError("DB_USE_PGBOUNCER=1 requires DATABASE_POOL_URL")
+    logger.warning("DB_USE_PGBOUNCER enabled but DATABASE_POOL_URL is empty; falling back to direct DATABASE_URL")
+
 USE_REDIS_JOBS = bool(REDIS_URL)
 VKPI_ASYNC_ENABLED = _env_flag("VKPI_ASYNC_ENABLED", "0")
 VKPI_VIDEO_CACHE_MAX_FILE_MB = max(1.0, _env_float("VKPI_VIDEO_CACHE_MAX_FILE_MB", "50"))

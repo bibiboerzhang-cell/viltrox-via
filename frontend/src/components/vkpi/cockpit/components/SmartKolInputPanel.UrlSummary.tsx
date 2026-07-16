@@ -1,30 +1,34 @@
-// URL 深析展示子组件(从 SmartKolInputPanel.Sections.tsx 抽出,行为不变)。
-// 仅吃 props 的展示组件 + 局部 useState/useEffect:VideoCreatorCard(创作者账号卡)、
+// URL 深析展示子组件：VideoCreatorCard(创作者账号卡)、VideoMediaSummary(播放/封面降级)、
 // VideoSceneAnalysis(URL 视频内联深析,纯读 final_v1/QA 缓存)、UrlSummary(URL 结果卡容器)。
 // 红线:纯展示/派生,只读 final_v1/QA 缓存,绝不写任何 viltrox_fit_score。
 // Sections 仍 re-export UrlSummary,容器调用面不变。
-import { useEffect, useState } from "react";
-import { AlertTriangle, BadgeCheck, Database, Loader2, ShieldCheck, UserPlus, Video } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  BadgeCheck,
+  CalendarDays,
+  Clock3,
+  Database,
+  ExternalLink,
+  Eye,
+  Heart,
+  Loader2,
+  MessageCircle,
+  UserPlus,
+  Video,
+} from "lucide-react";
 
 import { type VkpiKolUrlDeepCrawlResponse } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
-import { deepCrawlKolUrl, enqueueAllKolVideos, getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
-// A1·复用 KOLVideoAnalysisPanel 的画面质量分 / 三观-归因-建议 / 关键帧 QA 渲染原子(纯读 final_v1/QA 缓存,绝不触 viltrox_fit_score)。
 import {
-  DeepLayersSection,
-  analysisScoreColor,
-  compactText,
-  finalV1QaPayload,
-  firstText,
-  normaliseScore,
-  qaBoolean,
-  qaCheckTags,
-  qaIssueItems,
-  qaScoreCorrectionText,
-  qaStatusClass,
-  qaStatusLabel,
-  textFrom,
-} from "./KOLVideoAnalysisPanel";
+  deepCrawlKolUrl,
+  enqueueAllKolVideos,
+  getKolPoolAccountDossier,
+  getKolPoolDetailBundle,
+  getKolPoolItem,
+  getKolRecommendationCard,
+  type VkpiKolPoolDetailBundleResponse,
+} from "../../../../services/vkpi/kolPool-api";
 
 import {
   actionDescription,
@@ -34,31 +38,55 @@ import {
   durationLabel,
   numberLabel,
   urlTypeLabel,
-  videoExecutionDone,
   youtubeEmbedUrl,
   type Row,
 } from "./SmartKolInputPanel.helpers";
-import { sceneTimelineRowsLocal } from "./SmartKolInputPanel.derivers";
 import { ProfileInfoCard } from "./SmartKolInputPanel.Sections";
+import { humanizeLlmReason } from "../llmReasonCopy";
+import { VideoSceneAnalysis } from "./SmartKolInputPanel.UrlSummary.VideoAnalysis";
+import {
+  dateLabel,
+  firstSafeCachedVideoUrl,
+  firstSafeHttpUrl,
+  mergePublicProfiles,
+  publicFieldRows,
+  publicProfileFields,
+  safeCachedVideoUrl,
+  safeHttpUrl,
+  secondsLabel,
+  VideoPoster,
+} from "./SmartKolInputPanel.UrlSummary.shared";
 
-// A·上框:视频 URL 的创作者账号信息卡。复用 ProfileInfoCard 头像骨架(proxiedImageUrl + onError 渐变圆兜底),
-// 数据取 creator_identity,缺失字段用 video_metadata 兜底;点开展开抽屉看该用户全部字段。
-function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }) {
-  const [imgError, setImgError] = useState(false);
+const VideoCommentSamples = lazy(() => import("./SmartKolInputPanel.UrlSummary.Comments"));
+const AccountUrlInlineOverview = lazy(() =>
+  import("./SmartKolInputPanel.UrlSummary.AccountOverview").then((module) => ({
+    default: module.AccountUrlInlineOverview,
+  })),
+);
+
+function VideoCreatorCard({
+  creator,
+  metadata,
+  onOpen,
+}: {
+  creator: Row;
+  metadata: Row;
+  onOpen?: () => void;
+}) {
+  const [failedAvatar, setFailedAvatar] = useState("");
   const [expanded, setExpanded] = useState(false);
-  const avatar = proxiedImageUrl(cleanText(creator.avatar_url));
-  const handle = cleanText(creator.handle || creator.display_name || creator.channel_name || metadata.channel_name);
+  const avatar = proxiedImageUrl(safeHttpUrl(creator.avatar_url));
+  const handle = cleanText(creator.handle || creator.channel_name || metadata.channel_name);
   const platform = cleanText(creator.platform || metadata.platform);
   const channelId = cleanText(creator.channel_id || metadata.channel_id);
-  const name = display(handle || channelId || "创作者");
+  const name = display(creator.display_name || handle || channelId || "创作者");
   const followers = numberLabel(creator.followers ?? creator.subscriber_count);
-  const bio = cleanText(creator.bio || creator.description || metadata.description);
-  const profileUrl = cleanText(creator.profile_url || creator.channel_url);
-  const showImg = Boolean(avatar) && !imgError;
+  const posts = numberLabel(creator.posts_count ?? creator.video_count);
+  const bio = cleanText(creator.bio || creator.description);
+  const profileUrl = firstSafeHttpUrl(creator.profile_url, creator.channel_url);
+  const showImg = Boolean(avatar) && failedAvatar !== avatar;
   // 全部字段(creator_identity 优先,video_metadata 兜底),空值过滤。
-  const allFields = Object.entries({ ...metadata, ...creator })
-    .map(([key, value]) => [key, cleanText(value)] as const)
-    .filter(([, value]) => Boolean(value));
+  const allFields = publicFieldRows(metadata, creator);
   return (
     <div className="mt-2 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2">
       <div className="flex items-start gap-3">
@@ -72,7 +100,7 @@ function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }
               alt=""
               className="h-full w-full rounded-full object-cover"
               referrerPolicy="no-referrer"
-              onError={() => setImgError(true)}
+              onError={() => setFailedAvatar(avatar)}
             />
           ) : (
             name.slice(0, 1).toUpperCase()
@@ -86,6 +114,18 @@ function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }
             ) : null}
             {followers ? (
               <span className="shrink-0 rounded bg-amber-400/[0.10] px-1 text-[9px] font-semibold text-amber-200/90">{followers} 粉</span>
+            ) : null}
+            {posts ? (
+              <span className="shrink-0 rounded bg-cyan-400/[0.10] px-1 text-[9px] font-semibold text-cyan-200/90">{posts} 帖</span>
+            ) : null}
+            {onOpen ? (
+              <button
+                type="button"
+                onClick={onOpen}
+                className="shrink-0 text-[9px] font-medium text-cyan-300/80 hover:text-cyan-100"
+              >
+                查看档案 →
+              </button>
             ) : null}
           </div>
           {bio ? (
@@ -107,7 +147,7 @@ function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }
             type="button"
             onClick={() => setExpanded((cur) => !cur)}
             className="shrink-0 rounded border border-white/[0.1] px-2 py-0.5 text-[9.5px] text-slate-400 transition-colors hover:border-cyan-300/30 hover:text-cyan-100"
-          >{expanded ? "收起" : "点开全部字段"}</button>
+          >{expanded ? "收起原始字段" : `原始字段 ${allFields.length}`}</button>
         ) : null}
       </div>
       {expanded && allFields.length ? (
@@ -124,162 +164,141 @@ function VideoCreatorCard({ creator, metadata }: { creator: Row; metadata: Row }
   );
 }
 
-// A1·URL 视频内联深析。纯读 final_v1 + final_v1_keyframe_qa 两份缓存(no-store),
-// 渲染:画面质量分 layer6(content_quality_score 内容质量 / marketing_value 投放价值)、
-// 分镜时间线 layer1、三观/归因/建议 layer3-5(复用 DeepLayersSection)、关键帧 QA。
-// 绝不触 viltrox_fit_score:此处只读 final_v1/QA,从不写任何评分。
-function VideoSceneAnalysis({ apiToken, evidenceId, onVideoUrl }: { apiToken: string; evidenceId: string; onVideoUrl?: (url: string) => void }) {
-  const [entry, setEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
-  const [qaEntry, setQaEntry] = useState<VkpiKolVideoAnalysisCacheEntry | null>(null);
+function VideoMediaSummary({
+  platform,
+  metadata,
+  youtubeVideoId,
+  cachedVideoUrl,
+  sourceUrl,
+}: {
+  platform: string;
+  metadata: Row;
+  youtubeVideoId: string;
+  cachedVideoUrl: string;
+  sourceUrl: string;
+}) {
+  type CachePlaybackState = "idle" | "loading" | "ready" | "error";
+  const title = cleanText(metadata.title || metadata.description) || "视频详情";
+  const description = cleanText(metadata.description);
+  const posterSource = firstSafeHttpUrl(metadata.thumbnail_url, Array.isArray(metadata.image_urls) ? metadata.image_urls[0] : "");
+  const poster = proxiedImageUrl(posterSource);
+  const safeVideoUrl = safeCachedVideoUrl(cachedVideoUrl);
+  const safeSourceUrl = safeHttpUrl(sourceUrl);
+  // 缓存 URL 存在只证明“有地址”，不证明浏览器真的能播。状态与 URL 绑定，
+  // A→B 切换的首帧不会沿用 A 的 ready；只有 loadedmetadata/canplay 后才标记可播。
+  const [storedPlayback, setStoredPlayback] = useState<{ url: string; state: CachePlaybackState }>({
+    url: "",
+    state: "idle",
+  });
+  const cachePlaybackState: CachePlaybackState = safeVideoUrl
+    ? storedPlayback.url === safeVideoUrl ? storedPlayback.state : "loading"
+    : "idle";
   useEffect(() => {
-    let cancelled = false;
-    let timer = 0;
-    let attempts = 0;
-    setEntry(null);
-    setQaEntry(null);
-    if (!apiToken || !evidenceId) return undefined;
-    // 轮询:视频深析在后台 worker 跑,首拉常未就绪(state!=ready)。每 6s 重拉直到就绪或 ~2.5min 上限,
-    // 让分镜/评分「原地丝滑补上」,无需刷新或点详情页。就绪即停;QA 为独立 derive_method,随主轮询附带尝试。
-    const poll = () => {
-      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
-        .then((res) => {
-          if (cancelled) return;
-          // R2 缓存视频地址由后端按 evidence 解析,与分析就绪无关 —— 视频已缓存即可先点亮播放器,
-          // 不必等分镜跑完。上抛给父组件合并进 cachedVideoUrl(根治历史重建丢地址)。
-          const vurl = cleanText(res.cached_video_url);
-          if (vurl && onVideoUrl) onVideoUrl(vurl);
-          if (res.state === "ready" && res.entry) setEntry(res.entry);
-          else if (attempts < 25) {
-            attempts += 1;
-            timer = window.setTimeout(poll, 6000);
-          }
-        })
-        .catch(() => {
-          // 静默降级:读取失败也按未就绪继续轮询(上限内),不打断视频展示。
-          if (!cancelled && attempts < 25) {
-            attempts += 1;
-            timer = window.setTimeout(poll, 6000);
-          }
-        });
-      // 关键帧 QA 是独立 derive_method;缺它不影响 final_v1 主体渲染(独立 try)。
-      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa")
-        .then((res) => {
-          if (cancelled) return;
-          if (res.state === "ready" && res.entry) setQaEntry(res.entry);
-        })
-        .catch(() => {
-          // QA 缺失静默:只是少一块复核信息,不阻断主分析展示。
-        });
-    };
-    poll();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [apiToken, evidenceId]);
-  const result = asRecord(entry?.result);
-  const payload = asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
-  const layer1 = asRecord(payload.layer1_visual_content);
-  const layer2 = asRecord(payload.layer2_viewer_emotion);
-  const layer3 = asRecord(payload.layer3_three_values);
-  const layer4 = asRecord(payload.layer4_attribution);
-  const layer5 = asRecord(payload.layer5_recommendations);
-  const layer6 = asRecord(payload.layer6_flags_and_scores);
-  const scores = asRecord(layer6.scores);
-  // 画面质量分:content_quality_score=内容质量,marketing_value=投放价值(口径与 KOLVideoAnalysisPanel.AnalysisCard 一致)。
-  const contentScore = normaliseScore(scores.content_quality_score);
-  const marketingScore = normaliseScore(scores.marketing_value_score ?? layer6.marketing_value_score);
-  const verdict = textFrom(layer6.final_verdict) || marketingScore.rationale || textFrom(layer6.key_hook);
-  const viewerReaction = firstText(layer2.one_sentence_viewer_reaction, layer2.one_sentence_viewer_feeling);
-  const riskText = textFrom(layer6.risk_flags);
-  const contentSummary = cleanText(layer1.content_summary);
-  const sceneTimeline = sceneTimelineRowsLocal(layer1.scene_timeline);
-  const hasScores = contentScore.score != null || marketingScore.score != null;
-  // 关键帧 QA(复用面板口径):pass/checks/issues/纠偏建议。
-  const qaPayload = finalV1QaPayload(qaEntry);
-  const qaHasPayload = Object.keys(qaPayload).length > 0;
-  const qaPass = qaBoolean(qaPayload.qa_pass ?? asRecord(qaEntry?.result).qa_pass);
-  const qaBadgeText = qaPass === false ? "需复核" : qaPass === true ? "通过" : "未定";
-  const qaSummary = textFrom(qaPayload.summary);
-  const qaConfidence = Number(qaPayload.confidence);
-  const qaChecks = qaCheckTags(qaPayload.checks);
-  const qaIssues = qaIssueItems(qaPayload.issues);
-  const qaCorrection = qaScoreCorrectionText(qaPayload.score_correction);
-  if (!hasScores && !contentSummary && !sceneTimeline.length && !qaHasPayload) return null;
+    setStoredPlayback({ url: safeVideoUrl, state: safeVideoUrl ? "loading" : "idle" });
+  }, [safeVideoUrl]);
+  const markPlayback = (state: CachePlaybackState) => {
+    if (safeVideoUrl) setStoredPlayback({ url: safeVideoUrl, state });
+  };
+  const duration = secondsLabel(metadata.duration_seconds);
+  const published = dateLabel(metadata.publish_date || metadata.posted_at);
+  const views = numberLabel(metadata.view_count ?? metadata.play_count ?? metadata.views);
+  const likes = numberLabel(metadata.like_count ?? metadata.likes);
+  const comments = numberLabel(metadata.comment_count ?? metadata.comments);
+  const youtubePlayable = platform === "youtube" && Boolean(youtubeVideoId);
+  const r2Candidate = platform !== "youtube" && Boolean(safeVideoUrl);
+  const r2Playable = r2Candidate && cachePlaybackState === "ready";
+  const r2Failed = r2Candidate && cachePlaybackState === "error";
+  const playable = youtubePlayable || r2Playable;
+  const sourceLabel = platform === "instagram" ? "Instagram 原帖" : platform === "tiktok" ? "TikTok 原帖" : platform === "youtube" ? "YouTube 原视频" : "原帖";
+
   return (
-    <div className="mt-2 space-y-2">
-      {hasScores ? (
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-md border border-white/[0.05] bg-black/25 px-2.5 py-2">
-            <div className="mb-1 text-[9px] text-slate-500">内容质量</div>
-            <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: analysisScoreColor(contentScore.score) }}>{contentScore.score ?? "—"}</div>
+    <div className="mt-2 overflow-hidden rounded-lg border border-white/[0.08] bg-slate-950/35" data-testid="video-url-summary">
+      <div className="grid gap-0 lg:grid-cols-[minmax(260px,0.9fr)_minmax(320px,1.1fr)]">
+        <div className="border-b border-white/[0.07] bg-black/45 lg:border-b-0 lg:border-r">
+          <div className="relative w-full" style={{ aspectRatio: "16 / 9" }}>
+            {youtubePlayable ? (
+              <iframe
+                src={youtubeEmbedUrl(youtubeVideoId)}
+                title={title}
+                className="absolute inset-0 h-full w-full"
+                allow="autoplay; encrypted-media; picture-in-picture"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            ) : r2Candidate && !r2Failed ? (
+              <video
+                src={safeVideoUrl}
+                poster={poster || undefined}
+                controls
+                playsInline
+                preload="metadata"
+                className="absolute inset-0 h-full w-full bg-black object-contain"
+                onLoadedMetadata={() => markPlayback("ready")}
+                onCanPlay={() => markPlayback("ready")}
+                onError={() => markPlayback("error")}
+                data-testid="cached-video-player"
+              />
+            ) : (
+              <VideoPoster source={posterSource} title={title} />
+            )}
           </div>
-          <div className="rounded-md border border-white/[0.05] bg-black/25 px-2.5 py-2">
-            <div className="mb-1 text-[9px] text-slate-500">投放价值</div>
-            <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: analysisScoreColor(marketingScore.score) }}>{marketingScore.score ?? "—"}</div>
-          </div>
-        </div>
-      ) : null}
-      {verdict ? (
-        <div className="text-[10.5px] leading-relaxed text-slate-300">{compactText(verdict, 180)}</div>
-      ) : null}
-      {contentSummary ? (
-        <div className="rounded-md border border-white/[0.05] bg-white/[0.02] px-2.5 py-2">
-          <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">内容概述</div>
-          <div className="text-[10.5px] leading-relaxed text-slate-300">{contentSummary.length > 240 ? `${contentSummary.slice(0, 240)}...` : contentSummary}</div>
-        </div>
-      ) : null}
-      {sceneTimeline.length ? (
-        <div className="rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">
-          <div className="mb-1.5 text-[9px] uppercase tracking-wider text-slate-500">分镜时间线</div>
-          <div className="space-y-1">
-            {sceneTimeline.map((row) => (
-              <div key={row.key} className="flex items-start gap-2 text-[10px] leading-relaxed">
-                <span className="shrink-0 rounded bg-cyan-500/12 px-1.5 py-0.5 font-mono tabular-nums text-cyan-200">{row.timestamp || "—"}</span>
-                <span className="text-slate-300">{row.what || "—"}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {viewerReaction || riskText ? (
-        <div className="flex flex-wrap gap-1.5 text-[9.5px]">
-          {viewerReaction ? <span className="rounded bg-purple-500/10 px-2 py-1 text-purple-200">心动: {compactText(viewerReaction, 54)}</span> : null}
-          {riskText ? <span className="rounded bg-amber-500/10 px-2 py-1 text-amber-200">风险: {compactText(riskText, 60)}</span> : null}
-        </div>
-      ) : null}
-      <DeepLayersSection layer3={layer3} layer4={layer4} layer5={layer5} />
-      {qaHasPayload ? (
-        <div className={`rounded-md border p-2 ${qaPass === false ? "border-rose-400/20 bg-rose-500/[0.045]" : "border-emerald-400/15 bg-emerald-500/[0.035]"}`}>
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[9px] font-medium ${qaPass === false ? "bg-rose-500/15 text-rose-200" : "bg-emerald-500/15 text-emerald-200"}`}>
-              {qaPass === false ? <AlertTriangle size={10} /> : <ShieldCheck size={10} />}
-              关键帧 QA {qaBadgeText}
-            </span>
-            {Number.isFinite(qaConfidence) ? <span className="text-[9px] text-slate-500">置信 {Math.round(qaConfidence * 100)}%</span> : null}
-          </div>
-          {qaSummary ? <div className="mb-1.5 text-[10px] leading-relaxed text-slate-200">{compactText(qaSummary, 150)}</div> : null}
-          {qaChecks.length ? (
-            <div className="mb-1.5 flex flex-wrap gap-1">
-              {qaChecks.map((check) => (
-                <span key={check.key} className={`rounded border px-1.5 py-0.5 text-[8.5px] ${qaStatusClass(check.status)}`} title={check.detail || undefined}>
-                  {check.label}: {qaStatusLabel(check.status)}
-                </span>
-              ))}
+          {!playable ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-300/15 bg-amber-400/[0.07] px-3 py-2 text-[10px] text-amber-100">
+              <span className="inline-flex items-center gap-1.5"><Clock3 size={11} /> {
+                r2Failed
+                  ? "缓存视频加载失败，请打开原帖查看"
+                  : r2Candidate
+                    ? "缓存地址已发现，正在验证浏览器播放"
+                    : "视频缓存未就绪，暂时不可播放"
+              }</span>
+              {safeSourceUrl ? (
+                <a href={safeSourceUrl} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 font-medium text-cyan-200 hover:text-cyan-100 hover:underline">
+                  打开 {sourceLabel} <ExternalLink size={10} />
+                </a>
+              ) : null}
             </div>
           ) : null}
-          {qaIssues.slice(0, 2).map((issue) => (
-            <div key={issue.key} className="mb-1 rounded border border-white/[0.05] bg-black/20 px-2 py-1 text-[9.5px] text-slate-300">
-              <span className="text-amber-200">{issue.label}</span>
-              {issue.evidence ? <span> · {compactText(issue.evidence, 90)}</span> : null}
-              {issue.correction ? <span className="text-cyan-200"> · {compactText(issue.correction, 70)}</span> : null}
-            </div>
-          ))}
-          {qaCorrection ? <div className="text-[9.5px] text-slate-400">纠偏建议: {compactText(qaCorrection, 150)}</div> : null}
         </div>
-      ) : null}
+        <div className="flex min-w-0 flex-col p-3">
+          <div className="flex flex-wrap items-center gap-1.5 text-[9px]">
+            <span className="rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 uppercase tracking-wide text-slate-400">{platform || "video"}</span>
+            {r2Playable ? <span className="rounded border border-emerald-300/20 bg-emerald-400/[0.08] px-1.5 py-0.5 text-emerald-100">缓存视频可播放</span> : null}
+            {r2Candidate && cachePlaybackState === "loading" ? <span className="rounded border border-cyan-300/20 bg-cyan-400/[0.08] px-1.5 py-0.5 text-cyan-100">缓存视频加载中</span> : null}
+            {r2Failed ? <span className="rounded border border-rose-300/20 bg-rose-400/[0.08] px-1.5 py-0.5 text-rose-100">缓存视频加载失败</span> : null}
+            {youtubePlayable ? <span className="rounded border border-emerald-300/20 bg-emerald-400/[0.08] px-1.5 py-0.5 text-emerald-100">YouTube 播放源已就绪</span> : null}
+          </div>
+          <h3 className="mt-2 line-clamp-2 text-[13px] font-semibold leading-snug text-slate-100">{title}</h3>
+          {description && description !== title ? (
+            <p className="mt-1.5 line-clamp-3 text-[10.5px] leading-relaxed text-slate-400">{description}</p>
+          ) : null}
+          <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+            {views ? <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-[10px] text-slate-300"><Eye size={11} className="text-sky-300" /> {views} 播放</span> : null}
+            {likes ? <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-[10px] text-slate-300"><Heart size={11} className="text-rose-300" /> {likes} 点赞</span> : null}
+            {comments ? <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-[10px] text-slate-300"><MessageCircle size={11} className="text-violet-300" /> {comments} 评论</span> : null}
+            {duration ? <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-[10px] text-slate-300"><Clock3 size={11} className="text-cyan-300" /> {duration}</span> : null}
+            {published ? <span className="inline-flex items-center gap-1.5 rounded-md border border-white/[0.06] bg-black/20 px-2 py-1.5 text-[10px] text-slate-300"><CalendarDays size={11} className="text-amber-300" /> {published}</span> : null}
+          </div>
+          {safeSourceUrl ? (
+            <a href={safeSourceUrl} target="_blank" rel="noreferrer noopener" className="mt-auto inline-flex items-center gap-1 self-start pt-3 text-[10px] font-medium text-cyan-300/85 hover:text-cyan-100 hover:underline">
+              查看原帖 <ExternalLink size={10} />
+            </a>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
+}
+
+type ProfileUiState = "idle" | "queued" | "running" | "ready" | "partial" | "failed";
+
+function profileUiState(rawValue: unknown, isExecuting: boolean): ProfileUiState {
+  const raw = cleanText(rawValue).toLowerCase();
+  if (["ready", "already_ready", "already_fresh", "done", "executed"].includes(raw)) return "ready";
+  if (raw.includes("failed") || ["error", "timeout", "unsupported", "provider_error"].includes(raw)) return "failed";
+  if (["queued", "already_queued", "pending"].includes(raw)) return "queued";
+  if (["running", "processing", "retrying", "in_progress"].includes(raw)) return "running";
+  if (["partial", "degraded"].includes(raw)) return "partial";
+  return isExecuting ? "running" : "idle";
 }
 
 export function UrlSummary({
@@ -288,6 +307,7 @@ export function UrlSummary({
   canExecute,
   isExecuting,
   onExecute,
+  onLocalEvaluation,
   onOpenProfile,
 }: {
   result: VkpiKolUrlDeepCrawlResponse;
@@ -295,33 +315,240 @@ export function UrlSummary({
   canExecute: boolean;
   isExecuting: boolean;
   onExecute: () => void;
+  onLocalEvaluation?: () => void;
   onOpenProfile?: (result: VkpiKolUrlDeepCrawlResponse) => void;
 }) {
-  // 播放器地址兜底:分镜分析轮询(VideoSceneAnalysis)按 evidence 从后端解析 R2 缓存地址后上抛到此。
-  // 根治「从会话历史重建结果时丢掉实时算出的 cached_video_url → 播放器不出」(分镜照常出)。
-  const [polledVideoUrl, setPolledVideoUrl] = useState("");
+  const [polledVideo, setPolledVideo] = useState<{ evidenceId: string; sourceUrl: string; url: string } | null>(null);
+  const [hydratedProfile, setHydratedProfile] = useState<{
+    kolId: number;
+    data: Row;
+    item: Row;
+    freshness: Row;
+    recommendation: Row;
+  } | null>(null);
+  const resultRow = asRecord(result);
+  const isVideo = result.url_type === "video";
   const profileFlow = asRecord(result.profile_flow);
   const videoFlow = asRecord(result.video_flow);
-  const creator = asRecord(result.creator_identity || videoFlow.creator_identity);
-  const metadata = asRecord(result.video_metadata || videoFlow.video_metadata);
+  const videoResolution = asRecord(videoFlow.resolution_progress || resultRow.video_url_resolution);
+  const videoResolutionSteps = Array.isArray(videoResolution.steps)
+    ? videoResolution.steps.map((step) => asRecord(step)).slice(0, 4)
+    : [];
+  const profileExecute = asRecord(resultRow.profile_execute);
+  const nestedVideoProfileFlow = asRecord(videoFlow.profile_flow);
+  const profileExecuteData = asRecord(profileExecute.profile_data);
+  const nestedVideoProfileData = asRecord(nestedVideoProfileFlow.profile_data);
+  const flowProfileData = asRecord(profileFlow.profile_data);
+  const matchedKolId = Number(result.matched_kol_pool_id || profileFlow.kol_pool_id || videoFlow.kol_pool_id) || 0;
+  const searchSession = asRecord(result.search_session);
+  // 历史会话回放时 profile_execute 是 worker 后写的最新状态，应优先于初始
+  // profile_flow=queued。只有明确 ready 才可宣称“已入库”。
+  const rawProfileStatus = cleanText(
+    profileExecute.status
+    || profileFlow.job_status
+    || profileFlow.status
+    || searchSession.item_status
+    || resultRow.status,
+  );
+  const profileState = profileUiState(rawProfileStatus, !isVideo && isExecuting);
+  const repAnalysis = {
+    ...asRecord(profileFlow.representative_video_analysis),
+    ...asRecord(profileExecute.representative_video_analysis),
+    ...asRecord(resultRow.representative_video_analysis),
+  };
+  const repAiAnalysis = asRecord(repAnalysis.ai_analysis);
+  const repStatus = cleanText(repAnalysis.job_status || repAnalysis.status).toLowerCase();
+  const repQueued = Math.max(0, Number(repAnalysis.queued ?? 0) || 0);
+  const repReady = Math.max(0, Number(repAnalysis.ready ?? repAnalysis.completed ?? 0) || 0);
+  const repFailed = Math.max(0, Number(repAnalysis.failed ?? 0) || 0);
+  const accountAiDisabled = Boolean(
+    cleanText(repAiAnalysis.state).toLowerCase() === "not_requested"
+    || cleanText(repAiAnalysis.reason).toLowerCase() === "ai_disabled"
+    || repStatus === "ai_disabled"
+  );
+  const accountPipelineActive = !isVideo && !accountAiDisabled && (
+    ["queued", "running"].includes(profileState)
+    || ["queued", "already_queued", "pending", "running", "processing", "retrying"].includes(repStatus)
+    || (repQueued > repReady + repFailed && !["ready", "done", "completed"].includes(repStatus))
+  );
+  // 同一 KOL id 下状态/代表视频进度变化也要刷新，不再只依赖 matchedKolId。
+  const accountRefreshKey = [
+    rawProfileStatus,
+    cleanText(profileFlow.job_id || profileExecute.run_id),
+    repStatus,
+    repQueued,
+    repReady,
+    repFailed,
+    cleanText(searchSession.updated_at || searchSession.item_status),
+  ].join(":");
+  const [accountBundleState, setAccountBundleState] = useState<{
+    kolId: number;
+    status: "idle" | "loading" | "ready" | "error";
+    bundle: VkpiKolPoolDetailBundleResponse | null;
+    dossier: Row;
+    error: string;
+  }>({ kolId: 0, status: "idle", bundle: null, dossier: {}, error: "" });
+  const accountPollDeadlineRef = useRef<{ identity: string; startedAt: number }>({ identity: "", startedAt: 0 });
+  const accountPollIdentity = [
+    matchedKolId,
+    cleanText(
+      searchSession.item_id
+      || searchSession.id
+      || searchSession.search_session_id
+      || profileFlow.search_session_item_id
+      || resultRow.search_session_item_id
+      || result.url?.normalized
+      || result.url?.input,
+    ),
+  ].join(":");
+  // useEffect 清空发生在 commit 后；渲染期按 kolId 过滤，历史 A→B 的首帧也不会消费 A 的补读资料。
+  const currentHydratedProfile = hydratedProfile?.kolId === matchedKolId ? hydratedProfile.data : {};
+  const currentHydratedItem = hydratedProfile?.kolId === matchedKolId ? hydratedProfile.item : {};
+  const currentFreshness = hydratedProfile?.kolId === matchedKolId ? hydratedProfile.freshness : {};
+  const currentRecommendation = hydratedProfile?.kolId === matchedKolId ? hydratedProfile.recommendation : {};
+  useEffect(() => {
+    let cancelled = false;
+    setHydratedProfile(null);
+    if (!apiToken || !matchedKolId) return undefined;
+    // 只读现有池档案，且 refresh_if_stale=false：补足历史会话 compact flow 丢掉的头像/粉丝/帖数/简介，
+    // 不触发 provider，不要求用户先点“全部字段”或打开抽屉。
+    Promise.all([
+      getKolPoolItem(apiToken, matchedKolId, false)
+        .then((response) => response)
+        .catch(() => null),
+      // 推荐卡是现有纯读投影:data_grade 明确只是数据完整度档(非 Fit),
+      // why/signals 来自已入库 provenance,不会因为打开 URL 触发模型或写评分。
+      getKolRecommendationCard(apiToken, matchedKolId)
+        .then((response) => asRecord(response))
+        .catch(() => ({})),
+    ]).then(([response, recommendation]) => {
+      if (cancelled || (!response && !Object.keys(recommendation).length)) return;
+      setHydratedProfile({
+        kolId: matchedKolId,
+        data: publicProfileFields(response?.item),
+        item: asRecord(response?.item),
+        freshness: asRecord(response?.freshness),
+        recommendation,
+      });
+    });
+    return () => { cancelled = true; };
+  }, [apiToken, matchedKolId]);
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    if (!apiToken || !matchedKolId || isVideo) return undefined;
+    if (accountPollDeadlineRef.current.identity !== accountPollIdentity) {
+      accountPollDeadlineRef.current = { identity: accountPollIdentity, startedAt: Date.now() };
+    }
+    const startedAt = accountPollDeadlineRef.current.startedAt;
+    setAccountBundleState((current) => current.kolId === matchedKolId
+      ? { ...current, status: "loading", error: "" }
+      : { kolId: matchedKolId, status: "loading", bundle: null, dossier: {}, error: "" });
+    // 详情 bundle 是现有的纯读聚合端点:provider_calls=false / llm_calls=false / write_db=false。
+    // 两条现有纯读投影并发:detail-bundle 给 final_v1 内容，dossier 给全量覆盖计数/结论。
+    // 首屏最多渲染 6 条视频，即使库内更多也不放大 DOM。队列活跃时最长重读
+    // 30 分钟：前 2 分钟每 6s，之后每 10s；切换状态或 KOL 会 cleanup，旧请求不能覆盖新结果。
+    const load = () => {
+      Promise.all([
+        getKolPoolDetailBundle(apiToken, matchedKolId, { videoLimit: 10, llmLimit: 6 })
+          .then((bundle) => ({ bundle, error: "" }))
+          .catch((error: unknown) => ({ bundle: null, error: error instanceof Error ? cleanText(error.message).slice(0, 120) : "" })),
+        getKolPoolAccountDossier(apiToken, matchedKolId)
+          .then((dossier) => ({ dossier: asRecord(dossier), error: "" }))
+          .catch((error: unknown) => ({ dossier: {}, error: error instanceof Error ? cleanText(error.message).slice(0, 120) : "" })),
+      ]).then(([detailResult, dossierResult]) => {
+        if (cancelled) return;
+        const hasDetail = Boolean(detailResult.bundle);
+        const hasDossier = Object.keys(dossierResult.dossier).length > 0;
+        const errors = [detailResult.error, dossierResult.error].filter(Boolean).join("；");
+        setAccountBundleState({
+          kolId: matchedKolId,
+          status: hasDetail || hasDossier ? "ready" : "error",
+          bundle: detailResult.bundle,
+          dossier: dossierResult.dossier,
+          error: hasDetail || hasDossier ? "" : errors,
+        });
+        const elapsed = Date.now() - startedAt;
+        if (accountPipelineActive && elapsed < 30 * 60_000) {
+          timer = window.setTimeout(load, elapsed < 120_000 ? 6000 : 10000);
+        }
+      });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [accountPipelineActive, accountPollIdentity, accountRefreshKey, apiToken, isVideo, matchedKolId]);
+  const currentAccountState = accountBundleState.kolId === matchedKolId
+    ? accountBundleState
+    : { kolId: matchedKolId, status: "loading" as const, bundle: null, dossier: {}, error: "" };
+  const currentAccountBundle = !isVideo ? currentAccountState.bundle : null;
+  const currentAccountDossier = !isVideo ? currentAccountState.dossier : {};
+  const dossierProfile = asRecord(currentAccountDossier.profile);
+  const dossierVideos = Array.isArray(currentAccountDossier.videos)
+    ? currentAccountDossier.videos.map((video) => asRecord(video))
+    : [];
+  const dossierChannelName = cleanText(dossierVideos.find((video) => cleanText(video.channel_name))?.channel_name);
+  const currentAccountItem = {
+    ...currentHydratedItem,
+    ...dossierProfile,
+    ...asRecord(currentAccountBundle?.item),
+    ...(dossierChannelName ? { display_name: dossierChannelName } : {}),
+  };
+  const creator = mergePublicProfiles(
+    {
+      platform: result.platform,
+      handle: result.handle,
+      channel_id: result.channel_id,
+      // 视频原帖不是账号主页；只有 profile URL 才可把输入链接用作 profile_url 兜底。
+      profile_url: result.url_type === "video" ? "" : firstSafeHttpUrl(result.url?.normalized, result.url?.input),
+    },
+    videoFlow.creator_identity,
+    result.creator_identity,
+    currentHydratedProfile,
+    profileExecuteData,
+    nestedVideoProfileData,
+    flowProfileData,
+    currentAccountItem,
+  );
+  const metadata = {
+    ...asRecord(videoFlow.video_metadata),
+    ...asRecord(result.video_metadata),
+  };
   const analysis = asRecord(videoFlow.analysis);
-  const jobLastError = cleanText(videoFlow.job_last_error || profileFlow.job_last_error);
-  const jobStatus = cleanText(videoFlow.job_status || profileFlow.job_status || videoFlow.status || profileFlow.status);
+  const videoAiAnalysis = {
+    ...asRecord(asRecord(videoFlow.enqueue_result).ai_analysis),
+    ...asRecord(videoFlow.ai_analysis),
+  };
+  const jobLastError = cleanText(
+    videoFlow.job_last_error || videoFlow.error || videoFlow.reason_detail || videoFlow.reason ||
+    videoAiAnalysis.reason || videoAiAnalysis.gate_reason ||
+    profileFlow.job_last_error || profileFlow.error || profileFlow.reason_detail || profileFlow.reason,
+  );
+  const jobFailureCopy = humanizeLlmReason(jobLastError, "后台分析任务未完成，请检查模型授权与预算状态。");
+  const jobStatus = cleanText(videoFlow.job_status || videoAiAnalysis.state || profileFlow.job_status || videoFlow.status || profileFlow.status);
   const flowStatus = cleanText(videoFlow.status || profileFlow.status || (result.search_session ? asRecord(result.search_session).item_status : ""));
   const latency = durationLabel(analysis.latency_ms);
   const platform = cleanText(result.platform).toLowerCase();
-  const isVideo = result.url_type === "video";
   // 顶层兜底:execute 响应把 cached_video_url/evidence_id 摊平到 result 顶层(不在嵌套 video_flow 下),
   // 旧码只读 videoFlow.* → 取空 → 播放器/分镜静默不渲染。两处都加 result.* 兜底。
-  const cachedVideoUrl = cleanText(videoFlow.cached_video_url || asRecord(result).cached_video_url) || polledVideoUrl;
-  const effectiveEvidenceId = String(videoFlow.evidence_id ?? asRecord(result).evidence_id ?? "").trim();
+  const rawEvidenceId = videoFlow.evidence_id ?? resultRow.evidence_id;
+  const effectiveEvidenceId = Number(rawEvidenceId) > 0 ? String(rawEvidenceId).trim() : "";
   const youtubeVideoId = cleanText(result.video_id || videoFlow.video_id);
-  const videoPoster = proxiedImageUrl(cleanText(metadata.thumbnail_url));
-  const hasPlayableVideo = isVideo && (platform === "youtube" ? Boolean(youtubeVideoId) : Boolean(cachedVideoUrl));
+  const sourceVideoUrl = firstSafeHttpUrl(metadata.content_url, result.url?.normalized, result.url?.input);
+  const currentPolledVideoUrl = polledVideo?.evidenceId === effectiveEvidenceId && polledVideo.sourceUrl === sourceVideoUrl
+    ? polledVideo.url
+    : "";
+  const cachedVideoUrl = firstSafeCachedVideoUrl(videoFlow.cached_video_url, resultRow.cached_video_url, currentPolledVideoUrl);
+  const handlePolledVideoUrl = useCallback((value: string) => {
+    const safe = safeCachedVideoUrl(value);
+    if (safe) setPolledVideo({ evidenceId: effectiveEvidenceId, sourceUrl: sourceVideoUrl, url: safe });
+  }, [effectiveEvidenceId, sourceVideoUrl]);
   // 图片轮播:IG /p/ 按 URL 模式被当 video,但实际是图文/多图轮播(后端识别分流标 media_kind=image)。
   // 此时不放视频播放器/分镜,直接展示图片轮转。image_urls 由 _public_video_metadata 透传。
   const imageUrls = Array.isArray(metadata.image_urls)
-    ? (metadata.image_urls as unknown[]).map((u) => cleanText(u)).filter(Boolean)
+    ? (metadata.image_urls as unknown[]).map((u) => safeHttpUrl(u)).filter(Boolean)
     : [];
   const isImageCarousel = cleanText(metadata.media_kind) === "image" && imageUrls.length > 0;
   const profileOperation = cleanText(profileFlow.operation);
@@ -335,16 +562,46 @@ export function UrlSummary({
     cleanText(creator.handle || creator.channel_id || creator.profile_url || result.handle || result.channel_id),
   );
   const tiktokRisk = isVideo && platform === "tiktok";
-  const retryableFailure = Boolean(isVideo && jobLastError && ["failed", "blocked"].includes(jobStatus));
-  const executeDone = result.execute && (
-    isVideo ? videoExecutionDone(flowStatus || videoFlow.status) : cleanText(profileFlow.status) === "ready"
+  const analysisDisabled = Boolean(
+    isVideo && (
+      jobStatus.toLowerCase() === "not_requested"
+      || cleanText(videoAiAnalysis.reason).toLowerCase() === "ai_disabled"
+      || /ai_disabled|readiness_not_production_ready|model_binding_blocked|operator_disabled/i.test(jobLastError)
+    )
   );
-  // profile 已改自动 execute(识别即自动抓资料入库),手动按钮只在 profile 抓取失败时作「重试」兜底。
-  const profileFailed = !isVideo && ["crawl_failed", "failed"].includes(cleanText(profileFlow.status));
+  const analysisFailed = Boolean(
+    isVideo
+    && !analysisDisabled
+    && ["failed", "blocked", "error", "cancelled", "canceled"].includes(jobStatus.toLowerCase())
+  );
+  const localEvaluationEligible = Boolean(
+    import.meta.env.DEV
+    && isVideo
+    && (analysisFailed || analysisDisabled)
+    && /model_binding_blocked|readiness_not_production_ready|budget_guard_blocked/i.test(jobLastError)
+    && onLocalEvaluation,
+  );
+  const retryableFailure = analysisFailed;
+  const videoReady = ["ready", "partial", "already_analyzed"].includes(cleanText(flowStatus || videoFlow.status).toLowerCase()) && !analysisFailed;
+  const videoPending = Boolean(isVideo && result.execute && !videoReady && !analysisFailed);
+  const executeDone = Boolean(result.execute && (
+    isVideo ? videoReady : profileState === "ready"
+  ));
+  // profile 自动 execute 的“已入库”只认后端 ready；queued/running/partial 分别告知，
+  // 手动按钮仅在明确失败时作重试兜底。
+  const profileFailed = !isVideo && profileState === "failed";
   const profileRetryable = profileFailed && canExecute;
-  // 账号资料自动抓取中(用户贴 URL → 自动 execute,无二次确认):展示自动状态,不再显示「抓基础资料」按钮。
-  const profileAutoRunning = !isVideo && isExecuting;
-  const showActionButton = isVideo || profileRetryable;
+  const profileStatusPresentation: Record<Exclude<ProfileUiState, "failed">, { label: string; title: string }> = {
+    idle: { label: "等待资料抓取状态", title: "后端尚未返回可确认的抓取结果" },
+    queued: { label: "资料抓取已排队", title: "任务已进入队列，尚未宣称资料已入库" },
+    running: { label: "资料抓取进行中...", title: "worker 正在抓取，完成后才标记入库" },
+    ready: { label: "资料已抓取并入库", title: "后端已明确返回 ready" },
+    partial: { label: "资料部分完成，等待补齐", title: "部分资料可用，但抓取尚未全部完成" },
+  };
+  const profileStatusCopy = profileState === "failed"
+    ? { label: "资料抓取失败", title: "后端返回失败，可手动重试" }
+    : profileStatusPresentation[profileState];
+  const showActionButton = isVideo ? (!result.execute || analysisFailed) : profileRetryable;
   const actionLabel = isVideo
     ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
     : "重试抓资料";
@@ -364,16 +621,16 @@ export function UrlSummary({
   // P7·账号 URL 结果卡:把后端自动抓取的基础资料(头像/粉丝/简介/帖数)合并展示。
   // 优先 profile_flow.profile_data(execute 后写入),缺则用 creator_identity / 顶层 result 字段兜底,
   // 缺值诚实留空,绝不编造粉丝数。点卡片打开右侧 KOL 详情抽屉(onOpenProfile)。
-  const profileData = asRecord(profileFlow.profile_data);
   const profileBasics: Row = {
-    avatar_url: profileData.avatar_url ?? creator.avatar_url,
-    handle: profileData.handle ?? creator.handle ?? result.handle,
-    platform: profileData.platform ?? creator.platform ?? result.platform,
-    followers: profileData.followers ?? creator.followers ?? creator.subscriber_count,
-    posts_count: profileData.posts_count ?? creator.posts_count,
-    bio: profileData.bio ?? creator.bio ?? creator.description,
-    profile_url: profileData.profile_url ?? creator.profile_url ?? creator.channel_url ?? result.url?.normalized,
+    avatar_url: safeHttpUrl(creator.avatar_url),
+    handle: creator.display_name || creator.handle || result.handle,
+    platform: creator.platform || result.platform,
+    followers: creator.followers ?? creator.subscriber_count,
+    posts_count: creator.posts_count ?? creator.video_count,
+    bio: creator.bio || creator.description,
+    profile_url: firstSafeHttpUrl(creator.profile_url, creator.channel_url, result.url?.normalized, result.url?.input),
   };
+  const profileRawFields = publicFieldRows(creator);
   const hasProfileBasics = !isVideo && [
     profileBasics.avatar_url,
     profileBasics.followers,
@@ -383,19 +640,41 @@ export function UrlSummary({
   ].some((value) => cleanText(value));
   const canOpenProfile = !isVideo && Boolean(onOpenProfile);
 
-  // 项⑥:profile 默认只抓资料(profile_basics),不发现视频。这个按钮用 account_deep+force_full_history
-  // 把该 KOL 全部历史视频 materialize,再 enqueueAllKolVideos 跑 final_v1。
-  const [fullVideoState, setFullVideoState] = useState<{ status: string; msg: string }>({ status: "idle", msg: "" });
-  const matchedKolId = (result as any).matched_kol_pool_id;
+  // Profile 默认只抓资料；此操作最多补抓 120 条历史内容，再为已发现的视频排队 final_v1。
+  // 状态与 target/request 绑定，A 的慢响应不能覆盖 B 的 loading/done，也不会让 B 的按钮误禁用。
+  type FullVideoState = { targetKey: string; kolId: number; requestId: number; status: string; msg: string };
+  const fullVideoTargetKey = `${matchedKolId}:${firstSafeHttpUrl(result.url?.normalized, result.url?.input) || cleanText(result.handle)}`;
+  const fullVideoRequestId = useRef(0);
+  const activeFullVideoTarget = useRef(fullVideoTargetKey);
+  if (activeFullVideoTarget.current !== fullVideoTargetKey) {
+    activeFullVideoTarget.current = fullVideoTargetKey;
+    fullVideoRequestId.current += 1;
+  }
+  const [storedFullVideoState, setStoredFullVideoState] = useState<FullVideoState>({
+    targetKey: fullVideoTargetKey,
+    kolId: matchedKolId,
+    requestId: 0,
+    status: "idle",
+    msg: "",
+  });
+  const fullVideoState = storedFullVideoState.targetKey === fullVideoTargetKey
+    ? storedFullVideoState
+    : { targetKey: fullVideoTargetKey, kolId: matchedKolId, requestId: fullVideoRequestId.current, status: "idle", msg: "" };
   // 刀2·流2 路A:profile execute 顺带入队了 N 条代表视频 final_v1(account_dossier 据此出 LLM 账号分)。
   // queued>0 → 深度分析进行中,据此诚实化完成横幅(头像粉丝已入库,但 LLM 分要等 worker 跑完代表视频)。
-  const repAnalysis = asRecord((result as any).representative_video_analysis);
-  const repQueued = Number(repAnalysis.queued ?? 0);
-  const deepAnalysisRunning = !isVideo && repQueued > 0;
+  const deepAnalysisRunning = !isVideo && repQueued > 0 && !accountAiDisabled;
   const discoverAllVideos = async () => {
     const url = cleanText(result.url?.input);
     if (!apiToken || !url || fullVideoState.status === "loading") return;
-    setFullVideoState({ status: "loading", msg: "正在发现该 KOL 全部历史视频…" });
+    const requestId = ++fullVideoRequestId.current;
+    const targetKey = fullVideoTargetKey;
+    const targetKolId = matchedKolId;
+    const commit = (status: string, msg: string) => {
+      if (activeFullVideoTarget.current === targetKey && fullVideoRequestId.current === requestId) {
+        setStoredFullVideoState({ targetKey, kolId: targetKolId, requestId, status, msg });
+      }
+    };
+    commit("loading", "正在发现该 KOL 的历史视频（最多 120 条）…");
     try {
       const r = await deepCrawlKolUrl(apiToken, url, true, {
         mode: "account_deep", forceFullHistory: true, maxPosts: 120,
@@ -403,13 +682,17 @@ export function UrlSummary({
       });
       const kid = (r as any).profile_flow?.kol_pool_id || matchedKolId;
       if (kid) {
-        const enq = await enqueueAllKolVideos(apiToken, kid);
-        setFullVideoState({ status: "done", msg: `已发现并入队:${enq.queued ?? 0} 条 final_v1 排队中(进度见左侧任务板)` });
+        if (accountAiDisabled) {
+          commit("done", "已发现历史视频并入库；AI 深析未启用，本轮未创建模型任务");
+        } else {
+          const enq = await enqueueAllKolVideos(apiToken, kid);
+          commit("done", `已发现并入队:${enq.queued ?? 0} 条 final_v1 排队中(进度见左侧任务板)`);
+        }
       } else {
-        setFullVideoState({ status: "done", msg: "已发现视频并入库,稍后在抽屉查看" });
+        commit("done", "已发现视频并入库,稍后在抽屉查看");
       }
     } catch (e: any) {
-      setFullVideoState({ status: "error", msg: e?.message ? String(e.message) : "全视频发现失败" });
+      commit("error", e?.message ? String(e.message) : "全视频发现失败");
     }
   };
 
@@ -433,7 +716,11 @@ export function UrlSummary({
             ) : null}
           </div>
           {isVideo ? (
-            <VideoCreatorCard creator={creator} metadata={metadata} />
+            <VideoCreatorCard
+              creator={creator}
+              metadata={metadata}
+              onOpen={onOpenProfile && matchedKolId ? () => onOpenProfile(result) : undefined}
+            />
           ) : (
             <div className="mt-2 grid gap-1 text-[11px] text-slate-400 sm:grid-cols-2">
               <div className="truncate">对象: <span className="text-slate-200">{display(metadata.title || creator.display_name || creator.handle || result.handle || result.video_id)}</span></div>
@@ -442,14 +729,30 @@ export function UrlSummary({
           )}
           {/* P7·账号 URL 结果卡:头像 + 粉丝(+帖数/简介,有则显)+ 点开右侧详情抽屉;缺值诚实留空,不编造。 */}
           {hasProfileBasics ? (
-            <ProfileInfoCard
-              data={profileBasics}
-              apiToken={apiToken}
-              onOpen={canOpenProfile ? () => onOpenProfile?.(result) : undefined}
-            />
+            <>
+              <ProfileInfoCard
+                key={`${cleanText(profileBasics.avatar_url)}:${cleanText(profileBasics.handle)}`}
+                data={profileBasics}
+                apiToken={apiToken}
+                onOpen={canOpenProfile ? () => onOpenProfile?.(result) : undefined}
+              />
+              {profileRawFields.length ? (
+                <details className="mt-1.5 rounded-md border border-white/[0.05] bg-black/10 px-2.5 py-1.5 text-[9.5px] text-slate-400">
+                  <summary className="cursor-pointer select-none text-slate-500 hover:text-cyan-200">原始字段 {profileRawFields.length}</summary>
+                  <div className="mt-2 grid gap-x-3 gap-y-1 border-t border-white/[0.05] pt-2 sm:grid-cols-2">
+                    {profileRawFields.map(([key, value]) => (
+                      <div key={key} className="flex min-w-0 gap-1.5">
+                        <span className="shrink-0 text-slate-600">{key}</span>
+                        <span className="min-w-0 flex-1 truncate text-slate-300" title={value}>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </>
           ) : null}
         </div>
-        <div className="shrink-0">
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
           {showActionButton ? (
             <button
               type="button"
@@ -464,14 +767,84 @@ export function UrlSummary({
           ) : !isVideo ? (
             <span
               className="inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-500/[0.10] px-3 text-[11px] font-medium text-cyan-100"
-              title="账号 URL 已自动抓取基础资料并入库，无需手动确认"
+              title={profileStatusCopy.title}
+              data-testid="profile-crawl-status"
             >
-              {profileAutoRunning ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
-              {profileAutoRunning ? "自动抓资料中..." : "已自动抓资料入库"}
+              {profileState === "running" ? <Loader2 size={12} className="animate-spin" /> : profileState === "queued" ? <Clock3 size={12} /> : <Database size={12} />}
+              {profileStatusCopy.label}
             </span>
+          ) : null}
+          {localEvaluationEligible ? (
+            <button
+              type="button"
+              onClick={onLocalEvaluation}
+              disabled={!canExecute || isExecuting}
+              className="inline-flex min-h-[30px] items-center justify-center gap-1.5 rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-2.5 text-[10px] font-medium text-amber-100 transition-colors hover:bg-amber-400/[0.14] disabled:cursor-not-allowed disabled:opacity-50"
+              title="仅本机评估；结果与生产分析隔离，不代表模型已获生产授权"
+              data-testid="video-local-evaluation-action"
+            >
+              <AlertTriangle size={11} /> 本地评估此视频（非生产）
+            </button>
           ) : null}
         </div>
       </div>
+      {!isVideo && matchedKolId ? (
+        <Suspense
+          fallback={(
+            <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] text-slate-400" role="status">
+              <Loader2 size={11} className="animate-spin" /> 正在载入账号分析数据…
+            </div>
+          )}
+        >
+          <AccountUrlInlineOverview
+            item={currentAccountItem}
+            bundle={currentAccountBundle}
+            dossier={currentAccountDossier}
+            recommendation={currentRecommendation}
+            loading={currentAccountState.status === "loading"}
+            error={currentAccountState.status === "error" ? currentAccountState.error : ""}
+            freshness={currentFreshness}
+          />
+        </Suspense>
+      ) : null}
+      {isVideo && videoResolutionSteps.length ? (
+        <div
+          className="mt-2 rounded-md border border-cyan-300/15 bg-black/20 px-3 py-2"
+          data-testid="video-url-resolution-progress"
+        >
+          <div className="mb-1.5 text-[10px] font-medium text-cyan-100">视频 URL 处理进度</div>
+          <div className="grid gap-1.5 sm:grid-cols-4">
+            {videoResolutionSteps.map((step) => {
+              const state = cleanText(step.status).toLowerCase() || "pending";
+              const running = ["queued", "running", "processing"].includes(state);
+              const done = ["ready", "done", "skipped"].includes(state);
+              const failed = ["failed", "blocked", "error"].includes(state);
+              const stateLabel = running ? "进行中" : state === "skipped" ? "已跳过" : done ? "已完成" : failed ? "未完成" : "待处理";
+              return (
+                <div
+                  key={cleanText(step.key || step.label)}
+                  className={`rounded border px-2 py-1.5 text-[9.5px] ${
+                    failed
+                      ? "border-rose-300/20 bg-rose-400/[0.08] text-rose-100"
+                      : done
+                        ? "border-emerald-300/20 bg-emerald-400/[0.08] text-emerald-100"
+                        : running
+                          ? "border-cyan-300/20 bg-cyan-400/[0.08] text-cyan-100"
+                          : "border-white/[0.08] bg-white/[0.03] text-slate-400"
+                  }`}
+                  title={cleanText(step.reason)}
+                >
+                  <span className="flex items-center gap-1">
+                    {running ? <Loader2 size={10} className="animate-spin" /> : null}
+                    <span>{display(step.label)}</span>
+                  </span>
+                  <span className="mt-0.5 block text-[8.5px] opacity-70">{stateLabel}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       {isImageCarousel ? (
         <div className="mt-2">
           <div className="mx-auto w-full max-w-2xl">
@@ -490,38 +863,59 @@ export function UrlSummary({
           </div>
         </div>
       ) : null}
-      {hasPlayableVideo && !isImageCarousel ? (
-        <div className="mt-2">
-          <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-md border border-white/[0.08] bg-black/40">
-            <div className="relative w-full" style={{ aspectRatio: "16 / 9" }}>
-              {platform === "youtube" ? (
-                <iframe
-                  src={youtubeEmbedUrl(youtubeVideoId)}
-                  title={display(metadata.title || result.video_id)}
-                  className="absolute inset-0 h-full w-full"
-                  allow="autoplay; encrypted-media; picture-in-picture"
-                  allowFullScreen
-                />
-              ) : (
-                <video
-                  src={cachedVideoUrl}
-                  poster={videoPoster || undefined}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  className="absolute inset-0 h-full w-full bg-black object-contain"
-                />
-              )}
+      {isVideo && !isImageCarousel ? (
+        <VideoMediaSummary
+          platform={platform}
+          metadata={metadata}
+          youtubeVideoId={youtubeVideoId}
+          cachedVideoUrl={cachedVideoUrl}
+          sourceUrl={sourceVideoUrl}
+        />
+      ) : null}
+      {isVideo && !isImageCarousel && apiToken && matchedKolId > 0 && Number(effectiveEvidenceId) > 0 ? (
+        <Suspense
+          fallback={(
+            <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] text-slate-400" role="status">
+              <Loader2 size={11} className="animate-spin" /> 正在载入评论证据…
             </div>
-          </div>
-        </div>
+          )}
+        >
+          <VideoCommentSamples
+            apiToken={apiToken}
+            kolPoolId={matchedKolId}
+            evidenceId={Number(effectiveEvidenceId)}
+            platformCommentCount={metadata.comment_count ?? metadata.comments}
+          />
+        </Suspense>
       ) : null}
       {isVideo && !isImageCarousel && apiToken && effectiveEvidenceId ? (
         // 分镜/评分独立渲染:不再嵌在 hasPlayableVideo(播放器 URL)闸内——视频文件未就绪也先出时间戳/评分。
         // 图文/轮播帖(isImageCarousel)不跑视频分镜(上面已展示图片轮播)。
         // evidenceId 走顶层兜底,配合 VideoSceneAnalysis 轮询「原地丝滑补上」;历史记录点开同样命中(evidence_id 来自会话项)。
         <div className="mt-2">
-          <VideoSceneAnalysis apiToken={apiToken} evidenceId={effectiveEvidenceId} onVideoUrl={setPolledVideoUrl} />
+          <VideoSceneAnalysis
+            key={effectiveEvidenceId}
+            apiToken={apiToken}
+            evidenceId={effectiveEvidenceId}
+            fallbackFailure={analysisFailed ? jobLastError || "后台分析任务已停止" : undefined}
+            disabledReason={analysisDisabled ? cleanText(videoAiAnalysis.reason || jobLastError || "ai_disabled") : undefined}
+            disabledDetail={analysisDisabled ? cleanText(videoAiAnalysis.detail || videoAiAnalysis.reason_detail) : undefined}
+            recommendation={{
+              fitScore: currentHydratedItem.viltrox_fit_score,
+              fitReason: currentHydratedItem.viltrox_fit_reason,
+              dataGrade: currentRecommendation.data_grade,
+              dataGradeScore: currentRecommendation.data_grade_score,
+              whyRecommended: currentRecommendation.why_recommended,
+              signals: asRecord(currentRecommendation.signals),
+              profileUpdatedAt: currentHydratedItem.updated_at || currentHydratedItem.last_seen_at,
+            }}
+            onVideoUrl={handlePolledVideoUrl}
+          />
+        </div>
+      ) : null}
+      {isVideo && !isImageCarousel && !effectiveEvidenceId && videoPending ? (
+        <div className="mt-2 rounded-md border border-cyan-300/15 bg-cyan-400/[0.06] px-3 py-2 text-[10.5px] text-cyan-100" role="status">
+          <span className="inline-flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> 视频基础数据已展示，AI 深析与时间戳正在排队。</span>
         </div>
       ) : null}
       {disabledReason ? (
@@ -537,12 +931,16 @@ export function UrlSummary({
         }`}>
           <span className="flex-1">
             {flowStatus === "partial"
-              ? (isVideo ? "视频分析部分完成，已入库" : "资料部分抓取完成，已入库")
+              ? (isVideo ? "视频基础数据已入库 · 部分扩展数据未完成" : "资料部分抓取完成，已入库")
               : (isVideo
-                  ? "视频分析完成，已入库"
+                  ? analysisDisabled
+                    ? "视频基础数据已入库 · AI 深析未启用"
+                    : "视频基础数据已入库"
                   : deepAnalysisRunning
                     ? `资料已入库 · 账号深度分析进行中(${repQueued} 条代表视频，完成后「查看完整分析」即出 LLM 账号分)`
-                    : "资料已抓取并入库")}
+                    : accountAiDisabled
+                      ? "资料已抓取并入库 · AI 深析未启用"
+                      : "资料已抓取并入库")}
             {latency ? ` · 耗时 ${latency}` : ""}
           </span>
           {!isVideo ? (
@@ -552,7 +950,7 @@ export function UrlSummary({
               onClick={() => void discoverAllVideos()}
               className="shrink-0 rounded border border-cyan-300/30 bg-cyan-400/[0.12] px-2 py-0.5 font-medium text-cyan-50 hover:bg-cyan-400/[0.2] disabled:opacity-50"
             >
-              {fullVideoState.status === "loading" ? "发现中…" : "发现并分析全部视频"}
+              {fullVideoState.status === "loading" ? "发现中…" : accountAiDisabled ? "发现历史视频" : "发现历史视频并批量分析"}
             </button>
           ) : null}
           {onOpenProfile && result.matched_kol_pool_id ? (
@@ -571,9 +969,10 @@ export function UrlSummary({
           fullVideoState.status === "error" ? "border-rose-300/20 bg-rose-500/[0.08] text-rose-100" : "border-cyan-300/20 bg-cyan-400/[0.08] text-cyan-100"
         }`}>{fullVideoState.msg}</div>
       ) : null}
-      {jobLastError ? (
+      {jobLastError && (!isVideo || !effectiveEvidenceId) ? (
         <div className="mt-2 rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-2 py-1.5 text-[10.5px] text-rose-100">
-          分析失败: {jobLastError}
+          <div>分析失败：{jobFailureCopy.message}</div>
+          {jobFailureCopy.code ? <div className="mt-1 font-mono text-[9px] text-rose-200/60">诊断码：{jobFailureCopy.code}</div> : null}
         </div>
       ) : null}
       {!result.execute && actionDescription(result.next_action) ? (

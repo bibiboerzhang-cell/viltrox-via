@@ -12,17 +12,13 @@ from app.core.security import require_admin, require_admin_async
 from app.services.ingestion.pipeline import build_platform_job_type
 from app.services.ingestion.research import detect_learning_source
 from app.services.intelligence.dashboard import build_bh_dashboard
-from app.services.intelligence.lens_compare import compare_two_lenses
-from app.services.intelligence.lens_monitor import monitor_lens_market
 from app.services.intelligence import (
     build_viltrox_overview,
-    fetch_bh_viltrox_products,
     get_latest_bh_products,
     get_bh_summary,
     get_bh_price_history,
     get_bh_top_rated,
     reset_viltrox_official_roster,
-    save_bh_snapshot,
     scan_viltrox_official_matrix_now,
 )
 from app.services.cache import cache_clear, cached
@@ -36,7 +32,6 @@ from app.services.memory import (
     list_via_live_rollout_health,
     list_via_shadow_rollout_readiness,
     promote_via_policy_version_guarded,
-    run_via_daily_learning,
     run_via_offline_evaluator,
 )
 from app.db.repositories.via_control import (
@@ -271,15 +266,24 @@ async def intel_monitor(request: Request, body: dict):
     if max_videos > 50:
         max_videos = 50
     
-    result = await monitor_lens_market(
-        query,
-        max_videos=max_videos,
-        platform=(body.get("platform") or "youtube").strip().lower(),
-        market=(body.get("market") or body.get("region_code") or "").strip().upper(),
-        date_from=(body.get("date_from") or "").strip(),
-        date_to=(body.get("date_to") or "").strip(),
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(503, "durable job queue unavailable")
+    payload = {
+        "query": query,
+        "max_videos": max_videos,
+        "platform": (body.get("platform") or "youtube").strip().lower(),
+        "market": (body.get("market") or body.get("region_code") or "").strip().upper(),
+        "date_from": (body.get("date_from") or "").strip(),
+        "date_to": (body.get("date_to") or "").strip(),
+    }
+    task_id = await queue.enqueue(
+        "intel_lens_monitor",
+        payload,
+        lock_key=f"intel_lens_monitor:{payload['platform']}:{query.lower()}",
+        timeout_seconds=1200,
     )
-    return result
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/compare")
@@ -305,16 +309,25 @@ async def intel_compare(request: Request, body: dict):
     if max_videos > 30:
         max_videos = 30
     
-    result = await compare_two_lenses(
-        lens_a,
-        lens_b,
-        max_videos=max_videos,
-        platform=(body.get("platform") or "youtube").strip().lower(),
-        market=(body.get("market") or body.get("region_code") or "").strip().upper(),
-        date_from=(body.get("date_from") or "").strip(),
-        date_to=(body.get("date_to") or "").strip(),
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(503, "durable job queue unavailable")
+    payload = {
+        "lens_a": lens_a,
+        "lens_b": lens_b,
+        "max_videos": max_videos,
+        "platform": (body.get("platform") or "youtube").strip().lower(),
+        "market": (body.get("market") or body.get("region_code") or "").strip().upper(),
+        "date_from": (body.get("date_from") or "").strip(),
+        "date_to": (body.get("date_to") or "").strip(),
+    }
+    task_id = await queue.enqueue(
+        "intel_lens_compare",
+        payload,
+        lock_key=f"intel_lens_compare:{payload['platform']}:{lens_a.lower()}:{lens_b.lower()}",
+        timeout_seconds=1200,
     )
-    return result
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/bh/refresh-now")
@@ -325,25 +338,17 @@ async def bh_refresh_now(request: Request, max_items: int = 500):
     费 ~30 秒, 1 次 Apify call.
     """
     await require_admin_async(request)
-    logger.info("intel.bh_refresh_triggered", extra={"max_items": max_items})
-    products = await fetch_bh_viltrox_products(max_items=max_items)
-    
-    if not products:
-        return {
-            "ok": False,
-            "message": "B&H scraper returned no products",
-            "saved": 0,
-        }
-    
-    saved = await save_bh_snapshot(products)
-    cache_clear(prefix="intel:")
-    
-    return {
-        "ok": True,
-        "fetched": len(products),
-        "saved": saved,
-        "summary": get_bh_summary(),
-    }
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(503, "durable job queue unavailable")
+    logger.info("intel.bh_refresh_queued", extra={"max_items": max_items})
+    task_id = await queue.enqueue(
+        "intel_bh_refresh",
+        {"max_items": max(1, min(1000, int(max_items or 100)))},
+        lock_key="intel_bh_refresh:catalog",
+        timeout_seconds=1800,
+    )
+    return {"ok": True, "status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.post("/learn/url")
@@ -393,9 +398,16 @@ async def learn_from_url(request: Request, body: dict):
 async def via_learn_now(request: Request):
     """手动触发 Via 官方渠道 + B&H 日常学习"""
     await require_admin_async(request)
-    result = await run_via_daily_learning()
-    _clear_via_admin_cache()
-    return result
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(503, "durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "intel_via_learning",
+        {},
+        lock_key="intel_via_learning:daily",
+        timeout_seconds=3600,
+    )
+    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
 @router.get("/via/control-overview")

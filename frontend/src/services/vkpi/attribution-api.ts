@@ -2,6 +2,12 @@ import { apiFetch, jsonBody } from "../http";
 
 type Row = Record<string, unknown>;
 
+export interface VkpiAuthorizationEvidence {
+  authorizationRef: string;
+  reason: string;
+  confirmedByHuman: boolean;
+}
+
 export interface VkpiAttributionPayload {
   sourcePlatform: "shopify" | "amazon" | "manual" | "custom";
   sourceRef: string;
@@ -13,6 +19,7 @@ export interface VkpiAttributionPayload {
   commissionUsd?: number;
   confidence?: string;
   occurredAt?: string;
+  authorizationEvidence?: VkpiAuthorizationEvidence;
 }
 
 export interface VkpiAmazonImportPayload {
@@ -22,6 +29,7 @@ export interface VkpiAmazonImportPayload {
   marketplace?: string;
   reportDate?: string;
   rows: Row[];
+  authorizationEvidence?: VkpiAuthorizationEvidence;
 }
 
 export async function createSalesAttribution(token: string, payload: VkpiAttributionPayload) {
@@ -38,8 +46,15 @@ export async function createSalesAttribution(token: string, payload: VkpiAttribu
         order_id: payload.orderId ? Number(payload.orderId) : undefined,
         revenue_usd: payload.revenueUsd,
         commission_usd: payload.commissionUsd,
-        confidence: payload.confidence || "confirmed",
+        confidence: payload.confidence || "pending",
         occurred_at: payload.occurredAt,
+        authorization_evidence: payload.authorizationEvidence
+          ? {
+              authorization_ref: payload.authorizationEvidence.authorizationRef,
+              reason: payload.authorizationEvidence.reason,
+              confirmed_by_human: payload.authorizationEvidence.confirmedByHuman,
+            }
+          : undefined,
       }),
     },
     token,
@@ -58,6 +73,13 @@ export async function importAmazonAttributionRows(token: string, payload: VkpiAm
         marketplace: payload.marketplace || "US",
         report_date: payload.reportDate,
         rows: payload.rows,
+        authorization_evidence: payload.authorizationEvidence
+          ? {
+              authorization_ref: payload.authorizationEvidence.authorizationRef,
+              reason: payload.authorizationEvidence.reason,
+              confirmed_by_human: payload.authorizationEvidence.confirmedByHuman,
+            }
+          : undefined,
       }),
     },
     token,
@@ -75,6 +97,11 @@ export async function uploadAmazonAttributionReport(
   if (payload.asin) form.set("asin", payload.asin);
   form.set("marketplace", payload.marketplace || "US");
   if (payload.reportDate) form.set("report_date", payload.reportDate);
+  if (payload.authorizationEvidence) {
+    form.set("authorization_ref", payload.authorizationEvidence.authorizationRef);
+    form.set("authorization_reason", payload.authorizationEvidence.reason);
+    form.set("confirmed_by_human", String(payload.authorizationEvidence.confirmedByHuman));
+  }
   return apiFetch<Row>("/api/marketing/attribution/amazon/upload", { method: "POST", body: form }, token);
 }
 
@@ -103,12 +130,13 @@ export interface ShopifySyncRun {
 }
 
 export interface ShopifyProviderStatus {
-  provider_status: "configured" | "not_configured";
+  provider_status: "connected" | "configured" | "not_configured";
   shop_domain?: string;
   shop_domain_configured?: boolean;
   access_token_configured?: boolean;
   webhook_secret_configured?: boolean;
-  env_vars?: Record<string, boolean>;
+  credential_source?: "db" | "env" | "none" | string;
+  credential_fields?: Record<string, boolean>;
   webhooks?: { orders_create?: string; orders_refund_create?: string };
   sync_runs?: ShopifySyncRun[];
   message?: string;

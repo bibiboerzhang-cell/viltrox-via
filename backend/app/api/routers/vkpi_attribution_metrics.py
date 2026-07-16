@@ -11,6 +11,7 @@ from app.domains import attribution
 from app.domains import lineage as metric_lineage
 from app.domains.staff import kpi_ledger
 from app.domains import audit
+from app.domains import business_truth
 from app.domains.access import scope
 from app.domains.projects import workflow
 from app.domains.projects.workflow import staff_id as resolve_staff_id
@@ -88,10 +89,44 @@ def estimated_attribution(
         raise _scope_403(exc) from exc
 
 
-@router.post("/attribution")
-def create_attribution(body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def _authorization_or_http(body: dict, *, staff: dict, action: str) -> dict:
     try:
-        return attribution.create_attribution(body, staff=staff)
+        return business_truth.require_authorization_evidence(body, staff=staff, action=action)
+    except business_truth.BusinessTruthWriteBlocked as exc:
+        status_code = 409 if exc.reason == "feature_disabled" else 400
+        raise HTTPException(status_code=status_code, detail={"reason": exc.reason, "message": str(exc)}) from exc
+
+
+@router.post("/attribution")
+def create_attribution(body: dict, staff=Depends(require_tab("vkpi", "admin"))):
+    try:
+        authorization = _authorization_or_http(body, staff=staff, action="manual_attribution_create")
+        return attribution.create_manual_attribution(
+            body,
+            authorization_evidence=authorization,
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        raise _scope_403(exc) from exc
+
+
+@router.post("/attribution/{attribution_id}/verify")
+def verify_manual_attribution(
+    attribution_id: int,
+    body: dict,
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    authorization = _authorization_or_http(body, staff=staff, action="manual_attribution_verify")
+    try:
+        return attribution.verify_manual_attribution(
+            int(attribution_id),
+            authorization_evidence=authorization,
+            staff=staff,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -99,9 +134,13 @@ def create_attribution(body: dict, staff=Depends(require_tab("vkpi", "write"))):
 
 
 @router.post("/attribution/amazon/import")
-def import_amazon(body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def import_amazon(body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     try:
-        return attribution.import_amazon(body, staff=staff)
+        authorization = _authorization_or_http(body, staff=staff, action="amazon_attribution_import")
+        return attribution.import_amazon(
+            {**body, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -167,12 +206,26 @@ async def upload_amazon_report(
     asin: str = Form(default=""),
     marketplace: str = Form(default="US"),
     report_date: str = Form(default=""),
-    staff=Depends(require_tab("vkpi", "write")),
+    authorization_ref: str = Form(default=""),
+    authorization_reason: str = Form(default=""),
+    confirmed_by_human: bool = Form(default=False),
+    staff=Depends(require_tab("vkpi", "admin")),
 ):
     content = await file.read()
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="amazon report too large")
     try:
+        authorization = _authorization_or_http(
+            {
+                "authorization_evidence": {
+                    "authorization_ref": authorization_ref,
+                    "reason": authorization_reason,
+                    "confirmed_by_human": confirmed_by_human,
+                }
+            },
+            staff=staff,
+            action="amazon_attribution_report_upload",
+        )
         return integrations.import_amazon_report(
             content,
             file.filename or "amazon-report.csv",
@@ -183,6 +236,7 @@ async def upload_amazon_report(
                 "asin": asin,
                 "marketplace": marketplace,
                 "report_date": report_date,
+                "_authorization_evidence": authorization,
             },
             staff=staff,
         )

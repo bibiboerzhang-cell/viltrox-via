@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
     _bio,
@@ -378,22 +379,20 @@ def _enqueue_account_dossier_extract_followup(
         "source_url": source_url,
         "query_text": query_text or f"account dossier - kol_pool #{int(kol_pool_id)}",
     }
-    row = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES ('account_dossier_extract', ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id, job_type, status, created_at, updated_at
-        """,
-        (json.dumps(payload, ensure_ascii=False, default=str),),
-    ).fetchone()
+    row, inserted = enqueue_active_apify_job(
+        conn,
+        job_type="account_dossier_extract",
+        payload=payload,
+        idempotency_key=active_job_idempotency_key("account_dossier_extract", int(kol_pool_id)),
+    )
     try:
         conn.commit()
     except Exception:
         logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return {
-        "status": "queued",
-        "job": dict(row) if row else None,
+        "status": "queued" if inserted else ("already_running" if row.get("status") == "running" else "already_queued"),
+        "job": row,
         "kol_pool_id": int(kol_pool_id),
         "viltrox_fit_score_changed_ids": [],
         "viltrox_fit_score_untouched": True,

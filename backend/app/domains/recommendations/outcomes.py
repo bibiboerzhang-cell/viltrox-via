@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.shared.vkpi_utils import utcnow_iso
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -159,20 +160,26 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
         return {"outcome": None, "aggregates": {"status": "recommendation_not_found"}}
 
     rec_dict = dict(rec)
+    existing_outcome = conn.execute(
+        "SELECT * FROM vkpi_recommendation_outcomes WHERE recommendation_id=?",
+        (int(recommendation_id),),
+    ).fetchone()
+    recommended_at = (
+        _row_get(existing_outcome, "recommended_at")
+        or rec_dict.get("created_at")
+        or _utcnow()
+    )
+    launch_sku = ""
+    launch_id = int(rec_dict.get("launch_id") or 0)
+    if launch_id > 0:
+        launch_row = conn.execute(
+            "SELECT product_sku FROM vkpi_product_launches WHERE id=?",
+            (launch_id,),
+        ).fetchone()
+        launch_sku = str(_row_get(launch_row, "product_sku", "") or "").strip()
     # 打通 attribution→outcome:缺键时从已确认的 pool 桥解析 linked_main_kol_id,否则下方 join 全断。
     # 默认 persist=False(只内存生效,不改既有推荐行);persist_linked_kol=True 才落库回填(待审批后批量)。
     _resolve_linked_kol_id(conn, rec_dict, persist=bool(persist_linked_kol))
-    ensure_outcome(
-        int(recommendation_id),
-        kol_pool_id=rec_dict.get("kol_pool_id"),
-        launch_id=rec_dict.get("launch_id"),
-        feature_snapshot=_loads_safe(rec_dict.get("feature_snapshot_json")),
-        scoring_breakdown=_loads_safe(rec_dict.get("scoring_breakdown_json")),
-        model_version=str((_loads_safe(rec_dict.get("scoring_breakdown_json")) or {}).get("strategy_version") or "rule_v0"),
-        display_position=rec_dict.get("rank"),
-        display_context={"rank": rec_dict.get("rank"), "score": rec_dict.get("score"), "status": rec_dict.get("status")},
-    )
-
     kol_id = int(rec_dict.get("linked_main_kol_id") or 0)
     rec_id = int(recommendation_id)
     projects = conn.execute(
@@ -180,17 +187,30 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
         SELECT id, stage, created_at, updated_at
         FROM vkpi_projects
         WHERE COALESCE(stage_status, '') != 'deleted'
+          AND created_at >= ?
           AND (
             metadata_json LIKE ?
             OR metadata_json LIKE ?
-            OR (? > 0 AND kol_id=? AND source_type='product_recommendation')
+            OR (
+              ? > 0 AND kol_id=? AND source_type='product_recommendation'
+              AND (? = '' OR product_sku = ?)
+            )
           )
         """,
-        (f'%"recommendation_id": {rec_id}%', f'%"recommendation_id":{rec_id}%', kol_id, kol_id),
+        (
+            recommended_at,
+            f'%"recommendation_id": {rec_id}%',
+            f'%"recommendation_id":{rec_id}%',
+            kol_id,
+            kol_id,
+            launch_sku,
+            launch_sku,
+        ),
     ).fetchall()
     project_ids = [int(row["id"]) for row in projects]
     project_clause, project_params = _ids_clause("project_id", project_ids)
     stage_map = {int(row["id"]): str(row["stage"] or "") for row in projects}
+    first_project = _first_timestamp([row["created_at"] for row in projects])
 
     message_where = []
     message_params: list[Any] = []
@@ -198,11 +218,9 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
         clause, params = _ids_clause("project_id", project_ids)
         message_where.append(clause)
         message_params.extend(params)
-    if kol_id:
-        message_where.append("kol_id=?")
-        message_params.append(kol_id)
     message_stats = None
     if message_where:
+        message_params.append(recommended_at)
         message_stats = conn.execute(
             f"""
             SELECT
@@ -210,7 +228,8 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
                 MIN(CASE WHEN direction='outbound' THEN captured_at END) AS first_outbound_at,
                 MIN(CASE WHEN direction='inbound' THEN captured_at END) AS first_inbound_at
             FROM vkpi_messages
-            WHERE {' OR '.join(f'({part})' for part in message_where)}
+            WHERE ({' OR '.join(f'({part})' for part in message_where)})
+              AND captured_at >= ?
             """,
             tuple(message_params),
         ).fetchone()
@@ -224,8 +243,9 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
             FROM vkpi_project_stage_events
             WHERE {agreement_clause}
               AND to_stage IN ('agreed','shipped','received','published','measured','closed')
+              AND effective_at >= ?
             """,
-            tuple(agreement_params),
+            (*agreement_params, recommended_at),
         ).fetchone()
 
     content_stats = None
@@ -238,21 +258,19 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
                 MIN(post_url) AS content_url
             FROM vkpi_content_posts
             WHERE {project_clause}
+              AND COALESCE(published_at, created_at) >= ?
             """,
-            tuple(project_params),
+            (*project_params, recommended_at),
         ).fetchone()
 
     click_stats = None
-    if project_ids or kol_id:
+    if project_ids:
         click_where = []
         click_params: list[Any] = []
-        if project_ids:
-            link_project_clause, link_project_params = _ids_clause("l.project_id", project_ids)
-            click_where.append(link_project_clause)
-            click_params.extend(link_project_params)
-        if kol_id:
-            click_where.append("l.kol_id=?")
-            click_params.append(kol_id)
+        link_project_clause, link_project_params = _ids_clause("l.project_id", project_ids)
+        click_where.append(link_project_clause)
+        click_params.extend(link_project_params)
+        click_params.append(recommended_at)
         click_stats = conn.execute(
             f"""
             SELECT COUNT(*) AS valid_clicks
@@ -260,21 +278,19 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
             JOIN vkpi_links l ON l.id = c.link_id
             WHERE COALESCE(c.is_bot, 0)=0
               AND ({' OR '.join(f'({part})' for part in click_where)})
+              AND c.clicked_at >= ?
             """,
             tuple(click_params),
         ).fetchone()
 
     sales_stats = None
-    if project_ids or kol_id:
+    if project_ids:
         sales_where = []
         sales_params: list[Any] = []
-        if project_ids:
-            sales_project_clause, sales_project_params = _ids_clause("project_id", project_ids)
-            sales_where.append(sales_project_clause)
-            sales_params.extend(sales_project_params)
-        if kol_id:
-            sales_where.append("kol_id=?")
-            sales_params.append(kol_id)
+        sales_project_clause, sales_project_params = _ids_clause("project_id", project_ids)
+        sales_where.append(sales_project_clause)
+        sales_params.extend(sales_project_params)
+        sales_params.append(recommended_at)
         # 净额口径:退款是 revenue_cents<0 的负归因行,必须计入 GMV 净额,不能被 >0 过滤掉。
         #   - gmv_cents = SUM(revenue_cents):正单 + 负退款 = 净销售额(退款向下修正)。
         #   - orders    = 只数正向真实订单(revenue_cents>0),退款不算"新订单"而是冲减额;
@@ -288,8 +304,9 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
                 COALESCE(SUM(revenue_cents), 0) AS gmv_cents,
                 MIN(CASE WHEN revenue_cents > 0 THEN COALESCE(occurred_at, created_at) END) AS first_order_at
             FROM vkpi_sales_attributions
-            WHERE confidence != 'excluded'
+            WHERE {business_truth.verified_shopify_attribution_sql()}
               AND ({' OR '.join(f'({part})' for part in sales_where)})
+              AND COALESCE(occurred_at, created_at) >= ?
             """,
             tuple(sales_params),
         ).fetchone()
@@ -301,9 +318,10 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
             SELECT COALESCE(SUM(amount_cents), 0) AS cost_cents
             FROM vkpi_cost_ledger
             WHERE {project_clause}
-              AND status != 'void'
+              AND {business_truth.approved_actual_cost_sql()}
+              AND incurred_at >= ?
             """,
-            tuple(project_params),
+            (*project_params, recommended_at),
         ).fetchone()
 
     # was_claimed 的真业务行来源:vkpi_kol_claims(kol_id = kols.id = linked_main_kol_id)。
@@ -318,8 +336,9 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
                 MIN(COALESCE(claimed_at, created_at)) AS first_claim_at
             FROM vkpi_kol_claims
             WHERE kol_id=?
+              AND COALESCE(claimed_at, created_at) >= ?
             """,
-            (kol_id,),
+            (kol_id, recommended_at),
         ).fetchone()
 
     first_outreach = str(_row_get(message_stats, "first_outbound_at") or _row_get(message_stats, "first_message_at") or "") or None
@@ -336,6 +355,47 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
     gmv_cents = int(_row_get(sales_stats, "gmv_cents", 0) or 0)
     cost_cents = int(_row_get(cost_stats, "cost_cents", 0) or 0)
     computed_roi = (float(gmv_cents) / float(cost_cents)) if cost_cents > 0 else None
+    aggregates = {
+        "status": "ready" if project_ids or first_claim else "no_observed_business_evidence",
+        "project_ids": project_ids,
+        "kol_id": kol_id,
+        "project_created": bool(first_project),
+        "was_claimed": bool(first_claim),
+        "outreach_sent": bool(first_outreach),
+        "reply_received": bool(first_reply),
+        "agreement_reached": bool(first_agreement),
+        "content_published": bool(first_content),
+        "order_attributed": bool(first_order and orders > 0 and gmv_cents > 0),
+        "valid_clicks": clicks,
+        "orders": orders,
+        "gmv_cents": gmv_cents,
+        "cost_cents": cost_cents,
+        "computed_roi": computed_roi,
+    }
+    if not project_ids and not first_claim:
+        return {
+            "outcome": dict(existing_outcome) if existing_outcome else None,
+            "aggregates": aggregates,
+        }
+
+    if not existing_outcome:
+        ensure_outcome(
+            int(recommendation_id),
+            kol_pool_id=rec_dict.get("kol_pool_id"),
+            launch_id=rec_dict.get("launch_id"),
+            feature_snapshot=_loads_safe(rec_dict.get("feature_snapshot_json")),
+            scoring_breakdown=_loads_safe(rec_dict.get("scoring_breakdown_json")),
+            model_version=str(
+                (_loads_safe(rec_dict.get("scoring_breakdown_json")) or {}).get("strategy_version")
+                or "rule_v0"
+            ),
+            display_position=rec_dict.get("rank"),
+            display_context={
+                "rank": rec_dict.get("rank"),
+                "score": rec_dict.get("score"),
+                "status": rec_dict.get("status"),
+            },
+        )
 
     updates: list[str] = [
         "attributed_clicks=?",
@@ -343,9 +403,15 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
         "attributed_gmv_cents=?",
         "attributed_cost_cents=?",
         "computed_roi=?",
+        "order_attributed=?",
     ]
-    params: list[Any] = [clicks, orders, gmv_cents, cost_cents, computed_roi]
+    has_net_order = bool(first_order and orders > 0 and gmv_cents > 0)
+    params: list[Any] = [clicks, orders, gmv_cents, cost_cents, computed_roi, has_net_order]
     first_actions: list[Any] = []
+    if first_project:
+        updates.extend(["project_created=?", "project_created_at=COALESCE(project_created_at, ?)"])
+        params.extend([True, first_project])
+        first_actions.append(first_project)
     if first_claim:
         updates.extend(["was_claimed=?", "claimed_at=COALESCE(claimed_at, ?)"])
         params.append(True)
@@ -375,9 +441,8 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
             updates.append("content_url=COALESCE(NULLIF(content_url, ''), ?)")
             params.append(content_url)
     # 净额口径:有正向订单且净 GMV>0 才促升 order_attributed(全额退款 → 净额<=0 → 不算已归因)。
-    if first_order and orders > 0 and gmv_cents > 0:
-        updates.extend(["order_attributed=?", "first_order_at=COALESCE(first_order_at, ?)"])
-        params.append(True)
+    if has_net_order:
+        updates.append("first_order_at=COALESCE(first_order_at, ?)")
         params.append(first_order)
         first_actions.append(first_order)
     first_action = _first_timestamp(first_actions)
@@ -391,21 +456,8 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
     )
     conn.commit()
     result = get_outcome(rec_id)
-    result["aggregates"] = {
-        "project_ids": project_ids,
-        "kol_id": kol_id,
-        "was_claimed": bool(first_claim),
-        "outreach_sent": bool(first_outreach),
-        "reply_received": bool(first_reply),
-        "agreement_reached": bool(first_agreement),
-        "content_published": bool(first_content),
-        "order_attributed": orders > 0 and gmv_cents > 0,  # 净额>0 才算已归因(退款净化)
-        "valid_clicks": clicks,
-        "orders": orders,
-        "gmv_cents": gmv_cents,  # 净额(含退款负行)
-        "cost_cents": cost_cents,
-        "computed_roi": computed_roi,
-    }
+    aggregates["order_attributed"] = has_net_order
+    result["aggregates"] = aggregates
     return result
 
 
@@ -451,20 +503,32 @@ def refresh_open_outcomes(limit: int = 200, *, persist_linked_kol: bool = False)
                     "只读真实业务行促升,零伪造、零触 viltrox_fit_score。"}
 
 
-def ensure_outcomes_for_display(recs: list[dict[str, Any]], *, display_context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """展示路径挂钩:为每条被展示的推荐幂等落一行 outcome 底座(学习闭环·结果段接线)。
+def ensure_outcomes_for_display(
+    recs: list[dict[str, Any]],
+    *,
+    display_context: dict[str, Any] | None = None,
+    create_missing: bool = False,
+) -> dict[str, Any]:
+    """Audit outcome coverage for displayed recommendations.
 
-    幂等口径:outcomes 按 recommendation_id 一行 —— 先批量查缺,只对缺失行补底座,
-    同一推荐反复展示/同日多次刷新绝不刷屏落行。全函数自吞异常(单条也各自吞),
-    任何失败只告警,绝不影响推荐展示主流程。红线:零触 viltrox_fit_score / rule_v0 评分。
+    Display/read paths are read-only by default: missing outcome rows are reported
+    but not created. Explicit recommendation materialization or outcome refresh may
+    opt in with create_missing=True. Empty placeholders are never business results.
     """
     ensured = 0
     skipped_existing = 0
+    missing_not_created = 0
     try:
-        ids = [int(rec.get("id") or 0) for rec in (recs or []) if int(rec.get("id") or 0) > 0]
+        ids = list(dict.fromkeys(
+            int(rec.get("id") or 0)
+            for rec in (recs or [])
+            if int(rec.get("id") or 0) > 0
+        ))
         if not ids:
-            return {"ensured": 0, "existing": 0}
-        ensure_vkpi_product_industry_schema()
+            return {"ensured": 0, "existing": 0, "missing": 0,
+                    "create_missing": bool(create_missing), "writes": False}
+        if create_missing:
+            ensure_vkpi_product_industry_schema()
         conn = get_conn()
         clause, params = _ids_clause("recommendation_id", ids)
         existing_rows = conn.execute(
@@ -472,12 +536,17 @@ def ensure_outcomes_for_display(recs: list[dict[str, Any]], *, display_context: 
             tuple(params),
         ).fetchall()
         existing = {int(_row_get(row, "recommendation_id", 0) or 0) for row in existing_rows}
+        seen: set[int] = set()
         for rec in recs or []:
             rec_id = int(rec.get("id") or 0)
-            if rec_id <= 0:
+            if rec_id <= 0 or rec_id in seen:
                 continue
+            seen.add(rec_id)
             if rec_id in existing:
                 skipped_existing += 1
+                continue
+            if not create_missing:
+                missing_not_created += 1
                 continue
             try:
                 breakdown = _loads_safe(rec.get("scoring_breakdown_json"))
@@ -502,7 +571,13 @@ def ensure_outcomes_for_display(recs: list[dict[str, Any]], *, display_context: 
                 logger.warning("ensure_outcomes_for_display.one_failed rec_id=%s", rec_id, exc_info=True)
     except Exception:
         logger.warning("ensure_outcomes_for_display.failed", exc_info=True)
-    return {"ensured": ensured, "existing": skipped_existing}
+    return {
+        "ensured": ensured,
+        "existing": skipped_existing,
+        "missing": missing_not_created,
+        "create_missing": bool(create_missing),
+        "writes": bool(create_missing and ensured),
+    }
 
 
 def refresh_unfinalized_outcomes(limit: int = 500) -> dict[str, Any]:

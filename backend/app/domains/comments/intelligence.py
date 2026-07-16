@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.comments import collector as comments_collector
 from app.domains.comments.intelligence_rules import _rule_sentiment, _rule_tags, rule_v0_comment_summary
 import app.domains.comments.sentiment as sentiment
@@ -30,26 +30,48 @@ def _now_iso() -> str:
 def ensure_vkpi_comment_intelligence_schema() -> None:
     """Create pipeline run ledger when migrations are absent."""
     conn = get_conn()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_comment_intelligence_runs (
-          id BIGSERIAL PRIMARY KEY,
-          run_uid TEXT UNIQUE NOT NULL,
-          post_id BIGINT NOT NULL,
-          post_table VARCHAR(50) NOT NULL DEFAULT 'industry_posts',
-          status VARCHAR(20) NOT NULL DEFAULT 'running',
-          triggered_by VARCHAR(50),
-          staff_id INT,
-          retry_of_run_id BIGINT,
-          params_json TEXT,
-          steps_json TEXT,
-          error_message TEXT,
-          started_at TIMESTAMPTZ DEFAULT NOW(),
-          finished_at TIMESTAMPTZ,
-          created_at TIMESTAMPTZ DEFAULT NOW()
+    if is_postgres_runtime():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_comment_intelligence_runs (
+              id BIGSERIAL PRIMARY KEY,
+              run_uid TEXT UNIQUE NOT NULL,
+              post_id BIGINT NOT NULL,
+              post_table VARCHAR(50) NOT NULL DEFAULT 'industry_posts',
+              status VARCHAR(20) NOT NULL DEFAULT 'running',
+              triggered_by VARCHAR(50),
+              staff_id INT,
+              retry_of_run_id BIGINT,
+              params_json TEXT,
+              steps_json TEXT,
+              error_message TEXT,
+              started_at TIMESTAMPTZ DEFAULT NOW(),
+              finished_at TIMESTAMPTZ,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vkpi_comment_intelligence_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              run_uid TEXT UNIQUE NOT NULL,
+              post_id INTEGER NOT NULL,
+              post_table TEXT NOT NULL DEFAULT 'industry_posts',
+              status TEXT NOT NULL DEFAULT 'running',
+              triggered_by TEXT,
+              staff_id INTEGER,
+              retry_of_run_id INTEGER,
+              params_json TEXT,
+              steps_json TEXT,
+              error_message TEXT,
+              started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              finished_at TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_vkpi_ci_runs_post ON vkpi_comment_intelligence_runs(post_id, post_table, created_at DESC)"
     )
@@ -162,7 +184,10 @@ def _comment_ids_for_post(
     where = ["c.post_id = ?", "c.post_table = ?"]
     params: list[Any] = [int(post_id), post_table]
     if not force_reprocess:
-        where.append("s.id IS NULL")
+        where.append(
+            "(s.id IS NULL OR (COALESCE(s.llm_provider, '') = 'rule_v0' "
+            "AND COALESCE(s.llm_model, '') = 'rule_v0'))"
+        )
 
     rows = conn.execute(
         f"""
@@ -215,9 +240,10 @@ def _sync_comment_pillar_links(post_id: int, post_table: str) -> dict[str, Any]:
         (int(post_id), post_table, int(primary["pillar_id"])),
     ).fetchone()
     conn.commit()
+    updated_item = dict(updated) if updated else {}
     return {
         "status": "ok",
-        "updated": int((updated or {}).get("n") or 0),
+        "updated": int(updated_item.get("n") or 0),
         "pillar_id": int(primary["pillar_id"]),
     }
 
@@ -504,7 +530,7 @@ def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
         (safe_recent,),
     ).fetchall()
 
-    comment_coverage = conn.execute(
+    comment_coverage_row = conn.execute(
         """
         SELECT
           COUNT(*) AS total_comments,
@@ -514,13 +540,14 @@ def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
         WHERE fetched_at >= ?
         """,
         (cutoff,),
-    ).fetchone() or {}
+    ).fetchone()
+    comment_coverage = dict(comment_coverage_row) if comment_coverage_row else {}
     total_comments = int(comment_coverage.get("total_comments") or 0)
     with_sentiment = int(comment_coverage.get("with_sentiment") or 0)
     with_pillar = int(comment_coverage.get("with_pillar") or 0)
 
     if _table_exists("vkpi_industry_posts"):
-        post_coverage = conn.execute(
+        post_coverage_row = conn.execute(
             """
             SELECT
               COUNT(DISTINCT p.id) AS total_posts,
@@ -533,7 +560,8 @@ def overview(*, days: int = 7, recent_limit: int = 8) -> dict[str, Any]:
             WHERE p.created_at >= ?
             """,
             (cutoff,),
-        ).fetchone() or {}
+        ).fetchone()
+        post_coverage = dict(post_coverage_row) if post_coverage_row else {}
     else:
         post_coverage = {}
     total_posts = int(post_coverage.get("total_posts") or 0)

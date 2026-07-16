@@ -12,6 +12,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
@@ -21,6 +23,7 @@ import psycopg  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 
 from app.core.config import DB_RUNTIME_URL  # noqa: E402
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key  # noqa: E402
 
 
 DERIVE_METHOD = "video_analysis_final_v1"
@@ -168,16 +171,37 @@ def _insert_jobs(conn: psycopg.Connection[Any], planned: list[dict[str, Any]]) -
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
             for item in planned:
+                idempotency_key = active_job_idempotency_key("video-final-v1", item["target_id"])
                 cur.execute(
                     """
-                    INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-                    VALUES ('video', %s::jsonb, 'queued', NOW(), NOW())
+                    INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
+                    VALUES ('video', %s::jsonb, %s, 'queued', NOW(), NOW())
+                    ON CONFLICT (idempotency_key)
+                      WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''
+                        AND status IN ('queued', 'running')
+                    DO NOTHING
                     RETURNING id, status, created_at
                     """,
-                    (json.dumps(item["payload"], ensure_ascii=False),),
+                    (json.dumps(item["payload"], ensure_ascii=False), idempotency_key),
                 )
                 row = dict(cur.fetchone() or {})
-                inserted.append({"target_id": item["target_id"], "job_id": row.get("id"), "status": row.get("status")})
+                was_inserted = bool(row)
+                if not row:
+                    cur.execute(
+                        """SELECT id, status, created_at FROM apify_jobs
+                           WHERE idempotency_key=%s AND status IN ('queued', 'running')
+                           ORDER BY id DESC LIMIT 1""",
+                        (idempotency_key,),
+                    )
+                    row = dict(cur.fetchone() or {})
+                inserted.append(
+                    {
+                        "target_id": item["target_id"],
+                        "job_id": row.get("id"),
+                        "status": row.get("status"),
+                        "inserted": was_inserted,
+                    }
+                )
     return inserted
 
 
@@ -189,27 +213,28 @@ def _print_report(*, batch: str, commit: bool, classified: dict[str, Any], inser
     planned_platforms = Counter(str(item.get("platform_by_host") or "unknown") for item in planned)
     eligible_platforms = Counter(str(item.get("platform_by_host") or "unknown") for item in eligible_video)
     skipped_reasons = Counter(str(item.get("skip_reason") or "unknown") for item in skipped)
-    print(f"mode: {'commit' if commit else 'dry-run'}")
-    print(f"batch: {batch}")
-    print(f"derive_method: {DERIVE_METHOD}")
-    print(f"eligible_video_count: {len(eligible_video)}")
-    print("eligible_video_platforms:", dict(sorted(eligible_platforms.items())))
-    print(f"filtered_non_video_count: {len(filtered_non_video)}")
-    print("filtered_non_video_target_ids:", [str(item["target_id"]) for item in filtered_non_video])
-    print(f"planned_count: {len(planned)}")
-    print("planned_platforms:", dict(sorted(planned_platforms.items())))
-    print("skipped_reasons:", dict(sorted(skipped_reasons.items())))
+    out(f"mode: {'commit' if commit else 'dry-run'}")
+    out(f"batch: {batch}")
+    out(f"derive_method: {DERIVE_METHOD}")
+    out(f"eligible_video_count: {len(eligible_video)}")
+    out("eligible_video_platforms:", dict(sorted(eligible_platforms.items())))
+    out(f"filtered_non_video_count: {len(filtered_non_video)}")
+    out("filtered_non_video_target_ids:", [str(item["target_id"]) for item in filtered_non_video])
+    out(f"planned_count: {len(planned)}")
+    out("planned_platforms:", dict(sorted(planned_platforms.items())))
+    out("skipped_reasons:", dict(sorted(skipped_reasons.items())))
     if inserted is not None:
-        print(f"inserted_jobs: {len(inserted)}")
-    print("\nplanned:")
+        out(f"inserted_jobs: {sum(1 for item in inserted if item.get('inserted'))}")
+        out(f"reused_active_jobs: {sum(1 for item in inserted if not item.get('inserted'))}")
+    out("\nplanned:")
     for item in planned:
-        print(
+        out(
             f"{item['target_id']}\t{item['platform_by_host']}\t{item.get('kol') or '-'}\t"
             f"{item.get('publish_date') or '-'}\t{str(item.get('title') or '')[:120]}"
         )
-    print("\nskipped:")
+    out("\nskipped:")
     for item in skipped:
-        print(
+        out(
             f"{item['target_id']}\t{item['platform_by_host']}\t{item.get('skip_reason')}\t"
             f"{item.get('kol') or '-'}\t{item.get('publish_date') or '-'}"
         )

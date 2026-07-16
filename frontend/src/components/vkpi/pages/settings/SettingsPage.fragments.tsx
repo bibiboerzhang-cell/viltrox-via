@@ -7,6 +7,7 @@ import { boolValue } from '../../../../domains/settings';
 
 export const SETTINGS_MODULE_TITLES = {
   status: '当前状态',
+  businessIntegrations: '真实业务连接',
   sku: 'SKU 录入',
   staff: '账号授权',
   funds: '资金管理',
@@ -49,7 +50,6 @@ export function SettingsProviderGrid({ providers }: { providers: Array<Record<st
       {ordered.map((row) => {
         const configured = boolValue(row.configured, false);
         const ok = boolValue(row.ok, false);
-        const keyMask = String(row.key_mask || '').trim();
         const status = String(row.latest_status || row.status || (ok ? 'healthy' : 'not_configured'));
         return (
           <article className={`vkpi-settings-api-card ${configured ? 'is-configured' : 'is-empty'}`} key={String(row.provider || row.label)}>
@@ -57,7 +57,7 @@ export function SettingsProviderGrid({ providers }: { providers: Array<Record<st
               <strong>{String(row.label || row.provider || '-')}</strong>
               <span>{configured ? '已配置' : '未配置'}</span>
             </header>
-            <p>{keyMask || '未读取到 key'}</p>
+            <p>{configured ? '凭据已配置（仅服务端保存，不回显）' : '未配置凭据'}</p>
             <em>{status}</em>
           </article>
         );

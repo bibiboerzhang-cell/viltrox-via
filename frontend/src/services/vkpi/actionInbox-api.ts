@@ -35,6 +35,9 @@ export interface ActionInboxItem {
   status: string;
   created_at: string;
   updated_at: string;
+  execution_age_seconds?: number | null;
+  manual_reconciliation_required?: boolean;
+  reconciliation_overdue?: boolean;
 }
 
 // 灌水可见化:当天闭环计数(后端只读统计 vkpi_action_inbox/ledger;旧后端无此字段时缺省)。
@@ -133,6 +136,37 @@ export async function executeAction(
   return apiFetch<ActionExecuteResponse>(
     `/api/admin/vkpi/actions/${id}/execute`,
     { method: "POST", cache: "no-store" },
+    token,
+  );
+}
+
+export type ActionReconcileDecision = "succeeded" | "failed" | "unknown";
+
+export interface ActionReconcileRequest {
+  decision: ActionReconcileDecision;
+  reason: string;
+  evidence: Array<Record<string, unknown>>;
+  correlation_id: string;
+}
+
+export interface ActionReconcileResponse {
+  ok: boolean;
+  action_id: number;
+  decision: ActionReconcileDecision;
+  status: "executing" | "executed" | "failed" | string;
+  ledger_id: number;
+  correlation_id: string;
+  idempotent: boolean;
+}
+
+export async function reconcileAction(
+  token: string,
+  id: number,
+  payload: ActionReconcileRequest,
+): Promise<ActionReconcileResponse> {
+  return apiFetch<ActionReconcileResponse>(
+    `/api/admin/vkpi/actions/${id}/reconcile`,
+    { method: "POST", body: jsonBody(payload), cache: "no-store" },
     token,
   );
 }

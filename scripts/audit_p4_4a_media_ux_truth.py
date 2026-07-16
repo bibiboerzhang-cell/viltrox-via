@@ -7,6 +7,7 @@ and honest fallback states. It also samples local DB lineage counts without
 calling external platforms or LLM providers.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import csv
 import json
@@ -331,7 +332,7 @@ def main() -> None:
     write_csv(checks)
     REPORT_PATH.write_text(markdown(snapshot, checks), encoding="utf-8")
     pass_count = sum(1 for check in checks if check.status == "PASS")
-    print(json.dumps({
+    stdout_out(json.dumps({
         "ok": pass_count == len(checks),
         "marker": "VKPI_P4_4A_MEDIA_UX_TRUTH_AUDIT_OK",
         "checks": len(checks),

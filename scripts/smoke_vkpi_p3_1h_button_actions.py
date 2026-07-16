@@ -6,6 +6,7 @@ regressions before browser QA. Runtime API/browser coverage remains separate.
 """
 
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import re
 from pathlib import Path
@@ -86,7 +87,7 @@ def main() -> None:
     test_no_known_fake_actions()
     test_export_and_filters_are_real_actions()
     test_top_all_controls_exist()
-    print("VKPI_P3_1H_BUTTON_ACTIONS_SMOKE_OK")
+    stdout_out("VKPI_P3_1H_BUTTON_ACTIONS_SMOKE_OK")
 
 
 if __name__ == "__main__":

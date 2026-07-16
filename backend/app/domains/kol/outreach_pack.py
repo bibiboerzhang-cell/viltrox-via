@@ -3,7 +3,7 @@
 从 KOL 详情「合作」面板一键生成外联包:
 - ① 产品契合 brief:纯复用已有产物(content_fit_v1 缓存 / viltrox_fit_reason /
   recommended_product_lines_json / potential_concerns_json),不新跑 LLM 就有数据的直接用。
-- ② 个性化邮件草稿:llm_gateway.invoke(内置预算闸 + provider 兜底链,Claude 优先),
+- ② 个性化邮件草稿:llm_production 精确模型边界(运行就绪+原子预留),
   引用该 KOL 的真实内容亮点;LLM 不可用 → 确定性双语模板(诚实标 personalized=False)。
 - ③ 邮箱缺失 → 复用既有邮箱富化管线 business_contact_extract.enrich_business_contacts
   (flag/预算/白名单来源全在其内建),不新建任何抓取。
@@ -23,17 +23,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.model_registry import current_task_model_binding, split_binding
 from app.db.connection import get_conn
 from app.domains.kol import outreach_promises
-from app.platform import llm_gateway
+from app.platform import llm_production
 
 logger = get_logger("viltrox.domains.kol.outreach_pack")
 
 TARGET_TYPE = "kol_pool"
 DERIVE_METHOD = "kol_outreach_pack_v1"
-# 预算键沿用 cron: 前缀模式(与 official_daily_report / llm_gateway._cost_scope_for_purpose 同款)。
+# 预算键沿用 cron: 前缀模式。
 COST_TAG = "cron:kol_outreach_pack"
 MAX_OUTPUT_TOKENS = 1400
+MODEL_TASK = "kol_outreach_pack"
 
 
 def _utcnow() -> str:
@@ -47,6 +49,41 @@ def _today() -> str:
 def _text(value: Any, limit: int = 0) -> str:
     out = str(value or "").strip()
     return out[:limit] if limit and len(out) > limit else out
+
+
+def _stable_llm_reason(response: dict[str, Any]) -> str:
+    failure = response.get("failure") if isinstance(response.get("failure"), dict) else {}
+    errors = response.get("errors") if isinstance(response.get("errors"), list) else []
+    latest = errors[-1] if errors and isinstance(errors[-1], dict) else {}
+    reason = _text(
+        failure.get("code")
+        or response.get("failure_code")
+        or response.get("reason")
+        or latest.get("status")
+    ).lower()
+    if "timeout" in reason or "deadline" in reason:
+        return "llm_timeout_used_template"
+    if reason in {"all_providers_failed", "budget_exceeded", "not_configured", "provider_unavailable"}:
+        return reason
+    return "llm_unavailable_used_template"
+
+
+def _model_binding() -> tuple[str, str]:
+    return split_binding(current_task_model_binding().get(MODEL_TASK) or "")
+
+
+def _valid_email_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for key in ("subject", "email_en", "email_zh"):
+        if not isinstance(value.get(key), str) or not str(value.get(key) or "").strip():
+            return False
+    talking_points = value.get("talking_points")
+    return (
+        isinstance(talking_points, list)
+        and len(talking_points) <= 8
+        and all(isinstance(item, str) and item.strip() for item in talking_points)
+    )
 
 
 def _loads(value: Any) -> Any:
@@ -408,24 +445,49 @@ def _generate_email_draft(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """LLM 生成双语邮件草稿;失败/预算挡 → 模板兜底。返回 (draft, provenance片段)。
 
-    llm_gateway.invoke 内置:预算闸(monthly/single_call/provider/cost_tag 四层)+
-    provider 兜底链(preferred_provider 排第一,其余按序回退)+ 台账记录。
-    Claude 优先做措辞(参照 official_daily_report 的「Claude 优先、其余兜底」模式)。
+    llm_production 锁定经审核的 provider/model,且每次调用必须通过运行就绪与原子预留。
+    单次调用不跨 provider/model 静默兜底;未就绪时直接使用诚实确定性模板。
     G1:prompt 注入招牌拍法/最爆代表作 + 敢给差评信号 + 三承诺硬要求;
     无论 LLM 还是模板产出,三承诺块最后都过 ensure_promises 幂等兜底(开关关则跳过)。
     """
-    resp = llm_gateway.invoke(
-        _build_email_prompt(kol, brief, personalization, critic),
-        purpose="kol_outreach_pack",
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-        preferred_provider="anthropic",
-        cost_tag=COST_TAG,
-        staff=staff or {},
-        metadata={"kol_pool_id": kol.get("id")},
+    provider, model = _model_binding()
+    try:
+        resp = llm_production.generate_json(
+            _build_email_prompt(kol, brief, personalization, critic),
+            provider=provider,
+            model=model,
+            purpose="kol_outreach_pack",
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+            cost_tag=COST_TAG,
+            triggered_by=(staff or {}).get("user_id") or MODEL_TASK,
+            staff=staff or {},
+            required_keys=("subject", "email_en", "email_zh", "talking_points"),
+            validator=_valid_email_payload,
+            metadata={
+                "task_binding": MODEL_TASK,
+                "kol_pool_id": kol.get("id"),
+                "phase": "kol_outreach",
+                "subphase": "bilingual_draft",
+                "attempt_index": 1,
+                "total": 1,
+                "target_label": _kol_label(kol),
+            },
+        )
+    except Exception:  # noqa: BLE001 - template fallback is the product contract
+        logger.warning("outreach_pack.llm_failed; using deterministic template", exc_info=True)
+        resp = {"status": "unavailable", "provider": "rule_v0", "model": "", "reason": "provider_exception"}
+    if not isinstance(resp, dict):
+        resp = {"status": "unavailable", "provider": "rule_v0", "model": "", "reason": "invalid_gateway_response"}
+    response_provider = _text(resp.get("provider")).lower()
+    response_model = _text(resp.get("model"))
+    candidate = resp.get("json") if isinstance(resp, dict) else None
+    exact_response = (
+        resp.get("status") == "success"
+        and response_provider == provider
+        and response_model == model
     )
-    provider = _text(resp.get("provider"))
-    llm_used = bool(resp.get("status") == "success" and provider not in ("", "rule_v0"))
-    parsed = _parse_llm_json(_text(resp.get("text"))) if llm_used else {}
+    llm_used = bool(exact_response and _valid_email_payload(candidate))
+    parsed = candidate if llm_used and isinstance(candidate, dict) else {}
     email_en = _text(parsed.get("email_en"), 3400)
     email_zh = _text(parsed.get("email_zh"), 3400)
     if llm_used and email_en:
@@ -443,10 +505,15 @@ def _generate_email_draft(
     draft["email_zh"] = outreach_promises.ensure_promises(str(draft.get("email_zh") or ""), "zh")
     draft["promises_included"] = outreach_promises.has_promises(str(draft.get("email_en") or ""), "en") or outreach_promises.has_promises(str(draft.get("email_zh") or ""), "zh")
     provenance = {
-        "provider": provider,
-        "model": _text(resp.get("model")),
+        "provider": provider if (llm_used and email_en) else "rule_v0",
+        "model": model if (llm_used and email_en) else "rule_template",
+        "requested_binding": f"{provider}/{model}",
         "llm_used": llm_used and bool(email_en),
-        "reason": "" if (llm_used and email_en) else (_text(resp.get("reason")) or _text(resp.get("status")) or "llm_unavailable_used_template"),
+        "reason": "" if (llm_used and email_en) else (
+            "exact_model_or_json_contract_mismatch"
+            if str(resp.get("status") or "") == "success"
+            else _stable_llm_reason(resp)
+        ),
         "cost_cents": resp.get("cost_cents") or 0,
     }
     return draft, provenance
@@ -455,10 +522,15 @@ def _generate_email_draft(
 # ── ③ 邮箱状态 + 缺失时复用既有富化管线 ─────────────────────────────
 
 
-def _email_status(conn: Any, kol_pool_id: int) -> dict[str, Any]:
+def _email_status(conn: Any, kol_pool_id: int, *, reveal: bool = False) -> dict[str, Any]:
+    from app.domains.kol.contact_access import project_email_status
+
     row = conn.execute("SELECT email FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     email = _text(dict(row).get("email")) if row else ""
-    return {"state": "present" if email else "missing", "email": email}
+    return project_email_status(
+        {"state": "present" if email else "missing", "email": email},
+        reveal=reveal,
+    )
 
 
 def _try_enrich_email(kol_pool_id: int, *, staff: dict[str, Any] | None) -> dict[str, Any]:
@@ -476,7 +548,7 @@ def _try_enrich_email(kol_pool_id: int, *, staff: dict[str, Any] | None) -> dict
         return {"attempted": True, "status": "kol_not_found", "reason": ""}
     except Exception as exc:
         logger.warning("outreach_pack.email_enrich_failed (non-fatal) | kol_pool_id=%s", kol_pool_id, exc_info=True)
-        return {"attempted": True, "status": "error", "reason": str(exc)[:300]}
+        return {"attempted": True, "status": "error", "reason": "email_enrichment_failed"}
 
 
 # ── 缓存读写(vkpi_analysis_cache,同 outreach_draft 模式) ──────────
@@ -530,12 +602,25 @@ def _write_pack_cache(conn: Any, kol_pool_id: int, pack: dict[str, Any], *, mode
 # ── 对外入口 ─────────────────────────────────────────────────────
 
 
-def get_outreach_pack(kol_pool_id: int) -> dict[str, Any]:
+def get_outreach_pack(
+    kol_pool_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """读端:最新外联包(cache)+ 实时邮箱状态;无则 state=missing。零 LLM/零外调。"""
+    from app.domains.kol.contact_access import authorize_plaintext_contacts
+
     conn = get_conn()
     if not conn.execute("SELECT 1 FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone():
         raise LookupError("kol pool item not found")
-    email = _email_status(conn, int(kol_pool_id))
+    reveal = authorize_plaintext_contacts(
+        staff,
+        resource_type="kol_pool",
+        resource_id=int(kol_pool_id),
+        page_path=f"/kol-pool/{int(kol_pool_id)}/outreach-pack",
+        metadata={"surface": "outreach_pack"},
+    )
+    email = _email_status(conn, int(kol_pool_id), reveal=reveal)
     cached = _read_pack_cache(conn, int(kol_pool_id))
     if not cached:
         return {"state": "missing", "kol_pool_id": int(kol_pool_id), "email": email}
@@ -561,6 +646,15 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
     kol = _kol_row(conn, kid)
     if not kol:
         raise LookupError("kol pool item not found")
+    from app.domains.kol.contact_access import authorize_plaintext_contacts
+
+    reveal = authorize_plaintext_contacts(
+        staff,
+        resource_type="kol_pool",
+        resource_id=kid,
+        page_path=f"/kol-pool/{kid}/outreach-pack",
+        metadata={"surface": "outreach_pack", "operation": "generate"},
+    )
 
     # 当日幂等:缓存里 generated_date 是今天且非 force → 直接复用(邮箱状态仍实时读)。
     if not force:
@@ -574,7 +668,7 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
                     "pack": cached["pack"],
                     "model": cached.get("model"),
                     "updated_at": cached.get("updated_at"),
-                    "email": _email_status(conn, kid),
+                    "email": _email_status(conn, kid, reveal=reveal),
                     "cached": True,
                 }
 
@@ -636,6 +730,6 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
         "model": _text(llm_provenance.get("model")) or "rule_template",
         "updated_at": _utcnow(),
         # 富化可能刚写回 email,这里重读给前端最新状态。
-        "email": {**_email_status(conn, kid), "enrich": enrich},
+        "email": {**_email_status(conn, kid, reveal=reveal), "enrich": enrich},
         "cached": False,
     }

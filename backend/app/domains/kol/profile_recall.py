@@ -519,8 +519,8 @@ def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text:
     任何失败静默跳过(返回诊断短语);红线:绝不触 vector/recall/fit 分。"""
     try:
         from app.platform import llm_gateway
-    except Exception as exc:
-        return f"gateway_unavailable: {exc}"[:80]
+    except Exception:
+        return "gateway_unavailable"
     cands: list[dict[str, Any]] = []
     for bucket in ("creator", "reviewer"):
         cands.extend((buckets.get(bucket) or [])[:12])
@@ -981,6 +981,7 @@ def recall_kol_profiles(
     exclude_chinese: bool = True,
     product_focus: Any = None,
     target_persona: str = "",
+    provider_free: bool = False,
 ) -> dict[str, Any]:
     if ratio_policy != "soft":
         raise ValueError("only ratio_policy=soft is supported")
@@ -1010,26 +1011,27 @@ def recall_kol_profiles(
     )
     # 本次 query 是否偏视频/监视器人群(用于纯平面摄影候选的诚实标注与展示降权)。纯展示判据。
     video_leaning = _is_video_leaning_product(query_meta, persona_text, product_focus)
-    # 优雅降级(稳定优先):Qdrant 向量库缺失 / embedding 失败 / 预算超限 → 返回空召回而非 503。
-    # 智能搜索仍可继续走线上发现等路径;不再因向量库不可用整条链崩。
+    # 首屏基础召回可显式选择 provider_free:只读本地 pool 文本,不打
+    # embedding / Qdrant / LLM rerank。完整向量召回和语义规划保留在后台 worker。
+    pool_text_fallback_count = 0
     recall_degraded = ""
-    try:
-        query_vector, embedding_meta = _embed_query(resolved_text)
-        hits = _search_qdrant(query_vector, safe_candidate_limit)
-    except Exception as exc:  # noqa: BLE001 — 召回不可用时降级,不让 500/503 冒泡
-        recall_degraded = (str(exc).split(":", 1)[0] or "recall_unavailable")[:80]
+    if provider_free:
+        query_vector, embedding_meta = [], {"recall_mode": "provider_free_pool_text"}
+        hits = _pool_text_fallback_hits(resolved_text, safe_candidate_limit)
+        pool_text_fallback_count = len(hits)
+    else:
         try:
-            from app.core.logging import get_logger
-            get_logger(__name__).warning("recall_degraded", extra={"reason": str(exc)[:160]})
-        except Exception:
-            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-            pass
-        query_vector, embedding_meta, hits = [], {}, []
+            query_vector, embedding_meta = _embed_query(resolved_text)
+            hits = _search_qdrant(query_vector, safe_candidate_limit)
+        except Exception as exc:  # noqa: BLE001 — 召回不可用时降级,不让 500/503 冒泡
+            failure_text = f"{type(exc).__name__} {exc}".lower()
+            recall_degraded = "embedding_timeout" if "timeout" in failure_text or "deadline" in failure_text else "embedding_unavailable"
+            logger.warning("recall_degraded reason=%s", recall_degraded, exc_info=True)
+            query_vector, embedding_meta, hits = [], {}, []
 
     # 红线「召回永不零」(记忆 vkpi-text-search-resurrection):向量命中为空——无论是并发撞
     # Qdrant 文件锁 / 库缺失 / embedding 失败 / 预算超限(recall_degraded 已置),还是该 query
     # 向量库零命中——都回退到 pool 文本兜底,确保并发/降级下召回不返 0。兜底候选进同一展示管线。
-    pool_text_fallback_count = 0
     if not hits:
         hits = _pool_text_fallback_hits(resolved_text, safe_candidate_limit)
         pool_text_fallback_count = len(hits)
@@ -1127,7 +1129,9 @@ def recall_kol_profiles(
                         _it["display_rank_score"] = round(_float(_it.get("display_rank_score")) + _b, 6)
                         _it["adoption_boost"] = _b
                         _boosted += 1
-        if os.environ.get("RECALL_LLM_RERANK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+        if provider_free:
+            _rerank_note = "provider_free_initial"
+        elif os.environ.get("RECALL_LLM_RERANK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
             _rerank_note = _llm_rerank_buckets(buckets, resolved_text, persona_text, product_label)
         if _boosted or _rerank_note.startswith("ok"):
             for _bucket_items in buckets.values():
@@ -1141,7 +1145,10 @@ def recall_kol_profiles(
                 )
         _rerank_note = (_rerank_note or "off") + f" boost:{_boosted}"
     except Exception as _rr_exc:
-        _rerank_note = f"stage_skipped: {str(_rr_exc)[:80]}"
+        failure_text = f"{type(_rr_exc).__name__} {_rr_exc}".lower()
+        reason = "rerank_timeout" if "timeout" in failure_text or "deadline" in failure_text else "rerank_unavailable"
+        logger.warning("profile_recall rerank skipped reason=%s", reason, exc_info=True)
+        _rerank_note = f"stage_skipped:{reason}"
 
     creator_take = min(safe_creator_quota, safe_limit)
     reviewer_take = min(safe_reviewer_quota, max(0, safe_limit - creator_take))
@@ -1202,6 +1209,7 @@ def recall_kol_profiles(
             "reviewer_returned": len(selected_reviewer),
             "returned_count": len(items),
             "recall_degraded": recall_degraded,
+            "provider_free_initial": bool(provider_free),
             **embedding_meta,
         },
     }

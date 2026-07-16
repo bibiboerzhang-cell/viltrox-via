@@ -540,23 +540,40 @@ export function ProjectCampaignBoard({
                     </div>
                   ))}
                 </div>
-                <button
-                  className="flex items-center gap-2 shrink-0"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (group.primary.ownerId && onOpenStaffProfile) void onOpenStaffProfile(group.primary.ownerId, { name: group.primary.ownerName, avatarUrl: group.primary.ownerAvatar });
-                  }}
-                  title={`负责人 ${group.primary.ownerName || '-'}`}
-                >
-                  <div className="flex -space-x-1.5">
-                    {group.primary.ownerAvatar ? (
-                      <img alt={group.primary.ownerName || 'owner'} className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] object-cover" src={group.primary.ownerAvatar} />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] flex items-center justify-center text-[9px] font-bold text-white" style={{ background: ownerColor(initial) }}>{initial}</div>
-                    )}
+                {group.primary.ownerId && onOpenStaffProfile ? (
+                  <button
+                    aria-label={`打开负责人 ${group.primary.ownerName || '-'}`}
+                    className="flex items-center gap-2 shrink-0"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onOpenStaffProfile(group.primary.ownerId!, { name: group.primary.ownerName, avatarUrl: group.primary.ownerAvatar });
+                    }}
+                    title={`打开负责人 ${group.primary.ownerName || '-'}详情`}
+                  >
+                    <div className="flex -space-x-1.5">
+                      {group.primary.ownerAvatar ? (
+                        <img alt="" className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] object-cover" src={group.primary.ownerAvatar} />
+                      ) : (
+                        <div className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] flex items-center justify-center text-[9px] font-bold text-white" style={{ background: ownerColor(initial) }}>{initial}</div>
+                      )}
+                    </div>
+                  </button>
+                ) : (
+                  <div
+                    aria-label={`负责人 ${group.primary.ownerName || '-'}`}
+                    className="flex shrink-0 items-center gap-2"
+                    title={`负责人 ${group.primary.ownerName || '-'}`}
+                  >
+                    <div className="flex -space-x-1.5">
+                      {group.primary.ownerAvatar ? (
+                        <img alt="" className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] object-cover" src={group.primary.ownerAvatar} />
+                      ) : (
+                        <div className="w-6 h-6 rounded-full border-2 border-[#0a0a0d] flex items-center justify-center text-[9px] font-bold text-white" style={{ background: ownerColor(initial) }}>{initial}</div>
+                      )}
+                    </div>
                   </div>
-                </button>
+                )}
               </div>
 
               <div className="px-4 py-2 flex items-center gap-2 border-t border-white/[0.04]" style={{ background: group.healthScore < 70 ? 'rgba(239,68,68,0.05)' : group.healthScore < 85 ? 'rgba(251,191,36,0.05)' : 'rgba(255,255,255,0.01)' }}>

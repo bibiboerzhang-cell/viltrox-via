@@ -6,6 +6,7 @@ git. The script is intentionally single-account to keep provider spend and
 failure scope controlled.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -662,7 +663,7 @@ def main() -> None:
             _write_snapshot(channel, summary, posts, package_dir)
             summary["snapshot_written"] = True
             _write_json(package_dir / "summary.json", summary)
-        print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+        stdout_out(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
     finally:
         asyncio.run(close_db_runtime())
 

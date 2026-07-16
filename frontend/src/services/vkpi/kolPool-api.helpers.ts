@@ -56,10 +56,31 @@ export interface VkpiKolVideoAnalysisCacheResponse {
   target_type: string;
   target_id: string;
   derive_method?: string | null;
-  state: "ready" | "pending";
+  state: "ready" | "pending" | "queued" | "running" | "retrying" | "processing" | "blocked" | "failed" | "not_requested" | "unknown";
   entry?: VkpiKolVideoAnalysisCacheEntry | null;
+  /** 分析结果未落 cache 时的真实 Worker 状态；不含完整任务 payload 或原始错误。 */
+  analysis_job?: {
+    id?: number | null;
+    status?: string | null;
+    state?: string | null;
+    error_category?: string | null;
+    reason?: string | null;
+    reason_detail?: string | null;
+    provider?: string | null;
+    stage?: string | null;
+    created_at?: string | null;
+    started_at?: string | null;
+    updated_at?: string | null;
+  } | null;
   // 视频目标:后端顺带解析的 R2 缓存视频地址,供内联播放器与分镜分析共用同一轮询(历史重建也稳)。
   cached_video_url?: string | null;
+}
+
+export interface VkpiKolVideoAnalysisBatchResponse {
+  target_type: string;
+  derive_method: string;
+  count: number;
+  items: Array<Pick<VkpiKolVideoAnalysisCacheResponse, "target_id" | "state" | "entry" | "analysis_job">>;
 }
 
 export interface VkpiVideoAnalysisEnqueueResponse {
@@ -330,6 +351,8 @@ export interface VkpiKolSearchSessionRef {
   jobs_linked?: number;
   items?: Row[];
   status?: string;
+  phase?: string;
+  progress?: Row;
 }
 
 export interface VkpiKolSearchSessionItem {
@@ -355,8 +378,15 @@ export interface VkpiKolSearchHistoryItem {
   query_type?: "url_video" | "url_profile" | "text_recall" | "unknown" | string;
   source?: string;
   status?: string;
+  /** 可选渐进阶段；旧后端缺失时前端从 result_summary/counts 诚实派生。 */
+  phase?: string;
+  progress?: Row;
+  /** 会话创建者；历史端点按当前员工隔离，缺失时前端必须显示未知。 */
+  created_by?: number | null;
   input_payload?: Row;
   result_summary?: Row;
+  /** 人审锁定候选；用于 KOL 档案历史的精确 ID 关联，不按 handle 文本猜测。 */
+  approved_kol_ids?: number[];
   summary?: Row;
   item_count?: number;
   items_preview?: VkpiKolSearchSessionItem[];
@@ -366,8 +396,19 @@ export interface VkpiKolSearchHistoryItem {
   /** 触达展示闸折叠计数(后端 get_session/list_history 按 pool 现值实时重判):
    *  hidden_low_reach=低触达不展示;hidden_analyzing=档案补全中(分析后再放出)。 */
   reach_floor_display?: Row;
+  archived_at?: string | null;
+  archived_by?: number | null;
+  archive_reason?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface VkpiKolSearchHistoryArchiveResponse {
+  status?: string;
+  archive_status?: string;
+  archived_count?: number;
+  archived_session_ids?: number[];
+  skipped_active_count?: number;
 }
 
 export interface VkpiKolSearchHistoryResponse {
@@ -435,6 +476,7 @@ export interface VkpiKolUrlDeepCrawlResponse {
     cached_video_url?: string | null;
     evidence_result?: Row;
     enqueue_result?: Row;
+    resolution_progress?: Row;
     profile_flow?: Row;
     viltrox_fit_score_changed_ids?: number[];
     viltrox_fit_score_untouched?: boolean;

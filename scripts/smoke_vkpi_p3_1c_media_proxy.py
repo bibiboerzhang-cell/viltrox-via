@@ -6,6 +6,7 @@ sanitization, and route registration without touching Instagram/TikTok/CDN
 network URLs or spending crawler budget.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from fastapi import HTTPException
 
@@ -53,7 +54,7 @@ def main() -> None:
     assert "/api/admin/vkpi/media/video-proxy" in paths
     assert "/api/admin/vkpi/media/video-redirect" in paths
 
-    print("VKPI_P3_1C_MEDIA_PROXY_SMOKE_OK")
+    stdout_out("VKPI_P3_1C_MEDIA_PROXY_SMOKE_OK")
 
 
 if __name__ == "__main__":

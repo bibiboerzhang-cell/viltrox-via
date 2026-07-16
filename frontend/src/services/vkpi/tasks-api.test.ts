@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// W5 recon: tasks-api。listTasks 内部对每个 status 并发拉取 + 归一 + 去重 + 按时间排序;
+// W5 recon: tasks-api。listTasks 单次拉取 + 本地 status 过滤 + 归一 + 去重 + 按时间排序;
 // 还覆盖 isRecentTask(终态超 1h 丢弃)、cancel/retry/getTaskQueue 的入参与 buildTaskEventStreamUrl。
 const apiFetch = vi.fn();
 const buildApiUrl = (p: string) => `/base${p}`;
@@ -28,19 +28,24 @@ beforeEach(() => {
 });
 
 describe("listTasks(归一 / 去重 / 排序 / recent 过滤)", () => {
-  it("无 status 过滤时对默认状态集合各发一次请求(去重)", async () => {
+  it("无 status 过滤时只发一次有界全状态请求", async () => {
     await listTasks("tok");
-    // 默认集合: queued/running/processing/retrying + 6 个终态 = 10
-    expect(apiFetch).toHaveBeenCalledTimes(10);
-    // 每个请求都带 status query 与 token
-    const paths = apiFetch.mock.calls.map((c) => c[0] as string);
-    expect(paths.every((p) => p.startsWith("/api/marketing/tasks?status="))).toBe(true);
-    expect(apiFetch.mock.calls.every((c) => c[2] === "tok")).toBe(true);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch.mock.calls[0][0]).toBe("/api/marketing/tasks?limit=200");
+    expect(apiFetch.mock.calls[0][2]).toBe("tok");
   });
 
-  it("显式 status 列表只发对应请求,且 Set 去重", async () => {
-    await listTasks("tok", { status: ["queued", "queued", "running"] });
-    expect(apiFetch).toHaveBeenCalledTimes(2);
+  it("显式 status 列表在单次响应中本地过滤", async () => {
+    apiFetch.mockResolvedValue({
+      tasks: [
+        { task_id: "Q1", status: "queued" },
+        { task_id: "R1", status: "running" },
+        { task_id: "D1", status: "done", finished_at: new Date().toISOString() },
+      ],
+    });
+    const tasks = await listTasks("tok", { status: ["queued", "queued", "running"] });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(tasks.map((task) => task.task_id)).toEqual(["Q1", "R1"]);
   });
 
   it("normalizeAsyncTask: 缺 task_id 的行被丢弃", async () => {

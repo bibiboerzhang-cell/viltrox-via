@@ -66,6 +66,15 @@ def test_fetch_external_image_failure_reports_not_ok(monkeypatch):
     assert content_type == "image/svg+xml"
 
 
+def test_eu_tiktok_media_host_is_explicitly_allowlisted_for_same_origin_proxy():
+    url = "https://p16-sign-va.tiktokcdn-eu.com/tos-maliva-avt-0068/avatar.jpeg"
+
+    normalized, host = media_router._allowed_external_image_url(url)
+
+    assert normalized == url
+    assert host == "p16-sign-va.tiktokcdn-eu.com"
+
+
 # --- 播放数诚实口径 ---
 
 def test_instagram_image_post_views_marked_unavailable():

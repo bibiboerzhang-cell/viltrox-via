@@ -40,6 +40,27 @@ if TYPE_CHECKING:
 
 logger = get_logger("viltrox.domains.kol.url_deep_crawl_execute")
 
+_VIDEO_BASE_COMPLETE_STATUSES = {
+    "queued",
+    "already_queued",
+    "already_analyzed",
+    "already_evaluated",
+    "ai_disabled",
+}
+
+
+def _video_ai_analysis(enqueue_result: dict[str, Any]) -> dict[str, Any]:
+    value = enqueue_result.get("ai_analysis") if isinstance(enqueue_result, dict) else None
+    if isinstance(value, dict):
+        return value
+    return {
+        "state": "not_requested",
+        "reason": "analysis_not_requested",
+        "gate_reason": "",
+        "model_readiness_status": "not_ready",
+        "provider_calls_allowed": False,
+    }
+
 
 def _cache_video_flow_url(
     classified: ClassifiedUrl,
@@ -131,6 +152,10 @@ def _execute_existing_creator_video_flow(
                     source="kol_url_deep_crawl",
                     batch="url_existing_creator",
                     commit=True,
+                    search_session_id=body.get("search_session_id"),
+                    search_session_item_id=body.get("search_session_item_id"),
+                    parent_job_id=body.get("parent_job_id"),
+                    local_evaluation=body.get("local_evaluation") is True,
                 )
                 changed_ids.extend(_fit_changed_ids(enqueue_result))
                 status = str(enqueue_result.get("status") or "enqueue_unknown")
@@ -140,13 +165,13 @@ def _execute_existing_creator_video_flow(
         except Exception:
             logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
-        error = str(exc)[:500]
+        error = "video_analysis_enqueue_failed"
         status = "failed"
 
     cached_video_url, video_provider_called = _cache_video_flow_url(classified, metadata, evidence_id)
 
     account_dossier_extract_job = None
-    if status == "already_analyzed":
+    if status == "already_analyzed" and body.get("skip_profile_video_followups") is not True:
         account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
             conn,
             kol_pool_id=kol_pool_id,
@@ -157,7 +182,7 @@ def _execute_existing_creator_video_flow(
         )
         changed_ids.extend(_fit_changed_ids(account_dossier_extract_job or {}))
 
-    run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} else "failed"
+    run_status = "ready" if status in _VIDEO_BASE_COMPLETE_STATUSES else "failed"
     run_id = _record_deep_crawl_run(
         conn,
         kol_pool_id=kol_pool_id,
@@ -190,6 +215,7 @@ def _execute_existing_creator_video_flow(
         "evidence_id": evidence_id,
         "evidence_result": _compact_video_evidence_result(evidence_result),
         "enqueue_result": _compact_enqueue_result(enqueue_result),
+        "ai_analysis": _video_ai_analysis(enqueue_result),
         "account_dossier_extract_job": account_dossier_extract_job,
         "run_id": run_id,
         "run_status": run_status,
@@ -316,10 +342,14 @@ def _execute_new_creator_video_flow(
                             source="kol_url_deep_crawl",
                             batch="url_new_creator",
                             commit=True,
+                            search_session_id=body.get("search_session_id"),
+                            search_session_item_id=body.get("search_session_item_id"),
+                            parent_job_id=body.get("parent_job_id"),
+                            local_evaluation=body.get("local_evaluation") is True,
                         )
                         changed_ids.extend(_fit_changed_ids(enqueue_result))
                         status = str(enqueue_result.get("status") or "enqueue_unknown")
-                if kol_pool_id:
+                if kol_pool_id and body.get("skip_profile_video_followups") is not True:
                     onboarding_body = {
                         **body,
                         "mode": "account_deep",
@@ -353,7 +383,7 @@ def _execute_new_creator_video_flow(
         except Exception:
             logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
             pass
-        error = str(exc)[:500]
+        error = "video_creator_flow_failed"
         status = "failed"
 
     cached_video_url, video_provider_called = _cache_video_flow_url(
@@ -361,7 +391,11 @@ def _execute_new_creator_video_flow(
     )
 
     account_dossier_extract_job = None
-    if status == "already_analyzed" and kol_pool_id:
+    if (
+        status == "already_analyzed"
+        and kol_pool_id
+        and body.get("skip_profile_video_followups") is not True
+    ):
         account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
             conn,
             kol_pool_id=kol_pool_id,
@@ -373,7 +407,7 @@ def _execute_new_creator_video_flow(
         changed_ids.extend(_fit_changed_ids(account_dossier_extract_job or {}))
 
     representative_worker_touched = bool(representative_video_analysis.get("worker_touched"))
-    run_status = "ready" if status in {"queued", "already_queued", "already_analyzed"} or representative_worker_touched else "failed"
+    run_status = "ready" if status in _VIDEO_BASE_COMPLETE_STATUSES or representative_worker_touched else "failed"
     run_id = _record_deep_crawl_run(
         conn,
         kol_pool_id=kol_pool_id,
@@ -433,6 +467,7 @@ def _execute_new_creator_video_flow(
         },
         "evidence_result": _compact_video_evidence_result(evidence_result),
         "enqueue_result": _compact_enqueue_result(enqueue_result),
+        "ai_analysis": _video_ai_analysis(enqueue_result),
         "representative_video_analysis": representative_video_analysis,
         "history_video_evidence": history_video_evidence,
         "account_dossier_extract_job": account_dossier_extract_job,

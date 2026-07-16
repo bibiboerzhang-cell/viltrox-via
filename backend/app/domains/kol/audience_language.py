@@ -160,7 +160,7 @@ def enqueue_audience_comments_for_high_value(
             has_comments += 1
             continue
         try:
-            res = enqueue_kol_pool_comments_job(kid, staff=staff)
+            res = enqueue_kol_pool_comments_job(kid, staff=staff, queue_lane="batch")
             if str(res.get("status")) in ("queued", "already_queued"):
                 enqueued += 1
             else:

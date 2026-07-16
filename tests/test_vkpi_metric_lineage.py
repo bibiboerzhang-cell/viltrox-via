@@ -13,26 +13,107 @@ Run:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains import lineage as metric_lineage
 from app.domains.lineage import DEFINITION_VERSION
+from app.domains.lineage.definitions import METRICS
 import app.domains.lineage.drilldown as drilldown
+import app.domains.lineage.schema as lineage_schema
+import app.platform.db.schema as vkpi_schema
 from app.services.vkpi.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
+from app.domains.costs.ledger import _ensure_cost_ledger_columns
 
 
 # ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-def _ensure_schemas():
-    """Ensure both core and lineage schemas exist for every test."""
-    ensure_vkpi_schema()
-    ensure_vkpi_lineage_schema()
-    yield
+@pytest.fixture(scope="module", autouse=True)
+def _lineage_test_db(tmp_path_factory: pytest.TempPathFactory):
+    """Give this module a private, minimally seeded SQLite database.
+
+    The lineage tests exercise real SQL and schema guards, but must not inherit
+    either the repository ``submissions.db`` or tables left behind by another
+    test module.  Only the three identity/KOL tables not owned by the V-KPI
+    schema guard are declared here; the production schema guards build every
+    lineage and metric source table under test.
+    """
+    db_path = (tmp_path_factory.mktemp("metric-lineage") / "lineage.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_vkpi_ready = vkpi_schema._SCHEMA_READY
+    old_lineage_ready = lineage_schema._SCHEMA_READY
+
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    vkpi_schema._SCHEMA_READY = False
+    lineage_schema._SCHEMA_READY = False
+
+    conn = get_conn()
+    try:
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT DEFAULT 'pending',
+                role TEXT DEFAULT 'creator',
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE,
+                role TEXT NOT NULL DEFAULT 'readonly',
+                permissions_json TEXT NOT NULL DEFAULT '{}',
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER NOT NULL DEFAULT 0,
+                email_domain_verified INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE kols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                channel_url TEXT,
+                platform TEXT NOT NULL,
+                assigned_staff_id INTEGER,
+                created_by_staff_id INTEGER,
+                follower_count INTEGER DEFAULT 0,
+                avg_views INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        ensure_vkpi_schema()
+        _ensure_cost_ledger_columns()
+        ensure_vkpi_lineage_schema()
+        conn.commit()
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        vkpi_schema._SCHEMA_READY = old_vkpi_ready
+        lineage_schema._SCHEMA_READY = old_lineage_ready
 
 
 @pytest.fixture
@@ -48,6 +129,7 @@ def seeded_data():
     project_uid = "VKPI-TEST-001"
     source_ref = "test-order-1"
     cost_ref = "test-cost-1"
+    snapshot_ref = "test-shopify-snapshot-1"
 
     ids: dict[str, int] = {}
 
@@ -76,6 +158,7 @@ def seeded_data():
         conn.execute("DELETE FROM vkpi_metric_values")
         conn.execute("DELETE FROM vkpi_metric_runs")
         conn.execute("DELETE FROM vkpi_sales_attributions WHERE source_ref=?", (source_ref,))
+        conn.execute("DELETE FROM vkpi_shopify_order_snapshots WHERE shopify_order_id=?", (snapshot_ref,))
         conn.execute("DELETE FROM vkpi_cost_ledger WHERE source_ref=?", (cost_ref,))
         for project_id in project_ids:
             conn.execute("DELETE FROM vkpi_projects WHERE id=?", (project_id,))
@@ -129,14 +212,29 @@ def seeded_data():
         project_row = conn.execute("SELECT id FROM vkpi_projects WHERE project_uid=?", (project_uid,)).fetchone()
         project_id = int(project_row["id"])
 
-        # 1 sales attribution: $100 revenue
+        # 1 signed-provider-equivalent snapshot + attribution: $100 revenue.
+        conn.execute(
+            """
+            INSERT INTO vkpi_shopify_order_snapshots (
+                shopify_order_id, financial_status, provider_auth_mode,
+                provider_verified_at, raw_payload_hash, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (snapshot_ref, "paid", "shopify-hmac", now, "sha256:test-signed-payload", now, now),
+        )
+        snapshot_id = int(
+            conn.execute(
+                "SELECT id FROM vkpi_shopify_order_snapshots WHERE shopify_order_id=?",
+                (snapshot_ref,),
+            ).fetchone()["id"]
+        )
         conn.execute(
             """INSERT INTO vkpi_sales_attributions
-               (source_platform, source_ref, project_id, kol_id, staff_id, revenue_cents,
+               (source_platform, source_ref, project_id, kol_id, staff_id, shopify_order_snapshot_id, revenue_cents,
                 commission_cents, currency, attribution_model, confidence, occurred_at,
                 imported_at, evidence_json, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("shopify", source_ref, project_id, kol_id, staff_id, 10000,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("shopify", source_ref, project_id, kol_id, staff_id, snapshot_id, 10000,
              500, "USD", "last_touch", "confirmed", now, now, "{}", now),
         )
         sales_row = conn.execute("SELECT id FROM vkpi_sales_attributions WHERE source_ref=?", (source_ref,)).fetchone()
@@ -146,10 +244,10 @@ def seeded_data():
         conn.execute(
             """INSERT INTO vkpi_cost_ledger
                (project_id, kol_id, staff_id, cost_type, amount_cents, currency, status,
-                incurred_at, source_ref, note, metadata_json, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                incurred_at, source_ref, note, metadata_json, created_at, approved_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (project_id, kol_id, staff_id, "product_cost", 3000, "USD", "actual",
-             now, cost_ref, "test product cost", "{}", now),
+             now, cost_ref, "test product cost", "{}", now, now),
         )
         cost_row = conn.execute("SELECT id FROM vkpi_cost_ledger WHERE source_ref=?", (cost_ref,)).fetchone()
         cost_id = int(cost_row["id"])
@@ -221,6 +319,68 @@ def test_generate_run_derived_metrics_correct(seeded_data):
     assert abs(float(roi["value_numeric"]) - (10000 / 3000)) < 0.001
 
 
+def test_financial_run_without_canonical_sources_persists_unknown_not_zero(seeded_data):
+    conn = get_conn()
+    conn.execute("DELETE FROM vkpi_sales_attributions WHERE id=?", (seeded_data["sales_id"],))
+    conn.execute("DELETE FROM vkpi_cost_ledger WHERE id=?", (seeded_data["cost_id"],))
+    conn.commit()
+
+    result = _generate_seeded_run(
+        seeded_data,
+        trigger_source="dashboard",
+        metrics=["gmv", "cost", "net_contribution", "roi"],
+    )
+    values = {
+        row["metric_key"]: row
+        for row in metric_lineage.get_run(result["run_id"])["values"]
+    }
+
+    for key in ("gmv", "cost", "net_contribution", "roi"):
+        assert values[key]["value_numeric"] is None
+        assert values[key]["data_status"] == "awaiting_source"
+        assert float(values[key]["confidence"]) == 0.0
+        assert bool(values[key]["is_partial"]) is True
+    assert values["gmv"]["source_count"] == 0
+    assert values["cost"]["source_count"] == 0
+    assert values["net_contribution"]["source_count"] == 0
+    assert values["roi"]["source_count"] == 0
+
+
+def test_roi_with_real_zero_cost_is_unavailable_not_synthetic_zero(seeded_data):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE vkpi_cost_ledger SET amount_cents=0 WHERE id=?",
+        (seeded_data["cost_id"],),
+    )
+    conn.commit()
+
+    result = _generate_seeded_run(
+        seeded_data,
+        trigger_source="dashboard",
+        metrics=["gmv", "cost", "roi"],
+    )
+    values = {
+        row["metric_key"]: row
+        for row in metric_lineage.get_run(result["run_id"])["values"]
+    }
+
+    assert values["cost"]["value_numeric"] == 0
+    assert values["cost"]["data_status"] == "real"
+    assert values["roi"]["value_numeric"] is None
+    assert values["roi"]["data_status"] == "unavailable"
+    assert values["roi"]["source_count"] == 0
+    assert bool(values["roi"]["is_partial"]) is True
+
+
+def test_v4_financial_definition_metadata_matches_canonical_truth_contract() -> None:
+    assert DEFINITION_VERSION == "v4"
+    assert "shopify-hmac" in METRICS["gmv"]["formula"]
+    assert "provider_verified_at" in METRICS["gmv"]["formula"]
+    assert "status='actual'" in METRICS["cost"]["formula"]
+    assert "approved_at IS NOT NULL" in METRICS["cost"]["formula"]
+    assert "never synthetic zero" in METRICS["roi"]["formula"]
+
+
 def test_definition_version_persisted(seeded_data):
     result = _generate_seeded_run(seeded_data, trigger_source="dashboard")
     run_detail = metric_lineage.get_run(result["run_id"])
@@ -260,6 +420,32 @@ def test_drilldown_value_returns_hydrated_rows(seeded_data):
     assert row["evidence_ref"] == "test-order-1"
     assert row["evidence_type"] == "shopify"
     assert row["contribution_amount"] == 10000
+
+
+def test_drilldown_unavailable_metric_retains_audit_count_but_hides_sources(seeded_data):
+    result = _generate_seeded_run(seeded_data, trigger_source="dashboard")
+    run_detail = metric_lineage.get_run(result["run_id"])
+    gmv_value = next(v for v in run_detail["values"] if v["metric_key"] == "gmv")
+    conn = get_conn()
+    conn.execute(
+        """
+        UPDATE vkpi_metric_values
+        SET value_numeric=NULL, data_status='unavailable', confidence=0, is_partial=1
+        WHERE id=?
+        """,
+        (int(gmv_value["id"]),),
+    )
+    conn.commit()
+
+    drilldown_result = drilldown.drilldown_value(int(gmv_value["id"]))
+
+    assert drilldown_result["value"]["value_numeric"] is None
+    assert drilldown_result["value"]["data_status"] == "unavailable"
+    assert drilldown_result["value"]["source_count"] == 0
+    assert drilldown_result["value"]["retained_source_count"] == 1
+    assert drilldown_result["rows"] == []
+    assert drilldown_result["row_count"] == 0
+    assert drilldown_result["empty_reason"] == "metric_unavailable"
 
 
 def test_drilldown_value_404_for_unknown(seeded_data):

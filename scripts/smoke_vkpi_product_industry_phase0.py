@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test for V-KPI v2 Phase 0A product/industry/automation prebuild."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import secrets
@@ -141,7 +142,7 @@ def main() -> None:
         export = training_data_export.export_training_dataset(staff=staff)["export"]
         created["training_export_uids"].append(export["export_uid"])
         assert int(export["row_count"] or 0) >= 1
-        print("VKPI_PRODUCT_INDUSTRY_PHASE0_SMOKE_OK")
+        stdout_out("VKPI_PRODUCT_INDUSTRY_PHASE0_SMOKE_OK")
     finally:
         cleanup(created)
 

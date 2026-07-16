@@ -18,7 +18,22 @@ from urllib.parse import unquote, urlparse
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
-from app.domains.market.ai_today import _freshness_payload, _generate, _market_sources, _parse_json
+from app.domains.market.ai_today import (
+    _RESULT_CONTRACT_VERSION,
+    _call_generator,
+    _contract_result,
+    _freshness_payload,
+    _generate,
+    _generation_parts,
+    _market_sources,
+    _parse_datetime,
+    _parse_json,
+    _provider_call_attempted,
+    _public_http_url,
+    _result_status,
+    _strict_text,
+    _validate_grounding_sources,
+)
 
 logger = get_logger(__name__)
 
@@ -72,6 +87,8 @@ _ACCOUNT_FIELDS = (
     "source_account",
 )
 _SOCIAL_PLATFORM_NAMES = frozenset(_SOCIAL_PLATFORMS_BY_HOST.values())
+_SIGNAL_TYPES = {"market", "competitor", "public_excellent"}
+_MODEL_CONTENT_ORIGINS = {_ORIGIN_EXTERNAL, _ORIGIN_UNKNOWN}
 
 
 def _text(*values: Any) -> str:
@@ -79,6 +96,137 @@ def _text(*values: Any) -> str:
         if value is not None and str(value).strip():
             return str(value).strip()
     return ""
+
+
+def _validate_item_sources(value: Any, field: str) -> tuple[list[dict[str, Any]], list[str]]:
+    if value is None:
+        return [], []
+    if not isinstance(value, list):
+        return [], [f"{field}:expected_list"]
+    if len(value) > 8:
+        return [], [f"{field}:too_many_items"]
+    normalized: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, raw_source in enumerate(value):
+        if not isinstance(raw_source, dict):
+            errors.append(f"{field}[{index}]:expected_object")
+            continue
+        raw_url = raw_source.get("source_url") or raw_source.get("url")
+        source_url = _public_http_url(raw_url)
+        if not source_url:
+            errors.append(f"{field}[{index}].url:invalid_public_http_url")
+            continue
+        normalized.append({**raw_source, "url": source_url, "source_url": source_url})
+    return normalized, errors
+
+
+def _validate_competitor_content(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _contract_result("invalid", {"items": []}, ["result:expected_object"])
+    raw_items = value.get("items")
+    if raw_items is None:
+        return _contract_result("degraded", {"items": []}, ["items:missing"])
+    if not isinstance(raw_items, list):
+        return _contract_result("invalid", {"items": []}, ["items:expected_list"])
+    if not raw_items:
+        return _contract_result("degraded", {"items": []}, ["items:empty"])
+    if len(raw_items) > 6:
+        return _contract_result("invalid", {"items": []}, ["items:too_many_items"])
+
+    normalized_items: list[dict[str, Any]] = []
+    invalid: list[str] = []
+    partial: list[str] = []
+    for index, raw_item in enumerate(raw_items):
+        prefix = f"items[{index}]"
+        if not isinstance(raw_item, dict):
+            invalid.append(f"{prefix}:expected_object")
+            continue
+        item = dict(raw_item)
+        for field, max_length in (
+            ("brand", 80),
+            ("title", 200),
+            ("summary", 500),
+            ("impact", 500),
+        ):
+            text, field_invalid, field_partial = _strict_text(
+                raw_item.get(field),
+                f"{prefix}.{field}",
+                max_length=max_length,
+            )
+            invalid.extend(field_invalid)
+            partial.extend(field_partial)
+            item[field] = text
+
+        signal_type, field_invalid, field_partial = _strict_text(
+            raw_item.get("signal_type"),
+            f"{prefix}.signal_type",
+            max_length=40,
+        )
+        invalid.extend(field_invalid)
+        partial.extend(field_partial)
+        signal_type = signal_type.lower()
+        if signal_type and signal_type not in _SIGNAL_TYPES:
+            invalid.append(f"{prefix}.signal_type:unsupported_value")
+        item["signal_type"] = signal_type
+
+        content_origin, field_invalid, field_partial = _strict_text(
+            raw_item.get("content_origin"),
+            f"{prefix}.content_origin",
+            max_length=20,
+        )
+        invalid.extend(field_invalid)
+        partial.extend(field_partial)
+        content_origin = content_origin.lower()
+        if content_origin and content_origin not in _MODEL_CONTENT_ORIGINS:
+            invalid.append(f"{prefix}.content_origin:unsupported_value")
+        item["content_origin"] = content_origin
+
+        source_platform, field_invalid, field_partial = _strict_text(
+            raw_item.get("source_platform"),
+            f"{prefix}.source_platform",
+            max_length=40,
+        )
+        invalid.extend(field_invalid)
+        partial.extend(field_partial)
+        item["source_platform"] = source_platform.lower()
+
+        source_url_raw = raw_item.get("source_url")
+        if source_url_raw is None or source_url_raw == "":
+            partial.append(f"{prefix}.source_url:missing")
+            item["source_url"] = ""
+        elif not isinstance(source_url_raw, str):
+            invalid.append(f"{prefix}.source_url:expected_string")
+            item["source_url"] = ""
+        else:
+            source_url = _public_http_url(source_url_raw)
+            if not source_url:
+                invalid.append(f"{prefix}.source_url:invalid_public_http_url")
+            item["source_url"] = source_url
+
+        published_at_raw = raw_item.get("published_at")
+        if published_at_raw is None:
+            item["published_at"] = ""
+        elif not isinstance(published_at_raw, str):
+            invalid.append(f"{prefix}.published_at:expected_string")
+            item["published_at"] = ""
+        else:
+            published_at = published_at_raw.strip()
+            if published_at and _parse_datetime(published_at) is None:
+                invalid.append(f"{prefix}.published_at:invalid_datetime")
+            item["published_at"] = published_at
+
+        item_sources, source_errors = _validate_item_sources(raw_item.get("sources"), f"{prefix}.sources")
+        invalid.extend(source_errors)
+        if "sources" in raw_item:
+            item["sources"] = item_sources
+        normalized_items.append(item)
+
+    normalized = {"items": normalized_items}
+    if invalid:
+        return _contract_result("invalid", normalized, invalid + partial)
+    if partial:
+        return _contract_result("degraded", normalized, partial)
+    return _contract_result("ready", normalized)
 
 
 def _host(source_url: Any) -> str:
@@ -344,16 +492,6 @@ def normalize_signal_item(
     return item
 
 
-def _generation_parts(result: Any) -> tuple[str, str, list[dict[str, Any]]]:
-    """Accept both the historical two-tuple and the grounded three-tuple."""
-    if isinstance(result, tuple) and len(result) >= 3:
-        raw_sources = result[2] if isinstance(result[2], list) else []
-        return str(result[0] or ""), str(result[1] or ""), raw_sources
-    if isinstance(result, tuple) and len(result) >= 2:
-        return str(result[0] or ""), str(result[1] or ""), []
-    return "", "", []
-
-
 def _ensure_schema() -> None:
     conn = get_conn()
     conn.execute(
@@ -373,7 +511,19 @@ def generate_competitor_radar() -> dict[str, Any]:
     """每早一次:预算闸 → Gemini(Google 接地)查外部市场信号 → 存库。"""
     if not budget_guard.check_budget(_BUDGET_SCOPE, _EST_COST):
         logger.info("competitor_radar.budget_blocked", extra={"scope": _BUDGET_SCOPE})
-        return {"status": "budget_blocked"}
+        return {
+            "status": "budget_blocked",
+            "result_status": "degraded",
+            "contract_status": "degraded",
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "reason": "budget_blocked",
+            "provenance": {
+                "provider": "none",
+                "status": "budget_blocked",
+                "attempts": [],
+                "fallback_used": False,
+            },
+        }
 
     today_label = datetime.now(tz=timezone.utc).strftime("%Y年%m月%d日")
     prompt = (
@@ -398,30 +548,99 @@ def generate_competitor_radar() -> dict[str, Any]:
         '}\n'
         "items 取 3–5 条,优先 competitor/market,至少包含一条有证据的 public_excellent,按重要性排序。"
     )
-    raw, model_used, sources = _generation_parts(_generate(prompt))
+    raw, model_used, sources, provenance = _generation_parts(
+        _call_generator(_generate, prompt, _validate_competitor_content)
+    )
     content = _parse_json(raw)
-    items = content.get("items") if isinstance(content, dict) else None
-    if not isinstance(items, list) or not items:
-        logger.warning("competitor_radar.parse_empty")
-        return {"status": "parse_empty"}
 
-    try:
-        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
-    except Exception:
-        logger.debug("competitor_radar.record_cost_failed", exc_info=True)
+    if _provider_call_attempted(provenance):
+        try:
+            budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
+        except Exception:
+            logger.debug("competitor_radar.record_cost_failed", exc_info=True)
 
     generated_at = datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-    grounding_sources = _dedupe_sources(sources, observed_at=generated_at, default_relation="grounding")
-    if not grounding_sources:
+    contract = _validate_competitor_content(content)
+    contract_status = str(contract.get("status") or "invalid")
+    if contract_status != "ready":
+        reason = "invalid_result_contract" if contract_status == "invalid" else "partial_result_contract"
+        logger.warning(
+            "competitor_radar.result_contract_rejected",
+            extra={"status": contract_status, "errors": contract.get("errors")},
+        )
+        return {
+            "status": contract_status,
+            "result_status": contract_status,
+            "contract_status": contract_status,
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "reason": reason,
+            "validation_errors": list(contract.get("errors") or []),
+            "model": str(model_used or ""),
+            "provenance": provenance,
+            "generated_at": generated_at,
+        }
+
+    source_contract = _validate_grounding_sources(sources)
+    grounding_sources = _dedupe_sources(
+        list(source_contract.get("value") or []),
+        observed_at=generated_at,
+        default_relation="grounding",
+    )
+    if source_contract.get("status") != "ready" or not grounding_sources:
+        result_status = "invalid" if source_contract.get("status") == "invalid" else "degraded"
         logger.warning(
             "competitor_radar.ungrounded_not_persisted",
             extra={"model": model_used, "reason": "no_grounded_citations"},
         )
         return {
             "status": "ungrounded",
-            "reason": "no_grounded_citations",
+            "result_status": result_status,
+            "contract_status": result_status,
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "reason": "invalid_grounding_contract" if result_status == "invalid" else "no_grounded_citations",
             "model": str(model_used or ""),
             "sources": [],
+            "validation_errors": list(source_contract.get("errors") or []),
+            "provenance": provenance,
+            "generated_at": generated_at,
+        }
+    items = list((contract.get("value") or {}).get("items") or [])
+
+    def item_has_grounding(item: dict[str, Any]) -> bool:
+        item_url = str(item.get("source_url") or "")
+        brand = str(item.get("brand") or "").strip().lower()
+        for source in grounding_sources:
+            if not isinstance(source, dict):
+                continue
+            source_url = _text(source.get("source_url"), source.get("url"))
+            source_blob = " ".join(
+                str(source.get(key) or "").lower()
+                for key in ("title", "source_url", "url")
+            )
+            if (item_url and item_url == source_url) or (brand and brand in source_blob):
+                return True
+        return False
+
+    unmatched_urls = [
+        str(item.get("source_url") or "")
+        for item in items
+        if isinstance(item, dict) and not item_has_grounding(item)
+    ]
+    if unmatched_urls:
+        logger.warning(
+            "competitor_radar.item_sources_not_grounded",
+            extra={"count": len(unmatched_urls), "model": model_used},
+        )
+        return {
+            "status": "degraded",
+            "result_status": "degraded",
+            "contract_status": "degraded",
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "reason": "item_source_not_grounded",
+            "validation_errors": ["items.source_url:not_in_grounding_sources"],
+            "model": str(model_used or ""),
+            "sources": grounding_sources,
+            "provenance": provenance,
             "generated_at": generated_at,
         }
     clean: list[dict[str, Any]] = []
@@ -436,7 +655,7 @@ def generate_competitor_radar() -> dict[str, Any]:
                 str(source.get(key) or "").lower()
                 for key in ("title", "source_url", "url")
             )
-            if (item_url and source_url == item_url) or (not item_url and brand and brand.lower() in source_blob):
+            if (item_url and source_url == item_url) or (brand and brand.lower() in source_blob):
                 item_sources.append(source)
         clean.append(
             normalize_signal_item(
@@ -459,9 +678,29 @@ def generate_competitor_radar() -> dict[str, Any]:
                 observed_at=generated_at,
             )
         )
+    if any(item.get("content_origin") == _ORIGIN_OWNED for item in clean):
+        logger.warning("competitor_radar.owned_source_rejected", extra={"model": model_used})
+        return {
+            "status": "degraded",
+            "result_status": "degraded",
+            "contract_status": "degraded",
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "reason": "owned_source_excluded",
+            "validation_errors": ["items.content_origin:owned_source"],
+            "model": str(model_used or ""),
+            "sources": grounding_sources,
+            "provenance": provenance,
+            "generated_at": generated_at,
+        }
     payload = {
         "items": clean,
         "sources": grounding_sources,
+        "evidence": grounding_sources,
+        "status": "ready",
+        "result_status": "ready",
+        "contract_status": "ready",
+        "contract_version": _RESULT_CONTRACT_VERSION,
+        "provenance": provenance,
         "generated_at": generated_at,
     }
     _ensure_schema()
@@ -477,7 +716,15 @@ def generate_competitor_radar() -> dict[str, Any]:
     )
     conn.commit()
     logger.info("competitor_radar.generated", extra={"items": len(clean), "model": model_used})
-    return {"status": "ok", "items": len(clean)}
+    return {
+        "status": "ok",
+        "result_status": "ready",
+        "contract_status": "ready",
+        "contract_version": _RESULT_CONTRACT_VERSION,
+        "items": len(clean),
+        "provenance": provenance,
+        "generated_at": generated_at,
+    }
 
 
 def get_competitor_radar() -> dict[str, Any]:
@@ -489,11 +736,63 @@ def get_competitor_radar() -> dict[str, Any]:
             "FROM vkpi_competitor_radar ORDER BY snapshot_date DESC LIMIT 1"
         ).fetchone()
         if not row:
-            return {"available": False, "reason": "not_generated_yet"}
+            return {
+                "available": False,
+                "status": "invalid",
+                "result_status": "invalid",
+                "is_ready": False,
+                "reason": "not_generated_yet",
+            }
         d = dict(row)
-        content = json.loads(d.get("content_json") or "{}")
+        try:
+            content = json.loads(d.get("content_json") or "{}")
+        except (TypeError, ValueError):
+            content = {}
         content = content if isinstance(content, dict) else {}
-        items = content.get("items") if isinstance(content.get("items"), list) else []
+        contract = _validate_competitor_content(content)
+        source_contract = _validate_grounding_sources(content.get("sources"))
+        contract_statuses = {
+            str(contract.get("status") or "invalid"),
+            str(source_contract.get("status") or "degraded"),
+        }
+        contract_status = (
+            "invalid"
+            if "invalid" in contract_statuses
+            else "degraded"
+            if "degraded" in contract_statuses
+            else "ready"
+        )
+        validation_errors = [
+            *list(contract.get("errors") or []),
+            *list(source_contract.get("errors") or []),
+        ]
+        if contract_status == "invalid":
+            generated_at = _text(content.get("generated_at"), d.get("created_at"), d.get("snapshot_date"))
+            freshness = _freshness_payload(generated_at)
+            metadata = {
+                "status": "invalid",
+                "result_status": "invalid",
+                "contract_status": "invalid",
+                "contract_version": _RESULT_CONTRACT_VERSION,
+                "is_ready": False,
+                "snapshot_date": str(d.get("snapshot_date") or ""),
+                "generated_at": generated_at,
+                "items": [],
+                "sources": [],
+                "evidence": [],
+                "validation_errors": validation_errors,
+                "provenance": content.get("provenance") if isinstance(content.get("provenance"), dict) else {},
+                **freshness,
+            }
+            return {
+                "available": False,
+                "reason": "invalid_result_contract",
+                "model": d.get("model"),
+                **metadata,
+                "content": metadata,
+            }
+
+        items = list((contract.get("value") or {}).get("items") or [])
         brands = [str(item.get("brand") or "") for item in items if isinstance(item, dict)]
         generated_at = _text(content.get("generated_at"), d.get("created_at"), d.get("snapshot_date"))
         market_sources = _dedupe_sources(
@@ -502,7 +801,7 @@ def get_competitor_radar() -> dict[str, Any]:
             default_relation="brand_context",
         )
         grounding_sources = _dedupe_sources(
-            content.get("sources") if isinstance(content.get("sources"), list) else [],
+            list(source_contract.get("value") or []),
             observed_at=generated_at,
             default_relation="grounding",
         )
@@ -557,20 +856,46 @@ def get_competitor_radar() -> dict[str, Any]:
         enriched_items.sort(key=lambda item: origin_rank.get(str(item.get("content_origin") or ""), 1))
 
         freshness = _freshness_payload(content.get("generated_at"), d.get("created_at"), d.get("snapshot_date"))
+        result_status = _result_status(
+            contract_status,
+            str(freshness.get("freshness_status") or "unknown"),
+            grounded=bool(grounding_sources),
+        )
         enriched = {
             **content,
             **freshness,
+            "status": result_status,
+            "result_status": result_status,
+            "contract_status": contract_status,
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "is_ready": result_status == "ready",
             "snapshot_date": str(d.get("snapshot_date") or ""),
+            "generated_at": generated_at,
             "items": enriched_items,
             "sources": grounding_sources,
+            "evidence": grounding_sources,
+            "validation_errors": validation_errors,
+            "provenance": content.get("provenance") if isinstance(content.get("provenance"), dict) else {},
         }
         return {
-            "available": True,
+            "available": bool(enriched_items),
+            "status": result_status,
+            "result_status": result_status,
+            "contract_status": contract_status,
+            "contract_version": _RESULT_CONTRACT_VERSION,
+            "is_ready": result_status == "ready",
             "model": d.get("model"),
             "snapshot_date": enriched["snapshot_date"],
+            "generated_at": generated_at,
             **freshness,
             "content": enriched,
         }
     except Exception:
         logger.debug("competitor_radar.get_failed", exc_info=True)
-        return {"available": False, "reason": "read_error"}
+        return {
+            "available": False,
+            "status": "invalid",
+            "result_status": "invalid",
+            "is_ready": False,
+            "reason": "read_error",
+        }

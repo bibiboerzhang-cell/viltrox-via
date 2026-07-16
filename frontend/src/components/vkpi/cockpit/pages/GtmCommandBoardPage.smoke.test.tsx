@@ -164,7 +164,7 @@ const MAT_PERSIST_OK = {
   bets: [],
 };
 
-function routeApi(overrides: { summary?: unknown } = {}) {
+function routeApi(overrides: { summary?: unknown; preview?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: { body?: unknown }) => {
     const p = String(path);
     if (p.startsWith("/api/admin/vkpi/market-brain/summary")) {
@@ -172,7 +172,7 @@ function routeApi(overrides: { summary?: unknown } = {}) {
       if (value instanceof Error) throw value;
       return value;
     }
-    if (p.startsWith("/api/admin/vkpi/market-brain/gtm-plan/preview")) return PLAN_OK;
+    if (p.startsWith("/api/admin/vkpi/market-brain/gtm-plan/preview")) return overrides.preview ?? PLAN_OK;
     if (p.startsWith("/api/admin/vkpi/market-brain/gtm-plan/materialize")) {
       const body = JSON.parse(String(init?.body || "{}"));
       return body.dry_run === false ? MAT_PERSIST_OK : MAT_DRY_OK;
@@ -325,6 +325,44 @@ describe("GtmCommandBoardPage smoke(页壳 + KPI 带真数 + 默认八行 + 生�
     expect(screen.getAllByText("选 SKU 生成作战预览后点亮。").length).toBe(4);
     // 队列模块独立源(actions/inbox),照常真身
     expect(await screen.findByText("失败重试")).toBeTruthy();
+  });
+
+  it("summary scope_unavailable 显示明确租户待接通态,不伪装成普通空卡", async () => {
+    routeApi({
+      summary: {
+        status: "scope_unavailable",
+        reason: "租户范围无法确认，已安全停止读取默认工作区数据。",
+        organization_scope_status: "ambiguous",
+      },
+    });
+    renderBoard();
+
+    expect((await screen.findAllByText("当前租户的 GTM 聚合尚未接通")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/已安全停止读取默认工作区数据/).length).toBeGreaterThan(0);
+  });
+
+  it("preview scope_unavailable 统一拦住路线与 Bet 生命周期,不显示伪路线或点亮预览", async () => {
+    routeApi({
+      preview: {
+        status: "scope_unavailable",
+        reason: "GTM 仍依赖默认工作区数据，当前租户已安全停止。",
+        organization_id: 4,
+        organization_scope_status: "resolved",
+        writes: false,
+      },
+    });
+    renderBoard();
+    const buttons = await screen.findAllByText("生成路线");
+    fireEvent.click(buttons[0]);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("当前租户的 GTM 预览尚未接通").length).toBeGreaterThanOrEqual(6);
+    });
+    expect(screen.queryByText("决策 —")).toBeNull();
+    expect(screen.queryByText("沉淀")).toBeNull();
+    expect(screen.queryByText("生成行动(预演)")).toBeNull();
+    expect(screen.getAllByText("待接通").length).toBeGreaterThanOrEqual(6);
+    expect(apiFetchMock.mock.calls.filter((c) => String(c[0]).includes("gtm-plan/materialize"))).toHaveLength(0);
   });
 
   it("palette 全量可选:编辑布局 → 添加模块 弹层列出八个备选", async () => {

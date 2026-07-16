@@ -44,6 +44,7 @@
 .report-v2-actions article span,
 .report-v2-preview header span,
 .report-v2-ledger header span,
+.report-v2-history header span,
 .report-v2-table header span {
   color: var(--rv2-muted);
   font-size: 12px;
@@ -103,6 +104,7 @@
 .report-v2-builder-panel,
 .report-v2-preview,
 .report-v2-ledger,
+.report-v2-history,
 .report-v2-table {
   border: 1px solid var(--rv2-line);
   background: linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035));
@@ -244,6 +246,38 @@
   color: #f5f3ff;
 }
 
+.report-v2-control button:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.report-v2-date-control {
+  display: grid;
+  gap: 7px;
+}
+
+.report-v2-date-control > span {
+  color: var(--rv2-muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.report-v2-date-control input {
+  min-height: 36px;
+  border: 1px solid var(--rv2-line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.045);
+  color: var(--rv2-text);
+  color-scheme: dark;
+  outline: 0;
+  padding: 0 10px;
+}
+
+.report-v2-date-control input:focus {
+  border-color: rgba(97,168,255,.68);
+  box-shadow: 0 0 0 2px rgba(97,168,255,.12);
+}
+
 .report-v2-section-picker button {
   min-height: 42px;
   padding: 0 10px;
@@ -272,6 +306,12 @@
   gap: 8px;
 }
 
+.report-v2-output button.is-primary {
+  border-color: rgba(53,210,155,.54);
+  background: rgba(53,210,155,.14);
+  color: #d7fff1;
+}
+
 .report-v2-evidence-actions button {
   border-color: rgba(149,164,186,.30);
   background: rgba(255,255,255,.045);
@@ -287,6 +327,7 @@
 
 .report-v2-preview,
 .report-v2-ledger,
+.report-v2-history,
 .report-v2-table {
   border-radius: 18px;
   overflow: hidden;
@@ -294,6 +335,7 @@
 
 .report-v2-preview header,
 .report-v2-ledger header,
+.report-v2-history > header,
 .report-v2-table header {
   min-height: 46px;
   display: flex;
@@ -306,6 +348,7 @@
 
 .report-v2-preview header b,
 .report-v2-ledger header b,
+.report-v2-history header b,
 .report-v2-table header b {
   color: #d7dee8;
   font-size: 12px;
@@ -340,7 +383,7 @@
   color: #b08cff;
   font-size: 10px;
   font-weight: 900;
-  letter-spacing: .12em;
+  letter-spacing: 0;
 }
 
 .report-v2-visual-head h2 {
@@ -409,6 +452,45 @@
   background: rgba(0,0,0,.18);
 }
 
+.report-v2-server-preview {
+  padding: 14px;
+}
+
+.report-v2-server-preview pre {
+  min-height: 220px;
+  margin-top: 10px;
+  border: 1px solid var(--rv2-line);
+  border-radius: 8px;
+  background: rgba(0,0,0,.18);
+}
+
+.report-v2-server-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.report-v2-server-metrics .report-v2-metric {
+  min-height: 84px;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.report-v2-server-metrics .report-v2-metric strong {
+  font-size: 19px;
+}
+
+.report-v2-config-note {
+  margin: 10px 0 0;
+  border: 1px solid rgba(97,168,255,.22);
+  border-radius: 8px;
+  background: rgba(97,168,255,.07);
+  color: #aebed4;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .report-v2-ledger {
   min-height: 320px;
 }
@@ -440,8 +522,185 @@
 }
 
 .report-v2-message {
-  margin: 10px 14px 0;
+  margin: 2px 0 0;
   color: var(--rv2-green);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.5;
+}
+
+.report-v2-message.is-info { color: var(--rv2-blue); }
+.report-v2-message.is-error { color: var(--rv2-red); }
+.report-v2-message.is-permission { color: var(--rv2-amber); }
+
+.report-v2-history {
+  margin-top: 10px;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.report-v2-history > header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.report-v2-history-toolbar,
+.report-v2-history-toolbar > div,
+.report-v2-history-actions,
+.report-v2-history-badges {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.report-v2-history-toolbar button,
+.report-v2-history-actions button {
+  min-height: 32px;
+  border: 1px solid var(--rv2-line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+  color: #d5deea;
+  cursor: pointer;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.report-v2-history-toolbar button.is-active {
+  border-color: rgba(97,168,255,.52);
+  background: rgba(97,168,255,.13);
+  color: #e5f1ff;
+}
+
+.report-v2-history-toolbar button.is-icon {
+  width: 34px;
+  padding: 0;
+}
+
+.report-v2-history-toolbar button:disabled,
+.report-v2-history-actions button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.report-v2-history-error {
+  margin: 12px 14px 0;
+  border: 1px solid rgba(255,102,122,.28);
+  border-radius: 8px;
+  background: rgba(255,102,122,.08);
+  color: #ffb4be;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.report-v2-history-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+
+.report-v2-history-list > article {
+  min-width: 0;
+  border: 1px solid var(--rv2-line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.035);
+  padding: 11px;
+}
+
+.report-v2-history-list > article.is-selected {
+  border-color: rgba(97,168,255,.54);
+  background: rgba(97,168,255,.07);
+}
+
+.report-v2-history-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.report-v2-history-main > div:first-child {
+  min-width: 0;
+}
+
+.report-v2-history-main strong,
+.report-v2-history-main span {
+  display: block;
+}
+
+.report-v2-history-main strong {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-v2-history-main span {
+  margin-top: 5px;
+  color: var(--rv2-muted);
+  font-size: 11px;
+}
+
+.report-v2-history-badges {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.report-v2-history-badges b {
+  min-height: 22px;
+  border: 1px solid var(--rv2-line);
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: #d4dce8;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.report-v2-history-badges b.is-ready,
+.report-v2-history-badges b.is-data { color: var(--rv2-green); }
+.report-v2-history-badges b.is-failed { color: var(--rv2-red); }
+.report-v2-history-badges b.is-archived,
+.report-v2-history-badges b.is-pending { color: var(--rv2-amber); }
+
+.report-v2-history-list article > p {
+  min-height: 36px;
+  margin: 9px 0;
+  overflow: hidden;
+  color: #aeb9c9;
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.report-v2-history-actions {
+  flex-wrap: wrap;
+}
+
+.report-v2-history-actions button.is-danger { color: #ffabb6; }
+
+.report-v2-history-actions button.is-danger-armed {
+  border-color: rgba(255,102,122,.52);
+  background: rgba(255,102,122,.13);
+  color: #ffd4d9;
+}
+
+.report-v2-history-list > .is-empty {
+  grid-column: 1 / -1;
+  min-height: 100px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  color: var(--rv2-muted);
   font-size: 12px;
   font-weight: 850;
 }
@@ -516,7 +775,9 @@
   .report-v2-builder,
   .report-v2-grid,
   .report-v2-visual-kpis,
-  .report-v2-visual-sections {
+  .report-v2-visual-sections,
+  .report-v2-server-metrics,
+  .report-v2-history-list {
     grid-template-columns: 1fr;
   }
 }
@@ -538,5 +799,19 @@
 
   .report-v2-status {
     width: 100%;
+  }
+
+  .report-v2-history > header,
+  .report-v2-history-main {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .report-v2-history-toolbar {
+    justify-content: space-between;
+  }
+
+  .report-v2-history-badges {
+    justify-content: flex-start;
   }
 }

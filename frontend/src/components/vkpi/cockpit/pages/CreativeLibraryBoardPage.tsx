@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { formatLocal } from "../../lib/timeLocal";
 import {
   searchCreativeSegments,
@@ -69,9 +70,11 @@ type Row = Record<string, any>;
 export function CreativeLibraryBoardPage({
   apiToken = "",
   onNavigate,
+  embeddedModuleKey,
 }: {
   apiToken?: string;
   onNavigate?: (navKey: string) => void;
+  embeddedModuleKey?: string;
 }) {
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
@@ -489,6 +492,10 @@ export function CreativeLibraryBoardPage({
     // ↓ palette 备选(不进默认布局)
     { key: "health", label: "索引健康", description: "库量 / 缩略图可用率 / 生成时间 · 口径如实", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderHealth },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="创意资产库" />;
+  }
 
   const detailItem = detailIndex != null ? displayItems[detailIndex] : null;
 

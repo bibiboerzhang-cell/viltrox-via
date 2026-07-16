@@ -1,0 +1,11 @@
+{
+  "sitemap_urls": [
+    "https://stores.bestbuy.com/ny/new-york/52-e-14th-st-1028.html"
+  ],
+  "pages": [
+    {
+      "url": "https://stores.bestbuy.com/ny/new-york/52-e-14th-st-1028.html",
+      "html": "<!doctype html><html><head><script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"ElectronicsStore\",\"identifier\":\"1028\",\"name\":\"Best Buy Union Square\",\"url\":\"https://stores.bestbuy.com/ny/new-york/52-e-14th-st-1028.html\",\"telephone\":\"(212) 466-4789\",\"address\":{\"@type\":\"PostalAddress\",\"streetAddress\":\"52 E 14th St\",\"addressLocality\":\"New York\",\"addressRegion\":\"NY\",\"postalCode\":\"10003\",\"addressCountry\":\"US\"},\"geo\":{\"@type\":\"GeoCoordinates\",\"latitude\":40.7340,\"longitude\":-73.9901}}</script></head><body>fixture</body></html>"
+    }
+  ]
+}

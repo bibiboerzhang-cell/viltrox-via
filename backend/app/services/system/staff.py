@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -61,6 +62,120 @@ class StaffDeleteBlockedError(Exception):
 
 
 ALLOWED_STAFF_EMAIL_DOMAINS = _load_allowed_domains()
+
+
+def _resolve_inviter_organization_id(conn, inviter_id: int) -> int:
+    """Resolve exactly one membership for the inviting user, or fail closed."""
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT om.organization_id
+            FROM organization_members AS om
+            JOIN staff AS s ON s.id = om.staff_id
+            WHERE s.user_id = ? AND COALESCE(s.active, 0) = 1
+            ORDER BY om.organization_id, om.id
+            """,
+            (int(inviter_id),),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "staff.inviter_organization_lookup_unavailable",
+            extra={"inviter_id": int(inviter_id)},
+        )
+        raise ValueError("inviter organization membership unavailable") from exc
+    if len(rows) != 1:
+        logger.warning(
+            "staff.inviter_organization_scope_rejected",
+            extra={"inviter_id": int(inviter_id), "membership_count": len(rows)},
+        )
+        raise ValueError("inviter must have exactly one organization membership")
+    try:
+        organization_id = int(rows[0]["organization_id"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("inviter organization membership invalid") from exc
+    if organization_id <= 0:
+        raise ValueError("inviter organization membership invalid")
+    return organization_id
+
+
+def _organization_role_for_staff(role: str, *, owner: bool) -> str:
+    if owner:
+        return "owner"
+    normalized = str(role or "").strip().lower()
+    if normalized == "admin":
+        return "admin"
+    if normalized == "readonly":
+        return "viewer"
+    return "member"
+
+
+def _bind_invited_staff_organization(
+    conn,
+    *,
+    staff_id: int,
+    organization_id: int,
+    role: str,
+) -> None:
+    """Bind a new invite or verify a reinvite never crosses tenant scope."""
+
+    rows = conn.execute(
+        """
+        SELECT organization_id
+        FROM organization_members
+        WHERE staff_id = ?
+        ORDER BY organization_id, id
+        """,
+        (int(staff_id),),
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError("invitee organization membership is ambiguous")
+    if rows:
+        existing_organization_id = int(rows[0]["organization_id"] or 0)
+        if existing_organization_id != int(organization_id):
+            raise ValueError("invitee belongs to a different organization")
+        conn.execute(
+            """
+            UPDATE organization_members
+               SET role = ?
+             WHERE staff_id = ? AND organization_id = ?
+            """,
+            (str(role), int(staff_id), int(organization_id)),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO organization_members (organization_id, staff_id, role)
+        VALUES (?, ?, ?)
+        ON CONFLICT (organization_id, staff_id) DO UPDATE SET role=excluded.role
+        """,
+        (int(organization_id), int(staff_id), str(role)),
+    )
+
+
+def _require_existing_staff_organization(
+    conn,
+    *,
+    staff_id: int,
+    organization_id: int,
+) -> None:
+    """Verify an existing staff row has exactly one matching tenant membership."""
+
+    rows = conn.execute(
+        """
+        SELECT organization_id
+        FROM organization_members
+        WHERE staff_id = ?
+        ORDER BY organization_id, id
+        """,
+        (int(staff_id),),
+    ).fetchall()
+    if not rows:
+        raise ValueError("invitee must have exactly one organization membership")
+    if len(rows) != 1:
+        raise ValueError("invitee organization membership is ambiguous")
+    if int(rows[0]["organization_id"] or 0) != int(organization_id):
+        raise ValueError("invitee belongs to a different organization")
 
 
 # =========================================================================
@@ -237,6 +352,7 @@ def create_password_reset_link(staff_id: int) -> dict[str, Any]:
 def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[str, Any]:
     """Issue a fresh staff invite token for an existing staff row without changing permissions."""
     conn = get_conn()
+    organization_id = _resolve_inviter_organization_id(conn, inviter_id)
     row = conn.execute(
         """
         SELECT s.id, s.user_id, s.role, s.active, s.accepted_at,
@@ -256,33 +372,50 @@ def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[s
     _validate_staff_email(email)
     if row["accepted_at"]:
         raise ValueError("staff account already activated; use reset password link")
-
-    conn.execute(
-        """
-        UPDATE email_tokens
-           SET used_at = COALESCE(used_at, ?)
-         WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
-        """,
-        (_utcnow(), user_id),
+    _require_existing_staff_organization(
+        conn,
+        staff_id=int(staff_id),
+        organization_id=organization_id,
     )
-    columns = _staff_columns(conn)
-    fields = ["invited_by = ?", "invited_at = ?"]
-    values: list[Any] = [int(inviter_id), _utcnow()]
-    if "invited_by_staff_id" in columns:
-        fields.append("invited_by_staff_id = ?")
-        values.append(_staff_id_for_user(conn, int(inviter_id)))
-    values.append(int(staff_id))
-    conn.execute(
-        f"UPDATE staff SET {', '.join(fields)} WHERE id = ?",
-        values,
-    )
-    conn.commit()
 
-    token = create_email_token(user_id, "staff_invite")
-    expires_row = conn.execute(
-        "SELECT expires_at FROM email_tokens WHERE token = ? AND type = 'staff_invite'",
-        (token,),
-    ).fetchone()
+    now_dt = datetime.now(timezone.utc)
+    invited_at = now_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires_at = (now_dt + timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    token = secrets.token_urlsafe(32)
+    try:
+        conn.execute(
+            """
+            UPDATE email_tokens
+               SET used_at = COALESCE(used_at, ?)
+             WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+            """,
+            (invited_at, user_id),
+        )
+        columns = _staff_columns(conn)
+        fields = ["invited_by = ?", "invited_at = ?"]
+        values: list[Any] = [int(inviter_id), invited_at]
+        if "invited_by_staff_id" in columns:
+            fields.append("invited_by_staff_id = ?")
+            values.append(_staff_id_for_user(conn, int(inviter_id)))
+        values.append(int(staff_id))
+        conn.execute(
+            f"UPDATE staff SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        conn.execute(
+            """
+            INSERT INTO email_tokens (user_id, token, type, created_at, expires_at)
+            VALUES (?, ?, 'staff_invite', ?, ?)
+            """,
+            (user_id, token, invited_at, expires_at),
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("staff.existing_activation_transaction_rollback_failed", exc_info=True)
+        raise
     return {
         "staff_id": int(staff_id),
         "user_id": user_id,
@@ -291,7 +424,7 @@ def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[s
         "role": str(row["role"] or "readonly"),
         "activation_url": _staff_activation_url(token),
         "token_hint": _token_hint(token),
-        "expires_at": str(expires_row["expires_at"] if expires_row else ""),
+        "expires_at": expires_at,
         "expires_in_hours": 48,
         "delivery_method": "manual_link",
     }
@@ -300,6 +433,7 @@ def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[s
 def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
     """Create or refresh pending staff, then issue a staff invite token."""
     conn = get_conn()
+    organization_id = _resolve_inviter_organization_id(conn, inviter_id)
     email = str(body.get("email") or "").strip().lower()
     full_name = str(body.get("full_name") or body.get("name") or email.split("@")[0]).strip()
     role = str(body.get("role") or "employee").strip().lower()
@@ -314,77 +448,90 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
     if role == "admin" and not owner and not _inviter_is_owner(conn, inviter_id):
         raise PermissionError("only owner can invite admin staff")
 
-    user = conn.execute(
-        "SELECT id FROM users WHERE email = ?", (email,)
-    ).fetchone()
-    user_id = user["id"] if user else None
-    if not user_id:
-        # The richer `staff` row owns internal access. Keep the base user out
-        # of the legacy admin role so employee accounts cannot bypass staff RBAC.
-        base = "".join(ch for ch in email.split("@")[0].lower() if ch.isalnum()) or "staff"
-        creator_code = _unique_placeholder_creator_code(conn, base)
-        placeholder_password = hash_password(f"staff-invite:{email}:{secrets.token_urlsafe(32)}")
-        insert_sql = """
-            INSERT INTO users
-                (created_at, email, password_hash, name, creator_code, status, role, email_verified)
-            VALUES
-                (?, ?, ?, ?, ?, 'active', 'creator', 0)
-        """
-        params = (_utcnow(), email, placeholder_password, full_name, creator_code)
-        if is_postgres_runtime():
-            user_row = conn.execute(f"{insert_sql} RETURNING id", params).fetchone()
-            user_id = int(user_row["id"])
+    try:
+        user = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        user_id = user["id"] if user else None
+        if not user_id:
+            # The richer `staff` row owns internal access. Keep the base user out
+            # of the legacy admin role so employee accounts cannot bypass staff RBAC.
+            base = "".join(ch for ch in email.split("@")[0].lower() if ch.isalnum()) or "staff"
+            creator_code = _unique_placeholder_creator_code(conn, base)
+            placeholder_password = hash_password(f"staff-invite:{email}:{secrets.token_urlsafe(32)}")
+            insert_sql = """
+                INSERT INTO users
+                    (created_at, email, password_hash, name, creator_code, status, role, email_verified)
+                VALUES
+                    (?, ?, ?, ?, ?, 'active', 'creator', 0)
+            """
+            params = (_utcnow(), email, placeholder_password, full_name, creator_code)
+            if is_postgres_runtime():
+                user_row = conn.execute(f"{insert_sql} RETURNING id", params).fetchone()
+                user_id = int(user_row["id"])
+            else:
+                conn.execute(insert_sql, params)
+                user_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
         else:
-            conn.execute(insert_sql, params)
-            user_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-    else:
-        conn.execute("UPDATE users SET name = COALESCE(NULLIF(name, ''), ?) WHERE id = ?", (full_name, user_id))
+            conn.execute("UPDATE users SET name = COALESCE(NULLIF(name, ''), ?) WHERE id = ?", (full_name, user_id))
 
-    permissions = normalize_permissions(
-        _permissions_from_invite_body(body),
-        role,
-        owner=owner,
-    )
-    if not owner and role != "admin":
-        permissions = _strip_admin_levels(permissions)
-    columns = _staff_columns(conn)
-    existing_staff = conn.execute("SELECT id FROM staff WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
-    insert_cols = ["user_id", "role", "permissions_json", "mfa_enabled", "active", "invited_by", "invited_at"]
-    values: list[Any] = [user_id, role, json.dumps(permissions), 0, 1, inviter_id, _utcnow()]
-    if "is_owner" in columns:
-        insert_cols.append("is_owner"); values.append(1 if owner else 0)
-    if "email_domain_verified" in columns:
-        insert_cols.append("email_domain_verified"); values.append(1)
-    if "invited_by_staff_id" in columns:
-        insert_cols.append("invited_by_staff_id"); values.append(_staff_id_for_user(conn, inviter_id))
-    if existing_staff:
-        update_cols = [col for col in insert_cols if col != "user_id"]
-        update_values = [values[insert_cols.index(col)] for col in update_cols]
-        update_values.append(int(existing_staff["id"]))
-        conn.execute(
-            f"UPDATE staff SET {', '.join([f'{col} = ?' for col in update_cols])} WHERE id = ?",
-            update_values,
+        permissions = normalize_permissions(
+            _permissions_from_invite_body(body),
+            role,
+            owner=owner,
         )
-        staff_id = int(existing_staff["id"])
-    else:
-        placeholders = ",".join(["?"] * len(insert_cols))
-        sql = f"INSERT INTO staff ({', '.join(insert_cols)}) VALUES ({placeholders})"
-        if is_postgres_runtime():
-            row = conn.execute(f"{sql} RETURNING id", values).fetchone()
-            staff_id = int(row["id"])
+        if not owner and role != "admin":
+            permissions = _strip_admin_levels(permissions)
+        columns = _staff_columns(conn)
+        existing_staff = conn.execute("SELECT id FROM staff WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+        insert_cols = ["user_id", "role", "permissions_json", "mfa_enabled", "active", "invited_by", "invited_at"]
+        values: list[Any] = [user_id, role, json.dumps(permissions), 0, 1, inviter_id, _utcnow()]
+        if "is_owner" in columns:
+            insert_cols.append("is_owner"); values.append(1 if owner else 0)
+        if "email_domain_verified" in columns:
+            insert_cols.append("email_domain_verified"); values.append(1)
+        if "invited_by_staff_id" in columns:
+            insert_cols.append("invited_by_staff_id"); values.append(_staff_id_for_user(conn, inviter_id))
+        if existing_staff:
+            update_cols = [col for col in insert_cols if col != "user_id"]
+            update_values = [values[insert_cols.index(col)] for col in update_cols]
+            update_values.append(int(existing_staff["id"]))
+            conn.execute(
+                f"UPDATE staff SET {', '.join([f'{col} = ?' for col in update_cols])} WHERE id = ?",
+                update_values,
+            )
+            staff_id = int(existing_staff["id"])
         else:
-            cur = conn.cursor()
-            cur.execute(sql, values)
-            staff_id = int(cur.lastrowid or 0)
-    conn.execute(
-        """
-        UPDATE email_tokens
-           SET used_at = COALESCE(used_at, ?)
-         WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
-        """,
-        (_utcnow(), int(user_id)),
-    )
-    conn.commit()
+            placeholders = ",".join(["?"] * len(insert_cols))
+            sql = f"INSERT INTO staff ({', '.join(insert_cols)}) VALUES ({placeholders})"
+            if is_postgres_runtime():
+                row = conn.execute(f"{sql} RETURNING id", values).fetchone()
+                staff_id = int(row["id"])
+            else:
+                cur = conn.cursor()
+                cur.execute(sql, values)
+                staff_id = int(cur.lastrowid or 0)
+        _bind_invited_staff_organization(
+            conn,
+            staff_id=staff_id,
+            organization_id=organization_id,
+            role=_organization_role_for_staff(role, owner=owner),
+        )
+        conn.execute(
+            """
+            UPDATE email_tokens
+               SET used_at = COALESCE(used_at, ?)
+             WHERE user_id = ? AND type = 'staff_invite' AND used_at IS NULL
+            """,
+            (_utcnow(), int(user_id)),
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("staff.invite_transaction_rollback_failed", exc_info=True)
+        raise
 
     token = create_email_token(int(user_id), "staff_invite")
     expires_row = conn.execute(
@@ -676,4 +823,3 @@ def delete_member(staff_id: int) -> None:
         raise StaffDeleteBlockedError(
             "cannot delete staff: still referenced by other records"
         ) from exc
-

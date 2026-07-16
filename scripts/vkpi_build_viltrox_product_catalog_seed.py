@@ -6,9 +6,11 @@ official specs together while leaving internal cost data untouched.
 
 Usage:
     PYTHONPATH=backend .venv/bin/python scripts/vkpi_build_viltrox_product_catalog_seed.py --limit 10
+    PYTHONPATH=backend .venv/bin/python scripts/vkpi_build_viltrox_product_catalog_seed.py --limit 10 --fetch-pages
     PYTHONPATH=backend .venv/bin/python scripts/vkpi_build_viltrox_product_catalog_seed.py --all-categories
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import html
@@ -21,10 +23,12 @@ from pathlib import Path
 from typing import Any
 
 
-PRODUCTS_URL = "https://viltrox.com/products.json?limit=250"
+PRODUCTS_URL = "https://viltrox.com/products.json?limit=250&page=1"
 STORE_BASE_URL = "https://viltrox.com"
 DEFAULT_OUT = Path("tmp/viltrox_product_catalog_seed_generated.json")
 DEFAULT_TYPES = {"camera lens", "cine lenses"}
+MAX_PAGE_FETCHES = 20
+MAX_RESPONSE_BYTES = 10_000_000
 
 
 SPEC_LABEL_ALIASES = {
@@ -53,10 +57,13 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _fetch_text(url: str, timeout: int = 30) -> str:
+def _fetch_text(url: str, timeout: float = 15.0) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": "V-KPI product catalog audit/1.0"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+        payload = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise ValueError(f"response exceeded {MAX_RESPONSE_BYTES} bytes")
+    return payload.decode("utf-8", errors="replace")
 
 
 def _clean(value: Any) -> str:
@@ -73,6 +80,11 @@ def _money(value: Any) -> float | None:
         return round(float(value), 2)
     except (TypeError, ValueError):
         return None
+
+
+def _tags(value: Any) -> list[str]:
+    raw = value if isinstance(value, list) else str(value or "").split(",")
+    return [_clean(item) for item in raw if _clean(item)]
 
 
 def _slug(value: str) -> str:
@@ -154,7 +166,17 @@ def _model_code(title: str, handle: str, mount: str, series: str) -> str:
     normalized = _clean(normalized)
     if not normalized:
         normalized = handle
-    sku = _slug(normalized.replace("F1.8", "F18").replace("F1.7", "F17").replace("F1.4", "F14").replace("F1.2", "F12").replace("F2.0", "F20").replace("F2.8", "F28").replace("F4.0", "F40"))
+    for source, target in (
+        ("F1.8", "F18"),
+        ("F1.7", "F17"),
+        ("F1.4", "F14"),
+        ("F1.2", "F12"),
+        ("F2.0", "F20"),
+        ("F2.8", "F28"),
+        ("F4.0", "F40"),
+    ):
+        normalized = normalized.replace(source, target)
+    sku = _slug(normalized)
     mount_suffix = {
         "FE-mount": "FE",
         "Z-mount": "Z",
@@ -208,7 +230,7 @@ def _extract_highlights(body_html: str, limit: int = 12) -> list[str]:
 
 
 def _fit_tags(product: dict[str, Any], specs: dict[str, str], mount: str, series: str) -> list[str]:
-    tags = [str(tag).lower() for tag in product.get("tags") or [] if str(tag).strip()]
+    tags = [tag.lower() for tag in _tags(product.get("tags"))]
     title = str(product.get("title") or "")
     for token in re.findall(r"\b\d{1,3}mm\b", title.lower()):
         tags.append(token)
@@ -229,7 +251,17 @@ def _fit_tags(product: dict[str, Any], specs: dict[str, str], mount: str, series
     return result
 
 
-def _product_rows(products: list[dict[str, Any]], *, fetch_pages: bool, delay: float, limit: int, all_categories: bool) -> list[dict[str, Any]]:
+def _product_rows(
+    products: list[dict[str, Any]],
+    *,
+    fetch_pages: bool,
+    delay: float,
+    limit: int,
+    all_categories: bool,
+    page_limit: int,
+    request_timeout: float,
+    deadline_seconds: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     for product in products:
         product_type = _clean(product.get("product_type"))
@@ -241,23 +273,44 @@ def _product_rows(products: list[dict[str, Any]], *, fetch_pages: bool, delay: f
 
     checked_at = _utcnow()
     output: list[dict[str, Any]] = []
+    deadline = time.monotonic() + max(1.0, deadline_seconds)
+    page_attempts = 0
+    page_failures: list[dict[str, str]] = []
+    skipped_limit = 0
+    skipped_deadline = 0
     for index, product in enumerate(selected, start=1):
         title = _clean(product.get("title"))
         handle = _clean(product.get("handle"))
         product_type = _clean(product.get("product_type"))
         product_url = f"{STORE_BASE_URL}/products/{handle}" if handle else ""
-        tags = [str(tag) for tag in (product.get("tags") or [])]
+        tags = _tags(product.get("tags"))
         specs: dict[str, str] = {}
+        page_fetch_status = "not_requested"
         if fetch_pages and product_url:
-            try:
-                specs = _parse_specs_from_page(_fetch_text(product_url))
-                if delay:
-                    time.sleep(delay)
-            except Exception as exc:
-                specs = {"page_fetch_error": str(exc)[:180]}
+            remaining = deadline - time.monotonic()
+            if page_attempts >= page_limit:
+                page_fetch_status = "skipped_page_limit"
+                skipped_limit += 1
+            elif remaining <= 0:
+                page_fetch_status = "skipped_deadline"
+                skipped_deadline += 1
+            else:
+                page_attempts += 1
+                try:
+                    specs = _parse_specs_from_page(
+                        _fetch_text(product_url, timeout=min(request_timeout, remaining))
+                    )
+                    page_fetch_status = "completed"
+                    if delay:
+                        time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
+                except Exception as exc:
+                    page_fetch_status = "failed"
+                    page_failures.append({"handle": handle, "error": str(exc)[:180]})
 
-        variants = product.get("variants") or [{}]
-        variant = variants[0] if isinstance(variants[0], dict) else {}
+        variants = [item for item in (product.get("variants") or []) if isinstance(item, dict)]
+        variants.sort(key=lambda item: (int(item.get("position") or 0), str(item.get("id") or "")))
+        variant = variants[0] if variants else {}
+        prices = [price for price in (_money(item.get("price")) for item in variants) if price is not None]
         mount = _normalize_mount(str(specs.get("lens_mount") or ""), title, tags)
         series = _infer_series(title, tags)
         category_main, category_detail = _infer_category(product_type)
@@ -268,12 +321,33 @@ def _product_rows(products: list[dict[str, Any]], *, fetch_pages: bool, delay: f
             "official_tags": tags,
             "official_options": product.get("options") or [],
             "official_variant_id": variant.get("id"),
-            "variant_title": variant.get("title"),
-            "variant_weight_grams": variant.get("grams"),
+            "official_variants": [
+                {
+                    "id": item.get("id"),
+                    "sku": _clean(item.get("sku")).upper(),
+                    "title": _clean(item.get("title")),
+                    "price": _money(item.get("price")),
+                    "compare_at_price": _money(item.get("compare_at_price")),
+                    "public_store_purchase_available": item.get("available"),
+                    "weight_grams": item.get("grams"),
+                }
+                for item in variants
+            ],
+            "variant_count": len(variants),
+            "price_min_usd": min(prices) if prices else None,
+            "price_max_usd": max(prices) if prices else None,
+            "public_store_listed": True,
+            "public_store_purchase_available": any(
+                item.get("available") is True for item in variants
+            ),
+            "availability_scope": "public_storefront_purchase_option_only",
+            "warehouse_inventory_status": "not_provided_by_public_catalog",
+            "official_page_fetch": page_fetch_status,
             "highlights": _extract_highlights(str(product.get("body_html") or "")),
         }
         specs_payload.update(specs)
         source_confidence = 1.0 if len(specs) >= 4 else 0.72
+        highlights = _extract_highlights(str(product.get("body_html") or ""), limit=1)
         output.append(
             {
                 "sku": _model_code(title, handle, mount, series),
@@ -283,9 +357,9 @@ def _product_rows(products: list[dict[str, Any]], *, fetch_pages: bool, delay: f
                 "marketing_name": re.sub(r"^Viltrox\s+", "", title, flags=re.I),
                 "series": series,
                 "mount": mount,
-                "price_usd": _money(variant.get("price")),
+                "price_usd": min(prices) if prices else None,
                 "status": "official",
-                "description": _extract_highlights(str(product.get("body_html") or ""), limit=1)[0] if _extract_highlights(str(product.get("body_html") or ""), limit=1) else "",
+                "description": highlights[0] if highlights else "",
                 "product_url": product_url,
                 "source_url": product_url,
                 "source_file": "official:viltrox.com/products.json",
@@ -295,22 +369,71 @@ def _product_rows(products: list[dict[str, Any]], *, fetch_pages: bool, delay: f
                 "specs": specs_payload,
             }
         )
-        print(json.dumps({"index": index, "handle": handle, "sku": output[-1]["sku"], "spec_fields": len(specs)}, ensure_ascii=False))
-    return output
+        stdout_out(
+            json.dumps(
+                {
+                    "index": index,
+                    "handle": handle,
+                    "sku": output[-1]["sku"],
+                    "spec_fields": len(specs),
+                },
+                ensure_ascii=False,
+            )
+        )
+    return output, {
+        "page_fetch_attempted": page_attempts,
+        "page_fetch_failures": page_failures,
+        "page_fetch_skipped_limit": skipped_limit,
+        "page_fetch_skipped_deadline": skipped_deadline,
+    }
 
 
-def build_seed(*, out: Path, limit: int, fetch_pages: bool, delay: float, all_categories: bool) -> dict[str, Any]:
-    products = json.loads(_fetch_text(PRODUCTS_URL)).get("products", [])
-    rows = _product_rows(products, fetch_pages=fetch_pages, delay=delay, limit=limit, all_categories=all_categories)
+def build_seed(
+    *,
+    out: Path,
+    limit: int,
+    fetch_pages: bool,
+    delay: float,
+    all_categories: bool,
+    page_limit: int = MAX_PAGE_FETCHES,
+    request_timeout: float = 15.0,
+    deadline_seconds: float = 60.0,
+) -> dict[str, Any]:
+    payload = json.loads(_fetch_text(PRODUCTS_URL, timeout=request_timeout))
+    products = payload.get("products") if isinstance(payload, dict) else None
+    if not isinstance(products, list) or not products:
+        raise ValueError("official products response is missing non-empty products[]")
+    if len(products) >= 250:
+        raise ValueError("official products response may be truncated at 250 products")
+    rows, page_stats = _product_rows(
+        products,
+        fetch_pages=fetch_pages,
+        delay=delay,
+        limit=limit,
+        all_categories=all_categories,
+        page_limit=max(0, min(MAX_PAGE_FETCHES, int(page_limit))),
+        request_timeout=max(1.0, request_timeout),
+        deadline_seconds=max(1.0, deadline_seconds),
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    partial_failure_count = len(page_stats["page_fetch_failures"])
+    incomplete_page_coverage = (
+        partial_failure_count
+        + page_stats["page_fetch_skipped_limit"]
+        + page_stats["page_fetch_skipped_deadline"]
+    )
     return {
+        "status": "completed_with_partial_page_coverage" if incomplete_page_coverage else "completed",
         "output": str(out),
         "products_seen": len(products),
         "rows": len(rows),
         "fetch_pages": fetch_pages,
         "all_categories": all_categories,
         "with_specs": sum(1 for row in rows if row.get("source_confidence") == 1.0),
+        "partial_failure_count": partial_failure_count,
+        "incomplete_page_coverage": incomplete_page_coverage,
+        **page_stats,
     }
 
 
@@ -318,18 +441,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--limit", type=int, default=90, help="Maximum selected products. Use 0 for all selected.")
-    parser.add_argument("--all-categories", action="store_true", help="Include all store product types, not just lens/cine lens.")
-    parser.add_argument("--no-fetch-pages", action="store_true", help="Use products.json only; no per-product spec page fetch.")
+    parser.add_argument(
+        "--all-categories",
+        action="store_true",
+        help="Include all store product types, not just lens/cine lens.",
+    )
+    parser.add_argument(
+        "--fetch-pages",
+        action="store_true",
+        help=f"Fetch individual product pages for specs (explicit opt-in, max {MAX_PAGE_FETCHES}).",
+    )
     parser.add_argument("--delay", type=float, default=0.2, help="Delay between page fetches.")
+    parser.add_argument("--page-limit", type=int, default=MAX_PAGE_FETCHES)
+    parser.add_argument("--request-timeout", type=float, default=15.0)
+    parser.add_argument("--deadline", type=float, default=60.0, help="Overall page-fetch deadline in seconds.")
     args = parser.parse_args()
     result = build_seed(
         out=Path(args.out),
         limit=args.limit,
-        fetch_pages=not args.no_fetch_pages,
+        fetch_pages=bool(args.fetch_pages),
         delay=max(0.0, args.delay),
         all_categories=bool(args.all_categories),
+        page_limit=args.page_limit,
+        request_timeout=args.request_timeout,
+        deadline_seconds=args.deadline,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

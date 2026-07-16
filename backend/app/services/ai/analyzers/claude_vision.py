@@ -19,6 +19,7 @@ from app.services.ai.clients.openai_client import OPENAI_AVAILABLE
 from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.platform import llm_production
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.core import compute_weighted_scores
 from app.services.scraping.ytdlp import download_video_ytdlp, fetch_youtube_subtitles, YTDLP_AVAILABLE
@@ -236,10 +237,26 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
             )})
             resp = call_ai_with_retry(
                 "claude_vision.video_frames",
-                lambda: _client.messages.create(
-                    model=CLAUDE_MODEL,
-                    max_tokens=2000,
+                lambda: None,
+                attempt_fn=lambda attempt, total: llm_production.generate_anthropic_messages(
+                    client=_client,
                     messages=[{"role":"user","content":_content}],
+                    model=CLAUDE_MODEL,
+                    purpose="audit_vision_fallback",
+                    max_output_tokens=2000,
+                    cost_tag="cron:audit_vision_fallback",
+                    metadata={
+                        "task_binding": "audit_vision_fallback",
+                        "surface": "audit_pipeline",
+                        "phase": "vision_fallback",
+                        "subphase": "video_frames",
+                        "attempt_index": attempt,
+                        "attempt_total": total,
+                        "target_type": "video_file",
+                        "target_id": str(filename or video_path)[:160],
+                        "handle": str(creator_handle or "")[:80],
+                        "target_label": str(filename or "video frames")[:160],
+                    },
                 ),
             )
             raw = resp.content[0].text.strip()

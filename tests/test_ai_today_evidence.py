@@ -269,6 +269,13 @@ def test_read_hot_brands_drops_own_brand(tmp_path) -> None:
     assert _read_hot_brands(ops_dir=str(tmp_path)) == ["Sony", "Sigma"]
 
 
+def test_read_hot_brands_rejects_string_instead_of_iterating_characters(tmp_path) -> None:
+    artifact = tmp_path / "latest-market.json"
+    artifact.write_text(json.dumps({"hot_brands": "Sony"}), encoding="utf-8")
+
+    assert _read_hot_brands(ops_dir=str(tmp_path)) == []
+
+
 def test_market_sources_exclude_own_brand_in_query(monkeypatch) -> None:
     conn = _CaptureConn()
     monkeypatch.setattr(ai_today, "get_conn", lambda: conn)

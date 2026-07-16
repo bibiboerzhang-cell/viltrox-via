@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.permissions import check_tab_permission, is_owner
 from app.core.logging import get_logger
 from app.db.connection import is_postgres_runtime
 from app.services.cache import cache_clear, cache_set
@@ -15,6 +16,31 @@ ENRICHABLE_PLATFORMS = {"youtube", "instagram", "tiktok", "xiaohongshu", "x", "b
 OWNER_NAME_KEYS = ("owner_name", "owner", "responsible_owner", "responsible_name", "assignee", "登记/对接人")
 OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", "source_staff_id")
 KOL_POOL_READ_CACHE_TTL_SEC = 300
+CONTACT_VISIBILITY_MASKED = "masked"
+CONTACT_VISIBILITY_FULL = "full"
+CONTACT_METADATA_KEYS = {
+    "id",
+    "kol_pool_id",
+    "contact_type",
+    "type",
+    "channel",
+    "label",
+    "source",
+    "contact_source",
+    "layer",
+    "confidence",
+    "verified",
+    "status",
+    "consent",
+    "is_public_declared",
+    "first_seen_at",
+    "last_seen_at",
+    "created_at",
+    "updated_at",
+    "count",
+    "priority",
+    "reason",
+}
 logger = get_logger(__name__)
 # d8:列表 payload 的两根现成水管(只读相关子查询;前端 KolPoolAllModal『已分析』chip
 # 早已按 llm_deep_analysis_count 等键设计,此前后端从未供给——饿死字段)。
@@ -164,13 +190,16 @@ def _utcnow() -> str:
 
 
 def _mask_email(value: Any) -> str:
-    """读端邮箱脱敏:e***@d***。空/无效原样返回(空串)。
+    """读端邮箱脱敏:e***@d***。空值原样返回，非空脏值也不得明文回显。
 
-    合规:列表与详情默认掩码,真值仅 view_kol_contact 二次确认 + 审计后返回。
+    合规:列表与详情默认掩码；list/workspace 仅 owner/vkpi:admin 可用 full 投影，
+    普通成员的逐条真值仍走 view_kol_contact 二次确认 + 审计。
     """
     text = str(value or "").strip()
-    if not text or "@" not in text:
+    if not text:
         return text
+    if "@" not in text:
+        return "***" if len(text) <= 4 else f"{text[0]}***{text[-1]}"
     local, _, domain = text.partition("@")
     masked_local = (local[0] + "***") if local else "***"
     masked_domain = (domain[0] + "***") if domain else "***"
@@ -190,36 +219,119 @@ def _mask_contact_value(contact_type: Any, value: Any) -> str:
     return f"{text[0]}***{text[-1]}"
 
 
+def _mask_contact_record(value: Any, *, contact_type: Any = "") -> Any:
+    """Mask contact values while preserving channel/source metadata."""
+    if isinstance(value, list):
+        return [_mask_contact_record(item, contact_type=contact_type) for item in value]
+    if not isinstance(value, dict):
+        return _mask_contact_value(contact_type, value)
+
+    masked: dict[str, Any] = dict(value)
+    record_type = masked.get("contact_type") or masked.get("type") or contact_type
+    for key, raw_value in tuple(masked.items()):
+        if key in CONTACT_METADATA_KEYS or raw_value in (None, ""):
+            continue
+        if isinstance(raw_value, (dict, list)):
+            masked[key] = _mask_contact_record(raw_value, contact_type=record_type)
+            continue
+        key_type = "email" if "email" in key else "phone" if key in {
+            "phone",
+            "contact_phone",
+            "phone_number",
+            "mobile",
+            "whatsapp",
+        } else record_type
+        masked[key] = _mask_contact_value(key_type, raw_value)
+    return masked
+
+
 def _mask_contacts_json(value: Any) -> str:
-    """对 other_contacts_json(list[dict]) 逐条脱敏 contact_value。非法 JSON → 原样返回。"""
+    """对 other_contacts_json 逐条脱敏；非法或不可解析内容不回显。"""
     data = _loads(value, default=None)
-    if not isinstance(data, list):
-        return value if isinstance(value, str) else json.dumps(data or [], ensure_ascii=False)
-    out: list[Any] = []
-    for item in data:
-        if isinstance(item, dict):
-            masked = dict(item)
-            if "contact_value" in masked:
-                masked["contact_value"] = _mask_contact_value(masked.get("contact_type"), masked.get("contact_value"))
-            out.append(masked)
-        else:
-            out.append(item)
+    if data is None:
+        return "[]"
+    out = _mask_contact_record(data)
     return json.dumps(out, ensure_ascii=False)
 
 
-def mask_pool_item(item: dict[str, Any]) -> dict[str, Any]:
-    """读端联系列默认脱敏(就地浅拷贝)。列表/详情序列化出口统一套用。
+def _mask_contact_channels(value: Any) -> Any:
+    """Mask JSON/JSONB contact channel snapshots without changing their container type."""
+    data = _loads(value, default=None)
+    if data is None:
+        return "{}" if isinstance(value, str) else {}
+    if isinstance(data, dict):
+        masked = {
+            str(channel): _mask_contact_record(payload, contact_type=channel)
+            for channel, payload in data.items()
+        }
+    else:
+        masked = _mask_contact_record(data)
+    return json.dumps(masked, ensure_ascii=False) if isinstance(value, str) else masked
 
-    红线:只改 email/other_contacts_json 展示值;不触任何 fit/质量/产品线列。
+
+def normalize_contact_visibility(value: Any) -> str:
+    return CONTACT_VISIBILITY_FULL if value == CONTACT_VISIBILITY_FULL else CONTACT_VISIBILITY_MASKED
+
+
+def contact_visibility_for_staff(staff: dict[str, Any] | None) -> str:
+    """Return the list/workspace contact projection allowed for a trusted staff context."""
+    context = staff if isinstance(staff, dict) else {}
+    if is_owner(context) or check_tab_permission(context, "vkpi", "admin"):
+        return CONTACT_VISIBILITY_FULL
+    return CONTACT_VISIBILITY_MASKED
+
+
+def mask_pool_item(
+    item: dict[str, Any],
+    *,
+    contact_visibility: str = CONTACT_VISIBILITY_MASKED,
+) -> dict[str, Any]:
+    """Apply the permission-aware contact projection at every pool DTO boundary.
+
+    红线:只改联系方式展示值;不触任何 fit/质量/产品线列。
     """
     if not isinstance(item, dict):
         return item
     masked = dict(item)
-    if "email" in masked and masked.get("email"):
-        masked["email"] = _mask_email(masked.get("email"))
+    contact_keys = {
+        "email",
+        "contact_email",
+        "business_email",
+        "public_email",
+        "phone",
+        "contact_phone",
+        "phone_number",
+        "mobile",
+        "whatsapp",
+        "other_contacts_json",
+        "contact_channels",
+        "contact_links_json",
+        "contact_raw_json",
+    }
+    has_contact_projection = any(key in masked for key in contact_keys)
+    visibility = normalize_contact_visibility(contact_visibility)
+    if visibility == CONTACT_VISIBILITY_FULL:
+        if has_contact_projection:
+            masked["contact_masked"] = False
+        return masked
+    for key in ("email", "contact_email", "business_email", "public_email"):
+        if key in masked and masked.get(key):
+            masked[key] = _mask_email(masked.get(key))
+    for key in ("phone", "contact_phone", "phone_number", "mobile", "whatsapp"):
+        if key in masked and masked.get(key):
+            masked[key] = _mask_contact_value("phone", masked.get(key))
     if "other_contacts_json" in masked and masked.get("other_contacts_json"):
         masked["other_contacts_json"] = _mask_contacts_json(masked.get("other_contacts_json"))
-    masked["contact_masked"] = True
+    if "contact_channels" in masked and masked.get("contact_channels"):
+        masked["contact_channels"] = _mask_contact_channels(masked.get("contact_channels"))
+    for key in ("contact_links_json", "contact_raw_json"):
+        if key in masked and masked.get(key):
+            value = masked.get(key)
+            data = _loads(value, default=None)
+            projected = _mask_contact_record(data) if data is not None else []
+            masked[key] = json.dumps(projected, ensure_ascii=False) if isinstance(value, str) else projected
+    if has_contact_projection:
+        masked["contact_masked"] = True
     return masked
 
 

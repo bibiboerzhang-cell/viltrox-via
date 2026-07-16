@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from app.db.connection import get_conn
-from app.platform import llm_gateway
 from app.domains import memory
 from app.domains.costs.budget_guard import check_budget, get_budget_status
 from app.domains.kol.product_fit_helpers import *  # noqa: F403
@@ -55,6 +54,37 @@ SCENARIO = "kol_product_fit"
 REASON_BUDGET_SCOPE = "cron:p4_recommendation_reasons"
 _CATALOG_PRODUCT_BY_SKU: dict[str, dict[str, Any] | None] = {}
 _CATALOG_PRODUCTS: list[dict[str, Any]] | None = None
+
+
+def _preview_execution_policy(
+    *,
+    with_llm_reasons: bool,
+    reason_limit: int,
+    returned_count: int,
+) -> dict[str, Any]:
+    """Describe the bounded provider work this preview will actually attempt.
+
+    Ranking and business actions remain deterministic/read-only.  The only
+    provider-capable step is the optional explanation attached to a bounded
+    number of already-ranked candidates.
+    """
+
+    planned = (
+        max(0, min(int(reason_limit or 0), int(returned_count or 0)))
+        if with_llm_reasons
+        else 0
+    )
+    provider_calls_allowed = planned > 0
+    return {
+        "mode": "ai_enriched_preview" if provider_calls_allowed else "dry_run",
+        "provider_calls_allowed": provider_calls_allowed,
+        "provider_calls_planned": planned,
+        "provider_call_scope": (
+            "recommendation_reason_only" if provider_calls_allowed else "none"
+        ),
+        "deterministic_ranking": True,
+        "business_actions_executed": False,
+    }
 
 
 def _utcnow() -> datetime:
@@ -567,6 +597,12 @@ def build_kol_product_fit_preview(
     returned = eligible[:safe_limit]
     median = _median_score(returned)
     markdown_display = [item for item in returned if float(item["score"]) >= median]
+    execution_policy = _preview_execution_policy(
+        with_llm_reasons=with_llm_reasons,
+        reason_limit=reason_limit,
+        returned_count=len(returned),
+    )
+    reason_items = returned[: execution_policy["provider_calls_planned"]]
     kol_payload = {
         "kol_entity_uid": kol.get("entity_uid"),
         "legacy_entity_uid": legacy_uid,
@@ -593,19 +629,25 @@ def build_kol_product_fit_preview(
         "top_score": returned[0]["score"] if returned else 0,
         "median_score": median,
         "llm_reasons_requested": bool(with_llm_reasons),
+        "llm_reason_calls_planned": execution_policy["provider_calls_planned"],
         "reasons_attached": 0,
     }
     payload = {
         "scenario": SCENARIO,
-        "mode": "dry_run",
+        "mode": execution_policy["mode"],
         "generated_at": _iso(now),
-        "provider_calls_allowed": False,
+        "provider_calls_allowed": execution_policy["provider_calls_allowed"],
+        "execution_policy": execution_policy,
         "budget_guard": {
             "scope": BUDGET_SCOPE,
             "estimated_cost_usd": 0.0,
             "allowed": bool(cost_ok),
             "recorded_cost": False,
             "configured": bool(budget_status.get("configured")),
+            "llm_reason_scope": REASON_BUDGET_SCOPE,
+            "llm_reason_calls_planned": execution_policy["provider_calls_planned"],
+            "llm_reason_atomic_reservation_per_call": True,
+            "llm_reason_requires_configured_budget": True,
         },
         "kol": kol_payload,
         "summary": summary,
@@ -613,9 +655,9 @@ def build_kol_product_fit_preview(
         "items": returned,
         "markdown_items": markdown_display,
     }
-    if with_llm_reasons:
+    if reason_items:
         reasons_attached = 0
-        for item in returned[: max(0, min(int(reason_limit or 0), len(returned)))]:
+        for item in reason_items:
             _attach_reason(payload, item)
             reasons_attached += 1
         summary["reasons_attached"] = reasons_attached

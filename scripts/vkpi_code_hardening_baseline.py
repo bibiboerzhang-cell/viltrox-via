@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only V-KPI hardening baseline snapshot."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import asyncio
 import json
@@ -48,7 +49,7 @@ def main() -> None:
         "memory_readiness": memory.readiness(),
         "table_counts": [_count_table(conn, table_name) for table_name in TABLES],
     }
-    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    stdout_out(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     asyncio.run(close_db_runtime())
 
 

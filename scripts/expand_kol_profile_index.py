@@ -21,6 +21,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 from qdrant_client.http import models as qdrant_models
+from stdout_utils import out
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -260,21 +261,21 @@ def estimate_docs(docs: list[Any]) -> tuple[int, Decimal]:
 def print_plan(plan: CandidatePlan) -> None:
     new_docs = plan.new_docs
     tokens, cost = estimate_docs(new_docs)
-    print(f"kept_after_pollution={len(plan.kept_ids)}")
-    print(f"buildable={len(plan.docs)} existing_ready={len(plan.existing_ids)} new_buildable={len(new_docs)} thin={len(plan.thin)} pollution={len(plan.pollution)}")
-    print("buildable_bucket=" + json.dumps(Counter(plan.bucket_by_id[int(doc.kol_pool_id)] for doc in plan.docs), ensure_ascii=False, sort_keys=True))
-    print("new_bucket=" + json.dumps(Counter(plan.bucket_by_id[int(doc.kol_pool_id)] for doc in new_docs), ensure_ascii=False, sort_keys=True))
-    print("new_sufficiency=" + json.dumps(Counter(doc.sufficiency for doc in new_docs), ensure_ascii=False, sort_keys=True))
-    print(f"estimated_tokens={tokens} estimated_cost_usd={cost}")
-    print("new_ids=" + ",".join(str(int(doc.kol_pool_id)) for doc in new_docs))
+    out(f"kept_after_pollution={len(plan.kept_ids)}")
+    out(f"buildable={len(plan.docs)} existing_ready={len(plan.existing_ids)} new_buildable={len(new_docs)} thin={len(plan.thin)} pollution={len(plan.pollution)}")
+    out("buildable_bucket=" + json.dumps(Counter(plan.bucket_by_id[int(doc.kol_pool_id)] for doc in plan.docs), ensure_ascii=False, sort_keys=True))
+    out("new_bucket=" + json.dumps(Counter(plan.bucket_by_id[int(doc.kol_pool_id)] for doc in new_docs), ensure_ascii=False, sort_keys=True))
+    out("new_sufficiency=" + json.dumps(Counter(doc.sufficiency for doc in new_docs), ensure_ascii=False, sort_keys=True))
+    out(f"estimated_tokens={tokens} estimated_cost_usd={cost}")
+    out("new_ids=" + ",".join(str(int(doc.kol_pool_id)) for doc in new_docs))
     if plan.pollution:
-        print("pollution:")
+        out("pollution:")
         for item in plan.pollution:
-            print("\t".join(str(part) for part in item))
+            out("\t".join(str(part) for part in item))
     if plan.thin:
-        print("thin_sample:")
+        out("thin_sample:")
         for item in plan.thin[:20]:
-            print("\t".join(str(part) for part in item))
+            out("\t".join(str(part) for part in item))
 
 
 def write_incremental_index(docs: list[Any]) -> tuple[int, int, Decimal, int]:
@@ -478,9 +479,9 @@ def sample_docs(docs: list[Any], type_results: list[Any], limit: int = 5) -> lis
 
 def print_recall_report(report: dict[str, list[tuple[int, str, str, str, float]]]) -> None:
     for label, rows in report.items():
-        print(f"\n=== {label} Top 5 ===")
+        out(f"\n=== {label} Top 5 ===")
         for idx, (kol_id, handle, display, profile_type, score) in enumerate(rows, start=1):
-            print(f"{idx:02d}. kol_pool_id={kol_id} handle={handle} display={display} type={profile_type} vector_score={score:.6f}")
+            out(f"{idx:02d}. kol_pool_id={kol_id} handle={handle} display={display} type={profile_type} vector_score={score:.6f}")
 
 
 def current_totals() -> tuple[int, int, dict[str, int]]:
@@ -535,23 +536,23 @@ def command_write_and_validate(_: argparse.Namespace) -> int:
         {"eliinfante", "jaysoundo", "zwadephoto", "michaelziegann", "editorskeys", "thecamerastoretv"},
     )
 
-    print("\n=== write summary ===")
-    print(f"embedded_new={wrote} embedding_tokens={tokens} embedding_cost_usd={cost} qdrant_count_after_write={qdrant_count}")
-    print(f"classified_new={updated}")
-    print(f"entries_total={entries} qdrant_total={current_qdrant_count}")
-    print("classification_total_distribution=" + json.dumps(distribution, ensure_ascii=False, sort_keys=True))
-    print("new_classification_distribution=" + json.dumps(Counter(item.profile_type for item in type_results), ensure_ascii=False, sort_keys=True))
-    print(f"validation_query_tokens={query_tokens} validation_query_cost_usd={query_cost}")
+    out("\n=== write summary ===")
+    out(f"embedded_new={wrote} embedding_tokens={tokens} embedding_cost_usd={cost} qdrant_count_after_write={qdrant_count}")
+    out(f"classified_new={updated}")
+    out(f"entries_total={entries} qdrant_total={current_qdrant_count}")
+    out("classification_total_distribution=" + json.dumps(distribution, ensure_ascii=False, sort_keys=True))
+    out("new_classification_distribution=" + json.dumps(Counter(item.profile_type for item in type_results), ensure_ascii=False, sort_keys=True))
+    out(f"validation_query_tokens={query_tokens} validation_query_cost_usd={query_cost}")
     print_recall_report(recall_report)
 
-    print("\n=== 35mm tracked handles rank after expansion ===")
+    out("\n=== 35mm tracked handles rank after expansion ===")
     for line in ranks:
-        print(line)
+        out(line)
 
-    print("\n=== new profile samples ===")
+    out("\n=== new profile samples ===")
     for sample in sample_docs(docs, type_results, limit=5):
-        print("---")
-        print(sample)
+        out("---")
+        out(sample)
     return 0
 
 
@@ -563,13 +564,13 @@ def command_validate(_: argparse.Namespace) -> int:
         build.PRODUCT_QUERY_TEXTS["35mm_f12_lab"],
         {"eliinfante", "jaysoundo", "zwadephoto", "michaelziegann", "editorskeys", "thecamerastoretv"},
     )
-    print(f"entries_total={entries} qdrant_total={qdrant_count}")
-    print("classification_total_distribution=" + json.dumps(distribution, ensure_ascii=False, sort_keys=True))
-    print(f"validation_query_tokens={tokens} validation_query_cost_usd={cost}")
+    out(f"entries_total={entries} qdrant_total={qdrant_count}")
+    out("classification_total_distribution=" + json.dumps(distribution, ensure_ascii=False, sort_keys=True))
+    out(f"validation_query_tokens={tokens} validation_query_cost_usd={cost}")
     print_recall_report(recall_report)
-    print("\n=== 35mm tracked handles rank ===")
+    out("\n=== 35mm tracked handles rank ===")
     for line in ranks:
-        print(line)
+        out(line)
     return 0
 
 

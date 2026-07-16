@@ -39,7 +39,11 @@ def build_conversion_readiness(sku: str, product: dict[str, Any] | None) -> dict
 
     # 3) 订单承接数据:本地库无订单即诚实 unknown(线上有 webhook 流)。
     try:
-        row = conn.execute("SELECT COUNT(*) AS n FROM vkpi_shopify_orders").fetchone()
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM vkpi_shopify_orders "
+            "WHERE LOWER(COALESCE(financial_status,'')) "
+            "IN ('paid','partially_paid','partially_refunded')"
+        ).fetchone()
         n_orders = int(dict(row or {}).get("n") or 0)
         _item("orders_flow", "订单归因流", "ready" if n_orders > 0 else "unknown",
               f"订单快照 {n_orders} 条" if n_orders else "本地库 0 订单(线上 webhook 有流);上云后自动转 ready")

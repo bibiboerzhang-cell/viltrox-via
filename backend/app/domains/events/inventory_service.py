@@ -12,11 +12,46 @@ DB 走 get_conn(? 占位)应用路径,镜像 events/service.py。员工身份用
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import re
+import urllib.parse
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
+from app.domains import audit
 from app.domains.access import scope
+from app.platform.db.schema_audit import ensure_vkpi_audit_schema
+
+
+class InventoryVerificationConflict(ValueError):
+    """The operator attempted to verify or revoke a stale inventory row."""
+
+
+INVENTORY_VERIFICATION_SOURCE_TYPES = frozenset(
+    {
+        "physical_count_sheet",
+        "warehouse_confirmation",
+        "wms_export",
+        "erp_export",
+        "shopify_inventory_snapshot",
+    }
+)
+INVENTORY_PROVIDER_SOURCE_TYPES = frozenset(
+    {"wms_export", "erp_export", "shopify_inventory_snapshot"}
+)
+INVENTORY_SOURCE_CLOCK_SKEW = timedelta(minutes=5)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SENSITIVE_REF_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "signature",
+    "api_key",
+    "apikey",
+    "access_key",
+    "accesskey",
+)
 
 
 def _now() -> datetime:
@@ -58,6 +93,111 @@ def _movement_row(r: Any) -> dict[str, Any]:
     row = dict(r)
     row["metadata_json"] = _loads(row.get("metadata_json"), {})
     return row
+
+
+def _ensure_inventory_verification_schema() -> None:
+    """Keep SQLite development databases additive; Postgres uses migration 263."""
+
+    if is_postgres_runtime():
+        return
+    conn = get_conn()
+    cursor = conn.execute("PRAGMA table_info(vkpi_inventory)")
+    # Lightweight unit fakes do not emulate schema introspection.  Real
+    # SQLite cursors always expose fetchall; leaving a fake untouched preserves
+    # the production fail-closed behavior without coupling CRUD tests to DDL.
+    if not hasattr(cursor, "fetchall"):
+        return
+    rows = cursor.fetchall()
+    if not rows:
+        return
+    existing = {str(dict(row).get("name") or "") for row in rows}
+    columns = {
+        "quantity_status": "TEXT NOT NULL DEFAULT 'unverified'",
+        "quantity_source": "TEXT NOT NULL DEFAULT 'unknown'",
+        "quantity_verified_at": "TEXT",
+        "quantity_source_ref": "TEXT",
+        "quantity_source_observed_at": "TEXT",
+        "quantity_evidence_sha256": "TEXT",
+        "quantity_verified_by_staff_id": "INTEGER",
+        "quantity_verified_organization_id": "INTEGER",
+        "row_version": "INTEGER NOT NULL DEFAULT 1",
+    }
+    changed = False
+    for column, ddl in columns.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE vkpi_inventory ADD COLUMN {column} {ddl}")
+            changed = True
+    if changed:
+        conn.commit()
+
+
+def _verified_source_observed_at(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("source_observed_at is required")
+    iso_value = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    try:
+        observed = datetime.fromisoformat(iso_value)
+    except ValueError as exc:
+        raise ValueError("source_observed_at must be a valid ISO-8601 timestamp") from exc
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        raise ValueError("source_observed_at timezone is required")
+    observed_utc = observed.astimezone(timezone.utc)
+    if observed_utc > datetime.now(timezone.utc) + INVENTORY_SOURCE_CLOCK_SKEW:
+        raise ValueError("source_observed_at cannot be in the future")
+    return observed_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _positive_int(value: Any, field: str) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return parsed
+
+
+def _verification_cas(body: dict[str, Any]) -> tuple[str, int, int, str]:
+    expected_id = str(body.get("expected_id") or "").strip()
+    expected_qty = int(body.get("expected_qty")) if body.get("expected_qty") is not None else -1
+    expected_row_version = _positive_int(body.get("expected_row_version"), "expected_row_version")
+    expected_updated_at = str(body.get("expected_updated_at") or "").strip()
+    if not expected_id or expected_qty < 0 or not expected_updated_at:
+        raise ValueError(
+            "expected_id, expected_qty, expected_row_version and expected_updated_at are required"
+        )
+    return expected_id, expected_qty, expected_row_version, expected_updated_at
+
+
+def _safe_source_ref(value: Any) -> str:
+    """Accept a useful receipt reference while rejecting credential-bearing URLs."""
+
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 500:
+        raise ValueError("source_ref is required and must be at most 500 characters")
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        raise ValueError("source_ref cannot contain control characters")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError as exc:
+        raise ValueError("source_ref URL is invalid") from exc
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("source_ref URL must use http or https")
+        if parsed.username or parsed.password:
+            raise ValueError("source_ref URL cannot contain userinfo credentials")
+        key_values = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        key_values.extend(urllib.parse.parse_qsl(parsed.fragment, keep_blank_values=True))
+        unsafe_keys = []
+        for key, _item in key_values:
+            normalized = str(key or "").strip().lower().replace("-", "_")
+            if any(part in normalized for part in _SENSITIVE_REF_KEY_PARTS):
+                unsafe_keys.append(normalized)
+        fragment_lower = urllib.parse.unquote(parsed.fragment or "").lower()
+        if unsafe_keys or any(f"{part}=" in fragment_lower for part in _SENSITIVE_REF_KEY_PARTS):
+            raise ValueError("source_ref URL cannot contain credential query or fragment keys")
+    return raw
 
 
 def _log_movement(
@@ -112,6 +252,7 @@ def _get_by_sku(conn: Any, sku: str) -> dict[str, Any] | None:
 
 def create_item(body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     """新建库存项 + 落一条 action='add' 流水(delta=new_qty=初始数量)。"""
+    _ensure_inventory_verification_schema()
     conn = get_conn()
     sku = str((body or {}).get("sku") or "").strip()
     if not sku:
@@ -120,11 +261,15 @@ def create_item(body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str,
         raise ValueError(f"sku already exists: {sku}")
     iid = str((body or {}).get("id") or _gen_id("s"))
     qty = int((body or {}).get("qty") or 0)
+    # A typed quantity is a reference entry, not warehouse-source proof.  The
+    # request body cannot promote itself to manual/source confirmed; a future
+    # WMS/ERP/provider adapter must own that explicit verification boundary.
     conn.execute(
         """
         INSERT INTO vkpi_inventory
-          (id, sku, name, category, qty, location, note, is_sample, created_by_staff_id, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?, NOW(), NOW())
+          (id, sku, name, category, qty, location, note, is_sample, created_by_staff_id,
+           quantity_status, quantity_source, quantity_verified_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,CASE WHEN ? THEN NOW() ELSE NULL END, NOW(), NOW())
         """,
         (
             iid,
@@ -136,6 +281,9 @@ def create_item(body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str,
             str((body or {}).get("note") or ""),
             bool((body or {}).get("is_sample") or False),
             _staff_id(staff),
+            "unverified",
+            "manual_reference" if "qty" in (body or {}) else "manual_placeholder",
+            False,
         ),
     )
     _log_movement(
@@ -159,6 +307,7 @@ _UPDATABLE = {"name": str, "category": str, "location": str, "note": str}
 def update_item(sku: str, body: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     """改库存项。qty 变化 → action='adjust' 流水(记 delta/new_qty);
     仅改字段(name/location/...)→ action='edit' 流水(记改了哪些字段)。"""
+    _ensure_inventory_verification_schema()
     conn = get_conn()
     body = body or {}
     current = _get_by_sku(conn, str(sku))
@@ -185,11 +334,24 @@ def update_item(sku: str, body: dict[str, Any], staff: dict[str, Any] | None) ->
         new_qty = max(0, int(body.get("qty") or 0))
         sets.append("qty = ?")
         vals.append(new_qty)
+        sets.extend(
+            [
+                "quantity_status = ?",
+                "quantity_source = ?",
+                "quantity_verified_at = NULL",
+                "quantity_source_ref = NULL",
+                "quantity_source_observed_at = NULL",
+                "quantity_evidence_sha256 = NULL",
+                "quantity_verified_by_staff_id = NULL",
+                "quantity_verified_organization_id = NULL",
+            ]
+        )
+        vals.extend(["unverified", "manual_adjustment_reference"])
 
     if not sets:
         return {"item": current}
 
-    sets.append("updated_at = NOW()")
+    sets.extend(["row_version = row_version + 1", "updated_at = NOW()"])
     vals.append(str(sku))
     conn.execute(f"UPDATE vkpi_inventory SET {', '.join(sets)} WHERE sku = ?", tuple(vals))
 
@@ -220,6 +382,207 @@ def update_item(sku: str, body: dict[str, Any], staff: dict[str, Any] | None) ->
         )
     conn.commit()
     return {"item": _get_by_sku(conn, str(sku))}
+
+
+def verify_quantity(
+    sku: str,
+    body: dict[str, Any],
+    *,
+    authorization_evidence: dict[str, Any],
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Verify an existing, unchanged quantity against an immutable source receipt.
+
+    This route never accepts a new quantity.  ``expected_qty`` is only a CAS
+    assertion against the value already visible to the operator.
+    """
+
+    _ensure_inventory_verification_schema()
+    ensure_vkpi_audit_schema()
+    conn = get_conn()
+    organization_id = scope.assert_legacy_default_organization(
+        staff, conn, feature="inventory verification"
+    )
+    actor = _staff_id(staff)
+    if not actor:
+        raise ValueError("authenticated staff actor required")
+    source_type = str(body.get("source_type") or "").strip().lower()
+    source_ref = _safe_source_ref(body.get("source_ref"))
+    evidence_sha256 = str(body.get("evidence_sha256") or "").strip().lower()
+    if source_type not in INVENTORY_VERIFICATION_SOURCE_TYPES:
+        raise ValueError("unsupported inventory source_type")
+    if not _SHA256_RE.fullmatch(evidence_sha256):
+        raise ValueError("evidence_sha256 must be a lowercase SHA-256 hex digest")
+    source_observed_at = _verified_source_observed_at(body.get("source_observed_at"))
+    expected_id, expected_qty, expected_row_version, expected_updated_at = _verification_cas(body)
+    current = _get_by_sku(conn, str(sku))
+    if not current:
+        raise LookupError(f"inventory not found: {sku}")
+    now = _now()
+    quantity_status = (
+        "source_confirmed"
+        if source_type in INVENTORY_PROVIDER_SOURCE_TYPES
+        else "manual_confirmed"
+    )
+    try:
+        fresh = conn.execute(
+            """
+            UPDATE vkpi_inventory
+            SET quantity_status=?, quantity_source=?, quantity_source_ref=?,
+                quantity_source_observed_at=?, quantity_evidence_sha256=?,
+                quantity_verified_by_staff_id=?, quantity_verified_organization_id=?,
+                quantity_verified_at=?, row_version=row_version + 1, updated_at=?
+            WHERE id=? AND sku=? AND qty=? AND row_version=? AND updated_at=?
+              AND quantity_status='unverified'
+            RETURNING *
+            """,
+            (
+                quantity_status,
+                source_type,
+                source_ref,
+                source_observed_at,
+                evidence_sha256,
+                actor,
+                organization_id,
+                now,
+                now,
+                expected_id,
+                str(sku),
+                expected_qty,
+                expected_row_version,
+                expected_updated_at,
+            ),
+        ).fetchone()
+        if not fresh:
+            raise InventoryVerificationConflict(
+                "inventory quantity changed after it was loaded; refresh before verifying"
+            )
+        fresh_dict = dict(fresh)
+        audit_metadata = {
+            "organization_id": organization_id,
+            "quantity_status": quantity_status,
+            "source_type": source_type,
+            "source_ref": source_ref,
+            "source_observed_at": source_observed_at,
+            "evidence_sha256": evidence_sha256,
+            "authorization_ref": authorization_evidence.get("authorization_ref"),
+            "expected_qty": expected_qty,
+            "expected_row_version": expected_row_version,
+            "verified_row_version": fresh_dict.get("row_version"),
+        }
+        _log_movement(
+            conn,
+            inventory_sku=str(sku),
+            action="verify",
+            staff=staff,
+            delta_qty=0,
+            new_qty=expected_qty,
+            reason=str(authorization_evidence.get("reason") or "inventory quantity verified"),
+            metadata=audit_metadata,
+        )
+        audit.log_business_event(
+            staff_id=actor,
+            action_type="inventory_quantity_verify",
+            target_type="inventory",
+            target_id=str(sku),
+            detail=str(authorization_evidence.get("reason") or "inventory quantity verified"),
+            metadata=audit_metadata,
+            conn=conn,
+            commit=False,
+            ensure_schema=False,
+        )
+        conn.commit()
+        return {"item": fresh_dict, "verified": True, "quantity_changed": False}
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def revoke_quantity_verification(
+    sku: str,
+    body: dict[str, Any],
+    *,
+    authorization_evidence: dict[str, Any],
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Invalidate a stale/manual receipt without changing the stored quantity."""
+
+    _ensure_inventory_verification_schema()
+    ensure_vkpi_audit_schema()
+    conn = get_conn()
+    organization_id = scope.assert_legacy_default_organization(
+        staff, conn, feature="inventory verification revocation"
+    )
+    actor = _staff_id(staff)
+    if not actor:
+        raise ValueError("authenticated staff actor required")
+    expected_id, expected_qty, expected_row_version, expected_updated_at = _verification_cas(body)
+    current = _get_by_sku(conn, str(sku))
+    if not current:
+        raise LookupError(f"inventory not found: {sku}")
+    now = _now()
+    try:
+        fresh = conn.execute(
+            """
+            UPDATE vkpi_inventory
+            SET quantity_status='unverified', quantity_source='verification_revoked',
+                quantity_source_ref=NULL, quantity_source_observed_at=NULL,
+                quantity_evidence_sha256=NULL, quantity_verified_by_staff_id=NULL,
+                quantity_verified_organization_id=NULL, quantity_verified_at=NULL,
+                row_version=row_version + 1, updated_at=?
+            WHERE id=? AND sku=? AND qty=? AND row_version=? AND updated_at=?
+              AND quantity_status IN ('manual_confirmed','source_confirmed')
+            RETURNING *
+            """,
+            (
+                now,
+                expected_id,
+                str(sku),
+                expected_qty,
+                expected_row_version,
+                expected_updated_at,
+            ),
+        ).fetchone()
+        if not fresh:
+            raise InventoryVerificationConflict(
+                "inventory verification changed after it was loaded; refresh before revoking"
+            )
+        fresh_dict = dict(fresh)
+        audit_metadata = {
+            "organization_id": organization_id,
+            "previous_source_type": current.get("quantity_source"),
+            "previous_evidence_sha256": current.get("quantity_evidence_sha256"),
+            "authorization_ref": authorization_evidence.get("authorization_ref"),
+            "expected_qty": expected_qty,
+            "expected_row_version": expected_row_version,
+            "revoked_row_version": fresh_dict.get("row_version"),
+        }
+        _log_movement(
+            conn,
+            inventory_sku=str(sku),
+            action="verification_revoke",
+            staff=staff,
+            delta_qty=0,
+            new_qty=expected_qty,
+            reason=str(authorization_evidence.get("reason") or "inventory verification revoked"),
+            metadata=audit_metadata,
+        )
+        audit.log_business_event(
+            staff_id=actor,
+            action_type="inventory_quantity_verification_revoke",
+            target_type="inventory",
+            target_id=str(sku),
+            detail=str(authorization_evidence.get("reason") or "inventory verification revoked"),
+            metadata=audit_metadata,
+            conn=conn,
+            commit=False,
+            ensure_schema=False,
+        )
+        conn.commit()
+        return {"item": fresh_dict, "verified": False, "quantity_changed": False}
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def delete_item(sku: str, body: dict[str, Any] | None, staff: dict[str, Any] | None) -> dict[str, Any]:
@@ -416,6 +779,7 @@ _CAT_MAP = {
 def import_missing_from_catalog(staff: dict[str, Any] | None) -> dict[str, Any]:
     """把 vkpi_products 里有、vkpi_inventory 里没有的 SKU 批量补进库存(qty=0,location 待填)。
     幂等:已存在的 sku ON CONFLICT DO NOTHING;绝不覆盖已有项的 qty/字段。"""
+    _ensure_inventory_verification_schema()
     conn = get_conn()
     # 产品库列名兼容(category_main / category)
     cols = {c[0] for c in conn.execute(
@@ -426,7 +790,17 @@ def import_missing_from_catalog(staff: dict[str, Any] | None) -> dict[str, Any]:
         ).fetchall()
     }
     cat_col = "category_main" if "category_main" in cols else ("category" if "category" in cols else None)
-    name_col = "name" if "name" in cols else ("product_name" if "product_name" in cols else "sku")
+    name_col = (
+        "model_name"
+        if "model_name" in cols
+        else "marketing_name"
+        if "marketing_name" in cols
+        else "name"
+        if "name" in cols
+        else "product_name"
+        if "product_name" in cols
+        else "sku"
+    )
     sel = f"SELECT p.sku AS sku, p.{name_col} AS name" + (f", p.{cat_col} AS cat" if cat_col else ", '' AS cat")
     sel += " FROM vkpi_products p LEFT JOIN vkpi_inventory i ON i.sku = p.sku WHERE i.sku IS NULL AND p.sku IS NOT NULL AND p.sku <> ''"
     rows = conn.execute(sel).fetchall()
@@ -438,13 +812,18 @@ def import_missing_from_catalog(staff: dict[str, Any] | None) -> dict[str, Any]:
     for i, r in enumerate(rows):
         d = dict(r)
         sku = str(d.get("sku") or "").strip()
-        if not sku:
+        # viltrox.com 的多数 Shopify 变体没有官方 SKU。目录同步会使用
+        # WEB-VAR-<variant_id> 稳定标识，但它不是仓库 SKU，禁止自动建库存行。
+        if not sku or sku.upper().startswith("WEB-VAR-"):
             continue
         cat = _CAT_MAP.get(str(d.get("cat") or "").strip().lower(), "accessory")
         conn.execute(
             """
-            INSERT INTO vkpi_inventory (id, sku, name, category, qty, location, note, is_sample, created_by_staff_id, created_at, updated_at)
-            VALUES (?,?,?,?,0,'','从产品库导入·待填库存量',FALSE,?, NOW(), NOW())
+            INSERT INTO vkpi_inventory
+              (id, sku, name, category, qty, location, note, is_sample, created_by_staff_id,
+               quantity_status, quantity_source, quantity_verified_at, created_at, updated_at)
+            VALUES (?,?,?,?,0,'','从产品库导入·待填库存量',FALSE,?,
+                    'unverified','catalog_reference',NULL, NOW(), NOW())
             ON CONFLICT (sku) DO NOTHING
             """,
             (f"{_gen_id('s')}_{i}", sku, str(d.get("name") or sku), cat, sid),

@@ -23,6 +23,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.api.dependencies.legacy_scope import require_legacy_system_admin_scope
 from app.api.routers.system_admin_staff import router as staff_router
 from app.core.security import require_admin_async as require_admin, verify_password
 from app.db.connection import get_conn
@@ -36,8 +37,19 @@ from app.services.system import secrets_admin as secrets_svc
 from app.services.system import trust_admin as trust_svc
 from app.core.model_pricing import PRICING_USD_PER_1M_TOKENS
 from app.core.model_registry import AVAILABLE_MODELS, current_task_model_binding, split_binding, validate_task_model
+from app.platform.llm_runtime_errors import readiness_gate
+from app.platform.models.readiness import (
+    build_model_readiness_catalog,
+    configured_providers_from_environment,
+    exact_binding_readiness_from_environment,
+    model_attestation_trust_root_status,
+    readiness_evidence_from_environment,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["system-admin"])
+legacy_admin_router = APIRouter(
+    dependencies=[Depends(require_legacy_system_admin_scope)],
+)
 router.include_router(staff_router)
 
 SYSTEM_RESTART_ENABLED = os.environ.get("SYSTEM_RESTART_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -61,22 +73,22 @@ def _confirm_admin_password(admin: dict, confirm_password: str | None) -> None:
 # Integrations
 # =========================================================================
 
-@router.get("/integrations")
+@legacy_admin_router.get("/integrations")
 def list_integrations(admin=Depends(require_tab("runtime", "read"))):
     return int_svc.list_all()
 
 
-@router.get("/integrations/{integration_id}")
+@legacy_admin_router.get("/integrations/{integration_id}")
 def get_integration(integration_id: int, admin=Depends(require_tab("runtime", "read"))):
     return int_svc.get_detail(integration_id)
 
 
-@router.get("/integrations/{integration_id}/health")
+@legacy_admin_router.get("/integrations/{integration_id}/health")
 async def integration_health(integration_id: int, admin=Depends(require_tab("runtime", "read"))):
     return await int_svc.live_health_check(integration_id)
 
 
-@router.get("/integrations/{integration_id}/metrics")
+@legacy_admin_router.get("/integrations/{integration_id}/metrics")
 def integration_metrics(
     integration_id: int,
     window: Literal["1h", "24h", "7d"] = "24h",
@@ -85,17 +97,17 @@ def integration_metrics(
     return int_svc.get_metrics(integration_id, window=window)
 
 
-@router.post("/integrations/health-check-all")
+@legacy_admin_router.post("/integrations/health-check-all")
 async def health_check_all(admin=Depends(require_tab("runtime", "write"))):
     return await int_svc.health_check_all()
 
 
-@router.post("/integrations/{integration_id}/test")
+@legacy_admin_router.post("/integrations/{integration_id}/test")
 async def test_integration(integration_id: int, admin=Depends(require_tab("runtime", "write"))):
     return await int_svc.smoke_test(integration_id)
 
 
-@router.post("/integrations/{integration_id}/disable")
+@legacy_admin_router.post("/integrations/{integration_id}/disable")
 def disable_integration(
     integration_id: int,
     request: Request,
@@ -110,7 +122,7 @@ def disable_integration(
     )
     return {"ok": True}
 
-@router.post("/integrations/{integration_id}/enable")
+@legacy_admin_router.post("/integrations/{integration_id}/enable")
 def enable_integration(
     integration_id: int,
     request: Request,
@@ -130,7 +142,7 @@ def enable_integration(
 # Runtime
 # =========================================================================
 
-@router.get("/runtime/workers")
+@legacy_admin_router.get("/runtime/workers")
 async def runtime_workers(request: Request, admin=Depends(require_tab("runtime", "read"))):
     worker_snapshot = rt_svc.worker_states()
     queue = getattr(request.app.state, "job_queue", None)
@@ -151,7 +163,7 @@ async def runtime_workers(request: Request, admin=Depends(require_tab("runtime",
     }
 
 
-@router.get("/runtime/queues")
+@legacy_admin_router.get("/runtime/queues")
 async def runtime_queues(request: Request, admin=Depends(require_tab("runtime", "read"))):
     ledger_depths = rt_svc.queue_depths()
     queue = getattr(request.app.state, "job_queue", None)
@@ -171,7 +183,7 @@ async def runtime_queues(request: Request, admin=Depends(require_tab("runtime", 
     }
 
 
-@router.get("/runtime/route-performance")
+@legacy_admin_router.get("/runtime/route-performance")
 def runtime_route_performance(
     limit: int = 20,
     order_by: Literal["p95", "error_rate", "requests"] = "p95",
@@ -180,12 +192,12 @@ def runtime_route_performance(
     return rt_svc.route_performance(limit=limit, order_by=order_by)
 
 
-@router.get("/runtime/system-resources")
+@legacy_admin_router.get("/runtime/system-resources")
 def runtime_resources(admin=Depends(require_tab("runtime", "read"))):
     return rt_svc.system_resources()
 
 
-@router.post("/runtime/scheduler/{job_id}/run-now")
+@legacy_admin_router.post("/runtime/scheduler/{job_id}/run-now")
 async def run_scheduler_job(
     job_id: str,
     request: Request,
@@ -201,12 +213,12 @@ async def run_scheduler_job(
     return result
 
 
-@router.get("/runtime/scheduler/{job_id}/history")
+@legacy_admin_router.get("/runtime/scheduler/{job_id}/history")
 def scheduler_history(job_id: str, admin=Depends(require_tab("runtime", "read"))):
     return rt_svc.job_history(job_id)
 
 
-@router.post("/runtime/cache/{tier}/clear")
+@legacy_admin_router.post("/runtime/cache/{tier}/clear")
 def clear_cache_tier(
     tier: str,
     request: Request,
@@ -226,12 +238,12 @@ def clear_cache_tier(
 # System key/model management support
 # =========================================================================
 
-@router.get("/system/providers")
+@legacy_admin_router.get("/system/providers")
 def provider_status(admin=Depends(require_system_permission("system.api_keys", "read"))):
     return provider_svc.list_provider_status()
 
 
-@router.get("/system/usage")
+@legacy_admin_router.get("/system/usage")
 def system_usage(
     days: int = Query(default=7, ge=1, le=90),
     admin=Depends(require_system_permission("system.usage", "read")),
@@ -239,7 +251,7 @@ def system_usage(
     return usage_svc.usage_summary(days=days)
 
 
-@router.get("/system/rbac/status")
+@legacy_admin_router.get("/system/rbac/status")
 def system_rbac_status(
     include_staff: bool = Query(default=False),
     staff=Depends(require_system_permission("system.members", "read")),
@@ -251,7 +263,7 @@ def system_rbac_status(
     return rbac_status.build_rbac_status(include_staff=include_staff)
 
 
-@router.post("/system/providers/{provider}/probe")
+@legacy_admin_router.post("/system/providers/{provider}/probe")
 async def probe_provider(
     provider: str,
     body: dict | None = None,
@@ -263,7 +275,7 @@ async def probe_provider(
     return result
 
 
-@router.post("/system/keys/rotate")
+@legacy_admin_router.post("/system/keys/rotate")
 async def rotate_provider_key(
     body: dict,
     request: Request,
@@ -304,7 +316,7 @@ async def rotate_provider_key(
     return result
 
 
-@router.post("/system/restart")
+@legacy_admin_router.post("/system/restart")
 def restart_system_roles(
     body: dict,
     request: Request,
@@ -376,16 +388,123 @@ def restart_system_roles(
     return {"ok": all(item["status"] in {"dry_run", "restarted"} for item in results), "enabled": SYSTEM_RESTART_ENABLED, "results": results}
 
 
-@router.get("/system/models")
+@legacy_admin_router.get("/system/models")
 def system_models(admin=Depends(require_system_permission("system.models", "read"))):
+    del admin
+    registered_bindings = [
+        f"{provider}/{model}"
+        for provider, models in AVAILABLE_MODELS.items()
+        for model in models
+    ]
+    evidence, evidence_source = readiness_evidence_from_environment()
+    readiness = build_model_readiness_catalog(
+        registered_bindings,
+        evidence_by_binding=evidence,
+        configured_providers=configured_providers_from_environment(),
+    )
+    audited_items = [
+        {**item, "runtime_gate": readiness_gate(item, evidence_source)}
+        for item in readiness["items"]
+    ]
+    readiness = {**readiness, "items": audited_items}
+    by_binding = {item["binding"]: item for item in audited_items}
+    task_bindings = current_task_model_binding()
+    task_model_readiness = {}
+    for task, binding in task_bindings.items():
+        item = by_binding.get(binding) or {
+            "binding": binding,
+            "availability": "unverified",
+            "production_ready": False,
+            "claim_status": "descriptive_only",
+            "failure_reasons": ["binding_not_in_registered_catalog"],
+        }
+        task_model_readiness[task] = {
+            **item,
+            "runtime_gate": item.get("runtime_gate")
+            or readiness_gate(item, evidence_source),
+        }
+    blocked_bindings = [
+        {
+            "binding": item["binding"],
+            "code": item["runtime_gate"]["code"],
+            "category": item["runtime_gate"]["category"],
+            "failure_reasons": item["runtime_gate"]["failure_reasons"],
+        }
+        for item in audited_items
+        if item.get("production_ready") is not True
+    ]
+    trust_roots = model_attestation_trust_root_status()
     return {
+        "status": readiness["status"],
+        "claim_status": readiness["claim_status"],
         "available_models": AVAILABLE_MODELS,
-        "task_model_binding": current_task_model_binding(),
+        "available_models_semantics": "registered_candidates_only_not_verified_availability",
+        "registered_models": registered_bindings,
+        "task_model_binding": task_bindings,
+        "task_model_readiness": task_model_readiness,
+        "readiness_audit": {
+            "version": "model_readiness_audit_v1",
+            "candidate_count": readiness["candidate_count"],
+            "configured_count": readiness["configured_count"],
+            "probed_count": readiness["probed_count"],
+            "evaluated_count": readiness["evaluated_count"],
+            "production_ready_count": readiness["production_ready_count"],
+            "blocked_count": len(blocked_bindings),
+            "blocked_bindings": blocked_bindings,
+            "attestation_trust_roots": trust_roots,
+            "evidence_source": {
+                "source": evidence_source.get("source") or "not_configured",
+                "parsed": evidence_source.get("parsed") is True,
+                "error": evidence_source.get("error"),
+                "binding_count": int(evidence_source.get("binding_count") or 0),
+                "secret_values_exposed": False,
+            },
+        },
+        "model_readiness": readiness,
+        "readiness_evidence_source": evidence_source,
         "pricing_usd_per_1m_tokens": PRICING_USD_PER_1M_TOKENS,
     }
 
 
-@router.post("/system/models/switch")
+def _exact_binding_readiness(
+    binding: str,
+    *,
+    expected_tasks: tuple[str, ...] | None = None,
+) -> tuple[dict, dict]:
+    """Use the exact same authoritative gate as the LLM gateway."""
+    return exact_binding_readiness_from_environment(
+        binding,
+        expected_tasks=expected_tasks,
+    )
+
+
+@legacy_admin_router.get("/system/models/readiness")
+def system_model_readiness(
+    binding: str = Query(..., min_length=3, max_length=220),
+    admin=Depends(require_system_permission("system.models", "read")),
+):
+    """Return the exact fail-closed gate without probing or exposing secrets."""
+
+    del admin
+    provider, model = split_binding(binding)
+    if not provider or not model:
+        raise HTTPException(status_code=400, detail="binding must be provider/model")
+    item, evidence_source = _exact_binding_readiness(f"{provider}/{model}")
+    return {
+        "binding": f"{provider}/{model}",
+        "runtime_gate": readiness_gate(item, evidence_source),
+        "readiness": item,
+        "evidence_source": {
+            "source": evidence_source.get("source") or "not_configured",
+            "parsed": evidence_source.get("parsed") is True,
+            "error": evidence_source.get("error"),
+            "binding_count": int(evidence_source.get("binding_count") or 0),
+            "secret_values_exposed": False,
+        },
+    }
+
+
+@legacy_admin_router.post("/system/models/switch")
 async def switch_system_model(
     body: dict,
     request: Request,
@@ -397,6 +516,28 @@ async def switch_system_model(
     model = str(body.get("model") or "")
     if not validate_task_model(task, model):
         raise HTTPException(status_code=400, detail="unsupported task/model binding")
+    readiness, evidence_source = _exact_binding_readiness(
+        model,
+        expected_tasks=(task,),
+    )
+    if readiness.get("production_ready") is not True:
+        # A provider-level health check cannot prove access to this exact model,
+        # output validity, or evaluation quality.  Block before any provider
+        # probe or configuration write.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "model_binding_not_production_ready",
+                "binding": model,
+                "state": readiness.get("state") or "unverified",
+                "availability": readiness.get("availability") or "unverified",
+                "claim_status": readiness.get("claim_status") or "descriptive_only",
+                "failure_reasons": readiness.get("failure_reasons") or ["readiness_unverified"],
+                "runtime_gate": readiness_gate(readiness, evidence_source),
+                "evidence_source": evidence_source.get("source") or "not_configured",
+                "note": "provider health alone is not exact-model readiness evidence",
+            },
+        )
     provider, _model_name = split_binding(model)
     sandbox = await provider_svc.probe_provider(provider)
     provider_svc.record_provider_probe(provider, bool(sandbox.get("ok")), str(sandbox.get("error") or ""))
@@ -421,7 +562,7 @@ async def switch_system_model(
 # Trust
 # =========================================================================
 
-@router.get("/trust/events")
+@legacy_admin_router.get("/trust/events")
 def trust_events(
     pos: bool | None = None,
     user_id: int | None = None,
@@ -436,7 +577,7 @@ def trust_events(
     )
 
 
-@router.get("/trust/users")
+@legacy_admin_router.get("/trust/users")
 def trust_users(
     status: Literal["trusted", "watching", "flagged", "blocked"] | None = None,
     order_by: Literal["score_asc", "violations_desc", "recent"] = "score_asc",
@@ -445,22 +586,22 @@ def trust_users(
     return trust_svc.list_users(status=status, order_by=order_by)
 
 
-@router.get("/trust/users/{user_id}")
+@legacy_admin_router.get("/trust/users/{user_id}")
 def trust_user_detail(user_id: int, admin=Depends(require_tab("command", "read"))):
     return trust_svc.user_detail(user_id)
 
 
-@router.get("/trust/distribution")
+@legacy_admin_router.get("/trust/distribution")
 def trust_distribution(admin=Depends(require_tab("command", "read"))):
     return trust_svc.distribution()
 
 
-@router.get("/trust/rules")
+@legacy_admin_router.get("/trust/rules")
 def trust_rules(admin=Depends(require_tab("command", "read"))):
     return trust_svc.list_rules()
 
 
-@router.put("/trust/rules/{rule_id}")
+@legacy_admin_router.put("/trust/rules/{rule_id}")
 def update_trust_rule(
     rule_id: int,
     body: dict,
@@ -477,7 +618,7 @@ def update_trust_rule(
     return {"ok": True}
 
 
-@router.put("/trust/thresholds")
+@legacy_admin_router.put("/trust/thresholds")
 def update_thresholds(
     body: dict,
     request: Request,
@@ -497,7 +638,7 @@ def update_thresholds(
 # User moderation actions
 # =========================================================================
 
-@router.post("/users/{user_id}/block")
+@legacy_admin_router.post("/users/{user_id}/block")
 def block_user(
     user_id: int,
     body: dict,
@@ -517,7 +658,7 @@ def block_user(
     return {"ok": True}
 
 
-@router.post("/users/{user_id}/unblock")
+@legacy_admin_router.post("/users/{user_id}/unblock")
 def unblock_user(
     user_id: int,
     body: dict,
@@ -534,7 +675,7 @@ def unblock_user(
     return {"ok": True}
 
 
-@router.post("/users/{user_id}/flag")
+@legacy_admin_router.post("/users/{user_id}/flag")
 def flag_user(
     user_id: int,
     body: dict,
@@ -552,7 +693,7 @@ def flag_user(
     return {"ok": True}
 
 
-@router.post("/users/{user_id}/clear-flag")
+@legacy_admin_router.post("/users/{user_id}/clear-flag")
 def clear_flag(
     user_id: int,
     request: Request,
@@ -568,7 +709,7 @@ def clear_flag(
     return {"ok": True}
 
 
-@router.post("/users/{user_id}/adjust-score")
+@legacy_admin_router.post("/users/{user_id}/adjust-score")
 def adjust_score(
     user_id: int,
     body: dict,
@@ -587,3 +728,8 @@ def adjust_score(
         detail={"delta": delta, "reason": reason}, request=request,
     )
     return {"ok": True}
+
+
+# Keep only public token acceptance/status outside this dependency; every route
+# declared in this module is legacy-global and is guarded here.
+router.include_router(legacy_admin_router)

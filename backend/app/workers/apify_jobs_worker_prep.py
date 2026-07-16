@@ -34,7 +34,12 @@ from app.workers.apify_jobs_video_context import _select_keyframe_requests
 logger = get_logger(__name__)
 
 
-def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _llm_budget_preflight(
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    execution_class: str = llm_gateway.PRODUCTION_EXECUTION_CLASS,
+) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id}")
     with db_connection_sync_scope():
@@ -43,6 +48,9 @@ def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[
             purpose="vkpi_analysis_worker",
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider="google",
+            model_override=WORKER_GEMINI_MODEL,
+            model_fallbacks=[],
+            execution_class=execution_class,
             cost_tag=LLM_BUDGET_SCOPE,
             # 主线 enforce 口径:只对真有 caps 行的 scope 硬拦,未配额的 cost_scope
             # (如 video_analysis_final_v1)放行,避免视频深析被「未配额=全拦」误杀。
@@ -53,8 +61,48 @@ def _llm_budget_preflight(job: dict[str, Any], payload: dict[str, Any]) -> dict[
 def _google_allowed(preflight: dict[str, Any]) -> tuple[bool, str, float]:
     providers = preflight.get("providers") if isinstance(preflight.get("providers"), list) else []
     google = next((item for item in providers if item.get("provider") == "google"), {})
-    reason = str(preflight.get("provider_gate_reason") or google.get("provider_gate_reason") or "provider_calls_blocked")
+    reason = str(
+        google.get("binding_gate_reason")
+        or preflight.get("provider_gate_reason")
+        or "provider_calls_blocked"
+    )
     return bool(google.get("provider_calls_allowed")), reason, float(google.get("estimated_cost_usd") or 0.0)
+
+
+def _google_execution_authorization(preflight: dict[str, Any]) -> dict[str, Any]:
+    providers = (
+        preflight.get("providers")
+        if isinstance(preflight.get("providers"), list)
+        else []
+    )
+    google = next(
+        (item for item in providers if item.get("provider") == "google"), {}
+    )
+    return {
+        "binding": str(google.get("binding") or ""),
+        "model": str(google.get("model") or ""),
+        "execution_class": str(
+            google.get("execution_class")
+            or preflight.get("execution_class")
+            or llm_gateway.PRODUCTION_EXECUTION_CLASS
+        ),
+        "authorization_scope": str(
+            google.get("authorization_scope") or "blocked"
+        ),
+        "evaluation_only": bool(google.get("evaluation_only")),
+        "production_authorized": bool(google.get("production_authorized")),
+        "claim_status": str(
+            google.get("claim_status")
+            or google.get("model_claim_status")
+            or preflight.get("claim_status")
+            or "descriptive_only"
+        ),
+        "model_readiness_status": str(
+            google.get("model_readiness_status")
+            or preflight.get("model_readiness_status")
+            or "not_ready"
+        ),
+    }
 
 
 def _provider_allowed(preflight: dict[str, Any], provider_name: str) -> tuple[bool, str, float]:
@@ -94,6 +142,9 @@ def _provider_budget_preflight(job: dict[str, Any], payload: dict[str, Any], pro
             purpose="vkpi_analysis_worker",
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider=provider,
+            # QA and judge calls never inherit a final_v1 local-evaluation
+            # capability.  They remain behind production model readiness.
+            execution_class=llm_gateway.PRODUCTION_EXECUTION_CLASS,
             cost_tag=LLM_BUDGET_SCOPE,
             require_configured=False,
         )
@@ -232,4 +283,5 @@ from app.workers.apify_jobs_worker import (  # noqa: E402
     LLM_BUDGET_SCOPE,
     LLM_MAX_OUTPUT_TOKENS,
     WORKER_GEMINI_MODEL,
+    WORKER_LLM_EXECUTION_CLASS,
 )

@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Read-only post-sync audit for V-KPI official accounts and KOL pool state."""
 from __future__ import annotations
+import sys as _stdout_sys
+from pathlib import Path as _StdoutPath
+
+_STDOUT_UTILS_DIR = _StdoutPath(__file__).resolve().parents[1]
+if str(_STDOUT_UTILS_DIR) not in _stdout_sys.path:
+    _stdout_sys.path.insert(1, str(_STDOUT_UTILS_DIR))
+from stdout_utils import out as stdout_out  # noqa: E402
 
 import argparse
 import json
@@ -257,7 +264,7 @@ def main() -> int:
     args = parse_args()
     service_state = local_service_state(args.service) if args.local else remote_service_state(args.remote, args.service)
     if service_state in {"active", "activating"} and not args.allow_during_sync:
-        print(json.dumps({
+        stdout_out(json.dumps({
             "checked_at": utcnow(),
             "skipped": True,
             "reason": f"{args.service} is {service_state}; rerun after completion or pass --allow-during-sync for read-only inspection",
@@ -270,7 +277,7 @@ def main() -> int:
     payload = audit_local(args.remote_root) if args.local else audit_remote(args.remote, args.remote_root)
     payload["service"] = args.service
     payload["service_state"] = service_state
-    print(json.dumps(payload, ensure_ascii=False, default=str, indent=2, sort_keys=True))
+    stdout_out(json.dumps(payload, ensure_ascii=False, default=str, indent=2, sort_keys=True))
     if payload.get("error"):
         return 2
     acceptance = payload.get("acceptance") if isinstance(payload.get("acceptance"), dict) else {}

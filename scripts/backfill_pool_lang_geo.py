@@ -25,6 +25,7 @@
   .venv/bin/python scripts/backfill_pool_lang_geo.py --write    # 落库
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -299,7 +300,7 @@ def main() -> int:
         conn.commit()
         _clear_kol_pool_read_cache()
 
-    print(json.dumps({
+    stdout_out(json.dumps({
         "write": bool(args.write),
         "scanned_missing_lang_or_country": scanned,
         "language": {

@@ -28,12 +28,49 @@ class Finding:
     severity: str = "error"
 
 
+@dataclass(frozen=True)
+class WarningBaseline:
+    max_warnings: int
+    policy: str
+    warning_kind: str
+
+
 def _relative(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_warning_baseline(path: Path) -> WarningBaseline:
+    """Load the reviewed warning ceiling, failing closed on configuration drift."""
+
+    if not path.is_file():
+        raise ValueError(f"warning baseline does not exist: {path}")
+    payload = _load_json(path)
+    if payload.get("schema_version") != 1:
+        raise ValueError("warning baseline schema_version must be 1")
+    if payload.get("policy") != "ratchet_only":
+        raise ValueError("warning baseline policy must be ratchet_only")
+    if payload.get("warning_kind") != "print_call":
+        raise ValueError("warning baseline warning_kind must be print_call")
+    if payload.get("review_required_for_increase") is not True:
+        raise ValueError("warning baseline must require review for any increase")
+    raw_max = payload.get("max_warnings")
+    if isinstance(raw_max, bool) or not isinstance(raw_max, int) or raw_max < 0:
+        raise ValueError("warning baseline max_warnings must be a non-negative integer")
+    return WarningBaseline(
+        max_warnings=raw_max,
+        policy="ratchet_only",
+        warning_kind="print_call",
+    )
+
+
+def _warning_baseline_error(current: int, baseline: WarningBaseline) -> str | None:
+    if current <= baseline.max_warnings:
+        return None
+    return f"warnings exceeded reviewed ratchet: current={current} baseline={baseline.max_warnings}"
 
 
 ALLOWLIST = _load_json(ALLOWLIST_PATH) if ALLOWLIST_PATH.exists() else {}
@@ -258,25 +295,24 @@ def run() -> int:
         indent=2,
     )
 
-    baseline_max_warnings: int | None = None
+    warning_baseline: WarningBaseline | None = None
     if args.warning_baseline:
         baseline_path = Path(args.warning_baseline)
         if not baseline_path.is_absolute():
             baseline_path = ROOT / baseline_path
-        if baseline_path.exists():
-            try:
-                baseline_payload = _load_json(baseline_path)
-                baseline_max_warnings = int(baseline_payload.get("max_warnings", 0))
-            except Exception:
-                baseline_max_warnings = None
+        try:
+            warning_baseline = _load_warning_baseline(baseline_path)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            sys.stderr.write(f"[FAIL] invalid warning baseline: {exc}\n")
+            return 1
 
     if args.strict and findings:
         return 1
-    if args.strict and baseline_max_warnings is not None and len(warnings) > baseline_max_warnings:
-        sys.stderr.write(
-            f"[FAIL] warnings exceeded baseline: current={len(warnings)} baseline={baseline_max_warnings}\n"
-        )
-        return 1
+    if args.strict and warning_baseline is not None:
+        baseline_error = _warning_baseline_error(len(warnings), warning_baseline)
+        if baseline_error:
+            sys.stderr.write(f"[FAIL] {baseline_error}\n")
+            return 1
     return 0
 
 

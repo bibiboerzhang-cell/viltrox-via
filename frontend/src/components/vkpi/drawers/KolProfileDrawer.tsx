@@ -182,7 +182,7 @@ export function KolProfileDrawer({
             {' · '}有效 {numberFormatter.format(safeNumber(linkSummary.valid_click_count))}
             {' · '}机器人 {numberFormatter.format(safeNumber(linkSummary.bot_click_count))}
           </p>
-          <em>订单 {numberFormatter.format(safeNumber(linkSummary.order_count || linkOrders.length))} · 销售 {formatMoneyCents(linkSummary.revenue_cents)}</em>
+          <em>已验证订单 {numberFormatter.format(safeNumber(linkSummary.order_count))} · 已验证销售 {formatMoneyCents(linkSummary.revenue_cents)}</em>
         </article>
         <DetailList title="短链点击证据" rows={linkClicks} empty="暂无点击证据。">
           {(row) => (
@@ -196,16 +196,16 @@ export function KolProfileDrawer({
         <DetailList title="短链订单证据" rows={linkOrders} empty="暂无短链订单证据。">
           {(row) => (
             <article key={`kol-link-order-${String(row.shopify_order_snapshot_id || row.source_ref || row.attribution_id || Math.random())}`}>
-              <div><strong>{textValue(row.order_name || row.order_number || row.source_ref, '订单')}</strong><span>{formatMoneyCents(row.revenue_cents)}</span></div>
+              <div><strong>{textValue(row.order_name || row.order_number || row.source_ref, '订单')}</strong><span>{textValue(row.business_truth_status) === 'provider_verified' ? formatMoneyCents(row.revenue_cents) : '金额待验证'}</span></div>
               <p>{textValue(row.slug, '-')} · {textValue(row.financial_status || row.confidence, '-')}</p>
-              <em>{textValue(row.processed_at || row.occurred_at, '-')} · Hash {textValue(row.raw_payload_hash, '-')}</em>
+              <em>{textValue(row.business_truth_status) === 'provider_verified' ? '已验证 Shopify HMAC' : '仅作参考，不计入 GMV'} · {textValue(row.processed_at || row.occurred_at, '-')} · Hash {textValue(row.raw_payload_hash, '-')}</em>
             </article>
           )}
         </DetailList>
         <DetailList title="销售归因" rows={sales} empty="暂无销售归因。">
           {(row) => (
             <article key={`kol-sale-${String(row.id || row.source_ref || Math.random())}`}>
-              <div><strong>{formatMoneyCents(row.revenue_cents)}</strong><span>{textValue(row.source_platform, '-')}</span></div>
+              <div><strong>{textValue(row.business_truth_status) === 'provider_verified' ? formatMoneyCents(row.revenue_cents) : '金额待验证'}</strong><span>{textValue(row.source_platform, '-')}</span></div>
               <p>{textValue(row.source_ref || row.order_id, '-')}</p>
               {row.order_snapshot ? (
                 <p className="vkpi-detail-subline">
@@ -216,7 +216,7 @@ export function KolProfileDrawer({
                   {textValue((row.order_snapshot as Record<string, unknown>).refund_status, 'no refund')}
                 </p>
               ) : null}
-              <em>{textValue(row.confidence, '-')} · {textValue(row.occurred_at || row.created_at, '-')}</em>
+              <em>{textValue(row.business_truth_status) === 'provider_verified' ? '已验证业务证据' : '仅作参考，不计入 GMV'} · {textValue(row.confidence, '-')} · {textValue(row.occurred_at || row.created_at, '-')}</em>
             </article>
           )}
         </DetailList>
@@ -262,9 +262,9 @@ export function KolProfileDrawer({
           <DetailList title="成本记录" rows={costsRows} empty="暂无成本记录。">
             {(row) => (
               <article key={`kol-cost-${String(row.id || row.source_ref || Math.random())}`}>
-                <div><strong>{formatMoneyCents(row.amount_cents)}</strong><span>{textValue(row.cost_type, '-')}</span></div>
+                <div><strong>{textValue(row.business_truth_status) === 'approved_actual' ? formatMoneyCents(row.amount_cents) : '金额待审批'}</strong><span>{textValue(row.cost_type, '-')}</span></div>
                 <p>{textValue(row.note, '无备注')}</p>
-                <em>{textValue(row.status, '-')} · {textValue(row.incurred_at || row.created_at, '-')}</em>
+                <em>{textValue(row.business_truth_status) === 'approved_actual' ? '已审批实际成本' : '仅作参考，不计入 ROI'} · {textValue(row.status, '-')} · {textValue(row.incurred_at || row.created_at, '-')}</em>
               </article>
             )}
           </DetailList>

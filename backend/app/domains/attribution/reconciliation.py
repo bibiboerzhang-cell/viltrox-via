@@ -124,7 +124,11 @@ def stats() -> dict[str, Any]:
     try:
         row = conn.execute("SELECT * FROM vkpi_reconciliation_stats").fetchone()
         if row:
-            return dict(row)
+            return {
+                **dict(row),
+                "business_truth_status": "reference_diagnostic",
+                "counts_toward_verified_gmv": False,
+            }
     except Exception as exc:
         logger.warning("vkpi reconciliation stats view failed, using grouped fallback: %s", exc)
     statuses = {"pending": 0, "in_review": 0, "resolved": 0, "rejected": 0, "pending_gmv_cents": 0}
@@ -133,7 +137,11 @@ def stats() -> dict[str, Any]:
         statuses[f"{key}_count"] = int(row["n"] or 0)
         if key == "pending":
             statuses["pending_gmv_cents"] = int(row["revenue"] or 0)
-    return statuses
+    return {
+        **statuses,
+        "business_truth_status": "reference_diagnostic",
+        "counts_toward_verified_gmv": False,
+    }
 
 
 def get_item(queue_id: int) -> dict[str, Any]:
@@ -207,9 +215,17 @@ def resolve(queue_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None
             "currency": item.get("currency") or "USD",
             "confidence": str(body.get("confidence") or "manual"),
             "occurred_at": item.get("occurred_at") or _utcnow(),
-            "evidence": {"source": "manual_reconciliation", "queue_id": int(queue_id), "evidence_text": evidence_text, "original_source_ref": item.get("source_ref"), "payload": body},
+            "evidence": {
+                "source": "manual_reconciliation",
+                "queue_id": int(queue_id),
+                "evidence_text": evidence_text,
+                "original_source_ref": item.get("source_ref"),
+                "authorization_evidence": body.get("_authorization_evidence") or {},
+                "payload": body,
+            },
         },
         staff=staff,
+        ingest_class="human_verified",
     ).get("attribution") or {}
     attr_id = _int(attr.get("id"))
     conn = get_conn()
@@ -254,8 +270,8 @@ def adjust_attribution(attribution_id: int, body: dict[str, Any], *, staff: dict
     if new_revenue is None and "revenue_usd" in body:
         new_revenue = _money_cents(body.get("revenue_usd"))
     delta = _int(new_revenue, _int(base.get("revenue_cents"))) - _int(base.get("revenue_cents"))
-    payload = {**base, "source_ref": f"{base['source_ref']}:adjust:{secrets.token_hex(4)}", "revenue_cents": delta, "confidence": "manual", "evidence": {"source": "attribution_adjustment", "base_attribution_id": int(attribution_id), "evidence_text": evidence_text, "delta_cents": delta}}
-    attr = attribution.create_attribution(payload, staff=staff).get("attribution") or {}
+    payload = {**base, "source_ref": f"{base['source_ref']}:adjust:{secrets.token_hex(4)}", "revenue_cents": delta, "confidence": "manual", "evidence": {"source": "attribution_adjustment", "base_attribution_id": int(attribution_id), "evidence_text": evidence_text, "delta_cents": delta, "authorization_evidence": body.get("_authorization_evidence") or {}}}
+    attr = attribution.create_attribution(payload, staff=staff, ingest_class="human_verified").get("attribution") or {}
     adj_id = _log_adjustment(attribution_id=int(attribution_id), adjustment_type="amount_adjust", field_changed="revenue_cents", old_value=str(base.get("revenue_cents")), new_value=str(new_revenue), evidence_text=evidence_text, staff_id=actor, metadata={"adjustment_attribution_id": attr.get("id"), "delta_cents": delta})
     return {"adjustment_id": adj_id, "adjustment_attribution": attr, "base_attribution": base}
 
@@ -264,13 +280,18 @@ def void_attribution(attribution_id: int, body: dict[str, Any] | None = None, *,
     base = _base_attribution(int(attribution_id))
     actor = _actor(staff)
     evidence_text = str((body or {}).get("evidence_text") or (body or {}).get("reason") or "void attribution")
-    payload = {**base, "source_ref": f"{base['source_ref']}:void:{secrets.token_hex(4)}", "revenue_cents": -_int(base.get("revenue_cents")), "commission_cents": -_int(base.get("commission_cents")), "confidence": "void", "evidence": {"source": "void", "base_attribution_id": int(attribution_id), "evidence_text": evidence_text}}
-    attr = attribution.create_attribution(payload, staff=staff).get("attribution") or {}
+    payload = {**base, "source_ref": f"{base['source_ref']}:void:{secrets.token_hex(4)}", "revenue_cents": -_int(base.get("revenue_cents")), "commission_cents": -_int(base.get("commission_cents")), "confidence": "void", "evidence": {"source": "void", "base_attribution_id": int(attribution_id), "evidence_text": evidence_text, "authorization_evidence": (body or {}).get("_authorization_evidence") or {}}}
+    attr = attribution.create_attribution(payload, staff=staff, ingest_class="human_verified").get("attribution") or {}
     adj_id = _log_adjustment(attribution_id=int(attribution_id), adjustment_type="void", field_changed="revenue_cents", old_value=str(base.get("revenue_cents")), new_value="0", evidence_text=evidence_text, staff_id=actor, metadata={"offset_attribution_id": attr.get("id")})
     return {"adjustment_id": adj_id, "offset_attribution": attr}
 
 
-def refund(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def refund(
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    ingest_class: str = "manual_unverified",
+) -> dict[str, Any]:
     amount_cents = -abs(_money_cents(body.get("refund_cents", body.get("refund_usd", body.get("amount_usd", 0)))))
     source_ref = str(body.get("source_ref") or body.get("refund_id") or f"refund:{secrets.token_hex(6)}")
     source_platform = str(body.get("source_platform") or "shopify")
@@ -283,7 +304,6 @@ def refund(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict
         {
             "source_platform": source_platform,
             "source_ref": source_ref,
-            "system_trusted": bool(body.get("system_trusted") or body.get("trusted_ingest")),
             "project_id": body.get("project_id"),
             "link_id": body.get("link_id"),
             "kol_id": body.get("kol_id"),
@@ -296,6 +316,7 @@ def refund(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict
             "evidence": {"source": "refund", "payload": body},
         },
         staff=staff,
+        ingest_class=ingest_class,
     ).get("attribution") or {}
     if not existing or old_revenue != amount_cents:
         _log_adjustment(

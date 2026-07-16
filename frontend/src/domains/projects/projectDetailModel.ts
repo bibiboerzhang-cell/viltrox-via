@@ -153,6 +153,10 @@ export interface ProjectDetailViewProps {
   project: VkpiProjectRow;
   projects: VkpiProjectRow[];
   participatingRows?: VkpiProjectRow[];
+  assignmentPage?: VkpiProjectDetail['assignment_page'];
+  loadingMoreAssignments?: boolean;
+  assignmentLoadError?: string;
+  onLoadMoreAssignments?: () => void | Promise<void>;
   costRows?: Array<Record<string, unknown>>;
   productUnitCosts?: Record<string, number>;
   staff?: VkpiStaffMember[];

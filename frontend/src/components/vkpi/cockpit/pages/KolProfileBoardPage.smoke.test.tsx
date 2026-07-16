@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 // KOL 档案改版冒烟(金样板 MarketVoicePage/MyKolBoardPage.smoke 同构):
 // - 页壳:pagehead(KOL 档案 + 名号/平台药丸徽 + 编辑布局钮)+ 可编辑看板;
 // - KPI 带四卡全点时快照:无逐 KOL 时序端点 → 4 卡 spempty 诚实虚线、零 delta 药丸;
-// - 默认布局十模块在场(identity/credit/signature/deep/videos/comments/coop/leadtime/audience),
+// - 默认布局十一模块在场(identity/credit/signature/deep/history/videos/comments/coop/leadtime/audience),
 //   gear=palette 备选不进默认;
 // - 溯源:真实表名只进 SrcChip rows(vkpi_kol_pool / vkpi_kol_llm_deep_analysis_results /
 //   vkpi_comments / vkpi_kol_cooperation_events),卡面零术语;
@@ -197,15 +197,25 @@ const BOARD_SERIES_OK = {
   generated_at: "2026-07-12T02:00:00+00:00",
 };
 
-function routeApi(overrides: { deep?: unknown; competing?: unknown; boardSeries?: unknown } = {}) {
+function routeApi(overrides: { bundle?: unknown; resolve?: unknown; deep?: unknown; competing?: unknown; boardSeries?: unknown } = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
     const p = String(path);
+    if (p.startsWith("/api/admin/vkpi/kol-pool/resolve")) {
+      const value = overrides.resolve ?? { matched: true, kol_pool_id: 101, handle: "@alpha", display_name: "Alpha Cam" };
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.startsWith("/api/admin/vkpi/board-series")) {
       const value = overrides.boardSeries ?? new Error("board-series 未接通");
       if (value instanceof Error) throw value;
       return value;
     }
-    if (p.includes("/detail-bundle")) return BUNDLE_OK;
+    if (p.startsWith("/api/admin/vkpi/kol-search-history")) return { status: "ready", count: 0, items: [] };
+    if (p.includes("/detail-bundle")) {
+      const value = overrides.bundle ?? BUNDLE_OK;
+      if (value instanceof Error) throw value;
+      return value;
+    }
     if (p.includes("/cooperation")) return COOP_OK;
     if (p.includes("/llm-deep-analysis")) {
       const value = overrides.deep ?? DEEP_OK;
@@ -258,11 +268,14 @@ describe("KolProfileBoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + �
     expect(screen.getAllByText("youtube").length).toBeGreaterThan(0);
     expect(screen.getByText("编辑布局")).toBeTruthy();
 
-    // 六路 page 层端点全被调
-    const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
-    for (const seg of ["/detail-bundle", "/cooperation", "/llm-deep-analysis", "/intelligence-card", "/competing-activity", "/production-leadtime"]) {
-      expect(calledPaths.some((p) => p.includes(seg))).toBe(true);
-    }
+    // 主体核验完成后，其余模块在下一轮 effect 扇出；等待请求链收敛，避免并发
+    // 全套运行时把「主体已渲染」误当成「全部被动 effect 已执行」。
+    await waitFor(() => {
+      const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+      for (const seg of ["/detail-bundle", "/cooperation", "/llm-deep-analysis", "/intelligence-card", "/competing-activity", "/production-leadtime"]) {
+        expect(calledPaths.some((p) => p.includes(seg))).toBe(true);
+      }
+    });
   });
 
   it("board-series 就绪 → 已深析视频卡点亮真 sparkline(关联指标零环比药丸);点时快照三卡虚线如实", async () => {
@@ -280,10 +293,10 @@ describe("KolProfileBoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + �
     expect(bs[0]).toContain("kol_id=101");
   });
 
-  it("默认布局十模块在场;gear=palette 备选不进默认;真表名只进 SrcChip;Fit 只读徽", async () => {
+  it("默认布局十一模块在场;统一历史可见;gear=palette 备选不进默认;真表名只进 SrcChip;Fit 只读徽", async () => {
     renderBoard();
     expect(await screen.findByText("档案指标带")).toBeTruthy();
-    for (const title of ["身份档案", "信用与真实度", "招牌内容", "深析摘要", "视频深析", "评论声音", "合作动作", "制作周期", "受众画像"]) {
+    for (const title of ["身份档案", "信用与真实度", "招牌内容", "深析摘要", "统一历史", "视频深析", "评论声音", "合作动作", "制作周期", "受众画像"]) {
       expect(screen.getAllByText(title).length).toBeGreaterThan(0);
     }
     expect(screen.queryByText("创作装备")).toBeNull();
@@ -293,8 +306,10 @@ describe("KolProfileBoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + �
     expect(screen.getByText("什么最灵")).toBeTruthy();
     expect(screen.getByText("值多少钱")).toBeTruthy();
     expect(screen.getByText("Fit 82")).toBeTruthy();
-    expect(screen.getAllByText(/账号以镜头实拍横评见长/).length).toBeGreaterThan(0);
-    expect(screen.getByText("运镜稳")).toBeTruthy();
+    // 主体 detail-bundle 是身份闸门；深析在主体确认后才扇出。全量并发下必须
+    // 等待深析产物真正落屏，不能把身份卡先出现误当成深析请求已经完成。
+    expect((await screen.findAllByText(/账号以镜头实拍横评见长/)).length).toBeGreaterThan(0);
+    expect(await screen.findByText("运镜稳")).toBeTruthy();
 
     // 评论声音真分布 + 信用真实度行
     expect(screen.getByText("样本 34")).toBeTruthy();
@@ -347,14 +362,105 @@ describe("KolProfileBoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + �
     expect(calledPaths.some((p) => p.includes("dashboard/layout"))).toBe(false);
   });
 
-  it("引导态:未选择 KOL → 输入 ID 打开档案;事件管道 vkpi:open-kol-profile 也能进档案", async () => {
+  it("既有自定义布局只增量补一次统一历史；用户之后移除不会被反复强塞", async () => {
+    window.localStorage.setItem("vkpi-kol-profile-layout-v1", JSON.stringify({
+      version: 3,
+      columns: 12,
+      items: [{ instanceId: "kept-identity", moduleKey: "identity", span: 8, height: 15, x: 0, y: 0 }],
+    }));
+    const first = renderBoard();
+    expect(await screen.findByText("统一历史")).toBeTruthy();
+    const migrated = JSON.parse(window.localStorage.getItem("vkpi-kol-profile-layout-v1") || "null");
+    expect(migrated.items.map((item: { moduleKey: string }) => item.moduleKey)).toEqual(["identity", "history"]);
+    expect(window.localStorage.getItem("vkpi:kol-profile-history-layout-v1")).toBe("done");
+    first.unmount();
+
+    window.localStorage.setItem("vkpi-kol-profile-layout-v1", JSON.stringify({
+      version: 3,
+      columns: 12,
+      items: [{ instanceId: "kept-identity", moduleKey: "identity", span: 8, height: 15, x: 0, y: 0 }],
+    }));
+    renderBoard();
+    expect(await screen.findByText("身份档案")).toBeTruthy();
+    expect(screen.queryByText("统一历史")).toBeNull();
+  });
+
+  it("引导态:未选择 KOL → 输入 ID 打开档案;主体核验通过后才持久化", async () => {
     render(<KolProfileBoardPage apiToken="t" />);
     expect(screen.getByText(/未选择 KOL/)).toBeTruthy();
     // 零请求(诚实引导,不预取)
     expect(apiFetchMock).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("KOL 池 ID"), { target: { value: "101" } });
+    fireEvent.change(screen.getByLabelText("KOL 池 ID 或用户名"), { target: { value: "101" } });
     fireEvent.click(screen.getByText("打开档案"));
     expect(await screen.findByText("档案指标带")).toBeTruthy();
     expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("101");
+  });
+
+  it("用户名 / @handle 走既有只读 resolve → 真 ID → 档案主体", async () => {
+    render(<KolProfileBoardPage apiToken="t" />);
+    fireEvent.change(screen.getByLabelText("KOL 池 ID 或用户名"), { target: { value: "@alpha" } });
+    fireEvent.click(screen.getByText("打开档案"));
+
+    expect(await screen.findByText("档案指标带")).toBeTruthy();
+    const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledPaths.find((path) => path.startsWith("/api/admin/vkpi/kol-pool/resolve"))).toContain("handle=alpha");
+    expect(calledPaths.some((path) => path.includes("/kol-pool/101/detail-bundle"))).toBe(true);
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("101");
+  });
+
+  it("用户名未命中时明确报错并留在选择态，不静默禁用按钮", async () => {
+    routeApi({ resolve: { matched: false, handle: "jianbo" } });
+    render(<KolProfileBoardPage apiToken="t" />);
+    fireEvent.change(screen.getByLabelText("KOL 池 ID 或用户名"), { target: { value: "jianbo" } });
+    const openButton = screen.getByText("打开档案");
+    expect(openButton).not.toBeDisabled();
+    fireEvent.click(openButton);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("未找到“jianbo”");
+    const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledPaths.filter((path) => path.startsWith("/api/admin/vkpi/kol-pool/resolve"))).toHaveLength(1);
+    expect(calledPaths.some((path) => path.includes("/detail-bundle"))).toBe(false);
+  });
+
+  it("不存在的数字 ID 只失败一次:不扇出模块请求、不持久化，并给返回选择 / KOL Pool", async () => {
+    const onNavigate = vi.fn();
+    routeApi({ bundle: new Error("kol pool item not found") });
+    render(<KolProfileBoardPage apiToken="t" onNavigate={onNavigate} />);
+    fireEvent.change(screen.getByLabelText("KOL 池 ID 或用户名"), { target: { value: "111" } });
+    fireEvent.click(screen.getByText("打开档案"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("不存在档案 #111");
+    const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledPaths.filter((path) => path.includes("/detail-bundle"))).toHaveLength(1);
+    for (const segment of ["/cooperation", "/llm-deep-analysis", "/intelligence-card", "/competing-activity", "/production-leadtime", "/board-series"]) {
+      expect(calledPaths.some((path) => path.includes(segment))).toBe(false);
+    }
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBeNull();
+    expect(screen.queryByText("档案指标带")).toBeNull();
+    fireEvent.click(screen.getByText("去 KOL Pool"));
+    expect(onNavigate).toHaveBeenCalledWith("kol-pool");
+  });
+
+  it("跨页遗留坏 ID 会清掉；开发 StrictMode 下主体核验也只发一次", async () => {
+    routeApi({ bundle: new Error("kol pool item not found") });
+    window.sessionStorage.setItem("vkpi:kol-profile-id", "111");
+    render(
+      <React.StrictMode>
+        <KolProfileBoardPage apiToken="t" />
+      </React.StrictMode>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("不存在档案 #111");
+    const detailCalls = apiFetchMock.mock.calls.map((call) => String(call[0])).filter((path) => path.includes("/detail-bundle"));
+    expect(detailCalls).toHaveLength(1);
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBeNull();
+  });
+
+  it("有效档案可明确重新选择，并清除最近档案入口", async () => {
+    renderBoard();
+    expect(await screen.findByText("档案指标带")).toBeTruthy();
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("101");
+    fireEvent.click(screen.getByText("重新选择"));
+    expect(screen.getByText(/未选择 KOL/)).toBeTruthy();
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBeNull();
   });
 });

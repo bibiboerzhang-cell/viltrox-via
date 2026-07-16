@@ -348,12 +348,28 @@ def summarize_for_preview(sku: str, market: str | None = None, limit: int = DEFA
     cap = max(1, min(_int0(limit) or DEFAULT_PREVIEW_LIMIT, MAX_PREVIEW_LIMIT))
     items = [_preview_item(r) for r in sorted(rows, key=_preview_sort_key)[:cap]]
 
+    from app.domains.market_brain.data_readiness import build_source_readiness
+
+    readiness = build_source_readiness(
+        "market_signal_ledger",
+        observed=sample_size,
+        freshest_at=freshest,
+        minimum=3,
+        max_age_days=30,
+    )
+    status = "ready" if readiness["ready"] else "data_missing"
+
     return {
-        "status": "ready",
+        "status": status,
         "items": items,
         "sources_count": len(sources),
         "sample_size": sample_size,
         "freshest_at": freshest.isoformat() if freshest else None,
+        "data_readiness": readiness,
+        "claimable": bool(readiness["claimable"]),
+        "reason": "" if readiness["ready"] else (
+            "Signal rows exist but fail the sample/freshness gate; they are historical observations only."
+        ),
     }
 
 

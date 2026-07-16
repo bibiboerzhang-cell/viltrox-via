@@ -4,6 +4,30 @@ from app.domains.kol import lookup as lookup_domain
 from app.domains.access import scope
 
 
+@pytest.fixture(autouse=True)
+def isolate_lookup_tracking(monkeypatch):
+    """Keep orchestration unit tests from writing to the live runtime ledger."""
+
+    class NoopLookupTracker:
+        def __init__(self, *, body, staff):
+            self.session_id = None
+            self.task_id = "test_kol_lookup"
+
+        def open(self):
+            return None
+
+        def set_query_text(self, result):
+            return None
+
+        def stage(self, stage):
+            return None
+
+        def finish(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(lookup_domain, "LookupTracker", NoopLookupTracker)
+
+
 @pytest.mark.anyio
 async def test_lookup_with_context_returns_plain_result_without_kol_id(monkeypatch):
     monkeypatch.setattr(lookup_domain.claims_domain, "lookup", lambda body, *, staff: {"status": "created"})

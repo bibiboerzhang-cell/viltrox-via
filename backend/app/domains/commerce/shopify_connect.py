@@ -147,7 +147,17 @@ def save_credentials(body: dict[str, Any], staff: dict[str, Any] | None = None) 
     shop_domain is missing or no secret material is supplied.
     """
     body = body or {}
-    shop_domain = _norm_domain(body.get("shop_domain") or body.get("shopDomain") or body.get("shop"))
+    # ``store_domain`` was used by the first Shopify Hub form.  Keep accepting
+    # it at the boundary while standardising new clients on ``shop_domain`` so
+    # an authorization submitted through the existing UI does not fail with a
+    # misleading "shop_domain is required" response.
+    shop_domain = _norm_domain(
+        body.get("shop_domain")
+        or body.get("shopDomain")
+        or body.get("store_domain")
+        or body.get("storeDomain")
+        or body.get("shop")
+    )
     if not shop_domain:
         raise ValueError("shop_domain is required")
     access_token = str(body.get("access_token") or body.get("accessToken") or "").strip()
@@ -160,9 +170,14 @@ def save_credentials(body: dict[str, Any], staff: dict[str, Any] | None = None) 
     # Preserve previously stored secrets when a field is omitted on update.
     token_enc = _encrypt(access_token) if access_token else str(existing.get("access_token_encrypted") or "")
     secret_enc = _encrypt(webhook_secret) if webhook_secret else str(existing.get("webhook_secret_encrypted") or "")
-    status = "connected" if token_enc else "pending"
+    # Credential presence is configuration, not proof that Shopify accepted it.
+    status = "pending"
     now = _utcnow()
-    connected_at = now if token_enc else (existing.get("connected_at") or None)
+    # Do not manufacture a connection timestamp merely because a token was
+    # saved.  A later real provider success may populate this field.
+    # Any credential write invalidates the previous provider proof.  A token
+    # replacement must never inherit an old ``connected_at`` receipt.
+    connected_at = None
     actor = _actor(staff)
 
     conn = get_conn()
@@ -178,7 +193,7 @@ def save_credentials(body: dict[str, Any], staff: dict[str, Any] | None = None) 
             webhook_secret_encrypted=excluded.webhook_secret_encrypted,
             api_version=excluded.api_version,
             status=excluded.status,
-            connected_at=COALESCE(vkpi_shopify_credentials.connected_at, excluded.connected_at),
+            connected_at=excluded.connected_at,
             updated_at=excluded.updated_at,
             updated_by_staff_id=excluded.updated_by_staff_id
         """,
@@ -198,7 +213,6 @@ def save_credentials(body: dict[str, Any], staff: dict[str, Any] | None = None) 
     return {
         "ok": True,
         "shop_domain": shop_domain,
-        "token": _mask(access_token) if access_token else (_mask(_decrypt(token_enc)) if token_enc else ""),
         "token_configured": bool(token_enc),
         "webhook_secret_configured": bool(secret_enc),
         "api_version": api_version,
@@ -221,6 +235,7 @@ def get_credentials() -> dict[str, Any]:
             "webhook_secret": _decrypt(str(row.get("webhook_secret_encrypted") or "")),
             "api_version": str(row.get("api_version") or _DEFAULT_API_VERSION),
             "status": str(row.get("status") or "pending"),
+            "connected_at": row.get("connected_at"),
             "source": "db",
         }
     env_domain = _norm_domain(os.environ.get("SHOPIFY_SHOP_DOMAIN"))
@@ -234,7 +249,8 @@ def get_credentials() -> dict[str, Any]:
             "access_token": env_token,
             "webhook_secret": env_secret,
             "api_version": str(os.environ.get("SHOPIFY_API_VERSION") or _DEFAULT_API_VERSION).strip() or _DEFAULT_API_VERSION,
-            "status": "connected" if (env_domain and env_token) else "pending",
+            "status": "pending",
+            "connected_at": None,
             "source": "env",
         }
     return {
@@ -243,6 +259,7 @@ def get_credentials() -> dict[str, Any]:
         "webhook_secret": "",
         "api_version": _DEFAULT_API_VERSION,
         "status": "pending",
+        "connected_at": None,
         "source": "none",
     }
 
@@ -255,20 +272,107 @@ def connection_status() -> dict[str, Any]:
     domain = creds.get("shop_domain") or ""
     source = creds.get("source") or "none"
     configured = bool(domain and token)
+    persisted_status = str(creds.get("status") or "pending").strip().lower()
     if source == "none":
         status = "not_configured"
+    elif configured and persisted_status in {"connected", "error", "revoked"}:
+        status = persisted_status
     elif configured:
-        status = "connected"
+        status = "configured"
     else:
-        status = str(creds.get("status") or "pending")
+        status = persisted_status if persisted_status in _VALID_STATUS else "pending"
     return {
         "shop_domain": domain,
-        "token": _mask(token),
         "token_configured": bool(token),
         "webhook_secret_configured": bool(secret),
         "api_version": creds.get("api_version") or _DEFAULT_API_VERSION,
         "status": status,
+        "last_verified_at": creds.get("connected_at"),
         "source": source,
+    }
+
+
+_SHOP_PROBE_QUERY = """
+query VkpiShopifyConnectionProbe {
+  shop { id name myshopifyDomain }
+}
+""".strip()
+
+
+def _persist_probe_state(status: str, *, connected_at: str | None = None) -> None:
+    """Persist only a coarse provider state; never provider text or secrets."""
+
+    if status not in _VALID_STATUS:
+        status = "error"
+    ensure_shopify_creds_schema()
+    row = _load_row()
+    if not row:
+        # Environment-backed credentials stay environment-backed.  Do not copy
+        # secret material into the database merely to store a probe receipt.
+        return
+    conn = get_conn()
+    conn.execute(
+        """
+        UPDATE vkpi_shopify_credentials
+        SET status=?, connected_at=?, updated_at=?
+        WHERE id=?
+        """,
+        (status, connected_at if status == "connected" else None, _utcnow(), _CREDS_SINGLETON_ID),
+    )
+    conn.commit()
+
+
+def probe_connection() -> dict[str, Any]:
+    """Run an explicit, read-only Admin API canary and store its coarse receipt.
+
+    This function is only called by the admin-gated probe endpoint.  Merely
+    saving credentials never calls Shopify and never becomes ``connected``.
+    Provider response bodies are deliberately not returned or persisted.
+    """
+
+    creds = get_credentials()
+    domain = _norm_domain(creds.get("shop_domain"))
+    token = str(creds.get("access_token") or "").strip()
+    if not domain or not token:
+        return {"ok": False, "status": "not_configured", "reason": "not_configured"}
+
+    result = post_graphql(_SHOP_PROBE_QUERY)
+    if not result.get("ok"):
+        status_code = int(result.get("status_code") or 0)
+        revoked = status_code in {401, 403}
+        state = "revoked" if revoked else "error"
+        _persist_probe_state(state)
+        reason = (
+            "provider_rejected_credentials"
+            if revoked
+            else "provider_graphql_error"
+            if result.get("errors")
+            else "provider_unreachable"
+        )
+        return {"ok": False, "status": state, "reason": reason, "shop_domain": domain}
+
+    shop = ((result.get("data") or {}).get("shop")) if isinstance(result.get("data"), dict) else None
+    if not isinstance(shop, dict) or not str(shop.get("id") or "").strip():
+        _persist_probe_state("error")
+        return {
+            "ok": False,
+            "status": "error",
+            "reason": "provider_probe_payload_invalid",
+            "shop_domain": domain,
+        }
+
+    verified_at = _utcnow()
+    _persist_probe_state("connected", connected_at=verified_at)
+    return {
+        "ok": True,
+        "status": "connected",
+        "shop_domain": domain,
+        "verified_at": verified_at,
+        "shop": {
+            "id": str(shop.get("id") or ""),
+            "name": str(shop.get("name") or ""),
+            "myshopify_domain": _norm_domain(shop.get("myshopifyDomain") or domain),
+        },
     }
 
 
@@ -379,6 +483,7 @@ __all__ = [
     "save_credentials",
     "get_credentials",
     "connection_status",
+    "probe_connection",
     "register_webhooks",
     "post_graphql",
 ]

@@ -9,7 +9,7 @@ from typing import Any
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.db.connection import db_write, get_conn, is_postgres_runtime
-from app.services.ai.retry import call_ai_with_retry
+from app.platform.llm_production import generate_text
 from app.services.intelligence.account_scan_service import SCANNERS, provider_ready
 from app.services.kol.metrics import engagement_rate
 from app.services.kol.account_dossier_rules import (
@@ -37,13 +37,6 @@ from app.services.kol.account_dossier_lookup import (
 )
 
 logger = get_logger(__name__)
-
-try:
-    from app.services.ai.clients.claude_client import get_claude_client
-except Exception:
-    def get_claude_client():
-        return None
-
 
 def _now() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -477,9 +470,6 @@ def _metrics_report(context: dict[str, Any], product_sku: str = "") -> dict[str,
 
 def _claude_report(context: dict[str, Any], product_sku: str = "") -> dict[str, Any]:
     fallback = _metrics_report(context, product_sku)
-    client = get_claude_client()
-    if client is None:
-        return fallback
     compact = {
         "kol": context.get("kol"),
         "snapshot": context.get("snapshot"),
@@ -515,15 +505,14 @@ DATA:
 {json.dumps(compact, ensure_ascii=False, default=str)[:12000]}
 """
     try:
-        resp = call_ai_with_retry(
-            "kol_account_dossier.claude",
-            lambda: client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=1400,
-                messages=[{"role": "user", "content": prompt}],
-            ),
+        response = generate_text(
+            prompt,
+            provider="anthropic",
+            model=CLAUDE_MODEL,
+            purpose="kol_account_dossier",
+            max_output_tokens=1400,
         )
-        text = resp.content[0].text if resp.content else ""
+        text = str(response.get("text") or "")
         parsed = json.loads(_clean_json_text(text))
         if not isinstance(parsed, dict):
             raise ValueError("Claude returned non-object JSON")

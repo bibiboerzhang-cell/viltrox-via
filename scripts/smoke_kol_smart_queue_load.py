@@ -7,6 +7,8 @@ ORDER BY created_at, id FOR UPDATE SKIP LOCKED.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import json
 import os
@@ -301,14 +303,14 @@ def main() -> int:
     report = run_smoke(users=int(args.users), batch_size=int(args.batch_size), query=str(args.query or ""))
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    print(f"status={report['status']}")
-    print(f"users={report['users']} inserted={report['inserted']} claimed={report['claimed']} ordered={report['ordered']}")
-    print(f"provider_calls_performed={report['provider_calls_performed']} worker_visible={report['worker_visible']} persistent_write={report['persistent_write']}")
-    print(f"viltrox_fit_score_changed={report['viltrox_fit_score_changed']}")
-    print(f"elapsed_ms={report['elapsed_ms']}")
-    print(f"report={REPORT_PATH}")
+    out(f"status={report['status']}")
+    out(f"users={report['users']} inserted={report['inserted']} claimed={report['claimed']} ordered={report['ordered']}")
+    out(f"provider_calls_performed={report['provider_calls_performed']} worker_visible={report['worker_visible']} persistent_write={report['persistent_write']}")
+    out(f"viltrox_fit_score_changed={report['viltrox_fit_score_changed']}")
+    out(f"elapsed_ms={report['elapsed_ms']}")
+    out(f"report={REPORT_PATH}")
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+        out(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0 if report["status"] == "pass" else 1
 
 

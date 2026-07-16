@@ -27,6 +27,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
 logger = get_logger(__name__)
 
@@ -276,23 +277,23 @@ def enqueue_auto_poll(staff: dict[str, Any] | None = None) -> dict[str, Any]:
             "priority_reasons": cand.get("priority_reasons"),
             "last_seen_at": cand.get("last_seen_at"),
             "trigger": "auto_poll_daily",
+            "batch": "remaining",
             "triggered_by_staff_id": triggered_by,
             "summary": f"关注KOL轻量轮询 · KOL {kid}",
             "viltrox_fit_score_untouched": True,
         }
         try:
-            import json
-
-            row = conn.execute(
-                """
-                INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-                VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-                RETURNING id
-                """,
-                (AUTO_POLL_JOB_TYPE, json.dumps(payload, ensure_ascii=False)),
-            ).fetchone()
+            row, inserted = enqueue_active_apify_job(
+                conn,
+                job_type=AUTO_POLL_JOB_TYPE,
+                payload=payload,
+                idempotency_key=active_job_idempotency_key(AUTO_POLL_JOB_TYPE, kid),
+            )
             conn.commit()
-            enqueued.append({"kol_pool_id": kid, "job_id": _row_dict(row).get("id")})
+            if inserted:
+                enqueued.append({"kol_pool_id": kid, "job_id": _row_dict(row).get("id")})
+            else:
+                skipped.append({"kol_pool_id": kid, "job_id": _row_dict(row).get("id"), "reason": "already_queued_race"})
         except Exception as exc:
             logger.warning("vkpi.kol.auto_poll.insert_failed kid=%s err=%s", kid, exc, exc_info=True)
             skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed", "error": str(exc)[:300]})

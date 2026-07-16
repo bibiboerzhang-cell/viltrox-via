@@ -10,6 +10,7 @@ from app.services.cache import cache_get
 from app.platform.industry_crawlers import get_crawler
 from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
+    CONTACT_VISIBILITY_MASKED,
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
     mask_pool_item,
@@ -43,6 +44,7 @@ from app.domains.kol.pool_common import (
     _table_columns,
     _thumb_url,
     _utcnow,
+    normalize_contact_visibility,
 )
 from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -202,10 +204,12 @@ def list_pool(
     data_status: str = "",
     sort_by: str = "fit",
     enrichable: bool | None = None,
+    contact_visibility: str = CONTACT_VISIBILITY_MASKED,
 ) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     safe_limit = max(1, min(500, int(limit or 100)))
     safe_offset = max(0, int(offset or 0))
+    normalized_contact_visibility = normalize_contact_visibility(contact_visibility)
     cache_key = _kol_pool_cache_key(
         "list",
         limit=safe_limit,
@@ -216,6 +220,7 @@ def list_pool(
         data_status=str(data_status or "").strip().lower(),
         sort_by=str(sort_by or "fit").strip().lower(),
         enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
+        contact_visibility=normalized_contact_visibility,
     )
     cached = cache_get(cache_key)
     if cached is not None:
@@ -236,7 +241,15 @@ def list_pool(
         f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
         (*params, safe_limit, safe_offset),
     ).fetchall()
-    return _kol_pool_cache_store(cache_key, {"items": [mask_pool_item(dict(row)) for row in rows]})
+    return _kol_pool_cache_store(
+        cache_key,
+        {
+            "items": [
+                mask_pool_item(dict(row), contact_visibility=normalized_contact_visibility)
+                for row in rows
+            ]
+        },
+    )
 
 
 def _pool_filter_clause(
@@ -308,6 +321,7 @@ def workspace(
     data_status: str = "",
     sort_by: str = "fit",
     enrichable: bool | None = None,
+    contact_visibility: str = CONTACT_VISIBILITY_MASKED,
 ) -> dict[str, Any]:
     """Return one read-only KOL Pool page bundle for the cockpit workspace."""
 
@@ -319,6 +333,7 @@ def workspace(
     normalized_query = str(query or "").strip()
     normalized_data_status = str(data_status or "").strip().lower()
     normalized_sort = str(sort_by or "fit").strip().lower()
+    normalized_contact_visibility = normalize_contact_visibility(contact_visibility)
     cache_key = _kol_pool_cache_key(
         "workspace",
         limit=safe_limit,
@@ -329,6 +344,7 @@ def workspace(
         data_status=normalized_data_status,
         sort_by=normalized_sort,
         enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
+        contact_visibility=normalized_contact_visibility,
     )
     cached = cache_get(cache_key)
     if cached is not None:
@@ -427,7 +443,10 @@ def workspace(
             "items": countries,
         },
         "list": {
-            "items": [dict(row) for row in rows],
+            "items": [
+                mask_pool_item(dict(row), contact_visibility=normalized_contact_visibility)
+                for row in rows
+            ],
             "limit": safe_limit,
             "offset": safe_offset,
             "sort_by": normalized_sort,
@@ -496,7 +515,7 @@ def summary() -> dict[str, Any]:
             1 for row in flagged_rows if _low_reach_flagged(dict(row))
         )
     except Exception:  # noqa: BLE001 — 计数失败绝不拖垮 summary 主体
-        pass
+        logger.warning("low-reach visibility count failed", exc_info=True)
     # 发现转化漏斗 · 近 30 天(2026-07-12,KOL 池板块页「发现转化」图形模块消费):
     #   discovered    = vkpi_kol_search_session_items 近 30 天条目(找达人产出,含在库命中)
     #   enrolled      = vkpi_kol_pool 近 30 天新建非重复行(搜到自动落池)
@@ -547,11 +566,14 @@ def get_item(kol_pool_id: int) -> dict[str, Any]:
 def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20) -> dict[str, Any]:
     """Return the read-only detail drawer bundle without provider or worker side effects."""
 
-    from app.domains.analysis.cache_repo import get_analysis_cache_entry
+    from app.domains.analysis.cache_repo import get_analysis_cache_entries_for_targets
     from app.domains.kol.eleven_dimensions import load_persisted_dimensions_11
     from app.domains.kol.llm_deep_analysis import get_kol_llm_deep_analysis
 
-    safe_video_limit = max(1, min(10, int(video_limit or 3)))
+    # Keep the domain contract aligned with the API route (1..200).  The
+    # previous hard cap of 10 silently truncated account detail bundles even
+    # when callers explicitly requested the route default of 24 videos.
+    safe_video_limit = max(1, min(200, int(video_limit or 3)))
     safe_llm_limit = max(1, min(50, int(llm_limit or 20)))
     item_payload = get_item(int(kol_pool_id))
     item = dict(item_payload.get("item") or {})
@@ -561,6 +583,20 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
     # evidence(放宽 is_active 回挂 inactive 上的已有分析),修「找到 N 条但 video_analysis 未命中」。
     analysis_evidence = _video_evidence_for_kol(
         int(kol_pool_id), limit=200, only_with_cache=True, include_inactive=True
+    )
+    analysis_evidence_ids = [
+        str(evidence_id)
+        for video in analysis_evidence
+        if (evidence_id := _int_or_none(video.get("evidence_id") or video.get("id")))
+    ]
+    analysis_cache = get_analysis_cache_entries_for_targets(
+        "video",
+        analysis_evidence_ids,
+        derive_methods=(
+            "video_analysis_final_v1",
+            "video_analysis_final_v1_keyframe_qa",
+        ),
+        conn=get_conn(),
     )
     dimensions = load_persisted_dimensions_11(int(kol_pool_id)) or {
         "kol_pool_id": int(kol_pool_id),
@@ -579,16 +615,8 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
         evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
         if not evidence_id:
             continue
-        final_entry = get_analysis_cache_entry(
-            "video",
-            str(evidence_id),
-            derive_method="video_analysis_final_v1",
-        )
-        qa_entry = get_analysis_cache_entry(
-            "video",
-            str(evidence_id),
-            derive_method="video_analysis_final_v1_keyframe_qa",
-        )
+        final_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1"))
+        qa_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1_keyframe_qa"))
         if final_entry and final_entry.get("status") == "ready":
             ready_count += 1
         else:

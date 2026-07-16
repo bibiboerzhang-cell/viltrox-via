@@ -17,6 +17,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+from stdout_utils import out
+
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -259,9 +261,9 @@ def fetch_official_rows(cur) -> list[dict[str, Any]]:
 
 
 def print_counter(title: str, counter: Counter) -> None:
-    print(f"\n=== {title} ===")
+    out(f"\n=== {title} ===")
     for key in sorted(counter):
-        print(f"{key}: {counter[key]}")
+        out(f"{key}: {counter[key]}")
 
 
 def ensure_commit_columns(cur) -> None:
@@ -339,23 +341,23 @@ def main() -> int:
     for tier, count in official_tier.items():
         dashboard_group[("company", tier)] += count
 
-    print("=" * 72)
-    print("Dashboard KOL Picker Phase 1A ETL")
-    print(f"mode: {'COMMIT' if args.commit else 'DRY-RUN'}")
-    print("=" * 72)
-    print(f"vkpi_kol_pool rows: {len(pool_rows)}")
-    print(f"official company accounts: {len(official_rows)}")
-    print(f"dashboard view rows after company-source merge: {sum(dashboard_group.values())}")
+    out("=" * 72)
+    out("Dashboard KOL Picker Phase 1A ETL")
+    out(f"mode: {'COMMIT' if args.commit else 'DRY-RUN'}")
+    out("=" * 72)
+    out(f"vkpi_kol_pool rows: {len(pool_rows)}")
+    out(f"official company accounts: {len(official_rows)}")
+    out(f"dashboard view rows after company-source merge: {sum(dashboard_group.values())}")
     print_counter("pool account_type", pool_type)
     print_counter("pool tier", pool_tier)
-    print(f"\ncoords available: {len(pool_rows) - coords_missing}")
-    print(f"coords missing: {coords_missing}")
+    out(f"\ncoords available: {len(pool_rows) - coords_missing}")
+    out(f"coords missing: {coords_missing}")
 
-    print("\n=== dashboard account_type,tier preview ===")
+    out("\n=== dashboard account_type,tier preview ===")
     for account_type, tier in sorted(dashboard_group):
         count = dashboard_group[(account_type, tier)]
         if count > 0:
-            print(f"{account_type}\t{tier}\t{count}")
+            out(f"{account_type}\t{tier}\t{count}")
 
     if args.commit:
         ensure_commit_columns(cur)
@@ -371,9 +373,9 @@ def main() -> int:
             updates,
         )
         conn.commit()
-        print(f"\ncommitted rows: {len(updates)}")
+        out(f"\ncommitted rows: {len(updates)}")
     else:
-        print("\n[DRY-RUN] no rows were written.")
+        out("\n[DRY-RUN] no rows were written.")
 
     cur.close()
     conn.close()

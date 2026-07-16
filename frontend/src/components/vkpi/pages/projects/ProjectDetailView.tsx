@@ -41,6 +41,10 @@ export function ProjectDetailView({
   detail,
   project,
   participatingRows = [],
+  assignmentPage,
+  loadingMoreAssignments = false,
+  assignmentLoadError = '',
+  onLoadMoreAssignments,
   costRows = [],
   productUnitCosts = {},
   staff = [],
@@ -113,8 +117,15 @@ export function ProjectDetailView({
     setMovingRowId('');
   }, [project.id, project.stage]);
 
-  const { videoAnalysisCache, videoQaCache, videoAnalysisLoading, videoAnalysisError, videoQaError } =
-    useProjectVideoAnalysisCache(apiToken, project.id);
+  const {
+    videoAnalysisCache,
+    videoQaCache,
+    videoAnalysisLoading,
+    videoAnalysisError,
+    videoQaError,
+    videoAnalysisAutoRefreshStopped,
+    refreshVideoAnalysisCache,
+  } = useProjectVideoAnalysisCache(apiToken, project.id);
 
   const { contractsPayload, contractsLoading, contractsError, loadContracts } =
     useProjectContracts(apiToken, project.id, setNotice);
@@ -655,6 +666,10 @@ export function ProjectDetailView({
         goaffByKol={goaffByKol}
         expandedRows={expandedRows}
         movingRowId={movingRowId}
+        assignmentPage={assignmentPage}
+        loadingMoreAssignments={loadingMoreAssignments}
+        assignmentLoadError={assignmentLoadError}
+        onLoadMoreAssignments={onLoadMoreAssignments}
         platformOptions={platformOptions}
         tableQuery={tableQuery}
         tableStage={tableStage}
@@ -673,6 +688,8 @@ export function ProjectDetailView({
         videoAnalysisLoading={videoAnalysisLoading}
         videoAnalysisError={videoAnalysisError}
         videoQaError={videoQaError}
+        videoAnalysisAutoRefreshStopped={videoAnalysisAutoRefreshStopped}
+        onRefreshVideoAnalysis={refreshVideoAnalysisCache}
         retrospective={retrospective}
         retroBusy={retroBusy}
         evidenceCountForRow={evidenceCountForRow}

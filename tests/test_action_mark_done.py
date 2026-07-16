@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("hermetic_action_db")
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -38,7 +40,7 @@ _BEARER = {"Authorization": "Bearer mark-done-token"}
 
 
 @pytest.fixture()
-def actor_client():
+def actor_client(hermetic_action_db):
     """伪造为 _ACTOR 身份的 TestClient(中间件 + 依赖双 seam),teardown 还原。"""
     import app.main as main_mod
     from app.main import app
@@ -81,9 +83,9 @@ def _seed_action(status: str) -> int:
            suggested_endpoint, requires_approval, owner_staff_id, reason,
            payload_json, status, created_at, updated_at)
         VALUES (?, 'gtm_bet', 'mark-done probe', 'detail', 'low', 'bet', '',
-                '', true, ?, '', '{}'::jsonb, ?, NOW(), NOW())
+                '', true, ?, '', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        (dedupe, _ACTOR_STAFF_ID, status),
+        (dedupe, _ACTOR_STAFF_ID, "{}", status),
     )
     conn.commit()
     return int(

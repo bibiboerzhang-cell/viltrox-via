@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:event="https://schema.vkpi.invalid/event">
+  <id>https://viltrox.com/blogs/event.atom</id>
+  <title>Viltrox Events</title>
+  <updated>2026-07-15T05:00:00Z</updated>
+  <entry>
+    <id>gid://shopify/Article/usa-demo-2026</id>
+    <title>Creator Lens Demo in Los Angeles</title>
+    <published>2026-07-14T17:00:00Z</published>
+    <updated>2026-07-15T01:00:00Z</updated>
+    <link rel="alternate" href="https://viltrox.com/blogs/event/creator-lens-demo-los-angeles?utm_source=atom" />
+    <summary type="html">&lt;p&gt;Public product demonstration.&lt;/p&gt;</summary>
+    <event:start>2026-09-12T10:00:00-07:00</event:start>
+    <event:end>2026-09-12T15:00:00-07:00</event:end>
+    <event:timezone>America/Los_Angeles</event:timezone>
+    <event:venue>Los Angeles Center of Photography</event:venue>
+    <event:address>5566 W Washington Blvd</event:address>
+    <event:city>Los Angeles</event:city>
+    <event:state>CA</event:state>
+    <event:country>US</event:country>
+  </entry>
+  <entry>
+    <id>gid://shopify/Article/old-recap</id>
+    <title>Recap from a past camera expo</title>
+    <published>2026-06-01T12:00:00Z</published>
+    <link rel="alternate" href="https://viltrox.com/blogs/event/past-camera-expo-recap" />
+    <summary>A publication timestamp is not an event date.</summary>
+    <event:city>New York</event:city>
+    <event:state>NY</event:state>
+    <event:country>US</event:country>
+  </entry>
+  <entry>
+    <id>gid://shopify/Article/london-demo</id>
+    <title>London Creator Demo</title>
+    <published>2026-07-14T17:00:00Z</published>
+    <link rel="alternate" href="https://viltrox.com/blogs/event/london-creator-demo" />
+    <event:start>2026-09-20T10:00:00+01:00</event:start>
+    <event:end>2026-09-20T15:00:00+01:00</event:end>
+    <event:timezone>Europe/London</event:timezone>
+    <event:venue>London Photo Centre</event:venue>
+    <event:city>London</event:city>
+    <event:country>GB</event:country>
+  </entry>
+</feed>

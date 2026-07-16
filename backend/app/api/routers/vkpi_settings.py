@@ -9,6 +9,7 @@ from app.domains import settings as settings_domain
 from app.domains.access import scope
 from app.domains.ops import health_sentinel, scheduler_registry
 from app.domains.settings import api_key_pool
+from app.domains.settings import business_integrations
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-settings"])
 
@@ -22,6 +23,13 @@ def _require_manager_staff(staff: dict) -> None:
 def provider_statuses(staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)
     return settings_domain.provider_statuses()
+
+
+@router.get("/settings/business-integrations")
+def business_integrations_status(staff=Depends(require_tab("vkpi", "read"))):
+    """Masked real-business binding status; configured/reference is not connected."""
+    _require_manager_staff(staff)
+    return business_integrations.business_integrations_status()
 
 
 @router.post("/settings/providers/{provider}/probe")

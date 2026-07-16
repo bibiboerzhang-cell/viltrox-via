@@ -31,6 +31,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.db.connection import get_conn
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 from app.domains.kol import video_evidence_sources
 from app.domains.kol.url_deep_crawl import DEEP_CRAWL_JOB_TYPE
 
@@ -205,14 +206,12 @@ def enqueue_full_materialize(
     # Audit guard: snapshot viltrox_fit_score before/after the only write; if
     # it moved, roll back and raise (the INSERT must never perturb scoring).
     before_fit = _fit_snapshot(conn, kol_pool_id)
-    job = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id
-        """,
-        (DEEP_CRAWL_JOB_TYPE, _json.dumps(payload, ensure_ascii=False)),
-    ).fetchone()
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type=DEEP_CRAWL_JOB_TYPE,
+        payload=payload,
+        idempotency_key=active_job_idempotency_key(DEEP_CRAWL_JOB_TYPE, profile_url),
+    )
     after_fit = _fit_snapshot(conn, kol_pool_id)
     changed_ids = [kol_pool_id] if before_fit != after_fit else []
     if changed_ids:
@@ -221,17 +220,17 @@ def enqueue_full_materialize(
     conn.commit()
 
     return {
-        "status": "queued",
+        "status": "queued" if inserted else "already_queued",
         "kol_pool_id": kol_pool_id,
-        "job_id": int(dict(job)["id"]) if job else None,
+        "job_id": int(job["id"]),
         "requested_n": safe_target,
         "history_video_limit": safe_target,
         "budget_gate": "record_only",
         "budget": budget_telemetry,
         "viltrox_fit_score_changed_ids": changed_ids,
         "provider_calls": False,
-        "write_db": True,
-        "writes": ["apify_jobs"],
+        "write_db": inserted,
+        "writes": ["apify_jobs"] if inserted else [],
         "note": _channel_note(clamped),
     }
 

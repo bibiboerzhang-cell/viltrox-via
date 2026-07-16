@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.core.permissions import (
@@ -37,7 +39,7 @@ def main() -> None:
     failures: list[str] = []
     
     # ── 场景 0: _level_allows 三层关系 ──
-    print("[0/6] _level_allows 三层关系")
+    out("[0/6] _level_allows 三层关系")
     
     # read 接受所有 (read/write/admin)
     for value in ["read", "write", "admin"]:
@@ -65,18 +67,18 @@ def main() -> None:
         failures.append("_level_allows('none', 'admin') 应返回 False")
     
     if not failures:
-        print("   PASS: read < write < admin 层级正确")
+        out("   PASS: read < write < admin 层级正确")
     
     # ── 场景 1: is_owner=True 短路 admin level ──
-    print("[1/6] is_owner=True 通过 require_tab(*, 'admin')")
+    out("[1/6] is_owner=True 通过 require_tab(*, 'admin')")
     owner_staff = {"is_owner": 1, "role": "admin", "permissions_json": "{}"}
     if not check_tab_permission(owner_staff, "vkpi", "admin"):
         failures.append("场景 1: owner 应通过 admin level")
     else:
-        print("   PASS: owner 短路 admin level")
+        out("   PASS: owner 短路 admin level")
     
     # ── 场景 2: role=admin + permissions[vkpi]=admin 通过 ──
-    print("[2/6] role=admin + permissions[vkpi]=admin 通过")
+    out("[2/6] role=admin + permissions[vkpi]=admin 通过")
     admin_staff = {
         "is_owner": 0,
         "role": "admin",
@@ -85,10 +87,10 @@ def main() -> None:
     if not check_tab_permission(admin_staff, "vkpi", "admin"):
         failures.append(f"场景 2: admin role + permission=admin 应通过 admin level")
     else:
-        print("   PASS: admin role + admin permission 通过")
+        out("   PASS: admin role + admin permission 通过")
     
     # ── 场景 3: role=admin + permissions[vkpi]=write 拒绝 admin level ──
-    print("[3/6] role=admin + permissions[vkpi]=write 拒绝 admin level")
+    out("[3/6] role=admin + permissions[vkpi]=write 拒绝 admin level")
     
     # 注意: default_permissions_for_role 给 admin role 默认 admin
     # 但 permissions_json 显式覆盖为 write,所以最终 permission["vkpi"] = "write"
@@ -107,10 +109,10 @@ def main() -> None:
         if not check_tab_permission(admin_write_staff, "vkpi", "write"):
             failures.append("场景 3: admin role + write permission 应通过 write level")
         else:
-            print("   PASS: 显式 write 不通过 admin,但通过 write")
+            out("   PASS: 显式 write 不通过 admin,但通过 write")
     
     # ── 场景 4: role=employee + permissions[vkpi]=write 拒绝 admin level ──
-    print("[4/6] role=employee + permissions[vkpi]=write 拒绝 admin level")
+    out("[4/6] role=employee + permissions[vkpi]=write 拒绝 admin level")
     employee_staff = {
         "is_owner": 0,
         "role": "employee",
@@ -122,17 +124,17 @@ def main() -> None:
             "(R59-FW-PERM 修复前会通过 = 历史 bug,普通员工能改预算)"
         )
     else:
-        print("   PASS: employee + write 拒绝 admin level")
+        out("   PASS: employee + write 拒绝 admin level")
     
     # ── 场景 5: 普通员工 write level 仍通过 ──
-    print("[5/6] role=employee + write 通过 write level")
+    out("[5/6] role=employee + write 通过 write level")
     if not check_tab_permission(employee_staff, "vkpi", "write"):
         failures.append("场景 5: employee + write permission 应通过 write level")
     else:
-        print("   PASS: employee write 通过")
+        out("   PASS: employee write 通过")
     
     # ── 场景 6: default_permissions_for_role admin 默认值 ──
-    print("[6/6] admin role 默认 permissions 是 admin level")
+    out("[6/6] admin role 默认 permissions 是 admin level")
     defaults = default_permissions_for_role("admin")
     if defaults.get("vkpi") != "admin":
         failures.append(
@@ -147,16 +149,16 @@ def main() -> None:
             f"场景 6: admin role api_keys 应为 'read' (OWNER_ONLY 降级),实际 {defaults.get('system.api_keys')!r}"
         )
     else:
-        print(f"   PASS: admin role 默认 vkpi=admin, api_keys={defaults['system.api_keys']}")
+        out(f"   PASS: admin role 默认 vkpi=admin, api_keys={defaults['system.api_keys']}")
     
     # ── 总结 ──
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_ADMIN_PERMISSION_SMOKE_OK")
+        out("\nVKPI_ADMIN_PERMISSION_SMOKE_OK")
         sys.exit(0)
 
 

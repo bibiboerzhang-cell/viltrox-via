@@ -8,6 +8,7 @@ const approveAction = vi.fn();
 const dismissAction = vi.fn();
 const snoozeAction = vi.fn();
 const executeAction = vi.fn();
+const reconcileAction = vi.fn();
 const listRecentExecutionLedger = vi.fn(() => Promise.resolve({ items: [], available: true }));
 vi.mock("../../../../services/vkpi/actionInbox-api", () => ({
   listActionInbox: (...a: unknown[]) => listActionInbox(...a),
@@ -15,6 +16,7 @@ vi.mock("../../../../services/vkpi/actionInbox-api", () => ({
   dismissAction: (...a: unknown[]) => dismissAction(...a),
   snoozeAction: (...a: unknown[]) => snoozeAction(...a),
   executeAction: (...a: unknown[]) => executeAction(...a),
+  reconcileAction: (...a: unknown[]) => reconcileAction(...a),
   listRecentExecutionLedger: (...a: unknown[]) => listRecentExecutionLedger(...a),
 }));
 
@@ -26,6 +28,7 @@ beforeEach(() => {
   dismissAction.mockReset();
   snoozeAction.mockReset();
   executeAction.mockReset();
+  reconcileAction.mockReset();
 });
 
 // 可执行类(kol_profile 真实 requires_approval=true:writes_business_data 写 profile 字段)。
@@ -135,5 +138,84 @@ describe("ActionInboxPanel 渲染 smoke", () => {
     await screen.findByText("活动收尾提醒");
     expect(screen.getByRole("button", { name: /知道了/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /通过/ })).not.toBeInTheDocument();
+  });
+
+  it("executing 保持可见、禁止自动重试并可提交带证据人工对账", async () => {
+    const executing = {
+      ...baseItem,
+      id: 8,
+      title: "外部动作结果待核对",
+      status: "executing",
+      reconciliation_overdue: true,
+      manual_reconciliation_required: true,
+    };
+    listActionInbox.mockImplementation((_tok: unknown, params: any) =>
+      Promise.resolve(
+        params?.status === "executing"
+          ? { items: [executing], available: true, scope: "own" }
+          : { items: [], available: true, scope: "own" },
+      ),
+    );
+    reconcileAction.mockResolvedValue({
+      ok: true,
+      action_id: 8,
+      decision: "succeeded",
+      status: "executed",
+      ledger_id: 91,
+      correlation_id: "action-8-fixed",
+      idempotent: false,
+    });
+
+    render(<ActionInboxPanel apiToken="tok" />);
+    expect(await screen.findByText("外部动作结果待核对")).toBeInTheDocument();
+    expect(screen.getByText("已超时 · 待人工核对")).toBeInTheDocument();
+    expect(screen.getByText("禁止自动重试")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "人工对账" }));
+    fireEvent.change(screen.getByLabelText("对账结论"), { target: { value: "succeeded" } });
+    fireEvent.change(screen.getByLabelText("对账原因"), { target: { value: "已核对 provider 回执" } });
+    fireEvent.change(screen.getByLabelText("对账证据"), {
+      target: { value: "order:VKPI-42\nhttps://provider.example/receipt/42" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提交对账" }));
+
+    await waitFor(() => expect(reconcileAction).toHaveBeenCalledTimes(1));
+    const [, actionId, payload] = reconcileAction.mock.calls[0];
+    expect(actionId).toBe(8);
+    expect(payload.decision).toBe("succeeded");
+    expect(payload.reason).toBe("已核对 provider 回执");
+    expect(payload.evidence).toEqual([
+      { source: "manual", reference: "order:VKPI-42" },
+      { source: "manual", reference: "https://provider.example/receipt/42" },
+    ]);
+    expect(payload.correlation_id).toMatch(/^action-8-/);
+    await waitFor(() => expect(screen.queryByText("外部动作结果待核对")).not.toBeInTheDocument());
+  });
+
+  it("执行终态落账失败时转 executing 并保留在列表", async () => {
+    const approved = { ...baseItem, id: 9, title: "可能已产生外部副作用", status: "approved" };
+    listActionInbox.mockImplementation((_tok: unknown, params: any) =>
+      Promise.resolve(
+        params?.status === "approved"
+          ? { items: [approved], available: true, scope: "own" }
+          : { items: [], available: true, scope: "own" },
+      ),
+    );
+    executeAction.mockResolvedValue({
+      ok: false,
+      outcome: "failed",
+      reason: "execution_finalize_failed",
+      detail: { manual_reconciliation_required: true },
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    await waitFor(() => expect(executeAction).toHaveBeenCalledWith("tok", 9));
+    expect(screen.getByText("可能已产生外部副作用")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人工对账" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+    confirmSpy.mockRestore();
   });
 });

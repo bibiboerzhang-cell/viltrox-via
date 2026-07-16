@@ -8,16 +8,103 @@ circular import (parent re-exports from this module).
 """
 from __future__ import annotations
 
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol.url_deep_crawl_helpers import _video_id
+from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
 logger = get_logger("viltrox.domains.kol.url_deep_crawl")
 
 
 # ── 队列铁律(2026-06-12 裁令:所有 LLM 搜索都要进左侧队列)──
 DEEP_CRAWL_JOB_TYPE = "kol_profile_deep_crawl"
+PROFILE_DEEP_CRAWL_MODES = {"auto", "profile_with_video", "account_deep"}
+_PLATFORM_VIDEO_ID_PATTERNS = {
+    "instagram": re.compile(r"^[A-Za-z0-9_-]{3,96}$"),
+    "tiktok": re.compile(r"^[0-9]{5,32}$"),
+    "youtube": re.compile(r"^[A-Za-z0-9_-]{3,128}$"),
+}
+
+
+def _content_url_video_id(platform: Any, content_url: Any) -> str:
+    """Safely extract a platform-native video id from a public content URL."""
+
+    platform_key = str(platform or "").strip().lower()
+    pattern = _PLATFORM_VIDEO_ID_PATTERNS.get(platform_key)
+    if pattern is None:
+        return ""
+    try:
+        parsed = urlparse(str(content_url or "").strip())
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    host = parsed.hostname.lower().removeprefix("www.")
+    allowed_host = (
+        (platform_key == "instagram" and (host == "instagram.com" or host.endswith(".instagram.com")))
+        or (platform_key == "tiktok" and (host == "tiktok.com" or host.endswith(".tiktok.com")))
+        or (
+            platform_key == "youtube"
+            and (host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"))
+        )
+    )
+    if not allowed_host:
+        return ""
+    native_id = _video_id(platform_key, host, parsed.path, parsed.query)
+    return native_id if pattern.fullmatch(native_id) else ""
+
+
+def _video_cache_key(platform: Any, content_url: Any) -> str:
+    """Return only a verified native id; never create new evidence-id keys."""
+
+    return _content_url_video_id(platform, content_url)
+
+
+def _profile_deep_crawl_mode(value: Any, *, legacy_default: bool = False) -> str:
+    mode = str(value or "").strip()
+    if not mode and legacy_default:
+        return "account_deep"
+    if mode not in PROFILE_DEEP_CRAWL_MODES:
+        raise ValueError("unsupported profile deep-crawl mode")
+    return mode
+
+
+def _representative_video_limit(value: Any, *, legacy_default: bool = False) -> int:
+    if value in (None, "") and legacy_default:
+        return 1
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("representative_video_limit must be an integer") from None
+    if parsed < 1 or parsed > 3:
+        raise ValueError("representative_video_limit must be between 1 and 3")
+    return parsed
+
+
+def profile_deep_crawl_is_fresh(kol_pool_id: int | None, *, max_age_hours: int = 24) -> bool:
+    """Avoid paying for the same automatic URL refresh repeatedly."""
+    if not kol_pool_id:
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, int(max_age_hours)))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        row = get_conn().execute(
+            """
+            SELECT 1
+            FROM vkpi_kol_url_deep_crawl_runs
+            WHERE kol_pool_id=? AND status='ready' AND created_at>=?
+            LIMIT 1
+            """,
+            (int(kol_pool_id), cutoff),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        logger.warning("profile deep-crawl freshness check failed kol_pool_id=%s", kol_pool_id, exc_info=True)
+        return False
 
 
 def enqueue_profile_deep_crawl_job(
@@ -25,18 +112,26 @@ def enqueue_profile_deep_crawl_job(
     *,
     kol_pool_id: int | None = None,
     max_posts: int = 3,
+    mode: str = "account_deep",
+    representative_video_limit: int = 1,
     staff: dict[str, Any] | None = None,
+    search_session_id: int | None = None,
+    source: str = "kol_profile_deep_crawl",
+    queue_lane: str = "interactive",
 ) -> dict[str, Any]:
     """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
 
     幂等:同 URL 已有 queued/running 任务则返回 already_queued。
     """
-    import json as _json
-
     conn = get_conn()
     clean_url = str(url or "").strip()
     if not clean_url:
         raise ValueError("url required")
+    normalized_mode = _profile_deep_crawl_mode(mode)
+    normalized_representative_limit = _representative_video_limit(representative_video_limit)
+    normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
+    if normalized_queue_lane not in {"interactive", "batch"}:
+        raise ValueError("queue_lane must be interactive or batch")
     active = conn.execute(
         """
         SELECT id FROM apify_jobs
@@ -48,9 +143,12 @@ def enqueue_profile_deep_crawl_job(
     if active:
         return {"status": "already_queued", "job_id": int(dict(active)["id"])}
     payload = {
+        "queue_lane": normalized_queue_lane,
         "url": clean_url,
         "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
         "max_posts": max(1, min(12, int(max_posts or 3))),
+        "mode": normalized_mode,
+        "representative_video_limit": normalized_representative_limit,
         # 泳道 label=kind+query_text,kind 已是「账号分析」——query_text 只留 URL,
         # 否则显示成"账号分析 · 账号分析 · url"(2026-06-12 截图案)。
         "query_text": clean_url[:96],
@@ -59,34 +157,73 @@ def enqueue_profile_deep_crawl_job(
         "target_id": int(kol_pool_id) if kol_pool_id else None,
         "triggered_by_user_id": (staff or {}).get("user_id"),
         "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+        "search_session_id": int(search_session_id) if search_session_id else None,
+        "source": str(source or "kol_profile_deep_crawl")[:80],
     }
-    job = conn.execute(
-        """
-        INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
-        VALUES (?, ?::jsonb, 'queued', NOW(), NOW())
-        RETURNING id
-        """,
-        (DEEP_CRAWL_JOB_TYPE, _json.dumps(payload, ensure_ascii=False)),
-    ).fetchone()
+    job, inserted = enqueue_active_apify_job(
+        conn,
+        job_type=DEEP_CRAWL_JOB_TYPE,
+        payload=payload,
+        idempotency_key=active_job_idempotency_key(DEEP_CRAWL_JOB_TYPE, clean_url),
+    )
     conn.commit()
-    return {"status": "queued", "job_id": int(dict(job)["id"]) if job else None}
+    return {"status": "queued" if inserted else "already_queued", "job_id": int(job["id"])}
+
+
+def enqueue_stored_video_analysis_job(
+    *,
+    kol_pool_id: int,
+    evidence_id: int,
+    staff: dict[str, Any] | None = None,
+    search_session_id: int | None = None,
+    source: str = "kol_url_video_existing_evidence",
+    local_evaluation: bool = False,
+) -> dict[str, Any]:
+    """Queue only final_v1 for already-owned evidence; never crawl a profile.
+
+    The smart URL route already resolved the native video identity and its KOL
+    from local evidence. Sending that case through ``kol_profile_deep_crawl``
+    both duplicated work and rejected ``mode=video_deep`` before insertion.
+    """
+
+    from app.domains.kol.video_analysis_enqueue import _enqueue_final_v1_video_analysis
+
+    result = _enqueue_final_v1_video_analysis(
+        get_conn(),
+        kol_pool_id=int(kol_pool_id),
+        evidence_id=int(evidence_id),
+        staff=staff,
+        source=str(source or "kol_url_video_existing_evidence")[:80],
+        batch="on_demand",
+        commit=True,
+        search_session_id=int(search_session_id) if search_session_id else None,
+        local_evaluation=bool(local_evaluation),
+    )
+    job = result.get("job") if isinstance(result.get("job"), dict) else {}
+    return {
+        **result,
+        "job_id": int(job.get("id") or 0) or None,
+    }
 
 
 def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """worker 入口:执行账号深爬(与 HTTP execute 同一内核 dry_run_url_deep_crawl execute=True)。
 
-    mode=account_deep 是视频采集的总开关(_profile_should_enqueue_representative_videos /
-    _profile_should_materialize_history_videos 都按 mode 判),漏传则退化成纯资料刷新——
-    job 921 案:8 秒 done 零视频。history 落 evidence(max_posts 条),代表作入析 1 条。
+    新任务原样执行 API 写入的模式与代表视频数。旧任务没有这两个字段时继续使用
+    account_deep + 1，避免历史队列升级后改变行为。
     """
     from app.domains.kol.url_deep_crawl import dry_run_url_deep_crawl
 
     body = {
         "url": str(payload.get("url") or ""),
         "execute": True,
-        "mode": "account_deep",
+        "mode": _profile_deep_crawl_mode(payload.get("mode"), legacy_default=True),
         "max_posts": payload.get("max_posts") or 3,
-        "source": "queue:kol_profile_deep_crawl",
+        "representative_video_limit": _representative_video_limit(
+            payload.get("representative_video_limit"),
+            legacy_default=True,
+        ),
+        "source": str(payload.get("source") or "queue:kol_profile_deep_crawl"),
     }
     result = dry_run_url_deep_crawl(body)
     # 队列路径不经 HTTP 路由的 _attach_smart_url_session——session 必须在此自建,
@@ -94,12 +231,14 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     try:
         from app.domains.kol import search_sessions as kol_search_sessions
 
+        raw_session_id = payload.get("search_session_id")
+        session_id = int(raw_session_id) if raw_session_id not in (None, "") else None
         session = kol_search_sessions.ensure_session_for_result(
-            session_id=None,
-            create=True,
+            session_id=session_id,
+            create=session_id is None,
             query_text=f"账号分析 · {body['url'][:80]}",
-            query_type="url",
-            source="queue:kol_profile_deep_crawl",
+            query_type="url_profile",
+            source=str(payload.get("source") or "queue:kol_profile_deep_crawl"),
             input_payload={key: value for key, value in body.items() if key != "api_token"},
             staff=staff,
         )
@@ -133,10 +272,17 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
                 # 视频下载重(IG 经 ytdlp ~100s/条),只喂前 3 条免得串行 worker 被卡 20 分钟;
                 # 缩略图轻,12 条全喂。
                 if platform_key and platform_key != "youtube" and item.get("content_url") and videos_warmed < 3:
-                    vid = cache_video_for_item(platform_key, str(item["id"]), item["content_url"])
+                    video_key = _video_cache_key(platform_key, item["content_url"])
+                    if not video_key:
+                        warm_stats.append(f"vid#{item['id']}:skipped:native_video_id_unresolved")
+                        continue
+                    vid = cache_video_for_item(platform_key, video_key, item["content_url"])
                     videos_warmed += 1
                     reason = vid.get("skip_reason") or vid.get("reason") or ""
-                    warm_stats.append(f"vid#{item['id']}:{vid.get('status')}{':' + str(reason) if reason else ''}")
+                    warm_stats.append(
+                        f"vid#{item['id']}[{video_key}]:{vid.get('status')}"
+                        f"{':' + str(reason) if reason else ''}"
+                    )
             logger.info(
                 "deep_crawl media r2 warm kol_pool_id=%s %s",
                 kol_pool_id,

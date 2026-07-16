@@ -18,6 +18,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.api.routers import auth as auth_mod  # noqa: E402
 from app.api.routers import creator as creator_mod  # noqa: E402
 from app.schemas.auth import RegisterRequest  # noqa: E402
+from app.services.security import rate_limiter as rate_limiter_mod  # noqa: E402
 
 
 SCHEMA = """
@@ -102,6 +103,7 @@ class CreatorBusinessFlowTests(unittest.TestCase):
             patch.object(auth_mod, "IS_PRODUCTION", False),
             patch.object(creator_mod, "get_conn", return_value=self.conn),
             patch.object(creator_mod, "is_postgres_runtime", return_value=False),
+            patch.object(rate_limiter_mod, "_get_redis", return_value=None),
         ]
         for item in self.patches:
             item.start()

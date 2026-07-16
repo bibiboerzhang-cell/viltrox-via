@@ -15,7 +15,7 @@ export interface VkpiEvent {
   title: string;
   type_key: string;
   status: "planning" | "prep_ready" | "in_progress" | "done" | string;
-  health_score?: number;
+  health_score?: number | null;
   note?: string;
   start_date: string;
   end_date: string;
@@ -112,7 +112,7 @@ export interface VkpiEventUpdatePayload {
   title?: string;
   type_key?: string;
   status?: string;
-  health_score?: number;
+  health_score?: number | null;
   note?: string;
   start_date?: string;
   end_date?: string;
@@ -612,7 +612,7 @@ export interface UiEvent {
   title: string;
   typeKey: string;
   status: string;
-  healthScore: number;
+  healthScore: number | null;
   startDate: string;
   endDate: string;
   location: { name: string; city: string; country: string; lat?: number; lng?: number };
@@ -651,7 +651,9 @@ export function toUiEvent(row: VkpiEvent): UiEvent {
     title: row.title,
     typeKey: row.type_key,
     status: row.status,
-    healthScore: row.health_score ?? 100,
+    // Missing health is unknown, not a perfect score. The UI labels numeric values
+    // as recorded values because the current schema carries no scoring provenance.
+    healthScore: row.health_score ?? null,
     startDate: row.start_date,
     endDate: row.end_date,
     location: {

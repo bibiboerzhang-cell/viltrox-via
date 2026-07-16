@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static smoke for P2.4 comment intelligence frontend wiring."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -39,7 +40,7 @@ def main() -> None:
     assert ".da-ci-health" in css and ".da-ci-error" in css and ".da-ci-message" in css, "comment intelligence CSS missing"
     assert ".da-ci-distribution-grid" in css and ".da-ci-bar" in css, "distribution CSS missing"
 
-    print("VKPI_COMMENT_INTELLIGENCE_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_COMMENT_INTELLIGENCE_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

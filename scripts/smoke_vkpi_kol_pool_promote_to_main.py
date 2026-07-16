@@ -4,6 +4,8 @@ This is intentionally marker-scoped and cleans up both vkpi_kol_pool and kols.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import sys
 import time
 from pathlib import Path
@@ -26,7 +28,7 @@ MARKER = f"vkpi-pool-promote-{int(time.time())}"
 
 def main() -> None:
     if not seed_admin:
-        print("missing _smoke_seed.py")
+        out("missing _smoke_seed.py")
         sys.exit(1)
 
     conn = get_conn()
@@ -101,12 +103,12 @@ def main() -> None:
             cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
 
     if failures:
-        print("=== FAIL ===")
+        out("=== FAIL ===")
         for failure in failures:
-            print(f"- {failure}")
+            out(f"- {failure}")
         sys.exit(1)
 
-    print("VKPI_KOL_POOL_PROMOTE_TO_MAIN_SMOKE_OK")
+    out("VKPI_KOL_POOL_PROMOTE_TO_MAIN_SMOKE_OK")
 
 
 def cleanup(conn, *, marker: str, main_kol_id: int) -> None:

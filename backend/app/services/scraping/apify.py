@@ -13,6 +13,8 @@ import asyncio
 from typing import Any, Dict
 
 from app.core.logging import get_logger
+from app.platform.apify_budget import call_apify_actor
+from app.platform.apify_lifecycle import register_apify_client_shutdown
 
 try:
     from apify_client import ApifyClient
@@ -28,7 +30,7 @@ logger = get_logger(__name__)
 _APIFY_CALL_TIMEOUT_SECS = max(60, int(os.environ.get("APIFY_CALL_TIMEOUT_SECS", "900")))
 
 if APIFY_AVAILABLE and APIFY_TOKEN:
-    _client = ApifyClient(APIFY_TOKEN)
+    _client = register_apify_client_shutdown(ApifyClient(APIFY_TOKEN))
     logger.info("apify.client_initialized")
 else:
     _client = None
@@ -254,7 +256,13 @@ async def _fetch_douyin_comments(url: str, max_comments: int = 20) -> list[dict]
         return []
     try:
         run_input = _douyin_comments_payload(actor_id, url, max_comments)
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
+        run = await asyncio.to_thread(
+            lambda: call_apify_actor(
+                _client, actor_id, platform="douyin", operation="douyin_comments",
+                source="services.scraping.apify", run_input=run_input,
+                timeout_secs=_APIFY_CALL_TIMEOUT_SECS,
+            )
+        )
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="douyin_comments", item_count=len(items))
         return _normalize_douyin_comments(items)
@@ -269,7 +277,13 @@ async def _fetch_douyin_metrics(url: str) -> dict[str, int]:
         return {}
     try:
         run_input = _douyin_metrics_payload(actor_id, url)
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
+        run = await asyncio.to_thread(
+            lambda: call_apify_actor(
+                _client, actor_id, platform="douyin", operation="douyin_metrics",
+                source="services.scraping.apify", run_input=run_input,
+                timeout_secs=_APIFY_CALL_TIMEOUT_SECS,
+            )
+        )
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="douyin_metrics", item_count=len(items))
         if not items:
@@ -305,7 +319,11 @@ async def scrape_youtube(url: str) -> Dict[str, Any]:
         }
 
         run = await asyncio.to_thread(
-            lambda: _client.actor("streamers/youtube-scraper").call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS)
+            lambda: call_apify_actor(
+                _client, "streamers/youtube-scraper", platform="youtube",
+                operation="scrape_youtube", source="services.scraping.apify",
+                run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS,
+            )
         )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
@@ -370,7 +388,7 @@ def _media_proxy_config() -> Dict[str, Any]:
     return {"useApifyProxy": True, "apifyProxyGroups": groups} if groups else {"useApifyProxy": True}
 
 
-async def scrape_instagram(url: str) -> Dict[str, Any]:
+async def scrape_instagram(url: str, *, timeout_secs: int | None = None) -> Dict[str, Any]:
     """Fetch Instagram Reel/Post via Apify."""
     if not _apify_available():
         return _empty_result("apify not available")
@@ -388,7 +406,13 @@ async def scrape_instagram(url: str) -> Dict[str, Any]:
             run_input["proxyConfiguration"] = _proxy
 
         run = await asyncio.to_thread(
-            lambda: _client.actor("apify/instagram-scraper").call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS)
+            lambda: call_apify_actor(
+                _client, "apify/instagram-scraper", platform="instagram",
+                operation="scrape_instagram", source="services.scraping.apify",
+                run_input=run_input,
+                timeout_secs=max(10, int(timeout_secs or _APIFY_CALL_TIMEOUT_SECS)),
+                wait_secs=max(10, int(timeout_secs or _APIFY_CALL_TIMEOUT_SECS)),
+            )
         )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
@@ -450,7 +474,7 @@ async def scrape_instagram(url: str) -> Dict[str, Any]:
         return _empty_result(f"apify Instagram error: {e}")
 
 
-async def scrape_tiktok(url: str) -> Dict[str, Any]:
+async def scrape_tiktok(url: str, *, timeout_secs: int | None = None) -> Dict[str, Any]:
     """Fetch TikTok video via Apify."""
     if not _apify_available():
         return _empty_result("apify not available")
@@ -473,7 +497,14 @@ async def scrape_tiktok(url: str) -> Dict[str, Any]:
             run_input["proxyConfiguration"] = _proxy
 
         actor_id = _tiktok_actor_id()
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
+        run = await asyncio.to_thread(
+            lambda: call_apify_actor(
+                _client, actor_id, platform="tiktok", operation="scrape_tiktok",
+                source="services.scraping.apify", run_input=run_input,
+                timeout_secs=max(10, int(timeout_secs or _APIFY_CALL_TIMEOUT_SECS)),
+                wait_secs=max(10, int(timeout_secs or _APIFY_CALL_TIMEOUT_SECS)),
+            )
+        )
 
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="tiktok", operation="scrape_tiktok", item_count=len(items))
@@ -546,7 +577,13 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
     logger.info("apify.scrape_douyin.start | url=%s | actor=%s", url, actor_id)
     try:
         run_input = _douyin_video_payload(actor_id, url)
-        run = await asyncio.to_thread(lambda: _client.actor(actor_id).call(run_input=run_input, timeout_secs=_APIFY_CALL_TIMEOUT_SECS))
+        run = await asyncio.to_thread(
+            lambda: call_apify_actor(
+                _client, actor_id, platform="douyin", operation="scrape_douyin",
+                source="services.scraping.apify", run_input=run_input,
+                timeout_secs=_APIFY_CALL_TIMEOUT_SECS,
+            )
+        )
         items = list(_client.dataset(run["defaultDatasetId"]).iterate_items())
         _record_run_cost(run, actor_id=actor_id, platform="douyin", operation="scrape_douyin", item_count=len(items))
         if not items:
@@ -626,7 +663,12 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
         return _empty_result(f"apify Douyin error: {e}")
 
 
-async def scrape_with_apify(url: str, platform: str) -> Dict[str, Any]:
+async def scrape_with_apify(
+    url: str,
+    platform: str,
+    *,
+    timeout_secs: int | None = None,
+) -> Dict[str, Any]:
     """Unified Apify scrape entry. Routes to platform-specific actor."""
     if not _apify_available():
         return _empty_result("apify not available (check APIFY_TOKEN)")
@@ -635,9 +677,9 @@ async def scrape_with_apify(url: str, platform: str) -> Dict[str, Any]:
     if p == "youtube":
         return await scrape_youtube(url)
     elif p == "instagram":
-        return await scrape_instagram(url)
+        return await scrape_instagram(url, timeout_secs=timeout_secs)
     elif p == "tiktok":
-        return await scrape_tiktok(url)
+        return await scrape_tiktok(url, timeout_secs=timeout_secs)
     elif p == "douyin":
         return await scrape_douyin(url)
     else:

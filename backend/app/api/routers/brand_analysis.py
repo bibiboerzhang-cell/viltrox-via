@@ -11,15 +11,8 @@ from fastapi import APIRouter, Request, HTTPException
 from app.api.dependencies.admin import get_admin
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
-from app.services.ai.retry import call_ai_with_retry
+from app.platform.llm_production import ProductionLlmUnavailable, generate_text
 from app.services.security.rate_limiter import rate_limit
-
-try:
-    from app.services.ai.clients.claude_client import get_claude_client
-    _claude_ok = True
-except Exception:
-    _claude_ok = False
-    def get_claude_client(): return None
 
 router = APIRouter(prefix="/api/admin/intel", tags=["brand-analysis"])
 logger = get_logger(__name__)
@@ -109,12 +102,7 @@ PROMPT = """你是 Viltrox（唯卓仕）全球社交媒体首席增长官。你
 @router.post("/analyze-brand")
 @rate_limit("admin_mutation", max_requests=30, window_sec=300)
 async def analyze_brand(request: Request, body: dict):
-    get_admin(request)
-    if not _claude_ok:
-        raise HTTPException(500, "Claude not available")
-    client = get_claude_client()
-    if not client:
-        raise HTTPException(500, "Claude client not initialized")
+    admin = await get_admin(request)
 
     if body.get("mode") == "viltrox_scan":
         sd = body.get("scan_data", {})
@@ -153,16 +141,17 @@ async def analyze_brand(request: Request, body: dict):
     try:
         logger.info("brand_analysis.claude_started", extra={"prompt_chars": len(prompt)})
         t0 = time.time()
-        resp = call_ai_with_retry(
-            "brand_analysis.claude",
-            lambda: client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
-            ),
+        response = generate_text(
+            prompt,
+            provider="anthropic",
+            model=CLAUDE_MODEL,
+            purpose="brand_analysis",
+            max_output_tokens=4000,
+            triggered_by=admin,
+            staff=admin if isinstance(admin, dict) else None,
         )
         elapsed = time.time() - t0
-        text = (resp.content[0].text if resp.content else "").strip()
+        text = str(response.get("text") or "").strip()
         logger.info("brand_analysis.claude_complete", extra={"elapsed_sec": round(elapsed, 1), "char_count": len(text)})
 
         if text.startswith("```"):
@@ -184,6 +173,12 @@ async def analyze_brand(request: Request, body: dict):
             "raw_text": text[:2000],
             "sections": [],
         }
+    except ProductionLlmUnavailable as exc:
+        logger.warning(
+            "brand_analysis.production_llm_unavailable",
+            extra={"failure_code": exc.code},
+        )
+        raise HTTPException(503, "AI analysis temporarily unavailable") from exc
     except Exception:
         logger.exception("brand_analysis.failed")
         raise HTTPException(500, "Analysis failed")

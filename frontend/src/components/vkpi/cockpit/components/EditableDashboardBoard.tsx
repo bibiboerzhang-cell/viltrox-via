@@ -5,7 +5,7 @@ import ReactGridLayout, {
   type ResizeHandleAxis,
   verticalCompactor,
 } from "react-grid-layout";
-import { GripVertical, LayoutGrid, Plus, RotateCcw, Sparkles, X } from "lucide-react";
+import { GripVertical, LayoutGrid, Plus, RotateCcw, Search, Sparkles, X } from "lucide-react";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
 import {
@@ -22,7 +22,7 @@ const e = React.createElement;
 
 // 「跨板块模块」= Dashboard 专用第四类(task #76 跨板块拉卡):palette 可拉入子板块
 // 注册表模块(自带取数,来源徽可跳源板块)。板块页注册表仍只用前三类。
-export type DashboardModuleCategory = "核心模块" | "实时模块" | "业务板块" | "跨板块模块";
+export type DashboardModuleCategory = "核心模块" | "实时模块" | "数据库模块" | "业务板块" | "跨板块模块";
 
 export interface DashboardModuleDefinition {
   key: string;
@@ -36,6 +36,9 @@ export interface DashboardModuleDefinition {
   maxHeight?: number;
   render: () => React.ReactNode;
   allowMultiple?: boolean;
+  /** Dashboard 跨页模块 palette 分组元数据；普通板块页可不提供。 */
+  sourceBoard?: string;
+  sourceLabel?: string;
 }
 
 export interface DashboardLayoutItem {
@@ -52,10 +55,16 @@ interface EditableDashboardBoardProps {
   defaultLayout: Array<Pick<DashboardLayoutItem, "moduleKey" | "span"> & Partial<Pick<DashboardLayoutItem, "height" | "x" | "y">>>;
   editing: boolean;
   storageKey?: string;
+  /** Stable authenticated staff scope for the local-only fallback key. */
+  localStorageScope?: string | number;
+  /** One-time migration sources. Existing geometry is retained and the old value is not overwritten. */
+  legacyStorageKeys?: string[];
+  /** Safety modules appended below a migrated legacy layout without moving existing items. */
+  requiredDefaultModuleKeys?: string[];
   apiToken?: string;
 }
 
-const CATEGORY_ORDER: DashboardModuleCategory[] = ["核心模块", "实时模块", "业务板块", "跨板块模块"];
+const CATEGORY_ORDER: DashboardModuleCategory[] = ["核心模块", "数据库模块", "实时模块", "业务板块", "跨板块模块"];
 const FLOW_MODULES = new Set(["trend"]);
 const BOARD_GAP_PX = 14;
 const BOARD_ROW_HEIGHT_PX = 22;
@@ -328,14 +337,54 @@ function loadLayout(
   storageKey: string,
   defaultLayout: EditableDashboardBoardProps["defaultLayout"],
   moduleMap: Map<string, DashboardModuleDefinition>,
+  legacyStorageKeys: string[] = [],
+  requiredDefaultModuleKeys: string[] = [],
 ) {
   if (typeof window === "undefined") return freshDefaultLayout(defaultLayout, moduleMap);
   try {
     const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
-    return normalizeStoredLayout(parsed, moduleMap, "restored") ?? freshDefaultLayout(defaultLayout, moduleMap);
+    const restored = normalizeStoredLayout(parsed, moduleMap, "restored");
+    if (restored !== null) return restored;
   } catch {
-    return freshDefaultLayout(defaultLayout, moduleMap);
+    // Try a reviewed legacy key before falling back to the new default.
   }
+  for (const legacyStorageKey of legacyStorageKeys) {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(legacyStorageKey) || "null");
+      const legacy = normalizeStoredLayout(parsed, moduleMap, "migrated");
+      if (legacy !== null) {
+        const activeKeys = new Set(legacy.map((item) => item.moduleKey));
+        let nextY = legacy.reduce((bottom, item) => Math.max(bottom, item.y + normalizeHeight(item.height)), 0);
+        const additions = requiredDefaultModuleKeys.flatMap((moduleKey, index) => {
+          if (activeKeys.has(moduleKey)) return [];
+          const definition = moduleMap.get(moduleKey);
+          const defaultItem = defaultLayout.find((item) => item.moduleKey === moduleKey);
+          if (!definition || !defaultItem) return [];
+          const height = normalizeModuleHeight(defaultItem.height, definition);
+          const item: DashboardLayoutItem = {
+            instanceId: `migrated-required-${moduleKey}-${index}`,
+            moduleKey,
+            span: normalizeModuleSpan(defaultItem.span, definition),
+            height,
+            x: 0,
+            y: nextY,
+          };
+          nextY += height;
+          activeKeys.add(moduleKey);
+          return [item];
+        });
+        return [...legacy, ...additions];
+      }
+    } catch {
+      // Continue to the next legacy key; malformed legacy data stays untouched.
+    }
+  }
+  return freshDefaultLayout(defaultLayout, moduleMap);
+}
+
+function scopedLocalStorageKey(storageKey: string, scope: string | number | undefined) {
+  const normalized = String(scope ?? "").trim();
+  return normalized ? `${storageKey}:${encodeURIComponent(normalized)}` : storageKey;
 }
 
 function toGridLayout(
@@ -415,12 +464,24 @@ export function EditableDashboardBoard({
   defaultLayout,
   editing,
   storageKey = "vkpi-dashboard-layout-v1",
+  localStorageScope,
+  legacyStorageKeys = [],
+  requiredDefaultModuleKeys = [],
   apiToken = "",
 }: EditableDashboardBoardProps) {
+  const resolvedStorageKey = scopedLocalStorageKey(storageKey, localStorageScope);
+  const resolvedLegacyStorageKeys = legacyStorageKeys.map((key) => scopedLocalStorageKey(key, localStorageScope));
   const moduleMap = React.useMemo(() => new Map(modules.map((module) => [module.key, module])), [modules]);
   const moduleKeySignature = modules.map((module) => module.key).join("|");
-  const [layout, setLayout] = React.useState<DashboardLayoutItem[]>(() => loadLayout(storageKey, defaultLayout, moduleMap));
+  const [layout, setLayout] = React.useState<DashboardLayoutItem[]>(() => loadLayout(
+    resolvedStorageKey,
+    defaultLayout,
+    moduleMap,
+    resolvedLegacyStorageKeys,
+    requiredDefaultModuleKeys,
+  ));
   const [paletteOpen, setPaletteOpen] = React.useState(false);
+  const [paletteQuery, setPaletteQuery] = React.useState("");
   const [boardMetrics, setBoardMetrics] = React.useState({ width: 0, columns: DASHBOARD_LAYOUT_COLUMNS });
   const [syncState, setSyncState] = React.useState<"local" | "loading" | "saving" | "saved" | "error">(apiToken ? "loading" : "local");
   const boardRef = React.useRef<HTMLDivElement | null>(null);
@@ -438,11 +499,11 @@ export function EditableDashboardBoard({
 
   React.useEffect(() => {
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify(encodeDashboardLayoutPreference(layout)));
+      window.localStorage.setItem(resolvedStorageKey, JSON.stringify(encodeDashboardLayoutPreference(layout)));
     } catch {
       // The board remains usable when storage is disabled.
     }
-  }, [layout, storageKey]);
+  }, [layout, resolvedStorageKey]);
 
   React.useEffect(() => {
     const board = boardRef.current;
@@ -581,6 +642,32 @@ export function EditableDashboardBoard({
     replaceLayout(next, persist);
   }, [canEditGeometry, moduleMap, replaceLayout]);
 
+  const normalizedPaletteQuery = paletteQuery.trim().toLowerCase();
+  const visiblePaletteModules = normalizedPaletteQuery
+    ? modules.filter((module) => [module.label, module.description, module.sourceLabel]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedPaletteQuery))
+    : modules;
+  const renderPaletteButton = (module: DashboardModuleDefinition) => {
+    const alreadyAdded = activeModuleKeys.has(module.key) && !module.allowMultiple;
+    return e("button", {
+      key: module.key,
+      type: "button",
+      disabled: alreadyAdded,
+      onClick: () => addModule(module),
+      className: alreadyAdded ? "is-added" : "",
+      title: alreadyAdded ? `${module.label} 已在看板` : `添加 ${module.label} 到看板`,
+    },
+      e("strong", null, module.label),
+      e("span", null, module.description),
+      e("small", null, alreadyAdded
+        ? "已在看板"
+        : `默认 ${module.defaultSpan}/12 · 高 ${module.defaultHeight ?? DEFAULT_CARD_HEIGHT} 格`),
+    );
+  };
+
   return e(React.Fragment, null,
     editing && e("div", { className: "vkpi-board-edit-hint", role: "status" },
       e("span", null,
@@ -595,7 +682,7 @@ export function EditableDashboardBoard({
           e(Sparkles, { size: 13 }),
           "自动排列",
         ),
-        e("button", { type: "button", onClick: restoreDefault },
+        e("button", { type: "button", onClick: restoreDefault, title: "恢复 Dashboard 默认模块和位置" },
           e(RotateCcw, { size: 13 }),
           "恢复默认",
         ),
@@ -665,6 +752,7 @@ export function EditableDashboardBoard({
       type: "button",
       className: "vkpi-board-add",
       onClick: () => setPaletteOpen(true),
+      title: "打开模块库并添加 Dashboard 模块",
     },
       e(Plus, { size: 17 }),
       e("span", null, "添加模块"),
@@ -683,34 +771,41 @@ export function EditableDashboardBoard({
             e("h2", { id: "vkpi-module-palette-title" }, "添加模块"),
             e("p", null, "所有模块都绑定现有页面、组件或真实接口；无数据时保持诚实空态。"),
           ),
-          e("button", { type: "button", onClick: () => setPaletteOpen(false), "aria-label": "关闭添加模块" }, e(X, { size: 16 })),
+          e("button", { type: "button", onClick: () => setPaletteOpen(false), title: "关闭模块库", "aria-label": "关闭添加模块" }, e(X, { size: 16 })),
+        ),
+        e("label", { className: "vkpi-module-palette__search" },
+          e(Search, { size: 14 }),
+          e("input", {
+            value: paletteQuery,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => setPaletteQuery(event.target.value),
+            placeholder: "搜索模块或来源页面，如“历史”“Projects”",
+            "aria-label": "搜索 Dashboard 模块",
+            autoFocus: true,
+          }),
+          paletteQuery && e("button", { type: "button", onClick: () => setPaletteQuery(""), "aria-label": "清空模块搜索" }, e(X, { size: 13 })),
         ),
         e("div", { className: "vkpi-module-palette__body" },
           CATEGORY_ORDER.map((category) => {
-            const categoryModules = modules.filter((module) => module.category === category);
+            const categoryModules = visiblePaletteModules.filter((module) => module.category === category);
             if (categoryModules.length === 0) return null;
+            const sourceGroups = category === "跨板块模块"
+              ? Array.from(categoryModules.reduce((groups, module) => {
+                const label = module.sourceLabel || "其他来源";
+                const group = groups.get(label) || [];
+                group.push(module);
+                groups.set(label, group);
+                return groups;
+              }, new Map<string, DashboardModuleDefinition[]>()).entries())
+              : [[category, categoryModules] as [string, DashboardModuleDefinition[]]];
             return e("section", { key: category, className: "vkpi-module-palette__section" },
-              e("h3", null, category),
-              e("div", { className: "vkpi-module-palette__grid" },
-                categoryModules.map((module) => {
-                  const alreadyAdded = activeModuleKeys.has(module.key) && !module.allowMultiple;
-                  return e("button", {
-                    key: module.key,
-                    type: "button",
-                    disabled: alreadyAdded,
-                    onClick: () => addModule(module),
-                    className: alreadyAdded ? "is-added" : "",
-                  },
-                    e("strong", null, module.label),
-                    e("span", null, module.description),
-                    e("small", null, alreadyAdded
-                      ? "已在看板"
-                      : `默认 ${module.defaultSpan}/12 · 高 ${module.defaultHeight ?? DEFAULT_CARD_HEIGHT} 格`),
-                  );
-                }),
-              ),
+              e("h3", null, category, e("span", null, categoryModules.length)),
+              sourceGroups.map(([sourceLabel, sourceModules]) => e("div", { key: sourceLabel, className: "vkpi-module-palette__source" },
+                category === "跨板块模块" && e("h4", null, sourceLabel, e("span", null, sourceModules.length)),
+                e("div", { className: "vkpi-module-palette__grid" }, sourceModules.map(renderPaletteButton)),
+              )),
             );
           }),
+          visiblePaletteModules.length === 0 && e("div", { className: "vkpi-module-palette__empty" }, `没有匹配“${paletteQuery.trim()}”的模块`),
         ),
       ),
     ),

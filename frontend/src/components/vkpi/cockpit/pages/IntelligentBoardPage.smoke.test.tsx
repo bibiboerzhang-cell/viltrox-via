@@ -122,6 +122,26 @@ function routeApi(overrides: Overrides = {}) {
       const q = typeof body === "string" ? String(JSON.parse(body).question || "") : "";
       return answerFor(q);
     }
+    if (p.startsWith("/api/admin/vkpi/marketing-advisor/readiness")) {
+      return {
+        status: "degraded",
+        provider_ready: false,
+        provider_called: false,
+        reason: "advisor_provider_not_connected",
+        persistence_ready: true,
+        action_mode: "draft_only",
+        retryable: true,
+      };
+    }
+    if (p.startsWith("/api/admin/vkpi/marketing-advisor/threads")) return { status: "ok", threads: [], count: 0 };
+    if (p.startsWith("/api/admin/vkpi/marketing-advisor/memory")) {
+      return {
+        status: "ok",
+        settings: { state: "active", retention_days: 180, persisted: false },
+        candidates: [],
+        facts: [],
+      };
+    }
     throw new Error(`unexpected apiFetch: ${p}`);
   });
 }
@@ -173,6 +193,24 @@ beforeEach(() => {
 });
 
 describe("IntelligentBoardPage smoke(页壳 + KPI 带 + 布局键)", () => {
+  it("为旧的自定义布局一次性补入顾问和记忆模块,不要求用户恢复默认", async () => {
+    window.localStorage.setItem("vkpi-intelligent-layout-v1", JSON.stringify([
+      { instanceId: "legacy-qa", moduleKey: "qa", span: 8, height: 12, x: 0, y: 0 },
+      { instanceId: "legacy-history", moduleKey: "history", span: 4, height: 7, x: 8, y: 0 },
+    ]));
+
+    renderBoard();
+    expect(await screen.findByRole("heading", { name: "顾问" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "记忆" })).toBeTruthy();
+
+    const stored = JSON.parse(String(window.localStorage.getItem("vkpi-intelligent-layout-v1"))) as {
+      items?: Array<{ moduleKey?: string }>;
+    };
+    const keys = (stored.items || []).map((item) => item.moduleKey);
+    expect(keys).toEqual(expect.arrayContaining(["qa", "history", "advisor", "memory"]));
+    expect(window.localStorage.getItem("vkpi-intelligent-layout-v1:advisor-memory-added-v1")).toBe("1");
+  });
+
   it("KPI 四卡:本机三卡真 0 + 引用率诚实 pending;综合回答服务端真数 + 真 sparkline;布局本机键零账户级写", async () => {
     expect(() => renderBoard()).not.toThrow();
 
@@ -200,11 +238,14 @@ describe("IntelligentBoardPage smoke(页壳 + KPI 带 + 布局键)", () => {
     expect(screen.getAllByText(/POST \/api\/admin\/vkpi\/intelligent\/ask/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/意图秒回 → 池内检索 → 模型综合/).length).toBeGreaterThan(0);
 
-    // 布局:本机 storageKey 落盘;绝不写账户级偏好端点(全部请求都在 intelligent 前缀下)
+    // 布局:本机 storageKey 落盘;绝不写账户级偏好端点。新增的顾问/记忆只读取服务端私有状态。
     await waitFor(() => expect(window.localStorage.getItem("vkpi-intelligent-layout-v1")).toBeTruthy());
     const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
     expect(calledPaths.length).toBeGreaterThan(0);
-    expect(calledPaths.every((p) => p.startsWith("/api/admin/vkpi/intelligent/"))).toBe(true);
+    expect(calledPaths.every((p) => (
+      p.startsWith("/api/admin/vkpi/intelligent/")
+      || p.startsWith("/api/admin/vkpi/marketing-advisor/")
+    ))).toBe(true);
   });
 });
 

@@ -9,7 +9,7 @@ import re
 import urllib.parse
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol.pool_common import (
     _bio,  # noqa: F401  (kept available for sibling read-side parity)
     _float_or_none,
@@ -24,6 +24,9 @@ logger = get_logger(__name__)
 
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_VIDEO_CACHE_ROUTE_RE = re.compile(
+    r"^/api/(?:vkpi-media|admin/vkpi/media)/video-cache/([0-9a-fA-F]{64})/?$"
+)
 
 
 def _youtube_video_id(url: Any) -> str:
@@ -50,6 +53,78 @@ def _youtube_video_id(url: Any) -> str:
 
 def _youtube_thumbnail_url(video_id: str) -> str:
     return f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
+
+
+def _video_cache_digest(value: Any) -> str:
+    """Return a digest only for one of our authenticated cache routes."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        path = urllib.parse.urlsplit(raw).path
+    except ValueError:
+        return ""
+    matched = _VIDEO_CACHE_ROUTE_RE.fullmatch(path)
+    return matched.group(1).lower() if matched else ""
+
+
+def _validated_cached_video_url(item: dict[str, Any], platform: str) -> str:
+    """Resolve a playable local/R2 cache URL without trusting a stale ledger flag.
+
+    A historical ``status='cached'`` row is only a hint. Internal digest URLs
+    must still have local bytes or resolve to a current R2 URL. When that hint
+    is stale, the native/evidence identity resolver gets one read-only chance
+    to recover a valid cache before the caller falls back to ``content_url``.
+    """
+
+    from app.domains.kol.url_deep_crawl_queue import _content_url_video_id
+    from app.domains.media.cache import (
+        cached_video_file,
+        cached_video_redirect_url,
+        cached_video_url_for_item,
+    )
+
+    raw_url = str(item.get("cached_video_url") or "").strip()
+    raw_digest = str(item.get("cached_video_digest") or "").strip().lower()
+    if len(raw_digest) != 64 or any(ch not in "0123456789abcdef" for ch in raw_digest):
+        raw_digest = ""
+    digest = raw_digest or _video_cache_digest(raw_url)
+
+    if digest:
+        if cached_video_file(digest):
+            return f"/api/vkpi-media/video-cache/{digest}"
+        redirected = str(cached_video_redirect_url(digest) or "").strip()
+        if redirected:
+            return redirected
+
+    # A non-digest URL is already a resolved public cache URL. Digest routes,
+    # however, are never returned merely because the ledger labelled them
+    # cached: the two checks above must have proved local bytes or R2 playback.
+    if raw_url and not digest and not _video_cache_digest(raw_url):
+        return raw_url
+
+    candidates = [
+        _content_url_video_id(platform, item.get("content_url")),
+        str(item.get("id") or item.get("evidence_id") or "").strip(),
+    ]
+    seen: set[str] = set()
+    for video_id in candidates:
+        if not video_id or video_id in seen:
+            continue
+        seen.add(video_id)
+        resolved = str(cached_video_url_for_item(platform, video_id) or "").strip()
+        if not resolved:
+            continue
+        resolved_digest = _video_cache_digest(resolved)
+        if not resolved_digest:
+            return resolved
+        if cached_video_file(resolved_digest):
+            return f"/api/vkpi-media/video-cache/{resolved_digest}"
+        redirected = str(cached_video_redirect_url(resolved_digest) or "").strip()
+        if redirected:
+            return redirected
+    return ""
 
 
 def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -127,7 +202,7 @@ def _video_evidence_for_kol(
     # 【K4】WHERE 从纯 video 放开为 IN ('video','image'):image 类 evidence(IG 图文/轮播,
     #   迁移 087/200)此前被滤掉,前端媒体种类徽章永不点亮;media_article 等其余种类仍挡在外。
     #   only_with_cache=True 的分析路径不受影响(image 行无 final_v1 cache,天然被 EXISTS 过滤)。
-    rows = get_conn().execute(
+    postgres_query = (
         """
         SELECT
             e.id AS evidence_id,
@@ -141,6 +216,7 @@ def _video_evidence_for_kol(
             e.thumbnail_url,
             COALESCE(NULLIF(mimg.cache_url, ''), CASE WHEN COALESCE(mimg.digest, '') != '' THEN '/api/vkpi-media/image-cache/' || mimg.digest ELSE NULL END) AS cached_thumbnail_url,
             COALESCE(NULLIF(m.cache_url, ''), CASE WHEN COALESCE(m.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || m.digest ELSE NULL END) AS cached_video_url,
+            m.digest AS cached_video_digest,
             e.view_count,
             e.like_count,
             e.comment_count,
@@ -230,7 +306,49 @@ def _video_evidence_for_kol(
             COALESCE(e.view_count, 0) DESC,
             e.id DESC
         LIMIT ?
-        """,
+        """
+    )
+    sqlite_query = """
+        SELECT
+            e.id AS evidence_id,
+            e.id,
+            e.kol_pool_id,
+            e.project_id,
+            e.content_url,
+            e.platform,
+            COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
+            e.video_title,
+            e.thumbnail_url,
+            NULL AS cached_thumbnail_url,
+            NULL AS cached_video_url,
+            NULL AS cached_video_digest,
+            e.view_count,
+            e.like_count,
+            e.comment_count,
+            e.share_count,
+            e.duration_seconds,
+            e.publish_date,
+            e.posted_at,
+            e.evidence_type,
+            e.image_urls,
+            0 AS has_final_v1_cache,
+            NULL AS llm_viltrox_detected_text,
+            NULL AS llm_viltrox_products,
+            NULL AS llm_competitor_mentions,
+            0 AS has_keyframe_qa_cache
+        FROM vkpi_kol_video_evidence e
+        WHERE e.kol_pool_id=?
+          AND (? OR COALESCE(e.is_active, 1) != 0)
+          AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
+          AND NOT ?
+        ORDER BY
+            COALESCE(e.publish_date, e.posted_at, e.updated_at, e.created_at) DESC,
+            COALESCE(e.view_count, 0) DESC,
+            e.id DESC
+        LIMIT ?
+    """
+    rows = get_conn().execute(
+        postgres_query if is_postgres_runtime() else sqlite_query,
         # 上限 10→200(2026-06-12「全部视频」裁令:账号分析现采 12 条/E5 全量更多,硬顶 10 把列表掐断)
         # 绑定顺序须与 WHERE 占位符一致:kol_pool_id, include_inactive, only_with_cache, LIMIT。
         (
@@ -243,7 +361,7 @@ def _video_evidence_for_kol(
     # cache_image 只落本地文件缓存、不写 vkpi_media_cache_assets 行(asset 行历史上仅 prewarm
     # 脚本批量写入)——上面的 image LATERAL join 对深爬暖出的缩略图永远扑空;视频按
     # (platform, evidence_id) 键存 sidecar,join 的 source_url 匹配也兜不全。读端直查文件缓存补齐。
-    from app.domains.media.cache import cached_image_url, cached_video_url_for_item
+    from app.domains.media.cache import cached_image_url
 
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -286,12 +404,13 @@ def _video_evidence_for_kol(
             except Exception:
                 logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
-        if not item.get("cached_video_url") and platform and platform != "youtube":
+        if platform and platform != "youtube":
             try:
-                item["cached_video_url"] = cached_video_url_for_item(platform, str(item.get("id") or "")) or None
+                item["cached_video_url"] = _validated_cached_video_url(item, platform) or None
             except Exception:
                 logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-                pass
+                item["cached_video_url"] = None
+        item.pop("cached_video_digest", None)
         youtube_id = _youtube_video_id(item.get("content_url")) if platform == "youtube" else ""
         youtube_thumb = _youtube_thumbnail_url(youtube_id)
         item["youtube_video_id"] = youtube_id

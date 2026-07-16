@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.domains.access import scope
 from app.domains.dashboard.decision_dashboard import _day_bucket
 from app.shared.vkpi_decision_common import (
@@ -93,8 +94,16 @@ def _merge_metric(target: dict[int, dict[str, Any]], row: dict[str, Any], key: s
         "bot_clicks": 0,
         "content_views": 0,
         "content_likes": 0,
-        "gmv_cents": 0,
-        "cost_cents": 0,
+        "gmv_cents": None,
+        "cost_cents": None,
+        "net_contribution_cents": None,
+        "roi": None,
+        "net_roi": None,
+        "gmv_data_status": "awaiting_source",
+        "cost_data_status": "awaiting_source",
+        "net_contribution_data_status": "awaiting_source",
+        "roi_data_status": "awaiting_source",
+        "financial_data_status": "awaiting_source",
     })[key] = int(row.get(source_key) or 0)
 
 
@@ -131,10 +140,16 @@ def staff_kpi(window: str = "month", staff_id: int | None = None) -> dict[str, A
                 "bot_clicks": 0,
                 "content_views": 0,
                 "content_likes": 0,
-                "gmv_cents": 0,
-                "cost_cents": 0,
-                "net_contribution_cents": 0,
-                "roi": 0,
+                "gmv_cents": None,
+                "cost_cents": None,
+                "net_contribution_cents": None,
+                "roi": None,
+                "net_roi": None,
+                "gmv_data_status": "awaiting_source",
+                "cost_data_status": "awaiting_source",
+                "net_contribution_data_status": "awaiting_source",
+                "roi_data_status": "awaiting_source",
+                "financial_data_status": "awaiting_source",
                 "ledger_workload_score": 0,
                 "kpi_credit": 0,
                 "recommendation_source_rows": 0,
@@ -202,27 +217,39 @@ def staff_kpi(window: str = "month", staff_id: int | None = None) -> dict[str, A
     for row in _safe_rows(
         conn,
         f"""
-        SELECT sa.staff_id, COALESCE(SUM(sa.revenue_cents), 0) AS value
+        SELECT sa.staff_id, COALESCE(SUM(sa.revenue_cents), 0) AS value,
+               COUNT(*) AS source_count
         FROM vkpi_sales_attributions sa
         WHERE {_day_bucket('sa.occurred_at', 'sa.imported_at', 'sa.created_at')} >= ?{staff_filter.replace('staff_id', 'sa.staff_id')}
           AND {_active_project_filter('sa')}
+          AND {business_truth.verified_shopify_attribution_sql('sa')}
         GROUP BY sa.staff_id
         """,
         params,
     ):
         _merge_metric(rows_by_staff, row, "gmv_cents")
+        sid = int(row.get("staff_id") or 0)
+        if sid in rows_by_staff and int(row.get("source_count") or 0) > 0:
+            rows_by_staff[sid]["gmv_data_status"] = "real"
+            rows_by_staff[sid]["gmv_source_count"] = int(row.get("source_count") or 0)
     for row in _safe_rows(
         conn,
         f"""
-        SELECT c.staff_id, COALESCE(SUM(c.amount_cents), 0) AS value
+        SELECT c.staff_id, COALESCE(SUM(c.amount_cents), 0) AS value,
+               COUNT(*) AS source_count
         FROM vkpi_cost_ledger c
-        WHERE c.status!='void' AND c.incurred_at >= ?{staff_filter.replace('staff_id', 'c.staff_id')}
+        WHERE {business_truth.approved_actual_cost_sql('c')}
+          AND c.incurred_at >= ?{staff_filter.replace('staff_id', 'c.staff_id')}
           AND {_active_project_filter('c')}
         GROUP BY c.staff_id
         """,
         params,
     ):
         _merge_metric(rows_by_staff, row, "cost_cents")
+        sid = int(row.get("staff_id") or 0)
+        if sid in rows_by_staff and int(row.get("source_count") or 0) > 0:
+            rows_by_staff[sid]["cost_data_status"] = "real"
+            rows_by_staff[sid]["cost_source_count"] = int(row.get("source_count") or 0)
 
     ledger_staff_filter = " AND staff_id=?" if staff_id else ""
     ledger_params = (start, int(staff_id)) if staff_id else (start,)
@@ -241,6 +268,7 @@ def staff_kpi(window: str = "month", staff_id: int | None = None) -> dict[str, A
                COALESCE(SUM(CASE WHEN metric_key='recommendation_cost_cents' THEN metric_value ELSE 0 END), 0) AS recommendation_cost_cents
         FROM vkpi_kpi_ledger
         WHERE ledger_date >= ?{ledger_staff_filter}
+          AND {business_truth.current_kpi_ledger_sql()}
         GROUP BY staff_id
         """,
         ledger_params,
@@ -264,11 +292,38 @@ def staff_kpi(window: str = "month", staff_id: int | None = None) -> dict[str, A
 
     result_rows = []
     for row in rows_by_staff.values():
-        gmv = int(row.get("gmv_cents") or 0)
-        cost = int(row.get("cost_cents") or 0)
-        row["net_contribution_cents"] = gmv - cost
-        row["roi"] = round(gmv / cost, 4) if cost else 0
-        row["net_roi"] = round((gmv - cost) / cost, 4) if cost else 0
+        gmv_real = str(row.get("gmv_data_status") or "") == "real"
+        cost_real = str(row.get("cost_data_status") or "") == "real"
+        gmv = int(row.get("gmv_cents") or 0) if gmv_real else None
+        cost = int(row.get("cost_cents") or 0) if cost_real else None
+        if gmv_real and cost_real:
+            row["net_contribution_cents"] = int(gmv) - int(cost)
+            row["net_contribution_data_status"] = "real"
+            row["financial_data_status"] = "real"
+            if int(cost) > 0:
+                row["roi"] = round(int(gmv) / int(cost), 4)
+                row["net_roi"] = round((int(gmv) - int(cost)) / int(cost), 4)
+                row["roi_data_status"] = "real"
+            else:
+                row["roi"] = None
+                row["net_roi"] = None
+                row["roi_data_status"] = "unavailable"
+        else:
+            row["gmv_cents"] = gmv
+            row["cost_cents"] = cost
+            row["net_contribution_cents"] = None
+            row["roi"] = None
+            row["net_roi"] = None
+            row["net_contribution_data_status"] = "awaiting_source"
+            row["roi_data_status"] = "awaiting_source"
+            row["financial_data_status"] = "partial" if gmv_real or cost_real else "awaiting_source"
+        row["data_status"] = row["financial_data_status"]
+        row["metric_statuses"] = {
+            "gmv": row["gmv_data_status"],
+            "cost": row["cost_data_status"],
+            "net_contribution": row["net_contribution_data_status"],
+            "roi": row["roi_data_status"],
+        }
         row["workload_score"] = (
             int(row.get("kol_claims") or 0) * 2
             + int(row.get("contacted") or 0)
@@ -311,7 +366,7 @@ def employee_workspace(staff_id: int) -> dict[str, Any]:
     month_kpi = staff_kpi("month", staff_id=effective_staff_id)
     projects = _safe_rows(
         conn,
-        """
+        f"""
         SELECT p.*, k.channel_name AS kol_name, k.platform AS kol_platform
         FROM vkpi_projects p
         LEFT JOIN kols k ON k.id = p.kol_id
@@ -426,40 +481,45 @@ def staff_profile(staff_id: int, *, staff: dict[str, Any] | None = None, window:
     )
     attributions = _safe_rows(
         conn,
-        """
+        f"""
         SELECT sa.*, p.project_name, k.channel_name AS kol_name,
-               os.order_name, os.order_number, os.financial_status
+               os.order_name, os.order_number, os.financial_status,
+               CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                    THEN 1 ELSE 0 END AS is_verified_business_truth
         FROM vkpi_sales_attributions sa
         LEFT JOIN vkpi_projects p ON p.id = sa.project_id
         LEFT JOIN kols k ON k.id = sa.kol_id
         LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
-        WHERE sa.staff_id=? AND {_active_filter}
+        WHERE sa.staff_id=? AND {_active_project_filter('sa')}
         ORDER BY COALESCE(sa.occurred_at, sa.imported_at, sa.created_at) DESC, sa.id DESC
         LIMIT ?
-        """.format(_active_filter=_active_project_filter("sa")),
+        """,
         (target_staff_id, limit),
     )
     costs = _safe_rows(
         conn,
-        """
-        SELECT c.*, p.project_name, k.channel_name AS kol_name
+        f"""
+        SELECT c.*, p.project_name, k.channel_name AS kol_name,
+               CASE WHEN {business_truth.approved_actual_cost_sql('c')}
+                    THEN 1 ELSE 0 END AS is_approved_actual
         FROM vkpi_cost_ledger c
         LEFT JOIN vkpi_projects p ON p.id = c.project_id
         LEFT JOIN kols k ON k.id = c.kol_id
-        WHERE c.staff_id=? AND c.status!='void' AND {_active_filter}
+        WHERE c.staff_id=? AND c.status!='void' AND {_active_project_filter('c')}
         ORDER BY c.incurred_at DESC, c.id DESC
         LIMIT ?
-        """.format(_active_filter=_active_project_filter("c")),
+        """,
         (target_staff_id, limit),
     ) if costs_visible else []
     kpi_ledger = _safe_rows(
         conn,
-        """
+        f"""
         SELECT kl.*, p.project_name, k.channel_name AS kol_name
         FROM vkpi_kpi_ledger kl
         LEFT JOIN vkpi_projects p ON p.id = kl.project_id
         LEFT JOIN kols k ON k.id = kl.kol_id
         WHERE kl.staff_id=?
+          AND {business_truth.current_kpi_ledger_sql('kl')}
         ORDER BY kl.ledger_date DESC, kl.id DESC
         LIMIT ?
         """,
@@ -503,15 +563,35 @@ def staff_profile(staff_id: int, *, staff: dict[str, Any] | None = None, window:
         (target_staff_id, 50),
     ) if audit_visible else []
 
-    total_revenue = sum(int(row.get("revenue_cents") or 0) for row in attributions)
-    total_cost = sum(int(row.get("amount_cents") or 0) for row in costs) if costs_visible else None
+    for row in attributions:
+        row["business_truth_status"] = (
+            "provider_verified" if int(row.get("is_verified_business_truth") or 0) == 1 else "reference_only"
+        )
+    for row in costs:
+        row["business_truth_status"] = (
+            "approved_actual"
+            if int(row.get("is_approved_actual") or 0) == 1
+            else "reference_only"
+        )
+    verified_attributions = [
+        row for row in attributions if int(row.get("is_verified_business_truth") or 0) == 1
+    ]
+    approved_costs = [
+        row
+        for row in costs
+        if int(row.get("is_approved_actual") or 0) == 1
+    ]
+    total_revenue = sum(int(row.get("revenue_cents") or 0) for row in verified_attributions)
+    total_cost = sum(int(row.get("amount_cents") or 0) for row in approved_costs) if costs_visible else None
     summary = {
         **summary,
         "project_count": len(projects),
         "claim_count": len(claims),
         "link_count": len(links),
         "attribution_count": len(attributions),
+        "verified_attribution_count": len(verified_attributions),
         "cost_count": len(costs) if costs_visible else None,
+        "approved_cost_count": len(approved_costs) if costs_visible else None,
         "channel_count": len(channels),
         "kpi_entry_count": len(kpi_ledger),
         "kpi_source_count": int(kpi_breakdown.get("source_count") or 0),

@@ -283,6 +283,19 @@ def _compact_enqueue_result(result: dict[str, Any]) -> dict[str, Any]:
         }
     if result.get("reason"):
         compact["reason"] = result.get("reason")
+    ai_analysis = result.get("ai_analysis")
+    if isinstance(ai_analysis, dict):
+        compact["ai_analysis"] = {
+            key: ai_analysis.get(key)
+            for key in (
+                "state",
+                "reason",
+                "gate_reason",
+                "model_readiness_status",
+                "provider_calls_allowed",
+            )
+            if key in ai_analysis
+        }
     return compact
 
 

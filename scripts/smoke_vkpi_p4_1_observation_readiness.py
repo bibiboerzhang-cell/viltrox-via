@@ -11,6 +11,7 @@ It intentionally does not require 3+ real staff accounts to pass. Account
 provisioning is an observation rollout condition, not a code correctness check.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import subprocess
@@ -228,7 +229,7 @@ def main() -> int:
     smoke = Smoke()
     try:
         result = smoke.run()
-        print("VKPI_P4_1_OBSERVATION_READINESS_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
+        stdout_out("VKPI_P4_1_OBSERVATION_READINESS_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     finally:
         smoke.cleanup()

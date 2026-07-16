@@ -1,0 +1,646 @@
+/* Real cockpit shell rendered with the V-KPI-Dashboard visual language.
+   This file changes presentation only; routing, permissions, APIs and handlers stay in React. */
+
+.cockpit-shell {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  min-height: 100vh;
+  overflow: clip;
+  background: var(--ds-workspace-surface);
+  font-family: var(--ds-font-sans);
+  letter-spacing: 0;
+}
+
+.cockpit-shell::before {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+}
+
+.cockpit-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+[data-theme="dark"] .cockpit-shell {
+  background: radial-gradient(1200px 600px at 70% -10%, var(--ds-bg-2), var(--ds-workspace-surface)) fixed;
+}
+
+[data-style="glass"][data-theme="dark"] .cockpit-shell::before {
+  background:
+    linear-gradient(118deg, rgba(41, 118, 255, 0.12) 0%, rgba(41, 118, 255, 0.025) 32%, transparent 48%),
+    linear-gradient(292deg, rgba(143, 99, 255, 0.09) 0%, rgba(55, 221, 197, 0.025) 38%, transparent 58%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%);
+  background-position: 0% 0%, 100% 100%, 0 0;
+  background-size: 165% 165%, 150% 150%, 100% 100%;
+  opacity: 0.95;
+  animation: vkpi-ambient-flow 24s ease-in-out infinite alternate;
+}
+
+[data-style="glass"][data-theme="light"] .cockpit-shell::before {
+  background:
+    linear-gradient(118deg, rgba(0, 113, 227, 0.09), transparent 42%),
+    linear-gradient(292deg, rgba(124, 58, 237, 0.055), rgba(55, 221, 197, 0.025) 36%, transparent 58%);
+  background-position: 0% 0%, 100% 100%;
+  background-size: 155% 155%, 150% 150%;
+  animation: vkpi-ambient-flow 28s ease-in-out infinite alternate;
+}
+
+@keyframes vkpi-ambient-flow {
+  from { background-position: 0% 0%, 100% 100%, 0 0; }
+  to { background-position: 24% 14%, 76% 84%, 0 0; }
+}
+
+[data-theme="dark"] .vkpi-page-stage--dashboard {
+  background: transparent;
+}
+
+[data-style="glass"][data-theme="light"] .cockpit-shell {
+  --ds-panel: rgba(255, 255, 255, 0.7);
+  --ds-card: rgba(255, 255, 255, 0.82);
+  background:
+    linear-gradient(125deg, rgba(0, 113, 227, 0.045), transparent 34%, transparent 72%, rgba(124, 58, 237, 0.035)),
+    var(--ds-workspace-surface);
+}
+
+[data-style="glass"] .cockpit-shell :is(
+  .vkpi-kpi-overview,
+  .vkpi-northstar-dashboard,
+  .vkpi-dashboard-memo,
+  .vkpi-dashboard-trend,
+  .vkpi-dashboard-task-queue,
+  .vkpi-dashboard-board-link,
+  .vkpi-dashboard-error-card
+) {
+  box-shadow: var(--ds-shadow-sm), var(--ds-inner);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.cockpit-shell .vkpi-rail {
+  position: sticky;
+  z-index: 10;
+  padding: 15px 11px;
+  border: 0;
+  border-right: 1px solid var(--ds-sidebar-divider);
+  background: var(--ds-sidebar-surface);
+  box-shadow: none;
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+  transition: width 0.22s ease;
+  /* 融合修(波A-A2):此前 overflow:hidden 把 right:-11px 的收合圆钮切成半圆,
+     且矮窗口下底部 LLM 卡被静默裁掉。内部滚动由 .vkpi-rail__nav 承担(min-height:0
+     + overflow-y:auto 已就位),外层放开。 */
+  overflow: visible;
+}
+
+.vkpi-rail__toggle {
+  position: absolute;
+  top: 72px;
+  right: -11px;
+  z-index: 30;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--ds-line);
+  border-radius: 50%;
+  color: var(--ds-text-2);
+  background: var(--ds-card);
+  box-shadow: var(--ds-shadow-sm);
+  transition: color 0.16s, border-color 0.16s, transform 0.22s ease;
+}
+
+.vkpi-rail__toggle:hover {
+  border-color: var(--ds-accent);
+  color: var(--ds-accent);
+}
+
+.vkpi-rail.is-collapsed .vkpi-rail__toggle {
+  transform: rotate(180deg);
+}
+
+.vkpi-rail > div:first-of-type {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.vkpi-rail__brand {
+  /* 融合修(波A-A1):品牌行 45+3+13=61px 与顶栏 60px 差 1px,交角错位。锁齐 60。 */
+  min-height: 45px;
+  gap: 10px;
+  padding: 3px 7px 12px;
+}
+
+.vkpi-rail__logo {
+  display: block;
+  width: 112px;
+  height: auto;
+  object-fit: contain;
+  object-position: left center;
+}
+
+[data-theme="light"] .vkpi-rail__logo {
+  filter: invert(1);
+}
+
+.vkpi-rail__logo-mark {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--ds-line);
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.vkpi-rail__mark {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 29px;
+  place-items: center;
+  border-radius: 9px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--ds-accent), var(--ds-accent-2));
+}
+
+[data-style="instrument"] .vkpi-rail__mark,
+[data-style="commandos"] .vkpi-rail__mark {
+  border: 2px solid var(--ds-accent);
+  border-radius: 50%;
+  color: var(--ds-accent);
+  background: transparent;
+}
+
+.vkpi-rail__name {
+  color: var(--ds-text);
+  font-size: 13.5px;
+  font-weight: 660;
+  line-height: 1.2;
+}
+
+.vkpi-rail__subtitle {
+  margin-top: 2px;
+  color: var(--ds-muted);
+  font-family: var(--ds-font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+}
+
+.vkpi-rail__nav {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.vkpi-rail__nav::-webkit-scrollbar {
+  width: 0;
+}
+
+.vkpi-rail__cap {
+  margin: 12px 10px 4px;
+  padding: 0;
+  color: var(--ds-muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  opacity: 0.72;
+}
+
+.vkpi-rail__item {
+  position: relative;
+  min-height: 34px;
+  gap: 11px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  color: var(--ds-text-2);
+  font-size: 12.5px;
+  line-height: 1.35;
+  transition: color 0.16s, background-color 0.16s;
+}
+
+.vkpi-rail__item:hover {
+  color: var(--ds-text);
+  background: var(--ds-accent-soft);
+}
+
+.vkpi-rail__item.is-active {
+  color: var(--ds-accent);
+  font-weight: 600;
+  background: var(--ds-accent-soft);
+}
+
+.vkpi-rail__item.is-active::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: -2px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--ds-accent);
+  content: "";
+}
+
+.vkpi-rail__footer {
+  min-height: 0;
+  flex: 0 0 auto;
+  padding-bottom: 2px;
+}
+
+.vkpi-task-progress--compact {
+  max-height: none;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--ds-queue-border);
+  border-radius: 11px;
+  background: var(--ds-queue-surface);
+  box-shadow: var(--ds-queue-shadow), var(--ds-queue-inset);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.vkpi-task-progress__compact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.vkpi-task-progress__compact-title {
+  color: var(--ds-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.vkpi-task-progress__compact-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ds-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vkpi-task-progress__compact-status::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ds-muted);
+  content: "";
+}
+
+.vkpi-task-progress__compact-status.is-active {
+  color: var(--ds-good);
+}
+
+.vkpi-task-progress__compact-status.is-active::before {
+  background: var(--ds-good);
+  box-shadow: 0 0 var(--ds-glow-radius) var(--ds-good);
+  animation: vkpi-lane-pulse 1.4s ease-in-out infinite;
+}
+
+.vkpi-task-progress__compact-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.vkpi-task-progress__compact-lane {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+}
+
+.vkpi-task-progress__compact-name {
+  color: var(--ds-text-2);
+}
+
+.vkpi-task-progress__compact-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--ds-line);
+}
+
+.vkpi-task-progress__compact-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.vkpi-task-progress__compact-lane.is-running:first-child .vkpi-task-progress__compact-bar i {
+  background: linear-gradient(90deg, var(--ds-accent), var(--ds-accent-2)) !important;
+}
+
+.vkpi-task-progress__compact-bar i.is-indeterminate {
+  opacity: 0.72;
+  animation: vkpi-lane-pulse 1.4s ease-in-out infinite;
+}
+
+.vkpi-task-progress__compact-lane.is-idle .vkpi-task-progress__compact-name,
+.vkpi-task-progress__compact-lane.is-idle .vkpi-task-progress__compact-value {
+  color: var(--ds-muted);
+}
+
+.vkpi-task-progress__compact-lane.is-idle .vkpi-task-progress__compact-bar i {
+  background: repeating-linear-gradient(90deg, var(--ds-line-strong) 0 5px, transparent 5px 10px);
+  opacity: 0.6;
+  animation: vkpi-lane-idle 1s linear infinite;
+}
+
+.vkpi-task-progress__compact-value {
+  overflow: hidden;
+  color: var(--ds-muted);
+  font-family: var(--ds-font-mono);
+  font-size: 9px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vkpi-task-progress__compact-foot {
+  margin-top: 9px;
+  padding-top: 8px;
+  overflow: hidden;
+  border-top: 1px solid var(--ds-line);
+  color: var(--ds-muted);
+  font-family: var(--ds-font-mono);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes vkpi-lane-pulse {
+  50% { opacity: 0.35; }
+}
+
+@keyframes vkpi-lane-idle {
+  to { transform: translateX(10px); }
+}
+
+.vkpi-rail__utility {
+  min-height: 32px;
+  color: var(--ds-muted);
+  font-size: 12px;
+}
+
+.vkpi-rail.is-collapsed .vkpi-rail__item.is-active::before {
+  top: 7px;
+  bottom: 7px;
+  left: -3px;
+}
+
+.vkpi-task-progress {
+  max-height: min(46vh, 430px);
+  overflow-y: auto;
+  border-color: var(--ds-line) !important;
+  border-radius: 11px;
+  color: var(--ds-text-2);
+  background: var(--ds-card) !important;
+  box-shadow: var(--ds-shadow-sm) !important;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ds-line-strong) transparent;
+}
+
+.vkpi-task-progress [class*="text-white/"] {
+  color: var(--ds-text-2) !important;
+}
+
+.vkpi-task-progress [class*="text-white/30"],
+.vkpi-task-progress [class*="text-white/25"],
+.vkpi-task-progress [class*="text-white/35"],
+.vkpi-task-progress [class*="text-white/40"],
+.vkpi-task-progress [class*="text-white/45"] {
+  color: var(--ds-muted) !important;
+}
+
+.vkpi-task-progress [class*="border-white/"] {
+  border-color: var(--ds-line) !important;
+}
+
+.vkpi-task-progress [class*="bg-white/"] {
+  background-color: var(--ds-panel) !important;
+}
+
+.vkpi-task-progress.vkpi-task-progress--compact {
+  border-color: var(--ds-queue-border) !important;
+  background: var(--ds-queue-surface) !important;
+  box-shadow: var(--ds-queue-shadow), var(--ds-queue-inset) !important;
+}
+
+.cockpit-shell .vkpi-topbar {
+  display: flex !important;
+  height: 60px !important;
+  min-height: 60px;
+  grid-template-columns: none !important;
+  flex-wrap: nowrap;
+  align-items: center;
+  z-index: 20;
+  min-width: 0;
+  overflow: visible;
+  color: var(--ds-text-2);
+  border: 0;
+  /* 融合修(波A-A1):顶栏必须有下缘分界线,否则半透明面下内容滚过=烟熏断层。
+     分界线全站统一 --ds-line。 */
+  border-bottom: 1px solid var(--ds-line);
+  background: var(--ds-topbar-surface);
+  box-shadow: none;
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+.vkpi-topbar-title {
+  min-width: 92px;
+}
+
+.vkpi-topbar-actions,
+.vkpi-topbar-progress {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.vkpi-command-map {
+  z-index: 0;
+  isolation: isolate;
+  min-height: 560px;
+  border-radius: var(--ds-radius-lg);
+  box-shadow: var(--ds-shadow-sm);
+}
+
+.vkpi-command-map__title {
+  z-index: 1000 !important;
+  isolation: isolate;
+  border: 1px solid var(--ds-line-strong);
+  border-radius: 10px;
+  color: var(--ds-text);
+  background: color-mix(in srgb, var(--ds-card) 76%, transparent);
+  box-shadow: var(--ds-shadow-sm);
+  backdrop-filter: saturate(150%) blur(14px);
+  -webkit-backdrop-filter: saturate(150%) blur(14px);
+}
+
+.vkpi-command-map__title h2 {
+  margin: 0;
+}
+
+.vkpi-command-map__title p {
+  margin: 4px 0 0;
+}
+
+/* Opaque themes do not need glass blur. Keeping it over Leaflet can create a
+   browser compositing layer that clips title glyphs after a live theme swap. */
+[data-style="instrument"] .vkpi-command-map__title,
+[data-style="commandos"] .vkpi-command-map__title {
+  background: var(--ds-card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transform: translateZ(0);
+}
+
+.vkpi-command-map .leaflet-container {
+  isolation: isolate;
+}
+
+[data-theme="dark"] .vkpi-command-map .leaflet-tile-pane {
+  filter: brightness(1.18) contrast(0.92) saturate(1.12) hue-rotate(3deg);
+}
+
+.vkpi-map-network-line {
+  filter: drop-shadow(0 0 var(--ds-glow-radius, 0px) var(--ds-flow-blue));
+  stroke-linecap: round;
+}
+
+.vkpi-map-network-line--flow {
+  stroke-dashoffset: 0;
+}
+
+.vkpi-command-map .bg-panel {
+  background-color: color-mix(in srgb, var(--ds-card) 94%, transparent) !important;
+}
+
+.vkpi-command-map .text-slate-300 {
+  color: var(--ds-text-2) !important;
+}
+
+.vkpi-command-map .text-slate-400,
+.vkpi-command-map .text-slate-500 {
+  color: var(--ds-muted) !important;
+}
+
+.vkpi-kpi-overview {
+  position: relative;
+  overflow: hidden;
+  padding: 13px;
+  border: 1px solid var(--ds-line);
+  border-radius: var(--ds-radius-lg);
+  background: var(--ds-panel);
+  box-shadow: var(--ds-shadow-sm);
+  backdrop-filter: var(--ds-backdrop);
+  -webkit-backdrop-filter: var(--ds-backdrop);
+}
+
+[data-theme="dark"] .vkpi-kpi-overview {
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--ds-flow-blue) 12%, var(--ds-panel)), var(--ds-panel) 42%, color-mix(in srgb, var(--ds-flow-violet) 7%, var(--ds-panel))),
+    var(--ds-panel);
+}
+
+.vkpi-kpi-overview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 11px;
+}
+
+.vkpi-kpi-overview__head h2 {
+  margin: 0;
+  color: var(--ds-text);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.vkpi-kpi-overview__count {
+  padding: 2px 6px;
+  border: 1px solid var(--ds-line);
+  border-radius: 5px;
+  color: var(--ds-muted);
+  background: var(--ds-card);
+  font-size: 9px;
+}
+
+.vkpi-kpi-overview__tools,
+.vkpi-kpi-overview__scopes {
+  display: flex;
+  align-items: center;
+}
+
+.vkpi-kpi-overview__tools {
+  gap: 12px;
+}
+
+.vkpi-kpi-overview__scopes {
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ds-card);
+}
+
+.vkpi-kpi-overview__scopes button {
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--ds-muted);
+  font-size: 10px;
+  transition: color 0.16s, background-color 0.16s;
+}
+
+.vkpi-kpi-overview__scopes button:hover {
+  color: var(--ds-text);
+}
+
+.vkpi-kpi-overview__status,
+.vkpi-northstar-dashboard__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ds-good);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.vkpi-kpi-overview__status::before,
+.vkpi-northstar-dashboard__live::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 var(--ds-glow-radius) currentColor;
+  content: "";
+}
+
+.vkpi-kpi-overview__status.is-error {
+  color: var(--ds-crit);
+}
+
+.vkpi-kpi-overview__status.is-degraded {
+  color: var(--ds-warn);
+}
+
+.vkpi-kpi-overview .ds-kpi {
+  min-width: 0;
+  box-shadow: none;
+}

@@ -469,7 +469,7 @@ def record_project_kol_video(project_id: int, kol_ref: str | int, body: dict[str
             _text(metadata.get("thumbnail_url")),
             _text(metadata.get("channel_id")),
             _text(metadata.get("channel_name")),
-            "success",
+            _text(metadata.get("scrape_status")) or "pending",
             _text(metadata.get("scrape_source")),
             now,
             now,
@@ -521,10 +521,11 @@ def record_project_kol_video(project_id: int, kol_ref: str | int, body: dict[str
             "platform": metadata.get("platform"),
         },
     )
+    metadata_pending = _text(metadata.get("scrape_status")).lower() == "pending"
     return {
         "ok": True,
-        "status": "success",
-        "message": "视频已抓取并写入 evidence。",
+        "status": "metadata_pending" if metadata_pending else "success",
+        "message": "视频已录入，外部元数据待后台刷新。" if metadata_pending else "视频已抓取并写入 evidence。",
         "project_id": int(project_id),
         "assignment_id": int(row["id"]),
         "assignment": updated_assignment,
@@ -539,6 +540,78 @@ def record_project_kol_video(project_id: int, kol_ref: str | int, body: dict[str
             "publish_date": evidence.get("publish_date"),
             "scrape_source": evidence.get("scrape_source"),
         },
+    }
+
+
+def refresh_project_video_evidence_metadata(
+    evidence_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Worker-only metadata refresh for a previously recorded project video."""
+
+    ensure_vkpi_schema()
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM vkpi_kol_video_evidence WHERE id=?",
+        (int(evidence_id),),
+    ).fetchone()
+    if not row:
+        raise LookupError("project video evidence not found")
+    evidence = dict(row)
+    project_id = _int(evidence.get("project_id"))
+    if project_id:
+        scope.assert_project_access(project_id, staff, write=True)
+    content_url = _text(evidence.get("content_url"))
+    if not content_url:
+        raise ValueError("video evidence content_url missing")
+    metadata = _fetch_video_metadata(content_url)
+    status = _text(metadata.get("scrape_status")) or "pending"
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        UPDATE vkpi_kol_video_evidence
+        SET platform=?, video_title=?, title=?, posted_at=?, publish_date=?,
+            view_count=?, like_count=?, comment_count=?, share_count=?,
+            duration_seconds=?, thumbnail_url=?, channel_id=?, channel_name=?,
+            scrape_status=?, scrape_source=?, scrape_error=?, scraped_at=?,
+            metrics_scraped_at=?, metrics_source=?, updated_at=?
+        WHERE id=?
+        """,
+        (
+            _text(metadata.get("platform")),
+            _text(metadata.get("title")) or _text(evidence.get("video_title")),
+            _text(metadata.get("title")) or _text(evidence.get("title")),
+            metadata.get("posted_at"),
+            metadata.get("publish_date"),
+            metadata.get("view_count"),
+            metadata.get("like_count"),
+            metadata.get("comment_count"),
+            metadata.get("share_count"),
+            metadata.get("duration_seconds"),
+            _text(metadata.get("thumbnail_url")),
+            _text(metadata.get("channel_id")),
+            _text(metadata.get("channel_name")),
+            status,
+            _text(metadata.get("scrape_source")),
+            _text(metadata.get("scrape_error")),
+            now,
+            now,
+            _text(metadata.get("scrape_source")),
+            now,
+            int(evidence_id),
+        ),
+    )
+    conn.commit()
+    updated = conn.execute(
+        "SELECT * FROM vkpi_kol_video_evidence WHERE id=?",
+        (int(evidence_id),),
+    ).fetchone()
+    return {
+        "status": status,
+        "evidence_id": int(evidence_id),
+        "project_id": project_id,
+        "evidence": dict(updated) if updated else {},
     }
 
 

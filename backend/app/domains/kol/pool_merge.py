@@ -152,7 +152,7 @@ def apply_merge(
     try:
         # 1) 指针:从行 duplicate_of_id 指向主。
         db.execute(
-            "UPDATE vkpi_kol_pool SET duplicate_of_id=?, updated_at=NOW() WHERE id=?",
+            "UPDATE vkpi_kol_pool SET duplicate_of_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (int(master_id), int(duplicate_id)),
         )
         # 2) 别名:把从行 (platform,handle) 记为主的别名(表 039:47,自带 UNIQUE 幂等)。
@@ -160,7 +160,7 @@ def apply_merge(
             """
             INSERT INTO vkpi_kol_pool_aliases
                 (kol_pool_id, platform, handle, profile_url, confidence, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, NOW())
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(platform, handle) DO UPDATE SET
                 kol_pool_id=excluded.kol_pool_id,
                 profile_url=excluded.profile_url,

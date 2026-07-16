@@ -3,10 +3,9 @@ account_scanner.py — 多平台矩阵账号扫描
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.dependencies.perms import require_tab
-from app.services.intelligence.account_scan_service import scan_account, scan_matrix
 from app.services.security.rate_limiter import rate_limit
 
 router = APIRouter(prefix="/api/admin/intel", tags=["account-scanner"])
@@ -20,10 +19,8 @@ async def api_scan(request: Request, body: dict, staff=Depends(require_tab("inte
     max_posts = int(body.get("max_posts", 1000) or 1000)
     queue = getattr(request.app.state, "job_queue", None)
 
-    if body.get("sync") or queue is None:
-        result = await scan_account(platform, handle, max_posts)
-        result["status"] = "done"
-        return result
+    if queue is None:
+        raise HTTPException(503, "durable job queue unavailable")
 
     task_id = await queue.enqueue(
         "intel_scan_account",
@@ -39,6 +36,8 @@ async def api_scan(request: Request, body: dict, staff=Depends(require_tab("inte
         "platform": platform,
         "handle": handle,
         "message": "Account scan queued",
+        "progressive": True,
+        "initial_stage": "queued",
     }
 
 
@@ -49,10 +48,8 @@ async def api_matrix(request: Request, body: dict, staff=Depends(require_tab("in
     max_posts_per_account = int(body.get("max_posts_per_account", 1000) or 1000)
     queue = getattr(request.app.state, "job_queue", None)
 
-    if body.get("sync") or queue is None:
-        result = await scan_matrix(accounts, max_posts_per_account)
-        result["status"] = "done"
-        return result
+    if queue is None:
+        raise HTTPException(503, "durable job queue unavailable")
 
     task_id = await queue.enqueue(
         "intel_scan_matrix",
@@ -66,4 +63,6 @@ async def api_matrix(request: Request, body: dict, staff=Depends(require_tab("in
         "job_id": task_id,
         "total": len(accounts),
         "message": "Matrix scan queued",
+        "progressive": True,
+        "initial_stage": "queued",
     }

@@ -49,6 +49,16 @@ def _stub_execute_boundaries(monkeypatch, action: dict) -> None:
         lambda a: {"ok": True, "reason": "", "checks": {"entity_exists": True}},
     )
     monkeypatch.setattr(executors, "_write_ledger", lambda **k: 12345)
+    monkeypatch.setattr(
+        executors.inbox,
+        "claim_action_execution",
+        lambda aid, staff=None: {"ok": True, "status": "executing", "action_id": aid},
+    )
+    monkeypatch.setattr(
+        executors,
+        "_finalize_claimed_execution",
+        lambda **k: {"ok": True, "status": "executed", "ledger_id": 12345},
+    )
     monkeypatch.setattr(executors.inbox, "set_status", lambda *a, **k: None)
     monkeypatch.setattr(executors.inbox, "set_result_checklist", lambda *a, **k: None)
     monkeypatch.setattr(executors, "_snapshot_table_counts", lambda tables: {})
@@ -206,6 +216,7 @@ def test_skill_wire_failure_does_not_break_execute(monkeypatch):
 
 
 # ── 4) 集成(真库):creator_match.run(record=True) → vkpi_skill_runs 真多一行 ─────
+@pytest.mark.pg
 def test_creator_match_run_persists_skill_run_row(monkeypatch):
     from app.db.connection import get_conn, table_exists
     from app.domains.marketing_brain.skills import creator_match

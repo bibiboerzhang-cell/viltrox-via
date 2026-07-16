@@ -26,6 +26,8 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+SHOPIFY_GMV_FINANCIAL_STATUSES = frozenset({"paid", "partially_paid", "partially_refunded"})
+
 # Shopify payload parsing + attribution-context helpers live in a sibling module
 # (verbatim move); re-exported here so internal callers and tests keep using the
 # bare names unchanged.
@@ -49,7 +51,12 @@ from app.domains.attribution.integrations_shopify_parse import (  # noqa: E402
 )
 
 
-def _upsert_shopify_order_snapshot(payload: dict[str, Any], raw_body: bytes) -> int | None:
+def _upsert_shopify_order_snapshot(
+    payload: dict[str, Any],
+    raw_body: bytes,
+    *,
+    auth_mode: str,
+) -> int | None:
     """Persist Shopify order payloads as evidence rows for GMV drilldown."""
     order_ref = _pick(payload.get("admin_graphql_api_id"), payload.get("id"), payload.get("order_number"))
     if not order_ref:
@@ -65,10 +72,11 @@ def _upsert_shopify_order_snapshot(payload: dict[str, Any], raw_body: bytes) -> 
         INSERT INTO vkpi_shopify_order_snapshots (
             shopify_order_id, admin_graphql_api_id, order_name, order_number,
             processed_at, currency, subtotal_cents, total_cents, financial_status,
-            fulfillment_status, refund_status, discount_codes_json, landing_site,
+            fulfillment_status, refund_status, cancelled_at, provider_auth_mode,
+            provider_verified_at, discount_codes_json, landing_site,
             note_attributes_json, line_items_json, raw_payload_hash, raw_payload_json,
             created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(shopify_order_id) DO UPDATE SET
             admin_graphql_api_id=excluded.admin_graphql_api_id,
             order_name=excluded.order_name,
@@ -80,6 +88,9 @@ def _upsert_shopify_order_snapshot(payload: dict[str, Any], raw_body: bytes) -> 
             financial_status=excluded.financial_status,
             fulfillment_status=excluded.fulfillment_status,
             refund_status=excluded.refund_status,
+            cancelled_at=excluded.cancelled_at,
+            provider_auth_mode=excluded.provider_auth_mode,
+            provider_verified_at=excluded.provider_verified_at,
             discount_codes_json=excluded.discount_codes_json,
             landing_site=excluded.landing_site,
             note_attributes_json=excluded.note_attributes_json,
@@ -100,6 +111,9 @@ def _upsert_shopify_order_snapshot(payload: dict[str, Any], raw_body: bytes) -> 
             str(payload.get("financial_status") or ""),
             str(payload.get("fulfillment_status") or ""),
             str(payload.get("refund_status") or ""),
+            _pick(payload.get("cancelled_at"), payload.get("canceled_at")),
+            str(auth_mode or ""),
+            now if auth_mode == "shopify-hmac" else None,
             json.dumps(discounts, ensure_ascii=False),
             str(payload.get("landing_site") or payload.get("referring_site") or ""),
             json.dumps(note_attrs, ensure_ascii=False),
@@ -113,6 +127,22 @@ def _upsert_shopify_order_snapshot(payload: dict[str, Any], raw_body: bytes) -> 
     conn.commit()
     row = conn.execute("SELECT id FROM vkpi_shopify_order_snapshots WHERE shopify_order_id=?", (str(order_ref),)).fetchone()
     return int(row["id"]) if row else None
+
+
+def _shopify_order_is_gmv_eligible(payload: dict[str, Any], topic: str) -> bool:
+    """Return whether a native Shopify order event may enter attributed GMV."""
+
+    financial_status = str(payload.get("financial_status") or "").strip().lower()
+    normalized_topic = str(topic or "").strip().lower()
+    cancelled = bool(
+        payload.get("cancelled_at")
+        or payload.get("canceled_at")
+        or payload.get("cancel_reason")
+        or payload.get("cancelled") is True
+        or payload.get("canceled") is True
+        or normalized_topic in {"orders/cancelled", "orders/canceled", "orders/voided"}
+    )
+    return financial_status in SHOPIFY_GMV_FINANCIAL_STATUSES and not cancelled
 
 
 def _unique_texts(*values: Any) -> list[str]:
@@ -302,8 +332,11 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
     ensure_vkpi_reconciliation_schema()
     payload = body or {}
     now = _utcnow()
-    shop_domain = str(payload.get("shop_domain") or os.environ.get("SHOPIFY_SHOP_DOMAIN") or "").strip()
-    access_token = str(os.environ.get("SHOPIFY_ADMIN_ACCESS_TOKEN") or os.environ.get("SHOPIFY_API_ACCESS_TOKEN") or "").strip()
+    from app.domains.commerce import shopify_connect
+
+    credentials = shopify_connect.get_credentials()
+    shop_domain = str(credentials.get("shop_domain") or "").strip()
+    access_token = str(credentials.get("access_token") or "").strip()
     sync_uid = f"shopify-{mode}-{hashlib.sha1((now + shop_domain + str(payload)).encode('utf-8')).hexdigest()[:16]}"
     configured = bool(shop_domain and access_token)
     status = "queued" if configured else "not_configured"
@@ -311,6 +344,7 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
         "mode": mode,
         "shop_domain_configured": bool(shop_domain),
         "access_token_configured": bool(access_token),
+        "credential_source": credentials.get("source") or "none",
         "window": payload.get("window") or payload.get("range") or {},
         "note": "真实 Shopify Admin API 未配置时只记录请求，不生成订单或销售额。",
     }
@@ -333,7 +367,7 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
             0,
             0,
             0,
-            "" if configured else "SHOPIFY_SHOP_DOMAIN/SHOPIFY_ADMIN_ACCESS_TOKEN not configured",
+            "" if configured else "Shopify credentials not configured in encrypted DB or environment",
             staff_id(staff) or None,
             json.dumps(metadata, ensure_ascii=False, default=str),
         ),
@@ -384,37 +418,23 @@ def shopify_provider_status(*, limit: int = 10) -> dict[str, Any]:
     in the environment without writing a sync run or fabricating any orders.
     """
     ensure_vkpi_reconciliation_schema()
-    shop_domain = str(os.environ.get("SHOPIFY_SHOP_DOMAIN") or "").strip()
-    access_token = str(
-        os.environ.get("SHOPIFY_ADMIN_ACCESS_TOKEN") or os.environ.get("SHOPIFY_API_ACCESS_TOKEN") or ""
-    ).strip()
-    webhook_secret = str(os.environ.get("SHOPIFY_WEBHOOK_SECRET") or "").strip()
-    # 插 creds 即亮:env 未配时回退读 DB 里 Hub 连接区加密存的 creds(connection_status 只回 masked 布尔,
-    # 绝不取明文/不入 response),让连接徽标在同事保存钥匙后即变「已配置」,而不再只认环境变量。
-    if not (shop_domain and access_token):
-        try:
-            from app.domains.commerce import shopify_connect
+    from app.domains.commerce import shopify_connect
 
-            db = shopify_connect.connection_status()
-            shop_domain = shop_domain or str(db.get("shop_domain") or "").strip()
-            if db.get("token_configured") and not access_token:
-                access_token = "configured_in_db"
-            if db.get("webhook_secret_configured") and not webhook_secret:
-                webhook_secret = "configured_in_db"
-        except Exception:
-            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-            pass
-    configured = bool(shop_domain and access_token)
+    connection = shopify_connect.connection_status()
+    shop_domain = str(connection.get("shop_domain") or "").strip()
+    configured = bool(shop_domain and connection.get("token_configured"))
+    provider_status = "connected" if connection.get("status") == "connected" else ("configured" if configured else "not_configured")
     return {
-        "provider_status": "configured" if configured else "not_configured",
+        "provider_status": provider_status,
         "shop_domain": shop_domain,
         "shop_domain_configured": bool(shop_domain),
-        "access_token_configured": bool(access_token),
-        "webhook_secret_configured": bool(webhook_secret),
-        "env_vars": {
-            "SHOPIFY_SHOP_DOMAIN": bool(shop_domain),
-            "SHOPIFY_ADMIN_ACCESS_TOKEN": bool(access_token),
-            "SHOPIFY_WEBHOOK_SECRET": bool(webhook_secret),
+        "access_token_configured": bool(connection.get("token_configured")),
+        "webhook_secret_configured": bool(connection.get("webhook_secret_configured")),
+        "credential_source": connection.get("source") or "none",
+        "credential_fields": {
+            "shop_domain": bool(shop_domain),
+            "access_token": bool(connection.get("token_configured")),
+            "webhook_secret": bool(connection.get("webhook_secret_configured")),
         },
         "webhooks": {
             "orders_create": "/api/vkpi/webhooks/shopify/orders",
@@ -464,6 +484,8 @@ def _shopify_refund_amount(payload: dict[str, Any]) -> Any:
 def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host: str = "") -> dict[str, Any]:
     ensure_vkpi_schema()
     auth_mode = verify_webhook_request("shopify", headers, raw_body, client_host)
+    if auth_mode != "shopify-hmac":
+        raise PermissionError("shopify native hmac required")
     parsed = parse_request_body(raw_body, str(headers.get("content-type") or "application/json"))
     payload = _as_dict(parsed)
     if not payload:
@@ -473,8 +495,9 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
     if not order_ref:
         raise ValueError("shopify order id missing")
     context = _shopify_ref_context(payload)
-    snapshot_id = _upsert_shopify_order_snapshot(payload, raw_body)
+    snapshot_id = _upsert_shopify_order_snapshot(payload, raw_body, auth_mode=auth_mode)
     match = context["match"]
+    financially_eligible = _shopify_order_is_gmv_eligible(payload, topic)
     line_items = _shopify_line_items(payload)
     revenue_cents = _money_cents(
         _pick(payload.get("current_subtotal_price"), payload.get("subtotal_price"), payload.get("current_total_price"), payload.get("total_price"))
@@ -484,7 +507,6 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
         {
             "source_platform": "shopify",
             "source_ref": source_ref,
-            "system_trusted": True,
             "project_id": match.get("project_id"),
             "link_id": match.get("link_id"),
             "kol_id": match.get("kol_id"),
@@ -494,12 +516,14 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
             "order_id": _safe_int(payload.get("id")),
             "revenue_cents": revenue_cents,
             "currency": payload.get("currency") or "USD",
-            "confidence": "confirmed" if match else "unmatched",
+            "confidence": "confirmed" if match and financially_eligible else "unmatched",
             "occurred_at": _pick(payload.get("processed_at"), payload.get("created_at"), payload.get("updated_at")),
             "evidence": {
                 "source": "shopify_webhook",
                 "auth_mode": auth_mode,
                 "topic": topic,
+                "financial_status": str(payload.get("financial_status") or ""),
+                "financially_eligible": financially_eligible,
                 "order_ref": order_ref,
                 "match_source": context.get("match_source"),
                 "click_id": context.get("click_id"),
@@ -511,7 +535,11 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
                 "line_items": line_items,
                 "raw": payload,
             },
-        }
+        },
+        # A valid Shopify HMAC proves the order exists, but an unmatched order
+        # is not yet attributable to a KOL/project.  Keep it as provider
+        # evidence without promoting it into attributed GMV.
+        ingest_class="provider_verified" if match and financially_eligible else "provider_observed",
     )["attribution"]
     if not match:
         import app.domains.attribution.reconciliation as reconciliation
@@ -550,7 +578,8 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
     try:
         from app.domains.attribution import gmv_outcome_bridge
 
-        gmv_outcome_bridge.handle_attribution_row(row)
+        if financially_eligible:
+            gmv_outcome_bridge.handle_attribution_row(row)
     except Exception:
         logger.debug("ingest_shopify_order_webhook.gmv_outcome_bridge_failed", exc_info=True)
     return {
@@ -559,6 +588,7 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
         "auth_mode": auth_mode,
         "topic": topic,
         "matched": bool(match),
+        "financially_eligible": financially_eligible,
         "match_source": context.get("match_source"),
         "event_id": context.get("event_id") or "",
         "shopify_order_snapshot_id": snapshot_id,
@@ -570,6 +600,8 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
     """Verify and ingest Shopify refund webhooks as append-only negative attribution."""
     ensure_vkpi_schema()
     auth_mode = verify_webhook_request("shopify", headers, raw_body, client_host)
+    if auth_mode != "shopify-hmac":
+        raise PermissionError("shopify native hmac required")
     parsed = parse_request_body(raw_body, str(headers.get("content-type") or "application/json"))
     payload = _as_dict(parsed)
     if not payload:
@@ -585,7 +617,6 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
         {
             "source_platform": "shopify",
             "source_ref": _shopify_refund_ref(payload, order_refs),
-            "system_trusted": True,
             "refund_usd": _shopify_refund_amount(payload),
             "order_id": payload.get("order_id"),
             "project_id": base.get("project_id"),
@@ -600,7 +631,8 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
             "raw_payload": payload,
             "auth_mode": auth_mode,
             "topic": str(headers.get("x-shopify-topic") or "refunds/create").strip().lower(),
-        }
+        },
+        ingest_class="provider_refund",
     )
     # GMV 归因桥(no-op until token):退款写入负归因后,把对应推荐的 outcome 重算一遍 ——
     # refresh_business_outcome 从含本次退款负行的 ledger 重新聚合 attributed_orders/GMV,

@@ -3,6 +3,7 @@ import type {
   Row,
   VkpiKolRecallResponse,
   VkpiKolSearchHistoryItem,
+  VkpiKolSearchHistoryArchiveResponse,
   VkpiKolSearchHistoryResponse,
   VkpiKolUrlDeepCrawlResponse,
   VkpiKolSmartSearchResponse,
@@ -13,7 +14,7 @@ export async function deepCrawlKolUrl(
   token: string,
   url: string,
   execute = false,
-  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string; forceFullHistory?: boolean; representativeVideoLimit?: number } = {},
+  params: { maxPosts?: number; mode?: string; timeoutMs?: number; sessionId?: number; createSession?: boolean; source?: string; forceFullHistory?: boolean; representativeVideoLimit?: number; deferToQueue?: boolean; localEvaluation?: boolean } = {},
 ): Promise<VkpiKolUrlDeepCrawlResponse> {
   const body: Row = {
     url,
@@ -24,6 +25,10 @@ export async function deepCrawlKolUrl(
   if (params.forceFullHistory) body.force_full_history = true;  // 项⑥:account_deep 重跑全量历史视频
   // 刀2·流2 路A:profile_with_video 模式下自动跑 N 条代表视频 final_v1,dossier 才出真 LLM 账号分。
   if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
+  if (params.deferToQueue) body.defer_to_queue = true;
+  // Explicit only: ordinary retries and automatic URL execution never enter
+  // the local-evaluation capability lane.
+  if (params.localEvaluation === true) body.local_evaluation = true;
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   if (typeof params.createSession === "boolean") body.create_session = params.createSession;
   if (params.source) body.source = params.source;
@@ -133,7 +138,7 @@ export async function smartKolSearchProfileAdvanceJob(
 
 export async function listKolSearchHistory(
   token: string,
-  params: { limit?: number; status?: string; queryType?: string; itemLimit?: number } = {},
+  params: { limit?: number; status?: string; queryType?: string; itemLimit?: number; archived?: boolean } = {},
 ): Promise<VkpiKolSearchHistoryResponse> {
   const query = new URLSearchParams({
     limit: String(params.limit || 12),
@@ -141,9 +146,42 @@ export async function listKolSearchHistory(
   });
   if (params.status) query.set("status", params.status);
   if (params.queryType) query.set("query_type", params.queryType);
+  if (typeof params.archived === "boolean") query.set("archived", String(params.archived));
   return apiFetch<VkpiKolSearchHistoryResponse>(
     `/api/admin/vkpi/kol-search-history?${query.toString()}`,
     { cache: "no-store" },
+    token,
+  );
+}
+
+export async function archiveKolSearchHistorySession(
+  token: string,
+  sessionId: string | number,
+): Promise<VkpiKolSearchHistoryArchiveResponse> {
+  return apiFetch<VkpiKolSearchHistoryArchiveResponse>(
+    `/api/admin/vkpi/kol-search-history/${encodeURIComponent(String(sessionId))}`,
+    { method: "DELETE" },
+    token,
+  );
+}
+
+export async function restoreKolSearchHistorySession(
+  token: string,
+  sessionId: string | number,
+): Promise<VkpiKolSearchHistoryArchiveResponse> {
+  return apiFetch<VkpiKolSearchHistoryArchiveResponse>(
+    `/api/admin/vkpi/kol-search-history/${encodeURIComponent(String(sessionId))}/restore`,
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
+}
+
+export async function archiveAllKolSearchHistory(
+  token: string,
+): Promise<VkpiKolSearchHistoryArchiveResponse> {
+  return apiFetch<VkpiKolSearchHistoryArchiveResponse>(
+    "/api/admin/vkpi/kol-search-history",
+    { method: "DELETE" },
     token,
   );
 }

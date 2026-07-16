@@ -9,8 +9,8 @@ import {
   KolDetailModal,
   KolLibraryListModal,
   KolRowLine,
-  LibraryChips,
 } from "./MyKolBoardPage.dialogs";
+import { KolLibraryFilterControls, KolLibraryPageActions } from "./MyKolBoardPage.library-controls";
 import { CHIP, CHIP_OFF, CHIP_ON, MINI_BADGE, useKolEvidenceStats, V_TIER_META } from "./MyKolBoardPage.libdetail";
 import { useWorkflowRunsStream } from "../useWorkflowRunsStream";
 import { formatLocal } from "../../lib/timeLocal";
@@ -533,6 +533,10 @@ export function KolLibraryModule({
   isManager,
   staffOptions,
   projects,
+  page,
+  loadingMore = false,
+  loadMoreError = "",
+  onLoadMore,
   onActionDone,
 }: {
   apiToken: string;
@@ -551,6 +555,14 @@ export function KolLibraryModule({
   isManager: boolean;
   staffOptions: Array<{ id: string; name: string }>;
   projects: VkpiProjectRow[];
+  page?: {
+    total?: number;
+    has_more?: boolean;
+    next_cursor?: string | null;
+  };
+  loadingMore?: boolean;
+  loadMoreError?: string;
+  onLoadMore?: () => void | Promise<void>;
   /** 动作落地后(入项目/释放认领)触发父级 aggregate 重拉 */
   onActionDone?: () => void;
 }) {
@@ -558,6 +570,9 @@ export function KolLibraryModule({
   const [staffRows, setStaffRows] = React.useState<KolLibraryRow[] | null>(null);
   const [staffBusy, setStaffBusy] = React.useState(false);
   const [staffError, setStaffError] = React.useState("");
+  const [staffPage, setStaffPage] = React.useState<typeof page>();
+  const [staffLoadingMore, setStaffLoadingMore] = React.useState(false);
+  const [staffLoadMoreError, setStaffLoadMoreError] = React.useState("");
   const [listOpen, setListOpen] = React.useState(false);
   const [detailIndex, setDetailIndex] = React.useState<number | null>(null);
 
@@ -589,15 +604,24 @@ export function KolLibraryModule({
     if (!apiToken || !staffId) {
       setStaffRows(null);
       setStaffError("");
+      setStaffPage(undefined);
+      setStaffLoadMoreError("");
       return;
     }
     let alive = true;
     setStaffBusy(true);
     setStaffError("");
     import("../../../../services/vkpi/kol-api")
-      .then(({ getMyKolAggregate }) => getMyKolAggregate(apiToken, { staffId: Number(staffId) }))
+      .then(({ getMyKolAggregate }) => getMyKolAggregate(apiToken, {
+        staffId: Number(staffId),
+        mode: "summary",
+        favoritesLimit: 50,
+      }))
       .then((resp) => {
-        if (alive) setStaffRows(mapLibraryRows(resp.pool_favorites as Row[], resp.claims as Row[]));
+        if (alive) {
+          setStaffRows(mapLibraryRows(resp.pool_favorites as Row[], resp.claims as Row[]));
+          setStaffPage(resp.pool_favorites_page);
+        }
       })
       .catch((err: unknown) => {
         if (alive) setStaffError(String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || "按负责人读取失败").slice(0, 100));
@@ -610,7 +634,38 @@ export function KolLibraryModule({
     };
   }, [apiToken, staffId]);
 
+  const loadMoreStaffRows = React.useCallback(async () => {
+    const cursor = staffPage?.next_cursor;
+    if (!apiToken || !staffId || !cursor || staffLoadingMore) return;
+    setStaffLoadingMore(true);
+    setStaffLoadMoreError("");
+    try {
+      const { getMyKolAggregate } = await import("../../../../services/vkpi/kol-api");
+      const resp = await getMyKolAggregate(apiToken, {
+        staffId: Number(staffId),
+        mode: "summary",
+        favoritesLimit: 50,
+        favoritesCursor: cursor,
+      });
+      const nextRows = mapLibraryRows(resp.pool_favorites as Row[], resp.claims as Row[]);
+      setStaffRows((current) => {
+        const existing = current || [];
+        const seen = new Set(existing.map((row) => row.poolId));
+        return [...existing, ...nextRows.filter((row) => !seen.has(row.poolId))];
+      });
+      setStaffPage(resp.pool_favorites_page);
+    } catch (err) {
+      setStaffLoadMoreError(String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || "更多 KOL 加载失败").slice(0, 100));
+    } finally {
+      setStaffLoadingMore(false);
+    }
+  }, [apiToken, staffId, staffLoadingMore, staffPage?.next_cursor]);
+
   const rows = staffId && staffRows ? staffRows : baseRows;
+  const activePage = staffId ? staffPage : page;
+  const activeLoadingMore = staffId ? staffLoadingMore : loadingMore;
+  const activeLoadMoreError = staffId ? staffLoadMoreError : loadMoreError;
+  const activeLoadMore = staffId ? loadMoreStaffRows : onLoadMore;
   // 「我的收藏」先于其余筛选收窄(名单∩库行;名单未就绪时开关不渲染,rows 原样)。
   const scopedRows = React.useMemo(
     () => (mineOnly && mineIds ? rows.filter((row) => mineIds.has(row.poolId)) : rows),
@@ -637,34 +692,17 @@ export function KolLibraryModule({
 
   return (
     <div>
-      <div className="mb-2">
-        <LibraryChips filter={filter} onFilter={onFilter} platformOptions={platformOptions} vKolCount={vKolCount} staff={staffProp} mine={mineProp} />
-        {/* 漏斗阶段联动 chip(状态在 page 层,与合作漏斗模块同一份;再点移除) */}
-        {filter.stage ? (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9.5px] text-muted">
-            <button
-              type="button"
-              onClick={() => onFilter({ ...filter, stage: null })}
-              className="inline-flex items-center gap-1 rounded-[7px] border border-accent bg-accent-soft px-2 py-0.5 font-semibold text-accent"
-              title="来自合作漏斗点段 · 点此移除该过滤"
-            >
-              漏斗阶段:{filter.stage.label} ✕
-            </button>
-            <span>按行内项目阶段匹配(段计数=指派行,与库行数口径不同,如实不强对齐)</span>
-          </div>
-        ) : null}
-        {/* V 名单诚实降级(仅 vOnly 激活时出现;绝不悄悄装精确) */}
-        {filter.vOnly && vKolIds == null ? (
-          <div className="mt-1.5 text-[9.5px] text-warn">
-            V 名单未就绪(board-ext 未返回)——暂按「已挂项目」近似过滤,如实降级。
-          </div>
-        ) : null}
-        {filter.vOnly && vKolIds != null && vIdsTruncated ? (
-          <div className="mt-1.5 text-[9.5px] text-warn">
-            {vIdsNote || "V 名单超封顶被截断——过滤只覆盖名单内 KOL,全量以计数为准(如实降级)。"}
-          </div>
-        ) : null}
-      </div>
+      <KolLibraryFilterControls
+        filter={filter}
+        onFilter={onFilter}
+        platformOptions={platformOptions}
+        vKolCount={vKolCount}
+        staff={staffProp}
+        mine={mineProp}
+        vKolIds={vKolIds}
+        vIdsTruncated={vIdsTruncated}
+        vIdsNote={vIdsNote}
+      />
       {staffError ? <ErrorCard title="负责人筛选读取失败" text={staffError} /> : null}
       {staffBusy && !staffRows ? (
         <LoadingLine text="按负责人读取中…" />
@@ -677,20 +715,22 @@ export function KolLibraryModule({
           {filtered.slice(0, 6).map((row, i) => (
             <KolRowLine key={row.poolId} row={row} index={i} onOpen={openDetail} stats={statsMap.get(row.poolId)} />
           ))}
-          <button
-            type="button"
-            onClick={() => setListOpen(true)}
-            className="mt-2 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
-          >
-            ≡ 查看全量 {filtered.length} 条 · 点单条连续翻
-          </button>
+          <KolLibraryPageActions
+            page={activePage}
+            rowCount={rows.length}
+            filteredCount={filtered.length}
+            loadingMore={activeLoadingMore}
+            loadMoreError={activeLoadMoreError}
+            onLoadMore={activeLoadMore}
+            onOpenList={() => setListOpen(true)}
+          />
         </div>
       )}
       {listOpen ? (
         <KolLibraryListModal
           apiToken={apiToken}
           rows={filtered}
-          totalAll={rows.length}
+          totalAll={Number(activePage?.total || rows.length)}
           filter={filter}
           onFilter={onFilter}
           platformOptions={platformOptions}

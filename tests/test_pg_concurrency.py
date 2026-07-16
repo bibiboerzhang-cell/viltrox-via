@@ -30,7 +30,10 @@ from typing import Any, Callable
 
 import pytest
 
-pytestmark = pytest.mark.pg
+pytestmark = [
+    pytest.mark.pg,
+    pytest.mark.usefixtures("pg_test_identities"),
+]
 
 
 # ---------------------------------------------------------------------------

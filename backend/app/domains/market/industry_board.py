@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains import business_truth
 
 logger = get_logger(__name__)
 
@@ -57,8 +58,19 @@ def get_industry_board(staff: dict[str, Any] | None = None, *, window_days: int 
     market: dict[str, Any] = {
         "competitor_signals": _scalar("SELECT COUNT(*) AS n FROM vkpi_competitor_signals") if table_exists("vkpi_competitor_signals") else None,
         "products": _scalar("SELECT COUNT(*) AS n FROM vkpi_products") if table_exists("vkpi_products") else None,
-        "sales_attributions": _scalar("SELECT COUNT(*) AS n FROM vkpi_sales_attributions") if table_exists("vkpi_sales_attributions") else None,
-        "shopify_orders": _scalar("SELECT COUNT(*) AS n FROM vkpi_shopify_orders") if table_exists("vkpi_shopify_orders") else None,
+        "sales_attributions": _scalar(
+            "SELECT COUNT(*) AS n FROM vkpi_sales_attributions WHERE "
+            + business_truth.verified_shopify_attribution_sql()
+        ) if table_exists("vkpi_sales_attributions") else None,
+        "shopify_orders": _scalar(
+            "SELECT COUNT(*) AS n FROM vkpi_shopify_orders "
+            "WHERE LOWER(COALESCE(financial_status,'')) "
+            "IN ('paid','partially_paid','partially_refunded') "
+            "AND provider_auth_mode='shopify-hmac' "
+            "AND provider_verified_at IS NOT NULL "
+            "AND NULLIF(TRIM(COALESCE(raw_payload_hash,'')),'') IS NOT NULL "
+            "AND cancelled_at IS NULL"
+        ) if table_exists("vkpi_shopify_orders") else None,
     }
 
     # 市场预估:真订单(Shopify)接入前诚实标 awaiting_data(绝不编造预测)。

@@ -8,6 +8,7 @@ Usage:
     PYTHONPATH=backend .venv/bin/python scripts/cache_official_channel_comments.py --execute
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -92,7 +93,7 @@ def main() -> None:
             limit_channels=args.limit_channels,
             limit_per_post=args.limit_per_post,
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
     finally:
         asyncio.run(close_db_runtime())
 

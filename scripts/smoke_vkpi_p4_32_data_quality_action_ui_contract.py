@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """P4 Step32: Data Quality action UI governance contract."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -44,4 +45,4 @@ missing_css = [term for term in required_css_terms if term not in css]
 if missing_css:
     raise SystemExit(f"missing Data Quality action CSS contracts: {missing_css}")
 
-print("VKPI_P4_32_DATA_QUALITY_ACTION_UI_CONTRACT_OK")
+stdout_out("VKPI_P4_32_DATA_QUALITY_ACTION_UI_CONTRACT_OK")

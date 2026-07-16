@@ -5,6 +5,7 @@ This validates the 08:00 China scheduling contract, per-staff digest coverage,
 and the "uncontacted only" candidate rule without calling external APIs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import asyncio
 import json
@@ -147,7 +148,7 @@ def main() -> None:
         assert after["ready_staff_count"] == 1, after
         assert after["items_total"] == 1, after
         assert "未联系" in after["rule"], after
-        print("VKPI_PHASE1_DAILY_DIGEST_STATUS_SMOKE_OK")
+        stdout_out("VKPI_PHASE1_DAILY_DIGEST_STATUS_SMOKE_OK")
     finally:
         _cleanup(marker, user_id, staff_id, suggestion_id)
 

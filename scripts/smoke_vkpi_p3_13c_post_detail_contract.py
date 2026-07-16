@@ -6,6 +6,7 @@ this contract prevents the UI from regressing into fake buttons or disconnected
 analysis controls.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -80,7 +81,7 @@ def main() -> None:
     for needle in [".da-post-detail", ".da-post-detail__media", ".da-post-detail__metrics", ".da-post-card__actions"]:
         require(css, needle, css_rel)
 
-    print("VKPI_P3_13C_POST_DETAIL_CONTRACT_OK")
+    stdout_out("VKPI_P3_13C_POST_DETAIL_CONTRACT_OK")
 
 
 if __name__ == "__main__":

@@ -61,6 +61,16 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["诚实", "未深析 KOL =「未分析」灰态 · 绝不当 0 分/0 风险"],
     ],
   },
+  history: {
+    label: "kol-search-history · llm-deep-analysis · cooperation",
+    rows: [
+      ["搜索", "当前登录员工最近 50 条有效 + 50 条已移除会话；每会话最多核验 10 个候选"],
+      ["归属", "只接受返回体中的精确 kol_pool_id / matched_kol_pool_id / approved_kol_ids；不按用户名文本猜测"],
+      ["深析", "llm-deep-analysis items 行级 provider/method/evidence/cache/source_url 原样溯源"],
+      ["恢复口径", "恢复端点没有独立 restored_at/restored_by；时间取会话 updated_at 并明确标注，操作者显示未知"],
+      ["红线", "纯读聚合 · 不归档、不恢复、不触发抓取、不写分"],
+    ],
+  },
   videos: {
     label: "vkpi_analysis_cache · vkpi_kol_video_evidence",
     rows: [

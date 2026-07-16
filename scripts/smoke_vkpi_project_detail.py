@@ -7,6 +7,7 @@ order, verifies GET /projects/{id} returns the complete detail drawer payload,
 and deletes every row containing the smoke marker.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -451,7 +452,7 @@ def main() -> None:
     ensure_vkpi_audit_schema()
     smoke = Smoke()
     result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

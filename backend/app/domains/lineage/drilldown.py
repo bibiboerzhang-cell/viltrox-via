@@ -14,6 +14,7 @@ import json
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.lineage import ensure_vkpi_lineage_schema
@@ -59,14 +60,28 @@ def _source_is_live(conn: Any, data: dict[str, Any]) -> bool:
     source_type = str(data.get("source_type") or "").lower()
     source_id = _int(data.get("source_id"))
     if source_type == "sales_attribution":
-        row = conn.execute("SELECT project_id FROM vkpi_sales_attributions WHERE id=?", (source_id,)).fetchone()
+        row = conn.execute(
+            f"""
+            SELECT sa.project_id
+            FROM vkpi_sales_attributions sa
+            WHERE sa.id=? AND {business_truth.verified_shopify_attribution_sql('sa')}
+            """,
+            (source_id,),
+        ).fetchone()
         return bool(row) and _project_is_live(conn, dict(row).get("project_id"))
     if source_type == "cost_ledger":
-        row = conn.execute("SELECT project_id, status FROM vkpi_cost_ledger WHERE id=?", (source_id,)).fetchone()
+        row = conn.execute(
+            f"""
+            SELECT c.project_id, c.status
+            FROM vkpi_cost_ledger c
+            WHERE c.id=? AND {business_truth.approved_actual_cost_sql('c')}
+            """,
+            (source_id,),
+        ).fetchone()
         if not row:
             return False
         item = dict(row)
-        return str(item.get("status") or "").lower() != "void" and _project_is_live(conn, item.get("project_id"))
+        return _project_is_live(conn, item.get("project_id"))
     if source_type == "stage_event":
         row = conn.execute("SELECT project_id FROM vkpi_project_stage_events WHERE id=?", (source_id,)).fetchone()
         return bool(row) and _project_is_live(conn, dict(row).get("project_id"))
@@ -92,7 +107,12 @@ def _source_is_live(conn: Any, data: dict[str, Any]) -> bool:
         row = conn.execute("SELECT status FROM vkpi_alerts WHERE id=?", (source_id,)).fetchone()
         return bool(row) and str(dict(row).get("status") or "").lower() == "open"
     if source_type == "kpi_ledger":
-        return bool(conn.execute("SELECT id FROM vkpi_kpi_ledger WHERE id=?", (source_id,)).fetchone())
+        return bool(
+            conn.execute(
+                f"SELECT id FROM vkpi_kpi_ledger WHERE id=? AND {business_truth.current_kpi_ledger_sql()}",
+                (source_id,),
+            ).fetchone()
+        )
     return True
 
 
@@ -179,6 +199,8 @@ def drilldown_value(
     if not value_header:
         raise LookupError("metric value not found")
     value_row = dict(value_header)
+    stored_data_status = str(value_row.get("data_status") or "").strip().lower()
+    value_unavailable = stored_data_status in {"unavailable", "stale"}
     if staff is not None and not scope.can_view_all(staff):
         actor = scope.actor_staff_id(staff)
         run_scope_type = str(value_row.get("scope_type") or "")
@@ -203,7 +225,7 @@ def drilldown_value(
         where.append("s.staff_id = ?")
         params.append(int(staff_id))
 
-    rows = conn.execute(
+    rows = [] if value_unavailable else conn.execute(
         f"""
         SELECT s.*,
                p.project_name, p.project_uid,
@@ -265,7 +287,11 @@ def drilldown_value(
             "currency": value_row.get("currency"),
             "unit": value_row.get("unit"),
             "calculation": _safe_load(value_row.get("calculation_json")),
-            "source_count": _int(value_row.get("source_count")),
+            "source_count": 0 if value_unavailable else _int(value_row.get("source_count")),
+            "retained_source_count": _int(value_row.get("source_count")) if value_unavailable else 0,
+            "data_status": value_row.get("data_status") or "",
+            "confidence": value_row.get("confidence"),
+            "is_partial": bool(value_row.get("is_partial")),
         },
         "run": {
             "uid": value_row.get("run_uid"),
@@ -284,6 +310,12 @@ def drilldown_value(
     }
     if _int(value_row.get("source_count")) > 0 and not hydrated_rows:
         result["empty_reason"] = "source_rows_deleted_or_void"
+    if value_unavailable:
+        # The source map remains in storage for audit, but a retracted metric
+        # must never expose those historic contributions as current evidence.
+        result["rows"] = []
+        result["row_count"] = 0
+        result["empty_reason"] = "metric_unavailable"
     return result
 
 

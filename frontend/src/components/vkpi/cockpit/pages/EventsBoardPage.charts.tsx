@@ -11,8 +11,8 @@ import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../servi
 //   KpiCard(demo .kpi)/ CatDonutBody(demo donut)/ BarRow(demo mplatrow)零自造样式)。
 //   数据 = 页层已拉取的真活动行(GET /api/admin/vkpi/events → vkpi_events)与真库存行
 //   (GET /api/admin/vkpi/inventory → vkpi_inventory),本文件纯组合零网络。
-//   KPI 四卡:进行中活动 / 本月活动 / 物料备货 / 费用合计 —— 全真值;趋势线 =
-//   board-series?board=events 按日真序列(挂账迸发①):进行中活动←events_new
+//   KPI 四卡:未完结管线 / 本月活动 / 物料备货 / 费用合计 —— 全真值;趋势线 =
+//   board-series?board=events 按日真序列(挂账迸发①):未完结管线关联序列←events_new
 //   (新建活动/日)、本月活动←events_started(开幕活动/日)、费用合计←
 //   event_expense_amount(费用登记/日,vkpi_event_expenses);三条皆为关联指标,
 //   卡面大数是存量/合计 → 不挂环比药丸(拿流量环比冒充是编数);物料备货为点时
@@ -25,7 +25,7 @@ import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../servi
 
 /* ============ 口径工具(真实「今天」;绝不复用 helpers.TODAY mock 定格) ============ */
 
-// 进行中管线口径 = 未完结三态(旧页 KPI「进行中」同口径,SrcChip 记档)
+// 未完结管线口径 = 未完结三态；它是工作流状态，不等同于日期意义上的“正在进行”。
 export const ACTIVE_STATUSES = ["planning", "prep_ready", "live"] as const;
 
 /** 距开幕天数(真实今天,按浏览器本地日;正=倒计时,负=已开幕)。 */
@@ -96,14 +96,14 @@ export function EventsKpiBand({
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {eventsReady ? (
         <KpiCard
-          label="进行中活动"
+          label="未完结管线"
           value={active.length.toLocaleString()}
           unit="个"
           series={boardSeriesVals(bs, "events_new")}
           seriesColor="var(--ds-accent)"
         />
       ) : (
-        <KpiCard label="进行中活动" value="—" pending pendingNote="活动列表待到货" />
+        <KpiCard label="未完结管线" value="—" pending pendingNote="活动列表待到货" />
       )}
       {eventsReady ? (
         <KpiCard

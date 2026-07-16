@@ -5,6 +5,7 @@ The UI must not imply infinite historical coverage. It should clearly say how
 many posts were loaded and that 500 is the current backend window cap.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 from pathlib import Path
@@ -77,7 +78,7 @@ def main() -> None:
     router = read(router_rel)
     require(router, "limit: int = Query(default=500, ge=1, le=500)", router_rel)
 
-    print(json.dumps({"ok": True, "marker": "VKPI_P4_34_MEDIA_LOADED_COUNT_CONTRACT_OK"}, ensure_ascii=False))
+    stdout_out(json.dumps({"ok": True, "marker": "VKPI_P4_34_MEDIA_LOADED_COUNT_CONTRACT_OK"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

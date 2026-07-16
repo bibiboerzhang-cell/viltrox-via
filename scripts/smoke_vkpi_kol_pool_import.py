@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -39,9 +41,9 @@ def main() -> None:
     
     if seed_admin:
         user_id, staff_id = seed_admin(conn, marker=MARKER)
-        print(f"[seed] user_id={user_id} staff_id={staff_id}")
+        out(f"[seed] user_id={user_id} staff_id={staff_id}")
     else:
-        print("[seed] _smoke_seed.py missing")
+        out("[seed] _smoke_seed.py missing")
         sys.exit(1)
     
     failures: list[str] = []
@@ -52,10 +54,10 @@ def main() -> None:
     h3 = f"{MARKER}-handle-3"
     
     baseline_count = _count_pool()
-    print(f"[baseline] kol_pool count = {baseline_count}")
+    out(f"[baseline] kol_pool count = {baseline_count}")
     
     # ── 场景 1: 单条 Apify 风格导入 ──
-    print("[1/5] 单条 Apify 风格数据 (Instagram)")
+    out("[1/5] 单条 Apify 风格数据 (Instagram)")
     apify_item = {
         "platform": "instagram",
         "username": h1,
@@ -88,10 +90,10 @@ def main() -> None:
         elif row.get("email") != f"{h1}@example.com":
             failures.append(f"场景 1: email 字段映射错 {row.get('email')}")
         else:
-            print(f"   PASS: id={row['id']} followers={row['followers']} avg_views={row['avg_views']}")
+            out(f"   PASS: id={row['id']} followers={row['followers']} avg_views={row['avg_views']}")
     
     # ── 场景 2: 多条批量导入 ──
-    print("[2/5] 批量 2 条 (TikTok + YouTube)")
+    out("[2/5] 批量 2 条 (TikTok + YouTube)")
     items = [
         {
             "platform": "tiktok",
@@ -116,10 +118,10 @@ def main() -> None:
     if result["imported"] != 2:
         failures.append(f"场景 2: 期望 imported=2,实际 {result}")
     else:
-        print(f"   PASS: imported=2")
+        out(f"   PASS: imported=2")
     
     # ── 场景 3: 重复 platform+handle → ON CONFLICT UPDATE,不增行 ──
-    print("[3/5] 重复导入,期望 ON CONFLICT UPDATE")
+    out("[3/5] 重复导入,期望 ON CONFLICT UPDATE")
     pre_count = _count_pool()
     
     # 重导 h1,但改 followers
@@ -143,10 +145,10 @@ def main() -> None:
         if row.get("followers") != 99999:
             failures.append(f"场景 3: UPDATE 没生效 followers={row.get('followers')}")
         else:
-            print(f"   PASS: 不增行,followers 从 12345 → 99999")
+            out(f"   PASS: 不增行,followers 从 12345 → 99999")
     
     # ── 场景 4: 缺 handle 跳过 ──
-    print("[4/5] 缺 handle 的数据应该 skipped")
+    out("[4/5] 缺 handle 的数据应该 skipped")
     bad_items = [
         {"platform": "instagram", "fullName": "no handle"},  # 缺 username
         {"platform": "tiktok", "username": ""},  # 空 handle
@@ -162,32 +164,32 @@ def main() -> None:
     elif result["skipped"] != 2:
         failures.append(f"场景 4: 期望 skipped=2,实际 {result}")
     else:
-        print(f"   PASS: imported=0 skipped=2")
+        out(f"   PASS: imported=0 skipped=2")
     
     # ── 场景 5: list_pool 能查到 ──
-    print("[5/5] list_pool 能列出导入的 KOL")
+    out("[5/5] list_pool 能列出导入的 KOL")
     listed = kol_pool.list_pool(limit=100, query=MARKER)
     items_count = len(listed.get("items", []))
     if items_count < 3:
         failures.append(f"场景 5: 期望 >=3 行 marker 数据,实际 {items_count}")
     else:
-        print(f"   PASS: 列出 {items_count} 行 marker 数据")
+        out(f"   PASS: 列出 {items_count} 行 marker 数据")
     
     # ── cleanup ──
-    print("\n[cleanup]")
+    out("\n[cleanup]")
     deleted = _cleanup_pool(MARKER)
-    print(f"  deleted {deleted} pool rows")
+    out(f"  deleted {deleted} pool rows")
     if cleanup_admin and staff_id:
         cleanup_admin(conn, user_id=user_id, staff_id=staff_id)
     
     # ── 总结 ──
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_KOL_POOL_IMPORT_SMOKE_OK")
+        out("\nVKPI_KOL_POOL_IMPORT_SMOKE_OK")
         sys.exit(0)
 
 

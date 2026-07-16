@@ -28,11 +28,11 @@ def test_quality_first_picks_claude():
     assert not decision.degraded
     # Fallback chain is the rest, ranked, primary excluded.
     assert CLAUDE not in {m.key for m in decision.fallback_chain}
-    assert len(decision.fallback_chain) == 4
+    assert len(decision.fallback_chain) == 2
 
 
-def test_cost_first_prefers_local_then_cheap():
-    # Pure cost weight -> free local model wins (cost_score 1.0).
+def test_cost_first_uses_cheapest_transport_ready_model():
+    # Catalog-only local/qwen entries cannot win until a transport exists.
     decision = route(
         RouteRequest(
             skill="bulk_classify",
@@ -41,8 +41,8 @@ def test_cost_first_prefers_local_then_cheap():
             speed_weight=0.0,
         )
     )
-    assert decision.primary.key == LOCAL_VLLM
-    assert decision.primary.is_local
+    assert decision.primary.key == GPT
+    assert decision.primary.transport_ready
 
 
 def test_min_quality_floor_excludes_weak_models():
@@ -55,8 +55,8 @@ def test_min_quality_floor_excludes_weak_models():
 
 
 def test_cost_ceiling_filters_expensive_models():
-    # Tight ceiling that only cheap models pass; gpt(blended~77.5) excluded,
-    # claude(~55) excluded too, gemini(~13.9)/qwen(~6.4)/local(0) pass.
+    # No executable model meets this ceiling. Degraded mode keeps the request
+    # alive using only transport-ready models; it must not resurrect Qwen/local.
     decision = route(
         RouteRequest(
             skill="cheap_skill",
@@ -67,11 +67,9 @@ def test_cost_ceiling_filters_expensive_models():
         )
     )
     candidate_keys = {decision.primary.key} | {m.key for m in decision.fallback_chain}
-    assert GPT not in candidate_keys
-    assert CLAUDE not in candidate_keys
-    assert candidate_keys <= {GEMINI, QWEN, LOCAL_VLLM}
-    # Among survivors with quality weight, gemini (0.74) is strongest.
-    assert decision.primary.key == GEMINI
+    assert decision.degraded
+    assert candidate_keys == {GPT, GEMINI, CLAUDE}
+    assert decision.primary.key == GPT
 
 
 def test_speed_first_prefers_gemini():
@@ -115,8 +113,7 @@ def test_disallow_local_excludes_local():
     )
     all_keys = {decision.primary.key} | {m.key for m in decision.fallback_chain}
     assert LOCAL_VLLM not in all_keys
-    # Cheapest non-local is qwen.
-    assert decision.primary.key == QWEN
+    assert decision.primary.key == GPT
 
 
 def test_prefer_models_bumps_ranking_without_overriding_filters():
@@ -138,10 +135,28 @@ def test_impossible_floor_degrades_gracefully():
     decision = route(RouteRequest(skill="x", min_quality=0.99))
     assert isinstance(decision, RouteDecision)
     assert decision.degraded
-    # Degrade picks cheapest -> local/free.
-    assert decision.primary.key == LOCAL_VLLM
-    # Still produces a full chain over all models.
-    assert len(decision.fallback_chain) == 4
+    # Degrade picks the cheapest executable route, never a catalog-only entry.
+    assert decision.primary.key == GPT
+    assert len(decision.fallback_chain) == 2
+
+
+def test_transport_disabled_models_are_never_routed():
+    qwen = registry.get_model(QWEN)
+    local = registry.get_model(LOCAL_VLLM)
+    assert qwen is not None and qwen.transport_ready is False
+    assert local is not None and local.transport_ready is False
+
+    decision = route(
+        RouteRequest(
+            skill="must_not_escape",
+            prefer_models=(QWEN, LOCAL_VLLM),
+            quality_weight=0.0,
+            cost_weight=1.0,
+            speed_weight=0.0,
+        )
+    )
+    routed = {decision.primary.key, *(item.key for item in decision.fallback_chain)}
+    assert routed.isdisjoint({QWEN, LOCAL_VLLM})
 
 
 def test_context_floor_requires_long_context():
@@ -186,7 +201,11 @@ def test_route_and_invoke_delegates_to_gateway(monkeypatch):
     def fake_invoke(prompt, **kwargs):
         captured["prompt"] = prompt
         captured["kwargs"] = kwargs
-        return {"text": "ok", "provider": kwargs.get("preferred_provider")}
+        return {
+            "text": "ok",
+            "provider": kwargs.get("preferred_provider"),
+            "model": kwargs.get("model_override"),
+        }
 
     monkeypatch.setattr(llm_gateway, "invoke", fake_invoke)
 
@@ -197,9 +216,19 @@ def test_route_and_invoke_delegates_to_gateway(monkeypatch):
     )
     assert captured["prompt"] == "hello"
     assert captured["kwargs"]["preferred_provider"] == "anthropic"  # claude -> anthropic
+    assert captured["kwargs"]["model_override"] == "claude-sonnet-4-6"
+    assert captured["kwargs"]["model_fallbacks"] == [
+        (model.gateway_provider, model.model_id)
+        for model in route(
+            RouteRequest(skill="deep", quality_weight=1.0, cost_weight=0.0, speed_weight=0.0)
+        ).fallback_chain
+    ]
+    assert captured["kwargs"]["require_runtime_verified"] is True
+    assert captured["kwargs"]["enforce_atomic_reservation"] is True
     assert captured["kwargs"]["max_output_tokens"] == 123
     assert result["router"]["model_key"] == CLAUDE
     assert result["router"]["gateway_provider"] == "anthropic"
+    assert result["router"]["exact_model_match"] is True
 
 
 def test_adapters_offline_stub():

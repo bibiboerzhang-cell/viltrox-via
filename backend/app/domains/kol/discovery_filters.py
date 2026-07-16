@@ -341,10 +341,23 @@ SUPPORTED_DISCOVERY_PLATFORMS = {"youtube", "instagram", "tiktok", "facebook"}
 
 
 def _is_discovery_garbage(item: dict[str, Any]) -> bool:
-    """残废发现项:无真 handle(query-as-handle 修复后兜底为 'Unknown creator'/空)→ 丢弃。"""
+    """Drop unusable identities and obvious retailer/distributor accounts."""
     handle = str(item.get("handle") or "").strip()
     name = str(item.get("channel_name") or "").strip()
-    return not handle and name.lower() in ("", "unknown creator")
+    if not handle and name.lower() in ("", "unknown creator"):
+        return True
+    identity = " ".join(
+        str(item.get(field) or "")
+        for field in ("handle", "channel_name", "display_name", "username", "profile_url", "channel_url")
+    ).lower()
+    return bool(
+        re.search(
+            r"\bb\s*&\s*h\b|b\s*and\s*h|pro\s*audio|photo\s*video|"
+            r"camera\s*(?:store|house|shop|world|land)|rental|retailer|wholesale|"
+            r"distributor|旗舰店|专卖|经销",
+            identity,
+        )
+    )
 
 
 from app.core.coerce import _text

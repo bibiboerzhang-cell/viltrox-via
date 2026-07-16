@@ -1,23 +1,35 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { ModuleProvModal } from "./MarketVoicePage.dialogs";
 import { MiniDetailModal, MiniListModal } from "./ProjectsBoardPage.dialogs";
 import { useEndpoint } from "./ProjectsBoardPage.actions";
 import {
   createDealer,
+  getDealerCandidateStagingSummary,
+  getDealerCoverage,
   getDealerLocations,
+  getDealerUsSourceRegistry,
   listDealers,
+  publishDealer,
   scrapeDealersEnqueue,
+  unpublishDealer,
+  updateDealer,
   type VkpiDealer,
   type VkpiDealerPin,
+  type VkpiDealerWritePayload,
 } from "../../../../services/vkpi/dealers-api";
 import { getBoardSeries } from "../../../../services/vkpi/boardSeries-api";
 import {
   AddDealerForm,
+  DealerActivityExtension,
+  DealerCoverageStrip,
   DealerListBody,
   DealerRowLine,
+  DealerRecordEditor,
+  DealerTrustPipeline,
   DealersKpiBand,
   MODULE_SOURCES,
   PROV_TITLES,
@@ -41,7 +53,7 @@ import { formatLocal } from "../../lib/timeLocal";
 //   · 待补 geocode 清单 = pendD「待补定位」模块(升级:face 6 + 全量 + 单条连续翻);
 //   · 页头计数(已定位 / 待补)= KPI 带 + 卡头徽接管;介绍文案按门面纪律收进溯源。
 //   新增看板模块(全真数据):KPI 带四卡(经销商数 / 已定位 / 覆盖州 / 国家数)——
-//   vkpi_dealers 本地 0 行 → 全带 pending 诚实空态注明数据在线上库;地区分布条形
+//   vkpi_dealers 本地 0 行 → 全带 pending 诚实空态注明公开候选待核验;地区分布条形
 //   (按州,有数据才画);经销商名录(全量 + 连续翻)。
 //   数据源(全真,零编造):
 //     GET  /api/admin/vkpi/dealers            —— vkpi_dealers(上限 500 行)
@@ -56,12 +68,15 @@ import { formatLocal } from "../../lib/timeLocal";
 //   不传 apiToken 给 EditableDashboardBoard(其账户级持久化写死 dashboard_layout_v1
 //   键 —— 金样板同注释)。
 
-const STORAGE_KEY = "vkpi-dealers-layout-v1";
+const STORAGE_KEY = "vkpi-dealers-layout-v2-truth";
+const LEGACY_STORAGE_KEYS = ["vkpi-dealers-layout-v1"];
+const DEALER_PAGE_SIZE = 100;
 
 // 默认布局(12 列 · 默认简六模块):kpiD(12) → regionD(8)+pendD(4) → mapD(12)
 // → rosterD(8)+opsD(4);palette 全量可选(注册表即全集)。
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiD", span: 12 },
+  { moduleKey: "trustD", span: 12 },
   { moduleKey: "regionD", span: 8 },
   { moduleKey: "pendD", span: 4 },
   { moduleKey: "mapD", span: 12 },
@@ -72,26 +87,61 @@ const DEFAULT_LAYOUT = [
 const PH_BADGE =
   "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
 
-export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) {
+type DealerReadSource = "dealers" | "locations" | "coverage" | "candidateStaging" | "sourceRegistry" | "series";
+
+// Dashboard 跨板块只挂一个模块时，只读该模块真正消费的数据。完整 Dealers
+// 页仍拉全部六源；未知嵌入 key 零请求，由 EmbeddedDashboardModule 显示不可见空态。
+const EMBEDDED_MODULE_SOURCES: Record<string, readonly DealerReadSource[]> = {
+  kpiD: ["dealers", "locations", "coverage", "series"],
+  trustD: ["dealers", "coverage", "candidateStaging", "sourceRegistry"],
+  regionD: ["dealers", "coverage"],
+  pendD: ["dealers"],
+  mapD: ["dealers", "locations", "coverage", "candidateStaging", "sourceRegistry"],
+  rosterD: ["dealers"],
+  opsD: [],
+};
+
+export function DealersBoardPage({ apiToken = "", embeddedModuleKey }: { apiToken?: string; embeddedModuleKey?: string } = {}) {
   const token = apiToken || "";
+  const needsSource = React.useCallback(
+    (source: DealerReadSource) => !embeddedModuleKey || Boolean(EMBEDDED_MODULE_SOURCES[embeddedModuleKey]?.includes(source)),
+    [embeddedModuleKey],
+  );
 
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
+  const [rosterOffset, setRosterOffset] = React.useState(0);
   const [provKey, setProvKey] = React.useState<string | null>(null);
 
   // 采集动作(旧页 runScrape 同构:预检 record_only=true / 真跑成功后重拉)
   const [scrapeBusy, setScrapeBusy] = React.useState(false);
   const [scrapeMsg, setScrapeMsg] = React.useState("");
   const [scrapeErr, setScrapeErr] = React.useState("");
+  const [scrapePreviewGate, setScrapePreviewGate] = React.useState<{
+    importAllowed: boolean;
+    qualityStatus: string;
+    blockReason: string;
+  } | null>(null);
 
   // 手动添加表单(旧页 handleCreate 同构:必填校验 / 成功清空 / 重拉)
   const [addName, setAddName] = React.useState("");
   const [addAddress, setAddAddress] = React.useState("");
   const [addCity, setAddCity] = React.useState("");
   const [addState, setAddState] = React.useState("");
+  const [addPostalCode, setAddPostalCode] = React.useState("");
+  const [addPhone, setAddPhone] = React.useState("");
+  const [addWebsiteUrl, setAddWebsiteUrl] = React.useState("");
+  const [addLat, setAddLat] = React.useState("");
+  const [addLng, setAddLng] = React.useState("");
+  const [addBrands, setAddBrands] = React.useState<string[]>([]);
+  const [addCustomBrand, setAddCustomBrand] = React.useState("");
+  const [addPublishAfterCreate, setAddPublishAfterCreate] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
   const [addMsg, setAddMsg] = React.useState("");
   const [addErr, setAddErr] = React.useState("");
+  const [recordBusy, setRecordBusy] = React.useState(false);
+  const [recordMsg, setRecordMsg] = React.useState("");
+  const [recordErr, setRecordErr] = React.useState("");
 
   // 行模块弹窗状态(名录 / 待补定位:全量列表 + 单条详情连续翻)
   const [rosterIdx, setRosterIdx] = React.useState<number | null>(null);
@@ -99,21 +149,41 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
   const [pendIdx, setPendIdx] = React.useState<number | null>(null);
   const [pendListOpen, setPendListOpen] = React.useState(false);
 
+  React.useEffect(() => {
+    setRecordMsg("");
+    setRecordErr("");
+  }, [rosterIdx, pendIdx]);
+
   /* ---------- 只读端点(逐源独立装载,单源失败不拖累) ---------- */
   const dealersResp = useEndpoint(
-    token,
+    needsSource("dealers") ? token : "",
     reloadTick,
-    React.useCallback((t: string) => listDealers(t, { limit: 500 }), []),
+    React.useCallback((t: string) => listDealers(t, { limit: DEALER_PAGE_SIZE, offset: rosterOffset }), [rosterOffset]),
   );
   const locsResp = useEndpoint(
-    token,
+    needsSource("locations") ? token : "",
     reloadTick,
-    React.useCallback((t: string) => getDealerLocations(t), []),
+    React.useCallback((t: string) => getDealerLocations(t, { publishedOnly: true }), []),
+  );
+  const coverageResp = useEndpoint(
+    needsSource("coverage") ? token : "",
+    reloadTick,
+    React.useCallback((t: string) => getDealerCoverage(t), []),
+  );
+  const candidateStagingResp = useEndpoint(
+    needsSource("candidateStaging") ? token : "",
+    reloadTick,
+    React.useCallback((t: string) => getDealerCandidateStagingSummary(t), []),
+  );
+  const usSourceRegistryResp = useEndpoint(
+    needsSource("sourceRegistry") ? token : "",
+    reloadTick,
+    React.useCallback((t: string) => getDealerUsSourceRegistry(t), []),
   );
   // KPI 卡趋势线(挂账迸发①):board-series 按日真序列;vkpi_dealers 0 行 → 端点
   // 诚实 empty(绝不 0 填平线)→ 卡面照旧 spempty 虚线;有数据流入后自动点亮
   const kpiSeriesResp = useEndpoint(
-    token,
+    needsSource("series") ? token : "",
     reloadTick,
     React.useCallback((t: string) => getBoardSeries(t, { board: "dealers" }), []),
   );
@@ -126,19 +196,41 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
     () => (Array.isArray(locsResp.data?.pins) ? (locsResp.data!.pins as VkpiDealerPin[]) : null),
     [locsResp.data],
   );
+  const rosterTotalCount = Number.isFinite(Number(dealersResp.data?.total_count))
+    ? Number(dealersResp.data?.total_count)
+    : dealers?.length ?? null;
+  const rosterHasMore = Boolean(
+    dealersResp.data?.page?.has_more
+      ?? (rosterTotalCount != null && rosterOffset + (dealers?.length || 0) < rosterTotalCount),
+  );
+  const rosterPageNumber = Math.floor(rosterOffset / DEALER_PAGE_SIZE) + 1;
 
-  /* ---------- KPI 四数(全真;0 行 → 全带诚实空态注明数据在线上库) ---------- */
-  const zeroRows = dealers != null && dealers.length === 0;
+  // KPI 必须来自全表 coverage 端点。名录端点单次最多 500 行，不能在未来扩容后
+  // 被误当成全表分母；country 也必须读真实列，不能因“当前有 pin”硬推断为 1。
+  const coverage = coverageResp.data ?? null;
+  const coverageReady = Boolean(coverage && coverage.status !== "migration_pending");
+  const coverageHasRows = Boolean(coverageReady && Number(coverage!.total) > 0);
+  /* ---------- KPI 四数(全真;0 行 → 全带诚实空态注明候选待核验) ---------- */
+  const zeroRows = coverageReady ? Number(coverage?.total || 0) === 0 : dealers != null && dealers.length === 0;
   const totalNote = dealersResp.error ? `读取失败:${dealersResp.error}` : zeroRows ? ZERO_NOTE : "读取中…";
   const locatedNote = locsResp.error ? `读取失败:${locsResp.error}` : zeroRows ? ZERO_NOTE : "读取中…";
-  const total = dealers && !zeroRows ? dealers.length : null;
-  const located = pins && !zeroRows ? pins.length : null;
-  const stateCount =
-    dealers && !zeroRows
+  const total = coverageHasRows ? Number(coverage!.total) : dealers && !zeroRows ? dealers.length : null;
+  const publishedMapPins = Number(coverage?.published_map_pins);
+  const located = zeroRows
+    ? null
+    : Number.isFinite(publishedMapPins)
+      ? publishedMapPins
+      : pins ? pins.length : null;
+  const stateCount = coverageHasRows
+    ? Number(coverage!.states)
+    : dealers && !zeroRows
       ? new Set(dealers.map((d) => String(d.state || "").trim().toUpperCase()).filter(Boolean)).size
       : null;
-  // 表无 country 列;采集管线=美国相机零售商 → 国家按定位点归属计(口径住 SrcChip)
-  const countryCount = pins && !zeroRows ? (pins.length > 0 ? 1 : 0) : null;
+  const countryCount = coverageHasRows
+    ? Number(coverage!.countries)
+    : dealers && !zeroRows
+      ? new Set(dealers.map((d) => String(d.country || "").trim().toUpperCase()).filter(Boolean)).size
+      : null;
 
   // 待补定位:lat/lng 缺失(旧页 pendingGeocode 同口径)
   const pendingGeo = React.useMemo(
@@ -148,6 +240,14 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
 
   // 地区分布:按州 GROUP BY,count 降序 top10;state 空 → 「未标注」桶
   const regionRows = React.useMemo(() => {
+    const aggregateCounts = coverage?.us_jurisdiction_matrix?.dealer_counts_by_state_dc;
+    if (aggregateCounts) {
+      return Object.entries(aggregateCounts)
+        .map(([label, count]) => ({ label, count: Number(count || 0) }))
+        .filter((row) => row.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+    }
     if (!dealers || dealers.length === 0) return [];
     const counts = new Map<string, number>();
     dealers.forEach((d) => {
@@ -158,7 +258,7 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
       .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
-  }, [dealers]);
+  }, [dealers, coverage]);
 
   // 数据新鲜度:最新入库时间(绝对时间戳,进 SrcChip extraRows)
   const latestCreated = React.useMemo(() => {
@@ -171,20 +271,35 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
   const runScrape = React.useCallback(
     async (recordOnly: boolean) => {
       if (!token || scrapeBusy) return;
+      if (!recordOnly && scrapePreviewGate?.importAllowed !== true) {
+        setScrapeErr("导入已阻断：须先完成预检，且后端明确返回 import_allowed=true。");
+        return;
+      }
       setScrapeBusy(true);
       setScrapeMsg("");
       setScrapeErr("");
       try {
         const res = await scrapeDealersEnqueue(token, { limit: 20, record_only: recordOnly });
+        if (recordOnly) {
+          setScrapePreviewGate({
+            importAllowed: res.import_allowed === true,
+            qualityStatus: String(res.quality_status || "未返回"),
+            blockReason: String(res.import_block_reason || ""),
+          });
+        }
         setScrapeMsg(scrapeReceiptText(res));
-        if (!recordOnly) setReloadTick((tick) => tick + 1);
+        if (!recordOnly) {
+          setScrapePreviewGate(null);
+          setReloadTick((tick) => tick + 1);
+        }
       } catch (err) {
+        if (recordOnly) setScrapePreviewGate(null);
         setScrapeErr(err instanceof Error ? err.message : "抓取触发失败");
       } finally {
         setScrapeBusy(false);
       }
     },
-    [token, scrapeBusy],
+    [token, scrapeBusy, scrapePreviewGate],
   );
 
   /* ---------- 手动添加(幂等 upsert;成功清空 + 重拉,失败原因不吞) ---------- */
@@ -196,23 +311,92 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
       setAddErr("名称 + 地址必填");
       return;
     }
+    const hasLat = Boolean(addLat.trim());
+    const hasLng = Boolean(addLng.trim());
+    if (hasLat !== hasLng || (hasLat && (!Number.isFinite(Number(addLat)) || !Number.isFinite(Number(addLng))))) {
+      setAddErr("经纬度必须成对填写且为数字");
+      return;
+    }
     setAdding(true);
     setAddMsg("");
     setAddErr("");
+    const customBrands = addCustomBrand
+      .split(/[,\n]/)
+      .map((value) => value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_"))
+      .filter(Boolean);
+    let createdId: string | number | null = null;
     try {
-      await createDealer(token, { name, address, city: addCity.trim(), state: addState.trim() });
-      setAddMsg(`已添加:${name}`);
+      const created = await createDealer(token, {
+        name,
+        address,
+        city: addCity.trim() || undefined,
+        state: addState.trim() || undefined,
+        postal_code: addPostalCode.trim() || undefined,
+        phone: addPhone.trim() || undefined,
+        website_url: addWebsiteUrl.trim() || undefined,
+        ...(hasLat ? { lat: Number(addLat), lng: Number(addLng) } : {}),
+        brands: [...new Set([...addBrands, ...customBrands])],
+      });
+      createdId = created.id;
+      if (addPublishAfterCreate) {
+        if (createdId == null) throw new Error("草稿已创建，但后端未返回 id，无法发布到地图");
+        await publishDealer(token, createdId);
+      }
+      setAddMsg(addPublishAfterCreate ? `已添加并发布到地图:${name}` : `已添加草稿:${name}`);
       setAddName("");
       setAddAddress("");
       setAddCity("");
       setAddState("");
+      setAddPostalCode("");
+      setAddPhone("");
+      setAddWebsiteUrl("");
+      setAddLat("");
+      setAddLng("");
+      setAddBrands([]);
+      setAddCustomBrand("");
+      setAddPublishAfterCreate(false);
+      setRosterOffset(0);
       setReloadTick((tick) => tick + 1);
     } catch (err) {
-      setAddErr(err instanceof Error ? err.message : "添加失败");
+      setAddErr(`${createdId != null ? "草稿已创建；" : ""}${err instanceof Error ? err.message : "添加失败"}`);
+      if (createdId != null) setReloadTick((tick) => tick + 1);
     } finally {
       setAdding(false);
     }
-  }, [token, adding, addName, addAddress, addCity, addState]);
+  }, [token, adding, addName, addAddress, addCity, addState, addPostalCode, addPhone, addWebsiteUrl, addLat, addLng, addBrands, addCustomBrand, addPublishAfterCreate]);
+
+  const saveDealer = React.useCallback(async (dealerId: string | number, payload: VkpiDealerWritePayload) => {
+    if (!token || recordBusy) return;
+    setRecordBusy(true);
+    setRecordMsg("");
+    setRecordErr("");
+    try {
+      await updateDealer(token, dealerId, payload);
+      setRecordMsg("修改已保存");
+      setReloadTick((tick) => tick + 1);
+    } catch (error) {
+      setRecordErr(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setRecordBusy(false);
+    }
+  }, [token, recordBusy]);
+
+  const setDealerPublication = React.useCallback(async (dealerId: string | number, publish: boolean) => {
+    if (!token || recordBusy) return;
+    setRecordBusy(true);
+    setRecordMsg("");
+    setRecordErr("");
+    try {
+      if (publish) await publishDealer(token, dealerId);
+      else await unpublishDealer(token, dealerId);
+      setRecordMsg(publish ? "已发布到本地地图" : "已从本地地图撤下，记录仍保留");
+      setReloadTick((tick) => tick + 1);
+    } catch (error) {
+      setRecordErr(error instanceof Error ? error.message : publish ? "发布失败" : "撤下失败");
+    } finally {
+      setRecordBusy(false);
+    }
+  }, [token, recordBusy]);
 
   /* ---------- 闸(金样板同构) ---------- */
   const noTokenCard = (
@@ -243,6 +427,7 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
       ...(latestCreated ? ([["最新入库", `${latestCreated}(UTC 存 · 按浏览器时区显示)`]] as Array<[string, string]>) : []),
       ...(dealersResp.error ? ([["名录源", `读取失败:${dealersResp.error}`]] as Array<[string, string]>) : []),
       ...(locsResp.error ? ([["定位源", `读取失败:${locsResp.error}`]] as Array<[string, string]>) : []),
+      ...(coverageResp.error ? ([["覆盖质量", `读取失败:${coverageResp.error}`]] as Array<[string, string]>) : []),
       [
         "趋势线",
         "board-series?board=dealers 新入库经销商/日真序列(30 天窗;经销商数卡,关联指标不挂环比药丸);全表 0 行 → 端点诚实空 → 卡面虚线如实,绝不摆 0 填平线",
@@ -256,15 +441,22 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
         {!token ? (
           noTokenCard
         ) : (
-          <DealersKpiBand
-            total={total}
-            totalNote={totalNote}
-            located={located}
-            locatedNote={locatedNote}
-            stateCount={stateCount}
-            countryCount={countryCount}
-            boardSeries={kpiSeriesResp.data ?? null}
-          />
+          <>
+            <DealersKpiBand
+              total={total}
+              totalNote={totalNote}
+              located={located}
+              locatedNote={locatedNote}
+              stateCount={stateCount}
+              countryCount={countryCount}
+              boardSeries={kpiSeriesResp.data ?? null}
+            />
+            {coverageResp.error ? (
+              <div className="mt-3"><ErrorCard title="覆盖质量读取失败" text={coverageResp.error} /></div>
+            ) : (
+              <DealerCoverageStrip coverage={coverageResp.data ?? null} />
+            )}
+          </>
         )}
       </ModuleCard>
     );
@@ -294,16 +486,51 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
     }
     return (
       <DealerMapEmbed
+        token={token}
         pins={pins || []}
         loading={!pins}
-        emptyNote={zeroRows || !dealers ? ZERO_NOTE : "补齐经纬度后自动上图"}
+        emptyNote={
+          zeroRows || !dealers
+            ? ZERO_NOTE
+            : "地图只显示已显式发布且坐标齐全的记录；公开来源是独立证据字段；当前筛选下无点"
+        }
+        candidateCount={candidateStagingResp.data ? Number(candidateStagingResp.data.total || 0) : null}
+        registry={usSourceRegistryResp.data ?? null}
+        entityMatrix={coverage?.us_jurisdiction_matrix ?? null}
         onOpenSrc={() => setProvKey("mapD")}
       />
     );
   };
 
+  const renderTrust = () => (
+    <ModuleCard
+      {...cardProps(
+        "trustD",
+        "美国经销商来源与实体覆盖",
+        candidateStagingResp.data ? `${Number(candidateStagingResp.data.total || 0)} 候选` : undefined,
+        [
+          ["业务行", total == null ? "读取中 / 不可用" : `${total} 行`],
+          ["候选队列", candidateStagingResp.data?.status || (candidateStagingResp.error ? "读取失败" : "读取中")],
+          ["发现来源", usSourceRegistryResp.data?.coverage_claim || (usSourceRegistryResp.error ? "读取失败" : "读取中")],
+        ],
+      )}
+    >
+      {!token ? noTokenCard : (
+        <DealerTrustPipeline
+          businessTotal={total}
+          verifiedBusinessTotal={coverageReady ? Number(coverage?.public_listing_verified || 0) : null}
+          businessJurisdictionMatrix={coverage?.us_jurisdiction_matrix ?? null}
+          staging={candidateStagingResp.data ?? null}
+          registry={usSourceRegistryResp.data ?? null}
+          stagingError={candidateStagingResp.error}
+          registryError={usSourceRegistryResp.error}
+        />
+      )}
+    </ModuleCard>
+  );
+
   const renderPending = () => (
-    <ModuleCard {...cardProps("pendD", "待补定位", pendingGeo.length > 0 ? `${pendingGeo.length}` : undefined)}>
+    <ModuleCard {...cardProps("pendD", "当前页待补定位", pendingGeo.length > 0 ? `${pendingGeo.length}` : undefined)}>
       {opsGate(dealers, dealersResp.error, "dealers") ??
         (zeroRows ? (
           <PendingCard>
@@ -321,7 +548,7 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
   );
 
   const renderRoster = () => (
-    <ModuleCard {...cardProps("rosterD", "经销商名录", dealers && dealers.length > 0 ? `${dealers.length}` : undefined)}>
+    <ModuleCard {...cardProps("rosterD", "经销商名录", rosterTotalCount != null ? `${rosterTotalCount}` : undefined)}>
       {opsGate(dealers, dealersResp.error, "dealers") ??
         (zeroRows ? (
           <PendingCard>
@@ -333,8 +560,22 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
             emptyText="0 家 · 暂无经销商(如实)。"
             onOpen={(i) => setRosterIdx(i)}
             onOpenAll={() => setRosterListOpen(true)}
+            totalCount={rosterTotalCount}
           />
         ))}
+      {dealers && !zeroRows ? (
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-line pt-2 text-[9.5px] text-muted" data-testid="dealer-server-pagination">
+          <span>服务端分页 · 第 {rosterPageNumber} 页 · 当前 {dealers.length} 家{rosterTotalCount != null ? ` / 总计 ${rosterTotalCount} 家` : ""}</span>
+          <span className="flex gap-1.5">
+            <button type="button" disabled={rosterOffset <= 0} onClick={() => { setRosterIdx(null); setRosterListOpen(false); setRosterOffset((value) => Math.max(0, value - DEALER_PAGE_SIZE)); }} className="rounded-[6px] border border-line px-2 py-1 disabled:cursor-default">上一页</button>
+            <button type="button" disabled={!rosterHasMore} onClick={() => { setRosterIdx(null); setRosterListOpen(false); setRosterOffset((value) => value + DEALER_PAGE_SIZE); }} className="rounded-[6px] border border-line px-2 py-1 disabled:cursor-default">下一页</button>
+          </span>
+        </div>
+      ) : null}
+      <div className="mt-3 border-t border-line pt-3">
+        <div className="mb-2 text-[10px] font-semibold text-ink">Dealer 活动扩展 · 当前页</div>
+        <DealerActivityExtension dealers={dealers} />
+      </div>
     </ModuleCard>
   );
 
@@ -347,6 +588,9 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
           <ScrapeControls
             busy={scrapeBusy}
             disabled={!token}
+            importAllowed={scrapePreviewGate?.importAllowed ?? null}
+            qualityStatus={scrapePreviewGate?.qualityStatus ?? ""}
+            blockReason={scrapePreviewGate?.blockReason ?? ""}
             msg={scrapeMsg}
             err={scrapeErr}
             onPreview={() => void runScrape(true)}
@@ -358,10 +602,26 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
               address={addAddress}
               city={addCity}
               state={addState}
+              postalCode={addPostalCode}
+              phone={addPhone}
+              websiteUrl={addWebsiteUrl}
+              lat={addLat}
+              lng={addLng}
+              brands={addBrands}
+              customBrand={addCustomBrand}
+              publishAfterCreate={addPublishAfterCreate}
               onName={setAddName}
               onAddress={setAddAddress}
               onCity={setAddCity}
               onState={setAddState}
+              onPostalCode={setAddPostalCode}
+              onPhone={setAddPhone}
+              onWebsiteUrl={setAddWebsiteUrl}
+              onLat={setAddLat}
+              onLng={setAddLng}
+              onBrands={setAddBrands}
+              onCustomBrand={setAddCustomBrand}
+              onPublishAfterCreate={setAddPublishAfterCreate}
               adding={adding}
               disabled={!token}
               msg={addMsg}
@@ -376,13 +636,18 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
 
   /* ---------- 模块注册表(palette 全量可选;默认简;高度贴内容 1 格=22px+14px gap) ---------- */
   const modules: DashboardModuleDefinition[] = [
-    { key: "kpiD", label: "指标带", description: "经销商数 / 已定位 / 覆盖州 / 国家数 · 库内 0 行如实空态", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
+    { key: "kpiD", label: "指标带", description: "经销商数 / 证据合格上图 / 覆盖州 / 国家数 · 库内 0 行如实空态", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
+    { key: "trustD", label: "美国来源与实体覆盖", description: "来源辖区 / 候选待审 / 已入库门店实体严格分口径", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 10, minHeight: 7, maxHeight: 22, render: renderTrust },
     { key: "regionD", label: "地区分布", description: "按州分布条形 · 有数据才画,0 行如实空", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 22, render: renderRegion },
-    { key: "pendD", label: "待补定位", description: "缺经纬度的经销商 · 补齐后自动上图", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 5, maxHeight: 22, render: renderPending },
+    { key: "pendD", label: "待补定位", description: "当前服务端分页中缺经纬度的记录 · 补齐后仍须显式发布", category: "数据库模块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 5, maxHeight: 22, render: renderPending },
     { key: "mapD", label: "经销商地图", description: "定位点上图 · 地图渲染原件整体收编", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 10, maxHeight: 30, render: renderMap },
-    { key: "rosterD", label: "经销商名录", description: "全部经销商 · 全量列表 + 单条连续翻", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 26, render: renderRoster },
-    { key: "opsD", label: "录入与采集", description: "预检 / 有界抓取(≤20)/ 手动添加", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 6, maxHeight: 24, render: renderOps },
+    { key: "rosterD", label: "经销商名录", description: "服务端分页（每页 100） · 编辑 / 发布 + 当前页活动三态", category: "数据库模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 26, render: renderRoster },
+    { key: "opsD", label: "录入与采集", description: "预检 / 有界抓取(≤20)/ 手动添加草稿 / 可选发布", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 6, maxHeight: 24, render: renderOps },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="Dealers" />;
+  }
 
   const rosterItem = rosterIdx != null && dealers ? dealers[rosterIdx] ?? null : null;
   const pendItem = pendIdx != null ? pendingGeo[pendIdx] ?? null : null;
@@ -406,7 +671,7 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
             <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" }} />
-            实时
+            数据库快照
           </span>
           <button
             type="button"
@@ -431,11 +696,18 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
       {!token && <div className="mb-3">{noTokenCard}</div>}
 
       {/* 可编辑看板:布局本机记忆(storageKey);不传 apiToken,见文件头红线注释 */}
-      <EditableDashboardBoard modules={modules} defaultLayout={DEFAULT_LAYOUT} editing={editing} storageKey={STORAGE_KEY} />
+      <EditableDashboardBoard
+        modules={modules}
+        defaultLayout={DEFAULT_LAYOUT}
+        editing={editing}
+        storageKey={STORAGE_KEY}
+        legacyStorageKeys={LEGACY_STORAGE_KEYS}
+        requiredDefaultModuleKeys={["trustD"]}
+      />
 
       {/* 名录全量 + 详情连续翻 */}
       {rosterListOpen && dealers && (
-        <MiniListModal title="经销商名录" total={dealers.length} unit="家" onClose={() => setRosterListOpen(false)}>
+        <MiniListModal title={`经销商名录 · 第 ${rosterPageNumber} 页`} total={dealers.length} unit="家" onClose={() => setRosterListOpen(false)}>
           {dealers.map((item, i) => (
             <DealerRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => setRosterIdx(idx)} />
           ))}
@@ -450,12 +722,23 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
           total={dealers.length}
           onNav={(i) => setRosterIdx(Math.max(0, Math.min(dealers.length - 1, i)))}
           onClose={() => setRosterIdx(null)}
+          footer={
+            <DealerRecordEditor
+              dealer={rosterItem}
+              busy={recordBusy}
+              message={recordMsg}
+              error={recordErr}
+              onSave={(payload) => void saveDealer(rosterItem.id, payload)}
+              onPublish={() => void setDealerPublication(rosterItem.id, true)}
+              onUnpublish={() => void setDealerPublication(rosterItem.id, false)}
+            />
+          }
         />
       )}
 
       {/* 待补定位全量 + 详情连续翻 */}
       {pendListOpen && (
-        <MiniListModal title="待补定位" total={pendingGeo.length} unit="家" onClose={() => setPendListOpen(false)}>
+        <MiniListModal title={`当前页待补定位 · 第 ${rosterPageNumber} 页`} total={pendingGeo.length} unit="家" onClose={() => setPendListOpen(false)}>
           {pendingGeo.map((item, i) => (
             <DealerRowLine key={`${item.id}-${i}`} item={item} index={i} onOpen={(idx) => setPendIdx(idx)} />
           ))}
@@ -470,6 +753,17 @@ export function DealersBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
           total={pendingGeo.length}
           onNav={(i) => setPendIdx(Math.max(0, Math.min(pendingGeo.length - 1, i)))}
           onClose={() => setPendIdx(null)}
+          footer={
+            <DealerRecordEditor
+              dealer={pendItem}
+              busy={recordBusy}
+              message={recordMsg}
+              error={recordErr}
+              onSave={(payload) => void saveDealer(pendItem.id, payload)}
+              onPublish={() => void setDealerPublication(pendItem.id, true)}
+              onUnpublish={() => void setDealerPublication(pendItem.id, false)}
+            />
+          }
         />
       )}
 

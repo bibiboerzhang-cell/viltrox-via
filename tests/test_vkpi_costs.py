@@ -5,6 +5,10 @@ scope is intentionally narrow: costs.py only, no router or frontend behavior.
 """
 from __future__ import annotations
 
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 import pytest
 
 from app.db.connection import get_conn
@@ -19,12 +23,79 @@ PROJECT_UID = "VKPI-COSTS-TEST-PROJECT"
 PRODUCT_SKU = "VKPI-COSTS-SKU"
 
 
-@pytest.fixture(autouse=True)
-def _ensure_schemas():
+@pytest.fixture
+def costs_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run cost-ledger tests against a module-private SQLite database.
+
+    The V-KPI schema guards deliberately do not own the legacy users/staff/kols
+    tables.  Provide only the columns this test needs, then exercise the real
+    V-KPI, audit, and cost schema guards for all domain-owned tables.
+    """
+    from app.db import connection as db_connection
+    from app.platform.db import schema as vkpi_schema
+    from app.platform.db import schema_audit as vkpi_audit_schema
+
+    db_connection.close_db_runtime_sync()
+    db_path = (tmp_path / "vkpi-costs.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+
+    monkeypatch.setattr(db_connection, "DB_PATH", db_path)
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_URL", "")
+    monkeypatch.setattr(vkpi_schema, "_SCHEMA_READY", False)
+    monkeypatch.setattr(vkpi_audit_schema, "_SCHEMA_READY", False)
+
+    setup = sqlite3.connect(str(db_path))
+    try:
+        setup.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                name TEXT,
+                status TEXT,
+                role TEXT,
+                email_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                role TEXT,
+                permissions_json TEXT DEFAULT '{}',
+                mfa_enabled INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1,
+                invited_at TEXT,
+                is_owner INTEGER DEFAULT 0,
+                email_domain_verified INTEGER DEFAULT 0
+            );
+            CREATE TABLE kols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT,
+                channel_url TEXT,
+                platform TEXT,
+                assigned_staff_id INTEGER,
+                created_by_staff_id INTEGER,
+                follower_count INTEGER DEFAULT 0,
+                avg_views INTEGER DEFAULT 0
+            );
+            """
+        )
+        setup.commit()
+    finally:
+        setup.close()
+
     ensure_vkpi_schema()
     ensure_vkpi_audit_schema()
     costs.ensure_product_cost_schema()
-    yield
+    database_file = Path(get_conn().execute("PRAGMA database_list").fetchone()["file"]).resolve()
+    assert database_file == db_path
+    try:
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
 
 
 def _staff_context(staff_id: int) -> dict[str, object]:
@@ -50,7 +121,7 @@ def _audit_actions_for_metadata(marker: str) -> list[str]:
 
 
 @pytest.fixture
-def seeded_project():
+def seeded_project(costs_db: Path):
     conn = get_conn()
     now = "2026-05-01T10:00:00Z"
 
@@ -255,6 +326,35 @@ def test_record_shipped_product_cost_is_idempotent(seeded_project):
         staff=staff,
     )
 
+    unverified = costs.record_shipped_product_cost(seeded_project["project_id"], staff=staff)
+    assert unverified["status"] == "skipped"
+    assert unverified["reason"] == "product_cost_unverified"
+
+    current_product_cost = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+
+    costs.verify_product_cost(
+        PRODUCT_SKU,
+        {
+            "source_type": "vendor_invoice",
+            "source_ref": f"invoice:{MARKER}",
+            "source_observed_at": "2026-07-14T12:00:00Z",
+            "expected_id": current_product_cost["id"],
+            "expected_unit_cost_cents": current_product_cost["unit_cost_cents"],
+            "expected_currency": current_product_cost["currency"],
+            "expected_row_version": current_product_cost["row_version"],
+            "expected_updated_at": current_product_cost["updated_at"],
+        },
+        authorization_evidence={
+            "authorization_ref": f"approval:{MARKER}",
+            "reason": "test product cost evidence",
+        },
+        staff=staff,
+    )
+
     first = costs.record_shipped_product_cost(seeded_project["project_id"], staff=staff)
     second = costs.record_shipped_product_cost(seeded_project["project_id"], staff=staff)
     summary = costs.summarize_project(seeded_project["project_id"])
@@ -266,3 +366,199 @@ def test_record_shipped_product_cost_is_idempotent(seeded_project):
     assert second["reason"] == "already_recorded"
     assert int(summary["total_cost_cents"]) == 2500
     assert "cost_add" in _audit_actions_for_metadata(PROJECT_UID)
+
+
+def test_verify_product_cost_rejects_a_stale_row_version(seeded_project):
+    staff = _staff_context(seeded_project["staff_id"])
+    costs.upsert_product_cost(
+        {
+            "product_sku": PRODUCT_SKU,
+            "product_name": "CAS Lens",
+            "unit_cost_cents": 3100,
+            "currency": "USD",
+            "active": True,
+            "note": MARKER,
+        },
+        staff=staff,
+    )
+    current = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+
+    with pytest.raises(costs.ProductCostVerificationConflict):
+        costs.verify_product_cost(
+            PRODUCT_SKU,
+            {
+                "source_type": "vendor_invoice",
+                "source_ref": f"invoice:{MARKER}",
+                "source_observed_at": "2026-07-14T12:00:00Z",
+                "expected_id": current["id"],
+                "expected_unit_cost_cents": current["unit_cost_cents"],
+                "expected_currency": current["currency"],
+                "expected_row_version": int(current["row_version"]) + 1,
+                "expected_updated_at": current["updated_at"],
+            },
+            authorization_evidence={
+                "authorization_ref": f"approval:{MARKER}",
+                "reason": "stale browser snapshot",
+            },
+            staff=staff,
+        )
+
+    after = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+    assert after["verification_status"] == "reference_unverified"
+    assert int(after["row_version"]) == int(current["row_version"])
+
+
+def test_verify_product_cost_rolls_back_when_audit_insert_fails(seeded_project, monkeypatch):
+    from app.domains.costs import ledger
+
+    staff = _staff_context(seeded_project["staff_id"])
+    costs.upsert_product_cost(
+        {
+            "product_sku": PRODUCT_SKU,
+            "product_name": "Atomic Audit Lens",
+            "unit_cost_cents": 4200,
+            "currency": "USD",
+            "active": True,
+            "note": MARKER,
+        },
+        staff=staff,
+    )
+    current = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+
+    def fail_audit(**_kwargs):
+        raise RuntimeError("audit insert failed")
+
+    monkeypatch.setattr(ledger.audit, "log_business_event", fail_audit)
+    with pytest.raises(RuntimeError, match="audit insert failed"):
+        costs.verify_product_cost(
+            PRODUCT_SKU,
+            {
+                "source_type": "vendor_invoice",
+                "source_ref": f"invoice:{MARKER}",
+                "source_observed_at": "2026-07-14T12:00:00Z",
+                "expected_id": current["id"],
+                "expected_unit_cost_cents": current["unit_cost_cents"],
+                "expected_currency": current["currency"],
+                "expected_row_version": current["row_version"],
+                "expected_updated_at": current["updated_at"],
+            },
+            authorization_evidence={
+                "authorization_ref": f"approval:{MARKER}",
+                "reason": "audit and business write must be atomic",
+            },
+            staff=staff,
+        )
+
+    after = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+    assert after["verification_status"] == "reference_unverified"
+    assert int(after["row_version"]) == int(current["row_version"])
+
+
+@pytest.mark.parametrize(
+    ("source_type", "source_observed_at", "error_match"),
+    [
+        ("free_form", "2026-07-14T12:00:00Z", "unsupported product cost source_type"),
+        ("vendor_invoice", "not-a-date", "valid ISO-8601 timestamp"),
+        ("vendor_invoice", "2026-07-14T12:00:00", "timezone is required"),
+        (
+            "vendor_invoice",
+            (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            "cannot be in the future",
+        ),
+    ],
+)
+def test_verify_product_cost_rejects_untrusted_source_metadata_without_mutating_row(
+    seeded_project,
+    source_type,
+    source_observed_at,
+    error_match,
+):
+    staff = _staff_context(seeded_project["staff_id"])
+    costs.upsert_product_cost(
+        {
+            "product_sku": PRODUCT_SKU,
+            "product_name": "Source Validation Lens",
+            "unit_cost_cents": 4300,
+            "currency": "USD",
+            "active": True,
+            "note": MARKER,
+        },
+        staff=staff,
+    )
+    current = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        costs.verify_product_cost(
+            PRODUCT_SKU,
+            {
+                "source_type": source_type,
+                "source_ref": f"invoice:{MARKER}",
+                "source_observed_at": source_observed_at,
+                "expected_id": current["id"],
+                "expected_unit_cost_cents": current["unit_cost_cents"],
+                "expected_currency": current["currency"],
+                "expected_row_version": current["row_version"],
+                "expected_updated_at": current["updated_at"],
+            },
+            authorization_evidence={
+                "authorization_ref": f"approval:{MARKER}",
+                "reason": "reject untrusted source metadata",
+            },
+            staff=staff,
+        )
+
+    after = next(
+        row
+        for row in costs.list_product_costs(include_inactive=True)["product_costs"]
+        if row["product_sku"] == PRODUCT_SKU
+    )
+    assert after["verification_status"] == "reference_unverified"
+    assert int(after["row_version"]) == int(current["row_version"])
+
+
+def test_human_actual_cost_is_pending_until_approved(seeded_project):
+    staff = _staff_context(seeded_project["staff_id"])
+    created = costs.add_cost(
+        {
+            "project_id": seeded_project["project_id"],
+            "cost_type": "other",
+            "amount_cents": 3200,
+            "currency": "USD",
+            "status": "actual",
+            "source_ref": f"manual:{MARKER}",
+            "note": MARKER,
+        },
+        staff=staff,
+    )["cost"]
+
+    assert created["status"] == "pending"
+    assert costs.summarize_project(seeded_project["project_id"])["total_cost_cents"] == 0
+
+    approved = costs.approve_cost(
+        int(created["id"]),
+        {"note": "approved", "_authorization_evidence": {"authorization_ref": MARKER}},
+        staff=staff,
+    )["cost"]
+    assert approved["status"] == "actual"
+    assert approved["approved_at"]
+    assert costs.summarize_project(seeded_project["project_id"])["total_cost_cents"] == 3200

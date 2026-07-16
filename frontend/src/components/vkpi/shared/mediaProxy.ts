@@ -7,6 +7,7 @@ const IMAGE_PROXY_HOSTS = [
   'xx.fbcdn.net',
   'tiktokcdn.com',
   'tiktokcdn-us.com',
+  'tiktokcdn-eu.com',
   'byteoversea.com',
   'apifyusercontent.com',
   'redd.it',
@@ -26,6 +27,7 @@ const VIDEO_PROXY_HOSTS = [
   'xx.fbcdn.net',
   'tiktokcdn.com',
   'tiktokcdn-us.com',
+  'tiktokcdn-eu.com',
   'byteoversea.com',
   'akamaized.net',
   'googlevideo.com',
@@ -50,7 +52,14 @@ function hostMatches(host: string, suffixes: string[]) {
 }
 
 function localOrBlobUrl(url: string) {
-  return url.startsWith('/') || url.startsWith('data:') || url.startsWith('blob:');
+  // `//host/path` is an external protocol-relative URL, not a local route.
+  // Treating it as local lets signed TikTok/Instagram CDN URLs bypass the
+  // same-origin proxy and surface a browser-side 403.
+  return (url.startsWith('/') && !url.startsWith('//')) || url.startsWith('data:') || url.startsWith('blob:');
+}
+
+function absoluteExternalUrl(url: string) {
+  return url.startsWith('//') ? `https:${url}` : url;
 }
 
 function cachedVideoLookupKey(platform: string, videoId: string) {
@@ -65,13 +74,14 @@ export function proxiedImageUrl(rawUrl: unknown): string {
   const url = String(rawUrl || '').trim();
   if (!url || localOrBlobUrl(url)) return url;
   try {
-    const parsed = new URL(url);
+    const absoluteUrl = absoluteExternalUrl(url);
+    const parsed = new URL(absoluteUrl);
     const host = parsed.hostname.toLowerCase();
     if (hostMatches(host, DIRECT_IMAGE_HOSTS)) {
-      return url;
+      return absoluteUrl;
     }
     if (hostMatches(host, IMAGE_PROXY_HOSTS)) {
-      return `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(url)}`;
+      return `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(absoluteUrl)}`;
     }
   } catch {
     return url;
@@ -83,9 +93,10 @@ export function proxiedVideoUrl(rawUrl: unknown): string {
   const url = String(rawUrl || '').trim();
   if (!url || localOrBlobUrl(url)) return url;
   try {
-    const parsed = new URL(url);
+    const absoluteUrl = absoluteExternalUrl(url);
+    const parsed = new URL(absoluteUrl);
     if (hostMatches(parsed.hostname.toLowerCase(), VIDEO_PROXY_HOSTS)) {
-      return `/api/admin/vkpi/media/video-proxy?url=${encodeURIComponent(url)}`;
+      return `/api/admin/vkpi/media/video-proxy?url=${encodeURIComponent(absoluteUrl)}`;
     }
   } catch {
     return url;
@@ -156,9 +167,10 @@ export function redirectedVideoUrl(rawUrl: unknown): string {
   const url = String(rawUrl || '').trim();
   if (!url || localOrBlobUrl(url)) return url;
   try {
-    const parsed = new URL(url);
+    const absoluteUrl = absoluteExternalUrl(url);
+    const parsed = new URL(absoluteUrl);
     if (hostMatches(parsed.hostname.toLowerCase(), VIDEO_PROXY_HOSTS)) {
-      return `/api/admin/vkpi/media/video-redirect?url=${encodeURIComponent(url)}`;
+      return `/api/admin/vkpi/media/video-redirect?url=${encodeURIComponent(absoluteUrl)}`;
     }
   } catch {
     return url;

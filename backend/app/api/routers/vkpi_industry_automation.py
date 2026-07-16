@@ -1,7 +1,7 @@
 """V-KPI industry data, audience graph, and automation routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.routers.vkpi_industry_market import router as market_router
 from app.api.dependencies.perms import require_tab
@@ -117,11 +117,35 @@ def industry_update_account(account_id: int, body: dict, staff=Depends(require_t
 
 
 @router.post("/industry-data/accounts/{account_id}/refresh")
-def industry_refresh_account(account_id: int, staff=Depends(require_tab("vkpi", "write"))):
+async def industry_refresh_account(
+    request: Request,
+    account_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+):
     try:
-        return industry_domain.refresh_account(account_id, staff=staff)
+        # Validate tenancy/existence using the provider-free read path before
+        # enqueueing.  The live crawler is worker-only.
+        industry_domain.get_account(account_id, post_limit=1)
+        queue = getattr(request.app.state, "job_queue", None)
+        if queue is None:
+            raise RuntimeError("durable job queue unavailable")
+        task_id = await queue.enqueue(
+            "industry_account_refresh",
+            {"account_id": int(account_id), "staff": dict(staff or {})},
+            lock_key=f"industry_account_refresh:{int(account_id)}",
+            timeout_seconds=1200,
+        )
+        return {
+            "status": "queued",
+            "job_id": task_id,
+            "account_id": int(account_id),
+            "progressive": True,
+            "initial_stage": "queued",
+        }
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/industry-data/projects/{project_id}/cross-platform")
@@ -518,7 +542,14 @@ def automation_ml_score(body: dict, staff=Depends(require_tab("vkpi", "write")))
 @router.post("/automation/training-data/export")
 def automation_training_export(body: dict | None = None, staff=Depends(require_tab("vkpi", "admin"))):
     payload = body or {}
-    return training_data_export.export_training_dataset(str(payload.get("date_from") or ""), str(payload.get("date_to") or ""), staff=staff)
+    try:
+        return training_data_export.export_training_dataset(
+            str(payload.get("date_from") or ""),
+            str(payload.get("date_to") or ""),
+            staff=staff,
+        )
+    except training_data_export.PointInTimeDatasetBuildError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/automation/training-data/latest")

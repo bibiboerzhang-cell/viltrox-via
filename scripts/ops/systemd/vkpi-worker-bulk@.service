@@ -1,24 +1,66 @@
 [Unit]
-Description=V-KPI apify_jobs worker - bulk lane %i (claims all tiers)
+Description=V-KPI apify_jobs worker - bulk lane %i (batch-only)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/opt/viltrox-2.0
+User=viltrox
+Group=viltrox
+UMask=0027
+WorkingDirectory=/opt/viltrox-2.0/current
 EnvironmentFile=/opt/viltrox-2.0/.env
 EnvironmentFile=-/etc/vkpi/vkpi-lane-overrides.env
-Environment=PYTHONPATH=/opt/viltrox-2.0/backend
-Environment=APIFY_WORKER_CLAIM_LANE=all
+Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HOME=/tmp/vkpi-worker-home
+Environment=XDG_CACHE_HOME=/tmp/vkpi-worker-cache
+Environment=TMPDIR=/tmp
+Environment=APIFY_WORKER_CLAIM_LANE=batch
 Environment=APIFY_WORKER_HEARTBEAT_NAME=apify-worker-bulk-%i
-ExecStart=/opt/viltrox-2.0/.venv/bin/python -m app.workers.apify_jobs_worker
+# ExecStartPre runs under this unit's user, mount namespace and PrivateTmp.  It
+# exercises .env/code/tool reads plus real write-and-delete canaries on every
+# allowed mutable path before the worker can claim a job.
+ExecStartPre=/usr/bin/env HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python /opt/viltrox-2.0/current/scripts/ops/atomic_release_layout.py worker-runtime-preflight --root /opt/viltrox-2.0 --release-path /opt/viltrox-2.0/current --app-user viltrox --app-group viltrox --require-sandbox-readonly
+# EnvironmentFile values override Environment=.  The argv-level assignments are
+# the reviewed lane/process contract and cannot be weakened by a stale .env.
+ExecStart=/usr/bin/env APP_ROLE=worker ENVIRONMENT=production DB_RUNTIME_BACKEND=postgres ENABLE_LOCAL_ORCHESTRATOR=0 ENABLE_SCHEDULER=0 ENABLE_BROWSER=0 ENABLE_UPLOAD_CLEANUP=0 APIFY_WORKER_CLAIM_LANE=batch APIFY_WORKER_HEARTBEAT_NAME=apify-worker-bulk-%i HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python -m app.workers.apify_jobs_worker
 Restart=always
 RestartSec=5
 KillMode=mixed
 TimeoutStopSec=1300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vkpi-worker-bulk-%i
+LimitNOFILE=65536
 NoNewPrivileges=true
-PrivateTmp=false
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/viltrox-2.0/current
+ReadOnlyPaths=/opt/viltrox-2.0/.env
+ReadOnlyPaths=-/opt/viltrox-2.0/.env.production
+ReadWritePaths=/opt/viltrox-2.0/uploads
+ReadOnlyPaths=/opt/viltrox-2.0/runtime
+ReadOnlyPaths=/opt/viltrox-2.0/frames
+ReadOnlyPaths=/opt/viltrox-2.0/creator_profiles
+InaccessiblePaths=/opt/viltrox-2.0/backups
 
 [Install]
 WantedBy=multi-user.target

@@ -26,6 +26,8 @@ token,永不持有长期 API key;结果只交回 staging 由服务端校验后�
 """
 from __future__ import annotations
 
+from stdout_utils import out as stdout_out
+
 import argparse
 import hashlib
 import json
@@ -252,7 +254,7 @@ def register(base: str, token: str, device_name: str) -> str:
     device_id = str(out.get("device_id") or "")
     if not device_id:
         raise RuntimeError(f"register returned no device_id: {json.dumps(out)[:200]}")
-    print(f"[runner] registered device_id={device_id} reused={out.get('reused')} "
+    stdout_out(f"[runner] registered device_id={device_id} reused={out.get('reused')} "
           f"safe_types={out.get('safe_task_types')} dev_insecure={out.get('dev_insecure')}")
     return device_id
 
@@ -264,7 +266,7 @@ def heartbeat(base: str, token: str, device_id: str, current_task: str | None = 
             "stats": {"caps": _capabilities()},
         })
     except ApiError as exc:
-        print(f"[runner] heartbeat failed: {exc}", file=sys.stderr)
+        stdout_out(f"[runner] heartbeat failed: {exc}", file=sys.stderr)
 
 
 def lease_and_run(base: str, token: str, device_id: str, task_types: list[str], staging_dir: str) -> bool:
@@ -279,12 +281,12 @@ def lease_and_run(base: str, token: str, device_id: str, task_types: list[str], 
     task_type = lease["task_type"]
     payload = lease.get("payload") or {}
     task_token = lease["task_token"]
-    print(f"[runner] leased lease_id={lease_id} task_type={task_type} job_id={lease.get('job_id')}")
+    stdout_out(f"[runner] leased lease_id={lease_id} task_type={task_type} job_id={lease.get('job_id')}")
     heartbeat(base, token, device_id, current_task=task_type)
 
     executor = EXECUTORS.get(task_type)
     if executor is None:
-        print(f"[runner] no executor for {task_type}, skipping", file=sys.stderr)
+        stdout_out(f"[runner] no executor for {task_type}, skipping", file=sys.stderr)
         return True
     try:
         result, files_meta = executor(payload, staging_dir)
@@ -296,7 +298,7 @@ def lease_and_run(base: str, token: str, device_id: str, task_types: list[str], 
         "result": result,
         "files_meta": files_meta,
     })
-    print(f"[runner] submitted lease_id={lease_id} accepted={submit.get('accepted')} "
+    stdout_out(f"[runner] submitted lease_id={lease_id} accepted={submit.get('accepted')} "
           f"validated={submit.get('validated')} notes={submit.get('notes')}")
     return True
 
@@ -316,40 +318,40 @@ def main() -> int:
     task_types = [t.strip() for t in args.task_types.split(",") if t.strip()] or list(SAFE_TASK_TYPES)
     bad = [t for t in task_types if t not in SAFE_TASK_TYPES]
     if bad:
-        print(f"[runner] task types not in safe whitelist: {bad}", file=sys.stderr)
+        stdout_out(f"[runner] task types not in safe whitelist: {bad}", file=sys.stderr)
         return 2
 
     token = os.environ.get("VKPI_RUNNER_TOKEN", "").strip()
     if not token:
         if not args.email:
-            print("[runner] need --email + VKPI_RUNNER_PASSWORD, or VKPI_RUNNER_TOKEN", file=sys.stderr)
+            stdout_out("[runner] need --email + VKPI_RUNNER_PASSWORD, or VKPI_RUNNER_TOKEN", file=sys.stderr)
             return 2
         password = os.environ.get("VKPI_RUNNER_PASSWORD", "")
         if not password:
-            print("[runner] set VKPI_RUNNER_PASSWORD env", file=sys.stderr)
+            stdout_out("[runner] set VKPI_RUNNER_PASSWORD env", file=sys.stderr)
             return 2
         token = login(args.base, args.email, password)
-        print("[runner] logged in OK")
+        stdout_out("[runner] logged in OK")
 
     device_id = register(args.base, token, args.device_name)
 
     if args.once:
         did = lease_and_run(args.base, token, device_id, task_types, args.staging_dir)
         if not did:
-            print("[runner] no task available")
+            stdout_out("[runner] no task available")
         return 0
 
-    print(f"[runner] polling every {args.poll_interval}s for {task_types} (Ctrl-C to stop)")
+    stdout_out(f"[runner] polling every {args.poll_interval}s for {task_types} (Ctrl-C to stop)")
     while True:
         try:
             heartbeat(args.base, token, device_id)
             worked = lease_and_run(args.base, token, device_id, task_types, args.staging_dir)
             time.sleep(1 if worked else args.poll_interval)
         except KeyboardInterrupt:
-            print("\n[runner] stopped")
+            stdout_out("\n[runner] stopped")
             return 0
         except ApiError as exc:
-            print(f"[runner] api error (will retry): {exc}", file=sys.stderr)
+            stdout_out(f"[runner] api error (will retry): {exc}", file=sys.stderr)
             time.sleep(args.poll_interval)
 
 

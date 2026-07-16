@@ -104,12 +104,12 @@ def _rows(n, start=100):
 
 
 def _mine_invoke(monkeypatch):
-    """把 llm_gateway.invoke 换成地雷:被碰即爆。"""
+    """把 strict production JSON 边界换成地雷:被碰即爆。"""
 
     def _boom(*args, **kwargs):  # pragma: no cover - 爆了就是 bug
-        raise AssertionError("llm_gateway.invoke must NOT be called")
+        raise AssertionError("llm_production.generate_json must NOT be called")
 
-    monkeypatch.setattr(sa.llm_gateway, "invoke", _boom)
+    monkeypatch.setattr(sa.llm_production, "generate_json", _boom)
 
 
 # ── 1. dry_run:零 LLM、零落库,返回预估 ─────────────────────────────
@@ -148,7 +148,7 @@ def test_packed_prompt_contains_every_id_and_contract():
     prompt = sa.build_packed_prompt(items)
     for it in items:
         assert f"[{it['id']}]" in prompt
-    assert "JSON array" in prompt
+    assert '"items"' in prompt
     assert '"score"' in prompt and '"label"' in prompt and '"aspects"' in prompt
 
 
@@ -161,15 +161,15 @@ def test_live_run_prompt_packs_all_selected_ids(monkeypatch):
         payload = [{"id": i, "score": 0.5, "label": "pos", "aspects": []} for i in ids]
         return {
             "status": "success",
-            "text": json.dumps(payload),
+            "json": {"items": payload},
             "provider": "google",
-            "model": "gemini-flash-latest",
+            "model": kwargs["model"],
             "input_tokens": 100,
             "output_tokens": 50,
             "cost_micro_usd": 210,
         }
 
-    monkeypatch.setattr(sa.llm_gateway, "invoke", fake_invoke)
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
     conn = _FakeConn(pending_rows=_rows(5))
     result = sa.annotate_batch(5, dry_run=False, conn=conn)
 
@@ -235,15 +235,15 @@ def test_live_run_persists_and_links_per_id(monkeypatch):
     def fake_invoke(prompt, **kwargs):
         return {
             "status": "success",
-            "text": "```json\n" + json.dumps(payload) + "\n```",
+            "json": {"items": payload},
             "provider": "google",
-            "model": "gemini-flash-latest",
+            "model": kwargs["model"],
             "input_tokens": 300,
             "output_tokens": 120,
             "cost_micro_usd": 570,
         }
 
-    monkeypatch.setattr(sa.llm_gateway, "invoke", fake_invoke)
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
     conn = _FakeConn(pending_rows=rows)
     result = sa.annotate_batch(3, dry_run=False, conn=conn)
 
@@ -351,9 +351,15 @@ def test_job_runs_live_capped_when_gate_on(monkeypatch):
 
 def test_gateway_fallback_halts_without_writes(monkeypatch):
     def fake_invoke(prompt, **kwargs):
-        return {"status": "fallback_to_rule", "reason": "budget_disabled", "provider": "rule_v0", "text": ""}
+        return {
+            "status": "fallback_to_rule",
+            "reason": "budget_disabled",
+            "provider": "rule_v0",
+            "model": "rule_v0",
+            "json": None,
+        }
 
-    monkeypatch.setattr(sa.llm_gateway, "invoke", fake_invoke)
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
     conn = _FakeConn(pending_rows=_rows(4))
     result = sa.annotate_batch(4, dry_run=False, conn=conn)
 

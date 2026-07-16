@@ -8,6 +8,8 @@ Default mode is dry-run. Use --apply only after reviewing the printed rows.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import json
 from typing import Any
@@ -123,12 +125,12 @@ def main() -> int:
         result["staff_after"] = before
 
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        out(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
 
-    print("VKPI_P4_1B_STAFF_OBSERVATION_HYGIENE", json.dumps(result, ensure_ascii=False, sort_keys=True))
+    out("VKPI_P4_1B_STAFF_OBSERVATION_HYGIENE", json.dumps(result, ensure_ascii=False, sort_keys=True))
     if rows and not args.apply:
-        print("Dry-run only. Review rows, then rerun with --apply.")
+        out("Dry-run only. Review rows, then rerun with --apply.")
     return 0
 
 

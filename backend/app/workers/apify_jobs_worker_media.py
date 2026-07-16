@@ -20,7 +20,6 @@ from app.domains.media.cache import cache_local_video_file
 from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
 from app.workers.apify_jobs_worker_helpers import (
     _json,
-    _parse_apify_resolver_stdout,
     _parse_last_json_stdout,
     _platform_from_content_url,
     _url_host,
@@ -80,39 +79,35 @@ def _mock_result(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
 
 
 def _scrape_with_apify_timeout(content_url: str, platform: str) -> dict[str, Any]:
-    backend_dir = Path(__file__).resolve().parents[2]
-    repo_dir = Path(__file__).resolve().parents[3]
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(backend_dir) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    child_code = r"""
-import asyncio
-import json
-import sys
+    """Resolve media in the claimed worker process, preserving its fence.
 
-from app.services.scraping import apify as apify_scraper
+    The old subprocess boundary silently discarded the ContextVar installed by
+    ``_execute_claimed_job``.  Consequently ``call_apify_actor`` correctly
+    rejected the child and the media pipeline misreported a normal IG/TikTok
+    job as an empty scrape.  The provider lifecycle itself is already bounded
+    by ``timeout_secs`` + ``wait_secs`` and persists the run id before waiting,
+    so no process kill is needed here.
+    """
+    import asyncio
 
+    from app.platform.apify_budget import current_apify_execution_context
+    from app.services.scraping import apify as apify_scraper
 
-async def main() -> None:
-    result = await apify_scraper.scrape_with_apify(sys.argv[1], sys.argv[2])
-    print(json.dumps(result, ensure_ascii=False, default=str), flush=True)
-
-
-try:
-    asyncio.run(main())
-except BaseException as exc:
-    print(json.dumps({"scraped_ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False), flush=True)
-    raise
-"""
+    if current_apify_execution_context() is None:
+        return {
+            "scraped_ok": False,
+            "error": "durable_execution_context_required",
+            "_context_required": True,
+        }
     try:
-        proc = subprocess.run(
-            [sys.executable, "-c", child_code, content_url, platform],
-            cwd=str(repo_dir),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=MEDIA_RESOLVE_TIMEOUT_SECONDS,
+        return asyncio.run(
+            apify_scraper.scrape_with_apify(
+                content_url,
+                platform,
+                timeout_secs=MEDIA_RESOLVE_TIMEOUT_SECONDS,
+            )
         )
-    except subprocess.TimeoutExpired:
+    except TimeoutError:
         logger.warning(
             "apify media resolve timeout | platform=%s source_host=%s timeout_sec=%s",
             platform,
@@ -124,11 +119,17 @@ except BaseException as exc:
             "error": "media_resolve_timeout",
             "_timeout": True,
         }
-    parsed = _parse_apify_resolver_stdout(proc.stdout)
-    if proc.returncode != 0:
-        parsed["_child_exit"] = True
-        parsed["error"] = str(parsed.get("error") or proc.stderr or f"apify resolver exit {proc.returncode}")[-1000:]
-    return parsed
+    except Exception as exc:
+        logger.warning(
+            "apify media resolve failed | platform=%s source_host=%s error=%s",
+            platform,
+            _url_host(content_url),
+            type(exc).__name__,
+        )
+        return {
+            "scraped_ok": False,
+            "error": f"{type(exc).__name__}: {str(exc)[:800]}",
+        }
 
 
 def _gemini_analyzer_child_code() -> str:
@@ -174,6 +175,8 @@ async def _run(payload):
             schema_version=str(payload.get("schema_version") or "v2"),
             performance_context=payload.get("performance_context"),
             final_v1_models=payload.get("gemini_final_v1_models"),
+            models=payload.get("gemini_models"),
+            llm_context=payload.get("llm_context"),
         )
     if mode == "youtube":
         return await gemini_video_analyzer.analyze_youtube_with_gemini(
@@ -183,6 +186,8 @@ async def _run(payload):
             schema_version=str(payload.get("schema_version") or "legacy"),
             performance_context=payload.get("performance_context"),
             final_v1_models=payload.get("gemini_final_v1_models"),
+            models=payload.get("gemini_models"),
+            llm_context=payload.get("llm_context"),
         )
     return {"analyzed": False, "method": "gemini_worker_child", "error": f"unsupported_gemini_child_mode:{mode}"}
 

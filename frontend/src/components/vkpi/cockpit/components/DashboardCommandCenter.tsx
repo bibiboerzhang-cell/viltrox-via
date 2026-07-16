@@ -16,7 +16,10 @@ export function DashboardCommandCenter(props: any) {
     setSelectedPin, viewMode, setViewMode, countryOptions, cityOptions, itemOptions,
     venueOptions, breadcrumb, goBack, topListData, setSelectedEvent, focusTarget,
     viewModes, showSettingsModal, upcomingEvents, onOpenEvents, revenueBySource = [],
+    mapSelectionLoading = false, mapSelectionError = "",
   } = props;
+  const showMapLoading = mapSelectionLoading && !isAvailable;
+  const showMapChooser = !viewMode && !mapSelectionLoading;
 
   return e(m.div, {
     ref: globeContainerRef,
@@ -49,7 +52,7 @@ export function DashboardCommandCenter(props: any) {
       e("p", { className: "mt-1 text-xs text-muted md:text-sm" }, currentMode?.desc || "真实 KOL、Dealer 与 Events 地理分布"),
     ),
 
-    !showSettingsModal && e("div", { className: "absolute left-6 top-24 z-overlay-high flex max-w-[calc(100%-360px)] flex-wrap items-start gap-2" },
+    !showSettingsModal && (viewMode || !mapSelectionLoading) && e("div", { className: "absolute left-6 top-24 z-overlay-high flex max-w-[calc(100%-360px)] flex-wrap items-start gap-2" },
       e(HierarchyDropdown, {
         label: "Viewing",
         value: viewMode,
@@ -61,7 +64,15 @@ export function DashboardCommandCenter(props: any) {
           key,
           label: mode.label,
           sub: mode.desc,
-          badge: mode.available ? null : "WAITING",
+          badge: mode.available
+            ? null
+            : mode.loading
+              ? "LOADING"
+              : mode.error
+                ? "ERROR"
+                : mode.waitingMessage
+                  ? "WAITING"
+                  : "EMPTY",
           disabled: !mode.available,
         })),
         onChange: (value: any) => {
@@ -108,15 +119,27 @@ export function DashboardCommandCenter(props: any) {
       e(Breadcrumb, { levels: breadcrumb, onGoBack: goBack }),
     ),
 
-    !viewMode && e("div", { className: "absolute inset-0 flex items-center justify-center" },
+    showMapLoading && e("div", { className: "absolute inset-0 flex items-center justify-center" },
+      e("div", { className: "max-w-md px-6 text-center" },
+        e("div", { className: "mb-6 inline-flex h-20 w-20 items-center justify-center rounded-full border border-line bg-panel" }, e(Loader2, { size: 34, className: "animate-spin text-muted" })),
+        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, "Loading map data"),
+        e("p", { className: "text-sm text-muted" }, "正在检查 KOL、Dealer 与 Events 的真实地理数据。"),
+      ),
+    ),
+
+    showMapChooser && e("div", { className: "absolute inset-0 flex items-center justify-center" },
       e("div", { className: "max-w-md px-6 text-center" },
         e("div", { className: "mb-6 inline-flex h-20 w-20 items-center justify-center rounded-full border border-line bg-panel" }, e(Globe2, { size: 36, className: "text-muted" })),
-        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, "Choose what to map"),
-        e("p", { className: "mb-6 text-sm text-muted" }, "选择 KOL、Dealer 或 Events，地图将按真实数据切换。"),
+        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, mapSelectionError ? "Map data unavailable" : "Choose what to map"),
+        e("p", { className: "mb-6 text-sm text-muted" }, mapSelectionError
+          ? "KOL、Dealer 与 Events 地图源当前均不可用。"
+          : "当前没有可映射的真实位置；有数据后将自动选择。"),
         e("div", { className: "flex flex-wrap justify-center gap-2 text-xs text-muted" },
-          e("span", { className: "rounded-md border border-line bg-panel px-3 py-1.5" }, "KOL 分布读取真实 API"),
-          e("span", { className: "rounded-md border border-line bg-panel px-3 py-1.5" }, "Dealer locations 已接入"),
-          e("span", { className: "rounded-md border border-warn-soft bg-warn-soft px-3 py-1.5 text-warn" }, e(Loader2, { size: 11, className: "mr-1 inline-block animate-spin" }), "Customer data pending"),
+          ["kols", "dealers", "events"].map((key) => {
+            const mode = viewModes?.[key] || {};
+            const status = mode.available ? "READY" : mode.error ? "ERROR" : "EMPTY";
+            return e("span", { key, className: "rounded-md border border-line bg-panel px-3 py-1.5" }, `${mode.label || key} · ${status}`);
+          }),
         ),
       ),
     ),

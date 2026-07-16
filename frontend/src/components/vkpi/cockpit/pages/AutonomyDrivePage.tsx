@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { apiFetch, jsonBody } from "../../../../services/http";
 import { getBoardSeries, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
@@ -52,7 +53,7 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "loop", span: 4 },
 ];
 
-export function AutonomyDrivePage({ apiToken = "" }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
+export function AutonomyDrivePage({ apiToken = "", embeddedModuleKey }: { apiToken?: string; onNavigate?: (navKey: string) => void; embeddedModuleKey?: string }) {
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
   const [provKey, setProvKey] = React.useState<string | null>(null);
@@ -359,6 +360,10 @@ export function AutonomyDrivePage({ apiToken = "" }: { apiToken?: string; onNavi
     { key: "miss", label: "低命中复盘", description: "失败原因聚类 · 一键入记忆", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 6, maxHeight: 30, render: () => <MissEmbed apiToken={apiToken} noToken={noTokenCard} /> },
     { key: "shadow", label: "影子评测", description: "挑战者赢旧版才上线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 6, maxHeight: 30, render: () => <ShadowEmbed apiToken={apiToken} noToken={noTokenCard} /> },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="自治驾照" />;
+  }
 
   return (
     <div className="p-4 md:px-[22px] md:py-[15px]">

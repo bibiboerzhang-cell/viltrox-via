@@ -20,8 +20,22 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.db.connection import table_exists  # noqa: E402
 from app.domains.marketing_brain import skill_registry  # noqa: E402
+
+
+@pytest.fixture()
+def require_skill_runs_table() -> None:
+    """Skip at test runtime when migration 199 has not created the PG table.
+
+    Keep the database probe out of module import/collection.  The ``pg`` marker
+    lets ``tests/conftest.py`` establish PostgreSQL availability first, so a
+    sandboxed or offline database produces a normal skip instead of a
+    collection-time connection error.
+    """
+    from app.db.connection import table_exists
+
+    if not table_exists("vkpi_skill_runs"):
+        pytest.skip("vkpi_skill_runs missing (migration 199 not applied)")
 
 
 def test_register_skill_merges_tool_registry_metadata():
@@ -51,11 +65,8 @@ def test_truthy_compat_boolean_readback():
     assert skill_registry._truthy(True) is True
 
 
-@pytest.mark.skipif(
-    not table_exists("vkpi_skill_runs"),
-    reason="vkpi_skill_runs missing (migration 199 not applied)",
-)
-def test_record_then_readback_roundtrip():
+@pytest.mark.pg
+def test_record_then_readback_roundtrip(require_skill_runs_table: None):
     skill_name = "test_skill_" + uuid.uuid4().hex[:12]
     payload = {
         "skill_name": skill_name,
@@ -97,11 +108,8 @@ def test_record_then_readback_roundtrip():
     assert abs(float(run["human_score"]) - 0.85) < 1e-6
 
 
-@pytest.mark.skipif(
-    not table_exists("vkpi_skill_runs"),
-    reason="vkpi_skill_runs missing (migration 199 not applied)",
-)
-def test_acceptance_stats_three_state():
+@pytest.mark.pg
+def test_acceptance_stats_three_state(require_skill_runs_table: None):
     skill_name = "test_skill_" + uuid.uuid4().hex[:12]
     base = dict(skill_name=skill_name, model_used="m", cost_cents=10, latency_ms=100)
     # 2 accepted, 1 rejected, 1 unjudged(accepted=None)。

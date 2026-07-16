@@ -112,7 +112,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
   // ── Mutations:乐观更新 + 后端 + 对账 ──────────────────────────────────────
   function updateQty(item: StockItem, delta: number) {
     const newQty = Math.max(0, (item.qty || 0) + delta);
-    setStock(prev => prev.map(s => s.id === item.id ? { ...s, qty: newQty } : s)); // 乐观
+    setStock(prev => prev.map(s => s.id === item.id ? { ...s, qty: newQty, quantityStatus: "unverified", quantitySource: "manual_adjustment_reference" } : s)); // 乐观
     if (!token) return;
     updateInventoryItem(token, item.sku, { qty: newQty })
       .then(() => refetch())
@@ -139,7 +139,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
 
   function addItem() {
     if (!newName || !newSku) return;
-    const optimistic: StockItem = { id: "s_" + Date.now(), name: newName, category: newCategory, qty: newQty, location: newLocation, sku: newSku, note: newNote, isSample: newIsSample };
+    const optimistic: StockItem = { id: "s_" + Date.now(), name: newName, category: newCategory, qty: newQty, location: newLocation, sku: newSku, note: newNote, isSample: newIsSample, quantityStatus: "unverified", quantitySource: "manual_reference" };
     setStock(prev => [optimistic, ...prev]); // 乐观
     setNewName(""); setNewSku(""); setNewNote(""); setNewQty(0); setNewIsSample(false);
     setShowAdd(false);
@@ -191,10 +191,10 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
   }
   function runImport() {
     if (!token || importing) return;
-    if (!confirm("从产品库把缺的 SKU 批量补进库存(数量默认 0,你再调量)? 已存在的不变.")) return;
+    if (!confirm("从产品库补齐 SKU 参考项？导入的 0 仅是待核实占位，不会触发缺货告警；人工调量后才转为已确认。")) return;
     setImporting(true);
     importInventoryFromCatalog(token)
-      .then(res => { alert(`已导入 ${res.imported || 0} 个 SKU(数量 0,记得补库存量)`); refetch(); })
+      .then(res => { alert(`已导入 ${res.imported || 0} 个 SKU 参考项（数量待核实，不计缺货）`); refetch(); })
       .catch(e2 => setErr("导入失败:" + String(e2 && e2.message ? e2.message : e2)))
       .finally(() => setImporting(false));
   }
@@ -378,6 +378,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
                   const cat = PRODUCT_CATEGORIES[s.category];
                   const CI = cat?.icon || Package;
                   const editing = editingId === s.id;
+                  const quantityVerified = s.quantityStatus === "manual_confirmed" || s.quantityStatus === "source_confirmed";
                   return e("tr", { key: s.id, className: "border-t border-white/[0.04] hover:bg-white/[0.012]" },
                     e("td", { className: "px-2 py-2" },
                       e("div", { className: "flex items-center gap-2" },
@@ -385,7 +386,8 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
                         e("div", null,
                           e("div", { className: "text-[11.5px] text-white font-medium flex items-center gap-1.5" },
                             s.name,
-                            s.isSample && e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "样品")
+                            s.isSample && e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-purple-500/15 text-purple-300" }, "样品"),
+                            !quantityVerified && e("span", { className: "text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-300", title: "目录或历史占位数量，不参与缺货告警" }, "数量待核实")
                           )
                         )
                       )
@@ -397,7 +399,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
                     e("td", { className: "px-2 py-2" },
                       e("div", { className: "flex items-center justify-center gap-1" },
                         e("button", { onClick: () => updateQty(s, -1), className: "w-5 h-5 rounded text-[11px] hover:bg-white/[0.05] text-slate-500" }, "−"),
-                        e("span", { className: `text-[12px] font-bold tabular-nums w-8 text-center ${s.qty === 0 ? "text-red-300" : s.qty < 5 ? "text-amber-300" : "text-white"}` }, s.qty),
+                        e("span", { className: `text-[12px] font-bold tabular-nums w-8 text-center ${!quantityVerified ? "text-slate-500" : s.qty === 0 ? "text-red-300" : s.qty < 5 ? "text-amber-300" : "text-white"}`, title: quantityVerified ? "已确认数量" : "待核实占位数量" }, s.qty),
                         e("button", { onClick: () => updateQty(s, 1), className: "w-5 h-5 rounded text-[11px] hover:bg-white/[0.05] text-slate-500" }, "+")
                       )
                     ),
@@ -438,7 +440,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
           ),
           e("div", null,
             e("h3", { className: "text-[14px] font-semibold text-white" }, "公司库存表"),
-            e("p", { className: "text-[10.5px] text-slate-500 mt-0.5" }, "样品库 + 量产库存 + 配件 + 设备 · 跨 Event 共享 · 真后端 · 每次变更留痕")
+            e("p", { className: "text-[10.5px] text-slate-500 mt-0.5" }, "后端留痕 · 数量来源分为待核实 / 人工确认 / 外部来源确认")
           )
         ),
         e("button", { onClick: onClose, className: "text-slate-500 hover:text-white" }, e(X, { size: 16 }))
@@ -463,7 +465,7 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
         view === "stock" && e("button", {
           onClick: runImport, disabled: importing,
           className: `px-2.5 py-1.5 rounded-md border border-white/[0.08] text-[10.5px] flex items-center gap-1.5 ${importing ? "text-slate-600 cursor-not-allowed" : "text-slate-300 hover:bg-white/[0.04]"}`,
-          title: "把产品库里有、库存表没有的 SKU 批量补进来(数量 0)"
+          title: "把产品目录 SKU 补为待核实参考项（0 不代表真实缺货）"
         }, e(Download, { size: 11 }), importing ? "导入中…" : "从产品库导入")
       ),
 
@@ -483,8 +485,10 @@ export default function StockManagerModal({ stock, setStock, token: tokenProp, o
           ? e("div", { className: "text-[10px] text-slate-500" },
               "共 ", e("span", { className: "text-white" }, stock.length), " 项 · 样品 ",
               e("span", { className: "text-purple-300" }, stock.filter(s => s.isSample).length),
-              " · 缺货 ",
-              e("span", { className: "text-red-300" }, stock.filter(s => s.qty === 0).length)
+              " · 已确认缺货 ",
+              e("span", { className: "text-red-300" }, stock.filter(s => s.qty === 0 && (s.quantityStatus === "manual_confirmed" || s.quantityStatus === "source_confirmed")).length),
+              " · 数量待核实 ",
+              e("span", { className: "text-amber-300" }, stock.filter(s => s.quantityStatus !== "manual_confirmed" && s.quantityStatus !== "source_confirmed").length)
             )
           : e("div", { className: "text-[10px] text-slate-500" },
               "共 ", e("span", { className: "text-white" }, movements.length), " 条调动流水"

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # R58E: 加 LOCAL_DATABASE_URL 守门 + 启动可见性
 
+# An explicit quiet request from a service launcher is monotonic.  Environment
+# files may add settings, but must never re-enable connection URL logging after
+# the launcher disabled it.
+_RUNTIME_ENV_QUIET_REQUESTED="${RUNTIME_ENV_QUIET:-0}"
+
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
   SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 elif [[ -n "${ZSH_VERSION:-}" ]]; then
@@ -151,7 +156,7 @@ fi
 # R58E NEW: 启动可见性 - 打印当前生效的关键环境
 # 让任何调用 runtime_env.sh 的脚本都能看到真实值
 # ──────────────────────────────────────────────────────────
-if [[ "${RUNTIME_ENV_QUIET:-0}" != "1" ]]; then
+if [[ "${_RUNTIME_ENV_QUIET_REQUESTED}" != "1" && "${RUNTIME_ENV_QUIET:-0}" != "1" ]]; then
   cat >&2 <<EOF
 ─── runtime_env.sh loaded ───
   ENVIRONMENT       = $ENVIRONMENT

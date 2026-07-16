@@ -82,7 +82,7 @@ export function UpcomingEventsCard({ events, dragConstraintsRef, onEventClick, o
       // 诚实空态:无真实未来活动时显示「暂无活动」,不编造占位卡。
       events.length === 0 && e("div", { className: "rounded-lg border border-dashed border-line bg-panel px-3 py-4 text-center" },
         e("div", { className: "text-[11px] text-muted" }, "暂无活动"),
-        e("div", { className: "mt-0.5 text-[9px] text-muted" }, "近期无即将开始的真实活动")
+        e("div", { className: "mt-0.5 text-[9px] text-muted" }, "公司 Event 暂无即将开幕；公开机会见活动雷达")
       ),
       events.map((evt: any) => {
         const Icon = evt.icon;

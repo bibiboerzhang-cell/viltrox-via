@@ -8,6 +8,7 @@ P3.9C scope:
   - shipment evidence_url is stored and appears in project_detail()
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -256,8 +257,8 @@ class Smoke:
 
 def main() -> None:
     result = Smoke().run()
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    print("VKPI_PROJECT_EVIDENCE_DETAIL_FLOW_SMOKE_OK")
+    stdout_out(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    stdout_out("VKPI_PROJECT_EVIDENCE_DETAIL_FLOW_SMOKE_OK")
 
 
 if __name__ == "__main__":

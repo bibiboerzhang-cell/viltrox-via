@@ -1,11 +1,11 @@
-"""LLM 网关 google(gemini)请求体契约 —— 关思考回归锁(HIGH)。
+"""LLM 网关 Google 精确模型思考参数契约(HIGH)。
 
 真实生产事故回归(769 全灭):gemini-2.5 系默认动态思考,思考 token 计入
 maxOutputTokens——status=success 但正文全是思维链碎片 / 直接截断为空。
-网关修复(90f837739)在 generationConfig 里钉死 thinkingConfig.thinkingBudget=0;
-本测试 monkeypatch HTTP 缝(llm_gateway_providers._request_json)捕获
-_call_google 的真实请求体,把三件套(maxOutputTokens / temperature /
-thinkingBudget==0)锁进契约——谁改掉关思考,这里立刻红。
+后续精确模型 canary 又证明 2.5 Pro 禁止 thinkingBudget=0,
+Gemini 3 则使用 thinkingLevel。本测试 monkeypatch HTTP 缝捕获真实
+请求体,同时锁住 Flash 2.5 关思考、Pro 2.5 最小预算与 Gemini 3
+minimal 契约。
 
 零网络零真 key(_get_api_key 一并 patch);不触真库,不触 viltrox_fit_score / rule_v0。
 """
@@ -29,7 +29,12 @@ def _fake_google_response() -> dict:
     }
 
 
-def _capture_call(monkeypatch, max_output_tokens: int) -> dict:
+def _capture_call(
+    monkeypatch,
+    max_output_tokens: int,
+    *,
+    model_override: str | None = "gemini-2.5-flash",
+) -> dict:
     """跑一次 _call_google,返回被捕获的请求体 payload(零真实 HTTP)。"""
     captured: dict = {}
 
@@ -40,7 +45,11 @@ def _capture_call(monkeypatch, max_output_tokens: int) -> dict:
 
     monkeypatch.setattr(providers, "_request_json", fake_request_json)
     monkeypatch.setattr(providers, "_get_api_key", lambda provider: "test-key")
-    result = providers._call_google("hello world", max_output_tokens)
+    result = providers._call_google(
+        "hello world",
+        max_output_tokens,
+        model_override=model_override,
+    )
     assert result["status"] == "success", result  # 缝生效,没走真网络失败分支
     captured["result"] = result
     return captured
@@ -58,6 +67,26 @@ def test_call_google_generation_config_locks_thinking_off(monkeypatch):
     assert set(gen.keys()) == {"maxOutputTokens", "temperature", "thinkingConfig"}
     # prompt 走 contents/parts 标准形状
     assert captured["payload"]["contents"] == [{"parts": [{"text": "hello world"}]}]
+
+
+def test_call_google_uses_supported_thinking_controls_per_exact_model(monkeypatch):
+    pro = _capture_call(
+        monkeypatch,
+        max_output_tokens=256,
+        model_override="gemini-2.5-pro",
+    )
+    assert pro["payload"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingBudget": 128
+    }
+
+    flash_3 = _capture_call(
+        monkeypatch,
+        max_output_tokens=128,
+        model_override="gemini-3.5-flash",
+    )
+    assert flash_3["payload"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingLevel": "minimal"
+    }
 
 
 def test_call_google_token_clamp_keeps_thinking_off(monkeypatch):
@@ -81,3 +110,30 @@ def test_call_google_parses_text_and_usage_through_seam(monkeypatch):
     assert result["text"] == "ok"
     assert result["input_tokens"] == 10
     assert result["output_tokens"] == 5
+    assert result["visible_output_tokens"] == 5
+    assert result["thinking_tokens"] == 0
+
+
+def test_call_google_bills_thinking_and_visible_output_tokens(monkeypatch):
+    def fake_request_json(_url, _payload, _headers, _timeout):
+        return {
+            "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "thoughtsTokenCount": 7,
+            },
+        }
+
+    monkeypatch.setattr(providers, "_request_json", fake_request_json)
+    monkeypatch.setattr(providers, "_get_api_key", lambda _provider: "test-key")
+    result = providers._call_google(
+        "hello world",
+        256,
+        model_override="gemini-2.5-pro",
+    )
+
+    assert result["status"] == "success"
+    assert result["visible_output_tokens"] == 5
+    assert result["thinking_tokens"] == 7
+    assert result["output_tokens"] == 12

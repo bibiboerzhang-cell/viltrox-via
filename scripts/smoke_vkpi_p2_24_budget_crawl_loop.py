@@ -6,6 +6,7 @@ use the same global budget gates exposed in Settings, without triggering any
 YouTube or Apify network calls.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import sys
 from pathlib import Path
@@ -145,7 +146,7 @@ def main() -> None:
     _assert_crawl_budget_gate()
     _assert_provider_gate_uses_global_budget()
     _assert_frontend_gate_wiring()
-    print("VKPI_P2_24_BUDGET_CRAWL_LOOP_SMOKE_OK")
+    stdout_out("VKPI_P2_24_BUDGET_CRAWL_LOOP_SMOKE_OK")
 
 
 if __name__ == "__main__":

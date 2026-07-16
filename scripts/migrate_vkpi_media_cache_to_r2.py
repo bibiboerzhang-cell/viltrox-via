@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dry-run or execute V-KPI local video-cache migration to R2."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -27,7 +28,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     result = migrate_local_video_cache_to_r2(execute=bool(args.execute), limit=int(args.limit or 100), platform=args.platform)
-    print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     if args.execute and result.get("status") == "not_configured":
         return 2
     if args.execute and int(result.get("failed") or 0):

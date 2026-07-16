@@ -1,15 +1,35 @@
 [Unit]
 Description=V-KPI / Viltrox 2.0 Test App
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
 User=viltrox
 Group=viltrox
-WorkingDirectory=/opt/viltrox-2.0
+UMask=0027
+WorkingDirectory=/opt/viltrox-2.0/current
 EnvironmentFile=/opt/viltrox-2.0/.env
-Environment=PYTHONPATH=/opt/viltrox-2.0/backend
-ExecStart=/opt/viltrox-2.0/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1
+Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=APP_ROLE=admin-web
+Environment=ENVIRONMENT=production
+Environment=DB_RUNTIME_BACKEND=postgres
+Environment=LOCAL_RUNTIME_FORCE_STACK=0
+Environment=RUNTIME_ENV_QUIET=1
+Environment=HOST=127.0.0.1
+Environment=PORT=8001
+# Two web processes remove the current single-process head-of-line bottleneck.
+# Migration 249's PostgreSQL advisory leader lock keeps APScheduler single-owner.
+Environment=WEB_CONCURRENCY=2
+Environment=ADMIN_DAEMON=0
+Environment=ENABLE_SCHEDULER=1
+Environment=ENABLE_BROWSER=0
+Environment=ENABLE_UPLOAD_CLEANUP=0
+# EnvironmentFile= values override Environment= in systemd.  Pass the reviewed
+# contract marker and quiet flag as argv-level env assignments, then let
+# start_admin.sh restore every fixed web-runtime value after sourcing .env.
+ExecStart=/usr/bin/env VKPI_SYSTEMD_ADMIN_WEB_CONTRACT=1 ENVIRONMENT=production RUNTIME_ENV_QUIET=1 PYTHON_BIN=/opt/viltrox-2.0/.venv/bin/python /bin/bash /opt/viltrox-2.0/current/scripts/start_admin.sh
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -18,6 +38,33 @@ SyslogIdentifier=viltrox-2.0-test
 LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/viltrox-2.0/current
+ReadOnlyPaths=/opt/viltrox-2.0/.env
+ReadOnlyPaths=-/opt/viltrox-2.0/.env.production
+ReadWritePaths=/opt/viltrox-2.0/uploads
+ReadWritePaths=/opt/viltrox-2.0/runtime
+ReadWritePaths=/opt/viltrox-2.0/frames
+ReadWritePaths=/opt/viltrox-2.0/creator_profiles
+ReadOnlyPaths=-/opt/viltrox-2.0/runtime/ops/deploy-rollbacks
+InaccessiblePaths=/opt/viltrox-2.0/backups
 
 [Install]
 WantedBy=multi-user.target

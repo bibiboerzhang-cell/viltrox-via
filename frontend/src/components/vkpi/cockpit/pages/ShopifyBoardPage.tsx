@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { ModuleProvModal } from "./MarketVoicePage.dialogs";
 import { MiniDetailModal, MiniListModal } from "./ProjectsBoardPage.dialogs";
@@ -78,7 +79,7 @@ const DEFAULT_LAYOUT = [
 const PH_BADGE =
   "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
 
-export function ShopifyBoardPage({ apiToken = "" }: { apiToken?: string } = {}) {
+export function ShopifyBoardPage({ apiToken = "", embeddedModuleKey }: { apiToken?: string; embeddedModuleKey?: string } = {}) {
   const token = apiToken || "";
 
   const [editing, setEditing] = React.useState(false);
@@ -301,6 +302,10 @@ export function ShopifyBoardPage({ apiToken = "" }: { apiToken?: string } = {}) 
     // ↓ palette 备选(不进默认布局)
     { key: "credsS", label: "店铺凭据(旧)", description: "自建直连加密凭据表单(旧·待退役)· 保留供回滚排障", category: "业务板块", defaultSpan: 6, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 30, render: renderCreds },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="Shopify" />;
+  }
 
   const trackItem = trackIdx != null && trackItems ? trackItems[trackIdx] : null;
   const attrItem = attrIdx != null && attributions ? attributions[attrIdx] : null;

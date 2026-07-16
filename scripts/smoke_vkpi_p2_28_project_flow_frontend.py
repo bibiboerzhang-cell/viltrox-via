@@ -6,6 +6,7 @@ This smoke protects the source-level affordances that make that browser flow
 possible without requiring a browser runner in CI.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def main() -> None:
     assert "P2.28" in release_status and "smoke_vkpi_p2_28_project_flow_frontend.py" in release_status, "release status missing P2.28"
     assert "Browser QA" in qa_doc and "P2.28 browser QA message with attachment" in qa_doc, "P2.28 browser QA evidence doc incomplete"
 
-    print("VKPI_P2_28_PROJECT_FLOW_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_P2_28_PROJECT_FLOW_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

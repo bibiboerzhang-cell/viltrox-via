@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test for V-KPI Cost Ledger edit/approve/void/audit flow."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -190,8 +191,12 @@ def main() -> None:
     ensure_vkpi_schema()
     ensure_vkpi_audit_schema()
     smoke = Smoke()
-    result = smoke.run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    try:
+        result = smoke.run()
+    finally:
+        # 失败也清理，禁止成本 smoke 项污染真实项目/成本口径。
+        smoke.cleanup()
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

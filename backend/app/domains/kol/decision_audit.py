@@ -310,6 +310,7 @@ def _latest_followups(decision_uids: list[str]) -> dict[str, dict[str, Any]]:
 
 
 def _decision_followup_item(row: Any, latest_followup: dict[str, Any] | None, *, days_after: int, now: datetime) -> dict[str, Any]:
+    row_data = dict(row)
     decision = _row_to_decision(row)
     created = _parse_dt(decision.get("created_at")) or now
     due_at = created + timedelta(days=days_after)
@@ -327,17 +328,17 @@ def _decision_followup_item(row: Any, latest_followup: dict[str, Any] | None, *,
         "latest_followup": latest_followup or None,
         "kol": {
             "kol_pool_id": decision.get("kol_pool_id"),
-            "platform": _text(row.get("platform")),
-            "handle": _text(row.get("handle")),
-            "display_name": _text(row.get("display_name")),
-            "profile_url": _text(row.get("profile_url")),
-            "followers": _int(row.get("followers")),
+            "platform": _text(row_data.get("platform")),
+            "handle": _text(row_data.get("handle")),
+            "display_name": _text(row_data.get("display_name")),
+            "profile_url": _text(row_data.get("profile_url")),
+            "followers": _int(row_data.get("followers")),
         },
         "decision_context": {
             "source": _text(metadata.get("source")),
             "title": _text(metadata.get("title"), 300),
-            "handle": _text(metadata.get("handle") or row.get("handle")),
-            "platform": _text(metadata.get("platform") or row.get("platform")),
+            "handle": _text(metadata.get("handle") or row_data.get("handle")),
+            "platform": _text(metadata.get("platform") or row_data.get("platform")),
             "evidence_sections": decision.get("evidence_sections") or evidence_snapshot.get("evidence_sections") or [],
             "provider_calls": bool(evidence_snapshot.get("provider_calls")),
             "llm_calls": bool(evidence_snapshot.get("llm_calls")),

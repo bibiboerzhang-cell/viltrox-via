@@ -6,14 +6,22 @@ POST /api/admin/vkpi/actions/generate-daily — 跑 8 类生产者、幂等落�
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.api.dependencies.perms import require_tab
 from app.domains.actions import executors, inbox
 
 router = APIRouter(prefix="/api/admin/vkpi/actions", tags=["vkpi-actions"])
+
+
+class ActionReconcileRequest(BaseModel):
+    decision: Literal["succeeded", "failed", "unknown"]
+    reason: str = Field(min_length=1, max_length=500)
+    evidence: list[dict[str, Any]] = Field(min_length=1, max_length=20)
+    correlation_id: str = Field(min_length=8, max_length=160)
 
 
 @router.get("/inbox")
@@ -108,6 +116,43 @@ def execute(
     # 红线:仅 status=='approved' 执行;validators 双闸(approved+touches_v6_fit=False+
     # budget+entity 存在);未审批的写库/LLM 动作返回 outcome='skipped'。
     return executors.execute_action(action_id, staff)
+
+
+@router.post("/{action_id}/reconcile")
+def reconcile_execution(
+    action_id: int,
+    body: ActionReconcileRequest,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    """Manually settle an uncertain external execution with auditable evidence."""
+    res = inbox.reconcile_executing_action(
+        action_id,
+        staff,
+        decision=body.decision,
+        reason=body.reason,
+        evidence=body.evidence,
+        correlation_id=body.correlation_id,
+    )
+    if res.get("ok"):
+        return res
+    reason = str(res.get("reason") or "reconciliation_failed")
+    if reason == "not_found_or_out_of_scope":
+        raise HTTPException(status_code=404, detail=reason)
+    if reason in {
+        "invalid_reconciliation_decision",
+        "reconciliation_reason_required",
+        "reconciliation_evidence_required",
+        "reconciliation_correlation_required",
+        "reconciliation_actor_required",
+    }:
+        raise HTTPException(status_code=422, detail=reason)
+    if reason in {
+        "reconciliation_correlation_conflict",
+        "action_not_awaiting_reconciliation",
+        "reconciliation_state_changed",
+    }:
+        raise HTTPException(status_code=409, detail=reason)
+    raise HTTPException(status_code=503, detail=reason)
 
 
 # ── R7 执行台账回读(read tab;只读 vkpi_action_execution_ledger,scope 同 inbox) ──

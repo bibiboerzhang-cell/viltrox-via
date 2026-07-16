@@ -31,6 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains import business_truth
 
 logger = get_logger(__name__)
 
@@ -271,14 +272,14 @@ def _window_28d_metrics(conn: Any, *, kol_id: int, project_ids: list[int],
         f"""
         SELECT revenue_cents, occurred_at, created_at, confidence
         FROM vkpi_sales_attributions
-        WHERE {' OR '.join(sales_where)}
+        WHERE ({' OR '.join(sales_where)})
+          AND {business_truth.verified_shopify_attribution_sql()}
         """,
         tuple(sales_params),
     ) if sales_where else []
     in_window = [
         s for s in sales
-        if _text(s.get("confidence"), 20) != "excluded"
-        and _in_window(s.get("occurred_at") or s.get("created_at"), start, end)
+        if _in_window(s.get("occurred_at") or s.get("created_at"), start, end)
     ]
     orders = sum(1 for s in in_window if _int0(s.get("revenue_cents")) > 0)
     gmv_cents = sum(_int0(s.get("revenue_cents")) for s in in_window)

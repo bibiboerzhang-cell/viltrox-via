@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within, waitFor, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, within, waitFor, fireEvent } from "@testing-library/react";
 
 // P2-7 render smoke(jsdom):KOLDetailDrawer 的「长期记忆」(kolMemory)区。
 // mock seam:framer-motion(motion→div)、kolPool-api(4 fn resolve 空)、kolMemory-api(getKolMemory 可控)。
@@ -47,6 +47,7 @@ const promoteKolPoolToMain = vi.fn();
 const enqueueKolProfileCrawl = vi.fn();
 const refreshAudienceStats = vi.fn();
 const getKolVideoAnalysisCache = vi.fn();
+const getKolVideoAnalysisBatch = vi.fn();
 vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   getKolPoolDimensions11: (...a: unknown[]) => getKolPoolDimensions11(...a),
   getKolPoolLlmDeepAnalysis: (...a: unknown[]) => getKolPoolLlmDeepAnalysis(...a),
@@ -60,6 +61,7 @@ vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   enqueueKolProfileCrawl: (...a: unknown[]) => enqueueKolProfileCrawl(...a),
   refreshAudienceStats: (...a: unknown[]) => refreshAudienceStats(...a),
   getKolVideoAnalysisCache: (...a: unknown[]) => getKolVideoAnalysisCache(...a),
+  getKolVideoAnalysisBatch: (...a: unknown[]) => getKolVideoAnalysisBatch(...a),
 }));
 
 const getKolMemory = vi.fn();
@@ -68,6 +70,7 @@ vi.mock("../../../../services/vkpi/kolMemory-api", () => ({
 }));
 
 import { KOLDetailDrawer } from "./KOLDetailDrawer";
+import { KOLDrawerGeoDistribution } from "./KOLDetailDrawerSections.More";
 
 beforeEach(() => {
   getKolPoolDimensions11.mockReset().mockResolvedValue({ status: "missing" });
@@ -82,9 +85,14 @@ beforeEach(() => {
   enqueueKolProfileCrawl.mockReset().mockResolvedValue({ status: "queued" });
   refreshAudienceStats.mockReset().mockResolvedValue({ status: "ok" });
   getKolVideoAnalysisCache.mockReset().mockResolvedValue({ state: "missing" });
+  getKolVideoAnalysisBatch.mockReset().mockResolvedValue({ count: 0, items: [] });
   getKolMemory.mockReset().mockResolvedValue(null);
   // C1 tab 记忆落 localStorage:清掉,让每条用例都从默认「概览」出发(需要合作 tab 的用例自行点击)。
   window.localStorage.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // 【C1 Tab 化】长期记忆区已归「合作」tab(默认 tab 是「概览」),先点 tab 再断言。
@@ -110,6 +118,12 @@ const readyMemory = {
   },
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 function renderDrawer(props: Record<string, unknown> = {}) {
   return render(
     <KOLDetailDrawer
@@ -125,6 +139,263 @@ function renderDrawer(props: Record<string, unknown> = {}) {
 }
 
 describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
+  it("单视频入队后轮询真实终态并自动回填详情", async () => {
+    vi.useFakeTimers();
+    const onReloadDetail = vi.fn().mockResolvedValue(undefined);
+    getKolVideoAnalysisCache.mockResolvedValue({
+      state: "ready",
+      entry: {
+        target_type: "video",
+        target_id: "99",
+        derive_method: "video_analysis_final_v1",
+        status: "ready",
+        result: {},
+      },
+    });
+    const video = {
+      evidence_id: 99,
+      evidence_type: "video",
+      content_url: "https://example.com/video/99",
+      title: "ready after queue",
+    };
+    renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [video] },
+      detailBundle: {
+        status: "ready",
+        item: { video_evidence: [video] },
+        video_analysis: { items: [], summary: { evidence_count: 0, ready_count: 0, pending_count: 0 } },
+      },
+      onReloadDetail,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AI深度分析" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(enqueueVideoAnalysis).toHaveBeenCalledWith("tok", 42, 99);
+    expect(onReloadDetail).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getKolVideoAnalysisCache).toHaveBeenCalledWith(
+      "tok",
+      99,
+      "video_analysis_final_v1",
+      { allowLocalEvaluationFallback: false },
+    );
+    expect(onReloadDetail).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("视频深析已完成并自动回填。")).toBeInTheDocument();
+  });
+
+  it("切换 KOL 后丢弃上一位的延迟入队响应且不启动旧轮询", async () => {
+    const pending = deferred<{ status: string }>();
+    enqueueVideoAnalysis.mockImplementationOnce(() => pending.promise);
+    const onReloadDetail = vi.fn().mockResolvedValue(undefined);
+    const videoA = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/a.mp4" };
+    const videoB = { evidence_id: 100, evidence_type: "video", content_url: "https://example.com/b.mp4" };
+    const view = renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [videoA] },
+      detailBundle: { status: "ready", item: { video_evidence: [videoA] }, video_analysis: { items: [], summary: { ready_count: 0 } } },
+      onReloadDetail,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AI深度分析" }));
+    view.rerender(
+      <KOLDetailDrawer
+        item={{ ...baseItem, id: 43, handle: "@next", posts_count: 1, avg_views: 100, video_evidence: [videoB] }}
+        detailBundle={{ status: "ready", item: { video_evidence: [videoB] }, video_analysis: { items: [], summary: { ready_count: 0 } } }}
+        apiToken="tok"
+        onClose={() => {}}
+        inMyList={false}
+        onToggleMyList={() => {}}
+        onContact={() => {}}
+        onReloadDetail={onReloadDetail}
+      />,
+    );
+
+    await act(async () => {
+      pending.resolve({ status: "queued" });
+      await pending.promise;
+      await Promise.resolve();
+    });
+
+    expect(getKolVideoAnalysisCache).not.toHaveBeenCalled();
+    expect(screen.queryByText(/已入队；左侧任务进度/)).toBeNull();
+    expect(screen.getByRole("button", { name: "AI深度分析" })).toBeEnabled();
+  });
+
+  it("全视频 already_queued 也会逐 evidence 轮询到真实 ready 终态", async () => {
+    vi.useFakeTimers();
+    enqueueAllKolVideos.mockResolvedValue({
+      status: "completed",
+      evidence_total: 1,
+      queued: 0,
+      skipped: 1,
+      items: [{ status: "already_queued", evidence_id: 99 }],
+    });
+    getKolVideoAnalysisBatch.mockResolvedValue({
+      count: 1,
+      items: [{ target_id: "99", state: "ready", entry: { status: "ready" } }],
+    });
+    const onReloadDetail = vi.fn().mockResolvedValue(undefined);
+    const video = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/99.mp4" };
+    renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [video] },
+      detailBundle: { status: "ready", item: { video_evidence: [video] }, video_analysis: { items: [], summary: { ready_count: 0 } } },
+      onReloadDetail,
+    });
+    fireEvent.click(screen.getByText("深度分析"));
+    fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("button", { name: "深度分析入队中…" })).toBeDisabled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getKolVideoAnalysisBatch).toHaveBeenCalledWith(
+      "tok",
+      [99],
+      "video_analysis_final_v1",
+    );
+    expect(screen.getByText("全视频深析终态：1 条就绪。")).toBeInTheDocument();
+  });
+
+  it("全视频 batch 状态未变时不空转重拉 detail，终态变化才回填", async () => {
+    vi.useFakeTimers();
+    enqueueAllKolVideos.mockResolvedValue({
+      status: "completed",
+      evidence_total: 1,
+      queued: 1,
+      skipped: 0,
+      items: [{ status: "queued", evidence_id: 99 }],
+    });
+    getKolVideoAnalysisBatch
+      .mockResolvedValueOnce({
+        count: 1,
+        items: [{ target_id: "99", state: "running", analysis_job: { state: "running" } }],
+      })
+      .mockResolvedValueOnce({
+        count: 1,
+        items: [{ target_id: "99", state: "ready", entry: { status: "ready" } }],
+      });
+    const onReloadDetail = vi.fn().mockResolvedValue(undefined);
+    const video = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/99.mp4" };
+    renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [video] },
+      detailBundle: { status: "ready", item: { video_evidence: [video] }, video_analysis: { items: [], summary: { ready_count: 0 } } },
+      onReloadDetail,
+    });
+    fireEvent.click(screen.getByText("深度分析"));
+    fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
+    await act(async () => { await Promise.resolve(); });
+
+    // 启动时播种一次 detail；第一个 running batch 没有状态变化，不再重拉。
+    expect(onReloadDetail).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onReloadDetail).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onReloadDetail).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("全视频深析终态：1 条就绪。")).toBeInTheDocument();
+  });
+
+  it("单视频与全视频使用独立轮询控制器，交叉启动不会互相取消", async () => {
+    vi.useFakeTimers();
+    enqueueVideoAnalysis.mockResolvedValue({ status: "queued" });
+    enqueueAllKolVideos.mockResolvedValue({
+      status: "completed",
+      evidence_total: 1,
+      queued: 0,
+      skipped: 1,
+      items: [{ status: "already_queued", evidence_id: 100 }],
+    });
+    getKolVideoAnalysisCache.mockImplementation(async (_token, evidenceId) => ({
+      state: "ready",
+      entry: { target_type: "video", target_id: String(evidenceId), derive_method: "video_analysis_final_v1", status: "ready" },
+    }));
+    getKolVideoAnalysisBatch.mockResolvedValue({
+      count: 1,
+      items: [{ target_id: "100", state: "ready", entry: { status: "ready" } }],
+    });
+    const onReloadDetail = vi.fn().mockResolvedValue(undefined);
+    const videos = [
+      { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/99.mp4" },
+      { evidence_id: 100, evidence_type: "video", content_url: "https://example.com/100.mp4" },
+    ];
+    renderDrawer({
+      item: { ...baseItem, posts_count: 2, avg_views: 100, video_evidence: videos },
+      detailBundle: { status: "ready", item: { video_evidence: videos }, video_analysis: { items: [], summary: { ready_count: 0 } } },
+      onReloadDetail,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "AI深度分析" }));
+    fireEvent.click(screen.getByText("深度分析"));
+    fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getKolVideoAnalysisCache).toHaveBeenCalledWith(
+      "tok",
+      99,
+      "video_analysis_final_v1",
+      { allowLocalEvaluationFallback: false },
+    );
+    expect(getKolVideoAnalysisBatch).toHaveBeenCalledWith(
+      "tok",
+      [100],
+      "video_analysis_final_v1",
+    );
+    expect(screen.getByText("视频深析已完成并自动回填。")).toBeInTheDocument();
+    expect(screen.getByText("全视频深析终态：1 条就绪。")).toBeInTheDocument();
+  });
+
+  it("全视频批次的 ai_disabled 会立即形成诚实终态而非等待 30 分钟", async () => {
+    enqueueAllKolVideos.mockResolvedValue({
+      status: "completed",
+      evidence_total: 1,
+      queued: 0,
+      skipped: 1,
+      ai_disabled: 1,
+      items: [{ status: "ai_disabled", evidence_id: 99, reason: "model_binding_blocked" }],
+    });
+    const video = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/99.mp4" };
+    renderDrawer({
+      item: { ...baseItem, posts_count: 1, avg_views: 100, video_evidence: [video] },
+      detailBundle: { status: "ready", item: { video_evidence: [video] }, video_analysis: { items: [], summary: { ready_count: 0 } } },
+      onReloadDetail: vi.fn().mockResolvedValue(undefined),
+    });
+    fireEvent.click(screen.getByText("深度分析"));
+    fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
+
+    expect(await screen.findByText("全视频深析终态：0 条就绪，1 条未完成（model_binding_blocked）。")).toBeInTheDocument();
+    expect(getKolVideoAnalysisCache).not.toHaveBeenCalled();
+  });
+
   it("status=ready → 渲染长期记忆标题/内容风格/产品线/履约/独立徽标", async () => {
     getKolMemory.mockResolvedValue(readyMemory);
     renderDrawer();
@@ -181,5 +452,60 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     openCoopTab();
     await waitFor(() => expect(getKolMemory).toHaveBeenCalled());
     expect(screen.queryByText("长期记忆")).not.toBeInTheDocument();
+  });
+
+  it("历史缓存把未知地区写成 X 时不显示假 CN", async () => {
+    renderDrawer({ item: { ...baseItem, country: "", geo_tier: "X" } });
+
+    expect(await screen.findByText("@frank")).toBeInTheDocument();
+    expect(screen.queryByText("CN")).not.toBeInTheDocument();
+  });
+
+  it("新发现候选只显示真实入主表动作，不暴露待接入写入或更多占位", async () => {
+    renderDrawer({ item: { ...baseItem, candidate_kind: "new_promoted" } });
+
+    expect(await screen.findByText("新发现 · 高潜候选")).toBeInTheDocument();
+    expect(screen.queryByText(/待接入写入/)).toBeNull();
+    expect(screen.queryByText(/更多 · 待接入/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "入主表" }));
+    await waitFor(() => expect(promoteKolPoolToMain).toHaveBeenCalledWith("tok", 42));
+    expect(await screen.findByRole("button", { name: "已入主表 ✓" })).toBeInTheDocument();
+  });
+});
+
+describe("KOLDetailDrawer 受众来源口径", () => {
+  it("YouTube 329 评论者样本与本地评论桥 0 人分开展示", async () => {
+    render(
+      <KOLDrawerGeoDistribution
+        item={{
+        ...baseItem,
+        platform: "youtube",
+        audience_estimated: {
+          sample_size: 329,
+          confidence: "medium",
+          generated_at: "2026-07-13T12:00:00Z",
+          comments_scanned: 400,
+          comment_intel: { sample_size: 400, source: "youtube_api_sample" },
+          overlap: { items: [], self_commenters: 0 },
+          source_contract: {
+            profile_sample: {
+              source: "youtube_data_api_live_sample",
+              durable: false,
+              commenters: 329,
+              comments_scanned: 400,
+            },
+            overlap: { source: "vkpi_comments_pool_evidence", durable: true, commenters: 0 },
+          },
+        },
+        }}
+        geoDistribution={[]}
+        apiToken=""
+      />,
+    );
+
+    expect(await screen.findByText(/画像样本 329 评论者/)).toHaveTextContent("YouTube Data API 本次抽样");
+    expect(screen.getByText(/画像样本 329 评论者/)).toHaveTextContent("本地评论桥 0 人");
+    expect(screen.getByText(/未与本次 API 样本混算/)).toBeInTheDocument();
   });
 });

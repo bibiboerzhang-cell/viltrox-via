@@ -10,6 +10,7 @@ This smoke keeps the monitoring scope small and real:
 Run through scripts/run_smoke.sh so DB/runtime env matches the live backend.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import subprocess
@@ -169,7 +170,7 @@ def main() -> int:
     smoke = Smoke()
     try:
         result = smoke.run()
-        print("VKPI_P3_15A_MONITORING_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
+        stdout_out("VKPI_P3_15A_MONITORING_SMOKE_OK", json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     finally:
         smoke.cleanup()

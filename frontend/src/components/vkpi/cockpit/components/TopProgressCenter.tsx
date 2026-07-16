@@ -23,6 +23,12 @@ import { buildApiUrl } from "../../../../services/http";
 import { readStoredApiToken } from "../../../../services/vkpi/globalSearch-api";
 import { relativeFromNow } from "../../lib/timeLocal";
 import { useEventStreamOrPoll } from "../useEventStreamOrPoll";
+import {
+  analysisProviderLabel,
+  analysisStageFlow,
+  analysisTaskBindingLabel,
+  analysisTerminalCopy,
+} from "./analysisTaskProgress";
 
 const e = React.createElement;
 
@@ -53,6 +59,11 @@ const DEEP_KINDS = new Set([
   "智能查找",
   "KOL查找",
   "LLM分析",
+  "受众分析",
+  "视频QA",
+  "评论分析",
+  "营销顾问",
+  "账号沉淀",
 ]);
 
 function isDeepTask(task: ProgressTask): boolean {
@@ -73,6 +84,25 @@ function taskTitle(task: ProgressTask | ProgressRecentDone): string {
   const kind = String(task.kind || "任务");
   const label = String(task.label || "").trim();
   return label ? `${kind} · ${label}` : kind;
+}
+
+function llmPhaseLabel(task: ProgressTask | ProgressRecentDone): string {
+  const labels: Record<string, string> = {
+    dialogue: "对话生成",
+    structured_generation: "结构化分析",
+    provider_generation: "模型生成",
+    evaluation: "结果评估",
+    qa: "证据 QA",
+  };
+  const phase = String(task.phase || "").trim();
+  const subphase = String(task.subphase || "").trim();
+  const parts = [labels[phase] || phase, labels[subphase] || subphase].filter(Boolean);
+  const attempt = Number(task.attempt_index);
+  const total = Number(task.attempt_total);
+  if (Number.isFinite(attempt) && attempt > 0 && Number.isFinite(total) && total > 0) {
+    parts.push(`尝试 ${attempt}/${total}`);
+  }
+  return parts.join(" · ");
 }
 
 // ── 抽屉里的小件们 ────────────────────────────────────────────────────────────
@@ -100,12 +130,26 @@ function RunningRow({ task, flow }: { task: ProgressTask; flow: Array<{ stage: s
     ? Math.max(0, Math.min(100, Number(task.progress_pct)))
     : null;
   const eta = etaText(task.eta_seconds);
+  const progressLabel = task.progress_overdue
+    ? String(task.progress_label || "已超历史均时")
+    : pct !== null
+      ? `${task.progress_estimated ? "≈" : ""}${pct}%`
+      : "";
+  const taskFlow = analysisStageFlow(task, flow);
+  const providerLabel = analysisProviderLabel(task);
+  const taskBindingLabel = analysisTaskBindingLabel(task);
+  const phaseLabel = llmPhaseLabel(task);
   return e("div", { className: "px-3 py-2" },
     e("div", { className: "flex items-center gap-2" },
       e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(task)),
-      pct !== null && e("span", { className: "shrink-0 text-[10px] tabular-nums text-muted" }, `${pct}%`),
+      progressLabel && e("span", {
+        className: `shrink-0 text-[10px] tabular-nums ${task.progress_overdue ? "text-warn" : "text-muted"}`,
+      }, progressLabel),
       eta && e("span", { className: "shrink-0 text-[10px] text-muted" }, eta)
     ),
+    providerLabel && e("div", { className: "mt-0.5 truncate text-[9px] text-muted" }, providerLabel),
+    taskBindingLabel && e("div", { className: "mt-0.5 truncate text-[9px] text-muted" }, `任务绑定 · ${taskBindingLabel}`),
+    phaseLabel && e("div", { className: "mt-0.5 truncate text-[9px] text-muted" }, phaseLabel),
     e("div", { className: "mt-1.5 h-1 overflow-hidden rounded-full bg-panel" },
       pct !== null
         // 已知进度:宽度即进度,变化时 300ms 平滑过渡(变化动画一次,无循环)。
@@ -117,7 +161,7 @@ function RunningRow({ task, flow }: { task: ProgressTask; flow: Array<{ stage: s
         : e("div", { className: "tpc-breath h-full rounded-full bg-accent" })
     ),
     isDeepTask(task)
-      ? e(StageFlow, { task, flow })
+      ? e(StageFlow, { task, flow: taskFlow })
       : task.stage_label && e("div", { className: "mt-1 text-[10px] text-muted" }, String(task.stage_label))
   );
 }
@@ -125,25 +169,54 @@ function RunningRow({ task, flow }: { task: ProgressTask; flow: Array<{ stage: s
 function QueuedRow({ task }: { task: ProgressTask }) {
   const pos = Number(task.queue_position);
   const eta = etaText(task.eta_seconds);
-  return e("div", { className: "flex items-center gap-2 px-3 py-1.5" },
-    Number.isFinite(pos) && pos > 0 && e("span", {
-      className: "shrink-0 rounded bg-panel px-1.5 py-0.5 text-[10px] tabular-nums text-muted",
-    }, `第 ${pos} 位`),
-    e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(task)),
-    eta && e("span", { className: "shrink-0 text-[10px] text-muted" }, eta)
+  const retrying = String(task.status || "").toLowerCase() === "retrying";
+  const taskFlow = analysisStageFlow(task);
+  const providerLabel = analysisProviderLabel(task);
+  const taskBindingLabel = analysisTaskBindingLabel(task);
+  const phaseLabel = llmPhaseLabel(task);
+  return e("div", { className: "px-3 py-1.5" },
+    e("div", { className: "flex items-center gap-2" },
+      Number.isFinite(pos) && pos > 0 && e("span", {
+        className: "shrink-0 rounded bg-panel px-1.5 py-0.5 text-[10px] tabular-nums text-muted",
+      }, `第 ${pos} 位`),
+      e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(task)),
+      retrying && e("span", { className: "shrink-0 text-[10px] text-warn" }, "等待重试"),
+      eta && e("span", { className: "shrink-0 text-[10px] text-muted" }, eta)
+    ),
+    isDeepTask(task) && e("div", { className: "mt-0.5 truncate pl-0 text-[9px] text-muted" },
+      [taskFlow[0]?.label, taskFlow[1]?.label].filter(Boolean).join(" → ")
+    ),
+    providerLabel && e("div", { className: "mt-0.5 truncate text-[9px] text-muted" }, providerLabel),
+    taskBindingLabel && e("div", { className: "mt-0.5 truncate text-[9px] text-muted" }, `任务绑定 · ${taskBindingLabel}`),
+    phaseLabel && e("div", { className: "mt-0.5 truncate text-[9px] text-muted" }, phaseLabel)
   );
 }
 
 function RecentRow({ item }: { item: ProgressRecentDone }) {
-  const ok = String(item.status || "") === "done";
-  return e("div", { className: "flex items-center gap-2 px-3 py-1.5" },
-    e("span", {
-      className: `h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-good" : "bg-crit"}`,
-      "aria-hidden": true,
-    }),
-    e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(item)),
-    e("span", { className: "shrink-0 text-[10px] text-muted" },
-      [ok ? "完成" : "失败", relativeFromNow(item.finished_at)].filter(Boolean).join(" · ")
+  const copy = analysisTerminalCopy(item);
+  const providerLabel = analysisProviderLabel(item);
+  const taskBindingLabel = analysisTaskBindingLabel(item);
+  const phaseLabel = llmPhaseLabel(item);
+  const dotClass = copy.tone === "ready" ? "bg-good" : copy.tone === "warn" ? "bg-warn" : "bg-crit";
+  const statusClass = copy.tone === "ready" ? "text-good" : copy.tone === "warn" ? "text-warn" : "text-crit";
+  return e("div", { className: "px-3 py-1.5" },
+    e("div", { className: "flex items-center gap-2" },
+      e("span", {
+        className: `h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`,
+        "aria-hidden": true,
+      }),
+      e("span", { className: "min-w-0 flex-1 truncate text-xs text-ink-2" }, taskTitle(item)),
+      e("span", { className: `shrink-0 text-[10px] ${statusClass}` }, copy.label),
+      e("span", { className: "shrink-0 text-[10px] text-muted" }, relativeFromNow(item.finished_at))
+    ),
+    (providerLabel || taskBindingLabel || phaseLabel || copy.detail) && e("div", { className: "mt-0.5 pl-3.5 text-[9px] leading-4 text-muted" },
+      providerLabel && e("span", null, providerLabel),
+      providerLabel && taskBindingLabel && e("span", null, " · "),
+      taskBindingLabel && e("span", null, `任务绑定 ${taskBindingLabel}`),
+      (providerLabel || taskBindingLabel) && phaseLabel && e("span", null, " · "),
+      phaseLabel && e("span", null, phaseLabel),
+      (providerLabel || taskBindingLabel || phaseLabel) && copy.detail && e("span", null, " · "),
+      copy.detail && e("span", null, copy.detail)
     )
   );
 }
@@ -159,6 +232,7 @@ function SectionHeader(label: string, extra?: string) {
 
 export function TopProgressCenter() {
   const [data, setData] = React.useState<ProgressCenterData | null>(null);
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const boxRef = React.useRef<HTMLDivElement | null>(null);
   const aliveRef = React.useRef(true);
@@ -170,14 +244,18 @@ export function TopProgressCenter() {
 
   const load = React.useCallback(() => {
     fetchProgressCenter()
-      .then((res) => { if (aliveRef.current) setData(res); })
-      .catch(() => { /* 拉取失败保留上次快照,静默;首拉失败=闲态图标 */ });
+      .then((res) => {
+        if (!aliveRef.current) return;
+        setData(res);
+        setLoadFailed(false);
+      })
+      .catch(() => {
+        if (aliveRef.current) setLoadFailed(true);
+      });
   }, []);
 
   // SSE 优先 + 轮询兜底(归一定时器):有事件流走 SSE,否则 10s 轮询 + 可见性暂停。
-  // EventSource 不能带 Authorization header,把存储的 token 走 access_token 查询参数
-  // (后端 progress/center/stream 已用 require_tab_stream 认这条路)。无 token 时不附加,
-  // SSE 照常尝试→失败→无感回退轮询(与改动前行为一致,不额外 gate 轮询)。
+  // 存储 token 只用于 POST 签发短时一次性 SSE ticket，不进入 EventSource URL。
   const streamToken = readStoredApiToken();
   useEventStreamOrPoll({
     pollFn: load,
@@ -208,11 +286,14 @@ export function TopProgressCenter() {
   const running = data?.running || [];
   const queued = data?.queued || [];
   const recentDone = data?.recent_done || [];
+  const recentLlm = data?.recent_llm || [];
   const counts = data?.counts || { running: 0, queued: 0, active_total: 0, recent_total: 0 };
   const busy = counts.running > 0 || counts.queued > 0;
   const hasRunning = counts.running > 0;
   const workerOffline = data?.diagnostics?.worker_online === false;
   const queueBlocked = workerOffline && counts.queued > 0;
+  const reservationTrackingUnavailable =
+    data?.diagnostics?.llm_reservation_schema_available === false;
   const flow = data?.stage_flow || [];
 
   // 药丸态聚合进度:跑中任务已知 % 的均值;全未知则 null(呼吸整条)。
@@ -274,13 +355,21 @@ export function TopProgressCenter() {
               busy ? pillLabel : "空闲"
             )
           ),
-          data === null && e("div", { className: "px-3 py-3 text-xs text-muted" }, "任务数据加载中..."),
-          data !== null && !busy && recentDone.length === 0 && e("div", { className: "px-3 py-3 text-xs text-muted" },
+          loadFailed && e("div", {
+            className: "mx-2 mt-2 rounded-md border border-warn-soft bg-warn-soft px-2.5 py-2 text-[10px] text-warn",
+          }, data === null
+            ? "进度服务暂不可用，当前状态未知；这不代表队列空闲。"
+            : "进度服务暂不可用，下面保留的是上一次成功快照。"),
+          data === null && !loadFailed && e("div", { className: "px-3 py-3 text-xs text-muted" }, "任务数据加载中..."),
+          data !== null && !busy && recentDone.length === 0 && recentLlm.length === 0 && e("div", { className: "px-3 py-3 text-xs text-muted" },
             "队列空闲,没有在跑的任务"
           ),
           queueBlocked && e("div", { className: "mx-2 mt-2 rounded-md border border-warn-soft bg-warn-soft px-2.5 py-2 text-[10px] text-warn" },
             "Worker 未在线，排队任务不会开始"
           ),
+          reservationTrackingUnavailable && e("div", {
+            className: "mx-2 mt-2 rounded-md border border-warn-soft bg-warn-soft px-2.5 py-2 text-[10px] text-warn",
+          }, "LLM 在飞跟踪尚未启用：需应用 migration 258；当前只显示已登记的 Gateway 结果。"),
           running.length > 0 && e(React.Fragment, { key: "sec-running" },
             SectionHeader("跑中", counts.running > running.length ? `共 ${counts.running} 条` : undefined),
             ...running.slice(0, 8).map((task) => e(RunningRow, { key: `run-${task.id}`, task, flow }))
@@ -293,8 +382,12 @@ export function TopProgressCenter() {
             )
           ),
           recentDone.length > 0 && e(React.Fragment, { key: "sec-recent" },
-            SectionHeader("最近完成"),
+            SectionHeader("最近结果"),
             ...recentDone.map((item) => e(RecentRow, { key: `done-${item.source}-${item.id}`, item }))
+          ),
+          recentLlm.length > 0 && e(React.Fragment, { key: "sec-recent-llm" },
+            SectionHeader("LLM 分析记录", "Gateway 结果 / 严格调用"),
+            ...recentLlm.map((item) => e(RecentRow, { key: `llm-${item.source}-${item.id}`, item }))
           )
         )
       )

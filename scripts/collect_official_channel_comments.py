@@ -9,6 +9,7 @@ Usage:
     .venv/bin/python scripts/collect_official_channel_comments.py --execute --platform facebook --max-posts 5 --max-comments 50
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -176,7 +177,7 @@ def main() -> None:
             max_comments=args.max_comments,
             force=bool(args.force),
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        stdout_out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     finally:
         asyncio.run(close_db_runtime())
 

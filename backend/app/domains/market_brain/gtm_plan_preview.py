@@ -776,6 +776,7 @@ def _build_success_metrics(goal: str) -> dict[str, Any]:
 
 
 from app.domains.market_brain.conversion_readiness import build_conversion_readiness as _build_conversion_readiness  # noqa: E402
+from app.domains.market_brain.parallel_reads import run_read_tasks  # noqa: E402
 
 
 def build_preview(
@@ -819,23 +820,44 @@ def build_preview(
             logger.warning("gtm_preview %s failed: %s", name, exc)
             return fallback if fallback is not None else _section_error(exc)
 
-    from app.domains.content.creative_segments import segment_search
+    from app.domains.content.creative_segments import segment_top_items
     from app.domains.costs.product_persona import get_product_persona
     from app.domains.market.category_tracks import tracks
     from app.domains.market.industry_benchmark import benchmark
 
-    tracks_payload = _guard("tracks", tracks)
-    bench = _guard("benchmark", benchmark)
-    persona = _guard("persona", lambda: get_product_persona(sku_code), fallback={})
-    pool = _guard("candidate_pool", lambda: launch_assembly._candidate_pool(sku_code, _POOL_LIMIT),
-                  fallback={"status": "error", "items": []})
+    # Independent source reads dominate the preview cold path.  PostgreSQL can
+    # safely overlap them because run_read_tasks assigns a scoped connection to
+    # each worker and bounds fleet-local pool usage; SQLite remains sequential.
+    source_reads = run_read_tasks(
+        {
+            "tracks": lambda: _guard("tracks", tracks),
+            "benchmark": lambda: _guard("benchmark", benchmark),
+            "persona": lambda: _guard(
+                "persona",
+                lambda: get_product_persona(sku_code),
+                fallback={},
+            ),
+            "candidate_pool": lambda: _guard(
+                "candidate_pool",
+                lambda: launch_assembly._candidate_pool(sku_code, _POOL_LIMIT),
+                fallback={"status": "error", "items": []},
+            ),
+            "segments": lambda: _guard(
+                "segments",
+                lambda: segment_top_items(focal=focal or "", limit=6),
+            ),
+        }
+    )
+    tracks_payload = source_reads["tracks"]
+    bench = source_reads["benchmark"]
+    persona = source_reads["persona"]
+    pool = source_reads["candidate_pool"]
+    segments = source_reads["segments"]
     try:
         cands, roster_mod, engines_missing = _build_candidates(sku_code, pool.get("items") or [])
     except Exception as exc:  # noqa: BLE001
         logger.warning("gtm_preview candidates failed for %s: %s", sku_code, exc)
         cands, roster_mod, engines_missing = [], None, _text(str(exc), 200)
-    segments = _guard("segments", lambda: segment_search(focal=focal or "", limit=6))
-
     priceable_count = sum(1 for c in cands if c.get("cost_ready"))
     focal_id = f"focal:{focal}mm" if focal else ""
     track85 = next((o for o in (tracks_payload.get("opportunities") or [])

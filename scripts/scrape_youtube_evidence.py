@@ -12,6 +12,8 @@ be run with --dry-run until migration 089 is reviewed and applied.
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import csv
 import json
@@ -270,7 +272,7 @@ def apify_videos_url(channel_url: str) -> str:
     if re.search(r"youtube\.com/channel/[^/?#]+/?$", url):
         return url.rstrip("/") + "/videos"
     if "youtube.com" not in url:
-        print(f"[warn] Apify channel URL is not a YouTube URL, trying raw URL: {url}", flush=True)
+        out(f"[warn] Apify channel URL is not a YouTube URL, trying raw URL: {url}", flush=True)
     return url
 
 
@@ -298,10 +300,14 @@ class YouTubeApi:
         self.quota_exhausted = False
 
     def get(self, endpoint: str, params: dict[str, Any], cost: int = 1) -> dict[str, Any]:
-        params = {**params, "key": self.key}
         url = f"{YOUTUBE_API_BASE}/{endpoint}?{urllib.parse.urlencode(params, doseq=True)}"
+        request = urllib.request.Request(
+            url,
+            headers={"X-Goog-Api-Key": self.key},
+            method="GET",
+        )
         try:
-            with urllib.request.urlopen(url, timeout=45) as response:
+            with urllib.request.urlopen(request, timeout=45) as response:
                 self.units += cost
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
@@ -309,9 +315,11 @@ class YouTubeApi:
             if exc.code == 403 and "quotaExceeded" in body:
                 self.quota_exhausted = True
                 raise RuntimeError("quotaExceeded")
-            raise RuntimeError(f"HTTP {exc.code}: {body[:300]}") from exc
+            safe_body = body.replace(self.key, "[redacted]") if self.key else body
+            raise RuntimeError(f"HTTP {exc.code}: {safe_body[:300]}") from exc
         except Exception as exc:
-            raise RuntimeError(str(exc)) from exc
+            safe_error = str(exc).replace(self.key, "[redacted]") if self.key else str(exc)
+            raise RuntimeError(safe_error) from exc
 
     def resolve_channel(self, channel_url: str, kol: KolTarget) -> tuple[str, str]:
         hint_type, hint = extract_channel_hint(channel_url, kol)
@@ -414,7 +422,7 @@ def scrape_with_youtube_api(kol: KolTarget, keywords: list[str], max_per_channel
         video_ids = api.fetch_recent_video_ids(uploads, max_per_channel)
         details = api.fetch_video_details(video_ids)
         matches = [candidate for item in details if (candidate := from_youtube_item(kol, item, keywords))]
-        print(
+        out(
             f"[KOL {kol.id}] trying youtube_api... channel_id={channel_id}, "
             f"found {len(details)} videos, matched {len(matches)} viltrox",
             flush=True,
@@ -424,7 +432,7 @@ def scrape_with_youtube_api(kol: KolTarget, keywords: list[str], max_per_channel
         return KolRun(kol, channel_url, "youtube_api", "success", len(details), matches, api_units=api.units)
     except RuntimeError as exc:
         status = "quota_exhausted" if "quotaExceeded" in str(exc) else "error"
-        print(f"[KOL {kol.id}] trying youtube_api... {str(exc)[:160]}, falling back to apify...", flush=True)
+        out(f"[KOL {kol.id}] trying youtube_api... {str(exc)[:160]}, falling back to apify...", flush=True)
         return KolRun(kol, channel_url, "youtube_api", status, error=str(exc)[:300], api_units=api.units)
 
 
@@ -501,11 +509,11 @@ def scrape_with_apify(kol: KolTarget, keywords: list[str], max_per_channel: int)
         run_input = apify_run_input(channel_url, max_per_channel)
         run = client.actor(actor_id).call(run_input=run_input)
         run_id = text(run.get("id"))
-        print(f"[KOL {kol.id}] apify actor run started, run_id={run_id}", flush=True)
+        out(f"[KOL {kol.id}] apify actor run started, run_id={run_id}", flush=True)
         dataset_id = run.get("defaultDatasetId")
         items = client.dataset(dataset_id).list_items().items if dataset_id else []
         for index, item in enumerate(items[:3], start=1):
-            print(
+            out(
                 f"[KOL {kol.id}] apify sample {index}: "
                 f"title->{text(item.get('title'))[:60]} | "
                 f"url->{text(item.get('url'))[:80]} | "
@@ -517,7 +525,7 @@ def scrape_with_apify(kol: KolTarget, keywords: list[str], max_per_channel: int)
                 flush=True,
             )
         matches = [candidate for item in items if (candidate := map_apify_item(kol, item, keywords))]
-        print(f"[KOL {kol.id}] apify dataset items: {len(items)}, matched {len(matches)} viltrox", flush=True)
+        out(f"[KOL {kol.id}] apify dataset items: {len(items)}, matched {len(matches)} viltrox", flush=True)
         status = "success" if matches else "no_match"
         return KolRun(
             kol,
@@ -545,7 +553,7 @@ def scrape_kol_youtube(kol: KolTarget, keywords: list[str], max_per_channel: int
             return runs
     apify_run = scrape_with_apify(kol, keywords, max_per_channel)
     if apify_run.status.startswith("apify_missing"):
-        print(f"[KOL {kol.id}] {apify_run.status}: {apify_run.error}", flush=True)
+        out(f"[KOL {kol.id}] {apify_run.status}: {apify_run.error}", flush=True)
     runs.append(apify_run)
     return runs
 
@@ -785,13 +793,13 @@ def main() -> int:
     write_csv(csv_path, candidates)
     report = report_md(runs, candidates, len(keywords), predicted, duplicate_skip)
     report_path.write_text(report, encoding="utf-8")
-    print(f"CSV: {csv_path}")
-    print(f"Markdown: {report_path}")
-    print(report)
+    out(f"CSV: {csv_path}")
+    out(f"Markdown: {report_path}")
+    out(report)
 
     if args.commit:
         inserted = insert_candidates([item for item in candidates if item.video_url not in existing])
-        print(f"Inserted rows: {inserted}")
+        out(f"Inserted rows: {inserted}")
     return 0
 
 

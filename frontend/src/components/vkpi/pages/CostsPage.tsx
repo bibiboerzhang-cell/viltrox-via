@@ -7,13 +7,14 @@ import { PageShell } from './PageShell';
 import { getMarketingCostDetail } from '../../../domains/attribution';
 import { safeNumber, textValue } from '../shared/vkpiDataUtils';
 import { BudgetMonitorPanel } from './costs/BudgetMonitorPanel';
+import type { VkpiManualAuthorizationEvidence } from '../../../services/vkpi/cost-api';
 
 interface CostsPageProps {
   data: VkpiDashboardData;
   viewMode: 'manager' | 'employee';
-  onUpdateCost?: (costId: string, payload: { costType?: string; amountUsd?: number; note?: string; sourceRef?: string }) => Promise<void>;
-  onApproveCost?: (costId: string, note?: string) => Promise<void>;
-  onVoidCost?: (costId: string, reason?: string) => Promise<void>;
+  onUpdateCost?: (costId: string, payload: { costType?: string; amountUsd?: number; note?: string; sourceRef?: string; authorizationEvidence: VkpiManualAuthorizationEvidence }) => Promise<void>;
+  onApproveCost?: (costId: string, note: string, authorizationEvidence: VkpiManualAuthorizationEvidence) => Promise<void>;
+  onVoidCost?: (costId: string, reason: string, authorizationEvidence: VkpiManualAuthorizationEvidence) => Promise<void>;
   onOpenEvidence: (metricKey: VkpiMetricEvidenceKey) => void;
   apiToken?: string;
 }
@@ -23,12 +24,25 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
   const [costType, setCostType] = useState('');
   const [amountUsd, setAmountUsd] = useState('');
   const [note, setNote] = useState('');
+  const [authorizationRef, setAuthorizationRef] = useState('');
+  const [confirmedByHuman, setConfirmedByHuman] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const selectedCost = data.costs.find((row) => row.id === costId);
+  const authorizationReady = Boolean(note.trim() && authorizationRef.trim() && confirmedByHuman);
+  const authorizationEvidence = (): VkpiManualAuthorizationEvidence => ({
+    authorizationRef: authorizationRef.trim(),
+    reason: note.trim(),
+    confirmedByHuman: true,
+  });
+  const resetAuthorization = () => {
+    setNote('');
+    setAuthorizationRef('');
+    setConfirmedByHuman(false);
+  };
   const visibleCosts = viewMode === 'manager' ? data.costs : [];
   const loadDetail = async (id: string) => {
     if (!apiToken || !id) return;
@@ -48,19 +62,20 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
   }, [costId, apiToken, viewMode]);
   const submitUpdate = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!costId || !onUpdateCost) return;
+    if (!costId || !onUpdateCost || !authorizationReady) return;
     setBusy(true);
     try {
       await onUpdateCost(costId, {
         costType: costType || undefined,
         amountUsd: amountUsd ? Number(amountUsd) : undefined,
         note: note || undefined,
+        authorizationEvidence: authorizationEvidence(),
       });
       await loadDetail(costId);
       setMessage('成本记录已更新。');
       setCostType('');
       setAmountUsd('');
-      setNote('');
+      resetAuthorization();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '成本更新失败');
     } finally {
@@ -68,12 +83,13 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
     }
   };
   const approve = async () => {
-    if (!costId || !onApproveCost) return;
+    if (!costId || !onApproveCost || !authorizationReady) return;
     setBusy(true);
     try {
-      await onApproveCost(costId, note || '管理层审核');
+      await onApproveCost(costId, note.trim(), authorizationEvidence());
       await loadDetail(costId);
       setMessage('成本记录已审核。');
+      resetAuthorization();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '成本审核失败');
     } finally {
@@ -81,12 +97,13 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
     }
   };
   const voidRow = async () => {
-    if (!costId || !onVoidCost) return;
+    if (!costId || !onVoidCost || !authorizationReady) return;
     setBusy(true);
     try {
-      await onVoidCost(costId, note || '管理层作废');
+      await onVoidCost(costId, note.trim(), authorizationEvidence());
       await loadDetail(costId);
       setMessage('成本记录已作废。');
+      resetAuthorization();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '成本作废失败');
     } finally {
@@ -117,11 +134,16 @@ export function CostsPage({ data, viewMode, onUpdateCost, onApproveCost, onVoidC
             </select>
             <input value={amountUsd} onChange={(event) => setAmountUsd(event.target.value)} placeholder="新金额 USD（留空不改）" inputMode="decimal" />
             <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="备注 / 审核理由 / 作废原因" />
-            <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !costId || !onUpdateCost}>更新成本</button>
+            <input aria-label="成本变更授权回执" value={authorizationRef} onChange={(event) => setAuthorizationRef(event.target.value)} placeholder="审批单 / 变更单 / 授权 ticket" />
+            <label className="vkpi-checkbox">
+              <input type="checkbox" checked={confirmedByHuman} onChange={(event) => setConfirmedByHuman(event.target.checked)} />
+              我已人工核对本次成本更新、审核或作废操作
+            </label>
+            <button className="vkpi-button vkpi-button--primary" type="submit" disabled={busy || !costId || !onUpdateCost || !authorizationReady}>更新成本</button>
           </form>
           <div className="vkpi-row-actions">
-            <button className="vkpi-button" type="button" disabled={busy || !costId || !onApproveCost} onClick={() => void approve()}>审核</button>
-            <button className="vkpi-button" type="button" disabled={busy || !costId || !onVoidCost || selectedCost?.status === 'void'} onClick={() => void voidRow()}>作废</button>
+            <button className="vkpi-button" type="button" disabled={busy || !costId || !onApproveCost || !authorizationReady} onClick={() => void approve()}>审核</button>
+            <button className="vkpi-button" type="button" disabled={busy || !costId || !onVoidCost || selectedCost?.status === 'void' || !authorizationReady} onClick={() => void voidRow()}>作废</button>
           </div>
           {message ? <div className="vkpi-inline-message">{message}</div> : null}
         </section>

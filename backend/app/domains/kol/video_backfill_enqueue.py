@@ -112,7 +112,7 @@ def enqueue_lazy_video_backfill_for_session(
             continue
         try:
             res = url_deep_crawl.enqueue_profile_deep_crawl_job(
-                url, kol_pool_id=kid, max_posts=max_posts, staff=staff
+                url, kol_pool_id=kid, max_posts=max_posts, staff=staff, queue_lane="batch"
             )
             enqueued.append({"kol_pool_id": kid, "status": res.get("status"), "job_id": res.get("job_id")})
         except Exception as exc:  # 单个失败不阻断,懒抓尽力而为

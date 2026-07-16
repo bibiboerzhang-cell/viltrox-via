@@ -210,7 +210,7 @@ export function SafetyAuthenticityPanel({ apiToken, kolPoolId }: any) {
                         : "已检测未命中(规则法非背书)",
                       " ", levelChip(sig.level || "none"));
                   }
-                  return SignalLine(label, ready, body, String(sig.reason || ""));
+                  return e(React.Fragment, { key }, SignalLine(label, ready, body, String(sig.reason || "")));
                 }),
               ),
             ),

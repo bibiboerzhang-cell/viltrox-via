@@ -51,6 +51,7 @@ export interface VkpiKolProductFitResponse {
 export interface VkpiMyKolAggregateResponse {
   staff?: Row;
   window_days?: number;
+  scope_mode?: 'staff' | 'team';
   official_matrix?: Row;
   // pool_favorites mirrors pool_favorites.list_favorites field names; the
   // aggregate hands `projects` (already-parsed) rather than `projects_json`.
@@ -59,6 +60,14 @@ export interface VkpiMyKolAggregateResponse {
   projects?: Row[];
   claims?: Row[];
   kpi_summary?: Record<string, number>;
+  pool_favorites_page?: {
+    mode?: 'summary';
+    limit?: number;
+    count?: number;
+    total?: number;
+    has_more?: boolean;
+    next_cursor?: string | null;
+  };
 }
 
 // 【M3/M5】KOL 详情抽屉的观看者上下文:该 KOL 是否共享给我(来自谁)+ active 认领(可否释放)。
@@ -139,12 +148,22 @@ function numberValue(value: unknown): number {
 // 硬闸,员工传了也只拿自己的);显式 staffId 优先(跨看单人),两者互斥。
 export async function getMyKolAggregate(
   token: string,
-  params: { staffId?: number; windowDays?: number; scope?: "team" } = {},
+  params: {
+    staffId?: number;
+    windowDays?: number;
+    scope?: "team";
+    mode?: "summary";
+    favoritesLimit?: number;
+    favoritesCursor?: string;
+  } = {},
 ) {
   const query = new URLSearchParams();
   if (params.staffId != null) query.set("staff_id", String(params.staffId));
   else if (params.scope) query.set("scope", params.scope);
   if (params.windowDays != null) query.set("window_days", String(params.windowDays));
+  if (params.mode) query.set("mode", params.mode);
+  if (params.favoritesLimit != null) query.set("favorites_limit", String(params.favoritesLimit));
+  if (params.favoritesCursor) query.set("favorites_cursor", params.favoritesCursor);
   const suffix = query.toString();
   return apiFetch<VkpiMyKolAggregateResponse>(
     `/api/admin/vkpi/my-kol/aggregate${suffix ? `?${suffix}` : ""}`,

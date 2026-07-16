@@ -22,6 +22,8 @@ import re
 import urllib.parse
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+
 
 DEFAULT_ACTOR_ID = "clockworks~tiktok-scraper"
 DEFAULT_RUN_TIMEOUT_SECONDS = 180  # TikTok 抓取慢,timeout 长一点
@@ -108,12 +110,18 @@ class TikTokCrawler:
         if not self.configured:
             return self._not_configured("apify_run")
 
+        client: Any | None = None
         try:
             from apify_client import ApifyClient  # type: ignore
 
             actor_path = self.actor_id.replace("/", "~")
             client = ApifyClient(self.api_token)
-            run = client.actor(actor_path).call(
+            run = call_apify_actor(
+                client,
+                actor_path,
+                platform="tiktok",
+                operation="start_run",
+                source="industry_crawlers",
                 run_input=input_payload,
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
@@ -138,6 +146,8 @@ class TikTokCrawler:
                 "items": items,
                 "raw": {"actor_id": self.actor_id, "input": input_payload},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "raw": {"actor_id": self.actor_id}}
         except ImportError:
             return {
                 "provider": "tiktok",
@@ -156,6 +166,10 @@ class TikTokCrawler:
                 "error": str(exc),
                 "raw": {"actor_id": self.actor_id},
             }
+        finally:
+            from . import close_apify_client
+
+            close_apify_client(client)
 
     # ─── 公开接口 ─────────────────────────────────
 
@@ -271,9 +285,15 @@ class TikTokCrawler:
             }
 
         actor_id = (os.environ.get("APIFY_TIKTOK_COMMENT_ACTOR_ID") or "clockworks~tiktok-comments-scraper").replace("/", "~")
+        client: Any | None = None
         try:
             client = ApifyClient(self.api_token)
-            run = client.actor(actor_id).call(
+            run = call_apify_actor(
+                client,
+                actor_id,
+                platform="tiktok",
+                operation="crawl_video_comments",
+                source="industry_crawlers",
                 run_input={
                     "postURLs": [post_url],
                     "commentsPerPost": max(1, min(100, int(max_results or 50))),
@@ -293,6 +313,8 @@ class TikTokCrawler:
                 "items": items,
                 "raw": {"actor_id": actor_id, "post_url": post_url},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id, "post_url": post_url}}
         except Exception as exc:  # pragma: no cover - live provider path
             return {
                 "provider": "tiktok",
@@ -302,6 +324,10 @@ class TikTokCrawler:
                 "error": str(exc)[:500],
                 "raw": {"actor_id": actor_id, "post_url": post_url},
             }
+        finally:
+            from . import close_apify_client
+
+            close_apify_client(client)
 
     @staticmethod
     def _comment_url(video_id_or_url: str) -> str:

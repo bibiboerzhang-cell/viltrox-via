@@ -1,3 +1,8 @@
 {
-  "max_warnings": 895
+  "schema_version": 1,
+  "policy": "ratchet_only",
+  "warning_kind": "print_call",
+  "max_warnings": 0,
+  "review_required_for_increase": true,
+  "review_note": "Repository-approved legacy ceiling. Decrease as print debt is removed; do not increase to make a release green."
 }

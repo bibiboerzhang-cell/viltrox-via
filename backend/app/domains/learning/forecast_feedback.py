@@ -35,6 +35,10 @@ logger = get_logger(__name__)
 DEFAULT_MIN_AGE_DAYS = 30
 # 单次 refresh 最多处理的 pending 行数(防超长请求;每日 job 多跑几轮自然清空)。
 DEFAULT_REFRESH_LIMIT = 200
+# 自动回查至少需要 3 条窗口内真实视频;人工手录 actual_views 不受此限制。
+MIN_AUTO_EVIDENCE_SAMPLES = 3
+# 汇总至少 5 条已判实际,才允许把带内率作为可背书指标。
+MIN_CLAIMABLE_EVALS = 5
 
 OUTCOME_PENDING = "pending"
 OUTCOME_HIT = "hit_in_band"
@@ -160,7 +164,9 @@ def refresh_forecast_outcomes(
         "updated": 0,
         "outcomes": {OUTCOME_HIT: 0, OUTCOME_BELOW: 0, OUTCOME_ABOVE: 0},
         "kept_pending_no_evidence": 0,
+        "kept_pending_insufficient_evidence": 0,
         "kept_pending_missing_band": 0,
+        "min_auto_evidence_samples": MIN_AUTO_EVIDENCE_SAMPLES,
         "min_age_days": min_age_days,
         "cutoff": cutoff.isoformat(),
         "generated_at": now.isoformat(),
@@ -198,10 +204,14 @@ def refresh_forecast_outcomes(
                 continue
             # 人工手录的 actual_views 优先,只补判 outcome,不重算不覆写。
             actual = _int_or_none(row.get("actual_views"))
+            auto_sample = None
             if actual is None or actual <= 0:
-                actual, _sample = _actual_views_in_window(db, kol_id, created, now)
+                actual, auto_sample = _actual_views_in_window(db, kol_id, created, now)
             if actual is None or actual <= 0:
                 result["kept_pending_no_evidence"] += 1
+                continue
+            if auto_sample is not None and auto_sample < MIN_AUTO_EVIDENCE_SAMPLES:
+                result["kept_pending_insufficient_evidence"] += 1
                 continue
             outcome = _judge(actual, _int_or_none(row.get("p10")), _int_or_none(row.get("p90")))
             if outcome is None:
@@ -259,6 +269,9 @@ def forecast_log_summary(*, recent_limit: int = 10, conn: Any = None) -> dict[st
         "outcomes": {},
         "resolved": 0,
         "in_band_rate": None,
+        "observed_in_band_rate": None,
+        "claimable": False,
+        "data_readiness": None,
         "by_context": [],
         "by_method": [],
         "recent": [],
@@ -307,22 +320,55 @@ def forecast_log_summary(*, recent_limit: int = 10, conn: Any = None) -> dict[st
         total = sum(outcome_counts.values())
         hit = outcome_counts.get(OUTCOME_HIT, 0)
         resolved = hit + outcome_counts.get(OUTCOME_BELOW, 0) + outcome_counts.get(OUTCOME_ABOVE, 0)
+        latest_actual_row = db.execute(
+            """
+            SELECT MAX(actual_at) AS freshest_at
+            FROM vkpi_forecast_log
+            WHERE outcome IN ('hit_in_band', 'below', 'above')
+              AND actual_views IS NOT NULL
+            """,
+        ).fetchone()
+        latest_actual = dict(latest_actual_row or {}).get("freshest_at")
+        from app.domains.market_brain.data_readiness import build_source_readiness
+
+        readiness = build_source_readiness(
+            "forecast_evaluations",
+            observed=resolved,
+            freshest_at=latest_actual,
+            minimum=MIN_CLAIMABLE_EVALS,
+            max_age_days=45,
+        )
+        observed_rate = _rate(hit, resolved)
+
+        def bucket_rows(stats: dict[str, dict[str, int]], key_name: str) -> list[dict[str, Any]]:
+            rows_out: list[dict[str, Any]] = []
+            for key, values in sorted(stats.items()):
+                bucket_observed_rate = _rate(values["hit"], values["resolved"])
+                bucket_claimable = (
+                    bool(readiness["claimable"])
+                    and values["resolved"] >= MIN_CLAIMABLE_EVALS
+                )
+                rows_out.append({
+                    key_name: key,
+                    "total": values["total"],
+                    "resolved": values["resolved"],
+                    "in_band_rate": bucket_observed_rate if bucket_claimable else None,
+                    "observed_in_band_rate": bucket_observed_rate,
+                    "claimable": bucket_claimable,
+                })
+            return rows_out
+
         base.update(
             status="ready" if total else "empty",
             total=total,
             outcomes=outcome_counts,
             resolved=resolved,
-            in_band_rate=_rate(hit, resolved),
-            by_context=[
-                {"context": k, "total": v["total"], "resolved": v["resolved"],
-                 "in_band_rate": _rate(v["hit"], v["resolved"])}
-                for k, v in sorted(ctx_stats.items())
-            ],
-            by_method=[
-                {"method": k, "total": v["total"], "resolved": v["resolved"],
-                 "in_band_rate": _rate(v["hit"], v["resolved"])}
-                for k, v in sorted(method_stats.items())
-            ],
+            in_band_rate=observed_rate if readiness["claimable"] else None,
+            observed_in_band_rate=observed_rate,
+            claimable=bool(readiness["claimable"]),
+            data_readiness=readiness,
+            by_context=bucket_rows(ctx_stats, "context"),
+            by_method=bucket_rows(method_stats, "method"),
         )
         if not total:
             base["reason"] = "预测流水表还没有任何行 — 跑一次 KOL 预测(档案/发射台)即开始积累。"

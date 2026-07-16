@@ -6,6 +6,7 @@ history import and collector seams, then verifies video fields survive into
 vkpi_industry_posts for the frontend video player.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import secrets
@@ -148,7 +149,7 @@ def main() -> None:
         assert tk_post["media_type"] == "video", tk_post
         assert int(tk_post["duration_seconds"] or 0) == 9, tk_post
 
-        print("VKPI_P3_1B_POST_MEDIA_FIELDS_SMOKE_OK")
+        stdout_out("VKPI_P3_1B_POST_MEDIA_FIELDS_SMOKE_OK")
     finally:
         _cleanup(marker)
 

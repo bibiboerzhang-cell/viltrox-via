@@ -23,11 +23,7 @@ from app.core.config import (
     VIA_VISION_MODEL,
     VIA_VISION_PROVIDER,
 )
-from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE, get_claude_client
-from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
-from app.services.ai.clients.openai_client import OPENAI_AVAILABLE, openai_client
-from app.services.ai.retry import call_ai_with_retry
-from app.services.ai.runtime_guards import guarded_provider_call
+from app.platform import llm_gateway, llm_production
 
 
 def _parse_json_object(raw: str) -> dict[str, Any] | None:
@@ -71,14 +67,11 @@ def _coerce_dialogue_object(raw: str) -> dict[str, Any] | None:
 
 
 def _provider_available(provider: str) -> bool:
-    provider = str(provider or "").strip().lower()
-    if provider == "claude":
-        return bool(ANTHROPIC_AVAILABLE and get_claude_client())
-    if provider == "gemini":
-        return bool(GEMINI_AVAILABLE and gemini_client)
-    if provider == "openai":
-        return bool(OPENAI_AVAILABLE and openai_client)
-    return False
+    provider_key = {
+        "claude": "anthropic",
+        "gemini": "google",
+    }.get(str(provider or "").strip().lower(), str(provider or "").strip().lower())
+    return provider_key in llm_gateway.configured_providers()
 
 
 def _unique(items: list[str]) -> list[str]:
@@ -264,19 +257,11 @@ def preview_via_routes(
     return _routes_for_purpose(purpose, preferred_override=preferred_override, limit=limit)
 
 
-def _extract_gemini_text(resp: Any) -> str:
-    text = str(getattr(resp, "text", "") or "").strip()
-    if text:
-        return text
-    candidates = getattr(resp, "candidates", None) or []
-    for candidate in candidates:
-        content = getattr(candidate, "content", None)
-        parts = getattr(content, "parts", None) or []
-        for part in parts:
-            part_text = str(getattr(part, "text", "") or "").strip()
-            if part_text:
-                return part_text
-    return ""
+def _task_binding_for_purpose(purpose: str) -> str:
+    return {
+        "dialogue": "via_chat",
+        "summary": "via_persona_summary",
+    }.get(str(purpose or "").strip().lower(), "")
 
 
 async def generate_json_with_route(
@@ -298,6 +283,7 @@ async def generate_json_with_route(
     return await _generate_json_with_provider(
         provider=provider,
         model=model,
+        task_binding=_task_binding_for_purpose(purpose),
         system_prompt=system_prompt,
         prompt=prompt,
         temperature=temperature,
@@ -310,59 +296,81 @@ async def _generate_json_with_provider(
     *,
     provider: str,
     model: str,
+    task_binding: str = "",
     system_prompt: str,
     prompt: str,
     temperature: float,
     max_tokens: int,
     allow_text_fallback: bool = False,
 ) -> dict[str, Any] | None:
+    """Run one exact Via route through the production LLM boundary.
+
+    Via previously called three provider SDKs directly.  That made the user-facing
+    dialogue path invisible while a provider was in flight and bypassed the atomic
+    reservation ledger.  The synchronous production boundary is moved to a worker
+    thread so the async session API remains non-blocking; it owns exact-model
+    readiness, reservation, settlement/unknown recovery and the gateway trace.
+    """
+    del temperature  # The production gateway owns provider-safe generation config.
+    full_prompt = f"{system_prompt}\n\nPayload:\n{prompt}"
+    purpose = "via_dialogue" if allow_text_fallback else "via_structured_generation"
     try:
-        if provider == "openai":
-            def _call_openai() -> Any:
-                return openai_client.chat.completions.create(
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-
-            resp = await guarded_provider_call("openai", lambda: asyncio.to_thread(_call_openai))
-            content = resp.choices[0].message.content if resp and resp.choices else ""
-        elif provider == "claude":
-            client = get_claude_client()
-            if not client:
-                return None
-
-            def _call_claude() -> Any:
-                return call_ai_with_retry(
-                    "via.model_router.claude",
-                    lambda: client.messages.create(
-                        model=model,
-                        max_tokens=max_tokens,
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": prompt}],
-                    ),
-                )
-
-            resp = await guarded_provider_call("claude", lambda: asyncio.to_thread(_call_claude))
-            parts = getattr(resp, "content", None) or []
-            content = "".join(str(getattr(part, "text", "") or "") for part in parts).strip()
+        if allow_text_fallback:
+            gateway_result = await asyncio.to_thread(
+                llm_production.generate_text,
+                full_prompt,
+                provider=provider,
+                model=model,
+                purpose=purpose,
+                max_output_tokens=max_tokens,
+                cost_tag="single_call",
+                triggered_by={"surface": "via", "phase": "dialogue"},
+                metadata={
+                    "surface": "via",
+                    "task_binding": task_binding or "via_chat",
+                    "phase": "dialogue",
+                    "subphase": "provider_generation",
+                    "attempt_index": 1,
+                    "attempt_total": 1,
+                },
+            )
+            content = str(gateway_result.get("text") or "").strip()
+            data = _parse_json_object(content) or _coerce_dialogue_object(content)
         else:
-            def _call_gemini() -> Any:
-                combined = f"{system_prompt}\n\nPayload:\n{prompt}"
-                return gemini_client.models.generate_content(model=model, contents=combined)
-
-            resp = await guarded_provider_call("gemini", lambda: asyncio.to_thread(_call_gemini))
-            content = _extract_gemini_text(resp)
-        data = _parse_json_object(content)
-        if not data:
-            data = _coerce_dialogue_object(content) if allow_text_fallback else None
+            gateway_result = await asyncio.to_thread(
+                llm_production.generate_json,
+                full_prompt,
+                provider=provider,
+                model=model,
+                purpose=purpose,
+                max_output_tokens=max_tokens,
+                cost_tag="single_call",
+                triggered_by={"surface": "via", "phase": "structured_generation"},
+                require_configured_budget=False,
+                metadata={
+                    "surface": "via",
+                    "task_binding": task_binding or None,
+                    "phase": "structured_generation",
+                    "subphase": "provider_generation",
+                    "attempt_index": 1,
+                    "attempt_total": 1,
+                    "json_contract": True,
+                },
+            )
+            data = gateway_result.get("json") if isinstance(gateway_result, dict) else None
+            data = data if isinstance(data, dict) else None
         if not data:
             return None
-        return {"provider": provider, "model": model, "data": data}
+        actual_provider = str(gateway_result.get("provider") or "").strip().lower()
+        provider_key = {"claude": "anthropic", "gemini": "google"}.get(provider, provider)
+        if actual_provider != provider_key:
+            return None
+        return {
+            "provider": provider,
+            "model": str(gateway_result.get("model") or model),
+            "data": data,
+            "trace_id": gateway_result.get("call_id") or gateway_result.get("trace_id"),
+        }
     except Exception:
         return None
 
@@ -428,24 +436,26 @@ async def generate_json_with_collab(
         return await _generate_json_with_provider(
             provider=route["provider"],
             model=route["model"],
+            task_binding=_task_binding_for_purpose(purpose),
+            system_prompt=system_prompt,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            allow_text_fallback=allow_text_fallback,
+        )
+    results = await asyncio.gather(
+        *[
+            _generate_json_with_provider(
+                provider=route["provider"],
+                model=route["model"],
+                task_binding=_task_binding_for_purpose(purpose),
                 system_prompt=system_prompt,
                 prompt=prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 allow_text_fallback=allow_text_fallback,
             )
-    results = await asyncio.gather(
-        *[
-            _generate_json_with_provider(
-                provider=route["provider"],
-                model=route["model"],
-                    system_prompt=system_prompt,
-                    prompt=prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    allow_text_fallback=allow_text_fallback,
-                )
-                for route in routes
+            for route in routes
             ]
     )
     successful = [result for result in results if result]

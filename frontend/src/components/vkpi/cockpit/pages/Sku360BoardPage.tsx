@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import {
   getSku360CampaignCard,
   getSku360Persona,
@@ -93,10 +94,12 @@ export function Sku360BoardPage({
   apiToken = "",
   sku: skuProp = "",
   onNavigate,
+  embeddedModuleKey,
 }: {
   apiToken?: string;
   sku?: string;
   onNavigate?: (navKey: string) => void;
+  embeddedModuleKey?: string;
 }) {
   const readPendingSku = React.useCallback((): string => {
     try {
@@ -384,6 +387,10 @@ export function Sku360BoardPage({
     // ↓ palette 备选(不进默认布局)
     { key: "candidates", label: "推广候选", description: "启发式圈选候选 + 市场信号(人工复核,不自动推荐)", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 26, render: renderCandidates },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="SKU 360°" />;
+  }
 
   /* ---------- 选择器(pagehead 控件行;引导态也用同一只) ---------- */
   const selector = (

@@ -30,6 +30,26 @@ VIDEO_EVIDENCE_METHOD = "kol_video_evidence_url_service_v1"
 SCORE_FIELDS = ("viltrox_fit_score", "viltrox_fit_reason")
 
 
+def find_video_evidence_by_url(
+    video_url: str,
+    *,
+    conn: Any | None = None,
+) -> dict[str, Any] | None:
+    """Return existing evidence for one native video identity without providers.
+
+    URL search uses this read-only lookup before scheduling a background
+    refresh.  It deliberately shares the writer's native-ID dedupe contract so
+    ``youtu.be/<id>?...`` resolves an existing ``youtube.com/watch?v=<id>``
+    row instead of presenting the creator as unknown.
+    """
+
+    value = _text(video_url)
+    if not re.match(r"^https?://", value, flags=re.I):
+        return None
+    db = conn or get_conn()
+    return _load_existing_evidence(db, value, kol_pool_id=0)
+
+
 def ensure_video_evidence_from_url(
     kol_pool_id: int,
     source_url: str,

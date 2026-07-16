@@ -34,6 +34,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_lifecycle import close_apify_client
 from app.platform.industry_crawlers.reddit_json_path import RedditJsonPathMixin
 
 # PRAW import is optional - graceful degradation
@@ -345,9 +347,15 @@ class RedditCrawler(RedditJsonPathMixin):
         clean_post_id = self._normalize_post_id(raw_ref).replace("t3_", "").strip()
         post_url = raw_ref if raw_ref.startswith(("http://", "https://")) else f"https://www.reddit.com/comments/{clean_post_id}/"
         limit = max(1, min(300, int(max_results or 100)))
+        client: Any | None = None
         try:
             client = ApifyClient(self.apify_token)
-            run = client.actor(self.apify_actor).call(
+            run = call_apify_actor(
+                client,
+                self.apify_actor,
+                platform="reddit",
+                operation="crawl_post_comments",
+                source="industry_crawlers",
                 run_input={
                     "startUrls": [{"url": post_url}],
                     "skipComments": False,
@@ -387,6 +395,8 @@ class RedditCrawler(RedditJsonPathMixin):
                 "post_id": clean_post_id,
                 "raw": {"actor_id": self.apify_actor, "post_url": post_url},
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "provider": "apify"}
         except Exception as exc:
             return {
                 "items": [],
@@ -396,6 +406,8 @@ class RedditCrawler(RedditJsonPathMixin):
                 "post_id": clean_post_id,
                 "error": str(exc)[:500],
             }
+        finally:
+            close_apify_client(client)
 
     def _crawl_subreddit_via_apify(
         self, subreddit: str, limit: int
@@ -419,6 +431,7 @@ class RedditCrawler(RedditJsonPathMixin):
                 "error": "apify-client not installed",
             }
 
+        client: Any | None = None
         try:
             client = ApifyClient(self.apify_token)
             run_input = {
@@ -429,7 +442,12 @@ class RedditCrawler(RedditJsonPathMixin):
                 "type": "posts",
                 "sort": "hot",
             }
-            run = client.actor(self.apify_actor).call(
+            run = call_apify_actor(
+                client,
+                self.apify_actor,
+                platform="reddit",
+                operation="crawl_subreddit",
+                source="industry_crawlers",
                 run_input=run_input,
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
@@ -454,6 +472,8 @@ class RedditCrawler(RedditJsonPathMixin):
                 "sync_status": "ok",
                 "provider": "apify",
             }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "provider": "apify"}
         except Exception as exc:
             return {
                 "items": [],
@@ -462,6 +482,8 @@ class RedditCrawler(RedditJsonPathMixin):
                 "provider": "apify",
                 "error": str(exc)[:500],
             }
+        finally:
+            close_apify_client(client)
 
     # ─── Public API (V-KPI compatible) ──────────────────────────
 

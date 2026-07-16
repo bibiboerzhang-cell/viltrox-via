@@ -144,6 +144,7 @@ def _llm_cost_today(conn: Any) -> dict[str, Any]:
         return {
             "available": False,
             "label": "待接入",
+            "source_table": "vkpi_llm_calls",
             "cost_cents": None,
             "cost_usd": None,
             "call_count": None,
@@ -162,6 +163,7 @@ def _llm_cost_today(conn: Any) -> dict[str, Any]:
         return {
             "available": False,
             "label": "待接入",
+            "source_table": "vkpi_llm_calls",
             "cost_cents": None,
             "cost_usd": None,
             "call_count": None,
@@ -169,6 +171,7 @@ def _llm_cost_today(conn: Any) -> dict[str, Any]:
     cents = int((row["cents"] if row is not None else 0) or 0)
     return {
         "available": True,
+        "source_table": "vkpi_llm_calls",
         "cost_cents": cents,
         "cost_usd": round(cents / 100.0, 2),
         "call_count": int((row["n"] if row is not None else 0) or 0),

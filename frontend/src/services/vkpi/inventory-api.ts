@@ -12,6 +12,15 @@ export interface VkpiInventoryItem {
   location: string;
   note: string;
   is_sample: boolean;
+  quantity_status?: "unverified" | "manual_confirmed" | "source_confirmed" | string;
+  quantity_source?: string | null;
+  quantity_source_ref?: string | null;
+  quantity_source_observed_at?: string | null;
+  quantity_evidence_sha256?: string | null;
+  quantity_verified_by_staff_id?: number | null;
+  quantity_verified_organization_id?: number | null;
+  quantity_verified_at?: string | null;
+  row_version?: number;
   created_by_staff_id?: number | null;
   created_at?: string;
   updated_at?: string;
@@ -53,10 +62,90 @@ export interface VkpiInventoryMovement {
   created_at?: string;
 }
 
-export async function listInventory(token: string): Promise<{ items?: VkpiInventoryItem[] }> {
+export async function listInventory(
+  token: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<{ items?: VkpiInventoryItem[] }> {
   return apiFetch<{ items?: VkpiInventoryItem[] }>(
     "/api/admin/vkpi/inventory",
-    {},
+    { signal: options.signal },
+    token,
+  );
+}
+
+export interface VkpiInventoryAuthorizationEvidence {
+  authorizationRef: string;
+  reason: string;
+  confirmedByHuman: boolean;
+}
+
+export interface VkpiInventoryQuantityCas {
+  expectedId: string;
+  expectedQty: number;
+  expectedRowVersion: number;
+  expectedUpdatedAt: string;
+}
+
+export interface VkpiInventoryQuantityVerificationPayload
+  extends VkpiInventoryAuthorizationEvidence, VkpiInventoryQuantityCas {
+  sourceType: "physical_count_sheet" | "warehouse_confirmation" | "wms_export" | "erp_export" | "shopify_inventory_snapshot";
+  sourceRef: string;
+  sourceObservedAt: string;
+  evidenceSha256: string;
+}
+
+function authorizationBody(payload: VkpiInventoryAuthorizationEvidence) {
+  return {
+    authorization_evidence: {
+      authorization_ref: payload.authorizationRef,
+      reason: payload.reason,
+      confirmed_by_human: payload.confirmedByHuman,
+    },
+  };
+}
+
+export async function verifyInventoryQuantity(
+  token: string,
+  sku: string,
+  payload: VkpiInventoryQuantityVerificationPayload,
+): Promise<{ item?: VkpiInventoryItem; verified: boolean; quantity_changed: boolean }> {
+  return apiFetch(
+    `/api/admin/vkpi/inventory/${encodeURIComponent(sku)}/verify`,
+    {
+      method: "POST",
+      body: jsonBody({
+        source_type: payload.sourceType,
+        source_ref: payload.sourceRef,
+        source_observed_at: payload.sourceObservedAt,
+        evidence_sha256: payload.evidenceSha256,
+        expected_id: payload.expectedId,
+        expected_qty: payload.expectedQty,
+        expected_row_version: payload.expectedRowVersion,
+        expected_updated_at: payload.expectedUpdatedAt,
+        ...authorizationBody(payload),
+      }),
+    },
+    token,
+  );
+}
+
+export async function revokeInventoryQuantityVerification(
+  token: string,
+  sku: string,
+  payload: VkpiInventoryAuthorizationEvidence & VkpiInventoryQuantityCas,
+): Promise<{ item?: VkpiInventoryItem; verified: boolean; quantity_changed: boolean }> {
+  return apiFetch(
+    `/api/admin/vkpi/inventory/${encodeURIComponent(sku)}/verification/revoke`,
+    {
+      method: "POST",
+      body: jsonBody({
+        expected_id: payload.expectedId,
+        expected_qty: payload.expectedQty,
+        expected_row_version: payload.expectedRowVersion,
+        expected_updated_at: payload.expectedUpdatedAt,
+        ...authorizationBody(payload),
+      }),
+    },
     token,
   );
 }
@@ -207,6 +296,8 @@ export interface UiStockItem {
   sku: string;
   note: string;
   isSample: boolean;
+  quantityStatus: string;
+  quantitySource: string;
 }
 
 export function toUiStock(row: VkpiInventoryItem): UiStockItem {
@@ -219,5 +310,7 @@ export function toUiStock(row: VkpiInventoryItem): UiStockItem {
     sku: row.sku,
     note: row.note || "",
     isSample: !!row.is_sample,
+    quantityStatus: row.quantity_status || "unverified",
+    quantitySource: row.quantity_source || "unknown",
   };
 }

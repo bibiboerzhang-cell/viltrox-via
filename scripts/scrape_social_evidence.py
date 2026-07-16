@@ -12,6 +12,8 @@ kept behind an explicit --commit flag for the reviewed second round.
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import csv
 import os
@@ -451,7 +453,7 @@ def scrape_kol(kol: KolTarget, keywords: list[str], max_per_channel: int) -> Soc
     try:
         from apify_client import ApifyClient
 
-        print(f"[KOL {kol.id}] {kol.platform} actor={actor_id} url={cleaned_url}", flush=True)
+        out(f"[KOL {kol.id}] {kol.platform} actor={actor_id} url={cleaned_url}", flush=True)
         client = ApifyClient(token)
         run = client.actor(actor_id).call(run_input=run_input, timeout_secs=900, wait_secs=900)
         run_id = text(run.get("id"))
@@ -460,12 +462,12 @@ def scrape_kol(kol: KolTarget, keywords: list[str], max_per_channel: int) -> Soc
         matches = [candidate for item in items if (candidate := map_item(kol, item, keywords, run_id))]
         status = "success" if matches else "no_match"
         sample_keys = [sorted(str(key) for key in item.keys())[:30] for item in items[:3]]
-        print(
+        out(
             f"[KOL {kol.id}] run_id={run_id} scanned={len(items)} matched={len(matches)} status={status}",
             flush=True,
         )
         for candidate in matches[:3]:
-            print(f"[KOL {kol.id}] match: {candidate.title[:80]} | {candidate.video_url}", flush=True)
+            out(f"[KOL {kol.id}] match: {candidate.title[:80]} | {candidate.video_url}", flush=True)
         usage = run.get("usageTotalUsd")
         return SocialRun(
             kol=kol,
@@ -479,7 +481,7 @@ def scrape_kol(kol: KolTarget, keywords: list[str], max_per_channel: int) -> Soc
             sample_keys=sample_keys,
         )
     except Exception as exc:
-        print(f"[KOL {kol.id}] error: {str(exc)[:240]}", flush=True)
+        out(f"[KOL {kol.id}] error: {str(exc)[:240]}", flush=True)
         return SocialRun(kol, actor_id, "error", cleaned_url, error=str(exc)[:500])
 
 
@@ -719,13 +721,13 @@ def main() -> int:
     write_csv(csv_path, candidates)
     report = report_md(runs, candidates, len(keywords), len(insertable), len(candidates) - len(insertable))
     report_path.write_text(report, encoding="utf-8")
-    print(f"CSV: {csv_path}")
-    print(f"Markdown: {report_path}")
-    print(report)
+    out(f"CSV: {csv_path}")
+    out(f"Markdown: {report_path}")
+    out(report)
 
     if args.commit:
         inserted = insert_candidates(insertable)
-        print(f"Inserted rows: {inserted}")
+        out(f"Inserted rows: {inserted}")
     return 0
 
 

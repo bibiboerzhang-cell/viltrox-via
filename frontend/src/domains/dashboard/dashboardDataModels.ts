@@ -142,16 +142,20 @@ export function buildDashboardProductRoi(rows: Row[]): VkpiProductRoiItem[] {
   const mapped = rows.slice(0, 8).map((row) => {
     const revenue = numberValue(row.sales_cents || row.revenue_cents || row.gmv_cents);
     const cost = numberValue(row.cost_cents);
+    const costStatus = String(row.cost_data_status || row.financial_data_status || row.data_status || '').toLowerCase();
+    const costIsExplicit = cost !== 0
+      || costStatus === 'real'
+      || numberValue(row.cost_source_count) > 0;
     return {
       product: String(row.product_name || row.product_sku || row.project_name || '产品'),
-      roi: cost ? Number((revenue / cost).toFixed(2)) : 0,
+      roi: cost ? Number((revenue / cost).toFixed(2)) : costIsExplicit ? 0 : null,
       gmv: centsToUsd(revenue),
       sales: centsToUsd(revenue),
       cost: centsToUsd(cost),
       views: numberValue(row.views || row.total_views || row.play_count || row.impressions),
     };
   });
-  return mapped.length ? mapped : [{ product: '暂无项目数据', roi: 0, gmv: 0 }];
+  return mapped.length ? mapped : [{ product: '暂无项目数据', roi: null, gmv: 0 }];
 }
 
 export function buildDashboardPlatformShare(rows: Row[]): VkpiShareItem[] {

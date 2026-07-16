@@ -6,6 +6,7 @@ future KOL refresh is gated by ``vkpi_kol_refresh_tier``. It does not call
 Apify, YouTube, Gemini, LLMs, crawlers, or sync jobs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -301,9 +302,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.md_out:
             _write(args.md_out, markdown)
         if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+            stdout_out(json.dumps(report, ensure_ascii=False, indent=2, default=str))
         else:
-            print(markdown)
+            stdout_out(markdown)
         return 0 if report.get("passed") else 3
     finally:
         asyncio.run(close_db_runtime())

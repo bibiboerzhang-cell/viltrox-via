@@ -5,6 +5,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.dependencies.legacy_scope import require_legacy_system_admin_scope
 from app.api.dependencies.perms import require_system_permission, require_tab
 from app.core.security import require_admin_async as require_admin
 from app.services.audit_log import record_admin_action
@@ -12,15 +13,20 @@ from app.services.auth.email import email_service_available
 from app.services.auth.tokens import _token_ttl
 from app.services.system import staff as staff_svc
 
-router = APIRouter(prefix="/staff")
+router = APIRouter()
+public_staff_router = APIRouter(prefix="/staff")
+legacy_staff_router = APIRouter(
+    prefix="/staff",
+    dependencies=[Depends(require_legacy_system_admin_scope)],
+)
 
 
-@router.get("")
+@legacy_staff_router.get("")
 def list_staff(admin=Depends(require_tab("system", "read"))):
     return staff_svc.list_members()
 
 
-@router.get("/invite/capabilities")
+@legacy_staff_router.get("/invite/capabilities")
 def staff_invite_capabilities(admin=Depends(require_tab("system", "read"))):
     email_available = email_service_available()
     allowed_domains = staff_svc._load_allowed_domains()
@@ -39,7 +45,7 @@ def staff_invite_capabilities(admin=Depends(require_tab("system", "read"))):
     }
 
 
-@router.post("")
+@legacy_staff_router.post("")
 def add_staff(
     body: dict,
     request: Request,
@@ -61,7 +67,7 @@ def add_staff(
     return result
 
 
-@router.post("/invite")
+@legacy_staff_router.post("/invite")
 def invite_staff(
     body: dict,
     request: Request,
@@ -83,7 +89,7 @@ def invite_staff(
     return result
 
 
-@router.post("/invite/activation-link")
+@legacy_staff_router.post("/invite/activation-link")
 def create_activation_link(
     body: dict,
     request: Request,
@@ -112,7 +118,7 @@ def create_activation_link(
     return result
 
 
-@router.post("/accept-invite")
+@public_staff_router.post("/accept-invite")
 def accept_staff_invite(body: dict):
     try:
         return staff_svc.accept_invite(
@@ -123,12 +129,12 @@ def accept_staff_invite(body: dict):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/invite/status")
+@public_staff_router.get("/invite/status")
 def staff_invite_status(token: str = ""):
     return staff_svc.invite_token_status(token)
 
 
-@router.patch("/{staff_id}")
+@legacy_staff_router.patch("/{staff_id}")
 def update_staff(
     staff_id: int,
     body: dict,
@@ -145,7 +151,7 @@ def update_staff(
     return {"ok": True}
 
 
-@router.post("/{staff_id}/permissions")
+@legacy_staff_router.post("/{staff_id}/permissions")
 def update_staff_permissions(
     staff_id: int,
     body: dict,
@@ -171,7 +177,7 @@ def update_staff_permissions(
     return {"ok": True}
 
 
-@router.post("/{staff_id}/suspend")
+@legacy_staff_router.post("/{staff_id}/suspend")
 def suspend_staff(
     staff_id: int,
     body: dict,
@@ -188,7 +194,7 @@ def suspend_staff(
     return {"ok": True}
 
 
-@router.post("/{staff_id}/reactivate")
+@legacy_staff_router.post("/{staff_id}/reactivate")
 def reactivate_staff(
     staff_id: int,
     request: Request,
@@ -204,7 +210,7 @@ def reactivate_staff(
     return {"ok": True}
 
 
-@router.post("/{staff_id}/resend-invite")
+@legacy_staff_router.post("/{staff_id}/resend-invite")
 def resend_staff_invite(
     staff_id: int,
     request: Request,
@@ -226,7 +232,7 @@ def resend_staff_invite(
     return result
 
 
-@router.post("/{staff_id}/activation-link")
+@legacy_staff_router.post("/{staff_id}/activation-link")
 def create_existing_staff_activation_link(
     staff_id: int,
     request: Request,
@@ -252,7 +258,7 @@ def create_existing_staff_activation_link(
     return result
 
 
-@router.post("/{staff_id}/reset-password-link")
+@legacy_staff_router.post("/{staff_id}/reset-password-link")
 def create_staff_password_reset_link(
     staff_id: int,
     request: Request,
@@ -279,7 +285,7 @@ def create_staff_password_reset_link(
     return result
 
 
-@router.delete("/{staff_id}")
+@legacy_staff_router.delete("/{staff_id}")
 def delete_staff_member(
     staff_id: int,
     request: Request,
@@ -304,17 +310,17 @@ def delete_staff_member(
     return {"ok": True}
 
 
-@router.get("/roles")
+@legacy_staff_router.get("/roles")
 def list_roles(admin=Depends(require_tab("system", "read"))):
     return staff_svc.list_roles()
 
 
-@router.get("/permission-matrix")
+@legacy_staff_router.get("/permission-matrix")
 def permission_matrix(admin=Depends(require_tab("system", "read"))):
     return staff_svc.permission_matrix()
 
 
-@router.get("/audit-log")
+@legacy_staff_router.get("/audit-log")
 def audit_log(
     actor_id: int | None = None,
     action: str | None = None,
@@ -332,12 +338,12 @@ def audit_log(
     )
 
 
-@router.get("/api-tokens")
+@legacy_staff_router.get("/api-tokens")
 def list_tokens(admin=Depends(require_system_permission("system.api_keys", "read"))):
     return staff_svc.list_api_tokens()
 
 
-@router.post("/api-tokens")
+@legacy_staff_router.post("/api-tokens")
 def create_token(
     body: dict,
     request: Request,
@@ -355,7 +361,7 @@ def create_token(
     return result
 
 
-@router.delete("/api-tokens/{token_id}")
+@legacy_staff_router.delete("/api-tokens/{token_id}")
 def revoke_token(
     token_id: int,
     request: Request,
@@ -369,3 +375,10 @@ def revoke_token(
         request=request,
     )
     return {"ok": True}
+
+
+# Public token acceptance/status remain unguarded by design.  Management
+# invitations are guarded too: provisioning is tenant-aware, but its required
+# admin audit record remains legacy-global until that table is tenant-scoped.
+router.include_router(public_staff_router)
+router.include_router(legacy_staff_router)

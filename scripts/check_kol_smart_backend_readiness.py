@@ -7,6 +7,8 @@ V6 Fit fields.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import json
 import sys
@@ -232,26 +234,26 @@ def pending_write_commands(gates: list[Gate]) -> list[str]:
 
 def print_report(state: dict[str, Any], gates: list[Gate]) -> None:
     score = state["score"]
-    print("KOL Smart Backend Readiness")
-    print(f"branch: {state['git']['branch']} sha: {state['git']['short_sha']}")
-    print(f"code_chain_estimate: {score['code_chain_estimate']}")
-    print(f"materialized_data_layers_estimate: {score['materialized_data_layers_estimate']}%")
-    print(
+    out("KOL Smart Backend Readiness")
+    out(f"branch: {state['git']['branch']} sha: {state['git']['short_sha']}")
+    out(f"code_chain_estimate: {score['code_chain_estimate']}")
+    out(f"materialized_data_layers_estimate: {score['materialized_data_layers_estimate']}%")
+    out(
         "projected_materialized_data_layers_if_ready_backfills_committed: "
         f"{score.get('projected_materialized_data_layers_if_ready_backfills_committed')}%"
     )
-    print("gates:")
+    out("gates:")
     for gate in gates:
-        print(f"  [{gate.status}] {gate.key}: {gate.evidence}")
+        out(f"  [{gate.status}] {gate.key}: {gate.evidence}")
         if gate.next_step:
-            print(f"       next: {gate.next_step}")
+            out(f"       next: {gate.next_step}")
     commands = pending_write_commands(gates)
     if commands:
-        print("approved_write_commands_pending_confirmation:")
+        out("approved_write_commands_pending_confirmation:")
         for command in commands:
-            print(f"  {command}")
+            out(f"  {command}")
     else:
-        print("approved_write_commands_pending_confirmation: none")
+        out("approved_write_commands_pending_confirmation: none")
 
 
 def main() -> None:
@@ -264,8 +266,8 @@ def main() -> None:
     gates = build_gates(state)
     print_report(state, gates)
     if args.json:
-        print("readiness_json:")
-        print(
+        out("readiness_json:")
+        out(
             json.dumps(
                 {
                     "state_score": state["score"],

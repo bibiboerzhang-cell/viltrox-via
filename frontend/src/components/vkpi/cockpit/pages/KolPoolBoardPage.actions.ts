@@ -210,6 +210,8 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
   const [selectedDetailBundle, setSelectedDetailBundle] = React.useState<any>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState("");
+  const selectedItemIdRef = React.useRef<any>(null);
+  selectedItemIdRef.current = selectedItem?.id ?? null;
 
   const openItem = React.useCallback(async (item: any) => {
     const seedAvatar = avatarForItem(item);
@@ -246,6 +248,7 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
     try {
       const bundle = await getKolPoolDetailBundle(apiToken, id);
       if (!bundle || !bundle.item) return;
+      if (selectedItemIdRef.current !== id) return;
       const normalized = toCockpitKolPoolRows([bundle.item])[0];
       setSelectedDetailBundle(bundle);
       setSelectedItem((prev: any) => (prev && prev.id === id ? { ...prev, ...normalized, id } : prev));

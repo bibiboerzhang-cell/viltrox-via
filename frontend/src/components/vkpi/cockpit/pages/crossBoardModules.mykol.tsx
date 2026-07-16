@@ -89,7 +89,11 @@ export function MyKolContentWallXbCard({ apiToken, onOpenBoard }: XbProps) {
   const perms = usePermissions();
   const isManager = perms.isManager();
   const fetchAgg = React.useCallback(
-    (token: string) => getMyKolAggregate(token, isManager ? { scope: "team" } : {}),
+    (token: string) => getMyKolAggregate(token, {
+      ...(isManager ? { scope: "team" as const } : {}),
+      mode: "summary",
+      favoritesLimit: 50,
+    }),
     [isManager],
   );
   const ext = useXbFetch<VkpiMyKolBoardExtResponse>(apiToken, fetchExt30);

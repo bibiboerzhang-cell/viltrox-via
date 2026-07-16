@@ -17,6 +17,8 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
+from stdout_utils import out
+
 try:
     import pandas as pd
     import psycopg2
@@ -929,83 +931,83 @@ def print_report(
         pool_id = int(row["kol_pool_id"])
         if pool_id in new_active_pool_ids and row["evidence_type"] == "media_article":
             new_media_articles_by_pool[pool_id].append(row)
-    print("=" * 60)
-    print(f"ETL {'Commit' if mode == 'commit' else 'Dry-Run'} 报告 (V2)")
-    print("=" * 60)
-    print("\n[Projects]")
-    print(f"  {len(rows_by_sheet)} sheet -> {len(projects)} project")
-    print(f"  跳过 sheet: {len(skipped)}")
+    out("=" * 60)
+    out(f"ETL {'Commit' if mode == 'commit' else 'Dry-Run'} 报告 (V2)")
+    out("=" * 60)
+    out("\n[Projects]")
+    out(f"  {len(rows_by_sheet)} sheet -> {len(projects)} project")
+    out(f"  跳过 sheet: {len(skipped)}")
     if empty_products:
-        print(f"  空产品 sheet: {len(empty_products)} 个 ({', '.join(empty_products)})")
+        out(f"  空产品 sheet: {len(empty_products)} 个 ({', '.join(empty_products)})")
 
-    print("\n[KOL 匹配]")
-    print(f"  exact:           {stats['exact']}")
-    print(f"  fuzzy_high:      {stats['fuzzy_high']}")
-    print(f"  fuzzy_medium:    {stats['fuzzy_medium']} (全部 reject: {stats['fuzzy_medium_rejected']})")
-    print(f"  unmatched (将新建 pool):  {stats['unmatched_new_pool_rows']}")
-    print(f"  unmatched (WORKSHOP 跳过): {stats['unmatched_workshop_skipped']}")
+    out("\n[KOL 匹配]")
+    out(f"  exact:           {stats['exact']}")
+    out(f"  fuzzy_high:      {stats['fuzzy_high']}")
+    out(f"  fuzzy_medium:    {stats['fuzzy_medium']} (全部 reject: {stats['fuzzy_medium_rejected']})")
+    out(f"  unmatched (将新建 pool):  {stats['unmatched_new_pool_rows']}")
+    out(f"  unmatched (WORKSHOP 跳过): {stats['unmatched_workshop_skipped']}")
 
-    print("\n[匹配失败 top 30 (Excel 名)]")
+    out("\n[匹配失败 top 30 (Excel 名)]")
     unmatched_top = top_unmatched(match_report["unmatched"])
     if unmatched_top:
         for index, (name, sheet, count) in enumerate(unmatched_top, 1):
-            print(f"  {index}. {name}  (项目: {project_name(sheet)}, sheet出现 {count} 次)")
+            out(f"  {index}. {name}  (项目: {project_name(sheet)}, sheet出现 {count} 次)")
     else:
-        print("  无")
+        out("  无")
 
-    print("\n[fuzzy_medium top 20]")
+    out("\n[fuzzy_medium top 20]")
     fuzzy_top = top_fuzzy_medium(match_report["fuzzy_medium"])
     if fuzzy_top:
         for index, item in enumerate(fuzzy_top, 1):
-            print(
+            out(
                 f"  {index}. Excel: \"{item['name']}\" -> Pool: \"{item['matched_via']}\" "
                 f"(score={item['score']:.1f}, 项目: {project_name(item['sheet'])}, row={item['row']})"
             )
     else:
-        print("  无")
+        out("  无")
 
-    print("\n[新建 pool]")
-    print(f"  将新建 vkpi_kol_pool 记录: {len(new_pool_plans)}")
-    print(f"  覆盖 unmatched 行数: {stats['unmatched_new_pool_rows']}")
-    print(f"  - account_type=kol:     {stats['new_pool_kol']}")
-    print(f"  - account_type=media:   {stats['new_pool_media']}")
-    print(f"  - account_type=company: {stats['new_pool_company']}")
+    out("\n[新建 pool]")
+    out(f"  将新建 vkpi_kol_pool 记录: {len(new_pool_plans)}")
+    out(f"  覆盖 unmatched 行数: {stats['unmatched_new_pool_rows']}")
+    out(f"  - account_type=kol:     {stats['new_pool_kol']}")
+    out(f"  - account_type=media:   {stats['new_pool_media']}")
+    out(f"  - account_type=company: {stats['new_pool_company']}")
 
-    print("\n[Assignments]")
-    print(
+    out("\n[Assignments]")
+    out(
         f"  合并前: {stats['exact']} + {stats['unmatched_new_pool_rows']} = "
         f"{stats['exact'] + stats['fuzzy_high'] + stats['unmatched_new_pool_rows']}"
     )
-    print(
+    out(
         f"  合并后: {match_report['merged_count']} "
         f"(合并 {match_report['duplicate_extra_rows']} 条, {match_report['duplicate_groups']} 组)"
     )
-    print(f"  placeholder UPS 单号: {placeholder_count} 条")
+    out(f"  placeholder UPS 单号: {placeholder_count} 条")
 
-    print("\n[Video Evidence]")
-    print(f"  回片链接 -> valid evidence:        {evidence_by_source['excel_huipian']}")
-    print(f"  回片链接 -> blacklisted:           {evidence_stats[('回片链接', 'blacklisted')]}")
-    print(f"  回片链接 -> unknown_domain:        {evidence_stats[('回片链接', 'unknown_domain')]}")
-    print(f"  回片链接 -> media_domain:          {evidence_stats[('回片链接', 'media_domain')]}")
-    print(f"  内容发布链接 -> valid evidence:     {evidence_by_source['excel_published']}")
-    print(f"  内容发布链接 -> blacklisted:        {evidence_stats[('内容发布链接', 'blacklisted')]}")
-    print(f"  内容发布链接 -> unknown_domain:     {evidence_stats[('内容发布链接', 'unknown_domain')]}")
-    print(f"  内容发布链接 -> media_domain:       {evidence_stats[('内容发布链接', 'media_domain')]}")
-    print(f"  合计 valid evidence URL:           {len(evidence)}")
+    out("\n[Video Evidence]")
+    out(f"  回片链接 -> valid evidence:        {evidence_by_source['excel_huipian']}")
+    out(f"  回片链接 -> blacklisted:           {evidence_stats[('回片链接', 'blacklisted')]}")
+    out(f"  回片链接 -> unknown_domain:        {evidence_stats[('回片链接', 'unknown_domain')]}")
+    out(f"  回片链接 -> media_domain:          {evidence_stats[('回片链接', 'media_domain')]}")
+    out(f"  内容发布链接 -> valid evidence:     {evidence_by_source['excel_published']}")
+    out(f"  内容发布链接 -> blacklisted:        {evidence_stats[('内容发布链接', 'blacklisted')]}")
+    out(f"  内容发布链接 -> unknown_domain:     {evidence_stats[('内容发布链接', 'unknown_domain')]}")
+    out(f"  内容发布链接 -> media_domain:       {evidence_stats[('内容发布链接', 'media_domain')]}")
+    out(f"  合计 valid evidence URL:           {len(evidence)}")
 
-    print("\n[Fix 1 增量预测]")
-    print(f"  video evidence 新增:        {new_evidence_by_type['video']}")
-    print(f"  media_article 新增:         {new_evidence_by_type['media_article']}")
-    print(f"  预计新增 active KOL:        {len(new_active_pool_ids)}")
+    out("\n[Fix 1 增量预测]")
+    out(f"  video evidence 新增:        {new_evidence_by_type['video']}")
+    out(f"  media_article 新增:         {new_evidence_by_type['media_article']}")
+    out(f"  预计新增 active KOL:        {len(new_active_pool_ids)}")
     new_media_articles = [row for row in new_evidence if row["evidence_type"] == "media_article"]
     if new_media_articles:
-        print("\n[media_article 新增候选样本 top 5]")
+        out("\n[media_article 新增候选样本 top 5]")
         for index, row in enumerate(new_media_articles[:5], 1):
-            print(f"  {index}. {row['content_url']} ({row['source_ref']})")
+            out(f"  {index}. {row['content_url']} ({row['source_ref']})")
 
     if new_active_pool_ids:
-        print(f"\n[新 active KOL 候选 {len(new_active_pool_ids)} 人]")
-        print("display_name | dashboard_account_type | tier | 新增 media_article 数 | 样本 1 URL")
+        out(f"\n[新 active KOL 候选 {len(new_active_pool_ids)} 人]")
+        out("display_name | dashboard_account_type | tier | 新增 media_article 数 | 样本 1 URL")
         for pool_id in sorted(new_active_pool_ids, key=lambda value: text(pool_details.get(value, {}).get("display_name") or pool_details.get(value, {}).get("handle")).lower()):
             detail = pool_details.get(pool_id, {})
             articles = new_media_articles_by_pool.get(pool_id, [])
@@ -1013,20 +1015,20 @@ def print_report(
             account_type = text(detail.get("dashboard_account_type")) or "-"
             tier = text(detail.get("dashboard_tier")) or "-"
             sample_url = articles[0]["content_url"] if articles else "-"
-            print(f"{display_name} | {account_type} | {tier} | {len(articles)} | {sample_url}")
+            out(f"{display_name} | {account_type} | {tier} | {len(articles)} | {sample_url}")
 
-    print("\n[needs_scrape]")
-    print(f"  已合作但无视频证据: {len(need_scrape_pool_ids)} 个 KOL")
+    out("\n[needs_scrape]")
+    out(f"  已合作但无视频证据: {len(need_scrape_pool_ids)} 个 KOL")
 
-    print("\n" + "=" * 60)
-    print("预测最终 KPI:")
-    print(f"  vkpi_projects 新增/更新: {len(projects)}")
-    print(f"  vkpi_kol_pool 新增: {len(new_pool_plans)}")
-    print(f"  vkpi_project_kol_assignments 新增/更新: {len(assignments)}")
-    print(f"  vkpi_kol_video_evidence 新增: {len(evidence)}")
-    print(f"  has_video_evidence=TRUE: {active_roster} (= Active Roster)")
-    print(f"  needs_scrape=TRUE:        {len(need_scrape_pool_ids)}")
-    print("=" * 60)
+    out("\n" + "=" * 60)
+    out("预测最终 KPI:")
+    out(f"  vkpi_projects 新增/更新: {len(projects)}")
+    out(f"  vkpi_kol_pool 新增: {len(new_pool_plans)}")
+    out(f"  vkpi_project_kol_assignments 新增/更新: {len(assignments)}")
+    out(f"  vkpi_kol_video_evidence 新增: {len(evidence)}")
+    out(f"  has_video_evidence=TRUE: {active_roster} (= Active Roster)")
+    out(f"  needs_scrape=TRUE:        {len(need_scrape_pool_ids)}")
+    out("=" * 60)
 
 
 def main() -> int:
@@ -1087,7 +1089,7 @@ def main() -> int:
                 apply_evidence(cur, evidence)
                 if not args.evidence_only:
                     needs_scrape_count = apply_needs_scrape(cur)
-                    print(f"commit needs_scrape rows updated: {needs_scrape_count}")
+                    out(f"commit needs_scrape rows updated: {needs_scrape_count}")
 
         print_report(
             skipped=skipped,

@@ -8,6 +8,7 @@ import type { ChannelContentPost, OfficialChannelAccount } from './channelTypes'
 // ③累计口径:— 不混进合计(合计端用 viewsUnavailable||viewsMissing 过滤)
 
 const igAccount = { platform: 'instagram', platformLabel: 'Instagram' } as OfficialChannelAccount;
+const tiktokAccount = { platform: 'tiktok', platformLabel: 'TikTok' } as OfficialChannelAccount;
 
 function post(overrides: Partial<ChannelContentPost>): ChannelContentPost {
   return mapPost({ id: 'p1', title: 't', url: 'https://instagram.com/p/x', ...overrides });
@@ -69,6 +70,21 @@ describe('mediaState 缩略图链', () => {
     const item = post({ media_kind: 'image', image_urls: ['https://scontent-lga3-3.cdninstagram.com/v/pic.jpg'] });
     const media = mediaState(item, igAccount);
     expect(media.imageUrls[0]).toContain('/api/admin/vkpi/media/image-proxy?url=');
+  });
+
+  it('TikTok signed CDN 缩略图走同源代理，不向浏览器裸放 403 地址', () => {
+    const raw = 'https://p19-common-sign.tiktokcdn-us.com/tos-useast5-avt-0068-tx/avatar~tplv-tiktokx-cropcenter:720:720.jpeg?x-signature=secret';
+    const item = post({ media_kind: 'image', image_urls: [raw] });
+    const media = mediaState(item, tiktokAccount);
+    expect(media.imageUrls[0]).toBe(`/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(raw)}`);
+  });
+
+  it('协议相对 TikTok CDN 地址先补 https 再走同源代理', () => {
+    const raw = '//p19-common-sign.tiktokcdn-us.com/tos-useast5-avt/avatar.jpeg?x-signature=secret';
+    const absolute = `https:${raw}`;
+    const item = post({ media_kind: 'image', image_urls: [raw] });
+    const media = mediaState(item, tiktokAccount);
+    expect(media.imageUrls[0]).toBe(`/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(absolute)}`);
   });
 
   it('无任何媒体候选 → renderable=false(诚实占位,不造假图)', () => {

@@ -1,9 +1,34 @@
 from __future__ import annotations
 
+import socket
 from datetime import datetime, timezone
 
+import pytest
+
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.market.brand_signal_detector import commit_brand_signals, detect_viltrox_signals, list_brand_signals
+
+
+@pytest.fixture(autouse=True)
+def _private_brand_signal_db(tmp_path, monkeypatch):
+    """Run every detector test against a fresh empty SQLite file."""
+    db_connection.close_db_runtime_sync()
+    db_path = (tmp_path / "brand-signals.db").resolve()
+    assert db_path != db_connection._PRODUCTION_SQLITE_PATH
+    monkeypatch.setattr(db_connection, "DB_PATH", db_path)
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setattr(db_connection, "DB_RUNTIME_URL", "")
+
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("brand signal detector must not call the network")
+
+    monkeypatch.setattr(socket, "create_connection", fail_network)
+    monkeypatch.setattr(socket.socket, "connect", fail_network)
+    try:
+        yield
+    finally:
+        db_connection.close_db_runtime_sync()
 
 
 def test_numeric_epoch_published_at_is_normalized_for_db():

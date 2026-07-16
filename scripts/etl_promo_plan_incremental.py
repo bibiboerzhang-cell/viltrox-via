@@ -26,6 +26,8 @@ import pandas as pd
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 
+from stdout_utils import out
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -882,84 +884,84 @@ def print_report(plan: dict[str, Any], *, commit_result: dict[str, int] | None =
     standard_pools = standard["pool_inserts"]
     frame_pools = frame["pool_inserts"]
     frame_assignments = frame["assignment_inserts"]
-    print("=" * 72)
-    print("Promo Plan Incremental ETL Dry-Run")
-    print("=" * 72)
-    print(f"Excel: {plan['excel']}")
-    print(f"Mode: {'commit' if commit_result is not None else 'dry-run'}")
-    print("\n[Safety]")
+    out("=" * 72)
+    out("Promo Plan Incremental ETL Dry-Run")
+    out("=" * 72)
+    out(f"Excel: {plan['excel']}")
+    out(f"Mode: {'commit' if commit_result is not None else 'dry-run'}")
+    out("\n[Safety]")
     for key, value in plan["safety"].items():
-        print(f"  {key}: {value}")
+        out(f"  {key}: {value}")
 
-    print("\n[A. Pure Increment Inserts]")
-    print(f"  new KOL pools: {len(standard_pools)}")
-    print(f"  standard new assignments: {len(standard_assignments)}")
-    print(f"  standard parsed new evidence rows: {len(standard_evidence)}")
-    print("  standard assignment by project:")
+    out("\n[A. Pure Increment Inserts]")
+    out(f"  new KOL pools: {len(standard_pools)}")
+    out(f"  standard new assignments: {len(standard_assignments)}")
+    out(f"  standard parsed new evidence rows: {len(standard_evidence)}")
+    out("  standard assignment by project:")
     for project, count in Counter(item.project_name for item in standard_assignments).most_common():
-        print(f"    - {project}: {count}")
+        out(f"    - {project}: {count}")
     for item in standard_assignments:
-        print(
+        out(
             f"    assignment | {item.project_name} | kol_pool_id={item.kol_pool_id} | "
             f"stage={item.stage} | progress={item.excel_progress} | {item.source_ref}"
         )
     for item in standard_evidence:
-        print(f"    evidence | {item.source_group} | {item.project_uid} | kol_pool_id={item.kol_pool_id} | {item.content_url} | {item.source_ref}")
+        out(f"    evidence | {item.source_group} | {item.project_uid} | kol_pool_id={item.kol_pool_id} | {item.content_url} | {item.source_ref}")
 
-    print("\n[A. Frame the Game]")
-    print(f"  project insert: {1 if frame['project_insert'] else 0}")
+    out("\n[A. Frame the Game]")
+    out(f"  project insert: {1 if frame['project_insert'] else 0}")
     if frame["project_insert"]:
-        print(f"    {frame['project_insert']['project_uid']} | {frame['project_insert']['project_name']} | initial stage=discovery")
-    print(f"  new KOL pools: {len(frame_pools)}")
-    print(f"  assignments: {len(frame_assignments)}")
-    print(f"  raw progress distribution: {frame['progress_distribution']}")
-    print(f"  mapped stage distribution: {frame['mapped_stage_distribution']}")
-    print(f"  platform distribution: {frame['platform_distribution']}")
-    print(f"  match distribution: {frame['match_distribution']}")
-    print("  assignment stage mapping: 沟通中->discovery / 已联系->contacted / 已合作->shipped / 已终止->cancelled / 空->discovery")
+        out(f"    {frame['project_insert']['project_uid']} | {frame['project_insert']['project_name']} | initial stage=discovery")
+    out(f"  new KOL pools: {len(frame_pools)}")
+    out(f"  assignments: {len(frame_assignments)}")
+    out(f"  raw progress distribution: {frame['progress_distribution']}")
+    out(f"  mapped stage distribution: {frame['mapped_stage_distribution']}")
+    out(f"  platform distribution: {frame['platform_distribution']}")
+    out(f"  match distribution: {frame['match_distribution']}")
+    out("  assignment stage mapping: 沟通中->discovery / 已联系->contacted / 已合作->shipped / 已终止->cancelled / 空->discovery")
     for item in frame["raw_rows"]:
-        print(
+        out(
             f"    frame | row={item['excel_row']} | {item['name']} | platform={item['platform']} | "
             f"match={item['match']} | pool={item['kol_pool_id']} | progress={item['progress'] or '<blank>'} | stage={item['mapped_stage']}"
         )
 
-    print("\n[B. Vintage Z1 Pro Existing Assignment Updates]")
-    print(f"  progress text/stage updates: {len(vintage_progress_updates)}")
+    out("\n[B. Vintage Z1 Pro Existing Assignment Updates]")
+    out(f"  progress text/stage updates: {len(vintage_progress_updates)}")
     for item in vintage_progress_updates:
-        print(
+        out(
             f"    progress | assignment={item.assignment_id} | {item.handle or item.display_name} | "
             f"{item.current_stage}->{item.new_stage} | {item.current_stage_status}->{item.new_stage_status} | "
             f"{item.current_excel_progress or '<blank>'}->{item.new_excel_progress or '<blank>'}"
         )
-    print(f"  new video-link assignment updates: {len(vintage_link_updates)}")
+    out(f"  new video-link assignment updates: {len(vintage_link_updates)}")
     for item in vintage_link_updates:
-        print(
+        out(
             f"    link | assignment={item.assignment_id} | {item.handle or item.display_name} | "
             f"{item.current_stage}->{item.new_stage} | reason={item.reason}"
         )
     if standard_evidence and len(standard_evidence) == len(vintage_link_updates):
-        print("  evidence note: the 5 parsed standard evidence rows are the same 5 Vintage link rows; actual deduped evidence inserts = 5, not 10.")
+        out("  evidence note: the 5 parsed standard evidence rows are the same 5 Vintage link rows; actual deduped evidence inserts = 5, not 10.")
 
-    print("\n[Skipped]")
+    out("\n[Skipped]")
     for item in plan["skipped"]:
-        print(f"  {item['sheet']}: {item['action']} ({item['reason']}); rows={item['rows']}, kol_rows={item['kol_rows']}")
+        out(f"  {item['sheet']}: {item['action']} ({item['reason']}); rows={item['rows']}, kol_rows={item['kol_rows']}")
 
-    print("\n[Totals]")
-    print(f"  projects to insert: {1 if frame['project_insert'] else 0}")
-    print(f"  KOL pools to insert: {len(standard_pools) + len(frame_pools)}")
-    print(f"  assignments to insert: {len(standard_assignments) + len(frame_assignments)}")
-    print(f"  assignments to update: {len(vintage_progress_updates) + len(vintage_link_updates)}")
-    print(f"  evidence to insert, deduped by content_url: {len(standard_evidence)}")
-    print("  unchanged scope: other 31 projects=0 changes, project-level stage=0 changes, follow_status=0 changes, stars=0 writes")
-    print("\n[Projected Counts After Commit]")
-    print(f"  projects_in_scope: {plan['current_counts']['projects_in_scope']} -> {plan['projected_counts']['projects_in_scope']}")
-    print(f"  assignments_in_scope: {plan['current_counts']['assignments_in_scope']} -> {plan['projected_counts']['assignments_in_scope']}")
-    print(f"  kol_pool: {plan['current_counts']['kol_pool']} -> {plan['projected_counts']['kol_pool']}")
-    print(f"  evidence: {plan['current_counts']['evidence']} -> {plan['projected_counts']['evidence']}")
+    out("\n[Totals]")
+    out(f"  projects to insert: {1 if frame['project_insert'] else 0}")
+    out(f"  KOL pools to insert: {len(standard_pools) + len(frame_pools)}")
+    out(f"  assignments to insert: {len(standard_assignments) + len(frame_assignments)}")
+    out(f"  assignments to update: {len(vintage_progress_updates) + len(vintage_link_updates)}")
+    out(f"  evidence to insert, deduped by content_url: {len(standard_evidence)}")
+    out("  unchanged scope: other 31 projects=0 changes, project-level stage=0 changes, follow_status=0 changes, stars=0 writes")
+    out("\n[Projected Counts After Commit]")
+    out(f"  projects_in_scope: {plan['current_counts']['projects_in_scope']} -> {plan['projected_counts']['projects_in_scope']}")
+    out(f"  assignments_in_scope: {plan['current_counts']['assignments_in_scope']} -> {plan['projected_counts']['assignments_in_scope']}")
+    out(f"  kol_pool: {plan['current_counts']['kol_pool']} -> {plan['projected_counts']['kol_pool']}")
+    out(f"  evidence: {plan['current_counts']['evidence']} -> {plan['projected_counts']['evidence']}")
     if commit_result is not None:
-        print("\n[Commit Result]")
-        print(json.dumps(commit_result, ensure_ascii=False, indent=2))
-    print("=" * 72)
+        out("\n[Commit Result]")
+        out(json.dumps(commit_result, ensure_ascii=False, indent=2))
+    out("=" * 72)
 
 
 def main() -> int:

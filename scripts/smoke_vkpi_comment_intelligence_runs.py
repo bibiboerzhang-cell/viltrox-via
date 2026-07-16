@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P2.2 comment intelligence run ledger + retry path."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -136,7 +137,7 @@ def main() -> None:
         if int(retry_detail.get("retry_of_run_id") or 0) != int(result["run_id"]):
             raise AssertionError(f"retry link missing: {retry_detail}")
 
-        print("VKPI_COMMENT_INTELLIGENCE_RUNS_SMOKE_OK")
+        stdout_out("VKPI_COMMENT_INTELLIGENCE_RUNS_SMOKE_OK")
     finally:
         for run_id in run_ids:
             conn.execute("DELETE FROM vkpi_comment_intelligence_runs WHERE id = ?", (run_id,))

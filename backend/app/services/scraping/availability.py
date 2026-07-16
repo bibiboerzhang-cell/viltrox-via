@@ -87,7 +87,7 @@ def probe_video_availability(
         try:
             title = str(json.loads(body).get("title", ""))[:200]
         except Exception:  # noqa: BLE001 - title is best-effort decoration
-            pass
+            title = ""
         return ProbeResult("available", code, "ok", video_id, title)
     if code in (404, 410):
         return ProbeResult("unavailable", code, "deleted_or_private", video_id)

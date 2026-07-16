@@ -5,6 +5,7 @@ This script reads existing official-channel snapshots. It does not call Apify,
 YouTube, Gemini, LLMs, or any crawler.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -330,7 +331,7 @@ def main() -> int:
     if args.md_out:
         write_markdown(report, Path(args.md_out))
     if args.json or not (args.json_out or args.md_out):
-        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        stdout_out(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0 if report.get("passed") else 3
 
 

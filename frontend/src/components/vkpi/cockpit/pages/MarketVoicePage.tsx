@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import {
   fetchVoiceReportExt,
   getVoiceFeed,
@@ -100,7 +101,7 @@ const SAMPLE_PENDING: Record<string, string> = { line_voice: DIM_PENDING("产品
 const SKU360_SEARCH_KEY = "vkpi:sku360-search";
 const SKU360_SEARCH_EVENT = "vkpi:open-sku360-search";
 
-export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
+export function MarketVoicePage({ apiToken = "", onNavigate, embeddedModuleKey }: { apiToken?: string; onNavigate?: (navKey: string) => void; embeddedModuleKey?: string }) {
   const [month, setMonth] = React.useState<string>("");
   const [data, setData] = React.useState<Row | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -683,6 +684,10 @@ export function MarketVoicePage({ apiToken = "", onNavigate }: { apiToken?: stri
     { key: "gaps", label: "需求空白", description: "有声量但目录零 SKU 的焦段", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 5, maxHeight: 24, render: renderGaps },
     { key: "buckets", label: "产品线声量分桶", description: "产品线词表口径", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 4, minHeight: 3, maxHeight: 16, render: renderBuckets },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="市场之声" />;
+  }
 
   const detailItem = detailIndex != null && feedItems ? feedItems[detailIndex] : null;
 

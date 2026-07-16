@@ -1,28 +1,335 @@
 """Hardening coverage for V-KPI recommendation, feedback, and alert paths."""
 from __future__ import annotations
 
+import importlib
 import json
 import secrets
+import socket
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
 from app.db.connection import get_conn, get_db_actor_stats, probe_postgres_connectivity
+# Import the leaf filter through the KOL package before the recommendation
+# facade.  The production facades currently have an import-order cycle; the
+# wider suite happens to preload this leaf, while this file must also collect
+# deterministically on its own.
+from app.domains.kol import discovery_filters as _discovery_filters  # noqa: F401
 from app.domains.recommendations import new_launch_match, product_analysis
 from app.domains import alerts
 from app.domains import memory
-from app.services.vkpi.schema import ensure_vkpi_schema
-from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
 MARKER = "VKPI-HARDENING-TEST"
 
 
-@pytest.fixture(autouse=True)
-def _ensure_schemas():
-    ensure_vkpi_schema()
-    ensure_vkpi_product_industry_schema()
-    yield
+_P4_TEST_SCHEMA = """
+CREATE TABLE vkpi_memory_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_uid TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL,
+    identity_key TEXT NOT NULL,
+    display_name TEXT DEFAULT '',
+    source_table TEXT DEFAULT '',
+    source_id TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    confidence_score REAL DEFAULT 1.0,
+    identity_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(entity_type, identity_key)
+);
+
+CREATE TABLE vkpi_memory_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fact_uid TEXT NOT NULL UNIQUE,
+    entity_id INTEGER NOT NULL,
+    fact_type TEXT NOT NULL,
+    fact_key TEXT NOT NULL DEFAULT '',
+    fact_value_text TEXT DEFAULT '',
+    confidence_score REAL DEFAULT 1.0,
+    source_ref TEXT NOT NULL DEFAULT '',
+    source_table TEXT DEFAULT '',
+    source_id TEXT DEFAULT '',
+    fact_json TEXT NOT NULL DEFAULT '{}',
+    source_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    observed_at TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(entity_id, fact_type, fact_key, source_ref)
+);
+
+CREATE TABLE vkpi_memory_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    link_uid TEXT NOT NULL UNIQUE,
+    source_entity_id INTEGER NOT NULL,
+    target_entity_id INTEGER NOT NULL,
+    link_type TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    confidence_score REAL DEFAULT 1.0,
+    source_ref TEXT NOT NULL DEFAULT '',
+    source_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    observed_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_entity_id, target_entity_id, link_type, source_ref)
+);
+
+CREATE TABLE vkpi_memory_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feedback_uid TEXT NOT NULL UNIQUE,
+    entity_id INTEGER,
+    fact_id INTEGER,
+    link_id INTEGER,
+    feedback_type TEXT NOT NULL,
+    rating INTEGER,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_by_staff_id INTEGER,
+    resolved_by_staff_id INTEGER,
+    feedback_json TEXT NOT NULL DEFAULT '{}',
+    resolution_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE vkpi_memory_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_uid TEXT NOT NULL UNIQUE,
+    scope TEXT NOT NULL,
+    source_ref TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'completed',
+    entity_count INTEGER NOT NULL DEFAULT 0,
+    fact_count INTEGER NOT NULL DEFAULT 0,
+    link_count INTEGER NOT NULL DEFAULT 0,
+    feedback_count INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE vkpi_kol_pool (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pool_uid TEXT NOT NULL UNIQUE,
+    platform TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    profile_url TEXT DEFAULT '',
+    display_name TEXT DEFAULT '',
+    country TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    followers INTEGER,
+    avg_views INTEGER,
+    avg_comments INTEGER,
+    engagement_rate REAL,
+    linked_main_kol_id INTEGER,
+    sync_status TEXT NOT NULL DEFAULT 'imported',
+    source_type TEXT NOT NULL DEFAULT 'manual',
+    source_ref TEXT DEFAULT '',
+    raw_platform_data TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(platform, handle)
+);
+
+CREATE TABLE vkpi_legacy_kol_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_uid TEXT NOT NULL UNIQUE,
+    weak_label TEXT DEFAULT '',
+    resolution_decision TEXT DEFAULT ''
+);
+
+CREATE TABLE vkpi_kol_recommendation_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_uid TEXT NOT NULL UNIQUE,
+    launch_id INTEGER,
+    strategy_version TEXT NOT NULL DEFAULT 'rule_v0',
+    status TEXT NOT NULL DEFAULT 'completed',
+    candidate_count INTEGER NOT NULL DEFAULT 0,
+    recommendation_count INTEGER NOT NULL DEFAULT 0,
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    created_by_staff_id INTEGER,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE vkpi_kol_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_uid TEXT NOT NULL UNIQUE,
+    run_id INTEGER NOT NULL,
+    launch_id INTEGER,
+    kol_pool_id INTEGER,
+    linked_main_kol_id INTEGER,
+    platform TEXT DEFAULT '',
+    handle TEXT DEFAULT '',
+    display_name TEXT DEFAULT '',
+    score REAL,
+    rank INTEGER,
+    status TEXT NOT NULL DEFAULT 'recommended',
+    feature_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    scoring_breakdown_json TEXT NOT NULL DEFAULT '{}',
+    explanation_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE vkpi_recommendation_explanations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id INTEGER NOT NULL,
+    explanation_type TEXT NOT NULL DEFAULT 'rule',
+    explanation_text TEXT DEFAULT '',
+    strengths_json TEXT NOT NULL DEFAULT '[]',
+    concerns_json TEXT NOT NULL DEFAULT '[]',
+    model_version TEXT DEFAULT 'rule_v0',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE vkpi_recommendation_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id INTEGER NOT NULL,
+    feedback_type TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    created_by_staff_id INTEGER,
+    created_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE vkpi_recommendation_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id INTEGER UNIQUE,
+    kol_pool_id INTEGER,
+    launch_id INTEGER,
+    was_shortlisted INTEGER NOT NULL DEFAULT 0,
+    shortlisted_at TEXT,
+    was_rejected INTEGER NOT NULL DEFAULT 0,
+    rejected_at TEXT,
+    reject_reason TEXT DEFAULT '',
+    recommended_at TEXT NOT NULL,
+    first_action_at TEXT,
+    feature_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    scoring_breakdown_json TEXT NOT NULL DEFAULT '{}',
+    model_version TEXT DEFAULT 'rule_v0',
+    display_position INTEGER,
+    display_context_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE vkpi_recommendation_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recommendation_id INTEGER NOT NULL UNIQUE
+);
+
+CREATE TABLE vkpi_ai_cost_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cron_task TEXT,
+    ai_provider TEXT,
+    model_name TEXT,
+    cost_usd REAL,
+    tokens_in INTEGER,
+    tokens_out INTEGER,
+    kol_pool_id INTEGER,
+    staff_id INTEGER,
+    task_item_id INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    occurred_at TEXT
+);
+
+CREATE TABLE vkpi_provider_budget_caps (
+    scope TEXT PRIMARY KEY,
+    cap_usd REAL,
+    current_spend REAL DEFAULT 0,
+    warning_at REAL DEFAULT 0.80,
+    hard_stop_at REAL DEFAULT 1.00,
+    reset_at TEXT,
+    fallback_action TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE vkpi_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_key TEXT NOT NULL UNIQUE,
+    severity TEXT NOT NULL DEFAULT 'info',
+    status TEXT NOT NULL DEFAULT 'open',
+    target_type TEXT NOT NULL DEFAULT '',
+    target_id INTEGER,
+    staff_id INTEGER,
+    title TEXT NOT NULL,
+    body TEXT DEFAULT '',
+    rule_key TEXT DEFAULT '',
+    due_at TEXT,
+    resolved_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+@pytest.fixture(scope="module")
+def p4_module_db(tmp_path_factory: pytest.TempPathFactory):
+    """Keep this hardening module on one private, minimal SQLite database."""
+
+    from app.db import connection as db_connection
+
+    memory_common = importlib.import_module("app.domains.memory.common")
+    memory_feedback = importlib.import_module("app.domains.memory.feedback")
+    recommendation_actions = importlib.import_module("app.domains.recommendations.actions")
+    recommendation_outcomes = importlib.import_module("app.domains.recommendations.outcomes")
+    alert_service = importlib.import_module("app.domains.alerts.service")
+
+    patch = pytest.MonkeyPatch()
+    db_path = (tmp_path_factory.mktemp("vkpi-p4-p12") / "p4-p12.db").resolve()
+    production_path = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != production_path
+
+    db_connection.close_db_runtime_sync()
+    patch.setattr(db_connection, "DB_PATH", db_path)
+    patch.setattr(db_connection, "DB_RUNTIME_BACKEND", "sqlite")
+    patch.setattr(db_connection, "DB_RUNTIME_URL", "")
+    patch.setenv("DATABASE_URL", "")
+    patch.setenv("DATABASE_POOL_URL", "")
+    patch.setenv("LOCAL_DATABASE_URL", "")
+    patch.setenv("REDIS_URL", "")
+
+    # These production entry points normally run broad schema bootstraps.  The
+    # module owns the exact compatibility schema below, so every call remains
+    # local and cannot fall through to Postgres migrations or runtime seeders.
+    def no_schema_bootstrap() -> None:
+        return None
+
+    patch.setattr(memory, "ensure_memory_schema", no_schema_bootstrap)
+    patch.setattr(memory_common, "ensure_memory_schema", no_schema_bootstrap)
+    patch.setattr(memory_feedback, "ensure_memory_schema", no_schema_bootstrap)
+    patch.setattr(recommendation_actions, "ensure_vkpi_product_industry_schema", no_schema_bootstrap)
+    patch.setattr(recommendation_outcomes, "ensure_vkpi_product_industry_schema", no_schema_bootstrap)
+    patch.setattr(alert_service, "ensure_vkpi_schema", no_schema_bootstrap)
+
+    conn = db_connection.get_conn()
+    conn.executescript(_P4_TEST_SCHEMA)
+    conn.commit()
+
+    def forbidden_provider_call(*_args, **_kwargs):
+        raise AssertionError("P4 dry-run test attempted a provider call")
+
+    def forbidden_network_call(*_args, **_kwargs):
+        raise AssertionError("P4 hardening test attempted a network connection")
+
+    patch.setattr(new_launch_match.llm_production, "generate_json", forbidden_provider_call)
+    patch.setattr(socket, "create_connection", forbidden_network_call)
+    patch.setattr(socket.socket, "connect", forbidden_network_call)
+    patch.setattr(socket.socket, "connect_ex", forbidden_network_call)
+    try:
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        patch.undo()
 
 
 def _cleanup_memory_fixture(conn, marker: str = MARKER) -> None:
@@ -67,7 +374,7 @@ def _cleanup_memory_fixture(conn, marker: str = MARKER) -> None:
 
 
 @pytest.fixture(scope="module")
-def seeded_memory_readiness():
+def seeded_memory_readiness(p4_module_db: Path):
     conn = get_conn()
     memory.ensure_memory_schema()
     _cleanup_memory_fixture(conn)
@@ -378,7 +685,9 @@ def test_p4_preview_persistence_writes_run_recommendations_and_explanations(seed
             _cleanup_recommendation_run(conn, run_id=int(payload["persistence"]["run_id"]))
 
 
-def test_recommendation_actions_record_feedback_and_outcomes_without_duplicate_shortlist_feedback():
+def test_recommendation_actions_record_feedback_and_outcomes_without_duplicate_shortlist_feedback(
+    p4_module_db: Path,
+):
     conn = get_conn()
     marker = f"{MARKER}_actions_{secrets.token_hex(4)}"
     try:
@@ -421,7 +730,7 @@ def test_recommendation_actions_record_feedback_and_outcomes_without_duplicate_s
         _cleanup_recommendation_run(conn, marker=marker)
 
 
-def test_recommendation_review_gap_alert_opens_then_clears_after_feedback():
+def test_recommendation_review_gap_alert_opens_then_clears_after_feedback(p4_module_db: Path):
     conn = get_conn()
     marker = f"{MARKER}_review_gap_{secrets.token_hex(4)}"
     run_id = rec_id = None
@@ -451,7 +760,7 @@ def test_recommendation_review_gap_alert_opens_then_clears_after_feedback():
         _cleanup_recommendation_run(conn, run_id=run_id, marker=marker)
 
 
-def test_db_runtime_pool_status_probe_returns_stable_shape():
+def test_db_runtime_pool_status_probe_returns_stable_shape(p4_module_db: Path):
     connectivity = probe_postgres_connectivity()
     stats = get_db_actor_stats()
 

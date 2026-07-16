@@ -1,10 +1,62 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
+import pytest
+
+from app.db import connection as db_connection
 from app.db.connection import get_conn
+import app.domains.channels.post_metrics as post_metrics_schema
+import app.domains.channels.schema as channels_schema
 from app.services.vkpi.channel_post_metrics import ensure_channel_post_metrics_schema, normalize_channel_posts, record_channel_post_metrics
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _channel_post_metrics_test_db(tmp_path_factory: pytest.TempPathFactory):
+    db_path = (tmp_path_factory.mktemp("channel-post-metrics") / "channels.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_channels_ready = channels_schema._SCHEMA_READY
+    old_post_metrics_ready = post_metrics_schema._SCHEMA_READY
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    channels_schema._SCHEMA_READY = False
+    post_metrics_schema._SCHEMA_READY = False
+    conn = get_conn()
+    try:
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        conn.execute(
+            """
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                role TEXT NOT NULL DEFAULT 'readonly',
+                permissions_json TEXT NOT NULL DEFAULT '{}',
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                invited_at TEXT
+            )
+            """
+        )
+        ensure_vkpi_channels_schema()
+        ensure_channel_post_metrics_schema()
+        conn.commit()
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        channels_schema._SCHEMA_READY = old_channels_ready
+        post_metrics_schema._SCHEMA_READY = old_post_metrics_ready
 
 
 def test_normalize_channel_posts_reads_instagram_and_tiktok_metrics():

@@ -258,6 +258,9 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
     # 非 profile/video 的 URL 内核走 unsupported 短路,任务必须 blocked 而非 done。
     flow_status = str(((result or {}).get("profile_flow") or {}).get("status") or "")
     url_type = str((result or {}).get("url_type") or "")
+    if flow_status in {"crawl_failed", "profile_crawl_failed", "provider_error", "timeout"}:
+        crawl_status = str(((result or {}).get("profile_flow") or {}).get("crawl_status") or flow_status)
+        raise RuntimeError(f"profile_provider_unavailable:{crawl_status}")
     if ok and flow_status in ("unsupported", "needs_human_choice") and not (result or {}).get("video_flow"):
         ok = False
         status = f"url_{url_type or 'unknown'}_{flow_status}"
@@ -277,14 +280,28 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
                     int(job["id"]),
                 ),
             )
-    # Lane E(用户开启口径):账号深爬完成 → 顺带提取公开商务邮箱(从刚抓的 raw 零成本提;无则按预算
-    # 决定是否 Apify 兜底。flag/预算/白名单源/consent_basis=legitimate_interest_public_business 全在
-    # enrich_business_contacts 内建)。这样 Lane D 懒抓视频时也顺带补邮箱,搜索驱动、省消耗。失败不阻断。
-    kol_pool_id = _int_or_none(payload.get("kol_pool_id"))
+    # 账号深爬完成后先跑 L0:只读刚抓回的 raw/bio/公开链接,零外调、零成本、不受付费富化
+    # 开关影响。此前只调用 enrich_business_contacts,开关/白名单不命中时会安静返回 disabled/
+    # no_public_contact,导致“深爬完成但联系方式全空”。L0 完成后再尝试受预算和合规闸控制的
+    #商务邮箱富化。两层均为增强项,失败不阻断主任务。
+    kol_pool_id = _int_or_none(
+        payload.get("kol_pool_id")
+        or ((result or {}).get("profile_flow") or {}).get("kol_pool_id")
+        or (result or {}).get("matched_kol_pool_id")
+    )
     if ok and kol_pool_id:
         try:
-            from app.domains.kol.business_contact_extract import enrich_business_contacts
+            from app.domains.sync import refresh_tier
 
+            refresh_tier.mark_kol_refreshed(int(kol_pool_id), status="ready")
+        except Exception:
+            logger.warning("profile refresh freshness ledger failed kol_pool_id=%s", kol_pool_id, exc_info=True)
+    if ok and kol_pool_id:
+        try:
+            from app.domains.kol.business_contact_extract import enrich_business_contacts, enrich_contacts_l0
+
+            with db_connection_sync_scope():
+                enrich_contacts_l0(int(kol_pool_id), staff=staff)
             with db_connection_sync_scope():
                 enrich_business_contacts(int(kol_pool_id), staff=staff)
         except Exception as exc:
@@ -339,7 +356,7 @@ def _process_kol_auto_poll(conn: psycopg.Connection[Any], job: dict[str, Any], p
                 note = "auto_poll_no_profile_url"
             else:
                 enqueue_res = url_deep_crawl.enqueue_profile_deep_crawl_job(
-                    url, kol_pool_id=int(kid), max_posts=1, staff=None
+                    url, kol_pool_id=int(kid), max_posts=1, staff=None, queue_lane="batch"
                 )
                 note = "metadata_light_refresh_enqueued"
     payload["auto_poll_result"] = {"note": note, "kol_pool_id": kid, "enqueue": enqueue_res}
@@ -523,16 +540,47 @@ def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[
 
     staff = _resolve_job_staff(conn, payload)
     with db_connection_sync_scope():
-        result = comments_collector.run_kol_pool_comments_for_job(payload, staff=staff)
-    status = str((result or {}).get("status") or "")
+        result = dict(comments_collector.run_kol_pool_comments_for_job(payload, staff=staff) or {})
+    status = str(result.get("status") or "")
     ok = status == "ready"
-    payload["comments_collect_result"] = {k: v for k, v in (result or {}).items() if k != "results"}
     if not ok and "all_posts_failed" in status:
-        retryable, sample = _comments_failed_errors_retryable((result or {}).get("results"))
+        retryable, sample = _comments_failed_errors_retryable(result.get("results"))
         if retryable:
             # 抛异常 → run_worker 捕获 → _fail_job 分类(522/timeout 等词族命中
             # provider_pressure/timeout)→ 退避 requeue,与其它任务类型自愈通道对齐。
             raise RuntimeError(f"comments_collect_all_posts_failed_retryable: {sample}")
+    if ok and int(result.get("posts") or 0) > 0:
+        try:
+            with db_connection_sync_scope():
+                audience_refresh_job = comments_collector.enqueue_kol_audience_stats_refresh_job(
+                    int(result.get("kol_pool_id") or payload.get("kol_pool_id") or 0),
+                    source_comments_job_id=int(job["id"]),
+                    staff=staff,
+                    lineage_payload=payload,
+                )
+        except Exception:
+            # 评论已成功;受众 follow-up 入队故障只做可见降级,
+            # 不能把已完成的 Provider 采集反转为失败或触发重拓。
+            logger.warning(
+                "audience_stats follow-up enqueue failed | comments_job_id=%s kol_pool_id=%s",
+                job.get("id"),
+                result.get("kol_pool_id") or payload.get("kol_pool_id"),
+                exc_info=True,
+            )
+            audience_refresh_job = {
+                "status": "enqueue_failed",
+                "job_id": None,
+                "queue_lane": "batch",
+            }
+    else:
+        audience_refresh_job = {
+            "status": "not_queued",
+            "job_id": None,
+            "queue_lane": "batch",
+            "reason": "comments_job_not_ready" if not ok else "no_posts",
+        }
+    result["audience_refresh_job"] = audience_refresh_job
+    payload["comments_collect_result"] = {k: v for k, v in result.items() if k != "results"}
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -543,6 +591,56 @@ def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[
                     _json(payload),
                     int(job["id"]),
                 ),
+            )
+
+
+_AUDIENCE_REFRESH_DONE_STATUSES = frozenset(
+    {"ok", "partial", "skipped", "no_posts", "no_commenters", "unsupported_platform"}
+)
+
+
+def _process_kol_audience_stats_refresh(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    """Refresh audience intelligence as a durable, non-recursive batch job."""
+    from app.domains.kol import audience_stats
+
+    kol_pool_id = _int_or_none(payload.get("kol_pool_id") or payload.get("target_id"))
+    if not kol_pool_id:
+        raise ValueError("kol_audience_stats_refresh payload must include kol_pool_id")
+    with db_connection_sync_scope():
+        result = dict(
+            audience_stats.refresh_audience_stats(
+                int(kol_pool_id),
+                enqueue_if_missing=False,
+            )
+            or {}
+        )
+    status = str(result.get("status") or "")
+    job_status = "done" if status in _AUDIENCE_REFRESH_DONE_STATUSES else "blocked"
+    # The full audience document already lives on vkpi_kol_pool; duplicating it
+    # into every queue payload would make claims, heartbeat views, and history
+    # reads heavier.  Keep only the execution summary in the durable Job.
+    payload["audience_refresh_result"] = {
+        key: value for key, value in result.items() if key != "audience"
+    }
+    last_error = "" if job_status == "done" else str(
+        result.get("reason") or status or "audience_refresh_failed"
+    )
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job_status, last_error[:2000], _json(payload), int(job["id"])),
             )
 
 

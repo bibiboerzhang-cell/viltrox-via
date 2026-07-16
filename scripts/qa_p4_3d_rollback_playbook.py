@@ -7,6 +7,8 @@ runbook/report. It does not mutate business data.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import csv
 import json
 from datetime import datetime, timezone
@@ -281,9 +283,9 @@ def _write_report(db_results: list[dict[str, Any]], failures: list[str]) -> None
     REPORT.write_text(report, encoding="utf-8")
     if failed:
         raise SystemExit(f"P4_3D_ROLLBACK_PLAYBOOK_QA FAIL {failed}/{len(checks)}")
-    print(f"P4_3D_ROLLBACK_PLAYBOOK_QA PASS {passed}/{len(checks)}")
-    print(f"runbook={RUNBOOK}")
-    print(f"report={REPORT}")
+    out(f"P4_3D_ROLLBACK_PLAYBOOK_QA PASS {passed}/{len(checks)}")
+    out(f"runbook={RUNBOOK}")
+    out(f"report={REPORT}")
 
 
 def main() -> None:

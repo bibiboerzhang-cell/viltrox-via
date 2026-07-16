@@ -89,10 +89,83 @@ def _query_focals(text: str) -> set[int]:
     focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", low)}
     # 裸数字("90 evo")只在镜头语境下当焦段;排除功率/尺寸类单位粘连。
     # 注意不能用 \b:中文是 \w,「我们90」里 们/9 之间没有 word boundary,得用显式环视。
-    if _LENS_CONTEXT_RE.search(low):
+    # Operators often type split product families ("e vo", "l ab"). The compact
+    # form is only used to recognise context; the focal still comes from the raw
+    # text so unrelated numbers are not promoted into lens focal lengths.
+    compact = _normkey(low)
+    if _LENS_CONTEXT_RE.search(low) or any(series in compact for series in ("evo", "lab", "epic")):
         for m in re.findall(r"(?<![0-9a-z.])(\d{2,3})(?![0-9])(?!\s*(?:ws|w\b|nit|寸|inch|mah|fps))", low):
             focals.add(int(m))
     return {f for f in focals if 8 <= f <= 800}
+
+
+_EXPLICIT_PRODUCT_SERIES = ("evo", "lab", "epic", "vintage")
+
+
+def unresolved_product_request(query: str) -> dict[str, Any] | None:
+    """Describe an explicit product request that did not resolve to the catalog.
+
+    A missing catalog match is materially different from a generic request such
+    as "find portrait photographers". Letting an LLM infer a SKU in that case has
+    produced fabricated 24/26/28mm products. This helper lets the planner stop
+    before provider invocation and ask the operator to select a real product.
+    """
+    text = str(query or "").strip()
+    if not text:
+        return None
+    compact = _normkey(text)
+    series = next((name.upper() for name in _EXPLICIT_PRODUCT_SERIES if name in compact), "")
+    model_code = ""
+    code_match = re.search(r"\b(dc[- ]?[a-z0-9-]{2,}|af[- ]?\d{2,3}[a-z0-9./-]*)\b", text.lower())
+    if code_match:
+        model_code = code_match.group(1).upper().replace(" ", "-")
+    focals = sorted(_query_focals(text))
+    mount = _query_mount(text)
+    if not series and not model_code:
+        return None
+
+    probes = [value for value in (series, model_code, str(focals[0]) if focals else "") if value]
+    suggestions: dict[str, dict[str, Any]] = {}
+    for probe in probes:
+        try:
+            products = list_product_catalog(limit=30, query=probe).get("products") or []
+        except Exception:
+            products = []
+        for product in products:
+            sku = str(product.get("sku") or "")
+            if not sku or sku.upper().startswith("IMAGE-AWARDS"):
+                continue
+            blob = f"{sku} {product.get('model_name') or ''} {product.get('marketing_name') or ''} {product.get('series') or ''}".lower()
+            if series and series.lower() not in _normkey(blob):
+                continue
+            suggestions[sku] = product
+
+    requested_focal = focals[0] if focals else None
+
+    def _distance(product: dict[str, Any]) -> tuple[int, str]:
+        blob = f"{product.get('sku') or ''} {product.get('model_name') or ''}".lower()
+        values = [int(value) for value in re.findall(r"(\d{2,3})\s*mm", blob)]
+        distance = min((abs(value - requested_focal) for value in values), default=999) if requested_focal else 0
+        return distance, str(product.get("model_name") or product.get("sku") or "")
+
+    ordered = sorted(suggestions.values(), key=_distance)[:6]
+    return {
+        "reason": "explicit_product_not_in_catalog",
+        "requested_series": series,
+        "requested_model_code": model_code,
+        "requested_focals": focals,
+        "requested_mount": mount,
+        "message": "没有在产品目录中找到这个明确型号，请先选择正确产品后再找达人。",
+        "suggestions": [
+            {
+                "sku": product.get("sku"),
+                "name": product.get("marketing_name") or product.get("model_name"),
+                "mount": product.get("mount"),
+                "series": product.get("series"),
+            }
+            for product in ordered
+        ],
+    }
 
 
 def _apply_hard_constraints(text: str, pool: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:

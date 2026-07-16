@@ -25,6 +25,7 @@ from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_BIN, YTDLP_PROXY,
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.verticals import apply_learned_weights
 from app.platform import llm_gateway
+from app.platform import llm_production
 from app.services.media.video_keyframes import build_anthropic_multimodal_content, build_openai_multimodal_content
 
 logger = get_logger(__name__)
@@ -35,6 +36,22 @@ DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
 GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
     60,
     int(os.environ.get("GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC", "900")),
+)
+GEMINI_VIDEO_MAX_OUTPUT_TOKENS = min(
+    llm_production.GOOGLE_GENERATE_MAX_OUTPUT_TOKENS_HARD_CAP,
+    max(
+        256,
+        int(
+            os.environ.get(
+                "GEMINI_VIDEO_MAX_OUTPUT_TOKENS",
+                os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"),
+            )
+        ),
+    ),
+)
+GEMINI_VIDEO_RESERVE_TOKENS_PER_SECOND = min(
+    512,
+    max(300, int(os.environ.get("GEMINI_VIDEO_RESERVE_TOKENS_PER_SECOND", "300"))),
 )
 
 
@@ -176,6 +193,84 @@ def _video_generate_config(model_name: str, cache_config: Any = None) -> Any:
         return cache_config
 
 
+def _video_input_token_estimate(
+    prompt: str,
+    performance_context: dict[str, Any] | None,
+) -> int:
+    """Reserve video input conservatively before Gemini network I/O.
+
+    Known durations use a deliberately high 300 tokens/second floor.  Unknown
+    durations reserve the exact model's full one-million-token context instead
+    of silently under-reserving a long video.
+    """
+
+    duration_raw = (
+        performance_context.get("duration_seconds")
+        if isinstance(performance_context, dict)
+        else None
+    )
+    try:
+        duration_seconds = int(duration_raw) if duration_raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        duration_seconds = 0
+    text_tokens = max(1, len(str(prompt or "")) // 3) + 2048
+    if duration_seconds <= 0:
+        return llm_production.GOOGLE_GENERATE_INPUT_TOKENS_HARD_CAP
+    media_tokens = max(60, duration_seconds) * GEMINI_VIDEO_RESERVE_TOKENS_PER_SECOND
+    return min(
+        llm_production.GOOGLE_GENERATE_INPUT_TOKENS_HARD_CAP,
+        max(1, text_tokens + media_tokens),
+    )
+
+
+def _strict_generate_content(
+    *,
+    model_name: str,
+    contents: list[Any],
+    config: Any,
+    prompt: str,
+    performance_context: dict[str, Any] | None,
+    llm_context: dict[str, Any] | None,
+    subphase: str,
+    attempt_index: int,
+    attempt_total: int,
+    attempt_log: list[dict[str, Any]],
+) -> Any:
+    context = llm_context if isinstance(llm_context, dict) else {}
+    base_metadata = (
+        context.get("metadata")
+        if isinstance(context.get("metadata"), dict)
+        else {}
+    )
+    purpose = str(context.get("purpose") or "gemini_video_legacy")
+    return llm_production.generate_google_content(
+        client=gemini_client,
+        contents=contents,
+        config=config,
+        model=model_name,
+        purpose=purpose,
+        max_output_tokens=GEMINI_VIDEO_MAX_OUTPUT_TOKENS,
+        estimated_input_tokens=_video_input_token_estimate(
+            prompt,
+            performance_context,
+        ),
+        cost_tag=str(context.get("cost_tag") or "") or None,
+        triggered_by=context.get("triggered_by"),
+        metadata={
+            **base_metadata,
+            "phase": str(base_metadata.get("phase") or "video_analysis"),
+            "subphase": subphase,
+            "attempt_index": attempt_index,
+            "attempt_total": attempt_total,
+        },
+        execution_class=str(
+            context.get("execution_class")
+            or llm_gateway.PRODUCTION_EXECUTION_CLASS
+        ),
+        attempt_log=attempt_log,
+    )
+
+
 async def analyze_local_video_with_gemini(
     video_path: str,
     title: str,
@@ -185,6 +280,8 @@ async def analyze_local_video_with_gemini(
     performance_context: dict[str, Any] | None = None,
     subtitle_text: str = "",
     final_v1_models: list[str] | str | None = None,
+    models: list[str] | str | None = None,
+    llm_context: dict[str, Any] | None = None,
 ) -> dict:
     """Analyze an already-downloaded local MP4 with Gemini File API."""
     result = {
@@ -210,6 +307,8 @@ async def analyze_local_video_with_gemini(
         "model": "",
         "fileapi_cleanup": {"delete_attempted": False, "deleted": False},
         "error": None,
+        "llm_attempts": [],
+        "cost_authority": "llm_production_google_generate_content_v1",
     }
     if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
         result["error"] = "Gemini not available"
@@ -311,8 +410,15 @@ async def analyze_local_video_with_gemini(
             return result
 
         last_err = ""
-        model_names = final_v1_gemini_models(final_v1_models) if is_final_v1 else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
-        for model_name in model_names:
+        model_names = (
+            final_v1_gemini_models(models)
+            if models is not None
+            else final_v1_gemini_models(final_v1_models)
+            if is_final_v1
+            else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
+        )
+        attempt_total = len(model_names)
+        for attempt_index, model_name in enumerate(model_names, start=1):
             try:
                 cache_config = None
                 cache_info: dict[str, Any] = {}
@@ -332,7 +438,18 @@ async def analyze_local_video_with_gemini(
                     }
                     if request_config:
                         kwargs["config"] = request_config
-                    return gemini_client.models.generate_content(**kwargs)
+                    return _strict_generate_content(
+                        model_name=m,
+                        contents=kwargs["contents"],
+                        config=kwargs.get("config"),
+                        prompt=request_prompt,
+                        performance_context=performance_context,
+                        llm_context=llm_context,
+                        subphase="local_file_generation",
+                        attempt_index=attempt_index,
+                        attempt_total=attempt_total,
+                        attempt_log=result["llm_attempts"],
+                    )
 
                 resp = await asyncio.to_thread(_analyze)
                 usage_metadata = _response_usage_metadata(resp)

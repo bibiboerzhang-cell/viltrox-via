@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.dependencies.legacy_scope import require_legacy_system_admin_scope
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -39,9 +40,10 @@ def list_shadow_evals(
 def run_shadow_eval(
     eval_name: str,
     staff=Depends(require_tab("vkpi", "read")),
+    _legacy_scope=Depends(require_legacy_system_admin_scope),
 ) -> dict:
     """跑一轮影子评测(纯读端计算,不写库);未注册 404,内部异常诚实回 error。"""
-    del staff
+    del staff, _legacy_scope
     from app.domains.learning import shadow_eval
 
     try:

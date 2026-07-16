@@ -7,6 +7,8 @@ or LLM providers.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import asyncio
 import json
 import urllib.error
@@ -147,33 +149,33 @@ def main() -> int:
     image_checks = [check_image(url) for url in image_samples]
     video_checks = [check_video_range(url) for url in video_samples]
 
-    print("VKPI_MEDIA_LIVE_ASSET_AUDIT")
+    out("VKPI_MEDIA_LIVE_ASSET_AUDIT")
     for key in sorted(c):
-        print(f"{key}={c[key]}")
-    print(f"image_samples={len(image_samples)} ok={sum(1 for ok, _ in image_checks if ok)}")
+        out(f"{key}={c[key]}")
+    out(f"image_samples={len(image_samples)} ok={sum(1 for ok, _ in image_checks if ok)}")
     for i, (ok, detail) in enumerate(image_checks, 1):
-        print(f"image_sample_{i}={'ok' if ok else 'fail'} {detail}")
-    print(f"video_samples={len(video_samples)} ok={sum(1 for ok, _ in video_checks if ok)}")
+        out(f"image_sample_{i}={'ok' if ok else 'fail'} {detail}")
+    out(f"video_samples={len(video_samples)} ok={sum(1 for ok, _ in video_checks if ok)}")
     for i, (ok, detail) in enumerate(video_checks, 1):
-        print(f"video_sample_{i}={'ok' if ok else 'fail'} {detail}")
+        out(f"video_sample_{i}={'ok' if ok else 'fail'} {detail}")
 
     missing_avatar = [r for r in account_rows if not r["_avatar"]]
     if missing_avatar:
-        print("missing_avatar_accounts=" + ", ".join(f"{r['platform']}:{r.get('handle') or r.get('display_name')}#{r['id']}[{r.get('sync_status')}]" for r in missing_avatar[:10]))
+        out("missing_avatar_accounts=" + ", ".join(f"{r['platform']}:{r.get('handle') or r.get('display_name')}#{r['id']}[{r.get('sync_status')}]" for r in missing_avatar[:10]))
     missing_media = [r for r in post_rows if not r["_thumbnail"] and not r["_video"]]
     if missing_media:
-        print("missing_media_posts=" + ", ".join(f"{r['platform']}:{r['id']}" for r in missing_media[:10]))
+        out("missing_media_posts=" + ", ".join(f"{r['platform']}:{r['id']}" for r in missing_media[:10]))
 
     if image_samples and not any(ok for ok, _ in image_checks):
-        print("AUDIT_STATUS=blocked:image_urls_present_but_unreachable")
+        out("AUDIT_STATUS=blocked:image_urls_present_but_unreachable")
         return 2
     if video_samples and not any(ok for ok, _ in video_checks):
-        print("AUDIT_STATUS=blocked:video_urls_present_but_unreachable_or_expired")
+        out("AUDIT_STATUS=blocked:video_urls_present_but_unreachable_or_expired")
         return 2
     if any(not ok for ok, _ in image_checks + video_checks) or missing_avatar or missing_media:
-        print("AUDIT_STATUS=degraded:some_media_missing_or_expired")
+        out("AUDIT_STATUS=degraded:some_media_missing_or_expired")
         return 0
-    print("AUDIT_STATUS=ok")
+    out("AUDIT_STATUS=ok")
     return 0
 
 

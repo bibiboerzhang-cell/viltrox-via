@@ -25,6 +25,7 @@ DEFAULT_FLAGS = {
     "llm_summary": "大模型总结润色，默认关闭",
     "youtube_kpi_reserved": "YouTube KPI 接入预留",
     "business_email_enrichment": "公开商务邮箱富化（白名单来源，PII 合规门禁，默认关闭）",
+    "real_business_manual_writes": "人工真实业务补录门禁（默认关闭，仅管理员+授权证据）",
 }
 
 DEFAULT_FLAG_ENABLED = {

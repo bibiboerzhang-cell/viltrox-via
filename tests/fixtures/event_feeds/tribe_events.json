@@ -1,0 +1,70 @@
+{
+  "events": [
+    {
+      "id": 901,
+      "global_id": "samysphotoschool.com?id=901",
+      "title": "Hands-on Video Lighting Workshop",
+      "description": "<p>Practice a three-light interview setup.</p>",
+      "start_date": "2026-08-21 10:00:00",
+      "end_date": "2026-08-21 13:00:00",
+      "timezone": "America/Los_Angeles",
+      "all_day": false,
+      "url": "https://samysphotoschool.com/event/video-lighting/?utm_source=calendar",
+      "modified": "2026-07-15T01:02:03-07:00",
+      "venue": {
+        "venue": "Samy's Camera Pasadena",
+        "address": "1759 E Colorado Blvd",
+        "city": "Pasadena",
+        "stateprovince": "California",
+        "zip": "91106",
+        "country": "United States"
+      },
+      "organizer": [
+        {"organizer": "Samy's Photo School"}
+      ]
+    },
+    {
+      "id": 901,
+      "global_id": "samysphotoschool.com?id=901",
+      "title": "Hands-on Video Lighting Workshop",
+      "description": "<p>Practice a three-light interview setup.</p>",
+      "start_date": "2026-08-21 10:00:00",
+      "end_date": "2026-08-21 13:00:00",
+      "timezone": "America/Los_Angeles",
+      "all_day": false,
+      "url": "https://samysphotoschool.com/event/video-lighting/?utm_source=calendar",
+      "modified": "2026-07-15T01:02:03-07:00",
+      "venue": {
+        "venue": "Samy's Camera Pasadena",
+        "address": "1759 E Colorado Blvd",
+        "city": "Pasadena",
+        "stateprovince": "California",
+        "zip": "91106",
+        "country": "United States"
+      },
+      "organizer": [
+        {"organizer": "Samy's Photo School"}
+      ]
+    },
+    {
+      "id": 902,
+      "global_id": "samysphotoschool.com?id=902",
+      "title": "Photo Walk: Downtown Santa Ana",
+      "description": "Street photography practice.",
+      "start_date": "2026-08-22 16:30:00",
+      "end_date": "2026-08-22 19:00:00",
+      "timezone": "America/Los_Angeles",
+      "all_day": false,
+      "url": "https://samysphotoschool.com/event/santa-ana-photo-walk/",
+      "venue": {
+        "venue": "Samy's Camera Santa Ana",
+        "address": "3309 S Bristol St",
+        "city": "Santa Ana",
+        "state": "CA",
+        "zip": "92704",
+        "country": "US"
+      },
+      "organizer": {"organizer": "Samy's Photo School"}
+    }
+  ]
+}

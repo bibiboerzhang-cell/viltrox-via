@@ -64,6 +64,10 @@ export interface VkpiMetricValue {
   unit: string;
   calculation_json: string;          // JSON string from backend
   source_count: number;
+  retained_source_count?: number;
+  data_status?: string;
+  confidence?: number | null;
+  is_partial?: boolean;
   created_at: string;
 }
 
@@ -106,6 +110,10 @@ export interface VkpiDrilldownResponse {
     unit: string;
     calculation: Row;
     source_count: number;
+    retained_source_count?: number;
+    data_status?: string;
+    confidence?: number | null;
+    is_partial?: boolean;
   } | null;
   run: {
     uid: string;
@@ -121,7 +129,7 @@ export interface VkpiDrilldownResponse {
   rows: VkpiDrilldownRow[];
   filtered: { project_id?: number | null; kol_id?: number | null; staff_id?: number | null };
   row_count: number;
-  empty_reason?: "no_run_yet" | "source_rows_deleted_or_void";
+  empty_reason?: "no_run_yet" | "source_rows_deleted_or_void" | "metric_unavailable";
 }
 
 export interface VkpiOfficialViewsEvidenceRow {

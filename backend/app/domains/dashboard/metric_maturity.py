@@ -103,7 +103,10 @@ def snapshot_days_by_scope() -> dict[str, int]:
     owned_days = _count_distinct_snapshot_dates("vkpi_channel_post_metrics")
     # KOL video snapshots do not have a production table yet. Keeping this zero
     # prevents external KOL lifetime fields from leaking into 30d dashboard KPIs.
-    kol_days = _count_distinct_snapshot_dates("video_metrics_snapshot")
+    # Do not probe the intentionally absent placeholder table: PostgreSQL records
+    # every failed relation lookup as an ERROR even when the application catches
+    # it, which previously flooded the local database log on each dashboard poll.
+    kol_days = 0
     return {
         "owned": owned_days,
         "kol": kol_days,

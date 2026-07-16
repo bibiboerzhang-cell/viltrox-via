@@ -17,7 +17,7 @@ import os
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.access import scope
 from app.domains.actions import inbox, validators
 from app.domains.projects import automation_audit
@@ -34,6 +34,14 @@ _LEDGER = "vkpi_action_execution_ledger"
 
 def _dumps(value: Any) -> str:
     return json.dumps(value if value is not None else {}, default=str, ensure_ascii=False)
+
+
+def _sql_now() -> str:
+    return "NOW()" if is_postgres_runtime() else "CURRENT_TIMESTAMP"
+
+
+def _sql_json_param() -> str:
+    return "?::jsonb" if is_postgres_runtime() else "?"
 
 
 def _write_ledger(
@@ -64,7 +72,7 @@ def _write_ledger(
             INSERT INTO {_LEDGER}
               (action_id, category, dedupe_key, actor_staff_id, mode, outcome,
                endpoint, cost_cents, error, detail_json, created_at)
-            VALUES (?,?,?,?,'executed',?,?,?,?,?::jsonb,NOW())
+            VALUES (?,?,?,?,'executed',?,?,?,?,{_sql_json_param()},{_sql_now()})
             RETURNING id
             """,
             (
@@ -85,6 +93,104 @@ def _write_ledger(
     except Exception:
         logger.warning("action_executor.ledger_failed", extra={"action_id": action_id}, exc_info=True)
         return None
+
+
+def _finalize_claimed_execution(
+    *,
+    action: dict[str, Any],
+    action_id: int,
+    staff: dict[str, Any] | None,
+    outcome: str,
+    error: str = "",
+    detail: dict[str, Any] | None = None,
+    checklist: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically persist ledger, checklist, and the claimed action's next state.
+
+    External side effects cannot be rolled back, so a failed database finalize
+    intentionally leaves the action in ``executing``.  That blocks automatic
+    replay and makes the row require explicit reconciliation instead of risking
+    a duplicate external action.
+    """
+    target_status = {
+        "success": "executed",
+        "failed": "failed",
+        "skipped": "approved",
+    }.get(str(outcome), "failed")
+    try:
+        est = int(action.get("estimated_cost_cents") or 0)
+    except (TypeError, ValueError):
+        est = 0
+
+    conn = None
+    ledger_id: int | None = None
+    try:
+        conn = get_conn()
+        if not table_exists(_LEDGER):
+            raise RuntimeError("action execution ledger is unavailable")
+        row = conn.execute(
+            f"""
+            INSERT INTO {_LEDGER}
+              (action_id, category, dedupe_key, actor_staff_id, mode, outcome,
+               endpoint, cost_cents, error, detail_json, created_at)
+            VALUES (?,?,?,?,'executed',?,?,?,?,{_sql_json_param()},{_sql_now()})
+            RETURNING id
+            """,
+            (
+                int(action_id),
+                str(action.get("category") or ""),
+                str(action.get("dedupe_key") or ""),
+                int(scope.actor_staff_id(staff)) or None,
+                str(outcome),
+                str(action.get("suggested_endpoint") or ""),
+                est,
+                str(error or ""),
+                _dumps(detail),
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("action execution ledger insert returned no id")
+        ledger_id = int(dict(row)["id"])
+
+        cursor = conn.execute(
+            f"""
+            UPDATE vkpi_action_inbox
+            SET status = ?, result_checklist_json = {_sql_json_param()}, updated_at = {_sql_now()}
+            WHERE id = ? AND status = 'executing'
+            """,
+            (target_status, _dumps(checklist), int(action_id)),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            conn.rollback()
+            return {
+                "ok": False,
+                "reason": "execution_claim_lost",
+                "status": "executing",
+                "ledger_id": None,
+            }
+        conn.commit()
+        return {
+            "ok": True,
+            "status": target_status,
+            "ledger_id": ledger_id,
+        }
+    except Exception:
+        try:
+            if conn is not None:
+                conn.rollback()
+        except Exception:
+            logger.debug("action_executor.finalize_rollback_failed", exc_info=True)
+        logger.warning(
+            "action_executor.finalize_failed",
+            extra={"action_id": action_id, "outcome": outcome},
+            exc_info=True,
+        )
+        return {
+            "ok": False,
+            "reason": "execution_finalize_failed",
+            "status": "executing",
+            "ledger_id": None,
+        }
 
 
 def _result(
@@ -568,7 +674,7 @@ def _maybe_run_skill(action: dict[str, Any], detail: dict[str, Any] | None) -> d
 
 
 def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """执行一条已审批动作。双闸守门;任何异常 → outcome='failed' 不抛。"""
+    """执行一条已审批动作。原子抢占后才运行 handler;任何异常明确落 failed。"""
     # 1. scope 收口取 action(取不到/越权 → not_found)。
     action = inbox.get_action(action_id, staff)
     if action is None:
@@ -600,6 +706,17 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         )
         return _result(ok=False, outcome="skipped", category=category, reason="unknown_category", ledger_id=lid)
 
+    # 3. 原子抢占:approved -> executing。只有一个请求能取得执行权。
+    claim = inbox.claim_action_execution(action_id, staff)
+    if not claim.get("ok"):
+        return _result(
+            ok=False,
+            outcome="skipped",
+            category=category,
+            reason=str(claim.get("reason") or "execution_already_claimed"),
+            detail={"status": claim.get("status")},
+        )
+
     # S1:执行前对 affected_tables 取真 COUNT(执行后再取一次做 before/after delta)。
     affected_tables = action.get("affected_tables_json")
     before_counts = _snapshot_table_counts(affected_tables)
@@ -608,15 +725,52 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         outcome_obj = handler(action, staff)
     except Exception as exc:
         logger.warning("action_executor.handler_failed", extra={"action_id": action_id, "category": category}, exc_info=True)
-        lid = _write_ledger(
-            action=action, action_id=action_id, staff=staff, outcome="failed", error=str(exc)[:240]
+        reason = str(exc)[:240]
+        after_counts = _snapshot_table_counts(affected_tables)
+        detail = {"error": reason}
+        checklist = _build_result_checklist(
+            action,
+            outcome="failed",
+            reason=reason,
+            detail=detail,
+            before_counts=before_counts,
+            after_counts=after_counts,
         )
-        inbox.set_status(action_id, "failed")
-        return _result(ok=False, outcome="failed", category=category, reason="exception", ledger_id=lid, detail={"error": str(exc)[:240]})
+        detail["result_checklist"] = checklist
+        finalized = _finalize_claimed_execution(
+            action=action,
+            action_id=action_id,
+            staff=staff,
+            outcome="failed",
+            error=reason,
+            detail=detail,
+            checklist=checklist,
+        )
+        final_reason = "exception" if finalized.get("ok") else str(finalized.get("reason"))
+        if not finalized.get("ok"):
+            detail["manual_reconciliation_required"] = True
+        return _result(
+            ok=False,
+            outcome="failed",
+            category=category,
+            reason=final_reason,
+            ledger_id=finalized.get("ledger_id"),
+            detail=detail,
+        )
 
-    outcome = str(outcome_obj.get("outcome") or "failed")
-    reason = str(outcome_obj.get("reason") or "")
-    detail = outcome_obj.get("detail") or {}
+    if not isinstance(outcome_obj, dict):
+        outcome = "failed"
+        reason = "invalid_handler_result"
+        detail = {"handler_result_type": type(outcome_obj).__name__}
+    else:
+        outcome = str(outcome_obj.get("outcome") or "failed")
+        reason = str(outcome_obj.get("reason") or "")
+        raw_detail = outcome_obj.get("detail")
+        detail = raw_detail if isinstance(raw_detail, dict) else {}
+    if outcome not in {"success", "failed", "skipped"}:
+        detail = {**detail, "handler_outcome": outcome}
+        outcome = "failed"
+        reason = "invalid_handler_outcome"
 
     # S1:执行后再取一次 COUNT → before/after delta(真验收,确认这条 action 真写了)。
     after_counts = _snapshot_table_counts(affected_tables)
@@ -627,13 +781,31 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
     )
     detail = {**detail, "result_checklist": checklist}
 
-    # 4. 落 ledger(含回执)+ 写回执到 action 行 + 置 action 终态。
-    lid = _write_ledger(
-        action=action, action_id=action_id, staff=staff, outcome=outcome, error=reason if outcome != "success" else "", detail=detail
+    # 4. ledger + checklist + 终态在同一事务内落地。提交失败时保留 executing，禁止自动重放。
+    finalized = _finalize_claimed_execution(
+        action=action,
+        action_id=action_id,
+        staff=staff,
+        outcome=outcome,
+        error=reason if outcome != "success" else "",
+        detail=detail,
+        checklist=checklist,
     )
-    inbox.set_result_checklist(action_id, checklist)
+    if not finalized.get("ok"):
+        detail = {
+            **detail,
+            "side_effect_outcome": outcome,
+            "manual_reconciliation_required": True,
+        }
+        return _result(
+            ok=False,
+            outcome="failed",
+            category=category,
+            reason=str(finalized.get("reason") or "execution_finalize_failed"),
+            detail=detail,
+        )
+    lid = finalized.get("ledger_id")
     if outcome == "success":
-        inbox.set_status(action_id, "executed")
         # R8:成功执行 → 写回 vkpi_memory_feedback 埋种(②学习闭环);best-effort,不阻断返回。
         _record_execution_feedback(action, staff, outcome="success", detail=detail)
         _record_outcome_eval(action, outcome="success")  # B5/H4 结果回写 → 推荐权重回流
@@ -646,7 +818,6 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
                 detail = {**detail, "skill_run": skill_summary}
         return _result(ok=True, outcome="success", category=category, ledger_id=lid, detail=detail)
     if outcome == "failed":
-        inbox.set_status(action_id, "failed")
         _record_outcome_eval(action, outcome="fail")  # B5/H4 失败也回写(下次降权)
         return _result(ok=False, outcome="failed", category=category, reason=reason, ledger_id=lid, detail=detail)
     # skipped:不改 action 状态(仍 approved,人可再处理或 dismiss)。

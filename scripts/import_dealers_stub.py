@@ -21,6 +21,8 @@ CSV 表头(缺列容错):name,address,city,state,lat,lng,source
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import csv
 from pathlib import Path
@@ -113,8 +115,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.csv:
-        print("[stub] " + _PLACEHOLDER_HINT)
-        print("[stub] rows=0 dry_run=True(无源,不落库)")
+        out("[stub] " + _PLACEHOLDER_HINT)
+        out("[stub] rows=0 dry_run=True(无源,不落库)")
         return
 
     path = Path(args.csv)
@@ -125,21 +127,21 @@ def main() -> None:
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
 
-    print(f"[stub] csv={path} parsed_rows={len(rows)} apply={args.apply}")
+    out(f"[stub] csv={path} parsed_rows={len(rows)} apply={args.apply}")
     if not rows:
-        print("[stub] 无有效行(name+address 必须齐全)→ 不落库")
+        out("[stub] 无有效行(name+address 必须齐全)→ 不落库")
         return
 
     if not args.apply:
         for r in rows[:5]:
-            print(f"[dry_run] would upsert: {r['name']} | {r['address']} | {r.get('state') or '?'}")
+            out(f"[dry_run] would upsert: {r['name']} | {r['address']} | {r.get('state') or '?'}")
         if len(rows) > 5:
-            print(f"[dry_run] ... (+{len(rows) - 5} more)")
-        print(f"[dry_run] TOTAL would upsert={len(rows)}(加 --apply 真写)")
+            out(f"[dry_run] ... (+{len(rows) - 5} more)")
+        out(f"[dry_run] TOTAL would upsert={len(rows)}(加 --apply 真写)")
         return
 
     result = _upsert(rows)
-    print(f"[apply] upserted processed={result['processed']} into vkpi_dealers(幂等 on name,address)")
+    out(f"[apply] upserted processed={result['processed']} into vkpi_dealers(幂等 on name,address)")
 
 
 if __name__ == "__main__":

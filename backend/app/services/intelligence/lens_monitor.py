@@ -38,6 +38,8 @@ from typing import Any, Optional
 
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.platform.apify_budget import call_apify_actor
+from app.platform.apify_lifecycle import register_apify_client_shutdown
 from app.services.ai.retry import call_ai_with_retry
 from app.services.intelligence.account_scan_service import search_platform_content
 
@@ -47,7 +49,9 @@ logger = get_logger(__name__)
 try:
     from apify_client import ApifyClient
     _APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
-    _apify: Optional[ApifyClient] = ApifyClient(_APIFY_TOKEN) if _APIFY_TOKEN else None
+    _apify: Optional[ApifyClient] = (
+        register_apify_client_shutdown(ApifyClient(_APIFY_TOKEN)) if _APIFY_TOKEN else None
+    )
 except ImportError:
     _apify = None
 
@@ -87,7 +91,12 @@ async def search_youtube(query: str, max_results: int = 50) -> list[dict]:
                 "maxResultsShorts": 0,
                 "maxResultStreams": 0,
             }
-            run = _apify.actor("streamers/youtube-scraper").call(
+            run = call_apify_actor(
+                _apify,
+                "streamers/youtube-scraper",
+                platform="youtube",
+                operation="lens_monitor_search",
+                source="intelligence.lens_monitor",
                 run_input=run_input,
                 timeout_secs=240,
             )
@@ -658,9 +667,4 @@ async def monitor_lens_market(
 # python -m app.services.intelligence.lens_monitor
 # ──────────────────────────────────────────────
 if __name__ == "__main__":
-    async def main():
-        logger.info("lens_monitor.demo_started")
-        result = await monitor_lens_market("viltrox 16mm f1.8", max_videos=20)
-        logger.info("lens_monitor.demo_result", extra={"result": json.dumps(result, ensure_ascii=False)})
-    
-    asyncio.run(main())
+    raise SystemExit("Direct provider demo is disabled; enqueue intel_lens_monitor through the durable job queue.")

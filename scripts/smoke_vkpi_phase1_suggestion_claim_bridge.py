@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test for suggestion claim -> main KOL -> active claim bridge."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -154,7 +155,7 @@ def main() -> None:
         assert audit_count >= 1, audit_count
         cleanup = _cleanup(marker, user_id, staff_id, kol_id, suggestion_id)
         assert sum(cleanup.values()) == 0, cleanup
-        print("VKPI_PHASE1_SUGGESTION_CLAIM_BRIDGE_SMOKE_OK")
+        stdout_out("VKPI_PHASE1_SUGGESTION_CLAIM_BRIDGE_SMOKE_OK")
     except Exception:
         _cleanup(marker, user_id, staff_id, kol_id, suggestion_id)
         raise

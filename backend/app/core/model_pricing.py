@@ -7,13 +7,18 @@ monthly against provider billing exports.
 from __future__ import annotations
 
 PRICING_USD_PER_1M_TOKENS = {
-    "claude-opus-4-7": {"input": 15.0, "output": 75.0},
+    "claude-opus-4-7": {"input": 5.0, "output": 25.0},
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
     "gpt-4o": {"input": 2.5, "output": 10.0},
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-    "gemini-2.5-flash": {"input": 0.075, "output": 0.30},
-    "gemini-2.5-pro": {"input": 1.25, "output": 5.0},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+    "gpt-5.5": {"input": 5.0, "output": 30.0},
+    "gemini-3.5-flash": {"input": 1.50, "output": 9.0},
+    # Conservative video/multimodal text rates; audio input is reconciled from
+    # provider usage metadata by the worker's model-specific cost calculator.
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.0},
 }
 
 
@@ -21,6 +26,12 @@ def _pricing_key(model: str) -> str:
     raw = str(model or "").strip().lower()
     if raw in PRICING_USD_PER_1M_TOKENS:
         return raw
+    if "gpt-5.4-mini" in raw:
+        return "gpt-5.4-mini"
+    if "gpt-5.5" in raw:
+        return "gpt-5.5"
+    if "gemini-3.5-flash" in raw:
+        return "gemini-3.5-flash"
     if "gpt-4o-mini" in raw:
         return "gpt-4o-mini"
     if "gpt-4o" in raw:

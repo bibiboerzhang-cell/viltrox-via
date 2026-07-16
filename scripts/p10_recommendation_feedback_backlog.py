@@ -2,6 +2,8 @@
 """P10 read-only recommendation feedback backlog CLI."""
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import json
@@ -83,18 +85,18 @@ def main() -> int:
                     ),
                 }
             if args.json:
-                print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+                out(json.dumps(result, ensure_ascii=False, indent=2, default=str))
             else:
-                print(f"scenario={result.get('scenario', '')}")
-                print(f"dry_run={str(bool(result.get('dry_run'))).lower()}")
-                print(f"write_db={str(bool(result.get('write_db'))).lower()}")
-                print(f"provider_calls={str(bool(result.get('provider_calls'))).lower()}")
-                print(f"recommendation_id={args.recommendation_id}")
-                print(f"action={args.action}")
+                out(f"scenario={result.get('scenario', '')}")
+                out(f"dry_run={str(bool(result.get('dry_run'))).lower()}")
+                out(f"write_db={str(bool(result.get('write_db'))).lower()}")
+                out(f"provider_calls={str(bool(result.get('provider_calls'))).lower()}")
+                out(f"recommendation_id={args.recommendation_id}")
+                out(f"action={args.action}")
                 if result.get("feedback_inserted") is not None:
-                    print(f"feedback_inserted={str(bool(result.get('feedback_inserted'))).lower()}")
+                    out(f"feedback_inserted={str(bool(result.get('feedback_inserted'))).lower()}")
                 if result.get("message"):
-                    print(result["message"])
+                    out(result["message"])
             return 0
         payload = build_recommendation_feedback_backlog(
             run_uid=args.run_uid,
@@ -103,13 +105,13 @@ def main() -> int:
             md_out=args.md_out,
         )
         if args.json:
-            print(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))
+            out(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))
         else:
-            print(format_recommendation_feedback_backlog(payload))
+            out(format_recommendation_feedback_backlog(payload))
             if args.json_out:
-                print(f"json_out={args.json_out}")
+                out(f"json_out={args.json_out}")
             if args.md_out:
-                print(f"md_out={args.md_out}")
+                out(f"md_out={args.md_out}")
         return 0
     finally:
         asyncio.run(close_db_runtime())

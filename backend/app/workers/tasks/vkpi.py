@@ -10,6 +10,11 @@ import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
 from app.domains import channels
 from app.domains.channels import refill as channel_refill
+from app.platform.apify_budget import (
+    APIFY_BUDGET_SCOPE,
+    ApifyBudgetBlocked,
+    ApifyBudgetDecision,
+)
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}
@@ -24,6 +29,32 @@ def _int(value: Any, default: int = 0) -> int:
 
 def _status_ok(value: Any) -> bool:
     return str(value or "").strip().lower() in {"ok", "success", "done", "synced"}
+
+
+def _is_apify_budget_blocked_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    status = str(result.get("sync_status") or result.get("provider_status") or result.get("status") or "").strip().lower()
+    code = str(result.get("code") or "").strip().lower()
+    message = str(result.get("message") or result.get("error") or "").strip().lower()
+    return status == "budget_blocked" or code == "apify_budget_hard_stop" or "apify_budget_hard_stop" in message
+
+
+def _raise_if_apify_budget_blocked(result: Any, *, operation: str) -> None:
+    if not _is_apify_budget_blocked_result(result):
+        return
+    raise ApifyBudgetBlocked(
+        ApifyBudgetDecision(
+            allowed=False,
+            scope=APIFY_BUDGET_SCOPE,
+            estimated_cost_usd=float(result.get("estimated_cost_usd") or 0.001),
+            reason=str(result.get("reason") or "hard_stop_or_projected_cap"),
+            operation=operation,
+            actor_id=str(result.get("actor_id") or ""),
+            platform=str(result.get("platform") or ""),
+            source="redis_worker",
+        )
+    )
 
 
 async def _is_terminal(queue, task_id: str) -> bool:
@@ -117,6 +148,23 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
         )
         return
 
+    # A paid provider denial is terminal and must reach worker_main so the
+    # stream message goes to DLQ.  Returning here would let the generic worker
+    # ACK it as a successful handler completion.
+    if _is_apify_budget_blocked_result(result):
+        message = str(result.get("message") or result.get("error") or "Apify provider budget blocked")[:500]
+        task_enqueue.upsert_task_item(task_id, item_key, status="failed", error=message, result=result)
+        await queue.set_status(
+            task_id,
+            "failed",
+            error_message=message,
+            stage="budget_blocked",
+            result_json=result,
+            progress_pct=100,
+            progress_text="Apify 预算硬停，未发起网络请求",
+        )
+        _raise_if_apify_budget_blocked(result, operation="vkpi_official_channel_sync")
+
     if await _is_terminal(queue, task_id):
         return
 
@@ -187,6 +235,21 @@ async def process_vkpi_kol_pool_on_demand_refresh_job(queue, raw_job: dict) -> N
             progress_text="KOL 按需刷新失败",
         )
         return
+
+    if _is_apify_budget_blocked_result(result):
+        message = str(result.get("message") or result.get("error") or "Apify provider budget blocked")[:500]
+        refresh_tier.mark_kol_refreshed(kol_pool_id, status="budget_blocked")
+        task_enqueue.upsert_task_item(task_id, item_key, status="failed", error=message, result=result)
+        await queue.set_status(
+            task_id,
+            "failed",
+            error_message=message,
+            stage="budget_blocked",
+            result_json=result,
+            progress_pct=100,
+            progress_text="Apify 预算硬停，未发起网络请求",
+        )
+        _raise_if_apify_budget_blocked(result, operation="vkpi_kol_pool_on_demand_refresh")
 
     if await _is_terminal(queue, task_id):
         return

@@ -9,6 +9,7 @@ This smoke is intentionally schema-only and source-manifest-only:
 """
 
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -150,7 +151,7 @@ def main() -> None:
         tmp_dir = Path(tmp)
         schema_info = _dump_schema_only(tmp_dir)
         archive_info = _assert_archive_roundtrip(tmp_dir, schema_info)
-    print(
+    stdout_out(
         "VKPI_P3_15B_BACKUP_RESTORE_SMOKE_OK "
         + json.dumps({"schema": schema_info, "archive": archive_info}, sort_keys=True)
     )

@@ -7,6 +7,8 @@ new evidence.
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import csv
 import datetime as dt
@@ -411,12 +413,12 @@ def main() -> None:
     if commit:
         updated = maybe_update(conn, comparison)
         conn.commit()
-        print(f"UPDATED_ROWS={updated}")
+        out(f"UPDATED_ROWS={updated}")
     else:
         conn.rollback()
-    print(f"CSV={csv_path}")
-    print(f"REPORT={md_path}")
-    print(md_path.read_text())
+    out(f"CSV={csv_path}")
+    out(f"REPORT={md_path}")
+    out(md_path.read_text())
 
 
 if __name__ == "__main__":

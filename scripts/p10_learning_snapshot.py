@@ -2,6 +2,8 @@
 """P10 read-only learning snapshot CLI."""
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import json
@@ -31,13 +33,13 @@ def main() -> int:
         args = parse_args()
         payload = build_learning_snapshot(json_out=args.json_out, md_out=args.md_out)
         if args.json:
-            print(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))
+            out(json.dumps({key: value for key, value in payload.items() if key != "markdown"}, ensure_ascii=False, indent=2, default=str))
         else:
-            print(format_learning_snapshot(payload))
+            out(format_learning_snapshot(payload))
             if args.json_out:
-                print(f"json_out={args.json_out}")
+                out(f"json_out={args.json_out}")
             if args.md_out:
-                print(f"md_out={args.md_out}")
+                out(f"md_out={args.md_out}")
         return 0
     finally:
         asyncio.run(close_db_runtime())

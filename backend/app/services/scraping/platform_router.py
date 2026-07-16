@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from app.services.scraping.playwright_scraper import scrape_with_playwright
 from app.services.scraping.reddit_json import scrape_reddit_json
 from app.services.scraping.apify import scrape_with_apify, _apify_available
+from app.platform.apify_budget import current_apify_execution_context
 
 logger = get_logger(__name__)
 
@@ -52,7 +53,13 @@ async def scrape_url(url: str) -> Dict[str, Any]:
 
     APIFY_PLATFORMS = {"YouTube", "Instagram", "TikTok", "Douyin"}
 
-    if platform in APIFY_PLATFORMS and _apify_available():
+    # User/API reads may use the free browser fallback immediately.  Paid
+    # Apify execution is only selected inside the centrally claimed worker.
+    if (
+        platform in APIFY_PLATFORMS
+        and _apify_available()
+        and current_apify_execution_context() is not None
+    ):
         logger.info("platform_router.apify_primary", extra={"platform": platform})
         try:
             data = await scrape_with_apify(url, platform)
@@ -66,7 +73,13 @@ async def scrape_url(url: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("platform_router.apify_exception", extra={"platform": platform, "error": str(e)})
 
-    logger.info("platform_router.playwright_fallback", extra={"platform": platform})
+    logger.info(
+        "platform_router.playwright_fallback",
+        extra={
+            "platform": platform,
+            "provider_deferred": platform in APIFY_PLATFORMS and current_apify_execution_context() is None,
+        },
+    )
     data = await scrape_with_playwright(url)
     data["platform"] = platform
     data.setdefault("source_url", url)

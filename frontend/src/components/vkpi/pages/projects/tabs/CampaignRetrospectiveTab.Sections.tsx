@@ -78,7 +78,21 @@ export function ProjectVideoAnalysisCard({
   const keyHook = textFrom(layer6.key_hook);
   const riskFlagTags = normaliseRiskFlags(layer6.risk_flags);
   const verdict = textFrom(layer6.final_verdict) || marketingScore.rationale || keyHook;
-  const qaPayload = qaItem?.state === 'ready' && qaItem.entry ? finalV1QaPayload(qaItem.entry) : {};
+  const activeJobStatus = String(item.active_job?.status || '').toLowerCase();
+  const analysisIsActive = ['queued', 'running', 'retrying', 'processing'].includes(activeJobStatus);
+  const qaReady = qaItem?.state === 'ready' && Boolean(qaItem.entry);
+  const qaActiveStatus = String(qaItem?.active_job?.status || '').toLowerCase();
+  const qaIsActive = ['queued', 'running', 'retrying', 'processing'].includes(qaActiveStatus);
+  const qaVerificationText = qaReady
+    ? '已核验'
+    : qaItem?.state === 'unsupported'
+      ? '分析完成·QA仅支持YouTube'
+      : qaItem?.state === 'failed'
+        ? '分析完成·QA未完成'
+        : qaIsActive
+          ? '分析完成·QA待核验'
+          : '分析完成·QA未请求';
+  const qaPayload = qaReady ? finalV1QaPayload(qaItem?.entry) : {};
   const qaHasPayload = Object.keys(qaPayload).length > 0;
   const qaResultRecord = asRecord(qaItem?.entry?.result);
   const qaPass = qaBoolean(qaPayload.qa_pass ?? qaResultRecord.qa_pass);
@@ -99,6 +113,24 @@ export function ProjectVideoAnalysisCard({
   ];
 
   if (!ready) {
+    const pendingLabel = analysisIsActive
+      ? activeJobStatus === 'queued' || activeJobStatus === 'retrying' ? '排队中' : '分析中'
+      : item.state === 'failed'
+        ? '分析未完成'
+        : item.state === 'unsupported'
+          ? '暂不支持'
+          : item.state === 'pending'
+            ? '状态待确认'
+            : '尚未请求';
+    const pendingBody = analysisIsActive
+      ? `Worker 已有 ${activeJobStatus} 任务，完成写入缓存后这里会自动亮起。`
+      : item.state === 'failed'
+        ? `最近任务未产出可用缓存${item.terminal_reason ? `：${item.terminal_reason}` : '。'}`
+        : item.state === 'unsupported'
+          ? '当前视频平台不支持这项分析。'
+          : item.state === 'pending'
+            ? '旧接口未返回活动任务证据；不会自动轮询，请点“刷新状态”确认。'
+            : '当前没有 queued/running 分析任务；“刷新状态”只读取现状，不会新建任务。';
     return (
       <div className="rounded-lg border border-white/[0.05] bg-white/[0.012] p-3">
         <div className="flex items-center justify-between gap-3">
@@ -106,9 +138,9 @@ export function ProjectVideoAnalysisCard({
             <div className="text-[11px] font-semibold text-slate-300 truncate">{displayName}</div>
             <div className="text-[9.5px] text-slate-500 truncate">{item.platform || row.platform} · evidence #{item.evidence_id || '-'}</div>
           </div>
-          <span className="px-2 py-1 rounded bg-white/[0.05] text-slate-400 text-[10px] shrink-0">分析队列中</span>
+          <span className={`px-2 py-1 rounded text-[10px] shrink-0 ${analysisIsActive ? 'bg-amber-500/10 text-amber-200' : 'bg-white/[0.05] text-slate-400'}`}>{pendingLabel}</span>
         </div>
-        <div className="mt-2 text-[10.5px] text-slate-500">Worker 正在后台跑 final_v1，结果写入缓存后这里会亮起。</div>
+        <div className="mt-2 text-[10.5px] text-slate-500">{pendingBody}</div>
       </div>
     );
   }
@@ -124,7 +156,9 @@ export function ProjectVideoAnalysisCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-semibold text-white truncate">{displayName}</span>
-            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9.5px]">已分析</span>
+            <span className={`px-1.5 py-0.5 rounded text-[9.5px] ${qaReady ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/10 text-amber-200'}`}>
+              {qaVerificationText}
+            </span>
           </div>
           <div className="text-[9.5px] text-slate-500 truncate">{item.platform || row.platform} · 播放 {formatLargeNum(views)} · 赞 {formatLargeNum(likes)} · 评论 {formatLargeNum(comments)}</div>
         </div>

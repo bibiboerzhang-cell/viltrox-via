@@ -9,6 +9,7 @@ import {
   writeVkpiHash,
   EMPLOYEE_ALLOWED_PAGES,
 } from "./vkpiDashboardRouting";
+import { MANAGER_NAV_ITEMS } from "./vkpiLayoutConstants";
 
 // P2-6: 路由门禁纯逻辑(零 mock)。覆盖 page-key 识别、候选清洗、归一化、访问门禁、越权回退、
 // 以及触 window 的 getInitial/writeHash。manager 全量、employee 仅 EMPLOYEE_ALLOWED_PAGES。
@@ -18,10 +19,16 @@ describe("isVkpiPageKey 页面键识别", () => {
     expect(isVkpiPageKey("projects")).toBe(true);
     expect(isVkpiPageKey("cockpit")).toBe(true);
     expect(isVkpiPageKey("settings")).toBe(true);
+    expect(isVkpiPageKey("dataQuery")).toBe(true);
+    expect(isVkpiPageKey("marketTrends")).toBe(true);
+    expect(isVkpiPageKey("skillStudio")).toBe(true);
   });
   it("未知串 → false", () => {
     expect(isVkpiPageKey("not-a-page")).toBe(false);
     expect(isVkpiPageKey("")).toBe(false);
+  });
+  it("管理侧栏中的每个真页面都已注册", () => {
+    expect(MANAGER_NAV_ITEMS.filter((item) => !isVkpiPageKey(item.key))).toEqual([]);
   });
 });
 
@@ -48,6 +55,14 @@ describe("normalizeVkpiPage 归一化分支", () => {
   });
   it("manager:未知串 → 默认管理页 cockpit", () => {
     expect(normalizeVkpiPage("garbage", "manager")).toBe("cockpit");
+  });
+  it("manager:遗留 repairCenter/ops → 真实 dataQuality 页面", () => {
+    expect(normalizeVkpiPage("repairCenter", "manager")).toBe("dataQuality");
+    expect(normalizeVkpiPage("#/ops?from=legacy", "manager")).toBe("dataQuality");
+  });
+  it("employee:遗留运维目标仍受页面门禁保护", () => {
+    expect(normalizeVkpiPage("repairCenter", "employee")).toBe("cockpit");
+    expect(normalizeVkpiPage("ops", "employee")).toBe("cockpit");
   });
   it("employee:管理层专属页(costs/audit)→ 回退 cockpit", () => {
     expect(normalizeVkpiPage("costs", "employee")).toBe("cockpit");
@@ -109,6 +124,10 @@ describe("getInitialVkpiPage / writeVkpiHash 触 window", () => {
     window.history.replaceState(null, "", "#projects");
     expect(getInitialVkpiPage("manager")).toBe("projects");
   });
+  it("遗留 ops hash → dataQuality，不回落首页", () => {
+    window.history.replaceState(null, "", "#ops");
+    expect(getInitialVkpiPage("manager")).toBe("dataQuality");
+  });
   it("employee + hash=costs → 越权回退默认员工页", () => {
     window.history.replaceState(null, "", "#costs");
     expect(getInitialVkpiPage("employee")).toBe("cockpit");
@@ -116,5 +135,16 @@ describe("getInitialVkpiPage / writeVkpiHash 触 window", () => {
   it("writeVkpiHash 写入 location.hash", () => {
     writeVkpiHash("projects");
     expect(window.location.hash).toBe("#projects");
+  });
+  it("writeVkpiHash 对相同 hash 幂等且只派发一次事件", () => {
+    let events = 0;
+    const onHashChange = () => { events += 1; };
+    window.addEventListener("hashchange", onHashChange);
+
+    expect(writeVkpiHash("projects")).toBe(true);
+    expect(writeVkpiHash("projects")).toBe(false);
+    expect(events).toBe(1);
+
+    window.removeEventListener("hashchange", onHashChange);
   });
 });

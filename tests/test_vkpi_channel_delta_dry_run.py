@@ -2,10 +2,62 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 
+import pytest
+
+from app.db import connection as db_connection
 from app.db.connection import get_conn
+import app.domains.channels.schema as channels_schema
 from app.services.vkpi.schema_channels import ensure_vkpi_channels_schema
 from scripts import vkpi_channel_delta_dry_run
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _channel_delta_test_db(tmp_path_factory: pytest.TempPathFactory):
+    db_path = (tmp_path_factory.mktemp("channel-delta") / "channels.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_channels_ready = channels_schema._SCHEMA_READY
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    channels_schema._SCHEMA_READY = False
+    conn = get_conn()
+    try:
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                name TEXT
+            );
+            CREATE TABLE staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                role TEXT NOT NULL DEFAULT 'readonly',
+                permissions_json TEXT NOT NULL DEFAULT '{}',
+                mfa_enabled INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                invited_at TEXT
+            );
+            """
+        )
+        ensure_vkpi_channels_schema()
+        conn.commit()
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        channels_schema._SCHEMA_READY = old_channels_ready
 
 
 def _insert_staff() -> int:

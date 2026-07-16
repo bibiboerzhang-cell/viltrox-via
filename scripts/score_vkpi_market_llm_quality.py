@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Score an existing V-KPI market LLM smoke report without provider calls."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -27,7 +28,7 @@ def main() -> int:
         out = Path(args.json_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("usable_for_ui") else 3
 
 

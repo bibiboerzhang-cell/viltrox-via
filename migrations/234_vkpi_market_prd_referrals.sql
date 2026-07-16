@@ -22,8 +22,8 @@
 --   (避 compat 占位符炸 apply 的陷阱)。
 -- 红线:纯转交账本,零触 viltrox_fit_score、零碰 rule_v0 打分;不返回也不存任何评论作者个人字段。
 -- 回滚见 234_vkpi_market_prd_referrals_down.sql。
-BEGIN;
-
+-- The migration runner owns the transaction and fleet advisory lock.  Do not
+-- add BEGIN/COMMIT here.
 CREATE TABLE IF NOT EXISTS vkpi_market_prd_referrals (
     id                  BIGSERIAL   PRIMARY KEY,
     source_table        TEXT        NOT NULL,
@@ -47,5 +47,3 @@ CREATE INDEX IF NOT EXISTS idx_vkpi_market_prd_referrals_status
 
 COMMENT ON TABLE vkpi_market_prd_referrals IS
   '市场之声转产品部账本: 一条声音(vkpi_comments)或一条规则建议(lexicon_reco)至多转交一次(UNIQUE source_table+source_id 幂等锚); status=referred/accepted/rejected 域层枚举; 零触 viltrox_fit_score。';
-
-COMMIT;

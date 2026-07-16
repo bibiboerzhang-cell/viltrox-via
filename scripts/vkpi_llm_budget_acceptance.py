@@ -6,6 +6,7 @@ test. It does not call providers, enqueue tasks, run sync jobs, or write ledger
 rows.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -164,9 +165,9 @@ async def async_main(argv: list[str] | None = None) -> int:
         if args.md_out:
             _write(args.md_out, markdown)
         if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+            stdout_out(json.dumps(report, ensure_ascii=False, indent=2, default=str))
         else:
-            print(markdown)
+            stdout_out(markdown)
         return 0 if report.get("passed") else 3
     finally:
         await close_db_runtime()

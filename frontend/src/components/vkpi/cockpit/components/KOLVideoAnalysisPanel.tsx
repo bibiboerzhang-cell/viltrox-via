@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ShieldCheck, Video } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw, ShieldCheck, Video } from "lucide-react";
 import { getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
 // 【K4】媒体种类徽章(图/组图/视频):helpers 只从本文件 import 类型(编译期擦除),无运行时环。
 import { mediaKindBadge } from "./KOLDetailDrawer.helpers";
@@ -453,6 +453,7 @@ export function KOLVideoAnalysisPanel({
   preloadedBundles,
   summary,
   crawling = false,
+  onRefresh,
 }: {
   apiToken?: string;
   videos: VideoEvidence[];
@@ -461,6 +462,7 @@ export function KOLVideoAnalysisPanel({
   // 【A3】抓取进度徽标:父层(KOLDetailDrawer)在 profile 深爬入队/轮询中时置 true,
   // 标题旁显示「抓取中·完成自动出现」。纯 props 透传,本组件不新增任何全局依赖。
   crawling?: boolean;
+  onRefresh?: () => void | Promise<void>;
 }) {
   const evidenceVideos = useMemo(() => videos.filter((video) => videoEvidenceId(video)).slice(0, 3), [videos]);
   const summaryRecord = asRecord(summary);
@@ -470,6 +472,17 @@ export function KOLVideoAnalysisPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showAll, setShowAll] = useState(false); // C2:76条长卡默认收起,只显前3条
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refresh = async () => {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -536,6 +549,18 @@ export function KOLVideoAnalysisPanel({
             <span className="rounded bg-cyan-500/12 px-1.5 py-0.5 text-[9px] font-medium text-cyan-200">已有 {summaryReadyCount} 条分析</span>
           ) : Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? (
             <span className="rounded bg-slate-500/12 px-1.5 py-0.5 text-[9px] text-slate-300">已有 {summaryEvidenceCount} 条 evidence</span>
+          ) : null}
+          {onRefresh ? (
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={refreshing}
+              aria-label="刷新视频分析状态"
+              className="inline-flex items-center gap-1 rounded border border-white/[0.08] px-1.5 py-0.5 text-[8.5px] text-slate-400 hover:border-cyan-300/25 hover:text-cyan-100 disabled:opacity-50"
+            >
+              <RefreshCw size={9} className={refreshing ? "animate-spin" : ""} />
+              {refreshing ? "刷新中" : "刷新状态"}
+            </button>
           ) : null}
           <span className="text-[8.5px] text-slate-600">vkpi_analysis_cache</span>
         </div>

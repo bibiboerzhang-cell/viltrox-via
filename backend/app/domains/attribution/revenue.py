@@ -8,12 +8,19 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains import audit
+from app.domains import audit, business_truth
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow import staff_id
 
 SOURCE_PLATFORMS = {"shopify", "amazon", "webhook", "manual", "custom"}
+ATTRIBUTION_INGEST_CLASSES = {
+    "manual_unverified",
+    "human_verified",
+    "provider_observed",
+    "provider_verified",
+    "provider_refund",
+}
 logger = get_logger(__name__)
 
 
@@ -121,17 +128,26 @@ def _active_project_filter(alias: str = "") -> str:
     )
 
 
-def create_attribution(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def create_attribution(
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    ingest_class: str = "manual_unverified",
+) -> dict[str, Any]:
     ensure_vkpi_schema()
-    source = str(body.get("source_platform") or body.get("source") or "manual").strip().lower()
+    ingest_class = str(ingest_class or "manual_unverified").strip().lower()
+    if ingest_class not in ATTRIBUTION_INGEST_CLASSES:
+        raise ValueError("unsupported attribution ingest_class")
+    requested_source = str(body.get("source_platform") or body.get("source") or "manual").strip().lower()
+    provider_ingest = ingest_class in {"provider_observed", "provider_verified", "provider_refund"}
+    source = requested_source if ingest_class != "manual_unverified" else "manual"
     if source not in SOURCE_PLATFORMS:
         raise ValueError("unsupported source_platform")
     source_ref = str(body.get("source_ref") or body.get("external_id") or "").strip()
     if not source_ref:
         raise ValueError("source_ref required")
     project_id = _int(body.get("project_id"))
-    trusted_ingest = bool(body.get("system_trusted") or body.get("trusted_ingest"))
-    if project_id and not trusted_ingest:
+    if project_id and not provider_ingest:
         scope.assert_project_access(project_id, staff, write=True)
     project = _project_defaults(project_id)
     now = utcnow()
@@ -139,10 +155,32 @@ def create_attribution(body: dict[str, Any], *, staff: dict[str, Any] | None = N
     requested_staff_owner_id = _int(body.get("staff_id"), _int(project.get("assigned_staff_id"))) or actor_staff_id or None
     staff_owner_id = scope.effective_staff_id(staff, requested_staff_owner_id) or requested_staff_owner_id
     kol_id = _int(body.get("kol_id"), _int(project.get("kol_id"))) or None
+    shopify_order_snapshot_id = _int(body.get("shopify_order_snapshot_id")) or None
     conn = get_conn()
     evidence = body.get("evidence") or body.get("metadata") or {}
     if not isinstance(evidence, dict):
         evidence = {"raw": evidence}
+    if ingest_class == "provider_verified":
+        confidence = "confirmed"
+    elif ingest_class == "provider_refund":
+        confidence = "refund"
+    elif ingest_class == "provider_observed":
+        confidence = "unmatched"
+    elif ingest_class == "human_verified":
+        confidence = "human_verified"
+    else:
+        confidence = "pending"
+    evidence = {
+        **evidence,
+        "ingest_class": ingest_class,
+        "requested_source_claim": requested_source,
+        "requested_confidence_claim": str(body.get("confidence") or ""),
+        "counts_toward_gmv": bool(
+            requested_source == "shopify"
+            and shopify_order_snapshot_id
+            and ingest_class in {"provider_verified", "provider_refund"}
+        ),
+    }
     order_id = _int(body.get("order_id"))
     if order_id:
         order = conn.execute("SELECT id FROM orders WHERE id=?", (order_id,)).fetchone()
@@ -181,7 +219,7 @@ def create_attribution(body: dict[str, Any], *, staff: dict[str, Any] | None = N
             _int(body.get("link_id")) or None,
             kol_id,
             staff_owner_id,
-            _int(body.get("shopify_order_snapshot_id")) or None,
+            shopify_order_snapshot_id,
             str(body.get("product_sku") or project.get("product_sku") or ""),
             order_id or None,
             str(body.get("amazon_campaign_id") or body.get("amazon_tag") or ""),
@@ -189,7 +227,7 @@ def create_attribution(body: dict[str, Any], *, staff: dict[str, Any] | None = N
             _amount_cents(body, "commission"),
             str(body.get("currency") or "USD"),
             str(body.get("attribution_model") or "last_touch"),
-            str(body.get("confidence") or "confirmed"),
+            confidence,
             str(body.get("occurred_at") or now),
             now,
             _json(evidence),
@@ -202,6 +240,110 @@ def create_attribution(body: dict[str, Any], *, staff: dict[str, Any] | None = N
         (source, source_ref),
     ).fetchone()
     return {"attribution": dict(row) if row else {}}
+
+
+def create_manual_attribution(
+    body: dict[str, Any],
+    *,
+    authorization_evidence: dict[str, Any],
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a human repair row without allowing provider-truth promotion.
+
+    The caller-facing source/confidence values are retained only as audit
+    claims.  The persisted row is always ``manual`` + ``pending`` and is thus
+    excluded from Shopify GMV until a signed provider event reconciles it.
+    """
+
+    payload = dict(body or {})
+    existing_evidence = payload.get("evidence") or payload.get("metadata") or {}
+    if not isinstance(existing_evidence, dict):
+        existing_evidence = {"raw": existing_evidence}
+    requested_source = str(payload.get("source_platform") or payload.get("source") or "manual")
+    requested_confidence = str(payload.get("confidence") or "")
+    payload.update(
+        {
+            "source_platform": "manual",
+            "confidence": "pending",
+            "system_trusted": False,
+            "trusted_ingest": False,
+            "evidence": {
+                **existing_evidence,
+                "evidence_class": "human_authorized_manual_entry",
+                "authorization_evidence": authorization_evidence,
+                "requested_source_claim": requested_source,
+                "requested_confidence_claim": requested_confidence,
+                "counts_toward_gmv": False,
+            },
+        }
+    )
+    result = create_attribution(payload, staff=staff, ingest_class="manual_unverified")
+    result["truth_status"] = "manual_pending_verification"
+    result["counts_toward_gmv"] = False
+    return result
+
+
+def verify_manual_attribution(
+    attribution_id: int,
+    *,
+    authorization_evidence: dict[str, Any],
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record a human review while keeping the row outside provider GMV.
+
+    Human review is useful operational evidence, but is not a Shopify HMAC or
+    Admin-API receipt.  The row therefore becomes ``human_verified`` rather
+    than ``confirmed`` and its source remains ``manual``.
+    """
+
+    ensure_vkpi_schema()
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_sales_attributions WHERE id=?", (int(attribution_id),)).fetchone()
+    if not row:
+        raise LookupError("attribution not found")
+    current = dict(row)
+    if str(current.get("source_platform") or "").lower() != "manual":
+        raise ValueError("only manual attribution rows can be human-verified")
+    project_id = _int(current.get("project_id"))
+    if project_id:
+        scope.assert_project_access(project_id, staff, write=True)
+    evidence = _load_json(current.get("evidence_json"))
+    if not isinstance(evidence, dict):
+        evidence = {}
+    now = utcnow()
+    evidence.update(
+        {
+            "human_verification": authorization_evidence,
+            "human_verified_at": now,
+            "counts_toward_gmv": False,
+        }
+    )
+    conn.execute(
+        "UPDATE vkpi_sales_attributions SET confidence='human_verified', evidence_json=? WHERE id=?",
+        (_json(evidence), int(attribution_id)),
+    )
+    conn.commit()
+    fresh = conn.execute("SELECT * FROM vkpi_sales_attributions WHERE id=?", (int(attribution_id),)).fetchone()
+    actor = staff_id(staff) or 0
+    audit.log_business_event(
+        staff_id=actor,
+        action_type="manual_attribution_verify",
+        target_type="attribution",
+        target_id=int(attribution_id),
+        detail=str(authorization_evidence.get("reason") or "manual attribution reviewed"),
+        metadata={
+            "attribution_id": int(attribution_id),
+            "source_platform": "manual",
+            "confidence": "human_verified",
+            "counts_toward_gmv": False,
+            "authorization_ref": authorization_evidence.get("authorization_ref"),
+        },
+    )
+    return {
+        "attribution": dict(fresh) if fresh else {},
+        "human_verified": True,
+        "counts_toward_gmv": False,
+    }
 
 
 def import_amazon(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -223,16 +365,20 @@ def import_amazon(body: dict[str, Any], *, staff: dict[str, Any] | None = None) 
             "product_sku": normalized["product_sku"],
             "revenue_cents": normalized["revenue_cents"],
             "commission_cents": normalized["commission_cents"],
+            "confidence": "human_verified",
             "occurred_at": item.get("occurred_at") or f"{normalized['report_date']}T00:00:00Z",
             "evidence": {
                 "source": "amazon_attribution_import",
+                "evidence_class": "human_authorized_report_import",
+                "authorization_evidence": body.get("_authorization_evidence") or {},
+                "counts_toward_shopify_gmv": False,
                 "row": item,
                 "normalized": normalized,
                 "asin": normalized["asin"],
                 "marketplace": normalized["marketplace"],
             },
         }
-        created = create_attribution(payload, staff=staff)["attribution"]
+        created = create_attribution(payload, staff=staff, ingest_class="human_verified")["attribution"]
         imported.append(created)
         if not _int(payload.get("project_id")) or not _int(created.get("project_id")) or not _int(created.get("staff_id")):
             import app.domains.attribution.reconciliation as reconciliation
@@ -273,6 +419,13 @@ def list_amazon_attributions(staff_id: int | None = None, limit: int = 100, *, s
 
 
 def amazon_summary(staff_id: int | None = None, limit: int = 100, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return imported Amazon rows as reference diagnostics, never verified GMV.
+
+    The current Amazon import is human-authorized but has no cryptographic
+    provider receipt equivalent to the Shopify HMAC snapshot.  Preserve its
+    amounts for reconciliation while removing them from the standard summable
+    money columns.
+    """
     ensure_vkpi_schema()
     where: list[str] = ["sa.source_platform='amazon'", _active_project_filter("sa")]
     params: list[Any] = []
@@ -308,7 +461,22 @@ def amazon_summary(staff_id: int | None = None, limit: int = 100, *, staff: dict
         """,
         tuple(params),
     ).fetchone()
-    return {"items": [dict(row) for row in rows], "totals": dict(totals) if totals else {"rows": 0, "revenue_cents": 0, "commission_cents": 0}}
+    def reference_payload(raw: Any) -> dict[str, Any]:
+        item = dict(raw) if raw else {"rows": 0, "revenue_cents": 0, "commission_cents": 0}
+        item["reference_revenue_cents"] = int(item.get("revenue_cents") or 0)
+        item["reference_commission_cents"] = int(item.get("commission_cents") or 0)
+        item["revenue_cents"] = None
+        item["commission_cents"] = None
+        item["business_truth_status"] = "reference_only"
+        item["counts_toward_verified_gmv"] = False
+        return item
+
+    return {
+        "items": [reference_payload(row) for row in rows],
+        "totals": reference_payload(totals),
+        "business_truth_status": "reference_only",
+        "counts_toward_verified_gmv": False,
+    }
 
 
 def amazon_attribution_detail(attribution_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -471,7 +639,9 @@ def list_attributions(project_id: int | None = None, staff_id: int | None = None
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     rows = get_conn().execute(
         f"""
-        SELECT sa.*
+        SELECT sa.*,
+               CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                    THEN 1 ELSE 0 END AS is_verified_business_truth
         FROM vkpi_sales_attributions sa
         {clause}
         ORDER BY occurred_at DESC, id DESC
@@ -479,7 +649,14 @@ def list_attributions(project_id: int | None = None, staff_id: int | None = None
         """,
         (*params, max(1, min(500, int(limit or 100)))),
     ).fetchall()
-    return {"attributions": [dict(row) for row in rows]}
+    attributions = [dict(row) for row in rows]
+    for row in attributions:
+        row["business_truth_status"] = (
+            "provider_verified"
+            if int(row.get("is_verified_business_truth") or 0) == 1
+            else "reference_only"
+        )
+    return {"attributions": attributions}
 
 
 def unmatched(limit: int = 100, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -510,8 +687,14 @@ def summary() -> dict[str, Any]:
                COALESCE(SUM(commission_cents), 0) AS commission_cents
         FROM vkpi_sales_attributions sa
         WHERE {_active_project_filter("sa")}
+          AND {business_truth.verified_shopify_attribution_sql('sa')}
         GROUP BY source_platform, confidence
         ORDER BY revenue_cents DESC
         """
     ).fetchall()
-    return {"by_source": [dict(row) for row in rows]}
+    return {
+        "by_source": [
+            {**dict(row), "business_truth_status": "provider_verified"}
+            for row in rows
+        ]
+    }

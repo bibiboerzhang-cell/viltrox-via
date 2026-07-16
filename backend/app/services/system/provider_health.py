@@ -7,7 +7,9 @@ sandbox tests. They avoid expensive usage queries on page load.
 from __future__ import annotations
 
 import asyncio
+import html
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -22,6 +24,28 @@ logger = get_logger(__name__)
 
 PROVIDERS = ["anthropic", "openai", "google", "apify", "youtube", "resend"]
 SECURITY_NOTIFY_EMAIL = os.environ.get("SECURITY_NOTIFY_EMAIL", "jianboz@viltrox.com").strip()
+_SECRET_QUERY_RE = re.compile(
+    r"(?i)((?:[?&]|\b)(?:api[-_]?key|key|token|access_token)\s*=\s*)[^&\s,;\"']+"
+)
+_SECRET_HEADER_RE = re.compile(
+    r"(?i)((?:x-goog-api-key|x-api-key)\s*['\"]?\s*[:=]\s*['\"]?)[^,\s}\"']+"
+)
+_BEARER_SECRET_RE = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
+
+
+def _redact_probe_error(
+    value: Any,
+    api_key: str = "",
+    *,
+    max_length: int = 160,
+) -> str:
+    text = str(value or "")
+    if api_key:
+        text = text.replace(api_key, "[redacted]")
+    text = _SECRET_QUERY_RE.sub(r"\1[redacted]", text)
+    text = _SECRET_HEADER_RE.sub(r"\1[redacted]", text)
+    text = _BEARER_SECRET_RE.sub(r"\1[redacted]", text)
+    return text[:max_length]
 
 
 def _canonical_provider(provider: str) -> str:
@@ -68,7 +92,11 @@ async def probe_provider(provider: str, api_key: str | None = None) -> dict[str,
     except httpx.HTTPError as exc:
         return {"provider": provider_key, "status": "down", "ok": False, "error": f"probe http error: {exc.__class__.__name__}"}
     except Exception as exc:
-        logger.warning("provider_health.probe_failed", extra={"provider": provider_key, "error": str(exc)[:160]})
+        safe_error = _redact_probe_error(exc, key)
+        logger.warning(
+            "provider_health.probe_failed",
+            extra={"provider": provider_key, "error": safe_error},
+        )
         return {"provider": provider_key, "status": "down", "ok": False, "error": exc.__class__.__name__}
 
 
@@ -93,17 +121,24 @@ async def _probe_provider_http(provider: str, api_key: str) -> dict[str, Any]:
         elif provider == "google":
             response = await client.get(
                 "https://generativelanguage.googleapis.com/v1beta/models",
-                params={"key": api_key},
+                # Never put provider credentials in a URL.  Query strings are
+                # routinely captured by httpx, proxy and application logs.
+                headers={"x-goog-api-key": api_key},
             )
         elif provider == "apify":
             response = await client.get(
                 "https://api.apify.com/v2/users/me",
-                params={"token": api_key},
+                # Apify supports both forms and explicitly recommends Bearer
+                # authentication because query tokens leak into URL logs.
+                headers={"Authorization": f"Bearer {api_key}"},
             )
         elif provider == "youtube":
             response = await client.get(
                 "https://www.googleapis.com/youtube/v3/channels",
-                params={"part": "id", "id": "UC_x5XG1OV2P6uZZ5FSM9Ttw", "key": api_key},
+                params={"part": "id", "id": "UC_x5XG1OV2P6uZZ5FSM9Ttw"},
+                # Google recommends the API-key header because URL query
+                # parameters are retained by access logs and URL scanners.
+                headers={"x-goog-api-key": api_key},
             )
         elif provider == "resend":
             response = await client.get(
@@ -161,6 +196,7 @@ def record_provider_probe(provider: str, ok: bool, error: str = "") -> None:
     previous_failures = int(row["consecutive_failures"] or 0) if row else 0
     failures = 0 if ok else previous_failures + 1
     status = "healthy" if ok else ("down" if failures >= 3 else "degraded")
+    safe_error = _redact_probe_error(error, max_length=500)
     conn.execute(
         """
         INSERT INTO provider_status
@@ -173,7 +209,7 @@ def record_provider_probe(provider: str, ok: bool, error: str = "") -> None:
             consecutive_failures = excluded.consecutive_failures,
             updated_at = excluded.updated_at
         """,
-        (provider, status, now if ok else None, "" if ok else error[:500], failures, now),
+        (provider, status, now if ok else None, "" if ok else safe_error, failures, now),
     )
     conn.commit()
 
@@ -209,6 +245,7 @@ def _send_down_alert(provider: str, error: str) -> None:
         return
     if not should_send_down_alert(provider):
         return
+    safe_error = html.escape(_redact_probe_error(error, max_length=500) or "unknown")
     try:
         send_email(
             SECURITY_NOTIFY_EMAIL,
@@ -216,7 +253,7 @@ def _send_down_alert(provider: str, error: str) -> None:
             (
                 "<p>Provider health probe marked a provider as down.</p>"
                 f"<p><b>Provider:</b> {provider}</p>"
-                f"<p><b>Error:</b> {error or 'unknown'}</p>"
+                f"<p><b>Error:</b> {safe_error}</p>"
                 "<p>Alert frequency is capped at once per provider every 6 hours.</p>"
             ),
         )

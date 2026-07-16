@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
@@ -41,10 +42,18 @@ def post_gtm_plan_materialize(
     条件管理层闸:dry_run=True 员工可模拟(零落库);dry_run=False 真落库
     仅 owner/管理岗 → 否则 403。
     """
-    from app.domains.market_brain import gtm_plan_preview, materialize
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM materialize")
+    if scope_unavailable is not None:
+        return {
+            **scope_unavailable,
+            "dry_run": bool(dry_run),
+            "sku": str(sku)[:120],
+        }
 
     if not dry_run:
         require_manager_staff(staff)
+    from app.domains.market_brain import gtm_plan_preview, materialize
+
     goal_clean = (goal or "").strip().lower()
     if goal_clean not in gtm_plan_preview.GOALS:
         raise HTTPException(

@@ -5,6 +5,7 @@ Catches regressions where comment intelligence alerts are generated but no
 longer visible or actionable from the command-center right rail.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def main() -> None:
     assert "评论风险" in panel and "formatAlertMeta" in panel and "onResolveAlert(alert.id)" in panel, "alert triage UI missing"
     assert ".vkpi-alert-toolbar" in css and ".vkpi-alert-actions" in css, "alert triage CSS missing"
 
-    print("VKPI_ALERT_TRIAGE_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_ALERT_TRIAGE_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

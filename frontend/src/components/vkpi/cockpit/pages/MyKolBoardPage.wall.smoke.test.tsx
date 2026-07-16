@@ -123,8 +123,10 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     const more = screen.getByText(/查看更多/);
     expect(more.textContent).toContain("已显 12 / 14");
     fireEvent.click(more);
-    expect(wallCards().length).toBe(14);
-    expect(screen.queryByText(/查看更多/)).toBeNull();
+    await waitFor(() => {
+      expect(wallCards().length).toBe(14);
+      expect(screen.queryByText(/查看更多/)).toBeNull();
+    });
   });
 
   it("仅 V 相关 + 播放排序:未判定隐藏;实测播放降序、未实测排最后(不当 0 混序)", async () => {
@@ -140,6 +142,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     // 关掉仅 V + 播放排序:填充片(100+i)按实测降序,未实测仍最后一张
     fireEvent.click(screen.getByText("仅 V 相关"));
     fireEvent.click(screen.getByText(/查看更多/));
+    await waitFor(() => expect(wallCards().length).toBe(14));
     const titles = wallTitles();
     expect(titles[0]).toBe("Wall Coop Film");
     expect(titles[1]).toBe("Filler clip 12");

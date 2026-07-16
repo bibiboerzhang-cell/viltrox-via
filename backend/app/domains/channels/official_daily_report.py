@@ -5,9 +5,9 @@
 - 这是「我方官号绩效报告」,数据源全是 vkpi_employee_channels / vkpi_channel_metrics /
   vkpi_channel_post_metrics / vkpi_comments,与外部 KOL 的 viltrox_fit_score / rule_v0 /
   kol_pool 物理两套,绝不读写后者。
-- LLM 调用前过预算闸 cron:official_daily_report(硬上限,见 migration 157),调用后 record_cost;
-  超限 → 跳过 LLM 保留上一份,诚实返回 budget_blocked。
-- Claude 优先(对所给真实数据做经营推理,要稳)、Gemini 兜底,两者自带代理。
+- LLM 调用前过本域预算闸,每个精确模型调用再由 llm_production 原子预留/结算;
+  超限或未有运行证据 → 跳过 LLM 保留上一份,诚实返回不可用。
+- Claude 优先、Gemini 仅由本调用方显式兜底;单次调用禁止静默跨模型 fallback。
 - 只读所给真实数据,不编造;数据缺口(如官号画面质量尚未接 Gemini)诚实标 pending。
 - 一账号一天一轮一份(round_key 区分 中国早8/美西早6 两轮),ON CONFLICT 当轮覆盖刷新。
 """
@@ -17,11 +17,12 @@ import json
 from datetime import date, datetime, timezone
 from typing import Any
 
-from app.core.config import CLAUDE_MODEL
+from app.core.config import CLAUDE_MODEL, GEMINI_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
 from app.domains.market.ai_today import _parse_json  # 复用加固的 JSON 抽取
+from app.platform import llm_production
 
 logger = get_logger(__name__)
 
@@ -212,37 +213,68 @@ def _build_prompt(report_text: str, handle: str, platform: str, language: str) -
 
 
 def _generate(prompt: str) -> tuple[str, str]:
-    """Claude 优先(对真实数据做经营推理要稳);失败回退 Gemini。返回 (文本, 模型标签)。"""
-    try:
-        from app.services.ai.clients.claude_client import get_claude_client
-        from app.services.ai.retry import call_ai_with_retry
+    """Run two explicit exact-model attempts through the production boundary."""
 
-        client = get_claude_client()
-        resp = call_ai_with_retry(
-            "channels.official_daily_report",
-            lambda: client.messages.create(
-                # 3500:中文 5 段式报告较长,2000 会把 JSON 截断到不可解析(_parse_json→{})。
-                model=CLAUDE_MODEL, max_tokens=3500, messages=[{"role": "user", "content": prompt}]
-            ),
+    def usable_payload(value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        normalized = _normalize(value)
+        return bool(
+            normalized["play_performance"]
+            or normalized["suggestions"]
+            or normalized["headline"]
         )
-        text = (resp.content[0].text or "").strip() if resp and getattr(resp, "content", None) else ""
-        if text:
-            return text, f"claude:{CLAUDE_MODEL}"
-    except Exception:
-        logger.warning("official_daily_report.claude_failed_fallback_gemini", exc_info=True)
-    try:
-        import app.core.config  # noqa: F401  触发 .env 加载
-        import app.services.ai.clients.gemini_client as gc
-        from app.core.config import GEMINI_MODEL
 
-        client = getattr(gc, "gemini_client", None)
-        if client is not None:
-            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-            text = (getattr(resp, "text", "") or "").strip()
-            if text:
-                return text, f"gemini:{GEMINI_MODEL}"
-    except Exception:
-        logger.warning("official_daily_report.gemini_failed", exc_info=True)
+    candidates = (
+        ("anthropic", CLAUDE_MODEL, "claude", "primary"),
+        ("google", GEMINI_MODEL, "gemini", "explicit_fallback"),
+    )
+    for provider, model, label, stage in candidates:
+        try:
+            result = llm_production.generate_json(
+                prompt,
+                provider=provider,
+                model=model,
+                purpose="channels.official_daily_report",
+                # 中文 5 段式报告较长,2000 会把 JSON 截断。
+                max_output_tokens=3500,
+                cost_tag=_BUDGET_SCOPE,
+                validator=usable_payload,
+                deadline_seconds=75.0,
+                metadata={
+                    "surface": "official_daily_report",
+                    "model_stage": stage,
+                    "explicit_cross_model_fallback": stage == "explicit_fallback",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "official_daily_report.strict_model_failed",
+                extra={"provider": provider, "model": model, "stage": stage},
+                exc_info=True,
+            )
+            continue
+        payload = result.get("json") if isinstance(result, dict) else None
+        if (
+            str(result.get("status") or "") == "success"
+            and str(result.get("provider") or "").strip().lower() == provider
+            and usable_payload(payload)
+        ):
+            actual_model = str(result.get("model") or model).strip() or model
+            return json.dumps(payload, ensure_ascii=False), f"{label}:{actual_model}"
+        logger.info(
+            "official_daily_report.strict_model_unavailable",
+            extra={
+                "provider": provider,
+                "model": model,
+                "stage": stage,
+                "status": (
+                    str(result.get("status") or "failed")
+                    if isinstance(result, dict)
+                    else "invalid_result"
+                ),
+            },
+        )
     return "", ""
 
 
@@ -295,10 +327,7 @@ def generate_one(channel: dict[str, Any], *, report_date: str, round_key: str = 
     analysis = _normalize(_parse_json(raw))
     if not analysis["play_performance"] and not analysis["suggestions"] and not analysis["headline"]:
         return {"channel_id": int(channel["id"]), "status": "analysis_unavailable"}
-    try:
-        budget_guard.record_cost(scope=_BUDGET_SCOPE, cost_usd=_EST_COST)
-    except Exception:
-        logger.debug("official_daily_report.record_cost_failed", exc_info=True)
+    # Cost is settled exactly once by llm_production's atomic reservation.
     facts = {
         "trend_days": len(data.get("trend_7d") or []),
         "post_count": (data.get("posts") or {}).get("post_count"),

@@ -3,13 +3,47 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.platform import llm_gateway
+from app.platform.db import schema_product_industry
 from app.domains.costs import budget_guard
 from scripts import vkpi_llm_budget_acceptance
 
 
 MARKER = "vkpi-llm-budget-test"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _llm_budget_test_db(tmp_path_factory: pytest.TempPathFactory):
+    """Keep budget/gateway ledger tests on a module-private SQLite database."""
+    db_path = (tmp_path_factory.mktemp("llm-budget") / "llm-budget.db").resolve()
+    repository_db = (Path(__file__).resolve().parents[1] / "submissions.db").resolve()
+    assert db_path != repository_db
+    old_db_path = db_connection.DB_PATH
+    old_runtime_backend = db_connection.DB_RUNTIME_BACKEND
+    old_runtime_url = db_connection.DB_RUNTIME_URL
+    old_schema_ready = schema_product_industry._SCHEMA_READY
+    db_connection.close_db_runtime_sync()
+    db_connection.DB_PATH = db_path
+    db_connection.DB_RUNTIME_BACKEND = "sqlite"
+    db_connection.DB_RUNTIME_URL = ""
+    schema_product_industry._SCHEMA_READY = False
+    try:
+        schema_product_industry.ensure_vkpi_product_industry_schema()
+        budget_guard.ensure_budget_schema()
+        conn = get_conn()
+        actual_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2])).resolve()
+        assert actual_path == db_path
+        yield db_path
+    finally:
+        db_connection.close_db_runtime_sync()
+        db_connection.DB_PATH = old_db_path
+        db_connection.DB_RUNTIME_BACKEND = old_runtime_backend
+        db_connection.DB_RUNTIME_URL = old_runtime_url
+        schema_product_industry._SCHEMA_READY = old_schema_ready
 
 
 def _scope(scope: str) -> str:
@@ -143,6 +177,23 @@ def test_invoke_budget_block_records_zero_cost_ledger_without_calling_provider(m
         _cleanup()
         monkeypatch.delenv("VKPI_LLM_GATEWAY_FORCE_OFFLINE", raising=False)
         monkeypatch.setenv("LLM_MONTHLY_BUDGET_USD", "999")
+        # The production gateway now fail-closes every provider default unless
+        # runtime verification evidence names the exact provider/model binding.
+        # This test is about the downstream budget gate, so provide only that
+        # narrow, synthetic binding while the provider transport remains mocked.
+        monkeypatch.setenv(
+            "VKPI_LLM_RUNTIME_VERIFIED_MODELS",
+            f"openai/{llm_gateway.PROVIDER_CONFIG['openai']['model']}",
+        )
+        allowed_binding = f"openai/{llm_gateway.PROVIDER_CONFIG['openai']['model']}"
+        monkeypatch.setattr(
+            llm_gateway,
+            "exact_binding_readiness_from_environment",
+            lambda binding: (
+                {"binding": binding, "production_ready": binding == allowed_binding},
+                {"source": "test_signed_readiness_fixture"},
+            ),
+        )
         monkeypatch.setattr(llm_gateway, "_is_provider_configured", lambda provider: provider == "openai")
         monkeypatch.setitem(llm_gateway._PROVIDER_CALLERS, "openai", fake_openai)
         budget_guard.update_budget("monthly_total", {"cap_usd": 999, "current_spend": 0, "fallback_action": "fallback_to_rule_v0"})

@@ -9,6 +9,7 @@ It also locks the sidebar reachability fix. On shorter screens the old sidebar
 could push "系统设置" below the clickable viewport.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -56,7 +57,7 @@ def main() -> None:
     require_contains(CSS, "@media (max-width: 1180px)")
     require_contains(CSS, "@media (max-width: 760px)")
 
-    print("VKPI_P3_1D_SETTINGS_CRAWL_UI_SMOKE_OK")
+    stdout_out("VKPI_P3_1D_SETTINGS_CRAWL_UI_SMOKE_OK")
 
 
 if __name__ == "__main__":

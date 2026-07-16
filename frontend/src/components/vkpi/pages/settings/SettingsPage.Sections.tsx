@@ -57,7 +57,7 @@ export function SettingsApiKeyPoolPanel({
             <tr key={String(row.id)}>
               <td>{String(row.account_name ?? '')}</td>
               <td>{String(row.provider ?? '')}</td>
-              <td>{row.key_prefix ? `${String(row.key_prefix)}(已存,留空不改)` : '(未填)'}</td>
+              <td>{row.credential_status === 'configured' || row.key_prefix ? '(已配置,留空不改)' : '(未填)'}</td>
               <td>{Number(row.daily_quota ?? 0)}</td>
               <td>
                 <input

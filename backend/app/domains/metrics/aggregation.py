@@ -22,7 +22,8 @@ def _sum_cost(project_clause: str, params: list[Any]) -> int | None:
         return None
     try:
         row = get_conn().execute(
-            f"SELECT COALESCE(SUM(amount_cents), 0) AS c FROM vkpi_cost_ledger WHERE 1=1 {project_clause}",
+            f"SELECT COALESCE(SUM(amount_cents), 0) AS c FROM vkpi_cost_ledger "
+            f"WHERE status='actual' AND approved_at IS NOT NULL {project_clause}",
             tuple(params),
         ).fetchone()
         return int(dict(row).get("c") or 0)

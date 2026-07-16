@@ -6,6 +6,7 @@ visible at once. This catches the P2.20 browser QA regression where KOL Profile
 and Project Detail stacked on top of each other.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -38,7 +39,7 @@ def main() -> None:
     assert "onClose={closeStaffProfileDrawer}" in dashboard, "staff drawer close button should reuse helper"
     assert "KOL drawer 与 Project detail drawer 叠层" in p2_20, "P2.20 regression note missing"
 
-    print("VKPI_P2_22_DRAWER_UX_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_P2_22_DRAWER_UX_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

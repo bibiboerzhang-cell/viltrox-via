@@ -16,8 +16,11 @@ search 已停;竞品口碑改走本脚本 + reviews actor,落 vkpi_bh_reviews(�
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -64,7 +67,6 @@ async def _main() -> int:
     urls = [u.strip() for u in args.urls.split(",") if u.strip()] or None
 
     from app.services.intelligence.bh_repository import select_bh_review_targets
-    from app.services.intelligence.bh_scraper import fetch_bh_reviews
 
     if urls:
         targets = [{"url": u, "title": "(explicit url)", "bucket": "explicit"} for u in urls[:limit]]
@@ -72,34 +74,46 @@ async def _main() -> int:
         targets = select_bh_review_targets(limit=limit)
 
     est = _est_cost_per_call()
-    print(f"[plan] products={len(targets)} per_product_limit={args.per_product}")
+    out(f"[plan] products={len(targets)} per_product_limit={args.per_product}")
     for t in targets:
-        print(f"  - [{t.get('bucket', '-')}] {str(t.get('title', ''))[:60]} | {t.get('url', '')}")
-    print(f"[cost] 预估 = {len(targets)} 产品 x ~${est:.2f}/actor call = ~${len(targets) * est:.2f}"
+        out(f"  - [{t.get('bucket', '-')}] {str(t.get('title', ''))[:60]} | {t.get('url', '')}")
+    out(f"[cost] 预估 = {len(targets)} 产品 x ~${est:.2f}/actor call = ~${len(targets) * est:.2f}"
           f"(口径:同家 search actor ~$2/次 保守估,env BH_REVIEWS_EST_COST_PER_CALL_USD 可校准;实际以 Apify usageTotalUsd 记账为准)")
 
     if args.dry_run:
-        print("[dry-run] 不调 actor,零成本退出。")
+        out("[dry-run] 不调 actor,零成本退出。")
         return 0
 
     if os.environ.get("BH_REVIEWS_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        print("[blocked] BH_REVIEWS_ENABLED 默认 0(烧钱动作默认关)。确认要花钱就:")
-        print("          BH_REVIEWS_ENABLED=1 .venv/bin/python scripts/run_bh_reviews_once.py --limit 1")
+        out("[blocked] BH_REVIEWS_ENABLED 默认 0(烧钱动作默认关)。确认要花钱就:")
+        out("          BH_REVIEWS_ENABLED=1 .venv/bin/python scripts/run_bh_reviews_once.py --limit 1")
         return 1
 
-    summary = await fetch_bh_reviews(
-        product_urls=urls,
-        limit_per_product=args.per_product,
-        max_products=limit,
-    )
-    print("[result]")
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
-    if summary.get("ok"):
-        print(f"[done] fetched={summary.get('reviews_fetched')} upserted={summary.get('reviews_upserted')} "
-              f"actual_actor_cost_usd={summary.get('actor_cost_usd')}")
-        return 0
-    print(f"[failed] reason={summary.get('reason', 'unknown')}")
-    return 1
+    from app.services.jobs.queue import build_job_queue
+
+    queue = build_job_queue()
+    if queue is None:
+        out("[blocked] durable job queue unavailable; paid review fetch was not started")
+        return 1
+    selected_urls = [str(t.get("url") or "").strip() for t in targets if str(t.get("url") or "").strip()]
+    digest = hashlib.sha256("\n".join(selected_urls).encode("utf-8")).hexdigest()[:16]
+    try:
+        task_id = await queue.enqueue(
+            "intel_bh_reviews",
+            {
+                "product_urls": selected_urls,
+                "limit_per_product": max(1, min(int(args.per_product), 100)),
+                "max_products": limit,
+                "requested_by": "cli",
+            },
+            lock_key=f"intel_bh_reviews:{digest}",
+            timeout_seconds=3600,
+        )
+    finally:
+        await queue.close()
+    out("[queued]")
+    out(json.dumps({"status": "queued", "job_id": task_id}, ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":

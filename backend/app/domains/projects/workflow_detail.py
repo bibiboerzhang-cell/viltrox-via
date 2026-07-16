@@ -1,11 +1,13 @@
 """Project detail read model for V-KPI workflow."""
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains import business_truth
 from app.domains.access import scope
 from app.domains.projects.workflow_projects import _enrich_project_card_fields
 from app.domains.projects.stage_canonical import to_canonical, stage_label_zh
@@ -15,7 +17,52 @@ from app.domains.projects.workflow_common import _int
 
 logger = get_logger(__name__)
 
-def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+
+def _encode_assignment_cursor(project_id: int, row: dict[str, Any]) -> str:
+    """Opaque, project-bound keyset cursor for the summary assignment feed."""
+    payload = {
+        "v": 1,
+        "project_id": int(project_id),
+        "stage_rank": int(row.get("assignment_stage_rank") or 9),
+        "name": str(row.get("assignment_sort_name") or ""),
+        "assignment_id": int(row.get("assignment_id") or 0),
+    }
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_assignment_cursor(project_id: int, cursor: str) -> tuple[int, str, int]:
+    try:
+        padded = str(cursor or "") + "=" * (-len(str(cursor or "")) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        if int(payload.get("v") or 0) != 1 or int(payload.get("project_id") or 0) != int(project_id):
+            raise ValueError
+        stage_rank = int(payload["stage_rank"])
+        assignment_id = int(payload["assignment_id"])
+        name = str(payload.get("name") or "")
+        if stage_rank < 1 or stage_rank > 9 or assignment_id < 1:
+            raise ValueError
+        return stage_rank, name, assignment_id
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid assignment cursor") from exc
+
+
+def project_detail(
+    project_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+    assignment_limit: int | None = None,
+    assignment_cursor: str | None = None,
+) -> dict[str, Any]:
+    """Return full legacy detail, or a bounded assignment summary page.
+
+    ``assignment_limit=None`` is the historical full response.  Supplying a
+    limit activates the additive summary contract: assignments are keyset
+    paged and only the canonical ``project_kol_assignments`` field is emitted,
+    avoiding the historical duplicate array in ``participating_kols``.
+    """
+    if assignment_limit is not None:
+        assignment_limit = max(1, min(int(assignment_limit), 100))
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff)
     conn = get_conn()
@@ -34,6 +81,7 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                pk.avatar_url AS kol_avatar,
                pa.primary_kol_pool_id AS kol_pool_id,
                COALESCE(pa.kol_count, 0) AS kol_count,
+               COALESCE(pa.assignment_count, 0) AS assignment_count,
                COALESCE(pa.kol_with_evidence, 0) AS kol_with_evidence,
                COALESCE(ev.evidence_count, 0) AS evidence_count,
                COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
@@ -43,6 +91,7 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
         LEFT JOIN (
             SELECT
                 a.project_id,
+                COUNT(*) AS assignment_count,
                 COUNT(DISTINCT a.kol_pool_id) AS kol_count,
                 COUNT(DISTINCT CASE WHEN kp.has_video_evidence THEN a.kol_pool_id END) AS kol_with_evidence,
                 MIN(a.kol_pool_id) AS primary_kol_pool_id
@@ -88,10 +137,47 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
     ).fetchone()
     if not row:
         raise LookupError("project not found")
-    participating_kols = [
+    assignment_stage_rank_sql = """
+        CASE a.stage
+            WHEN 'reviewed' THEN 1
+            WHEN 'measured' THEN 1
+            WHEN 'content_posted' THEN 2
+            WHEN 'published' THEN 2
+            WHEN 'device_sent' THEN 3
+            WHEN 'shipped' THEN 3
+            WHEN 'received' THEN 3
+            WHEN 'agreed' THEN 4
+            WHEN 'replied' THEN 5
+            WHEN 'contacted' THEN 6
+            WHEN 'discovered' THEN 7
+            WHEN 'churned' THEN 8
+            ELSE 9
+        END
+    """
+    assignment_sort_name_sql = "COALESCE(kp.display_name, '')"
+    assignment_cursor_sql = ""
+    assignment_params: list[Any] = [int(project_id), int(project_id), int(project_id), int(project_id)]
+    if assignment_limit is not None and assignment_cursor:
+        cursor_rank, cursor_name, cursor_id = _decode_assignment_cursor(project_id, assignment_cursor)
+        assignment_cursor_sql = f"""
+            AND (
+                ({assignment_stage_rank_sql}) > ?
+                OR (({assignment_stage_rank_sql}) = ? AND (
+                    ({assignment_sort_name_sql}) > ?
+                    OR (({assignment_sort_name_sql}) = ? AND a.id > ?)
+                ))
+            )
+        """
+        assignment_params.extend([cursor_rank, cursor_rank, cursor_name, cursor_name, cursor_id])
+    assignment_limit_sql = ""
+    if assignment_limit is not None:
+        assignment_limit_sql = "LIMIT ?"
+        assignment_params.append(assignment_limit + 1)
+
+    assignment_rows = [
         dict(item)
         for item in conn.execute(
-            """
+            f"""
             SELECT
                 a.id AS assignment_id,
                 a.project_id,
@@ -136,7 +222,9 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 latest_ev.content_url AS latest_video_url,
                 COALESCE(latest_ev.title, latest_ev.video_title, latest_ev.content_url) AS latest_evidence_title,
                 latest_ev.thumbnail_url AS latest_evidence_thumbnail_url,
-                latest_ev.publish_date AS latest_evidence_publish_date
+                latest_ev.publish_date AS latest_evidence_publish_date,
+                ({assignment_stage_rank_sql}) AS assignment_stage_rank,
+                ({assignment_sort_name_sql}) AS assignment_sort_name
             FROM vkpi_project_kol_assignments a
             LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
             LEFT JOIN staff assigned_staff ON assigned_staff.id = a.assigned_staff_id
@@ -193,29 +281,26 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                     id DESC
             ) latest_ev ON latest_ev.project_id = a.project_id AND latest_ev.kol_pool_id = a.kol_pool_id
             WHERE a.project_id=?
+            {assignment_cursor_sql}
             ORDER BY
-                CASE a.stage
-                    WHEN 'reviewed' THEN 1
-                    WHEN 'measured' THEN 1
-                    WHEN 'content_posted' THEN 2
-                    WHEN 'published' THEN 2
-                    WHEN 'device_sent' THEN 3
-                    WHEN 'shipped' THEN 3
-                    WHEN 'received' THEN 3
-                    WHEN 'agreed' THEN 4
-                    WHEN 'replied' THEN 5
-                    WHEN 'contacted' THEN 6
-                    WHEN 'discovered' THEN 7
-                    WHEN 'churned' THEN 8
-                    ELSE 9
-                END,
-                kp.display_name ASC,
+                ({assignment_stage_rank_sql}) ASC,
+                ({assignment_sort_name_sql}) ASC,
                 a.id ASC
+            {assignment_limit_sql}
             """,
-            (int(project_id), int(project_id), int(project_id), int(project_id)),
+            tuple(assignment_params),
         ).fetchall()
     ]
+    assignment_has_more = bool(assignment_limit is not None and len(assignment_rows) > assignment_limit)
+    participating_kols = assignment_rows[:assignment_limit] if assignment_limit is not None else assignment_rows
+    assignment_next_cursor = (
+        _encode_assignment_cursor(project_id, participating_kols[-1])
+        if assignment_has_more and participating_kols
+        else None
+    )
     for item in participating_kols:
+        item.pop("assignment_stage_rank", None)
+        item.pop("assignment_sort_name", None)
         for key in (
             "assignment_id",
             "project_id",
@@ -234,7 +319,7 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
         item["canonical_stage"] = to_canonical(item.get("stage"), item.get("stage_status", ""))
         item["canonical_stage_label"] = stage_label_zh(item["canonical_stage"])
     project = dict(row)
-    if participating_kols:
+    if assignment_limit is None and participating_kols:
         project["kol_count"] = len({int(item.get("kol_pool_id") or 0) for item in participating_kols if int(item.get("kol_pool_id") or 0)})
         project["kol_with_evidence"] = sum(1 for item in participating_kols if bool(item.get("has_video_evidence")))
         project["evidence_count"] = sum(int(item.get("evidence_count") or 0) for item in participating_kols)
@@ -306,7 +391,9 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                        os.refund_status,
                        os.total_cents,
                        os.landing_site,
-                       os.raw_payload_hash
+                       os.raw_payload_hash,
+                       CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                            THEN 1 ELSE 0 END AS is_verified_business_truth
                 FROM vkpi_sales_attributions sa
                 LEFT JOIN vkpi_links l ON l.id = sa.link_id
                 LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
@@ -317,10 +404,18 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 [int(project_id), *link_ids],
             ).fetchall()
         ]
+        for item in link_orders:
+            item["business_truth_status"] = (
+                "provider_verified"
+                if int(item.get("is_verified_business_truth") or 0) == 1
+                else "reference_only"
+            )
     sales: list[dict[str, Any]] = []
     for item in conn.execute(
-        """
+        f"""
         SELECT sa.*,
+               CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
+                    THEN 1 ELSE 0 END AS is_verified_business_truth,
                os.shopify_order_id,
                os.order_name AS shopify_order_name,
                os.order_number AS shopify_order_number,
@@ -342,6 +437,11 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
         (int(project_id),),
     ).fetchall():
         row_data = dict(item)
+        row_data["business_truth_status"] = (
+            "provider_verified"
+            if int(row_data.get("is_verified_business_truth") or 0) == 1
+            else "reference_only"
+        )
         if row_data.get("shopify_order_snapshot_id"):
             row_data["order_snapshot"] = {
                 "id": row_data.get("shopify_order_snapshot_id"),
@@ -364,10 +464,23 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
     raw_costs = [
         dict(item)
         for item in conn.execute(
-            "SELECT * FROM vkpi_cost_ledger WHERE project_id=? ORDER BY incurred_at DESC, id DESC",
+            f"""
+            SELECT c.*,
+                   CASE WHEN {business_truth.approved_actual_cost_sql('c')}
+                        THEN 1 ELSE 0 END AS is_approved_actual
+            FROM vkpi_cost_ledger c
+            WHERE c.project_id=?
+            ORDER BY c.incurred_at DESC, c.id DESC
+            """,
             (int(project_id),),
         ).fetchall()
     ]
+    for item in raw_costs:
+        item["business_truth_status"] = (
+            "approved_actual"
+            if int(item.get("is_approved_actual") or 0) == 1
+            else "reference_only"
+        )
     if show_financials:
         costs = raw_costs
     else:
@@ -442,17 +555,35 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
             (int(project_id),),
         ).fetchall()
     ]
-    revenue_cents = sum(int(item.get("revenue_cents") or 0) for item in sales)
-    cost_cents = sum(int(item.get("amount_cents") or 0) for item in raw_costs if str(item.get("status") or "") != "void")
-    visible_cost_cents = sum(int(item.get("amount_cents") or 0) for item in costs if str(item.get("status") or "") != "void")
+    verified_sales = [
+        item for item in sales
+        if int(item.get("is_verified_business_truth") or 0) == 1
+    ]
+    approved_costs = [
+        item for item in raw_costs
+        if int(item.get("is_approved_actual") or 0) == 1
+    ]
+    visible_approved_costs = [
+        item for item in costs
+        if int(item.get("is_approved_actual") or 0) == 1
+    ]
+    verified_link_orders = [
+        item for item in link_orders
+        if int(item.get("is_verified_business_truth") or 0) == 1
+    ]
+    revenue_cents = sum(int(item.get("revenue_cents") or 0) for item in verified_sales)
+    cost_cents = sum(int(item.get("amount_cents") or 0) for item in approved_costs)
+    visible_cost_cents = sum(int(item.get("amount_cents") or 0) for item in visible_approved_costs)
     link_summary = {
         "link_count": len(links),
         "click_count": sum(int(item.get("click_count") or 0) for item in links),
         "valid_click_count": sum(int(item.get("valid_click_count") or 0) for item in links),
         "bot_click_count": sum(int(item.get("bot_click_count") or 0) for item in links),
         "unique_click_count": sum(1 for item in link_clicks if int(item.get("is_unique") or 0)),
-        "order_count": len({str(item.get("source_ref") or item.get("shopify_order_id") or item.get("attribution_id")) for item in link_orders}),
-        "revenue_cents": sum(int(item.get("revenue_cents") or 0) for item in link_orders),
+        "order_count": len({str(item.get("source_ref") or item.get("shopify_order_id") or item.get("attribution_id")) for item in verified_link_orders}),
+        "attribution_count": len(link_orders),
+        "verified_attribution_count": len(verified_link_orders),
+        "revenue_cents": sum(int(item.get("revenue_cents") or 0) for item in verified_link_orders),
     }
     audit_events: list[dict[str, Any]] = []
     if scope.can_view_all(staff, domain="audit"):
@@ -496,10 +627,8 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
                 audit_params,
             ).fetchall()
         ]
-    return {
+    result = {
         "project": project,
-        "participating_kols": participating_kols,
-        "project_kol_assignments": participating_kols,
         "events": events,
         "links": links,
         "link_clicks": link_clicks,
@@ -524,3 +653,21 @@ def project_detail(project_id: int, *, staff: dict[str, Any] | None = None) -> d
             "financials_hidden": not show_financials,
         },
     }
+    if assignment_limit is None:
+        # Historical default remains byte-for-byte shape compatible.
+        result["participating_kols"] = participating_kols
+        result["project_kol_assignments"] = participating_kols
+    else:
+        # Summary mode emits one canonical array, rather than serializing the
+        # same assignment rows twice as the legacy response does.
+        assignment_total = int(project.get("assignment_count") or 0)
+        result["project_kol_assignments"] = participating_kols
+        result["assignment_page"] = {
+            "mode": "summary",
+            "limit": int(assignment_limit),
+            "count": len(participating_kols),
+            "total": assignment_total,
+            "has_more": assignment_has_more,
+            "next_cursor": assignment_next_cursor,
+        }
+    return result

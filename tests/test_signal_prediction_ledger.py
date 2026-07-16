@@ -9,6 +9,8 @@ freshest_at 取最新 / items 按 momentum 降序 None 沉底)。
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from app.domains.market_brain import prediction_ledger, signal_ledger
 
 
@@ -159,23 +161,27 @@ def test_summarize_zero_rows_is_data_missing(monkeypatch):
 
 
 def test_summarize_ready_aggregates_and_sorts(monkeypatch):
+    now = datetime.now(timezone.utc)
+    oldest = now - timedelta(days=3)
+    middle = now - timedelta(days=2)
+    freshest = now - timedelta(days=1)
     rows = [
         {"id": 1, "source_type": "reddit", "source_name": "r/photography",
          "signal_kind": "mention", "signal_text": "低动量", "momentum": 2.0,
-         "sample_size": 4, "captured_at": "2026-07-01T00:00:00+00:00"},
+         "sample_size": 4, "captured_at": oldest},
         {"id": 2, "source_type": "reddit", "source_name": "r/photography",
          "signal_kind": "mention", "signal_text": "高动量", "momentum": 5.0,
-         "sample_size": 10, "captured_at": "2026-07-05T00:00:00+00:00"},
+         "sample_size": 10, "captured_at": middle},
         {"id": 3, "source_type": "youtube_comments", "source_name": "chan-a",
          "signal_kind": "review", "signal_text": "无动量", "momentum": None,
-         "sample_size": None, "captured_at": "2026-07-06T12:00:00Z"},
+         "sample_size": None, "captured_at": freshest},
     ]
     _patch_db(monkeypatch, exists=True, rows=rows)
     out = signal_ledger.summarize_for_preview("AF-85-18", market="US", limit=2)
     assert out["status"] == "ready"
     assert out["sources_count"] == 2  # (source_type, source_name) 去重
     assert out["sample_size"] == 15  # 10 + 4 + 1(无 sample_size 的行按 1 条观测计)
-    assert out["freshest_at"] == "2026-07-06T12:00:00+00:00"
+    assert out["freshest_at"] == freshest.isoformat()
     assert [i["id"] for i in out["items"]] == [2, 1]  # momentum 降序,None 沉底且被 limit 截掉
     assert all("raw_ref" not in i and "normalized" not in i for i in out["items"])
 

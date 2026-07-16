@@ -54,7 +54,7 @@ export function useProjectDetailDrawer({
     if (!apiToken) return;
     setProjectDetailLoading(true);
     try {
-      const detail = await getProjectDetail(apiToken, projectId);
+      const detail = await getProjectDetail(apiToken, projectId, { mode: 'summary', assignmentLimit: 50 });
       setProjectDetail(detail);
       const kolId = textValue(detail.project?.kol_id, '');
       if (kolId && kolId !== '-') {

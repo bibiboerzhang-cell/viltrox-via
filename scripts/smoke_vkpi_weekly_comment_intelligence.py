@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P2.7 weekly reports include grounded comment intelligence context."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -172,7 +173,7 @@ def main() -> None:
         if "Pipeline runs:" not in body or "Comment coverage:" not in body:
             raise AssertionError(f"weekly report missing CI metrics: {body[:1000]}")
 
-        print("VKPI_WEEKLY_COMMENT_INTELLIGENCE_SMOKE_OK")
+        stdout_out("VKPI_WEEKLY_COMMENT_INTELLIGENCE_SMOKE_OK")
     finally:
         if staff_id is not None:
             conn.execute("DELETE FROM vkpi_weekly_reports WHERE staff_id = ?", (staff_id,))

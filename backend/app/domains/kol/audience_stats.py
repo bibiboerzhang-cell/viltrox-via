@@ -47,6 +47,7 @@ AGE_MIN_DETERMINED = 5  # 年龄分布最小判定人数:低于此不出 bins(�
 AGE_BUCKETS = ("0-18", "19-29", "30-39", "40+")
 AGE_LLM_BATCH_SIZE = 50   # A 路(Gemini)每次调用批 50 评论者
 AGE_LLM_MAX_BATCHES = 4   # 单次刷新 A 路调用上限(成本闸;其余人走 C 路弱先验,下次刷新继续补)
+AGE_LLM_DEADLINE_SECONDS = 40.0
 CREATOR_DENSITY_MIN_SUBS = 1000  # 受众创作者浓度口径:订阅数超过 1000
 
 # ── 人名词表(轻量,替代 m3inference 等重依赖;P0 只做西文名,未知留空不猜)──
@@ -256,7 +257,10 @@ def _yt_get(endpoint: str, params: dict[str, Any], *, timeout: int = 20) -> dict
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "ViltroxMarketing/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - fixed Google API host.
-            return json.loads(response.read().decode("utf-8") or "{}")
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+            if not isinstance(payload, dict):
+                raise ValueError("youtube api expected a JSON object")
+            return payload
     except urllib.error.HTTPError as exc:
         body = ""
         try:
@@ -317,6 +321,7 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
     comments_scanned = 0
     reply_total = 0
     page_token = ""
+    partial_reason = ""
     try:
         while comments_scanned < int(max_comments or 400):
             payload = _yt_get(
@@ -379,10 +384,12 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
         if not by_author:
             return {"status": "network_error", "reason": str(exc)[:400]}
         logger.warning("audience_stats yt comment paging partial: %s", exc)
+        partial_reason = "youtube_comment_paging_unavailable"
 
     # 批量 channels.list(part=snippet,statistics, 50/批):自报 country(强信号 .9)+ 白捡档案字段。
     author_ids = list(by_author.keys())
     declared_hits = 0
+    profile_batches_failed = 0
     for index in range(0, len(author_ids), 50):
         chunk = author_ids[index : index + 50]
         try:
@@ -392,6 +399,7 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
             api_calls += 1
         except RuntimeError as exc:
             logger.warning("audience_stats yt channels.list batch failed: %s", exc)
+            profile_batches_failed += 1
             continue
         for item in payload.get("items") or []:
             if not isinstance(item, dict):
@@ -425,7 +433,7 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
                 entry["video_count"] = int(stats.get("videoCount"))
             except (TypeError, ValueError):
                 pass
-    return {
+    result = {
         "status": "ok",
         "channel_id": channel_id,
         "commenters": list(by_author.values()),
@@ -436,6 +444,15 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
         "api_calls": api_calls,
         "elapsed_sec": round(time.time() - started, 2),
     }
+    if partial_reason:
+        result["partial"] = True
+        result["reason"] = partial_reason
+    elif profile_batches_failed:
+        result["partial"] = True
+        result["reason"] = "youtube_commenter_profile_enrichment_unavailable"
+    if profile_batches_failed:
+        result["profile_batches_failed"] = profile_batches_failed
+    return result
 
 
 # ── IG / TikTok:复用库里已抓评论(不新写抓取)──
@@ -451,7 +468,8 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
 
     db = conn or get_conn()
     rows = db.execute(
-        "SELECT author_handle, author_id, raw_data_json, comment_text FROM vkpi_comments WHERE account_id=? LIMIT ?",
+        "SELECT author_handle, author_id, raw_data_json, comment_text FROM vkpi_comments "
+        "WHERE account_id=? AND post_table IN ('evidence','vkpi_kol_video_evidence') LIMIT ?",
         (int(kol_pool_id), int(limit)),
     ).fetchall()
     if not rows:
@@ -530,7 +548,7 @@ def sample_local_commenters(kol_pool_id: int, *, conn: Any = None, limit: int = 
         "status": "ok",
         "commenters": list(by_author.values()),
         "comments_scanned": comments_scanned,
-        "source": "vkpi_comments",
+        "source": "vkpi_comments_pool_evidence",
     }
 
 
@@ -769,6 +787,52 @@ def _extract_json_array(text: str) -> list[dict[str, Any]]:
     return out
 
 
+def _validate_age_llm_batch(value: Any, expected_count: int) -> tuple[bool, str]:
+    """Reject partial or malformed model output before it affects aggregate estimates."""
+    if not isinstance(value, list):
+        return False, "top-level result must be an array"
+    if len(value) != expected_count:
+        return False, f"expected {expected_count} items, got {len(value)}"
+    seen: set[int] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            return False, "every result item must be an object"
+        try:
+            index = int(item.get("i"))
+        except (TypeError, ValueError):
+            return False, "result item i must be an integer"
+        if not 1 <= index <= expected_count or index in seen:
+            return False, "result item i is missing, duplicated, or out of range"
+        seen.add(index)
+        age = str(item.get("age") or "").strip()
+        if age and not _normalize_age_bucket(age):
+            return False, f"unsupported age bucket for item {index}"
+        if str(item.get("gender") or "").strip().lower() not in ("", "male", "female"):
+            return False, f"unsupported gender for item {index}"
+        try:
+            confidence = float(item.get("conf") or 0.0)
+        except (TypeError, ValueError):
+            return False, f"invalid confidence for item {index}"
+        if not 0.0 <= confidence <= 1.0:
+            return False, f"confidence out of range for item {index}"
+    return True, ""
+
+
+def _age_llm_failure_reason(response: dict[str, Any]) -> str:
+    statuses = {
+        str(item.get("status") or "")
+        for item in list(response.get("errors") or [])
+        if isinstance(item, dict)
+    }
+    if "deadline_exceeded" in statuses or str(response.get("reason") or "") == "deadline_exceeded":
+        return "provider_timeout"
+    if "parse_failure" in statuses or "validation_failure" in statuses:
+        return "invalid_json"
+    if "empty_response" in statuses:
+        return "empty_response"
+    return "provider_unavailable"
+
+
 def _age_llm_batches(
     commenters: list[dict[str, Any]],
     *,
@@ -786,13 +850,23 @@ def _age_llm_batches(
     if max_batches <= 0 or not commenters:
         return {}, {"status": "skipped", "calls": 0, "batches_ok": 0, "people_in": 0, "people_out": 0}
     try:
-        from app.platform import llm_gateway
+        from app.core.model_registry import current_task_model_binding, split_binding
+        from app.platform.llm_production import generate_json
     except Exception as exc:
-        return {}, {"status": f"gateway_unavailable: {exc}"[:120], "calls": 0, "batches_ok": 0, "people_in": 0, "people_out": 0}
+        return {}, {
+            "status": "failed",
+            "reason": "gateway_unavailable",
+            "error_type": type(exc).__name__,
+            "calls": 0,
+            "batches_ok": 0,
+            "people_in": min(len(commenters), max_batches * batch_size),
+            "people_out": 0,
+        }
     out: dict[str, dict[str, Any]] = {}
     calls = 0
     batches_ok = 0
     people_in = 0
+    failures: Counter = Counter()
     batches = [commenters[i : i + batch_size] for i in range(0, len(commenters), batch_size)][:max_batches]
     for batch in batches:
         people_in += len(batch)
@@ -818,23 +892,48 @@ def _age_llm_batches(
             "no prose, no markdown fences. Your reply must start with the character [\n\n"
             + "\n".join(lines)
         )
-        resp = llm_gateway.invoke(
-            prompt,
-            purpose="vkpi_audience_age_v1",
-            preferred_provider="google",
-            # thinking 型模型的思考 token 计入 maxOutputTokens,给足余量;残缺数组有救援解析兜底。
-            max_output_tokens=4000,
-            cost_tag="audience_stats",
-        )
         calls += 1
-        text = str(resp.get("text") or "")
-        if str(resp.get("model") or "") == "rule_v0" or str(resp.get("status") or "") != "success" or not text.strip():
-            logger.warning("audience age llm batch unusable: model=%s status=%s", resp.get("model"), resp.get("status"))
+        try:
+            provider, model = split_binding(
+                current_task_model_binding().get("kol_audience_analysis") or ""
+            )
+            raw_response = generate_json(
+                prompt,
+                provider=provider,
+                model=model,
+                purpose="vkpi_audience_age_v1",
+                max_output_tokens=4000,
+                cost_tag="audience_stats",
+                validator=lambda value, expected=len(batch): _validate_age_llm_batch(value, expected),
+                deadline_seconds=AGE_LLM_DEADLINE_SECONDS,
+                metadata={
+                    "aggregate_only": True,
+                    "batch_size": len(batch),
+                    "task_binding": "kol_audience_analysis",
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - an age estimate must never fail the refresh
+            logger.warning("audience age llm batch raised: %s", str(exc)[:150])
+            failures["provider_exception"] += 1
             continue
-        parsed = _extract_json_array(text)
-        if not parsed:
-            # 诊断留痕:模型可能整段婉拒或输出散文;截前 200 字方便追查(不含个人数据以外内容)。
-            logger.warning("audience age llm batch parse failed, preview=%r", text[:200])
+        if not isinstance(raw_response, dict):
+            logger.warning("audience age llm batch returned a non-object response")
+            failures["invalid_gateway_response"] += 1
+            continue
+        resp = raw_response
+        parsed = resp.get("json") if isinstance(resp, dict) else None
+        valid, validation_error = _validate_age_llm_batch(parsed, len(batch))
+        if str(resp.get("status") or "") != "success" or not valid:
+            reason = _age_llm_failure_reason(resp) if isinstance(resp, dict) else "provider_unavailable"
+            if not valid and validation_error and reason == "provider_unavailable":
+                reason = "invalid_json"
+            failures[reason] += 1
+            logger.warning(
+                "audience age llm batch unusable: provider=%s status=%s reason=%s",
+                resp.get("provider"),
+                resp.get("status"),
+                reason,
+            )
             continue
         batches_ok += 1
         for item in parsed:
@@ -853,8 +952,17 @@ def _age_llm_batches(
                 conf = 0.0
             if key and (bucket or gender in ("male", "female")) and conf > 0:
                 out[key] = {"age_bucket": bucket, "gender": gender if gender in ("male", "female") else "", "conf": round(conf, 2)}
-    return out, {"status": "ok" if batches_ok else "failed", "calls": calls, "batches_ok": batches_ok,
-                 "people_in": people_in, "people_out": len(out)}
+    status = "ok" if batches_ok == calls else ("partial" if batches_ok else "failed")
+    failure_reason = failures.most_common(1)[0][0] if failures else ""
+    return out, {
+        "status": status,
+        "reason": failure_reason,
+        "calls": calls,
+        "batches_ok": batches_ok,
+        "people_in": people_in,
+        "people_out": len(out),
+        "failure_counts": dict(failures),
+    }
 
 
 AGE_AVATAR_MAX_IMAGES = 120  # E 路(头像视觉)单次刷新最多看多少张(小缩略图,Gemini 视觉便宜但设上限)
@@ -1421,6 +1529,37 @@ def _yt_audience_affinity(commenter_channel_ids: list[str], self_channel_id: str
     }
 
 
+def _audience_source_contract(
+    platform: str,
+    sample: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """把画像抽样、评论情报和 durable overlap 三条来源链明确分开。"""
+    intel_payload = payload.get("comment_intel") if isinstance(payload.get("comment_intel"), dict) else {}
+    overlap_payload = payload.get("overlap") if isinstance(payload.get("overlap"), dict) else {}
+    live_youtube_sample = str(platform or "").lower() == "youtube"
+    profile_source = "youtube_data_api_live_sample" if live_youtube_sample else "vkpi_comments_pool_evidence"
+    return {
+        "profile_sample": {
+            "source": profile_source,
+            "durable": not live_youtube_sample,
+            "commenters": int(payload.get("sample_size") or 0),
+            "comments_scanned": int(sample.get("comments_scanned") or 0),
+        },
+        "comment_intelligence": {
+            "source": str(intel_payload.get("source") or profile_source),
+            "durable": not live_youtube_sample,
+            "comments": int(intel_payload.get("sample_size") or 0),
+        },
+        "overlap": {
+            "source": "vkpi_comments_pool_evidence",
+            "durable": True,
+            "commenters": int(overlap_payload.get("self_commenters") or 0),
+        },
+        "contract_version": "audience_sources_v1",
+    }
+
+
 def refresh_audience_stats(
     kol_pool_id: int,
     *,
@@ -1486,20 +1625,28 @@ def refresh_audience_stats(
                 try:
                     from app.domains.comments.collector import enqueue_kol_pool_comments_job
 
-                    result = enqueue_kol_pool_comments_job(int(kol_pool_id))
+                    result = enqueue_kol_pool_comments_job(int(kol_pool_id), queue_lane="batch")
                     enqueue_status = str(result.get("status") or "")
                     enqueued = enqueue_status in ("queued", "already_queued")
                 except Exception as exc:
                     enqueue_status = f"enqueue_failed: {exc}"[:200]
             return {
-                "status": "pending_comments",
+                "status": "pending_comments" if enqueued else "partial",
                 "kol_pool_id": int(kol_pool_id),
                 "platform": platform,
                 "comments_found": int(sample.get("comments_scanned") or 0),
                 "min_required": MIN_LOCAL_COMMENTS,
                 "enqueued": enqueued,
                 "enqueue_status": enqueue_status,
-                "reason": "本地评论不足,已入队抓评论,稍后再刷新" if enqueued else "本地评论不足",
+                "reason": (
+                    "本地评论不足,已入队抓评论,稍后再刷新"
+                    if enqueued
+                    else (
+                        "comment_collection_enqueue_failed"
+                        if enqueue_status.startswith("enqueue_failed:")
+                        else "local_comments_insufficient"
+                    )
+                ),
             }
     else:
         return {"status": "unsupported_platform", "platform": platform, "kol_pool_id": int(kol_pool_id),
@@ -1508,7 +1655,8 @@ def refresh_audience_stats(
     commenters = list(sample.get("commenters") or [])
     if not commenters:
         return {"status": "no_commenters", "kol_pool_id": int(kol_pool_id), "platform": platform,
-                "comments_scanned": int(sample.get("comments_scanned") or 0)}
+                "comments_scanned": int(sample.get("comments_scanned") or 0),
+                "reason": "no_commenter_identities_in_sample"}
     inferred, cache_stats = _infer_with_cache(conn, platform, commenters)
     # v2:年龄 ABC 三路融合(失败不阻断主流程,coverage 里诚实标注)。
     age_stats: dict[str, Any] = {"llm": {"status": "skipped", "calls": 0}, "m3": "unavailable", "counts": {}}
@@ -1552,6 +1700,9 @@ def refresh_audience_stats(
     except Exception as exc:
         logger.warning("audience overlap failed kol=%s: %s", kol_pool_id, exc)
         payload["overlap"] = {"items": [], "error": str(exc)[:200]}
+    # v4:画像抽样、评论情报、重叠桥各自声明来源。YouTube 的画像/评论情报来自
+    # 本次 Data API 抽样，不与本地 durable 评论桥混算；overlap 永远只读本地桥。
+    payload["source_contract"] = _audience_source_contract(platform, sample, payload)
     # v3:关注图谱 v0(仅 YT;评论者=频道 id 可直接查公开订阅)。失败不阻断主流程。
     if platform == "youtube":
         try:
@@ -1565,8 +1716,17 @@ def refresh_audience_stats(
         (json.dumps(payload, ensure_ascii=False), _utcnow_iso(), int(kol_pool_id)),
     )
     conn.commit()
-    return {
-        "status": "ok",
+    llm_stats = age_stats.get("llm") if isinstance(age_stats.get("llm"), dict) else {}
+    llm_degraded = bool(
+        age_stats.get("error")
+        or (
+            int(llm_stats.get("people_in") or 0) > 0
+            and str(llm_stats.get("status") or "") in {"failed", "partial"}
+        )
+    )
+    sample_degraded = bool(sample.get("partial"))
+    result = {
+        "status": "partial" if llm_degraded or sample_degraded else "ok",
         "kol_pool_id": int(kol_pool_id),
         "platform": platform,
         "sample_size": payload.get("sample_size"),
@@ -1574,3 +1734,15 @@ def refresh_audience_stats(
         "audience": payload,
         "elapsed_sec": round(time.time() - started, 2),
     }
+    partial_components: list[str] = []
+    reasons: list[str] = []
+    if sample_degraded:
+        partial_components.append("comment_sample")
+        reasons.append(str(sample.get("reason") or "comment_sample_partial"))
+    if llm_degraded:
+        partial_components.append("age_llm")
+        reasons.append(str(llm_stats.get("reason") or "age_inference_unavailable"))
+    if partial_components:
+        result["reason"] = ",".join(reasons)
+        result["partial_components"] = partial_components
+    return result

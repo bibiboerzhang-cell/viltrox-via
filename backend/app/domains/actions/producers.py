@@ -418,16 +418,22 @@ def produce_event_followup(conn: Any, *, limit: int = 25) -> list[dict[str, Any]
 
 # ── 8. inventory_low:库存低于阈值,提醒补货 ───────────────────────────
 def produce_inventory_low(conn: Any, *, threshold: int = 5, limit: int = 25) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT id, sku, name, category, qty
-        FROM vkpi_inventory
-        WHERE qty < ? AND is_sample = FALSE
-        ORDER BY qty ASC
-        LIMIT ?
-        """,
-        (int(threshold), int(limit)),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, sku, name, category, qty, quantity_status, quantity_source
+            FROM vkpi_inventory
+            WHERE qty < ? AND is_sample = FALSE
+              AND quantity_status IN ('manual_confirmed', 'source_confirmed')
+            ORDER BY qty ASC
+            LIMIT ?
+            """,
+            (int(threshold), int(limit)),
+        ).fetchall()
+    except Exception:
+        # 旧库未应用 quantity truth migration 时，宁可不报缺货，也不把目录占位 0
+        # 冒充仓库实盘。迁移应用后自动恢复真实告警。
+        return []
     out: list[dict[str, Any]] = []
     for r in rows:
         row = dict(r)
@@ -446,7 +452,13 @@ def produce_inventory_low(conn: Any, *, threshold: int = 5, limit: int = 25) -> 
                 writes_business_data=False,  # 不自动改 qty/下单;执行=受理+留痕(补货仍人工)
                 uses_llm=False,
                 requires_approval=True,  # R6:走 approve→execute 人审闸,执行=受理并留痕
-                payload={"sku": row.get("sku"), "qty": qty, "threshold": int(threshold)},
+                payload={
+                    "sku": row.get("sku"),
+                    "qty": qty,
+                    "threshold": int(threshold),
+                    "quantity_status": row.get("quantity_status"),
+                    "quantity_source": row.get("quantity_source"),
+                },
             )
         )
     return out

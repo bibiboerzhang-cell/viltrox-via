@@ -4,9 +4,9 @@ This module records smart URL/profile/text recall orchestration state. It only
 writes the session tables introduced by migration 103 and must not update
 vkpi_kol_pool scoring fields.
 
-Pure serde/normalization helpers live in ``search_sessions_serde`` and the
-attach-result builders live in ``search_sessions_attach``; both are re-exported
-below so all existing call sites keep importing from ``search_sessions``.
+Schema constants, serde helpers, history operations, item persistence, and
+attach-result builders live in focused ``search_sessions_*`` modules. This
+module remains the compatibility facade for existing imports and monkeypatches.
 """
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol.pool_common import _mask_email
+from app.domains.kol.contact_access import mask_contact_payload
 
 logger = get_logger(__name__)
 
@@ -40,15 +42,36 @@ from app.domains.kol.search_sessions_serde import (
     _staff_user_id,
     _text,
 )
+from app.domains.kol.search_sessions_schema import (
+    PENDING_ENRICHMENT_STATUSES as _PENDING_ENRICHMENT_STATUSES,
+    REACH_GATED_ITEM_TYPES as _REACH_GATED_ITEM_TYPES,
+    TERMINAL_SESSION_STATUSES as _TERMINAL_SESSION_STATUSES,
+)
+from app.domains.kol.search_sessions_history import (
+    archive_history_session as _archive_history_session,
+    archive_history_sessions as _archive_history_sessions,
+    list_history as _list_history,
+    restore_history_session as _restore_history_session,
+)
+from app.domains.kol.search_sessions_items import (
+    _update_session as _update_session_impl,
+    _upsert_item as _upsert_item_impl,
+    get_session_item as _get_session_item,
+    mark_items_profile_cancelled as _mark_items_profile_cancelled,
+    mark_items_profile_queued as _mark_items_profile_queued,
+    mark_items_profile_running as _mark_items_profile_running,
+    record_items as _record_items,
+    update_item_profile_execution as _update_item_profile_execution,
+)
 
 # Re-export attach-result builders (behavior-preserving move).
 from app.domains.kol.search_sessions_attach import (
     _link_job_payloads,
     _session_status_from_url_result,
     _url_result_item,
-    attach_new_discovery_result,
-    attach_recall_result,
-    attach_url_result,
+    attach_new_discovery_result as _attach_new_discovery_result,
+    attach_recall_result as _attach_recall_result,
+    attach_url_result as _attach_url_result,
 )
 
 # 触达门槛读端展示闸(2026-07-12 第二道闸,kol_pool 12297 两粉号案):会话项是搜索时的快照,
@@ -63,7 +86,69 @@ from app.domains.kol.discovery_filters import (  # noqa: E402
 
 # 展示闸适用的会话项类型:推荐/发现面的候选(用户显式贴 URL 的分析项 url_video/url_profile
 # 不闸——那是用户点名要看的,非推荐)。
-_REACH_GATED_ITEM_TYPES = {"new_creator", "existing_kol", "recall_candidate"}
+
+
+def _enrichment_preview_status(item: dict[str, Any], key: str, *, ready: bool) -> str:
+    if ready:
+        return "ready"
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    profile_execute = payload.get("profile_execute") if isinstance(payload.get("profile_execute"), dict) else {}
+    explicit = profile_execute.get(key) if isinstance(profile_execute.get(key), dict) else {}
+    explicit_status = _text(explicit.get("status")).lower()
+    if explicit_status in _PENDING_ENRICHMENT_STATUSES:
+        return "pending"
+    if explicit_status in {"ok", "ready", "done"}:
+        return "ready"
+    if explicit_status in {"no_contacts", "no_commenters", "no_posts", "no_raw", "not_found"}:
+        return "empty"
+    if explicit_status in {"error", "failed", "partial"}:
+        return "partial"
+    job = payload.get("profile_advance_job") if isinstance(payload.get("profile_advance_job"), dict) else {}
+    item_status = _text(item.get("status")).lower()
+    job_status = _text(job.get("status")).lower()
+    if item_status in {"queued", "running"} or job_status in _PENDING_ENRICHMENT_STATUSES:
+        return "pending"
+    return "missing"
+
+
+def _refresh_enrichment_queue_states(conn: Any, items: list[dict[str, Any]]) -> None:
+    job_ids: set[int] = set()
+    for item in items:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        profile_execute = payload.get("profile_execute") if isinstance(payload.get("profile_execute"), dict) else {}
+        for key in ("contact_enrichment", "audience_enrichment"):
+            enrichment = profile_execute.get(key) if isinstance(profile_execute.get(key), dict) else {}
+            job_id = _int_or_none(enrichment.get("job_id"))
+            if job_id:
+                job_ids.add(job_id)
+    if not job_ids:
+        return
+    placeholders = ",".join(["?"] * len(job_ids))
+    try:
+        rows = conn.execute(
+            f"SELECT id, status FROM apify_jobs WHERE id IN ({placeholders})",
+            tuple(sorted(job_ids)),
+        ).fetchall()
+    except Exception:
+        logger.warning("search_sessions.enrichment_job_lookup_failed", exc_info=True)
+        return
+    job_statuses = {int(dict(row)["id"]): _text(dict(row).get("status")).lower() for row in rows}
+    for item in items:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        profile_execute = payload.get("profile_execute") if isinstance(payload.get("profile_execute"), dict) else {}
+        for key in ("contact_enrichment", "audience_enrichment"):
+            enrichment = profile_execute.get(key) if isinstance(profile_execute.get(key), dict) else None
+            if enrichment is None:
+                continue
+            queue_status = job_statuses.get(_int_or_none(enrichment.get("job_id")) or 0)
+            if not queue_status:
+                continue
+            enrichment["queue_status"] = queue_status
+            if _text(enrichment.get("status")).lower() in _PENDING_ENRICHMENT_STATUSES:
+                if queue_status == "done":
+                    enrichment["status"] = "empty"
+                elif queue_status in {"failed", "blocked", "cancelled"}:
+                    enrichment["status"] = "partial"
 
 
 def _reach_gate_pool_rows(
@@ -255,126 +340,45 @@ def list_history(
     item_limit: int = 5,
     staff: dict[str, Any] | None = None,
     scope_to_staff: bool = True,
+    archived: bool = False,
 ) -> dict[str, Any]:
     """Return recent search sessions with compact item previews for history UI.
 
     每个人的记录不能串:默认按 created_by=当前登录人作用域过滤(scope_to_staff),
-    不同员工互不串记录。actor 取不到时不过滤(回退看全部,避免登录态异常致空)。
+    不同员工互不串记录。actor 取不到时返回空,绝不回退成全员记录。
     """
-    safe_limit = max(1, min(int(limit or 20), 50))
-    safe_item_limit = max(0, min(int(item_limit or 5), 10))
-    normalized_status = _normalize_status(status) if status else ""
-    normalized_query_type = _normalize_query_type(query_type) if query_type else ""
+    return _list_history(
+        limit=limit,
+        status=status,
+        query_type=query_type,
+        item_limit=item_limit,
+        staff=staff,
+        scope_to_staff=scope_to_staff,
+        archived=archived,
+        get_conn_fn=get_conn,
+        apply_reach_display_gate_fn=_apply_reach_display_gate,
+        mask_contact_payload_fn=mask_contact_payload,
+    )
 
-    where: list[str] = []
-    params: list[Any] = []
-    if normalized_status:
-        where.append("status=?")
-        params.append(normalized_status)
-    if normalized_query_type:
-        where.append("query_type=?")
-        params.append(normalized_query_type)
-    actor_id = _staff_user_id(staff) if scope_to_staff else None
-    if actor_id:
+
+def get_session(
+    session_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+    scope_to_staff: bool = False,
+) -> dict[str, Any]:
+    conn = get_conn()
+    params: list[Any] = [int(session_id)]
+    where = ["id=?"]
+    if scope_to_staff:
+        actor_id = _staff_user_id(staff)
+        if not actor_id:
+            raise LookupError(f"search session not found: {session_id}")
         where.append("created_by=?")
         params.append(actor_id)
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-
-    conn = get_conn()
-    rows = conn.execute(
-        f"""
-        SELECT *
-        FROM vkpi_kol_search_sessions
-        {where_sql}
-        ORDER BY updated_at DESC, id DESC
-        LIMIT ?
-        """,
-        (*params, safe_limit),
-    ).fetchall()
-    sessions = [_row_to_session(row) for row in rows]
-    if not sessions:
-        return {
-            "status": "ready",
-            "count": 0,
-            "items": [],
-            "filters": {
-                "status": normalized_status,
-                "query_type": normalized_query_type,
-                "limit": safe_limit,
-                "item_limit": safe_item_limit,
-            },
-        }
-
-    session_ids = [int(session["id"]) for session in sessions if _int_or_none(session.get("id"))]
-    placeholders = ", ".join(["?"] * len(session_ids))
-    item_rows = conn.execute(
-        f"""
-        SELECT *
-        FROM vkpi_kol_search_session_items
-        WHERE session_id IN ({placeholders})
-        ORDER BY session_id, rank NULLS LAST, id
-        """,
-        tuple(session_ids),
-    ).fetchall()
-
-    grouped: dict[int, list[dict[str, Any]]] = {int(session_id): [] for session_id in session_ids}
-    for row in item_rows:
-        item = _row_to_item(row)
-        grouped.setdefault(int(item.get("session_id") or 0), []).append(item)
-
-    history_items: list[dict[str, Any]] = []
-    for session in sessions:
-        session_id = int(session["id"])
-        all_items = grouped.get(session_id, [])
-        # 触达展示闸(第二道闸落点①,与 get_session 同口径):历史面板的 items_preview 也是
-        # 前端「全网新发现/召回」展示来源(restoreSession 直接吃),同样按 pool 现值过滤。
-        all_items, reach_counts = _apply_reach_display_gate(conn, all_items)
-        counts = _item_counts(all_items)
-        preview_items = all_items[:safe_item_limit] if safe_item_limit else []
-        active_items = [
-            item
-            for item in all_items
-            if _text(item.get("status")) in {"queued", "running", "already_queued"}
-        ]
-        result_summary = _dict(session.get("result_summary"))
-        history_items.append(
-            {
-                **session,
-                "item_count": len(all_items),
-                "items_preview": preview_items,
-                "active_items": active_items[:3],
-                "counts": counts,
-                "reach_floor_display": reach_counts,
-                "summary": {
-                    "kind": result_summary.get("kind"),
-                    "platform": result_summary.get("platform"),
-                    "url_type": result_summary.get("url_type"),
-                    "in_pool": result_summary.get("in_pool"),
-                    "items_written": result_summary.get("items_written"),
-                    "matched_kol_pool_id": result_summary.get("matched_kol_pool_id"),
-                    "viltrox_fit_score_untouched": result_summary.get("viltrox_fit_score_untouched"),
-                },
-            }
-        )
-
-    return {
-        "status": "ready",
-        "count": len(history_items),
-        "items": history_items,
-        "filters": {
-            "status": normalized_status,
-            "query_type": normalized_query_type,
-            "limit": safe_limit,
-            "item_limit": safe_item_limit,
-        },
-    }
-
-
-def get_session(session_id: int) -> dict[str, Any]:
-    conn = get_conn()
     row = conn.execute(
-        "SELECT * FROM vkpi_kol_search_sessions WHERE id=?",
-        (int(session_id),),
+        f"SELECT * FROM vkpi_kol_search_sessions WHERE {' AND '.join(where)}",
+        tuple(params),
     ).fetchone()
     if not row:
         raise LookupError(f"search session not found: {session_id}")
@@ -389,38 +393,94 @@ def get_session(session_id: int) -> dict[str, Any]:
     ).fetchall()
     session = _row_to_session(row)
     items = [_row_to_item(item) for item in item_rows]
+    _refresh_enrichment_queue_states(conn, items)
     # 名字全局一致(2026-07-03 用户点名):部分物化路径的 item payload 不带 display_name,
     # 前端只好显示 handle(YT 时是一串频道 ID)。读端统一回填:凡带 kol_pool_id 且 payload
     # 缺名字的,批量查池表补 display_name —— 一处修好,校验中/已有库/新发现全部受益。
-    _need_name_ids = sorted({
+    _profile_ids = sorted({
         int(it["kol_pool_id"]) for it in items
-        if it.get("kol_pool_id")
-        and isinstance(it.get("payload"), dict)
-        and not str(it["payload"].get("display_name") or it["payload"].get("channel_name") or "").strip()
+        if it.get("kol_pool_id") and isinstance(it.get("payload"), dict)
     })
-    if _need_name_ids:
+    if _profile_ids:
         try:
-            _ph = ",".join(["?"] * len(_need_name_ids))
-            _name_rows = conn.execute(
-                f"SELECT id, display_name FROM vkpi_kol_pool WHERE id IN ({_ph})",
-                tuple(_need_name_ids),
+            _ph = ",".join(["?"] * len(_profile_ids))
+            _profile_rows = conn.execute(
+                f"""
+                SELECT id, display_name, email, contact_channels, other_contacts_json,
+                       audience_estimated_json
+                FROM vkpi_kol_pool
+                WHERE id IN ({_ph})
+                """,
+                tuple(_profile_ids),
             ).fetchall()
-            _names = {
-                int(dict(r)["id"]): str(dict(r)["display_name"] or "").strip()
-                for r in _name_rows
-            }
+            _profiles = {int(dict(row)["id"]): dict(row) for row in _profile_rows}
             for it in items:
                 _kid = it.get("kol_pool_id")
                 if _kid and isinstance(it.get("payload"), dict):
-                    _nm = _names.get(int(_kid), "")
+                    _profile = _profiles.get(int(_kid), {})
+                    _nm = str(_profile.get("display_name") or "").strip()
                     if _nm and not str(it["payload"].get("display_name") or "").strip():
                         it["payload"]["display_name"] = _nm
+                    _email = str(_profile.get("email") or "").strip()
+                    _channels = _loads(_profile.get("contact_channels"), {})
+                    _other_contacts = _loads(_profile.get("other_contacts_json"), [])
+                    _contact_count = len(_other_contacts) if isinstance(_other_contacts, list) else 0
+                    if isinstance(_channels, (dict, list)):
+                        _contact_count += len(_channels)
+                    _contact_ready = bool(_email or _contact_count)
+                    it["payload"]["contact_preview"] = {
+                        "status": _enrichment_preview_status(
+                            it,
+                            "contact_enrichment",
+                            ready=_contact_ready,
+                        ),
+                        "email": _mask_email(_email),
+                        "channel_count": _contact_count,
+                        "contact_masked": True,
+                        "async": not _contact_ready,
+                    }
+                    _audience = _loads(_profile.get("audience_estimated_json"), {})
+                    _audience_ready = isinstance(_audience, dict) and bool(_audience)
+                    it["payload"]["audience_preview"] = {
+                        "status": _enrichment_preview_status(
+                            it,
+                            "audience_enrichment",
+                            ready=_audience_ready,
+                        ),
+                        "method": _text(_audience.get("method")) if isinstance(_audience, dict) else "",
+                        "confidence": _audience.get("confidence") if isinstance(_audience, dict) else None,
+                        "sample_size": _audience.get("sample_size") if isinstance(_audience, dict) else None,
+                        "async": not _audience_ready,
+                    }
         except Exception:
-            logger.warning("search_sessions.display_name_backfill_failed", exc_info=True)
+            logger.warning("search_sessions.profile_preview_backfill_failed", exc_info=True)
+    for item in items:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
+        if payload is None:
+            continue
+        if not isinstance(payload.get("contact_preview"), dict):
+            payload["contact_preview"] = {
+                "status": _enrichment_preview_status(item, "contact_enrichment", ready=False),
+                "email": "",
+                "channel_count": 0,
+                "contact_masked": True,
+                "async": True,
+            }
+        if not isinstance(payload.get("audience_preview"), dict):
+            payload["audience_preview"] = {
+                "status": _enrichment_preview_status(item, "audience_enrichment", ready=False),
+                "method": "",
+                "confidence": None,
+                "sample_size": None,
+                "async": True,
+            }
     # 触达展示闸(第二道闸落点①):会话项按 pool 现值实时重判——补全回填 followers 后,
     # 低触达行(如 kol_pool 12297,2 粉)从「全网新发现/库内已有」消失;followers 未知折叠为
     # 「分析中 ×N」。counts/count 按可见项重算,隐藏计数走 reach_floor_display 诚实透出。
     items, reach_counts = _apply_reach_display_gate(conn, items)
+    for item in items:
+        if isinstance(item.get("payload"), dict):
+            item["payload"] = mask_contact_payload(item["payload"])
     session["items"] = items
     session["count"] = len(items)
     session["counts"] = _item_counts(items)
@@ -428,19 +488,41 @@ def get_session(session_id: int) -> dict[str, Any]:
     return session
 
 
+def archive_history_session(
+    session_id: int,
+    *,
+    staff: dict[str, Any] | None,
+    reason: str = "user_removed",
+) -> dict[str, Any]:
+    """Soft-archive one terminal search session owned by the current staff member."""
+    return _archive_history_session(
+        session_id,
+        staff=staff,
+        reason=reason,
+        get_conn_fn=get_conn,
+    )
+
+
+def restore_history_session(
+    session_id: int,
+    *,
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Restore one archived search session to the current staff member's history."""
+    return _restore_history_session(
+        session_id,
+        staff=staff,
+        get_conn_fn=get_conn,
+    )
+
+
+def archive_history_sessions(*, staff: dict[str, Any] | None) -> dict[str, Any]:
+    """Archive all terminal history rows owned by staff, preserving active work."""
+    return _archive_history_sessions(staff=staff, get_conn_fn=get_conn)
+
+
 def get_session_item(session_id: int, item_id: int) -> dict[str, Any]:
-    conn = get_conn()
-    row = conn.execute(
-        """
-        SELECT *
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=? AND id=?
-        """,
-        (int(session_id), int(item_id)),
-    ).fetchone()
-    if not row:
-        raise LookupError(f"search session item not found: session={session_id} item={item_id}")
-    return _row_to_item(row)
+    return _get_session_item(session_id, item_id, get_conn_fn=get_conn)
 
 
 def approve_session(
@@ -552,6 +634,95 @@ def update_session_result_summary(
     return _row_to_session(updated)
 
 
+def _attached_result_count(result: dict[str, Any]) -> int:
+    items = result.get("items")
+    if isinstance(items, list) and items:
+        return len(items)
+    buckets = result.get("buckets") if isinstance(result.get("buckets"), dict) else {}
+    bucket_count = sum(len(value) for value in buckets.values() if isinstance(value, list))
+    return bucket_count if bucket_count else len(items or [])
+
+
+def _persist_attached_status(
+    session_id: int,
+    recorded: dict[str, Any],
+    *,
+    status: str,
+    result_state: str,
+) -> dict[str, Any]:
+    normalized = _normalize_status(status)
+    if _text(recorded.get("status")).lower() == normalized:
+        return recorded
+    updated = update_session_result_summary(
+        int(session_id),
+        status=normalized,
+        summary_patch={"result_state": result_state},
+    )
+    recorded["status"] = updated.get("status") or normalized
+    if isinstance(recorded.get("result_summary"), dict):
+        recorded["result_summary"]["result_state"] = result_state
+    return recorded
+
+
+def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+    recorded = _attach_recall_result(int(session_id), result)
+    upstream_status = _text(result.get("status")).lower()
+    item_count = len(recorded.get("items") or [])
+    if "items" not in recorded:
+        item_count = _attached_result_count(result)
+    if upstream_status == "failed":
+        desired, state = "failed", "failed"
+    elif upstream_status == "partial":
+        desired, state = "partial", "partial"
+    elif item_count <= 0:
+        desired, state = "partial", "empty"
+    else:
+        desired, state = "ready", "ready"
+    if bool(result.get("_session_pipeline_running")):
+        progress = _dict(result.get("_session_progress"))
+        updated = update_session_result_summary(
+            int(session_id),
+            status="running",
+            summary_patch={"result_state": state, "phase": "base", "progress": progress},
+        )
+        recorded["status"] = updated.get("status") or "running"
+        return recorded
+    return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
+
+
+def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+    recorded = _attach_new_discovery_result(int(session_id), result)
+    upstream_status = _text(result.get("status")).lower()
+    recorded_count = len(recorded.get("items") or [])
+    if upstream_status == "failed":
+        desired, state = ("partial", "partial") if recorded_count else ("failed", "failed")
+    elif upstream_status == "partial":
+        desired, state = "partial", "partial"
+    elif upstream_status == "empty" and recorded_count <= 0:
+        desired, state = "partial", "empty"
+    else:
+        desired, state = _text(recorded.get("status")) or "ready", upstream_status or "ready"
+    if bool(result.get("_session_pipeline_running")):
+        progress = _dict(result.get("_session_progress"))
+        updated = update_session_result_summary(
+            int(session_id),
+            status="running",
+            summary_patch={"result_state": state, "phase": "base", "progress": progress},
+        )
+        recorded["status"] = updated.get("status") or "running"
+        return recorded
+    return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
+
+
+def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+    recorded = _attach_url_result(int(session_id), result)
+    desired = _session_status_from_url_result(result)
+    state = desired
+    if not result.get("execute") and result.get("url_type") not in {"profile", "video"}:
+        desired, state = "partial", "unsupported"
+    return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
+
+
 def update_item_profile_execution(
     session_id: int,
     item_id: int,
@@ -559,79 +730,13 @@ def update_item_profile_execution(
     profile_result: dict[str, Any],
 ) -> dict[str, Any]:
     """Persist profile-crawl execution result for a discovery item."""
-    conn = get_conn()
-    row = conn.execute(
-        """
-        SELECT *
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=? AND id=?
-        """,
-        (int(session_id), int(item_id)),
-    ).fetchone()
-    if not row:
-        raise LookupError(f"search session item not found: session={session_id} item={item_id}")
-    current = _row_to_item(row)
-    payload = _dict(current.get("payload")).copy()
-    profile_flow = _dict(profile_result.get("profile_flow"))
-    status_text = _text(profile_flow.get("status") or profile_result.get("status")).lower()
-    next_status = "ready" if status_text == "ready" else "failed" if "failed" in status_text or status_text in {"crawl_failed", "unsupported"} else "partial"
-    kol_pool_id = _int_or_none(
-        profile_flow.get("kol_pool_id")
-        or profile_result.get("matched_kol_pool_id")
-        or current.get("kol_pool_id")
+    return _update_item_profile_execution(
+        session_id,
+        item_id,
+        profile_result=profile_result,
+        get_conn_fn=get_conn,
+        update_session_fn=_update_session,
     )
-    payload["profile_execute"] = {
-        "status": status_text or next_status,
-        "kol_pool_id": kol_pool_id,
-        "operation": profile_flow.get("operation"),
-        "run_id": profile_flow.get("run_id"),
-        "profile_data": profile_flow.get("profile_data"),
-        "write_result": profile_flow.get("write_result"),
-        "representative_video_analysis": profile_flow.get("representative_video_analysis"),
-        "viltrox_fit_score_changed_ids": profile_flow.get("viltrox_fit_score_changed_ids") or profile_result.get("viltrox_fit_score_changed_ids") or [],
-        "viltrox_fit_score_untouched": profile_flow.get("viltrox_fit_score_untouched") if "viltrox_fit_score_untouched" in profile_flow else profile_result.get("viltrox_fit_score_untouched"),
-    }
-    updated = conn.execute(
-        """
-        UPDATE vkpi_kol_search_session_items
-        SET status=?,
-            stage='profile',
-            kol_pool_id=COALESCE(?, kol_pool_id),
-            payload_json=?::jsonb,
-            updated_at=NOW()
-        WHERE session_id=? AND id=?
-        RETURNING *
-        """,
-        (
-            next_status,
-            kol_pool_id,
-            _json_dumps(payload),
-            int(session_id),
-            int(item_id),
-        ),
-    ).fetchone()
-
-    session_row = conn.execute(
-        "SELECT result_summary_json FROM vkpi_kol_search_sessions WHERE id=?",
-        (int(session_id),),
-    ).fetchone()
-    summary = _loads(dict(session_row).get("result_summary_json") if session_row else "{}", {})
-    if not isinstance(summary, dict):
-        summary = {}
-    profile_materialization = _dict(summary.get("profile_materialization")).copy()
-    profile_materialization.update(
-        {
-            "last_item_id": int(item_id),
-            "last_status": next_status,
-            "last_kol_pool_id": kol_pool_id,
-            "viltrox_fit_score_untouched": payload["profile_execute"].get("viltrox_fit_score_untouched"),
-        }
-    )
-    summary["profile_materialization"] = profile_materialization
-    session_status = "partial" if next_status == "failed" else "ready"
-    _update_session(conn, int(session_id), status=session_status, summary=summary)
-    conn.commit()
-    return _row_to_item(updated)
 
 
 def mark_items_profile_queued(
@@ -643,78 +748,14 @@ def mark_items_profile_queued(
     plan_items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mark selected discovery items as queued for one session-advance job."""
-
-    safe_item_ids = sorted({int(item_id) for item_id in item_ids if _int_or_none(item_id)})
-    safe_job_id = _int_or_none(job_id)
-    if not safe_item_ids or not safe_job_id:
-        return {
-            "status": "ready",
-            "session_id": int(session_id),
-            "job_id": safe_job_id,
-            "updated_count": 0,
-            "items": [],
-        }
-
-    plan_by_item_id = {
-        _int_or_none(item.get("item_id")): item
-        for item in (plan_items or [])
-        if isinstance(item, dict) and _int_or_none(item.get("item_id"))
-    }
-    placeholders = ", ".join(["?"] * len(safe_item_ids))
-    conn = get_conn()
-    rows = conn.execute(
-        f"""
-        SELECT *
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=?
-          AND id IN ({placeholders})
-        ORDER BY rank NULLS LAST, id
-        """,
-        (int(session_id), *safe_item_ids),
-    ).fetchall()
-
-    queued_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    updated_items: list[dict[str, Any]] = []
-    for row in rows:
-        current = _row_to_item(row)
-        item_id = int(current["id"])
-        payload = _dict(current.get("payload")).copy()
-        payload["profile_advance_job"] = {
-            "status": "queued",
-            "job_id": safe_job_id,
-            "queued_at": queued_at,
-            "reason": _text(reason) or "session_advance_queued",
-            "plan": _dict(plan_by_item_id.get(item_id)).get("plan"),
-            "viltrox_fit_score_untouched": True,
-        }
-        updated = conn.execute(
-            """
-            UPDATE vkpi_kol_search_session_items
-            SET status='queued',
-                stage='profile',
-                job_id=?,
-                payload_json=?::jsonb,
-                updated_at=NOW()
-            WHERE session_id=? AND id=?
-            RETURNING *
-            """,
-            (
-                safe_job_id,
-                _json_dumps(payload),
-                int(session_id),
-                item_id,
-            ),
-        ).fetchone()
-        updated_items.append(_row_to_item(updated))
-
-    conn.commit()
-    return {
-        "status": "ready",
-        "session_id": int(session_id),
-        "job_id": safe_job_id,
-        "updated_count": len(updated_items),
-        "items": updated_items,
-    }
+    return _mark_items_profile_queued(
+        session_id,
+        item_ids=item_ids,
+        job_id=job_id,
+        reason=reason,
+        plan_items=plan_items,
+        get_conn_fn=get_conn,
+    )
 
 
 def mark_items_profile_running(
@@ -724,69 +765,12 @@ def mark_items_profile_running(
     reason: str = "session_advance_running",
 ) -> dict[str, Any]:
     """Mark queued discovery items as running when the worker claims the job."""
-
-    safe_job_id = _int_or_none(job_id)
-    if not safe_job_id:
-        return {
-            "status": "ready",
-            "session_id": int(session_id),
-            "job_id": safe_job_id,
-            "updated_count": 0,
-            "items": [],
-        }
-
-    conn = get_conn()
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=? AND job_id=? AND status='queued'
-        ORDER BY rank NULLS LAST, id
-        """,
-        (int(session_id), safe_job_id),
-    ).fetchall()
-    running_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    updated_items: list[dict[str, Any]] = []
-    for row in rows:
-        current = _row_to_item(row)
-        payload = _dict(current.get("payload")).copy()
-        profile_advance_job = _dict(payload.get("profile_advance_job")).copy()
-        profile_advance_job.update(
-            {
-                "status": "running",
-                "job_id": safe_job_id,
-                "running_at": running_at,
-                "reason": _text(reason) or "session_advance_running",
-                "viltrox_fit_score_untouched": True,
-            }
-        )
-        payload["profile_advance_job"] = profile_advance_job
-        updated = conn.execute(
-            """
-            UPDATE vkpi_kol_search_session_items
-            SET status='running',
-                stage='profile',
-                payload_json=?::jsonb,
-                updated_at=NOW()
-            WHERE session_id=? AND id=?
-            RETURNING *
-            """,
-            (
-                _json_dumps(payload),
-                int(session_id),
-                int(current["id"]),
-            ),
-        ).fetchone()
-        updated_items.append(_row_to_item(updated))
-
-    conn.commit()
-    return {
-        "status": "ready",
-        "session_id": int(session_id),
-        "job_id": safe_job_id,
-        "updated_count": len(updated_items),
-        "items": updated_items,
-    }
+    return _mark_items_profile_running(
+        session_id,
+        job_id=job_id,
+        reason=reason,
+        get_conn_fn=get_conn,
+    )
 
 
 def mark_items_profile_cancelled(
@@ -796,70 +780,12 @@ def mark_items_profile_cancelled(
     reason: str = "session_advance_cancelled_by_user",
 ) -> dict[str, Any]:
     """Mark queued items as retryable after their queued session-advance job is blocked."""
-
-    safe_job_ids = sorted({int(job_id) for job_id in job_ids if _int_or_none(job_id)})
-    if not safe_job_ids:
-        return {
-            "status": "ready",
-            "session_id": int(session_id),
-            "updated_count": 0,
-            "items": [],
-        }
-
-    placeholders = ", ".join(["?"] * len(safe_job_ids))
-    conn = get_conn()
-    rows = conn.execute(
-        f"""
-        SELECT *
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=?
-          AND job_id IN ({placeholders})
-          AND status='queued'
-        ORDER BY rank NULLS LAST, id
-        """,
-        (int(session_id), *safe_job_ids),
-    ).fetchall()
-
-    cancelled_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    updated_items: list[dict[str, Any]] = []
-    for row in rows:
-        current = _row_to_item(row)
-        payload = _dict(current.get("payload")).copy()
-        profile_advance_job = _dict(payload.get("profile_advance_job")).copy()
-        profile_advance_job.update(
-            {
-                "status": "cancelled",
-                "cancelled_at": cancelled_at,
-                "reason": _text(reason) or "session_advance_cancelled_by_user",
-                "viltrox_fit_score_untouched": True,
-            }
-        )
-        payload["profile_advance_job"] = profile_advance_job
-        updated = conn.execute(
-            """
-            UPDATE vkpi_kol_search_session_items
-            SET status='skipped',
-                stage='identified',
-                payload_json=?::jsonb,
-                updated_at=NOW()
-            WHERE session_id=? AND id=?
-            RETURNING *
-            """,
-            (
-                _json_dumps(payload),
-                int(session_id),
-                int(current["id"]),
-            ),
-        ).fetchone()
-        updated_items.append(_row_to_item(updated))
-
-    conn.commit()
-    return {
-        "status": "ready",
-        "session_id": int(session_id),
-        "updated_count": len(updated_items),
-        "items": updated_items,
-    }
+    return _mark_items_profile_cancelled(
+        session_id,
+        job_ids=job_ids,
+        reason=reason,
+        get_conn_fn=get_conn,
+    )
 
 
 def _update_session(
@@ -869,55 +795,11 @@ def _update_session(
     status: str,
     summary: dict[str, Any],
 ) -> None:
-    conn.execute(
-        """
-        UPDATE vkpi_kol_search_sessions
-        SET status=?,
-            result_summary_json=?::jsonb,
-            updated_at=NOW()
-        WHERE id=?
-        """,
-        (_normalize_status(status), _json_dumps(summary), int(session_id)),
-    )
+    _update_session_impl(conn, session_id, status=status, summary=summary)
 
 
 def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, Any]:
-    dedupe_key = _text(item.get("dedupe_key")) or f"item:{_text(item.get('item_type'))}:{_text(item.get('source_url'))}:{_text(item.get('kol_pool_id'))}"
-    row = conn.execute(
-        """
-        INSERT INTO vkpi_kol_search_session_items
-          (session_id, dedupe_key, item_type, status, stage, rank, score, kol_pool_id, evidence_id, job_id, source_url, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
-        ON CONFLICT (session_id, dedupe_key) DO UPDATE
-        SET item_type=EXCLUDED.item_type,
-            status=EXCLUDED.status,
-            stage=EXCLUDED.stage,
-            rank=COALESCE(EXCLUDED.rank, vkpi_kol_search_session_items.rank),
-            score=COALESCE(EXCLUDED.score, vkpi_kol_search_session_items.score),
-            kol_pool_id=COALESCE(EXCLUDED.kol_pool_id, vkpi_kol_search_session_items.kol_pool_id),
-            evidence_id=COALESCE(EXCLUDED.evidence_id, vkpi_kol_search_session_items.evidence_id),
-            job_id=COALESCE(EXCLUDED.job_id, vkpi_kol_search_session_items.job_id),
-            source_url=COALESCE(NULLIF(EXCLUDED.source_url, ''), vkpi_kol_search_session_items.source_url),
-            payload_json=EXCLUDED.payload_json,
-            updated_at=NOW()
-        RETURNING *
-        """,
-        (
-            int(session_id),
-            dedupe_key,
-            _text(item.get("item_type")) or "unknown",
-            _normalize_status(item.get("status"), item=True),
-            _text(item.get("stage")) or "identified",
-            _int_or_none(item.get("rank")),
-            _float_or_none(item.get("score")),
-            _int_or_none(item.get("kol_pool_id")),
-            _int_or_none(item.get("evidence_id")),
-            _int_or_none(item.get("job_id")),
-            _text(item.get("source_url")),
-            _json_dumps(item.get("payload") or {}),
-        ),
-    ).fetchone()
-    return _row_to_item(row)
+    return _upsert_item_impl(conn, session_id, item)
 
 
 def record_items(
@@ -927,22 +809,15 @@ def record_items(
     status: str = "ready",
     summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    conn = get_conn()
-    existing = conn.execute(
-        "SELECT id FROM vkpi_kol_search_sessions WHERE id=?",
-        (int(session_id),),
-    ).fetchone()
-    if not existing:
-        raise LookupError(f"search session not found: {session_id}")
-    written = [_upsert_item(conn, int(session_id), item) for item in items]
-    _update_session(conn, int(session_id), status=status, summary=summary or {"items_written": len(written)})
-    conn.commit()
-    return {
-        "status": "ready",
-        "session_id": int(session_id),
-        "items_written": len(written),
-        "items": written,
-    }
+    return _record_items(
+        session_id,
+        items,
+        status=status,
+        summary=summary,
+        get_conn_fn=get_conn,
+        upsert_item_fn=_upsert_item,
+        update_session_fn=_update_session,
+    )
 
 
 def ensure_session_for_result(
@@ -967,4 +842,3 @@ def ensure_session_for_result(
             staff=staff,
         )
     return None
-

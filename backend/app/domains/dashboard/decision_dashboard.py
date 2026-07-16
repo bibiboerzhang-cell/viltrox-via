@@ -75,6 +75,7 @@ def _dashboard_impl(window_days: int = 30) -> dict[str, Any]:
                COALESCE(SUM(revenue_cents), 0) AS revenue_cents
         FROM vkpi_sales_attributions sa
         WHERE {_active_project_filter('sa')}
+          AND {_confirmed_revenue_filter('sa')}
         GROUP BY source_platform, confidence
         ORDER BY revenue_cents DESC
         """
@@ -88,7 +89,8 @@ def _dashboard_impl(window_days: int = 30) -> dict[str, Any]:
                COALESCE((
                    SELECT SUM(c.amount_cents)
                    FROM vkpi_cost_ledger c
-                   WHERE c.staff_id = sa.staff_id AND c.status!='void'
+                   WHERE c.staff_id = sa.staff_id
+                     AND c.status='actual' AND c.approved_at IS NOT NULL
                ), 0) AS cost_cents
         FROM vkpi_sales_attributions sa
         LEFT JOIN staff st ON st.id = sa.staff_id
@@ -109,7 +111,8 @@ def _dashboard_impl(window_days: int = 30) -> dict[str, Any]:
                COALESCE((
                    SELECT SUM(c.amount_cents)
                    FROM vkpi_cost_ledger c
-                   WHERE c.project_id = p.id AND c.status!='void'
+                   WHERE c.project_id = p.id
+                     AND c.status='actual' AND c.approved_at IS NOT NULL
                ), 0) AS cost_cents
         FROM vkpi_projects p
         LEFT JOIN vkpi_sales_attributions sa
@@ -216,7 +219,7 @@ def revenue_trend(window_days: int = 7, staff_id: int | None = None) -> dict[str
         SELECT {cost_day} AS day,
                COALESCE(SUM(c.amount_cents), 0) AS cost_cents
         FROM vkpi_cost_ledger c
-        WHERE c.status!='void'
+        WHERE c.status='actual' AND c.approved_at IS NOT NULL
           AND {cost_day} >= ?
           AND {_active_project_filter('c')}
           {cost_staff_clause}
@@ -364,7 +367,7 @@ def product_performance(window_days: int = 30, staff_id: int | None = None, limi
             SELECT project_id,
                    COALESCE(SUM(amount_cents), 0) AS cost_cents
             FROM vkpi_cost_ledger
-            WHERE status!='void' AND {cost_day} >= ?
+            WHERE status='actual' AND approved_at IS NOT NULL AND {cost_day} >= ?
             GROUP BY project_id
         ),
         content AS (

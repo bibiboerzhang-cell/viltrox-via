@@ -10,7 +10,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.services.ai.retry import call_ai_with_retry
+from app.platform.llm_production import generate_text
 
 logger = get_logger(__name__)
 
@@ -304,28 +304,26 @@ def list_gap_insights() -> dict:
 
 
 async def regenerate_gap_insights() -> dict:
-    try:
-        from app.services.ai.claude_client import get_claude_client
-    except ImportError:
-        return list_gap_insights()
-
     heatmap = build_category_heatmap()
     benchmarks = list_benchmarks()
     observations = list_observations(limit=10)
     prompt = _gap_prompt(heatmap, benchmarks, observations)
     try:
-        client = get_claude_client()
         response = await asyncio.to_thread(
-            lambda: call_ai_with_retry(
-                "intelligence.market.claude",
-                lambda: client.messages.create(
-                    model="claude-opus-4-7",
-                    max_tokens=2048,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
+            lambda: generate_text(
+                prompt,
+                provider="anthropic",
+                model="claude-opus-4-7",
+                purpose="intelligence_market",
+                max_output_tokens=2048,
             )
         )
-        parsed = json.loads(response.content[0].text)
+        parsed = json.loads(str(response.get("text") or ""))
+        generated_insights = parsed.get("insights") if isinstance(parsed, dict) else None
+        if not isinstance(generated_insights, list) or not all(
+            isinstance(insight, dict) for insight in generated_insights
+        ):
+            raise ValueError("Claude response must contain a list of insight objects")
     except Exception as exc:
         logger.exception("market gap generation failed: %s", exc)
         return list_gap_insights()
@@ -337,7 +335,7 @@ async def regenerate_gap_insights() -> dict:
     )
     now = datetime.utcnow().isoformat()
     expires = (datetime.utcnow() + timedelta(hours=24)).isoformat()
-    for ins in parsed.get("insights", []):
+    for ins in generated_insights:
         conn.execute(
             """INSERT INTO ai_insights (
                 module, category, severity, insight_type, title, body,

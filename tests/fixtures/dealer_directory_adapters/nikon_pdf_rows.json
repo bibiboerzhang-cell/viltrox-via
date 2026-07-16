@@ -1,0 +1,22 @@
+{
+  "extraction": {
+    "media_type": "application/pdf",
+    "document_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+    "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "extractor": "tabula-fixture-v1",
+    "rows": [
+      {
+        "source_store_id": "nikon-wa-007",
+        "organization_name": "Northwest Camera",
+        "branch_name": "Seattle",
+        "address1": "789 Pine St",
+        "city": "Seattle",
+        "state": "WA",
+        "postal_code": "98101",
+        "country_code": "US",
+        "phone": "206-555-0107",
+        "website": "https://northwest-camera.invalid/seattle"
+      }
+    ]
+  }
+}

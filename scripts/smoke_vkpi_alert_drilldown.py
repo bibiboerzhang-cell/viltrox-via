@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke P2.11 alert drilldown source rows."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import sys
@@ -153,7 +154,7 @@ def main() -> None:
         if int(summary.get("comment_count") or 0) != 1:
             raise AssertionError(f"summary comment count wrong: {summary}")
 
-        print("VKPI_ALERT_DRILLDOWN_SMOKE_OK")
+        stdout_out("VKPI_ALERT_DRILLDOWN_SMOKE_OK")
     finally:
         if alert_key:
             conn.execute("DELETE FROM vkpi_alerts WHERE alert_key = ?", (alert_key,))

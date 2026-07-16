@@ -606,6 +606,95 @@ def _content_performance(product: dict[str, Any], aliases: list[dict[str, Any]])
     }
 
 
+def sku_content_aggregate_briefs(sku_codes: list[str]) -> dict[str, dict[str, Any] | None]:
+    """Return exact content aggregates for several SKUs with one shared evidence scan.
+
+    ``sku_content_performance`` deliberately returns the full content list and
+    content-fit records for a single SKU.  The GTM summary consumes only its
+    ``content.aggregate`` projection for at most two SKUs.  Calling the full
+    reader twice scanned the same 2k deep-analysis and 8k title windows twice.
+
+    This bounded projection keeps the same resolver, alias matcher, deep/title
+    precedence, evidence de-duplication, sorting and ``_aggregate`` function as
+    the public single-SKU reader.  It omits only response fields the GTM summary
+    never consumes (content rows, aliases, diagnostics and content-fit matches).
+    Missing SKUs retain the single-reader ``not_found`` meaning as ``None``.
+    """
+
+    from app.db.connection import get_conn
+
+    queries = list(dict.fromkeys(_text(code, 120) for code in sku_codes if _text(code, 120)))
+    if not queries:
+        return {}
+
+    states: dict[str, dict[str, Any] | None] = {}
+    active: list[dict[str, Any]] = []
+    for query in queries:
+        product = resolve_sku(query)
+        if not product:
+            states[query] = None
+            continue
+        matcher = _AliasMatcher(_aliases_for(product))
+        state = {
+            "query": query,
+            "matcher": matcher,
+            "seen_evidence": set(),
+            "items": [],
+        }
+        states[query] = state
+        if not matcher.empty:
+            active.append(state)
+
+    if active:
+        conn = get_conn()
+        for row in _deep_rows(conn):
+            evidence_id = _int_or_none(row.get("evidence_id"))
+            if evidence_id is None:
+                continue
+            for state in active:
+                seen = state["seen_evidence"]
+                if evidence_id in seen:
+                    continue
+                hit = _match_deep_row(row, state["matcher"])
+                if not hit:
+                    continue
+                matched, field = hit
+                seen.add(evidence_id)
+                state["items"].append(_build_item(row, matched, field, deep=True))
+
+        for row in _title_rows(conn):
+            evidence_id = _int_or_none(row.get("evidence_id"))
+            if evidence_id is None:
+                continue
+            # Title normalization is SKU-independent; compute it once per row.
+            normalized_title = _norm(_text(row.get("title"), 400))
+            for state in active:
+                seen = state["seen_evidence"]
+                if evidence_id in seen:
+                    continue
+                matched = state["matcher"].match(normalized_title)
+                if not matched:
+                    continue
+                seen.add(evidence_id)
+                state["items"].append(_build_item(row, matched, "evidence_title", deep=False))
+
+    output: dict[str, dict[str, Any] | None] = {}
+    for query in queries:
+        state = states.get(query)
+        if state is None:
+            output[query] = None
+            continue
+        items = state["items"]
+        items.sort(
+            key=lambda item: (
+                -(item["engagement"] if item["engagement"] is not None else -1),
+                -(item["view_count"] or 0),
+            )
+        )
+        output[query] = _aggregate(items)
+    return output
+
+
 def sku_content_performance(sku_or_code: str) -> dict[str, Any]:
     """谁的内容提到/评测该 SKU:按互动排序的内容清单 + 聚合 + content_fit 命中。"""
     product = resolve_sku(sku_or_code)

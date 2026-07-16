@@ -96,6 +96,19 @@ describe("getMarketBrainSummary", () => {
     expect(r.weekly_signals.items).toEqual([]);
     expect(r.product_opportunities.items[0].opportunity_score).toBe(7.5); // 字符串数字宽容
   });
+
+  it("scope_unavailable 顶层真值不会被归一化成普通空卡", () => {
+    const r = normalizeMarketBrainSummary({
+      status: "scope_unavailable",
+      reason: "租户范围无法确认",
+      claim_status: "descriptive_only",
+      organization_id: null,
+      organization_scope_status: "ambiguous",
+    });
+    expect(r.status).toBe("scope_unavailable");
+    expect(r.reason).toContain("租户范围");
+    expect(r.organization_scope_status).toBe("ambiguous");
+  });
 });
 
 describe("getGtmPlanPreview", () => {
@@ -149,6 +162,21 @@ describe("getGtmPlanPreview", () => {
     expect(JSON.stringify(r)).not.toContain("机密原文");
     expect(JSON.stringify(r)).not.toContain("score_details");
     expect(r.public_plan.thesis.go_nogo).toBe("GO");
+  });
+
+  it("preview scope_unavailable 顶层真值不会被空 public_plan 吃掉", () => {
+    const r = normalizeGtmPlanPreview({
+      status: "scope_unavailable",
+      reason: "仅默认租户已接通",
+      organization_id: 4,
+      organization_scope_status: "resolved",
+      writes: false,
+    });
+    expect(r.status).toBe("scope_unavailable");
+    expect(r.reason).toContain("默认租户");
+    expect(r.organization_id).toBe(4);
+    expect(r.writes).toBe(false);
+    expect(r.public_plan.roadmap).toEqual([]);
   });
 });
 

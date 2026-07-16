@@ -13,7 +13,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
-from app.domains import audit
+from app.domains import audit, business_truth
 from app.domains.access import scope
 from app.shared.vkpi_kpi_evidence import enrich_kpi_source_row
 from app.platform.db.schema import ensure_vkpi_schema
@@ -228,6 +228,7 @@ def _ledger_source_query(day: str, staff_id: int | None = None) -> list[dict[str
         SELECT *
         FROM vkpi_kpi_ledger
         WHERE ledger_date=?{staff_clause}
+          AND {business_truth.current_kpi_ledger_sql()}
         ORDER BY staff_id, project_id, metric_key, id
         """,
         (day, *params),
@@ -238,11 +239,12 @@ def list_entries(limit: int = 100, staff_id: int | None = None, *, staff: dict[s
     ensure_vkpi_schema()
     limit_i = max(1, min(500, int(limit or 100)))
     params: list[Any] = []
-    where = ""
+    where_parts: list[str] = [business_truth.current_kpi_ledger_sql("kl")]
     scoped_staff_id = scope.effective_staff_id(staff, staff_id)
     if scoped_staff_id:
-        where = "WHERE kl.staff_id=?"
+        where_parts.append("kl.staff_id=?")
         params.append(int(scoped_staff_id))
+    where = "WHERE " + " AND ".join(where_parts)
     rows = get_conn().execute(
         f"""
         SELECT kl.*,
@@ -448,7 +450,7 @@ def generate_daily_rollup(ledger_date: str | None = None, staff_id: int | None =
         SELECT id, staff_id, kol_id, project_id, cost_type, amount_cents, status, source_ref, incurred_at
         FROM vkpi_cost_ledger
         WHERE {_day_where('incurred_at')}{cost_filter}
-          AND COALESCE(status, '') != 'void'
+          AND {business_truth.approved_actual_cost_sql()}
         """,
         (day, *cost_params),
     ):
@@ -470,7 +472,7 @@ def generate_daily_rollup(ledger_date: str | None = None, staff_id: int | None =
                revenue_cents, commission_cents, confidence, occurred_at, imported_at, created_at
         FROM vkpi_sales_attributions
         WHERE {_day_where('COALESCE(occurred_at, imported_at, created_at)')}{attribution_filter}
-          AND COALESCE(confidence, '') NOT IN ('void', 'reversed', 'excluded')
+          AND {business_truth.verified_shopify_attribution_sql()}
         """,
         (day, *attribution_params),
     ):
@@ -673,8 +675,11 @@ def generate_daily_rollup(ledger_date: str | None = None, staff_id: int | None =
         )
 
     conn.commit()
+    total_where = "WHERE ledger_date=? AND " + business_truth.current_kpi_ledger_sql()
+    if scoped_staff_id:
+        total_where += " AND staff_id=?"
     total_entries = conn.execute(
-        "SELECT COUNT(*) AS n FROM vkpi_kpi_ledger WHERE ledger_date=?" + (" AND staff_id=?" if scoped_staff_id else ""),
+        "SELECT COUNT(*) AS n FROM vkpi_kpi_ledger " + total_where,
         (day, scoped_staff_id) if scoped_staff_id else (day,),
     ).fetchone()["n"]
     try:

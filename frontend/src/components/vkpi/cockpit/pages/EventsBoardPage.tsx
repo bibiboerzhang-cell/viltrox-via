@@ -1,6 +1,7 @@
 import React from "react";
 import { Package, PencilLine, Plus } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import {
   listEvents,
   createEvent,
@@ -47,6 +48,7 @@ import {
   type BoardFilters,
 } from "./EventsBoardPage.modules";
 import { EventDetailTakeover, EventsBoardModals } from "./EventsBoardPage.embeds";
+import { EventRadarModule } from "./EventRadarModule";
 
 // Events → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 五件套
 //   embeds 收编手法 1:1 同构)。旧 pages/events/EventsMockupPage(+EventsPage)已退役
@@ -71,12 +73,34 @@ import { EventDetailTakeover, EventsBoardModals } from "./EventsBoardPage.embeds
 //   不传 apiToken 给 EditableDashboardBoard(其账户级持久化写死 dashboard_layout_v1
 //   键,传了会覆写 Dashboard 布局 —— 金样板同注释)。
 
-const STORAGE_KEY = "vkpi-events-board-layout-v1";
+const STORAGE_KEY = "vkpi-events-board-layout-v2-truth";
+const LEGACY_STORAGE_KEYS = ["vkpi-events-board-layout-v1"];
+const EVENT_RADAR_MANAGER_ROLES = new Set([
+  "admin",
+  "manager",
+  "lead",
+  "marketing_lead",
+  "marketing_manager",
+  "marketing-manager",
+]);
+
+export function canManageEventRadar(user: {
+  role?: string;
+  staff_role?: string;
+  is_owner?: boolean;
+  permissions?: Record<string, string>;
+} | null | undefined): boolean {
+  if (user?.is_owner) return true;
+  const role = String(user?.staff_role || user?.role || "").trim().toLowerCase();
+  const vkpi = String(user?.permissions?.vkpi || "none").trim().toLowerCase();
+  return EVENT_RADAR_MANAGER_ROLES.has(role) && ["write", "admin"].includes(vkpi);
+}
 
 // 默认布局(12 列 · 默认简五行):kpiE(12) → board(8)+status(4) → budget(8)+upcoming(4)
 // palette 备选:type / inventory / retro / team
 const DEFAULT_LAYOUT = [
   { moduleKey: "kpiE", span: 12 },
+  { moduleKey: "radar", span: 12 },
   { moduleKey: "board", span: 8 },
   { moduleKey: "status", span: 4 },
   { moduleKey: "budget", span: 8 },
@@ -98,6 +122,7 @@ interface EventsBoardPageProps {
   currentUser?: { id?: string | number; name?: string; avatar?: string; email?: string };
   initialEventId?: string | null;
   onConsumeInitialEvent?: () => void;
+  embeddedModuleKey?: string;
 }
 
 export function EventsBoardPage({
@@ -106,6 +131,7 @@ export function EventsBoardPage({
   currentUser: loggedInUser,
   initialEventId = null,
   onConsumeInitialEvent,
+  embeddedModuleKey,
 }: EventsBoardPageProps) {
   // 入口一次性归一化:CockpitApp 传 staffAdapter.UiStaff(宽松),下游全按
   // events 严格口径(name 兜底 email/id 字符串,与旧页 ownerById 解析同语义)。
@@ -113,7 +139,8 @@ export function EventsBoardPage({
     () => staffInput.map((s) => ({ ...s, name: s.name ?? s.email ?? String(s.id) })) as unknown as EventsUiStaff[],
     [staffInput],
   );
-  const { token } = useAuth();
+  const { token, user: authUser } = useAuth();
+  const canManageRadar = canManageEventRadar(authUser);
   const [editing, setEditing] = React.useState(false);
 
   // 真实 staff 喂 lookups 模块缓存(渲染前同步、幂等 —— 旧 EventsPage 同款,
@@ -294,6 +321,12 @@ export function EventsBoardPage({
     if (uiRow && uiRow.id) setEvents((prev) => prev.map((ev) => (ev.id === uiRow.id ? { ...ev, ...asEventVm(uiRow) } : ev)));
   };
 
+  const handleRadarPromoted = React.useCallback(() => {
+    listEvents(token, { limit: 200 })
+      .then((res) => setEvents((res.items || []).map(toUiEvent).map(asEventVm)))
+      .catch((err: any) => setLoadError("活动雷达转入后刷新失败:" + String(err?.message || err)));
+  }, [token]);
+
   /* ---------- 卡头 props(金样板 cardProps 同构;SrcChip hover 口径卡,
      不借市场之声 GENERIC_CHAIN 溯源链 —— 链口径不同不冒充) ---------- */
   const srcOf = (key: string) => MODULE_SOURCES[key] || { label: key, rows: [] };
@@ -436,19 +469,38 @@ export function EventsBoardPage({
     </ModuleCard>
   );
 
+  const renderRadar = () => (
+    <ModuleCard
+      {...cardProps("radar", "活动雷达 · 公开机会")}
+    >
+      <EventRadarModule
+        apiToken={token}
+        limit={100}
+        showHeading={false}
+        canManage={canManageRadar}
+        onPromoted={handleRadarPromoted}
+      />
+    </ModuleCard>
+  );
+
   /* ---------- 模块注册表(palette 全量可选;默认简五卡,type/inventory/retro/team 备选) ---------- */
   const modules: DashboardModuleDefinition[] = [
     { key: "kpiE", label: "活动总览带", description: "进行中 / 本月 / 物料备货 / 费用合计(全真值)", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
+    { key: "radar", label: "活动雷达", description: "Dealer / 学校 / 线下活动与大展会记录 · 登记来源、变更、人工判断和转 Event", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 22, minHeight: 10, maxHeight: 44, render: renderRadar },
     { key: "board", label: "活动看板", description: "活动卡片 + 我参与的/状态/类型/搜索过滤 · 点卡进详情", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 18, minHeight: 8, maxHeight: 36, render: renderBoard },
     { key: "status", label: "状态构成", description: "六状态环图 · 分段点击联动看板过滤", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 16, render: renderStatus },
     { key: "budget", label: "预算执行", description: "每活动 spent/plan 条形 · 超支/近超语义染色", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 7, minHeight: 4, maxHeight: 20, render: renderBudget },
-    { key: "upcoming", label: "即将开幕", description: "end_date ≥ 今天升序 · 真实倒计时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 20, render: renderUpcoming },
+    { key: "upcoming", label: "即将开幕", description: "数据库 end_date ≥ 今天升序 · 浏览器当前时间倒计时", category: "数据库模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 20, render: renderUpcoming },
     // ↓ palette 备选(不进默认布局,注册表保留全量可选)
     { key: "type", label: "类型分布", description: "活动类型条形 · 点行联动看板过滤", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderType },
-    { key: "inventory", label: "公司库存", description: "vkpi_inventory 概览 + 管理弹窗入口(跨活动共享)", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderInventory },
+    { key: "inventory", label: "公司库存", description: "vkpi_inventory 数据库快照 + 管理弹窗入口(跨活动共享)", category: "数据库模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderInventory },
     { key: "retro", label: "复盘结果", description: "已完成活动 ROI/线索/视频 + 平均 ROI", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 7, minHeight: 4, maxHeight: 20, render: renderRetro },
     { key: "team", label: "团队参与", description: "team_ids × 员工名单,每人参与活动数", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderTeam },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="Events" />;
+  }
 
   /* ---------- 详情接管(旧页 selectedId 早退 1:1;七 tab 旧件零改动) ---------- */
   const selected = selectedId ? events.find((ev) => String(ev.id) === String(selectedId)) : null;
@@ -490,7 +542,7 @@ export function EventsBoardPage({
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
             <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" }} />
-            实时
+            数据库快照
           </span>
           <button
             type="button"
@@ -529,7 +581,14 @@ export function EventsBoardPage({
       )}
 
       {/* 可编辑看板:布局本机记忆(storageKey);不传 apiToken,见文件头红线注释 */}
-      <EditableDashboardBoard modules={modules} defaultLayout={DEFAULT_LAYOUT} editing={editing} storageKey={STORAGE_KEY} />
+      <EditableDashboardBoard
+        modules={modules}
+        defaultLayout={DEFAULT_LAYOUT}
+        editing={editing}
+        storageKey={STORAGE_KEY}
+        legacyStorageKeys={LEGACY_STORAGE_KEYS}
+        requiredDefaultModuleKeys={["radar"]}
+      />
 
       {/* 活动全量弹窗(卡面 6 张之外的全量;点卡直接进详情) */}
       {listOpen && <EventsListDialog events={filtered} staff={staff} onOpen={(ev) => openEvent(ev.id)} onClose={() => setListOpen(false)} />}

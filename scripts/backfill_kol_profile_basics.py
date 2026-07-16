@@ -7,6 +7,8 @@ fields and raw crawler payloads.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import json
 import os
@@ -637,15 +639,15 @@ def _reload_score_fields(conn: psycopg.Connection[Any], ids: list[int]) -> dict[
 
 
 def _print_targets(targets: list[dict[str, Any]]) -> None:
-    print("pilot_targets:")
+    out("pilot_targets:")
     for idx, row in enumerate(targets, 1):
-        print(
+        out(
             f"{idx:02d}\t{row['id']}\t{_platform(row.get('platform') or '')}\t"
             f"{row.get('recall_status')}\t{row.get('target_kind')}\t"
             f"{row.get('handle') or row.get('display_name') or '-'}\t{row.get('target')}"
         )
-    print("target_platforms:", dict(Counter(_platform(row.get("platform") or "") for row in targets)))
-    print("target_statuses:", dict(Counter(str(row.get("recall_status") or "") for row in targets)))
+    out("target_platforms:", dict(Counter(_platform(row.get("platform") or "") for row in targets)))
+    out("target_statuses:", dict(Counter(str(row.get("recall_status") or "") for row in targets)))
 
 
 def main() -> None:
@@ -669,9 +671,9 @@ def main() -> None:
         if not args.execute:
             raise SystemExit("Refusing provider calls without --execute. Use --plan-only to inspect targets.")
         if args.commit:
-            print("write_mode: commit_profile_basics_only")
+            out("write_mode: commit_profile_basics_only")
         else:
-            print("write_mode: dry_run_no_db_writes")
+            out("write_mode: dry_run_no_db_writes")
         tracker = ApifyRunTracker()
         before_scores = {int(row["id"]): {"viltrox_fit_score": row.get("viltrox_fit_score"), "viltrox_fit_reason": row.get("viltrox_fit_reason")} for row in targets}
         results: list[dict[str, Any]] = []
@@ -679,7 +681,7 @@ def main() -> None:
         for idx, row in enumerate(targets, 1):
             platform = _platform(row.get("platform") or "")
             label = f"{idx:02d}/{len(targets)} id={row['id']} {platform} {row.get('handle') or row.get('display_name')}"
-            print(f"crawl_start\t{label}", flush=True)
+            out(f"crawl_start\t{label}", flush=True)
             before_fields = _field_snapshot(row)
             try:
                 crawled = _crawl(row, max_posts=max(1, min(12, int(args.max_posts or 3))), tracker=tracker)
@@ -712,7 +714,7 @@ def main() -> None:
                     "last_video_at": update.get("last_video_at") or "",
                     "error": "",
                 }
-                print(
+                out(
                     "crawl_done\t"
                     f"id={result['id']} status={result['provider_status']} success={result['success']} "
                     f"filled={','.join(filled) or '-'} actual_cost={result['actual_cost_usd']} "
@@ -741,7 +743,7 @@ def main() -> None:
                     "last_video_at": str(row.get("last_video_at") or ""),
                     "error": f"{type(exc).__name__}: {str(exc)[:500]}",
                 }
-                print(f"crawl_error\tid={row['id']} error={result['error']}", flush=True)
+                out(f"crawl_error\tid={row['id']} error={result['error']}", flush=True)
             results.append(result)
         ids = [int(row["id"]) for row in targets]
         after_scores = _reload_score_fields(conn, ids)
@@ -751,9 +753,9 @@ def main() -> None:
             if before.get("viltrox_fit_score") != after.get("viltrox_fit_score") or before.get("viltrox_fit_reason") != after.get("viltrox_fit_reason"):
                 score_changed.append(row_id)
         summary = _summary(results, targets, score_changed, schema_samples, committed=bool(args.commit))
-        print("SUMMARY_JSON_START")
-        print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
-        print("SUMMARY_JSON_END")
+        out("SUMMARY_JSON_START")
+        out(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
+        out("SUMMARY_JSON_END")
     finally:
         conn.close()
 

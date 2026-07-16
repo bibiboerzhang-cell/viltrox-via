@@ -30,10 +30,6 @@ from app.core.config import VERIFY_CODE_TTL_HOURS
 from app.db.connection import db_read, db_write, get_conn
 from app.db.repositories.users import mark_social_account_verified
 from app.services.security.rate_limiter import rate_limit
-from app.services.verification.scanner import (
-    scan_pending_verifications,
-    scan_single_verification,
-)
 from app.services.verification.start_service import start_verification_request
 from app.services.verification.viltrox_official import (
     SUPPORTED_PLATFORMS,
@@ -458,15 +454,22 @@ async def mark_as_posted(
     user_id = current_user.get("user_id") or current_user.get("id")
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    response = await db_write(partial(_mark_verification_posted, payload.verification_id, int(user_id), now))
     queue = getattr(request.app.state, "job_queue", None)
-    if queue is not None and response.get("status") == "awaiting_scan":
+    # Do not mutate to awaiting_scan unless the durable follow-up can be
+    # recorded.  Otherwise the user sees a successful write that can never be
+    # consumed by the provider worker.
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    response = await db_write(partial(_mark_verification_posted, payload.verification_id, int(user_id), now))
+    if response.get("status") == "awaiting_scan":
         response["job_id"] = await queue.enqueue(
             "verification_scan_single",
             {
                 "verification_id": payload.verification_id,
                 "requested_by": str(user_id),
             },
+            lock_key=f"verification_scan_single:{int(payload.verification_id)}",
+            timeout_seconds=900,
         )
         response["scan_status"] = "queued"
     return response
@@ -553,31 +556,27 @@ async def admin_trigger_scan(
         "verify.admin_manual_scan_triggered",
         extra={"requested_by": admin_user.get("email", "")},
     )
+    del sync  # legacy flag retained in the request contract; direct execution is fenced off.
     queue = getattr(request.app.state, "job_queue", None)
-    if not sync and queue is not None:
-        task_id = await queue.enqueue(
-            "verification_scan_pending",
-            {
-                "platform": platform,
-                "only_oldest_n": only_oldest_n,
-                "requested_by": admin_user.get("email", ""),
-            },
-        )
-        return {
-            "ok": True,
-            "status": "queued",
-            "job_id": task_id,
-            "message": "Verification scan queued",
-        }
-
-    stats = await scan_pending_verifications(
-        platform=platform,
-        only_oldest_n=only_oldest_n,
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "verification_scan_pending",
+        {
+            "platform": platform,
+            "only_oldest_n": only_oldest_n,
+            "requested_by": admin_user.get("email", ""),
+        },
+        lock_key=f"verification_scan_pending:{str(platform or 'all').lower()}:{int(only_oldest_n or 0)}",
+        timeout_seconds=1800,
     )
     return {
         "ok": True,
-        "status": "done",
-        "stats": stats,
+        "status": "queued",
+        "job_id": task_id,
+        "progressive": True,
+        "initial_stage": "queued",
+        "message": "Verification scan queued",
     }
 
 
@@ -590,18 +589,27 @@ async def admin_rescan_single(
     admin_user: dict = Depends(require_admin),
 ):
     """Admin 重新扫描某一条"""
+    del sync  # legacy flag retained; every provider attempt is durable.
     queue = getattr(request.app.state, "job_queue", None)
-    if not sync and queue is not None:
-        task_id = await queue.enqueue(
-            "verification_scan_single",
-            {
-                "verification_id": verification_id,
-                "requested_by": admin_user.get("email", ""),
-            },
-        )
-        return {"ok": True, "status": "queued", "job_id": task_id, "verification_id": verification_id}
-    result = await scan_single_verification(verification_id)
-    return result
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    task_id = await queue.enqueue(
+        "verification_scan_single",
+        {
+            "verification_id": verification_id,
+            "requested_by": admin_user.get("email", ""),
+        },
+        lock_key=f"verification_scan_single:{int(verification_id)}",
+        timeout_seconds=900,
+    )
+    return {
+        "ok": True,
+        "status": "queued",
+        "job_id": task_id,
+        "verification_id": verification_id,
+        "progressive": True,
+        "initial_stage": "queued",
+    }
 
 
 @router.get("/queue")

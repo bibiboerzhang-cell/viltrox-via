@@ -5,6 +5,7 @@ This catches accidental removal of the two top-level entry points without
 requiring a browser or fake data.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -77,7 +78,7 @@ def main() -> None:
     assert "API 是否工作" in settings_modules and "授权账户" in settings_modules and "SKU 录入" in settings_modules and "员工授权列表" in settings, "settings modules incomplete"
     assert "平台抓取开关" in settings_modules and "预算控制" in settings_modules and "保存限制" in settings_modules, "crawl/budget settings missing"
 
-    print("VKPI_PHASE0B_FRONTEND_ENTRIES_SMOKE_OK")
+    stdout_out("VKPI_PHASE0B_FRONTEND_ENTRIES_SMOKE_OK")
 
 
 if __name__ == "__main__":

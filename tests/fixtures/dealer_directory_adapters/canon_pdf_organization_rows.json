@@ -1,0 +1,17 @@
+{
+  "extraction": {
+    "media_type": "application/pdf",
+    "document_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+    "document_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "extractor": "pdftotext-fixture-v1",
+    "rows": [
+      {
+        "source_store_id": "canon-org-bh-photo-video",
+        "organization_name": "B&H PHOTO & VIDEO",
+        "branch_name": "Headquarters row",
+        "state": "NY",
+        "country_code": "US"
+      }
+    ]
+  }
+}

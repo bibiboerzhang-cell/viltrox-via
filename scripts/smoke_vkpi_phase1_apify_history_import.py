@@ -6,6 +6,7 @@ This validates the no-cost import path:
 2. Rows with real metrics/videos create snapshots and posts from supplied data.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import os
 import secrets
@@ -99,7 +100,7 @@ def main() -> None:
         assert int(snapshot["views_30d"] or 0) == 3200, dict(snapshot)
         post_count = get_conn().execute("SELECT COUNT(*) AS c FROM vkpi_industry_posts WHERE account_id=?", (int(metrics_account["id"]),)).fetchone()["c"]
         assert int(post_count) == 1, post_count
-        print("VKPI_PHASE1_APIFY_HISTORY_IMPORT_SMOKE_OK")
+        stdout_out("VKPI_PHASE1_APIFY_HISTORY_IMPORT_SMOKE_OK")
     finally:
         _cleanup(marker)
 

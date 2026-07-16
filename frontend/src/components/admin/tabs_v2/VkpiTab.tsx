@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { VkpiDashboard, type VkpiDashboardData, type VkpiPageKey } from "../../vkpi";
 import { getInitialVkpiPage } from "../../vkpi/layout/vkpiDashboardRouting";
@@ -7,6 +7,7 @@ import {
   importAmazonAttributionRows,
   uploadAmazonAttributionReport,
 } from "../../../domains/attribution";
+import type { VkpiCostUpdatePayload, VkpiManualAuthorizationEvidence } from "../../../services/vkpi/cost-api";
 import {
   addProjectCost,
   approveMarketingCost,
@@ -16,11 +17,17 @@ import {
 } from "../../../domains/attribution";
 import {
   copyTextToClipboard,
-  exportVkpiReport,
   fetchVkpiDashboardData,
-  generateWeeklyReport,
   runKpiRollup,
 } from "../../../domains/dashboard";
+import {
+  VKPI_REPORT_SECTION_KEYS,
+  createVkpiReportExport,
+  downloadVkpiFile,
+  generateVkpiReport,
+  reportApiErrorMessage,
+  type VkpiReportGenerateConfig,
+} from "../../../services/vkpi/reports-api";
 import { uploadMarketingEvidenceFile } from "../../../domains/evidence";
 import {
   claimKol,
@@ -117,10 +124,6 @@ function canUseManagerView(user: Props["user"]): boolean {
   );
 }
 
-function downloadUrlFrom(result: Record<string, unknown>): string {
-  return String(result.downloadUrl || result.download_url || "").trim();
-}
-
 type WeeklyReportStatus = {
   state: "idle" | "loading" | "success" | "error";
   message: string;
@@ -129,6 +132,9 @@ type WeeklyReportStatus = {
 
 export function VkpiTab({ token, user, onSignOut }: Props) {
   const { refreshUser } = useAuth();
+  const mountedRef = useRef(false);
+  const activeLoadKeyRef = useRef("");
+  const inFlightLoadRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
   const [data, setData] = useState<VkpiDashboardData | undefined>();
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -147,39 +153,69 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     : "成员";
   const canRenderWithoutDashboardData = getInitialVkpiPage(effectiveViewMode) === "cockpit";
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setMessage("");
-    setActionLink(null);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeLoadKeyRef.current = "";
+    };
+  }, []);
+
+  const load = useCallback((): Promise<void> => {
     const cacheKey = vkpiCacheKey(range, scope, user?.staff_id);
+    // Keep the bearer token out of persistent storage, but include it in the
+    // in-memory identity so a fast account switch can never join the previous
+    // session's request. The cache key supplies scope/range/staff isolation.
+    const loadKey = `${token}\u0000${cacheKey}`;
+    activeLoadKeyRef.current = loadKey;
+    const existing = inFlightLoadRef.current;
+    if (existing?.key === loadKey) return existing.promise;
+
+    if (mountedRef.current) {
+      setLoading(true);
+      setMessage("");
+      setActionLink(null);
+    }
     const cached = readVkpiDashboardCache(cacheKey);
-    if (cached?.data) {
+    if (cached?.data && mountedRef.current && activeLoadKeyRef.current === loadKey) {
       setData(cached.data);
       setLastSyncedAt(cached.data.lastSyncedAt || new Date(cached.savedAt).toISOString());
     }
-    try {
-      const nextData = await fetchVkpiDashboardData(token, {
-        range,
-        scope,
-        staffId: user?.staff_id ? String(user.staff_id) : undefined,
-      });
-      // 2026-07-03 缓存防毒:成员名单切片是静默超时型(optionalFetch 回空),
-      // 空结果不得覆盖缓存里已有的真名单 —— 否则一次超时把「账号授权/分组成员」钉死为空。
-      if (!nextData.staffMembers?.length && cached?.data?.staffMembers?.length) {
-        nextData.staffMembers = cached.data.staffMembers;
+
+    const promise = (async () => {
+      try {
+        const nextData = await fetchVkpiDashboardData(token, {
+          range,
+          scope,
+          staffId: user?.staff_id ? String(user.staff_id) : undefined,
+        });
+        // 2026-07-03 缓存防毒:成员名单切片是静默超时型(optionalFetch 回空),
+        // 空结果不得覆盖缓存里已有的真名单 —— 否则一次超时把「账号授权/分组成员」钉死为空。
+        if (!nextData.staffMembers?.length && cached?.data?.staffMembers?.length) {
+          nextData.staffMembers = cached.data.staffMembers;
+        }
+        if (!mountedRef.current || activeLoadKeyRef.current !== loadKey) return;
+        setData(nextData);
+        setLastSyncedAt(nextData.lastSyncedAt || new Date().toISOString());
+        writeVkpiDashboardCache(cacheKey, nextData);
+      } catch (error) {
+        if (!mountedRef.current || activeLoadKeyRef.current !== loadKey) return;
+        if (cached?.data) {
+          console.warn("V-KPI dashboard refresh failed; keeping local cache", error);
+          return;
+        }
+        setMessage(error instanceof Error ? error.message : "加载 Viltrox Marketing 失败");
+      } finally {
+        if (inFlightLoadRef.current?.key === loadKey) {
+          inFlightLoadRef.current = null;
+        }
+        if (mountedRef.current && activeLoadKeyRef.current === loadKey) {
+          setLoading(false);
+        }
       }
-      setData(nextData);
-      setLastSyncedAt(nextData.lastSyncedAt || new Date().toISOString());
-      writeVkpiDashboardCache(cacheKey, nextData);
-    } catch (error) {
-      if (cached?.data) {
-        console.warn("V-KPI dashboard refresh failed; keeping local cache", error);
-        return;
-      }
-      setMessage(error instanceof Error ? error.message : "加载 Viltrox Marketing 失败");
-    } finally {
-      setLoading(false);
-    }
+    })();
+    inFlightLoadRef.current = { key: loadKey, promise };
+    return promise;
   }, [range, scope, token, user?.staff_id]);
 
   useEffect(() => {
@@ -208,56 +244,74 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     setViewMode((current) => current === "manager" ? "employee" : "manager");
   }, []);
 
+  const currentReportConfig = useCallback((): VkpiReportGenerateConfig => ({
+    period: range === "30d" || range === "mtd" || range === "qtd" ? "monthly" : "weekly",
+    date: new Date().toISOString().slice(0, 10),
+    language: "zh",
+    sections: VKPI_REPORT_SECTION_KEYS,
+    format: "visual",
+    scope: scope === "all" ? "all" : "self",
+    staffId: user?.staff_id,
+  }), [range, scope, user?.staff_id]);
+
   const handleExportPDF = useCallback(async () => {
     setMessage("正在生成 PDF 导出...");
     setActionLink(null);
     try {
-      const result = await exportVkpiReport(token, { reportType: "weekly", format: "pdf", range, scope, staffId: user?.staff_id ? String(user.staff_id) : undefined });
-      const downloadUrl = downloadUrlFrom(result);
-      setMessage(downloadUrl ? "PDF 已就绪。" : "PDF 导出任务已提交；当前接口没有返回下载链接。");
-      setActionLink(downloadUrl ? { href: downloadUrl, label: "打开 PDF" } : null);
-      if (downloadUrl) window.open(downloadUrl, "_blank", "noopener,noreferrer");
+      const result = await createVkpiReportExport(token, "pdf", currentReportConfig());
+      if (!result.downloadUrl) {
+        setMessage("PDF 导出任务已提交，但接口没有返回下载链接。");
+        return;
+      }
+      await downloadVkpiFile(token, result.downloadUrl, `vkpi-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+      setMessage("PDF 已就绪并下载。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "PDF 导出失败");
+      setMessage(reportApiErrorMessage(error, "PDF 导出失败"));
       setActionLink(null);
     }
-  }, [range, scope, token, user?.staff_id]);
+  }, [currentReportConfig, token]);
 
   const handleExportCSV = useCallback(async () => {
     setMessage("正在生成 CSV 导出...");
     setActionLink(null);
     try {
-      const result = await exportVkpiReport(token, { reportType: "weekly", format: "csv", range, scope, staffId: user?.staff_id ? String(user.staff_id) : undefined });
-      const downloadUrl = downloadUrlFrom(result);
-      setMessage(downloadUrl ? "CSV 已就绪。" : "CSV 导出任务已提交；当前接口没有返回下载链接。");
-      setActionLink(downloadUrl ? { href: downloadUrl, label: "打开 CSV" } : null);
-      if (downloadUrl) window.open(downloadUrl, "_blank", "noopener,noreferrer");
+      const result = await createVkpiReportExport(token, "csv", currentReportConfig());
+      if (!result.downloadUrl) {
+        setMessage("CSV 导出任务已提交，但接口没有返回下载链接。");
+        return;
+      }
+      await downloadVkpiFile(token, result.downloadUrl, `vkpi-report-${new Date().toISOString().slice(0, 10)}.csv`);
+      setMessage("CSV 已就绪并下载。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "CSV 导出失败");
+      setMessage(reportApiErrorMessage(error, "CSV 导出失败"));
       setActionLink(null);
     }
-  }, [range, scope, token, user?.staff_id]);
+  }, [currentReportConfig, token]);
 
   const handleGenerateWeeklyReport = useCallback(async () => {
     setMessage("正在生成周报...");
     setActionLink(null);
     setWeeklyReportStatus({ state: "loading", message: "正在生成周报..." });
     try {
-      const result = await generateWeeklyReport(token, { range, scope, staffId: user?.staff_id ? String(user.staff_id) : undefined });
-      const downloadUrl = downloadUrlFrom(result);
-      if (downloadUrl) window.open(downloadUrl, "_blank", "noopener,noreferrer");
+      const result = await generateVkpiReport(token, { ...currentReportConfig(), period: "weekly" });
+      if (result.status.toLowerCase() !== "ready") {
+        throw new Error(`报告接口返回状态：${result.status || "unknown"}`);
+      }
+      if (result.downloadUrl) {
+        await downloadVkpiFile(token, result.downloadUrl, `vkpi-weekly-${new Date().toISOString().slice(0, 10)}.pdf`);
+      }
       await load();
-      const doneMessage = downloadUrl ? "周报已生成，下载文件已就绪。" : "周报已生成，但当前接口没有返回下载链接。";
+      const doneMessage = result.downloadUrl ? "周报已生成并下载。" : "周报记录已生成，但接口没有返回下载链接。";
       setMessage(doneMessage);
-      setActionLink(downloadUrl ? { href: downloadUrl, label: "打开周报" } : null);
-      setWeeklyReportStatus({ state: "success", message: doneMessage, href: downloadUrl || undefined });
+      setActionLink(null);
+      setWeeklyReportStatus({ state: "success", message: doneMessage });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "周报生成失败";
+      const errorMessage = reportApiErrorMessage(error, "周报生成失败");
       setMessage(errorMessage);
       setActionLink(null);
       setWeeklyReportStatus({ state: "error", message: errorMessage });
     }
-  }, [load, range, scope, token, user?.staff_id]);
+  }, [currentReportConfig, load, token]);
 
   const handleUploadAvatar = useCallback(async (file: File) => {
     setMessage("正在上传真人头像...");
@@ -346,23 +400,23 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     await load();
   }, [load, token]);
 
-  const handleUpdateCost = useCallback(async (costId: string, payload: Partial<Parameters<typeof addProjectCost>[1]>) => {
+  const handleUpdateCost = useCallback(async (costId: string, payload: VkpiCostUpdatePayload) => {
     setMessage("正在更新成本记录...");
     await updateMarketingCost(token, costId, payload);
     setMessage("成本记录已更新。");
     await load();
   }, [load, token]);
 
-  const handleApproveCost = useCallback(async (costId: string, note?: string) => {
+  const handleApproveCost = useCallback(async (costId: string, note: string, authorizationEvidence: VkpiManualAuthorizationEvidence) => {
     setMessage("正在审核成本记录...");
-    await approveMarketingCost(token, costId, note);
+    await approveMarketingCost(token, costId, note, authorizationEvidence);
     setMessage("成本记录已审核。");
     await load();
   }, [load, token]);
 
-  const handleVoidCost = useCallback(async (costId: string, reason?: string) => {
+  const handleVoidCost = useCallback(async (costId: string, reason: string, authorizationEvidence: VkpiManualAuthorizationEvidence) => {
     setMessage("正在作废成本记录...");
-    await voidMarketingCost(token, costId, reason);
+    await voidMarketingCost(token, costId, reason, authorizationEvidence);
     setMessage("成本记录已作废，历史审计保留。");
     await load();
   }, [load, token]);

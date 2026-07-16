@@ -10,22 +10,33 @@ from app.domains.lineage.common import _float, _int, _json
 from app.domains.lineage.schema import ensure_vkpi_lineage_schema
 
 def _persist_value(conn: Any, *, run_id: int, metric_key: str, result: dict[str, Any], now: str) -> int:
+    raw_value = result.get("value_numeric")
+    data_status = str(result.get("data_status") or "real").strip().lower()
+    if data_status not in {"real", "partial", "awaiting_source", "unavailable", "stale"}:
+        data_status = "unavailable"
+    confidence = result.get("confidence")
+    if confidence is None:
+        confidence = 1.0 if data_status == "real" else 0.0
     conn.execute(
         """
         INSERT INTO vkpi_metric_values (
             run_id, metric_key, value_numeric, value_text, currency, unit,
-            calculation_json, source_count, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
+            calculation_json, source_count, data_status, confidence, is_partial,
+            created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             int(run_id),
             metric_key,
-            _float(result.get("value_numeric")),
+            None if raw_value is None else _float(raw_value),
             "",
             str(result.get("currency") or ""),
             str(result.get("unit") or ""),
             _json(result.get("calculation")),
             len(result.get("sources") or []),
+            data_status,
+            _float(confidence),
+            1 if bool(result.get("is_partial")) else 0,
             now,
         ),
     )
@@ -196,24 +207,25 @@ def recent_dashboard_run_id(
     scope_type: str = "all",
     scope_id: int | None = None,
     period_days: int,
-    max_age_seconds: int,
+    max_age_seconds: int | None,
 ) -> int | None:
     """Return a reusable ready dashboard-run id for the scope+window, or None.
 
-    Read-only idempotency gate for the GET /dashboard path: when a ``ready`` run for
-    the same scope and rolling-window length was generated within ``max_age_seconds``
-    we reuse it instead of recomputing + writing a fresh run on every page load. The
-    rolling-window length must match (a 7-day view never reuses a 30-day run); recency
-    is filtered in SQL (Z-format timestamps sort lexicographically), window length is
-    verified in Python.
+    The rolling-window length must match (a 7-day view never reuses a 30-day run).
+    When ``max_age_seconds`` is ``None`` this is a strict read-only lookup of the
+    latest matching snapshot. Otherwise recency is filtered in SQL (Z-format
+    timestamps sort lexicographically). Window length is verified in Python.
     """
     ensure_vkpi_lineage_schema()
     conn = get_conn()
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(seconds=max(1, int(max_age_seconds)))
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    where = "trigger_source='dashboard' AND status='ready' AND generated_at >= ? AND scope_type=?"
-    params: list[Any] = [cutoff, scope_type or "all"]
+    where = "trigger_source='dashboard' AND status='ready' AND scope_type=?"
+    params: list[Any] = [scope_type or "all"]
+    if max_age_seconds is not None:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=max(1, int(max_age_seconds)))
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        where += " AND generated_at >= ?"
+        params.append(cutoff)
     if scope_id is not None:
         where += " AND scope_id=?"
         params.append(int(scope_id))

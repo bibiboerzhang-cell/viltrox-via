@@ -7,6 +7,7 @@ employee latest-metric drilldown is forced to staff scope, then deletes all
 smoke rows and generated metric runs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -411,7 +412,7 @@ def main() -> None:
     ensure_vkpi_reports_schema()
     ensure_vkpi_audit_schema()
     result = Smoke().run()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

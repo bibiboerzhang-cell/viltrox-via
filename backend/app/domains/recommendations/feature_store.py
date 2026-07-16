@@ -1,6 +1,7 @@
 """Feature snapshots for recommendation and future ML training."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -10,8 +11,44 @@ from app.db.connection import get_conn
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 
+class HistoricalFeatureSnapshotUnavailable(LookupError):
+    """Raised when a point-in-time request cannot be proven from frozen data."""
+
+
+FEATURE_SNAPSHOT_SCHEMA_VERSION = "vkpi_kol_feature_snapshot_v1"
+_HISTORICAL_CANDIDATE_LIMIT = 1000
+_STANDARD_KOL_FEATURE_KEYS = frozenset(
+    {
+        "platform",
+        "followers",
+        "posts_count",
+        "avg_views",
+        "avg_likes",
+        "avg_comments",
+        "engagement_rate",
+        "primary_topic",
+        "sync_status",
+    }
+)
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _as_utc(value: Any, *, field: str) -> tuple[datetime, str]:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field} is required")
+    candidate = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must include a timezone")
+    normalized = parsed.astimezone(timezone.utc)
+    return normalized, normalized.isoformat().replace("+00:00", "Z")
 
 
 def _loads(value: Any, default: Any = None) -> Any:
@@ -143,7 +180,13 @@ def snapshot_features(recommendation_id: int | None = None, kol_pool_id: int | N
     conn = get_conn()
     kol = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id or 0),)).fetchone() if kol_pool_id else None
     launch = conn.execute("SELECT * FROM vkpi_product_launches WHERE id=?", (int(launch_id or 0),)).fetchone() if launch_id else None
-    features: dict[str, Any] = {"snapshot_at": _utcnow(), "recommendation_id": recommendation_id, "kol_pool_id": kol_pool_id, "launch_id": launch_id}
+    features: dict[str, Any] = {
+        "feature_schema_version": FEATURE_SNAPSHOT_SCHEMA_VERSION,
+        "snapshot_at": _utcnow(),
+        "recommendation_id": recommendation_id,
+        "kol_pool_id": kol_pool_id,
+        "launch_id": launch_id,
+    }
     if kol:
         item = dict(kol)
         features.update(
@@ -176,8 +219,168 @@ def snapshot_features(recommendation_id: int | None = None, kol_pool_id: int | N
     return features
 
 
-def get_features_at_time(kol_pool_id: int, timestamp: str | None = None) -> dict[str, Any]:
-    return snapshot_features(kol_pool_id=kol_pool_id) | {"requested_at": timestamp or "current"}
+def get_features_at_time(
+    kol_pool_id: int,
+    timestamp: str | None = None,
+    *,
+    launch_id: int | None = None,
+) -> dict[str, Any]:
+    """Return only features that were frozen on or before ``timestamp``.
+
+    A historical request must never fall back to the current KOL row: doing so
+    would let training/evaluation observe facts that appeared after the decision
+    time.  Existing persisted recommendation feature snapshots are the current
+    frozen-by-application-convention source.  Callers receive an explicit exception when no usable
+    snapshot exists so they can exclude the row instead of silently leaking the
+    future.  A missing/current timestamp preserves the live-snapshot behavior,
+    while labelling it as non-historical.
+    """
+
+    entity_id = int(kol_pool_id or 0)
+    if entity_id <= 0:
+        raise ValueError("kol_pool_id must be a positive integer")
+    launch_scope = int(launch_id or 0)
+    if launch_id is not None and launch_scope <= 0:
+        raise ValueError("launch_id must be a positive integer when provided")
+    requested = str(timestamp or "").strip()
+    if not requested or requested.lower() == "current":
+        current = snapshot_features(kol_pool_id=entity_id, launch_id=launch_scope or None)
+        return current | {
+            "requested_at": "current",
+            "_point_in_time": {
+                "status": "current_not_historical",
+                "point_in_time": False,
+                "source": "live_kol_snapshot",
+                "entity_scope": "kol_launch" if launch_scope else "kol_only",
+            },
+        }
+
+    requested_dt, requested_at = _as_utc(requested, field="timestamp")
+    where_launch = " AND launch_id=?" if launch_scope else ""
+    params: tuple[Any, ...] = (
+        (entity_id, launch_scope, _HISTORICAL_CANDIDATE_LIMIT + 1)
+        if launch_scope
+        else (entity_id, _HISTORICAL_CANDIDATE_LIMIT + 1)
+    )
+    rows = get_conn().execute(
+        f"""
+        SELECT id, launch_id, feature_snapshot_json, created_at
+        FROM vkpi_kol_recommendations
+        WHERE kol_pool_id=?
+          {where_launch}
+          AND COALESCE(feature_snapshot_json, '{{}}')<>'{{}}'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    if not rows:
+        raise HistoricalFeatureSnapshotUnavailable(
+            "no frozen recommendation feature snapshot exists at or before the requested time"
+        )
+    if len(rows) > _HISTORICAL_CANDIDATE_LIMIT:
+        raise HistoricalFeatureSnapshotUnavailable(
+            "historical feature candidate window is incomplete; indexed pagination is required"
+        )
+
+    valid: list[tuple[datetime, datetime, int, dict[str, Any], str, str, str]] = []
+    rejected = 0
+    for row in rows:
+        item = dict(row)
+        snapshot = _loads(item.get("feature_snapshot_json"), {})
+        if not isinstance(snapshot, dict) or not snapshot:
+            rejected += 1
+            continue
+        try:
+            recorded_dt, recorded_at = _as_utc(item.get("created_at"), field="snapshot created_at")
+            snapshot_dt, snapshot_at = _as_utc(snapshot.get("snapshot_at"), field="feature snapshot_at")
+        except ValueError:
+            rejected += 1
+            continue
+        if recorded_dt > requested_dt or snapshot_dt > requested_dt or snapshot_dt > recorded_dt:
+            rejected += 1
+            continue
+        try:
+            snapshot_entity_id = int(snapshot.get("kol_pool_id") or 0)
+        except (TypeError, ValueError, OverflowError):
+            rejected += 1
+            continue
+        if snapshot_entity_id != entity_id:
+            rejected += 1
+            continue
+        if launch_scope:
+            try:
+                snapshot_launch_id = int(snapshot.get("launch_id") or 0)
+                row_launch_id = int(item.get("launch_id") or 0)
+            except (TypeError, ValueError, OverflowError):
+                rejected += 1
+                continue
+            if snapshot_launch_id != launch_scope or row_launch_id != launch_scope:
+                rejected += 1
+                continue
+        if not _STANDARD_KOL_FEATURE_KEYS.issubset(snapshot):
+            rejected += 1
+            continue
+        schema_version = str(snapshot.get("feature_schema_version") or "").strip()
+        if schema_version not in {"", FEATURE_SNAPSHOT_SCHEMA_VERSION}:
+            rejected += 1
+            continue
+        valid.append(
+            (
+                snapshot_dt,
+                recorded_dt,
+                int(item["id"]),
+                snapshot,
+                recorded_at,
+                snapshot_at,
+                schema_version or "legacy_unversioned_standard",
+            )
+        )
+
+    if not valid:
+        raise HistoricalFeatureSnapshotUnavailable(
+            "no schema-compatible frozen feature snapshot exists at or before the requested time"
+        )
+    _, _, source_row_id, snapshot, recorded_at, snapshot_at, schema_version = max(
+        valid,
+        key=lambda candidate: (candidate[0], candidate[1], candidate[2]),
+    )
+    snapshot_sha256 = hashlib.sha256(
+        json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if launch_scope:
+        selected_features = dict(snapshot)
+    else:
+        selected_features = {
+            key: snapshot.get(key)
+            for key in (
+                "feature_schema_version",
+                "snapshot_at",
+                "kol_pool_id",
+                *_STANDARD_KOL_FEATURE_KEYS,
+            )
+            if key in snapshot
+        }
+
+    return selected_features | {
+        "requested_at": requested_at,
+        "_point_in_time": {
+            "status": "historical_frozen_snapshot",
+            "point_in_time": True,
+            "source": "vkpi_kol_recommendations.feature_snapshot_json",
+            "source_row_id": source_row_id,
+            "source_launch_id": launch_scope or None,
+            "entity_scope": "kol_launch" if launch_scope else "kol_only",
+            "recorded_at": recorded_at,
+            "snapshot_at": snapshot_at,
+            "snapshot_sha256": snapshot_sha256,
+            "storage_mutability": "application_convention_not_db_enforced",
+            "feature_schema_version": schema_version,
+            "candidate_rows_examined": len(rows),
+            "candidate_rows_rejected": rejected,
+            "candidate_limit": _HISTORICAL_CANDIDATE_LIMIT,
+        },
+    }
 
 
 def list_feature_names() -> list[str]:

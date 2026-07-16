@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.domains import business_truth
 import app.domains.attribution.reconciliation as reconciliation
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-reconciliation"])
@@ -19,6 +20,17 @@ def _is_manager_staff(staff: dict) -> bool:
 def _require_manager_staff(staff: dict) -> None:
     if not _is_manager_staff(staff):
         raise HTTPException(status_code=403, detail="management permission required")
+
+
+def _authorization_or_http(body: dict, *, staff: dict, action: str) -> dict:
+    try:
+        return business_truth.require_authorization_evidence(body, staff=staff, action=action)
+    except business_truth.BusinessTruthWriteBlocked as exc:
+        status_code = 409 if exc.reason == "feature_disabled" else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason": exc.reason, "message": str(exc)},
+        ) from exc
 
 
 @router.get("/reconciliation/stats")
@@ -48,10 +60,15 @@ def reconciliation_item(queue_id: int, staff=Depends(require_tab("vkpi", "read")
 
 
 @router.post("/reconciliation/queue/{queue_id}/resolve")
-def reconciliation_resolve(queue_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def reconciliation_resolve(queue_id: int, body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     _require_manager_staff(staff)
+    authorization = _authorization_or_http(body, staff=staff, action="attribution_reconciliation_resolve")
     try:
-        return reconciliation.resolve(queue_id, body, staff=staff)
+        return reconciliation.resolve(
+            queue_id,
+            {**body, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -85,19 +102,30 @@ def reconciliation_sync_logs(limit: int = Query(default=100, ge=1, le=500), staf
 
 
 @router.post("/attribution/{attribution_id}/adjust")
-def attribution_adjust(attribution_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def attribution_adjust(attribution_id: int, body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     _require_manager_staff(staff)
+    authorization = _authorization_or_http(body, staff=staff, action="attribution_adjust")
     try:
-        return reconciliation.adjust_attribution(attribution_id, body, staff=staff)
+        return reconciliation.adjust_attribution(
+            attribution_id,
+            {**body, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/attribution/{attribution_id}/void")
-def attribution_void(attribution_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+def attribution_void(attribution_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "admin"))):
     _require_manager_staff(staff)
+    payload = body or {}
+    authorization = _authorization_or_http(payload, staff=staff, action="attribution_void")
     try:
-        return reconciliation.void_attribution(attribution_id, body or {}, staff=staff)
+        return reconciliation.void_attribution(
+            attribution_id,
+            {**payload, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

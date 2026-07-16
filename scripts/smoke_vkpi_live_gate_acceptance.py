@@ -6,6 +6,7 @@ gate behavior without calling YouTube or Apify. Set VKPI_P2_12_LIVE=1 to run one
 minimal live provider call after the offline checks are green.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -119,8 +120,8 @@ def main() -> None:
     if os.environ.get("VKPI_P2_12_LIVE") == "1":
         live_result = _run_optional_live()
 
-    print(json.dumps({"providers": sorted(names), "live_result": live_result}, ensure_ascii=False, default=str))
-    print("VKPI_LIVE_GATE_ACCEPTANCE_SMOKE_OK")
+    stdout_out(json.dumps({"providers": sorted(names), "live_result": live_result}, ensure_ascii=False, default=str))
+    stdout_out("VKPI_LIVE_GATE_ACCEPTANCE_SMOKE_OK")
 
 
 if __name__ == "__main__":

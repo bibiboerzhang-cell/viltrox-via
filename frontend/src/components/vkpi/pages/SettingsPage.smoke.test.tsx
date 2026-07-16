@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { VkpiDashboardData } from "../vkpiTypes";
 
 import { SettingsPage } from "./SettingsPage";
@@ -17,8 +17,12 @@ const emptyData = {
 } as unknown as VkpiDashboardData;
 
 describe("SettingsPage smoke", () => {
-  it("manager 视图挂载不抛异常,并渲染出 PageShell 标题", () => {
-    expect(() =>
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("manager 视图挂载不抛异常,并渲染出 PageShell 标题", async () => {
+    await act(async () => {
       render(
         React.createElement(SettingsPage, {
           data: emptyData,
@@ -28,9 +32,32 @@ describe("SettingsPage smoke", () => {
           onUpsertProductCost: () => {},
           onRefreshData: () => {},
         }),
-      ),
-    ).not.toThrow();
+      );
+    });
 
     expect(screen.getByText("系统设置")).toBeTruthy();
+  });
+
+  it("卸载时中止仍在等待的版本探针,不让异步结果回写已卸载页面", async () => {
+    const abortSeen = vi.fn();
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        abortSeen();
+        reject(new DOMException("aborted", "AbortError"));
+      }, { once: true });
+    })));
+
+    const view = render(
+      React.createElement(SettingsPage, {
+        data: emptyData,
+        viewMode: "manager",
+        onInviteStaff: () => {},
+        onUpsertProductCost: () => {},
+        onRefreshData: () => {},
+      }),
+    );
+    view.unmount();
+
+    await waitFor(() => expect(abortSeen).toHaveBeenCalledOnce());
   });
 });

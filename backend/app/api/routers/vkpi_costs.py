@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import costs
+from app.domains import business_truth
 from app.domains.access import scope
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-costs"])
@@ -24,6 +25,16 @@ def _require_manager_staff(staff: dict) -> None:
 
 def _scope_403(exc: Exception) -> HTTPException:
     return HTTPException(status_code=403, detail=str(exc) or "scope denied")
+
+
+def _authorization_or_http(body: dict, *, staff: dict, action: str) -> dict:
+    try:
+        return business_truth.require_authorization_evidence(body, staff=staff, action=action)
+    except business_truth.BusinessTruthWriteBlocked as exc:
+        status_code = 409 if exc.reason == "feature_disabled" else 400
+        raise HTTPException(status_code=status_code, detail={"reason": exc.reason, "message": str(exc)}) from exc
+
+
 @router.get("/costs")
 def list_costs(
     project_id: int | None = None,
@@ -49,10 +60,15 @@ def get_cost(cost_id: int, staff=Depends(require_tab("vkpi", "read"))):
 
 
 @router.patch("/costs/{cost_id}")
-def update_cost(cost_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
+def update_cost(cost_id: int, body: dict, staff=Depends(require_tab("vkpi", "admin"))):
     _require_manager_staff(staff)
+    authorization = _authorization_or_http(body, staff=staff, action="cost_update")
     try:
-        return costs.update_cost(cost_id, body, staff=staff)
+        return costs.update_cost(
+            cost_id,
+            {**body, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -62,19 +78,31 @@ def update_cost(cost_id: int, body: dict, staff=Depends(require_tab("vkpi", "wri
 
 
 @router.post("/costs/{cost_id}/approve")
-def approve_cost(cost_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+def approve_cost(cost_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "admin"))):
     _require_manager_staff(staff)
+    payload = body or {}
+    authorization = _authorization_or_http(payload, staff=staff, action="actual_cost_approve")
     try:
-        return costs.approve_cost(cost_id, body or {}, staff=staff)
+        return costs.approve_cost(
+            cost_id,
+            {**payload, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/costs/{cost_id}/void")
-def void_cost(cost_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+def void_cost(cost_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "admin"))):
     _require_manager_staff(staff)
+    payload = body or {}
+    authorization = _authorization_or_http(payload, staff=staff, action="cost_void")
     try:
-        return costs.void_cost(cost_id, body or {}, staff=staff)
+        return costs.void_cost(
+            cost_id,
+            {**payload, "_authorization_evidence": authorization},
+            staff=staff,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -107,5 +135,28 @@ def upsert_product_cost(body: dict, staff=Depends(require_tab("vkpi", "write")))
     _require_manager_staff(staff)
     try:
         return costs.upsert_product_cost(body, staff=staff)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/product-costs/{product_sku}/verify")
+def verify_product_cost(
+    product_sku: str,
+    body: dict,
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    _require_manager_staff(staff)
+    authorization = _authorization_or_http(body, staff=staff, action="product_cost_verify")
+    try:
+        return costs.verify_product_cost(
+            product_sku,
+            body,
+            authorization_evidence=authorization,
+            staff=staff,
+        )
+    except costs.ProductCostVerificationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

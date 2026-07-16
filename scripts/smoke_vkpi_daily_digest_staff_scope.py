@@ -6,6 +6,7 @@ can prove eligible-vs-excluded staff counts without depending on the real team
 roster or external provider APIs.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import os
@@ -166,7 +167,7 @@ def main() -> None:
         assert after["ready_staff_count"] == 1, after
         assert after["empty_staff_count"] == 0, after
         assert after["items_total"] == 1, after
-        print("VKPI_DAILY_DIGEST_STAFF_SCOPE_SMOKE_OK")
+        stdout_out("VKPI_DAILY_DIGEST_STAFF_SCOPE_SMOKE_OK")
     finally:
         analytics.staff_service.list_members = original_list_members
         _cleanup(marker, suggestion_id, [eligible_staff_id, smoke_staff_id, inactive_staff_id], user_ids)

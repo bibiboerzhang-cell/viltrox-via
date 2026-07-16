@@ -308,7 +308,11 @@ def _site_channel(site_budget: float, db: Any) -> dict[str, Any]:
     try:
         from app.db.connection import table_exists
         if table_exists("vkpi_shopify_orders"):
-            row = db.execute("SELECT COUNT(*) AS n FROM vkpi_shopify_orders").fetchone()
+            row = db.execute(
+                "SELECT COUNT(*) AS n FROM vkpi_shopify_orders "
+                "WHERE LOWER(COALESCE(financial_status,'')) "
+                "IN ('paid','partially_paid','partially_refunded')"
+            ).fetchone()
             order_count = _int_or_none(dict(row).get("n")) if row is not None else 0
             attribution_status = "ready" if (order_count or 0) > 0 else "data_missing"
     except Exception as exc:  # noqa: BLE001 — 订单探测失败诚实降级,不拖垮分配

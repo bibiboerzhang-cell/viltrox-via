@@ -9,6 +9,52 @@ from typing import Any, Dict, Optional
 from app.services.ai.orchestrator import TaskStatus
 
 
+# Jobs in this set may reach paid/network providers and therefore require the
+# Redis + Postgres durable worker fence.  The in-process development queue has
+# no cross-process claim, reservation, or execution-context proof and must
+# reject them before it advertises a task as queued.
+DURABLE_PROVIDER_JOB_TYPES = frozenset(
+    {
+        "apify_batch_refresh",
+        "comment_intelligence_post",
+        "comment_intelligence_recent",
+        "comments_batch_collect",
+        "comments_collect_post",
+        "discovery_federated_search",
+        "industry_account_refresh",
+        "intel_bh_refresh",
+        "intel_bh_reviews",
+        "intel_lens_compare",
+        "intel_lens_monitor",
+        "intel_scan_account",
+        "intel_scan_matrix",
+        "intel_via_learning",
+        "kol_apify_enrich",
+        "kol_apify_enrich_candidates",
+        "kol_dossier_scan",
+        "kol_onboarding",
+        "kol_platform_search",
+        "official_visual_scan",
+        "platform_ingest_amazon",
+        "platform_ingest_bh",
+        "platform_ingest_facebook",
+        "platform_ingest_instagram",
+        "platform_ingest_reddit",
+        "platform_ingest_tiktok",
+        "platform_ingest_web",
+        "platform_ingest_youtube",
+        "project_video_metadata_refresh",
+        "score_kol_content",
+        "verification_scan_pending",
+        "verification_scan_single",
+        "vkpi_analytics_compare",
+        "vkpi_analytics_monitor",
+        "vkpi_kol_pool_on_demand_refresh",
+        "vkpi_official_channel_sync",
+    }
+)
+
+
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 

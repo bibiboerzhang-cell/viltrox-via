@@ -28,6 +28,9 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_lifecycle import managed_apify_client
+
 
 X_API_BASE = "https://api.twitter.com/2"
 DEFAULT_ACTOR_ID = "apidojo~twitter-scraper-lite"
@@ -146,27 +149,34 @@ class XCrawler:
             from apify_client import ApifyClient  # type: ignore
 
             resolved_actor_id = (actor_id or self.actor_id).replace("/", "~")
-            client = ApifyClient(self.api_token)
-            run = client.actor(resolved_actor_id).call(
-                run_input=input_payload,
-                timeout_secs=self.run_timeout_seconds,
-                wait_secs=self.run_timeout_seconds,
-            )
-            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+            with managed_apify_client(ApifyClient(self.api_token)) as client:
+                run = call_apify_actor(
+                    client,
+                    resolved_actor_id,
+                    platform="x",
+                    operation="apify_run",
+                    source="industry_crawlers",
+                    run_input=input_payload,
+                    timeout_secs=self.run_timeout_seconds,
+                    wait_secs=self.run_timeout_seconds,
+                )
+                if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
+                    return {
+                        "provider": "x", "provider_status": "error", "sync_status": "error",
+                        "items": [], "error": f"X actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                        "raw": {"actor_id": resolved_actor_id, "input": input_payload},
+                    }
+                from . import record_apify_run_cost
+
+                record_apify_run_cost(run, platform="x", actor_id=resolved_actor_id, operation="apify_run")
+                items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
                 return {
-                    "provider": "x", "provider_status": "error", "sync_status": "error",
-                    "items": [], "error": f"X actor did not finish: {str((run or {}).get('status') or 'unknown')}",
+                    "provider": "x", "provider_status": "ok", "sync_status": "synced",
+                    "items": items,
                     "raw": {"actor_id": resolved_actor_id, "input": input_payload},
                 }
-            from . import record_apify_run_cost
-
-            record_apify_run_cost(run, platform="x", actor_id=resolved_actor_id, operation="apify_run")
-            items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
-            return {
-                "provider": "x", "provider_status": "ok", "sync_status": "synced",
-                "items": items,
-                "raw": {"actor_id": resolved_actor_id, "input": input_payload},
-            }
+        except ApifyBudgetBlocked as exc:
+            return {**exc.payload(), "items": [], "provider": "x"}
         except ImportError:
             return {
                 "provider": "x", "provider_status": "error", "sync_status": "error",

@@ -11,9 +11,180 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains import business_truth
 from app.domains.metrics import aggregation as metrics_agg
 
 logger = get_logger(__name__)
+
+
+def _bulk_high_value_signals(conn: Any, kids: list[int]) -> dict[int, dict[str, Any]]:
+    """Return ROI and learning signals for a candidate set with constant queries.
+
+    This is deliberately private to the leaderboard.  The single-KOL public
+    functions keep their established contracts, while a 50-row leaderboard no
+    longer fans out into hundreds of table checks and reads.
+    """
+    if not kids:
+        return {}
+    placeholders = ",".join("?" for _ in kids)
+    signals: dict[int, dict[str, Any]] = {
+        kid: {"cost_cents": None, "revenue_cents": None, "funnel_weight": None, "outcome_weight": None}
+        for kid in kids
+    }
+
+    if table_exists("vkpi_cost_ledger"):
+        try:
+            for kid in kids:
+                signals[kid]["cost_cents"] = 0
+            rows = conn.execute(
+                f"""
+                SELECT pka.kol_pool_id, COALESCE(SUM(c.amount_cents), 0) AS cost_cents
+                FROM vkpi_project_kol_assignments pka
+                JOIN vkpi_cost_ledger c ON c.project_id = pka.project_id
+                WHERE pka.kol_pool_id IN ({placeholders})
+                  AND c.status='actual' AND c.approved_at IS NOT NULL
+                GROUP BY pka.kol_pool_id
+                """,
+                tuple(kids),
+            ).fetchall()
+            for row in rows:
+                data = dict(row)
+                signals[int(data["kol_pool_id"])]["cost_cents"] = int(data.get("cost_cents") or 0)
+        except Exception:
+            logger.debug("roi.high_value_cost_batch_failed", exc_info=True)
+            for kid in kids:
+                signals[kid]["cost_cents"] = None
+
+    if table_exists("vkpi_sales_attributions"):
+        try:
+            for kid in kids:
+                signals[kid].update({"revenue_cents": 0, "commission_cents": 0, "orders": 0})
+            rows = conn.execute(
+                f"""
+                SELECT pka.kol_pool_id,
+                       COALESCE(NULLIF(s.currency, ''), 'USD') AS currency,
+                       COALESCE(SUM(s.revenue_cents), 0) AS revenue_cents,
+                       COALESCE(SUM(s.commission_cents), 0) AS commission_cents,
+                       COUNT(*) AS orders
+                FROM vkpi_project_kol_assignments pka
+                JOIN vkpi_sales_attributions s ON s.project_id = pka.project_id
+                WHERE pka.kol_pool_id IN ({placeholders})
+                  AND {business_truth.verified_shopify_attribution_sql('s')}
+                GROUP BY pka.kol_pool_id, COALESCE(NULLIF(s.currency, ''), 'USD')
+                """,
+                tuple(kids),
+            ).fetchall()
+            currencies: dict[int, list[dict[str, Any]]] = {kid: [] for kid in kids}
+            for row in rows:
+                data = dict(row)
+                currencies[int(data["kol_pool_id"])].append(data)
+            for kid, buckets in currencies.items():
+                if not buckets:
+                    continue
+                primary = max(
+                    buckets,
+                    key=lambda value: (int(value.get("revenue_cents") or 0), int(value.get("orders") or 0)),
+                )
+                signals[kid].update(
+                    {
+                        "revenue_cents": int(primary.get("revenue_cents") or 0),
+                        "commission_cents": int(primary.get("commission_cents") or 0),
+                        "orders": int(primary.get("orders") or 0),
+                        "currency": str(primary.get("currency") or "USD"),
+                        "mixed_currency": len(buckets) > 1,
+                    }
+                )
+        except Exception:
+            logger.debug("roi.high_value_revenue_batch_failed", exc_info=True)
+            for kid in kids:
+                signals[kid].update({"revenue_cents": None, "commission_cents": None, "orders": None})
+
+    if table_exists("vkpi_recommendation_outcomes"):
+        try:
+            rows = conn.execute(
+                f"""
+                WITH ranked AS (
+                  SELECT kol_pool_id, was_claimed, agreement_reached, content_published,
+                         ROW_NUMBER() OVER (PARTITION BY kol_pool_id ORDER BY id DESC) AS rn
+                  FROM vkpi_recommendation_outcomes
+                  WHERE kol_pool_id IN ({placeholders})
+                )
+                SELECT kol_pool_id, COUNT(*) AS total,
+                       SUM(CASE WHEN was_claimed THEN 1 ELSE 0 END) AS claimed,
+                       SUM(CASE WHEN agreement_reached THEN 1 ELSE 0 END) AS agreed,
+                       SUM(CASE WHEN content_published THEN 1 ELSE 0 END) AS published
+                FROM ranked WHERE rn <= 50 GROUP BY kol_pool_id
+                """,
+                tuple(kids),
+            ).fetchall()
+            for row in rows:
+                data = dict(row)
+                total = int(data.get("total") or 0)
+                if total:
+                    signals[int(data["kol_pool_id"])]["funnel_weight"] = min(
+                        1.0,
+                        max(
+                            0.0,
+                            (
+                                0.2 * int(data.get("claimed") or 0)
+                                + 0.3 * int(data.get("agreed") or 0)
+                                + 0.5 * int(data.get("published") or 0)
+                            )
+                            / total,
+                        ),
+                    )
+        except Exception:
+            logger.debug("roi.high_value_funnel_batch_failed", exc_info=True)
+
+    if table_exists("vkpi_agent_outcome_evaluations"):
+        try:
+            string_kids = [str(kid) for kid in kids]
+            string_placeholders = ",".join("?" for _ in string_kids)
+            rows = conn.execute(
+                f"""
+                WITH ranked AS (
+                  SELECT entity_id, success,
+                         ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY id DESC) AS rn
+                  FROM vkpi_agent_outcome_evaluations
+                  WHERE entity_type='kol' AND entity_id IN ({string_placeholders})
+                )
+                SELECT entity_id, COUNT(*) AS total,
+                       SUM(CASE WHEN success IS TRUE THEN 1 ELSE 0 END) AS successes,
+                       SUM(CASE WHEN success IS FALSE THEN 1 ELSE 0 END) AS failures
+                FROM ranked WHERE rn <= 20 GROUP BY entity_id
+                """,
+                tuple(string_kids),
+            ).fetchall()
+            for row in rows:
+                data = dict(row)
+                successes = int(data.get("successes") or 0)
+                failures = int(data.get("failures") or 0)
+                decided = successes + failures
+                if decided:
+                    signals[int(data["entity_id"])]["outcome_weight"] = successes / decided
+        except Exception:
+            logger.debug("roi.high_value_outcome_batch_failed", exc_info=True)
+
+    for signal in signals.values():
+        funnel_weight = signal.pop("funnel_weight", None)
+        outcome_weight = signal.pop("outcome_weight", None)
+        if funnel_weight is not None and outcome_weight is not None:
+            signal["recommendation_weight"] = round(0.6 * funnel_weight + 0.4 * outcome_weight, 4)
+        elif funnel_weight is not None:
+            signal["recommendation_weight"] = round(funnel_weight, 4)
+        elif outcome_weight is not None:
+            signal["recommendation_weight"] = round(outcome_weight, 4)
+        else:
+            signal["recommendation_weight"] = None
+        revenue = signal.get("revenue_cents")
+        cost = signal.get("cost_cents")
+        signal["roi"] = (
+            round((int(revenue) - int(cost)) / int(cost), 4)
+            if isinstance(revenue, int) and isinstance(cost, int) and cost > 0
+            else None
+        )
+        signal["status"] = "ready" if isinstance(revenue, int) and revenue > 0 else "awaiting_m5"
+    return signals
 
 
 def _project_ids_for_kol(kol_pool_id: int) -> list[int]:
@@ -101,17 +272,18 @@ def list_high_value_kols(*, limit: int = 10, staff: dict[str, Any] | None = None
                 names[int(dict(nr)["id"])] = str(dict(nr).get("label") or "")
         except Exception:
             logger.debug("roi.high_value_names_failed", exc_info=True)
+    signals = _bulk_high_value_signals(conn, kids)
     items: list[dict[str, Any]] = []
     for kid in kids:
-        roi = get_kol_roi_summary(kid)
+        signal = signals.get(kid, {})
         items.append({
             "kol_pool_id": kid,
             "name": names.get(kid, f"KOL #{kid}"),
             "projects": proj.get(kid, 0),
-            "roi": roi.get("roi"),
-            "revenue_cents": roi.get("revenue_cents"),
-            "status": roi.get("status"),
-            "recommendation_weight": compute_next_recommendation_weight(kid),
+            "roi": signal.get("roi"),
+            "revenue_cents": signal.get("revenue_cents"),
+            "status": signal.get("status", "awaiting_m5"),
+            "recommendation_weight": signal.get("recommendation_weight"),
         })
     items.sort(key=lambda x: (-(x["recommendation_weight"] or 0), -x["projects"]))
     return {"items": items, "available": True, "count": len(items),

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a dry-run review package for market-signal promotion candidates."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -21,7 +22,7 @@ def main() -> int:
 
     payload = build_market_signal_review_package_from_file(args.classifier_json)
     paths = write_review_package_report(payload, out_dir=args.out_dir)
-    print(
+    stdout_out(
         json.dumps(
             {
                 **paths,

@@ -1,9 +1,31 @@
+import pytest
+
 from app.domains.dashboard import summary as dashboard_summary
+
+
+@pytest.fixture(autouse=True)
+def _isolate_database_backed_summary_blocks(monkeypatch):
+    """Keep these orchestration tests independent of production dashboard tables."""
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_cached_summary_block",
+        lambda _name, _scope, builder, **_parts: builder(),
+    )
+    monkeypatch.setattr(dashboard_summary, "_build_evidence_metrics_summary", lambda **_kwargs: {})
+    monkeypatch.setattr(dashboard_summary, "_build_active_campaigns_summary", lambda **_kwargs: {})
+    monkeypatch.setattr(dashboard_summary, "_build_funnel_summary", lambda **_kwargs: {})
+    monkeypatch.setattr(dashboard_summary, "_build_company_window_metrics", lambda: {})
+    monkeypatch.setattr(dashboard_summary, "_build_company_metric_series", lambda **_kwargs: {})
 
 
 def test_build_dashboard_summary_adds_lineage_and_official_summary(monkeypatch):
     monkeypatch.setattr(dashboard_summary.scope, "effective_staff_id", lambda staff, staff_id: None)
     monkeypatch.setattr(dashboard_summary, "resolve_staff_id", lambda staff: 7)
+    monkeypatch.setattr(
+        dashboard_summary,
+        "build_dashboard_kpi",
+        lambda **kwargs: {"active_roster": 12, "scope": kwargs.get("staff_scope_id")},
+    )
     monkeypatch.setattr(
         dashboard_summary.decision_engine,
         "dashboard",
@@ -37,6 +59,11 @@ def test_build_dashboard_summary_uses_staff_dashboard_when_scoped(monkeypatch):
 
     monkeypatch.setattr(dashboard_summary.scope, "effective_staff_id", lambda staff, staff_id: 42)
     monkeypatch.setattr(dashboard_summary, "resolve_staff_id", lambda staff: 9)
+    monkeypatch.setattr(
+        dashboard_summary,
+        "build_dashboard_kpi",
+        lambda **kwargs: {"active_roster": 4, "scope": kwargs.get("staff_scope_id")},
+    )
 
     def dashboard_view(view, *, window_days, staff_id):
         calls["view"] = view

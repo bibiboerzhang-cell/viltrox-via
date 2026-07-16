@@ -3,7 +3,7 @@ import {
   AlertCircle, Briefcase, CircleDot, DollarSign, ExternalLink, MapPin, Plus,
   ShieldCheck, Users, X
 } from "lucide-react";
-import { daysUntil, fmtMoneyShort, healthColor, sum } from "../shared/helpers";
+import { eventTiming, fmtMoneyShort, healthColor, percentOf, sum } from "../shared/helpers";
 import { memberFromStaff, projectById } from "../shared/lookups";
 import type { EventVm, InvitedKolVm, TaskVm, UiStaff } from "../shared/types";
 
@@ -23,21 +23,23 @@ export default function OverviewTab({ ev, staff = [], tasks = [], onUpdateTeam }
   // 加成员候选 = 真实员工名单里还不在团队里的人(mock TEAM 退役,mock id 不再落库)。
   const teamCandidates = (Array.isArray(staff) ? staff : []).filter(u => !ev.teamUserIds.includes(String(u.id)));
   const totalSpent = sum(ev.budgetByCategory, "spent");
-  const days = daysUntil(ev.startDate);
+  const timing = eventTiming(ev.startDate, ev.endDate);
   const isDone = ev.status === "done";
+  const isCancelled = ev.status === "cancelled";
+  const budgetPct = percentOf(totalSpent, ev.budgetTotal);
+  const hasHealthScore = ev.healthScore != null && Number.isFinite(ev.healthScore);
   const confirmedKols = ev.invitedKols.filter((k: InvitedKolVm) => k.status === "confirmed").length;
   const doneTasks = tasks.filter(t => t.done).length;
 
   return e("div", { className: "p-5 space-y-4" },
     // 倒计时大数字
-    !isDone && e("div", { className: "rounded-xl p-5 border", style: { background: days <= 14 ? "linear-gradient(135deg, rgba(251,191,36,0.10), rgba(251,191,36,0.02))" : "linear-gradient(135deg, rgba(168,85,247,0.10), rgba(168,85,247,0.02))", borderColor: days <= 14 ? "rgba(251,191,36,0.20)" : "rgba(168,85,247,0.18)" } },
+    !isDone && !isCancelled && e("div", { className: "rounded-xl p-5 border", style: timing.phase === "ended" || timing.phase === "invalid" ? { background: "rgba(100,116,139,0.05)", borderColor: "rgba(100,116,139,0.18)" } : { background: timing.phase === "ongoing" || timing.days <= 14 ? "linear-gradient(135deg, rgba(251,191,36,0.10), rgba(251,191,36,0.02))" : "linear-gradient(135deg, rgba(168,85,247,0.10), rgba(168,85,247,0.02))", borderColor: timing.phase === "ongoing" || timing.days <= 14 ? "rgba(251,191,36,0.20)" : "rgba(168,85,247,0.18)" } },
       e("div", { className: "flex items-center justify-between" },
         e("div", null,
-          e("div", { className: "text-[10.5px] text-slate-400 mb-1" }, days <= 14 ? "紧急 — 距开幕" : "倒计时"),
+          e("div", { className: "text-[10.5px] text-slate-400 mb-1" }, timing.phase === "ended" ? "日程已过期 — 状态未结项" : timing.phase === "invalid" ? "活动日期" : timing.phase === "ongoing" ? "活动日程" : timing.days <= 14 ? "紧急 — 距开幕" : "倒计时"),
           e("div", { className: "flex items-baseline gap-2" },
-            e("div", { className: "text-[36px] font-bold tabular-nums", style: { color: days <= 14 ? "#fbbf24" : "#a855f7" } },
-              days > 0 ? days : Math.abs(days)),
-            e("div", { className: "text-[14px] text-slate-300" }, days >= 0 ? "天" : "天 (进行中)")
+            e("div", { className: "text-[28px] font-bold tabular-nums", style: { color: timing.phase === "ended" || timing.phase === "invalid" ? "#94a3b8" : timing.phase === "ongoing" || timing.days <= 14 ? "#fbbf24" : "#a855f7" } },
+              timing.label)
           ),
           e("div", { className: "text-[10.5px] text-slate-500 mt-1" },
             ev.startDate, " · ", ev.location.city
@@ -59,7 +61,7 @@ export default function OverviewTab({ ev, staff = [], tasks = [], onUpdateTeam }
       e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] p-3" },
         e("div", { className: "flex items-center gap-1.5 text-[10px] text-slate-400 mb-2" }, e(DollarSign, { size: 10 }), "预算使用"),
         e("div", { className: "text-[20px] font-bold text-white tabular-nums" }, fmtMoneyShort(totalSpent)),
-        e("div", { className: "text-[10px] text-slate-500" }, "/ " + fmtMoneyShort(ev.budgetTotal), " · ", Math.round(totalSpent/ev.budgetTotal*100), "%")
+        e("div", { className: "text-[10px] text-slate-500" }, "/ " + fmtMoneyShort(ev.budgetTotal), budgetPct == null ? " · 未设预算" : ` · ${budgetPct}%`)
       ),
       e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] p-3" },
         e("div", { className: "flex items-center gap-1.5 text-[10px] text-slate-400 mb-2" }, e(CircleDot, { size: 10 }), "任务进度"),
@@ -73,8 +75,8 @@ export default function OverviewTab({ ev, staff = [], tasks = [], onUpdateTeam }
       ),
       e("div", { className: "rounded-lg border border-white/[0.06] bg-white/[0.012] p-3" },
         e("div", { className: "flex items-center gap-1.5 text-[10px] text-slate-400 mb-2" }, e(ShieldCheck, { size: 10 }), "健康度"),
-        e("div", { className: "text-[20px] font-bold tabular-nums", style: { color: healthColor(ev.healthScore) } }, ev.healthScore),
-        e("div", { className: "text-[10px] text-slate-500" }, ev.healthScore >= 85 ? "进度良好" : ev.healthScore >= 70 ? "需关注" : "落后")
+        e("div", { className: "text-[20px] font-bold tabular-nums", style: { color: healthColor(ev.healthScore) } }, hasHealthScore ? ev.healthScore : "—"),
+        e("div", { className: "text-[10px] text-slate-500" }, hasHealthScore ? "录入值 · 无评分来源" : "待评估 · 不默认满分")
       )
     ),
 

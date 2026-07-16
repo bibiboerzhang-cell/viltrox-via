@@ -8,6 +8,8 @@ AI Brief / Gemini preflight / bio 翻译」端点簇。本模块自带无 prefix
 """
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
@@ -25,6 +27,54 @@ router = APIRouter(tags=["vkpi-kol-pool"])
 logger = get_logger(__name__)
 
 
+def _write_service_error(
+    *,
+    status_code: int,
+    status: str,
+    reason: str,
+    operation: str,
+    kol_pool_id: int | None = None,
+) -> HTTPException:
+    detail = {
+        "status": status,
+        "reason": reason,
+        "operation": operation,
+        "retryable": status_code in {502, 503},
+    }
+    if kol_pool_id is not None:
+        detail["kol_pool_id"] = int(kol_pool_id)
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+def _audience_refresh_contract(result: object, kol_pool_id: int) -> dict:
+    if not isinstance(result, dict):
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="invalid_refresh_result",
+            operation="audience_refresh",
+            kol_pool_id=kol_pool_id,
+        )
+    upstream_status = str(result.get("status") or "")
+    if upstream_status == "network_error":
+        raise _write_service_error(
+            status_code=502,
+            status="upstream_unavailable",
+            reason="audience_provider_unavailable",
+            operation="audience_refresh",
+            kol_pool_id=kol_pool_id,
+        )
+    if upstream_status == "not_configured":
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="audience_provider_not_configured",
+            operation="audience_refresh",
+            kol_pool_id=kol_pool_id,
+        )
+    return result
+
+
 @router.post("/kol-pool/{kol_pool_id}/contacts")
 def add_kol_manual_contact(
     kol_pool_id: int,
@@ -35,19 +85,42 @@ def add_kol_manual_contact(
     consent='manual_entry'、is_public_declared=FALSE、记操作人;写 vkpi_kol_pool_contacts 审计表 +
     other_contacts_json 展示快照(并集去重)。纯人工录入零外调。零触 viltrox_fit_score。"""
     from app.domains.kol import business_contact_extract
+    from app.domains.kol.contact_access import authorize_plaintext_contacts, project_pool_contact_write
 
     try:
-        return business_contact_extract.add_manual_contact(
+        result = business_contact_extract.add_manual_contact(
             int(kol_pool_id),
             email=str(body.get("email") or ""),
             platform=str(body.get("platform") or ""),
             handle=str(body.get("handle") or ""),
             staff=staff or {},
         )
+        reveal = authorize_plaintext_contacts(
+            staff,
+            resource_type="kol_pool",
+            resource_id=int(kol_pool_id),
+            page_path=f"/kol-pool/{int(kol_pool_id)}/contacts",
+            metadata={"operation": "write_response"},
+        )
+        return project_pool_contact_write(result, reveal=reveal)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"save contact error: {exc}") from exc
+        correlation_id = uuid.uuid4().hex
+        logger.exception(
+            "vkpi.kol_contact_save_failed | kol_pool_id=%s correlation_id=%s",
+            kol_pool_id,
+            correlation_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "kol_contact_save_failed",
+                "message": "联系方式未保存，请联系管理员并提供错误编号。",
+                "retryable": False,
+                "correlation_id": correlation_id,
+            },
+        ) from exc
 
 
 @router.post("/kol-pool/{kol_pool_id}/audience-stats/refresh")
@@ -65,11 +138,29 @@ async def refresh_kol_audience_stats(
 
     try:
         # 网络抽样最长可到几十秒,走 threadpool 不阻塞事件循环。
-        return await run_in_threadpool(audience_stats.refresh_audience_stats, int(kol_pool_id))
+        result = await run_in_threadpool(audience_stats.refresh_audience_stats, int(kol_pool_id))
+        return _audience_refresh_contract(result, int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except TimeoutError as exc:
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="audience_refresh_timeout",
+            operation="audience_refresh",
+            kol_pool_id=kol_pool_id,
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — 估算功能失败不该炸接口,诚实回原因
-        return {"status": "error", "reason": str(exc)[:300], "kol_pool_id": int(kol_pool_id)}
+        logger.warning("vkpi.audience_refresh_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="audience_refresh_failed",
+            operation="audience_refresh",
+            kol_pool_id=kol_pool_id,
+        ) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/cooperation")
@@ -160,13 +251,21 @@ def get_kol_outreach_pack(
 ) -> dict:
     """C4:读最新外联包(brief + 双语邮件草稿,cache kol_outreach_pack_v1)+ 实时邮箱状态;
     无则 state=missing。零 LLM/零外调,零触 viltrox_fit_score。"""
-    del staff
     from app.domains.kol import outreach_pack as kol_outreach_pack
 
     try:
-        return kol_outreach_pack.get_outreach_pack(int(kol_pool_id))
+        return kol_outreach_pack.get_outreach_pack(int(kol_pool_id), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception:  # noqa: BLE001 - read surface returns an honest unavailable state
+        logger.warning("vkpi.outreach_pack_read_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        return {
+            "state": "error",
+            "status": "unavailable",
+            "reason": "outreach_pack_read_failed",
+            "retryable": True,
+            "kol_pool_id": int(kol_pool_id),
+        }
 
 
 @router.post("/kol-pool/{kol_pool_id}/outreach-pack")
@@ -193,7 +292,14 @@ async def generate_kol_outreach_pack(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — 生成失败不该 500 裸炸,诚实回原因供前端展示
-        return {"state": "error", "kol_pool_id": int(kol_pool_id), "reason": str(exc)[:300]}
+        logger.warning("vkpi.outreach_pack_generate_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        return {
+            "state": "error",
+            "status": "unavailable",
+            "reason": "outreach_pack_generation_failed",
+            "retryable": True,
+            "kol_pool_id": int(kol_pool_id),
+        }
 
 
 @router.get("/kol-pool/{kol_pool_id}/dimensions11")
@@ -230,7 +336,34 @@ def get_pool_item_llm_deep_analysis(
 ) -> dict:
     """Return independent LLM deep-analysis results; never touches V6 Fit."""
     del staff
-    return kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
+    try:
+        result = kol_llm_deep_analysis.get_kol_llm_deep_analysis(int(kol_pool_id), limit=limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - this is a read surface; return an honest empty state
+        logger.warning("vkpi.llm_deep_analysis_read_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        return {
+            "status": "unavailable",
+            "reason": "deep_analysis_read_failed",
+            "retryable": True,
+            "kol_pool_id": int(kol_pool_id),
+            "summary": {"count": 0, "llm_calls": False, "write_db": False},
+            "primary_result": None,
+            "items": [],
+            "count": 0,
+        }
+    if not isinstance(result, dict):
+        return {
+            "status": "unavailable",
+            "reason": "invalid_deep_analysis_result",
+            "retryable": True,
+            "kol_pool_id": int(kol_pool_id),
+            "summary": {"count": 0, "llm_calls": False, "write_db": False},
+            "primary_result": None,
+            "items": [],
+            "count": 0,
+        }
+    return result
 
 
 def _enqueue_content_fit_on_demand(kol_pool_id: int, product_sku, *, force: bool, staff) -> dict:
@@ -271,6 +404,23 @@ async def get_pool_item_content_fit(
         return await run_in_threadpool(kol_content_fit.get_content_fit, int(kol_pool_id))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vkpi.content_fit_endpoint_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        if analyze or force:
+            raise _write_service_error(
+                status_code=503,
+                status="unavailable",
+                reason="content_fit_enqueue_failed",
+                operation="content_fit_generate",
+                kol_pool_id=kol_pool_id,
+            ) from exc
+        return {
+            "status": "unavailable",
+            "reason": "content_fit_read_failed",
+            "retryable": True,
+            "kol_pool_id": int(kol_pool_id),
+            "result": None,
+        }
 
 
 @router.get("/kol-pool/{kol_pool_id}/intelligence-card")
@@ -321,7 +471,8 @@ def get_pool_item_competitor_exposure(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — 聚合失败不该 500 裸炸,诚实回原因供前端展示
-        return {"status": "error", "reason": str(exc)[:300], "kol_pool_id": int(kol_pool_id)}
+        logger.warning("vkpi.competitor_exposure_read_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        return {"status": "error", "reason": "competitor_exposure_read_failed", "kol_pool_id": int(kol_pool_id)}
 
 
 @router.get("/kol-pool/{kol_pool_id}/evidence-summary")
@@ -424,11 +575,11 @@ def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require
     """
     text = str((body or {}).get("text") or "").strip()
     if not text:
-        return {"translated": "", "lang": "zh", "cached": False, "skipped": "empty"}
+        return {"status": "skipped", "reason": "empty_input", "translated": "", "lang": "zh", "cached": False}
     if len(text) > 1200:
         text = text[:1200]
     if text in _BIO_ZH_CACHE:
-        return {"translated": _BIO_ZH_CACHE[text], "lang": "zh", "cached": True}
+        return {"status": "ready", "translated": _BIO_ZH_CACHE[text], "lang": "zh", "cached": True}
     try:
         from app.platform import llm_gateway
 
@@ -447,10 +598,30 @@ def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require
             out = str(resp.get("text") or "").strip().strip('"').strip("'").strip()
             if out:
                 _BIO_ZH_CACHE[text] = out
-                return {"translated": out, "lang": "zh", "cached": False}
-        return {"translated": "", "lang": "zh", "cached": False, "skipped": str(resp.get("status") or "unavailable")}
+                return {"status": "ready", "translated": out, "lang": "zh", "cached": False}
+        provider_reason = str(resp.get("reason") or resp.get("status") or "").strip().lower()
+        if "timeout" in provider_reason or "deadline" in provider_reason:
+            safe_reason = "provider_timeout"
+        elif provider_reason in {"all_providers_failed", "budget_exceeded", "not_configured", "provider_unavailable"}:
+            safe_reason = provider_reason
+        else:
+            safe_reason = "provider_unavailable"
+        return {
+            "status": "partial",
+            "reason": safe_reason,
+            "translated": "",
+            "lang": "zh",
+            "cached": False,
+        }
     except Exception as exc:  # noqa: BLE001 — 翻译失败不阻断,前端回退原文
-        return {"translated": "", "lang": "zh", "cached": False, "error": str(exc)}
+        logger.warning("vkpi.bio_translate_failed", exc_info=True)
+        return {
+            "status": "partial",
+            "reason": "provider_exception",
+            "translated": "",
+            "lang": "zh",
+            "cached": False,
+        }
 
 
 @router.post("/kol-pool/{kol_pool_id}/build-full-profile")
@@ -463,4 +634,34 @@ def build_full_profile_endpoint(
     del staff
     from app.domains.discovery.buildout import build_full_profile
 
-    return build_full_profile(int(kol_pool_id))
+    try:
+        result = build_full_profile(int(kol_pool_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("vkpi.build_full_profile_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="profile_build_enqueue_failed",
+            operation="build_full_profile",
+            kol_pool_id=kol_pool_id,
+        ) from exc
+    if not isinstance(result, dict):
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="invalid_profile_build_result",
+            operation="build_full_profile",
+            kol_pool_id=kol_pool_id,
+        )
+    out = dict(result)
+    tier = str(out.get("tier") or "")
+    if tier in {"full", "light"}:
+        out.setdefault("status", "queued")
+    elif str(out.get("reason") or "") == "error":
+        out["status"] = "partial"
+        out["reason"] = "profile_build_enqueue_partial"
+    else:
+        out.setdefault("status", "skipped")
+    return out

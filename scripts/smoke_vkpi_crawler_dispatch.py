@@ -20,6 +20,8 @@ import os
 import sys
 from pathlib import Path
 
+from stdout_utils import out
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 # 关键: 确保测试环境没 token (即使 .env 有,也覆盖掉)
@@ -49,7 +51,7 @@ def main() -> None:
     failures: list[str] = []
     
     # ── 场景 1-3: registry 返回正确类 ──
-    print("[1/8] get_crawler 返回正确实例")
+    out("[1/8] get_crawler 返回正确实例")
     
     yt = get_crawler("youtube")
     if not isinstance(yt, YouTubeCrawler):
@@ -72,19 +74,19 @@ def main() -> None:
         failures.append(f"get_crawler('facebook') 应返回 FacebookCrawler,实际 {type(facebook)}")
     
     if not failures:
-        print("   PASS: 3 个 crawler 都注册")
+        out("   PASS: 3 个 crawler 都注册")
     
     # ── 场景 4: unsupported 返回 None ──
-    print("[2/8] get_crawler('unsupported') 返回 None")
+    out("[2/8] get_crawler('unsupported') 返回 None")
     
     unsupported = get_crawler("nonexistent_platform_xyz")
     if unsupported is not None:
         failures.append(f"get_crawler('nonexistent_platform_xyz') 应返回 None,实际 {unsupported}")
     else:
-        print("   PASS: 未注册平台返回 None")
+        out("   PASS: 未注册平台返回 None")
     
     # ── 场景 5: is_supported / supported_platforms ──
-    print("[3/8] is_supported / supported_platforms")
+    out("[3/8] is_supported / supported_platforms")
     
     if not is_supported("youtube"):
         failures.append("is_supported('youtube') 应 True")
@@ -98,10 +100,10 @@ def main() -> None:
     if not expected.issubset(set(platforms)):
         failures.append(f"supported_platforms 缺: {expected - set(platforms)}")
     else:
-        print(f"   PASS: supported_platforms = {platforms}")
+        out(f"   PASS: supported_platforms = {platforms}")
     
     # ── 场景 6: 接口规范统一 ──
-    print("[4/8] 所有 crawler 都满足接口规范")
+    out("[4/8] 所有 crawler 都满足接口规范")
     
     required_attrs = ["configured", "provider_status", "crawl_channel_profile"]
     xhs = get_crawler("xiaohongshu")
@@ -125,10 +127,10 @@ def main() -> None:
                 failures.append(f"{name} 缺接口 {attr}")
     
     if not [f for f in failures if "缺接口" in f]:
-        print("   PASS: 3 个 crawler 接口规范统一")
+        out("   PASS: 3 个 crawler 接口规范统一")
     
     # ── 场景 7: 没配置时返回 not_configured ──
-    print("[5/8] 没 token 时返回 not_configured (不假数据)")
+    out("[5/8] 没 token 时返回 not_configured (不假数据)")
     
     for name, crawler in [
         ("YouTubeCrawler", yt),
@@ -142,7 +144,7 @@ def main() -> None:
         ("FacebookCrawler", facebook),
     ]:
         if crawler.configured:
-            print(f"   SKIP: {name} 有 token,跳过 not_configured 测试")
+            out(f"   SKIP: {name} 有 token,跳过 not_configured 测试")
             continue
         
         result = crawler.crawl_channel_profile("test_handle")
@@ -152,10 +154,10 @@ def main() -> None:
             failures.append(f"{name} 无 token 时不应返回 items,实际 {len(result['items'])} 条")
     
     if not [f for f in failures if "无 token" in f]:
-        print("   PASS: 3 个 crawler 没配置时优雅降级")
+        out("   PASS: 3 个 crawler 没配置时优雅降级")
     
     # ── 场景 8: provider_status 字段完整 ──
-    print("[6/8] provider_status() 返回字段完整")
+    out("[6/8] provider_status() 返回字段完整")
     
     for name, crawler in [("YouTubeCrawler", yt), ("InstagramCrawler", ig), ("TikTokCrawler", tt)]:
         status = crawler.provider_status()
@@ -165,10 +167,10 @@ def main() -> None:
             failures.append(f"{name}.provider_status() 缺字段 {missing}")
     
     if not [f for f in failures if "provider_status() 缺" in f]:
-        print("   PASS: provider_status 字段完整")
+        out("   PASS: provider_status 字段完整")
     
     # ── 场景 7: 接口规范 normalize_handle_ref (如果有) ──
-    print("[7/8] normalize_handle_ref (IG / TikTok)")
+    out("[7/8] normalize_handle_ref (IG / TikTok)")
     
     ig_ref = ig.normalize_handle_ref("@instagram_user")
     if ig_ref.get("kind") != "handle" or ig_ref.get("value") != "instagram_user":
@@ -187,10 +189,10 @@ def main() -> None:
         failures.append(f"TikTok normalize_handle_ref URL 错: {tt_ref_url}")
     
     if not [f for f in failures if "normalize_handle_ref" in f]:
-        print("   PASS: handle 规范化正确")
+        out("   PASS: handle 规范化正确")
     
     # ── 场景 8: provider_gate 多平台 (in-process 测试) ──
-    print("[8/8] provider_gate 路径区分多平台")
+    out("[8/8] provider_gate 路径区分多平台")
     
     try:
         from app.services.vkpi.industry_snapshot_collector import provider_gate
@@ -219,18 +221,18 @@ def main() -> None:
             failures.append(f"provider_gate xiaohongshu 应返回 allowed: {result}")
         
         if not [f for f in failures if "provider_gate" in f]:
-            print("   PASS: provider_gate 多平台路径不挂")
+            out("   PASS: provider_gate 多平台路径不挂")
     except Exception as exc:
         failures.append(f"provider_gate 调用挂: {exc}")
     
     # ── 总结 ──
     if failures:
-        print("\n=== FAIL ===")
+        out("\n=== FAIL ===")
         for f in failures:
-            print(f"  - {f}")
+            out(f"  - {f}")
         sys.exit(1)
     else:
-        print("\nVKPI_CRAWLER_DISPATCH_SMOKE_OK")
+        out("\nVKPI_CRAWLER_DISPATCH_SMOKE_OK")
         sys.exit(0)
 
 

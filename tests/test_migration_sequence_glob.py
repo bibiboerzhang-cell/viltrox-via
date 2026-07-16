@@ -9,8 +9,11 @@ historical apply order and cannot silently drop or reorder a migration.
 """
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.db import connection
 
@@ -66,6 +69,35 @@ class MigrationSequenceGlobTests(unittest.TestCase):
                 f"excluded migration is missing from disk: {name}",
             )
             self.assertNotIn(name, seq)
+
+    def test_runner_owned_forward_migrations_have_no_transaction_control(self):
+        for name in self._seq():
+            match = re.match(r"^(\d{3})", name)
+            if (
+                match is None
+                or int(match.group(1))
+                < connection._RUNNER_OWNED_TRANSACTION_MIN_VERSION
+            ):
+                continue
+            sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
+            self.assertIsNone(
+                connection._FORWARD_TRANSACTION_CONTROL_RE.search(sql),
+                f"{name} must leave BEGIN/COMMIT to _run_postgres_migrations",
+            )
+
+    def test_discovery_fails_closed_on_runner_owned_transaction_control(self):
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "234_bad.sql").write_text(
+                "CREATE TABLE audit_bad(id INT);\nCOMMIT;\n",
+                encoding="utf-8",
+            )
+            with patch.object(connection, "_MIGRATIONS_DIR", directory):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Forward migration contains transaction control",
+                ):
+                    connection._discover_postgres_migrations()
 
 
 if __name__ == "__main__":

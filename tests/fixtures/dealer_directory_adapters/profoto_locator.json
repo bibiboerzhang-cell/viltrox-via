@@ -1,0 +1,18 @@
+{
+  "records": [
+    {
+      "location_id": "pro-la-042",
+      "company": "Pro Imaging Retail",
+      "branch": "Los Angeles",
+      "line1": "456 S Hope St",
+      "city": "Los Angeles",
+      "region": "CA",
+      "zip": "90071",
+      "country": "United States",
+      "telephone": "213-555-0142",
+      "url": "https://pro-imaging.invalid/stores/los-angeles",
+      "lat": "34.0514",
+      "lng": "-118.2540"
+    }
+  ]
+}

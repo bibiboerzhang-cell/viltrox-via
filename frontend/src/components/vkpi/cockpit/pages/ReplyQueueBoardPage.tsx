@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import type { ReplyQueueItem } from "../../../../services/vkpi/replyQueue-api";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { CatDonutBody } from "./MarketVoicePage.charts";
@@ -80,9 +81,11 @@ function applyFilter(items: ReplyQueueItem[], f: ListFilter): ReplyQueueItem[] {
 export function ReplyQueueBoardPage({
   apiToken = "",
   onNavigate,
+  embeddedModuleKey,
 }: {
   apiToken?: string;
   onNavigate?: (navKey: string) => void;
+  embeddedModuleKey?: string;
 }) {
   const [editing, setEditing] = React.useState(false);
   const [statusFilter, setStatusFilter] = React.useState<string>("pending"); // 旧页默认待起草
@@ -307,6 +310,10 @@ export function ReplyQueueBoardPage({
     { key: "plat", label: "平台分布", description: "队列行按平台条形分布 · 点行看该平台队列", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 4, maxHeight: 16, render: renderPlat },
     { key: "lang", label: "语言分布", description: "队列行按语种条形分布 · 点行看该语种队列", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 6, minHeight: 4, maxHeight: 16, render: renderLang },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="回复队列" />;
+  }
 
   /* ---------- 弹窗数据 ---------- */
   const listItems = listFilter && items ? applyFilter(items, listFilter) : null;

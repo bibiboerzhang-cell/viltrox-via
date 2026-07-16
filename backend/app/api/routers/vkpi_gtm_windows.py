@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -32,7 +33,9 @@ def post_gtm_windows_refresh(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """三窗自动回填(job 同款函数):窗到期才填,只写 window_* 列,绝不触 decision。"""
-    del staff
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM window refresh")
+    if scope_unavailable is not None:
+        return {**scope_unavailable, "dry_run": bool(dry_run)}
     from app.domains.market_brain import gtm_windows
 
     try:
@@ -48,7 +51,9 @@ def get_gtm_weekly_answers(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """周对答案报告(纯读):对了什么/错了什么/下次怎么改 + 分组胜率;days=0 全量。"""
-    del staff
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM weekly answers")
+    if scope_unavailable is not None:
+        return scope_unavailable
     from app.domains.market_brain import weekly_answers
 
     try:

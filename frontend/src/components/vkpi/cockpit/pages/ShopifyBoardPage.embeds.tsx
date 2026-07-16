@@ -101,7 +101,11 @@ export function LegacyCredsEmbed({ apiToken, onOpenSrc }: { apiToken: string; on
   }, [apiToken, storeDomain, accessToken, webhookSecret, loadStatus]);
 
   const configured = status?.provider_status === "configured";
-  const env = status?.env_vars || {};
+  const env = {
+    SHOPIFY_SHOP_DOMAIN: Boolean(status?.credential_fields?.shop_domain),
+    SHOPIFY_ADMIN_ACCESS_TOKEN: Boolean(status?.credential_fields?.access_token),
+    SHOPIFY_WEBHOOK_SECRET: Boolean(status?.credential_fields?.webhook_secret),
+  };
 
   return (
     <ModuleCard

@@ -72,6 +72,16 @@ def test_execute_action_success_with_entity_writes_outcome(monkeypatch):
     )
     # ledger / 终态写回 / before-after 快照都是 DB 边界 → 屏蔽,不依赖真库。
     monkeypatch.setattr(executors, "_write_ledger", lambda **k: 12345)
+    monkeypatch.setattr(
+        executors.inbox,
+        "claim_action_execution",
+        lambda aid, staff=None: {"ok": True, "status": "executing", "action_id": aid},
+    )
+    monkeypatch.setattr(
+        executors,
+        "_finalize_claimed_execution",
+        lambda **k: {"ok": True, "status": "executed", "ledger_id": 12345},
+    )
     monkeypatch.setattr(executors.inbox, "set_status", lambda *a, **k: None)
     monkeypatch.setattr(executors.inbox, "set_result_checklist", lambda *a, **k: None)
     monkeypatch.setattr(executors, "_snapshot_table_counts", lambda tables: {})
@@ -134,6 +144,7 @@ def test_record_outcome_eval_early_returns_without_entity(monkeypatch):
 
 
 # ── 3) 集成:真打 DB,_record_outcome_eval → record_outcome 端到端落一行可读回 ──────
+@pytest.mark.pg
 def test_record_outcome_eval_persists_real_row(monkeypatch):
     """真库集成:_record_outcome_eval(success, 实体齐)→ vkpi_agent_outcome_evaluations 多一行。
 

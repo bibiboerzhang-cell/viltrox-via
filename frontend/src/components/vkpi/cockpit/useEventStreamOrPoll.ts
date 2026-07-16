@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { prepareSseStream } from "../../../services/sse-api";
 
 // SSE 扩面归一:统一「SSE 优先 + 轮询兜底」的定时器基元。
 // ----------------------------------------------------------------------------
@@ -33,9 +34,8 @@ export interface EventStreamOrPollOptions {
    */
   streamUrl?: string | null;
   /**
-   * 认证 token。浏览器原生 EventSource 无法带 Authorization header,故 token 走
-   * ?access_token= 查询参数(后端 stream 端点用 require_tab_stream 认这条路)。
-   * 不传则不附加(依赖 cookie / 同源);传了才追加到 streamUrl。
+   * 用于签发一次性 SSE ticket 的登录 token。长期 token 不会进入 EventSource URL；
+   * 不传时签发请求依赖现有 HttpOnly 登录 cookie。
    */
   streamToken?: string | null;
   /** 要监听的 SSE 事件名;缺省用 DEFAULT_SSE_EVENTS。 */
@@ -63,13 +63,6 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
     enabled = true,
   } = options;
   const intervalMs = interval && interval > 0 ? interval : DEFAULT_INTERVAL_MS;
-  // EventSource 不能带 Authorization header,把 token 作为 access_token 追加到 URL。
-  const effectiveStreamUrl = streamUrl
-    ? (streamToken
-        ? streamUrl + (streamUrl.includes("?") ? "&" : "?") + "access_token=" + encodeURIComponent(streamToken)
-        : streamUrl)
-    : streamUrl;
-
   const pollRef = useRef(options.pollFn);
   const eventsRef = useRef(options.events);
   const onEventRef = useRef(options.onEvent);
@@ -102,12 +95,13 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
       else startPolling();
     };
 
-    const canSse = Boolean(effectiveStreamUrl) && typeof EventSource !== "undefined";
+    const canSse = Boolean(streamUrl) && typeof EventSource !== "undefined";
 
     if (canSse) {
       // SSE 优先:订阅成功即事件驱动(仍先播种一次首屏快照);任一错误无感回退轮询。
       let source: EventSource | null = null;
       let fellBack = false;
+      let cancelled = false;
       const fallbackToPolling = () => {
         if (fellBack) return;
         fellBack = true;
@@ -119,13 +113,25 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
         if (handler) handler(ev as MessageEvent);
         else runPoll();
       };
-      try {
-        runPoll(); // 播种首屏,不等第一条事件
-        source = new EventSource(effectiveStreamUrl as string, { withCredentials });
-        const names = eventsRef.current && eventsRef.current.length ? eventsRef.current : DEFAULT_SSE_EVENTS;
-        names.forEach((name) => source?.addEventListener(name, onSseMessage));
-        source.onerror = () => {
-          // 断线 / 不支持 → 关连接、静默回退轮询(不抛,不拖垮整页)。
+      runPoll(); // 播种首屏,不等 ticket 或第一条事件
+      void prepareSseStream(streamUrl as string, streamToken || undefined)
+        .then((authorizedUrl) => {
+          if (cancelled) return;
+          source = new EventSource(authorizedUrl, { withCredentials });
+          const names = eventsRef.current && eventsRef.current.length ? eventsRef.current : DEFAULT_SSE_EVENTS;
+          names.forEach((name) => source?.addEventListener(name, onSseMessage));
+          source.onerror = () => {
+            try {
+              source?.close();
+            } catch {
+              /* noop */
+            }
+            source = null;
+            fallbackToPolling();
+          };
+        })
+        .catch(() => {
+          if (cancelled) return;
           try {
             source?.close();
           } catch {
@@ -133,19 +139,9 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
           }
           source = null;
           fallbackToPolling();
-        };
-      } catch {
-        if (source) {
-          try {
-            (source as EventSource).close();
-          } catch {
-            /* noop */
-          }
-          source = null;
-        }
-        fallbackToPolling();
-      }
+        });
       return () => {
+        cancelled = true;
         if (source) {
           try {
             source.close();
@@ -165,5 +161,5 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
       stopPolling();
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [enabled, effectiveStreamUrl, intervalMs, withCredentials]);
+  }, [enabled, streamUrl, streamToken, intervalMs, withCredentials]);
 }

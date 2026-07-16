@@ -40,7 +40,8 @@ _ITEM_CAP = 30
 
 _METHOD_NOTE = (
     "decision 口径:win=validated/escalate,loss=failed/retreat,partial/retry 计中性;"
-    "win_rate=wins/n。样本<5 的组标 insufficient——只展示不背书,绝不据此改权重。"
+    "win_rate=wins/n,仅统计带 actual/filled window 证据的人工 finalized outcome。"
+    "样本<5 的组标 insufficient——只展示不背书,绝不据此改权重。"
 )
 
 
@@ -91,6 +92,7 @@ def _bet_brief(row: dict[str, Any]) -> dict[str, Any]:
         "decision": _text(row.get("decision"), 20),
         "lesson": _text(row.get("lesson"), 200) or None,
         "decided_at": _text(row.get("decided_at"), 40) or None,
+        "evidence_backed": bool(row.get("evidence_backed")),
     }
 
 
@@ -235,9 +237,13 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
             f"""
             SELECT id, gtm_plan_id, product_sku, market, segment, channel,
                    action_type, content_angle, decision, lesson,
-                   next_weight_change, created_at, decided_at, decided_by
+                   next_weight_change, actual_result,
+                   window_7d, window_14d, window_28d,
+                   created_at, decided_at, decided_by
             FROM {TABLE}
             WHERE decision IN ({decided_placeholders})
+              AND decided_at IS NOT NULL
+              AND decided_by IS NOT NULL
             ORDER BY id DESC
             """,
             tuple(DECIDED_DECISIONS),
@@ -268,26 +274,64 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
             if decided_at is not None and decided_at >= since:
                 period_rows.append(row)
 
-    groups = {dim: _group_stats(decided, dim) for dim in GROUP_DIMS}
+    from app.domains.market_brain.data_readiness import (
+        build_learning_readiness,
+        has_observed_outcome_evidence,
+    )
 
-    worked_items = [_bet_brief(r) for r in period_rows if _text(r.get("decision"), 20) in WIN_DECISIONS]
-    failed_items = [_bet_brief(r) for r in period_rows if _text(r.get("decision"), 20) in LOSS_DECISIONS]
+    for row in decided:
+        row["evidence_backed"] = has_observed_outcome_evidence(row)
+    evidence_decided = [row for row in decided if row["evidence_backed"]]
+    evidence_period_rows = [row for row in period_rows if row.get("evidence_backed")]
+    groups = {dim: _group_stats(evidence_decided, dim) for dim in GROUP_DIMS}
+
+    readiness = build_learning_readiness(conn=conn, now=now)
+    claimable = bool(readiness.get("claimable"))
+    for entries in groups.values():
+        for group in entries:
+            group["observed_win_rate"] = group.get("win_rate")
+            group["claimable"] = claimable and not bool(group.get("insufficient"))
+            group["claim_status"] = "validated" if group["claimable"] else "descriptive_only"
+
+    conclusion_rows = evidence_period_rows if claimable else period_rows
+    worked_items = [_bet_brief(r) for r in conclusion_rows if _text(r.get("decision"), 20) in WIN_DECISIONS]
+    failed_items = [_bet_brief(r) for r in conclusion_rows if _text(r.get("decision"), 20) in LOSS_DECISIONS]
     what_worked = {
         "status": "ready" if worked_items else "empty",
         "items": worked_items[:_ITEM_CAP],
-        "group_highlights": _sufficient(groups, min_rate=0.6),
-        "note": "对了什么=本期 validated/escalate 裁决 + 样本≥5 且胜率≥60% 的组合。",
+        "group_highlights": _sufficient(groups, min_rate=0.6) if claimable else [],
+        "claimable": claimable,
+        "claim_status": "validated" if claimable else "human_verdicts_only",
+        "note": (
+            "对了什么=本期带真实窗口证据的 validated/escalate 裁决"
+            " + 样本≥5 且胜率≥60% 的组合。"
+            if claimable else
+            "保留人工裁决明细,但 finalized outcome / prediction eval / 真实反馈三项未齐,不输出有效组合。"
+        ),
     }
     what_failed = {
         "status": "ready" if failed_items else "empty",
         "items": failed_items[:_ITEM_CAP],
-        "group_highlights": _sufficient(groups, max_rate=0.4),
-        "note": "错了什么=本期 failed/retreat 裁决 + 样本≥5 且胜率≤40% 的组合;lesson 原话随行。",
+        "group_highlights": _sufficient(groups, max_rate=0.4) if claimable else [],
+        "claimable": claimable,
+        "claim_status": "validated" if claimable else "human_verdicts_only",
+        "note": (
+            "错了什么=本期带真实窗口证据的 failed/retreat 裁决"
+            " + 样本≥5 且胜率≤40% 的组合;lesson 原话随行。"
+            if claimable else
+            "保留人工裁决明细,但 DataReadiness 未通过,不把小样本命名为稳定失败规律。"
+        ),
     }
-    what_to_change = _build_what_to_change(period_rows)
+    what_to_change = _build_what_to_change(conclusion_rows)
+    what_to_change["claimable"] = claimable
     headline = _build_headline(
-        period_rows=period_rows, decided_total=len(decided), open_total=open_total,
+        period_rows=evidence_period_rows, decided_total=len(evidence_decided), open_total=open_total,
         groups=groups, days=period_days or 0)
+    if not claimable:
+        headline = (
+            f"近 {period_days or 0} 天记录人工裁决 {len(period_rows)} 条;"
+            "DataReadiness 未通过,当前只展示观察值,不输出哪些打法有效或失效的确定性结论。"
+        )
 
     return {
         "status": "ready" if decided else "empty",
@@ -296,14 +340,20 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
         "period": {
             "days": period_days,
             "since": since.isoformat() if since else None,
-            "scope_note": "分组胜率=累计全部已裁决行;三段=本期(decided_at 窗口)行。",
+            "scope_note": "分组胜率=累计 evidence-backed 人工 finalized 行;"
+                          "三段=本期(decided_at 窗口)行。",
         },
         "totals": {
             "decided_total": len(decided),
+            "evidence_backed_finalized_total": len(evidence_decided),
             "open_total": open_total,
             "decided_in_period": len(period_rows),
+            "evidence_backed_in_period": len(evidence_period_rows),
         },
         "method": _METHOD_NOTE,
+        "claimable": claimable,
+        "claim_status": "validated" if claimable else "descriptive_only",
+        "data_readiness": readiness,
         "groups": groups,
         "what_worked": what_worked,
         "what_failed": what_failed,

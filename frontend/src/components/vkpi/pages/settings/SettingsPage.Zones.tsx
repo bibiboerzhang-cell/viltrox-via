@@ -14,6 +14,7 @@ import { SettingsSkuPanel } from './SettingsSkuPanel';
 import { SettingsStatusPanel } from './SettingsStatusPanel';
 import { SettingsSchedulerPanel } from './SettingsSchedulerPanel';
 import { GoaffproConnectCard } from './GoaffproConnectCard';
+import { SettingsBusinessIntegrationsPanel } from './SettingsBusinessIntegrationsPanel';
 import { SystemHealthBar } from '../../cockpit/components/SystemHealthBar';
 import type {
   VkpiProductCatalogItem,
@@ -73,6 +74,8 @@ interface SettingsCompanyZoneProps {
   versionCheckedAt: string;
   versionSummary: string;
   onReloadVersionStatus: () => void;
+  onOpenBusinessArea?: (area: 'shopify' | 'dealers' | 'events' | 'gtmCommand') => void;
+  onOpenCostModule: () => void;
   // sku
   skuCount: number;
   lensCount: number;
@@ -198,8 +201,16 @@ export function SettingsCompanyZone(props: SettingsCompanyZoneProps) {
           onReloadVersionStatus={props.onReloadVersionStatus}
         />
       ))}
+      {renderModule('businessIntegrations', 'Shopify / Dealer / 库存 / 实际成本 / 销售归因 / 结果回传 / R2 · 只认真实成功证据', (
+        <SettingsBusinessIntegrationsPanel
+          apiToken={props.apiToken}
+          onOpenArea={props.onOpenBusinessArea}
+          onOpenCostModule={props.onOpenCostModule}
+        />
+      ))}
       {renderModule('sku', `${props.skuCount} 个 SKU · 镜头 ${props.lensCount} · 闪光灯 ${props.lightingCount} · 转接环 ${props.adapterCount}`, (
         <SettingsSkuPanel
+          apiToken={props.apiToken}
           costSku={props.costSku}
           costProductName={props.costProductName}
           unitCostUsd={props.unitCostUsd}

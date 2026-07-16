@@ -22,6 +22,8 @@ import json
 import secrets
 from typing import Any
 
+from app.domains import business_truth
+
 
 def _json(value: Any, default: Any) -> Any:
     """psycopg 可能把 jsonb 交回 str 或已解析对象;防御式解析(同 my_kol_aggregate)。"""
@@ -61,7 +63,7 @@ def issue_token(conn: Any, kol_pool_id: int, *, created_by_staff_id: int | None 
         return str(dict(existing).get("token") or "")
     token = secrets.token_urlsafe(32)
     conn.execute(
-        """
+        f"""
         INSERT INTO vkpi_kol_portal_tokens (kol_pool_id, token, created_by_staff_id)
         VALUES (?, ?, ?)
         """,
@@ -157,6 +159,7 @@ def _gmv(conn: Any, kol_pool_id: int) -> dict[str, Any]:
                MIN(currency) AS currency
         FROM vkpi_shopify_orders
         WHERE attributed_kol_pool_id = ?
+          AND LOWER(COALESCE(financial_status,'')) IN ('paid','partially_paid','partially_refunded')
         """,
         (_int(kol_pool_id),),
     ).fetchone()
@@ -190,10 +193,11 @@ def _attributions(conn: Any, main_kol_id: int | None) -> list[dict[str, Any]]:
     if not main_kol_id:
         return []
     rows = conn.execute(
-        """
+        f"""
         SELECT revenue_cents, commission_cents, currency, occurred_at
         FROM vkpi_sales_attributions
         WHERE kol_id = ?
+          AND {business_truth.verified_shopify_attribution_sql()}
         ORDER BY occurred_at DESC NULLS LAST, id DESC
         LIMIT 100
         """,

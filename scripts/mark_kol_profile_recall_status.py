@@ -7,6 +7,8 @@ vkpi_kol_pool, viltrox_fit_score, V6 Fit, Qdrant, or KOL Pool ordering.
 
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import json
 import os
@@ -121,12 +123,12 @@ def apply_migration() -> None:
             cur.execute("SELECT pg_advisory_xact_lock(hashtext('viltrox_schema_migrations'))")
             cur.execute("SELECT 1 FROM schema_migrations WHERE version_key = %s", (MIGRATION_NAME,))
             if cur.fetchone():
-                print(f"migration already applied: {MIGRATION_NAME}")
+                out(f"migration already applied: {MIGRATION_NAME}")
                 return
             cur.execute(migration_path.read_text(encoding="utf-8"))
             cur.execute("INSERT INTO schema_migrations(version_key) VALUES (%s)", (MIGRATION_NAME,))
         conn.commit()
-    print(f"migration applied: {MIGRATION_NAME}")
+    out(f"migration applied: {MIGRATION_NAME}")
 
 
 def low_signal(value: str | None) -> bool:
@@ -327,8 +329,8 @@ def write_statuses(rows: list[RecallStatusRow]) -> None:
 
 def print_report(rows: list[RecallStatusRow], kols: dict[int, dict[str, Any]]) -> None:
     distribution = Counter(row.status for row in rows)
-    print("STATUS_WRITE_DISTRIBUTION=" + json.dumps(dict(distribution), ensure_ascii=False, sort_keys=True))
-    print("STATUS_WRITE_TOTAL=" + str(sum(distribution.values())))
+    out("STATUS_WRITE_DISTRIBUTION=" + json.dumps(dict(distribution), ensure_ascii=False, sort_keys=True))
+    out("STATUS_WRITE_TOTAL=" + str(sum(distribution.values())))
     sample_by_status: dict[str, list[dict[str, Any]]] = {key: [] for key in ("recallable", "suspect", "pending_data", "empty")}
     for row in rows:
         samples = sample_by_status[row.status]
@@ -345,7 +347,7 @@ def print_report(rows: list[RecallStatusRow], kols: dict[int, dict[str, Any]]) -
                 "status_reason": row.status_reason,
             }
         )
-    print("STATUS_WRITE_SAMPLES=" + json.dumps(sample_by_status, ensure_ascii=False, sort_keys=True))
+    out("STATUS_WRITE_SAMPLES=" + json.dumps(sample_by_status, ensure_ascii=False, sort_keys=True))
 
 
 def main() -> int:

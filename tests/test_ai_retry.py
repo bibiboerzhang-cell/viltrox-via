@@ -32,6 +32,27 @@ class AiRetryTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 call_ai_with_retry("unit.fail", lambda: (_ for _ in ()).throw(RuntimeError("boom")), attempts=2, base_delay_sec=0)
 
+    def test_attempt_aware_callback_receives_exact_progress(self) -> None:
+        seen = []
+
+        def attempt_fn(attempt, total):
+            seen.append((attempt, total))
+            if attempt < total:
+                raise RuntimeError("retry")
+            return "ok"
+
+        self.assertEqual(
+            call_ai_with_retry(
+                "unit.progress",
+                lambda: "legacy-should-not-run",
+                attempts=3,
+                base_delay_sec=0,
+                attempt_fn=attempt_fn,
+            ),
+            "ok",
+        )
+        self.assertEqual(seen, [(1, 3), (2, 3), (3, 3)])
+
 
 if __name__ == "__main__":
     unittest.main()

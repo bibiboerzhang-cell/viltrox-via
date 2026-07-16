@@ -25,4 +25,5 @@ export interface ProjectsPageProps {
   onToggleView?: (targetPage?: VkpiPageKey) => void;
   onRefreshData?: () => void | Promise<void>;
   apiToken?: string;
+  embeddedModuleKey?: string;
 }

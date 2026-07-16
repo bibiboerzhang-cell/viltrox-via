@@ -73,6 +73,52 @@ class RedisJobQueue(BaseJobQueue):
                 raise
         self._ready = True
 
+    async def worker_readiness(self, consumer_names: list[str]) -> Dict[str, Any]:
+        """Prove Redis/group/consumer readiness without consuming a message.
+
+        Release health must not be inferred from a Postgres heartbeat written
+        before Redis is usable.  This probe creates the idempotent consumer
+        registrations, confirms the expected group on the expected stream, and
+        pings Redis.  It deliberately never calls XREADGROUP/XCLAIM/XACK.
+        """
+
+        names = [str(name or "").strip() for name in consumer_names if str(name or "").strip()]
+        if not names or len(names) != len(set(names)):
+            raise RuntimeError("redis worker readiness requires unique consumer names")
+        await self._ensure_ready()
+        pong = await self._client.ping()
+        if pong is not True and str(pong).strip().upper() != "PONG":
+            raise RuntimeError("redis ping did not return PONG")
+        groups = await self._client.xinfo_groups(REDIS_JOB_STREAM_KEY)
+        group_names = {
+            str((item or {}).get("name") or "")
+            for item in (groups or [])
+            if isinstance(item, dict)
+        }
+        if self._group not in group_names:
+            raise RuntimeError("redis stream consumer group is not visible")
+        for name in names:
+            await self._client.xgroup_createconsumer(
+                REDIS_JOB_STREAM_KEY,
+                self._group,
+                name,
+            )
+        consumers = await self._client.xinfo_consumers(REDIS_JOB_STREAM_KEY, self._group)
+        registered = {
+            str((item or {}).get("name") or "")
+            for item in (consumers or [])
+            if isinstance(item, dict)
+        }
+        missing = [name for name in names if name not in registered]
+        if missing:
+            raise RuntimeError("redis consumer registration is incomplete")
+        return {
+            "redis_ready": True,
+            "redis_stream_key": REDIS_JOB_STREAM_KEY,
+            "redis_group_name": self._group,
+            "redis_consumer_count": len(names),
+        }
+
     def _task_channel(self, task_id: str) -> str:
         return f"{REDIS_JOB_EVENT_PREFIX}:task:{task_id}"
 
@@ -270,6 +316,39 @@ class RedisJobQueue(BaseJobQueue):
         conn = get_conn()
         row = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
         return self._status_row_to_dict(row) if row else None
+
+    def _provider_execution_claim_is_live(self, task_id: str) -> bool:
+        """Fail closed while a paid-provider fence still owns this task.
+
+        Redis pending-idle time is not an execution lease.  A second consumer
+        must not XCLAIM and terminalize work merely because the first consumer
+        has spent 60 seconds inside a legitimate provider call.
+        """
+
+        clean_task = str(task_id or "").strip()
+        if not clean_task:
+            return False
+        try:
+            row = get_conn().execute(
+                """
+                SELECT 1 AS live
+                FROM vkpi_provider_execution_claims
+                WHERE task_id=? AND state='active' AND lease_expires_at>NOW()
+                LIMIT 1
+                """,
+                (clean_task,),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            # Migration 254 is a startup prerequisite for the dedicated
+            # worker.  If its state cannot be proved, skipping reclamation is
+            # safer than double-running a paid provider operation.
+            logger.error(
+                "redis stale-claim provider fence check failed closed | task_id=%s",
+                clean_task,
+                exc_info=True,
+            )
+            return True
 
     def _find_active_submission_job(self, job_type: str, submission_id: int) -> Optional[str]:
         if not submission_id:
@@ -580,7 +659,18 @@ class RedisJobQueue(BaseJobQueue):
             if current_status in TERMINAL_JOB_STATUSES:
                 await self._client.xack(REDIS_JOB_STREAM_KEY, self._group, message_id)
                 continue
-            if job_type.startswith("vkpi_") and current_status in {"processing", "running"}:
+            # Queue status can be changed to ``retrying`` by a contender that
+            # observed the live fence.  Therefore the durable paid-provider
+            # lease must gate *every* non-terminal stale message, not only the
+            # nominal processing/running states.
+            async with db_connection_scope():
+                provider_claim_live = await asyncio.to_thread(
+                    self._provider_execution_claim_is_live,
+                    task_id,
+                )
+            if provider_claim_live:
+                continue
+            if current_status in {"processing", "running"}:
                 started = _parse_ts((current or {}).get("started_at") or (current or {}).get("updated_at") or (current or {}).get("created_at"))
                 timeout_seconds = int((current or {}).get("timeout_seconds") or 0)
                 if started and timeout_seconds > 0 and (now - started).total_seconds() < timeout_seconds:
@@ -598,6 +688,7 @@ class RedisJobQueue(BaseJobQueue):
         for stream_id, fields in batches:
             raw_job = {
                 "_stream_id": stream_id,
+                "_consumer_name": consumer_name,
                 "task_id": fields.get("task_id", ""),
                 "job_type": fields.get("job_type", ""),
                 "submission_id": int(fields.get("submission_id") or 0),
@@ -640,6 +731,7 @@ class RedisJobQueue(BaseJobQueue):
         stream_id, fields = entries[0]
         raw_job = {
             "_stream_id": stream_id,
+            "_consumer_name": consumer_name,
             "task_id": fields.get("task_id", ""),
             "job_type": fields.get("job_type", ""),
             "submission_id": int(fields.get("submission_id") or 0),

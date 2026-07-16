@@ -365,6 +365,7 @@ def record_cost(
     metadata: dict[str, Any] | None = None,
     triggered_by: Any = None,
     extra_scopes: list[str] | tuple[str, ...] | None = None,
+    update_budget_scopes: bool = True,
 ) -> dict[str, Any]:
     ensure_budget_schema()
     scope_key = _normalize_scope(scope)
@@ -401,7 +402,11 @@ def record_cost(
     # single_call[_*] are per-request ceilings: never accumulate current_spend on
     # them or the shared row creeps past cap and hard-stops every later call
     # (the flapping bug). Cumulative accounting stays on monthly_total/provider:*/cron:*.
-    scopes_to_update = [scope for scope in dict.fromkeys(requested_scopes) if not _is_single_call_ceiling_scope(scope)]
+    scopes_to_update = (
+        [scope for scope in dict.fromkeys(requested_scopes) if not _is_single_call_ceiling_scope(scope)]
+        if update_budget_scopes
+        else []
+    )
     for budget_scope in scopes_to_update:
         conn.execute(
             """
@@ -576,6 +581,7 @@ def record_apify_run(
     """
     try:
         run_obj = run if isinstance(run, dict) else {}
+        reservation_key = str(run_obj.get("_vkpi_budget_reservation_key") or "").strip()
         actor_key = str(actor_id or "").strip().replace("~", "/")
         run_id = str(run_obj.get("id") or "").strip()
         run_status = str(run_obj.get("status") or "")
@@ -620,6 +626,11 @@ def record_apify_run(
             pricing_basis = "no_run_object"
         estimated = pricing_basis != "usage_settled"
         ensure_budget_schema()
+        reservation_settlement: dict[str, Any] = {}
+        if reservation_key:
+            from app.platform.apify_budget import settle_apify_reservation
+
+            reservation_settlement = settle_apify_reservation(reservation_key, cost_usd)
         if run_id and _apify_run_already_recorded(get_conn(), run_id):
             return {"recorded": False, "reason": "duplicate_run", "apify_run_id": run_id}
         return record_cost(
@@ -628,6 +639,9 @@ def record_apify_run(
             model_name=actor_key,
             cost_usd=cost_usd,
             extra_scopes=["monthly_total"],
+            # Atomic reservation settlement already moved actual spend into
+            # cumulative scopes.  Legacy unreserved runs keep old accounting.
+            update_budget_scopes=not bool(reservation_key),
             metadata={
                 "platform": str(platform or ""),
                 "actor_id": actor_key,
@@ -641,6 +655,8 @@ def record_apify_run(
                 "estimated": estimated,
                 "pricing_basis": pricing_basis,
                 "unified_entry": True,
+                "budget_reservation_key": reservation_key,
+                "budget_reservation_settlement": reservation_settlement,
             },
         )
     except Exception:

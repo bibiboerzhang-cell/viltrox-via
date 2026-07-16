@@ -38,8 +38,20 @@ export interface VkpiProjectVideoAnalysisCacheItem {
   like_count?: number | null;
   comment_count?: number | null;
   publish_date?: string | null;
-  state: "ready" | "pending";
+  state: "ready" | "pending" | "queued" | "running" | "retrying" | "processing" | "failed" | "unsupported" | "not_requested";
   entry?: VkpiAnalysisCacheEntry | null;
+  active_job?: VkpiProjectVideoAnalysisJob | null;
+  last_job?: VkpiProjectVideoAnalysisJob | null;
+  terminal_reason?: string | null;
+}
+
+export interface VkpiProjectVideoAnalysisJob {
+  id?: number | null;
+  status: string;
+  last_error?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface VkpiProjectVideoAnalysisCacheResponse {
@@ -50,6 +62,11 @@ export interface VkpiProjectVideoAnalysisCacheResponse {
     evidence_count: number;
     ready_count: number;
     pending_count: number;
+    active_count?: number;
+    not_requested_count?: number;
+    failed_count?: number;
+    unsupported_count?: number;
+    state_counts?: Record<string, number>;
   };
 }
 
@@ -138,8 +155,23 @@ export interface VkpiStagePayload {
   sourceRefId?: string;
 }
 
-export async function getProjectDetail(token: string, projectId: string) {
-  return apiFetch<VkpiProjectDetail>(`/api/marketing/projects/${encodeURIComponent(projectId)}`, {}, token);
+export interface VkpiProjectDetailQuery {
+  mode?: "summary";
+  assignmentLimit?: number;
+  assignmentCursor?: string;
+}
+
+export async function getProjectDetail(token: string, projectId: string, query: VkpiProjectDetailQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.mode) params.set("mode", query.mode);
+  if (query.assignmentLimit != null) params.set("assignment_limit", String(query.assignmentLimit));
+  if (query.assignmentCursor) params.set("assignment_cursor", query.assignmentCursor);
+  const suffix = params.toString();
+  return apiFetch<VkpiProjectDetail>(
+    `/api/marketing/projects/${encodeURIComponent(projectId)}${suffix ? `?${suffix}` : ""}`,
+    {},
+    token,
+  );
 }
 
 export async function getAnalysisCache(token: string, targetType: string, targetId: string, deriveMethod?: string) {

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routers import ADMIN_ROUTER_MODULES
@@ -31,6 +31,7 @@ from app.core.config import (
     ENABLE_SCHEDULER,
     ENABLE_UPLOAD_CLEANUP,
     IS_PRODUCTION,
+    MIGRATION_RUNNER_APP_ROLE,
     RESPONSE_GZIP_MIN_SIZE,
     UPLOAD_DIR,
 )
@@ -38,8 +39,11 @@ from app.db.connection import (
     close_standalone_conn,
     close_db_runtime,
     db_connection_scope,
+    db_connection_sync_scope,
     get_conn,
+    get_db_startup_status,
     init_db_runtime,
+    is_postgres_runtime,
     open_standalone_conn,
 )
 from app.services.jobs.queue import build_job_queue
@@ -50,6 +54,14 @@ from app.core.logging import get_logger
 from app.core.security import AUTH_COOKIE_NAME, get_current_user
 from app.core.permissions import check_system_permission, check_tab_permission, staff_context_for_user
 from app.main_health import build_deep_health_payload
+from app.main_request_guards import (
+    DB_REQUEST_ADMISSION_TIMEOUT_SEC as _DB_REQUEST_ADMISSION_TIMEOUT_SEC,
+    PRIVATE_INTERNAL_UPLOAD_PREFIXES as _PRIVATE_INTERNAL_UPLOAD_PREFIXES,
+    admin_permission_for_request as _admin_permission_for_request,
+    db_admission_unavailable_response,
+    db_request_admission_limiter as _db_request_admission_limiter,
+    request_path_requires_db_admission,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
@@ -67,6 +79,18 @@ ADMIN_APP_ROLES = {"all", "web", "admin-web"}
 IS_PUBLIC_APP = APP_ROLE in PUBLIC_APP_ROLES
 IS_ADMIN_APP = APP_ROLE in ADMIN_APP_ROLES
 logger = get_logger(__name__)
+
+def _request_requires_db_admission(request) -> bool:
+    return request_path_requires_db_admission(
+        request,
+        postgres_runtime=is_postgres_runtime(),
+    )
+
+
+def _db_admission_unavailable_response() -> JSONResponse:
+    return db_admission_unavailable_response(
+        _DB_REQUEST_ADMISSION_TIMEOUT_SEC,
+    )
 
 
 def _read_git_value(*args: str) -> str:
@@ -92,7 +116,7 @@ def _read_build_file(name: str) -> str:
 APP_VERSION = "2.0.0"
 APP_GIT_SHA = os.getenv("APP_GIT_SHA", "").strip() or _read_build_file("BUILD_GIT_SHA") or _read_git_value("rev-parse", "HEAD")
 APP_GIT_SHORT_SHA = (APP_GIT_SHA[:8] if APP_GIT_SHA else "unknown")
-APP_GIT_BRANCH = os.getenv("APP_GIT_BRANCH", "").strip() or _read_git_value("rev-parse", "--abbrev-ref", "HEAD")
+APP_GIT_BRANCH = os.getenv("APP_GIT_BRANCH", "").strip() or _read_build_file("BUILD_GIT_BRANCH") or _read_git_value("rev-parse", "--abbrev-ref", "HEAD")
 APP_BUILD_TIME = (
     os.getenv("APP_BUILD_TIME", "").strip()
     or _read_build_file("BUILD_TIME")
@@ -127,12 +151,21 @@ def _build_info(client_build: str = "") -> dict[str, str | bool]:
 _WORKER_ONLINE_WINDOW_MIN = 10
 
 
+def _worker_lane_from_name(name: str) -> str:
+    normalized = str(name or "").strip().lower()
+    if "-interactive-" in normalized or normalized.endswith("-interactive"):
+        return "interactive"
+    if "-bulk" in normalized:
+        return "batch"
+    return "all"
+
+
 def _trust_db_migration_max() -> str | None:
     """Highest migration version_key ACTUALLY APPLIED on the DB (schema_migrations).
 
-    2026-06-17: 改为读真实已应用集而非代码声明的序列尾——此前返回
-    _POSTGRES_MIGRATION_SEQUENCE[-1] 会在迁移应用失败时仍报最新号(假阳)。
-    DB 读失败才回退代码尾。文件名 NNN_ 三位零填充,字典序最大=数值最大。
+    Fail closed when the database cannot be queried.  Returning the code
+    manifest tail after a DB failure would let deployment acceptance mistake
+    "declared in source" for "applied to this database".
     """
     try:
         from app.db.connection import get_conn
@@ -144,49 +177,17 @@ def _trust_db_migration_max() -> str | None:
             return max(applied)
     except Exception:
         logger.debug("health: applied migration read failed", exc_info=True)
-    try:
-        from app.db.connection import _POSTGRES_MIGRATION_SEQUENCE
-
-        if _POSTGRES_MIGRATION_SEQUENCE:
-            return str(_POSTGRES_MIGRATION_SEQUENCE[-1])
-    except Exception:
-        logger.debug("health: db_migration_max seq read failed", exc_info=True)
     return None
 
 
 def _trust_worker() -> dict[str, object | None]:
-    """Worker 真存活:优先读 vkpi_worker_heartbeat(worker 每轮 poll 都写,空闲也写),
-    在线 = 心跳在 2 分钟内;表空/缺失才回退 MAX(updated_at) on apify_jobs(任务活动启发式)。
-    W0/T5:此前只用 apify_jobs 活动 → 空闲 worker 误判离线;现与 system_health._worker_online 同源。"""
-    result: dict[str, object | None] = {"worker_heartbeat": None, "worker_online": None}
-    try:
-        from app.db.connection import get_conn, table_exists
+    """Return the live worker fleet trust contract used by ``/health``."""
 
-        conn = get_conn()
-        latest_dt = None
-        window_sec = _WORKER_ONLINE_WINDOW_MIN * 60
-        if table_exists("vkpi_worker_heartbeat"):
-            row = conn.execute("SELECT MAX(last_heartbeat_at) AS latest FROM vkpi_worker_heartbeat").fetchone()
-            latest_dt = row["latest"] if row is not None else None
-            if latest_dt not in (None, ""):
-                window_sec = 120  # 真心跳每 2s 一次,2 分钟窗足够判活
-        if latest_dt in (None, "") and table_exists("apify_jobs"):
-            row = conn.execute("SELECT MAX(updated_at) AS latest FROM apify_jobs").fetchone()
-            latest_dt = row["latest"] if row is not None else None
-        if latest_dt in (None, ""):
-            return result
-        if isinstance(latest_dt, str):
-            latest_dt = datetime.fromisoformat(latest_dt.strip().replace("Z", "+00:00"))
-        if latest_dt.tzinfo is None:
-            latest_dt = latest_dt.replace(tzinfo=timezone.utc)
-        result["worker_heartbeat"] = (
-            latest_dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        )
-        age = (datetime.now(tz=timezone.utc) - latest_dt).total_seconds()
-        result["worker_online"] = bool(age <= window_sec)
-    except Exception:
-        logger.debug("health: worker heartbeat read failed", exc_info=True)
-    return result
+    # Release identity contract fields remain source-visible for the migration
+    # alignment gate: worker_git_sha, boot_nonce_sha256, started_at.
+    from app.main_worker_trust import trust_worker_impl
+
+    return trust_worker_impl(globals())
 
 
 def _trust_scheduler() -> dict[str, int] | str:
@@ -212,19 +213,14 @@ def _trust_scheduler() -> dict[str, int] | str:
 
 
 def _trust_worker_sha() -> dict[str, str | None]:
-    """Best-effort worker SHA. If the worker stamps runtime/worker_sha use it;
-    otherwise assume the worker runs from the same repo as this server."""
-    try:
-        stamp = PROJECT_ROOT / "runtime" / "worker_sha"
-        if stamp.is_file():
-            value = stamp.read_text(encoding="utf-8").strip()
-            if value:
-                return {"worker_sha": value, "worker_sha_source": "runtime_stamp"}
-    except Exception:
-        logger.debug("health: worker_sha stamp read failed", exc_info=True)
+    """Legacy test hook; production worker identity is DB-heartbeat bound.
+
+    A filesystem stamp or the server build cannot prove which worker process is
+    alive, so this compatibility helper deliberately fails closed.
+    """
     return {
-        "worker_sha": (APP_GIT_SHA or None),
-        "worker_sha_source": "assumed_same_repo",
+        "worker_sha": None,
+        "worker_sha_source": "unavailable",
     }
 
 
@@ -232,23 +228,52 @@ def _runtime_trust() -> dict[str, object]:
     """Additive runtime-trust block for /health. Never raises; each field guarded."""
     trust: dict[str, object] = {}
     try:
-        trust["db_migration_max"] = _trust_db_migration_max()
+        trust["db_startup"] = get_db_startup_status()
+    except Exception:
+        trust["db_startup"] = {"state": "unknown"}
+    try:
+        migration_max = _trust_db_migration_max()
+        trust["db_migration_max"] = migration_max
+        trust["db_migration_source"] = (
+            "schema_migrations" if migration_max else "unavailable"
+        )
     except Exception:
         trust["db_migration_max"] = None
+        trust["db_migration_source"] = "unavailable"
     try:
-        trust.update(_trust_worker())
+        worker_trust = _trust_worker()
+        trust.update(worker_trust)
     except Exception:
         trust["worker_heartbeat"] = None
         trust["worker_online"] = None
+        trust["worker_sha"] = None
+        trust["worker_sha_source"] = "unavailable"
+        trust["worker_heartbeat_source"] = "unavailable"
+    try:
+        from app.workers.redis_worker_health import redis_worker_fleet_health
+
+        trust["redis_worker_fleet"] = redis_worker_fleet_health(APP_GIT_SHA)
+    except Exception:
+        logger.debug("health: redis worker heartbeat read failed", exc_info=True)
+        trust["redis_worker_fleet"] = {
+            "online": False,
+            "online_count": 0,
+            "expected_count": None,
+            "workers": [],
+        }
     try:
         trust["scheduler_status"] = _trust_scheduler()
     except Exception:
         trust["scheduler_status"] = "not_configured"
-    try:
-        trust.update(_trust_worker_sha())
-    except Exception:
-        trust["worker_sha"] = (APP_GIT_SHA or None)
-        trust["worker_sha_source"] = "assumed_same_repo"
+    # Compatibility hook for isolated legacy tests only.  Production
+    # _trust_worker always returns an explicit worker_sha key and therefore can
+    # never fall back to the server build or a stale filesystem assumption.
+    if "worker_sha" not in trust:
+        try:
+            trust.update(_trust_worker_sha())
+        except Exception:
+            trust["worker_sha"] = None
+            trust["worker_sha_source"] = "unavailable"
     try:
         _server_sha = (APP_GIT_SHA or None)
         _client_sha = (_read_frontend_build_sha() or None)
@@ -337,101 +362,70 @@ def _can_read_deep_health(request) -> bool:
         return False
 
 
-def _admin_permission_for_request(path: str, method: str) -> tuple[str, str, bool] | None:
-    if method.upper() == "OPTIONS":
-        return None
-    if path in {"/api/admin/staff/accept-invite", "/api/admin/staff/invite/status"}:
-        return None
-    mutating = method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-    level = "write" if mutating else "read"
-    if path.startswith("/api/admin/system/keys"):
-        return ("system.api_keys", "write", True)
-    if path.startswith("/api/admin/system/restart"):
-        return ("system.restart", "write", True)
-    if path.startswith("/api/admin/system/providers"):
-        return ("system.api_keys", "read", True)
-    if path.startswith("/api/admin/system/models"):
-        return ("system.models", level, True)
-    if path.startswith("/api/admin/staff/api-tokens"):
-        return ("system.api_keys", level, True)
-    if path.startswith("/api/admin/staff"):
-        if mutating:
-            return ("system.members", "write", True)
-        return ("system", "read", False)
-    if path.startswith("/api/admin/runtime") or path.startswith("/api/admin/integrations"):
-        return ("runtime", level, False)
-    if path.startswith("/api/admin/trust"):
-        return ("command", level, False)
-    if path.startswith("/api/admin/kol"):
-        return ("kol_ops", level, False)
-    if path.startswith("/api/admin/deepsight"):
-        return ("deepsight", level, False)
-    if path.startswith("/api/admin/activities") or path.startswith("/api/public/event"):
-        return ("activities", level, False)
-    if path.startswith("/api/admin/dashboard"):
-        return ("vkpi", level, False)
-    if path.startswith("/api/admin/vkpi") or path.startswith("/api/marketing"):
-        return ("vkpi", level, False)
-    if path.startswith("/api/admin/insights/"):
-        return ("insights", level, False)
-    if path.startswith("/api/admin/intel/student"):
-        return ("student", level, False)
-    if path.startswith("/api/admin/intel/via"):
-        return ("via", level, False)
-    if path.startswith("/api/admin/intel/system"):
-        return ("runtime", level, False)
-    if path.startswith("/api/intelligence/market") or path.startswith("/api/intelligence/brand"):
-        return ("analytics", level, False)
-    if path.startswith("/api/admin/intel") or path.startswith("/api/intelligence"):
-        return ("intelligence", level, False)
-    if path.startswith("/api/admin/analytics") or path.startswith("/api/admin/benchmarks") or path.startswith("/api/admin/learning"):
-        return ("analytics", level, False)
-    if path.startswith("/api/admin/orders") or path.startswith("/api/admin/payouts") or path.startswith("/api/admin/attribution") or path.startswith("/api/admin/webhook-events") or path.startswith("/api/admin/affiliate"):
-        return ("operations", level, False)
-    if path.startswith("/api/admin/rewards") or path.startswith("/api/admin/product_catalog") or path.startswith("/api/admin/creator-public/shop-heroes") or path.startswith("/api/admin/upload/reward-image"):
-        return ("products", level, False)
-    if path.startswith("/api/admin/creator") or path.startswith("/api/admin/creators"):
-        return ("creators", level, False)
-    if path.startswith("/api/admin/users/") and (
-        path.endswith("/block")
-        or path.endswith("/unblock")
-        or path.endswith("/flag")
-        or path.endswith("/clear-flag")
-        or path.endswith("/adjust-score")
-    ):
-        return ("command", level, False)
-    if path.startswith("/api/admin/users") or path.startswith("/api/admin/social-accounts") or path.startswith("/api/admin/verifications") or path.startswith("/api/admin/submissions") or path.startswith("/api/admin/approve") or path.startswith("/api/admin/reject") or path.startswith("/api/admin/reanalyze") or path.startswith("/api/admin/redemptions") or path.startswith("/api/verify/queue") or path.startswith("/api/verify/admin") or path.endswith("/scan") or path.endswith("/approve") or path.endswith("/reject"):
-        return ("operations", level, False)
-    if path.startswith("/api/admin/student") or path.startswith("/api/student/admin"):
-        return ("student", level, False)
-    if path.startswith("/api/vios"):
-        return ("analytics", level, False)
-    if path.startswith("/api/admin"):
-        return ("overview", level, False)
-    return None
-
-
 def _admin_rbac_allowed(request) -> bool:
     path = str(request.url.path)
-    if not (path.startswith("/api/admin") or path.startswith("/api/marketing") or path.startswith("/api/intelligence") or path.startswith("/api/vios") or path.startswith("/api/verify/")):
+    if not (
+        path.startswith("/api/admin")
+        or path.startswith("/api/marketing")
+        or path.startswith("/api/intelligence")
+        or path.startswith("/api/vios")
+        or path.startswith("/api/verify/")
+        or path.startswith(_PRIVATE_INTERNAL_UPLOAD_PREFIXES)
+    ):
         return True
     requirement = _admin_permission_for_request(path, request.method)
     if requirement is None:
         return True
     permission_key, level, is_system = requirement
-    # SSE / EventSource 端点(/stream)允许 token 走 ?access_token= 查询参数:浏览器原生
-    # EventSource 无法带 Authorization header。与端点级 require_tab_stream 口径一致,仅限 /stream。
-    # 非 stream 路径按原样调用(不传 kwarg),对既有调用方 / 测试桩保持字节级兼容。
-    if path.endswith("/stream"):
-        user = get_current_user(request, allow_query_token=True)
+    # Browser EventSource subscriptions are GET requests and consume a
+    # short-lived path-bound ticket from an HttpOnly cookie.  A POST endpoint
+    # may also return ``text/event-stream`` (for example the Marketing Advisor
+    # staged response) while still using the normal Authorization header.  Do
+    # not classify those mutation requests as EventSource subscriptions merely
+    # because their path ends in ``/stream``; doing so rejected a valid bearer
+    # request before routing and left the UI waiting for an SSE response that
+    # could never arrive.
+    if request.method.upper() == "GET" and path.endswith("/stream"):
+        from app.core.security import get_current_user_stream
+
+        user = get_current_user_stream(request)
     else:
         user = get_current_user(request)
     if not user:
         return False
     staff = staff_context_for_user(user)
+    # The route permission dependency and post-response audit need the exact
+    # same staff projection.  Reusing it avoids two more synchronous Postgres
+    # lookups per request and, critically, prevents an async dependency from
+    # waiting for the fifth pool lease on the event-loop thread.
+    request.state.vkpi_authorized_staff = staff
     if is_system:
         return check_system_permission(staff, permission_key, level)
     return check_tab_permission(staff, permission_key, level)
+
+
+def _admin_rbac_allowed_bounded(request) -> bool:
+    """Authorize without retaining a pool lease for the whole request.
+
+    ``db_scope_middleware`` is outside this middleware in Starlette's runtime
+    stack.  If RBAC uses that outer handle, a cold dashboard fan-out lets the
+    first requests keep every pool connection while the remaining RBAC worker
+    threads wait for one.  Give authentication its own lazy, bounded scope so
+    the lease is returned before routing continues.
+    """
+    with db_connection_sync_scope():
+        return _admin_rbac_allowed(request)
+
+
+def _audit_sensitive_request(request, status_code: int) -> None:
+    """Run the existing sensitive-request audit outside the event loop."""
+    from app.domains import audit as vkpi_audit
+
+    user = get_current_user(request)
+    staff = getattr(request.state, "vkpi_authorized_staff", None)
+    if staff is None and user:
+        staff = staff_context_for_user(user)
+    vkpi_audit.log_request_if_sensitive(request, status_code, staff=staff)
 
 
 def _host_without_port(raw: str) -> str:
@@ -508,6 +502,15 @@ def _serve_frontend():
     raise HTTPException(status_code=404, detail="Frontend build not found")
 
 
+def _serve_frontend_public_file(filename: str):
+    path = FRONTEND_DIST_DIR / filename
+    if path.is_file():
+        response = FileResponse(path)
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
+    raise HTTPException(status_code=404, detail="Frontend public file not found")
+
+
 def _collect_referenced_uploads() -> set[str]:
     refs: set[str] = set()
     conn = None
@@ -557,6 +560,10 @@ async def _cleanup_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if APP_ROLE == MIGRATION_RUNNER_APP_ROLE:
+        raise RuntimeError(
+            "APP_ROLE='migration-runner' is a one-shot database role and cannot serve web traffic"
+        )
     await init_db_runtime()
     app.state.orchestrator = None
     app.state.job_queue = None
@@ -623,7 +630,21 @@ async def lifespan(app: FastAPI):
     await close_db_runtime()
 
 
-app = FastAPI(title="Viltrox Marketing", version="2.0.0", lifespan=lifespan)
+_ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+app = FastAPI(
+    title="Viltrox Workspace",
+    version="2.0.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if _ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if _ENABLE_API_DOCS else None,
+)
 
 sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
 if sentry_dsn:
@@ -662,7 +683,18 @@ async def csrf_origin_middleware(request, call_next):
 
 @app.middleware("http")
 async def admin_rbac_middleware(request, call_next):
-    if not _admin_rbac_allowed(request):
+    # RBAC performs synchronous Postgres reads.  A request waiting for the next
+    # pool lease must not block the event loop: under a burst larger than the
+    # pool, that prevented completed requests from resuming and releasing their
+    # own leases (pool-size + 1 became a deterministic deadlock).
+    try:
+        allowed = await asyncio.to_thread(_admin_rbac_allowed_bounded, request)
+    except Exception as exc:
+        # Fail closed, but surface pool/database admission pressure as a
+        # retryable service condition instead of leaking an ASGI 500.
+        logger.warning("db.rbac_admission_failed: %s", exc)
+        return _db_admission_unavailable_response()
+    if not allowed:
         logger.warning(
             "admin_rbac.blocked",
             extra={
@@ -672,22 +704,48 @@ async def admin_rbac_middleware(request, call_next):
             },
         )
         return JSONResponse({"detail": "当前账号没有 Viltrox Marketing 权限"}, status_code=403)
+    if _request_requires_db_admission(request):
+        try:
+            # RBAC's bounded lease has already been returned.  Prime the outer
+            # request handle off-loop before entering sync-heavy route code, so
+            # a fifth get_conn() can never block the sole event-loop thread.
+            await asyncio.to_thread(get_conn)
+        except Exception as exc:
+            logger.warning("db.request_prime_failed: %s", exc)
+            return _db_admission_unavailable_response()
     return await call_next(request)
 
 
 @app.middleware("http")
 async def db_scope_middleware(request, call_next):
-    async with db_connection_scope():
-        response = await call_next(request)
+    limiter = None
+    acquired = False
+    if _request_requires_db_admission(request):
+        limiter = _db_request_admission_limiter()
         try:
-            from app.domains import audit as vkpi_audit
+            await asyncio.wait_for(
+                limiter.acquire(),
+                timeout=_DB_REQUEST_ADMISSION_TIMEOUT_SEC,
+            )
+            acquired = True
+        except TimeoutError:
+            return _db_admission_unavailable_response()
 
-            user = get_current_user(request)
-            staff = staff_context_for_user(user) if user else None
-            vkpi_audit.log_request_if_sensitive(request, response.status_code, staff=staff)
-        except Exception as exc:
-            logger.debug("vkpi sensitive request audit skipped: %s", exc)
-        return response
+    try:
+        async with db_connection_scope():
+            response = await call_next(request)
+            try:
+                # Staff projection is synchronous Postgres work.  Running it on the
+                # event loop can freeze even DB-free endpoints such as /health when
+                # a cold dashboard burst is already using every pool connection.
+                await asyncio.to_thread(_audit_sensitive_request, request, response.status_code)
+            except Exception as exc:
+                logger.debug("vkpi sensitive request audit skipped: %s", exc)
+            return response
+    finally:
+        # Covers normal completion, route exceptions and client cancellation.
+        if acquired and limiter is not None:
+            limiter.release()
 
 
 @app.middleware("http")
@@ -722,6 +780,10 @@ async def request_metrics_middleware(request, call_next):
 async def security_headers_middleware(request, call_next):
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault(
+        "X-Robots-Tag",
+        "noindex, nofollow, noarchive, nosnippet, noimageindex",
+    )
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Permissions-Policy",
@@ -797,11 +859,15 @@ if IS_ADMIN_APP:
 async def health_check(request: Request, deep: bool = False):
     build = _build_info(str(request.query_params.get("client_build", "") or ""))
     try:
-        trust = _runtime_trust()
+        # Runtime trust performs synchronous Postgres/Redis heartbeat reads.
+        # A saturated small DB pool must never make that work block the sole
+        # asyncio event loop, otherwise in-flight requests cannot finish and
+        # return the very leases /health is waiting for.
+        trust = await asyncio.to_thread(_runtime_trust)
     except Exception:
         logger.debug("health: runtime_trust block failed", exc_info=True)
         trust = {}
-    if not deep:
+    if not deep and (not IS_PRODUCTION or _can_read_deep_health(request)):
         return {
             "status": "ok",
             "service": APP_ROLE,
@@ -809,6 +875,8 @@ async def health_check(request: Request, deep: bool = False):
             "build": build,
             "trust": trust,
         }
+    if not deep:
+        return {"status": "ok", "service": APP_ROLE, "version": APP_VERSION}
     if not _can_read_deep_health(request):
         raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
     return await build_deep_health_payload(
@@ -819,6 +887,26 @@ async def health_check(request: Request, deep: bool = False):
         is_public_app=IS_PUBLIC_APP,
         is_admin_app=IS_ADMIN_APP,
     )
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots_txt():
+    response = PlainTextResponse(
+        "User-agent: *\n"
+        "Disallow: /\n"
+    )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def frontend_favicon_svg():
+    return _serve_frontend_public_file("favicon.svg")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def frontend_favicon_ico():
+    return _serve_frontend_public_file("favicon.ico")
 
 
 @app.get("/")

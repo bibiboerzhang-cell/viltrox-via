@@ -9,6 +9,7 @@ from typing import Any
 
 from app.core.permissions import normalize_permissions
 from app.db.connection import get_conn
+from app.domains.platform import tenancy
 
 
 MANAGER_ROLES = {"admin", "owner", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}
@@ -229,6 +230,71 @@ def assert_project_access(project_id: int, staff: dict[str, Any] | None, *, writ
     raise ScopeDenied("project scope denied")
 
 
+def assert_project_access_many(
+    project_ids: list[int] | tuple[int, ...] | set[int],
+    staff: dict[str, Any] | None,
+    *,
+    write: bool = False,
+) -> None:
+    """Batch-equivalent project gate for bounded multi-target read models.
+
+    The scalar gate is intentionally kept for ordinary detail routes.  Batch
+    analysis polling may cover up to 200 evidence rows, however, and calling
+    the scalar gate per distinct project recreates a permission N+1 (up to two
+    reads per project).  This helper mirrors the scalar decisions with one
+    bounded query; missing project ids keep the scalar helper's downstream-404
+    behaviour.
+    """
+    normalized: list[int] = []
+    for raw_id in project_ids:
+        project_id = _int(raw_id)
+        if project_id > 0 and project_id not in normalized:
+            normalized.append(project_id)
+        if len(normalized) >= 200:
+            break
+    if not normalized or can_view_all(staff):
+        return
+    actor = actor_staff_id(staff)
+    if not actor:
+        raise ScopeDenied("project scope denied")
+    placeholders = ",".join("?" for _ in normalized)
+    rows = get_conn().execute(
+        f"""
+        SELECT p.id, p.assigned_staff_id, p.created_by_staff_id,
+               COALESCE(p.restricted, FALSE) AS restricted,
+               COALESCE(p.is_public, FALSE) AS is_public,
+               pm.role AS member_role
+        FROM vkpi_projects p
+        LEFT JOIN vkpi_project_members pm
+          ON pm.project_id=p.id AND pm.staff_id=?
+        WHERE p.id IN ({placeholders})
+        """,
+        (actor, *normalized),
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        if actor in {
+            _int(item.get("assigned_staff_id")),
+            _int(item.get("created_by_staff_id")),
+        }:
+            continue
+        member_role = str(item.get("member_role") or "").strip().lower()
+        if member_role:
+            if not write or member_role == "editor":
+                continue
+            raise ScopeDenied("project scope denied")
+        if not write and bool(item.get("is_public")) and not bool(item.get("restricted")):
+            continue
+        if (
+            not write
+            and not bool(item.get("restricted"))
+            and not _int(item.get("assigned_staff_id"))
+            and not _int(item.get("created_by_staff_id"))
+        ):
+            continue
+        raise ScopeDenied("project scope denied")
+
+
 def _team_ids_for_event(row: dict[str, Any]) -> set[int]:
     """把 vkpi_events.team_ids(jsonb 数组,psycopg 可能回字符串或 list)解析成 int 集合。"""
     raw = row.get("team_ids")
@@ -251,11 +317,152 @@ def _team_ids_for_event(row: dict[str, Any]) -> set[int]:
     return out
 
 
+def event_organization_id(
+    staff: dict[str, Any] | None,
+    conn: Any | None = None,
+) -> int:
+    """Resolve the trusted Event workspace without swallowing DB failures.
+
+    An explicit organization attached by the authenticated staff dependency is
+    authoritative.  Otherwise resolve the actor's membership using this
+    operation's connection.  Legacy staff with no membership remain in org 1,
+    but an unavailable or ambiguous membership lookup fails closed.
+    """
+    explicit = _int((staff or {}).get("organization_id"))
+    if explicit > 0:
+        return explicit
+    actor = actor_staff_id(staff)
+    if actor <= 0:
+        raise ScopeDenied("event organization context unavailable")
+    db = conn or get_conn()
+    try:
+        rows = db.execute(
+            "SELECT organization_id FROM organization_members WHERE staff_id=? ORDER BY id",
+            (actor,),
+        ).fetchall()
+    except Exception as exc:
+        raise ScopeDenied("event organization context unavailable") from exc
+    memberships = {_int(dict(row).get("organization_id")) for row in rows}
+    memberships.discard(0)
+    if len(memberships) > 1:
+        raise ScopeDenied("event organization context is ambiguous")
+    if memberships:
+        return next(iter(memberships))
+    # A missing membership is a supported legacy-org-1 shape only for a real
+    # staff row.  Without this existence check an arbitrary/stale actor id
+    # could be collapsed into the default workspace merely because both the
+    # membership query and the staff identity were empty.
+    try:
+        staff_row = db.execute("SELECT 1 FROM staff WHERE id=?", (actor,)).fetchone()
+    except Exception as exc:
+        raise ScopeDenied("event organization context unavailable") from exc
+    if staff_row is None:
+        raise ScopeDenied("event organization context unavailable")
+    return int(tenancy.default_organization_id())
+
+
+def assert_legacy_default_organization(
+    staff: dict[str, Any] | None,
+    conn: Any | None = None,
+    *,
+    feature: str = "legacy resource",
+) -> int:
+    """Fail closed when an unscoped legacy table is used outside org 1.
+
+    Reports and exports predate ``organization_id``.  Until an additive
+    migration and backfill exist, they may safely serve only the default
+    workspace.  Membership lookup errors and ambiguous memberships are already
+    denied by :func:`event_organization_id`; this wrapper adds the capability
+    gate without pretending that staff ownership is tenant isolation.
+    """
+    organization_id = event_organization_id(staff, conn)
+    if organization_id != int(tenancy.default_organization_id()):
+        raise ScopeDenied(f"{feature} organization scope unavailable")
+    return organization_id
+
+
+def event_has_organization_scope(conn: Any | None = None) -> bool:
+    """Return whether migration 244's ``vkpi_events.organization_id`` exists.
+
+    ``PRAGMA table_info`` is intentionally used through the compatibility DB
+    adapter: SQLite handles it natively and Postgres translates it to a
+    read-only ``information_schema`` query.  Detection errors fail closed for
+    every workspace; ``False`` exclusively means a successful pre-244 probe.
+    """
+    db = conn or get_conn()
+    try:
+        rows = db.execute("PRAGMA table_info(vkpi_events)").fetchall()
+    except Exception as exc:
+        raise ScopeDenied("event organization schema unavailable") from exc
+    for row in rows:
+        try:
+            name = dict(row).get("name")
+        except Exception:
+            try:
+                name = row[1]
+            except Exception:
+                name = None
+        if str(name or "").strip().lower() == "organization_id":
+            return True
+    return False
+
+
+def event_organization_context(
+    staff: dict[str, Any] | None,
+    conn: Any | None = None,
+) -> tuple[int, bool]:
+    """Return ``(organization_id, schema_is_scoped)`` for Event operations.
+
+    Before migration 244 only the default workspace may use the legacy table.
+    A non-default actor never collapses into org 1 merely because deployment is
+    between code and schema rollout; callers must deny or return an empty set.
+    """
+    organization_id = event_organization_id(staff, conn)
+    scoped = event_has_organization_scope(conn)
+    if not scoped and organization_id != int(tenancy.default_organization_id()):
+        raise ScopeDenied("event organization scope unavailable")
+    return organization_id, scoped
+
+
+def staff_belongs_to_event_organization(conn: Any, staff_id: Any, organization_id: int) -> bool:
+    """Validate a team/share target without breaking legacy org-1 staff rows.
+
+    Staff with an explicit organization membership must match.  Historical
+    staff without any membership remain valid only in the default workspace;
+    a non-default workspace always requires an explicit membership.
+    """
+    target = _int(staff_id)
+    if target <= 0:
+        return False
+    try:
+        rows = conn.execute(
+            "SELECT organization_id FROM organization_members WHERE staff_id=? ORDER BY id",
+            (target,),
+        ).fetchall()
+    except Exception:
+        return False
+    memberships = {_int(dict(row).get("organization_id")) for row in rows}
+    memberships.discard(0)
+    if memberships:
+        return int(organization_id) in memberships
+    # Preserve the legacy default-workspace fallback only for an existing
+    # staff identity.  This also turns a nonexistent share/team target into a
+    # clean scope rejection instead of a later FK/500 failure.
+    try:
+        staff_row = conn.execute("SELECT 1 FROM staff WHERE id=?", (target,)).fetchone()
+    except Exception:
+        return False
+    return (
+        staff_row is not None
+        and int(organization_id) == int(tenancy.default_organization_id())
+    )
+
+
 def assert_event_access(event_id: str, staff: dict[str, Any] | None, *, write: bool = False) -> None:
     """活动写权限收口(2026-06-14,镜像 assert_project_access)。
 
     放行裁决(越上越宽):
-    - can_view_all(admin/owner/manager)→ 完全读写,原样保留(收紧写不破 admin/owner)。
+    - can_view_all(admin/owner/manager)→ 当前 organization 内完全读写;不得跨 workspace。
     - owner_id == actor → 完全读写(活动所有者)。
     - team_ids 含 actor → editor 级:读写均放行。裁决(可追认):Events 是显式「多人协作」
       模块(团队成员本就在跑这个活动),故团队成员=编辑者,可写;与项目侧 assigned/creator
@@ -267,18 +474,35 @@ def assert_event_access(event_id: str, staff: dict[str, Any] | None, *, write: b
 
     红线:只读 vkpi_events / vkpi_event_members;绝不碰 viltrox_fit_score / rule_v0。
     """
-    if can_view_all(staff):
-        return
+    conn = get_conn()
+    organization_id, organization_scoped = event_organization_context(staff, conn)
     actor = actor_staff_id(staff)
     if not actor:
         raise ScopeDenied("event scope denied")
-    row = get_conn().execute(
-        "SELECT owner_id, team_ids, COALESCE(is_public, FALSE) AS is_public FROM vkpi_events WHERE id=?",
-        (str(event_id),),
-    ).fetchone()
+    if organization_scoped:
+        row = conn.execute(
+            "SELECT owner_id, team_ids, COALESCE(is_public, FALSE) AS is_public "
+            "FROM vkpi_events WHERE id=? AND organization_id=?",
+            (str(event_id), organization_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT owner_id, team_ids, COALESCE(is_public, FALSE) AS is_public FROM vkpi_events WHERE id=?",
+            (str(event_id),),
+        ).fetchone()
     if not row:
+        # With migration 244 present, an unqualified id may belong to another
+        # workspace.  Treat both cross-workspace and absent rows as denied so a
+        # manager/public shortcut can never turn that ambiguity into access.
+        if organization_scoped:
+            raise ScopeDenied("event scope denied")
         return
     item = dict(row)
+    # Global roles are global only inside the actor's current organization.
+    # The organization-qualified lookup above deliberately happens before this
+    # shortcut so manager/admin cannot read or mutate another workspace by id.
+    if can_view_all(staff):
+        return
     if actor == _int(item.get("owner_id")):
         # owner = 完全读写,原样放行。
         return
@@ -287,7 +511,7 @@ def assert_event_access(event_id: str, staff: dict[str, Any] | None, *, write: b
         return
     # 活动共享接线(2026-06-14,ADDITIVE):actor 若是显式共享成员,按 role 区分:
     #   viewer → 只读(write=False 放行,write=True 拒);editor → 读写均放行。
-    member = get_conn().execute(
+    member = conn.execute(
         "SELECT role FROM vkpi_event_members WHERE event_id=? AND staff_id=?",
         (str(event_id), actor),
     ).fetchone()
@@ -353,6 +577,44 @@ def resolve_analysis_target_project(target_type: str, target_id: str | int) -> i
         return None
     project_id = _int(dict(row).get("project_id"))
     return project_id or None
+
+
+def resolve_analysis_target_projects(
+    target_type: str,
+    target_ids: list[str | int] | tuple[str | int, ...],
+) -> set[int]:
+    """Batch variant used by bounded analysis status polling.
+
+    It returns only concrete project owners.  Historical video/contract rows
+    with NULL project ownership retain the existing tab-level fallback.
+    """
+    kind = str(target_type or "").strip().lower()
+    row_ids: list[int] = []
+    for target_id in target_ids:
+        try:
+            value = int(str(target_id).strip())
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value not in row_ids:
+            row_ids.append(value)
+        if len(row_ids) >= 200:
+            break
+    if kind == "project":
+        return set(row_ids)
+    table = _ANALYSIS_TARGET_PROJECT_TABLES.get(kind)
+    if not table or not row_ids:
+        return set()
+    placeholders = ",".join("?" for _ in row_ids)
+    rows = get_conn().execute(
+        f"SELECT DISTINCT project_id FROM {table} "  # noqa: S608 - table 来自白名单映射
+        f"WHERE id IN ({placeholders}) AND project_id IS NOT NULL",
+        tuple(row_ids),
+    ).fetchall()
+    return {
+        project_id
+        for row in rows
+        if (project_id := _int(dict(row).get("project_id")))
+    }
 
 
 def assert_link_access(link_id: int, staff: dict[str, Any] | None, *, write: bool = False) -> None:

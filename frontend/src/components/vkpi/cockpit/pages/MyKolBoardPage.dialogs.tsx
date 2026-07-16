@@ -28,6 +28,7 @@ import {
   type FlowReceipt,
 } from "../../pages/myKol/PoolEvidenceContent.helpers";
 import type { VkpiProjectRow } from "../../vkpiTypes";
+import { proxiedImageUrl } from "../../shared/mediaProxy";
 
 // MY KOL · 弹窗族(M3:库弹窗化 + V 视频筛选;金样板 = MarketVoicePage.dialogs 的
 //   FeedListModal/FeedDetailModal 连续翻体验,ModalShell/SectionLabel 复用零重写)。
@@ -67,6 +68,44 @@ export function ReceiptLine({ msg }: { msg: FlowReceipt | null }) {
 const errText = (err: unknown, fallback: string) =>
   String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || fallback).slice(0, 100);
 
+function KolAvatar({ row, size = "row" }: { row: KolLibraryRow; size?: "row" | "detail" }) {
+  const resolvedSrc = proxiedImageUrl(row.avatarUrl);
+  const [failed, setFailed] = React.useState(!resolvedSrc);
+  React.useEffect(() => setFailed(!resolvedSrc), [resolvedSrc]);
+  const avatarClass = size === "detail"
+    ? "h-9 w-9 flex-none rounded-full border border-line object-cover"
+    : "h-[22px] w-[22px] flex-none rounded-full border border-line object-cover";
+  const fallbackClass = size === "detail"
+    ? "grid h-9 w-9 flex-none place-items-center rounded-full border border-line bg-card text-[14px] text-muted"
+    : "grid h-[22px] w-[22px] flex-none place-items-center rounded-full border border-line bg-panel text-[10px] text-muted";
+
+  if (failed || !resolvedSrc) {
+    return (
+      <span
+        aria-label={`${row.name || "KOL"} 头像暂不可用`}
+        className={fallbackClass}
+      >
+        {(row.name || "?").slice(0, 1).toUpperCase()}
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={resolvedSrc}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      className={avatarClass}
+      onError={() => setFailed(true)}
+      onLoad={(event) => {
+        const image = event.currentTarget;
+        if (image.naturalWidth <= 2 && image.naturalHeight <= 2) setFailed(true);
+      }}
+    />
+  );
+}
+
 /* ============ 库行(卡面 6 条与全量弹窗共用;点行开详情,弹窗内可勾选批量) ============ */
 export function KolRowLine({
   row,
@@ -97,11 +136,7 @@ export function KolRowLine({
       {selectable ? (
         <input type="checkbox" aria-label={`勾选 ${row.name}`} checked={selected} onChange={() => onToggleSelect?.(row.poolId)} onClick={(ev) => ev.stopPropagation()} className="h-3.5 w-3.5 flex-none accent-[var(--ds-accent)]" />
       ) : null}
-      {row.avatarUrl ? (
-        <img src={row.avatarUrl} alt="" loading="lazy" className="h-[22px] w-[22px] flex-none rounded-full border border-line object-cover" />
-      ) : (
-        <span className="grid h-[22px] w-[22px] flex-none place-items-center rounded-full border border-line bg-panel text-[10px] text-muted">{(row.name || "?").slice(0, 1).toUpperCase()}</span>
-      )}
+      <KolAvatar row={row} />
       <span className="min-w-[42px] flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-center text-[8.5px] font-semibold text-ink-2">{platformBadge(row.platform)}</span>
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">
         {row.name}
@@ -616,11 +651,7 @@ export function KolDetailModal({
       {/* 档案卡:头像/名称/平台/粉丝/Fit(只读)/状态徽 + SrcChip 溯源 */}
       <div className="mb-[22px] rounded-[11px] border border-line bg-panel px-3.5 py-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          {item.avatarUrl ? (
-            <img src={item.avatarUrl} alt="" className="h-9 w-9 flex-none rounded-full border border-line object-cover" />
-          ) : (
-            <span className="grid h-9 w-9 flex-none place-items-center rounded-full border border-line bg-card text-[14px] text-muted">{(item.name || "?").slice(0, 1).toUpperCase()}</span>
-          )}
+          <KolAvatar row={item} size="detail" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="truncate text-[14px] font-semibold text-ink">{item.name}</span>

@@ -10,6 +10,7 @@ Default scope is "inventory", defined as KOLs present in vkpi_kol_pool_favorites
 No database writes, no provider calls, no LLM calls.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import hashlib
@@ -363,7 +364,7 @@ def main() -> int:
     parser.add_argument("--materialize-folders", action="store_true", help="Create per-video folders and metadata.json files.")
     args = parser.parse_args()
     summary = prepare_inventory(args)
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    stdout_out(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
 

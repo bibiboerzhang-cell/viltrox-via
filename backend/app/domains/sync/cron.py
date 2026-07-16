@@ -5,7 +5,6 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from app.core.config import VKPI_ASYNC_ENABLED
 from app.core.logging import get_logger
 from app.domains import audit
 from app.domains.projects.workflow import staff_id as resolve_staff_id
@@ -205,6 +204,8 @@ async def _queue_channel_syncs(
         effective_queue = owned_queue
     if effective_queue is None:
         raise RuntimeError("job queue unavailable")
+    if str(getattr(effective_queue, "backend_name", "")) == "inprocess":
+        raise RuntimeError("durable_queue_required:inprocess_queue_has_no_provider_execution_fence")
 
     import app.domains.tasks.enqueue as task_enqueue
 
@@ -221,7 +222,7 @@ async def _queue_channel_syncs(
                 queued = await task_enqueue.enqueue_official_channel_sync(
                     effective_queue,
                     channel_id,
-                    max_posts=max_posts,
+                    max_posts=int(row.get("_requested_max_posts") or max_posts),
                     staff=enqueue_staff,
                     priority=5,
                 )
@@ -241,6 +242,122 @@ async def _queue_channel_syncs(
         "channels_requested": len(rows),
         "channels_failed_to_enqueue": len(failed),
         "task_ids": unique_task_ids[:20],
+        "failed": failed[:20],
+    }
+
+
+async def _queue_provider_jobs(
+    jobs: list[dict[str, Any]],
+    *,
+    queue: Any | None,
+) -> dict[str, Any]:
+    """Enqueue reviewed provider jobs and never execute them in cron."""
+
+    owned_queue = None
+    effective_queue = queue
+    if effective_queue is None:
+        from app.services.jobs.queue import build_job_queue
+
+        owned_queue = build_job_queue()
+        effective_queue = owned_queue
+    if effective_queue is None:
+        raise RuntimeError("durable job queue unavailable")
+    if str(getattr(effective_queue, "backend_name", "")) == "inprocess":
+        raise RuntimeError("durable_queue_required:inprocess_queue_has_no_provider_execution_fence")
+    task_ids: list[str] = []
+    failed: list[dict[str, Any]] = []
+    try:
+        for spec in jobs:
+            try:
+                task_id = await effective_queue.enqueue(
+                    str(spec.get("job_type") or ""),
+                    dict(spec.get("payload") or {}),
+                    lock_key=str(spec.get("lock_key") or "") or None,
+                    timeout_seconds=int(spec.get("timeout_seconds") or 1200),
+                )
+                task_ids.append(str(task_id))
+            except Exception as exc:
+                failed.append(
+                    {
+                        "job_type": spec.get("job_type"),
+                        "target_id": (spec.get("payload") or {}).get("account_id")
+                        or (spec.get("payload") or {}).get("body", {}).get("product_sku"),
+                        "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    }
+                )
+    finally:
+        if owned_queue is not None:
+            close_fn = getattr(owned_queue, "close", None)
+            if close_fn is not None:
+                result = close_fn()
+                if hasattr(result, "__await__"):
+                    await result
+    return {
+        "requested": len(jobs),
+        "enqueued": len(task_ids),
+        "failed_to_enqueue": len(failed),
+        "task_ids": task_ids[:50],
+        "failed": failed[:20],
+    }
+
+
+async def _queue_kol_refreshes(
+    rows: list[dict[str, Any]],
+    *,
+    payload: dict[str, Any],
+    staff: dict[str, Any] | None,
+    queue: Any | None,
+) -> dict[str, Any]:
+    owned_queue = None
+    effective_queue = queue
+    if effective_queue is None:
+        from app.services.jobs.queue import build_job_queue
+
+        owned_queue = build_job_queue()
+        effective_queue = owned_queue
+    if effective_queue is None:
+        raise RuntimeError("durable job queue unavailable")
+    if str(getattr(effective_queue, "backend_name", "")) == "inprocess":
+        raise RuntimeError("durable_queue_required:inprocess_queue_has_no_provider_execution_fence")
+    import app.domains.tasks.enqueue as task_enqueue
+
+    task_ids: list[str] = []
+    failed: list[dict[str, Any]] = []
+    max_posts = max(1, min(3, int(payload.get("kol_max_posts") or payload.get("max_posts") or 1)))
+    try:
+        for row in rows:
+            kol_pool_id = int(row.get("id") or 0)
+            if not kol_pool_id:
+                continue
+            try:
+                queued = await task_enqueue.enqueue_kol_pool_on_demand_refresh(
+                    effective_queue,
+                    kol_pool_id,
+                    reason="daily_incremental_sync",
+                    max_posts=max_posts,
+                    staff=staff or _system_staff(),
+                    priority=5,
+                )
+                task_ids.append(str(queued.get("task_id") or ""))
+            except Exception as exc:
+                failed.append(
+                    {
+                        "kol_pool_id": kol_pool_id,
+                        "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    }
+                )
+    finally:
+        if owned_queue is not None:
+            close_fn = getattr(owned_queue, "close", None)
+            if close_fn is not None:
+                result = close_fn()
+                if hasattr(result, "__await__"):
+                    await result
+    return {
+        "requested": len(rows),
+        "enqueued": len([item for item in task_ids if item]),
+        "failed_to_enqueue": len(failed),
+        "task_ids": [item for item in task_ids if item][:50],
         "failed": failed[:20],
     }
 
@@ -351,7 +468,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         from app.domains import analytics
 
         products = analytics.list_monitored_products(limit=50).get("products") or []
-        ran = []
+        jobs: list[dict[str, Any]] = []
         for product in products:
             if str(product.get("enabled") or "1") in {"0", "false"}:
                 continue
@@ -363,25 +480,33 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             except Exception:
                 platform_list = ["youtube"]
             for platform in (platform_list or ["youtube"]):
-                ran.append(await analytics.monitor_product({"product_sku": product.get("product_sku"), "platform": platform, "max_videos": int(payload.get("max_videos") or 20)}))
-        return {"job": name, "status": "ok", "runs": len(ran), "ran_at": _stamp()}
+                body = {
+                    "product_sku": product.get("product_sku"),
+                    "platform": platform,
+                    "max_videos": int(payload.get("max_videos") or 20),
+                }
+                jobs.append(
+                    {
+                        "job_type": "vkpi_analytics_monitor",
+                        "payload": {"body": body, "staff": dict(payload.get("staff") or {})},
+                        "lock_key": f"vkpi_analytics_monitor:{body['product_sku']}:{platform}",
+                        "timeout_seconds": 1200,
+                    }
+                )
+        queued = await _queue_provider_jobs(jobs, queue=queue)
+        return {"job": name, "status": "queued", "runs": queued["enqueued"], **queued, "ran_at": _stamp()}
     if name == "channels_sync":
         from app.domains import channels
 
         rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
-        if VKPI_ASYNC_ENABLED:
-            queued = await _queue_channel_syncs(
-                rows,
-                payload={**payload, "max_posts": max_posts},
-                staff=payload.get("staff"),
-                queue=queue,
-            )
-            return {"job": name, "status": "queued", **queued, "ran_at": _stamp()}
-        results = []
-        for row in rows:
-            results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=max_posts))
-        return {"job": name, "status": "ok", "synced": len(results), "results": results[:20], "ran_at": _stamp()}
+        queued = await _queue_channel_syncs(
+            rows,
+            payload={**payload, "max_posts": max_posts},
+            staff=payload.get("staff"),
+            queue=queue,
+        )
+        return {"job": name, "status": "queued", **queued, "ran_at": _stamp()}
     if name == "official_full_baseline":
         from app.domains import channels
 
@@ -405,27 +530,81 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             if str(row.get("platform") or "").lower() in platform_filter
         ]
         max_override = int(payload.get("max_posts") or 0)
-        results = []
+        queued_rows: list[dict[str, Any]] = []
         for row in rows:
             platform_key = str(row.get("platform") or "").lower()
             max_posts = max_override or platform_limits.get(platform_key, 100)
-            results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=max_posts))
-        failed = [item for item in results if str(item.get("sync_status") or "") not in {"synced"}]
+            queued_rows.append({**row, "_requested_max_posts": max_posts})
+        queued = await _queue_channel_syncs(
+            queued_rows,
+            payload={**payload, "max_posts": max_override or 100},
+            staff=payload.get("staff"),
+            queue=queue,
+        )
         return {
             "job": name,
-            "status": "ok",
-            "synced": len(results) - len(failed),
-            "failed": len(failed),
+            "status": "queued",
+            **queued,
             "platforms": sorted(platform_filter),
             "limits": {key: platform_limits[key] for key in sorted(platform_limits) if key in platform_filter},
-            "results": results[:30],
             "ran_at": _stamp(),
         }
     if name == "daily_incremental_sync":
         from app.domains.sync import daily_sync
+        from app.domains.sync import refresh_tier
 
-        result = await asyncio.to_thread(daily_sync.run_daily_incremental, payload)
-        return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
+        daily_sync.check_daily_sync_guard(payload)
+        official: dict[str, Any] = {"skipped": True}
+        if not daily_sync._bool(payload.get("skip_official")):
+            from app.domains import channels
+
+            rows = channels.list_channels(staff={}, limit=300).get("channels") or []
+            official = await _queue_channel_syncs(
+                rows,
+                payload={
+                    **payload,
+                    "max_posts": int(payload.get("official_max_posts") or payload.get("channel_max_posts") or payload.get("max_posts") or 50),
+                },
+                staff=payload.get("staff"),
+                queue=queue,
+            )
+
+        kol_result: dict[str, Any] = {"skipped": True}
+        selector = daily_sync._kol_refresh_selector(payload)
+        allow_legacy = daily_sync._bool(payload.get("allow_legacy_kol_full_refresh")) or daily_sync._bool(payload.get("include_legacy_kol"))
+        allow_qualified = daily_sync._bool(payload.get("allow_qualified_kol_refresh")) or daily_sync._bool(payload.get("include_qualified_kol"))
+        if not daily_sync._bool(payload.get("skip_kol")) and ((selector == "qualified" and allow_qualified) or (selector != "qualified" and allow_legacy)):
+            limit = max(1, min(1200, int(payload.get("kol_limit") or 1200)))
+            platforms = daily_sync._platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
+            if selector == "qualified":
+                rows = refresh_tier.qualified_refresh_rows(
+                    limit=limit,
+                    offset=max(0, int(payload.get("kol_offset") or 0)),
+                    stale_before=str(payload.get("kol_stale_before") or ""),
+                    platforms=platforms,
+                    tiers=daily_sync._tier_filter(payload.get("kol_tiers") or payload.get("refresh_tiers")),
+                )
+            else:
+                rows = daily_sync._kol_light_rows(
+                    limit=limit,
+                    offset=max(0, int(payload.get("kol_offset") or 0)),
+                    stale_before=str(payload.get("kol_stale_before") or ""),
+                    platforms=platforms,
+                    source_type=str(payload.get("kol_source_type") or "legacy_excel_p2d"),
+                )
+            kol_result = await _queue_kol_refreshes(
+                rows,
+                payload=payload,
+                staff=payload.get("staff"),
+                queue=queue,
+            )
+        return {
+            "job": name,
+            "status": "queued",
+            "official": official,
+            "kol_pool_light": kol_result,
+            "ran_at": _stamp(),
+        }
     if name == "daily_outreach_digest_only":
         from app.domains import analytics
 
@@ -442,27 +621,37 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         from app.domains import industry as industry_domain
 
         channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
-        channel_results = []
         channel_enqueue: dict[str, Any] = {}
         channel_max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
-        if VKPI_ASYNC_ENABLED:
-            channel_enqueue = await _queue_channel_syncs(
-                channel_rows,
-                payload={**payload, "max_posts": channel_max_posts},
-                staff=payload.get("staff"),
-                queue=queue,
-            )
-        else:
-            for row in channel_rows:
-                channel_results.append(channels.sync_now(int(row["id"]), staff=payload.get("staff"), max_posts=channel_max_posts))
-
-        industry_sync = industry_domain.sync_enabled_accounts(
-            limit=int(payload.get("industry_account_limit") or 100),
+        channel_enqueue = await _queue_channel_syncs(
+            channel_rows,
+            payload={**payload, "max_posts": channel_max_posts},
             staff=payload.get("staff"),
+            queue=queue,
         )
 
+        industry_rows = [
+            row
+            for row in industry_domain.list_accounts(
+                limit=int(payload.get("industry_account_limit") or 100)
+            ).get("accounts")
+            or []
+            if bool(row.get("crawl_enabled"))
+        ]
+        industry_jobs = [
+            {
+                "job_type": "industry_account_refresh",
+                "payload": {"account_id": int(row["id"]), "staff": dict(payload.get("staff") or {})},
+                "lock_key": f"industry_account_refresh:{int(row['id'])}",
+                "timeout_seconds": 1200,
+            }
+            for row in industry_rows
+            if row.get("id")
+        ]
+        industry_sync = await _queue_provider_jobs(industry_jobs, queue=queue)
+
         products = analytics.list_monitored_products(limit=100).get("products") or []
-        monitor_runs = []
+        monitor_jobs: list[dict[str, Any]] = []
         for product in products:
             if str(product.get("enabled") or "1").lower() in {"0", "false", "no"}:
                 continue
@@ -474,17 +663,21 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             except Exception:
                 platform_list = ["youtube"]
             for platform in (platform_list or ["youtube"]):
-                monitor_runs.append(
-                    await analytics.monitor_product(
-                        {
-                            "product_sku": product.get("product_sku"),
-                            "platform": platform,
-                            "max_videos": int(payload.get("max_videos") or 50),
-                            "period_days": int(payload.get("period_days") or 1),
-                        },
-                        staff=payload.get("staff"),
-                    )
+                body = {
+                    "product_sku": product.get("product_sku"),
+                    "platform": platform,
+                    "max_videos": int(payload.get("max_videos") or 50),
+                    "period_days": int(payload.get("period_days") or 1),
+                }
+                monitor_jobs.append(
+                    {
+                        "job_type": "vkpi_analytics_monitor",
+                        "payload": {"body": body, "staff": dict(payload.get("staff") or {})},
+                        "lock_key": f"vkpi_analytics_monitor:{body['product_sku']}:{platform}",
+                        "timeout_seconds": 1200,
+                    }
                 )
+        monitor_runs = await _queue_provider_jobs(monitor_jobs, queue=queue)
 
         digest = analytics.generate_daily_staff_outreach_digest(
             target_date=payload.get("date"),
@@ -494,16 +687,17 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         )
         return {
             "job": name,
-            "status": "ok",
-            "channels_synced": len(channel_results),
+            "status": "queued",
+            "channels_synced": 0,
             "channels_enqueued": channel_enqueue.get("channels_enqueued", 0),
             "channels_failed_to_enqueue": channel_enqueue.get("channels_failed_to_enqueue", 0),
             "channel_task_ids": channel_enqueue.get("task_ids", []),
-            "industry_accounts_synced": industry_sync.get("synced", 0),
-            "industry_accounts_skipped": industry_sync.get("skipped", 0),
-            "industry_accounts_failed": industry_sync.get("failed", 0),
+            "industry_accounts_synced": 0,
+            "industry_accounts_enqueued": industry_sync.get("enqueued", 0),
+            "industry_accounts_skipped": 0,
+            "industry_accounts_failed": industry_sync.get("failed_to_enqueue", 0),
             "industry_sync": industry_sync,
-            "monitor_runs": len(monitor_runs),
+            "monitor_runs": monitor_runs.get("enqueued", 0),
             "digest": digest,
             "ran_at": _stamp(),
         }

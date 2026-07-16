@@ -31,14 +31,28 @@ class SmartKolInputPollingContractTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertIn(f'"{status}"', body)
 
-    def test_polling_stops_on_terminal_session_and_refreshes_history(self) -> None:
-        self.assertIn("if (isSearchSessionTerminal(session))", self.source)
+    def test_polling_waits_for_required_tasks_or_terminal_grace_and_refreshes_history(self) -> None:
+        self.assertIn("const progress = searchSessionProgress(session);", self.source)
+        self.assertIn("if (progress.requiredTasksComplete)", self.source)
+        self.assertIn("Date.now() - terminalSince >= 30000", self.source)
+        self.assertNotIn("haveDiscovery || graceUsedUp", self.source)
         self.assertIn("setActiveSearchSessionId(null);", self.source)
-        self.assertIn('setSessionPollNotice("已找完，结果已更新");', self.source)
+        self.assertIn("结果已更新", self.source)
         self.assertIn("void refreshHistory();", self.source)
+
+    def test_polling_merges_sparse_snapshots_per_kol_and_reports_stage_progress(self) -> None:
+        self.assertIn("mergeKolSearchSessionSnapshots(prev, session)", self.source)
+        self.assertIn("mergeKolRecallSnapshots(prev, polledRecall)", self.source)
+        self.assertIn("基础结果 ${progress.basicVisible}/${progress.target}", self.source)
+        self.assertIn("档案补全 ${progress.profileReady}/${progress.target}", self.source)
+        self.assertIn("完整分析 ${progress.deepReady}/${progress.target}", self.source)
 
     def test_polling_has_visibility_pause_timeout_and_cleanup(self) -> None:
         self.assertIn("const maxPollMs = 12 * 60 * 1000;", self.source)
+        self.assertIn("let inFlight = false;", self.source)
+        self.assertIn("if (cancelled || inFlight) return;", self.source)
+        self.assertIn("inFlight = true;", self.source)
+        self.assertIn("inFlight = false;", self.source)
         self.assertIn('document.visibilityState === "hidden"', self.source)
         self.assertIn("window.setInterval", self.source)
         self.assertIn("}, 2500);", self.source)

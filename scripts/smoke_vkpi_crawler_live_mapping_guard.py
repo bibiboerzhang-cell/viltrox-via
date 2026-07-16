@@ -7,6 +7,8 @@ are visible. Use --live explicitly to run one real provider request.
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import json
@@ -177,12 +179,12 @@ def main() -> None:
 
         if args.live:
             result = _run_live(args)
-            print(json.dumps({"readiness": readiness, "live_result": result}, ensure_ascii=False, indent=2, default=str))
-            print("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
+            out(json.dumps({"readiness": readiness, "live_result": result}, ensure_ascii=False, indent=2, default=str))
+            out("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
             return
 
-        print(json.dumps(readiness, ensure_ascii=False, indent=2, default=str))
-        print("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
+        out(json.dumps(readiness, ensure_ascii=False, indent=2, default=str))
+        out("VKPI_CRAWLER_LIVE_MAPPING_GUARD_SMOKE_OK")
     finally:
         asyncio.run(close_db_runtime())
 

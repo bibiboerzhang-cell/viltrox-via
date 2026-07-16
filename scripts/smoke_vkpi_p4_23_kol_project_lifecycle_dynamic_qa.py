@@ -10,6 +10,7 @@ This smoke uses the running local backend over HTTP. It verifies:
 All data is marker-scoped and cleaned up before exit.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import json
 import sys
@@ -318,7 +319,7 @@ def main() -> None:
         )
         _assert(_audit_count("project_delete", "project", project_id) >= 1, "project delete should write business audit")
 
-        print(
+        stdout_out(
             json.dumps(
                 {
                     "ok": True,
@@ -339,7 +340,7 @@ def main() -> None:
                 ensure_ascii=False,
             )
         )
-        print("VKPI_P4_23_KOL_PROJECT_LIFECYCLE_DYNAMIC_QA_OK")
+        stdout_out("VKPI_P4_23_KOL_PROJECT_LIFECYCLE_DYNAMIC_QA_OK")
     finally:
         _cleanup(pairs)
 

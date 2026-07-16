@@ -1,6 +1,7 @@
 import React from "react";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { usePermissions } from "../../../../hooks/usePermissions";
 import { useCachedGet } from "../../../../hooks/useCachedGet";
 import { ErrorCard, LoadingLine, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
@@ -112,7 +113,7 @@ const EMPTY_DIGEST: LearningDigest = {
   status: "",
 };
 
-export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: string; onNavigate?: (navKey: string) => void }) {
+export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleKey }: { apiToken?: string; onNavigate?: (navKey: string) => void; embeddedModuleKey?: string }) {
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
   const [provKey, setProvKey] = React.useState<string | null>(null);
@@ -263,7 +264,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
         dryRun,
       )
         .then((res) => {
-          if (res.status === "error" || (!dryRun && !res.ok)) {
+          if (!res.ok || res.status === "error" || res.status === "scope_unavailable") {
             setMatError(res.reason || "生成行动失败");
             return;
           }
@@ -285,6 +286,12 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
   );
 
   const p = plan?.public_plan;
+  const previewReady = Boolean(plan && plan.status !== "scope_unavailable" && plan.status !== "error");
+  const previewCount = (value: React.ReactNode): React.ReactNode | undefined => {
+    if (plan?.status === "scope_unavailable") return "待接通";
+    if (plan?.status === "error") return "失败";
+    return previewReady ? value : undefined;
+  };
   const digest: LearningDigest = summary?.learning_digest || EMPTY_DIGEST;
 
   const mat: MaterializeAdapter = {
@@ -318,6 +325,13 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
     if (summaryLoading && !summary) return <LoadingLine text="全局聚合读取中…" />;
     if (summaryError) return <ErrorCard title="market-brain/summary 读取失败" text={summaryError} />;
     if (!summary) return <LoadingLine text="全局聚合读取中…" />;
+    if (summary.status === "scope_unavailable") {
+      return (
+        <PendingCard>
+          <b>当前租户的 GTM 聚合尚未接通</b> —— {summary.reason || "租户范围无法确认，已安全停止读取默认工作区数据。"}
+        </PendingCard>
+      );
+    }
     return null;
   };
 
@@ -327,6 +341,16 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
     if (!selectedSku) return <PlanPending />;
     if (planLoading) return <LoadingLine text="作战预览聚合中…" />;
     if (planError) return <ErrorCard title="gtm-plan/preview 生成失败" text={planError} />;
+    if (plan?.status === "scope_unavailable") {
+      return (
+        <PendingCard>
+          <b>当前租户的 GTM 预览尚未接通</b> —— {plan.reason || "租户范围无法确认，已安全停止读取默认工作区数据。"}
+        </PendingCard>
+      );
+    }
+    if (plan?.status === "error") {
+      return <ErrorCard title="gtm-plan/preview 生成失败" text={plan.reason || "作战预览返回错误状态。"} />;
+    }
     if (!plan || !p) return <PlanPending />;
     return null;
   };
@@ -345,19 +369,25 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
   };
 
   const renderRoute = () => {
-    const cnt = plan ? selectedSku : summary ? `${summary.product_opportunities.items.length} 机会` : undefined;
+    const cnt = plan?.status === "scope_unavailable"
+      ? "待接通"
+      : plan
+        ? selectedSku
+        : summary
+          ? `${summary.product_opportunities.items.length} 机会`
+          : undefined;
+    const gate = selectedSku ? planGate() : summaryGate();
     return (
       <ModuleCard {...cardProps("route", "今日增长路线", cnt)}>
-        {!apiToken ? (
-          noTokenCard
-        ) : planLoading ? (
-          <LoadingLine text="作战预览聚合中…" />
-        ) : plan ? (
-          <RouteBody summary={summary} plan={plan} selectedSku={selectedSku} budgetText={budgetText} goal={goal} />
-        ) : (
-          summaryGate() ?? (
-            <RouteBody summary={summary} plan={null} selectedSku={selectedSku} budgetText={budgetText} goal={goal} onPickSku={loadPreview} />
-          )
+        {gate ?? (
+          <RouteBody
+            summary={summary}
+            plan={selectedSku ? plan : null}
+            selectedSku={selectedSku}
+            budgetText={budgetText}
+            goal={goal}
+            onPickSku={selectedSku ? undefined : loadPreview}
+          />
         )}
       </ModuleCard>
     );
@@ -383,7 +413,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
   };
 
   const renderLearn = () => {
-    const extraRows: Array<[string, string]> = plan
+    const extraRows: Array<[string, string]> = previewReady
       ? [["本页口径", "复用全局复盘账本 —— preview 无 SKU 级学习段,如实标注"]]
       : [];
     return (
@@ -393,11 +423,15 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
     );
   };
 
-  const renderBets = () => (
-    <ModuleCard {...cardProps("bets", "Bet 生命周期", plan ? "至「预览」" : "构想")}>
-      {!apiToken ? noTokenCard : <BetsBody plan={plan} />}
-    </ModuleCard>
-  );
+  const renderBets = () => {
+    const gate = selectedSku ? planGate() : null;
+    const cnt = previewCount("至「预览」") ?? "构想";
+    return (
+      <ModuleCard {...cardProps("bets", "Bet 生命周期", cnt)}>
+        {!apiToken ? noTokenCard : gate ?? <BetsBody plan={selectedSku ? plan : null} />}
+      </ModuleCard>
+    );
+  };
 
   const renderHealth = () => <HealthEmbed apiToken={apiToken} noToken={noTokenCard} />;
   const renderNorthstar = () => <NorthstarEmbed apiToken={apiToken} noToken={noTokenCard} />;
@@ -413,31 +447,31 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
   /* ---------- 作战预览模块族(planGate 统一闸) ---------- */
 
   const renderThesis = () => (
-    <ModuleCard {...cardProps("thesis", "主判断", p ? `${selectedSku} · 置信 ${p.thesis.confidence || "—"}` : undefined)}>
+    <ModuleCard {...cardProps("thesis", "主判断", previewCount(`${selectedSku} · 置信 ${p?.thesis.confidence || "—"}`))}>
       {planGate() ?? <ThesisBody p={p!} />}
     </ModuleCard>
   );
 
   const renderForecast = () => (
-    <ModuleCard {...cardProps("forecast", "条件化预判", p ? `${p.forecast.length}` : undefined)}>
+    <ModuleCard {...cardProps("forecast", "条件化预判", previewCount(`${p?.forecast.length || 0}`))}>
       {planGate() ?? <ForecastBody p={p!} />}
     </ModuleCard>
   );
 
   const renderRoadmap = () => (
-    <ModuleCard {...cardProps("roadmap", "增长路线图", p ? `${p.roadmap.length} 段` : undefined)}>
+    <ModuleCard {...cardProps("roadmap", "增长路线图", previewCount(`${p?.roadmap.length || 0} 段`))}>
       {planGate() ?? <RoadmapBody p={p!} />}
     </ModuleCard>
   );
 
   const renderTodayActions = () => (
-    <ModuleCard {...cardProps("todayActions", "今日行动", p ? `${p.action_inbox_items.length}` : undefined)}>
+    <ModuleCard {...cardProps("todayActions", "今日行动", previewCount(`${p?.action_inbox_items.length || 0}`))}>
       {planGate() ?? <TodayActionsBody p={p!} selectedSku={selectedSku} mat={mat} />}
     </ModuleCard>
   );
 
   const renderFootnote = () => (
-    <ModuleCard {...cardProps("footnote", "风险与缺口", p ? `${p.risks.length} 风险` : undefined)}>
+    <ModuleCard {...cardProps("footnote", "风险与缺口", previewCount(`${p?.risks.length || 0} 风险`))}>
       {planGate() ?? <FootnoteBody p={p!} meta={plan?.meta} />}
     </ModuleCard>
   );
@@ -491,6 +525,10 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate }: { apiToken?: 
     { key: "mix", label: "渠道组合", description: "品牌 / 转化两层预算配比建议", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 10, minHeight: 4, maxHeight: 20, render: renderMix },
     { key: "footnote", label: "风险与缺口", description: "风险标签 / 数据缺口 / 成功指标 / 覆盖度", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 7, minHeight: 4, maxHeight: 16, render: renderFootnote },
   ];
+
+  if (embeddedModuleKey) {
+    return <EmbeddedDashboardModule modules={modules} moduleKey={embeddedModuleKey} boardLabel="GTM Command" />;
+  }
 
   return (
     <div className="p-4 md:px-[22px] md:py-[15px]">

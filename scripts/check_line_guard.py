@@ -7,6 +7,7 @@ the threshold.
 """
 
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import fnmatch
@@ -179,9 +180,9 @@ def main() -> int:
             "violation_count": len(violations),
             "violations": [asdict(item) for item in violations],
         }
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        stdout_out(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print(render_table(violations, limit=args.limit))
+        stdout_out(render_table(violations, limit=args.limit))
     return 1 if args.fail and violations else 0
 
 

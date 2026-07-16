@@ -5,6 +5,7 @@ projects active and recently-finished work from already-registered tables.
 """
 from __future__ import annotations
 
+import heapq
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -12,7 +13,26 @@ from decimal import Decimal
 from typing import Any
 
 from app.db.connection import get_conn, table_exists
+from app.domains.tasks.queue_runtime_state import (
+    ACTIVE_STATUSES,
+    QUEUED_STATUSES,
+    RUNNING_STATUSES,
+    STATUS_ALIASES,
+    TERMINAL_STATUSES,
+    _authoritative_llm_status,
+    _llm_reason_code,
+    _normal_status,
+    _reason_projection,
+    _runtime_reason_contract,
+    _safe_runtime_attempt,
+)
+from app.domains.tasks.queue_llm_reservations import (
+    query_llm_reservations,
+    true_llm_reservation_counts,
+)
+from app.domains.tasks.queue_llm_calls import query_llm_calls
 from app.services.cache import cache_get, cache_set
+from app.workers.apify_job_lane import queue_priority_sql_expression, queue_service_priority_sql_expression
 
 from app.core.logging import get_logger
 
@@ -22,33 +42,9 @@ logger = get_logger(__name__)
 _WORKER_HEARTBEAT_WINDOW_SEC = 120
 # worker 离线时 queued 任务的诚实 stage 标签(不谎报 ETA)。
 _WORKER_OFFLINE_LABEL = "worker离线"
+QUEUE_PRIORITY_SQL = queue_priority_sql_expression("payload")
+QUEUE_SERVICE_PRIORITY_SQL = queue_service_priority_sql_expression("job_type", "created_at")
 
-
-ACTIVE_STATUSES = {"queued", "retrying", "processing", "running", "in_progress", "started"}
-TERMINAL_STATUSES = {
-    "done",
-    "success",
-    "failed",
-    "blocked",
-    "cancelled",
-    "timeout",
-    "partial_done",
-    "prefilter_rejected",
-    "all_providers_failed",
-    "ai_budget_hard_stop",
-    "budget_disabled",
-    "not_configured",
-}
-
-STATUS_ALIASES = {
-    "success": "done",
-    "all_providers_failed": "failed",
-    "ai_budget_hard_stop": "failed",
-    "budget_disabled": "failed",
-    "not_configured": "failed",
-    "in_progress": "running",
-    "started": "running",
-}
 
 STAGE_LABELS = {
     "queued": "排队",
@@ -83,11 +79,6 @@ def _jsonable(value: Any) -> Any:
 
 
 from app.core.coerce import _text
-
-
-def _normal_status(value: Any) -> str:
-    raw = _text(value).lower() or "queued"
-    return STATUS_ALIASES.get(raw, raw)
 
 
 def _timestamp(value: Any) -> str | None:
@@ -140,16 +131,28 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
         return "合同润色"
     if _text(job_type).lower() == "project_retrospective_aggregate" or "project_retrospective" in haystack:
         return "复盘聚合"
+    if _text(job_type).lower() == "video_url_resolve":
+        return "视频解析"
     if _text(job_type).lower() == "kol_profile_deep_crawl" or "kol_profile_deep_crawl" in haystack:
         return "账号分析"
     if _text(job_type).lower() == "kol_pool_comments_collect" or "kol_pool_comments_collect" in haystack:
         return "评论采集"
+    if _text(job_type).lower() == "kol_audience_stats_refresh" or "audience_stats" in haystack or "audience_age" in haystack:
+        return "受众分析"
     if _text(job_type).lower() == "kol_content_fit_analysis" or "kol_content_fit_analysis" in haystack or "content_fit_v1" in haystack:
         return "内容契合"
     if _text(job_type).lower() == "kol_outreach_draft" or "kol_outreach_draft" in haystack:
         return "联系草稿"
     if _text(job_type).lower() == "logistics_track_sync" or "logistics_track_sync" in haystack:
         return "物流同步"
+    if "keyframe_qa" in haystack or "video_qa" in haystack:
+        return "视频QA"
+    if "marketing_advisor" in haystack or "advisor" in haystack:
+        return "营销顾问"
+    if source == "llm_calls" and any(word in haystack for word in ("sentiment", "comment_reply", "comment_intel")):
+        return "评论分析"
+    if source == "llm_calls" and any(word in haystack for word in ("recall_rerank", "query_plan", "discovery_localize")):
+        return "智能查找"
     if "final_v1" in haystack or "video_analysis" in haystack or "video" in haystack:
         return "video深析"
     if any(word in haystack for word in ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync")):
@@ -164,7 +167,7 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
 
 
 def _infer_stage(status: str, kind: str, job_type: str = "", purpose: str = "", payload: Any = None) -> str:
-    if status == "queued":
+    if status in QUEUED_STATUSES:
         return "queued"
     data = payload if isinstance(payload, dict) else {}
     # KOL 查找(同步路径)自带真实板内 stage(search/thinking/summarizing),直接采信,
@@ -184,6 +187,8 @@ def _infer_stage(status: str, kind: str, job_type: str = "", purpose: str = "", 
             _text(data.get("prompt")),
         ]
     ).lower()
+    if _text(job_type).lower() == "video_url_resolve":
+        return "search"
     # 收口路①-3:内容契合深析(逐候选)= 思考中。job_type/derive_method/kind 任一命中即归桶。
     if "kol_content_fit_analysis" in haystack or "content_fit_v1" in haystack or "内容契合" in haystack:
         return "thinking"
@@ -212,8 +217,13 @@ def _target_from_payload(payload: Any, *, fallback: dict[str, Any] | None = None
     # 再退 platform/handle 组合——泳道里"看得出是谁"优先于留空。
     label = _text(
         data.get("query_text")
-        or data.get("prompt")
         or data.get("summary")
+        # Strict LLM reservations deliberately persist only a bounded
+        # ``target_label`` instead of prompts/request bodies.  Keep that safe
+        # correlation label visible in the progress center rather than
+        # collapsing every call to its generic purpose.
+        or data.get("target_label")
+        or data.get("prompt")
         or data.get("handle")
         or data.get("display_name")
         or data.get("title")
@@ -343,15 +353,93 @@ def _worker_online(conn: Any) -> bool:
     return age <= _WORKER_HEARTBEAT_WINDOW_SEC
 
 
-def _query_apify_jobs(cutoff: datetime, limit: int, worker_online: bool = True) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _online_worker_count(conn: Any) -> int:
+    """Return currently heartbeating apify worker identities.
+
+    One process owns one unique ``worker_name`` row.  A count is required for
+    truthful ETA once the queue is split across bounded worker lanes; a simple
+    online boolean would keep reporting the old single-worker serial wait.
+    """
+    if not table_exists("vkpi_worker_heartbeat"):
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_WORKER_HEARTBEAT_WINDOW_SEC)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM vkpi_worker_heartbeat WHERE last_heartbeat_at >= ?",
+            (cutoff,),
+        ).fetchone()
+        return max(0, int((row or {}).get("n") or 0))
+    except Exception:
+        logger.warning("worker heartbeat count failed", exc_info=True)
+        return 0
+
+
+def _multi_lane_eta_info(
+    rows: list[dict[str, Any]],
+    *,
+    duration_for_job_type: Any,
+    worker_count: int,
+) -> dict[Any, dict[str, Any]]:
+    """FCFS queue-start estimates for the observed worker lanes.
+
+    Running jobs occupy one lane for half of their historical mean (the same
+    conservative midpoint used by the prior serial estimator). Queued jobs are
+    then assigned in the worker's lane-priority + aged-SPT claim order to the
+    earliest available lane. Provider caps are intentionally not inferred
+    here, so every result remains a rough ETA.
+    """
+    running = [
+        row
+        for row in rows
+        if _normal_status(row.get("status")) in RUNNING_STATUSES
+    ]
+    lanes = max(1, int(worker_count or 0), len(running))
+    lane_heap: list[tuple[float, int]] = [(0.0, index) for index in range(lanes)]
+    heapq.heapify(lane_heap)
+    for row in running:
+        available, lane_id = heapq.heappop(lane_heap)
+        duration = float(duration_for_job_type(str(row.get("job_type") or ""))) / 2.0
+        heapq.heappush(lane_heap, (available + max(0.0, duration), lane_id))
+
+    eta_info: dict[Any, dict[str, Any]] = {}
+    queued_ahead = 0
+    for row in rows:
+        status = _normal_status(row.get("status"))
+        if status in RUNNING_STATUSES:
+            continue
+        if status not in QUEUED_STATUSES:
+            continue
+        available, lane_id = heapq.heappop(lane_heap)
+        duration = max(0.0, float(duration_for_job_type(str(row.get("job_type") or ""))))
+        eta_info[row.get("id")] = {
+            "queue_position": queued_ahead + 1,
+            "ahead_count": len(running) + queued_ahead,
+            "eta_seconds": int(max(0.0, available)),
+            "eta_worker_lanes": lanes,
+            "eta_model": "lane_priority_aged_spt_observed_worker_lanes_avg7d",
+        }
+        heapq.heappush(lane_heap, (available + duration, lane_id))
+        queued_ahead += 1
+    return eta_info
+
+
+def _query_apify_jobs(
+    cutoff: datetime,
+    limit: int,
+    worker_online: bool = True,
+    worker_count: int = 1,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     conn = get_conn()
     active_rows = conn.execute(
-        """
+        f"""
         SELECT id, job_type, payload, status, last_error, last_error_category,
                next_retry_at, created_at, updated_at
         FROM apify_jobs
-        WHERE status IN ('queued', 'retrying', 'processing', 'running')
-        ORDER BY COALESCE(next_retry_at, created_at) ASC, created_at DESC
+        WHERE status IN ('queued', 'retrying', 'processing', 'running', 'in_progress', 'started')
+        ORDER BY
+          {QUEUE_PRIORITY_SQL},
+          {QUEUE_SERVICE_PRIORITY_SQL},
+          COALESCE(next_retry_at, created_at), created_at, id
         LIMIT ?
         """,
         (limit,),
@@ -361,15 +449,18 @@ def _query_apify_jobs(cutoff: datetime, limit: int, worker_online: bool = True) 
         SELECT id, job_type, payload, status, last_error, last_error_category,
                next_retry_at, created_at, updated_at
         FROM apify_jobs
-        WHERE status IN ('done', 'failed', 'blocked')
-          AND created_at >= ?
-        ORDER BY created_at DESC
+        WHERE status IN (
+          'done', 'success', 'failed', 'blocked', 'triage', 'cancelled',
+          'timeout', 'partial_done', 'prefilter_rejected'
+        )
+          AND updated_at >= ?
+        ORDER BY updated_at DESC
         LIMIT ?
         """,
         (cutoff, limit),
     ).fetchall()
 
-    # 排队位次/ETA(worker 串行消费 apify_jobs):按 claim 排序(COALESCE(next_retry_at,created_at))
+    # 排队位次/ETA:按 worker 真 claim 顺序(车道优先 + 15min aging SPT + 时间稳定键)
     # 给每个 queued 任务算 前方任务数 与 预计等待秒数(基于近 7 天同类型均时,无样本回退 300s)。
     avg_by_type = _avg_duration_by_job_type(conn)
 
@@ -377,28 +468,14 @@ def _query_apify_jobs(cutoff: datetime, limit: int, worker_online: bool = True) 
         return avg_by_type.get(job_type, DEFAULT_JOB_DURATION_SEC)
 
     eta_info: dict[Any, dict[str, Any]] = {}
-    running_remaining = 0.0
-    ahead = 0
     # worker 离线时不算串行 ETA:死队列没人处理,谎报 eta_seconds:300 是欺骗。
     # 离线分支下 eta_info 保持空,convert() 会把 queued 任务标为 worker离线 + eta_seconds=None。
     if worker_online:
-        for row in active_rows:  # 已按 claim 顺序排序
-            data = dict(row)
-            jt = _text(data.get("job_type"))
-            status = _text(data.get("status"))
-            if status in ("running", "processing"):
-                running_remaining += _dur(jt) / 2  # 在跑任务按半程估
-                ahead += 1
-            elif status in ("queued", "retrying"):
-                eta_info[data.get("id")] = {
-                    "queue_position": sum(1 for v in eta_info.values()) + 1,
-                    "ahead_count": ahead,
-                    "eta_seconds": int(running_remaining + sum(x["_q"] for x in eta_info.values())),
-                    "_q": _dur(jt),
-                }
-                ahead += 1
-        for v in eta_info.values():
-            v.pop("_q", None)
+        eta_info = _multi_lane_eta_info(
+            [dict(row) for row in active_rows],
+            duration_for_job_type=_dur,
+            worker_count=worker_count,
+        )
 
     def convert(row: Any) -> dict[str, Any]:
         data = dict(row)
@@ -411,6 +488,13 @@ def _query_apify_jobs(cutoff: datetime, limit: int, worker_online: bool = True) 
             "initiator_user_id": _text(payload.get("triggered_by_user_id") or payload.get("user_id")) or None,
             "initiator_staff_id": _text(payload.get("staff_id")) or None,
         }
+        extra.update(
+            _reason_projection(
+                data.get("status"),
+                data.get("last_error"),
+                data.get("last_error_category"),
+            )
+        )
         if data.get("id") in eta_info:
             extra.update(eta_info[data.get("id")])
         item = _make_item(
@@ -463,7 +547,7 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
         SELECT id, task_id, job_type, status, stage, summary, payload_json, result_json, error_message,
                submission_id, user_id, created_at, updated_at, started_at, finished_at
         FROM job_execution_ledger
-        WHERE status IN ('queued', 'retrying', 'processing', 'running')
+        WHERE status IN ('queued', 'retrying', 'processing', 'running', 'in_progress', 'started')
           AND updated_at >= NOW() - INTERVAL '24 hours'
         ORDER BY updated_at DESC
         LIMIT ?
@@ -475,7 +559,10 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
         SELECT id, task_id, job_type, status, stage, summary, payload_json, result_json, error_message,
                submission_id, user_id, created_at, updated_at, started_at, finished_at
         FROM job_execution_ledger
-        WHERE status IN ('done', 'failed', 'cancelled', 'timeout', 'partial_done', 'prefilter_rejected')
+        WHERE status IN (
+          'done', 'success', 'failed', 'blocked', 'triage', 'cancelled',
+          'timeout', 'partial_done', 'prefilter_rejected'
+        )
           AND updated_at >= ?
         ORDER BY updated_at DESC
         LIMIT ?
@@ -486,6 +573,10 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
     def convert(row: Any) -> dict[str, Any]:
         data = dict(row)
         payload = _loads(data.get("payload_json"), {})
+        reason_projection = _reason_projection(
+            data.get("status"),
+            data.get("error_message"),
+        )
         target = _target_from_payload(
             payload,
             fallback={
@@ -510,6 +601,7 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
                 "finished_at": _timestamp(data.get("finished_at")),
                 "initiator_user_id": _text(data.get("user_id") or payload.get("user_id") or payload.get("created_by_user_id")) or None,
                 "initiator_staff_id": _text(payload.get("staff_id")) or None,
+                **reason_projection,
             },
         )
         if data.get("stage") and item["stage"] == "thinking" and str(data.get("stage")).lower() in {"ingest", "crawl"}:
@@ -521,50 +613,49 @@ def _query_job_execution_ledger(cutoff: datetime, limit: int) -> tuple[list[dict
 
 
 def _query_llm_calls(cutoff: datetime, limit: int, scan_limit: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    rows = get_conn().execute(
-        """
-        SELECT id, call_uid, provider, model, purpose, status, created_at, metadata_json, latency_ms, cost_cents
-        FROM vkpi_llm_calls
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (scan_limit,),
-    ).fetchall()
+    return query_llm_calls(
+        cutoff,
+        limit,
+        scan_limit,
+        get_conn=get_conn,
+        make_item=_make_item,
+        target_from_payload=_target_from_payload,
+        loads=_loads,
+        text=_text,
+        as_datetime=_as_datetime,
+        active_statuses=ACTIVE_STATUSES,
+        terminal_statuses=TERMINAL_STATUSES,
+        runtime_reason_contract=_runtime_reason_contract,
+        authoritative_llm_status=_authoritative_llm_status,
+    )
 
-    active: list[dict[str, Any]] = []
-    recent: list[dict[str, Any]] = []
-    for row in rows:
-        data = dict(row)
-        raw_status = _text(data.get("status")).lower()
-        created_at = data.get("created_at")
-        created_dt = _as_datetime(created_at)
-        is_active = raw_status in ACTIVE_STATUSES
-        is_recent = raw_status in TERMINAL_STATUSES and created_dt is not None and created_dt >= cutoff
-        if not is_active and not is_recent:
-            continue
-        metadata = _loads(data.get("metadata_json"), {})
-        item = _make_item(
-            source="llm_calls",
-            row_id=data.get("call_uid") or data.get("id"),
-            raw_status=raw_status,
-            purpose=_text(data.get("purpose")),
-            payload={**(metadata if isinstance(metadata, dict) else {}), "provider": data.get("provider"), "model": data.get("model")},
-            created_at=created_at,
-            updated_at=created_at,
-            target=_target_from_payload(metadata if isinstance(metadata, dict) else {}, fallback={"label": data.get("purpose")}),
-            extra={
-                "llm_call_id": data.get("id"),
-                "provider": data.get("provider"),
-                "model": data.get("model"),
-                "latency_ms": data.get("latency_ms"),
-                "cost_cents": data.get("cost_cents"),
-            },
-        )
-        if is_active:
-            active.append(item)
-        else:
-            recent.append(item)
-    return active[:limit], recent[:limit]
+
+def _query_llm_reservations(
+    cutoff: datetime,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return query_llm_reservations(
+        cutoff,
+        limit,
+        table_exists=table_exists,
+        get_conn=get_conn,
+        make_item=_make_item,
+        target_from_payload=_target_from_payload,
+        loads=_loads,
+        text=_text,
+        as_datetime=_as_datetime,
+        timestamp=_timestamp,
+        logger=logger,
+    )
+
+
+def _true_llm_reservation_counts(conn: Any) -> Counter:
+    return true_llm_reservation_counts(
+        conn,
+        table_exists=table_exists,
+        text=_text,
+        logger=logger,
+    )
 
 
 def _active_status_rank(item: dict[str, Any]) -> int:
@@ -593,7 +684,7 @@ def _true_active_counts(conn: Any) -> Counter:
         for r in conn.execute(
             """
             SELECT status, COUNT(*) AS n FROM apify_jobs
-            WHERE status IN ('queued', 'retrying', 'processing', 'running')
+            WHERE status IN ('queued', 'retrying', 'processing', 'running', 'in_progress', 'started')
             GROUP BY status
             """,
         ).fetchall():
@@ -605,7 +696,7 @@ def _true_active_counts(conn: Any) -> Counter:
         for r in conn.execute(
             """
             SELECT status, COUNT(*) AS n FROM job_execution_ledger
-            WHERE status IN ('queued', 'retrying', 'processing', 'running')
+            WHERE status IN ('queued', 'retrying', 'processing', 'running', 'in_progress', 'started')
               AND updated_at >= NOW() - INTERVAL '24 hours'
             GROUP BY status
             """,
@@ -615,6 +706,27 @@ def _true_active_counts(conn: Any) -> Counter:
         logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
         pass
     return counts
+
+
+def _rollup_active_counts(counts: Counter) -> tuple[int, int, int]:
+    """Return ``(queued, running, total)`` from authoritative raw statuses.
+
+    ``retrying`` is queued work.  It must never inflate the running headline;
+    only statuses that a worker has actually claimed belong in ``running``.
+    """
+    queued = 0
+    running = 0
+    total = 0
+    for raw_status, raw_count in counts.items():
+        count = max(0, int(raw_count or 0))
+        status = _normal_status(raw_status)
+        if status in QUEUED_STATUSES:
+            queued += count
+            total += count
+        elif status in RUNNING_STATUSES:
+            running += count
+            total += count
+    return queued, running, total
 
 
 def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_calls: bool = True, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -628,8 +740,18 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
     recent: list[dict[str, Any]] = []
     sources = ["apify_jobs", "job_execution_ledger"]
 
-    worker_online = _worker_online(get_conn())
-    apify_active, apify_recent = _query_apify_jobs(cutoff, safe_limit, worker_online=worker_online)
+    conn = get_conn()
+    worker_count = _online_worker_count(conn)
+    # Compatibility fallback: old/mocked heartbeat readers may only expose the
+    # boolean probe. Never invent more than one lane from that fallback.
+    worker_online = worker_count > 0 or _worker_online(conn)
+    effective_worker_count = worker_count if worker_count > 0 else (1 if worker_online else 0)
+    apify_active, apify_recent = _query_apify_jobs(
+        cutoff,
+        safe_limit,
+        worker_online=worker_online,
+        worker_count=effective_worker_count,
+    )
     ledger_active, ledger_recent = _query_job_execution_ledger(cutoff, safe_limit)
     active.extend(apify_active)
     active.extend(ledger_active)
@@ -637,11 +759,21 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
     recent.extend(ledger_recent)
 
     llm_scan_limit = max(200, safe_limit * 5)
+    reservation_schema_available = bool(
+        include_llm_calls and table_exists("vkpi_llm_budget_reservations")
+    )
     if include_llm_calls:
         llm_active, llm_recent = _query_llm_calls(cutoff, safe_limit, llm_scan_limit)
         active.extend(llm_active)
         recent.extend(llm_recent)
         sources.append("vkpi_llm_calls")
+        reservation_active, reservation_recent = _query_llm_reservations(
+            cutoff, safe_limit
+        )
+        active.extend(reservation_active)
+        recent.extend(reservation_recent)
+        if reservation_schema_available:
+            sources.append("vkpi_llm_budget_reservations")
 
     active = sorted(active, key=_recent_sort_key, reverse=True)
     active = sorted(active, key=_active_status_rank)[:safe_limit]
@@ -653,22 +785,17 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
     # C1 真实计数:active 列表已被 [:safe_limit] 截断为渲染采样,headline 计数(queued/running/
     # active_total)须取全量,否则 234 条排队只显示 ~49。LLM 在飞调用无独立 COUNT 源,就采样列表补计。
     true_active_counts = _true_active_counts(get_conn())
+    true_active_counts.update(_true_llm_reservation_counts(get_conn()))
     for item in active:
-        if str(item.get("source") or "") == "vkpi_llm_calls":
+        if str(item.get("source") or "") == "llm_calls":
             st = str(item.get("status") or "")
             if st in ("queued", "retrying", "processing", "running"):
                 true_active_counts[st] += 1
-    true_queued = int(true_active_counts.get("queued", 0))
-    true_running = int(
-        true_active_counts.get("running", 0)
-        + true_active_counts.get("processing", 0)
-        + true_active_counts.get("retrying", 0)
-    )
-    true_active_total = int(sum(true_active_counts.values()))
+    true_queued, true_running, true_active_total = _rollup_active_counts(true_active_counts)
 
     payload = {
         "status": "ready",
-        "source": "apify_jobs+job_execution_ledger+vkpi_llm_calls" if include_llm_calls else "apify_jobs+job_execution_ledger",
+        "source": "+".join(sources),
         "query": {
             "limit": safe_limit,
             "recent_minutes": safe_recent_minutes,
@@ -697,12 +824,18 @@ def get_task_queue(*, limit: int = 50, recent_minutes: int = 10, include_llm_cal
                 "job_execution_ledger": "idx_job_execution_ledger_status_updated(status, updated_at)",
                 "vkpi_llm_calls": "pkey id desc window; no status/created_at index in phase 1",
             },
-            "llm_calls_coverage": "registered LLM calls only; Gateway-bypassing naked calls are not visible in phase 1",
+            "llm_calls_coverage": (
+                "registered Gateway outcomes plus strict atomic reservations; "
+                "Gateway-bypassing naked calls remain invisible"
+            ),
+            "llm_reservation_schema_available": reservation_schema_available,
             "write_db": False,
             "llm_calls": False,
             "worker_touched": False,
             # worker 心跳存活:false 时 apify queued 任务的 eta_seconds=None(不谎报死队列 ETA)。
             "worker_online": worker_online,
+            "worker_count": effective_worker_count,
+            "queue_eta_model": "fcfs_observed_worker_lanes_avg7d; provider caps not inferred",
         },
     }
     # 波2 R1(2026-06-12 体检):重型端点同样按观看者遮蔽,杜绝绕过 compact 隐私

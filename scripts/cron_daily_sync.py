@@ -8,6 +8,8 @@ Default behavior:
 """
 from __future__ import annotations
 
+from stdout_utils import out
+
 import argparse
 import asyncio
 import json
@@ -51,7 +53,7 @@ def compute_kol_stale_before(raw_value: str = "", stale_days: int = 0, *, now: d
 
 
 def emit_event(event: str, **payload: object) -> None:
-    print(json.dumps({"event": event, "at": utcnow(), **payload}, ensure_ascii=False, default=str), flush=True)
+    out(json.dumps({"event": event, "at": utcnow(), **payload}, ensure_ascii=False, default=str), flush=True)
 
 
 def result_summary(result: dict[str, object]) -> dict[str, object]:
@@ -178,7 +180,7 @@ async def main() -> int:
             emit_event("cron_daily_sync_index_maint_done")
         except Exception as _idx_exc:
             emit_event("cron_daily_sync_index_maint_failed", error=f"{type(_idx_exc).__name__}: {str(_idx_exc)[:200]}")
-        print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+        out(json.dumps(result, ensure_ascii=False, default=str, indent=2))
         inner = result.get("result") if isinstance(result, dict) else {}
         if isinstance(inner, dict):
             # 退出码与 health 阈值对齐(2026-07-03):此前「任意 1 个官号失败就 exit 2」,
@@ -210,7 +212,7 @@ async def main() -> int:
             summary=exc.summary,
             error=f"{type(exc).__name__}: {str(exc)[:500]}",
         )
-        print(json.dumps({
+        out(json.dumps({
             "job": "daily_incremental_sync",
             "status": "interrupted",
             "exit_code": exc.exit_code,
@@ -228,7 +230,7 @@ async def main() -> int:
             summary=exc.summary,
             error=f"{type(exc).__name__}: {str(exc)[:500]}",
         )
-        print(json.dumps({
+        out(json.dumps({
             "job": "daily_incremental_sync",
             "status": "blocked",
             "exit_code": exc.exit_code,

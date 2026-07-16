@@ -1,10 +1,11 @@
 """V-KPI cost ledger helpers."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
-from app.domains import audit
+from app.domains import audit, business_truth
 from app.domains.access import scope
 from app.domains.costs.common import (
     TYPE_ALIASES,
@@ -22,6 +23,39 @@ from app.domains.costs.product_catalog import ensure_product_catalog_schema, lis
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
 from app.domains.projects.workflow import staff_id
+
+
+class ProductCostVerificationConflict(ValueError):
+    """The human verified a stale product-cost snapshot."""
+
+
+PRODUCT_COST_VERIFICATION_SOURCE_TYPES = frozenset(
+    {
+        "supplier_invoice",
+        "vendor_invoice",
+        "finance_erp",
+        "approved_quote",
+        "warehouse_cost_sheet",
+    }
+)
+PRODUCT_COST_SOURCE_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _verified_source_observed_at(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("source_observed_at is required")
+    iso_value = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    try:
+        observed = datetime.fromisoformat(iso_value)
+    except ValueError as exc:
+        raise ValueError("source_observed_at must be a valid ISO-8601 timestamp") from exc
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        raise ValueError("source_observed_at timezone is required")
+    observed_utc = observed.astimezone(timezone.utc)
+    if observed_utc > datetime.now(timezone.utc) + PRODUCT_COST_SOURCE_CLOCK_SKEW:
+        raise ValueError("source_observed_at cannot be in the future")
+    return observed_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _ensure_cost_ledger_columns() -> None:
@@ -56,6 +90,13 @@ def ensure_product_cost_schema() -> None:
                 currency TEXT NOT NULL DEFAULT 'USD',
                 active BOOLEAN NOT NULL DEFAULT TRUE,
                 note TEXT DEFAULT '',
+                row_version BIGINT NOT NULL DEFAULT 1,
+                verification_status TEXT NOT NULL DEFAULT 'reference_unverified',
+                source_type TEXT NOT NULL DEFAULT '',
+                source_ref TEXT NOT NULL DEFAULT '',
+                source_observed_at TIMESTAMPTZ,
+                verified_by_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
+                verified_at TIMESTAMPTZ,
                 created_by_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
                 updated_by_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -74,6 +115,13 @@ def ensure_product_cost_schema() -> None:
                 currency TEXT NOT NULL DEFAULT 'USD',
                 active INTEGER NOT NULL DEFAULT 1,
                 note TEXT DEFAULT '',
+                row_version INTEGER NOT NULL DEFAULT 1,
+                verification_status TEXT NOT NULL DEFAULT 'reference_unverified',
+                source_type TEXT NOT NULL DEFAULT '',
+                source_ref TEXT NOT NULL DEFAULT '',
+                source_observed_at TEXT,
+                verified_by_staff_id INTEGER,
+                verified_at TEXT,
                 created_by_staff_id INTEGER,
                 updated_by_staff_id INTEGER,
                 created_at TEXT NOT NULL,
@@ -81,6 +129,19 @@ def ensure_product_cost_schema() -> None:
             )
             """
         )
+    if not is_postgres_runtime():
+        existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(vkpi_product_cost_catalog)").fetchall()}
+        for column, ddl in {
+            "row_version": "INTEGER NOT NULL DEFAULT 1",
+            "verification_status": "TEXT NOT NULL DEFAULT 'reference_unverified'",
+            "source_type": "TEXT NOT NULL DEFAULT ''",
+            "source_ref": "TEXT NOT NULL DEFAULT ''",
+            "source_observed_at": "TEXT",
+            "verified_by_staff_id": "INTEGER",
+            "verified_at": "TEXT",
+        }.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE vkpi_product_cost_catalog ADD COLUMN {column} {ddl}")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_vkpi_product_cost_catalog_active
@@ -113,14 +174,24 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
         """
         INSERT INTO vkpi_product_cost_catalog (
             product_sku, product_name, unit_cost_cents, currency, active, note,
+            row_version,
+            verification_status, source_type, source_ref, source_observed_at,
+            verified_by_staff_id, verified_at,
             created_by_staff_id, updated_by_staff_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(product_sku) DO UPDATE SET
             product_name=excluded.product_name,
             unit_cost_cents=excluded.unit_cost_cents,
             currency=excluded.currency,
             active=excluded.active,
             note=excluded.note,
+            row_version=vkpi_product_cost_catalog.row_version + 1,
+            verification_status='reference_unverified',
+            source_type=excluded.source_type,
+            source_ref=excluded.source_ref,
+            source_observed_at=excluded.source_observed_at,
+            verified_by_staff_id=NULL,
+            verified_at=NULL,
             updated_by_staff_id=excluded.updated_by_staff_id,
             updated_at=excluded.updated_at
         """,
@@ -131,6 +202,13 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
             currency,
             active_value,
             str(body.get("note") or ""),
+            1,
+            "reference_unverified",
+            str(body.get("source_type") or "historical_reference"),
+            str(body.get("source_ref") or ""),
+            str(body.get("source_observed_at") or "") or None,
+            None,
+            None,
             actor_staff_id or None,
             actor_staff_id or None,
             now,
@@ -153,6 +231,9 @@ def upsert_product_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = 
             "currency": product_cost.get("currency") or currency,
             "active": bool(active),
             "note": product_cost.get("note") or str(body.get("note") or ""),
+            "verification_status": "reference_unverified",
+            "source_type": product_cost.get("source_type") or "historical_reference",
+            "source_ref": product_cost.get("source_ref") or "",
         },
     )
     return {"product_cost": product_cost}
@@ -184,12 +265,135 @@ def _product_cost_for_sku(product_sku: str) -> dict[str, Any] | None:
         """
         SELECT *
         FROM vkpi_product_cost_catalog
-        WHERE upper(product_sku)=? AND active
+        WHERE upper(product_sku)=?
+          AND active
+          AND verification_status='verified'
+          AND NULLIF(TRIM(source_type), '') IS NOT NULL
+          AND NULLIF(TRIM(source_ref), '') IS NOT NULL
+          AND source_observed_at IS NOT NULL
+          AND verified_by_staff_id IS NOT NULL
+          AND verified_at IS NOT NULL
         LIMIT 1
         """,
         (sku,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def verify_product_cost(
+    product_sku: str,
+    body: dict[str, Any],
+    *,
+    authorization_evidence: dict[str, Any],
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Promote a reference cost only after source + human evidence is present."""
+
+    ensure_vkpi_schema()
+    ensure_product_cost_schema()
+    sku = _sku(product_sku)
+    if not sku:
+        raise ValueError("product_sku required")
+    source_type = str(body.get("source_type") or "").strip().lower()
+    source_ref = str(body.get("source_ref") or "").strip()
+    if not source_type or not source_ref or not str(body.get("source_observed_at") or "").strip():
+        raise ValueError("source_type, source_ref and source_observed_at are required")
+    if source_type not in PRODUCT_COST_VERIFICATION_SOURCE_TYPES:
+        raise ValueError("unsupported product cost source_type")
+    source_observed_at = _verified_source_observed_at(body.get("source_observed_at"))
+    expected_id = _int(body.get("expected_id"))
+    expected_unit_cost_cents = _int(body.get("expected_unit_cost_cents"), -1)
+    expected_currency = normalize_currency(body.get("expected_currency"))
+    expected_row_version = _int(body.get("expected_row_version"))
+    expected_updated_at = str(body.get("expected_updated_at") or "").strip()
+    if (
+        expected_id <= 0
+        or expected_unit_cost_cents < 0
+        or not expected_currency
+        or expected_row_version <= 0
+        or not expected_updated_at
+    ):
+        raise ValueError(
+            "expected_id, expected_unit_cost_cents, expected_currency, "
+            "expected_row_version and expected_updated_at are required"
+        )
+    actor = staff_id(staff)
+    if not actor:
+        raise ValueError("authenticated staff actor required")
+    # Schema guards run before the business transaction. In particular the
+    # SQLite audit guard may commit its DDL, so it must never run between the
+    # cost CAS update and the audit insert.
+    ensure_vkpi_audit_schema()
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_product_cost_catalog WHERE upper(product_sku)=?", (sku,)).fetchone()
+    if not row:
+        raise LookupError("product cost not found")
+    now = utcnow()
+    try:
+        fresh = conn.execute(
+            """
+            UPDATE vkpi_product_cost_catalog
+            SET verification_status='verified', source_type=?, source_ref=?, source_observed_at=?,
+                verified_by_staff_id=?, verified_at=?, updated_by_staff_id=?, updated_at=?,
+                row_version=row_version + 1
+            WHERE id=?
+              AND upper(product_sku)=?
+              AND unit_cost_cents=?
+              AND upper(currency)=?
+              AND row_version=?
+              AND updated_at=?
+              AND verification_status<>'verified'
+            RETURNING *
+            """,
+            (
+                source_type,
+                source_ref,
+                source_observed_at,
+                actor,
+                now,
+                actor,
+                now,
+                expected_id,
+                sku,
+                expected_unit_cost_cents,
+                expected_currency,
+                expected_row_version,
+                expected_updated_at,
+            ),
+        ).fetchone()
+        if not fresh:
+            raise ProductCostVerificationConflict(
+                "product cost changed after it was loaded; refresh and verify the current row"
+            )
+        fresh_dict = dict(fresh)
+        audit.log_business_event(
+            staff_id=actor,
+            action_type="product_cost_verify",
+            target_type="product_cost",
+            target_id=sku,
+            detail=str(authorization_evidence.get("reason") or "product cost verified"),
+            metadata={
+                "product_sku": sku,
+                "verification_status": "verified",
+                "source_type": source_type,
+                "source_ref": source_ref,
+                "source_observed_at": source_observed_at,
+                "authorization_ref": authorization_evidence.get("authorization_ref"),
+                "expected_id": expected_id,
+                "expected_unit_cost_cents": expected_unit_cost_cents,
+                "expected_currency": expected_currency,
+                "expected_row_version": expected_row_version,
+                "verified_row_version": fresh_dict.get("row_version"),
+            },
+            conn=conn,
+            commit=False,
+            ensure_schema=False,
+        )
+        conn.commit()
+        return {"product_cost": fresh_dict, "verified": True}
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def record_shipped_product_cost(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -201,15 +405,21 @@ def record_shipped_product_cost(project_id: int, *, staff: dict[str, Any] | None
     ensure_vkpi_schema()
     ensure_product_cost_schema()
     conn = get_conn()
-    project = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
-    if not project:
+    project_row = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (int(project_id),)).fetchone()
+    if not project_row:
         raise LookupError("project not found")
+    project = dict(project_row)
     sku = _sku(project["product_sku"])
     if not sku:
         return {"status": "skipped", "reason": "missing_product_sku"}
     product_cost = _product_cost_for_sku(sku)
     if not product_cost:
-        return {"status": "skipped", "reason": "product_cost_not_configured", "product_sku": sku}
+        any_cost = conn.execute(
+            "SELECT verification_status FROM vkpi_product_cost_catalog WHERE upper(product_sku)=? AND active LIMIT 1",
+            (sku,),
+        ).fetchone()
+        reason = "product_cost_unverified" if any_cost else "product_cost_not_configured"
+        return {"status": "skipped", "reason": reason, "product_sku": sku}
     source_ref = f"auto_product_cost:{int(project_id)}:{sku}"
     existing = conn.execute(
         """
@@ -228,8 +438,9 @@ def record_shipped_product_cost(project_id: int, *, staff: dict[str, Any] | None
         """
         INSERT INTO vkpi_cost_ledger (
             project_id, kol_id, staff_id, cost_type, amount_cents, currency,
-            status, incurred_at, source_ref, note, created_by_staff_id, metadata_json, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            status, incurred_at, source_ref, note, created_by_staff_id, metadata_json, created_at,
+            approved_by_staff_id, approved_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             int(project_id),
@@ -243,7 +454,19 @@ def record_shipped_product_cost(project_id: int, *, staff: dict[str, Any] | None
             source_ref,
             f"发货自动计入镜头成本：{sku}",
             actor_staff_id or None,
-            _json({"auto": True, "trigger": "shipped", "product_sku": sku, "product_cost_id": product_cost.get("id")}),
+            _json({
+                "auto": True,
+                "trigger": "shipped",
+                "product_sku": sku,
+                "product_cost_id": product_cost.get("id"),
+                "verification_status": "verified",
+                "source_type": product_cost.get("source_type"),
+                "source_ref": product_cost.get("source_ref"),
+                "source_observed_at": product_cost.get("source_observed_at"),
+            }),
+            now,
+            product_cost.get("verified_by_staff_id") or actor_staff_id or None,
+            product_cost.get("verified_at") or now,
             now,
         ),
     )
@@ -269,6 +492,7 @@ def record_shipped_product_cost(project_id: int, *, staff: dict[str, Any] | None
             "product_cost_id": product_cost.get("id"),
             "auto": True,
             "trigger": "shipped",
+            "verification_status": "verified",
         },
     )
     return {"status": "recorded", "cost": cost, "product_cost": product_cost}
@@ -288,7 +512,11 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
     # 写前硬校验(路由映 400):金额非负 + 上界防 BIGINT 溢出 500;币种/状态白名单防任意值混入。
     amount_cents = validate_amount_cents(_amount_cents(body))
     currency = normalize_currency(body.get("currency"))
-    status = normalize_cost_status(body.get("status"))
+    requested_status = normalize_cost_status(body.get("status"))
+    # Human-entered costs are reviewable evidence, not actual spend.  Only the
+    # manager approval route (or verified product-cost automation above) can
+    # create an approved actual row.
+    status = "pending" if requested_status in {None, "actual"} else requested_status
     conn = get_conn()
     project = conn.execute("SELECT * FROM vkpi_projects WHERE id=?", (project_id,)).fetchone()
     if not project:
@@ -320,13 +548,14 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
             conn.execute(
                 """
                 UPDATE vkpi_cost_ledger
-                SET amount_cents=?, currency=?, status=?, incurred_at=?, note=?, metadata_json=?, updated_at=?
+                SET amount_cents=?, currency=?, status=?, incurred_at=?, note=?, metadata_json=?,
+                    approved_by_staff_id=NULL, approved_at=NULL, updated_at=?
                 WHERE id=?
                 """,
                 (
                     amount_cents,
                     currency or old.get("currency") or "USD",
-                    status or old.get("status") or "actual",
+                    status,
                     str(body.get("incurred_at") or old.get("incurred_at") or now),
                     str(body.get("note") or old.get("note") or ""),
                     metadata_value,
@@ -357,7 +586,7 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
             return {"cost": fresh, "idempotent_update": True}
     # P2:INSERT 取行一律 RETURNING——并发下 ORDER BY id DESC 会取到别人的行。
     row = conn.execute(
-        """
+        f"""
         INSERT INTO vkpi_cost_ledger (
             project_id, kol_id, staff_id, cost_type, amount_cents, currency,
             status, incurred_at, source_ref, note, created_by_staff_id, metadata_json, created_at, updated_at
@@ -371,7 +600,7 @@ def add_cost(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> di
             cost_type,
             amount_cents,
             currency or "USD",
-            status or "actual",
+            status,
             str(body.get("incurred_at") or now),
             source_ref,
             str(body.get("note") or ""),
@@ -420,6 +649,8 @@ def list_costs(project_id: int | None = None, staff_id: int | None = None, limit
     rows = get_conn().execute(
         f"""
         SELECT c.*,
+               CASE WHEN {business_truth.approved_actual_cost_sql('c')}
+                    THEN 1 ELSE 0 END AS is_approved_actual,
                p.project_name,
                p.product_sku,
                k.channel_name AS kol_name,
@@ -435,7 +666,14 @@ def list_costs(project_id: int | None = None, staff_id: int | None = None, limit
         """,
         (*params, max(1, min(500, int(limit or 100)))),
     ).fetchall()
-    return {"costs": [dict(row) for row in rows]}
+    costs = [dict(row) for row in rows]
+    for row in costs:
+        row["business_truth_status"] = (
+            "approved_actual"
+            if int(row.get("is_approved_actual") or 0) == 1
+            else "reference_only"
+        )
+    return {"costs": costs}
 
 
 def get_cost(cost_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -443,8 +681,10 @@ def get_cost(cost_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, 
     _ensure_cost_ledger_columns()
     conn = get_conn()
     row = conn.execute(
-        """
+        f"""
         SELECT c.*,
+               CASE WHEN {business_truth.approved_actual_cost_sql('c')}
+                    THEN 1 ELSE 0 END AS is_approved_actual,
                p.project_name,
                p.product_sku,
                p.platform AS project_platform,
@@ -474,6 +714,11 @@ def get_cost(cost_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, 
     if not row:
         raise LookupError("cost not found")
     cost = dict(row)
+    cost["business_truth_status"] = (
+        "approved_actual"
+        if int(cost.get("is_approved_actual") or 0) == 1
+        else "reference_only"
+    )
     project_id = _int(cost.get("project_id"))
     if project_id:
         scope.assert_project_access(project_id, staff)
@@ -537,29 +782,37 @@ def update_cost(cost_id: int, body: dict[str, Any], *, staff: dict[str, Any] | N
     actor_staff_id = staff_id(staff)
     updates: list[str] = []
     params: list[Any] = []
+    truth_material_changed = False
     if "cost_type" in body:
         cost_type = TYPE_ALIASES.get(str(body.get("cost_type") or "").strip().lower(), str(body.get("cost_type") or "").strip().lower())
         if cost_type not in VALID_COST_TYPES:
             raise ValueError("unsupported cost_type")
         updates.append("cost_type=?")
         params.append(cost_type)
+        truth_material_changed = True
     if "amount_cents" in body or "amount_usd" in body or "amount" in body:
         # 兄弟对齐 add_cost:非负 + BIGINT 上界越界 → ValueError(→400),不脏落库/溢出 500。
         amount_cents = validate_amount_cents(_amount_cents(body))
         updates.append("amount_cents=?")
         params.append(amount_cents)
+        truth_material_changed = True
     if "currency" in body:
         # 兄弟对齐 add_cost:币种过白名单归一;非法 → ValueError(→400),空值跳过(保留原币不置空)。
         currency = normalize_currency(body.get("currency"))
         if currency is not None:
             updates.append("currency=?")
             params.append(currency)
+            truth_material_changed = True
     for key in ("incurred_at", "source_ref", "note"):
         if key in body:
             updates.append(f"{key}=?")
             params.append(str(body.get(key) or ""))
+            if key != "note":
+                truth_material_changed = True
     if not updates:
         return {"cost": old, "updated": False}
+    if truth_material_changed:
+        updates.extend(["status='pending'", "approved_by_staff_id=NULL", "approved_at=NULL"])
     updates.append("updated_at=?")
     params.append(utcnow())
     params.append(int(cost_id))
@@ -581,6 +834,7 @@ def update_cost(cost_id: int, body: dict[str, Any], *, staff: dict[str, Any] | N
             "note": fresh.get("note"),
             "old": old,
             "new": fresh,
+            "authorization_evidence": body.get("_authorization_evidence") or {},
         },
     )
     return {"cost": fresh, "updated": True}
@@ -621,6 +875,7 @@ def approve_cost(cost_id: int, body: dict[str, Any] | None = None, *, staff: dic
             "staff_id": fresh.get("staff_id"),
             "source_ref": fresh.get("source_ref"),
             "note": fresh.get("note"),
+            "authorization_evidence": (body or {}).get("_authorization_evidence") or {},
         },
     )
     return {"cost": fresh, "approved": True}
@@ -663,6 +918,7 @@ def void_cost(cost_id: int, body: dict[str, Any] | None = None, *, staff: dict[s
             "staff_id": fresh.get("staff_id"),
             "source_ref": fresh.get("source_ref"),
             "note": fresh.get("note"),
+            "authorization_evidence": (body or {}).get("_authorization_evidence") or {},
         },
     )
     return {"cost": fresh, "voided": True}
@@ -670,14 +926,14 @@ def void_cost(cost_id: int, body: dict[str, Any] | None = None, *, staff: dict[s
 
 def summarize_project(project_id: int) -> dict[str, Any]:
     ensure_vkpi_schema()
-    # 汇总只计已确认的实际成本(status='actual'):estimate/pending 不冒充实际支出。
+    # 汇总只计管理员已批准或可验证自动过账的实际成本。
     # 按 currency 分组:异币种绝不直加(无汇率),单币种给标量 total_cost_cents,
     # 多币种置 None 并以 totals_by_currency 明细呈现(mixed_currency=True 提示调用方)。
     rows = get_conn().execute(
         """
         SELECT cost_type, currency, COALESCE(SUM(amount_cents), 0) AS amount_cents
         FROM vkpi_cost_ledger
-        WHERE project_id=? AND status='actual'
+        WHERE project_id=? AND status='actual' AND approved_at IS NOT NULL
         GROUP BY cost_type, currency
         ORDER BY amount_cents DESC
         """,

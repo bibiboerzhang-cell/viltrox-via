@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Enqueue one local mock apify_jobs task for worker smoke validation."""
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -40,7 +41,7 @@ def main() -> None:
             )
             job_id = cur.fetchone()[0]
         conn.commit()
-    print(json.dumps({"job_id": job_id, "status": "queued", "payload": payload}, ensure_ascii=False))
+    stdout_out(json.dumps({"job_id": job_id, "status": "queued", "payload": payload}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

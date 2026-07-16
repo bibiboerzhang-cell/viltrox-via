@@ -15,6 +15,8 @@
   python3 scripts/download_kol_inventory.py --limit-per-kol 20 # 全量,每人20条
 """
 from __future__ import annotations
+
+from stdout_utils import out as stdout_out
 import argparse, json, os, re, subprocess, sys, time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -153,13 +155,13 @@ def main():
 
     targets = select_targets(args.limit_per_kol, args.pilot)
     total_videos = sum(len(v) for _, v in targets)
-    print(f"🚀 目标 {len(targets)} 个 KOL / {total_videos} 条视频 → {out_root} | R2 bucket={bucket}")
+    stdout_out(f"🚀 目标 {len(targets)} 个 KOL / {total_videos} 条视频 → {out_root} | R2 bucket={bucket}")
     stats = {"done": 0, "skip_exists": 0, "download_failed": 0, "src_mb": 0.0, "proxy_mb": 0.0, "elapsed": 0.0}
     for ki, (k, vids) in enumerate(targets, 1):
         kol_dir = out_root / f"KOL-{int(k['id']):06d}_{k['platform']}_{_slug(k['handle'])}"
         kol_dir.mkdir(parents=True, exist_ok=True)
         (kol_dir / "profile.json").write_text(json.dumps(k, ensure_ascii=False, indent=1))
-        print(f"[{ki}/{len(targets)}] KOL-{k['id']} {k['platform']}/{k['handle']} — {len(vids)} 条")
+        stdout_out(f"[{ki}/{len(targets)}] KOL-{k['id']} {k['platform']}/{k['handle']} — {len(vids)} 条")
         for ev in vids:
             r = process_video(k, ev, kol_dir, r2, bucket, args.keep_source_local)
             st = r.get("status", "?")
@@ -167,15 +169,15 @@ def main():
             if st == "done":
                 stats["src_mb"] += r.get("source_mb", 0); stats["proxy_mb"] += r.get("proxy_mb", 0)
                 stats["elapsed"] += r.get("elapsed_s", 0)
-                print(f"    ✅ ev#{ev['evidence_id']} src={r['source_mb']}MB proxy={r['proxy_mb']}MB {r['elapsed_s']}s")
+                stdout_out(f"    ✅ ev#{ev['evidence_id']} src={r['source_mb']}MB proxy={r['proxy_mb']}MB {r['elapsed_s']}s")
             elif st == "download_failed":
-                print(f"    ❌ ev#{ev['evidence_id']} 下载失败: {r.get('error','')[:80]}")
+                stdout_out(f"    ❌ ev#{ev['evidence_id']} 下载失败: {r.get('error','')[:80]}")
             else:
-                print(f"    ⏭  ev#{ev['evidence_id']} {st}")
-    print(f"\n🎉 完成 done={stats['done']} 跳过={stats['skip_exists']} 失败={stats['download_failed']}")
-    print(f"   源片合计 {stats['src_mb']:.0f}MB → R2 | 本地代理 {stats['proxy_mb']:.0f}MB | 总耗时 {stats['elapsed']:.0f}s")
+                stdout_out(f"    ⏭  ev#{ev['evidence_id']} {st}")
+    stdout_out(f"\n🎉 完成 done={stats['done']} 跳过={stats['skip_exists']} 失败={stats['download_failed']}")
+    stdout_out(f"   源片合计 {stats['src_mb']:.0f}MB → R2 | 本地代理 {stats['proxy_mb']:.0f}MB | 总耗时 {stats['elapsed']:.0f}s")
     if stats["done"]:
-        print(f"   单条均值: {stats['src_mb']/stats['done']:.1f}MB源 / {stats['proxy_mb']/stats['done']:.1f}MB代理 / {stats['elapsed']/stats['done']:.1f}s")
+        stdout_out(f"   单条均值: {stats['src_mb']/stats['done']:.1f}MB源 / {stats['proxy_mb']/stats['done']:.1f}MB代理 / {stats['elapsed']/stats['done']:.1f}s")
 
 
 if __name__ == "__main__":

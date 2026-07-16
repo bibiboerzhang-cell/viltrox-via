@@ -33,6 +33,10 @@ def _guard(fn, *args, **kwargs):
     except ValueError as exc:
         # 入参校验失败(坏日期/数值越界等)→ 400。消息是我方 ValueError 文案,不含 PG DETAIL。
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except scope.ScopeDenied as exc:
+        # Includes the safe code/schema rollout gap: a non-default workspace
+        # must never fall back into legacy org-1 Event rows before migration 244.
+        raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
     except Exception as exc:  # noqa: BLE001 — DB/序列化等意外 → 500
         # 绝不把 exc 原文(可能含整行数据 / PG DETAIL)透传给客户端;真因写服务端日志。
         logger.error("events endpoint error", exc_info=True)
@@ -99,7 +103,7 @@ def list_event_share_members(event_id: str, staff=Depends(require_tab("vkpi", "r
         policy.require_event_read(str(event_id), staff)
     except policy.ScopeDenied as exc:
         raise _scope_403(exc) from exc
-    return _guard(event_members.list_members, str(event_id))
+    return _guard(event_members.list_members, str(event_id), staff)
 
 
 @router.post("/{event_id}/share-members")
@@ -113,11 +117,20 @@ def add_event_share_member(event_id: str, body: dict = Body(default_factory=dict
     target_staff_id = body.get("staff_id")
     if target_staff_id in (None, "", 0, "0"):
         raise HTTPException(status_code=400, detail="staff_id required")
+    try:
+        if isinstance(target_staff_id, bool):
+            raise ValueError("boolean is not a staff id")
+        parsed_target_staff_id = int(target_staff_id)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=400, detail="staff_id must be a positive integer") from exc
+    if parsed_target_staff_id <= 0:
+        raise HTTPException(status_code=400, detail="staff_id must be a positive integer")
     result = event_members.add_member(
         str(event_id),
-        int(target_staff_id),
+        parsed_target_staff_id,
         role=str(body.get("role") or "viewer"),
         added_by_staff_id=scope.actor_staff_id(staff) or None,
+        staff=staff,
     )
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error") or "add member failed")
@@ -131,7 +144,12 @@ def remove_event_share_member(event_id: str, staff_id: int, staff=Depends(requir
         event_members.assert_can_manage_members(str(event_id), staff)
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
-    result = event_members.remove_member(str(event_id), int(staff_id), removed_by_staff_id=scope.actor_staff_id(staff) or None)
+    result = event_members.remove_member(
+        str(event_id),
+        int(staff_id),
+        removed_by_staff_id=scope.actor_staff_id(staff) or None,
+        staff=staff,
+    )
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("error") or "remove member failed")
     return result
@@ -220,7 +238,9 @@ def update_event(event_id: str, body: dict, staff=Depends(require_tab("vkpi", "w
 
 @router.delete("/{event_id}")
 def delete_event(event_id: str, staff=Depends(require_tab("vkpi", "write"))):
-    _assert_write(event_id, staff)
+    # Deleting the parent cascades into tasks, expenses, invites and shares; it
+    # is an ownership/manager action, not ordinary team/editor content editing.
+    _assert_manage_team(event_id, staff)
     return _guard(service.delete_event, event_id, staff)
 
 

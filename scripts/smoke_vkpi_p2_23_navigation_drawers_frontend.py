@@ -6,6 +6,7 @@ back to another main page left global right-side drawers mounted on top of the
 new page. This smoke keeps the navigation handler wired to close those drawers.
 """
 from __future__ import annotations
+from stdout_utils import out as stdout_out
 
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def main() -> None:
     _require("closeAlertDetailDrawer();" in source, "Alert drawer close helper is not reused")
 
     _require("P2.23" in status, "P2 release status does not mention P2.23")
-    print("VKPI_P2_23_NAVIGATION_DRAWERS_FRONTEND_SMOKE_OK")
+    stdout_out("VKPI_P2_23_NAVIGATION_DRAWERS_FRONTEND_SMOKE_OK")
 
 
 if __name__ == "__main__":

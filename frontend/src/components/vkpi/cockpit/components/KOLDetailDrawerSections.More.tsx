@@ -141,6 +141,13 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const fans = intelN > 0 && Array.isArray(intel.superfans) ? intel.superfans.slice(0, 5) : [];
   const overlap = (hasEst && est.overlap && typeof est.overlap === "object") ? est.overlap as any : null;
   const overlapItems = overlap && Array.isArray(overlap.items) ? overlap.items : [];
+  const sourceContract = (hasEst && est.source_contract && typeof est.source_contract === "object") ? est.source_contract as any : null;
+  const profileSource = String(sourceContract?.profile_sample?.source || (intel?.source === "youtube_api_sample" ? "youtube_data_api_live_sample" : "vkpi_comments_pool_evidence"));
+  const profileSourceLabel = profileSource === "youtube_data_api_live_sample"
+    ? "YouTube Data API 本次抽样（未写入本地评论桥）"
+    : "本地评论桥（可追溯入库评论）";
+  const scannedComments = Number(sourceContract?.profile_sample?.comments_scanned ?? est?.comments_scanned ?? 0) || 0;
+  const bridgeCommenters = Number(sourceContract?.overlap?.commenters ?? overlap?.self_commenters ?? 0) || 0;
   const affinity = (hasEst && est.audience_affinity && typeof est.audience_affinity === "object") ? est.audience_affinity as any : null;
   const affinityItems = affinity && Array.isArray(affinity.items) ? affinity.items : [];
   const density = (hasEst && est.creator_density && typeof est.creator_density === "object") ? est.creator_density as any : null;
@@ -368,7 +375,9 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
                 e("span", { className: "text-slate-600 text-[9px] tabular-nums ml-auto" }, "jaccard " + (Number(o.jaccard) || 0).toFixed(3))
               ))
             )
-          : e("div", { className: "text-[9.5px] text-slate-500" }, "暂无重叠数据(库内同类 KOL 抓样越多越准)")
+          : e("div", { className: "text-[9.5px] text-slate-500" },
+              `本地评论桥 ${bridgeCommenters} 位评论者，未与本次 API 样本混算；入库同类 KOL 评论后再算重叠`
+            )
       ),
       // 受众还关注(关注图谱 v0:YT 评论者公开订阅抽样,Modash「audience also follows」同款)
       affinity && e("div", { className: "mb-2.5" },
@@ -391,10 +400,13 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
       density && density.pct !== null && density.pct !== undefined && e("div", { className: "text-[9px] text-slate-500 mb-1" },
         `受众创作者浓度 ${density.pct}%(订阅数超 ${Number(density.min_subscribers) || 1000},已知 ${Number(density.known_n) || 0} 人)`
       ),
-      // 底部小字:只留 样本/置信/日期(方法与覆盖细节留在 JSON 内部,不渲染)
+      // 底部小字:样本与来源必须同屏，避免把本次 API 抽样误读为本地 durable 评论桥。
       // 【K5】受众保鲜:生成时间距今 >30 天 → 样本行旁琥珀小字提醒(点下方按钮即可重新生成)。
       hasEst && e("div", { className: "text-[9px] text-slate-500 leading-relaxed" },
-        `样本 ${est.sample_size} 评论者 · 置信 ${est.confidence ?? "—"}` + (generatedDate ? ` · ${generatedDate}` : ""),
+        `画像样本 ${est.sample_size} 评论者 · ${profileSourceLabel}` +
+          (scannedComments ? ` · 扫描 ${scannedComments} 条评论` : "") +
+          ` · 本地评论桥 ${bridgeCommenters} 人 · 置信 ${est.confidence ?? "—"}` +
+          (generatedDate ? ` · ${generatedDate}` : ""),
         estStale && e("span", {
           className: "ml-1.5 text-amber-300/90",
           title: `受众画像生成于 ${generatedDate || "未知日期"},已超过 30 天,评论者构成可能已变化`,

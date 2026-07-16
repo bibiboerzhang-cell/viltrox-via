@@ -1,4 +1,6 @@
 import React from "react";
+import { SmartKolInputPanel } from "../components/SmartKolInputPanel";
+import { KolSearchHistoryPanel } from "../components/KolSearchHistoryPanel";
 import { usePoolSummary } from "./KolPoolBoardPage.actions";
 import { DiscoveryFunnelBody } from "./KolPoolBoardPage.charts";
 import { MODULE_SOURCES } from "./KolPoolBoardPage.modules";
@@ -12,9 +14,60 @@ import { XbCard, xbNoToken } from "./crossBoardModules.shell";
 const BOARD_LABEL = "KOL Pool";
 const src = (key: string) => MODULE_SOURCES[key] || { label: key, rows: [] as Array<[string, string]> };
 
+// SmartKolInputPanel 在源页由 ModuleCard 接管标题和卡壳；Dashboard 的 XbCard 同样
+// 接管，因此只压平外壳、隐藏重复标题，搜索、历史、收藏/立项等交互保持原件。
+const SMART_DASHBOARD_TRIM = [
+  "[&>section]:!rounded-none [&>section]:!border-0",
+  "[&>section]:!bg-transparent [&>section]:!p-0",
+  "[&>section>div:first-child>div:first-child>span:first-child]:hidden",
+  "[&>section>div:first-child_h2]:hidden",
+].join(" ");
+
 interface XbProps {
   apiToken: string;
   onOpenBoard: () => void;
+}
+
+export function PoolSmartSearchXbCard({ apiToken, onOpenBoard }: XbProps) {
+  return (
+    <XbCard
+      title="找达人"
+      boardLabel={BOARD_LABEL}
+      onOpenBoard={onOpenBoard}
+      statusLabel="可操作"
+      srcLabel={src("smart").label}
+      srcRows={[...src("smart").rows, ["跨板块", "Dashboard 内可直接查找、查看历史；点结果进入 KOL Pool"]]}
+    >
+      {!apiToken ? xbNoToken(BOARD_LABEL) : (
+        <div data-testid="dashboard-kol-smart-search" className={SMART_DASHBOARD_TRIM}>
+          <SmartKolInputPanel
+            apiToken={apiToken}
+            onOpenRecallItem={onOpenBoard}
+            onOpenProfile={onOpenBoard}
+          />
+        </div>
+      )}
+    </XbCard>
+  );
+}
+
+export function PoolSearchHistoryXbCard({ apiToken, onOpenBoard }: XbProps) {
+  return (
+    <XbCard
+      title="搜索历史"
+      boardLabel={BOARD_LABEL}
+      onOpenBoard={onOpenBoard}
+      statusLabel="账号记录"
+      srcLabel="搜索会话历史"
+      srcRows={[
+        ["数据源", "GET /api/admin/vkpi/kol-search-history · 当前登录账号"],
+        ["动作", "移除为软归档；已移除记录可恢复"],
+        ["打开", "点记录跳转 KOL Pool 并恢复该会话"],
+      ]}
+    >
+      <KolSearchHistoryPanel apiToken={apiToken} onOpenBoard={onOpenBoard} />
+    </XbCard>
+  );
 }
 
 export function PoolDiscoveryFunnelXbCard({ apiToken, onOpenBoard }: XbProps) {

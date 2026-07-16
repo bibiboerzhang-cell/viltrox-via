@@ -262,7 +262,7 @@ export function qaItemForAnalysis(item: VkpiProjectVideoAnalysisCacheItem, map: 
   ].filter(Boolean);
   for (const key of keys) {
     const match = map.get(key);
-    if (match?.state === 'ready' && match.entry) return match;
+    if (match) return match;
   }
   return null;
 }

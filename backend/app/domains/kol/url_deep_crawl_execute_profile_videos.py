@@ -42,6 +42,43 @@ if TYPE_CHECKING:
     from app.domains.kol.url_deep_crawl import ClassifiedUrl
 
 
+def _representative_ai_analysis(items: list[dict[str, Any]]) -> dict[str, Any]:
+    analyses = [
+        (item.get("enqueue_result") or {}).get("ai_analysis")
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("enqueue_result"), dict)
+    ]
+    analyses = [value for value in analyses if isinstance(value, dict)]
+    if not analyses:
+        return {
+            "state": "not_requested",
+            "reason": "no_eligible_representative_video",
+            "gate_reason": "",
+            "model_readiness_status": "not_ready",
+            "provider_calls_allowed": False,
+        }
+    states = {str(value.get("state") or "not_requested") for value in analyses}
+    disabled = [value for value in analyses if value.get("reason") == "ai_disabled"]
+    if "queued" in states:
+        state, reason = "queued", "analysis_queued"
+    elif "ready" in states:
+        state, reason = "ready", "cached_analysis"
+    elif disabled:
+        state, reason = "not_requested", "ai_disabled"
+    else:
+        state, reason = "not_requested", str(analyses[0].get("reason") or "not_requested")
+    source = disabled[0] if disabled else analyses[0]
+    return {
+        "state": state,
+        "reason": reason,
+        "gate_reason": str(source.get("gate_reason") or ""),
+        "model_readiness_status": str(source.get("model_readiness_status") or "not_ready"),
+        "provider_calls_allowed": any(bool(value.get("provider_calls_allowed")) for value in analyses),
+        "item_count": len(analyses),
+        "not_requested_count": sum(1 for value in analyses if value.get("state") == "not_requested"),
+    }
+
+
 def _execute_profile_representative_video_analysis(
     conn: Any,
     *,
@@ -61,6 +98,13 @@ def _execute_profile_representative_video_analysis(
             "skipped": 0,
             "errors": 0,
             "worker_touched": False,
+            "ai_analysis": {
+                "state": "not_requested",
+                "reason": "profile_video_analysis_not_requested",
+                "gate_reason": "",
+                "model_readiness_status": "not_ready",
+                "provider_calls_allowed": False,
+            },
             "viltrox_fit_score_changed_ids": [],
             "incremental": incremental_state,
         }
@@ -73,6 +117,13 @@ def _execute_profile_representative_video_analysis(
             "skipped": 0,
             "errors": 1,
             "worker_touched": False,
+            "ai_analysis": {
+                "state": "not_requested",
+                "reason": "missing_kol_pool_id",
+                "gate_reason": "",
+                "model_readiness_status": "not_ready",
+                "provider_calls_allowed": False,
+            },
             "viltrox_fit_score_changed_ids": [],
             "incremental": incremental_state,
         }
@@ -85,6 +136,13 @@ def _execute_profile_representative_video_analysis(
             "skipped": 1,
             "errors": 0,
             "worker_touched": False,
+            "ai_analysis": {
+                "state": "not_requested",
+                "reason": "unsupported_tiktok_video_resolver",
+                "gate_reason": "",
+                "model_readiness_status": "not_ready",
+                "provider_calls_allowed": False,
+            },
             "viltrox_fit_score_changed_ids": [],
             "incremental": incremental_state,
         }
@@ -108,6 +166,13 @@ def _execute_profile_representative_video_analysis(
             "candidate_count": len(all_videos),
             "incremental": incremental_state,
             "worker_touched": False,
+            "ai_analysis": {
+                "state": "not_requested",
+                "reason": "no_eligible_representative_video",
+                "gate_reason": "",
+                "model_readiness_status": "not_ready",
+                "provider_calls_allowed": False,
+            },
             "viltrox_fit_score_changed_ids": [],
         }
 
@@ -142,6 +207,9 @@ def _execute_profile_representative_video_analysis(
                     source="kol_url_deep_crawl",
                     batch="url_profile_representative",
                     commit=True,
+                    search_session_id=body.get("search_session_id"),
+                    search_session_item_id=body.get("search_session_item_id"),
+                    parent_job_id=body.get("parent_job_id"),
                 )
                 changed_ids.extend(_fit_changed_ids(enqueue_result))
                 item_status = str(enqueue_result.get("status") or "enqueue_unknown")
@@ -156,7 +224,7 @@ def _execute_profile_representative_video_analysis(
                 logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
             errors += 1
-            error = str(exc)[:500]
+            error = "representative_video_enqueue_failed"
             item_status = "error"
         items.append(
             {
@@ -164,6 +232,7 @@ def _execute_profile_representative_video_analysis(
                 "metadata": _public_video_metadata(metadata),
                 "evidence_result": _compact_video_evidence_result(evidence_result),
                 "enqueue_result": _compact_enqueue_result(enqueue_result),
+                "ai_analysis": enqueue_result.get("ai_analysis") if isinstance(enqueue_result, dict) else None,
                 "error": error or None,
             }
         )
@@ -181,6 +250,7 @@ def _execute_profile_representative_video_analysis(
         "items": items,
         "incremental": incremental_state,
         "worker_touched": queued > 0,
+        "ai_analysis": _representative_ai_analysis(items),
         "viltrox_fit_score_changed_ids": sorted(set(changed_ids)),
         "viltrox_fit_score_untouched": not changed_ids,
     }
@@ -282,7 +352,7 @@ def _execute_profile_history_video_evidence(
                 logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 pass
             errors += 1
-            error = str(exc)[:500]
+            error = "history_video_evidence_failed"
             item_status = "error"
         items.append(
             {
