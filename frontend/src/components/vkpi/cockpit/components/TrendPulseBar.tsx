@@ -135,11 +135,11 @@ export function TrendPulseBar({ apiToken = "" }: { apiToken?: string }) {
   let content: React.ReactNode;
   if (state === "loading") {
     content = e("div", { className: "flex min-w-0 items-center gap-2 text-[10px] text-muted" },
-      e(Loader2, { size: 13, className: "shrink-0 animate-spin text-rose-300" }),
+      e(Loader2, { size: 13, className: "shrink-0 animate-spin text-[color:var(--ds-flow-rose)]" }),
       e("span", null, "正在聚合真实行业帖…"),
     );
   } else if (state === "error") {
-    content = e("div", { className: "flex min-w-0 items-center gap-2 rounded-md border border-red-400/20 bg-red-500/[0.06] px-2 py-1 text-[10px] text-crit" },
+    content = e("div", { className: "flex min-w-0 items-center gap-2 rounded-md border border-[color:color-mix(in_srgb,var(--ds-crit)_20%,transparent)] bg-crit-soft px-2 py-1 text-[10px] text-crit" },
       e(AlertTriangle, { size: 12, className: "shrink-0" }),
       e("span", { className: "shrink-0 font-medium" }, "热词源暂不可用"),
       e("span", { className: "min-w-0 truncate text-muted", title: error }, error),
@@ -159,11 +159,16 @@ export function TrendPulseBar({ apiToken = "" }: { apiToken?: string }) {
         return e("span", {
           key: `${platform || "all"}:${hashtag}:${index}`,
           className: "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium",
-          style: { background: "rgba(239,68,68,0.06)", borderColor: "rgba(239,68,68,0.2)", color: "#fda4af" },
+          // 热词芯片走 --ds-flow-rose token(color-mix 软底,tailwind config 无 alpha-value,禁 token/opacity 修饰类)
+          style: {
+            background: "color-mix(in srgb, var(--ds-flow-rose) 8%, transparent)",
+            borderColor: "color-mix(in srgb, var(--ds-flow-rose) 22%, transparent)",
+            color: "var(--ds-flow-rose)",
+          },
           title: `${postCount} 帖${platform ? " · " + platform : ""}${trend.engagement != null ? ` · 互动 ${trend.engagement}` : ""}`,
         },
         e("span", null, `#${hashtag}`),
-        postCount ? e("span", { className: "text-[9px] text-rose-200/70" }, `·${postCount}`) : null,
+        postCount ? e("span", { className: "text-[9px] text-[color:color-mix(in_srgb,var(--ds-flow-rose)_70%,transparent)]" }, `·${postCount}`) : null,
         platform ? e("span", { className: "rounded bg-white/[0.05] px-1 text-[8px] uppercase text-muted" }, platform) : null,
         );
       }),
@@ -177,11 +182,11 @@ export function TrendPulseBar({ apiToken = "" }: { apiToken?: string }) {
     title: data?.generated_at ? `聚合于 ${data.generated_at}` : undefined,
   },
     e("div", { className: "flex min-w-[190px] shrink-0 items-center gap-2" },
-      e("div", { className: "rounded-md p-1.5", style: { background: "rgba(239,68,68,0.18)" } }, e(Flame, { size: 12, className: "text-rose-400" })),
+      e("div", { className: "rounded-md p-1.5", style: { background: "color-mix(in srgb, var(--ds-flow-rose) 18%, transparent)" } }, e(Flame, { size: 12, className: "text-[color:var(--ds-flow-rose)]" })),
       e("div", { className: "min-w-0" },
         e("div", { className: "text-[11px] font-semibold text-ink" }, "近期市场热词"),
         e("div", { className: "flex flex-wrap items-center gap-x-1 text-[9px] text-muted" },
-          e("span", { className: state === "error" ? "text-crit" : state === "ready" ? "text-rose-300" : "" }, headline),
+          e("span", { className: state === "error" ? "text-crit" : state === "ready" ? "text-[color:var(--ds-flow-rose)]" : "" }, headline),
           e("span", { "aria-label": "热词取数口径" }, `· ${sourceMeta}`),
         ),
       )
