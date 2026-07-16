@@ -41,6 +41,15 @@ class MessageCreateBody(BaseModel):
     allow_external_ai: bool = False
 
 
+class MessageFeedbackBody(BaseModel):
+    rating: str = Field(..., max_length=20)
+    correction_text: str = Field(default="", max_length=4000)
+    propose_memory: bool = False
+    context_refs: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    client_request_id: str = Field(..., min_length=1, max_length=120)
+
+
 class MemorySettingsBody(BaseModel):
     state: str = Field(..., max_length=20)
     retention_days: int | None = Field(default=None, ge=1, le=3650)
@@ -156,6 +165,38 @@ def list_messages(
 ) -> dict[str, Any]:
     items = _run(repository.list_messages, scope, thread_uid, limit=limit)
     return {"status": "ok", "messages": items, "count": len(items)}
+
+
+@router.post("/threads/{thread_uid}/messages/{message_uid}/feedback")
+def submit_message_feedback(
+    thread_uid: str,
+    message_uid: str,
+    body: MessageFeedbackBody,
+    scope: AdvisorScope = Depends(require_advisor_write_scope),
+) -> dict[str, Any]:
+    result = _run(
+        repository.submit_message_feedback,
+        scope,
+        thread_uid,
+        message_uid,
+        rating=body.rating,
+        correction_text=body.correction_text,
+        propose_memory=body.propose_memory,
+        context_refs=body.context_refs,
+        provenance=body.provenance,
+        client_request_id=body.client_request_id,
+    )
+    candidate = result.get("candidate")
+    pending_candidate = bool(
+        isinstance(candidate, dict) and candidate.get("status") == "pending"
+    )
+    return {
+        "status": "pending_confirmation" if pending_candidate else "ok",
+        **result,
+        "memory_active": False,
+        "training_triggered": False,
+        "weights_changed": False,
+    }
 
 
 @router.post("/threads/{thread_uid}/messages")

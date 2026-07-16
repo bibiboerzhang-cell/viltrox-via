@@ -489,7 +489,15 @@ def create_message_turn(
             }
         claim_token = str(claim.get("claim_token") or "")
 
-    bridged = intelligent_bridge.answer(content, scope, thread_uid=thread_uid)
+    # Use this request's refs for this request.  Previously the bridge read the
+    # thread before the new refs were persisted, so changed selections affected
+    # only the following turn.
+    bridged = intelligent_bridge.answer(
+        content,
+        scope,
+        thread_uid=thread_uid,
+        context_refs=context_refs,
+    )
     prompt, allowed_evidence_ids = _provider_prompt(content, bridged)
     operator_enabled = _truthy(os.environ.get(_EXTERNAL_ENABLE_ENV))
     try:

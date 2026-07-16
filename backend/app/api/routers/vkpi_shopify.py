@@ -17,7 +17,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.domains import business_truth
-from app.domains.commerce import shopify_connect, shopify_discounts, shopify_orders
+from app.domains.commerce import (
+    shopify_client_credentials,
+    shopify_connect,
+    shopify_discounts,
+    shopify_orders,
+)
 
 
 router = APIRouter(prefix="/api/admin/vkpi/shopify", tags=["vkpi-shopify"])
@@ -89,21 +94,37 @@ def get_gmv(
     )
 
 
-# --- creds-ready: connection creds (encrypted store + settings-page fill) -----
+# --- credentials: formal Client Credentials + legacy compatibility -----------
 
 @router.post("/creds")
 def save_shopify_creds(
     body=Body(default_factory=dict),
     staff=Depends(require_tab("vkpi", "admin")),
 ):
-    """Persist Shopify creds (encrypted). Returns masked-only; never echoes plaintext token.
+    """Advanced compatibility path for an existing long-lived access token.
 
-    admin-gated (not write): mirrors api_key_pool separation-of-duties — only
-    admin/owner may manage company-wide live credentials (access_token + webhook_secret).
+    New stores should use ``/client-credentials/connect``.  This admin-only
+    endpoint remains for migration and never echoes plaintext token material.
     """
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
     return _guard(shopify_connect.save_credentials, body, staff)
+
+
+@router.post("/client-credentials/connect")
+def connect_shopify_client_credentials(
+    body=Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "admin")),
+):
+    """Atomically enable a candidate after token, probe and webhooks pass.
+
+    The candidate stays out of the singleton until every external stage
+    succeeds. Any failure preserves last-known-good and returns a secret-free
+    four-stage receipt. Partially created webhooks are cleaned up best effort.
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    return _guard(shopify_client_credentials.connect_client_credentials, body, staff)
 
 
 @router.get("/creds")

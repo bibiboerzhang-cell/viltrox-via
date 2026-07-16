@@ -190,32 +190,42 @@ async def job_vkpi_bet_review_due():
 
 
 async def job_vkpi_fulfillment_sweep():
-    """cut4 · workflow_runs 事实源:每日自动起一条 durable 履约 sweep(原只能手动端点触发)。
+    """cut4 · workflow_runs 事实源:每日续跑未完成履约链，无时才新建。
 
-    走 fulfillment_workflow.start_fulfillment_sweep:17track同步→开观察窗→扫内容,每步入 workflow_runs/
-    steps/checkpoints(失败可从中间步续跑)。让 workflow_runs 真自动累积,不再 demo 级。零触 viltrox_fit_score。
+    17track同步→开观察窗→扫内容；优先对同一 run_id 取新 fence 续跑，
+    避免每个 cron tick 无条件新建。零触 viltrox_fit_score。
     """
     try:
-        from app.domains.projects import fulfillment_workflow
+        from app.domains.platform import workflow_recovery
 
-        result = await asyncio.to_thread(fulfillment_workflow.start_fulfillment_sweep, None)
+        result = await asyncio.to_thread(
+            workflow_recovery.run_scheduled_workflow,
+            "fulfillment_sweep",
+            None,
+        )
         logger.info("scheduler.vkpi_fulfillment_sweep",
-                    extra={"run_id": result.get("run_id"), "status": result.get("status")})
+                    extra={"run_id": result.get("run_id"), "status": result.get("status"),
+                           "scheduled_action": result.get("scheduled_action")})
     except Exception:
         logger.exception("scheduler.vkpi_fulfillment_sweep_failed")
 
 
 async def job_vkpi_agent_cycle():
-    """cut4 · workflow_runs 事实源:每日自动起一条 durable Agent 建议链(原只能手动触发)。
+    """cut4 · workflow_runs 事实源:每日续跑未完成 Agent 链，无时才新建。
 
-    走 agent_cycle_workflow.start_agent_cycle:生成今日建议→汇总→留痕,入 workflow_runs。执行仍需人审。
+    生成今日建议→汇总→留痕；优先复用同一 run_id，执行仍需人审。
     """
     try:
-        from app.domains.actions import agent_cycle_workflow
+        from app.domains.platform import workflow_recovery
 
-        result = await asyncio.to_thread(agent_cycle_workflow.start_agent_cycle, None)
+        result = await asyncio.to_thread(
+            workflow_recovery.run_scheduled_workflow,
+            "agent_cycle",
+            None,
+        )
         logger.info("scheduler.vkpi_agent_cycle",
-                    extra={"run_id": result.get("run_id"), "status": result.get("status")})
+                    extra={"run_id": result.get("run_id"), "status": result.get("status"),
+                           "scheduled_action": result.get("scheduled_action")})
     except Exception:
         logger.exception("scheduler.vkpi_agent_cycle_failed")
 

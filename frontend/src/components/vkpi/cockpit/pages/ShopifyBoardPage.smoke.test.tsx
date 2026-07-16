@@ -60,6 +60,17 @@ const STATUS_NOT_CONFIGURED = {
   message: "Shopify Admin API 未配置",
 };
 
+const STATUS_CONNECTED = {
+  ...STATUS_NOT_CONFIGURED,
+  provider_status: "connected",
+  shop_domain: "demo.myshopify.com",
+  shop_domain_configured: true,
+  access_token_configured: true,
+  webhook_secret_configured: true,
+  credential_fields: { shop_domain: true, access_token: true, webhook_secret: true },
+  message: "Shopify Admin API 已通过真实探测",
+};
+
 const GOAFF_CONNECTED = { status: "connected", access_token_configured: true, public_token_configured: false, source: "db", api_base: "https://api.goaffpro.com/v1", token: "abcd...wxyz" };
 const GOAFF_NOT_CONFIGURED = { status: "not_configured", access_token_configured: false, public_token_configured: false, source: "none" };
 
@@ -77,7 +88,7 @@ const SUMMARY_OK = {
   note: null,
 };
 
-type Overrides = { gmv?: unknown; attr?: unknown; goaffCreds?: unknown; summary?: unknown };
+type Overrides = { gmv?: unknown; attr?: unknown; goaffCreds?: unknown; summary?: unknown; status?: unknown };
 
 function routeApi(overrides: Overrides = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: RequestInit) => {
@@ -90,7 +101,7 @@ function routeApi(overrides: Overrides = {}) {
     };
     if (p.startsWith("/api/admin/vkpi/shopify/gmv")) return pick(overrides.gmv, GMV_OK);
     if (p.startsWith("/api/admin/vkpi/attribution")) return pick(overrides.attr, ATTR_OK);
-    if (p.startsWith("/api/marketing/shopify/status")) return STATUS_NOT_CONFIGURED;
+    if (p.startsWith("/api/marketing/shopify/status")) return pick(overrides.status, STATUS_NOT_CONFIGURED);
     if (p.startsWith("/api/marketing/shopify/sync") && method === "POST") return { sync_uid: "s-2", status: "not_configured", provider_status: "not_configured", orders_received: 0 };
     if (p.startsWith("/api/admin/vkpi/goaffpro/creds")) return pick(overrides.goaffCreds, GOAFF_CONNECTED);
     if (p.startsWith("/api/admin/vkpi/goaffpro/sync-metrics") && method === "POST") return { ok: true, synced: 2, errors: 0, synced_at: "2026-07-10T01:00:00Z" };
@@ -166,6 +177,19 @@ describe("ShopifyBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () 
     expect(calledPaths().some((p) => p.startsWith("/api/marketing/shopify/status"))).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/goaffpro/creds"))).toBe(true);
     expect(calledPaths().some((p) => p.startsWith("/api/admin/vkpi/goaffpro/summary"))).toBe(true);
+  });
+
+  it("accepts provider_status connected as configured across the current Shopify UI", async () => {
+    routeApi({ status: STATUS_CONNECTED });
+    renderBoard();
+
+    await screen.findByText("Shopify");
+    const directKpi = Array.from(document.querySelectorAll(".ds-kpi")).find((row) =>
+      row.textContent?.includes("直连订单"),
+    );
+    expect(directKpi?.textContent).toContain("$0.00");
+    expect(directKpi?.textContent).not.toContain("未配置店铺凭据");
+    expect(screen.getAllByText(/已配置/).length).toBeGreaterThan(0);
   });
 
   it("默认布局五模块在场;palette 备选(店铺凭据旧表单)不进默认;编辑布局可从 palette 添加", async () => {

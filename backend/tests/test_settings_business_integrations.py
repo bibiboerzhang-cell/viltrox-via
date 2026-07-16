@@ -50,6 +50,72 @@ def test_shopify_credentials_are_not_connected_without_live_success(monkeypatch)
     assert card["operator_label"] == "待配置"
 
 
+def test_shopify_client_credentials_are_pending_without_token_or_business_evidence(monkeypatch):
+    monkeypatch.setattr(
+        subject.shopify_connect,
+        "connection_status",
+        lambda: {
+            "status": "pending",
+            "source": "db",
+            "shop_domain": "demo.myshopify.com",
+            "auth_mode": "client_credentials",
+            "client_id_configured": True,
+            "client_secret_configured": True,
+            "token_configured": False,
+            "token_fresh": False,
+            "refresh_required": True,
+            "access_token_expires_at": None,
+            "granted_scopes": [],
+            "last_refresh_at": None,
+            "webhook_secret_configured": True,
+        },
+    )
+    monkeypatch.setattr(subject, "table_exists", lambda _table: False)
+    monkeypatch.setattr(subject, "_count", lambda *_args, **_kwargs: 0)
+
+    card = subject._shopify_card()
+
+    assert card["state"] == "pending"
+    assert card["operator_status"] == "awaiting_configuration"
+    assert card["evidence"]["auth_mode"] == "client_credentials"
+    assert card["evidence"]["client_id_configured"] is True
+    assert card["evidence"]["client_secret_configured"] is True
+    assert card["evidence"]["refresh_required"] is True
+    assert "client_id" not in card["evidence"]
+    assert "client_secret" not in card["evidence"]
+
+
+def test_shopify_native_hmac_snapshot_is_real_connection_evidence(monkeypatch):
+    monkeypatch.setattr(
+        subject.shopify_connect,
+        "connection_status",
+        lambda: {
+            "status": "connected",
+            "source": "encrypted_db",
+            "shop_domain": "demo.myshopify.com",
+            "token_configured": True,
+            "webhook_secret_configured": True,
+        },
+    )
+
+    def fake_count(table, where="", params=()):
+        if table == "vkpi_shopify_order_snapshots" and "provider_auth_mode='shopify-hmac'" in where:
+            return 1
+        return 0
+
+    monkeypatch.setattr(subject, "_count", fake_count)
+    monkeypatch.setattr(subject, "table_exists", lambda _table: False)
+
+    card = subject._shopify_card()
+
+    assert card["state"] == "connected"
+    assert card["data_quality"] == "real"
+    assert card["evidence"]["normalized_orders"] == 0
+    assert card["evidence"]["native_webhook_snapshots"] == 1
+    assert card["evidence"]["orders"] == 1
+    assert "vkpi_shopify_order_snapshots" in card["source"]
+
+
 def test_dealer_directory_readiness_is_information_and_map_not_authorization(monkeypatch):
     def fake_count(table, where="", params=()):
         assert table == "vkpi_dealers"

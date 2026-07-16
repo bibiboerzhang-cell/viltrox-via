@@ -113,14 +113,33 @@ def _guarded_card(
 
 def _shopify_card() -> dict[str, Any]:
     status = shopify_connect.connection_status()
-    configured = bool(status.get("shop_domain") and status.get("token_configured"))
+    auth_mode = str(status.get("auth_mode") or "legacy_access_token")
+    formal_configured = bool(
+        status.get("shop_domain")
+        and status.get("client_id_configured")
+        and status.get("client_secret_configured")
+    )
+    configured = formal_configured if auth_mode == "client_credentials" else bool(
+        status.get("shop_domain") and status.get("token_configured")
+    )
     order_rows = _count("vkpi_shopify_orders")
-    order_count = _count(
+    normalized_order_count = _count(
         "vkpi_shopify_orders",
         "LOWER(COALESCE(financial_status,'')) IN ('paid','partially_paid','partially_refunded') "
         "AND provider_auth_mode='shopify-hmac' AND provider_verified_at IS NOT NULL "
         "AND NULLIF(TRIM(COALESCE(raw_payload_hash,'')),'') IS NOT NULL AND cancelled_at IS NULL",
     )
+    native_webhook_snapshots = _count(
+        "vkpi_shopify_order_snapshots",
+        "LOWER(COALESCE(financial_status,'')) IN ('paid','partially_paid','partially_refunded') "
+        "AND provider_auth_mode='shopify-hmac' AND provider_verified_at IS NOT NULL "
+        "AND NULLIF(TRIM(COALESCE(raw_payload_hash,'')),'') IS NOT NULL AND cancelled_at IS NULL",
+    )
+    # A native webhook normally materializes into vkpi_shopify_orders.  Use the
+    # larger truth count so the settings card sees a verified snapshot even if
+    # the downstream materializer is delayed, without double-counting the same
+    # order across both tables.
+    order_count = max(normalized_order_count, native_webhook_snapshots)
     successful_runs = _count("vkpi_shopify_sync_runs", "status='success'")
     latest_run = (
         _row(
@@ -143,7 +162,11 @@ def _shopify_card() -> dict[str, Any]:
         summary = "已出现真实订单或成功同步证据。"
     elif configured:
         state = "pending"
-        summary = "凭据已保存，仍待真实 Admin API / Webhook 成功证据。"
+        summary = (
+            "技术接入已验证，仍待真实订单或成功同步证据。"
+            if raw_status == "connected"
+            else "凭据已保存，仍待真实 Admin API / Webhook 成功证据。"
+        )
     else:
         state = "not_configured"
         summary = "等待 Shopify 授权；当前真实订单与 GMV 均为 0。"
@@ -155,17 +178,34 @@ def _shopify_card() -> dict[str, Any]:
         data_quality="real" if order_count > 0 else ("partial" if configured else "empty"),
         evidence={
             "credential_source": str(status.get("source") or "none"),
+            "auth_mode": auth_mode,
             "shop_domain_configured": bool(status.get("shop_domain")),
+            "client_id_configured": bool(status.get("client_id_configured")),
+            "client_secret_configured": bool(status.get("client_secret_configured")),
+            "technical_connection_verified": raw_status == "connected",
             "token_configured": bool(status.get("token_configured")),
+            "token_fresh": bool(status.get("token_fresh")),
+            "refresh_required": bool(status.get("refresh_required")),
+            "access_token_expires_at": status.get("access_token_expires_at"),
+            "granted_scope_count": len(status.get("granted_scopes") or []),
+            "last_refresh_at": status.get("last_refresh_at"),
             "webhook_secret_configured": bool(status.get("webhook_secret_configured")),
             "order_rows": order_rows,
+            "normalized_orders": normalized_order_count,
+            "native_webhook_snapshots": native_webhook_snapshots,
             "orders": order_count,
             "successful_sync_runs": successful_runs,
             "last_run_status": latest_run.get("status") or "never_run",
             "last_run_at": latest_run.get("completed_at") or latest_run.get("started_at"),
         },
-        source="vkpi_shopify_credentials + vkpi_shopify_sync_runs + vkpi_shopify_orders",
-        next_action="进入 Shopify 授权入口提交凭据；保存只代表待验证，不代表已连接。",
+        source=(
+            "vkpi_shopify_credentials + vkpi_shopify_sync_runs + "
+            "vkpi_shopify_orders + vkpi_shopify_order_snapshots"
+        ),
+        next_action=(
+            "优先使用组织应用 Client ID / Client Secret 授权；系统会换取并自动刷新"
+            "24 小时 Token。旧 Access Token 仅作高级兼容。"
+        ),
         operator_status=(
             "verified"
             if state == "connected"

@@ -99,6 +99,7 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_source_passports",
     "vkpi_inventory",
     "vkpi_dealers",
+    "vkpi_dealer_location_verification",
     "vkpi_shopify",
     "vkpi_goaffpro",
     "vkpi_staff_groups",

@@ -258,13 +258,16 @@ def invoke_json(
 
     ``require_runtime_verified`` remains accepted for call compatibility, but
     False cannot disable the production runtime-verification boundary.
-    ``enforce_atomic_reservation`` is the strict production migration boundary:
-    when true, one committed budget reservation is created and marked started
-    immediately before every provider attempt, then settled or left ``unknown``
-    conservatively.  Legacy callers retain their prior behaviour until migrated.
+    ``enforce_atomic_reservation`` is the explicit non-production migration
+    boundary. Production forces it on centrally: one committed budget
+    reservation is created and marked started immediately before every provider
+    attempt, then settled or left ``unknown`` conservatively.
     """
 
     gateway = _gateway_module()
+    enforce_atomic_reservation = gateway._strict_atomic_reservation_enabled(
+        enforce_atomic_reservation
+    )
     started = gateway.time.monotonic()
     resolved_deadline = gateway._resolve_deadline_seconds(deadline_seconds)
     deadline_at = started + resolved_deadline
@@ -440,8 +443,9 @@ def invoke_json(
             break
 
         reservation_key = ""
-        if enforce_atomic_reservation:
-            try:
+        breaker_permit = None
+        try:
+            if enforce_atomic_reservation:
                 reservation = gateway._llm_budget_reservations().reserve_llm_budget(
                     provider=provider,
                     model=binding.model_id,
@@ -454,56 +458,78 @@ def invoke_json(
                     triggered_by=triggered_by,
                 )
                 reservation_key = str(reservation.reservation_key or "")
+            breaker_permit = gateway._acquire_strict_fleet_breaker(
+                provider=provider,
+                model=binding.model_id,
+                enforce_atomic_reservation=enforce_atomic_reservation,
+            )
+            if enforce_atomic_reservation:
                 gateway._llm_budget_reservations().mark_llm_provider_started(
                     reservation_key
                 )
-            except Exception as exc:  # noqa: BLE001 - fail closed before network
-                if reservation_key:
-                    try:
-                        gateway._llm_budget_reservations().release_llm_reservation(
-                            reservation_key
-                        )
-                    except Exception:
-                        gateway.logger.error(
-                            "vkpi.llm_gateway.json_reservation_release_failed",
-                            extra={"reservation_key": reservation_key},
-                            exc_info=True,
-                        )
-                reason = str(getattr(exc, "reason", "") or type(exc).__name__)
-                blocked_scope = str(getattr(exc, "scope", "") or "")
-                gateway.record_call(
-                    provider=provider,
-                    model=binding.model_id,
-                    purpose=purpose,
-                    prompt=safe_prompt,
-                    status="budget_blocked",
-                    fallback_used=True,
-                    cost_tag=cost_scope or gateway.SINGLE_CALL_BUDGET_SCOPE,
-                    triggered_by=triggered_by,
-                    metadata={
-                        **(metadata or {}),
-                        "json_contract": True,
-                        "reservation_key": reservation_key,
-                        "reservation_reason": reason,
-                        "reservation_scope": blocked_scope,
-                        "estimated_cost_usd": estimated_cost,
-                        "resolved_model_binding": binding.to_dict(),
-                        "request_content_recorded": False,
-                    },
-                    staff=staff,
-                    update_budget_scopes=False,
-                    force_cost_ledger=True,
-                )
-                errors.append(
-                    {
-                        "provider": provider,
-                        "model": model_id,
-                        "status": "budget_blocked",
-                        "error": reason,
-                        "scope": blocked_scope,
-                    }
-                )
-                continue
+        except Exception as exc:  # noqa: BLE001 - fail closed before network
+            if breaker_permit is not None:
+                try:
+                    gateway._abandon_strict_fleet_breaker(breaker_permit)
+                except Exception:
+                    gateway.logger.error(
+                        "vkpi.llm_gateway.json_fleet_breaker_abandon_failed",
+                        extra={"provider": provider, "model": binding.model_id},
+                        exc_info=True,
+                    )
+            if reservation_key:
+                try:
+                    gateway._llm_budget_reservations().release_llm_reservation(
+                        reservation_key
+                    )
+                except Exception:
+                    gateway.logger.error(
+                        "vkpi.llm_gateway.json_reservation_release_failed",
+                        extra={"reservation_key": reservation_key},
+                        exc_info=True,
+                    )
+            reason = str(getattr(exc, "reason", "") or type(exc).__name__)
+            blocked_scope = str(getattr(exc, "scope", "") or "")
+            failure_reason = str(getattr(exc, "reason", "") or "")
+            blocked_status = (
+                failure_reason
+                if failure_reason.startswith("fleet_breaker_")
+                else "budget_blocked"
+            )
+            gateway.record_call(
+                provider=provider,
+                model=binding.model_id,
+                purpose=purpose,
+                prompt=safe_prompt,
+                status=blocked_status,
+                fallback_used=True,
+                cost_tag=cost_scope or gateway.SINGLE_CALL_BUDGET_SCOPE,
+                triggered_by=triggered_by,
+                metadata={
+                    **(metadata or {}),
+                    "json_contract": True,
+                    "reservation_key": reservation_key,
+                    "reservation_reason": reason,
+                    "reservation_scope": blocked_scope,
+                    "fleet_breaker_blocked": blocked_status.startswith("fleet_breaker_"),
+                    "estimated_cost_usd": estimated_cost,
+                    "resolved_model_binding": binding.to_dict(),
+                    "request_content_recorded": False,
+                },
+                staff=staff,
+                update_budget_scopes=not enforce_atomic_reservation,
+                force_cost_ledger=enforce_atomic_reservation,
+            )
+            errors.append(
+                {
+                    "provider": provider,
+                    "model": model_id,
+                    "status": blocked_status,
+                    "error": reason,
+                    "scope": blocked_scope,
+                }
+            )
+            continue
 
         try:
             provider_attempts += 1
@@ -536,6 +562,46 @@ def invoke_json(
                     else f"{type(exc).__name__}: {str(exc)[:300]}"
                 ),
             }
+
+        try:
+            gateway._complete_strict_fleet_breaker(breaker_permit, result)
+        except Exception as breaker_exc:  # noqa: BLE001 - no fallback provider after state loss
+            if reservation_key:
+                gateway._mark_reserved_attempt_unknown(reservation_key)
+            gateway.logger.error(
+                "vkpi.llm_gateway.json_fleet_breaker_completion_failed",
+                extra={
+                    "provider": provider,
+                    "model": binding.model_id,
+                    "breaker_error_type": type(breaker_exc).__name__,
+                },
+            )
+            errors.append(
+                {
+                    "provider": provider,
+                    "model": model_id,
+                    "status": "fleet_breaker_store_unavailable_after_provider",
+                    "error": type(breaker_exc).__name__,
+                }
+            )
+            fallback = gateway._rule_fallback(
+                safe_prompt,
+                purpose=purpose,
+                reason="fleet_breaker_store_unavailable_after_provider",
+                errors=errors,
+            )
+            fallback.update(
+                {
+                    "json": None,
+                    "deadline_seconds": resolved_deadline,
+                    "elapsed_ms": max(
+                        0, int((gateway.time.monotonic() - started) * 1000)
+                    ),
+                    "provider_attempts": provider_attempts,
+                    "budget_reservation_key": reservation_key or None,
+                }
+            )
+            return fallback
 
         completed_after_deadline = gateway.time.monotonic() >= deadline_at
         provider_status = str(result.get("status") or "failed")

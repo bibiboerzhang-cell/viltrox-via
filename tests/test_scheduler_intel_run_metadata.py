@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -52,12 +53,47 @@ def test_intel_job_records_non_ok_result_without_advancing_success(monkeypatch) 
     monkeypatch.setattr(
         ai_today,
         "generate_ai_today_hot",
-        lambda: {"status": "ungrounded", "reason": "claude_fallback_without_grounding"},
+        lambda: {
+            "status": "invalid",
+            "result_status": "invalid",
+            "reason": "invalid_result_contract",
+            "generated_at": "2026-07-16T12:00:00Z",
+            "provenance": {
+                "provider": "none",
+                "status": "all_providers_failed",
+                "attempts": [
+                    {
+                        "provider": "google",
+                        "model": "gemini-2.5-pro",
+                        "status": "transient_error",
+                    },
+                    {
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-5",
+                        "status": "transient_error",
+                    },
+                ],
+            },
+        },
     )
 
     asyncio.run(jobs_tasks_intel.job_vkpi_ai_today_hot())
 
-    assert recorded == [("vkpi_ai_today_hot", False, "claude_fallback_without_grounding")]
+    assert len(recorded) == 1
+    task_key, ok, raw_error = recorded[0]
+    assert task_key == "vkpi_ai_today_hot"
+    assert ok is False
+    assert json.loads(raw_error) == {
+        "kind": "ai_today_attempt_v1",
+        "status": "invalid",
+        "reason": "invalid_result_contract",
+        "provider": "anthropic",
+        "provider_status": "transient_error",
+        "generation_status": "all_providers_failed",
+        "model": "claude-sonnet-4-5",
+        "providers_attempted": ["google", "anthropic"],
+        "generated_at": "2026-07-16T12:00:00Z",
+    }
 
 
 def test_intel_job_records_exception_text(monkeypatch) -> None:

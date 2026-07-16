@@ -10,11 +10,74 @@ jobs_tasks.py 通过 `from .jobs_tasks_intel import (...)` re-export 兜住所�
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+_AI_TODAY_ATTEMPT_KIND = "ai_today_attempt_v1"
+
+
+def _attempt_text(value: Any, limit: int) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _ai_today_attempt_error(payload: dict[str, Any]) -> str:
+    """Serialize a bounded, non-secret failure receipt into scheduler_tasks.last_error."""
+    provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
+    raw_attempts = provenance.get("attempts") if isinstance(provenance.get("attempts"), list) else []
+    attempts = [item for item in raw_attempts if isinstance(item, dict)]
+    latest_provider_attempt = attempts[-1] if attempts else {}
+    providers_attempted: list[str] = []
+    for attempt in attempts:
+        provider = _attempt_text(attempt.get("provider"), 40)
+        if provider and provider not in providers_attempted:
+            providers_attempted.append(provider)
+
+    # A failed fallback can leave provenance.provider/model pointing at an earlier
+    # Gemini response. The last concrete provider attempt is the truthful latest
+    # attempt for operations and UI diagnostics.
+    provider = _attempt_text(
+        latest_provider_attempt.get("provider") or provenance.get("provider") or "unknown",
+        40,
+    )
+    model = _attempt_text(
+        latest_provider_attempt.get("model") or provenance.get("model") or payload.get("model"),
+        96,
+    )
+    receipt: dict[str, Any] = {
+        "kind": _AI_TODAY_ATTEMPT_KIND,
+        "status": _attempt_text(
+            payload.get("result_status") or payload.get("contract_status") or payload.get("status") or "failed",
+            40,
+        ),
+        "reason": _attempt_text(
+            payload.get("error") or payload.get("reason") or "ai_today_not_ready",
+            140,
+        ),
+        "provider": provider or "unknown",
+        "provider_status": _attempt_text(latest_provider_attempt.get("status"), 60),
+        "generation_status": _attempt_text(provenance.get("status"), 60),
+        "model": model,
+        "providers_attempted": providers_attempted[:4],
+        "generated_at": _attempt_text(payload.get("generated_at"), 40),
+    }
+    receipt = {key: value for key, value in receipt.items() if value not in ("", [], None)}
+    encoded = json.dumps(receipt, ensure_ascii=True, separators=(",", ":"))
+    if len(encoded) <= 480:
+        return encoded
+
+    # scheduler_registry caps last_error at 500 characters. Drop optional fields
+    # before shortening the reason so the stored JSON always remains parseable.
+    receipt.pop("model", None)
+    receipt.pop("providers_attempted", None)
+    encoded = json.dumps(receipt, ensure_ascii=True, separators=(",", ":"))
+    if len(encoded) <= 480:
+        return encoded
+    receipt["reason"] = _attempt_text(receipt.get("reason"), 60)
+    return json.dumps(receipt, ensure_ascii=True, separators=(",", ":"))
 
 
 def _scheduler_task_enabled(task_key: str) -> bool:
@@ -38,7 +101,10 @@ def _record_scheduler_result(task_key: str, result: Any) -> None:
     ok = status == "ok"
     error = ""
     if not ok:
-        error = str(payload.get("error") or payload.get("reason") or f"status={status or 'missing'}")[:240]
+        if task_key == "vkpi_ai_today_hot":
+            error = _ai_today_attempt_error(payload)
+        else:
+            error = str(payload.get("error") or payload.get("reason") or f"status={status or 'missing'}")[:240]
     _record_scheduler_run(task_key, ok=ok, error=error)
 
 

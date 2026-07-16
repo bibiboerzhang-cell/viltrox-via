@@ -45,12 +45,11 @@ def invoke_impl(
     ``require_runtime_verified`` remains accepted for API compatibility. Runtime
     verification is a hard production gate, so passing False does not disable it.
 
-    ``enforce_atomic_reservation`` is the migration boundary for strict
-    production callers.  It atomically reserves the monthly/provider allowance
-    before network I/O.  After the provider returns, the resolved response
-    contract is committed to the call ledger before the reservation is settled.
-    Legacy callers retain their previous behavior until migrated to
-    ``llm_production``.
+    ``enforce_atomic_reservation`` atomically reserves the monthly/provider
+    allowance before network I/O. The public gateway forces this flag in
+    production; focused tests and local evaluation remain explicit opt-ins.
+    After the provider returns, the resolved response contract is committed to
+    the call ledger before the reservation is settled.
     """
     # Resolve every dependency from the facade namespace at call time. This is
     # deliberate: callers and tests historically monkeypatch llm_gateway
@@ -72,6 +71,9 @@ def invoke_impl(
     _budget_allows_provider = namespace["_budget_allows_provider"]
     _record_budget_blocked_attempt = namespace["_record_budget_blocked_attempt"]
     _llm_budget_reservations = namespace["_llm_budget_reservations"]
+    _acquire_strict_fleet_breaker = namespace["_acquire_strict_fleet_breaker"]
+    _complete_strict_fleet_breaker = namespace["_complete_strict_fleet_breaker"]
+    _abandon_strict_fleet_breaker = namespace["_abandon_strict_fleet_breaker"]
     SINGLE_CALL_BUDGET_SCOPE = namespace["SINGLE_CALL_BUDGET_SCOPE"]
     _mark_reserved_attempt_unknown = namespace["_mark_reserved_attempt_unknown"]
     _record_reserved_provider_attempt = namespace["_record_reserved_provider_attempt"]
@@ -207,6 +209,37 @@ def invoke_impl(
             )
         return None
 
+    def _fleet_breaker_hard_stop(
+        *,
+        provider: str,
+        model: str,
+        reservation_key: str,
+        error_type: str,
+    ) -> dict[str, Any]:
+        reason = "fleet_breaker_store_unavailable_after_provider"
+        if reservation_key:
+            return _reserved_hard_stop(
+                provider=provider,
+                model=model,
+                reservation_key=reservation_key,
+                reason=reason,
+                error_type=error_type,
+            )
+        errors.append(
+            {
+                "provider": provider,
+                "model": model,
+                "status": reason,
+                "error": error_type,
+            }
+        )
+        return _rule_fallback(
+            safe_prompt,
+            purpose=purpose,
+            reason=reason,
+            errors=errors,
+        )
+
     candidates = _ordered_model_candidates(
         preferred_provider,
         model_override,
@@ -299,8 +332,9 @@ def invoke_impl(
             )
             continue
         reservation_key = ""
-        if enforce_atomic_reservation:
-            try:
+        breaker_permit = None
+        try:
+            if enforce_atomic_reservation:
                 reservation = _llm_budget_reservations().reserve_llm_budget(
                     provider=provider,
                     model=binding.model_id,
@@ -313,57 +347,79 @@ def invoke_impl(
                     triggered_by=triggered_by,
                 )
                 reservation_key = str(reservation.reservation_key or "")
+            breaker_permit = _acquire_strict_fleet_breaker(
+                provider=provider,
+                model=binding.model_id,
+                enforce_atomic_reservation=enforce_atomic_reservation,
+            )
+            if enforce_atomic_reservation:
                 # This committed state transition is the last operation before
                 # provider network I/O.
                 _llm_budget_reservations().mark_llm_provider_started(
                     reservation_key
                 )
-            except Exception as exc:  # noqa: BLE001 - fail closed before network
-                if reservation_key:
-                    try:
-                        _llm_budget_reservations().release_llm_reservation(
-                            reservation_key
-                        )
-                    except Exception:
-                        logger.error(
-                            "vkpi.llm_gateway.reservation_release_failed",
-                            extra={"reservation_key": reservation_key},
-                            exc_info=True,
-                        )
-                reason = str(getattr(exc, "reason", "") or type(exc).__name__)
-                blocked_scope = str(getattr(exc, "scope", "") or "")
-                record_call(
-                    provider=provider,
-                    model=binding.model_id,
-                    purpose=purpose,
-                    prompt=safe_prompt,
-                    status="budget_blocked",
-                    fallback_used=True,
-                    cost_tag=cost_scope or SINGLE_CALL_BUDGET_SCOPE,
-                    triggered_by=triggered_by,
-                    metadata={
-                        **(metadata or {}),
-                        "reservation_key": reservation_key,
-                        "reservation_reason": reason,
-                        "reservation_scope": blocked_scope,
-                        "estimated_cost_usd": estimated_cost,
-                        "resolved_model_binding": binding.to_dict(),
-                        "request_content_recorded": False,
-                    },
-                    staff=staff,
-                    update_budget_scopes=False,
-                    force_cost_ledger=True,
-                )
-                errors.append(
-                    {
-                        "provider": provider,
-                        "model": model_id,
-                        "status": "budget_blocked",
-                        "error": reason,
-                        "scope": blocked_scope,
-                    }
-                )
-                continue
+        except Exception as exc:  # noqa: BLE001 - fail closed before network
+            if breaker_permit is not None:
+                try:
+                    _abandon_strict_fleet_breaker(breaker_permit)
+                except Exception:
+                    logger.error(
+                        "vkpi.llm_gateway.fleet_breaker_abandon_failed",
+                        extra={"provider": provider, "model": binding.model_id},
+                        exc_info=True,
+                    )
+            if reservation_key:
+                try:
+                    _llm_budget_reservations().release_llm_reservation(
+                        reservation_key
+                    )
+                except Exception:
+                    logger.error(
+                        "vkpi.llm_gateway.reservation_release_failed",
+                        extra={"reservation_key": reservation_key},
+                        exc_info=True,
+                    )
+            reason = str(getattr(exc, "reason", "") or type(exc).__name__)
+            blocked_scope = str(getattr(exc, "scope", "") or "")
+            failure_reason = str(getattr(exc, "reason", "") or "")
+            blocked_status = (
+                failure_reason
+                if failure_reason.startswith("fleet_breaker_")
+                else "budget_blocked"
+            )
+            record_call(
+                provider=provider,
+                model=binding.model_id,
+                purpose=purpose,
+                prompt=safe_prompt,
+                status=blocked_status,
+                fallback_used=True,
+                cost_tag=cost_scope or SINGLE_CALL_BUDGET_SCOPE,
+                triggered_by=triggered_by,
+                metadata={
+                    **(metadata or {}),
+                    "reservation_key": reservation_key,
+                    "reservation_reason": reason,
+                    "reservation_scope": blocked_scope,
+                    "fleet_breaker_blocked": blocked_status.startswith("fleet_breaker_"),
+                    "estimated_cost_usd": estimated_cost,
+                    "resolved_model_binding": binding.to_dict(),
+                    "request_content_recorded": False,
+                },
+                staff=staff,
+                update_budget_scopes=not enforce_atomic_reservation,
+                force_cost_ledger=enforce_atomic_reservation,
+            )
+            errors.append(
+                {
+                    "provider": provider,
+                    "model": model_id,
+                    "status": blocked_status,
+                    "error": reason,
+                    "scope": blocked_scope,
+                }
+            )
+            continue
         try:
             if explicit_model:
                 raw_result = caller(
@@ -410,6 +466,23 @@ def invoke_impl(
                         error_type=type(audit_exc).__name__,
                     )
                 _mark_reserved_attempt_unknown(reservation_key)
+            try:
+                _complete_strict_fleet_breaker(breaker_permit, exc)
+            except Exception as breaker_exc:  # noqa: BLE001 - no second provider after state loss
+                logger.error(
+                    "vkpi.llm_gateway.fleet_breaker_completion_failed",
+                    extra={
+                        "provider": provider,
+                        "model": binding.model_id,
+                        "breaker_error_type": type(breaker_exc).__name__,
+                    },
+                )
+                return _fleet_breaker_hard_stop(
+                    provider=provider,
+                    model=model_id,
+                    reservation_key=reservation_key,
+                    error_type=type(breaker_exc).__name__,
+                )
             errors.append(
                 {
                     "provider": provider,
@@ -457,6 +530,15 @@ def invoke_impl(
                         error_type=type(audit_exc).__name__,
                     )
                 _mark_reserved_attempt_unknown(reservation_key)
+            try:
+                _complete_strict_fleet_breaker(breaker_permit, "invalid_response")
+            except Exception as breaker_exc:  # noqa: BLE001 - no second provider after state loss
+                return _fleet_breaker_hard_stop(
+                    provider=provider,
+                    model=model_id,
+                    reservation_key=reservation_key,
+                    error_type=type(breaker_exc).__name__,
+                )
             errors.append(
                 {
                     "provider": provider,
@@ -468,6 +550,23 @@ def invoke_impl(
             continue
         result = raw_result
         status = str(result.get("status") or "")
+        try:
+            _complete_strict_fleet_breaker(breaker_permit, result)
+        except Exception as breaker_exc:  # noqa: BLE001 - strict shared state is mandatory
+            logger.error(
+                "vkpi.llm_gateway.fleet_breaker_completion_failed",
+                extra={
+                    "provider": provider,
+                    "model": binding.model_id,
+                    "breaker_error_type": type(breaker_exc).__name__,
+                },
+            )
+            return _fleet_breaker_hard_stop(
+                provider=provider,
+                model=model_id,
+                reservation_key=reservation_key,
+                error_type=type(breaker_exc).__name__,
+            )
         result_in_tokens = _safe_int(result.get("input_tokens"))
         result_out_tokens = _safe_int(result.get("output_tokens"))
         actual_model = str(result.get("model") or "").strip()

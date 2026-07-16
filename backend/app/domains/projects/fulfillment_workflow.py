@@ -14,27 +14,56 @@ logger = get_logger(__name__)
 Step = tuple[str, Callable[[dict[str, Any]], dict[str, Any]]]
 
 
+def _require_fence() -> dict[str, Any]:
+    from app.domains.platform import workflow_engine
+
+    return workflow_engine.require_workflow_fence()
+
+
 def build_fulfillment_steps(staff: dict[str, Any] | None = None) -> list[Step]:
     """履约链 3 步(复用既有 service)。"""
 
     def s_logistics(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.logistics import seventeen_track
 
+        execution = _require_fence()
         r = seventeen_track.enqueue_logistics_sync_job(project_id=None, staff=staff)
-        return {"logistics_sync": {"status": r.get("status"), "reason": r.get("reason", "")}}
+        return {
+            "logistics_sync": {
+                "status": r.get("status"),
+                "reason": r.get("reason", ""),
+                "side_effect_key": execution["side_effect_key"],
+                "external_exactly_once": False,
+            }
+        }
 
     def s_delivered(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.projects import observation_windows
 
+        execution = _require_fence()
         r = observation_windows.scan_delivered_into_windows(staff)
-        return {"scan_delivered": {"opened": r.get("opened") or r.get("created") or 0, "scanned": r.get("scanned", 0)}}
+        return {
+            "scan_delivered": {
+                "opened": r.get("opened") or r.get("created") or 0,
+                "scanned": r.get("scanned", 0),
+                "side_effect_key": execution["side_effect_key"],
+                "external_exactly_once": False,
+            }
+        }
 
     def s_content(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.projects import observation_windows
 
+        execution = _require_fence()
         r = observation_windows.scan_windows_for_content(staff)
-        return {"scan_content": {"windows": r.get("windows_scanned") or r.get("scanned") or 0,
-                                 "candidates": r.get("candidates") or r.get("matched") or 0}}
+        return {
+            "scan_content": {
+                "windows": r.get("windows_scanned") or r.get("scanned") or 0,
+                "candidates": r.get("candidates") or r.get("matched") or 0,
+                "side_effect_key": execution["side_effect_key"],
+                "external_exactly_once": False,
+            }
+        }
 
     return [("logistics_sync", s_logistics), ("scan_delivered", s_delivered), ("scan_content", s_content)]
 

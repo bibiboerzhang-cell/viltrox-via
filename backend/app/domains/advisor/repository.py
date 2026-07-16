@@ -423,8 +423,15 @@ def list_messages(
         ") AS latest_messages ORDER BY id ASC",
         (*_scope_params(scope), _text(thread_uid, 80), _positive_limit(limit, default=100, maximum=500)),
     ).fetchall()
+    items = [_row_dict(row) for row in rows]
+    # Migration 268 is intentionally additive: existing conversation reads stay
+    # available before rollout, while upgraded environments receive current
+    # owner feedback in one bounded query (never one query per message).
+    from app.domains.advisor.repository_feedback import attach_feedback_to_messages
+
+    items = attach_feedback_to_messages(conn, scope, thread_uid, items)
     conn.commit()
-    return [_row_dict(row) for row in rows]
+    return items
 
 
 def _idempotent_turn(
@@ -679,3 +686,7 @@ from app.domains.advisor.repository_memory import (  # noqa: E402
     update_memory_fact,
     update_memory_settings,
 )
+
+# Feedback is a separate, additive persistence surface.  Keep the public
+# repository import stable for the router and tests.
+from app.domains.advisor.repository_feedback import submit_message_feedback  # noqa: E402

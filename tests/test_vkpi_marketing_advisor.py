@@ -628,10 +628,42 @@ def test_owner_scoped_bridge_excludes_other_users_and_non_normal_memory(advisor_
     assert "Owner creator" in serialized
     assert "restricted-owner-secret" not in serialized
     assert "other-user-secret" not in serialized
+    context_items = [item for item in result["evidence"] if item.get("kind") == "context_ref"]
+    assert context_items[0]["external_share_allowed"] is False
+    assert context_items[0]["verification_status"] == "unverified_entity_reference"
     assert all(
         item.get("external_share_allowed") is True
         for item in result["evidence"]
+        if item.get("kind") != "context_ref"
     )
+
+
+def test_current_turn_context_overrides_stale_thread_defaults(advisor_db) -> None:
+    scope = _scope(1, 11)
+    thread = repository.create_thread(
+        scope,
+        title="turn refs",
+        context_refs=[{
+            "entity_type": "kol",
+            "entity_id": "stale-kol",
+            "snapshot": {"label": "Stale creator"},
+        }],
+    )
+    result = intelligent_bridge.answer(
+        "Use this project",
+        scope,
+        thread_uid=thread["thread_uid"],
+        context_refs=[{
+            "entity_type": "project",
+            "entity_id": "current-project",
+            "snapshot": {"label": "Current project"},
+        }],
+    )
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "Current project" in serialized
+    assert "Stale creator" not in serialized
+    current = next(item for item in result["evidence"] if item.get("kind") == "context_ref")
+    assert current["external_share_allowed"] is False
 
 
 def _allowed_provider_plan() -> dict:

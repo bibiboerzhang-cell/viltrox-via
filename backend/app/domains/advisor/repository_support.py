@@ -235,7 +235,7 @@ def _row_dict(row: Any) -> dict[str, Any]:
             continue
         fallback: Any = [] if key == "context_refs_json" else {}
         item[key] = _json_loads(item.get(key), fallback=fallback)
-    for key in ("writes_business_data",):
+    for key in ("writes_business_data", "propose_memory"):
         if key in item:
             item[key] = bool(item.get(key))
     return item

@@ -16,8 +16,10 @@ vi.mock("../http", () => ({
 
 import {
   confirmAdvisorMemoryCandidate,
+  createAdvisorThread,
   listAdvisorThreads,
   postAdvisorMessage,
+  postAdvisorMessageFeedback,
   postAdvisorMessageStream,
   updateAdvisorMemorySettings,
 } from "./marketing-advisor-api";
@@ -63,6 +65,28 @@ describe("marketing advisor API contract", () => {
     });
   });
 
+  it("passes explicit entity context to thread creation and message turns", async () => {
+    const context = [{
+      entity_type: "kol" as const,
+      entity_id: "iti-jarve",
+      snapshot: { label: "ItiJarve", platform: "youtube" },
+      provenance: { source_ref: "explicit:test-context" },
+    }];
+    apiFetchMock
+      .mockResolvedValueOnce({ thread: { thread_uid: "advthr_context" } })
+      .mockResolvedValueOnce({ status: "degraded", messages: [] });
+
+    await createAdvisorThread("token", "Context thread", context);
+    await postAdvisorMessage("token", "advthr_context", "Analyze this creator", "request-context", false, context);
+
+    expect(JSON.parse(String(apiFetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      context_refs: context,
+    });
+    expect(JSON.parse(String(apiFetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      context_refs: context,
+    });
+  });
+
   it("sends external AI consent only when the caller explicitly opts in", async () => {
     apiFetchMock.mockResolvedValue({ status: "ok", messages: [] });
 
@@ -84,6 +108,12 @@ describe("marketing advisor API contract", () => {
     ));
     vi.stubGlobal("fetch", fetchMock);
     const events: string[] = [];
+    const context = [{
+      entity_type: "project" as const,
+      entity_id: "project-7",
+      snapshot: { label: "Launch 7" },
+      provenance: { source_ref: "explicit:stream-test" },
+    }];
 
     const result = await postAdvisorMessageStream(
       "token",
@@ -91,6 +121,7 @@ describe("marketing advisor API contract", () => {
       "请给建议",
       "request-stream-1",
       false,
+      context,
       (event) => events.push(event.type),
     );
 
@@ -106,7 +137,46 @@ describe("marketing advisor API contract", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({
       client_request_id: "request-stream-1",
       allow_external_ai: false,
+      context_refs: context,
     });
+  });
+
+  it("posts payload-bound assistant feedback without any training or activation flag", async () => {
+    apiFetchMock.mockResolvedValue({
+      status: "pending_confirmation",
+      feedback: { feedback_uid: "fb-1", rating: "unhelpful" },
+      candidate: { candidate_uid: "c-1", status: "pending" },
+      memory_active: false,
+      training_triggered: false,
+      weights_changed: false,
+    });
+
+    const result = await postAdvisorMessageFeedback(
+      "token",
+      "thread/1",
+      "message/1",
+      {
+        rating: "unhelpful",
+        correctionText: "Use verified overseas creators.",
+        proposeMemory: true,
+        clientRequestId: "feedback-request-1",
+      },
+    );
+
+    expect(apiFetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/admin/vkpi/marketing-advisor/threads/thread%2F1/messages/message%2F1/feedback",
+    );
+    expect(JSON.parse(String(apiFetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      rating: "unhelpful",
+      correction_text: "Use verified overseas creators.",
+      propose_memory: true,
+      context_refs: [],
+      provenance: {},
+      client_request_id: "feedback-request-1",
+    });
+    expect(result.memory_active).toBe(false);
+    expect(result.training_triggered).toBe(false);
+    expect(result.weights_changed).toBe(false);
   });
 
   it("uses escaped owner-scoped memory paths and omits an absent retention value", async () => {

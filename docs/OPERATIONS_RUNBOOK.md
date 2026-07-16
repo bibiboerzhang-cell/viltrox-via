@@ -278,6 +278,13 @@ snapshot is:
 scripts/ops/check_prod_snapshot_sync_status.sh
 ```
 
+This check now fails non-zero when launchd is loaded but the last run failed.
+On macOS, `runtime_status=permission_blocked` plus exit `126` means the launch
+agent cannot enter the protected `Documents` folder. Grant the launch-agent
+executable access to that folder, or move the scheduled wrapper outside the
+protected folder; then bootstrap and kickstart the agent again. A loaded plist
+alone is not backup evidence.
+
 By default this downloads only. It does not restore into a local DB.
 It also checks `vkpi-sync-daily.service` first and skips safely while the remote
 daily sync is `active` or `activating`. Override only for an intentional ops run:
@@ -296,6 +303,21 @@ scripts/ops/sync_prod_snapshot_to_local.sh
 ```
 
 Do not restore into production, and do not treat this as automatic two-way DB sync. Production remains the source of truth for runtime data.
+
+### Run a scheduler canary without provider-backed jobs
+
+Never start the full local scheduler merely to prove its process is alive. Use
+the strict registration allowlist and a zero-provider-cost task first:
+
+```bash
+VKPI_SCHEDULER_TASK_ALLOWLIST=scheduler_fire_stale_recovery \
+VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS=30 \
+bash scripts/run_scheduler_daemon.sh
+```
+
+Verify a `completed` row in `vkpi_scheduler_fire_claims`, then stop the canary.
+An empty, malformed, or unknown allowlist fails closed; omitting the variable
+preserves the normal full scheduler registry.
 
 ### Deploy local code to cloud
 

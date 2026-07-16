@@ -5,6 +5,7 @@ import {
   type BusinessIntegrationOperatorStatus,
   type BusinessIntegrationState,
 } from "../../../../services/vkpi/settings-api";
+import { ShopifyCompatibilityConnectWizard } from "./ShopifyCompatibilityConnectWizard";
 
 const STATE_LABEL: Record<BusinessIntegrationState, string> = {
   connected: "已验证",
@@ -36,7 +37,7 @@ const QUALITY_LABEL: Record<string, string> = {
 };
 
 const ACTION_LABEL: Record<string, string> = {
-  shopify: "打开 Shopify 授权",
+  shopify: "打开 Shopify 授权接入",
   dealers: "打开 Dealers",
   inventory: "打开库存管理",
   costs: "打开 SKU 成本",
@@ -46,7 +47,7 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 const EVIDENCE_FIELDS: Record<string, Array<[string, string]>> = {
-  shopify: [["orders", "订单"], ["successful_sync_runs", "成功同步"]],
+  shopify: [["orders", "订单"], ["native_webhook_snapshots", "HMAC 快照"], ["successful_sync_runs", "成功同步"]],
   dealers: [
     ["address_complete", "地址"],
     ["contact_complete", "联系方式"],
@@ -80,7 +81,7 @@ export function SettingsBusinessIntegrationsPanel({
   const [error, setError] = React.useState("");
   const [expandedDiagnostic, setExpandedDiagnostic] = React.useState("");
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (throwOnError = false) => {
     if (!apiToken) {
       setError("缺少 API token，无法读取真实业务接口状态。");
       return;
@@ -93,6 +94,7 @@ export function SettingsBusinessIntegrationsPanel({
       setGeneratedAt(String(payload?.generated_at || ""));
     } catch (err) {
       setError(err instanceof Error ? err.message : "真实业务接口状态读取失败");
+      if (throwOnError) throw err;
     } finally {
       setLoading(false);
     }
@@ -103,15 +105,15 @@ export function SettingsBusinessIntegrationsPanel({
   }, [load]);
 
   const openCard = (key: string) => {
-    if (key === "r2") {
-      setExpandedDiagnostic((current) => current === "r2" ? "" : "r2");
+    if (key === "r2" || key === "shopify") {
+      setExpandedDiagnostic((current) => current === key ? "" : key);
       return;
     }
     if (key === "costs") {
       onOpenCostModule?.();
       return;
     }
-    if (key === "shopify" || key === "dealers") {
+    if (key === "dealers") {
       onOpenArea?.(key);
       return;
     }
@@ -137,7 +139,7 @@ export function SettingsBusinessIntegrationsPanel({
       <div className="vkpi-settings-card-grid">
         {cards.map((card) => {
           const metrics = EVIDENCE_FIELDS[card.key] || [];
-          const actionAvailable = card.key === "r2" || (card.key === "costs" ? Boolean(onOpenCostModule) : Boolean(onOpenArea));
+          const actionAvailable = card.key === "r2" || card.key === "shopify" || (card.key === "costs" ? Boolean(onOpenCostModule) : Boolean(onOpenArea));
           return (
             <article className={`vkpi-settings-toggle-card ${card.state === "connected" ? "is-on" : "is-off"}`} key={card.key}>
               <header>
@@ -157,11 +159,18 @@ export function SettingsBusinessIntegrationsPanel({
                   className="vkpi-mini-button"
                   type="button"
                   onClick={() => openCard(card.key)}
-                  aria-expanded={card.key === "r2" ? expandedDiagnostic === "r2" : undefined}
-                  aria-controls={card.key === "r2" ? "vkpi-r2-safe-diagnostic" : undefined}
+                  aria-expanded={card.key === "r2" || card.key === "shopify" ? expandedDiagnostic === card.key : undefined}
+                  aria-controls={card.key === "r2" ? "vkpi-r2-safe-diagnostic" : card.key === "shopify" ? "vkpi-shopify-compatibility-connect" : undefined}
                 >
                   {ACTION_LABEL[card.key] || "打开入口"}
                 </button>
+              ) : null}
+              {card.key === "shopify" && expandedDiagnostic === "shopify" ? (
+                <ShopifyCompatibilityConnectWizard
+                  apiToken={apiToken}
+                  onOpenDataPage={onOpenArea ? () => onOpenArea("shopify") : undefined}
+                  onRefreshStatus={() => load(true)}
+                />
               ) : null}
               {card.key === "r2" && expandedDiagnostic === "r2" ? (
                 <div id="vkpi-r2-safe-diagnostic" role="region" aria-label="R2 安全诊断与配置说明" className="vkpi-inline-message">

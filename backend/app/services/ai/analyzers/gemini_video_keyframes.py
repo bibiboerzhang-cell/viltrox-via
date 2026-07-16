@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL, is_selectable_model
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
 try:
     from google.genai import types as genai_types
@@ -236,7 +237,7 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
     keyframes: list[dict[str, Any]],
     title: str,
     performance_context: dict[str, Any] | None = None,
-    model_name: str = "claude-opus-4-8",
+    model_name: str = CLAUDE_OPUS_EXACT_MODEL,
 ) -> dict[str, Any]:
     """Judge Layer2+3 from Layer1 text plus keyframe JPGs using Claude vision."""
     result = {
@@ -246,6 +247,12 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
         "usage_metadata": {},
         "error": None,
     }
+    if not is_selectable_model(f"anthropic/{model_name}"):
+        result["error"] = (
+            "Anthropic model must be an exact id registered in model_registry: "
+            f"{model_name or '<empty>'}"
+        )
+        return result
     api_key = llm_gateway._get_api_key("anthropic")
     if not api_key:
         result["error"] = "Anthropic not available"

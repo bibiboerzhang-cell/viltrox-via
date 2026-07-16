@@ -27,6 +27,8 @@ class _FakeConn:
             return _Cursor({"n": 0})
         if "COUNT(*) AS n FROM vkpi_shopify_orders" in normalized:
             return _Cursor({"n": self.shopify_orders})
+        if "COUNT(*) AS n FROM vkpi_shopify_order_snapshots" in normalized:
+            return _Cursor({"n": 0})
         if "COUNT(*) AS n FROM vkpi_dealers" in normalized:
             if "authorization_status" in normalized:
                 return _Cursor({"n": 0})

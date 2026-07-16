@@ -152,7 +152,9 @@ export function ShopifyBoardPage({ apiToken = "", embeddedModuleKey }: { apiToke
       ? "未配置 · 设置 → 联盟营销"
       : srcNote(trackResp.error);
   // ④ 直连订单:店铺凭据未配置 → pending 注明缺配置;已配置 → 订单台账 GMV(美分→美元)
-  const directConfigured = statusResp.data?.provider_status === "configured";
+  const directConfigured = ["configured", "connected"].includes(
+    String(statusResp.data?.provider_status || ""),
+  );
   const directUsd = directConfigured && gmvResp.data ? (centsToUsd(gmvResp.data.order_ledger_gmv_cents ?? 0) ?? 0) : null;
   const directNote = statusResp.error
     ? `读取失败:${statusResp.error}`

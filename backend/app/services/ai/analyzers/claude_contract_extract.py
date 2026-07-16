@@ -13,11 +13,27 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logging import get_logger
-from app.platform import llm_gateway
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL, is_selectable_model
+from app.core.model_pricing import estimate_cost_usd
+from app.platform import llm_gateway, llm_production
 
 
 logger = get_logger(__name__)
-DEFAULT_CONTRACT_MODEL = os.getenv("VKPI_CONTRACT_CLAUDE_MODEL", "claude-opus-4-8")
+
+
+def _registered_anthropic_model(model_name: str | None) -> str:
+    model = str(model_name or "").strip()
+    if not is_selectable_model(f"anthropic/{model}"):
+        raise RuntimeError(
+            "Anthropic model must be an exact id registered in model_registry: "
+            f"{model or '<empty>'}"
+        )
+    return model
+
+
+DEFAULT_CONTRACT_MODEL = _registered_anthropic_model(
+    os.getenv("VKPI_CONTRACT_CLAUDE_MODEL", CLAUDE_OPUS_EXACT_MODEL)
+)
 
 
 def _json_loads(text: str) -> dict[str, Any]:
@@ -108,16 +124,11 @@ def estimate_contract_extract_cost(file_size_bytes: int, *, prompt_chars: int = 
 def _anthropic_cost_usd(model: str, usage: dict[str, Any]) -> float:
     tokens_in = int(usage.get("input_tokens") or 0)
     tokens_out = int(usage.get("output_tokens") or 0)
-    model_key = str(model or "").lower()
-    if "opus" in model_key:
-        return round(((tokens_in * 15.0) + (tokens_out * 75.0)) / 1_000_000, 6)
-    config = llm_gateway.PROVIDER_CONFIG.get("anthropic") or {}
-    input_cents = float(config.get("input_cents_per_million") or 0)
-    output_cents = float(config.get("output_cents_per_million") or 0)
-    return round(((tokens_in * input_cents) + (tokens_out * output_cents)) / 100_000_000, 6)
+    return round(estimate_cost_usd(model, tokens_in, tokens_out), 6)
 
 
 def extract_contract_pdf(pdf_path: str, *, context: dict[str, Any] | None = None, model_name: str = DEFAULT_CONTRACT_MODEL) -> dict[str, Any]:
+    model_name = _registered_anthropic_model(model_name)
     api_key = llm_gateway._get_api_key("anthropic")
     if not api_key:
         raise RuntimeError("missing ANTHROPIC_API_KEY")
@@ -133,9 +144,14 @@ def extract_contract_pdf(pdf_path: str, *, context: dict[str, Any] | None = None
     prompt = _contract_prompt(context)
     client = anthropic.Anthropic(api_key=api_key)
     started = time.monotonic()
-    response = client.messages.create(
+    response = llm_production.generate_anthropic_messages(
+        client=client,
         model=model_name,
-        max_tokens=4000,
+        purpose="project_contract_extract",
+        max_output_tokens=4000,
+        cost_tag="projects:contract_extract",
+        triggered_by="project_contract_extract_worker",
+        metadata={"task_binding": "contract_pdf_extract"},
         messages=[
             {
                 "role": "user",
@@ -173,6 +189,7 @@ def extract_contract_pdf_with_timeout(
     model_name: str = DEFAULT_CONTRACT_MODEL,
     timeout_sec: int = 120,
 ) -> dict[str, Any]:
+    model_name = _registered_anthropic_model(model_name)
     backend_root = Path(__file__).resolve().parents[4]
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{backend_root}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)

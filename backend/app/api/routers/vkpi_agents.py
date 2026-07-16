@@ -230,6 +230,18 @@ def agent_cycle_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, An
     return agent_cycle_workflow.start_agent_cycle(staff)
 
 
+@router.post("/cycle/{run_id}/resume")
+def agent_cycle_resume(
+    run_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    """Resume the same failed, paused, or lease-expired Agent cycle run."""
+
+    from app.domains.actions import agent_cycle_workflow
+
+    return agent_cycle_workflow.resume_agent_cycle(int(run_id), staff)
+
+
 @router.get("/workflow/{run_id}")
 def workflow_run(run_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """P2 · Durable Workflow:读一个 run 的状态 + 各 step(可观测每步为什么/到哪了)。"""

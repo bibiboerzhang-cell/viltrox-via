@@ -12,19 +12,19 @@ WORKER_CLUSTER_TIER="${WORKER_CLUSTER_TIER:-60}"
 case "$WORKER_CLUSTER_TIER" in
   60)
     PROFILE_PROCESSES=4
-    PROFILE_CONSUMERS=15
+    PROFILE_CONSUMERS=2
     ;;
   120)
     PROFILE_PROCESSES=8
-    PROFILE_CONSUMERS=15
+    PROFILE_CONSUMERS=2
     ;;
   300)
     PROFILE_PROCESSES=20
-    PROFILE_CONSUMERS=15
+    PROFILE_CONSUMERS=2
     ;;
   custom)
     PROFILE_PROCESSES="${WORKER_SERVICE_PROCESSES:-2}"
-    PROFILE_CONSUMERS="${WORKER_ASYNC_CONSUMERS:-15}"
+    PROFILE_CONSUMERS="${WORKER_ASYNC_CONSUMERS:-2}"
     ;;
   *)
     echo "Unsupported WORKER_CLUSTER_TIER=$WORKER_CLUSTER_TIER. Use 60, 120, 300, or custom." >&2
@@ -38,6 +38,22 @@ if [[ "$WORKER_CLUSTER_TIER" == "custom" ]]; then
 else
   WORKER_SERVICE_PROCESSES="$PROFILE_PROCESSES"
   WORKER_ASYNC_CONSUMERS="$PROFILE_CONSUMERS"
+fi
+
+# Keep the launcher and worker runtime on the same reviewed concurrency
+# contract.  The worker deliberately rejects the historical 15-consumer
+# setting, so fail before spawning detached processes instead of leaving a
+# stale pidfile and a briefly green heartbeat from the previous worker.
+REDIS_CONSUMER_HARD_MAX="${VKPI_REDIS_WORKER_MAX_CONSUMERS:-2}"
+if [[ ! "$WORKER_SERVICE_PROCESSES" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$WORKER_ASYNC_CONSUMERS" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$REDIS_CONSUMER_HARD_MAX" =~ ^[1-4]$ ]]; then
+  echo "invalid Redis worker process/concurrency configuration" >&2
+  exit 2
+fi
+if (( WORKER_ASYNC_CONSUMERS > REDIS_CONSUMER_HARD_MAX )); then
+  echo "WORKER_ASYNC_CONSUMERS=$WORKER_ASYNC_CONSUMERS exceeds reviewed hard max $REDIS_CONSUMER_HARD_MAX" >&2
+  exit 2
 fi
 
 mkdir -p "$RUNTIME_LOGS"

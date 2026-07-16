@@ -25,14 +25,23 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import APP_ROLE, MIGRATION_RUNNER_APP_ROLE, VIA_ENABLE_DAILY_LEARNING
 from app.core.logging import get_logger
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.services.scheduler.fleet_guard import (
     SchedulerFleetController,
     SchedulerLeaderLease,
     guard_scheduled_callable,
-    recover_stale_scheduled_fires,
     scheduled_fire_context,
     scheduler_instance_id,
 )
+from app.services.scheduler.jobs_fire_recovery import (
+    scheduler_fire_recovery_interval_seconds,
+    job_scheduler_fire_stale_recovery,
+)
+from app.services.scheduler.registration_policy import (
+    enforce_scheduler_task_allowlist,
+    scheduler_task_allowlist,
+)
+from app.services.scheduler import run_now as scheduler_run_now
 
 logger = get_logger(__name__)
 _SCHEDULER_INSTANCE_ID = scheduler_instance_id()
@@ -123,6 +132,12 @@ try:
 
         def add_job(self, func: Any, trigger: Any = None, *args: Any, **kwargs: Any):
             task_key = str(kwargs.get("id") or getattr(func, "__name__", "scheduled_job"))
+            allowlist = scheduler_task_allowlist()
+            if allowlist is not None and task_key not in allowlist:
+                filtered = getattr(self, "_vkpi_filtered_task_ids", [])
+                filtered.append(task_key)
+                self._vkpi_filtered_task_ids = filtered
+                return None
             guarded = guard_scheduled_callable(
                 task_key,
                 func,
@@ -211,37 +226,15 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_vkpi_weekly_report,
     job_worker_lease_expire_stale,
 )
+from app.services.scheduler.jobs_workflow_recovery import (  # noqa: F401
+    job_vkpi_workflow_recovery,
+    workflow_auto_recovery_enabled,
+    workflow_scheduled_execution_enabled,
+)
 from app.services.scheduler.jobs_pool_dedupe import job_kol_pool_dedupe_reconcile  # noqa: F401
 from app.services.scheduler.jobs_tasks_events import job_vkpi_dealer_activity_candidate_sync  # noqa: F401
 from app.services.scheduler.jobs_tasks_products import job_vkpi_official_catalog_sync  # noqa: F401
 from app.services.monitoring.runtime import job_runtime_metrics_snapshot  # noqa: F401
-
-
-def _scheduler_fire_recovery_interval_seconds() -> int:
-    raw = str(os.environ.get("VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS") or "60").strip()
-    try:
-        seconds = int(raw)
-    except ValueError as exc:
-        raise RuntimeError(
-            "VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS must be an integer"
-        ) from exc
-    if seconds < 30 or seconds > 3600:
-        raise RuntimeError(
-            "VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS must be between 30 and 3600"
-        )
-    return seconds
-
-
-def job_scheduler_fire_stale_recovery() -> dict[str, Any]:
-    """Fail-closed stale-fire reconciliation; never replays the original fire."""
-
-    recovered = recover_stale_scheduled_fires(_SCHEDULER_INSTANCE_ID)
-    return {
-        "status": "ok",
-        "recovered_total": len(recovered),
-        "automatic_replay": False,
-        "claim_ids": [item.claim_id for item in recovered],
-    }
 
 
 # ──────────────────────────────────────────────
@@ -402,24 +395,36 @@ async def _start_scheduler_local() -> None:
     )
 
     # ── Job 7c: workflow_runs 事实源·每日自动起 durable 履约 sweep + Agent 建议链 ──
-    _scheduler.add_job(
-        job_vkpi_fulfillment_sweep,
-        trigger=CronTrigger(hour=5, minute=10),
-        id="vkpi_fulfillment_sweep",
-        name="Daily durable fulfillment sweep (workflow_runs)",
-        max_instances=1,
-        coalesce=True,
-    )
-    _scheduler.add_job(
-        job_vkpi_agent_cycle,
-        trigger=CronTrigger(hour=5, minute=30, timezone=CHINA_TZ),
-        id="vkpi_agent_cycle",
-        name="Daily durable agent suggestion cycle (workflow_runs)",
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=3600,
-    )
-
+    # These callbacks may resume failed/paused runs.  Until they have a capped
+    # retry/DLQ policy and every external sink is idempotent, scheduling them
+    # is an explicit opt-in rather than a default production behavior.
+    if workflow_scheduled_execution_enabled():
+        _scheduler.add_job(
+            job_vkpi_fulfillment_sweep,
+            trigger=CronTrigger(hour=5, minute=10),
+            id="vkpi_fulfillment_sweep",
+            name="Daily durable fulfillment sweep (workflow_runs)",
+            max_instances=1,
+            coalesce=True,
+        )
+        _scheduler.add_job(
+            job_vkpi_agent_cycle,
+            trigger=CronTrigger(hour=5, minute=30, timezone=CHINA_TZ),
+            id="vkpi_agent_cycle",
+            name="Daily durable agent suggestion cycle (workflow_runs)",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+    # Automatic recovery is deliberately opt-in. Workflow DB state is fenced,
+    # but external callback effects are not all exactly-once and failed runs do
+    # not yet have a capped retry/dead-letter policy.
+    if workflow_auto_recovery_enabled():
+        _scheduler.add_job(
+            job_vkpi_workflow_recovery, trigger=IntervalTrigger(minutes=5),
+            id="vkpi_workflow_recovery", max_instances=1, coalesce=True,
+            misfire_grace_time=300,
+        )
     # ── Job 7d: Bet Ledger 到期复盘催办(每日;06:00 中国,对齐同文件其他 job 的时区口径) ──
     _scheduler.add_job(
         job_vkpi_bet_review_due,
@@ -869,12 +874,23 @@ async def _start_scheduler_local() -> None:
     # planned-fire wrapper, bounded per pass, and never replays old side effects.
     _scheduler.add_job(
         job_scheduler_fire_stale_recovery,
-        trigger=IntervalTrigger(seconds=_scheduler_fire_recovery_interval_seconds()),
+        trigger=IntervalTrigger(seconds=scheduler_fire_recovery_interval_seconds()),
         id="scheduler_fire_stale_recovery",
         name="Terminalize provably stale scheduler fires without replay",
         max_instances=1,
         coalesce=True,
     )
+
+    try:
+        allowlist_summary = enforce_scheduler_task_allowlist(_scheduler)
+    except RuntimeError:
+        _scheduler = None
+        raise
+    if allowlist_summary is not None:
+        logger.info(
+            "scheduler.registration_allowlist_applied",
+            extra=allowlist_summary,
+        )
 
     _scheduler.start()
 
@@ -961,37 +977,23 @@ async def stop_scheduler() -> None:
             await asyncio.gather(monitor_task, return_exceptions=True)
 
 
+def trigger_job_now(job_id: str) -> dict[str, Any]:
+    return scheduler_run_now.trigger_from_jobs_module(sys.modules[__name__], job_id)
+def _scheduler_run_request_storage_status() -> tuple[bool, str]:
+    return scheduler_run_now.storage_from_jobs_module(sys.modules[__name__])
+
+
+def enqueue_job_run_request(
+    job_id: str,
+    *,
+    requested_by: int | None = None,
+) -> dict[str, Any]:
+    return scheduler_run_now.enqueue_from_jobs_module(
+        sys.modules[__name__], job_id, requested_by
+    )
+
+
+def dispatch_queued_run_requests(*, limit: int = 10) -> dict[str, Any]:
+    return scheduler_run_now.dispatch_from_jobs_module(sys.modules[__name__], limit)
 def get_scheduler_status() -> dict:
-    """状态查询"""
-    fleet = _fleet_controller.status() if _fleet_controller is not None else {
-        "identity": _SCHEDULER_INSTANCE_ID,
-        "is_leader": False,
-        "backend": "not_started",
-    }
-    if _scheduler is None:
-        return {
-            "running": False,
-            "jobs": [],
-            "available": _APSCHEDULER_AVAILABLE,
-            "fleet": fleet,
-        }
-    
-    jobs = []
-    for job in _scheduler.get_jobs():
-        next_run = job.next_run_time.isoformat() if job.next_run_time else None
-        jobs.append({
-            "id": job.id,
-            "name": job.name,
-            "next_run": next_run,
-        })
-    
-    return {
-        "running": _scheduler.running,
-        "jobs": jobs,
-        "available": _APSCHEDULER_AVAILABLE,
-        "fleet": fleet,
-    }
-
-
-# 修复一个 import (上面用了 Any 但没 import)
-from typing import Any  # noqa: E402
+    return scheduler_run_now.status_from_jobs_module(sys.modules[__name__])

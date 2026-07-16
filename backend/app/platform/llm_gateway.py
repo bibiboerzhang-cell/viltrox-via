@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 from app.core.config import CLAUDE_MODEL, IS_PRODUCTION
 from app.core.logging import get_logger
+from app.core.model_registry import assert_production_task_bindings_are_pinned
 from app.db.connection import get_conn
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.platform.llm_runtime_errors import (
@@ -43,6 +44,62 @@ def _llm_budget_reservations() -> Any:
     return llm_budget_reservations
 
 
+def _llm_fleet_breaker() -> Any:
+    """Lazy import for the PostgreSQL fleet-wide LLM circuit breaker."""
+
+    from app.platform import llm_fleet_breaker
+
+    return llm_fleet_breaker
+
+
+def _strict_fleet_breaker_enabled(enforce_atomic_reservation: bool) -> bool:
+    """Production cannot disable the shared breaker; tests/staging opt in.
+
+    ``enforce_atomic_reservation`` remains in the signature because gateway
+    callers pass it through with the spend-boundary context.  Breaker coverage
+    is deliberately independent of that migration flag: legacy production
+    calls must not bypass the fleet health boundary.
+    """
+
+    opt_in = os.environ.get("VKPI_LLM_FLEET_BREAKER_ENABLED", "").strip().lower()
+    _ = enforce_atomic_reservation
+    return bool(IS_PRODUCTION or opt_in in {"1", "true", "yes", "on"})
+
+
+def _strict_atomic_reservation_enabled(requested: bool) -> bool:
+    """Force the atomic spend boundary in production.
+
+    Non-production callers keep the explicit opt-in used by focused tests and
+    local evaluation. Production has no call-site or environment opt-out: a
+    legacy caller that omits the flag is upgraded before any provider attempt.
+    """
+
+    return bool(IS_PRODUCTION or requested)
+
+
+def _acquire_strict_fleet_breaker(
+    *,
+    provider: str,
+    model: str,
+    enforce_atomic_reservation: bool,
+) -> Any | None:
+    if not _strict_fleet_breaker_enabled(enforce_atomic_reservation):
+        return None
+    return _llm_fleet_breaker().begin_fleet_breaker_session(provider, model)
+
+
+def _complete_strict_fleet_breaker(permit: Any | None, outcome: Any) -> None:
+    if permit is None:
+        return
+    permit.complete(outcome)
+
+
+def _abandon_strict_fleet_breaker(permit: Any | None) -> None:
+    if permit is None:
+        return
+    permit.abandon()
+
+
 def resolve_staff_id(staff: Any) -> Any:
     """Lazy import wrapper for app.domains.projects.workflow.staff_id(防顶层倒挂)。"""
     from app.domains.projects.workflow import staff_id as _staff_id
@@ -51,6 +108,11 @@ def resolve_staff_id(staff: Any) -> Any:
 
 
 logger = get_logger(__name__)
+
+if IS_PRODUCTION:
+    # Workers import this module without entering FastAPI's lifespan.  Validate
+    # the same task-binding invariant at that process boundary too.
+    assert_production_task_bindings_are_pinned()
 
 PROVIDER_ORDER = ("openai", "google", "anthropic", "rule_v0")
 SINGLE_CALL_BUDGET_SCOPE = "single_call"
@@ -735,7 +797,9 @@ def invoke(
         triggered_by=triggered_by,
         metadata=metadata,
         staff=staff,
-        enforce_atomic_reservation=enforce_atomic_reservation,
+        enforce_atomic_reservation=_strict_atomic_reservation_enabled(
+            enforce_atomic_reservation
+        ),
         namespace=globals(),
     )
 

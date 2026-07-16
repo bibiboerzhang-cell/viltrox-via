@@ -14,107 +14,15 @@ from typing import Any
 
 from app.core.model_registry import current_task_model_binding
 from app.platform import llm_gateway
-
-
-# Task bindings are only inferred where ``purpose`` is an unambiguous alias of
-# one reviewed registry binding.  Generic production calls keep their purpose
-# visible without pretending that they use one of the 13 task bindings.
-_PURPOSE_TASK_BINDINGS = {
-    "audit_deep_score": "audit_deep_score",
-    "audit_video_analysis": "audit_video_analysis",
-    "audit_vision_fallback": "audit_vision_fallback",
-    "audit_pre_filter": "audit_pre_filter",
-    "trust_anomaly": "audit_pre_filter",
-    "marketing_advisor": "via_chat",
-    "via_dialogue": "via_chat",
-}
-
-
-def _progress_metadata(
-    purpose: str,
-    metadata: dict[str, Any] | None,
-    *,
-    phase: str,
-) -> dict[str, Any]:
-    """Return complete, bounded progress correlation for strict calls.
-
-    Call sites may provide richer business correlation (job, KOL, project or
-    thread identifiers).  The strict boundary owns the mechanical defaults so
-    a newly migrated call cannot silently lose its phase/attempt display.  This
-    helper changes telemetry only; readiness, budget and provider gates remain
-    owned by the gateway.
-    """
-
-    clean_purpose = str(purpose or "").strip()
-    out = dict(metadata) if isinstance(metadata, dict) else {}
-    if not str(out.get("task_binding") or "").strip():
-        inferred = _PURPOSE_TASK_BINDINGS.get(clean_purpose)
-        if inferred:
-            out["task_binding"] = inferred
-    if not str(out.get("phase") or "").strip():
-        out["phase"] = phase
-    if not str(out.get("subphase") or "").strip():
-        out["subphase"] = "provider_generation"
-    if not isinstance(out.get("attempt_index"), int) or isinstance(
-        out.get("attempt_index"), bool
-    ) or int(out.get("attempt_index") or 0) <= 0:
-        out["attempt_index"] = 1
-    if not isinstance(out.get("attempt_total"), int) or isinstance(
-        out.get("attempt_total"), bool
-    ) or int(out.get("attempt_total") or 0) <= 0:
-        legacy_total = out.get("total")
-        out["attempt_total"] = (
-            int(legacy_total)
-            if isinstance(legacy_total, int)
-            and not isinstance(legacy_total, bool)
-            and legacy_total > 0
-            else 1
-        )
-    if not str(out.get("target_label") or "").strip() and clean_purpose:
-        out["target_label"] = clean_purpose[:160]
-    return out
-
-
-class ProductionLlmUnavailable(RuntimeError):
-    """Safe, bounded failure raised when strict production generation degrades."""
-
-    def __init__(self, result: dict[str, Any]) -> None:
-        failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
-        code = str(
-            failure.get("code")
-            or result.get("failure_code")
-            or result.get("reason")
-            or "provider_unavailable"
-        )[:120]
-        super().__init__(code)
-        self.code = code
-        self.result = result
-
-
-from app.platform.llm_production_anthropic_helpers import (  # noqa: E402
+from app.platform.llm_production_common import (
+    ProductionLlmUnavailable,
+    progress_metadata as _progress_metadata,
+    sdk_failure as _sdk_failure,
+)
+from app.platform.llm_production_anthropic_helpers import (
     anthropic_input_token_estimate as _anthropic_input_token_estimate,
     anthropic_messages_fingerprint as _anthropic_messages_fingerprint,
 )
-
-
-def _sdk_failure(
-    code: str,
-    *,
-    provider: str,
-    model: str,
-    purpose: str,
-    details: dict[str, Any] | None = None,
-) -> ProductionLlmUnavailable:
-    return ProductionLlmUnavailable(
-        {
-            "status": "blocked",
-            "provider": provider,
-            "model": model,
-            "purpose": purpose,
-            "failure": {"code": str(code or "provider_unavailable")},
-            **(details or {}),
-        }
-    )
 
 
 def generate_anthropic_messages(
@@ -231,6 +139,7 @@ def generate_anthropic_messages(
     estimated_cost = float(estimated_micro) / 1_000_000
     cost_scope = llm_gateway._cost_scope_for_purpose(exact_purpose, cost_tag)
     reservation_key = ""
+    breaker_session = None
     try:
         reservation = llm_gateway._llm_budget_reservations().reserve_llm_budget(
             provider=provider,
@@ -249,10 +158,24 @@ def generate_anthropic_messages(
             triggered_by=triggered_by,
         )
         reservation_key = str(reservation.reservation_key or "")
+        breaker_session = llm_gateway._acquire_strict_fleet_breaker(
+            provider=provider,
+            model=exact_model,
+            enforce_atomic_reservation=True,
+        )
         llm_gateway._llm_budget_reservations().mark_llm_provider_started(
             reservation_key
         )
     except Exception as exc:
+        if breaker_session is not None:
+            try:
+                llm_gateway._abandon_strict_fleet_breaker(breaker_session)
+            except Exception:
+                llm_gateway.logger.error(
+                    "vkpi.llm_production.breaker_abandon_failed_before_provider",
+                    extra={"provider": provider, "model": exact_model},
+                    exc_info=True,
+                )
         if reservation_key:
             try:
                 llm_gateway._llm_budget_reservations().release_llm_reservation(
@@ -302,7 +225,14 @@ def generate_anthropic_messages(
             max_tokens=max_output_tokens,
             messages=messages,
         )
-    except Exception:
+    except Exception as provider_exc:
+        breaker_completion_error: Exception | None = None
+        try:
+            llm_gateway._complete_strict_fleet_breaker(
+                breaker_session, provider_exc
+            )
+        except Exception as exc:  # shared health state is a hard boundary
+            breaker_completion_error = exc
         try:
             llm_gateway.record_call(
                 provider=provider,
@@ -338,6 +268,13 @@ def generate_anthropic_messages(
             )
         finally:
             llm_gateway._mark_reserved_attempt_unknown(reservation_key)
+        if breaker_completion_error is not None:
+            raise _sdk_failure(
+                "fleet_breaker_store_unavailable_after_provider",
+                provider=provider,
+                model=exact_model,
+                purpose=exact_purpose,
+            ) from breaker_completion_error
         raise
 
     usage = getattr(response, "usage", None)
@@ -353,6 +290,19 @@ def generate_anthropic_messages(
         status = "model_mismatch"
     elif input_tokens <= 0 or output_tokens <= 0:
         status = "usage_missing"
+    try:
+        llm_gateway._complete_strict_fleet_breaker(
+            breaker_session,
+            {"status": status},
+        )
+    except Exception as exc:
+        llm_gateway._mark_reserved_attempt_unknown(reservation_key)
+        raise _sdk_failure(
+            "fleet_breaker_store_unavailable_after_provider",
+            provider=provider,
+            model=exact_model,
+            purpose=exact_purpose,
+        ) from exc
     actual_micro = (
         llm_gateway._estimate_cost_micro_usd(
             provider,
@@ -565,6 +515,7 @@ def generate_google_content(
     estimated_cost = max(0.000001, float(estimated_micro) / 1_000_000)
     cost_scope = llm_gateway._cost_scope_for_purpose(exact_purpose, cost_tag)
     reservation_key = ""
+    breaker_session = None
     try:
         reservation = llm_gateway._llm_budget_reservations().reserve_llm_budget(
             provider=provider,
@@ -584,7 +535,32 @@ def generate_google_content(
             triggered_by=triggered_by,
         )
         reservation_key = str(reservation.reservation_key or "")
+        breaker_session = llm_gateway._acquire_strict_fleet_breaker(
+            provider=provider,
+            model=exact_model,
+            enforce_atomic_reservation=True,
+        )
     except Exception as exc:
+        if breaker_session is not None:
+            try:
+                llm_gateway._abandon_strict_fleet_breaker(breaker_session)
+            except Exception:
+                llm_gateway.logger.error(
+                    "vkpi.llm_production.google_breaker_abandon_failed_during_gate",
+                    extra={"provider": provider, "model": exact_model},
+                    exc_info=True,
+                )
+        if reservation_key:
+            try:
+                llm_gateway._llm_budget_reservations().release_llm_reservation(
+                    reservation_key
+                )
+            except Exception:
+                llm_gateway.logger.error(
+                    "vkpi.llm_production.google_reservation_release_failed_during_gate",
+                    extra={"reservation_key": reservation_key},
+                    exc_info=True,
+                )
         reason = str(getattr(exc, "reason", "") or type(exc).__name__)
         llm_gateway.record_call(
             provider=provider,
@@ -625,6 +601,15 @@ def generate_google_content(
             reservation_key
         )
     except Exception as exc:
+        if breaker_session is not None:
+            try:
+                llm_gateway._abandon_strict_fleet_breaker(breaker_session)
+            except Exception:
+                llm_gateway.logger.error(
+                    "vkpi.llm_production.google_breaker_abandon_failed_before_provider",
+                    extra={"provider": provider, "model": exact_model},
+                    exc_info=True,
+                )
         released = False
         try:
             released = bool(
@@ -657,7 +642,14 @@ def generate_google_content(
             contents=contents,
             config=provider_config,
         )
-    except Exception:
+    except Exception as provider_exc:
+        breaker_completion_error: Exception | None = None
+        try:
+            llm_gateway._complete_strict_fleet_breaker(
+                breaker_session, provider_exc
+            )
+        except Exception as exc:
+            breaker_completion_error = exc
         try:
             llm_gateway.record_call(
                 provider=provider,
@@ -689,6 +681,13 @@ def generate_google_content(
                 state="unknown",
                 estimated_cost_usd=estimated_cost,
             )
+        if breaker_completion_error is not None:
+            raise _sdk_failure(
+                "fleet_breaker_store_unavailable_after_provider",
+                provider=provider,
+                model=exact_model,
+                purpose=exact_purpose,
+            ) from breaker_completion_error
         raise
 
     usage_metadata = _google_usage_metadata(response)
@@ -710,6 +709,26 @@ def generate_google_content(
         status = "model_mismatch"
     elif input_tokens <= 0 or output_tokens <= 0:
         status = "usage_missing"
+    try:
+        llm_gateway._complete_strict_fleet_breaker(
+            breaker_session,
+            {"status": status},
+        )
+    except Exception as exc:
+        llm_gateway._mark_reserved_attempt_unknown(reservation_key)
+        _append_google_attempt(
+            attempt_log,
+            model=exact_model,
+            metadata=progress_metadata,
+            state="unknown",
+            estimated_cost_usd=estimated_cost,
+        )
+        raise _sdk_failure(
+            "fleet_breaker_store_unavailable_after_provider",
+            provider=provider,
+            model=exact_model,
+            purpose=exact_purpose,
+        ) from exc
     actual_micro = (
         _google_usage_cost_micro_usd(
             model=exact_model,
@@ -918,6 +937,22 @@ def generate_json(
         metadata,
         phase="structured_generation",
     )
+    task_binding = str(progress_metadata.get("task_binding") or "").strip()
+    actual_binding = f"{provider_key}/{exact_model}"
+    if task_binding:
+        expected_binding = current_task_model_binding().get(task_binding, "")
+        if expected_binding != actual_binding:
+            raise _sdk_failure(
+                "task_binding_model_mismatch",
+                provider=provider_key,
+                model=exact_model,
+                purpose=str(purpose or "").strip(),
+                details={
+                    "task_binding": task_binding,
+                    "expected_binding": expected_binding,
+                    "actual_binding": actual_binding,
+                },
+            )
     return llm_gateway.invoke_json(
         str(prompt or ""),
         purpose=str(purpose or ""),

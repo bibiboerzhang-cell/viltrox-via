@@ -13,10 +13,13 @@ import {
   updateAdvisorMemoryFact,
   updateAdvisorMemorySettings,
   type AdvisorMemorySnapshot,
+  type AdvisorContextRef,
   type AdvisorMessage,
   type AdvisorReadiness,
   type AdvisorThread,
 } from "../../../../services/vkpi/marketing-advisor-api";
+import { MarketingAdvisorContextPicker } from "./MarketingAdvisorContextPicker";
+import { MarketingAdvisorFeedbackControls } from "./MarketingAdvisorFeedbackControls";
 import { formatLocal } from "../../lib/timeLocal";
 import { humanizeLlmReason, llmErrorValue } from "../llmReasonCopy";
 import { EmptyLine, LoadingLine, PendingCard } from "./MarketVoicePage.modules";
@@ -60,6 +63,8 @@ type PendingTurn = {
   content: string;
   requestId: string;
   allowExternalAi: boolean;
+  contextRefs: AdvisorContextRef[];
+  contextKey: string;
 };
 
 type AdvisorTurnStage = "submitting" | "accepted" | "persisted" | "degraded" | "failed";
@@ -144,6 +149,7 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
   const [threadUid, setThreadUid] = React.useState("");
   const [messages, setMessages] = React.useState<AdvisorMessage[]>([]);
   const [input, setInput] = React.useState("");
+  const [contextRefs, setContextRefs] = React.useState<AdvisorContextRef[]>([]);
   const [allowExternalAi, setAllowExternalAi] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [messagesLoading, setMessagesLoading] = React.useState(false);
@@ -226,13 +232,16 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
     };
   }, [apiToken, threadUid]);
 
-  const startThread = React.useCallback(async (title = "新营销顾问会话") => {
-    const created = await createAdvisorThread(apiToken, title.slice(0, 120));
+  const startThread = React.useCallback(async (
+    title = "新营销顾问会话",
+    refs: AdvisorContextRef[] = contextRefs,
+  ) => {
+    const created = await createAdvisorThread(apiToken, title.slice(0, 120), refs);
     if (!mountedRef.current) return created.thread_uid;
     setThreads((rows) => [created, ...rows.filter((item) => item.thread_uid !== created.thread_uid)]);
     selectThread(created.thread_uid);
     return created.thread_uid;
-  }, [apiToken, selectThread]);
+  }, [apiToken, contextRefs, selectThread]);
 
   const createEmptyThread = React.useCallback(async () => {
     if (busyRef.current) return;
@@ -258,14 +267,28 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
     let activeUid = threadUid;
     let serverAccepted = false;
     try {
-      activeUid = threadUid || await startThread(content.slice(0, 60));
+      const contextSnapshot = contextRefs.map((item) => ({
+        ...item,
+        snapshot: item.snapshot ? { ...item.snapshot } : undefined,
+        provenance: item.provenance ? { ...item.provenance } : undefined,
+      }));
+      const contextKey = JSON.stringify(contextSnapshot);
+      activeUid = threadUid || await startThread(content.slice(0, 60), contextSnapshot);
       const prior = pendingTurnRef.current;
       const pending = prior
         && prior.threadUid === activeUid
         && prior.content === content
         && prior.allowExternalAi === allowExternalAi
+        && prior.contextKey === contextKey
         ? prior
-        : { threadUid: activeUid, content, requestId: requestId(), allowExternalAi };
+        : {
+            threadUid: activeUid,
+            content,
+            requestId: requestId(),
+            allowExternalAi,
+            contextRefs: contextSnapshot,
+            contextKey,
+          };
       pendingTurnRef.current = pending;
       if (mountedRef.current && selectedThreadRef.current === activeUid) {
         setTurnProgress({ threadUid: activeUid, stage: "submitting", accepted: false });
@@ -276,6 +299,7 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
         content,
         pending.requestId,
         pending.allowExternalAi,
+        pending.contextRefs,
         (event) => {
           if (!mountedRef.current || selectedThreadRef.current !== activeUid) return;
           if (event.type === "accepted") {
@@ -340,7 +364,7 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
       busyRef.current = false;
       if (mountedRef.current) setLoading(false);
     }
-  }, [allowExternalAi, apiToken, input, refreshThreads, startThread, threadUid]);
+  }, [allowExternalAi, apiToken, contextRefs, input, refreshThreads, startThread, threadUid]);
 
   if (booting && !readiness) return <LoadingLine text="读取私有顾问状态…" />;
 
@@ -376,6 +400,12 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
           知识检索桥已安全关闭：现有检索还未完成组织级隔离，修复前不会冒险读取跨租户数据或意外触发外部费用。
         </div>
       ) : null}
+
+      <MarketingAdvisorContextPicker
+        value={contextRefs}
+        onChange={setContextRefs}
+        disabled={loading}
+      />
 
       {threads.length > 0 ? (
         <label className="mb-3 block text-[10px] text-muted">
@@ -413,6 +443,19 @@ function MarketingAdvisorSession({ apiToken }: { apiToken: string }) {
               {message.created_at ? <span className="ml-auto">{formatLocal(message.created_at)}</span> : null}
             </div>
             <div className="whitespace-pre-wrap text-[11.5px] leading-5 text-ink">{message.content_text || "—"}</div>
+            {message.role === "assistant" ? (
+              <MarketingAdvisorFeedbackControls
+                apiToken={apiToken}
+                message={message}
+                onSaved={(response) => {
+                  setMessages((current) => current.map((item) => (
+                    item.message_uid === message.message_uid
+                      ? { ...item, feedback: response.feedback }
+                      : item
+                  )));
+                }}
+              />
+            ) : null}
           </div>
         ))}
       </div>

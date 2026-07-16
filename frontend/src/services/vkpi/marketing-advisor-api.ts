@@ -32,6 +32,35 @@ export interface AdvisorThread {
   last_message_at?: string | null;
 }
 
+export interface AdvisorContextRef {
+  entity_type: "kol" | "product" | "project" | "event" | "dealer";
+  entity_id: string;
+  snapshot?: {
+    label?: string;
+    platform?: string;
+    observed_at?: string;
+  };
+  provenance?: {
+    source_ref?: string;
+    source_passport_id?: string;
+    observed_at?: string;
+    content_hash?: string;
+  };
+}
+
+export interface AdvisorMessageFeedback {
+  feedback_uid: string;
+  thread_uid: string;
+  message_uid: string;
+  rating: "helpful" | "unhelpful";
+  correction_text?: string;
+  propose_memory?: boolean;
+  context_refs_json?: AdvisorContextRef[];
+  provenance_json?: Record<string, unknown>;
+  candidate_uid?: string | null;
+  updated_at?: string;
+}
+
 export interface AdvisorMessage {
   message_uid: string;
   thread_uid: string;
@@ -42,6 +71,8 @@ export interface AdvisorMessage {
   provider_reason?: string;
   metadata_json?: Record<string, unknown>;
   provenance_json?: Record<string, unknown>;
+  context_refs_json?: AdvisorContextRef[];
+  feedback?: AdvisorMessageFeedback;
   created_at?: string;
 }
 
@@ -102,6 +133,16 @@ export interface AdvisorStreamEvent {
   payload: Record<string, unknown>;
 }
 
+export interface AdvisorFeedbackResponse {
+  status: "ok" | "pending_confirmation" | string;
+  feedback: AdvisorMessageFeedback;
+  candidate?: AdvisorMemoryCandidate | null;
+  idempotent_replay?: boolean;
+  memory_active: false;
+  training_triggered: false;
+  weights_changed: false;
+}
+
 export async function getAdvisorReadiness(token: string): Promise<AdvisorReadiness> {
   return apiFetch<AdvisorReadiness>(`${ROOT}/readiness`, { cache: "no-store" }, token);
 }
@@ -115,10 +156,14 @@ export async function listAdvisorThreads(token: string, limit = 50): Promise<Adv
   return Array.isArray(payload.threads) ? payload.threads : [];
 }
 
-export async function createAdvisorThread(token: string, title: string): Promise<AdvisorThread> {
+export async function createAdvisorThread(
+  token: string,
+  title: string,
+  contextRefs: AdvisorContextRef[] = [],
+): Promise<AdvisorThread> {
   const payload = await apiFetch<{ thread: AdvisorThread }>(
     `${ROOT}/threads`,
-    { method: "POST", body: jsonBody({ title, context_refs: [] }) },
+    { method: "POST", body: jsonBody({ title, context_refs: contextRefs }) },
     token,
   );
   return payload.thread;
@@ -143,6 +188,7 @@ export async function postAdvisorMessage(
   content: string,
   clientRequestId: string,
   allowExternalAi = false,
+  contextRefs: AdvisorContextRef[] = [],
 ): Promise<AdvisorTurnResponse> {
   return apiFetch<AdvisorTurnResponse>(
     `${ROOT}/threads/${encodeURIComponent(threadUid)}/messages`,
@@ -151,7 +197,7 @@ export async function postAdvisorMessage(
       body: jsonBody({
         content,
         client_request_id: clientRequestId,
-        context_refs: [],
+        context_refs: contextRefs,
         requested_actions: [],
         allow_external_ai: allowExternalAi,
       }),
@@ -188,6 +234,7 @@ export async function postAdvisorMessageStream(
   content: string,
   clientRequestId: string,
   allowExternalAi = false,
+  contextRefs: AdvisorContextRef[] = [],
   onEvent?: (event: AdvisorStreamEvent) => void,
 ): Promise<AdvisorTurnResponse> {
   const headers = new Headers({
@@ -206,7 +253,7 @@ export async function postAdvisorMessageStream(
       body: jsonBody({
         content,
         client_request_id: clientRequestId,
-        context_refs: [],
+        context_refs: contextRefs,
         requested_actions: [],
         allow_external_ai: allowExternalAi,
       }),
@@ -259,6 +306,36 @@ export async function postAdvisorMessageStream(
   if (buffer.trim()) consumeBlock(buffer.trim());
   if (!finalPayload) throw new Error("advisor_stream_missing_final");
   return finalPayload;
+}
+
+export async function postAdvisorMessageFeedback(
+  token: string,
+  threadUid: string,
+  messageUid: string,
+  input: {
+    rating: "helpful" | "unhelpful";
+    correctionText?: string;
+    proposeMemory?: boolean;
+    contextRefs?: AdvisorContextRef[];
+    provenance?: Record<string, unknown>;
+    clientRequestId: string;
+  },
+): Promise<AdvisorFeedbackResponse> {
+  return apiFetch<AdvisorFeedbackResponse>(
+    `${ROOT}/threads/${encodeURIComponent(threadUid)}/messages/${encodeURIComponent(messageUid)}/feedback`,
+    {
+      method: "POST",
+      body: jsonBody({
+        rating: input.rating,
+        correction_text: input.correctionText || "",
+        propose_memory: Boolean(input.proposeMemory),
+        context_refs: input.contextRefs || [],
+        provenance: input.provenance || {},
+        client_request_id: input.clientRequestId,
+      }),
+    },
+    token,
+  );
 }
 
 export async function getAdvisorMemory(token: string): Promise<AdvisorMemorySnapshot> {

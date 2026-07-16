@@ -11,6 +11,7 @@ import {
   getAdvisorReadiness,
   listAdvisorMessages,
   listAdvisorThreads,
+  postAdvisorMessageFeedback,
   postAdvisorMessageStream,
   updateAdvisorMemorySettings,
 } from "../../../../services/vkpi/marketing-advisor-api";
@@ -21,6 +22,7 @@ vi.mock("../../../../services/vkpi/marketing-advisor-api", () => ({
   createAdvisorThread: vi.fn(),
   listAdvisorMessages: vi.fn(),
   postAdvisorMessageStream: vi.fn(),
+  postAdvisorMessageFeedback: vi.fn(),
   getAdvisorMemory: vi.fn(),
   updateAdvisorMemorySettings: vi.fn(),
   createAdvisorMemoryCandidate: vi.fn(),
@@ -34,6 +36,7 @@ const threadsMock = vi.mocked(listAdvisorThreads);
 const createThreadMock = vi.mocked(createAdvisorThread);
 const messagesMock = vi.mocked(listAdvisorMessages);
 const postMessageMock = vi.mocked(postAdvisorMessageStream);
+const feedbackMock = vi.mocked(postAdvisorMessageFeedback);
 const memoryMock = vi.mocked(getAdvisorMemory);
 const createCandidateMock = vi.mocked(createAdvisorMemoryCandidate);
 const confirmCandidateMock = vi.mocked(confirmAdvisorMemoryCandidate);
@@ -79,13 +82,14 @@ describe("MarketingAdvisorBody", () => {
     fireEvent.click(screen.getByRole("button", { name: /发送/ }));
 
     expect(await screen.findByText("问题已安全保存；模型通道尚未连接。")).toBeTruthy();
-    expect(createThreadMock).toHaveBeenCalledWith("token", "给我海外 KOL 建议");
+    expect(createThreadMock).toHaveBeenCalledWith("token", "给我海外 KOL 建议", []);
     expect(postMessageMock).toHaveBeenCalledWith(
       "token",
       "advthr_1",
       "给我海外 KOL 建议",
       expect.any(String),
       false,
+      [],
       expect.any(Function),
     );
     expect(screen.getByText("诚实降级")).toBeTruthy();
@@ -293,7 +297,7 @@ describe("MarketingAdvisorBody", () => {
     const thread = { thread_uid: "advthr_stream", title: "进度会话", status: "active" };
     threadsMock.mockResolvedValue([thread]);
     let resolveTurn: ((value: Awaited<ReturnType<typeof postAdvisorMessageStream>>) => void) | undefined;
-    postMessageMock.mockImplementation((_token, _uid, _content, _requestId, _allowAi, onEvent) => {
+    postMessageMock.mockImplementation((_token, _uid, _content, _requestId, _allowAi, _contextRefs, onEvent) => {
       onEvent?.({
         type: "accepted",
         payload: { status: "accepted", transport: "staged_sse_v1", provider_streaming: false },
@@ -341,6 +345,133 @@ describe("MarketingAdvisorBody", () => {
     rerender(<MarketingAdvisorBody apiToken="new-token" />);
     expect(screen.queryByText("旧员工私有内容")).toBeNull();
     expect(await screen.findByText(/尚无服务端会话/)).toBeTruthy();
+  });
+
+  it("maps explicit KOL context into both the new thread and streamed message", async () => {
+    const thread = { thread_uid: "advthr_context", title: "Context", status: "active" };
+    createThreadMock.mockResolvedValue(thread);
+    postMessageMock.mockResolvedValue({ status: "degraded", messages: [] });
+
+    render(<MarketingAdvisorBody apiToken="token" />);
+    expect(await screen.findByText("会话可留存 · 模型降级")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("上下文类型"), { target: { value: "kol" } });
+    fireEvent.change(screen.getByLabelText("上下文实体 ID"), { target: { value: "iti-jarve" } });
+    fireEvent.change(screen.getByLabelText("上下文显示标签"), { target: { value: "ItiJarve" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加顾问上下文" }));
+    expect(screen.getByText("KOL · ItiJarve")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("向营销顾问提问"), { target: { value: "Analyze this creator" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(postMessageMock).toHaveBeenCalledTimes(1));
+
+    const threadContexts = createThreadMock.mock.calls[0]?.[2] || [];
+    const messageContexts = postMessageMock.mock.calls[0]?.[5] || [];
+    expect(threadContexts).toEqual(messageContexts);
+    expect(threadContexts[0]).toMatchObject({
+      entity_type: "kol",
+      entity_id: "iti-jarve",
+      snapshot: { label: "ItiJarve" },
+      provenance: { source_ref: "explicit:advisor-workspace-context" },
+    });
+  });
+
+  it("stores an assistant correction only as a pending personal-memory candidate", async () => {
+    const thread = { thread_uid: "advthr_feedback", title: "Feedback", status: "active" };
+    threadsMock.mockResolvedValue([thread]);
+    messagesMock.mockResolvedValue([{
+      message_uid: "assistant-feedback-1",
+      thread_uid: thread.thread_uid,
+      role: "assistant",
+      content_text: "Contact this creator.",
+      status: "ready",
+    }]);
+    feedbackMock.mockResolvedValue({
+      status: "pending_confirmation",
+      feedback: {
+        feedback_uid: "fb-1",
+        thread_uid: thread.thread_uid,
+        message_uid: "assistant-feedback-1",
+        rating: "unhelpful",
+        correction_text: "Verify overseas activity first.",
+        propose_memory: true,
+        candidate_uid: "candidate-1",
+      },
+      candidate: {
+        candidate_uid: "candidate-1",
+        memory_kind: "semantic",
+        memory_key: "advisor-feedback:assistant-feedback-1",
+        summary: "Verify overseas activity first.",
+        status: "pending",
+      },
+      memory_active: false,
+      training_triggered: false,
+      weights_changed: false,
+    });
+
+    render(<MarketingAdvisorBody apiToken="token" />);
+    expect(await screen.findByText("Contact this creator.")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("标记无用或纠正：assistant-feedback-1"));
+    fireEvent.change(screen.getByLabelText("纠正顾问回复：assistant-feedback-1"), {
+      target: { value: "Verify overseas activity first." },
+    });
+    fireEvent.click(screen.getByLabelText(/仅保存为个人记忆候选/));
+    fireEvent.click(screen.getByRole("button", { name: "提交无用反馈" }));
+
+    await waitFor(() => expect(feedbackMock).toHaveBeenCalledTimes(1));
+    expect(feedbackMock.mock.calls[0]?.slice(0, 3)).toEqual([
+      "token",
+      thread.thread_uid,
+      "assistant-feedback-1",
+    ]);
+    expect(feedbackMock.mock.calls[0]?.[3]).toMatchObject({
+      rating: "unhelpful",
+      correctionText: "Verify overseas activity first.",
+      proposeMemory: true,
+      contextRefs: [],
+      provenance: { source_ref: "explicit:advisor-workspace-feedback" },
+      clientRequestId: expect.any(String),
+    });
+    expect(await screen.findByText("记忆候选待你确认，尚未生效")).toBeTruthy();
+    expect(confirmCandidateMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses the exact feedback request and provenance when a network failure is retried", async () => {
+    const thread = { thread_uid: "advthr_feedback_retry", title: "Feedback retry", status: "active" };
+    threadsMock.mockResolvedValue([thread]);
+    messagesMock.mockResolvedValue([{
+      message_uid: "assistant-feedback-retry",
+      thread_uid: thread.thread_uid,
+      role: "assistant",
+      content_text: "Retry this feedback.",
+      status: "ready",
+    }]);
+    feedbackMock
+      .mockRejectedValueOnce(new Error("feedback network interrupted"))
+      .mockResolvedValueOnce({
+        status: "ok",
+        feedback: {
+          feedback_uid: "fb-retry",
+          thread_uid: thread.thread_uid,
+          message_uid: "assistant-feedback-retry",
+          rating: "unhelpful",
+        },
+        memory_active: false,
+        training_triggered: false,
+        weights_changed: false,
+      });
+
+    render(<MarketingAdvisorBody apiToken="token" />);
+    expect(await screen.findByText("Retry this feedback.")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("标记无用或纠正：assistant-feedback-retry"));
+    fireEvent.click(screen.getByRole("button", { name: "提交无用反馈" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("feedback network interrupted");
+    fireEvent.click(screen.getByRole("button", { name: "提交无用反馈" }));
+    await waitFor(() => expect(feedbackMock).toHaveBeenCalledTimes(2));
+
+    const firstPayload = feedbackMock.mock.calls[0]?.[3];
+    const secondPayload = feedbackMock.mock.calls[1]?.[3];
+    expect(secondPayload?.clientRequestId).toBe(firstPayload?.clientRequestId);
+    expect(secondPayload?.provenance).toEqual(firstPayload?.provenance);
   });
 });
 

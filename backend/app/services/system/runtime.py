@@ -8,8 +8,7 @@ services/jobs, services/scheduler, services/cache.
 from __future__ import annotations
 
 import os
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from app.core.logging import get_logger
@@ -154,33 +153,16 @@ def system_resources() -> dict:
 # =========================================================================
 
 async def run_job_now(job_id: str) -> dict:
-    """Trigger a scheduler job immediately."""
-    try:
-        from app.services.scheduler.jobs import get_job_by_id, run_job_manually
-        job = get_job_by_id(job_id)
-        if not job:
-            return {"error": "job not found", "job_id": job_id}
-        t0 = time.time()
-        result = await run_job_manually(job_id)
-        return {
-            "job_id": job_id,
-            "ran_at": datetime.utcnow().isoformat(),
-            "duration_ms": int((time.time() - t0) * 1000),
-            "result": result,
-        }
-    except ImportError:
-        # APScheduler direct invocation fallback
-        try:
-            from apscheduler.schedulers.background import BackgroundScheduler
-            from app.services.scheduler.jobs import get_scheduler
-            sched = get_scheduler()
-            job = sched.get_job(job_id)
-            if not job:
-                return {"error": "job not found", "job_id": job_id}
-            job.modify(next_run_time=datetime.utcnow())
-            return {"job_id": job_id, "status": "triggered"}
-        except Exception as e:
-            return {"error": str(e), "job_id": job_id}
+    """Dispatch locally or durably queue for the standalone scheduler leader."""
+    from app.services.scheduler.jobs import (
+        enqueue_job_run_request,
+        trigger_job_now,
+    )
+
+    result = trigger_job_now(job_id)
+    if result.get("status") != "not_started":
+        return result
+    return enqueue_job_run_request(job_id)
 
 
 def job_history(job_id: str, limit: int = 20) -> dict:

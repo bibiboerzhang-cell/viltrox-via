@@ -29,6 +29,46 @@ export interface BusinessIntegrationsStatus {
   integrations?: BusinessIntegrationCard[];
 }
 
+export interface ShopifyCompatibilityCredentials {
+  shop_domain: string;
+  access_token: string;
+  webhook_secret: string;
+}
+
+export interface ShopifyClientCredentials {
+  shop_domain: string;
+  client_id: string;
+  client_secret: string;
+}
+
+export interface ShopifyConnectionStepResult {
+  ok?: boolean;
+  status?: string;
+  reason?: string;
+  shop_domain?: string;
+  auth_mode?: "client_credentials" | "legacy_access_token" | string;
+  client_id_configured?: boolean;
+  client_secret_configured?: boolean;
+  token_configured?: boolean;
+  access_token_expires_at?: string | null;
+  granted_scopes?: string[];
+  last_refresh_at?: string | null;
+  preserved_existing?: boolean;
+  verified_at?: string;
+  registered?: Row[];
+  registered_count?: number;
+  phases?: Partial<Record<"authorization" | "probe" | "webhooks" | "commit", {
+    status?: "pending" | "running" | "success" | "error" | string;
+    reason?: string;
+    expires_at?: string;
+    verified_at?: string;
+    scope_count?: number;
+    registered_count?: number;
+    required_count?: number;
+    cleanup?: Row;
+  }>>;
+}
+
 // F3 运行态信任块:GET /health 顶层 trust 字段(server/client/worker sha · 对齐 · worker 在线 · 迁移号)。
 // /health 是公开只读端点(无需 token),直接 fetch;任何字段缺失返回 null,绝不编造。
 export interface VkpiHealthTrust {
@@ -79,6 +119,44 @@ export async function getBusinessIntegrationsStatus(token: string) {
   return apiFetch<BusinessIntegrationsStatus>(
     "/api/admin/vkpi/settings/business-integrations",
     { timeoutMs: 15000 },
+    token,
+  );
+}
+
+export async function saveShopifyConnectionCredentials(
+  token: string,
+  payload: ShopifyCompatibilityCredentials,
+) {
+  return apiFetch<ShopifyConnectionStepResult>(
+    "/api/admin/vkpi/shopify/creds",
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function connectShopifyClientCredentials(
+  token: string,
+  payload: ShopifyClientCredentials,
+) {
+  return apiFetch<ShopifyConnectionStepResult>(
+    "/api/admin/vkpi/shopify/client-credentials/connect",
+    { method: "POST", body: jsonBody(payload) },
+    token,
+  );
+}
+
+export async function probeShopifyConnection(token: string) {
+  return apiFetch<ShopifyConnectionStepResult>(
+    "/api/admin/vkpi/shopify/probe",
+    { method: "POST", body: jsonBody({}) },
+    token,
+  );
+}
+
+export async function registerShopifyWebhooks(token: string) {
+  return apiFetch<ShopifyConnectionStepResult>(
+    "/api/admin/vkpi/shopify/webhooks/register",
+    { method: "POST", body: jsonBody({}) },
     token,
   );
 }

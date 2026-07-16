@@ -635,8 +635,12 @@ def test_scheduler_executor_propagates_planned_fire_to_sync_and_async_jobs(
     assert observed == [planned, planned]
 
 
-def test_scheduler_lifecycle_starts_only_local_leader_and_wraps_every_job() -> None:
+def test_scheduler_lifecycle_starts_only_local_leader_and_wraps_every_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.services.scheduler import jobs
+
+    monkeypatch.delenv("VKPI_WORKFLOW_AUTO_RECOVERY_ENABLED", raising=False)
 
     async def scenario() -> None:
         await jobs.stop_scheduler()
@@ -652,6 +656,9 @@ def test_scheduler_lifecycle_starts_only_local_leader_and_wraps_every_job() -> N
             scheduled = scheduler.get_jobs()
             assert scheduled
             assert any(job.id == "scheduler_fire_stale_recovery" for job in scheduled)
+            assert not any(job.id == "vkpi_workflow_recovery" for job in scheduled)
+            assert not any(job.id == "vkpi_fulfillment_sweep" for job in scheduled)
+            assert not any(job.id == "vkpi_agent_cycle" for job in scheduled)
             assert any(
                 isinstance(executor, jobs.FleetSafeAsyncIOExecutor)
                 for executor in scheduler._executors.values()
@@ -667,3 +674,39 @@ def test_scheduler_lifecycle_starts_only_local_leader_and_wraps_every_job() -> N
         assert scheduler.running is False
 
     asyncio.run(scenario())
+
+
+def test_workflow_auto_recovery_requires_explicit_valid_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.scheduler.jobs_workflow_recovery import (
+        workflow_auto_recovery_enabled,
+    )
+
+    monkeypatch.delenv("VKPI_WORKFLOW_AUTO_RECOVERY_ENABLED", raising=False)
+    assert workflow_auto_recovery_enabled() is False
+
+    monkeypatch.setenv("VKPI_WORKFLOW_AUTO_RECOVERY_ENABLED", "true")
+    assert workflow_auto_recovery_enabled() is True
+
+    monkeypatch.setenv("VKPI_WORKFLOW_AUTO_RECOVERY_ENABLED", "sometimes")
+    with pytest.raises(RuntimeError, match="VKPI_WORKFLOW_AUTO_RECOVERY_ENABLED"):
+        workflow_auto_recovery_enabled()
+
+
+def test_workflow_scheduled_execution_requires_explicit_valid_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.scheduler.jobs_workflow_recovery import (
+        workflow_scheduled_execution_enabled,
+    )
+
+    monkeypatch.delenv("VKPI_WORKFLOW_SCHEDULED_EXECUTION_ENABLED", raising=False)
+    assert workflow_scheduled_execution_enabled() is False
+
+    monkeypatch.setenv("VKPI_WORKFLOW_SCHEDULED_EXECUTION_ENABLED", "1")
+    assert workflow_scheduled_execution_enabled() is True
+
+    monkeypatch.setenv("VKPI_WORKFLOW_SCHEDULED_EXECUTION_ENABLED", "maybe")
+    with pytest.raises(RuntimeError, match="VKPI_WORKFLOW_SCHEDULED_EXECUTION_ENABLED"):
+        workflow_scheduled_execution_enabled()

@@ -49,6 +49,7 @@ def _owner_context(
     *,
     question: str,
     thread_uid: str = "",
+    context_refs: Any = None,
 ) -> dict[str, Any]:
     query_tokens = _tokens(question)
     snapshot = repository.get_memory(scope, limit=50)
@@ -89,7 +90,17 @@ def _owner_context(
     history: list[dict[str, Any]] = []
     if thread_uid:
         thread = repository.get_thread(scope, thread_uid)
-        for ref in thread.get("context_refs_json") or []:
+        # An explicit list belongs to this turn and must win over a thread's
+        # older defaults.  The repository sanitizer strips unknown fields, but
+        # these user-selected IDs are not yet an owner/provenance lookup.  They
+        # are therefore useful as local navigation evidence only and are never
+        # sent to an external model as if they were verified business facts.
+        turn_refs = (
+            repository.sanitize_context_refs(context_refs)
+            if context_refs is not None
+            else thread.get("context_refs_json") or []
+        )
+        for ref in turn_refs:
             if not isinstance(ref, dict):
                 continue
             snapshot_value = ref.get("snapshot") if isinstance(ref.get("snapshot"), dict) else {}
@@ -105,7 +116,8 @@ def _owner_context(
                     "label": str(snapshot_value.get("label") or "")[:240],
                     "platform": str(snapshot_value.get("platform") or "")[:40],
                     "observed_at": str(snapshot_value.get("observed_at") or "")[:64],
-                    "external_share_allowed": True,
+                    "external_share_allowed": False,
+                    "verification_status": "unverified_entity_reference",
                 }
             )
         for message in repository.list_messages(scope, thread_uid, limit=12)[-8:]:
@@ -137,10 +149,16 @@ def answer(
     scope: AdvisorScope,
     *,
     thread_uid: str = "",
+    context_refs: Any = None,
 ) -> dict[str, Any]:
     """Return a safe local context envelope without external calls or costs."""
 
-    context = _owner_context(scope, question=question, thread_uid=thread_uid)
+    context = _owner_context(
+        scope,
+        question=question,
+        thread_uid=thread_uid,
+        context_refs=context_refs,
+    )
     evidence = [
         *context["memories"],
         *context["context_refs"],

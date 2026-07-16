@@ -15,13 +15,24 @@ logger = get_logger(__name__)
 Step = tuple[str, Callable[[dict[str, Any]], dict[str, Any]]]
 
 
+def _require_fence() -> dict[str, Any]:
+    from app.domains.platform import workflow_engine
+
+    return workflow_engine.require_workflow_fence()
+
+
 def build_agent_cycle_steps(staff: dict[str, Any] | None = None) -> list[Step]:
     def s_detect(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.actions import inbox
 
+        execution = _require_fence()
         r = inbox.generate_daily_action_inbox(staff, persist=True)
-        return {"generated": r.get("persisted") or r.get("total") or 0,
-                "by_category_generated": r.get("by_category", {})}
+        return {
+            "generated": r.get("persisted") or r.get("total") or 0,
+            "by_category_generated": r.get("by_category", {}),
+            "inbox_side_effect_key": execution["side_effect_key"],
+            "external_exactly_once": False,
+        }
 
     def s_summarize(state: dict[str, Any]) -> dict[str, Any]:
         from collections import Counter
@@ -34,12 +45,22 @@ def build_agent_cycle_steps(staff: dict[str, Any] | None = None) -> list[Step]:
     def s_record(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.platform import event_ledger
 
+        execution = _require_fence()
         event_ledger.emit(
             "agent_cycle_completed", entity_type="agent", entity_id="daily",
             actor_type="agent", source="agent_cycle",
-            payload={"generated": state.get("generated", 0), "pending": state.get("pending", 0)},
+            payload={
+                "generated": state.get("generated", 0),
+                "pending": state.get("pending", 0),
+                "workflow_side_effect_key": execution["side_effect_key"],
+                "external_exactly_once": False,
+            },
         )
-        return {"recorded": True}
+        return {
+            "recorded": True,
+            "event_side_effect_key": execution["side_effect_key"],
+            "external_exactly_once": False,
+        }
 
     return [("detect_and_propose", s_detect), ("summarize_pending", s_summarize), ("record_cycle", s_record)]
 
@@ -54,3 +75,14 @@ def start_agent_cycle(staff: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"status": "unavailable", "detail": started}
     res = workflow_engine.run(int(run_id), build_agent_cycle_steps(staff))
     return {"run_id": run_id, **res, "note": "建议已生成待人审;批准后由 executor 执行→验收→学习(既有路径)。"}
+
+
+def resume_agent_cycle(
+    run_id: int,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """续跑失败、暂停或 lease 过期的 Agent 周期。"""
+
+    from app.domains.platform import workflow_engine
+
+    return workflow_engine.run(int(run_id), build_agent_cycle_steps(staff))

@@ -161,9 +161,14 @@ def extract_invoice_file(file_path: str, *, model_name: str = DEFAULT_CONTRACT_M
         raise RuntimeError("invoice file missing")
     client = anthropic.Anthropic(api_key=api_key)
     started = time.monotonic()
-    response = client.messages.create(
+    response = llm_production.generate_anthropic_messages(
+        client=client,
         model=model_name,
-        max_tokens=1200,
+        purpose="project_invoice_extract",
+        max_output_tokens=1200,
+        cost_tag="projects:invoice_extract",
+        triggered_by="project_invoice_extract_worker",
+        metadata={"task_binding": "invoice_extract"},
         messages=[
             {
                 "role": "user",

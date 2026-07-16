@@ -33,7 +33,7 @@ try:
     else:
         _anthropic_client = anthropic.Anthropic(api_key=_api_key)
         ANTHROPIC_AVAILABLE = True
-        logger.info("ai.claude.ready", extra={"key_prefix": _api_key[:8]})
+        logger.info("ai.claude.ready", extra={"configured": True})
 except ImportError:
     anthropic = None  # type: ignore
     _anthropic_client = None
