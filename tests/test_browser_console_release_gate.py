@@ -45,7 +45,7 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             "same_origin_api_idle": True,
             "same_origin_api_inflight": 0,
             "ready_state": "complete",
-            "final_url": f"{APP_URL}?page={family}",
+            "final_url": f"{APP_ORIGIN}/?cockpit={contract[0]}#cockpit",
             "elapsed_ms": 100,
         }
         for family, contract in gate.REQUIRED_PAGE_FAMILIES.items()
@@ -363,6 +363,26 @@ def test_wrong_page_heading_or_lazy_error_fails_closed() -> None:
     assert page["proof"]["lazy_error_absent"] is False
 
 
+@pytest.mark.parametrize(
+    "final_url",
+    [
+        f"{APP_ORIGIN}/#cockpit",
+        f"{APP_ORIGIN}/?cockpit=dashboard#cockpit",
+        f"{APP_ORIGIN}/?cockpit=events&cockpit=dealers#cockpit",
+        f"{APP_ORIGIN}/#cockpit?cockpit=events",
+    ],
+)
+def test_page_without_exact_cockpit_query_fails_closed(final_url: str) -> None:
+    payload = capture()
+    page = next(row for row in payload["pages"] if row["family"] == "events")
+    page["final_url"] = final_url
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    evidence = next(row for row in result["pages"] if row["family"] == "events")
+    assert evidence["proof"]["cockpit_query_matches_nav_key"] is False
+    assert "?" not in evidence["final_url"]
+
+
 def test_page_with_inflight_same_origin_api_cannot_pass() -> None:
     payload = capture()
     page = next(row for row in payload["pages"] if row["family"] == "gtmCommand")
@@ -541,6 +561,10 @@ def test_report_redacts_secrets_and_removes_url_query() -> None:
     assert "topsecret" not in serialized
     assert "abcdefghijklmnopqrstuv" not in serialized
     assert "?access_token" not in result["events"][0]["source_url"]
+    events_page = next(row for row in result["pages"] if row["family"] == "events")
+    assert events_page["final_url"] == f"{APP_ORIGIN}/"
+    assert "?" not in events_page["final_url"]
+    assert "#" not in events_page["final_url"]
     assert "[REDACTED]" in result["events"][0]["text_preview"]
 
 

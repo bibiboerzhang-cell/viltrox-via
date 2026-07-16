@@ -261,6 +261,31 @@ def test_deploy_runs_canonical_gate_before_any_build_backup_or_remote_command() 
         assert gate_at < deploy.index(marker)
 
 
+def test_deploy_requires_embedded_production_browser_gate_before_remote_state() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    canonical_at = deploy.index(
+        "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
+    )
+    function_at = deploy.index("run_predeploy_embedded_browser_gate()")
+    call_at = deploy.index("\nrun_predeploy_embedded_browser_gate\n", function_at)
+    remote_state_at = deploy.index("\ncapture_remote_sync_unit_state\n", call_at)
+    assert canonical_at < function_at < call_at < remote_state_at
+
+    block = deploy[function_at:remote_state_at]
+    for required in (
+        'PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/#cockpit"',
+        "create_local_auth_context(900)",
+        "scripts/capture_browser_console_cdp.mjs",
+        "scripts/verify_browser_console_capture.py",
+        'pages.get("required") != 21',
+        'pages.get("captured") != 21',
+        'pages.get("passed") != 21',
+        "assert_deploy_source_unchanged",
+        "verify_deploy_candidate",
+    ):
+        assert required in deploy
+
+
 def test_deploy_cannot_succeed_without_bound_post_restart_acceptance() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     restart_at = deploy.index("WORKER_RESTART_NOT_BEFORE=")

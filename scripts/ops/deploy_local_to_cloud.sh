@@ -104,6 +104,7 @@ BROWSER_GATE_PAGE_SETTLE_MS="${VKPI_BROWSER_GATE_PAGE_SETTLE_MS:-1000}"
 BROWSER_GATE_PAGE_TIMEOUT_MS="${VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS:-30000}"
 BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS:-}"
 POST_DEPLOY_CHROME_PATH="${VKPI_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/#cockpit"
 REMOTE_ACCEPTANCE_BASE_URL="${VKPI_REMOTE_ACCEPTANCE_BASE_URL:-${HEALTH_URL%/health}}"
 LOCAL_ACCEPTANCE_REPORT_TMP=""
 RELEASE_ID="${VKPI_RELEASE_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${LOCAL_GIT_SHA:0:12}}"
@@ -455,9 +456,82 @@ else
   POST_DEPLOY_EVIDENCE_DIR="${PROJECT_ROOT}/runtime/ops/post-deploy/${RELEASE_ID}"
   POST_DEPLOY_EVIDENCE_OWNED=1
 fi
+PREDEPLOY_BROWSER_EVIDENCE_DIR="${PROJECT_ROOT}/runtime/ops/predeploy/${RELEASE_ID}"
 REMOTE_LOG_BASELINE=""
 REMOTE_ACCEPTANCE_REPORT=""
 DEPLOY_ACCEPTED=0
+
+run_predeploy_embedded_browser_gate() {
+  local token=""
+  local capture_status=0
+  local capture_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/capture.json"
+  local report_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/gate-report.json"
+
+  mkdir -p -- "${PREDEPLOY_BROWSER_EVIDENCE_DIR}"
+  chmod 700 "${PREDEPLOY_BROWSER_EVIDENCE_DIR}"
+  rm -f -- "${capture_path}" "${report_path}"
+
+  if ! token="$(
+    PYTHONPATH="${PROJECT_ROOT}/scripts:${PROJECT_ROOT}/backend" \
+    RUNTIME_ENV_QUIET=1 LOG_LEVEL=CRITICAL \
+      "${PROJECT_ROOT}/.venv/bin/python" -B -c \
+      'from local_release_acceptance import create_local_auth_context; print(create_local_auth_context(900).token, end="")'
+  )"; then
+    echo "Local embedded-production browser token mint failed; no remote change was made." >&2
+    return 1
+  fi
+  if ! [[ "${token}" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
+    token=""
+    echo "Local embedded-production browser token is not a compact JWT." >&2
+    return 1
+  fi
+
+  VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" \
+  VKPI_BROWSER_GATE_TOKEN="${token}" node \
+    "${PROJECT_ROOT}/scripts/capture_browser_console_cdp.mjs" \
+    --url "${PREDEPLOY_BROWSER_URL}" \
+    --output "${capture_path}" \
+    --settle-ms "${BROWSER_GATE_SETTLE_MS}" \
+    --page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}" \
+    --page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}" \
+    --chrome "${POST_DEPLOY_CHROME_PATH}" >/dev/null || capture_status=$?
+  token=""
+  if [ "${capture_status}" -ne 0 ]; then
+    echo "Local embedded-production browser capture failed; no remote change was made." >&2
+    return "${capture_status}"
+  fi
+
+  "${PROJECT_ROOT}/.venv/bin/python" -B \
+    "${PROJECT_ROOT}/scripts/verify_browser_console_capture.py" \
+    --input "${capture_path}" \
+    --json-out "${report_path}" >/dev/null
+  "${PROJECT_ROOT}/.venv/bin/python" -B - "${report_path}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+overall = payload.get("overall") or {}
+pages = (payload.get("metrics") or {}).get("pages") or {}
+if (
+    payload.get("schema_version") != "vkpi-browser-console-gate/v1"
+    or overall.get("pass") is not True
+    or overall.get("release_eligible") is not True
+    or pages.get("required") != 21
+    or pages.get("captured") != 21
+    or pages.get("passed") != 21
+    or pages.get("missing") not in ([], None)
+):
+    raise SystemExit("local embedded-production browser receipt is incomplete")
+PY
+  chmod 600 "${capture_path}" "${report_path}"
+
+  # Browser execution must not race a source edit or swap in a different
+  # candidate after the canonical gate. Rebind both identities before SSH.
+  assert_deploy_source_unchanged
+  verify_deploy_candidate
+  echo "[deploy] local embedded-production browser gate passed: 21/21 (${PREDEPLOY_BROWSER_EVIDENCE_DIR})"
+}
 
 capture_remote_sync_unit_state() {
   local captured
@@ -861,6 +935,7 @@ if [ -z "${LATEST_MIGRATION}" ]; then
 fi
 MIGRATION_MANIFEST_CSV="$(find "${PROJECT_ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
 
+run_predeploy_embedded_browser_gate
 capture_remote_sync_unit_state
 sync_state="${SYNC_SERVICE_ACTIVE_STATE}"
 if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then

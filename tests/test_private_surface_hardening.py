@@ -134,6 +134,17 @@ def test_application_sends_noindex_on_success_and_error_responses() -> None:
         _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
 
 
+def test_admin_root_serves_spa_without_dropping_cockpit_query() -> None:
+    client = TestClient(main.app, raise_server_exceptions=False)
+    with mock.patch.object(main, "IS_ADMIN_APP", True), mock.patch.object(
+        main, "IS_PUBLIC_APP", False
+    ):
+        response = client.get("/?cockpit=dealers", follow_redirects=False)
+    assert response.status_code == 200
+    assert "location" not in response.headers
+    _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
+
+
 def test_frontend_favicons_are_served_without_console_404s() -> None:
     client = TestClient(main.app, raise_server_exceptions=False)
     for path, content_type in (

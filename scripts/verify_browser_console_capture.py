@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 
 CAPTURE_SCHEMA_VERSION = "vkpi-browser-console-capture/v1"
@@ -335,6 +335,14 @@ def _evaluate_pages(
         nav_key = str(raw.get("nav_key") or "")
         expected_heading = str(raw.get("expected_heading") or "")
         observed_heading = str(raw.get("observed_heading") or "")
+        final_url = str(raw.get("final_url") or "").strip()
+        try:
+            final_url_cockpit_values = parse_qs(
+                urlsplit(final_url).query,
+                keep_blank_values=True,
+            ).get("cockpit", [])
+        except ValueError:
+            final_url_cockpit_values = []
         if not expected or family in seen:
             failures.append(f"page[{index}] family is unknown or duplicated")
         else:
@@ -361,6 +369,10 @@ def _evaluate_pages(
             "ready_state_complete": str(raw.get("ready_state") or "") == "complete",
             "same_origin_final_url": normalized_origin(raw.get("final_url"))
             == application_origin,
+            "cockpit_query_matches_nav_key": (
+                expected is not None
+                and final_url_cockpit_values == [expected[0]]
+            ),
         }
         page_pass = all(proof.values())
         if page_pass:

@@ -912,7 +912,7 @@ def frontend_favicon_ico():
 @app.get("/")
 def read_index():
     if IS_ADMIN_APP and not IS_PUBLIC_APP:
-        return RedirectResponse("/admin", status_code=307)
+        return _serve_frontend()
     if not IS_PUBLIC_APP:
         raise HTTPException(status_code=404, detail="Public surface is disabled on this instance")
     return _serve_frontend()
