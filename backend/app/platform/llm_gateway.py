@@ -124,6 +124,7 @@ _EXECUTION_CLASSES = {
 }
 _LOCAL_EVALUATION_ENABLED_ENV = "VKPI_LLM_LOCAL_EVALUATION_ENABLED"
 _LOCAL_EVALUATION_MODELS_ENV = "VKPI_LLM_LOCAL_EVALUATION_MODELS"
+_READINESS_OPERATOR_ACK_ENV = "VKPI_LLM_READINESS_OPERATOR_ACK"
 PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
     "openai": {
         "model": os.getenv("VKPI_OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.4-mini")),
@@ -215,6 +216,28 @@ def _local_evaluation_bindings() -> set[str]:
     # P0 scope is intentionally fixed to the one video-analysis binding.  The
     # env is an operator acknowledgement, not an extensible model registry.
     return bindings & {"google/gemini-2.5-flash"}
+
+
+def _readiness_operator_ack_bindings() -> set[str]:
+    """Return exact bindings the operator explicitly cleared past the readiness gate.
+
+    独立信任根 + 签名 30 例评测的证据管线交付前,操作员可用本变量按「精确绑定」
+    逐个点名放行(不支持通配)。默认为空 = 门保持完全 fail-closed;被放行的调用
+    仍走预算预留/熔断/记账全链,仅免除就绪证据要求,且每次放行打审计告警日志。
+    这是操作员确认书,不是就绪证据——不改变 readiness 目录里的 production_ready。
+    """
+
+    raw = str(os.environ.get(_READINESS_OPERATOR_ACK_ENV) or "")
+    bindings: set[str] = set()
+    for item in raw.replace(";", ",").split(","):
+        provider, separator, model_id = item.strip().partition("/")
+        provider = {"gemini": "google", "claude": "anthropic"}.get(
+            provider.strip().lower(), provider.strip().lower()
+        )
+        model_id = model_id.strip()
+        if separator and provider and model_id:
+            bindings.add(f"{provider}/{model_id}")
+    return bindings
 
 
 # B1 key broker:gateway provider → key 池 provider 名(google→gemini)。
@@ -611,6 +634,14 @@ def _binding_call_blocker(
             return "local_evaluation_disabled"
         if binding.binding not in _local_evaluation_bindings():
             return "local_evaluation_model_not_allowlisted"
+        return ""
+    if binding.binding in _readiness_operator_ack_bindings():
+        # 操作员确认书放行:免除就绪证据要求,预算/熔断/记账全链照旧。
+        # 告警级日志留审计痕,claim 口径仍是 descriptive_only(见 docstring)。
+        logger.warning(
+            "vkpi.llm_gateway.readiness_gate_operator_ack",
+            extra={"binding": binding.binding},
+        )
         return ""
     try:
         readiness, _evidence_source = exact_binding_readiness_from_environment(

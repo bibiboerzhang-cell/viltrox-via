@@ -86,6 +86,12 @@ fi
 if [[ -n "$ENV_FILE" ]]; then
   load_env_file "$ENV_FILE" 1
 fi
+# 可选本地操作员覆盖(gitignored,不入库、不随部署):放非密钥类操作员开关,
+# 例如 VKPI_LLM_READINESS_OPERATOR_ACK。密钥仍只属于 .env,别写进这里。
+if [[ -f "$ROOT/runtime/local_operator_env.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/runtime/local_operator_env.sh"
+fi
 
 if [[ ! -x "$POSTGRES_BIN/initdb" && -x "/opt/homebrew/opt/postgresql@16/bin/initdb" ]]; then
   POSTGRES_BIN="/opt/homebrew/opt/postgresql@16/bin"
