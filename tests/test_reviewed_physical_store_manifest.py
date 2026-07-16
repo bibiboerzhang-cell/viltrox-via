@@ -22,6 +22,8 @@ class _Conn:
                 "city": row["city"],
                 "state": row["state"],
                 "postal_code": row["postal_code"],
+                "phone": row["phone"],
+                "website_url": row["website_url"],
                 "location_source_url": row["location_source_url"],
                 "brand_listing_url": row["brand_listing_url"],
                 "lat": None,
@@ -74,6 +76,7 @@ def test_bounded_manifest_is_exact_and_google_pending():
     }
     assert manifest["google_places_status"] == "pending"
     assert all("google_place_id" not in row for row in manifest["stores"])
+    assert all(row["phone"] and row["website_url"].startswith("https://") for row in manifest["stores"])
     assert all(
         brand["authorization_status"] == "unverified"
         for row in manifest["stores"]
@@ -122,6 +125,7 @@ def test_explicit_publish_updates_five_rows_and_never_writes_google_evidence(mon
     assert all("google_place_verification_status='pending'" in sql for sql in updates)
     assert all("google_place_id=NULL" in sql for sql in updates)
     assert all("google_place_evidence_json='{}'::jsonb" in sql for sql in updates)
+    assert all("phone=?" in sql and "website_url=?" in sql for sql in updates)
 
 
 def test_projection_exposes_census_provenance_and_pending_google_without_blocking_map():

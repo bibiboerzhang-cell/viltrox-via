@@ -143,6 +143,13 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
         expected_host = _text(row.get("retailer_host")).casefold()
         if source_host != expected_host and not source_host.endswith("." + expected_host):
             raise ReviewedPhysicalStoreManifestError(f"{prefix} source is not retailer-owned")
+        website_url = _http_url(row.get("website_url"), field=f"{prefix}.website_url")
+        website_host = str(urlsplit(website_url).hostname or "").casefold()
+        if website_host != expected_host and not website_host.endswith("." + expected_host):
+            raise ReviewedPhysicalStoreManifestError(f"{prefix} website is not retailer-owned")
+        phone = _text(row.get("phone"))
+        if len(phone) < 7:
+            raise ReviewedPhysicalStoreManifestError(f"{prefix}.phone is incomplete")
         _http_url(row.get("brand_listing_url"), field=f"{prefix}.brand_listing_url")
         coordinates = row.get("coordinates")
         if not isinstance(coordinates, dict):
@@ -192,6 +199,11 @@ def _evidence(row: Mapping[str, Any], *, actor_ref: str) -> dict[str, Any]:
             "observed_at": _text(row["observed_at"]),
             "reviewer_id": actor_ref,
             "evidence_scope": "retailer_owned_exact_physical_store_page",
+            "value_status": "observed",
+        },
+        "contact": {
+            "phone": _text(row["phone"]),
+            "website_url": _text(row["website_url"]),
             "value_status": "observed",
         },
         "product": {
@@ -259,6 +271,8 @@ def build_plan(
             {
                 "dealer_id": int(current["id"]),
                 "name": _text(row["name"]),
+                "phone": _text(row["phone"]),
+                "website_url": _text(row["website_url"]),
                 "coordinate_provider": "us_census_geocoder",
                 "google_place_status": "pending",
                 "publish_requested": True,
@@ -316,7 +330,7 @@ def apply_manifest(
             conn.execute(
                 """
                 UPDATE vkpi_dealers
-                SET lat=?, lng=?, source_status='public_listing_verified',
+                SET lat=?, lng=?, phone=?, website_url=?, source_status='public_listing_verified',
                     source_checked_at=?, source_id=?, stable_org_key=?,
                     stable_location_key=?, reviewer_id=?, reviewed_at=?,
                     evidence_json=?::jsonb, review_contract_version=1,
@@ -337,6 +351,8 @@ def apply_manifest(
                 (
                     float(coordinates["lat"]),
                     float(coordinates["lng"]),
+                    _text(row["phone"]),
+                    _text(row["website_url"]),
                     observed_at,
                     _text(row["source_id"]),
                     org_key,
