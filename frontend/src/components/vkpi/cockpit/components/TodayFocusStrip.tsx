@@ -102,6 +102,37 @@ function resolvePendingCount(resp: any, returnedCount: number, limit: number): P
   return { label: String(legacyCount), kind: "exact", value: legacyCount };
 }
 
+// 失败重试 chips 按 job_type 聚合(2026-07-16):同类失败任务逐条铺 chip 视觉重复
+// (截图三连「失败任务待重试 · kol_profile_deep_crawl」),聚合成「失败重试 video ×N」。
+// 其余类别保持逐条;聚合 chip 仍走同一跳转(点击直达「今日该做什么」面板)。
+function aggregateFocusItems(items: any[]) {
+  const out: any[] = [];
+  const retryBuckets = new Map<string, { item: any; count: number }>();
+  for (const raw of items) {
+    const it = raw && typeof raw === "object" ? raw : {};
+    if (String(it.category || "") !== "failed_retry") {
+      out.push(it);
+      continue;
+    }
+    const payload = it.payload_json && typeof it.payload_json === "object" ? it.payload_json : {};
+    const jobType = String(payload.job_type || "").trim()
+      || String(it.title || "").split("·").pop()?.trim()
+      || "任务";
+    const bucket = retryBuckets.get(jobType);
+    if (bucket) {
+      bucket.count += 1;
+      continue;
+    }
+    const aggregated = { ...it };
+    retryBuckets.set(jobType, { item: aggregated, count: 1 });
+    out.push(aggregated);
+  }
+  retryBuckets.forEach((bucket, jobType) => {
+    bucket.item.title = bucket.count > 1 ? `${jobType} ×${bucket.count}` : jobType;
+  });
+  return out;
+}
+
 function jumpElement(
   callback: (() => void) | undefined,
   props: Record<string, unknown>,
@@ -152,7 +183,7 @@ export function TodayFocusStrip({
         if (cancelled) return;
         const resp: any = value || {};
         const arr = Array.isArray(resp.items) ? resp.items : [];
-        setTopItems(arr.slice(0, 3));
+        setTopItems(aggregateFocusItems(arr).slice(0, 3));
         setPendingCount(resolvePendingCount(resp, arr.length, 20));
         setInboxAvailable(resp.available !== false);
         setInboxError("");

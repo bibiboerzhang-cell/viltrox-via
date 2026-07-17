@@ -102,6 +102,32 @@ describe("TodayFocusStrip 紧凑焦点摘要", () => {
     expect(screen.getByLabelText("今日焦点")).toHaveAttribute("data-state", "degraded");
   });
 
+  it("失败重试 chips 按 job_type 聚合成一枚计数 chip,点击仍可跳转", async () => {
+    listActionInbox.mockResolvedValue({
+      items: [
+        { id: 11, category: "failed_retry", priority: "high", title: "失败任务待重试 · video", payload_json: { job_type: "video" } },
+        { id: 12, category: "failed_retry", priority: "high", title: "失败任务待重试 · video", payload_json: { job_type: "video" } },
+        { id: 13, category: "failed_retry", priority: "high", title: "失败任务待重试 · kol_profile_deep_crawl", payload_json: { job_type: "kol_profile_deep_crawl" } },
+        { id: 14, category: "content_candidate", priority: "medium", title: "确认新视频证据" },
+      ],
+      count: 4,
+      available: true,
+    });
+    apiFetch.mockResolvedValue({ status: "ready", headline: "" });
+    const onJumpToInbox = vi.fn();
+
+    render(<TodayFocusStrip apiToken="tok" onJumpToInbox={onJumpToInbox} />);
+
+    expect(await screen.findByText("video ×2")).toBeInTheDocument();
+    expect(screen.getByText("kol_profile_deep_crawl")).toBeInTheDocument();
+    // 同 job_type 不再逐条铺 chip:三条 failed_retry 聚合成两枚 + 其他类别一枚 = 展示 3。
+    expect(screen.getByText("优先待办 · 展示 3")).toBeInTheDocument();
+    expect(screen.queryAllByText("失败任务待重试 · video")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "查看待办:video ×2" }));
+    expect(onJumpToInbox).toHaveBeenCalledTimes(1);
+  });
+
   it("无 token 时不渲染也不发请求", async () => {
     const { container } = render(<TodayFocusStrip apiToken="" />);
     expect(container.textContent).toBe("");

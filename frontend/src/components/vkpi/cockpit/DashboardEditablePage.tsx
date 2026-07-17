@@ -208,7 +208,10 @@ export function DashboardEditablePage(props: any) {
       { key: "memo", label: "备忘录", description: "账户偏好中保存的计划与待办", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 9, minHeight: 7, maxHeight: 18, allowMultiple: true, render: () => e(DashboardMemoCard, { apiToken }) },
     { key: "trend-pulse", label: "市场热词", description: "近期行业帖热词与真实稀疏态", category: "核心模块", defaultSpan: 8, render: () => e(TrendPulseBar, { apiToken }) },
 
-    { key: "today-focus", label: "今日焦点", description: "Action Inbox 与晨报摘要", category: "实时模块", defaultSpan: 12, render: () => apiToken ? e(TodayFocusStrip, { apiToken, onJumpToInbox: () => scrollToDashboardModule("actions") }) : null },
+    // 2026-07-16 排版修复:此前无 defaultHeight → 吃 9 格默认高,而横条内容只有一行,
+    // 板内 min-height:100% 把 bg-good-soft 绿底撑成大片空绿地(chips 漂中间)。收紧到 3-6 格;
+    // min/max 同时会把用户已存布局里的旧高度钳回合理区间(normalizeModuleHeight 读定义钳制)。
+    { key: "today-focus", label: "今日焦点", description: "Action Inbox 与晨报摘要", category: "实时模块", defaultSpan: 12, defaultHeight: 4, minHeight: 3, maxHeight: 6, render: () => apiToken ? e(TodayFocusStrip, { apiToken, onJumpToInbox: () => scrollToDashboardModule("actions") }) : null },
       { key: "morning-brief", label: "夜班晨报", description: "昨夜自动任务结果", category: "实时模块", defaultSpan: 4, render: () => apiToken ? renderLazyModule(MorningBriefCard, { apiToken }) : null },
       { key: "gifted-funnel", label: "送样履约漏斗", description: "签收、开窗、发布与超期", category: "实时模块", defaultSpan: 4, render: () => apiToken ? renderLazyModule(GiftedFunnelPanel, { apiToken }) : null },
     { key: "activity-feed", label: "思考流", description: "任务完成、告警与会话推进", category: "实时模块", defaultSpan: 4, render: () => apiToken ? e(ActivityFeed, { apiToken }) : null },
