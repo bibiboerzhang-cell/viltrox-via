@@ -110,6 +110,10 @@ def current_task_model_binding() -> dict[str, str]:
         default_provider, default_model = split_binding(default_binding)
         model_env, provider_env = TASK_MODEL_ENV_KEYS.get(task, ("", None))
         model = os.environ.get(model_env, "").strip() if model_env else ""
+        # 浮动 *-latest env 覆盖不可复现,被生产 pin 断言拒绝——直接忽略,回退精确
+        # 默认(线上 GEMINI_MODEL=gemini-flash-latest 曾致新版本 import 崩;2026-07-16)。
+        if model.lower().endswith("-latest"):
+            model = ""
         provider = os.environ.get(provider_env, "").strip().lower() if provider_env else default_provider
         current[task] = f"{provider or default_provider}/{model or default_model}"
     return current

@@ -81,3 +81,30 @@ def test_cost_visibility_maps_reviewed_snapshot_ids_to_exact_prices() -> None:
     assert model_pricing.estimate_cost_usd(
         "claude-opus-4-7", tokens_in=1_000_000, tokens_out=1_000_000
     ) == 30.0
+
+
+def test_floating_latest_env_override_falls_back_to_pinned_default(monkeypatch):
+    # 生产 pin 断言禁浮动 *-latest 绑定;浮动 env 覆盖须被忽略、回退精确默认。
+    # 线上 GEMINI_MODEL=gemini-flash-latest 曾致新版本 import 崩(2026-07-16)。
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+    from app.core import model_registry as reg
+
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-flash-latest")
+    binding = reg.current_task_model_binding()["kol_audience_analysis"]
+    assert binding == "google/gemini-3.5-flash"
+    assert reg.floating_production_task_bindings() == {}
+    reg.assert_production_task_bindings_are_pinned()  # 不抛
+
+
+def test_exact_env_override_still_applies(monkeypatch):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+    from app.core import model_registry as reg
+
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    assert reg.current_task_model_binding()["kol_audience_analysis"] == "google/gemini-2.5-flash"
