@@ -96,6 +96,7 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
     rows = conn.execute(
         """
         SELECT d.id AS dealer_id, d.name, d.city, d.state, d.website_url,
+               d.stable_org_key,
                v.verified_at, v.website_status, v.is_camera_retailer,
                v.carries_viltrox, v.viltrox_evidence_url, v.scale_tier,
                v.prominence_score, v.prominence_rationale
@@ -114,9 +115,9 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
         """,
         (safe_limit,),
     ).fetchall()
-    rankings: list[dict[str, Any]] = []
-    viltrox_confirmed = 0
-    rank = 0
+    # 2026-07-18 组织聚合:同 stable_org_key 的连锁多址合并为一行(Samy's ×3 等),
+    # 取最高分成员为代表;任一门店 confirmed 即组织 confirmed。key 为空按单店处理。
+    location_rows: list[dict[str, Any]] = []
     for raw in rows:
         item = _row_dict(raw)
         website_status = _text(item.get("website_status")).casefold()
@@ -128,17 +129,11 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
         evidence_url = _text(item.get("viltrox_evidence_url")) or None
         if carries != "confirmed":
             evidence_url = None
-        if carries == "confirmed":
-            viltrox_confirmed += 1
         scale_tier = _text(item.get("scale_tier")).casefold()
         if scale_tier not in _SCALE_TIERS:
             scale_tier = "unknown"
-        score = _score(item.get("prominence_score"))
-        if score is not None:
-            rank += 1
-        rankings.append(
+        location_rows.append(
             {
-                "rank": rank if score is not None else None,
                 "dealer_id": item.get("dealer_id"),
                 "name": _text(item.get("name")),
                 "city": _text(item.get("city")) or None,
@@ -150,11 +145,60 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
                 "carries_viltrox": carries,
                 "viltrox_evidence_url": evidence_url,
                 "scale_tier": scale_tier,
-                "prominence_score": score,
+                "prominence_score": _score(item.get("prominence_score")),
                 "prominence_rationale": _text(item.get("prominence_rationale")) or None,
+                "org_key": _text(item.get("stable_org_key")) or None,
             }
         )
-    verified_count = len(rankings)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for loc in location_rows:
+        key = loc["org_key"] or f"solo:{loc['dealer_id']}"
+        groups.setdefault(key, []).append(loc)
+    _TIER_RANK = {"national_chain": 4, "regional_chain": 3, "local_store": 2, "online_focus": 1, "unknown": 0}
+    merged: list[dict[str, Any]] = []
+    for key, members in groups.items():
+        members.sort(key=lambda m: (-(m["prominence_score"] or -1), str(m["name"])))
+        top = members[0]
+        confirmed_members = [m for m in members if m["carries_viltrox"] == "confirmed"]
+        best_tier = max(members, key=lambda m: _TIER_RANK.get(m["scale_tier"], 0))["scale_tier"]
+        entry = dict(top)
+        entry.pop("org_key", None)
+        entry["carries_viltrox"] = "confirmed" if confirmed_members else top["carries_viltrox"]
+        entry["viltrox_evidence_url"] = (
+            confirmed_members[0]["viltrox_evidence_url"] if confirmed_members else None
+        )
+        entry["scale_tier"] = best_tier
+        entry["website_status"] = (
+            "alive" if any(m["website_status"] == "alive" for m in members) else top["website_status"]
+        )
+        entry["location_count"] = len(members)
+        entry["states"] = sorted({m["state"] for m in members if m["state"]})
+        if len(members) > 1:
+            entry["locations"] = [
+                {
+                    "dealer_id": m["dealer_id"],
+                    "city": m["city"],
+                    "state": m["state"],
+                    "carries_viltrox": m["carries_viltrox"],
+                    "prominence_score": m["prominence_score"],
+                }
+                for m in members
+            ]
+        merged.append(entry)
+    merged.sort(key=lambda e: (-(e["prominence_score"] or -1), str(e["name"])))
+    rankings: list[dict[str, Any]] = []
+    viltrox_confirmed = 0
+    rank = 0
+    for entry in merged:
+        if entry["carries_viltrox"] == "confirmed":
+            viltrox_confirmed += 1
+        if entry["prominence_score"] is not None:
+            rank += 1
+            entry["rank"] = rank
+        else:
+            entry["rank"] = None
+        rankings.append(entry)
+    verified_count = len(location_rows)
     return {
         "status": "ready" if verified_count > 0 else "empty",
         "rankings": rankings,
