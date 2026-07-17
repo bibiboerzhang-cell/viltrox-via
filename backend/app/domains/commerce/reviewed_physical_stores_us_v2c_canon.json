@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "canon_usa_pdf_20260717",
+  "stores": [
+    {
+      "address": "1797 Ave of the States, Unit 7",
+      "brand_listing_url": "https://www.focuscamera.com/pages/store-locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lakewood",
+      "coordinates": {
+        "lat": 40.078135061578,
+        "lng": -74.190711511531,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.focuscamera.com/pages/store-locations",
+      "name": "Lakewood Store · Lakewood",
+      "observed_at": "2026-07-17T22:10:20Z",
+      "organization_key_material": "FOCUS CAMERA INC",
+      "phone": "732-333-6855",
+      "postal_code": "08701",
+      "retailer_host": "focuscamera.com",
+      "source_id": "focuscamera_store_page",
+      "state": "NJ",
+      "website_url": "https://www.focuscamera.com"
+    },
+    {
+      "address": "4511 West Sahara Avenue",
+      "brand_listing_url": "https://store.bandccamera.com/pages/hours-location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Las Vegas",
+      "coordinates": {
+        "lat": 36.144323999039,
+        "lng": -115.202003267469,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://store.bandccamera.com/pages/hours-location",
+      "name": "B&C Camera · Las Vegas",
+      "observed_at": "2026-07-17T20:52:57Z",
+      "organization_key_material": "B & C CAMERA",
+      "phone": "(702) 871-1100",
+      "postal_code": "89102",
+      "retailer_host": "store.bandccamera.com",
+      "source_id": "store_store_page",
+      "state": "NV",
+      "website_url": "https://store.bandccamera.com"
+    },
+    {
+      "address": "895 McDonald Ave",
+      "brand_listing_url": "https://www.focuscamera.com/pages/store-locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brooklyn",
+      "coordinates": {
+        "lat": 40.63310715036,
+        "lng": -73.97753263919,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.focuscamera.com/pages/store-locations",
+      "name": "Brooklyn Store · Brooklyn",
+      "observed_at": "2026-07-17T22:10:20Z",
+      "organization_key_material": "FOCUS CAMERA INC",
+      "phone": "718-431-7900",
+      "postal_code": "11218",
+      "retailer_host": "focuscamera.com",
+      "source_id": "focuscamera_store_page",
+      "state": "NY",
+      "website_url": "https://www.focuscamera.com"
+    },
+    {
+      "address": "4415 14th Ave",
+      "brand_listing_url": "https://www.duddyselectronics.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brooklyn",
+      "coordinates": {
+        "lat": 40.636347346065,
+        "lng": -73.987058624773,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.duddyselectronics.com",
+      "name": "Duddy's Electronics · Brooklyn",
+      "observed_at": "2026-07-17T21:14:24Z",
+      "organization_key_material": "DUDDY'S ELECTRONICS & APPLIANCES INC",
+      "phone": "718-851-9400",
+      "postal_code": "11219",
+      "retailer_host": "duddyselectronics.com",
+      "source_id": "duddyselectronics_store_page",
+      "state": "NY",
+      "website_url": "https://www.duddyselectronics.com"
+    },
+    {
+      "address": "325 38th Street",
+      "brand_listing_url": "https://kmcamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brooklyn",
+      "coordinates": {
+        "lat": 40.654179391327,
+        "lng": -74.007016234943,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://kmcamera.com",
+      "name": "K&M Rentals (Brooklyn Location) · Brooklyn",
+      "observed_at": "2026-07-17T22:22:08Z",
+      "organization_key_material": "K&M CAMERA",
+      "phone": "212-523-0954",
+      "postal_code": "11232",
+      "retailer_host": "kmcamera.com",
+      "source_id": "kmcamera_store_page",
+      "state": "NY",
+      "website_url": "https://kmcamera.com"
+    },
+    {
+      "address": "60-18 Fresh Pond Rd",
+      "brand_listing_url": "https://cambridgeworld.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Maspeth",
+      "coordinates": {
+        "lat": 40.716633034691,
+        "lng": -73.901795045286,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cambridgeworld.com/pages/contact",
+      "name": "Cambridge World Inc · Maspeth",
+      "observed_at": "2026-07-17T21:00:30Z",
+      "organization_key_material": "CAMBRIDGE WORLD",
+      "phone": "800-221-2253",
+      "postal_code": "11378",
+      "retailer_host": "cambridgeworld.com",
+      "source_id": "cambridgeworld_store_page",
+      "state": "NY",
+      "website_url": "https://cambridgeworld.com"
+    },
+    {
+      "address": "42 West 18th Street",
+      "brand_listing_url": "https://www.adorama.com/help/mapAndDirections",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.7390215706,
+        "lng": -73.993187846046,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.adorama.com/help/mapAndDirections",
+      "name": "Adorama NYC Store · New York",
+      "observed_at": "2026-07-17T21:45:15Z",
+      "organization_key_material": "ADORAMA CAMERA INC",
+      "phone": "212-741-0063",
+      "postal_code": "10011",
+      "retailer_host": "adorama.com",
+      "source_id": "adorama_store_page",
+      "state": "NY",
+      "website_url": "https://www.adorama.com"
+    },
+    {
+      "address": "420 9th Ave",
+      "brand_listing_url": "https://www.bhphotovideo.com/find/HelpCenter/NYCSuperStore.jsp",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.753308871719,
+        "lng": -73.996272449882,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bhphotovideo.com/find/HelpCenter/NYCSuperStore.jsp",
+      "name": "B&H NYC SuperStore · New York",
+      "observed_at": "2026-07-17T19:28:03Z",
+      "organization_key_material": "B&H PHOTO & VIDEO",
+      "phone": "212-444-6615",
+      "postal_code": "10001",
+      "retailer_host": "bhphotovideo.com",
+      "source_id": "bhphotovideo_store_page",
+      "state": "NY",
+      "website_url": "https://www.bhphotovideo.com/"
+    },
+    {
+      "address": "54 Orchard Street",
+      "brand_listing_url": "https://kmcamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.716676879263,
+        "lng": -73.990889377636,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://kmcamera.com",
+      "name": "K&M Camera (Manhattan Store) · New York",
+      "observed_at": "2026-07-17T22:22:08Z",
+      "organization_key_material": "K&M CAMERA",
+      "phone": "212-523-0954",
+      "postal_code": "10002",
+      "retailer_host": "kmcamera.com",
+      "source_id": "kmcamera_store_page",
+      "state": "NY",
+      "website_url": "https://kmcamera.com"
+    },
+    {
+      "address": "720 Old Bethpage Rd",
+      "brand_listing_url": "https://cameralandny.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Old Bethpage",
+      "coordinates": {
+        "lat": 40.764315125357,
+        "lng": -73.454556074405,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cameralandny.com/",
+      "name": "Camera Land NY · Old Bethpage",
+      "observed_at": "2026-07-17T19:39:42Z",
+      "organization_key_material": "CAMERA LAND INC",
+      "phone": "516-217-1000",
+      "postal_code": "11804",
+      "retailer_host": "cameralandny.com",
+      "source_id": "cameralandny_store_page",
+      "state": "NY",
+      "website_url": "https://cameralandny.com/"
+    },
+    {
+      "address": "1755 East Avenue",
+      "brand_listing_url": "https://www.rocphotosupply.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Rochester",
+      "coordinates": {
+        "lat": 43.145927568521,
+        "lng": -77.557523345266,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.rocphotosupply.com/",
+      "name": "Scott's Rochester Photo Supply · Rochester",
+      "observed_at": "2026-07-17T22:57:14Z",
+      "organization_key_material": "ROCHESTER PHOTO SUPPLY",
+      "phone": "(585) 442-3140",
+      "postal_code": "14610",
+      "retailer_host": "rocphotosupply.com",
+      "source_id": "rocphotosupply_store_page",
+      "state": "NY",
+      "website_url": "https://www.rocphotosupply.com/"
+    },
+    {
+      "address": "226 West Jericho Tpk.",
+      "brand_listing_url": "https://www.berger-bros.com/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Syosset",
+      "coordinates": {
+        "lat": 40.810112034362,
+        "lng": -73.508812862055,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.berger-bros.com/about-us",
+      "name": "Berger Bros - Syosset, NY · Syosset",
+      "observed_at": "2026-07-17T19:30:45Z",
+      "organization_key_material": "BERGER BROS CAMERA & VIDEO EXCHANGE",
+      "phone": "516-496-1000",
+      "postal_code": "11791",
+      "retailer_host": "berger-bros.com",
+      "source_id": "bergerbros_store_page",
+      "state": "NY",
+      "website_url": "https://www.berger-bros.com/"
+    },
+    {
+      "address": "2887 Silver Dr",
+      "brand_listing_url": "https://mpex.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Columbus",
+      "coordinates": {
+        "lat": 40.02308596684,
+        "lng": -82.995776837245,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://mpex.com",
+      "name": "Midwest Photo · Columbus",
+      "observed_at": "2026-07-17T22:31:52Z",
+      "organization_key_material": "MIDWEST PHOTO",
+      "phone": "614-261-1264",
+      "postal_code": "43211",
+      "retailer_host": "mpex.com",
+      "source_id": "mpex_store_page",
+      "state": "OH",
+      "website_url": "https://mpex.com"
+    },
+    {
+      "address": "1645 E. Main Street",
+      "brand_listing_url": "https://www.campuscamera.net/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Kent",
+      "coordinates": {
+        "lat": 41.154335705402,
+        "lng": -81.334521100116,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.campuscamera.net/",
+      "name": "Campus Camera & Imaging · Kent",
+      "observed_at": "2026-07-17T19:44:16Z",
+      "organization_key_material": "CAMPUS CAMERA EXCHANGE",
+      "phone": "330-678-1297",
+      "postal_code": "44240",
+      "retailer_host": "campuscamera.net",
+      "source_id": "campuscamera_store_page",
+      "state": "OH",
+      "website_url": "https://www.campuscamera.net/"
+    },
+    {
+      "address": "120 W. South Boundary Street",
+      "brand_listing_url": "https://kohnes.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Perrysburg",
+      "coordinates": {
+        "lat": 41.545436129784,
+        "lng": -83.620703188083,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://kohnes.com/",
+      "name": "Kohne Camera & Photo + The Print Refinery · Perrysburg",
+      "observed_at": "2026-07-17T21:02:21Z",
+      "organization_key_material": "CAMERA & THE PRINT REFINERY & PRESSED ART BY POLY",
+      "phone": "419-385-9500",
+      "postal_code": "43551",
+      "retailer_host": "kohnes.com",
+      "source_id": "kohnes_store_page",
+      "state": "OH",
+      "website_url": "https://kohnes.com/"
+    },
+    {
+      "address": "3400 S. Kelly Ave.",
+      "brand_listing_url": "https://www.petra.com/b2b",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Edmond",
+      "coordinates": {
+        "lat": 35.622957717611,
+        "lng": -97.495974355143,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.petra.com/b2b",
+      "name": "The Petra B2B Store · Edmond",
+      "observed_at": "2026-07-17T23:26:03Z",
+      "organization_key_material": "PETRA INDUSTRIES LLC",
+      "phone": "405-216-2166",
+      "postal_code": "73013",
+      "retailer_host": "petra.com",
+      "source_id": "petra_store_page",
+      "state": "OK",
+      "website_url": "https://www.petra.com"
+    },
+    {
+      "address": "6401 SW Macadam Ave",
+      "brand_listing_url": "https://www.camerasolutionsinc.com/visit-our-store",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Portland",
+      "coordinates": {
+        "lat": 45.477898489143,
+        "lng": -122.67238826332,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.camerasolutionsinc.com/visit-our-store",
+      "name": "Camera Solutions · Portland",
+      "observed_at": "2026-07-17T19:40:17Z",
+      "organization_key_material": "CAMERA SOLUTIONS INC",
+      "phone": "(503) 452-3907",
+      "postal_code": "97239",
+      "retailer_host": "camerasolutionsinc.com",
+      "source_id": "camerasolutionsinc_store_page",
+      "state": "OR",
+      "website_url": "https://www.camerasolutionsinc.com"
+    },
+    {
+      "address": "1439 W. Fairmont St.",
+      "brand_listing_url": "https://danscamera.com/about-us/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Allentown",
+      "coordinates": {
+        "lat": 40.617437778769,
+        "lng": -75.495628040459,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://danscamera.com/about-us/contact-us/",
+      "name": "Dan's Camera City · Allentown",
+      "observed_at": "2026-07-17T19:52:45Z",
+      "organization_key_material": "DAN'S CAMERA CITY",
+      "phone": "(610) 434-2313",
+      "postal_code": "18102",
+      "retailer_host": "danscamera.com",
+      "source_id": "danscamera_store_page",
+      "state": "PA",
+      "website_url": "https://danscamera.com"
+    },
+    {
+      "address": "154 W Main St",
+      "brand_listing_url": "https://www.townecamera.com/where-to-find-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bloomsburg",
+      "coordinates": {
+        "lat": 41.001994274021,
+        "lng": -76.459034275942,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.townecamera.com/where-to-find-us",
+      "name": "Towne Camera · Bloomsburg",
+      "observed_at": "2026-07-17T23:13:16Z",
+      "organization_key_material": "TOWNE CAMERA",
+      "phone": "570-441-1165",
+      "postal_code": "17815",
+      "retailer_host": "townecamera.com",
+      "source_id": "townecamera_store_page",
+      "state": "PA",
+      "website_url": "https://www.townecamera.com"
+    },
+    {
+      "address": "319 S. 10th Street",
+      "brand_listing_url": "https://fineartphotoinc.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lemoyne",
+      "coordinates": {
+        "lat": 40.236239391365,
+        "lng": -76.896989939232,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://fineartphotoinc.com/",
+      "name": "Fine Art Photo Inc. · Lemoyne",
+      "observed_at": "2026-07-17T21:17:46Z",
+      "organization_key_material": "FINE ART PHOTO INC",
+      "phone": "(717) 761-8543",
+      "postal_code": "17043",
+      "retailer_host": "fineartphotoinc.com",
+      "source_id": "fineartphotoinc_store_page",
+      "state": "PA",
+      "website_url": "https://fineartphotoinc.com/"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

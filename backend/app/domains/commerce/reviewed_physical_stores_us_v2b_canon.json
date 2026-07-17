@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "canon_usa_pdf_20260717",
+  "stores": [
+    {
+      "address": "950 Mapunapuna St",
+      "brand_listing_url": "https://www.fisherhawaii.net/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Honolulu",
+      "coordinates": {
+        "lat": 21.343523887782,
+        "lng": -157.898641334419,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.fisherhawaii.net/contact-us/",
+      "name": "Mapunapuna Warehouse & Distribution Center · Honolulu",
+      "observed_at": "2026-07-17T22:09:30Z",
+      "organization_key_material": "FISHER HAWAII",
+      "phone": "(808) 524-8770",
+      "postal_code": "96819",
+      "retailer_host": "fisherhawaii.net",
+      "source_id": "fisherhawaii_store_page",
+      "state": "HI",
+      "website_url": "https://www.fisherhawaii.net/"
+    },
+    {
+      "address": "690 Pohukaina St",
+      "brand_listing_url": "https://www.fisherhawaii.net/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Honolulu",
+      "coordinates": {
+        "lat": 21.299288756485,
+        "lng": -157.859310039681,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.fisherhawaii.net/contact-us/",
+      "name": "Pohukaina Store · Honolulu",
+      "observed_at": "2026-07-17T22:09:30Z",
+      "organization_key_material": "FISHER HAWAII",
+      "phone": "(808) 356-1800",
+      "postal_code": "96813",
+      "retailer_host": "fisherhawaii.net",
+      "source_id": "fisherhawaii_store_page",
+      "state": "HI",
+      "website_url": "https://www.fisherhawaii.net/"
+    },
+    {
+      "address": "3523 Eastern Avenue",
+      "brand_listing_url": "https://thecameracorner.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Davenport",
+      "coordinates": {
+        "lat": 41.556219298127,
+        "lng": -90.551325417357,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://thecameracorner.com/contact",
+      "name": "The Camera Corner · Davenport",
+      "observed_at": "2026-07-17T23:09:31Z",
+      "organization_key_material": "THE CAMERA CORNER INC",
+      "phone": "(563) 391-6851",
+      "postal_code": "52807",
+      "retailer_host": "thecameracorner.com",
+      "source_id": "thecameracorner_store_page",
+      "state": "IA",
+      "website_url": "https://thecameracorner.com"
+    },
+    {
+      "address": "6721 Douglas Ave.",
+      "brand_listing_url": "https://www.christianphoto.biz/contact-us.html",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Urbandale",
+      "coordinates": {
+        "lat": 41.629441843615,
+        "lng": -93.708896030224,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.christianphoto.biz/contact-us.html",
+      "name": "Christian Photo · Urbandale",
+      "observed_at": "2026-07-17T21:05:25Z",
+      "organization_key_material": "CHRISTIAN PHOTO",
+      "phone": "515-270-8030",
+      "postal_code": "50322",
+      "retailer_host": "christianphoto.biz",
+      "source_id": "christianphoto_store_page",
+      "state": "IA",
+      "website_url": "https://www.christianphoto.biz/"
+    },
+    {
+      "address": "610 W. Hubbard Ave, Suite 109",
+      "brand_listing_url": "https://www.cameracorral.com/contact/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Coeur d'Alene",
+      "coordinates": {
+        "lat": 47.68283501518,
+        "lng": -116.792049393928,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.cameracorral.com/contact/",
+      "name": "Camera Corral · Coeur d'Alene",
+      "observed_at": "2026-07-17T23:09:49Z",
+      "organization_key_material": "THE CAMERA CORRAL",
+      "phone": "208-664-2420",
+      "postal_code": "83814",
+      "retailer_host": "cameracorral.com",
+      "source_id": "cameracorral_store_page",
+      "state": "ID",
+      "website_url": "https://www.cameracorral.com/"
+    },
+    {
+      "address": "1740 W. Carroll Ave",
+      "brand_listing_url": "https://progearrental.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Chicago",
+      "coordinates": {
+        "lat": 41.887834025788,
+        "lng": -87.670500142907,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://progearrental.com/",
+      "name": "ProGear Rental · Chicago",
+      "observed_at": "2026-07-17T22:52:54Z",
+      "organization_key_material": "PROGEAR",
+      "phone": "312-376-3770",
+      "postal_code": "60612",
+      "retailer_host": "progearrental.com",
+      "source_id": "progearrental_store_page",
+      "state": "IL",
+      "website_url": "https://progearrental.com/"
+    },
+    {
+      "address": "1200 N. Milwaukee Ave.",
+      "brand_listing_url": "https://www.abt.com/help/store-hours-and-directions",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Glenview",
+      "coordinates": {
+        "lat": 42.078261009202,
+        "lng": -87.861540341734,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.abt.com/help/store-hours-and-directions",
+      "name": "Abt Electronics · Glenview",
+      "observed_at": "2026-07-17T20:46:28Z",
+      "organization_key_material": "ABT ELECTRONICS",
+      "phone": "800-249-9376",
+      "postal_code": "60025",
+      "retailer_host": "abt.com",
+      "source_id": "abt_store_page",
+      "state": "IL",
+      "website_url": "https://www.abt.com"
+    },
+    {
+      "address": "100 N. Walnut Street",
+      "brand_listing_url": "https://www.helixcamera.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Itasca",
+      "coordinates": {
+        "lat": 41.970685447713,
+        "lng": -88.013172691535,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.helixcamera.com/pages/contact",
+      "name": "Helix Camera & Video · Itasca",
+      "observed_at": "2026-07-17T22:15:47Z",
+      "organization_key_material": "HELIX CAMERA & VIDEO",
+      "phone": "312-421-6000",
+      "postal_code": "60143",
+      "retailer_host": "helixcamera.com",
+      "source_id": "helixcamera_store_page",
+      "state": "IL",
+      "website_url": "https://www.helixcamera.com/"
+    },
+    {
+      "address": "220 E St Clair St",
+      "brand_listing_url": "https://robertscamera.com/location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Indianapolis",
+      "coordinates": {
+        "lat": 39.777948030536,
+        "lng": -86.153250842771,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://robertscamera.com/location",
+      "name": "Roberts Camera · Indianapolis",
+      "observed_at": "2026-07-17T22:57:02Z",
+      "organization_key_material": "ROBERTS CAMERA",
+      "phone": "1-317-636-5544",
+      "postal_code": "46204",
+      "retailer_host": "robertscamera.com",
+      "source_id": "robertscamera_store_page",
+      "state": "IN",
+      "website_url": "https://robertscamera.com/"
+    },
+    {
+      "address": "6750 Broadway Avenue",
+      "brand_listing_url": "https://garycameradigital.com/store-location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Merrillville",
+      "coordinates": {
+        "lat": 41.496490562266,
+        "lng": -87.336115871073,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://garycameradigital.com/store-location",
+      "name": "Gary Camera & Digital · Merrillville",
+      "observed_at": "2026-07-17T21:22:29Z",
+      "organization_key_material": "GARY CAMERA & VIDEO",
+      "phone": "(219) 769-2451",
+      "postal_code": "46410",
+      "retailer_host": "garycameradigital.com",
+      "source_id": "garycameradigital_store_page",
+      "state": "IN",
+      "website_url": "https://garycameradigital.com/"
+    },
+    {
+      "address": "513 Lincoln Way W",
+      "brand_listing_url": "https://www.genescamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "South Bend",
+      "coordinates": {
+        "lat": 41.680554322668,
+        "lng": -86.258226233307,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.genescamera.com",
+      "name": "Gene's Camera · South Bend",
+      "observed_at": "2026-07-17T21:22:55Z",
+      "organization_key_material": "GENE'S CAMERA",
+      "phone": "574-234-2278",
+      "postal_code": "46601",
+      "retailer_host": "genescamera.com",
+      "source_id": "genescamera_store_page",
+      "state": "IN",
+      "website_url": "https://www.genescamera.com"
+    },
+    {
+      "address": "9 West Rd #1",
+      "brand_listing_url": "https://orleanscamera.com/contact/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Orleans",
+      "coordinates": {
+        "lat": 41.780919181687,
+        "lng": -70.000529632191,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://orleanscamera.com/contact/",
+      "name": "Orleans Camera · Orleans",
+      "observed_at": "2026-07-17T22:43:33Z",
+      "organization_key_material": "ORLEANS CAMERA INC.",
+      "phone": "508-240-1300",
+      "postal_code": "02653",
+      "retailer_host": "orleanscamera.com",
+      "source_id": "orleanscamera_store_page",
+      "state": "MA",
+      "website_url": "https://orleanscamera.com"
+    },
+    {
+      "address": "2275 W Stadium Blvd",
+      "brand_listing_url": "https://cameramall.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Ann Arbor",
+      "coordinates": {
+        "lat": 42.275340390481,
+        "lng": -83.777600281137,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cameramall.com",
+      "name": "CameraMall · Ann Arbor",
+      "observed_at": "2026-07-17T21:57:09Z",
+      "organization_key_material": "CAMERAMALL",
+      "phone": "734-997-5031",
+      "postal_code": "48103",
+      "retailer_host": "cameramall.com",
+      "source_id": "cameramall_store_page",
+      "state": "MI",
+      "website_url": "https://cameramall.com"
+    },
+    {
+      "address": "33501 Woodward Ave.",
+      "brand_listing_url": "https://woodwardcamera.com/pages/contact-1",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Birmingham",
+      "coordinates": {
+        "lat": 42.535157718889,
+        "lng": -83.203155349172,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://woodwardcamera.com/pages/contact-1",
+      "name": "Woodward Camera · Birmingham",
+      "observed_at": "2026-07-17T23:21:33Z",
+      "organization_key_material": "WOODWARD CAMERA",
+      "phone": "248-642-1985",
+      "postal_code": "48009",
+      "retailer_host": "woodwardcamera.com",
+      "source_id": "woodwardcamera_store_page",
+      "state": "MI",
+      "website_url": "https://woodwardcamera.com/"
+    },
+    {
+      "address": "121 1st St",
+      "brand_listing_url": "https://fentoncamera.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Fenton",
+      "coordinates": {
+        "lat": 42.798621216348,
+        "lng": -83.7043123326,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://fentoncamera.com/",
+      "name": "Billmeier Camera Shop · Fenton",
+      "observed_at": "2026-07-17T19:32:43Z",
+      "organization_key_material": "BILLMEIER CAMERA SHOP INC",
+      "phone": "(810) 629-2287",
+      "postal_code": "48430",
+      "retailer_host": "fentoncamera.com",
+      "source_id": "fentoncamera_store_page",
+      "state": "MI",
+      "website_url": "https://fentoncamera.com/"
+    },
+    {
+      "address": "3602 S. Westnedge Ave.",
+      "brand_listing_url": "https://normancamera.com/pages/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Kalamazoo",
+      "coordinates": {
+        "lat": 42.255625099783,
+        "lng": -85.589694456154,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://normancamera.com/pages/about-us",
+      "name": "Kalamazoo Store · Kalamazoo",
+      "observed_at": "2026-07-17T22:37:36Z",
+      "organization_key_material": "NORMAN CAMERA CO",
+      "phone": "269-343-0460",
+      "postal_code": "49008",
+      "retailer_host": "normancamera.com",
+      "source_id": "normancamera_store_page",
+      "state": "MI",
+      "website_url": "https://normancamera.com"
+    },
+    {
+      "address": "1262 Stoneridge Drive",
+      "brand_listing_url": "https://bozemancamera.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bozeman",
+      "coordinates": {
+        "lat": 45.691417258483,
+        "lng": -111.063256026752,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://bozemancamera.com/contact-us/",
+      "name": "Bozeman Camera & Repair · Bozeman",
+      "observed_at": "2026-07-17T19:33:48Z",
+      "organization_key_material": "BOZEMAN CAMERA REPAIR",
+      "phone": "(406) 586-8300",
+      "postal_code": "59718",
+      "retailer_host": "bozemancamera.com",
+      "source_id": "bozemancamera_store_page",
+      "state": "MT",
+      "website_url": "https://bozemancamera.com/"
+    },
+    {
+      "address": "16 N Canyon Street",
+      "brand_listing_url": "https://www.yellowstonecamera.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "West Yellowstone",
+      "coordinates": {
+        "lat": 44.659370049462,
+        "lng": -111.099772895047,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.yellowstonecamera.com/",
+      "name": "The Yellowstone Camera Store · West Yellowstone",
+      "observed_at": "2026-07-17T22:46:38Z",
+      "organization_key_material": "PERFECT LIGHT LLC",
+      "phone": "406-646-5191",
+      "postal_code": "59758",
+      "retailer_host": "yellowstonecamera.com",
+      "source_id": "yellowstonecamera_store_page",
+      "state": "MT",
+      "website_url": "https://www.yellowstonecamera.com/"
+    },
+    {
+      "address": "805 S Kings Dr",
+      "brand_listing_url": "https://biggscamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Charlotte",
+      "coordinates": {
+        "lat": 35.207829823579,
+        "lng": -80.835758412776,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://biggscamera.com/contact-us",
+      "name": "Biggs Camera · Charlotte",
+      "observed_at": "2026-07-17T21:51:28Z",
+      "organization_key_material": "BIGGS CAMERA IMAGE CENTER INC",
+      "phone": "704-377-3492",
+      "postal_code": "28204",
+      "retailer_host": "biggscamera.com",
+      "source_id": "biggscamera_store_page",
+      "state": "NC",
+      "website_url": "https://biggscamera.com"
+    },
+    {
+      "address": "80 Carter Drive",
+      "brand_listing_url": "https://www.beachcamera.com/pages/retail-store",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Edison",
+      "coordinates": {
+        "lat": 40.53070024199,
+        "lng": -74.395528796408,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.beachcamera.com/pages/retail-store",
+      "name": "Beach Camera Retail Store · Edison",
+      "observed_at": "2026-07-17T19:29:38Z",
+      "organization_key_material": "BEACH CAMERA",
+      "phone": "732-387-3221",
+      "postal_code": "08817",
+      "retailer_host": "beachcamera.com",
+      "source_id": "beachcamera_store_page",
+      "state": "NJ",
+      "website_url": "https://www.beachcamera.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

@@ -67,8 +67,14 @@ def main() -> int:
               store_hours = EXCLUDED.store_hours,
               lat = EXCLUDED.lat,
               lng = EXCLUDED.lng,
-              location_source_url = EXCLUDED.location_source_url,
-              brand_listing_url = EXCLUDED.brand_listing_url
+              -- 2026-07-17:契约行(review_contract_version>0)的契约配对字段
+              -- 只能由 apply/人审步骤动——草稿 upsert 覆盖会与 evidence_json 里
+              -- 的源 URL 失配,撞 chk_vkpi_dealer_review_contract_shape(Canon
+              -- 并牌撞 Nikon 存量行实证)。仅未进契约的行允许刷新这两列。
+              location_source_url = CASE WHEN vkpi_dealers.review_contract_version = 0
+                THEN EXCLUDED.location_source_url ELSE vkpi_dealers.location_source_url END,
+              brand_listing_url = CASE WHEN vkpi_dealers.review_contract_version = 0
+                THEN EXCLUDED.brand_listing_url ELSE vkpi_dealers.brand_listing_url END
             RETURNING (xmax = 0) AS was_insert
             """,
             row,

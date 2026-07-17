@@ -1,0 +1,79 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "canon_usa_pdf_20260717",
+  "stores": [
+    {
+      "address": "7965 S Main Street",
+      "brand_listing_url": "https://www.impulsecameras.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Oak Creek",
+      "coordinates": {
+        "lat": 42.90027046762,
+        "lng": -87.917778735661,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.impulsecameras.com/pages/contact",
+      "name": "Impulse Cameras · Oak Creek",
+      "observed_at": "2026-07-17T21:31:54Z",
+      "organization_key_material": "IMPULSE PRODUCTIONS LLC",
+      "phone": "414-574-0110",
+      "postal_code": "53154",
+      "retailer_host": "impulsecameras.com",
+      "source_id": "impulsecameras_store_page",
+      "state": "WI",
+      "website_url": "https://www.impulsecameras.com"
+    },
+    {
+      "address": "439 N. Main St.",
+      "brand_listing_url": "https://www.cameracasino.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "canon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Oshkosh",
+      "coordinates": {
+        "lat": 44.018471572945,
+        "lng": -88.537593055993,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.cameracasino.com/",
+      "name": "Camera Casino · Oshkosh",
+      "observed_at": "2026-07-17T21:00:50Z",
+      "organization_key_material": "CAMERA CASINO",
+      "phone": "920-233-2424",
+      "postal_code": "54901",
+      "retailer_host": "cameracasino.com",
+      "source_id": "cameracasino_store_page",
+      "state": "WI",
+      "website_url": "https://www.cameracasino.com/"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}
