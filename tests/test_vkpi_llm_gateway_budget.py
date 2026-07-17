@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -236,3 +237,104 @@ def test_invoke_budget_block_records_zero_cost_ledger_without_calling_provider(m
         for scope, snapshot in snapshots.items():
             _restore_scope(scope, snapshot)
         _restore_scope(cost_scope, cost_snapshot)
+
+
+# ── 预算滚动窗:日窗(cron:*/report_analysis)与月窗(monthly_total/provider:*)惰性重置 ──
+
+
+def _yesterday_utc() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _next_month_first_utc() -> str:
+    now = datetime.now(timezone.utc)
+    if now.month == 12:
+        return f"{now.year + 1:04d}-01-01T00:00:00Z"
+    return f"{now.year:04d}-{now.month + 1:02d}-01T00:00:00Z"
+
+
+def _tomorrow_midnight_utc() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+
+
+@pytest.mark.parametrize("scope", ["provider:gemini", "monthly_total"])
+def test_monthly_window_expired_reset_zeroes_spend_and_rolls_to_next_month(scope: str) -> None:
+    snapshot = _snapshot_scope(scope)
+    try:
+        budget_guard.update_budget(
+            scope,
+            {"cap_usd": 100.0, "current_spend": 42.5, "reset_at": _yesterday_utc(), "fallback_action": "fallback_to_rule_v0"},
+        )
+        assert budget_guard.check_budget(scope, 0.01) is True
+        row = _snapshot_scope(scope)
+        assert row is not None
+        assert float(row["current_spend"] or 0) == 0.0
+        assert str(row["reset_at"]) == _next_month_first_utc()
+    finally:
+        _restore_scope(scope, snapshot)
+
+
+def test_monthly_window_missing_reset_initializes_anchor_without_zeroing() -> None:
+    """终身池转月窗的过渡口径:无 reset_at 只补锚点,既有累计不清零(不放开预算)。"""
+    scope = "provider:openai"
+    snapshot = _snapshot_scope(scope)
+    try:
+        budget_guard.update_budget(
+            scope,
+            {"cap_usd": 100.0, "current_spend": 7.5, "reset_at": None, "fallback_action": "fallback_to_rule_v0"},
+        )
+        status = budget_guard.get_budget_status(scope)
+        assert float(status["current_spend"]) == 7.5
+        assert str(status["reset_at"]) == _next_month_first_utc()
+        row = _snapshot_scope(scope)
+        assert float(row["current_spend"]) == 7.5
+        assert str(row["reset_at"]) == _next_month_first_utc()
+    finally:
+        _restore_scope(scope, snapshot)
+
+
+def test_cron_window_daily_roll_behavior_not_regressed() -> None:
+    scope = "cron:window_roll_probe_vkpi_llm_budget_test"
+    try:
+        # 过期 → 清零 + 推到下一个 UTC 零点
+        budget_guard.update_budget(
+            scope,
+            {"cap_usd": 4.0, "current_spend": 4.0, "reset_at": _yesterday_utc(), "fallback_action": "fallback_to_rule_v0"},
+        )
+        assert budget_guard.check_budget(scope, 0.01) is True
+        row = _snapshot_scope(scope)
+        assert float(row["current_spend"] or 0) == 0.0
+        assert str(row["reset_at"]) == _tomorrow_midnight_utc()
+
+        # 从未设置 → 同样清零补窗(既有 cron 语义)
+        budget_guard.update_budget(scope, {"cap_usd": 4.0, "current_spend": 4.0, "reset_at": None})
+        assert budget_guard.check_budget(scope, 0.01) is True
+        row = _snapshot_scope(scope)
+        assert float(row["current_spend"] or 0) == 0.0
+        assert str(row["reset_at"]) == _tomorrow_midnight_utc()
+
+        # 未过期 → 原样不动(hard stop 继续生效)
+        future = (datetime.now(timezone.utc) + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        budget_guard.update_budget(scope, {"cap_usd": 4.0, "current_spend": 4.0, "reset_at": future})
+        assert budget_guard.check_budget(scope, 0.01) is False
+        row = _snapshot_scope(scope)
+        assert float(row["current_spend"]) == 4.0
+        assert str(row["reset_at"]) == future
+    finally:
+        _cleanup()
+
+
+def test_report_analysis_scope_is_a_daily_window() -> None:
+    scope = "dashboard:report_analysis"
+    snapshot = _snapshot_scope(scope)
+    try:
+        budget_guard.update_budget(
+            scope,
+            {"cap_usd": 3.0, "current_spend": 3.0, "reset_at": _yesterday_utc(), "fallback_action": "skip_analysis"},
+        )
+        assert budget_guard.check_budget(scope, 0.01) is True
+        row = _snapshot_scope(scope)
+        assert float(row["current_spend"] or 0) == 0.0
+        assert str(row["reset_at"]) == _tomorrow_midnight_utc()  # 日窗,不是月窗
+    finally:
+        _restore_scope(scope, snapshot)
