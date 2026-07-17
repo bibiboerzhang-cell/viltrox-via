@@ -237,8 +237,10 @@ def _judge_one(row_payload: dict[str, Any], model: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global SOURCE_REGISTRY_ID
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--organization-id", type=int, default=1)
+    parser.add_argument("--source-registry-id", default=SOURCE_REGISTRY_ID)
     parser.add_argument("--model", default="gemini-3.5-flash")
     parser.add_argument("--limit", type=int, default=0, help="0 = all pending")
     parser.add_argument("--qps", type=float, default=1.0)
@@ -248,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         help="also rejudge rows whose stored judge is unclear+ungrounded",
     )
     args = parser.parse_args(argv)
+    SOURCE_REGISTRY_ID = args.source_registry_id
 
     from app.db.connection import get_conn, is_postgres_runtime
 

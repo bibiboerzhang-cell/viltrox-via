@@ -93,21 +93,30 @@ def _source_id(expected_host: str) -> str:
     return f"{cleaned or 'retailer'}_store_page"
 
 
+_FILE_TAG = "nikon"
+
+
 def _chunk_paths(out_dir: Path, chunk_count: int) -> list[Path]:
     if chunk_count <= 1:
-        return [out_dir / "reviewed_physical_stores_us_v2_nikon.json"]
+        return [out_dir / f"reviewed_physical_stores_us_v2_{_FILE_TAG}.json"]
     return [
-        out_dir / f"reviewed_physical_stores_us_v2{string.ascii_lowercase[index]}_nikon.json"
+        out_dir / f"reviewed_physical_stores_us_v2{string.ascii_lowercase[index]}_{_FILE_TAG}.json"
         for index in range(chunk_count)
     ]
 
 
 def main(argv: list[str] | None = None) -> int:
+    global SOURCE_REGISTRY_ID, _FILE_TAG
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--organization-id", type=int, default=1)
+    parser.add_argument("--source-registry-id", default=SOURCE_REGISTRY_ID)
+    parser.add_argument("--brand-key", default="nikon")
+    parser.add_argument("--file-tag", default="nikon")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--geocode-sleep", type=float, default=0.5)
     args = parser.parse_args(argv)
+    SOURCE_REGISTRY_ID = args.source_registry_id
+    _FILE_TAG = args.file_tag
 
     from app.db.connection import get_conn, is_postgres_runtime
     from app.domains.commerce import reviewed_physical_store_manifest as reviewed
@@ -207,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     "brand_relationships": [
                         {
-                            "brand_key": "nikon",
+                            "brand_key": args.brand_key,
                             "relationship_status": "official_directory_listed",
                             "authorization_status": "unverified",
                             "evidence_scope": "organization_and_city_only",

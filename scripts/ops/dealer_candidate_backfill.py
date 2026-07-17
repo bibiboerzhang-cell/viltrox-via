@@ -49,14 +49,14 @@ def _slug(value: str, max_length: int = 48) -> str:
 def _source_entity_key(row: dict) -> str:
     """Stable per-row identity key within the Nikon registry snapshot."""
     identity = "|".join(
-        (row["organization_name"], row["city"], row["state"], row["dealer_type"])
+        (row["organization_name"], row.get("city", ""), row["state"], row.get("dealer_type", ""))
     )
     suffix = hashlib.sha256(identity.casefold().encode("utf-8")).hexdigest()[:8]
     key = ".".join(
         (
             _slug(row["organization_name"]),
-            _slug(row["city"], 24),
-            row["state"].lower(),
+            _slug(row.get("city", ""), 24),
+            str(row.get("state", "")).lower(),
             suffix,
         )
     )
@@ -69,10 +69,14 @@ def _candidate_id(source_entity_key: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    global SOURCE_REGISTRY_ID
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rows-json", type=Path, default=DEFAULT_ROWS_JSON)
+    # R0 参数化(2026-07-17):复用管线到 Canon/Sony 等品牌目录,缺省保持 Nikon 兼容。
+    parser.add_argument("--source-registry-id", default=SOURCE_REGISTRY_ID)
     parser.add_argument("--organization-id", type=int, default=1)
     args = parser.parse_args(argv)
+    SOURCE_REGISTRY_ID = args.source_registry_id
 
     if args.organization_id <= 0:
         stdout_out("error: --organization-id must be positive", file=sys.stderr)
@@ -120,9 +124,9 @@ def main(argv: list[str] | None = None) -> int:
                     "row_index": row["row_index"],
                     "page": row.get("page"),
                     "organization_name": row["organization_name"],
-                    "city": row["city"],
+                    "city": row.get("city", ""),
                     "state": row["state"],
-                    "dealer_type": row["dealer_type"],
+                    "dealer_type": row.get("dealer_type", ""),
                 },
                 "row_scope": "organization_and_city_only",
             }
@@ -134,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()
-            location_material = "|".join((row["organization_name"], row["city"], row["state"]))
+            location_material = "|".join((row["organization_name"], row.get("city", ""), row["state"]))
             persisted = conn.execute(
                 """
                 INSERT INTO vkpi_dealer_event_candidates(
