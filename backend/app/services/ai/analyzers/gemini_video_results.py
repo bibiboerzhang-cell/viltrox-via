@@ -221,24 +221,51 @@ def _response_usage_metadata(resp: Any) -> dict[str, Any]:
     return output
 
 
+_STRING_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _sub_outside_strings(raw: str, pattern: re.Pattern[str], repl: str) -> str:
+    """Apply a regex substitution only to spans outside JSON string tokens."""
+
+    parts: list[str] = []
+    last = 0
+    for match in _STRING_TOKEN_RE.finditer(raw):
+        parts.append(pattern.sub(repl, raw[last : match.start()]))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(pattern.sub(repl, raw[last:]))
+    return "".join(parts)
+
+
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+_MISSING_COMMA_RE = re.compile(r'(["\]}0-9])\s*\n(\s*")')
+
+
+def _string_tokens(raw: str) -> list[str]:
+    return _STRING_TOKEN_RE.findall(raw)
+
+
 def _syntax_repair_candidates(raw: str) -> list[str]:
     """Bounded, deterministic syntax repairs for common Gemini JSON glitches.
 
-    只修 token 之间的语法(尾逗号/行尾漏逗号),绝不改动字符串内容本身;
-    修不好就让原始 JSONDecodeError 冒出来,不做任何有损猜测。
+    只修 token 之间的语法(尾逗号/行尾漏逗号)。尾逗号替换按字符串分段执行,
+    字符串字面量内容绝不触碰(2026-07-16 红队实证:全文盲替换会把
+    '"hooks: [a,], done"' 静默改写);候选被采纳前还要过字符串 token 序列
+    一致性保险(见 _parse_json_response_text)。修不好就让原始
+    JSONDecodeError 冒出来,不做任何有损猜测。
     """
 
     candidates: list[str] = []
-    # 尾逗号:{"a":1,} / [1,2,]
-    no_trailing = re.sub(r",\s*([}\]])", r"\1", raw)
+    # 尾逗号:{"a":1,} / [1,2,] —— 只在字符串外替换
+    no_trailing = _sub_outside_strings(raw, _TRAILING_COMMA_RE, r"\1")
     if no_trailing != raw:
         candidates.append(no_trailing)
     # 行尾漏逗号:一行以 " / } / ] / 数字 结尾,下一行以 " 开新键
     # (Expecting ',' delimiter 的典型来源,2026-07-16 evidence 3972 实例)
-    missing_comma = re.sub(r'(["\]}0-9])\s*\n(\s*")', r"\1,\n\2", raw)
+    missing_comma = _MISSING_COMMA_RE.sub(r"\1,\n\2", raw)
     if missing_comma != raw:
         candidates.append(missing_comma)
-        both = re.sub(r",\s*([}\]])", r"\1", missing_comma)
+        both = _sub_outside_strings(missing_comma, _TRAILING_COMMA_RE, r"\1")
         if both != missing_comma:
             candidates.append(both)
     return candidates
@@ -259,7 +286,12 @@ def _parse_json_response_text(text: str) -> dict[str, Any]:
         try:
             parsed = json.loads(sliced)
         except json.JSONDecodeError:
+            original_strings = _string_tokens(sliced)
             for candidate in _syntax_repair_candidates(sliced):
+                # 保险丝:修复只许动 token 间语法——候选的字符串字面量
+                # 序列必须与原文逐一相同,否则弃用该候选(宁可报原始错)。
+                if _string_tokens(candidate) != original_strings:
+                    continue
                 try:
                     parsed = json.loads(candidate)
                     break

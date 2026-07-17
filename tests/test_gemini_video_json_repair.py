@@ -54,3 +54,21 @@ def test_string_content_never_mutated():
     # 字符串内部的换行+引号组合不应被修复梯改写(合法 JSON 直接首轮通过)
     raw = '{"a": "line1\\nline2 \\"quoted\\""}'
     assert _parse_json_response_text(raw) == {"a": 'line1\nline2 "quoted"'}
+
+
+def test_trailing_comma_inside_string_preserved_and_outside_repaired():
+    # 2026-07-16 红队实证案例:字符串内的 ",]" 必须原样保留,字符串外的尾逗号修掉
+    raw = '{"note": "hooks: [a,], done", "list": [1, 2,]}'
+    assert _parse_json_response_text(raw) == {
+        "note": "hooks: [a,], done",
+        "list": [1, 2],
+    }
+
+
+def test_candidate_rejected_if_string_tokens_would_change():
+    # 无法在不动字符串内容的前提下修好的输入,必须抛原始错误而不是有损修复
+    raw = '{"a": "unclosed [1,2,] '
+    import pytest as _pytest
+
+    with _pytest.raises(Exception):
+        _parse_json_response_text(raw)

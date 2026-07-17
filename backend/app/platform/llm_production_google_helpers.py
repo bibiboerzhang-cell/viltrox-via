@@ -30,24 +30,37 @@ def google_contents_fingerprint(contents: list[Any]) -> str:
     return f"google_contents_sha256:{digest}"
 
 
-def _default_thinking_config(config: Any, model: str) -> dict[str, Any] | None:
-    """Return a zero-budget thinking config when the caller left it unset.
+def _default_thinking_config(config: Any, model: str) -> Any | None:
+    """Return a bounded thinking config when the caller left it unset.
 
     gemini-2.5 系默认动态思考,思考 token 计入 max_output_tokens——本边界全是
-    结构化抽取,思考只会烧光预算导致正文截断(769 事故在网关修过,2026-07-16
-    evidence 3972 在本 SDK 路径复发:Unterminated string)。pro 系不允许关思考,
-    跳过;调用方显式给过 thinking_config 也不动。
+    结构化抽取,无界思考会烧光预算导致正文截断(769 事故在网关修过,2026-07-16
+    evidence 3972 在本 SDK 路径复发:Unterminated string)。口径对齐网关实弹
+    矩阵(llm_gateway_providers/canary 2026-07-15):flash 系关死(budget 0);
+    2.5-pro 不允许关但可有界(budget 128);其余 pro 系证据不足不动。
+    调用方显式给过 thinking_config 一律不动。
     """
 
     model_id = str(model or "").lower()
-    if not model_id or "pro" in model_id:
+    if not model_id:
         return None
     if isinstance(config, dict):
         if config.get("thinking_config") is not None or config.get("thinkingConfig") is not None:
             return None
     elif config is not None and getattr(config, "thinking_config", None) is not None:
         return None
-    return {"thinking_budget": 0}
+    if "pro" in model_id:
+        if "2.5" not in model_id:
+            return None
+        budget = 128
+    else:
+        budget = 0
+    try:  # 优先真类型,消 pydantic model_copy 的裸 dict 序列化警告
+        from google.genai import types as _genai_types
+
+        return _genai_types.ThinkingConfig(thinking_budget=budget)
+    except Exception:
+        return {"thinking_budget": budget}
 
 
 def google_config_with_output_limit(
