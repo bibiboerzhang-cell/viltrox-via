@@ -282,7 +282,9 @@ def test_apify_leaf_inventory_is_explicit_and_opaque_network_wrapper_is_unused()
             if name in calls:
                 calls[name].append(f"{path.relative_to(root)}:{node.lineno}")
 
-    assert len(calls["call_apify_actor"]) == 33
+    # 34 = 33 + listening_executors(2026-07-16 市场监听接线:X/Reddit 经 call_apify_actor
+    # 走预算预检+记账,属显式登记的合法叶子)。
+    assert len(calls["call_apify_actor"]) == 34
     assert calls["run_apify_network"] == []
     media_source = inspect.getsource(
         __import__("app.workers.apify_jobs_worker_media", fromlist=["_scrape_with_apify_timeout"])._scrape_with_apify_timeout
