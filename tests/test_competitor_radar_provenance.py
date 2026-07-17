@@ -178,6 +178,53 @@ def test_generate_grounded_three_tuple_adds_provenance(monkeypatch) -> None:
     assert item["observed_at"] == payload["generated_at"]
 
 
+def test_generate_matches_cjk_parenthetical_brand_to_grounding(monkeypatch) -> None:
+    """「Meike (美科)」式中英混写品牌必须能命中英文接地源标题(2026-07-17
+    线上两连发 item_source_not_grounded 的回归钉)。"""
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Meike (美科)",
+                            "title": "Meike 发布 85mm f/1.4 II",
+                            "summary": "升级版人像定焦开售",
+                            "impact": "同级价格压力",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            # 线上真实形态:条目自带 URL 但与引文 URL 不同,只能靠品牌命中接地。
+                            "source_url": "https://petapixel.com/meike-85-announcement",
+                            "published_at": "2026-07-16T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "gemini:test+google_search",
+            [{"title": "Meike launches 85mm f/1.4 II lens", "url": "https://petapixel.com/meike-85"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "ok"
+    assert result["result_status"] == "ready"
+    assert conn.insert_params is not None
+    payload = json.loads(str(conn.insert_params[0]))
+    item = payload["items"][0]
+    assert item["brand"] == "Meike (美科)"
+    # 接地源要真的挂到条目上,前端「可回源」计数才有 URL 可点。
+    attached_urls = {str(s.get("source_url") or "") for s in item["sources"]}
+    assert "https://petapixel.com/meike-85" in attached_urls
+
+
 def test_generate_does_not_persist_legacy_ungrounded_result(monkeypatch) -> None:
     conn = _Conn()
     monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)

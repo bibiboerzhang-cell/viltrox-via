@@ -98,6 +98,16 @@ def _text(*values: Any) -> str:
     return ""
 
 
+def _brand_ascii_key(value: Any) -> str:
+    """ASCII 归一化品牌键:模型常回「Meike (美科)」式中英混写,原样小写包含
+    匹配对英文接地源标题恒 miss(2026-07-17 线上两连发 item_source_not_grounded
+    实证)。剥括注后只留 ASCII 词元;纯 CJK 品牌返回空串,回退 URL 匹配(闸不放宽)。"""
+    raw = str(value or "").lower()
+    raw = re.sub(r"[\(（][^\)）]*[\)）]", " ", raw)
+    tokens = re.findall(r"[a-z0-9][a-z0-9&'-]*", raw)
+    return " ".join(tokens).strip()
+
+
 def _validate_item_sources(value: Any, field: str) -> tuple[list[dict[str, Any]], list[str]]:
     if value is None:
         return [], []
@@ -609,6 +619,7 @@ def generate_competitor_radar() -> dict[str, Any]:
     def item_has_grounding(item: dict[str, Any]) -> bool:
         item_url = str(item.get("source_url") or "")
         brand = str(item.get("brand") or "").strip().lower()
+        brand_key = _brand_ascii_key(brand)
         for source in grounding_sources:
             if not isinstance(source, dict):
                 continue
@@ -617,7 +628,11 @@ def generate_competitor_radar() -> dict[str, Any]:
                 str(source.get(key) or "").lower()
                 for key in ("title", "source_url", "url")
             )
-            if (item_url and item_url == source_url) or (brand and brand in source_blob):
+            if (
+                (item_url and item_url == source_url)
+                or (brand and brand in source_blob)
+                or (brand_key and brand_key in source_blob)
+            ):
                 return True
         return False
 
@@ -649,13 +664,18 @@ def generate_competitor_radar() -> dict[str, Any]:
         brand = str(d.get("brand") or "")[:40]
         item_sources = list(d.get("sources")) if isinstance(d.get("sources"), list) else []
         item_url = _text(d.get("source_url"), d.get("url"))
+        brand_key = _brand_ascii_key(brand)
         for source in grounding_sources:
             source_url = _text(source.get("source_url"), source.get("url"))
             source_blob = " ".join(
                 str(source.get(key) or "").lower()
                 for key in ("title", "source_url", "url")
             )
-            if (item_url and source_url == item_url) or (brand and brand.lower() in source_blob):
+            if (
+                (item_url and source_url == item_url)
+                or (brand and brand.lower() in source_blob)
+                or (brand_key and brand_key in source_blob)
+            ):
                 item_sources.append(source)
         clean.append(
             normalize_signal_item(
