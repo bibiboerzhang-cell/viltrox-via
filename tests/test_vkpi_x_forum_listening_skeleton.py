@@ -1,11 +1,12 @@
-"""迸发⑤ 契约测试:X / 摄影论坛监听骨架 —— 闸默认 OFF 零网络 + 字段映射。
+"""迸发⑤ 契约测试:X / 摄影论坛监听 —— 闸默认 OFF 零网络 + 字段映射 + 开闸委派。
 
 红线契约:
-  1) 闸三态(absent/off/on)任何一态都零网络零写库(socket 级卫兵坐实);
-  2) on 也只到 not_wired(执行体属开闸刀),绝不静默变成真实抓取;
-  3) 字段映射(x / forum)对 mock payload 产出 vkpi_comments 标准字段,0 值保留;
-  4) 监听覆盖两行读真闸态:not_connected / scaffold / empty / ready;
-  5) market_voice 扩源降级兜底:骨架模块炸 → 覆盖卡仍出「未接入·盲区」两行。
+  1) 闸 absent/off 两态零网络零写库(socket 级卫兵坐实);
+  2) 闸 on + dry_run=True 只出执行计划(status="planned"),同样零网络零写库;
+  3) 闸 on(非 dry_run)委派 listening_executors 真采集(测试用假执行体,仍零网络);
+  4) 字段映射(x / forum)对 mock payload 产出 vkpi_comments 标准字段,0 值保留;
+  5) 监听覆盖两行读真闸态:not_connected / scaffold / empty / ready;
+  6) market_voice 扩源降级兜底:骨架模块炸 → 覆盖卡仍出「未接入·盲区」两行。
 """
 from __future__ import annotations
 
@@ -60,25 +61,56 @@ def test_gate_off_returns_disabled_with_zero_network(no_network, monkeypatch):
         assert result["network_calls"] == 0
 
 
-def test_gate_on_stops_at_not_wired_still_zero_network(no_network, monkeypatch):
-    """开闸 ≠ 抓取:骨架阶段执行体未接线,on 也必须零网络(误开闸零烧钱)。"""
+def test_gate_on_dry_run_plans_with_zero_network(no_network, monkeypatch):
+    """开闸 + dry_run=True 只出执行计划(status="planned"),必须零网络零写库。"""
     monkeypatch.setenv(ml.GATE_X, "1")
     monkeypatch.setenv(ml.GATE_FORUM, "1")
 
-    x = ml.collect_x_listening(max_items=5000)
-    assert x["status"] == "not_wired"
+    x = ml.collect_x_listening(max_items=5000, dry_run=True)
+    assert x["status"] == "planned"
     assert x["items"] == [] and x["network_calls"] == 0
     # 词族复用 lexicon:品牌词必在;max_items 被日上限封顶
     assert "viltrox" in x["planned"]["queries"]
     assert x["planned"]["max_items"] <= ml.X_LISTEN_DAILY_CAP
 
-    forum = ml.collect_forum_listening()
-    assert forum["status"] == "not_wired"
+    forum = ml.collect_forum_listening(dry_run=True)
+    assert forum["status"] == "planned"
     assert forum["items"] == [] and forum["network_calls"] == 0
     # 合规红线:自动化只允许 reddit;DPReview 论坛 / FredMiranda 永在 no_scrape
     assert forum["planned"]["allowed_sources"] == ["reddit"]
     assert set(forum["planned"]["no_scrape_sources"]) == {"dpreview_forums", "fredmiranda"}
     assert forum["planned"]["watchlist"], "watchlist 不得为空(reddit 策略或兜底)"
+
+
+def test_gate_on_delegates_to_wired_executors(no_network, monkeypatch):
+    """开闸(非 dry_run)委派 listening_executors 真执行体;透传结果并带上闸/计划。"""
+    import app.domains.comments.listening_executors as le
+
+    monkeypatch.setenv(ml.GATE_X, "1")
+    monkeypatch.setenv(ml.GATE_FORUM, "1")
+    calls: dict[str, dict] = {}
+
+    def _fake_x(queries=None, *, max_items=0, **_kw):
+        calls["x"] = {"queries": list(queries or []), "max_items": max_items}
+        return {"status": "ok", "platform": "x", "network_calls": 1, "fetched": 2, "new_mentions": 2}
+
+    def _fake_reddit(subreddits=None, *, max_items=0, **_kw):
+        calls["reddit"] = {"subreddits": list(subreddits or []), "max_items": max_items}
+        return {"status": "ok", "platform": "reddit", "network_calls": 3, "fetched": 5, "new_mentions": 4}
+
+    monkeypatch.setattr(le, "run_x_listening", _fake_x)
+    monkeypatch.setattr(le, "run_reddit_listening", _fake_reddit)
+
+    x = ml.collect_x_listening(max_items=5000)
+    assert x["status"] == "ok" and x["new_mentions"] == 2
+    assert x["gate"] == ml.GATE_X and x["gate_state"] == "on"
+    assert calls["x"]["max_items"] == ml.X_LISTEN_DAILY_CAP  # 5000 被日上限封顶
+    assert "viltrox" in calls["x"]["queries"]
+
+    forum = ml.collect_forum_listening()
+    assert forum["status"] == "ok" and forum["new_mentions"] == 4
+    assert forum["gate"] == ml.GATE_FORUM and forum["gate_state"] == "on"
+    assert calls["reddit"]["subreddits"], "默认 watchlist 必须传给执行体"
 
 
 def test_forum_platform_registered_but_has_no_crawler():

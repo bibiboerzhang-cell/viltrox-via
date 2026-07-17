@@ -924,6 +924,7 @@ from .jobs_tasks_intel import (  # noqa: E402,F401
     _run_brief_agent_daily,
     job_market_voice_alerts,
     job_sentiment_annotate,
+    job_vkpi_market_listening_daily,
     job_vkpi_ai_today_hot,
     job_vkpi_brief_agent,
     job_vkpi_competitor_radar,

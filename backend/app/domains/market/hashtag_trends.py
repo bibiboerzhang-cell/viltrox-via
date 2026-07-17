@@ -1,9 +1,10 @@
 """#21 市场热词聚合(实时,不建快照表)。
 
-优先读取近期行业帖 hashtag；当行业账号暂未同步时，同时读取已落库且带
-来源引用的 ``vkpi_market_observations``，复用统一市场词表提取品牌/品类词。
-两个来源始终分别计数并回传，绝不把内部生成时间伪装成原帖发布时间。
-数据稀疏时如实返回少量；两个来源都无命中才返回空 trends。
+读取三路近期证据:行业帖 hashtag(``vkpi_industry_posts``)、带来源引用的
+``vkpi_market_observations``、市场监听帖(``vkpi_market_mentions``,Reddit/X
+采集落表),后两路复用统一市场词表提取品牌/品类词。
+各来源始终分别计数并回传,绝不把内部生成时间伪装成原帖发布时间。
+数据稀疏时如实返回少量;所有来源都无命中才返回空 trends。
 红线:纯聚合,零 viltrox_fit_score / rule_v0 触点。占位符 '?'(方言层翻译)。
 """
 from __future__ import annotations
@@ -108,7 +109,7 @@ def build_hashtag_trends_v0(limit: int = 12, days: int = 14, platform: str = "")
     conn = get_conn()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
     agg: dict[str, dict[str, Any]] = {}
-    source_rows = {"industry_posts": 0, "market_observations": 0}
+    source_rows = {"industry_posts": 0, "market_observations": 0, "market_mentions": 0}
 
     where = ["COALESCE(published_at, created_at) >= ?"]
     params: list[Any] = [cutoff]
@@ -177,6 +178,55 @@ def build_hashtag_trends_v0(limit: int = 12, days: int = 14, platform: str = "")
                     },
                 )
 
+    # 市场监听帖(Reddit/X 采集,listening_executors 落表):标题+摘要过统一词表。
+    # mentions 行带 platform 列,请求平台过滤时按同口径参与(与行业帖一致)。
+    if table_exists("vkpi_market_mentions") and table_exists("vkpi_market_sources"):
+        mention_where = ["m.created_at >= ?"]
+        mention_params: list[Any] = [cutoff]
+        if plat:
+            mention_where.append("LOWER(COALESCE(m.platform,'')) = ?")
+            mention_params.append(plat)
+        mention_rows = conn.execute(
+            f"""
+            SELECT m.id, LOWER(COALESCE(m.platform,'')) AS platform, m.mention_text,
+                   m.metadata_json, m.created_at,
+                   COALESCE(s.source_url, '') AS source_url
+            FROM vkpi_market_mentions m
+            LEFT JOIN vkpi_market_sources s ON s.id = m.source_id
+            WHERE {' AND '.join(mention_where)}
+            """,
+            tuple(mention_params),
+        ).fetchall()
+        source_rows["market_mentions"] = len(mention_rows)
+        for row in mention_rows:
+            data = _row_dict(row)
+            meta: dict[str, Any] = {}
+            try:
+                raw_meta = data.get("metadata_json")
+                parsed = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+                meta = parsed if isinstance(parsed, dict) else {}
+            except (TypeError, ValueError):
+                meta = {}
+            engagement = 0
+            for key in ("score", "num_comments", "likes", "retweets", "replies", "quotes"):
+                try:
+                    engagement += max(0, int(meta.get(key) or 0))
+                except (TypeError, ValueError):
+                    continue
+            observed = str(meta.get("published_at") or data.get("created_at") or "")
+            url = str(meta.get("url") or meta.get("source_url") or data.get("source_url") or "")
+            for term in set(keyword_hits(str(data.get("mention_text") or ""))):
+                _add_evidence(
+                    agg,
+                    term=term,
+                    source="market_mentions",
+                    platform=str(data.get("platform") or ""),
+                    kind="keyword",
+                    engagement=engagement,
+                    observed_at=observed,
+                    ref={"table": "vkpi_market_mentions", "id": data.get("id"), "url": url},
+                )
+
     trends = []
     for term, value in agg.items():
         sources = sorted(value["sources"])
@@ -213,6 +263,7 @@ def build_hashtag_trends_v0(limit: int = 12, days: int = 14, platform: str = "")
     source_labels = {
         "industry_posts": "行业帖",
         "market_observations": "市场观测",
+        "market_mentions": "市场监听",
     }
     source_label = " + ".join(source_labels[source] for source in active_sources)
     return {

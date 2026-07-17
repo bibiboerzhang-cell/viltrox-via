@@ -184,6 +184,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_logistics_track_sync,
     job_market_voice_alerts,
     job_ops_threshold_alerts,
+    job_vkpi_market_listening_daily,
     job_pending_asset_cleanup,
     job_sentiment_annotate,
     job_provider_health_check,
@@ -678,6 +679,19 @@ async def _start_scheduler_local() -> None:
         name="Market voice volume alerts (8h window x complaint category, owned x2, default-off)",
         max_instances=1,
         coalesce=True,
+    )
+    # ── 市场监听每日采集(07:40 中国·Reddit 免费 JSON + X Apify 封顶)──
+    # 双闸:env VKPI_FORUM_COLLECT_ENABLED / VKPI_X_COLLECT_ENABLED + config-gate
+    # (scheduler_tasks.vkpi_market_listening,注册表无此行 → 默认关,空跑即返回)。
+    # 落 vkpi_market_sources/vkpi_market_mentions(幂等),喂「近期市场热词」;开启方式见 job 注释。
+    _scheduler.add_job(
+        job_vkpi_market_listening_daily,
+        trigger=CronTrigger(hour=7, minute=40, timezone=CHINA_TZ),
+        id="vkpi_market_listening_daily",
+        name="Market listening daily collect (Reddit free JSON + X Apify capped, default-off)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     # ── AI Today 今日热点(每早8点中国时区·LLM·预算闸)── config-gate(scheduler_tasks.vkpi_ai_today_hot)。
     _scheduler.add_job(

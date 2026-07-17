@@ -12,9 +12,10 @@ class _Rows:
 
 
 class _Conn:
-    def __init__(self, post_rows=None, observation_rows=None):
+    def __init__(self, post_rows=None, observation_rows=None, mention_rows=None):
         self.post_rows = post_rows or []
         self.observation_rows = observation_rows or []
+        self.mention_rows = mention_rows or []
 
     def execute(self, query, params=()):
         del params
@@ -22,12 +23,22 @@ class _Conn:
             return _Rows(self.post_rows)
         if "FROM vkpi_market_observations" in query:
             return _Rows(self.observation_rows)
+        if "FROM vkpi_market_mentions" in query:
+            return _Rows(self.mention_rows)
         raise AssertionError(query)
 
 
-def _install(monkeypatch, *, posts=None, observations=None, tables=None):
-    conn = _Conn(posts, observations)
-    available = set(tables or {"vkpi_industry_posts", "vkpi_market_observations"})
+def _install(monkeypatch, *, posts=None, observations=None, mentions=None, tables=None):
+    conn = _Conn(posts, observations, mentions)
+    available = set(
+        tables
+        or {
+            "vkpi_industry_posts",
+            "vkpi_market_observations",
+            "vkpi_market_mentions",
+            "vkpi_market_sources",
+        }
+    )
     monkeypatch.setattr(hashtag_trends, "get_conn", lambda: conn)
     monkeypatch.setattr(hashtag_trends, "table_exists", lambda name: name in available)
 
@@ -64,7 +75,11 @@ def test_trends_merge_same_term_across_sources_without_duplicate_cards(monkeypat
     assert sony["sources"] == ["industry_posts", "market_observations"]
     assert sony["engagement"] == 112
     assert result["summary"]["unique_terms"] == len(result["trends"])
-    assert result["summary"]["source_rows"] == {"industry_posts": 1, "market_observations": 1}
+    assert result["summary"]["source_rows"] == {
+        "industry_posts": 1,
+        "market_observations": 1,
+        "market_mentions": 0,
+    }
     assert result["summary"]["source"] == "multi_source"
     assert result["summary"]["source_label"] == "行业帖 + 市场观测"
 
@@ -120,4 +135,47 @@ def test_missing_optional_tables_are_safe(monkeypatch):
     assert result["summary"]["source_rows"] == {
         "industry_posts": 0,
         "market_observations": 0,
+        "market_mentions": 0,
     }
+
+
+def test_listening_mentions_feed_trends_with_real_engagement_and_platform_filter(monkeypatch):
+    """市场监听帖(Reddit/X 落表)出词:词表命中 + metadata 互动数 + 平台过滤同口径。"""
+    _install(
+        monkeypatch,
+        posts=[],
+        observations=[],
+        mentions=[
+            {
+                "id": 101,
+                "platform": "reddit",
+                "mention_text": "Viltrox 85mm f/1.8 vs Sigma on Sony bodies · long term review",
+                "metadata_json": '{"origin":"listening","url":"https://www.reddit.com/r/SonyAlpha/comments/abc/","score":57,"num_comments":14,"published_at":"2026-07-15T09:00:00Z"}',
+                "created_at": "2026-07-15T10:00:00Z",
+                "source_url": "https://www.reddit.com/r/SonyAlpha/comments/abc/",
+            },
+            {
+                "id": 102,
+                "platform": "x",
+                "mention_text": "The new Viltrox lab lens is wild",
+                "metadata_json": '{"origin":"listening","likes":30,"retweets":5,"replies":2,"published_at":"2026-07-15T11:00:00Z"}',
+                "created_at": "2026-07-15T11:05:00Z",
+                "source_url": "",
+            },
+        ],
+    )
+
+    result = hashtag_trends.build_hashtag_trends_v0(limit=20, days=14)
+
+    viltrox = next(item for item in result["trends"] if item["hashtag"] == "viltrox")
+    assert viltrox["evidence_count"] == 2
+    assert viltrox["sources"] == ["market_mentions"]
+    assert viltrox["engagement"] == (57 + 14) + (30 + 5 + 2)
+    assert set(viltrox["platforms"]) == {"reddit", "x"}
+    assert result["summary"]["source_rows"]["market_mentions"] == 2
+    assert result["summary"]["source_label"] == "市场监听"
+    # 证据引用带原帖 URL(metadata url 优先)
+    assert any(
+        str(ref.get("url") or "").startswith("https://www.reddit.com/")
+        for ref in viltrox["sample_refs"]
+    )

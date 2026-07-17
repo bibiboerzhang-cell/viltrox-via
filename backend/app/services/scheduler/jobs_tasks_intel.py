@@ -286,6 +286,58 @@ async def job_market_voice_alerts():
         _record_scheduler_run("market_voice_alerts", ok=False, error=str(exc)[:240])
 
 
+async def job_vkpi_market_listening_daily():
+    """市场监听每日采集(迸发⑤开闸刀):Reddit 公开 JSON(免费)+ X Apify actor(封顶),
+    帖级实体落 vkpi_market_sources/vkpi_market_mentions,喂 Dashboard「近期市场热词」。
+
+    双闸叠加,默认全关不烧钱:
+      1) env 闸:VKPI_FORUM_COLLECT_ENABLED / VKPI_X_COLLECT_ENABLED(缺省/0 →
+         collect_* 各自返回 disabled,零网络零写库;两闸独立,可只开 Reddit);
+      2) config-gate(scheduler_tasks.vkpi_market_listening):注册表无此行/未开 → 不跑。
+    成本口径(2026-07-16 实测结算):Reddit 免费(公开 JSON 限速 >= 2 秒/请求;
+    IP 被挡时经 VKPI_FORUM_APIFY_FALLBACK_ENABLED 显式放行单 run 批量兜底,
+    计时计费 600s 封顶 ≈ $0.26/run);X 走 call_apify_actor(provider:apify
+    预算预检 + 记账),单轮 maxItems=60(实测 $2.56/1k → ≈$0.15/天 ≈ $4.6/月)。
+    合计月成本 ≈ $4.6(免费路通)~ $12(兜底常开),贴着 ~$10/月 授权跑。
+    零触 viltrox_fit_score / rule_v0;落表幂等(platform+source_ref 去重)。
+
+    开启方式(运营显式执行 SQL,或 Ops 设置页开关):
+      INSERT INTO scheduler_tasks (task_key, label, enabled, risk_level)
+      VALUES ('vkpi_market_listening', '市场监听每日采集(Reddit 免费 + X Apify 封顶)', TRUE, 'low')
+      ON CONFLICT (task_key) DO UPDATE SET enabled = TRUE;
+    关闸:UPDATE scheduler_tasks SET enabled = FALSE WHERE task_key = 'vkpi_market_listening';
+    """
+    if not _scheduler_task_enabled("vkpi_market_listening"):
+        return
+    try:
+        import asyncio
+
+        from app.domains.comments import market_listening
+
+        forum = await asyncio.to_thread(market_listening.collect_forum_listening)
+        # X 单轮 60 条:实测结算 $2.56/1k,60 条 ≈ $0.15/天,守住月授权(见 docstring 成本口径)
+        x = await asyncio.to_thread(lambda: market_listening.collect_x_listening(max_items=60))
+        summary_keys = ("status", "fetched", "new_sources", "new_mentions", "skipped_existing", "network_calls", "reason")
+        result = {
+            "forum": {k: forum.get(k) for k in summary_keys if forum.get(k) is not None},
+            "x": {k: x.get(k) for k in summary_keys if x.get(k) is not None},
+        }
+        logger.info("scheduler.vkpi_market_listening", extra={"result": result})
+        failed = [
+            f"{name}={part.get('status')}:{str(part.get('reason') or '')[:80]}"
+            for name, part in (("forum", forum), ("x", x))
+            if str(part.get("status") or "") in {"error", "blocked"}
+        ]
+        _record_scheduler_run(
+            "vkpi_market_listening",
+            ok=not failed,
+            error="; ".join(failed)[:240],
+        )
+    except Exception as exc:
+        logger.exception("scheduler.vkpi_market_listening_failed")
+        _record_scheduler_run("vkpi_market_listening", ok=False, error=str(exc)[:240])
+
+
 async def job_sentiment_annotate():
     """V0g 评论情绪批注(打包 LLM):sentiment_id IS NULL 的 vkpi_comments 每轮批注 ≤200 条
     (env VKPI_SENTIMENT_ANNOTATE_MAX_PER_RUN 可调),一次调用打包 40 条省 token,

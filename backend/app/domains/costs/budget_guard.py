@@ -536,6 +536,10 @@ _APIFY_DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "apify/facebook-posts-scraper": {"per_run": 0.001, "per_1000_items": 2.5},
     "apify/facebook-pages-scraper": {"per_1000_items": 6.5},
     "trudax/reddit-scraper-lite": {"per_run": 0.02, "per_1000_items": 3.6},
+    # X 监听(迸发⑤开闸刀):2026-07-16 实测结算 100 条=$0.256 → $2.56/1k
+    # (设计单标价 $0.40/1k 与实测差 6x,按实测口径记;缺行会被预检 estimate_unavailable 整路挡死)。
+    "apidojo/twitter-scraper-lite": {"per_1000_items": 2.6},
+    "apidojo/tweet-scraper": {"per_1000_items": 2.6},
     # B&H 付费 actor:实测 $0.09/start + $0.005/item ≈ $0.29-0.34/run
     "powerai/bhphotovideo-product-search-scraper": {"per_run": 0.32},
     "powerai/bhphotovideo-product-reviews-scraper": {"per_run": 0.32},
