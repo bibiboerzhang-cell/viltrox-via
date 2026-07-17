@@ -52,7 +52,7 @@ export function DashboardCommandCenter(props: any) {
       e("p", { className: "mt-1 text-xs text-muted md:text-sm" }, currentMode?.desc || "真实 KOL、Dealer 与 Events 地理分布"),
     ),
 
-    !showSettingsModal && (viewMode || !mapSelectionLoading) && e("div", { className: "absolute left-6 top-24 z-overlay-high flex max-w-[calc(100%-360px)] flex-wrap items-start gap-2" },
+    !showSettingsModal && (viewMode || !mapSelectionLoading) && e("div", { className: "absolute left-6 top-24 z-overlay-top flex max-w-[calc(100%-360px)] flex-wrap items-start gap-2" },
       e(HierarchyDropdown, {
         label: "Viewing",
         value: viewMode,
@@ -115,7 +115,7 @@ export function DashboardCommandCenter(props: any) {
       }),
     ),
 
-    !showSettingsModal && breadcrumb.length > 0 && e("div", { className: "absolute left-6 top-[154px] z-overlay-high" },
+    !showSettingsModal && breadcrumb.length > 0 && e("div", { className: "absolute left-6 top-[154px] z-overlay-top" },
       e(Breadcrumb, { levels: breadcrumb, onGoBack: goBack }),
     ),
 

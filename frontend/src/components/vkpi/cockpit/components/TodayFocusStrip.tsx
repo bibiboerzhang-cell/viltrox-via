@@ -26,6 +26,9 @@ const CATEGORY_LABEL: Record<string, string> = {
   event_followup: "活动收尾",
   inventory_low: "库存预警",
   project_shared_to_you: "项目共享",
+  // 与 ActionInboxPanel 的 CATEGORY_META 口径对齐(补齐 gtm 两类,消除横条露英文 slug)。
+  gtm_verdict: "裁决对答案",
+  gtm_bet: "GTM押注",
 };
 
 // 优先级小圆点(高/中/低),与 ActionInboxPanel 的 PRIORITY_META 同色系。
@@ -257,7 +260,7 @@ export function TodayFocusStrip({
           e(
             "span",
             { className: "shrink-0 text-[9px] text-muted" },
-            CATEGORY_LABEL[it.category] || it.category,
+            CATEGORY_LABEL[it.category] || "待处理",
           ),
           e("span", { className: "min-w-0 truncate" }, it.title),
         ),

@@ -251,6 +251,9 @@
   /* 防御性 z-index — 防止 Tailwind JIT 不识别 z-[N] */
   .z-overlay-mid  { z-index: 500 !important; }
   .z-overlay-high { z-index: 600 !important; }
+  /* 交互型地图门面(Viewing 下拉/面包屑)必须压过可拖拽浮层卡(zIndex:800),
+     否则浮层卡盖住下拉项会吃掉点击(Dealers 层"点不动"根因)。 */
+  .z-overlay-top  { z-index: 900 !important; }
 
   /* ─── KP module CSS (KOL Pool table + geo bars) ─── */
   .kp-table { border-collapse: separate; border-spacing: 0; width: 100%; }
