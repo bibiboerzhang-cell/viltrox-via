@@ -6,7 +6,6 @@ test. It does not call providers, enqueue tasks, run sync jobs, or write ledger
 rows.
 """
 from __future__ import annotations
-from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -17,13 +16,20 @@ from pathlib import Path
 from typing import Any
 
 
+# Path patch must run before any local import: under pytest collection the
+# module is imported as ``scripts.vkpi_llm_budget_acceptance`` and scripts/ is
+# NOT sys.path[0], so ``stdout_utils`` is only importable after this block.
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
+SCRIPTS = Path(__file__).resolve().parent
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
+from stdout_utils import out as stdout_out  # noqa: E402
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.platform import llm_gateway  # noqa: E402
 from app.domains.costs import budget_guard  # noqa: E402
