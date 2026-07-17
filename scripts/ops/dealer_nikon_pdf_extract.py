@@ -24,6 +24,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from stdout_utils import out as stdout_out  # noqa: E402
+
 DEFAULT_PDF = ROOT / "runtime" / "dealer-source-audit" / "20260716" / "nikon.pdf"
 DEFAULT_OUT = ROOT / "runtime" / "dealer-source-audit" / "20260716" / "nikon_rows.json"
 DOCUMENT_URL = "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf"
@@ -133,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.pdf.is_file():
-        print(f"error: PDF not found: {args.pdf}", file=sys.stderr)
+        stdout_out(f"error: PDF not found: {args.pdf}", file=sys.stderr)
         return 2
     pdf_bytes = args.pdf.read_bytes()
     document_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
@@ -169,15 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     stats = extraction["stats"]
-    print(f"document_sha256={document_sha256}")
-    print(f"directory_as_of={extraction['as_of']}")
-    print(f"raw_rows={stats['raw_rows']}")
-    print(f"unique_organizations={stats['unique_organizations']}")
-    print(f"organizations_with_multiple_rows={stats['organizations_with_multiple_rows']}")
-    print(f"duplicate_full_identity_rows={stats['duplicate_full_identity_rows']}")
-    print(f"by_dealer_type={json.dumps(stats['by_dealer_type'], sort_keys=True)}")
-    print(f"skipped_fragments={stats['skipped_fragments']}")
-    print(f"out={args.out}")
+    stdout_out(f"document_sha256={document_sha256}")
+    stdout_out(f"directory_as_of={extraction['as_of']}")
+    stdout_out(f"raw_rows={stats['raw_rows']}")
+    stdout_out(f"unique_organizations={stats['unique_organizations']}")
+    stdout_out(f"organizations_with_multiple_rows={stats['organizations_with_multiple_rows']}")
+    stdout_out(f"duplicate_full_identity_rows={stats['duplicate_full_identity_rows']}")
+    stdout_out(f"by_dealer_type={json.dumps(stats['by_dealer_type'], sort_keys=True)}")
+    stdout_out(f"skipped_fragments={stats['skipped_fragments']}")
+    stdout_out(f"out={args.out}")
     return 0
 
 

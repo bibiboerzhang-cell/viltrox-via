@@ -25,6 +25,10 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from stdout_utils import out as stdout_out  # noqa: E402
 
 DEFAULT_ROWS_JSON = ROOT / "runtime" / "dealer-source-audit" / "20260716" / "nikon_rows.json"
 SOURCE_REGISTRY_ID = "nikon_usa_pdf_20260716"
@@ -71,28 +75,28 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.organization_id <= 0:
-        print("error: --organization-id must be positive", file=sys.stderr)
+        stdout_out("error: --organization-id must be positive", file=sys.stderr)
         return 2
     try:
         payload = json.loads(args.rows_json.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"error: unreadable rows json: {exc}", file=sys.stderr)
+        stdout_out(f"error: unreadable rows json: {exc}", file=sys.stderr)
         return 2
     document = payload.get("document") or {}
     rows = payload.get("rows") or []
     document_sha256 = str(document.get("document_sha256") or "")
     document_url = str(document.get("document_url") or "")
     if not re.match(r"^[0-9a-f]{64}$", document_sha256) or not document_url.startswith("https://"):
-        print("error: rows json lacks document_sha256/document_url", file=sys.stderr)
+        stdout_out("error: rows json lacks document_sha256/document_url", file=sys.stderr)
         return 2
     if not rows:
-        print("error: rows json contains no rows", file=sys.stderr)
+        stdout_out("error: rows json contains no rows", file=sys.stderr)
         return 2
 
     from app.db.connection import get_conn, is_postgres_runtime
 
     if not is_postgres_runtime():
-        print("error: candidate backfill requires the PostgreSQL runtime", file=sys.stderr)
+        stdout_out("error: candidate backfill requires the PostgreSQL runtime", file=sys.stderr)
         return 2
     conn = get_conn()
 
@@ -172,11 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         """,
         (args.organization_id, CANDIDATE_TYPE, SOURCE_REGISTRY_ID),
     ).fetchone()
-    print(f"source_registry_id={SOURCE_REGISTRY_ID}")
-    print(f"rows_in_snapshot={len(rows)}")
-    print(f"inserted={inserted}")
-    print(f"skipped={skipped}")
-    print(f"registry_candidates_total={int(total['n'] if hasattr(total, 'keys') else total[0])}")
+    stdout_out(f"source_registry_id={SOURCE_REGISTRY_ID}")
+    stdout_out(f"rows_in_snapshot={len(rows)}")
+    stdout_out(f"inserted={inserted}")
+    stdout_out(f"skipped={skipped}")
+    stdout_out(f"registry_candidates_total={int(total['n'] if hasattr(total, 'keys') else total[0])}")
     return 0
 
 

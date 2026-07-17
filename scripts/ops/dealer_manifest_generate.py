@@ -34,6 +34,10 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from stdout_utils import out as stdout_out  # noqa: E402
 
 SOURCE_REGISTRY_ID = "nikon_usa_pdf_20260716"
 MANIFEST_SCHEMA = "vkpi.reviewed-physical-store-manifest/v1"
@@ -110,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     from app.domains.commerce.census_geocode import geocode_match
 
     if not is_postgres_runtime():
-        print("error: manifest generation requires the PostgreSQL runtime", file=sys.stderr)
+        stdout_out("error: manifest generation requires the PostgreSQL runtime", file=sys.stderr)
         return 2
     conn = get_conn()
     rows = conn.execute(
@@ -236,17 +240,17 @@ def main(argv: list[str] | None = None) -> int:
         reviewed.load_manifest(path)  # schema self-check; raises on violation
         written.append(str(path))
 
-    print(json.dumps(counters, indent=2, sort_keys=True))
-    print(f"manifest_stores={len(manifest_stores)} files={len(written)}")
+    stdout_out(json.dumps(counters, indent=2, sort_keys=True))
+    stdout_out(f"manifest_stores={len(manifest_stores)} files={len(written)}")
     for path in written:
-        print(f"manifest_file={path}")
-    print("summary (state / city / name / phone):")
+        stdout_out(f"manifest_file={path}")
+    stdout_out("summary (state / city / name / phone):")
     for store in manifest_stores:
-        print(
+        stdout_out(
             f"  {store['state']} | {store['city']} | {store['name']} | {store['phone']}"
         )
     if not written:
-        print("no stores qualified; nothing written")
+        stdout_out("no stores qualified; nothing written")
     return 0
 
 

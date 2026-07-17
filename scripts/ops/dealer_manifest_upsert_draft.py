@@ -17,8 +17,11 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 
 from app.db.connection import get_conn  # noqa: E402
+from stdout_utils import out as stdout_out  # noqa: E402
 
 
 def main() -> int:
@@ -76,7 +79,7 @@ def main() -> int:
             updated += 1
     if args.write:
         conn.commit()
-    print(json.dumps({
+    stdout_out(json.dumps({
         "manifest": str(args.manifest.name),
         "stores": len(stores),
         "inserted": inserted,

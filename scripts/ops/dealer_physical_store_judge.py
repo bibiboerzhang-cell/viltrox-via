@@ -35,6 +35,10 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from stdout_utils import out as stdout_out  # noqa: E402
 
 SOURCE_REGISTRY_ID = "nikon_usa_pdf_20260716"
 PURPOSE = "vkpi_dealer_store_judge"
@@ -248,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     from app.db.connection import get_conn, is_postgres_runtime
 
     if not is_postgres_runtime():
-        print("error: judge requires the PostgreSQL runtime", file=sys.stderr)
+        stdout_out("error: judge requires the PostgreSQL runtime", file=sys.stderr)
         return 2
     conn = get_conn()
     where_missing = "(candidate_payload_json->'judge') IS NULL"
@@ -270,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     ).fetchall()
     if args.limit > 0:
         rows = rows[: args.limit]
-    print(f"pending_candidates={len(rows)} model={args.model}")
+    stdout_out(f"pending_candidates={len(rows)} model={args.model}")
 
     judged = {"physical": 0, "online_only": 0, "unclear": 0}
     failures = 0
@@ -285,9 +289,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001 - per-row isolation, row stays retryable
             failures += 1
             consecutive_failures += 1
-            print(f"[{index}/{len(rows)}] {candidate_id} FAILED: {type(exc).__name__}: {exc}")
+            stdout_out(f"[{index}/{len(rows)}] {candidate_id} FAILED: {type(exc).__name__}: {exc}")
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                print(
+                stdout_out(
                     f"aborting: {consecutive_failures} consecutive provider failures "
                     "(check GEMINI_API_KEY / proxy / readiness ack / budget gate)",
                     file=sys.stderr,
@@ -313,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         conn.commit()
         judged[judge["verdict"]] += 1
         org = (payload.get("row") or {}).get("organization_name", "")
-        print(
+        stdout_out(
             f"[{index}/{len(rows)}] {candidate_id} {judge['verdict']}"
             f" conf={judge['confidence']:.2f} stores={len(judge['stores'])}"
             f" grounded={judge['grounding_status'] == 'grounded'} | {org}"
@@ -330,11 +334,11 @@ def main(argv: list[str] | None = None) -> int:
         """,
         (args.organization_id, SOURCE_REGISTRY_ID),
     ).fetchall()
-    print(f"run_judged={json.dumps(judged, sort_keys=True)} run_failures={failures}")
+    stdout_out(f"run_judged={json.dumps(judged, sort_keys=True)} run_failures={failures}")
     for total in totals:
         verdict = total["verdict"] if hasattr(total, "keys") else total[0]
         count = total["n"] if hasattr(total, "keys") else total[1]
-        print(f"db_total verdict={verdict} count={count}")
+        stdout_out(f"db_total verdict={verdict} count={count}")
     return 0 if failures == 0 else 1
 
 
