@@ -349,6 +349,29 @@ describe("AI Today 真实证据与新鲜度", () => {
       providersAttempted: ["google", "anthropic"],
     });
   });
+
+  it("快照不可用时诚实空态,绝不回落 copilot-brief 内部产物", () => {
+    // 2026-07-16 用户裁决:AI Today 只看外部市场内容;内部建议归 Action Inbox。
+    const out = normalizeAiInsight(
+      {
+        headline: "Brief Agent v0 prepared 4 candidate briefs",
+        is_real: true,
+        last_run_at: "2026-07-15T20:00:00Z",
+        actions: [{ title: "内部建议一" }],
+      },
+      { tasks: [{ title: "内部任务" }] },
+      { available: false, reason: "no_grounded_latest" },
+    );
+
+    expect(out.todayDecision.text).toBe("");
+    expect(out.todayDecision.reason).not.toContain("copilot");
+    expect(out.strengthen).toEqual([]);
+    expect(out.todayContent).toEqual([]);
+    expect(out.sources).toEqual([]);
+    expect(out.recommendedVideos).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain("Brief Agent v0");
+    expect(JSON.stringify(out)).not.toContain("内部建议一");
+  });
 });
 
 describe("竞品雷达来源归一化", () => {

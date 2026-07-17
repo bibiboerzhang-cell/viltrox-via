@@ -688,40 +688,42 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
       raw: hot,
     };
   }
-  const brief = record(copilotBrief);
-  const summary = record(brief.summary);
-  const items = list(brief.items);
-  const actions = list(brief.actions);
-  const taskItems = list(record(tasks).tasks);
-  const headline = String(brief.headline || summary.headline || "暂无可执行候选");
+  // 2026-07-16 用户裁决:AI Today 只看外部市场内容 —— 快照不可用时诚实空态,
+  // 绝不再回落 copilot-brief/内部任务顶「今日重点决策」位(内部建议归 Action Inbox)。
+  // 此前回落造成三重误导:内部产物冒充市场决策、「20 小时前」实为 brief 产物时间、
+  // 底部黄字「未保留市场来源」看似快照坏了实为根本没读快照。
+  void copilotBrief;
+  void tasks;
+  const fallbackFreshnessLabel = String(hotContent.freshness_label || hot.freshness_label || "");
+  const fallbackFreshnessStatus = String(hotContent.freshness_status || hot.freshness_status || "unknown");
   return {
-    // 2026-06-12 波3 R4:此前 72% 为前端硬编码假置信度;brief 产物不含模型置信度,诚实置 null(卡面不显示 conf)。
     confidence: null,
-    updatedLabel: brief.last_run_at ? timeLabel(brief.last_run_at) : "无信号",
+    updatedLabel: fallbackFreshnessLabel || "暂无今日快照",
     todayDecision: {
-      text: headline,
+      text: "",
       amount: "--",
-      reason: brief.is_real ? "来自 copilot-brief 只读产物" : "当前没有可用真实候选",
-      primaryAction: "查看证据",
+      reason: latestAttempt
+        ? "今日外部市场快照未就绪,最近一次生成情况见下方说明"
+        : "今日外部市场快照未就绪,等待每日刷新",
+      primaryAction: "查看来源",
       secondaryAction: "稍后处理",
     },
-    strengthen: (actions.length ? actions : items).slice(0, 3).map((item, index) => ({
-      text: String(record(item).title || record(item).label || record(item).action || `建议 ${index + 1}`),
-      detail: String(record(item).body || record(item).reason || record(item).summary || ""),
-    })),
+    strengthen: [],
     weaken: [],
-    todayContent: taskItems.slice(0, 3).map((item) => String(record(item).title || record(item).body || "任务待复核")),
+    todayContent: [],
     recommendedVideos: [],
     productRecommendations: [],
     contentRecommendations: [],
     videoRecommendations: [],
     sources: [],
     latestAttempt,
-    freshnessStatus: "unknown",
-    freshnessLabel: "",
-    isStale: false,
-    poweredBy: brief.source || "实时聚合",
-    raw: brief,
+    freshnessStatus: fallbackFreshnessStatus,
+    freshnessLabel: fallbackFreshnessLabel,
+    isStale: fallbackFreshnessStatus === "stale",
+    generatedAt: String(hotContent.generated_at || hot.generated_at || ""),
+    snapshotDate: String(hotContent.snapshot_date || hot.snapshot_date || ""),
+    poweredBy: "只展示外部市场内容 · 内部建议见今日该做什么",
+    raw: hot,
   };
 }
 

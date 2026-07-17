@@ -152,7 +152,9 @@ export async function fetchCockpitDashboardBundle(
     settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/industry-data/market-intelligence/cards/v0?limit=120&brand_limit=5&include_latest_llm_artifact=false&include_latest_external_smoke=false", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
     settleWithStatus(cachedApiFetch<{ projects?: Row[] }>("/api/admin/vkpi/projects?limit=100&starred=true", { timeoutMs: 3500, forceRefresh }, apiToken), { projects: [] }),
     settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/fit-movers?limit=8", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
-    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
+    // ai-today-hot 读端要跑视频证据排序+市场来源拼接,冷库/并发批里 2.5s 会静默超时回 {},
+    // AI Today 卡随即落空态(2026-07-16 截图事故根因之一)。对齐 fetchAiTodayHotSnapshot 的 5s。
+    settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/ai-today-hot", { timeoutMs: 5000, forceRefresh }, apiToken), {}),
     settleWithStatus(cachedApiFetch<Row>("/api/admin/vkpi/dashboard/competitor-radar", { timeoutMs: 2500, forceRefresh }, apiToken), {}),
   ]);
 
