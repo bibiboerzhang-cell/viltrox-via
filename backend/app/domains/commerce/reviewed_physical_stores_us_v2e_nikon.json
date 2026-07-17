@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "40 Main Street",
+      "brand_listing_url": "https://www.madisonphoto.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Madison",
+      "coordinates": {
+        "lat": 40.759230918379,
+        "lng": -74.415689337658,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.madisonphoto.com/contact-us",
+      "name": "Madison PhotoPlus · Madison",
+      "observed_at": "2026-07-16T23:56:56Z",
+      "organization_key_material": "Madison Photoplus",
+      "phone": "973-966-2900",
+      "postal_code": "07940",
+      "retailer_host": "madisonphoto.com",
+      "source_id": "madisonphoto_store_page",
+      "state": "NJ",
+      "website_url": "https://www.madisonphoto.com"
+    },
+    {
+      "address": "85 Godwin Ave, Midland Park Shopping Center",
+      "brand_listing_url": "https://wholesalephoto.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Midland Park",
+      "coordinates": {
+        "lat": 40.984451637944,
+        "lng": -74.137434001448,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://wholesalephoto.com/",
+      "name": "Wholesale Photo · Midland Park",
+      "observed_at": "2026-07-17T00:03:02Z",
+      "organization_key_material": "Wholesale Photo Supply Inc",
+      "phone": "(833) 682-9331",
+      "postal_code": "07432",
+      "retailer_host": "wholesalephoto.com",
+      "source_id": "wholesalephoto_store_page",
+      "state": "NJ",
+      "website_url": "https://wholesalephoto.com/"
+    },
+    {
+      "address": "200 Morris Avenue",
+      "brand_listing_url": "https://www.mackretail.com/service/about/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Springfield",
+      "coordinates": {
+        "lat": 40.710805700254,
+        "lng": -74.309366918365,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.mackretail.com/service/about/",
+      "name": "Mack Camera · Springfield",
+      "observed_at": "2026-07-16T23:56:53Z",
+      "organization_key_material": "Mack Camera & Video Service In",
+      "phone": "973-467-2291",
+      "postal_code": "07081",
+      "retailer_host": "mackretail.com",
+      "source_id": "mackretail_store_page",
+      "state": "NJ",
+      "website_url": "https://www.mackretail.com"
+    },
+    {
+      "address": "1362 S Delsea Dr",
+      "brand_listing_url": "https://tfcamerashop.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Vineland",
+      "coordinates": {
+        "lat": 39.467147614542,
+        "lng": -75.044836412198,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://tfcamerashop.com",
+      "name": "T&F Camera Shop · Vineland",
+      "observed_at": "2026-07-17T00:01:12Z",
+      "organization_key_material": "T & F Camera Shop Inc",
+      "phone": "(856) 691-5328",
+      "postal_code": "08360",
+      "retailer_host": "tfcamerashop.com",
+      "source_id": "tfcamerashop_store_page",
+      "state": "NJ",
+      "website_url": "https://tfcamerashop.com"
+    },
+    {
+      "address": "270 Westwood Avenue",
+      "brand_listing_url": "https://bergencountycamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Westwood",
+      "coordinates": {
+        "lat": 40.992965802286,
+        "lng": -74.030028279222,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://bergencountycamera.com",
+      "name": "Bergen County Camera · Westwood",
+      "observed_at": "2026-07-16T23:49:41Z",
+      "organization_key_material": "Bergen County Camera Inc",
+      "phone": "+1 201-664-4113",
+      "postal_code": "07675",
+      "retailer_host": "bergencountycamera.com",
+      "source_id": "bergencountycamera_store_page",
+      "state": "NJ",
+      "website_url": "https://bergencountycamera.com"
+    },
+    {
+      "address": "1808 2nd Street, Suite C",
+      "brand_listing_url": "https://www.camerashopsf.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Santa Fe",
+      "coordinates": {
+        "lat": 35.663090963117,
+        "lng": -105.965769202735,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.camerashopsf.com/contact",
+      "name": "The Camera Shop of Santa Fe · Santa Fe",
+      "observed_at": "2026-07-17T00:01:45Z",
+      "organization_key_material": "The Camera Shop of Santa Fe",
+      "phone": "(505) 983-6591",
+      "postal_code": "87505",
+      "retailer_host": "camerashopsf.com",
+      "source_id": "camerashopsf_store_page",
+      "state": "NM",
+      "website_url": "https://www.camerashopsf.com"
+    },
+    {
+      "address": "4511 West Sahara Avenue",
+      "brand_listing_url": "https://www.bandccamera.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Las Vegas",
+      "coordinates": {
+        "lat": 36.144323999039,
+        "lng": -115.202003267469,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bandccamera.com/pages/contact-us",
+      "name": "B&C Camera · Las Vegas",
+      "observed_at": "2026-07-16T23:49:12Z",
+      "organization_key_material": "B&C Camera",
+      "phone": "(702) 871-1100",
+      "postal_code": "89102",
+      "retailer_host": "bandccamera.com",
+      "source_id": "bandccamera_store_page",
+      "state": "NV",
+      "website_url": "https://www.bandccamera.com"
+    },
+    {
+      "address": "5890 S. Virginia St. building 3",
+      "brand_listing_url": "https://www.actioncamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Reno",
+      "coordinates": {
+        "lat": 39.472133766714,
+        "lng": -119.786746174909,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.actioncamera.com",
+      "name": "Action Camera Reno · Reno",
+      "observed_at": "2026-07-16T23:48:26Z",
+      "organization_key_material": "Action Camera",
+      "phone": "(775) 825-2000",
+      "postal_code": "89502",
+      "retailer_host": "actioncamera.com",
+      "source_id": "actioncamera_store_page",
+      "state": "NV",
+      "website_url": "https://www.actioncamera.com"
+    },
+    {
+      "address": "Industry City, 88 35th St, 4th Fl",
+      "brand_listing_url": "https://www.abelcine.com/locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brooklyn",
+      "coordinates": {
+        "lat": 40.656674950458,
+        "lng": -74.006930758739,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.abelcine.com/locations",
+      "name": "AbelCine New York · Brooklyn",
+      "observed_at": "2026-07-16T23:48:10Z",
+      "organization_key_material": "Abel Cine",
+      "phone": "888-223-1599",
+      "postal_code": "11232",
+      "retailer_host": "abelcine.com",
+      "source_id": "abelcine_store_page",
+      "state": "NY",
+      "website_url": "https://www.abelcine.com"
+    },
+    {
+      "address": "895 McDonald Ave",
+      "brand_listing_url": "https://www.focuscamera.com/pages/store-locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brooklyn",
+      "coordinates": {
+        "lat": 40.63310715036,
+        "lng": -73.97753263919,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.focuscamera.com/pages/store-locations",
+      "name": "Focus Camera Brooklyn Store · Brooklyn",
+      "observed_at": "2026-07-16T23:53:17Z",
+      "organization_key_material": "Focus Camera LLC",
+      "phone": "718-431-7900",
+      "postal_code": "11218",
+      "retailer_host": "focuscamera.com",
+      "source_id": "focuscamera_store_page",
+      "state": "NY",
+      "website_url": "https://www.focuscamera.com"
+    },
+    {
+      "address": "325 38th Street",
+      "brand_listing_url": "https://www.kmcamera.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brooklyn",
+      "coordinates": {
+        "lat": 40.654179391327,
+        "lng": -74.007016234943,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.kmcamera.com/pages/contact-us",
+      "name": "K&M Rentals Brooklyn · Brooklyn",
+      "observed_at": "2026-07-16T23:55:52Z",
+      "organization_key_material": "K&M Camera",
+      "phone": "212-523-0954",
+      "postal_code": "11232",
+      "retailer_host": "kmcamera.com",
+      "source_id": "kmcamera_store_page",
+      "state": "NY",
+      "website_url": "https://www.kmcamera.com"
+    },
+    {
+      "address": "3237 Greenpoint Ave",
+      "brand_listing_url": "https://www.kellards.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Long Island City",
+      "coordinates": {
+        "lat": 40.735257102239,
+        "lng": -73.9357474472,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.kellards.com/pages/contact-us",
+      "name": "Kellards · Long Island City",
+      "observed_at": "2026-07-16T23:56:05Z",
+      "organization_key_material": "Kellards Photo and Electronic",
+      "phone": "(212) 747-8789",
+      "postal_code": "11101",
+      "retailer_host": "kellards.com",
+      "source_id": "kellards_store_page",
+      "state": "NY",
+      "website_url": "https://www.kellards.com/"
+    },
+    {
+      "address": "42 W 18th Street",
+      "brand_listing_url": "https://www.adorama.com/g/nyc-store",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.7390215706,
+        "lng": -73.993187846046,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.adorama.com/g/nyc-store",
+      "name": "Adorama NYC Store · New York",
+      "observed_at": "2026-07-16T23:48:29Z",
+      "organization_key_material": "Adorama Inc",
+      "phone": "212-741-0063",
+      "postal_code": "10011",
+      "retailer_host": "adorama.com",
+      "source_id": "adorama_store_page",
+      "state": "NY",
+      "website_url": "https://www.adorama.com"
+    },
+    {
+      "address": "420 9th Ave",
+      "brand_listing_url": "https://www.bhphotovideo.com/find/jsp/area_map.jsp",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.753308871719,
+        "lng": -73.996272449882,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bhphotovideo.com/find/jsp/area_map.jsp",
+      "name": "B&H NYC SuperStore · New York",
+      "observed_at": "2026-07-16T23:49:17Z",
+      "organization_key_material": "B & H Photo & Video",
+      "phone": "212-444-6615",
+      "postal_code": "10001",
+      "retailer_host": "bhphotovideo.com",
+      "source_id": "bhphotovideo_store_page",
+      "state": "NY",
+      "website_url": "https://www.bhphotovideo.com"
+    },
+    {
+      "address": "41 West 22nd Street",
+      "brand_listing_url": "https://fotocare.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.74148661181,
+        "lng": -73.991360009954,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://fotocare.com/contact-us",
+      "name": "Foto Care · New York",
+      "observed_at": "2026-07-16T23:53:28Z",
+      "organization_key_material": "Foto-Care Ltd",
+      "phone": "212-741-2990",
+      "postal_code": "10010",
+      "retailer_host": "fotocare.com",
+      "source_id": "fotocare_store_page",
+      "state": "NY",
+      "website_url": "https://fotocare.com"
+    },
+    {
+      "address": "54 Orchard Street",
+      "brand_listing_url": "https://www.kmcamera.com/pages/store-hours-and-location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New York",
+      "coordinates": {
+        "lat": 40.716676879263,
+        "lng": -73.990889377636,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.kmcamera.com/pages/store-hours-and-location",
+      "name": "K&M Camera Manhattan Store · New York",
+      "observed_at": "2026-07-16T23:55:52Z",
+      "organization_key_material": "K&M Camera",
+      "phone": "212-523-0954",
+      "postal_code": "10002",
+      "retailer_host": "kmcamera.com",
+      "source_id": "kmcamera_store_page",
+      "state": "NY",
+      "website_url": "https://www.kmcamera.com"
+    },
+    {
+      "address": "720 Old Bethpage Rd",
+      "brand_listing_url": "https://cameralandny.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Old Bethpage",
+      "coordinates": {
+        "lat": 40.764315125357,
+        "lng": -73.454556074405,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cameralandny.com/contact-us",
+      "name": "Camera Land NY · Old Bethpage",
+      "observed_at": "2026-07-16T23:51:09Z",
+      "organization_key_material": "Camera Land Inc",
+      "phone": "516-217-1000",
+      "postal_code": "11804",
+      "retailer_host": "cameralandny.com",
+      "source_id": "cameralandny_store_page",
+      "state": "NY",
+      "website_url": "https://cameralandny.com"
+    },
+    {
+      "address": "1755 East Avenue",
+      "brand_listing_url": "https://www.rocphotosupply.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Rochester",
+      "coordinates": {
+        "lat": 43.145927568521,
+        "lng": -77.557523345266,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.rocphotosupply.com/contact",
+      "name": "Scott's Rochester Photo Supply · Rochester",
+      "observed_at": "2026-07-16T23:59:40Z",
+      "organization_key_material": "Rochester Photo Supply LLC",
+      "phone": "(585) 442-3140",
+      "postal_code": "14610",
+      "retailer_host": "rocphotosupply.com",
+      "source_id": "rocphotosupply_store_page",
+      "state": "NY",
+      "website_url": "https://www.rocphotosupply.com"
+    },
+    {
+      "address": "226 West Jericho Tpk. (Rt. 25)",
+      "brand_listing_url": "https://www.berger-bros.com/about-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Syosset",
+      "coordinates": {
+        "lat": 40.810112034362,
+        "lng": -73.508812862055,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.berger-bros.com/about-us/",
+      "name": "Berger Bros - Syosset, NY · Syosset",
+      "observed_at": "2026-07-16T23:49:45Z",
+      "organization_key_material": "Berger Bros Camera Exchange In",
+      "phone": "516-496-1000",
+      "postal_code": "11791",
+      "retailer_host": "berger-bros.com",
+      "source_id": "bergerbros_store_page",
+      "state": "NY",
+      "website_url": "https://www.berger-bros.com"
+    },
+    {
+      "address": "6565 Kinne Rd. at Erie Blvd.",
+      "brand_listing_url": "https://www.johnsoncamera.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Syracuse",
+      "coordinates": {
+        "lat": 43.042675880454,
+        "lng": -76.067534230848,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.johnsoncamera.com/contact-us/",
+      "name": "Johnson Studio & Camera · Syracuse",
+      "observed_at": "2026-07-16T23:55:48Z",
+      "organization_key_material": "Johnson Studio & Camera",
+      "phone": "(315) 446-0290",
+      "postal_code": "13214",
+      "retailer_host": "johnsoncamera.com",
+      "source_id": "johnsoncamera_store_page",
+      "state": "NY",
+      "website_url": "https://www.johnsoncamera.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

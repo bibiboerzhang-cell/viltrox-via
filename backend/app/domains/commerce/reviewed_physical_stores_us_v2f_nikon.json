@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "625 Burnet Ave",
+      "brand_listing_url": "https://www.ralins.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Syracuse",
+      "coordinates": {
+        "lat": 43.052213099321,
+        "lng": -76.135560194794,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.ralins.com",
+      "name": "Ra-Lin Discount · Syracuse",
+      "observed_at": "2026-07-16T23:59:26Z",
+      "organization_key_material": "Ra-Lin Inc",
+      "phone": "(315) 472-7766",
+      "postal_code": "13203",
+      "retailer_host": "ralins.com",
+      "source_id": "ralins_store_page",
+      "state": "NY",
+      "website_url": "https://www.ralins.com"
+    },
+    {
+      "address": "1168 Wantagh Avenue",
+      "brand_listing_url": "https://www.17thstreet.com/ny-store",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Wantagh",
+      "coordinates": {
+        "lat": 40.694789178066,
+        "lng": -73.507538706792,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.17thstreet.com/ny-store",
+      "name": "17th Street Photo Supply · Wantagh",
+      "observed_at": "2026-07-16T23:48:06Z",
+      "organization_key_material": "17th St. Photo Supply, Inc",
+      "phone": "516-500-3605",
+      "postal_code": "11793",
+      "retailer_host": "17thstreet.com",
+      "source_id": "17thstreet_store_page",
+      "state": "NY",
+      "website_url": "https://www.17thstreet.com"
+    },
+    {
+      "address": "2100 Center Road",
+      "brand_listing_url": "https://www.thepixelconnection.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Avon",
+      "coordinates": {
+        "lat": 41.46354826766,
+        "lng": -82.022042553062,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.thepixelconnection.com/pages/contact",
+      "name": "Pixel Connection - Cleveland/Avon · Avon",
+      "observed_at": "2026-07-16T23:58:36Z",
+      "organization_key_material": "Pixel Connection",
+      "phone": "(440) 934-1544",
+      "postal_code": "44011",
+      "retailer_host": "thepixelconnection.com",
+      "source_id": "thepixelconnection_store_page",
+      "state": "OH",
+      "website_url": "https://www.thepixelconnection.com"
+    },
+    {
+      "address": "4920 Whipple Ave NW",
+      "brand_listing_url": "https://vanscamera.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Canton",
+      "coordinates": {
+        "lat": 40.853115958375,
+        "lng": -81.422998141913,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://vanscamera.com/pages/contact-us",
+      "name": "Van's Camera · Canton",
+      "observed_at": "2026-07-17T00:02:30Z",
+      "organization_key_material": "Van's Camera Inc",
+      "phone": "(330) 493-3534",
+      "postal_code": "44718",
+      "retailer_host": "vanscamera.com",
+      "source_id": "vanscamera_store_page",
+      "state": "OH",
+      "website_url": "https://vanscamera.com"
+    },
+    {
+      "address": "2077 East 30th Street",
+      "brand_listing_url": "https://doddcamera.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Cleveland",
+      "coordinates": {
+        "lat": 41.500262302766,
+        "lng": -81.666881108128,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://doddcamera.com/contact",
+      "name": "East 30th Street (Cleveland) · Cleveland",
+      "observed_at": "2026-07-16T23:52:54Z",
+      "organization_key_material": "Dodd Camera Holdings, Inc",
+      "phone": "(216) 361-6800",
+      "postal_code": "44115",
+      "retailer_host": "doddcamera.com",
+      "source_id": "doddcamera_store_page",
+      "state": "OH",
+      "website_url": "https://doddcamera.com"
+    },
+    {
+      "address": "2887 Silver Dr",
+      "brand_listing_url": "https://mpex.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Columbus",
+      "coordinates": {
+        "lat": 40.02308596684,
+        "lng": -82.995776837245,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://mpex.com",
+      "name": "Midwest Photo · Columbus",
+      "observed_at": "2026-07-16T23:57:13Z",
+      "organization_key_material": "Midwest Photo",
+      "phone": "614-261-1264",
+      "postal_code": "43211",
+      "retailer_host": "mpex.com",
+      "source_id": "mpex_store_page",
+      "state": "OH",
+      "website_url": "https://mpex.com"
+    },
+    {
+      "address": "1645 E. Main Street",
+      "brand_listing_url": "https://www.campuscamera.net/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Kent",
+      "coordinates": {
+        "lat": 41.154335705402,
+        "lng": -81.334521100116,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.campuscamera.net/contact",
+      "name": "Campus Camera & Imaging · Kent",
+      "observed_at": "2026-07-16T23:51:54Z",
+      "organization_key_material": "Campus Camera & Imaging",
+      "phone": "330-678-1297",
+      "postal_code": "44240",
+      "retailer_host": "campuscamera.net",
+      "source_id": "campuscamera_store_page",
+      "state": "OH",
+      "website_url": "https://www.campuscamera.net"
+    },
+    {
+      "address": "1301 Cameron Avenue",
+      "brand_listing_url": "https://doddcamera.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lewis Center",
+      "coordinates": {
+        "lat": 40.153881845654,
+        "lng": -82.999832092837,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://doddcamera.com/contact",
+      "name": "Columbus · Lewis Center",
+      "observed_at": "2026-07-16T23:52:54Z",
+      "organization_key_material": "Dodd Camera Holdings, Inc",
+      "phone": "(614) 547-7096",
+      "postal_code": "43035",
+      "retailer_host": "doddcamera.com",
+      "source_id": "doddcamera_store_page",
+      "state": "OH",
+      "website_url": "https://doddcamera.com"
+    },
+    {
+      "address": "120 W. South Boundary Street",
+      "brand_listing_url": "https://www.kohnes.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Perrysburg",
+      "coordinates": {
+        "lat": 41.545436129784,
+        "lng": -83.620703188083,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.kohnes.com",
+      "name": "Kohne Camera & Photo · Perrysburg",
+      "observed_at": "2026-07-16T23:56:12Z",
+      "organization_key_material": "Kohne Camera & Photo",
+      "phone": "419.385.9500",
+      "postal_code": "43551",
+      "retailer_host": "kohnes.com",
+      "source_id": "kohnes_store_page",
+      "state": "OH",
+      "website_url": "https://www.kohnes.com"
+    },
+    {
+      "address": "34384 Aurora Road",
+      "brand_listing_url": "https://doddcamera.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Solon",
+      "coordinates": {
+        "lat": 41.383484588244,
+        "lng": -81.433447600841,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://doddcamera.com/contact",
+      "name": "Solon · Solon",
+      "observed_at": "2026-07-16T23:52:54Z",
+      "organization_key_material": "Dodd Camera Holdings, Inc",
+      "phone": "(440) 498-0580",
+      "postal_code": "44139",
+      "retailer_host": "doddcamera.com",
+      "source_id": "doddcamera_store_page",
+      "state": "OH",
+      "website_url": "https://doddcamera.com"
+    },
+    {
+      "address": "755 Boardman-Canfield Road",
+      "brand_listing_url": "https://ymcamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Youngstown",
+      "coordinates": {
+        "lat": 41.024466839178,
+        "lng": -80.685640098383,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://ymcamera.com/contact-us",
+      "name": "YM Camera · Youngstown",
+      "observed_at": "2026-07-17T00:03:24Z",
+      "organization_key_material": "YM Camera Inc",
+      "phone": "330-758-7005",
+      "postal_code": "44512",
+      "retailer_host": "ymcamera.com",
+      "source_id": "ymcamera_store_page",
+      "state": "OH",
+      "website_url": "https://ymcamera.com/"
+    },
+    {
+      "address": "3110 North May Ave",
+      "brand_listing_url": "https://www.bedfords.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Oklahoma City",
+      "coordinates": {
+        "lat": 35.50088345612,
+        "lng": -97.565591717204,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bedfords.com/contact",
+      "name": "Bedford Camera & Video: Oklahoma City · Oklahoma City",
+      "observed_at": "2026-07-16T23:49:35Z",
+      "organization_key_material": "Bedford Camera & Video Inc",
+      "phone": "405-943-1047",
+      "postal_code": "73112",
+      "retailer_host": "bedfords.com",
+      "source_id": "bedfords_store_page",
+      "state": "OK",
+      "website_url": "https://www.bedfords.com"
+    },
+    {
+      "address": "11929 SW Canyon Road",
+      "brand_listing_url": "https://www.theshutterbug.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Beaverton",
+      "coordinates": {
+        "lat": 45.489184269763,
+        "lng": -122.799677474911,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.theshutterbug.com/contact",
+      "name": "The Shutterbug Beaverton · Beaverton",
+      "observed_at": "2026-07-17T00:02:09Z",
+      "organization_key_material": "The Shutterbug Inc",
+      "phone": "(503) 639-5088",
+      "postal_code": "97005",
+      "retailer_host": "theshutterbug.com",
+      "source_id": "theshutterbug_store_page",
+      "state": "OR",
+      "website_url": "https://www.theshutterbug.com"
+    },
+    {
+      "address": "161 W. Ellendale",
+      "brand_listing_url": "https://www.focalpointphoto.com/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Dallas",
+      "coordinates": {
+        "lat": 44.929065902088,
+        "lng": -123.314318527781,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.focalpointphoto.com/about-us",
+      "name": "Focal Point Photography · Dallas",
+      "observed_at": "2026-07-16T23:53:13Z",
+      "organization_key_material": "Focal Point Photography",
+      "phone": "503-623-6300",
+      "postal_code": "97338",
+      "retailer_host": "focalpointphoto.com",
+      "source_id": "focalpointphoto_store_page",
+      "state": "OR",
+      "website_url": "https://www.focalpointphoto.com"
+    },
+    {
+      "address": "6401 SW Macadam Ave",
+      "brand_listing_url": "https://www.camerasolutionsinc.com/store-location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Portland",
+      "coordinates": {
+        "lat": 45.477898489143,
+        "lng": -122.67238826332,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.camerasolutionsinc.com/store-location",
+      "name": "Camera Solutions Inc. · Portland",
+      "observed_at": "2026-07-16T23:51:21Z",
+      "organization_key_material": "Camera Solutions Inc.",
+      "phone": "503-452-3907",
+      "postal_code": "97239",
+      "retailer_host": "camerasolutionsinc.com",
+      "source_id": "camerasolutionsinc_store_page",
+      "state": "OR",
+      "website_url": "https://www.camerasolutionsinc.com"
+    },
+    {
+      "address": "1112 NW 19th Ave",
+      "brand_listing_url": "https://prophotosupply.com/pages/location-hours",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Portland",
+      "coordinates": {
+        "lat": 45.530784120456,
+        "lng": -122.69044586827,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://prophotosupply.com/pages/location-hours",
+      "name": "Pro Photo Supply Main Store · Portland",
+      "observed_at": "2026-07-16T23:59:15Z",
+      "organization_key_material": "Pro Photo Supply Inc",
+      "phone": "503-241-1112",
+      "postal_code": "97209",
+      "retailer_host": "prophotosupply.com",
+      "source_id": "prophotosupply_store_page",
+      "state": "OR",
+      "website_url": "https://prophotosupply.com/"
+    },
+    {
+      "address": "1815 NW Northrup St",
+      "brand_listing_url": "https://prophotosupply.com/pages/location-hours",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Portland",
+      "coordinates": {
+        "lat": 45.531435203341,
+        "lng": -122.689738634419,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://prophotosupply.com/pages/location-hours",
+      "name": "Pro Photo Supply Photo Lab · Portland",
+      "observed_at": "2026-07-16T23:59:15Z",
+      "organization_key_material": "Pro Photo Supply Inc",
+      "phone": "503-241-1112",
+      "postal_code": "97209",
+      "retailer_host": "prophotosupply.com",
+      "source_id": "prophotosupply_store_page",
+      "state": "OR",
+      "website_url": "https://prophotosupply.com/"
+    },
+    {
+      "address": "714 SW Washington ST",
+      "brand_listing_url": "https://www.theshutterbug.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Portland",
+      "coordinates": {
+        "lat": 45.520672309412,
+        "lng": -122.679112090023,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.theshutterbug.com/contact",
+      "name": "The Shutterbug Portland · Portland",
+      "observed_at": "2026-07-17T00:02:09Z",
+      "organization_key_material": "The Shutterbug Inc",
+      "phone": "(503) 227-3456",
+      "postal_code": "97205",
+      "retailer_host": "theshutterbug.com",
+      "source_id": "theshutterbug_store_page",
+      "state": "OR",
+      "website_url": "https://www.theshutterbug.com"
+    },
+    {
+      "address": "3932 Commercial St SE",
+      "brand_listing_url": "https://www.theshutterbug.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Salem",
+      "coordinates": {
+        "lat": 44.899637126807,
+        "lng": -123.038780782209,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.theshutterbug.com/contact",
+      "name": "The Shutterbug Salem · Salem",
+      "observed_at": "2026-07-17T00:02:09Z",
+      "organization_key_material": "The Shutterbug Inc",
+      "phone": "503-364-8044",
+      "postal_code": "97302",
+      "retailer_host": "theshutterbug.com",
+      "source_id": "theshutterbug_store_page",
+      "state": "OR",
+      "website_url": "https://www.theshutterbug.com"
+    },
+    {
+      "address": "1439 W. Fairmont St.",
+      "brand_listing_url": "https://danscamera.com/about-us/hours-location-directions",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Allentown",
+      "coordinates": {
+        "lat": 40.617437778769,
+        "lng": -75.495628040459,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://danscamera.com/about-us/hours-location-directions",
+      "name": "Dan's Camera City - Allentown Store · Allentown",
+      "observed_at": "2026-07-16T23:52:29Z",
+      "organization_key_material": "Dan's Camera City Inc",
+      "phone": "(610) 434-2313",
+      "postal_code": "18102",
+      "retailer_host": "danscamera.com",
+      "source_id": "danscamera_store_page",
+      "state": "PA",
+      "website_url": "https://danscamera.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

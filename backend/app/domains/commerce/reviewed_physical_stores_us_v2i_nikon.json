@@ -1,0 +1,234 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "18110 W Bluemound Rd",
+      "brand_listing_url": "https://mikecrivellos.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Brookfield",
+      "coordinates": {
+        "lat": 43.036882376131,
+        "lng": -88.137344981647,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://mikecrivellos.com",
+      "name": "Mike Crivello's Cameras · Brookfield",
+      "observed_at": "2026-07-16T23:57:18Z",
+      "organization_key_material": "Mike Crivello's Camera Centers",
+      "phone": "(262) 782-4303",
+      "postal_code": "53045",
+      "retailer_host": "mikecrivellos.com",
+      "source_id": "mikecrivellos_store_page",
+      "state": "WI",
+      "website_url": "https://mikecrivellos.com"
+    },
+    {
+      "address": "529 North Monroe Avenue",
+      "brand_listing_url": "https://www.cccp.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Green Bay",
+      "coordinates": {
+        "lat": 44.516474272812,
+        "lng": -88.007670489587,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.cccp.com/contact-us/",
+      "name": "Camera Corner Connecting Point · Green Bay",
+      "observed_at": "2026-07-16T23:50:44Z",
+      "organization_key_material": "Camera Corner Connecting Poin",
+      "phone": "(920) 435-5353",
+      "postal_code": "54301",
+      "retailer_host": "cccp.com",
+      "source_id": "cccp_store_page",
+      "state": "WI",
+      "website_url": "https://www.cccp.com/"
+    },
+    {
+      "address": "6742 Odana Rd",
+      "brand_listing_url": "https://cameracompany.com/contacts",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Madison",
+      "coordinates": {
+        "lat": 43.056684776585,
+        "lng": -89.497496395418,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cameracompany.com/contacts",
+      "name": "The Camera Company - Westside · Madison",
+      "observed_at": "2026-07-17T00:01:34Z",
+      "organization_key_material": "The Camera Company",
+      "phone": "(608) 234-5280",
+      "postal_code": "53719",
+      "retailer_host": "cameracompany.com",
+      "source_id": "cameracompany_store_page",
+      "state": "WI",
+      "website_url": "https://cameracompany.com"
+    },
+    {
+      "address": "7965 S Main St",
+      "brand_listing_url": "https://impulsemke.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Oak Creek",
+      "coordinates": {
+        "lat": 42.90027046762,
+        "lng": -87.917778735661,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://impulsemke.com/pages/contact",
+      "name": "Impulse Camera Store · Oak Creek",
+      "observed_at": "2026-07-16T23:55:26Z",
+      "organization_key_material": "IMPULSE PRODUCTIONS, LLC",
+      "phone": "414-574-0110",
+      "postal_code": "53154",
+      "retailer_host": "impulsemke.com",
+      "source_id": "impulsemke_store_page",
+      "state": "WI",
+      "website_url": "https://impulsemke.com"
+    },
+    {
+      "address": "439 N. Main St.",
+      "brand_listing_url": "https://www.cameracasino.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Oshkosh",
+      "coordinates": {
+        "lat": 44.018471572945,
+        "lng": -88.537593055993,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.cameracasino.com",
+      "name": "Camera Casino · Oshkosh",
+      "observed_at": "2026-07-16T23:50:40Z",
+      "organization_key_material": "Camera Casino LLC",
+      "phone": "920.233.2424",
+      "postal_code": "54901",
+      "retailer_host": "cameracasino.com",
+      "source_id": "cameracasino_store_page",
+      "state": "WI",
+      "website_url": "https://www.cameracasino.com"
+    },
+    {
+      "address": "128 West 2nd Street",
+      "brand_listing_url": "https://wyomingcameraoutfitters.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Casper",
+      "coordinates": {
+        "lat": 42.848744573575,
+        "lng": -106.325603409271,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://wyomingcameraoutfitters.com/contact-us/",
+      "name": "Wyoming Camera Outfitters - Casper Store · Casper",
+      "observed_at": "2026-07-17T00:03:16Z",
+      "organization_key_material": "Wyoming Camera Outfitters Inc.",
+      "phone": "307-237-1223",
+      "postal_code": "82601",
+      "retailer_host": "wyomingcameraoutfitters.com",
+      "source_id": "wyomingcameraoutfitters_store_page",
+      "state": "WY",
+      "website_url": "https://wyomingcameraoutfitters.com/"
+    },
+    {
+      "address": "60 South Cache Street",
+      "brand_listing_url": "https://wyomingcameraoutfitters.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Jackson",
+      "coordinates": {
+        "lat": 43.478765279416,
+        "lng": -110.762288134627,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://wyomingcameraoutfitters.com/contact-us/",
+      "name": "Wyoming Camera Outfitters - Jackson Store · Jackson",
+      "observed_at": "2026-07-17T00:03:16Z",
+      "organization_key_material": "Wyoming Camera Outfitters Inc.",
+      "phone": "307-733-3831",
+      "postal_code": "83001",
+      "retailer_host": "wyomingcameraoutfitters.com",
+      "source_id": "wyomingcameraoutfitters_store_page",
+      "state": "WY",
+      "website_url": "https://wyomingcameraoutfitters.com/"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

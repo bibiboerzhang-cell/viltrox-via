@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "7160 N 9th Ave",
+      "brand_listing_url": "https://gulfcoastcamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Pensacola",
+      "coordinates": {
+        "lat": 30.498211654415,
+        "lng": -87.186962472011,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://gulfcoastcamera.com/contact-us",
+      "name": "Gulf Coast Camera Pensacola Headquarters · Pensacola",
+      "observed_at": "2026-07-16T23:54:37Z",
+      "organization_key_material": "Gulf Coast Camera LLC",
+      "phone": "(850) 476-2697",
+      "postal_code": "32504",
+      "retailer_host": "gulfcoastcamera.com",
+      "source_id": "gulfcoastcamera_store_page",
+      "state": "FL",
+      "website_url": "https://gulfcoastcamera.com"
+    },
+    {
+      "address": "3393 Peachtree Road NE, Unit 4058",
+      "brand_listing_url": "https://broadcasthub.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Atlanta",
+      "coordinates": {
+        "lat": 33.843234424516,
+        "lng": -84.362792804219,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://broadcasthub.com/contact-us",
+      "name": "Broadcast Hub LLC · Atlanta",
+      "observed_at": "2026-07-16T23:50:25Z",
+      "organization_key_material": "Broadcast Hub LLC",
+      "phone": "(770) 599-7225",
+      "postal_code": "30326",
+      "retailer_host": "broadcasthub.com",
+      "source_id": "broadcasthub_store_page",
+      "state": "GA",
+      "website_url": "https://broadcasthub.com"
+    },
+    {
+      "address": "803 New Franklin Rd",
+      "brand_listing_url": "https://www.walmart.com/store/614-lagrange-ga/electronics",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lagrange",
+      "coordinates": {
+        "lat": 33.060600634156,
+        "lng": -85.028582406766,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.walmart.com/store/614-lagrange-ga/electronics",
+      "name": "Lagrange New Franklin Rd Supercenter · Lagrange",
+      "observed_at": "2026-07-17T00:02:49Z",
+      "organization_key_material": "WAL-MART.COM",
+      "phone": "706-812-0225",
+      "postal_code": "30240",
+      "retailer_host": "walmart.com",
+      "source_id": "walmart_store_page",
+      "state": "GA",
+      "website_url": "https://www.walmart.com"
+    },
+    {
+      "address": "5080 Highlands Pkwy SE, Suite B",
+      "brand_listing_url": "https://www.keh.com/shop/store-locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Smyrna",
+      "coordinates": {
+        "lat": 33.829518856127,
+        "lng": -84.510221931181,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.keh.com/shop/store-locations",
+      "name": "KEH ATL Retail Store · Smyrna",
+      "observed_at": "2026-07-16T23:56:00Z",
+      "organization_key_material": "KEH, INC",
+      "phone": "1-800-342-5534",
+      "postal_code": "30082",
+      "retailer_host": "keh.com",
+      "source_id": "keh_store_page",
+      "state": "GA",
+      "website_url": "https://www.keh.com"
+    },
+    {
+      "address": "3523 Eastern Avenue",
+      "brand_listing_url": "https://www.thecameracorner.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Davenport",
+      "coordinates": {
+        "lat": 41.556219298127,
+        "lng": -90.551325417357,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.thecameracorner.com",
+      "name": "The Camera Corner · Davenport",
+      "observed_at": "2026-07-16T23:50:49Z",
+      "organization_key_material": "Camera Corner Inc",
+      "phone": "(563) 391-6851",
+      "postal_code": "52807",
+      "retailer_host": "thecameracorner.com",
+      "source_id": "thecameracorner_store_page",
+      "state": "IA",
+      "website_url": "https://www.thecameracorner.com"
+    },
+    {
+      "address": "6721 Douglas Ave.",
+      "brand_listing_url": "https://www.christianphoto.biz/contact-us.html",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Urbandale",
+      "coordinates": {
+        "lat": 41.629441843615,
+        "lng": -93.708896030224,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.christianphoto.biz/contact-us.html",
+      "name": "Christian Photo · Urbandale",
+      "observed_at": "2026-07-16T23:52:03Z",
+      "organization_key_material": "Christian Photography, Inc",
+      "phone": "515-270-8030",
+      "postal_code": "50322",
+      "retailer_host": "christianphoto.biz",
+      "source_id": "christianphoto_store_page",
+      "state": "IA",
+      "website_url": "https://www.christianphoto.biz"
+    },
+    {
+      "address": "12598 W Fairview Ave Suite 101",
+      "brand_listing_url": "https://www.pictureline.com/pages/hours-location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Boise",
+      "coordinates": {
+        "lat": 43.619502276019,
+        "lng": -116.336976675531,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.pictureline.com/pages/hours-location",
+      "name": "The Boise Store · Boise",
+      "observed_at": "2026-07-16T23:58:27Z",
+      "organization_key_material": "Pictureline Inc",
+      "phone": "208-330-2200",
+      "postal_code": "83713",
+      "retailer_host": "pictureline.com",
+      "source_id": "pictureline_store_page",
+      "state": "ID",
+      "website_url": "https://www.pictureline.com"
+    },
+    {
+      "address": "610 W. Hubbard Ave, Suite 109",
+      "brand_listing_url": "https://www.cameracorral.com/contact/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Coeur d'Alene",
+      "coordinates": {
+        "lat": 47.68283501518,
+        "lng": -116.792049393928,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.cameracorral.com/contact/",
+      "name": "Camera Corral · Coeur d'Alene",
+      "observed_at": "2026-07-16T23:50:56Z",
+      "organization_key_material": "Camera Corral Ltd",
+      "phone": "208-664-2420",
+      "postal_code": "83814",
+      "retailer_host": "cameracorral.com",
+      "source_id": "cameracorral_store_page",
+      "state": "ID",
+      "website_url": "https://www.cameracorral.com"
+    },
+    {
+      "address": "4300 Westbrook Drive",
+      "brand_listing_url": "https://procam.com/pages/procam-chicago-aurora-il",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Aurora",
+      "coordinates": {
+        "lat": 41.754483774975,
+        "lng": -88.20883476189,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://procam.com/pages/procam-chicago-aurora-il",
+      "name": "PROCAM Chicago · Aurora",
+      "observed_at": "2026-07-16T23:59:22Z",
+      "organization_key_material": "Procam",
+      "phone": "(630) 631-0907",
+      "postal_code": "60504",
+      "retailer_host": "procam.com",
+      "source_id": "procam_store_page",
+      "state": "IL",
+      "website_url": "https://procam.com"
+    },
+    {
+      "address": "1200 N. Milwaukee Ave.",
+      "brand_listing_url": "https://www.abt.com/help/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Glenview",
+      "coordinates": {
+        "lat": 42.078261009202,
+        "lng": -87.861540341734,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.abt.com/help/contact-us",
+      "name": "Abt Electronics · Glenview",
+      "observed_at": "2026-07-16T23:48:15Z",
+      "organization_key_material": "Abt Electronics Inc",
+      "phone": "800-914-2061",
+      "postal_code": "60025",
+      "retailer_host": "abt.com",
+      "source_id": "abt_store_page",
+      "state": "IL",
+      "website_url": "https://www.abt.com"
+    },
+    {
+      "address": "100 N. Walnut Street",
+      "brand_listing_url": "https://helixcamera.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Itasca",
+      "coordinates": {
+        "lat": 41.970685447713,
+        "lng": -88.013172691535,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://helixcamera.com/pages/contact-us",
+      "name": "Helix Camera & Video · Itasca",
+      "observed_at": "2026-07-16T23:54:41Z",
+      "organization_key_material": "Helix Camera & Video",
+      "phone": "312-421-6000",
+      "postal_code": "60143",
+      "retailer_host": "helixcamera.com",
+      "source_id": "helixcamera_store_page",
+      "state": "IL",
+      "website_url": "https://helixcamera.com/"
+    },
+    {
+      "address": "4700 N University St. Suite 63",
+      "brand_listing_url": "https://peoriacamerashop.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Peoria",
+      "coordinates": {
+        "lat": 40.744429156469,
+        "lng": -89.612450160527,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://peoriacamerashop.com",
+      "name": "Peoria Camera Shop · Peoria",
+      "observed_at": "2026-07-16T23:58:10Z",
+      "organization_key_material": "Peoria Camera Shop",
+      "phone": "309-693-9191",
+      "postal_code": "61614",
+      "retailer_host": "peoriacamerashop.com",
+      "source_id": "peoriacamerashop_store_page",
+      "state": "IL",
+      "website_url": "https://peoriacamerashop.com"
+    },
+    {
+      "address": "220 E St Clair St",
+      "brand_listing_url": "https://robertscamera.com/location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Indianapolis",
+      "coordinates": {
+        "lat": 39.777948030536,
+        "lng": -86.153250842771,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://robertscamera.com/location",
+      "name": "Roberts Camera · Indianapolis",
+      "observed_at": "2026-07-16T23:59:29Z",
+      "organization_key_material": "Roberts Camera",
+      "phone": "1-317-636-5544",
+      "postal_code": "46204",
+      "retailer_host": "robertscamera.com",
+      "source_id": "robertscamera_store_page",
+      "state": "IN",
+      "website_url": "https://robertscamera.com"
+    },
+    {
+      "address": "513 Lincoln Way W",
+      "brand_listing_url": "https://genescamera.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "South Bend",
+      "coordinates": {
+        "lat": 41.680554322668,
+        "lng": -86.258226233307,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://genescamera.com/",
+      "name": "Gene's Camera · South Bend",
+      "observed_at": "2026-07-16T23:54:09Z",
+      "organization_key_material": "Gene's Camera",
+      "phone": "574.234.2278",
+      "postal_code": "46601",
+      "retailer_host": "genescamera.com",
+      "source_id": "genescamera_store_page",
+      "state": "IN",
+      "website_url": "https://genescamera.com/"
+    },
+    {
+      "address": "8701 Metcalf Ave",
+      "brand_listing_url": "https://www.bedfords.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Overland Park",
+      "coordinates": {
+        "lat": 38.971205150476,
+        "lng": -94.667588343777,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bedfords.com/contact",
+      "name": "Bedford Camera & Video: Overland Park · Overland Park",
+      "observed_at": "2026-07-16T23:49:35Z",
+      "organization_key_material": "Bedford Camera & Video Inc",
+      "phone": "913-648-5950",
+      "postal_code": "66212",
+      "retailer_host": "bedfords.com",
+      "source_id": "bedfords_store_page",
+      "state": "KS",
+      "website_url": "https://www.bedfords.com"
+    },
+    {
+      "address": "538 - 542 Terry Lane",
+      "brand_listing_url": "https://www.krphotodigital.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Crescent Springs",
+      "coordinates": {
+        "lat": 39.047817188196,
+        "lng": -84.579064300204,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.krphotodigital.com",
+      "name": "K&R Photographics · Crescent Springs",
+      "observed_at": "2026-07-16T23:55:56Z",
+      "organization_key_material": "K & R Photographics, LLC",
+      "phone": "1-859-341-6986",
+      "postal_code": "41017",
+      "retailer_host": "krphotodigital.com",
+      "source_id": "krphotodigital_store_page",
+      "state": "KY",
+      "website_url": "https://www.krphotodigital.com"
+    },
+    {
+      "address": "1100 Winchester Road",
+      "brand_listing_url": "https://murphyscamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lexington",
+      "coordinates": {
+        "lat": 38.042017217107,
+        "lng": -84.46628556307,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://murphyscamera.com/contact-us",
+      "name": "Murphy's Camera - Lexington · Lexington",
+      "observed_at": "2026-07-16T23:57:31Z",
+      "organization_key_material": "Murphy's Camera",
+      "phone": "(859) 255-1012",
+      "postal_code": "40505",
+      "retailer_host": "murphyscamera.com",
+      "source_id": "murphyscamera_store_page",
+      "state": "KY",
+      "website_url": "https://murphyscamera.com"
+    },
+    {
+      "address": "1440 Bardstown Road",
+      "brand_listing_url": "https://murphyscamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Louisville",
+      "coordinates": {
+        "lat": 38.232653554101,
+        "lng": -85.710642109985,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://murphyscamera.com/contact-us",
+      "name": "Murphy's Camera - Louisville (Main Location) · Louisville",
+      "observed_at": "2026-07-16T23:57:31Z",
+      "organization_key_material": "Murphy's Camera",
+      "phone": "(502) 485-1500",
+      "postal_code": "40204",
+      "retailer_host": "murphyscamera.com",
+      "source_id": "murphyscamera_store_page",
+      "state": "KY",
+      "website_url": "https://murphyscamera.com"
+    },
+    {
+      "address": "3838 Falls Road",
+      "brand_listing_url": "https://www.servicephoto.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Baltimore",
+      "coordinates": {
+        "lat": 39.334574218448,
+        "lng": -76.636121671785,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.servicephoto.com/contact-us",
+      "name": "Service Photo · Baltimore",
+      "observed_at": "2026-07-17T00:00:23Z",
+      "organization_key_material": "Service Photo Supply Inc",
+      "phone": "(410) 235-6200",
+      "postal_code": "21211",
+      "retailer_host": "servicephoto.com",
+      "source_id": "servicephoto_store_page",
+      "state": "MD",
+      "website_url": "https://www.servicephoto.com"
+    },
+    {
+      "address": "2015 W Stadium Blvd",
+      "brand_listing_url": "https://procam.com/pages/procam-ann-arbor-mi",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Ann Arbor",
+      "coordinates": {
+        "lat": 42.270138112463,
+        "lng": -83.77374513299,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://procam.com/pages/procam-ann-arbor-mi",
+      "name": "PROCAM Ann Arbor · Ann Arbor",
+      "observed_at": "2026-07-16T23:59:22Z",
+      "organization_key_material": "Procam",
+      "phone": "(734) 977-6226",
+      "postal_code": "48103",
+      "retailer_host": "procam.com",
+      "source_id": "procam_store_page",
+      "state": "MI",
+      "website_url": "https://procam.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

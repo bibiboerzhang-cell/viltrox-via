@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "121 1st St",
+      "brand_listing_url": "https://fentoncamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Fenton",
+      "coordinates": {
+        "lat": 42.798621216348,
+        "lng": -83.7043123326,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://fentoncamera.com",
+      "name": "Billmeier Camera Shop · Fenton",
+      "observed_at": "2026-07-16T23:50:06Z",
+      "organization_key_material": "Billmeier Camera Shop, Inc.",
+      "phone": "(810) 629-2287",
+      "postal_code": "48430",
+      "retailer_host": "fentoncamera.com",
+      "source_id": "fentoncamera_store_page",
+      "state": "MI",
+      "website_url": "https://fentoncamera.com"
+    },
+    {
+      "address": "3602 S. Westnedge Ave.",
+      "brand_listing_url": "https://www.normancamera.com/pages/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Kalamazoo",
+      "coordinates": {
+        "lat": 42.255625099783,
+        "lng": -85.589694456154,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.normancamera.com/pages/about-us",
+      "name": "Norman Camera & Video · Kalamazoo",
+      "observed_at": "2026-07-16T23:57:47Z",
+      "organization_key_material": "Norman Camera & Video",
+      "phone": "269-343-0460",
+      "postal_code": "49008",
+      "retailer_host": "normancamera.com",
+      "source_id": "normancamera_store_page",
+      "state": "MI",
+      "website_url": "https://www.normancamera.com/"
+    },
+    {
+      "address": "34224 Plymouth Rd",
+      "brand_listing_url": "https://procam.com/pages/procam-detroit-livonia-mi",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Livonia",
+      "coordinates": {
+        "lat": 42.368215375878,
+        "lng": -83.380252740315,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://procam.com/pages/procam-detroit-livonia-mi",
+      "name": "PROCAM Detroit · Livonia",
+      "observed_at": "2026-07-16T23:59:22Z",
+      "organization_key_material": "Procam",
+      "phone": "(734) 838-6900",
+      "postal_code": "48150",
+      "retailer_host": "procam.com",
+      "source_id": "procam_store_page",
+      "state": "MI",
+      "website_url": "https://procam.com"
+    },
+    {
+      "address": "2638 Henry Street",
+      "brand_listing_url": "https://camerashopmuskegon.com/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Muskegon",
+      "coordinates": {
+        "lat": 43.204399149918,
+        "lng": -86.263015537671,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://camerashopmuskegon.com/about-us",
+      "name": "The Camera Shop of Muskegon · Muskegon",
+      "observed_at": "2026-07-16T23:51:16Z",
+      "organization_key_material": "Camera Mall and The Camera Sh",
+      "phone": "(231) 733-1286",
+      "postal_code": "49441",
+      "retailer_host": "camerashopmuskegon.com",
+      "source_id": "camerashopmuskegon_store_page",
+      "state": "MI",
+      "website_url": "https://camerashopmuskegon.com"
+    },
+    {
+      "address": "5582 Dixie Hwy",
+      "brand_listing_url": "https://cameraexc.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Waterford",
+      "coordinates": {
+        "lat": 42.699484350599,
+        "lng": -83.39890571127,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cameraexc.com/pages/contact-us",
+      "name": "Camera Exchange · Waterford",
+      "observed_at": "2026-07-16T23:51:01Z",
+      "organization_key_material": "Camera Exchange",
+      "phone": "(248) 623-8990",
+      "postal_code": "48329",
+      "retailer_host": "cameraexc.com",
+      "source_id": "cameraexc_store_page",
+      "state": "MI",
+      "website_url": "https://cameraexc.com"
+    },
+    {
+      "address": "1000 West 78th St",
+      "brand_listing_url": "https://stores.bestbuy.com/mn/minneapolis/1000-west-78th-st.html",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Minneapolis",
+      "coordinates": {
+        "lat": 44.862542840558,
+        "lng": -93.260520382203,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://stores.bestbuy.com/mn/minneapolis/1000-west-78th-st.html",
+      "name": "Best Buy Richfield · Minneapolis",
+      "observed_at": "2026-07-16T23:49:57Z",
+      "organization_key_material": "BEST BUY PURCHASING LLC",
+      "phone": "612-861-3917",
+      "postal_code": "55423",
+      "retailer_host": "bestbuy.com",
+      "source_id": "bestbuy_store_page",
+      "state": "MN",
+      "website_url": "https://www.bestbuy.com"
+    },
+    {
+      "address": "21 University Avenue NE",
+      "brand_listing_url": "https://www.westphoto.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Minneapolis",
+      "coordinates": {
+        "lat": 44.988264203354,
+        "lng": -93.256438406177,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.westphoto.com",
+      "name": "West Photo · Minneapolis",
+      "observed_at": "2026-07-17T00:02:56Z",
+      "organization_key_material": "West Photo",
+      "phone": "612-379-2321",
+      "postal_code": "55413",
+      "retailer_host": "westphoto.com",
+      "source_id": "westphoto_store_page",
+      "state": "MN",
+      "website_url": "https://www.westphoto.com"
+    },
+    {
+      "address": "9240 Manchester Rd",
+      "brand_listing_url": "https://www.schillers.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "St. Louis",
+      "coordinates": {
+        "lat": 38.611367083593,
+        "lng": -90.358081261702,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.schillers.com/contact-us",
+      "name": "Schiller's Camera · St. Louis",
+      "observed_at": "2026-07-17T00:02:43Z",
+      "organization_key_material": "W. Schiller & Co Inc",
+      "phone": "(314) 968-3650",
+      "postal_code": "63144",
+      "retailer_host": "schillers.com",
+      "source_id": "schillers_store_page",
+      "state": "MO",
+      "website_url": "https://www.schillers.com"
+    },
+    {
+      "address": "13035 Olive Blvd. Suite 200",
+      "brand_listing_url": "https://photoprostl.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "St. Louis",
+      "coordinates": {
+        "lat": 38.682222796641,
+        "lng": -90.479336292837,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://photoprostl.com/",
+      "name": "The Photo Pros · St. Louis",
+      "observed_at": "2026-07-17T00:02:04Z",
+      "organization_key_material": "The Photo Pros",
+      "phone": "314-567-3456",
+      "postal_code": "63141",
+      "retailer_host": "photoprostl.com",
+      "source_id": "photoprostl_store_page",
+      "state": "MO",
+      "website_url": "https://photoprostl.com"
+    },
+    {
+      "address": "1262 Stoneridge Drive",
+      "brand_listing_url": "https://bozemancamera.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bozeman",
+      "coordinates": {
+        "lat": 45.691417258483,
+        "lng": -111.063256026752,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://bozemancamera.com/contact-us/",
+      "name": "Bozeman Camera & Repair · Bozeman",
+      "observed_at": "2026-07-16T23:50:19Z",
+      "organization_key_material": "Bozeman Camera & Repair Inc",
+      "phone": "(406) 586-8300",
+      "postal_code": "59718",
+      "retailer_host": "bozemancamera.com",
+      "source_id": "bozemancamera_store_page",
+      "state": "MT",
+      "website_url": "https://bozemancamera.com"
+    },
+    {
+      "address": "16 N Canyon Street",
+      "brand_listing_url": "https://www.yellowstonecamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "West Yellowstone",
+      "coordinates": {
+        "lat": 44.659370049462,
+        "lng": -111.099772895047,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.yellowstonecamera.com",
+      "name": "The Yellowstone Camera Store · West Yellowstone",
+      "observed_at": "2026-07-17T00:03:20Z",
+      "organization_key_material": "Yellowstone Camera Store LLC",
+      "phone": "(406) 646-5191",
+      "postal_code": "59758",
+      "retailer_host": "yellowstonecamera.com",
+      "source_id": "yellowstonecamera_store_page",
+      "state": "MT",
+      "website_url": "https://www.yellowstonecamera.com"
+    },
+    {
+      "address": "2273 S Church St",
+      "brand_listing_url": "https://www.cameracorner.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Burlington",
+      "coordinates": {
+        "lat": 36.081768201645,
+        "lng": -79.472214041799,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.cameracorner.com",
+      "name": "Camera Corner · Burlington",
+      "observed_at": "2026-07-16T23:50:53Z",
+      "organization_key_material": "Camera Corner",
+      "phone": "336-228-0251",
+      "postal_code": "27215",
+      "retailer_host": "cameracorner.com",
+      "source_id": "cameracorner_store_page",
+      "state": "NC",
+      "website_url": "https://www.cameracorner.com"
+    },
+    {
+      "address": "805 S Kings Dr",
+      "brand_listing_url": "https://biggscamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Charlotte",
+      "coordinates": {
+        "lat": 35.207829823579,
+        "lng": -80.835758412776,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://biggscamera.com/contact-us",
+      "name": "Biggs Camera · Charlotte",
+      "observed_at": "2026-07-16T23:50:01Z",
+      "organization_key_material": "Biggs Camera Image Center Inc",
+      "phone": "704-377-3492",
+      "postal_code": "28204",
+      "retailer_host": "biggscamera.com",
+      "source_id": "biggscamera_store_page",
+      "state": "NC",
+      "website_url": "https://biggscamera.com/"
+    },
+    {
+      "address": "2410 Atlantic Avenue",
+      "brand_listing_url": "https://www.southeasterncamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Raleigh",
+      "coordinates": {
+        "lat": 35.811779625746,
+        "lng": -78.618836541342,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.southeasterncamera.com",
+      "name": "Southeastern Camera (Raleigh) · Raleigh",
+      "observed_at": "2026-07-17T00:00:37Z",
+      "organization_key_material": "Southeastern Camera & Supply I",
+      "phone": "(919) 890-4484",
+      "postal_code": "27604",
+      "retailer_host": "southeasterncamera.com",
+      "source_id": "southeasterncamera_store_page",
+      "state": "NC",
+      "website_url": "https://www.southeasterncamera.com"
+    },
+    {
+      "address": "4333 S. 70th Street, Ste 7",
+      "brand_listing_url": "https://www.rockbrookcamera.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lincoln",
+      "coordinates": {
+        "lat": 40.769315497362,
+        "lng": -96.625345502735,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.rockbrookcamera.com/pages/contact-us",
+      "name": "Rockbrook Camera at Pioneer Place (Lincoln) · Lincoln",
+      "observed_at": "2026-07-16T23:59:45Z",
+      "organization_key_material": "Rockbrook Camera & Video",
+      "phone": "402-488-4200",
+      "postal_code": "68516",
+      "retailer_host": "rockbrookcamera.com",
+      "source_id": "rockbrookcamera_store_page",
+      "state": "NE",
+      "website_url": "https://www.rockbrookcamera.com"
+    },
+    {
+      "address": "700 S. 72nd St.",
+      "brand_listing_url": "https://www.nfm.com/omaha-ne/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Omaha",
+      "coordinates": {
+        "lat": 41.254261237415,
+        "lng": -96.024019870927,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.nfm.com/omaha-ne/",
+      "name": "NFM Omaha Store · Omaha",
+      "observed_at": "2026-07-16T23:57:39Z",
+      "organization_key_material": "Nebraska Furniture Mart Inc",
+      "phone": "(402) 397-6100",
+      "postal_code": "68114",
+      "retailer_host": "nfm.com",
+      "source_id": "nfm_store_page",
+      "state": "NE",
+      "website_url": "https://www.nfm.com"
+    },
+    {
+      "address": "2909 S. 169th Plaza, Ste 100",
+      "brand_listing_url": "https://www.rockbrookcamera.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Omaha",
+      "coordinates": {
+        "lat": 41.233070688829,
+        "lng": -96.178311148829,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.rockbrookcamera.com/pages/contact-us",
+      "name": "Rockbrook Camera at Legacy (West Omaha) · Omaha",
+      "observed_at": "2026-07-16T23:59:45Z",
+      "organization_key_material": "Rockbrook Camera & Video",
+      "phone": "402-691-0003",
+      "postal_code": "68130",
+      "retailer_host": "rockbrookcamera.com",
+      "source_id": "rockbrookcamera_store_page",
+      "state": "NE",
+      "website_url": "https://www.rockbrookcamera.com"
+    },
+    {
+      "address": "1930 Route 88",
+      "brand_listing_url": "https://thephotocenter.com/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bricktown",
+      "coordinates": {
+        "lat": 40.072243998113,
+        "lng": -74.11775898527,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://thephotocenter.com/",
+      "name": "The Photo Center · Bricktown",
+      "observed_at": "2026-07-17T00:01:59Z",
+      "organization_key_material": "The Photo Center",
+      "phone": "(732) 840-1333",
+      "postal_code": "08724",
+      "retailer_host": "thephotocenter.com",
+      "source_id": "thephotocenter_store_page",
+      "state": "NJ",
+      "website_url": "https://thephotocenter.com/"
+    },
+    {
+      "address": "80 Carter Drive",
+      "brand_listing_url": "https://www.beachcamera.com/pages/retail-store",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Edison",
+      "coordinates": {
+        "lat": 40.53070024199,
+        "lng": -74.395528796408,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.beachcamera.com/pages/retail-store",
+      "name": "Beach Camera Retail Store · Edison",
+      "observed_at": "2026-07-16T23:49:28Z",
+      "organization_key_material": "beachcamera.com buydig.com",
+      "phone": "800-572-3224",
+      "postal_code": "08817",
+      "retailer_host": "beachcamera.com",
+      "source_id": "beachcamera_store_page",
+      "state": "NJ",
+      "website_url": "https://www.beachcamera.com"
+    },
+    {
+      "address": "123 US Hwy 46 (West)",
+      "brand_listing_url": "https://www.uniquephoto.com/fairfield",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Fairfield",
+      "coordinates": {
+        "lat": 40.86962349048,
+        "lng": -74.308625681853,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.uniquephoto.com/fairfield",
+      "name": "Unique Photo Fairfield Store · Fairfield",
+      "observed_at": "2026-07-17T00:02:25Z",
+      "organization_key_material": "Unique Photo, Inc",
+      "phone": "(973) 377-2007",
+      "postal_code": "07004",
+      "retailer_host": "uniquephoto.com",
+      "source_id": "uniquephoto_store_page",
+      "state": "NJ",
+      "website_url": "https://www.uniquephoto.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}
