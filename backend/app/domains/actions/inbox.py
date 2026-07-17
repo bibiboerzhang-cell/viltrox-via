@@ -12,6 +12,10 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.actions.inbox_live_recheck import (
+    failed_retry_live_ok,
+    is_stale_failed_retry,
+)
 from app.domains.access import scope
 from app.domains.actions.producers import PRODUCERS
 
@@ -338,43 +342,15 @@ def list_inbox(
         tuple(params),
     ).fetchall()
 
-    # failed_retry 活状态复核(2026-07-16):建议行由每日生成器落库,底下 apify_jobs 状态随时在变
-    # (失败池回收后任务已回 queued/done);读端按当前真实状态过滤,不让「失败待重试」chip 指向
-    # 已不在失败/受阻态的任务。纯读一把 IN 查询,不写建议行(执行器本就有 not_in_failed_state 闸)。
-    live_retry_ok: set[str] | None = None
-    retry_job_ids = sorted({
-        str(dict(r).get("entity_id") or "").strip()
-        for r in rows
-        if str(dict(r).get("category") or "") == "failed_retry"
-        and str(dict(r).get("entity_id") or "").strip().isdigit()
-    })
-    if retry_job_ids and table_exists("apify_jobs"):
-        try:
-            placeholders = ",".join(["?"] * len(retry_job_ids))
-            job_rows = conn.execute(
-                f"SELECT id, status FROM apify_jobs WHERE id IN ({placeholders})",
-                tuple(int(job_id) for job_id in retry_job_ids),
-            ).fetchall()
-            live_retry_ok = {
-                str(dict(job).get("id"))
-                for job in job_rows
-                if str(dict(job).get("status") or "") in ("failed", "blocked")
-            }
-        except Exception:
-            # 复核失败 → 不过滤(诚实降级为旧行为),绝不因只读校验拖垮 inbox。
-            logger.warning("action_inbox.failed_retry_live_check_failed", exc_info=True)
-            live_retry_ok = None
+    # failed_retry 活状态复核(见 inbox_live_recheck):按 apify_jobs 当前状态过滤,
+    # 不让「失败待重试」chip 指向已回收/已完成的任务。纯读、失败即诚实降级不过滤。
+    live_retry_ok = failed_retry_live_ok(conn, rows)
 
     items = []
     counts: dict[str, int] = {}
     for r in rows:
         row = dict(r)
-        if (
-            live_retry_ok is not None
-            and str(row.get("category") or "") == "failed_retry"
-            and str(row.get("entity_id") or "").strip().isdigit()
-            and str(row.get("entity_id") or "").strip() not in live_retry_ok
-        ):
+        if is_stale_failed_retry(row, live_retry_ok):
             continue  # 任务已离开 failed/blocked(如已回收入队),chip 不再展示
         row["payload_json"] = _loads(row.get("payload_json"))
         row["evidence_refs_json"] = _loads(row.get("evidence_refs_json"))

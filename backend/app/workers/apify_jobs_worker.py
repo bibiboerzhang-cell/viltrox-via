@@ -958,19 +958,10 @@ def run_worker() -> None:
                             break
                         try:
                             final_status = _execute_claimed_job(conn, job)
-                            # 执行体内部限流/租约冲突会 requeue 后正常返回(行仍是
-                            # queued),此前无条件打 "job done" 曾把审计骗成同 job
-                            # 反复执行 21 次 —— 按终态区分日志口径。
-                            if final_status == "queued":
-                                logger.info(
-                                    "apify_jobs job requeued by executor | id=%s", job["id"]
-                                )
-                            else:
-                                logger.info(
-                                    "apify_jobs job done | id=%s status=%s",
-                                    job["id"],
-                                    final_status or "unknown",
-                                )
+                            # 执行体内部限流/租约冲突 requeue 后行仍 queued;按终态
+                            # 区分日志(旧无条件 "job done" 曾把审计骗成同 job 跑 21 次)。
+                            _verb = "requeued by executor" if final_status == "queued" else "done"
+                            logger.info("apify_jobs job %s | id=%s status=%s", _verb, job["id"], final_status or "unknown")
                         except ApifyExecutionClaimBlocked as exc:
                             logger.warning(
                                 "apify_jobs job left unexecuted behind live provider fence | id=%s error=%s",

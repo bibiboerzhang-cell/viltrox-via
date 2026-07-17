@@ -42,6 +42,7 @@ from app.services.scheduler.registration_policy import (
     scheduler_task_allowlist,
 )
 from app.services.scheduler import run_now as scheduler_run_now
+from app.services.scheduler.jobs_market_listening import register_market_listening_job
 
 logger = get_logger(__name__)
 _SCHEDULER_INSTANCE_ID = scheduler_instance_id()
@@ -184,7 +185,6 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_logistics_track_sync,
     job_market_voice_alerts,
     job_ops_threshold_alerts,
-    job_vkpi_market_listening_daily,
     job_pending_asset_cleanup,
     job_sentiment_annotate,
     job_provider_health_check,
@@ -669,8 +669,7 @@ async def _start_scheduler_local() -> None:
         max_instances=1,
         coalesce=True,
     )
-    # ── 市场之声声量告警(V0f·每 2h 扫近 8h 窗·lexicon_v0 复用·官号帖×2)──
-    # config-gate(scheduler_tasks.market_voice_alerts,注册表无此行 → 默认关,空跑即返回)。
+    # ── 市场之声声量告警(V0f·每 2h 扫近 8h 窗·lexicon_v0 复用·官号帖×2)── config-gate 默认关空跑;
     # 触发只推「今日该做什么」(vkpi_action_inbox,同类别同日幂等),零 LLM/零成本;开启方式见 job 注释。
     _scheduler.add_job(
         job_market_voice_alerts,
@@ -680,19 +679,7 @@ async def _start_scheduler_local() -> None:
         max_instances=1,
         coalesce=True,
     )
-    # ── 市场监听每日采集(07:40 中国·Reddit 免费 JSON + X Apify 封顶)──
-    # 双闸:env VKPI_FORUM_COLLECT_ENABLED / VKPI_X_COLLECT_ENABLED + config-gate
-    # (scheduler_tasks.vkpi_market_listening,注册表无此行 → 默认关,空跑即返回)。
-    # 落 vkpi_market_sources/vkpi_market_mentions(幂等),喂「近期市场热词」;开启方式见 job 注释。
-    _scheduler.add_job(
-        job_vkpi_market_listening_daily,
-        trigger=CronTrigger(hour=7, minute=40, timezone=CHINA_TZ),
-        id="vkpi_market_listening_daily",
-        name="Market listening daily collect (Reddit free JSON + X Apify capped, default-off)",
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=3600,
-    )
+    register_market_listening_job(_scheduler, CHINA_TZ)
     # ── AI Today 今日热点(每早8点中国时区·LLM·预算闸)── config-gate(scheduler_tasks.vkpi_ai_today_hot)。
     _scheduler.add_job(
         job_vkpi_ai_today_hot,
