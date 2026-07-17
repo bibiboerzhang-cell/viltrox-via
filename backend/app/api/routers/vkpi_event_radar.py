@@ -77,6 +77,9 @@ def list_event_radar(
     time_window: str | None = Query(default=None, max_length=20),
     country: str | None = Query(default=None, min_length=2, max_length=2),
     region: str | None = Query(default=None, min_length=2, max_length=2),
+    city: str | None = Query(default=None, max_length=120),
+    start_from: str | None = Query(default=None, max_length=10),
+    start_to: str | None = Query(default=None, max_length=10),
     include_past: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ):
@@ -92,6 +95,9 @@ def list_event_radar(
         time_window=time_window,
         country=country,
         region=region,
+        city=city,
+        start_from=start_from,
+        start_to=start_to,
         include_past=include_past,
         organization_id=organization_id,
     )
@@ -331,6 +337,22 @@ def event_radar_refresh(
         record_only=False,
         organization_id=_organization_id(staff),
     )
+
+
+@router.get("/{opportunity_id}")
+def event_radar_opportunity(
+    opportunity_id: str,
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Single-event deep lookup (M2): fresh read of one opportunity."""
+    item = _guard(
+        radar.get_opportunity,
+        opportunity_id,
+        organization_id=_organization_id(staff),
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="opportunity not found")
+    return item
 
 
 @router.get("/{opportunity_id}/changes")

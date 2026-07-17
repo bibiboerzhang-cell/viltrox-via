@@ -169,6 +169,9 @@ export interface ListEventRadarParams {
   time_window?: "upcoming" | "30d" | "90d" | "past" | "date_pending";
   country?: string;
   region?: string;
+  city?: string;
+  start_from?: string;
+  start_to?: string;
   include_past?: boolean;
 }
 
@@ -256,9 +259,24 @@ export async function listEventRadar(
   if (params.time_window) query.set("time_window", params.time_window);
   if (params.country) query.set("country", params.country);
   if (params.region) query.set("region", params.region);
+  if (params.city) query.set("city", params.city);
+  if (params.start_from) query.set("start_from", params.start_from);
+  if (params.start_to) query.set("start_to", params.start_to);
   if (params.include_past) query.set("include_past", "true");
   return apiFetch<EventRadarListResponse>(
     `${ROOT}?${query.toString()}`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+// Single-event deep lookup (M2): fresh read of one opportunity by id.
+export async function getEventRadarOpportunity(
+  token: string,
+  opportunityId: string,
+): Promise<EventRadarOpportunity> {
+  return apiFetch<EventRadarOpportunity>(
+    `${ROOT}/${encodeURIComponent(opportunityId)}`,
     { cache: "no-store" },
     token,
   );

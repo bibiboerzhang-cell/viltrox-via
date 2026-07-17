@@ -11,6 +11,7 @@ import {
   getEventRadarSummary,
   getEventUsSourceRegistry,
   listEventRadar,
+  getEventRadarOpportunity,
   previewEventRadarRefresh,
   promoteEventRadarOpportunity,
   refreshEventRadar,
@@ -148,6 +149,9 @@ export function EventRadarModule({
   const [decision, setDecision] = React.useState("");
   const [country, setCountry] = React.useState("");
   const [stateCode, setStateCode] = React.useState("");
+  const [cityFilter, setCityFilter] = React.useState("");
+  const [startFrom, setStartFrom] = React.useState("");
+  const [startTo, setStartTo] = React.useState("");
   const [timeWindow, setTimeWindow] = React.useState("upcoming");
   const [evidenceStatus, setEvidenceStatus] = React.useState("");
   const [viewMode, setViewMode] = React.useState<"list" | "map">("list");
@@ -188,6 +192,8 @@ export function EventRadarModule({
           time_window: timeWindow as "upcoming" | "30d" | "90d" | "past" | "date_pending",
           country: normalizedCountry || undefined,
           region: stateCode || undefined,
+          start_from: startFrom || undefined,
+          start_to: startTo || undefined,
         }),
         getEventRadarSummary(apiToken),
       ]);
@@ -231,7 +237,7 @@ export function EventRadarModule({
     } finally {
       setLoading(false);
     }
-  }, [apiToken, country, decision, evidenceStatus, lane, limit, offset, sourceKind, stateCode, timeWindow]);
+  }, [apiToken, country, decision, evidenceStatus, lane, limit, offset, sourceKind, stateCode, startFrom, startTo, timeWindow]);
 
   React.useEffect(() => {
     void load();
@@ -294,17 +300,24 @@ export function EventRadarModule({
     ].filter((state) => /^[A-Z]{2}$/.test(state)))].sort(),
     [items, usSourceRegistry],
   );
+  const availableCities = React.useMemo(
+    () => [...new Set(
+      items.map((item) => String(item.city || "").trim()).filter(Boolean),
+    )].sort((a, b) => a.localeCompare(b)),
+    [items],
+  );
   const filteredItems = React.useMemo(() => {
     const candidateCountry = country.trim().toUpperCase();
     const normalizedCountry = /^[A-Z]{2}$/.test(candidateCountry) ? candidateCountry : "";
     return items.filter((item) => {
       if (normalizedCountry && String(item.country_code || "").toUpperCase() !== normalizedCountry) return false;
       if (stateCode && String(item.region || "").trim().toUpperCase() !== stateCode) return false;
+      if (cityFilter && String(item.city || "").trim().toLowerCase() !== cityFilter.toLowerCase()) return false;
       if (sourceKind && String(item.source_kind || "").toLowerCase() !== sourceKind) return false;
       if (!matchesEvidence(item, evidenceStatus)) return false;
       return matchesTimeWindow(item, timeWindow);
     });
-  }, [country, evidenceStatus, items, sourceKind, stateCode, timeWindow]);
+  }, [country, evidenceStatus, items, sourceKind, stateCode, cityFilter, timeWindow]);
   const filteredDiscoveryPreviewItems = React.useMemo(() => {
     const candidateCountry = country.trim().toUpperCase();
     const normalizedCountry = /^[A-Z]{2}$/.test(candidateCountry) ? candidateCountry : "";
@@ -375,6 +388,24 @@ export function EventRadarModule({
       setBusyId((prev) => ({ ...prev, [id]: "" }));
     }
   }, [apiToken, canManage, load, onPromoted]);
+
+  const deepLookup = React.useCallback(async (item: EventRadarOpportunity) => {
+    if (!apiToken) return;
+    const id = String(item.id);
+    setBusyId((prev) => ({ ...prev, [id]: "deep" }));
+    setActionError("");
+    try {
+      const fresh = await getEventRadarOpportunity(apiToken, id);
+      setItems((prev) => prev.map((row) => (String(row.id) === id ? { ...row, ...fresh } : row)));
+      const verifyText = fresh.verification_status || fresh.evidence_grade || "未标注";
+      const changeText = typeof fresh.change_count === "number" ? `${fresh.change_count} 次变更` : "变更未知";
+      setReceipt(`已刷新单条「${fresh.title || item.title}」· 核验 ${verifyText} · ${changeText}`);
+    } catch (err) {
+      setActionError(`单活动深查失败：${errorText(err)}`);
+    } finally {
+      setBusyId((prev) => ({ ...prev, [id]: "" }));
+    }
+  }, [apiToken]);
 
   const runRefresh = React.useCallback(async (mode: "preview" | "write") => {
     if (mode === "write" && !canManage) {
@@ -570,6 +601,21 @@ export function EventRadarModule({
             {availableStates.map((state) => <option key={state} value={state}>{state}</option>)}
           </select>
         </label>
+        <label className="flex min-w-0 flex-col gap-1 text-[9.5px] text-muted" htmlFor="event-radar-city">
+          城市
+          <select id="event-radar-city" className={INPUT} value={cityFilter} onChange={(event) => { setOffset(0); setCityFilter(event.target.value); }}>
+            <option value="">全部城市</option>
+            {availableCities.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+        <label className="flex min-w-0 flex-col gap-1 text-[9.5px] text-muted" htmlFor="event-radar-start-from">
+          起始日期从
+          <input id="event-radar-start-from" type="date" className={INPUT} value={startFrom} onChange={(event) => { setOffset(0); setStartFrom(event.target.value); }} aria-label="起始日期从" />
+        </label>
+        <label className="flex min-w-0 flex-col gap-1 text-[9.5px] text-muted" htmlFor="event-radar-start-to">
+          起始日期至
+          <input id="event-radar-start-to" type="date" className={INPUT} value={startTo} onChange={(event) => { setOffset(0); setStartTo(event.target.value); }} aria-label="起始日期至" />
+        </label>
         <label className="flex min-w-0 flex-col gap-1 text-[9.5px] text-muted" htmlFor="event-radar-decision">人工判断
         <select id="event-radar-decision" className={INPUT} value={decision} onChange={(event) => { setOffset(0); setDecision(event.target.value); }}>
           <option value="">全部</option>
@@ -665,6 +711,7 @@ export function EventRadarModule({
               canManage={canManage}
               onDecision={(row, status) => void actDecision(row, status)}
               onPromote={(row) => void promote(row)}
+              onDeepLookup={(row) => void deepLookup(row)}
             />
           ))}
         </div>

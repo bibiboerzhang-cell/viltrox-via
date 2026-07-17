@@ -428,6 +428,9 @@ def list_opportunities(
     time_window: str | None = None,
     country: str | None = None,
     region: str | None = None,
+    city: str | None = None,
+    start_from: str | None = None,
+    start_to: str | None = None,
     include_past: bool = False,
     organization_id: int = 1,
 ) -> dict[str, Any]:
@@ -448,10 +451,48 @@ def list_opportunities(
         time_window=time_window,
         country=country,
         region=region,
+        city=city,
+        start_from=start_from,
+        start_to=start_to,
         include_past=include_past,
         loads=_loads,
         freshness=_freshness,
     )
+
+
+def get_opportunity(
+    opportunity_id: str,
+    *,
+    organization_id: int = 1,
+) -> dict[str, Any] | None:
+    """Read one opportunity fresh, scoped to the caller's organization.
+
+    Single-event deep lookup (M2): reuses ``_opportunity_with_source`` so the
+    single-row read applies the same source join and organization scope as the
+    list query, then normalizes the row the same way list rows are normalized.
+    Returns ``None`` when the id is unknown or belongs to another organization.
+    """
+    conn = _require_organization_schema()
+    if not table_exists(_TABLE):
+        return None
+    org_id = _organization_id(explicit=organization_id)
+    row = _opportunity_with_source(conn, str(opportunity_id), org_id)
+    if row is None:
+        return None
+    item = dict(row)
+    item["metadata_json"] = _loads(item.get("metadata_json"), {})
+    item["freshness_status"] = _freshness(
+        item.get("last_verified_at") or item.get("source_checked_at")
+    )
+    item["is_source_backed_lead"] = True
+    item["business_outcome_status"] = "unmeasured"
+    changes_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM vkpi_event_opportunity_changes "
+        "WHERE opportunity_id=? AND organization_id=?",
+        (str(opportunity_id), int(org_id)),
+    ).fetchone()
+    item["change_count"] = int((dict(changes_row) if changes_row else {}).get("n") or 0)
+    return item
 
 
 def summary(

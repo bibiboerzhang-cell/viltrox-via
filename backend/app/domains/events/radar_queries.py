@@ -119,6 +119,9 @@ def _filters(
     time_window: str | None,
     country: str | None,
     region: str | None,
+    city: str | None,
+    start_from: str | None,
+    start_to: str | None,
     include_past: bool,
 ) -> tuple[str, list[Any]]:
     # A disabled source is an operational kill switch, even when its review
@@ -145,6 +148,17 @@ def _filters(
     if region:
         where.append("o.region = ?")
         params.append(str(region).strip().upper())
+    if city:
+        # Case-insensitive exact match; the UI feeds it from the observed city
+        # set so an exact predicate stays index-friendly and avoids LIKE/%.
+        where.append("LOWER(o.city) = LOWER(?)")
+        params.append(str(city).strip())
+    if start_from:
+        where.append("o.start_date IS NOT NULL AND o.start_date >= ?")
+        params.append(str(start_from).strip())
+    if start_to:
+        where.append("o.start_date IS NOT NULL AND o.start_date <= ?")
+        params.append(str(start_to).strip())
     _append_evidence_filter(where, params, evidence_status)
     _append_time_filter(where, params, time_window, include_past=include_past)
     return " AND ".join(where), params
@@ -164,6 +178,9 @@ def list_opportunities(
     time_window: str | None,
     country: str | None,
     region: str | None,
+    city: str | None,
+    start_from: str | None,
+    start_to: str | None,
     include_past: bool,
     loads: Callable[[Any, Any], Any],
     freshness: Callable[[Any], str],
@@ -179,6 +196,9 @@ def list_opportunities(
         time_window=time_window,
         country=country,
         region=region,
+        city=city,
+        start_from=start_from,
+        start_to=start_to,
         include_past=include_past,
     )
     total_row = conn.execute(

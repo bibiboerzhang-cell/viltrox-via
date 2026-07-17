@@ -6,6 +6,7 @@ import {
   ExternalLink,
   Loader2,
   MapPin,
+  Search,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -155,12 +156,14 @@ export function OpportunityRow({
   canManage,
   onDecision,
   onPromote,
+  onDeepLookup,
 }: {
   item: EventRadarOpportunity;
   busy: string;
   canManage: boolean;
   onDecision: (item: EventRadarOpportunity, status: "watching" | "approved" | "dismissed") => void;
   onPromote: (item: EventRadarOpportunity) => void;
+  onDeepLookup?: (item: EventRadarOpportunity) => void;
 }) {
   const lane = LANE_META[item.lane] || { label: item.lane || "未分类", className: "border-line bg-card text-muted" };
   const verify = statusTone(item);
@@ -270,6 +273,17 @@ export function OpportunityRow({
           >
             报名 <ArrowUpRight size={11} />
           </a>
+        ) : null}
+        {onDeepLookup ? (
+          <button
+            type="button"
+            onClick={() => onDeepLookup(item)}
+            disabled={busy === "deep"}
+            className={`${BUTTON} border-line text-muted hover:border-accent hover:text-accent`}
+            aria-label={`深查 ${item.title}`}
+          >
+            {busy === "deep" ? <Loader2 size={11} className="animate-spin" /> : <Search size={11} />} 深查
+          </button>
         ) : null}
         <span className="min-w-1 flex-1" />
         {canManage && sourceActionable && !converted && !["watching", "approved"].includes(item.decision_status) ? (
