@@ -819,7 +819,8 @@ def invoke_impl(
         metadata={
             **(metadata or {}),
             "errors": errors,
-            "model_level_fallback": model_fallbacks is not None,
+            # 如实口径:空的 fallback 链(绑定钉死)= 没有会被尝试的模型级后备胎。
+            "model_level_fallback": bool(model_fallbacks),
         },
         staff=staff,
     )

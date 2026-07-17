@@ -367,3 +367,122 @@ def test_gateway_fallback_halts_without_writes(monkeypatch):
     assert result["halted_reason"] == "budget_disabled"
     assert conn.inserted == {}
     assert conn.links == []  # 绝不写假中性占坑
+
+
+# ── 刀:同绑定重试语义(绑定钉死,不存在模型级后备胎)─────────────────
+
+
+def _validation_failure_response(kwargs):
+    """gateway 真实形状:单候选 validator 拒绝 → rule_v0 降级,errors 带 validation_failure。"""
+    return {
+        "status": "fallback_to_rule",
+        "reason": "all_providers_failed",
+        "provider": "rule_v0",
+        "model": "rule_v0",
+        "json": None,
+        "errors": [
+            {
+                "provider": "google",
+                "model": kwargs["model"],
+                "status": "validation_failure",
+                "error": "missing required ids",
+            }
+        ],
+    }
+
+
+def _success_response(kwargs, ids):
+    payload = [{"id": i, "score": 0.5, "label": "pos", "aspects": []} for i in ids]
+    return {
+        "status": "success",
+        "json": {"items": payload},
+        "provider": "google",
+        "model": kwargs["model"],
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cost_micro_usd": 210,
+    }
+
+
+def test_validation_failure_retries_same_binding_once_then_succeeds(monkeypatch):
+    rows = _rows(3)
+    ids = [r["id"] for r in rows]
+    calls: list[dict] = []
+
+    def fake_invoke(prompt, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _validation_failure_response(kwargs)
+        return _success_response(kwargs, ids)
+
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
+    conn = _FakeConn(pending_rows=rows)
+    result = sa.annotate_batch(3, dry_run=False, conn=conn)
+
+    assert len(calls) == 2  # 同一 chunk、同一绑定,原地重试一次
+    assert result["annotated"] == 3
+    assert result["halted_reason"] == ""
+    assert [c["metadata"]["binding_retry"] for c in calls] == [0, 1]
+    assert calls[1]["metadata"]["attempt_index"] == calls[0]["metadata"]["attempt_index"] + 1
+    # 绑定钉死 → 两次调用 provider/model 完全一致(不是换模型的假 fallback)
+    assert calls[0]["provider"] == calls[1]["provider"]
+    assert calls[0]["model"] == calls[1]["model"]
+
+
+def test_validation_failure_twice_halts_without_writes(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_invoke(prompt, **kwargs):
+        calls.append(kwargs)
+        return _validation_failure_response(kwargs)
+
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
+    conn = _FakeConn(pending_rows=_rows(3))
+    result = sa.annotate_batch(3, dry_run=False, conn=conn)
+
+    assert len(calls) == 2  # 重试恰好 1 次,再失败即停跑
+    assert result["annotated"] == 0
+    assert result["halted_reason"] == "all_providers_failed"
+    assert conn.inserted == {}
+    assert conn.links == []  # 绝不写假中性占坑
+
+
+def test_budget_block_is_structural_and_never_retried(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_invoke(prompt, **kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "fallback_to_rule",
+            "reason": "budget_disabled",
+            "provider": "rule_v0",
+            "model": "rule_v0",
+            "json": None,
+            "errors": [{"provider": "google", "status": "budget_blocked", "error": "budget_blocked"}],
+        }
+
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
+    conn = _FakeConn(pending_rows=_rows(3))
+    result = sa.annotate_batch(3, dry_run=False, conn=conn)
+
+    assert len(calls) == 1  # 结构性失败(预算闸)重试只会双倍烧钱 → 一次即停
+    assert result["halted_reason"] == "budget_disabled"
+    assert conn.inserted == {}
+
+
+def test_metadata_declares_pinned_binding_honestly(monkeypatch):
+    rows = _rows(2)
+    ids = [r["id"] for r in rows]
+    calls: list[dict] = []
+
+    def fake_invoke(prompt, **kwargs):
+        calls.append(kwargs)
+        return _success_response(kwargs, ids)
+
+    monkeypatch.setattr(sa.llm_production, "generate_json", fake_invoke)
+    conn = _FakeConn(pending_rows=rows)
+    sa.annotate_batch(2, dry_run=False, conn=conn)
+
+    assert len(calls) == 1
+    # 任务绑定钉死单 provider/model:如实申报没有模型级后备胎
+    assert calls[0]["metadata"]["model_level_fallback"] is False

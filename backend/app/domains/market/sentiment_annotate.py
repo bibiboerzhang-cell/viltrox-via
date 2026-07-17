@@ -215,6 +215,20 @@ def _valid_batch_payload(value: Any, expected_ids: set[int]) -> bool:
     return seen == expected_ids
 
 
+# 模型输出层失败:provider/预算/绑定都健康,只是这一次的输出不合 schema/解析不出。
+# 该任务绑定钉死单一 provider/model(generate_json 传 model_fallbacks=()),声明中的
+# 「后备胎」永远不会被尝试 —— 唯一有意义的补救是同绑定原地重试一次;
+# 预算闸/无 key/绑定错配等结构性失败绝不重试(重试只会双倍烧钱,结果不变)。
+_RETRYABLE_OUTPUT_FAILURES = {"validation_failure", "parse_failure", "empty_response"}
+
+
+def _is_model_output_failure(response: Any) -> bool:
+    result = response if isinstance(response, dict) else {}
+    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+    statuses = {str(item.get("status") or "") for item in errors if isinstance(item, dict)}
+    return bool(statuses & _RETRYABLE_OUTPUT_FAILURES)
+
+
 def _failure_code(value: Any) -> str:
     result = value if isinstance(value, dict) else {}
     failure = result.get("failure") if isinstance(result.get("failure"), dict) else {}
@@ -417,44 +431,60 @@ def annotate_batch(
     for attempt_index, (chunk, prompt) in enumerate(zip(chunks, prompts), start=1):
         expected = {int(it["id"]) for it in chunk}
         max_out = min(4000, len(chunk) * OUTPUT_TOKENS_PER_COMMENT + OUTPUT_TOKENS_SLACK)
-        try:
-            response = llm_production.generate_json(
-                prompt,
-                provider=provider_pref,
-                model=model_pref,
-                purpose=PURPOSE,
-                max_output_tokens=max_out,
-                triggered_by="scheduler:vkpi_sentiment_annotate",
-                staff=staff,
-                required_keys=("items",),
-                validator=lambda value, ids=expected: _valid_batch_payload(value, ids),
-                metadata={
-                    "task_binding": "vkpi_sentiment_annotate",
-                    "surface": "market_sentiment",
-                    "pipeline": "sentiment_annotate_v0g",
-                    "pack": len(chunk),
-                    "phase": "analysis",
-                    "subphase": "sentiment_annotation",
-                    "attempt_index": attempt_index,
-                    "total": len(chunks),
-                    "target_label": f"comments {min(expected)}-{max(expected)}",
-                },
+        response: dict[str, Any] = {}
+        accepted = False
+        for retry_index in range(2):  # 同绑定本地重试:仅模型输出层失败多给 1 次
+            try:
+                response = llm_production.generate_json(
+                    prompt,
+                    provider=provider_pref,
+                    model=model_pref,
+                    purpose=PURPOSE,
+                    max_output_tokens=max_out,
+                    triggered_by="scheduler:vkpi_sentiment_annotate",
+                    staff=staff,
+                    required_keys=("items",),
+                    validator=lambda value, ids=expected: _valid_batch_payload(value, ids),
+                    metadata={
+                        "task_binding": "vkpi_sentiment_annotate",
+                        "surface": "market_sentiment",
+                        "pipeline": "sentiment_annotate_v0g",
+                        "pack": len(chunk),
+                        "phase": "analysis",
+                        "subphase": "sentiment_annotation",
+                        "attempt_index": attempt_index + retry_index,
+                        "binding_retry": retry_index,
+                        # 如实声明:绑定钉死单模型,不存在会被尝试的模型级后备胎。
+                        "model_level_fallback": False,
+                        "total": len(chunks),
+                        "target_label": f"comments {min(expected)}-{max(expected)}",
+                    },
+                )
+            except Exception as exc:  # strict AI-off/readiness failure; base pipeline remains usable
+                response = {
+                    "status": "failed",
+                    "reason": str(exc)[:120] or type(exc).__name__,
+                    "provider": "rule_v0",
+                    "model": "rule_v0",
+                    "json": None,
+                }
+            status = str(response.get("status") or "")
+            accepted = (
+                status == "success"
+                and str(response.get("provider") or "").strip().lower() == provider_pref
+                and str(response.get("model") or "").strip() == model_pref
+                and _valid_batch_payload(response.get("json"), expected)
             )
-        except Exception as exc:  # strict AI-off/readiness failure; base pipeline remains usable
-            response = {
-                "status": "failed",
-                "reason": str(exc)[:120] or type(exc).__name__,
-                "provider": "rule_v0",
-                "model": "rule_v0",
-                "json": None,
-            }
-        status = str(response.get("status") or "")
-        if (
-            status != "success"
-            or str(response.get("provider") or "").strip().lower() != provider_pref
-            or str(response.get("model") or "").strip() != model_pref
-            or not _valid_batch_payload(response.get("json"), expected)
-        ):
+            if accepted:
+                break
+            if retry_index == 0 and _is_model_output_failure(response):
+                logger.info(
+                    "sentiment_annotate.binding_retry",
+                    extra={"reason": _failure_code(response), "attempt_index": attempt_index},
+                )
+                continue
+            break
+        if not accepted:
             # fallback_to_rule = 预算闸/无 key/全 provider 失败 → 停跑。绝不写假中性占坑
             # (占坑会填掉 sentiment_id,永久挡住真批注)。
             halted_reason = _failure_code(response)

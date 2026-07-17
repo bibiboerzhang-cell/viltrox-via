@@ -166,7 +166,8 @@ def budget_preflight_impl(
         "monthly_env_remaining_usd": max(0, monthly_remaining) / 100,
         "force_offline": forced_offline,
         "single_call_scope": namespace["SINGLE_CALL_BUDGET_SCOPE"],
-        "model_level_fallback": model_fallbacks is not None,
+        # 如实口径:空的 fallback 链(绑定钉死)= 没有会被尝试的模型级后备胎。
+        "model_level_fallback": bool(model_fallbacks),
         "execution_class": resolved_execution_class,
         "evaluation_only": resolved_execution_class == evaluation_class,
         "production_authorized": bool(

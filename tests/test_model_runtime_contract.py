@@ -658,3 +658,56 @@ def test_local_evaluation_rejects_unallowlisted_or_production_execution(
         production["providers"][0]["binding_gate_reason"]
         == "local_evaluation_forbidden_in_production"
     )
+
+
+def test_rule_v0_record_reports_model_level_fallback_truthfully(monkeypatch) -> None:
+    """空 fallback 链(绑定钉死)必须记 model_level_fallback=False;真链才记 True。"""
+    from app.platform import llm_gateway as gateway
+
+    monkeypatch.setenv(
+        "VKPI_LLM_RUNTIME_VERIFIED_MODELS",
+        "openai/gpt-5.6,anthropic/claude-fable-5",
+    )
+    _authorize_gateway_readiness(
+        monkeypatch,
+        gateway,
+        "openai/gpt-5.6",
+        "anthropic/claude-fable-5",
+    )
+    monkeypatch.setattr(gateway, "_is_provider_configured", lambda _provider: True)
+    monkeypatch.setattr(gateway, "_budget_allows_provider", lambda *_args, **_kwargs: (True, []))
+
+    def failing(_prompt: str, _tokens: int, *, model_override=None) -> dict[str, Any]:
+        return {"status": "failed", "provider": "fixture", "error": "fixture"}
+
+    monkeypatch.setitem(gateway._PROVIDER_CALLERS, "openai", failing)
+    monkeypatch.setitem(gateway._PROVIDER_CALLERS, "anthropic", failing)
+
+    def final_flag(records: list[dict[str, Any]]) -> bool:
+        rule_rows = [row for row in records if row.get("provider") == "rule_v0"]
+        assert rule_rows, "expected a terminal rule_v0 ledger row"
+        return rule_rows[-1]["metadata"]["model_level_fallback"]
+
+    pinned_records: list[dict[str, Any]] = []
+    monkeypatch.setattr(gateway, "record_call", lambda **kwargs: pinned_records.append(kwargs))
+    pinned = gateway.invoke_json(
+        "hello",
+        preferred_provider="openai",
+        model_override="gpt-5.6",
+        model_fallbacks=(),
+        skip_budget_check=True,
+    )
+    assert pinned["provider"] == "rule_v0"
+    assert final_flag(pinned_records) is False  # 钉死绑定:没有会被尝试的后备胎
+
+    chain_records: list[dict[str, Any]] = []
+    monkeypatch.setattr(gateway, "record_call", lambda **kwargs: chain_records.append(kwargs))
+    chained = gateway.invoke_json(
+        "hello",
+        preferred_provider="openai",
+        model_override="gpt-5.6",
+        model_fallbacks=[("anthropic", "claude-fable-5")],
+        skip_budget_check=True,
+    )
+    assert chained["provider"] == "rule_v0"
+    assert final_flag(chain_records) is True  # 真实存在并被尝试过的模型级后备链
