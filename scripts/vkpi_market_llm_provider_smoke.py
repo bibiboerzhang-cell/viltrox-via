@@ -6,7 +6,6 @@ sync jobs. Use --execute-live-probe for one low-cost provider-health probe and
 --execute-llm-single for one budget-gated LLM call.
 """
 from __future__ import annotations
-from stdout_utils import out as stdout_out
 
 import argparse
 import asyncio
@@ -24,6 +23,14 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+# Path patch must precede this import: under pytest the module loads as
+# scripts.<name>, so scripts/ is not sys.path[0] and stdout_utils would
+# raise ModuleNotFoundError at collection time.
+from stdout_utils import out as stdout_out  # noqa: E402
 
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.services.system import provider_health  # noqa: E402
