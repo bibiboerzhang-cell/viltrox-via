@@ -120,12 +120,16 @@ def _count_pending(conn: Any) -> int:
 
 
 def _select_pending(conn: Any, limit: int) -> list[dict[str, Any]]:
+    # 随机序取批:回填顺序无业务意义,而确定性排序会让一个 schema_failure
+    # 毒包永远排头、fail-fast 停跑后挡死其后全部好包(2026-07-16 排空实测
+    # 1,875 条被同一包卡死)。随机序让好包在多轮重跑中自然排空;毒包本体
+    # 仍如实停跑、绝不写假中性占坑。
     rows = conn.execute(
         f"""
         SELECT id, comment_text, language_detected
         FROM vkpi_comments
         WHERE {_PENDING_WHERE}
-        ORDER BY created_at DESC
+        ORDER BY RANDOM()
         LIMIT ?
         """,
         (int(limit),),
