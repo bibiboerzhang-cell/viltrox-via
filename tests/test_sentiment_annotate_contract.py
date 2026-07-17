@@ -486,3 +486,60 @@ def test_metadata_declares_pinned_binding_honestly(monkeypatch):
     assert len(calls) == 1
     # 任务绑定钉死单 provider/model:如实申报没有模型级后备胎
     assert calls[0]["metadata"]["model_level_fallback"] is False
+
+
+# ── 刀:绑定唯一真源 = model_registry(env 漂移不再恒 mismatch 停摆)────
+
+
+def _clear_binding_env(monkeypatch):
+    for key in (sa.PROVIDER_ENV, sa.MODEL_ENV, "GEMINI_MODEL", "OPENAI_MODEL", "CLAUDE_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_binding_default_equals_registry(monkeypatch):
+    """全缺省:绑定 == registry 任务绑定 == generate_json 硬闸期望,恒不 mismatch。"""
+    from app.core import model_registry
+
+    _clear_binding_env(monkeypatch)
+    provider, model = sa._sentiment_binding()
+    expected = model_registry.current_task_model_binding()[sa.TASK_BINDING]
+    assert f"{provider}/{model}" == expected
+    assert (provider, model) == ("google", "gemini-3.5-flash")
+
+
+def test_binding_partial_env_override_warns_and_uses_registry(monkeypatch, caplog):
+    """只给 provider(半覆盖)→ 打警告并回落 registry 默认,不产出 openai/gemini-* 怪胎。"""
+    from app.core import model_registry
+
+    _clear_binding_env(monkeypatch)
+    monkeypatch.setenv(sa.PROVIDER_ENV, "openai")
+    with caplog.at_level("WARNING", logger=sa.logger.name):
+        provider, model = sa._sentiment_binding()
+    assert f"{provider}/{model}" == model_registry.TASK_MODEL_BINDING[sa.TASK_BINDING]
+    assert (provider, model) == ("google", "gemini-3.5-flash")
+    assert any("partial_env_override_ignored" in rec.message for rec in caplog.records)
+
+
+def test_binding_survives_global_gemini_model_drift(monkeypatch):
+    """GEMINI_MODEL 全局 env 漂移:旧实现会分叉出 google/gemini-2.5-flash 而 registry
+    仍期望 google/gemini-3.5-flash → 恒 task_binding_model_mismatch;新实现恒等 registry。"""
+    from app.core import model_registry
+
+    _clear_binding_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    provider, model = sa._sentiment_binding()
+    expected = model_registry.current_task_model_binding()[sa.TASK_BINDING]
+    assert f"{provider}/{model}" == expected
+    assert (provider, model) == ("google", "gemini-3.5-flash")
+
+
+def test_binding_double_env_override_is_effective(monkeypatch):
+    """provider+model 成对显式覆盖 → 生效,且与 registry 当前值(吃同一对 env)恒等。"""
+    from app.core import model_registry
+
+    _clear_binding_env(monkeypatch)
+    monkeypatch.setenv(sa.PROVIDER_ENV, "openai")
+    monkeypatch.setenv(sa.MODEL_ENV, "gpt-5.4-mini")
+    provider, model = sa._sentiment_binding()
+    assert (provider, model) == ("openai", "gpt-5.4-mini")
+    assert f"{provider}/{model}" == model_registry.current_task_model_binding()[sa.TASK_BINDING]

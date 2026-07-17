@@ -36,7 +36,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from app.core.config import CLAUDE_MODEL, GEMINI_MODEL, OPENAI_MODEL
+from app.core import model_registry
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.platform import llm_gateway, llm_production
@@ -45,7 +45,8 @@ logger = get_logger("viltrox.domains.market.sentiment_annotate")
 
 PROMPT_VERSION = "batch_v1"          # 与单发路径 v1.0 分口径,UNIQUE(comment_id, prompt_version) 互不冲突
 PURPOSE = "vkpi_sentiment_annotate"  # gateway cost_scope 自动成 cron:vkpi_sentiment_annotate
-DEFAULT_PROVIDER = "google"          # gemini-flash-latest:gateway 价目表里最便宜
+TASK_BINDING = "vkpi_sentiment_annotate"  # model_registry 任务绑定键 = 绑定唯一真源
+DEFAULT_PROVIDER = "google"          # 仅作展示/成本预估兜底;真绑定见 _sentiment_binding()
 
 HARD_CAP_ENV = "VKPI_SENTIMENT_ANNOTATE_MAX_PER_RUN"
 DEFAULT_HARD_CAP = 200
@@ -55,6 +56,7 @@ COMMENT_CHAR_CAP = 400               # 单条评论截断,控 input token
 OUTPUT_TOKENS_PER_COMMENT = 60       # 预算 max_output_tokens 用(实付按真用量,上限放宽零成本)
 OUTPUT_TOKENS_SLACK = 60
 MODEL_ENV = "VKPI_SENTIMENT_ANNOTATE_MODEL"
+PROVIDER_ENV = "VKPI_SENTIMENT_ANNOTATE_PROVIDER"
 
 LABEL_MAP = {
     "pos": "positive", "positive": "positive",
@@ -99,16 +101,30 @@ def _estimate_cost_usd(input_tokens: int, output_tokens: int, provider: str = DE
 
 
 def _sentiment_binding() -> tuple[str, str]:
-    """Resolve one explicit provider/model pair; never return a fallback chain."""
+    """Resolve one explicit provider/model pair; never return a fallback chain.
 
-    provider = str(os.environ.get("VKPI_SENTIMENT_ANNOTATE_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+    唯一真源 = model_registry 的 vkpi_sentiment_annotate 任务绑定——generate_json 的
+    task_binding 硬闸用同一 current_task_model_binding() 校验。此前本函数自带
+    GEMINI_MODEL/OPENAI_MODEL/CLAUDE_MODEL defaults 与 registry 分叉:GEMINI_MODEL
+    等全局 env 一漂移即恒 task_binding_model_mismatch 停摆。
+    VKPI_SENTIMENT_ANNOTATE_PROVIDER/MODEL 显式覆盖仍可用,但必须成对给出;
+    只给一个时打警告并回落 registry 默认绑定,防半覆盖分叉出 openai/gemini-* 之类怪胎。
+    """
+
+    env_provider = str(os.environ.get(PROVIDER_ENV) or "").strip().lower()
+    env_model = str(os.environ.get(MODEL_ENV) or "").strip()
+    if bool(env_provider) != bool(env_model):
+        logger.warning(
+            "sentiment_annotate.partial_env_override_ignored",
+            extra={"provider_env": env_provider or "(unset)", "model_env": env_model or "(unset)"},
+        )
+        binding = model_registry.TASK_MODEL_BINDING.get(TASK_BINDING, "")
+    else:
+        # 双覆盖时 current_task_model_binding 已按 TASK_MODEL_ENV_KEYS 吃进这对 env;
+        # 全缺省时它就是 registry 默认绑定。一条路径,恒与 generate_json 的期望一致。
+        binding = model_registry.current_task_model_binding().get(TASK_BINDING, "")
+    provider, model = model_registry.split_binding(binding)
     provider = {"gemini": "google", "claude": "anthropic"}.get(provider, provider)
-    defaults = {
-        "google": GEMINI_MODEL,
-        "openai": OPENAI_MODEL,
-        "anthropic": CLAUDE_MODEL,
-    }
-    model = str(os.environ.get(MODEL_ENV) or defaults.get(provider) or "").strip()
     if not provider or not model:
         raise ValueError("unsupported_sentiment_model_binding")
     return provider, model
@@ -387,7 +403,7 @@ def annotate_batch(
         provider_pref, model_pref = _sentiment_binding()
         binding_error = ""
     except ValueError as exc:
-        provider_pref = str(os.environ.get("VKPI_SENTIMENT_ANNOTATE_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+        provider_pref = str(os.environ.get(PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()
         model_pref = str(os.environ.get(MODEL_ENV) or "").strip()
         binding_error = str(exc)
     summary: dict[str, Any] = {
@@ -446,7 +462,7 @@ def annotate_batch(
                     required_keys=("items",),
                     validator=lambda value, ids=expected: _valid_batch_payload(value, ids),
                     metadata={
-                        "task_binding": "vkpi_sentiment_annotate",
+                        "task_binding": TASK_BINDING,
                         "surface": "market_sentiment",
                         "pipeline": "sentiment_annotate_v0g",
                         "pack": len(chunk),
