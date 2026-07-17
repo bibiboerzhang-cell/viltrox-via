@@ -35,7 +35,9 @@ STATIC_IMPORT_RE = re.compile(
 
 @dataclass(frozen=True)
 class BudgetLimits:
-    initial_js_raw_kib: float = 1120.0
+    # 2026-07-17 1120→1124:焦点条分层计数(待审/待执行/待对账)+首条强调位落地,
+    # 实测 initial_js 1,147,407B 超旧线 527B;gzip 线(345)未动仍有 3KiB 余量。
+    initial_js_raw_kib: float = 1124.0
     initial_js_gzip_kib: float = 345.0
     max_js_chunk_raw_kib: float = 325.0
     max_js_chunk_gzip_kib: float = 92.0

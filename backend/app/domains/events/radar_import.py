@@ -134,7 +134,10 @@ def import_reviewed_catalog(*, record_only: bool = True, organization_id: int = 
                 elif key == "terms_robots_status":
                     values.append(source.get(key) or "unknown")
                 elif key == "enabled":
-                    values.append(bool(source.get(key, False)) and str(source.get("status") or "active") == "active")
+                    # 目录是人工审阅过的:status=active 即默认启用(显式 enabled:false 仍尊重)。
+                    # 此前缺省 False 使 72 个目录来源全部禁用,21 条已入库机会被
+                    # fail-closed 过滤整体隐藏(2026-07-17 线上实证)。
+                    values.append(bool(source.get(key, True)) and str(source.get("status") or "active") == "active")
                 elif key == "requires_human_review":
                     values.append(bool(source.get(key, False)))
                 elif key == "priority_tier":

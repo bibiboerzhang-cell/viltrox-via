@@ -276,6 +276,59 @@ def test_generate_resolves_vertexaisearch_redirect_shells(monkeypatch) -> None:
     assert "https://petapixel.com/2026/07/16/meike-85mm-f14-ii-launch" in item_urls
 
 
+def test_generate_persists_grounded_subset_and_drops_unmatched(monkeypatch) -> None:
+    """引文只覆盖部分品牌时:落库已接地子集,丢弃未接地条目(告别整批连坐)。"""
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Tamron",
+                            "title": "Tamron 12-20mm F2.8 发布",
+                            "summary": "超广角变焦开卖",
+                            "impact": "定价压力",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "https://fstoppers.com/tamron-item-page",
+                            "published_at": "2026-07-15T12:00:00Z",
+                        },
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Canon (佳能)",
+                            "title": "Canon 新机传闻",
+                            "summary": "无引文覆盖的传闻",
+                            "impact": "未知",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "https://example.com/canon-rumor",
+                            "published_at": "2026-07-16T12:00:00Z",
+                        },
+                    ]
+                }
+            ),
+            "gemini:test+google_search",
+            [{"title": "fstoppers.com", "url": "https://fstoppers.com/gear/tamron-12-20mm-f28-ultra-wide"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "ok"
+    assert conn.insert_params is not None
+    payload = json.loads(str(conn.insert_params[0]))
+    brands = [item["brand"] for item in payload["items"]]
+    assert brands == ["Tamron"]
+    assert payload["dropped_ungrounded"] == 1
+
+
 def test_generate_keeps_shell_and_stays_degraded_when_resolution_fails(monkeypatch) -> None:
     """解析失败必须保壳 + 照旧 degraded 拒绝落库(fail-closed,不因解析器放宽闸)。"""
     conn = _Conn()

@@ -679,16 +679,23 @@ def generate_competitor_radar() -> dict[str, Any]:
                 return True
         return False
 
-    unmatched_urls = [
-        str(item.get("source_url") or "")
-        for item in items
-        if isinstance(item, dict) and not item_has_grounding(item)
+    # 条目级 fail-closed(2026-07-17):此前任一条目未接地→整批连坐拒绝,
+    # 实测引文只覆盖部分品牌时(4条里1条 Canon 传闻无引文)批批全灭。
+    # 改为丢弃未接地条目、只落库已接地子集;全部未接地才整批拒绝。
+    grounded_items = [
+        item for item in items if isinstance(item, dict) and item_has_grounding(item)
     ]
-    if unmatched_urls:
+    dropped_ungrounded = sum(1 for item in items if isinstance(item, dict)) - len(grounded_items)
+    if dropped_ungrounded:
         logger.warning(
             "competitor_radar.item_sources_not_grounded",
-            extra={"count": len(unmatched_urls), "model": model_used},
+            extra={
+                "count": dropped_ungrounded,
+                "kept": len(grounded_items),
+                "model": model_used,
+            },
         )
+    if not grounded_items:
         return {
             "status": "degraded",
             "result_status": "degraded",
@@ -701,6 +708,7 @@ def generate_competitor_radar() -> dict[str, Any]:
             "provenance": provenance,
             "generated_at": generated_at,
         }
+    items = grounded_items
     clean: list[dict[str, Any]] = []
     for it in items[:6]:
         d = it if isinstance(it, dict) else {}
@@ -759,6 +767,8 @@ def generate_competitor_radar() -> dict[str, Any]:
         "items": clean,
         "sources": grounding_sources,
         "evidence": grounding_sources,
+        # 诚实记账:本轮被丢弃的未接地条目数(0=全部接地),前端/审计可见。
+        "dropped_ungrounded": dropped_ungrounded,
         "status": "ready",
         "result_status": "ready",
         "contract_status": "ready",

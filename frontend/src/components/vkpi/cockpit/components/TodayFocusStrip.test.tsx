@@ -44,11 +44,11 @@ describe("TodayFocusStrip 紧凑焦点摘要", () => {
       />,
     );
 
-    expect(await screen.findByText("待办 126")).toHaveAttribute("data-count-kind", "exact");
+    expect(await screen.findByText("待审 126")).toHaveAttribute("data-count-kind", "exact");
     expect(screen.getByText("优先待办 · 展示 2")).toBeInTheDocument();
     expect(screen.getByText("昨晚完成 8 件，0 失败")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "查看全部待办,当前 126" }));
+    fireEvent.click(screen.getByRole("button", { name: "待审 126 · 待执行 126 · 待对账 126,点击查看全部" }));
     fireEvent.click(screen.getByRole("button", { name: "查看待办:重试失败的深析" }));
     fireEvent.click(screen.getByRole("button", { name: "查看夜班晨报" }));
 
@@ -71,7 +71,7 @@ describe("TodayFocusStrip 紧凑焦点摘要", () => {
 
     render(<TodayFocusStrip apiToken="tok" />);
 
-    expect(await screen.findByText("待办 20+")).toHaveAttribute("data-count-kind", "lower-bound");
+    expect(await screen.findByText("待审 20+")).toHaveAttribute("data-count-kind", "lower-bound");
     expect(screen.getByText("优先待办 · 展示 3")).toBeInTheDocument();
   });
 
@@ -82,7 +82,7 @@ describe("TodayFocusStrip 紧凑焦点摘要", () => {
 
     const { unmount } = render(<TodayFocusStrip apiToken="tok" />);
 
-    expect(await screen.findByText("待办 1")).toBeInTheDocument();
+    expect(await screen.findByText("待审 1")).toBeInTheDocument();
     expect(screen.getByText("重试失败的深析")).toBeInTheDocument();
     expect(screen.getByText("读取晨报")).toBeInTheDocument();
 

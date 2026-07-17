@@ -223,12 +223,15 @@ def produce_failed_retry(conn: Any, *, limit: int = 25) -> list[dict[str, Any]]:
         row = dict(r)
         bucket = row.get("last_error_category") or "unknown"
         err = (row.get("last_error") or "")[:160]
+        # 「失败但已试=0次」读感自相矛盾(blocked/从未真正跑过的任务 attempts=0),换人话。
+        attempts = int(row.get("attempts") or 0)
+        attempt_note = f"已试={attempts}次" if attempts > 0 else "未曾执行(入队即受阻)"
         out.append(
             make_suggestion(
                 category="failed_retry",
                 dedupe_key=f"failed_retry:job:{row['id']}",
                 title=f"失败任务待重试 · {row.get('job_type', 'job')}",
-                detail=f"#{row['id']} [{row.get('status')}] 失败桶={bucket} 已试={row.get('attempts', 0)}次。{err}",
+                detail=f"#{row['id']} [{row.get('status')}] 失败桶={bucket} {attempt_note}。{err}",
                 reason=f"任务因『{bucket}』失败/受阻;按失败桶选择重试策略可回收产出。",
                 priority="high",
                 entity_type="job",

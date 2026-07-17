@@ -157,6 +157,10 @@ export function TodayFocusStrip({
 }) {
   const [topItems, setTopItems] = React.useState<any[]>([]);
   const [pendingCount, setPendingCount] = React.useState<PendingCountMeta>(EMPTY_PENDING_COUNT);
+  // 分层口径(2026-07-17 demo 定稿):待审=suggested / 待执行=approved / 待对账=executing,
+  // 告别单一「待办 N」把前 20 条待审冒充全部待办的误导。
+  const [approvedCount, setApprovedCount] = React.useState<PendingCountMeta>(EMPTY_PENDING_COUNT);
+  const [executingCount, setExecutingCount] = React.useState<PendingCountMeta>(EMPTY_PENDING_COUNT);
   const [inboxAvailable, setInboxAvailable] = React.useState(true);
   const [inboxError, setInboxError] = React.useState("");
   const [headline, setHeadline] = React.useState("");
@@ -181,6 +185,7 @@ export function TodayFocusStrip({
     setBriefLoading(true);
 
     // 两路独立收口:任一路先回来就先展示,不被另一路拖住。
+    // 待审(suggested)为主路:出 chips + 计数;approved/executing 只补分层计数,失败静默保 "--"。
     void listActionInbox(apiToken, { limit: 20 })
       .then((value) => {
         if (cancelled) return;
@@ -197,6 +202,22 @@ export function TodayFocusStrip({
       .finally(() => {
         if (!cancelled) setInboxLoading(false);
       });
+    void listActionInbox(apiToken, { limit: 20, status: "approved" })
+      .then((value) => {
+        if (cancelled) return;
+        const resp: any = value || {};
+        const arr = Array.isArray(resp.items) ? resp.items : [];
+        setApprovedCount(resolvePendingCount(resp, arr.length, 20));
+      })
+      .catch(() => undefined);
+    void listActionInbox(apiToken, { limit: 20, status: "executing" })
+      .then((value) => {
+        if (cancelled) return;
+        const resp: any = value || {};
+        const arr = Array.isArray(resp.items) ? resp.items : [];
+        setExecutingCount(resolvePendingCount(resp, arr.length, 20));
+      })
+      .catch(() => undefined);
 
     void apiFetch<BriefResp>("/api/admin/vkpi/morning-brief", {}, apiToken)
       .then((b) => {
@@ -241,18 +262,25 @@ export function TodayFocusStrip({
     inboxSeg = e(
       "div",
       { className: "flex min-w-0 flex-wrap items-center gap-1.5" },
-      topItems.map((it: any, index: number) =>
-        jumpElement(
+      topItems.map((it: any, index: number) => {
+        // 第一条=「下一步最该做的一条」:唯一强调位(demo 定稿),其余保持安静。
+        const isNext = index === 0;
+        return jumpElement(
           onJumpToInbox,
           {
             key: it.id ?? `${it.category || "action"}-${index}`,
             "data-action": onJumpToInbox ? "jump-inbox" : "summary-only",
+            "data-next": isNext ? "1" : undefined,
             "aria-label": onJumpToInbox ? `查看待办:${it.title || "未命名待办"}` : undefined,
             title: onJumpToInbox
               ? `${it.title || ""} · 点击直达「今日该做什么」`
               : `${it.title || ""} · 展示摘要`,
             className:
-              `flex max-w-[220px] items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[10px] text-ink-2 ${onJumpToInbox ? "transition-colors hover:border-emerald-500/30 hover:bg-good-soft" : ""}`,
+              `flex max-w-[240px] items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] ${
+                isNext
+                  ? "border-emerald-500/30 bg-good-soft text-ink"
+                  : "border-line bg-panel text-ink-2"
+              } ${onJumpToInbox ? "transition-colors hover:border-emerald-500/30 hover:bg-good-soft" : ""}`,
           },
           e("i", {
             className: `h-1.5 w-1.5 shrink-0 rounded-full ${PRIORITY_DOT[it.priority] || PRIORITY_DOT.low}`,
@@ -263,8 +291,11 @@ export function TodayFocusStrip({
             CATEGORY_LABEL[it.category] || "待处理",
           ),
           e("span", { className: "min-w-0 truncate" }, it.title),
-        ),
-      ),
+          isNext && onJumpToInbox
+            ? e("span", { className: "shrink-0 text-[9px] font-bold tracking-wide text-good" }, "先做这条 →")
+            : null,
+        );
+      }),
     );
   }
 
@@ -300,15 +331,15 @@ export function TodayFocusStrip({
       className:
         "grid gap-2 rounded-xl border border-emerald-500/15 bg-good-soft px-3 py-2 backdrop-blur-xl lg:grid-cols-[auto_minmax(0,1fr)_minmax(220px,0.8fr)] lg:items-center",
     },
-    // 标头 + 待办计数(点击直达右栏面板)
+    // 标头 + 分层计数(待审/待执行/待对账,点击直达右栏面板)
     jumpElement(
       onJumpToInbox,
       {
         "data-action": onJumpToInbox ? "jump-inbox" : "summary-only",
-        "aria-label": onJumpToInbox ? `查看全部待办,当前 ${pendingCount.label}` : undefined,
-        title: pendingCount.kind === "lower-bound"
-          ? `待办至少 ${pendingCount.value ?? 0} 条${onJumpToInbox ? "，点击直达面板" : ""}`
-          : `待办 ${pendingCount.label} 条${onJumpToInbox ? "，点击直达面板" : ""}`,
+        "aria-label": onJumpToInbox
+          ? `待审 ${pendingCount.label} · 待执行 ${approvedCount.label} · 待对账 ${executingCount.label},点击查看全部`
+          : undefined,
+        title: `待审 ${pendingCount.label} · 待执行 ${approvedCount.label} · 待对账 ${executingCount.label}${onJumpToInbox ? "，点击直达面板" : ""}`,
         className: `flex shrink-0 items-center gap-1.5 ${onJumpToInbox ? "transition-opacity hover:opacity-80" : ""}`,
       },
       e(Target, { size: 13, className: "text-good" }),
@@ -320,7 +351,17 @@ export function TodayFocusStrip({
             "rounded-full border border-emerald-500/25 bg-good-soft px-1.5 py-px text-[9px] tabular-nums text-good",
           "data-count-kind": pendingCount.kind,
         },
-        `待办 ${pendingCount.label}`,
+        `待审 ${pendingCount.label}`,
+      ),
+      e(
+        "span",
+        { className: "rounded-full border border-line px-1.5 py-px text-[9px] tabular-nums text-ink-2", "data-count-kind": approvedCount.kind },
+        `待执行 ${approvedCount.label}`,
+      ),
+      e(
+        "span",
+        { className: "rounded-full border border-line px-1.5 py-px text-[9px] tabular-nums text-ink-2", "data-count-kind": executingCount.kind },
+        `待对账 ${executingCount.label}`,
       ),
       inboxLoading ? e(Loader2, { size: 10, className: "animate-spin text-muted" }) : null,
     ),
