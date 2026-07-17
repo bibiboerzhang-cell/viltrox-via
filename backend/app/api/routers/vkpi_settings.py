@@ -191,11 +191,14 @@ def health_sentinel_run(staff=Depends(require_tab("vkpi", "admin"))):
 # 权威账单以 Apify console 为准(无法程序化比对,如实标注)。
 # ---------------------------------------------------------------------------
 @router.get("/ops/cost-ledger")
-def cost_ledger_overview(staff=Depends(require_tab("vkpi", "read"))):
+def cost_ledger_overview(
+    tz_offset_minutes: int = 0,
+    staff=Depends(require_tab("vkpi", "read")),
+):
     _require_manager_staff(staff)
     from app.domains.costs import budget_guard
 
-    return budget_guard.cost_overview()
+    return budget_guard.cost_overview(tz_offset_minutes=tz_offset_minutes)
 
 
 @router.get("/settings/api-key-pool")

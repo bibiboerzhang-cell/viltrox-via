@@ -169,7 +169,7 @@ export function CostLedgerCard({ apiToken }: { apiToken?: string }) {
     if (!apiToken) return;
     let alive = true;
     setLoading(true);
-    apiFetch<CostOverview>('/api/admin/vkpi/ops/cost-ledger', { timeoutMs: 15000 }, apiToken)
+    apiFetch<CostOverview>(`/api/admin/vkpi/ops/cost-ledger?tz_offset_minutes=${-new Date().getTimezoneOffset()}`, { timeoutMs: 15000 }, apiToken)
       .then((res) => {
         if (alive) setOverview(res || null);
       })

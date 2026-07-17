@@ -833,13 +833,25 @@ _COST_NOTE = (
 )
 
 
-def cost_overview() -> dict[str, Any]:
-    """成本记账总览(设置页成本卡):今日/本月 Apify+LLM 消耗、top actor、覆盖口径。只读。"""
+def cost_overview(tz_offset_minutes: int = 0) -> dict[str, Any]:
+    """成本记账总览(设置页成本卡):今日/本月 Apify+LLM 消耗、top actor、覆盖口径。只读。
+
+    「今日/本月」按观看者本地零点划界(时间机制红线:显示按浏览器时区)——
+    tz_offset_minutes 为浏览器相对 UTC 的偏移(东八区 +480,美东夏令 -240),
+    缺省 0 保持旧 UTC 口径。此前固定 UTC 零点导致美东晚间「今日」被清零。
+    """
     ensure_budget_schema()
     conn = get_conn()
-    now = datetime.now(timezone.utc)
-    day_start = now.strftime("%Y-%m-%dT00:00:00Z")
-    month_start = now.strftime("%Y-%m-01T00:00:00Z")
+    offset = max(-840, min(840, int(tz_offset_minutes or 0)))
+    now_local = datetime.now(timezone.utc) + timedelta(minutes=offset)
+    day_start = (
+        now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        - timedelta(minutes=offset)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    month_start = (
+        now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        - timedelta(minutes=offset)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     overview: dict[str, Any] = {
         "generated_at": _utcnow(),
         "today": _cost_bucket_rows(conn, day_start),

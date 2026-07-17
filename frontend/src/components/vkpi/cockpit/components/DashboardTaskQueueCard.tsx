@@ -67,7 +67,7 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
   React.useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
-    void apiFetch<CostOverview>("/api/admin/vkpi/ops/cost-ledger", { timeoutMs: 12000 }, apiToken)
+    void apiFetch<CostOverview>(`/api/admin/vkpi/ops/cost-ledger?tz_offset_minutes=${-new Date().getTimezoneOffset()}`, { timeoutMs: 12000 }, apiToken)
       .then((payload) => { if (!cancelled) setCost(payload); })
       .catch(() => { if (!cancelled) setCost(null); });
     return () => { cancelled = true; };
