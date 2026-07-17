@@ -142,7 +142,12 @@ def _production_evidence(binding: str) -> dict:
     }
 
 
-def test_ready_data_still_fails_closed_without_runtime_evidence() -> None:
+def test_ready_data_still_fails_closed_without_runtime_evidence(monkeypatch) -> None:
+    # 密闭:清 provider key env,断言 configured=False 不受操作员机器上的真 key 污染
+    # (fail-closed 契约与 key 是否在场无关——评测证据缺失才是拦截主因)。
+    for _name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+                  "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"):
+        monkeypatch.delenv(_name, raising=False)
     decision = evaluate_report_model_policy(
         _ready(),
         [_source()],
