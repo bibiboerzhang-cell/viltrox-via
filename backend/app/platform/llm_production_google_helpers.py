@@ -47,8 +47,16 @@ def _default_thinking_config(config: Any, model: str) -> Any | None:
     if isinstance(config, dict):
         if config.get("thinking_config") is not None or config.get("thinkingConfig") is not None:
             return None
-    elif config is not None and getattr(config, "thinking_config", None) is not None:
-        return None
+        if config.get("tools"):
+            return None
+    elif config is not None:
+        if getattr(config, "thinking_config", None) is not None:
+            return None
+        # 带工具(如 Google Search 接地)的调用不注入思考上限:搜索是模型在
+        # 思考期间自主决定调用的,压死思考会掐掉搜索→无引文→接地契约拒收。
+        # 这些路径的截断风险由各自调大的 max_output_tokens 承担。
+        if getattr(config, "tools", None):
+            return None
     if "pro" in model_id:
         if "2.5" not in model_id:
             return None

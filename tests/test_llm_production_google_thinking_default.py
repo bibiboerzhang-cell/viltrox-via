@@ -86,3 +86,28 @@ def test_pydantic_like_config_gets_update():
     out = google_config_with_output_limit(FakeConfig(), 4096, model="gemini-2.5-flash")
     assert out["max_output_tokens"] == 4096
     assert _budget_of(out["thinking_config"]) == 0
+
+
+def test_tool_carrying_config_not_bounded():
+    # 接地搜索是模型在思考期间自主调用的——带 tools 的调用不注入思考上限
+    out = google_config_with_output_limit(
+        {"tools": [{"google_search": {}}]}, 8192, model="gemini-2.5-pro"
+    )
+    assert "thinking_config" not in out
+    assert out["max_output_tokens"] == 8192
+
+
+def test_tool_carrying_pydantic_config_not_bounded():
+    class FakeConfig:
+        def __init__(self):
+            self.thinking_config = None
+            self.tools = [object()]
+
+        def model_copy(self, update):
+            merged = {"thinking_config": self.thinking_config, "tools": self.tools}
+            merged.update(update)
+            return merged
+
+    out = google_config_with_output_limit(FakeConfig(), 8192, model="gemini-2.5-flash")
+    assert out["thinking_config"] is None
+    assert out["max_output_tokens"] == 8192
