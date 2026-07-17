@@ -749,9 +749,11 @@ def test_ready_snapshot_is_preserved_while_latest_failed_attempt_is_exposed(monk
                     "hot_topics": ["Topic"],
                     "sources": [source],
                     "generated_at": (now - timedelta(hours=1)).isoformat(),
+                    # Codex 清单 D 组:读端只把完整两阶段 pipeline v1 快照当 ready。
+                    "provenance": {"pipeline": "ai_today_evidence_strategy_v1"},
                 }
             ),
-            "model": "gemini:ready+google_search",
+            "model": "gemini-2.5-pro->claude-opus-4-7",
             "created_at": (now - timedelta(hours=1)).isoformat(),
         }
     ]
@@ -823,3 +825,85 @@ def test_source_string_is_invalid_not_a_character_list(monkeypatch) -> None:
     assert result["result_status"] == "invalid"
     assert result["reason"] == "invalid_grounding_contract"
     assert result["validation_errors"] == ["sources:expected_list"]
+
+
+def test_legacy_single_stage_snapshot_reads_back_degraded_not_ready(monkeypatch) -> None:
+    """Codex 清单 D 组:旧单阶段(无 pipeline v1 标记)grounded 快照只能作 degraded 展示。"""
+    now = datetime.now(tz=timezone.utc)
+    snapshot_rows = [
+        {
+            "snapshot_date": now.date().isoformat(),
+            "content_json": json.dumps(
+                {
+                    "headline": "Legacy single stage",
+                    "shooting_plans": ["Plan"],
+                    "hot_topics": ["Topic"],
+                    "sources": [_grounding_source()],
+                    "generated_at": (now - timedelta(hours=1)).isoformat(),
+                }
+            ),
+            "model": "gemini:gemini-2.5-flash+google_search",
+            "created_at": (now - timedelta(hours=1)).isoformat(),
+        }
+    ]
+    monkeypatch.setattr(ai_today, "_ensure_schema", lambda: None)
+    monkeypatch.setattr(ai_today, "get_conn", lambda: _ReadConn(snapshot_rows, []))
+    monkeypatch.setattr(ai_today, "_market_sources", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ai_today, "_recommended_video_rows", lambda: [])
+
+    result = ai_today.get_ai_today_hot()
+
+    assert result["available"] is True
+    assert result["is_ready"] is False
+    assert result["result_status"] == "degraded"
+    assert result["reason"] == "legacy_snapshot_pre_pipeline_v1"
+    assert result["content"]["headline"] == "Legacy single stage"
+    assert "legacy_snapshot:pipeline_v1_required" in result["content"]["validation_errors"]
+
+
+def test_pipeline_v1_snapshot_wins_over_newer_legacy_snapshot(monkeypatch) -> None:
+    """更新的旧单阶段快照不能压过完整 pipeline v1 快照;v1 行为准,标 degraded 提示有新行被拒。"""
+    now = datetime.now(tz=timezone.utc)
+    snapshot_rows = [
+        {
+            "snapshot_date": now.date().isoformat(),
+            "content_json": json.dumps(
+                {
+                    "headline": "Newer legacy",
+                    "shooting_plans": ["Plan"],
+                    "hot_topics": ["Topic"],
+                    "sources": [_grounding_source()],
+                    "generated_at": now.isoformat(),
+                }
+            ),
+            "model": "gemini:gemini-2.5-flash+google_search",
+            "created_at": now.isoformat(),
+        },
+        {
+            "snapshot_date": (now - timedelta(days=1)).date().isoformat(),
+            "content_json": json.dumps(
+                {
+                    "headline": "Older pipeline v1",
+                    "shooting_plans": ["Plan"],
+                    "hot_topics": ["Topic"],
+                    "sources": [_grounding_source()],
+                    "generated_at": (now - timedelta(days=1)).isoformat(),
+                    "provenance": {"pipeline": "ai_today_evidence_strategy_v1"},
+                }
+            ),
+            "model": "gemini-2.5-pro->claude-opus-4-7",
+            "created_at": (now - timedelta(days=1)).isoformat(),
+        },
+    ]
+    monkeypatch.setattr(ai_today, "_ensure_schema", lambda: None)
+    monkeypatch.setattr(ai_today, "get_conn", lambda: _ReadConn(snapshot_rows, []))
+    monkeypatch.setattr(ai_today, "_market_sources", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ai_today, "_recommended_video_rows", lambda: [])
+
+    result = ai_today.get_ai_today_hot()
+
+    assert result["available"] is True
+    assert result["content"]["headline"] == "Older pipeline v1"
+    assert result.get("reason") != "legacy_snapshot_pre_pipeline_v1"
+    assert result["contract_status"] == "degraded"
+    assert "legacy_snapshot:pipeline_v1_required" in result["content"]["validation_errors"]

@@ -81,10 +81,16 @@ _AI_TODAY_DISCOVERY_MODEL = "gemini-2.5-pro"
 _AI_TODAY_STRATEGY_MODEL = CLAUDE_OPUS_EXACT_MODEL
 _AI_TODAY_DISCOVERY_PURPOSE = "ai_today.grounded_discovery"
 _AI_TODAY_STRATEGY_PURPOSE = "ai_today.evidence_strategy"
-_AI_TODAY_DISCOVERY_OUTPUT_TOKENS = 1400
+# 2026-07-16 实跑校准:gemini-2.5-pro 思考 token 计入 max_output_tokens(实测复杂接地 prompt
+# 思考 3000+ → 1400/4096 均正文截断「Unterminated string」→ 合同全灭);顶到边界硬上限 8192,
+# 并在 prompt 里约束条数/长度,双管齐下防截断。对齐视频分镜先例(1200→4096)。
+_AI_TODAY_DISCOVERY_OUTPUT_TOKENS = 8192
 _AI_TODAY_STRATEGY_OUTPUT_TOKENS = 1800
-_PROVIDER_TIMEOUT_SECONDS = 20.0
-_STRATEGY_TIMEOUT_SECONDS = 38.0
+# 2026-07-16 实跑校准:gemini-2.5-pro+Google Search 接地经代理常态 >20s(旧 20s 全灭在
+# ReadTimeout);claude-opus 1800 token 输出经代理也常超 38s(scheduler 回执 deadline_exceeded)。
+# 每日一次的离线任务,放宽到 pro/opus 的真实完成区间;失败仍如实降级,不影响门面。
+_PROVIDER_TIMEOUT_SECONDS = 75.0
+_STRATEGY_TIMEOUT_SECONDS = 90.0
 _AI_TODAY_ATTEMPT_KIND = "ai_today_attempt_v1"
 
 
@@ -251,9 +257,11 @@ def _generate(
         client = getattr(gemini_module, "gemini_client", None)
         if client is None:
             raise RuntimeError("google_client_not_configured")
+        # 注意:Google Search 工具与 response_mime_type="application/json" 互斥
+        # (API 400: "Tool use with a response mime type: 'application/json' is unsupported")。
+        # 接地发现只能靠 prompt 约束 JSON,_parse_json 已兜底剥引用/说明文字。
         config = types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
-            response_mime_type="application/json",
             http_options=types.HttpOptions(
                 timeout=int(_PROVIDER_TIMEOUT_SECONDS * 1000),
                 retry_options=types.HttpRetryOptions(attempts=1),
@@ -597,7 +605,9 @@ def generate_ai_today_hot() -> dict[str, Any]:
         "(如 AF 27/35/56/85mm F1.x、135mm F1.8 LAB 旗舰)、变形宽荧幕电影镜、轻量广角等。优先选能直接\n"
         "借势到这些镜头/拍法的热点(如弱光人像、电影感Vlog、复古街拍);每条 hot_topic 都要能落到一类\n"
         "我们能借势的镜头或拍法,纯无关的热点(如纯无人机竞速)不要。\n"
-        "严格只输出 JSON(不要多余文字):\n"
+        "严格只输出 JSON(不要多余文字);market_signals 与 video_candidates 各最多 5 条,"
+        "每条必须是一条纯文本字符串(禁止输出对象/嵌套字段,把热点、时间、事实摘要写进同一句话),"
+        "每条不超过 120 字(超长或非字符串会被判作废):\n"
         '{\n'
         '  "market_signals": ["热点/赛事/玩法+时间+搜索事实摘要"],\n'
         '  "video_candidates": ["可供 Viltrox 内容团队复核的真实海外视频/创作者案例"]\n'
@@ -815,6 +825,7 @@ def get_ai_today_hot() -> dict[str, Any]:
             }, latest_attempt)
 
         selected: tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]] | None = None
+        legacy: tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]] | None = None
         newest: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]] | None = None
         skipped_newer_errors: list[str] = []
         for raw_row in rows:
@@ -830,14 +841,31 @@ def get_ai_today_hot() -> dict[str, Any]:
                 newest = (d, content, contract, source_contract)
             grounding_sources = list(source_contract.get("value") or [])
             if contract.get("status") == "ready" and source_contract.get("status") == "ready":
-                selected = (d, content, contract, grounding_sources)
-                break
-            skipped_newer_errors.extend(
-                [
-                    *list(contract.get("errors") or []),
-                    *list(source_contract.get("errors") or []),
-                ]
-            )
+                # Codex 清单 D 组:读端只把「完整两阶段 pipeline v1」快照当 ready;
+                # 旧单阶段(无 pipeline 标记)快照最多作 stale/degraded 展示,绝不冒充今日就绪。
+                provenance = content.get("provenance") if isinstance(content.get("provenance"), dict) else {}
+                if str(provenance.get("pipeline") or "") == _AI_TODAY_PIPELINE_VERSION:
+                    selected = (d, content, contract, grounding_sources)
+                    break
+                if legacy is None:
+                    legacy = (d, content, contract, grounding_sources)
+                    skipped_newer_errors.append("legacy_snapshot:pipeline_v1_required")
+                continue
+            if legacy is None:
+                # 只累计「比可展示行更新」的拒绝原因;legacy 兜底行之下的陈年错误不进门面。
+                skipped_newer_errors.extend(
+                    [
+                        *list(contract.get("errors") or []),
+                        *list(source_contract.get("errors") or []),
+                    ]
+                )
+
+        legacy_fallback = False
+        if selected is None and legacy is not None:
+            # 没有任何 pipeline v1 快照时,用最新的旧单阶段 grounded 快照兜底展示,
+            # 但强制 degraded(is_ready=False),门面口径「历史快照」而非今日结论。
+            selected = legacy
+            legacy_fallback = True
 
         if selected is None:
             d, content, contract, source_contract = newest or (
@@ -897,7 +925,7 @@ def get_ai_today_hot() -> dict[str, Any]:
         contract_status = (
             "invalid" if evidence_contract.get("status") == "invalid" else str(contract.get("status") or "invalid")
         )
-        if skipped_newer_errors and contract_status == "ready":
+        if (legacy_fallback or skipped_newer_errors) and contract_status == "ready":
             contract_status = "degraded"
         result_status = _result_status(
             contract_status,
@@ -926,6 +954,7 @@ def get_ai_today_hot() -> dict[str, Any]:
                 *skipped_newer_errors,
             ],
             "provenance": content.get("provenance") if isinstance(content.get("provenance"), dict) else {},
+            **({"reason": "legacy_snapshot_pre_pipeline_v1"} if legacy_fallback else {}),
         }
         return _attach_latest_attempt({
             "available": True,
@@ -940,6 +969,7 @@ def get_ai_today_hot() -> dict[str, Any]:
             "grounding_status": "grounded",
             "sources": stored_sources,
             **freshness,
+            **({"reason": "legacy_snapshot_pre_pipeline_v1"} if legacy_fallback else {}),
             "content": enriched,
         }, latest_attempt)
     except Exception:
