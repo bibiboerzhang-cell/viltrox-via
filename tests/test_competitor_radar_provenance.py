@@ -225,6 +225,101 @@ def test_generate_matches_cjk_parenthetical_brand_to_grounding(monkeypatch) -> N
     assert "https://petapixel.com/meike-85" in attached_urls
 
 
+def test_generate_resolves_vertexaisearch_redirect_shells(monkeypatch) -> None:
+    """接地壳 URL(域名级 title + vertexaisearch 重定向)解析成真实文章 URL 后,
+    品牌经真 URL slug 命中、落库源=可回跳真链(2026-07-17 线上恒败根因回归钉)。"""
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_fetch_final_url",
+        lambda _url, timeout_seconds=6.0: "https://petapixel.com/2026/07/16/meike-85mm-f14-ii-launch",
+    )
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Meike (美科)",
+                            "title": "Meike 发布 85mm f/1.4 II",
+                            "summary": "升级版人像定焦开售",
+                            "impact": "同级价格压力",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "https://petapixel.com/some-other-page",
+                            "published_at": "2026-07-16T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "gemini:test+google_search",
+            # 线上真实形态:title 只有域名,URL 是重定向壳。
+            [{"title": "petapixel.com", "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "ok"
+    assert result["result_status"] == "ready"
+    assert conn.insert_params is not None
+    payload = json.loads(str(conn.insert_params[0]))
+    top_urls = {str(s.get("source_url") or "") for s in payload["sources"]}
+    assert "https://petapixel.com/2026/07/16/meike-85mm-f14-ii-launch" in top_urls
+    item_urls = {str(s.get("source_url") or "") for s in payload["items"][0]["sources"]}
+    assert "https://petapixel.com/2026/07/16/meike-85mm-f14-ii-launch" in item_urls
+
+
+def test_generate_keeps_shell_and_stays_degraded_when_resolution_fails(monkeypatch) -> None:
+    """解析失败必须保壳 + 照旧 degraded 拒绝落库(fail-closed,不因解析器放宽闸)。"""
+    conn = _Conn()
+    monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)
+    monkeypatch.setattr(competitor_radar.budget_guard, "check_budget", lambda *_args: True)
+    monkeypatch.setattr(competitor_radar.budget_guard, "record_cost", lambda **_kwargs: None)
+
+    def _boom(_url, timeout_seconds=6.0):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(competitor_radar, "_fetch_final_url", _boom)
+    monkeypatch.setattr(
+        competitor_radar,
+        "_generate",
+        lambda _prompt: (
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "signal_type": "competitor",
+                            "brand": "Meike (美科)",
+                            "title": "Meike 发布 85mm f/1.4 II",
+                            "summary": "升级版人像定焦开售",
+                            "impact": "同级价格压力",
+                            "content_origin": "external",
+                            "source_platform": "website",
+                            "source_url": "https://petapixel.com/some-other-page",
+                            "published_at": "2026-07-16T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "gemini:test+google_search",
+            [{"title": "petapixel.com", "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF"}],
+        ),
+    )
+
+    result = competitor_radar.generate_competitor_radar()
+
+    assert result["status"] == "degraded"
+    assert result["reason"] == "item_source_not_grounded"
+    assert conn.insert_params is None
+
+
 def test_generate_does_not_persist_legacy_ungrounded_result(monkeypatch) -> None:
     conn = _Conn()
     monkeypatch.setattr(competitor_radar, "get_conn", lambda: conn)

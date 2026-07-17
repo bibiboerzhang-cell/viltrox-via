@@ -108,6 +108,48 @@ def _brand_ascii_key(value: Any) -> str:
     return " ".join(tokens).strip()
 
 
+_GROUNDING_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+
+
+def _fetch_final_url(url: str, timeout_seconds: float = 6.0) -> str:
+    """跟随重定向链拿最终落地 URL;stream 不迭代 body,只取 Location 终点。"""
+    import httpx
+
+    with httpx.stream("GET", url, follow_redirects=True, timeout=timeout_seconds) as response:
+        return str(response.url)
+
+
+def _resolve_grounding_redirects(
+    sources: list[dict[str, Any]],
+    *,
+    max_resolve: int = 8,
+) -> list[dict[str, Any]]:
+    """把 Gemini 接地元数据的 vertexaisearch 重定向壳解析成真实文章 URL。
+
+    2026-07-17 线上实证:接地源 title 只有域名(nbcnews.com 级)、URL 全是
+    重定向壳——条目级 brand/URL 匹配在壳上**结构性恒败**(壳里永远没有品牌词,
+    条目自报 URL 也永远等不上壳)。解析后真 URL 的路径 slug 天然携带品牌词,
+    既有匹配闸不放宽即可命中,且落库/卡面拿到的就是可回跳的真链。
+    解析失败保留壳 URL,闸照旧严格(fail-closed,绝不编 URL)。"""
+    resolved: list[dict[str, Any]] = []
+    budget = max_resolve
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        url = _text(source.get("source_url"), source.get("url"))
+        if budget > 0 and _GROUNDING_REDIRECT_HOST in url:
+            budget -= 1
+            try:
+                final_url = _public_http_url(_fetch_final_url(url))
+            except Exception:
+                logger.debug("competitor_radar.grounding_redirect_resolve_failed", exc_info=True)
+                final_url = ""
+            if final_url and _GROUNDING_REDIRECT_HOST not in final_url:
+                source = {**source, "source_url": final_url, "url": final_url}
+        resolved.append(source)
+    return resolved
+
+
 def _validate_item_sources(value: Any, field: str) -> tuple[list[dict[str, Any]], list[str]]:
     if value is None:
         return [], []
@@ -591,8 +633,9 @@ def generate_competitor_radar() -> dict[str, Any]:
         }
 
     source_contract = _validate_grounding_sources(sources)
+    # 壳解析在去重前:两个壳解析到同一篇真文章时按真 URL 合并。
     grounding_sources = _dedupe_sources(
-        list(source_contract.get("value") or []),
+        _resolve_grounding_redirects(list(source_contract.get("value") or [])),
         observed_at=generated_at,
         default_relation="grounding",
     )
