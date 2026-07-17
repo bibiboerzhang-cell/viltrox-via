@@ -508,14 +508,14 @@ def test_current_catalog_counts_unknown_viltrox_and_name_hints_as_uncovered():
     assert report["coverage"]["activity_evidence"]["rate"] == 0.0
     assert report["coverage"]["viltrox_presence_evidence"] == {
         "covered": 0,
-        "denominator": 25,
+        "denominator": 24,
         "rate": 0.0,
         "status": "measured",
         "reason": "",
     }
     assert report["coverage"]["exact_dealer_location_linkage"] == {
         "covered": 0,
-        "denominator": 12,
+        "denominator": 11,
         "rate": None,
         "status": "unavailable",
         "reason": "reviewed_dealer_universe_not_supplied",
@@ -814,6 +814,12 @@ def test_event_persistent_import_requires_per_source_freshness_before_db(monkeyp
 
     monkeypatch.setattr(radar, "get_conn", forbidden_get_conn)
     monkeypatch.setattr(radar, "table_exists", forbidden_table_exists)
+
+    # 2026-07-17 目录重核后打包目录已可导入;此测验证的是「时效不全→绝不触库」的
+    # 闸机制本身,改用做旧副本(剥掉一个来源的 source_checked_at)保持前提成立。
+    stale = radar.load_reviewed_catalog()
+    stale["sources"][0].pop("source_checked_at", None)
+    monkeypatch.setattr(radar, "load_reviewed_catalog", lambda: stale)
 
     preview = radar.import_reviewed_catalog(record_only=True)
     assert preview["ok"] is True  # still renderable as a descriptive preview

@@ -336,8 +336,8 @@ def test_reviewed_import_bindings_include_workspace_without_db_side_effect_fixtu
 
     result = radar.import_reviewed_catalog(record_only=False, organization_id=1)
 
-    assert result["inserted"] == 25
-    assert result["observations_inserted"] == 25
+    assert result["inserted"] == 24
+    assert result["observations_inserted"] == 24
 
 
 def test_reviewed_import_persists_scoped_reviewer_evidence_in_jsonb(monkeypatch):
@@ -548,7 +548,7 @@ def test_reviewed_import_conflicts_are_scoped_to_workspace(monkeypatch):
 
     result = radar.import_reviewed_catalog(record_only=False, organization_id=2)
 
-    assert result["inserted"] == 25
+    assert result["inserted"] == 24
     opportunity_upsert = next(
         sql for sql, _ in conn.statements
         if sql.startswith("INSERT INTO vkpi_event_opportunities")

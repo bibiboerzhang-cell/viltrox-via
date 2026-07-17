@@ -15,7 +15,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 from app.domains.access import policy, scope
-from app.domains.events import event_members, service
+from app.domains.events import campus_universities, event_members, service
 
 
 logger = get_logger(__name__)
@@ -117,6 +117,21 @@ def upcoming_events(
         limit=limit,
         as_of_date=as_of_date,
     )
+
+
+# ── 校园大学目录(选校入口;必须在动态 /{event_id} 路由之前注册)──────────────
+@router.get("/campus-universities")
+def campus_universities_route(
+    region: str = Query(default="", max_length=20),
+    tier: str = Query(default="", max_length=2),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """打包人审目录只读端(2026-07-17 官方 .edu 逐一核实);零联网零写库。
+
+    联系方式仅机构级公开信息;目录是选校研究快照,发函前应回访系页复核。
+    """
+    del staff
+    return _guard(campus_universities.list_campus_universities, region=region, tier=tier)
 
 
 # ── Share members(真·活动共享:必须在动态 /{event_id} 路由之前注册)─────────────

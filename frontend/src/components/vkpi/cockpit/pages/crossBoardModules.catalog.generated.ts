@@ -98,6 +98,7 @@ export const FULL_BOARD_MODULE_CATALOG: FullBoardModuleSource[] = [
     modules: [
       { moduleKey: "kpiE", label: "活动总览带", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12 },
       { moduleKey: "radar", label: "活动雷达", defaultSpan: 12, minSpan: 6, defaultHeight: 22, minHeight: 10, maxHeight: 44 },
+      { moduleKey: "campus", label: "校园活动", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 30 },
       { moduleKey: "board", label: "活动看板", defaultSpan: 8, minSpan: 4, defaultHeight: 18, minHeight: 8, maxHeight: 36 },
       { moduleKey: "status", label: "状态构成", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 16 },
       { moduleKey: "budget", label: "预算执行", defaultSpan: 8, minSpan: 4, defaultHeight: 7, minHeight: 4, maxHeight: 20 },
@@ -131,6 +132,7 @@ export const FULL_BOARD_MODULE_CATALOG: FullBoardModuleSource[] = [
       { moduleKey: "mapD", label: "经销商地图", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 10, maxHeight: 30 },
       { moduleKey: "rosterD", label: "经销商名录", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 26 },
       { moduleKey: "opsD", label: "录入与采集", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 6, maxHeight: 24 },
+      { moduleKey: "rankD", label: "排名与知名度", defaultSpan: 12, minSpan: 6, defaultHeight: 14, minHeight: 7, maxHeight: 26 },
     ],
   },
   {

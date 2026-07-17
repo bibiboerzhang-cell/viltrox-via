@@ -49,6 +49,7 @@ import {
 } from "./EventsBoardPage.modules";
 import { EventDetailTakeover, EventsBoardModals } from "./EventsBoardPage.embeds";
 import { EventRadarModule } from "./EventRadarModule";
+import { CampusUniversitiesModule } from "./CampusUniversitiesModule";
 
 // Events → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 五件套
 //   embeds 收编手法 1:1 同构)。旧 pages/events/EventsMockupPage(+EventsPage)已退役
@@ -483,10 +484,17 @@ export function EventsBoardPage({
     </ModuleCard>
   );
 
+  const renderCampus = () => (
+    <ModuleCard {...cardProps("campus", "校园活动 · 选校目录")}>
+      <CampusUniversitiesModule apiToken={token} />
+    </ModuleCard>
+  );
+
   /* ---------- 模块注册表(palette 全量可选;默认简五卡,type/inventory/retro/team 备选) ---------- */
   const modules: DashboardModuleDefinition[] = [
     { key: "kpiE", label: "活动总览带", description: "进行中 / 本月 / 物料备货 / 费用合计(全真值)", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
     { key: "radar", label: "活动雷达", description: "Dealer / 学校 / 线下活动与大展会记录 · 登记来源、变更、人工判断和转 Event", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 22, minHeight: 10, maxHeight: 44, render: renderRadar },
+    { key: "campus", label: "校园活动", description: "69 所摄影系大学人审目录 · 地区/名校筛选 + 系办联系方式 · 官方 .edu 逐一核实快照", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 30, render: renderCampus },
     { key: "board", label: "活动看板", description: "活动卡片 + 我参与的/状态/类型/搜索过滤 · 点卡进详情", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 18, minHeight: 8, maxHeight: 36, render: renderBoard },
     { key: "status", label: "状态构成", description: "六状态环图 · 分段点击联动看板过滤", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 7, minHeight: 5, maxHeight: 16, render: renderStatus },
     { key: "budget", label: "预算执行", description: "每活动 spent/plan 条形 · 超支/近超语义染色", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 7, minHeight: 4, maxHeight: 20, render: renderBudget },

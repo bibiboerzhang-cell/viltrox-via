@@ -137,6 +137,17 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["回执", "requested / inserted / skipped / geocoded / pending 全部来自端点真实返回"],
     ],
   },
+  rankD: {
+    label: "dealers/rankings · vkpi_dealer_web_verification",
+    rows: [
+      ["读取", "GET /dealers/rankings 每店最新一条核验回执(历史全保留,只取 MAX(verified_at))"],
+      ["核验通道", "联网搜索逐店判定(官网在营 / 仍售相机器材 / Viltrox 在售 / 体量档 / 知名度);证据 URL 逐条落库可溯"],
+      ["Viltrox 在售", "confirmed 必须带零售商自有域名页面 URL;只代表核验时点页面出现过 Viltrox,不代表实时库存、成交或官方授权"],
+      ["体量档", "全国连锁 / 区域连锁 / 本地单店 / 以线上为主 / 待定 —— 依零售商自有门店页 + 公开来源判定"],
+      ["知名度分", "0-100 公开知名度信号(连锁店数 / 媒体口碑 / 本地评价规模),附判定依据;描述性排序用,绝不进任何评分管线"],
+      ["空态", "未跑核验 → 「尚未核验」如实;数据表未迁移 → migration_pending;绝不编名次"],
+    ],
+  },
 };
 
 export const PROV_TITLES: Record<string, string> = {
@@ -147,6 +158,7 @@ export const PROV_TITLES: Record<string, string> = {
   pendD: "待补定位",
   rosterD: "经销商名录",
   opsD: "录入与采集",
+  rankD: "排名与知名度",
 };
 
 /* ============ KPI 带四卡(有真数才真值;0 行 / 读取失败 → pending 带原因) ============ */

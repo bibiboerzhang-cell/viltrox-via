@@ -932,3 +932,46 @@ export async function unpublishDealer(token: string, dealerId: string | number):
   );
   return normalizeDealer(response);
 }
+
+/* ============ 官网核验排名(vkpi_dealer_web_verification 最新回执/店) ============ */
+
+export interface VkpiDealerRankingRow {
+  /** 名次;未评出知名度分的行为 null(排在已评分行之后) */
+  rank: number | null;
+  dealer_id: string | number;
+  name: string;
+  city?: string | null;
+  state?: string | null;
+  website_url?: string | null;
+  verified_at?: string | null;
+  website_status?: "alive" | "dead" | "unreachable" | string;
+  is_camera_retailer?: boolean | null;
+  carries_viltrox?: "confirmed" | "not_found" | "unknown" | string;
+  /** 仅 carries_viltrox=confirmed 时非空;零售商自有域名页面 */
+  viltrox_evidence_url?: string | null;
+  scale_tier?: "national_chain" | "regional_chain" | "local_store" | "online_focus" | "unknown" | string;
+  prominence_score?: number | null;
+  prominence_rationale?: string | null;
+}
+
+export interface VkpiDealerRankings {
+  status: "ready" | "empty" | "migration_pending" | string;
+  rankings: VkpiDealerRankingRow[];
+  verified_count: number;
+  unverified_count: number;
+  published_total: number;
+  viltrox_confirmed_count: number;
+  generated_at?: string | null;
+}
+
+export async function getDealerRankings(
+  token: string,
+  limit = 200,
+): Promise<VkpiDealerRankings> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return apiFetch<VkpiDealerRankings>(
+    `/api/admin/vkpi/dealers/rankings?${query.toString()}`,
+    { cache: "no-store" },
+    token,
+  );
+}

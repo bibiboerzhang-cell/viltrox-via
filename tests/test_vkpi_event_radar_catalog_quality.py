@@ -41,19 +41,18 @@ def test_reviewed_catalog_passes_offline_quality_gate_with_explicit_truth_bounds
         "global_complete": False,
     }
     assert report["counts"]["sources"] == 72
-    assert report["counts"]["opportunities"] == 25
+    assert report["counts"]["opportunities"] == 24
     assert report["dealer_linkage"] == {
-        "candidate_opportunities": 12,
+        "candidate_opportunities": 11,
         "matched_by_name": 9,
-        "unmatched": 3,
-        "coverage_rate": 0.75,
+        "unmatched": 2,
+        "coverage_rate": 0.8182,
         "unmatched_opportunity_ids": [
             "opp_adorama_portrait_light_20260714",
-            "opp_adorama_event_revenue_20260721",
             "opp_hunts_beginner_manchester_20260804",
         ],
     }
-    assert report["issue_counts"] == {"errors": 0, "warnings": 3}
+    assert report["issue_counts"] == {"errors": 0, "warnings": 2}
     assert _codes(report) == {"opportunity.dealer_match_missing"}
 
 

@@ -18,7 +18,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
-from app.domains.commerce import dealer_directory_adapters, dealer_scrape
+from app.domains.commerce import (
+    dealer_directory_adapters,
+    dealer_scrape,
+    dealer_web_verification_view,
+)
 from app.domains.events import (
     candidate_staging,
     dealer_activity_view,
@@ -233,6 +237,24 @@ def dealer_coverage_route(
         organization_id=organization_id,
         stale_after_days=stale_after_days,
     )
+
+
+@router.get("/rankings")
+def dealer_rankings_route(
+    limit: int = Query(default=200, ge=1, le=500),
+    staff=Depends(require_tab("vkpi", "read")),
+):
+    """Latest web-verification receipt per published dealer, ranked by prominence.
+
+    ``carries_viltrox`` marks one retailer-owned page observed at
+    ``verified_at`` — never current inventory, sales, or Viltrox
+    authorization.  ``prominence_score`` is a descriptive 0-100 public
+    prominence signal and never feeds fit scoring.  Databases without
+    migration 271 return ``status="migration_pending"`` with an honest
+    unverified count instead of an error.
+    """
+    del staff
+    return _guard(dealer_web_verification_view.dealer_rankings, limit=limit)
 
 
 @router.get("/us-source-registry")

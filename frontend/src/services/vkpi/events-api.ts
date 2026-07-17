@@ -892,3 +892,43 @@ export function fromUiInviteCreate(k: Record<string, any>): VkpiEventKolInviteCr
     travel_status: k.travel ? String(k.travel) : undefined,
   };
 }
+
+/* ============ 校园大学目录(打包人审快照 · 2026-07-17 官方 .edu 核实) ============ */
+
+export interface VkpiCampusUniversity {
+  name: string;
+  city?: string | null;
+  state?: string | null;
+  region: "northeast" | "south" | "midwest" | "west" | "other" | string;
+  region_label?: string | null;
+  program?: string | null;
+  degrees?: string | null;
+  tier: "A" | "B" | string;
+  dept_url?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  notes?: string | null;
+}
+
+export interface VkpiCampusUniversities {
+  status: "ready" | "empty" | string;
+  universities: VkpiCampusUniversity[];
+  total: number;
+  reviewed_at?: string | null;
+  review_method?: string | null;
+}
+
+export async function getCampusUniversities(
+  token: string,
+  params: { region?: string; tier?: string } = {},
+): Promise<VkpiCampusUniversities> {
+  const query = new URLSearchParams();
+  if (params.region) query.set("region", params.region);
+  if (params.tier) query.set("tier", params.tier);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<VkpiCampusUniversities>(
+    `/api/admin/vkpi/events/campus-universities${suffix}`,
+    { cache: "no-store" },
+    token,
+  );
+}

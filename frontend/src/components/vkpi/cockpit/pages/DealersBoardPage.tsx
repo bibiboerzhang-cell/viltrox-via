@@ -40,6 +40,8 @@ import {
   scrapeReceiptText,
 } from "./DealersBoardPage.modules";
 import { DealerMapEmbed } from "./DealersBoardPage.embeds";
+import { DealerRankingsBody, DealerRankingRowLine, dealerRankingDetailRows } from "./DealerRankingsModule";
+import { getDealerRankings, type VkpiDealerRankingRow } from "../../../../services/vkpi/dealers-api";
 import { formatLocal } from "../../lib/timeLocal";
 
 // Dealers → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage embeds
@@ -87,7 +89,7 @@ const DEFAULT_LAYOUT = [
 const PH_BADGE =
   "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
 
-type DealerReadSource = "dealers" | "locations" | "coverage" | "candidateStaging" | "sourceRegistry" | "series";
+type DealerReadSource = "dealers" | "locations" | "coverage" | "candidateStaging" | "sourceRegistry" | "series" | "rankings";
 
 // Dashboard 跨板块只挂一个模块时，只读该模块真正消费的数据。完整 Dealers
 // 页仍拉全部六源；未知嵌入 key 零请求，由 EmbeddedDashboardModule 显示不可见空态。
@@ -98,6 +100,7 @@ const EMBEDDED_MODULE_SOURCES: Record<string, readonly DealerReadSource[]> = {
   pendD: ["dealers"],
   mapD: ["dealers", "locations", "coverage", "candidateStaging", "sourceRegistry"],
   rosterD: ["dealers"],
+  rankD: ["rankings"],
   opsD: [],
 };
 
@@ -148,6 +151,8 @@ export function DealersBoardPage({ apiToken = "", embeddedModuleKey }: { apiToke
   const [rosterListOpen, setRosterListOpen] = React.useState(false);
   const [pendIdx, setPendIdx] = React.useState<number | null>(null);
   const [pendListOpen, setPendListOpen] = React.useState(false);
+  const [rankRow, setRankRow] = React.useState<VkpiDealerRankingRow | null>(null);
+  const [rankListOpen, setRankListOpen] = React.useState(false);
 
   React.useEffect(() => {
     setRecordMsg("");
@@ -186,6 +191,13 @@ export function DealersBoardPage({ apiToken = "", embeddedModuleKey }: { apiToke
     needsSource("series") ? token : "",
     reloadTick,
     React.useCallback((t: string) => getBoardSeries(t, { board: "dealers" }), []),
+  );
+
+  // 官网核验排名(迁移 271 最新回执/店;未迁移诚实 migration_pending)
+  const rankingsResp = useEndpoint(
+    needsSource("rankings") ? token : "",
+    reloadTick,
+    React.useCallback((t: string) => getDealerRankings(t), []),
   );
 
   const dealers = React.useMemo(
@@ -634,6 +646,30 @@ export function DealersBoardPage({ apiToken = "", embeddedModuleKey }: { apiToke
     </ModuleCard>
   );
 
+  const renderRankings = () => (
+    <ModuleCard
+      {...cardProps(
+        "rankD",
+        "排名与知名度",
+        rankingsResp.data?.status === "ready" ? `${rankingsResp.data.verified_count} 家` : undefined,
+        rankingsResp.data?.generated_at
+          ? [["生成时间", `${formatLocal(rankingsResp.data.generated_at)}(UTC 存 · 按浏览器时区显示)`]]
+          : undefined,
+      )}
+    >
+      {!token ? (
+        noTokenCard
+      ) : (
+        <DealerRankingsBody
+          data={rankingsResp.data ?? null}
+          error={rankingsResp.error}
+          onOpen={(row) => setRankRow(row)}
+          onOpenAll={() => setRankListOpen(true)}
+        />
+      )}
+    </ModuleCard>
+  );
+
   /* ---------- 模块注册表(palette 全量可选;默认简;高度贴内容 1 格=22px+14px gap) ---------- */
   const modules: DashboardModuleDefinition[] = [
     { key: "kpiD", label: "指标带", description: "经销商数 / 证据合格上图 / 覆盖州 / 国家数 · 库内 0 行如实空态", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
@@ -643,6 +679,7 @@ export function DealersBoardPage({ apiToken = "", embeddedModuleKey }: { apiToke
     { key: "mapD", label: "经销商地图", description: "定位点上图 · 地图渲染原件整体收编", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 10, maxHeight: 30, render: renderMap },
     { key: "rosterD", label: "经销商名录", description: "服务端分页（每页 100） · 编辑 / 发布 + 当前页活动三态", category: "数据库模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 26, render: renderRoster },
     { key: "opsD", label: "录入与采集", description: "预检 / 有界抓取(≤20)/ 手动添加草稿 / 可选发布", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 12, minHeight: 6, maxHeight: 24, render: renderOps },
+    { key: "rankD", label: "排名与知名度", description: "官网核验回执排名 · 体量档 / 知名度分 / Viltrox 在售 · 未核验如实空态", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 14, minHeight: 7, maxHeight: 26, render: renderRankings },
   ];
 
   if (embeddedModuleKey) {
@@ -764,6 +801,29 @@ export function DealersBoardPage({ apiToken = "", embeddedModuleKey }: { apiToke
               onUnpublish={() => void setDealerPublication(pendItem.id, false)}
             />
           }
+        />
+      )}
+
+      {rankListOpen && rankingsResp.data && (
+        <MiniListModal
+          title="排名与知名度 · 全量"
+          total={rankingsResp.data.rankings.length}
+          unit="家"
+          onClose={() => setRankListOpen(false)}
+        >
+          {rankingsResp.data.rankings.map((row) => (
+            <DealerRankingRowLine key={String(row.dealer_id)} row={row} onOpen={(r) => setRankRow(r)} />
+          ))}
+        </MiniListModal>
+      )}
+      {rankRow && (
+        <MiniDetailModal
+          title={String(rankRow.name || `经销商 #${rankRow.dealer_id}`)}
+          rows={dealerRankingDetailRows(rankRow)}
+          index={0}
+          total={1}
+          onNav={() => undefined}
+          onClose={() => setRankRow(null)}
         />
       )}
 

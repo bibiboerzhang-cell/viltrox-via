@@ -155,15 +155,15 @@ def test_current_event_queue_expands_every_known_gap_at_entity_grain():
         "database_accessed": False,
         "business_rows_written": 0,
     }
-    assert queue["task_count"] == 136
+    assert queue["task_count"] == 133
     assert len(_tasks(queue, field="source_checked_at")) == 72
-    assert len(_tasks(queue, field="activity_evidence")) == 25
-    assert len(_tasks(queue, field="viltrox_presence_evidence")) == 25
-    assert len(_tasks(queue, field="dealer_stable_location_key")) == 12
+    assert len(_tasks(queue, field="activity_evidence")) == 24
+    assert len(_tasks(queue, field="viltrox_presence_evidence")) == 24
+    assert len(_tasks(queue, field="dealer_stable_location_key")) == 11
     assert len(_tasks(queue, field="known_source_universe_denominator")) == 1
-    assert queue["task_counts"]["blocking_import"] == 98
+    assert queue["task_counts"]["blocking_import"] == 97
     assert queue["evidence_gaps"]["source_current_check"]["denominator"] == 72
-    assert queue["evidence_gaps"]["activity_evidence"]["denominator"] == 25
+    assert queue["evidence_gaps"]["activity_evidence"]["denominator"] == 24
 
 
 def test_current_dealer_queue_expands_source_identity_product_and_optional_fields():
@@ -205,7 +205,7 @@ def test_task_identity_is_stable_across_as_of_and_queue_is_exactly_deduplicated(
     ]
     assert len({task["task_id"] for task in first["tasks"]}) == first["task_count"]
     assert len({task["dedupe_key"] for task in first["tasks"]}) == first["task_count"]
-    assert first["task_count"] == 215
+    assert first["task_count"] == 212
 
 
 def test_missing_global_denominators_emit_no_rate_property_or_coverage_claim():
@@ -351,7 +351,7 @@ def test_read_routes_delegate_to_preview_only_queues(monkeypatch):
         staff={"id": 1},
     )
 
-    assert combined_view["task_count"] == 215
+    assert combined_view["task_count"] == 212
     assert combined_view["filtered_total"] == 5
     assert combined_view["returned"] == 2
     assert dealer_view["task_count"] == 79
@@ -382,9 +382,9 @@ def test_query_projection_filters_activity_evidence_without_rewriting_global_tru
 
     assert queue == before
     assert view["status"] == "action_required"
-    assert view["task_count"] == 215
-    assert view["task_count_total"] == 215
-    assert view["unfiltered_total"] == 215
+    assert view["task_count"] == 212
+    assert view["task_count_total"] == 212
+    assert view["unfiltered_total"] == 212
     assert view["filtered_total"] == 5
     assert view["returned"] == 2
     assert view["has_more"] is True
@@ -428,7 +428,7 @@ def test_query_projection_marks_scope_mismatch_without_claiming_queue_clear():
     )
 
     assert view["status"] == "action_required"
-    assert view["task_count"] == 215
+    assert view["task_count"] == 212
     assert view["task_counts"] == queue["task_counts"]
     assert view["filtered_total"] == 0
     assert view["returned"] == 0
@@ -453,7 +453,7 @@ def test_query_projection_distinguishes_offset_past_end_from_no_matches():
     )
 
     assert view["status"] == "action_required"
-    assert view["task_count"] == 215
+    assert view["task_count"] == 212
     assert view["filtered_total"] == 79
     assert view["returned"] == 0
     assert view["has_more"] is False

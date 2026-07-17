@@ -99,15 +99,15 @@ def test_current_event_dealer_contract_reports_coverage_without_global_claims():
     assert report["freshness"]["event_catalog_snapshot"]["status"] == "fresh"
     assert report["freshness"]["event_sources"] == {
         "rows": 72,
-        "rows_with_source_checked_at": 0,
-        "coverage_rate": 0.0,
-        "status": "unavailable",
+        "rows_with_source_checked_at": 72,
+        "coverage_rate": 1.0,
+        "status": "available",
     }
 
     linkage = report["dealer_event_identity_linkage"]
-    assert linkage["dealer_local_opportunities"] == 12
+    assert linkage["dealer_local_opportunities"] == 11
     assert linkage["opportunities_with_name_hint"] == 9
-    assert linkage["name_hint_rate"] == 0.75
+    assert linkage["name_hint_rate"] == 0.8182
     assert linkage["name_hints_resolved_to_one_candidate"] == 9
     assert linkage["candidate_name_resolution_rate"] == 1.0
     assert linkage["reviewed_location_identity_links"] == 0

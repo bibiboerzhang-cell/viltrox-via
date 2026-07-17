@@ -195,6 +195,21 @@ def import_reviewed_catalog(*, record_only: bool = True, organization_id: int = 
                 "SELECT * FROM vkpi_event_opportunities WHERE canonical_key = ? AND organization_id = ?",
                 (item.get("canonical_key"), org_id),
             ).fetchone()
+            if old_row is None:
+                # canonical_key 漂移兜底(2026-07-17 重放实证):目录内容修订(如日期
+                # 更正)会换 canonical_key,按 key 找不到同 id 旧行→INSERT 撞 PK。
+                # 回落到目录身份键(id)找旧行,并先把 canonical_key 归位到新值,
+                # 之后仍走原 canonical upsert(审计/失效语义不变)。
+                old_row = conn.execute(
+                    "SELECT * FROM vkpi_event_opportunities WHERE id = ? AND organization_id = ?",
+                    (item.get("id"), org_id),
+                ).fetchone()
+                if old_row is not None:
+                    conn.execute(
+                        "UPDATE vkpi_event_opportunities SET canonical_key = ?, updated_at = NOW() "
+                        "WHERE id = ? AND organization_id = ?",
+                        (item.get("canonical_key"), item.get("id"), org_id),
+                    )
             old = _row(old_row)
             old_for_comparison = dict(old)
             if old:

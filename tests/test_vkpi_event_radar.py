@@ -58,10 +58,10 @@ def test_reviewed_event_catalog_is_truth_bounded_and_internally_consistent():
     assert preview["global_complete"] is False
     assert preview["coverage_claim"] == "registered_publisher_owned_public_entries_only"
     assert preview["source_count"] == 72
-    assert preview["opportunity_count"] == 25
-    assert preview["lanes"] == {"major_expo": 13, "dealer_event": 7, "local_activity": 5}
-    assert preview["preview_item_count"] == 25
-    assert len(preview["preview_items"]) == 25
+    assert preview["opportunity_count"] == 24
+    assert preview["lanes"] == {"major_expo": 13, "dealer_event": 6, "local_activity": 5}
+    assert preview["preview_item_count"] == 24
+    assert len(preview["preview_items"]) == 24
     assert preview["preview_contract"] == {
         "read_only": True,
         "network_accessed": False,

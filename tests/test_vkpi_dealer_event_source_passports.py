@@ -390,11 +390,11 @@ def test_current_bundled_catalog_reports_exact_observed_denominators_and_zero_up
         "fresh_source_rows": 0,
     }
     assert report["event_opportunities"]["counts"] == {
-        "rows": 25,
-        "exact_source_links": 25,
-        "valid_official_urls": 25,
+        "rows": 24,
+        "exact_source_links": 24,
+        "valid_official_urls": 24,
         "fresh_activity_evidence": 0,
-        "dealer_or_local_rows": 12,
+        "dealer_or_local_rows": 11,
         "exact_dealer_location_links": 0,
     }
     dealer_counts = report["dealer_locations"]["counts"]
