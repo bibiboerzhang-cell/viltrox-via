@@ -51,6 +51,21 @@ def _latest_official_channel_rows(staff: dict[str, Any] | None = None, view_as_s
     return [row for row in _latest_channel_rows() if _is_official_channel_row(row)]
 
 
+def _reliable_engagement_rate(row: dict[str, Any]) -> float | None:
+    """小分母钳制(2026-07-18 体检修):474 粉的号 ER 算出 99.99% 纯属分母失真,
+    原样透传把矩阵卡变笑话。粉丝 <100 或 ER>100% 视为样本不足,返回 None(卡面显 —)。"""
+    rate = _float(row.get("metric_engagement_rate"))
+    followers = _int(row.get("metric_followers"))
+    if rate is None:
+        return None
+    if followers is not None and 0 < followers < 100:
+        return None
+    # 真实频道 ER 极少超 20%;≥50% 一律视为分母失真产物(474 粉算出 99.99% 这类)。
+    if rate >= 50:
+        return None
+    return rate
+
+
 def _platform_label(platform: str) -> str:
     labels = {
         "instagram": "Instagram",
@@ -713,7 +728,7 @@ def _personal_matrix_account(row: dict[str, Any]) -> dict[str, Any]:
         "views_delta": _int(row.get("metric_views_delta")),
         "total_likes": _int(row.get("metric_likes")),
         "total_comments": _int(row.get("metric_comments")),
-        "engagement_rate": _float(row.get("metric_engagement_rate")),
+        "engagement_rate": _reliable_engagement_rate(row),
         "posts": [],
     }
 
@@ -817,7 +832,7 @@ def official_account_matrix(*, staff: dict[str, Any] | None = None, view_as_staf
                 "total_likes": _int(row.get("metric_likes")),
                 "total_comments": _int(row.get("metric_comments")),
                 "total_shares": _int(row.get("metric_shares")),
-                "engagement_rate": _float(row.get("metric_engagement_rate")),
+                "engagement_rate": _reliable_engagement_rate(row),
                 **floor_status,
                 "posts": posts,
             }
