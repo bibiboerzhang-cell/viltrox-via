@@ -1933,12 +1933,13 @@ test "${LOCAL_ASSET}" = "${REMOTE_ASSET}"
 # Access mode instead requires anonymous interception at both HTML and asset paths.
 PRIVATE_SURFACE_URLS="${PRIVATE_SURFACE_URLS:-https://viltroxtest.com https://www.viltroxtest.com}"
 read -r -a PRIVATE_SURFACE_URL_LIST <<< "${PRIVATE_SURFACE_URLS}"
-PRIVATE_SURFACE_GATE_ARGS=()
 if [ "${VKPI_EXPECT_ACCESS_GATED}" = "1" ]; then
-  PRIVATE_SURFACE_GATE_ARGS+=(--expect-access-gated)
+  "${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/scripts/verify_private_surface_live.py" \
+    --expect-access-gated "${PRIVATE_SURFACE_URL_LIST[@]}"
+else
+  "${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/scripts/verify_private_surface_live.py" \
+    "${PRIVATE_SURFACE_URL_LIST[@]}"
 fi
-"${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/scripts/verify_private_surface_live.py" \
-  "${PRIVATE_SURFACE_GATE_ARGS[@]}" "${PRIVATE_SURFACE_URL_LIST[@]}"
 
 restore_remote_sync_unit_state
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
