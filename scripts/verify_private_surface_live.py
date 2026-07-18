@@ -179,7 +179,7 @@ def _robots_groups(text: str) -> list[tuple[set[str], list[tuple[str, str]]]]:
     return groups
 
 
-def _deny_all_robots_failures(text: str) -> list[str]:
+def _noindex_discovery_robots_failures(text: str) -> list[str]:
     failures: list[str] = []
     groups = _robots_groups(text)
     if not groups:
@@ -188,10 +188,17 @@ def _deny_all_robots_failures(text: str) -> list[str]:
         failures.append("robots.txt has no wildcard user-agent group")
     for agents, directives in groups:
         label = ", ".join(sorted(agents)) or "<empty>"
-        if ("disallow", "/") not in directives:
-            failures.append(f"robots.txt group {label} does not deny all paths")
-        if any(key == "allow" and value for key, value in directives):
-            failures.append(f"robots.txt group {label} contains an Allow directive")
+        if agents != {"*"}:
+            failures.append(
+                f"robots.txt contains crawler-specific group {label}; "
+                "noindex discovery must use one wildcard policy"
+            )
+        if ("allow", "/") not in directives:
+            failures.append(f"robots.txt group {label} does not explicitly allow all paths")
+        if any(key == "disallow" and value for key, value in directives):
+            failures.append(
+                f"robots.txt group {label} blocks crawling required to discover noindex"
+            )
         if any(key == "sitemap" for key, _value in directives):
             failures.append(f"robots.txt group {label} advertises a sitemap")
     return failures
@@ -339,7 +346,7 @@ def validate_base_url(
         failures.append(f"robots.txt returned HTTP {robots.status}")
     if "text/plain" not in robots.headers.get("content-type", "").lower():
         failures.append("robots.txt did not return text/plain")
-    failures.extend(_deny_all_robots_failures(robots.body))
+    failures.extend(_noindex_discovery_robots_failures(robots.body))
 
     asset_path = next(
         (
