@@ -198,7 +198,26 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
         else:
             entry["rank"] = None
         rankings.append(entry)
-    verified_count = len(location_rows)
+    # 2026-07-18 截断修:verified_count/viltrox_confirmed_count 必须是全量真值,
+    # 不能用 LIMIT 截断后的行集算(默认 limit 200,>200 店时卡头徽章会少报)。
+    # rankings 仍受 limit 约束(展示分页),但计数走独立 COUNT。
+    totals_row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT v.dealer_id) AS verified,
+               COUNT(DISTINCT v.dealer_id) FILTER (WHERE v.carries_viltrox = 'confirmed') AS viltrox
+        FROM vkpi_dealers d
+        JOIN vkpi_dealer_web_verification v ON v.dealer_id = d.id
+        JOIN (
+            SELECT dealer_id, MAX(verified_at) AS verified_at
+            FROM vkpi_dealer_web_verification GROUP BY dealer_id
+        ) latest ON latest.dealer_id = v.dealer_id AND latest.verified_at = v.verified_at
+        WHERE d.publication_status = 'published'
+        """,
+        (),
+    ).fetchone()
+    totals = _row_dict(totals_row)
+    verified_count = int(totals.get("verified") or 0)
+    viltrox_confirmed = int(totals.get("viltrox") or 0)
     return {
         "status": "ready" if verified_count > 0 else "empty",
         "rankings": rankings,

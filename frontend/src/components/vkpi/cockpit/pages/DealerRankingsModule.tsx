@@ -151,6 +151,11 @@ export function DealerRankingRowLine({
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">
         {String(row.name || "—")}
         {cityState ? <span className="ml-1.5 text-[9.5px] text-muted">· {cityState}</span> : null}
+        {row.location_count && row.location_count > 1 ? (
+          <span className="ml-1.5 rounded-[5px] border border-line bg-panel px-1.5 py-px text-[8.5px] text-muted">
+            连锁 ×{row.location_count}{row.states && row.states.length ? ` · ${row.states.join("/")}` : ""}
+          </span>
+        ) : null}
       </span>
       {row.is_camera_retailer === false ? (
         <span className="flex-none rounded-[5px] border border-warn bg-warn-soft px-1.5 py-px text-[8.5px] text-warn">
@@ -173,6 +178,14 @@ export function dealerRankingDetailRows(row: VkpiDealerRankingRow): Array<[strin
     ["名次", row.rank != null ? `#${row.rank}` : "未评知名度分 · 不参与名次"],
     ["名称", String(row.name || "—")],
     ["城市 / 州", [row.city || "—", row.state || "—"].join(" · ")],
+    ...(row.location_count && row.location_count > 1
+      ? [[
+          `连锁门店(×${row.location_count})`,
+          (row.locations || [])
+            .map((loc) => `${loc.city || "—"}, ${loc.state || "—"}${loc.carries_viltrox === "confirmed" ? " ✓在售" : ""}`)
+            .join(" · ") || (row.states || []).join(" / "),
+        ]] as Array<[string, React.ReactNode]>
+      : []),
     ["官网核验", site.text],
     ["仍售相机器材", row.is_camera_retailer === true ? "是(零售商自有页面可见)" : row.is_camera_retailer === false ? "本次核验未见在售器材" : "本次未能确认"],
     ["体量档", tier.text],

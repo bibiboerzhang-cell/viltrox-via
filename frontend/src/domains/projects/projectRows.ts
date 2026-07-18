@@ -52,8 +52,17 @@ export function buildDashboardProjects(
     const id = String(project.id || project.project_uid || '');
     const projectLinks = linksByProject.get(id) || [];
     const clicks = projectLinks.reduce((sum, link) => sum + link.validClicks, 0);
-    const gmv = revenueByProject.get(id) || centsToUsd(project.revenue_cents);
-    const cost = costByProject.get(id) || centsToUsd(project.cost_cents);
+    // 2026-07-18 诚实空态修:无归因链路时 gmv/cost 应为 null(显「—」待数据),
+    // 不能 centsToUsd(undefined)=0 把「链路不存在」谎报成「实测为零」。
+    // 有归因(含值为 0)才给数值。revenue_cents/cost_cents 列不存在时回退 null。
+    const attributedGmv = revenueByProject.get(id);
+    const gmv = attributedGmv != null
+      ? attributedGmv
+      : (project.revenue_cents != null ? centsToUsd(project.revenue_cents) : null);
+    const attributedCost = costByProject.get(id);
+    const cost = attributedCost != null
+      ? attributedCost
+      : (project.cost_cents != null ? centsToUsd(project.cost_cents) : null);
     const startedAt = String(project.started_at || project.first_event_at || project.created_at || '');
     const closedAt = String(project.closed_at || '');
     const stageStartedAt = String(project.current_stage_started_at || project.last_activity_at || project.updated_at || '');
@@ -77,7 +86,7 @@ export function buildDashboardProjects(
       orders: numberValue(project.orders) || null,
       gmv,
       cost,
-      roi: cost ? Number((gmv / cost).toFixed(2)) : null,
+      roi: (gmv != null && cost != null && cost !== 0) ? Number((gmv / cost).toFixed(2)) : null,
       ownerId: project.assigned_staff_id ? String(project.assigned_staff_id) : project.created_by_staff_id ? String(project.created_by_staff_id) : undefined,
       ownerName: String(project.staff_name || project.assigned_staff_id || '未分配'),
       productSku: String(project.product_sku || ''),

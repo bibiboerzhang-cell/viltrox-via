@@ -952,6 +952,18 @@ export interface VkpiDealerRankingRow {
   scale_tier?: "national_chain" | "regional_chain" | "local_store" | "online_focus" | "unknown" | string;
   prominence_score?: number | null;
   prominence_rationale?: string | null;
+  /** 组织聚合:同连锁多址合并后的门店数(1=单店);>1 时 states/locations 有值 */
+  location_count?: number;
+  /** 该组织覆盖的州清单(多址连锁) */
+  states?: string[];
+  /** 多址连锁的成员门店明细(location_count>1 时) */
+  locations?: Array<{
+    dealer_id: string | number;
+    city?: string | null;
+    state?: string | null;
+    carries_viltrox?: string;
+    prominence_score?: number | null;
+  }>;
 }
 
 export interface VkpiDealerRankings {
