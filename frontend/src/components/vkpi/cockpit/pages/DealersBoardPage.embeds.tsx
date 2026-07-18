@@ -409,7 +409,14 @@ export function DealerMapEmbed({
             <dl className="mt-3 space-y-2 text-[9.5px]">
               <div className="flex gap-2"><dt className="w-20 flex-none text-muted">电话</dt><dd className="text-ink-2">{selectedDealer.phone || "未收集"}</dd></div>
               <div className="flex gap-2"><dt className="w-20 flex-none text-muted">公开邮箱</dt><dd className="text-ink-2">{selectedDealer.contact_email || "未收集"}</dd></div>
-              <div className="flex gap-2"><dt className="w-20 flex-none text-muted">活动观测</dt><dd className="text-ink-2">{selectedDealer.activity?.status === "active" ? "有公开活动" : selectedDealer.activity?.status === "none_observed" ? "本次未观测到" : "未检索 / 未知"}</dd></div>
+              {/* 2026-07-18 体检修:此前读 activity_status 列(全库恒 unknown),与下方
+                  Event Radar 真实关联条数自相矛盾——改以懒加载的精确关联结果为准。 */}
+              <div className="flex gap-2"><dt className="w-20 flex-none text-muted">活动观测</dt><dd className="text-ink-2">{
+                linkedActivities != null
+                  ? (Number(linkedActivities.count || 0) > 0 || Number(linkedActivities.linked_count || 0) > 0 ? "有公开活动" : "本次未观测到")
+                  : selectedDealer.activity?.status === "active" ? "有公开活动"
+                  : selectedDealer.activity?.status === "none_observed" ? "本次未观测到" : "检索中…"
+              }</dd></div>
               <div className="flex gap-2">
                 <dt className="w-20 flex-none text-muted">坐标来源</dt>
                 <dd className="text-ink-2">

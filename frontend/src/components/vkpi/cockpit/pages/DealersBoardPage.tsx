@@ -82,6 +82,9 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "regionD", span: 8 },
   { moduleKey: "pendD", span: 4 },
   { moduleKey: "mapD", span: 12 },
+  // 2026-07-18 体检修:排名榜(全站唯一连锁聚合视图)此前只在 palette、默认
+  // 布局不渲染;lite 核验回填 vkpi_dealer_web_verification 后有真数据,入默认布局。
+  { moduleKey: "rankD", span: 12 },
   { moduleKey: "rosterD", span: 8 },
   { moduleKey: "opsD", span: 4 },
 ];
