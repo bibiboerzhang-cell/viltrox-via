@@ -15,11 +15,17 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
-SAFE_TITLE = "Authorized Workspace"
-SAFE_DESCRIPTION = "Private workspace. Sign-in required."
+SAFE_TITLE = "Viltrox Test"
+SAFE_DESCRIPTION = "Viltrox test environment. Sign-in required."
 REQUIRED_ROBOT_TOKENS = {"noindex", "nofollow", "noarchive", "nosnippet", "noimageindex"}
 CONFLICTING_ROBOT_TOKENS = {"all", "archive", "follow", "imageindex", "index", "snippet"}
 SAFE_DENIAL_STATUSES = {401, 403, 404}
+ACCESS_DENIAL_STATUSES = {401, 403}
+ACCESS_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+ACCESS_GATE_STATIC_PROBE_PATHS = (
+    "/favicon.svg",
+    "/assets/__private_surface_access_probe__.js",
+)
 DEFAULT_PROTECTED_API_PATHS = (
     "/api/admin/vkpi/kols?limit=1",
     "/api/admin/vkpi/projects?limit=1",
@@ -211,6 +217,40 @@ def _denial_leaks(body: str) -> list[str]:
     return sorted(marker for marker in DENIAL_LEAK_MARKERS if marker in lowered)
 
 
+def _is_access_redirect(result: HttpResult) -> bool:
+    if result.status not in ACCESS_REDIRECT_STATUSES:
+        return False
+    location = str(result.headers.get("location", "")).strip()
+    if not location:
+        return False
+    target = urlsplit(urljoin(result.url, location))
+    hostname = str(target.hostname or "").lower()
+    source_hostname = str(urlsplit(result.url).hostname or "").lower()
+    return hostname.endswith(".cloudflareaccess.com") or (
+        hostname == source_hostname and target.path.startswith("/cdn-cgi/access/")
+    )
+
+
+def _require_access_denial(result: HttpResult, *, label: str, failures: list[str]) -> None:
+    if result.status == 200:
+        failures.append(f"{label} is anonymously downloadable (HTTP 200)")
+        return
+    if result.status in ACCESS_DENIAL_STATUSES:
+        for leaked_text in _shell_leaks(result.body):
+            failures.append(f"{label} access denial leaked public shell text: {leaked_text}")
+        for marker in _denial_leaks(result.body):
+            failures.append(f"{label} access denial leaked internal marker: {marker}")
+        return
+    if result.status in ACCESS_REDIRECT_STATUSES:
+        if not _is_access_redirect(result):
+            failures.append(f"{label} redirected outside the Cloudflare Access flow")
+        return
+    failures.append(
+        f"{label} must be denied by Cloudflare Access; returned HTTP {result.status} "
+        "instead of an Access redirect or HTTP 401/403"
+    )
+
+
 def _validate_html_shell(result: HttpResult, *, label: str, failures: list[str]) -> HeadParser:
     parser = HeadParser()
     parser.feed(result.body)
@@ -252,6 +292,7 @@ def validate_base_url(
     *,
     timeout: float,
     protected_api_paths: Sequence[str] = DEFAULT_PROTECTED_API_PATHS,
+    expect_access_gated: bool = False,
 ) -> dict[str, object]:
     base = base_url.rstrip("/") + "/"
     base_parts = urlsplit(base)
@@ -259,6 +300,33 @@ def validate_base_url(
         raise ValueError(f"base URL must be an absolute HTTP(S) origin: {base_url}")
 
     failures: list[str] = []
+    if expect_access_gated:
+        root = fetch(base, timeout=timeout, follow_redirects=False)
+        _require_access_denial(root, label="root", failures=failures)
+
+        static_probes: list[dict[str, object]] = []
+        for probe_path in ACCESS_GATE_STATIC_PROBE_PATHS:
+            result = fetch(_same_origin_url(base, probe_path), timeout=timeout, follow_redirects=False)
+            _require_access_denial(result, label=f"static asset {probe_path}", failures=failures)
+            static_probes.append(
+                {
+                    "path": probe_path,
+                    "status": result.status,
+                    "location": result.headers.get("location", ""),
+                }
+            )
+
+        return {
+            "base_url": base,
+            "resolved_url": root.url,
+            "status": root.status,
+            "expect_access_gated": True,
+            "location": root.headers.get("location", ""),
+            "static_probes": static_probes,
+            "ok": not failures,
+            "failures": failures,
+        }
+
     root = fetch(base, timeout=timeout)
     if urlsplit(root.url).netloc != base_parts.netloc:
         failures.append(f"root redirected off-origin to {root.url}")
@@ -336,6 +404,14 @@ def main() -> int:
     parser.add_argument("base_urls", nargs="+", help="Public origins to validate after deployment.")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
+        "--expect-access-gated",
+        action="store_true",
+        help=(
+            "Require anonymous root and static-asset probes to be intercepted by "
+            "Cloudflare Access instead of serving the SPA."
+        ),
+    )
+    parser.add_argument(
         "--protected-api-path",
         action="append",
         dest="protected_api_paths",
@@ -352,6 +428,7 @@ def main() -> int:
                     base_url,
                     timeout=args.timeout,
                     protected_api_paths=protected_api_paths,
+                    expect_access_gated=args.expect_access_gated,
                 )
             )
         except Exception as exc:  # release gate must report every requested origin

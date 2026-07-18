@@ -1,6 +1,8 @@
 import { Suspense, lazy } from "react";
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
+import { PUBLIC_SURFACE_NAME } from "../lib/publicSurface";
+
 const AdminRoute = lazy(() => import("../routes/admin/AdminRoute"));
 const AdminLoginRoute = lazy(() => import("../routes/admin/AdminLoginRoute"));
 const StaffActivateRoute = lazy(() => import("../routes/admin/StaffActivateRoute"));
@@ -11,7 +13,7 @@ const DashboardReferencePrototype = lazy(() => import("../prototypes/DashboardRe
 const RealCockpitPrototype = lazy(() => import("../prototypes/RealCockpitPrototype"));
 
 function RouteLoading() {
-  return <div className="muted-block">正在进入 Viltrox Marketing...</div>;
+  return <div className="muted-block">正在进入 {PUBLIC_SURFACE_NAME}...</div>;
 }
 
 function loadRoute(node: React.ReactNode) {

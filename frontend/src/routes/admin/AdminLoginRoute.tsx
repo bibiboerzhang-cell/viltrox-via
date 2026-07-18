@@ -11,6 +11,7 @@ import { Navigate, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../hooks/useAuth";
 import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
+import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
 import { ThemeSwitch } from "../../shared/ThemeSwitch";
 import "../../styles/admin.css";
 
@@ -61,7 +62,7 @@ export default function AdminLoginRoute() {
           <span className="admin-root__mark">V</span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>
-              Viltrox Marketing
+              {PUBLIC_SURFACE_NAME}
             </div>
           </div>
         </div>
@@ -70,19 +71,26 @@ export default function AdminLoginRoute() {
           登录
         </h1>
 
-        {error ? <div className="admin-auth-card__error">{error}</div> : null}
+        {error ? (
+          <div id="ax-login-error" className="admin-auth-card__error" role="alert" aria-live="polite">
+            {error}
+          </div>
+        ) : null}
 
         <form className="admin-auth-card__form" onSubmit={handleSubmit}>
           <label className="admin-auth-card__field" htmlFor="ax-login-email">
             <span>邮箱</span>
             <input
               id="ax-login-email"
+              name="username"
               type="text"
               inputMode="email"
               autoCapitalize="none"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "ax-login-error" : undefined}
               autoFocus
               disabled={submitting}
             />
@@ -92,10 +100,13 @@ export default function AdminLoginRoute() {
             <span>密码</span>
             <input
               id="ax-login-password"
+              name="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? "ax-login-error" : undefined}
               disabled={submitting}
             />
           </label>
@@ -104,6 +115,7 @@ export default function AdminLoginRoute() {
             type="submit"
             className="admin-auth-card__primary"
             disabled={submitting}
+            aria-busy={submitting}
           >
             {submitting ? "登录中…" : "登录"}
           </button>

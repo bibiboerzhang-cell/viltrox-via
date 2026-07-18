@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { acceptStaffInvite, getStaffInviteStatus } from "../../domains/settings";
 import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
+import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
 import "../../styles/admin.css";
 
 export default function StaffActivateRoute() {
@@ -82,7 +83,7 @@ export default function StaffActivateRoute() {
           <span className="admin-root__mark">V</span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>
-              Viltrox Marketing
+              {PUBLIC_SURFACE_NAME}
             </div>
           </div>
         </div>
@@ -91,23 +92,23 @@ export default function StaffActivateRoute() {
 
         {done ? (
           <>
-            <div className="admin-auth-card__success">账号已激活，可以登录。</div>
+            <div className="admin-auth-card__success" role="status" aria-live="polite">账号已激活，可以登录。</div>
             <button className="admin-auth-card__primary" type="button" onClick={() => navigate("/login", { replace: true })}>
               去登录
             </button>
           </>
         ) : status === "checking" ? (
-          <div className="admin-auth-card__success">正在校验激活链接...</div>
+          <div className="admin-auth-card__success" role="status" aria-live="polite">正在校验激活链接...</div>
         ) : status !== "active" ? (
           <>
-            <div className="admin-auth-card__error">
+            <div className="admin-auth-card__error" role="alert" aria-live="polite">
               {status === "used" ? "这个激活链接已经使用过。" : status === "expired" ? "这个激活链接已过期。" : error || "激活链接无效。"}
             </div>
             <Link className="admin-auth-card__back" to="/login">返回登录</Link>
           </>
         ) : (
           <>
-            {error ? <div className="admin-auth-card__error">{error}</div> : null}
+            {error ? <div className="admin-auth-card__error" role="alert" aria-live="polite">{error}</div> : null}
             <form className="admin-auth-card__form" onSubmit={handleSubmit}>
               <label className="admin-auth-card__field" htmlFor="staff-activate-password">
                 <span>设置密码</span>

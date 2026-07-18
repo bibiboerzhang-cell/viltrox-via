@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
 
+import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
+
 // 部署后旧标签页的懒加载 chunk 已被新包替换(旧 hash 404)→ 动态 import 失败。
 // 这类错误刷新一次即自愈;识别特征串,60 秒守卫防刷新循环(真代码错不会被无限刷)。
 function isStaleChunkError(error: unknown): boolean {
@@ -12,7 +14,7 @@ function isStaleChunkError(error: unknown): boolean {
 
 function resolveMessage(error: unknown): { title: string; body: string } {
   if (isRouteErrorResponse(error) && error.status === 404) {
-    return { title: "页面不存在", body: "这个地址不是 Viltrox Marketing 的有效入口。" };
+    return { title: "页面不存在", body: `这个地址不是 ${PUBLIC_SURFACE_NAME} 的有效入口。` };
   }
   if (isStaleChunkError(error)) {
     return { title: "正在加载新版本…", body: "系统刚更新,页面自动刷新中。" };
@@ -50,8 +52,8 @@ export default function RouteErrorBoundary() {
         <div className="admin-auth-card__brand">
           <span className="admin-root__mark">V</span>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>Viltrox Marketing</div>
-            <div style={{ fontSize: 11, color: "#667085" }}>内部营销管理系统</div>
+            <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>{PUBLIC_SURFACE_NAME}</div>
+            <div style={{ fontSize: 11, color: "#667085" }}>受限测试环境</div>
           </div>
         </div>
         <h1 className="admin-auth-card__title">{message.title}</h1>
