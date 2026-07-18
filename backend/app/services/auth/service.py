@@ -6,9 +6,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from app.core.security import make_token, verify_password
+from app.core.security import make_token, user_status_allows_auth, verify_password
 from app.core.config import DB_PATH, IS_PRODUCTION, PROJECT_ROOT
-from app.core.permissions import staff_context_for_user
+from app.core.permissions import staff_context_for_user, staff_context_is_inactive
 from app.db.connection import get_conn, is_postgres_runtime
 from app.db.repositories.users import creator_code_exists, generate_creator_code
 from app.services.auth.lockout import LOCKOUT_MINUTES, clear_failed, is_locked_out, record_failed_login
@@ -21,9 +21,20 @@ def _row_value(user, key: str, default=None):
         return default
 
 
+def _inactive_account_response() -> dict:
+    return {"status": "error", "message": "Account is not active — contact support"}
+
+
 def build_login_payload(user) -> dict:
     user_dict = dict(user)
+    if not user_status_allows_auth(
+        _row_value(user, "status", ""),
+        production=IS_PRODUCTION,
+    ):
+        return _inactive_account_response()
     staff = staff_context_for_user(user_dict)
+    if staff_context_is_inactive(staff):
+        return _inactive_account_response()
     auth_role = str(user["role"] or "")
     effective_role = str(staff.get("role") or auth_role or "readonly")
     return {
@@ -64,12 +75,18 @@ def validate_login_credentials(user, password: str, *, client_ip: str = "") -> d
         record_failed_login(int(user["id"]), client_ip)
         return {"status": "error", "message": "Invalid email or password"}
     clear_failed(int(user["id"]))
+    user_status = str(_row_value(user, "status", "") or "").strip().lower()
+    if user_status == "rejected":
+        return {"status": "error", "message": "Account rejected — contact support"}
+    if user_status != "pending" and not user_status_allows_auth(user_status, production=IS_PRODUCTION):
+        return _inactive_account_response()
+    staff = staff_context_for_user(dict(user))
+    if staff_context_is_inactive(staff):
+        return _inactive_account_response()
     if IS_PRODUCTION and int(_row_value(user, "email_verified", 0) or 0) != 1:
         return {"status": "error", "message": "Please verify your email before signing in"}
-    if IS_PRODUCTION and user["status"] == "pending":
+    if IS_PRODUCTION and user_status == "pending":
         return {"status": "pending", "message": "Your account is awaiting admin approval"}
-    if user["status"] == "rejected":
-        return {"status": "error", "message": "Account rejected — contact support"}
     return None
 
 

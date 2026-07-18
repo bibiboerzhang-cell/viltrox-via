@@ -270,6 +270,8 @@ def auth_register(request: Request, req: RegisterRequest, response: Response):
         if not IS_PRODUCTION:
             user_row = _fetch_user_row(int(user_id))
             payload = build_login_payload(user_row)
+            if payload.get("status") != "success" or not payload.get("token"):
+                return payload
             apply_auth_cookie(response, payload["token"])
             if student_program:
                 payload["student"] = student_program
@@ -308,6 +310,8 @@ async def auth_login(request: Request, req: LoginRequest, response: Response):
         await db_write(partial(_update_password_sync, int(user["id"]), upgraded_hash))
     await db_write(lambda: touch_user_last_login(user["id"]))
     payload = await asyncio.to_thread(build_login_payload, user)
+    if payload.get("status") != "success" or not payload.get("token"):
+        return payload
     apply_auth_cookie(response, payload["token"])
     return payload
 
