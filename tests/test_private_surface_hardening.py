@@ -107,7 +107,7 @@ def _passing_live_responses() -> dict[str, verifier.HttpResult]:
         f"{base}robots.txt": _http_result(
             f"{base}robots.txt",
             200,
-            "User-agent: *\nDisallow: /\n",
+            "User-agent: *\nAllow: /\n",
             content_type="text/plain; charset=utf-8",
         ),
         f"{base}assets/app.js": _http_result(
@@ -182,7 +182,7 @@ def test_frontend_favicons_are_served_without_console_404s() -> None:
         _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
 
 
-def test_application_closes_api_schema_and_denies_all_crawlers_by_default() -> None:
+def test_application_closes_api_schema_and_keeps_noindex_discoverable() -> None:
     client = TestClient(main.app, raise_server_exceptions=False)
     for path in ("/docs", "/redoc", "/openapi.json"):
         response = client.get(path, follow_redirects=False)
@@ -191,8 +191,8 @@ def test_application_closes_api_schema_and_denies_all_crawlers_by_default() -> N
 
     robots = client.get("/robots.txt")
     assert robots.status_code == 200
-    assert robots.text == "User-agent: *\nDisallow: /\n"
-    assert verifier._deny_all_robots_failures(robots.text) == []
+    assert robots.text == "User-agent: *\nAllow: /\n"
+    assert verifier._noindex_discovery_robots_failures(robots.text) == []
 
 
 def test_unauthenticated_internal_apis_do_not_return_data() -> None:
@@ -229,10 +229,10 @@ def test_frontend_metadata_is_generic_and_non_indexable() -> None:
     assert not verifier._shell_leaks(index)
 
 
-def test_static_robots_policy_denies_every_crawler_and_path() -> None:
+def test_static_robots_policy_keeps_noindex_discoverable() -> None:
     robots = (REPO_ROOT / "frontend" / "public" / "robots.txt").read_text(encoding="utf-8")
-    assert robots == "User-agent: *\nDisallow: /\n"
-    assert verifier._deny_all_robots_failures(robots) == []
+    assert robots == "User-agent: *\nAllow: /\n"
+    assert verifier._noindex_discovery_robots_failures(robots) == []
 
 
 @pytest.mark.parametrize(
@@ -266,7 +266,7 @@ def test_nginx_makes_noindex_authoritative_for_every_response_class(relative_pat
     for location in robots_locations:
         directives = location["directives"]
         assert 'add_header Cache-Control "no-store, max-age=0" always;' in directives
-        assert 'return 200 "User-agent: *\\nDisallow: /\\n";' in directives
+        assert 'return 200 "User-agent: *\\nAllow: /\\n";' in directives
 
 
 def test_live_gate_accepts_complete_private_surface_contract() -> None:
@@ -275,6 +275,21 @@ def test_live_gate_accepts_complete_private_surface_contract() -> None:
         result = verifier.validate_base_url("https://private.example", timeout=1)
     assert result["ok"] is True
     assert result["failures"] == []
+
+
+def test_live_gate_rejects_robots_rules_that_hide_noindex_from_crawlers() -> None:
+    responses = _passing_live_responses()
+    robots_url = "https://private.example/robots.txt"
+    responses[robots_url] = _http_result(
+        robots_url,
+        200,
+        "User-agent: *\nDisallow: /\n",
+        content_type="text/plain",
+    )
+    with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
+        result = verifier.validate_base_url("https://private.example", timeout=1)
+    assert result["ok"] is False
+    assert any("required to discover noindex" in failure for failure in result["failures"])
 
 
 def test_live_gate_accepts_cloudflare_access_interception_when_explicitly_requested() -> None:
@@ -372,19 +387,19 @@ def test_access_gate_mode_rejects_a_non_access_redirect() -> None:
     assert any("outside the Cloudflare Access flow" in failure for failure in result["failures"])
 
 
-def test_live_gate_rejects_robots_rules_that_reopen_a_named_bot() -> None:
+def test_live_gate_rejects_robots_rules_that_block_a_named_bot() -> None:
     responses = _passing_live_responses()
     robots_url = "https://private.example/robots.txt"
     responses[robots_url] = _http_result(
         robots_url,
         200,
-        "User-agent: *\nDisallow: /\n\nUser-agent: ExampleBot\nAllow: /\n",
+        "User-agent: *\nAllow: /\n\nUser-agent: Googlebot\nDisallow: /\n",
         content_type="text/plain",
     )
     with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
         result = verifier.validate_base_url("https://private.example", timeout=1)
     assert result["ok"] is False
-    assert any("ExampleBot" in failure or "examplebot" in failure for failure in result["failures"])
+    assert any("Googlebot" in failure or "googlebot" in failure for failure in result["failures"])
 
 
 def test_live_gate_rejects_anonymous_internal_api_data() -> None:

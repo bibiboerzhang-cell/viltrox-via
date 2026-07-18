@@ -893,7 +893,7 @@ async def health_check(request: Request, deep: bool = False):
 def robots_txt():
     response = PlainTextResponse(
         "User-agent: *\n"
-        "Disallow: /\n"
+        "Allow: /\n"
     )
     response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
