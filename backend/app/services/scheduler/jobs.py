@@ -387,6 +387,13 @@ async def _start_scheduler_local() -> None:
 
     _scheduler = FleetSafeAsyncIOScheduler(
         executors={"default": FleetSafeAsyncIOExecutor()},
+        # 2026-07-18 事故修:进程重启/事件循环卡顿会让 cron 任务错过触发点且
+        # 无补跑(今晨 4 个每日任务集体漏跑无痕迹)。全局兜底:misfire 后 6h
+        # 内仍补跑一次(coalesce 合并堆积为一次),避免每日任务因短暂错过而整天丢。
+        job_defaults={
+            "misfire_grace_time": int(os.getenv("VKPI_SCHEDULER_MISFIRE_GRACE", "21600") or 21600),
+            "coalesce": True,
+        },
     )
 
     # 原注册顺序(勿变):核心运维 → 学习闭环/workflow → 预测/GTM → 内部运维
