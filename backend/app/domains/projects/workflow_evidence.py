@@ -171,6 +171,17 @@ def update_project_kol_shipping(project_id: int, kol_ref: str | int, body: dict[
         """,
         (next_stage, tracking_number, _db_bool(False), _json(metadata), now, int(row["id"])),
     )
+    # 2026-07-18 体检修:发货同事务落 vkpi_shipments,真实发货进闭环账本
+    # (此前只写 metadata → scan_delivered_into_windows 永远看不到)。
+    _upsert_shipment_shipped(
+        conn,
+        project_id=int(project_id),
+        assignment_id=int(row["id"]),
+        kol_pool_id=dict(row).get("kol_pool_id"),
+        tracking_number=tracking_number,
+        carrier=str(body.get("carrier") or ""),
+        now=now,
+    )
     conn.commit()
     updated = dict(conn.execute("SELECT * FROM vkpi_project_kol_assignments WHERE id=?", (int(row["id"]),)).fetchone())
     audit.log_business_event(
@@ -213,6 +224,94 @@ def _shipments_has_delivered_column(conn: Any) -> bool:
         return True
     except Exception:
         return False
+
+
+def _shipments_has_assignment_column(conn: Any) -> bool:
+    """vkpi_shipments.assignment_id 是否存在(migrations/272;prod 未迁移时降级)。"""
+    try:
+        conn.execute("SELECT assignment_id FROM vkpi_shipments WHERE 1=0")
+        return True
+    except Exception:
+        return False
+
+
+def _upsert_shipment_shipped(
+    conn: Any,
+    *,
+    project_id: int,
+    assignment_id: int,
+    kol_pool_id: Any,
+    tracking_number: str,
+    carrier: str,
+    now: str,
+) -> None:
+    """发货动作即落 vkpi_shipments 账本行(2026-07-18 体检修:履约闭环断链)。
+
+    此前 update_project_kol_shipping 只写 assignment.metadata_json.shipping,
+    vkpi_shipments 零写入 → scan_delivered_into_windows 永远看不到真实发货
+    (842 条 device_sent 全部游离在闭环外)。幂等键 (project_id, tracking_number)
+    与 record_delivered_signal 对齐:后续 17track 签收把同键行推到 delivered。
+    已 delivered 的行绝不回退状态。
+    """
+    existing = conn.execute(
+        """
+        SELECT id, status, shipped_at FROM vkpi_shipments
+        WHERE project_id=? AND COALESCE(tracking_number,'')=?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (int(project_id), tracking_number),
+    ).fetchone()
+    meta = {
+        "source": "assignment_shipping_update",
+        "assignment_id": int(assignment_id),
+        "kol_pool_id": int(kol_pool_id) if kol_pool_id else None,
+    }
+    has_assignment_col = _shipments_has_assignment_column(conn)
+    if existing is not None:
+        ex = dict(existing)
+        keep_shipped = ex.get("shipped_at") or now
+        keep_status = "delivered" if str(ex.get("status") or "") == "delivered" else "shipped"
+        if has_assignment_col:
+            conn.execute(
+                "UPDATE vkpi_shipments SET status=?, shipped_at=?, carrier=COALESCE(NULLIF(?,''), carrier), "
+                "assignment_id=COALESCE(assignment_id, ?), updated_at=? WHERE id=?",
+                (keep_status, keep_shipped, str(carrier or ""), int(assignment_id), now, int(ex["id"])),
+            )
+        else:
+            conn.execute(
+                "UPDATE vkpi_shipments SET status=?, shipped_at=?, carrier=COALESCE(NULLIF(?,''), carrier), "
+                "updated_at=? WHERE id=?",
+                (keep_status, keep_shipped, str(carrier or ""), now, int(ex["id"])),
+            )
+        return
+    if has_assignment_col:
+        conn.execute(
+            """
+            INSERT INTO vkpi_shipments (
+                project_id, sample_asset_id, assignment_id, carrier, tracking_number, status,
+                shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
+                note, metadata_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(project_id), None, int(assignment_id), str(carrier or ""), tracking_number,
+                "shipped", 0, "USD", now, None, "", "", _json(meta), now, now,
+            ),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO vkpi_shipments (
+                project_id, sample_asset_id, carrier, tracking_number, status,
+                shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
+                note, metadata_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                int(project_id), None, str(carrier or ""), tracking_number,
+                "shipped", 0, "USD", now, None, "", "", _json(meta), now, now,
+            ),
+        )
 
 
 def record_delivered_signal(
@@ -268,47 +367,89 @@ def record_delivered_signal(
             "raw_status": raw,
             "last_checked_at": checked_ts,
         }
+        # 2026-07-18 migrations/272:assignment_id 升为实列,新写点直接落列
+        # (prod 未迁移时降级走 metadata-only 老路径)。
+        has_assignment_col = _shipments_has_assignment_column(conn)
         if existing is not None:
             ex = dict(existing)
             # 已有 delivered_at → 保留首签时间(单调),只刷元数据/last_checked_at。
             keep_delivered = ex.get("delivered_at") or delivered_ts
-            conn.execute(
-                """
-                UPDATE vkpi_shipments
-                SET delivered_at=?, status='delivered', carrier=COALESCE(NULLIF(?,''), carrier),
-                    metadata_json=?, updated_at=?
-                WHERE id=?
-                """,
-                (keep_delivered, str(carrier or ""), _json(meta), now, int(ex["id"])),
-            )
+            if has_assignment_col:
+                conn.execute(
+                    """
+                    UPDATE vkpi_shipments
+                    SET delivered_at=?, status='delivered', carrier=COALESCE(NULLIF(?,''), carrier),
+                        assignment_id=COALESCE(assignment_id, ?), metadata_json=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (keep_delivered, str(carrier or ""), int(assignment_id), _json(meta), now, int(ex["id"])),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE vkpi_shipments
+                    SET delivered_at=?, status='delivered', carrier=COALESCE(NULLIF(?,''), carrier),
+                        metadata_json=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (keep_delivered, str(carrier or ""), _json(meta), now, int(ex["id"])),
+                )
             result["shipment_action"] = "updated"
             result["shipment_id"] = int(ex["id"])
         else:
-            conn.execute(
-                """
-                INSERT INTO vkpi_shipments (
-                    project_id, sample_asset_id, carrier, tracking_number, status,
-                    shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
-                    note, metadata_json, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    int(project_id),
-                    None,
-                    str(carrier or ""),
-                    tracking,
-                    "delivered",
-                    0,
-                    "USD",
-                    None,
-                    delivered_ts,
-                    "",
-                    "",
-                    _json(meta),
-                    now,
-                    now,
-                ),
-            )
+            if has_assignment_col:
+                conn.execute(
+                    """
+                    INSERT INTO vkpi_shipments (
+                        project_id, sample_asset_id, assignment_id, carrier, tracking_number, status,
+                        shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
+                        note, metadata_json, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        int(project_id),
+                        None,
+                        int(assignment_id),
+                        str(carrier or ""),
+                        tracking,
+                        "delivered",
+                        0,
+                        "USD",
+                        None,
+                        delivered_ts,
+                        "",
+                        "",
+                        _json(meta),
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO vkpi_shipments (
+                        project_id, sample_asset_id, carrier, tracking_number, status,
+                        shipping_cost_cents, currency, shipped_at, delivered_at, evidence_url,
+                        note, metadata_json, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        int(project_id),
+                        None,
+                        str(carrier or ""),
+                        tracking,
+                        "delivered",
+                        0,
+                        "USD",
+                        None,
+                        delivered_ts,
+                        "",
+                        "",
+                        _json(meta),
+                        now,
+                        now,
+                    ),
+                )
             ins = conn.execute(
                 "SELECT id FROM vkpi_shipments WHERE project_id=? AND COALESCE(tracking_number,'')=? ORDER BY id DESC LIMIT 1",
                 (int(project_id), tracking),

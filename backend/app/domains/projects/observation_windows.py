@@ -762,57 +762,83 @@ def scan_delivered_into_windows(
     红线:这不是裁决——只为人 CREATE「待人核」的观察窗口,绝不自动改项目/派单/费用状态。
     去重交给 open_window_for_delivered(同 project/assignment/KOL 已有活动窗口则跳过)。
 
-    派单关联:vkpi_shipments 无 assignment 外键,按 project_id 下的派单 fan-out
-    (同项目多派单各开一窗,assignment_id/kol_pool_id 取自 vkpi_project_kol_assignments;
-    项目下零派单时退化为项目级单窗 assignment_id=NULL)。
-    当前 vkpi_shipments 多无 delivered_at 数据 → created=[] 是诚实结果(物流断流)。
+    派单关联(2026-07-18 migrations/272 后):shipment.assignment_id 实列非空时
+    逐票只为该派单开窗;legacy 无关联行按 project fan-out 但过滤到发货后阶段的
+    派单,零命中退化为项目级单窗 assignment_id=NULL。
     """
     days = max(0, min(int(days_overdue or 7), 90))
     cutoff = datetime.utcnow() - timedelta(days=days)
     conn = get_conn()
 
+    # 2026-07-18 体检修(migrations/272):shipment 带 assignment_id 实列时逐票
+    # 精确开窗——此前按 project fan-out 给项目下全部派单开窗,1 条 demo 货在
+    # project 3994 炸出 102 个窗(含从未收货的 contacted/discovered 派单)。
+    try:
+        conn.execute("SELECT assignment_id FROM vkpi_shipments WHERE 1=0")
+        has_assignment_col = True
+    except Exception:
+        has_assignment_col = False
+
     scope_sql, scope_params = scope.project_filter("p", staff)
     scope_clause = f"AND {scope_sql}" if scope_sql else ""
-    # 每个项目取最早 delivered_at(同 due_list 口径);只读,不改 shipments。
+    assignment_select = "s.assignment_id AS assignment_id," if has_assignment_col else "NULL AS assignment_id,"
     rows = conn.execute(
         f"""
-        SELECT p.id AS project_id, MIN(s.delivered_at) AS delivered_at
+        SELECT s.id AS shipment_id, s.project_id AS project_id,
+               {assignment_select} s.delivered_at AS delivered_at
         FROM vkpi_shipments s
         JOIN vkpi_projects p ON p.id = s.project_id
         WHERE s.delivered_at IS NOT NULL
           AND s.delivered_at < ?
           {scope_clause}
-        GROUP BY p.id
-        ORDER BY MIN(s.delivered_at) ASC
+        ORDER BY s.delivered_at ASC
         LIMIT 500
         """,
         (cutoff, *scope_params),
     ).fetchall()
 
+    # 签收后仍算「在途/待内容」的派单阶段;legacy fan-out 只对这些开窗,
+    # 不再把 contacted/discovered 等从未发货的派单也拉进观察窗。
+    _fanout_stages = ("device_sent", "shipped", "arrived", "received", "delivered", "content_posted")
     created: list[int] = []
     skipped_existing = 0
     scanned_projects = 0
+    seen_projects: set[int] = set()
     for r in rows:
         row = dict(r)
         project_id = row.get("project_id")
         delivered_at = row.get("delivered_at")
         if not project_id or delivered_at is None:
             continue
-        scanned_projects += 1
-        # 项目下派单 fan-out;零派单退化为项目级单窗(assignment_id/kol_pool_id=NULL)。
-        assignments = conn.execute(
-            """
-            SELECT id AS assignment_id, kol_pool_id
-            FROM vkpi_project_kol_assignments
-            WHERE project_id = ?
-            """,
-            (int(project_id),),
-        ).fetchall()
-        targets: list[tuple[int | None, int | None]] = (
-            [(dict(a).get("assignment_id"), dict(a).get("kol_pool_id")) for a in assignments]
-            if assignments
-            else [(None, None)]
-        )
+        if int(project_id) not in seen_projects:
+            seen_projects.add(int(project_id))
+            scanned_projects += 1
+        shipment_assignment = row.get("assignment_id")
+        if shipment_assignment:
+            a_row = conn.execute(
+                "SELECT kol_pool_id FROM vkpi_project_kol_assignments WHERE id=?",
+                (int(shipment_assignment),),
+            ).fetchone()
+            targets: list[tuple[int | None, int | None]] = [
+                (int(shipment_assignment), (dict(a_row) if a_row else {}).get("kol_pool_id"))
+            ]
+        else:
+            # legacy 行(无 assignment 关联):项目 fan-out,但只对已进入发货后
+            # 阶段的派单开窗;零命中退化为项目级单窗(assignment/kol=NULL)。
+            placeholders = ",".join("?" for _ in _fanout_stages)
+            assignments = conn.execute(
+                f"""
+                SELECT id AS assignment_id, kol_pool_id
+                FROM vkpi_project_kol_assignments
+                WHERE project_id = ? AND LOWER(COALESCE(stage,'')) IN ({placeholders})
+                """,
+                (int(project_id), *_fanout_stages),
+            ).fetchall()
+            targets = (
+                [(dict(a).get("assignment_id"), dict(a).get("kol_pool_id")) for a in assignments]
+                if assignments
+                else [(None, None)]
+            )
         for assignment_id, kol_pool_id in targets:
             result = open_window_for_delivered(
                 project_id=int(project_id),
