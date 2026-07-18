@@ -77,6 +77,7 @@ HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
 SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
 SYNC_TIMER="${SYNC_TIMER:-vkpi-sync-daily.timer}"
 ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
+VKPI_EXPECT_ACCESS_GATED="${VKPI_EXPECT_ACCESS_GATED:-0}"
 REMOTE_APP_USER="${REMOTE_APP_USER:-viltrox}"
 REMOTE_APP_GROUP="${REMOTE_APP_GROUP:-viltrox}"
 LANE_OVERRIDE_TEMPLATE_RELATIVE="scripts/ops/systemd/vkpi-lane-overrides.env"
@@ -180,6 +181,10 @@ if ! [[ "${SYNC_SERVICE}" =~ ^[A-Za-z0-9@_.-]+\.service$ ]] \
 fi
 if [ "${ALLOW_DURING_SYNC}" != "0" ] && [ "${ALLOW_DURING_SYNC}" != "1" ]; then
   echo "ALLOW_DURING_SYNC must be exactly 0 or 1." >&2
+  exit 1
+fi
+if [ "${VKPI_EXPECT_ACCESS_GATED}" != "0" ] && [ "${VKPI_EXPECT_ACCESS_GATED}" != "1" ]; then
+  echo "VKPI_EXPECT_ACCESS_GATED must be exactly 0 or 1." >&2
   exit 1
 fi
 if ! [[ "${REMOTE_SERVICE_UNIT_RELATIVE}" =~ ^scripts/ops/systemd/[A-Za-z0-9@_.-]+\.service$ ]]; then
@@ -1924,12 +1929,16 @@ echo "local_asset=${LOCAL_ASSET}"
 echo "remote_asset=${REMOTE_ASSET}"
 test "${LOCAL_ASSET}" = "${REMOTE_ASSET}"
 
-# Public search-surface gate. A deployment is not accepted while either public
-# hostname still exposes legacy internal descriptions or misses noindex headers.
+# Private-surface gate. The default contract requires the safe noindex shell;
+# Access mode instead requires anonymous interception at both HTML and asset paths.
 PRIVATE_SURFACE_URLS="${PRIVATE_SURFACE_URLS:-https://viltroxtest.com https://www.viltroxtest.com}"
 read -r -a PRIVATE_SURFACE_URL_LIST <<< "${PRIVATE_SURFACE_URLS}"
+PRIVATE_SURFACE_GATE_ARGS=()
+if [ "${VKPI_EXPECT_ACCESS_GATED}" = "1" ]; then
+  PRIVATE_SURFACE_GATE_ARGS+=(--expect-access-gated)
+fi
 "${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/scripts/verify_private_surface_live.py" \
-  "${PRIVATE_SURFACE_URL_LIST[@]}"
+  "${PRIVATE_SURFACE_GATE_ARGS[@]}" "${PRIVATE_SURFACE_URL_LIST[@]}"
 
 restore_remote_sync_unit_state
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then

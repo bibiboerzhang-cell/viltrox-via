@@ -11,6 +11,7 @@ import { VkpiTab } from "../../components/admin/tabs_v2/VkpiTab";
 import { VkpiDashboard } from "../../components/vkpi";
 import { GlassDemoPage } from "../../components/vkpi/pages/GlassDemoPage";
 import { useAuth } from "../../hooks/useAuth";
+import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
 import AdminLoginRoute from "./AdminLoginRoute";
 import "../../styles/admin.css";
 
@@ -29,7 +30,7 @@ function AdminAuthLoading() {
           <span className="admin-root__mark">V</span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>
-              Viltrox Marketing
+              {PUBLIC_SURFACE_NAME}
             </div>
             <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>
               正在恢复登录会话
@@ -37,7 +38,7 @@ function AdminAuthLoading() {
           </div>
         </div>
         <h1 className="admin-auth-card__title">
-          正在进入 Viltrox Marketing
+          正在进入 {PUBLIC_SURFACE_NAME}
         </h1>
         <p className="admin-auth-card__subtitle">
           请稍等，正在校验本地登录态。
@@ -100,7 +101,7 @@ export default function AdminRoute() {
             <span className="admin-root__mark">V</span>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>
-                Viltrox Marketing
+                {PUBLIC_SURFACE_NAME}
               </div>
               <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>
                 访问被拒绝
@@ -111,7 +112,7 @@ export default function AdminRoute() {
             当前账号没有内部系统权限
           </h1>
           <p className="admin-auth-card__subtitle">
-            你已登录，但当前账号没有 Viltrox Marketing 权限。
+            你已登录，但当前账号没有 {PUBLIC_SURFACE_NAME} 权限。
           </p>
           <button
             type="button"

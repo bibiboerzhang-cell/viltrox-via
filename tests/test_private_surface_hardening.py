@@ -126,6 +126,30 @@ def _passing_live_responses() -> dict[str, verifier.HttpResult]:
     return responses
 
 
+def _access_gated_responses() -> dict[str, verifier.HttpResult]:
+    base = "https://private.example/"
+    access_location = (
+        "https://team.cloudflareaccess.com/cdn-cgi/access/login/private.example"
+    )
+    responses = {
+        base: verifier.HttpResult(
+            status=302,
+            url=base,
+            headers={"location": access_location},
+            body="",
+        )
+    }
+    for probe_path in verifier.ACCESS_GATE_STATIC_PROBE_PATHS:
+        url = f"{base}{probe_path.lstrip('/')}"
+        responses[url] = verifier.HttpResult(
+            status=302,
+            url=url,
+            headers={"location": access_location},
+            body="",
+        )
+    return responses
+
+
 def test_application_sends_noindex_on_success_and_error_responses() -> None:
     client = TestClient(main.app, raise_server_exceptions=False)
     for path in ("/", "/assets/not-present.js", "/definitely-not-present"):
@@ -253,6 +277,101 @@ def test_live_gate_accepts_complete_private_surface_contract() -> None:
     assert result["failures"] == []
 
 
+def test_live_gate_accepts_cloudflare_access_interception_when_explicitly_requested() -> None:
+    responses = _access_gated_responses()
+    with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
+        result = verifier.validate_base_url(
+            "https://private.example",
+            timeout=1,
+            expect_access_gated=True,
+        )
+    assert result["ok"] is True
+    assert result["status"] == 302
+    assert [probe["status"] for probe in result["static_probes"]] == [302, 302]
+    assert result["failures"] == []
+
+
+def test_live_gate_accepts_direct_access_denials_when_explicitly_requested() -> None:
+    responses = _access_gated_responses()
+    for url in tuple(responses):
+        responses[url] = verifier.HttpResult(
+            status=403,
+            url=url,
+            headers={"content-type": "text/html"},
+            body="Access denied",
+        )
+    with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
+        result = verifier.validate_base_url(
+            "https://private.example",
+            timeout=1,
+            expect_access_gated=True,
+        )
+    assert result["ok"] is True
+    assert result["status"] == 403
+    assert [probe["status"] for probe in result["static_probes"]] == [403, 403]
+
+
+def test_access_gate_mode_rejects_an_anonymously_downloadable_root() -> None:
+    responses = _access_gated_responses()
+    base = "https://private.example/"
+    responses[base] = _http_result(
+        base,
+        200,
+        PRIVATE_HTML,
+        content_type="text/html; charset=utf-8",
+    )
+    with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
+        result = verifier.validate_base_url(
+            "https://private.example",
+            timeout=1,
+            expect_access_gated=True,
+        )
+    assert result["ok"] is False
+    assert any("root is anonymously downloadable" in failure for failure in result["failures"])
+
+
+def test_access_gate_mode_rejects_an_anonymously_downloadable_static_asset() -> None:
+    responses = _access_gated_responses()
+    probe_path = verifier.ACCESS_GATE_STATIC_PROBE_PATHS[0]
+    asset_url = f"https://private.example/{probe_path.lstrip('/')}"
+    responses[asset_url] = _http_result(
+        asset_url,
+        200,
+        "<svg></svg>",
+        content_type="image/svg+xml",
+    )
+    with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
+        result = verifier.validate_base_url(
+            "https://private.example",
+            timeout=1,
+            expect_access_gated=True,
+        )
+    assert result["ok"] is False
+    assert any(
+        f"static asset {probe_path} is anonymously downloadable" in failure
+        for failure in result["failures"]
+    )
+
+
+def test_access_gate_mode_rejects_a_non_access_redirect() -> None:
+    responses = _access_gated_responses()
+    base = "https://private.example/"
+    responses[base] = verifier.HttpResult(
+        status=302,
+        url=base,
+        headers={"location": "https://private.example/login"},
+        body="",
+    )
+    with mock.patch.object(verifier, "fetch", side_effect=lambda url, **_kwargs: responses[url]):
+        result = verifier.validate_base_url(
+            "https://private.example",
+            timeout=1,
+            expect_access_gated=True,
+        )
+    assert result["ok"] is False
+    assert any("outside the Cloudflare Access flow" in failure for failure in result["failures"])
+
+
 def test_live_gate_rejects_robots_rules_that_reopen_a_named_bot() -> None:
     responses = _passing_live_responses()
     robots_url = "https://private.example/robots.txt"
@@ -320,6 +439,11 @@ def test_cloud_deploy_runs_external_private_surface_gate() -> None:
     deploy = (REPO_ROOT / "scripts" / "ops" / "deploy_local_to_cloud.sh").read_text(encoding="utf-8")
     assert "verify_private_surface_live.py" in deploy
     assert "https://www.viltroxtest.com" in deploy
+    assert 'VKPI_EXPECT_ACCESS_GATED="${VKPI_EXPECT_ACCESS_GATED:-0}"' in deploy
+    assert "VKPI_EXPECT_ACCESS_GATED must be exactly 0 or 1." in deploy
+    assert 'if [ "${VKPI_EXPECT_ACCESS_GATED}" = "1" ]; then' in deploy
+    assert "PRIVATE_SURFACE_GATE_ARGS+=(--expect-access-gated)" in deploy
+    assert '"${PRIVATE_SURFACE_GATE_ARGS[@]}" "${PRIVATE_SURFACE_URL_LIST[@]}"' in deploy
 
 
 def test_internal_uploads_are_not_anonymous_static_files() -> None:
