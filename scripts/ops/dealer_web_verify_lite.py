@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                   dealer_id, verified_at, website_status, is_camera_retailer,
                   carries_viltrox, viltrox_evidence_url, scale_tier,
                   prominence_score, prominence_rationale, evidence_json, model
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?::jsonb, 'direct_fetch_v1')
+                ) VALUES (?, ?, ?, ?, ?, ?, 'unknown', NULL, '', ?::jsonb, 'direct_fetch_v1')
                 """,
                 (
                     int(row["id"]),
