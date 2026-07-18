@@ -102,6 +102,23 @@ def main(argv: list[str] | None = None) -> int:
                 "UPDATE vkpi_dealer_web_verification SET dealer_id=? WHERE dealer_id=?",
                 (keeper["id"], dupe["id"]),
             )
+            # 2026-07-18 bug 猎杀修:host 活动关联也要改挂 keeper,否则副本置
+            # draft 后从地图消失,活动卡的 host dealer 变成悬挂引用。
+            # keeper 已有同 opportunity 关联时跳过(避免主键冲突)。
+            conn.execute(
+                """
+                UPDATE vkpi_event_opportunity_dealers od
+                SET dealer_id=?
+                WHERE od.dealer_id=?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM vkpi_event_opportunity_dealers k
+                    WHERE k.opportunity_id=od.opportunity_id
+                      AND k.organization_id=od.organization_id
+                      AND k.dealer_id=?
+                  )
+                """,
+                (keeper["id"], dupe["id"], keeper["id"]),
+            )
             conn.execute(
                 "UPDATE vkpi_dealers SET publication_status='draft', verification_note=? WHERE id=?",
                 (
