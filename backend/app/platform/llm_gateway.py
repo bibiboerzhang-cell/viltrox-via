@@ -131,21 +131,22 @@ PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
         "endpoint": "https://api.openai.com/v1/responses",
         "input_cents_per_million": 75,
         "output_cents_per_million": 450,
-        "timeout": 30,
+        "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
     "google": {
         "model": os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "input_cents_per_million": 150,
         "output_cents_per_million": 900,
-        "timeout": 30,
+        "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
     "anthropic": {
         "model": os.getenv("VKPI_CLAUDE_MODEL", os.getenv("VKPI_WEEKLY_SUMMARY_MODEL", CLAUDE_MODEL)),
         "endpoint": "https://api.anthropic.com/v1/messages",
         "input_cents_per_million": 300,
         "output_cents_per_million": 1500,
-        "timeout": 30,
+        # 2026-07-18 事故修:官号日报长文生成 >30s 全超时→熔断锁死 LLM 面板。
+        "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
 }
 
