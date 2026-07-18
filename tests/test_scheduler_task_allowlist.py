@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.services.scheduler import jobs
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_scheduler_task_allowlist_is_unset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,3 +57,12 @@ def test_scheduler_allowlist_rejects_unknown_registered_task(
 
     with pytest.raises(RuntimeError, match="unavailable tasks: missing_task"):
         jobs.enforce_scheduler_task_allowlist(scheduler)
+
+
+def test_local_supervisor_allowlists_registered_market_listening_job_id() -> None:
+    supervisor = (
+        REPO_ROOT / "scripts" / "ops" / "local_stack_supervisor.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "vkpi_market_listening_daily" in supervisor
+    assert ",vkpi_market_listening," not in supervisor
