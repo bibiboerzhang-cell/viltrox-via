@@ -235,6 +235,14 @@ def list_opportunities(
     for raw in rows:
         item = dict(raw)
         item["metadata_json"] = loads(item.get("metadata_json"), {})
+        # 2026-07-18 体检修:compat BOOLEAN 读回 int 1/0,序列化给前端后
+        # `=== true` 恒 false → 全部机会动作面被判死;此处归一真 bool。
+        enabled = item.get("source_enabled")
+        item["source_enabled"] = enabled if isinstance(enabled, bool) else enabled in (1, "1", "t", "true")
+        review = item.get("source_requires_human_review")
+        item["source_requires_human_review"] = (
+            review if isinstance(review, bool) else review in (1, "1", "t", "true")
+        )
         item["freshness_status"] = freshness(
             item.get("last_verified_at") or item.get("source_checked_at")
         )

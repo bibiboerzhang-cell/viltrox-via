@@ -94,6 +94,17 @@ def _row(value: Any) -> dict[str, Any]:
     return dict(value) if value is not None else {}
 
 
+def _flag(value: Any) -> bool:
+    """Compat BOOLEAN read-back: psycopg gives bool, the shim gives int 1/0.
+
+    2026-07-18 体检修:`is not True` 判 int 1 恒失败,把全部机会的
+    决策/批准/转 Event 动作面判死(前端同款 `=== true` 吃序列化的 1)。
+    """
+    if isinstance(value, bool):
+        return value
+    return value in (1, "1", "t", "true", "TRUE", "True")
+
+
 def _normalize_title(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
@@ -234,9 +245,25 @@ def _opportunity_with_source(
         if current_source_id != locked_source_id:
             raise EventRadarStateConflict("event opportunity source changed; reload and retry")
         return row
+    # 2026-07-18 体检修(M2):补齐与列表投影同形的 7 字段(source_kind/name/
+    # catalog_url/requires_human_review + host dealer + promoted event),否则
+    # 深查合并 {...row,...fresh} 时缺键不覆盖,刚晋级条目 converted_event_id 不刷新。
     return conn.execute(
         """
-        SELECT o.*, s.status AS source_status, s.enabled AS source_enabled
+        SELECT o.*, s.name AS source_name, s.status AS source_status,
+               s.enabled AS source_enabled,
+               s.source_kind AS source_kind,
+               s.canonical_url AS source_catalog_url,
+               s.requires_human_review AS source_requires_human_review,
+               (SELECT od.dealer_id FROM vkpi_event_opportunity_dealers od
+                 WHERE od.opportunity_id=o.id AND od.organization_id=o.organization_id
+                   AND od.relation_type='host' ORDER BY od.created_at ASC LIMIT 1) AS dealer_id,
+               (SELECT d.name FROM vkpi_event_opportunity_dealers od
+                  JOIN vkpi_dealers d ON d.id=od.dealer_id
+                 WHERE od.opportunity_id=o.id AND od.organization_id=o.organization_id
+                   AND od.relation_type='host' ORDER BY od.created_at ASC LIMIT 1) AS dealer_name,
+               (SELECT p.event_id FROM vkpi_event_opportunity_promotions p
+                 WHERE p.opportunity_id=o.id AND p.organization_id=o.organization_id) AS converted_event_id
         FROM vkpi_event_opportunities o
         JOIN vkpi_event_watch_targets s ON s.id=o.source_id
         WHERE o.id=? AND o.organization_id=?
@@ -249,7 +276,7 @@ def _validate_approval_truth(item: dict[str, Any], *, action: str) -> Any:
     """Revalidate every execution truth field after the mutation locks."""
     if str(item.get("source_status") or "") != "active":
         raise ValueError("event opportunity source is not active")
-    if item.get("source_enabled") is not True:
+    if not _flag(item.get("source_enabled")):
         raise ValueError("event opportunity source is disabled")
     if item.get("verification_status") != "verified" or item.get("event_status") != "scheduled":
         raise ValueError(f"only verified scheduled opportunities can be {action}")
@@ -481,6 +508,8 @@ def get_opportunity(
         return None
     item = dict(row)
     item["metadata_json"] = _loads(item.get("metadata_json"), {})
+    item["source_enabled"] = _flag(item.get("source_enabled"))
+    item["source_requires_human_review"] = _flag(item.get("source_requires_human_review"))
     item["freshness_status"] = _freshness(
         item.get("last_verified_at") or item.get("source_checked_at")
     )
@@ -581,7 +610,7 @@ def decide(opportunity_id: str, *, decision_status: str, note: str = "", staff: 
         item = _row(existing)
         if str(item.get("source_status") or "") != "active":
             raise ValueError("event opportunity source is not active")
-        if item.get("source_enabled") is not True:
+        if not _flag(item.get("source_enabled")):
             raise ValueError("event opportunity source is disabled")
         current = str(item.get("decision_status") or "new")
         if current == "promoted":
