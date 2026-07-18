@@ -12,6 +12,7 @@ v0 铁律:不自动发帖,只到 drafted;人工一键复制手动回,再 mark(re
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ def _now_iso() -> str:
 
 
 from app.core.coerce import _text
+
+logger = logging.getLogger("viltrox.domains.comments.reply_queue")
 
 
 # ── 多语种购买意向关键词(复用 intelligence_rules 的 OPPORTUNITY 词表,再补齐若干语种)──
@@ -613,7 +616,10 @@ def draft_reply(reply_id: int, *, staff: dict[str, Any] | None = None) -> dict[s
         from app.domains.costs import budget_guard
         budget_ok = bool(budget_guard.check_budget("comment_reply_draft", 0.01, require_configured=False))
     except Exception:
-        budget_ok = True
+        # 2026-07-18 审计修:预算闸异常必须 fail-closed——闸失效时 LLM 起草照烧钱
+        # 是真事故面;降级到模板回复零业务代价。
+        logger.warning("comment reply budget check failed; falling back to template", exc_info=True)
+        budget_ok = False
 
     if budget_ok:
         draft, strict_provider = _generate_reply_draft(

@@ -27,6 +27,9 @@ import {
   SynergyFullModal,
 } from "./LaunchPadBoardPage.dialogs";
 import { useContentReview, usePublishActions } from "./LaunchPadBoardPage.actions";
+// 2026-07-18 审计修:删除本地旧副本,改用 ProjectsBoardPage.actions 的加固版
+// useEndpoint(带「换 token 绝不渲染上一 principal 数据」的作用域检查)。
+import { useEndpoint } from "./ProjectsBoardPage.actions";
 import {
   assembleLaunchPlan,
   fmtUsd,
@@ -83,27 +86,7 @@ const DEFAULT_LAYOUT = [
 const PH_BADGE =
   "flex-none rounded-[7px] bg-accent-soft px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.05em] text-accent";
 
-/** 只读端点装载(端点失败 = error 原文;version 自增 = 重拉服务器真数)。 */
-function useEndpoint<T>(apiToken: string, version: number, fetcher: (token: string) => Promise<T>) {
-  const [data, setData] = React.useState<T | null>(null);
-  const [error, setError] = React.useState("");
-  React.useEffect(() => {
-    if (!apiToken) return;
-    let alive = true;
-    setError("");
-    fetcher(apiToken)
-      .then((res) => {
-        if (alive) setData((res as T) ?? null);
-      })
-      .catch((err: any) => {
-        if (alive) setError(String(err?.detail || err?.message || "读取失败"));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [apiToken, version, fetcher]);
-  return { data, error };
-}
+
 
 export function LaunchPadBoardPage({ apiToken = "", onNavigate, embeddedModuleKey }: { apiToken?: string; onNavigate?: (navKey: string) => void; embeddedModuleKey?: string }) {
   const [editing, setEditing] = React.useState(false);

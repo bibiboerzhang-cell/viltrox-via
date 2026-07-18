@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -17,13 +17,15 @@ def _row(row: Any) -> dict[str, Any]:
 
 def _window_start(window: str) -> str:
     clean = str(window or "month").strip().lower()
-    now = datetime.now()
+    # 2026-07-18 审计修:窗口串必须按 UTC 算——created_at 存 UTC,服务器本地时区
+    # (如 UTC+8)下 naive now() 会让 today/月界整体漂移。
+    now = datetime.now(timezone.utc)
     if clean in {"today", "day", "daily", "1d"}:
         return now.strftime("%Y-%m-%d")
     if clean in {"7d", "week", "weekly"}:
-        return datetime.fromtimestamp(now.timestamp() - 6 * 24 * 3600).strftime("%Y-%m-%d")
+        return (now - timedelta(days=6)).strftime("%Y-%m-%d")
     if clean in {"30d"}:
-        return datetime.fromtimestamp(now.timestamp() - 29 * 24 * 3600).strftime("%Y-%m-%d")
+        return (now - timedelta(days=29)).strftime("%Y-%m-%d")
     return now.strftime("%Y-%m-01")
 
 

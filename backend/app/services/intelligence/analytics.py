@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 def trend_series(*, metric: str = "submissions", window_days: int = 30) -> dict:
     conn = get_conn()
-    from_date = (datetime.utcnow() - timedelta(days=window_days)).isoformat()
+    from_date = (datetime.utcnow() - timedelta(days=window_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if metric == "submissions":
         q = """SELECT date(created_at) AS d, COUNT(*) AS v
@@ -115,8 +115,8 @@ def compute_correlation(
            VALUES (?,?,?,?,?,?,?,?)""",
         (
             metric_a, metric_b, r, slope, lag_days, n,
-            (datetime.utcnow() - timedelta(days=window_days)).isoformat(),
-            datetime.utcnow().isoformat(),
+            (datetime.utcnow() - timedelta(days=window_days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         ),
     )
     conn.commit()

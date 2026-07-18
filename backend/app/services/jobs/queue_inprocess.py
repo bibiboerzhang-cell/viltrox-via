@@ -1,5 +1,6 @@
 """In-process fallback job queue."""
 from __future__ import annotations
+import logging
 
 import asyncio
 import json
@@ -13,6 +14,7 @@ from app.core.config import (
 )
 from app.services.ai.orchestrator import TaskStatus, VideoJobInput
 from app.services.jobs.queue_common import (
+
     BaseJobQueue,
     DURABLE_PROVIDER_JOB_TYPES,
     TRANSIENT_JOB_STATUSES,
@@ -20,6 +22,8 @@ from app.services.jobs.queue_common import (
     utcnow,
 )
 
+
+logger = logging.getLogger("viltrox.services.jobs.queue_inprocess")
 
 class InProcessJobQueue(BaseJobQueue):
     backend_name = "inprocess"
@@ -86,7 +90,23 @@ class InProcessJobQueue(BaseJobQueue):
         await self._publish(task_id, {"event_type": "queued", "task_id": task_id, "status": TaskStatus.QUEUED.value, "created_at": now})
         from app.services.jobs.processor import process_background_job
 
-        self._generic_tasks[task_id] = asyncio.create_task(process_background_job(self, raw_job))
+        task = asyncio.create_task(process_background_job(self, raw_job))
+        self._generic_tasks[task_id] = task
+
+        # 2026-07-18 审计修:fire-and-forget 任务的未捕获异常(如 payload 校验错)
+        # 会被 asyncio 静默吞,任务表残留 queued 假象。done-callback 记录异常并清引用。
+        def _on_done(finished: "asyncio.Task[Any]", _tid: str = task_id) -> None:
+            self._generic_tasks.pop(_tid, None)
+            if finished.cancelled():
+                return
+            exc = finished.exception()
+            if exc is not None:
+                logger.exception("background job crashed task_id=%s", _tid, exc_info=exc)
+                status = dict(self._generic_status.get(_tid) or {})
+                status.update({"task_id": _tid, "status": TaskStatus.FAILED.value, "error": str(exc)[:500]})
+                self._generic_status[_tid] = status
+
+        task.add_done_callback(_on_done)
         return task_id
 
     async def get_status(self, task_id: str) -> Optional[Dict[str, Any]]:

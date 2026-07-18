@@ -745,9 +745,12 @@ def reconcile_apify_costs(hours: int = 48, max_rows: int = 300) -> dict[str, Any
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 if resp.status_code != 200:
+                    # 2026-07-18 审计修:对账失败必须可见,否则结算漂移永不收敛。
+                    logger.warning("apify reconcile non-200 run_id=%s status=%s", run_id, resp.status_code)
                     continue
                 settled = float(((resp.json().get("data") or {}).get("usageTotalUsd")) or 0.0)
             except Exception:
+                logger.warning("apify reconcile fetch failed run_id=%s", run_id, exc_info=True)
                 continue
             recorded = float(data.get("cost_usd") or 0.0)
             delta = settled - recorded

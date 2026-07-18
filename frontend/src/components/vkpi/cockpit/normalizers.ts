@@ -328,10 +328,12 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
   const viewCovered = int(evidenceCoverage.view_covered);
   const coveragePct = number(evidenceCoverage.view_coverage_pct);
   const coveragePercent = coveragePct == null ? null : coveragePct * 100;
-  const evidenceCoverageText = `实时 · evidence 覆盖 ${percentLabel(coveragePercent, 0)}`;
-  const evidenceVideoText = `实时 · 基于 ${viewCovered != null ? viewCovered.toLocaleString() : DASH} 条已抓视频`;
+  // 2026-07-18 审计修:门面红线禁硬编码「实时」——新鲜度只能来自真实时间戳。
+  const summaryFreshness = timeLabel(summary.generated_at || dashboard.generated_at) || DASH;
+  const evidenceCoverageText = `${summaryFreshness} · evidence 覆盖 ${percentLabel(coveragePercent, 0)}`;
+  const evidenceVideoText = `${summaryFreshness} · 基于 ${viewCovered != null ? viewCovered.toLocaleString() : DASH} 条已抓视频`;
   const active30WindowDays = int(evidenceActive30.window_days) ?? 30;
-  const evidenceActive30Text = `实时 · 近 ${active30WindowDays} 天发布/同步`;
+  const evidenceActive30Text = `${summaryFreshness} · 近 ${active30WindowDays} 天发布/同步`;
   const active30ByScope = record(summary.active_30d_by_scope);
   const exposureByScope = record(summary.exposure_30d_by_scope);
   const engagementByScope = record(summary.engagement_rate_by_scope);
@@ -348,29 +350,29 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
 
   const values: Record<string, MetricScopes> = {
     "kol-count": {
-      all: metricData(rosterAll, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: "实时 · evidence active roster" }),
-      kol: metricData(rosterKol, "#ec4899", { source: "evidence_metrics", sourceLabel: "实时", trend: "实时 · KOL evidence active" }),
-      company: metricData(rosterCompany, "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: "实时 · 官方矩阵 active" }),
+      all: metricData(rosterAll, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · evidence active roster` }),
+      kol: metricData(rosterKol, "#ec4899", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · KOL evidence active` }),
+      company: metricData(rosterCompany, "#06b6d4", { source: "owned_matrix", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · 官方矩阵 active` }),
     },
     "active-30d": {
-      all: number(evidenceActive30.all) != null ? metricData(number(evidenceActive30.all), "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · active_30d 累计中` }),
-      kol: number(evidenceActive30.kol) != null ? metricData(number(evidenceActive30.kol), "#ec4899", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL active_30d 累计中` }),
-      company: number(evidenceActive30.company ?? evidenceActive30.owned) != null ? metricData(number(evidenceActive30.company ?? evidenceActive30.owned), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.owned ?? active30ByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 active_30d 累计中` }),
+      all: number(evidenceActive30.all) != null ? metricData(number(evidenceActive30.all), "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · active_30d 累计中` }),
+      kol: number(evidenceActive30.kol) != null ? metricData(number(evidenceActive30.kol), "#ec4899", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL active_30d 累计中` }),
+      company: number(evidenceActive30.company ?? evidenceActive30.owned) != null ? metricData(number(evidenceActive30.company ?? evidenceActive30.owned), "#06b6d4", { source: "owned_matrix", sourceLabel: summaryFreshness, trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.owned ?? active30ByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 active_30d 累计中` }),
     },
     exposure: {
-      all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceCoverageText, anomaly: exposureAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
+      all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: evidenceCoverageText, anomaly: exposureAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
       // 2026-06-12 波3 R6:KOL 口径不再复用全量 totalExposure(避免「KOL 曝光=全部曝光」假象)
       kol: windowMetricData(number(exposureByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 30d 曝光累计中(不复用全量口径)` }),
       // 官方矩阵 channel-level 30d 真实增量(summary.exposure_30d_by_scope.owned/company,由 _build_company_window_metrics 写入);
       // 后端给到非 null 即走实时,否则回退到原「累积中」窗口口径。镜像 active-30d.company 的 owned_matrix 模式。
-      company: number(exposureByScope.owned ?? exposureByScope.company) != null ? metricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: "实时 · 官方矩阵 30d" }) : windowMetricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 30d 曝光累计中` }),
+      company: number(exposureByScope.owned ?? exposureByScope.company) != null ? metricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · 官方矩阵 30d` }) : windowMetricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 30d 曝光累计中` }),
     },
     engagement: {
-      all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: "实时", trend: evidenceVideoText, anomaly: engagementAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
+      all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: evidenceVideoText, anomaly: engagementAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
       // 2026-06-12 波3 R6:KOL 口径不再复用全量 engagementPercent
       kol: windowMetricData(number(engagementByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 互动率累计中(不复用全量口径)` }),
       // 官方矩阵最新快照真实互动率(summary.engagement_rate_by_scope.owned/company,百分数,由 _build_company_window_metrics 写入)。
-      company: number(engagementByScope.owned ?? engagementByScope.company) != null ? metricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: "实时", trend: "实时 · 官方互动率" }) : windowMetricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方互动率累计中` }),
+      company: number(engagementByScope.owned ?? engagementByScope.company) != null ? metricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · 官方互动率` }) : windowMetricData(number(engagementByScope.owned ?? engagementByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方互动率累计中` }),
     },
     gmv: {
       all: metricData(null, "#fbbf24", { waiting: "待 Shopify 订单接入" }),
@@ -951,7 +953,7 @@ export function normalizeDashboardSourceHealth(bundle: RawValue = {}) {
     failed,
     pendingCapabilities,
     degraded: failed.length > 0,
-    label: total > 0 ? `${ready}/${total} 可用 · ${pendingCapabilities.length} 待接` : "实时",
+    label: total > 0 ? `${ready}/${total} 可用 · ${pendingCapabilities.length} 待接` : DASH,
     detail: [
       total > 0 ? `Dashboard 数据源 ${ready}/${total} 本次可用` : "Dashboard 数据源状态未知",
       failed.length > 0 ? `异常: ${failed.join("、")}` : "数据源响应正常",

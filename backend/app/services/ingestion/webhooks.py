@@ -2,6 +2,7 @@
 services/ingestion/webhooks.py — webhook auth and provider-specific payload normalization
 """
 from __future__ import annotations
+import logging
 
 import base64
 import hashlib
@@ -13,6 +14,7 @@ from typing import Any
 from starlette.datastructures import Headers, QueryParams
 
 from app.core.config import (
+
     META_APP_SECRET_PREVIOUS,
     META_APP_SECRET,
     META_WEBHOOK_VERIFY_TOKEN_PREVIOUS,
@@ -25,6 +27,8 @@ from app.core.config import (
     TIKTOK_WEBHOOK_SECRET,
 )
 
+
+logger = logging.getLogger("viltrox.services.ingestion.webhooks")
 
 LOCAL_CLIENTS = {"127.0.0.1", "::1", "localhost"}
 SUPPORTED_WEBHOOK_PLATFORMS = {"facebook", "instagram", "tiktok", "shopify"}
@@ -282,6 +286,9 @@ def verify_webhook_request(platform: str, headers: Headers, raw_body: bytes, cli
 
             shopify_secret = str(shopify_connect.get_credentials().get("webhook_secret") or "").strip()
         except Exception:
+            # 2026-07-18 审计修:静默回退 env 旧 secret 会在 DB secret 已轮转时把合法
+            # 订单 webhook 全拒(invalid hmac)且误导排障方向——归因 GMV 静默丢单。
+            logger.warning("shopify credentials read failed; falling back to env webhook secret", exc_info=True)
             shopify_secret = str(SHOPIFY_WEBHOOK_SECRET or "").strip()
         if not shopify_secret:
             raise RuntimeError("shopify webhook secret not configured")

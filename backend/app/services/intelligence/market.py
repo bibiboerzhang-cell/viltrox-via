@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -243,10 +243,11 @@ def list_gap_insights() -> dict:
         rows = conn.execute(
             """SELECT * FROM ai_insights
                WHERE module='market' AND category='gap'
-                 AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 AND (expires_at IS NULL OR expires_at > ?)
                  AND dismissed_at IS NULL
                ORDER BY generated_at DESC
-               LIMIT 20"""
+               LIMIT 20""",
+            (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),),
         ).fetchall()
     except Exception:
         # 诊断阶段三c(1):ai_insights 表缺失(未迁移)时此前抛 500 崩端点。
@@ -330,11 +331,12 @@ async def regenerate_gap_insights() -> dict:
 
     conn = get_conn()
     conn.execute(
-        "UPDATE ai_insights SET expires_at = datetime('now') "
-        "WHERE module='market' AND category='gap' AND expires_at IS NULL"
+        "UPDATE ai_insights SET expires_at = ? "
+        "WHERE module='market' AND category='gap' AND expires_at IS NULL",
+        (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),),
     )
-    now = datetime.utcnow().isoformat()
-    expires = (datetime.utcnow() + timedelta(hours=24)).isoformat()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires = (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for ins in generated_insights:
         conn.execute(
             """INSERT INTO ai_insights (

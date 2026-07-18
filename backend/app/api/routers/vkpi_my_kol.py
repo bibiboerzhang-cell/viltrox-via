@@ -179,7 +179,7 @@ def my_kol_contribution_rollup_endpoint(
         raise HTTPException(status_code=403, detail="manager scope required")
 
     days = max(1, min(_int(window_days, 90), 365))
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")  # 2026-07-18 审计修:无Z裸isoformat被PG按会话时区解析
     conn = get_conn()
 
     # 主聚合:一个负责人一行。
