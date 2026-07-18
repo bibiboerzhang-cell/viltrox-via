@@ -364,6 +364,11 @@ def update_budget(scope: str, payload: dict[str, Any] | None = None, *, staff: d
     fallback_action = str(pick("fallback_action", "") or "")
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else _load_json(old_data.get("metadata_json"))
 
+    # 2026-07-18 竞态修:payload 未显式带 current_spend 时(管理员改 cap 的
+    # 常态),DO UPDATE 绝不能用 SELECT 读到的旧值回写——否则会清掉 SELECT 与
+    # upsert 之间并发 record_cost 的原子累加,花费回退→预算闸失效超支。
+    # 只有 payload 显式给 current_spend(重置场景)才覆写该列。
+    spend_explicit = 1 if "current_spend" in payload else 0
     conn.execute(
         """
         INSERT INTO vkpi_provider_budget_caps
@@ -371,14 +376,15 @@ def update_budget(scope: str, payload: dict[str, Any] | None = None, *, staff: d
         VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(scope) DO UPDATE SET
             cap_usd=excluded.cap_usd,
-            current_spend=excluded.current_spend,
+            current_spend=CASE WHEN ?=1 THEN excluded.current_spend
+                               ELSE vkpi_provider_budget_caps.current_spend END,
             warning_at=excluded.warning_at,
             hard_stop_at=excluded.hard_stop_at,
             reset_at=excluded.reset_at,
             fallback_action=excluded.fallback_action,
             metadata_json=excluded.metadata_json
         """,
-        (scope_key, cap_usd, current_spend, warning_at, hard_stop_at, reset_at, fallback_action, _json(metadata)),
+        (scope_key, cap_usd, current_spend, warning_at, hard_stop_at, reset_at, fallback_action, _json(metadata), spend_explicit),
     )
     conn.commit()
     return get_budget_status(scope_key)

@@ -196,6 +196,10 @@ def _ingest_order_from_event_sync(event_id: int) -> int | None:
             "paid", row["occurred_at"], json.dumps([event_id]), row["payload_json"],
         ),
     )
+    # 2026-07-18 竞态修:INSERT OR IGNORE 输掉竞争的一方 rowcount=0——绝不能
+    # 再跑归因累加/party 事件(orders/create 与 orders/paid 并发会双记账,收入翻倍)。
+    # 只有真正插入成功(rowcount==1)的赢家执行下游副作用;输家标记已消费即返回。
+    won_insert = int(getattr(cur, "rowcount", 0) or 0) == 1
     conn.commit()
     order_row = conn.execute(
         "SELECT id FROM orders WHERE external_order_id = ?",
@@ -206,6 +210,9 @@ def _ingest_order_from_event_sync(event_id: int) -> int | None:
     order_id = int(order_row["id"])
     _mark_event_ingested(conn, event_id)
     conn.commit()
+    if not won_insert:
+        logger.info("order %s already ingested by concurrent webhook; skipping side effects", external_id)
+        return order_id
 
     # Mark click as converted if we have one matching
     if attribution_source:

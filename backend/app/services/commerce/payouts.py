@@ -327,12 +327,17 @@ def process_cycle(cycle_id: str, admin_id: int) -> dict:
     if cycle["status"] not in ("active", "upcoming"):
         raise ValueError(f"cycle {cycle_id} is in status {cycle['status']}; cannot process")
 
-    # Mark cycle as processing
-    conn.execute(
-        "UPDATE payout_cycles SET status='processing', processed_by=? WHERE id = ?",
+    # 2026-07-18 竞态修:认领 cycle 用 CAS(带状态谓词+rowcount),两个并发
+    # process 只有一个能把 cycle 从 active/upcoming 抢到 processing;输家 409。
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE payout_cycles SET status='processing', processed_by=? "
+        "WHERE id = ? AND status IN ('active','upcoming')",
         (admin_id, cycle_id),
     )
     conn.commit()
+    if int(getattr(cur, "rowcount", 0) or 0) != 1:
+        raise ValueError(f"cycle {cycle_id} already being processed by another request")
 
     approved = conn.execute(
         "SELECT * FROM payouts WHERE cycle_id = ? AND status = 'approved'",
@@ -343,6 +348,16 @@ def process_cycle(cycle_id: str, admin_id: int) -> dict:
     failed: list[dict] = []
     for p in approved:
         try:
+            # 2026-07-18 竞态修:每笔打款前先 CAS 抢单——只有把该 payout 从
+            # approved 抢到 paying 的那一次(rowcount==1)才真发款,杜绝双打款。
+            claim = conn.cursor()
+            claim.execute(
+                "UPDATE payouts SET status='paying' WHERE id = ? AND status = 'approved'",
+                (p["id"],),
+            )
+            conn.commit()
+            if int(getattr(claim, "rowcount", 0) or 0) != 1:
+                continue
             tx_id = _dispatch_payout(dict(p))
             conn.execute(
                 "UPDATE payouts SET status='paid', paid_at=datetime('now'), paid_tx_id=? "
