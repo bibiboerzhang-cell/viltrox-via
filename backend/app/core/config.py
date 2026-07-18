@@ -387,17 +387,22 @@ ENABLE_LOCAL_ORCHESTRATOR = _env_flag(
     "ENABLE_LOCAL_ORCHESTRATOR",
     "1" if APP_ROLE == "all" and not REDIS_URL and not IS_PRODUCTION else "0",
 )
+# 2026-07-18 止险修:APP_ROLE 缺省 "all" 让本地裸起(无 env)就自动开
+# scheduler/browser/upload-cleanup——scheduler 一开即注册 60+ 花钱定时任务
+# (6/30 本地烧钱事故元凶)。加 IS_PRODUCTION 守卫:仅生产/staging 的 all/worker
+# 角色才默认开;本地一律 fail-closed(需显式 ENABLE_* 才开)。线上这些服务
+# 本就显式设 env 或 IS_PRODUCTION=True,行为不变。
 ENABLE_BROWSER = _env_flag(
     "ENABLE_BROWSER",
-    "1" if APP_ROLE in {"all", "worker"} else "0",
+    "1" if APP_ROLE in {"all", "worker"} and IS_PRODUCTION else "0",
 )
 ENABLE_SCHEDULER = _env_flag(
     "ENABLE_SCHEDULER",
-    "1" if APP_ROLE == "all" else "0",
+    "1" if APP_ROLE == "all" and IS_PRODUCTION else "0",
 )
 ENABLE_UPLOAD_CLEANUP = _env_flag(
     "ENABLE_UPLOAD_CLEANUP",
-    "1" if APP_ROLE == "all" else "0",
+    "1" if APP_ROLE == "all" and IS_PRODUCTION else "0",
 )
 
 if APP_ROLE not in VALID_APP_ROLES:
