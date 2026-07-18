@@ -104,11 +104,9 @@ def _recovery_seconds() -> int:
 def _half_open_lease_seconds() -> int:
     return _bounded_int(
         os.environ.get("VKPI_LLM_FLEET_BREAKER_HALF_OPEN_LEASE_SECONDS"),
-        # Provider transports currently time out at 30 seconds.  Keep a
-        # generous initial lease even though a live probe is also renewed in
-        # the background; this prevents scheduler jitter from making the
-        # lease and HTTP deadline coincide.
-        default=120,
+        # 2026-07-18:provider HTTP 超时提到 90s(长文生成),half-open 租约
+        # 必须 ≥ 2×超时(否则探测请求会在租约过期后才返回,重试被误判失败)。
+        default=200,
         minimum=5,
         maximum=900,
     )

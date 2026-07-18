@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,34 @@ def _now() -> str:
 def _fetch(client: Any, url: str) -> tuple[int, str]:
     resp = client.get(url, headers={"User-Agent": _UA})
     return int(resp.status_code), str(resp.text or "")[:400_000]
+
+
+_NO_RESULT_MARKERS = (
+    "no results", "no products", "0 results", "did not match any",
+    "nothing found", "no matches", "sorry, no", "couldn't find",
+    "no se encontraron", "无结果", "没有找到",
+)
+_PRODUCT_NEAR = re.compile(
+    r"viltrox[^<]{0,80}(?:\$|usd|add to cart|add-to-cart|buy now|/products/|/product/|in stock)",
+    re.I,
+)
+
+
+def _search_page_has_product(html: str) -> bool:
+    """True only if the search page shows a real Viltrox product, not an echo.
+
+    Search result pages echo the query term (search box value, "no results for
+    viltrox" text).  Require a Viltrox mention within product context AND the
+    absence of an explicit no-results marker.
+    """
+    lowered = html.lower()
+    if "viltrox" not in lowered:
+        return False
+    if any(marker in lowered for marker in _NO_RESULT_MARKERS):
+        return False
+    if 'href="/products/' in lowered and "viltrox" in lowered:
+        return True
+    return bool(_PRODUCT_NEAR.search(html))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,7 +170,11 @@ def main(argv: list[str] | None = None) -> int:
                             code, sub_html = _fetch(client, base + pattern)
                         except Exception:
                             continue
-                        if code < 400 and "viltrox" in sub_html.lower():
+                        # 2026-07-18 假阳性修:搜索结果页会回显查询词(搜索框
+                        # value、"no results for viltrox" 等),裸 "viltrox" 子串
+                        # 命中会把 0 结果误判为在售。要求产品级证据:出现 viltrox
+                        # 的商品链接/加购/价格上下文,且页面非"无结果"。
+                        if code < 400 and _search_page_has_product(sub_html):
                             evidence_url = base + pattern
                             break
             carries = "confirmed" if evidence_url else ("not_found" if status_label == "alive" else "unknown")
