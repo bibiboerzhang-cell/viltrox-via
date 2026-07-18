@@ -6,8 +6,7 @@
     "backend/app/services/ai/analyzers/**",
     "backend/app/services/ai/clients/**",
     "backend/app/services/audit/learning.py",
-    "backend/app/api/routers/brand_analysis.py",
-    "backend/app/setup_equipment_dirs.py"
+    "backend/app/api/routers/brand_analysis.py"
   ],
   "silent_exception_allowlist": [
     "backend/app/services/scraping/**",

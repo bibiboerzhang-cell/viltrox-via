@@ -169,7 +169,7 @@ describe("normalizeDashboardSourceHealth 数据源透明度", () => {
   });
 
   it("旧缓存没有状态字段时保持兼容", () => {
-    expect(normalizeDashboardSourceHealth({})).toMatchObject({ available: false, label: "实时" });
+    expect(normalizeDashboardSourceHealth({})).toMatchObject({ available: false, label: "—" });
   });
 });
 
