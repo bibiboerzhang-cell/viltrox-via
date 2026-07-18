@@ -457,8 +457,9 @@ def test_cloud_deploy_runs_external_private_surface_gate() -> None:
     assert 'VKPI_EXPECT_ACCESS_GATED="${VKPI_EXPECT_ACCESS_GATED:-0}"' in deploy
     assert "VKPI_EXPECT_ACCESS_GATED must be exactly 0 or 1." in deploy
     assert 'if [ "${VKPI_EXPECT_ACCESS_GATED}" = "1" ]; then' in deploy
-    assert "PRIVATE_SURFACE_GATE_ARGS+=(--expect-access-gated)" in deploy
-    assert '"${PRIVATE_SURFACE_GATE_ARGS[@]}" "${PRIVATE_SURFACE_URL_LIST[@]}"' in deploy
+    assert '--expect-access-gated "${PRIVATE_SURFACE_URL_LIST[@]}"' in deploy
+    assert '"${PRIVATE_SURFACE_URL_LIST[@]}"' in deploy
+    assert "PRIVATE_SURFACE_GATE_ARGS" not in deploy
 
 
 def test_internal_uploads_are_not_anonymous_static_files() -> None:
