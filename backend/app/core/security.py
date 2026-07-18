@@ -30,6 +30,16 @@ JWT_AUDIENCE = "vos-app"
 AUTH_COOKIE_NAME = "via_token"
 AUTH_COOKIE_MAX_AGE_SEC = 86400 * int(JWT_EXPIRES_DAYS)
 JWT_VERIFY_SECRETS = [JWT_SECRET, *[item for item in JWT_SECRET_PREVIOUS if item and item != JWT_SECRET]]
+_ACTIVE_USER_STATUSES = {"active", "approved"}
+
+
+def user_status_allows_auth(status: object, *, production: bool | None = None) -> bool:
+    """Fail closed for disabled accounts while preserving local pending signup."""
+    normalized = str(status or "").strip().lower()
+    if normalized in _ACTIVE_USER_STATUSES:
+        return True
+    production_mode = IS_PRODUCTION if production is None else bool(production)
+    return normalized == "pending" and not production_mode
 
 
 # ── Password ──────────────────────────────
@@ -176,7 +186,14 @@ def _load_user_for_auth(user_id: int, cache_key: str):
     uid = int(user_id)
     cached = cache_get(cache_key)
     if cached is not None:
-        return cached
+        if isinstance(cached, dict) and user_status_allows_auth(cached.get("status")):
+            return cached
+        logger.warning(
+            "security.inactive_cached_user_rejected uid=%s status=%s",
+            uid,
+            str(cached.get("status") if isinstance(cached, dict) else "invalid_cache_value"),
+        )
+        return None
 
     with db_connection_sync_reusing_scope():
         conn = get_conn()
@@ -190,8 +207,15 @@ def _load_user_for_auth(user_id: int, cache_key: str):
         if not user:
             return None
         user_dict = dict(user)
+        if not user_status_allows_auth(user_dict.get("status")):
+            logger.warning(
+                "security.inactive_user_rejected uid=%s status=%s",
+                uid,
+                str(user_dict.get("status") or ""),
+            )
+            return None
         try:
-            from app.core.permissions import staff_context_for_user
+            from app.core.permissions import staff_context_for_user, staff_context_is_inactive
 
             # Keep the base-user and staff lookups in one bounded connection
             # scope.  The admin RBAC middleware and the route dependency may
@@ -209,6 +233,10 @@ def _load_user_for_auth(user_id: int, cache_key: str):
             # 下一个请求重试完整拼装,自然自愈。
             logger.warning("security.staff_context_attach_failed uid=%s (degraded user NOT cached)", uid, exc_info=True)
             return user_dict
+
+        if staff_context_is_inactive(staff):
+            logger.warning("security.inactive_staff_rejected uid=%s", uid)
+            return None
 
         auth_role = str(user_dict.get("role") or "")
         effective_role = str(staff.get("role") or auth_role or "readonly")

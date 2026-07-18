@@ -318,7 +318,10 @@ def _update_user_status(uid: int, status: str, note: str) -> bool:
     conn = get_conn()
     cur = conn.execute("UPDATE users SET status=?, note=? WHERE id=?", (status, note, uid))
     conn.commit()
-    return cur.rowcount == 1
+    updated = cur.rowcount == 1
+    if updated:
+        invalidate_user_cache(int(uid))
+    return updated
 
 
 def _delete_user_by_id(uid: int) -> bool:

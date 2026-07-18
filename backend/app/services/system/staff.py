@@ -700,16 +700,19 @@ def update(staff_id: int, body: dict) -> None:
         params.append(1 if body["mfa_enabled"] else 0)
     if not fields:
         return
+    row = conn.execute("SELECT user_id FROM staff WHERE id = ?", (staff_id,)).fetchone()
     params.append(staff_id)
     conn.execute(f"UPDATE staff SET {', '.join(fields)} WHERE id = ?", params)
     conn.commit()
+    if row and row["user_id"]:
+        invalidate_user_cache(int(row["user_id"]))
 
 
 def update_permissions(staff_id: int, permissions: dict[str, str], *, actor_is_owner: bool = False) -> None:
     if not actor_is_owner:
         raise PermissionError("only owner can update staff permissions")
     conn = get_conn()
-    row = conn.execute("SELECT role, is_owner FROM staff WHERE id = ?", (staff_id,)).fetchone()
+    row = conn.execute("SELECT user_id, role, is_owner FROM staff WHERE id = ?", (staff_id,)).fetchone()
     if not row:
         raise ValueError("staff not found")
     normalized = normalize_permissions(
@@ -724,10 +727,13 @@ def update_permissions(staff_id: int, permissions: dict[str, str], *, actor_is_o
         (json.dumps(normalized), staff_id),
     )
     conn.commit()
+    if row["user_id"]:
+        invalidate_user_cache(int(row["user_id"]))
 
 
 def suspend(staff_id: int, reason: str) -> None:
     conn = get_conn()
+    row = conn.execute("SELECT user_id FROM staff WHERE id = ?", (staff_id,)).fetchone()
     conn.execute(
         """UPDATE staff SET active = 0,
             suspended_at = datetime('now'),
@@ -736,10 +742,13 @@ def suspend(staff_id: int, reason: str) -> None:
         (reason, staff_id),
     )
     conn.commit()
+    if row and row["user_id"]:
+        invalidate_user_cache(int(row["user_id"]))
 
 
 def reactivate(staff_id: int) -> None:
     conn = get_conn()
+    row = conn.execute("SELECT user_id FROM staff WHERE id = ?", (staff_id,)).fetchone()
     conn.execute(
         """UPDATE staff SET active = 1,
             suspended_at = NULL,
@@ -748,6 +757,8 @@ def reactivate(staff_id: int) -> None:
         (staff_id,),
     )
     conn.commit()
+    if row and row["user_id"]:
+        invalidate_user_cache(int(row["user_id"]))
 
 
 def resend_invite(staff_id: int, *, inviter_id: int) -> dict[str, Any]:

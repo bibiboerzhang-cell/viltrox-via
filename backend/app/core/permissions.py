@@ -140,6 +140,30 @@ def is_owner(staff: dict[str, Any] | None) -> bool:
     return str(staff.get("email") or staff.get("user_email") or "").strip().lower() in OWNER_EMAILS
 
 
+def _staff_access_disabled(staff: dict[str, Any] | None) -> bool:
+    """Treat an explicit inactive staff row as a hard permission boundary."""
+    if not isinstance(staff, dict) or "active" not in staff:
+        return False
+    value = staff.get("active")
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, (int, float)):
+        return int(value) != 1
+    return str(value or "").strip().lower() not in {"1", "active", "on", "true", "yes"}
+
+
+def staff_context_is_inactive(staff: dict[str, Any] | None) -> bool:
+    if not isinstance(staff, dict):
+        return False
+    return _staff_access_disabled(staff) or str(
+        staff.get("organization_scope_status") or ""
+    ).strip().lower() == "staff_inactive"
+
+
+def _no_permissions() -> dict[str, str]:
+    return {key: "none" for key in [*TAB_PERMISSION_KEYS, *SYSTEM_PERMISSION_KEYS]}
+
+
 def default_permissions_for_role(role: str, *, owner: bool = False) -> dict[str, str]:
     """
     R59-FW-PERM 修正:
@@ -234,6 +258,8 @@ def normalize_permissions(raw: Any, role: str = "readonly", *, owner: bool = Fal
 
 
 def check_tab_permission(staff: dict[str, Any], tab_key: str, level: str = "read") -> bool:
+    if _staff_access_disabled(staff):
+        return False
     if is_owner(staff):
         return True
     tab = str(tab_key or "")
@@ -248,6 +274,8 @@ def check_tab_permission(staff: dict[str, Any], tab_key: str, level: str = "read
 
 
 def check_system_permission(staff: dict[str, Any], permission_key: str, level: str = "read") -> bool:
+    if _staff_access_disabled(staff):
+        return False
     if is_owner(staff):
         return True
     key = str(permission_key or "")
@@ -274,6 +302,8 @@ def check_contact_reveal_permission(staff: dict[str, Any] | None) -> bool:
     returning plaintext.
     """
     context = staff if isinstance(staff, dict) else {}
+    if _staff_access_disabled(context):
+        return False
     if is_owner(context):
         return True
     role = str(context.get("role") or "").strip().lower()
@@ -342,6 +372,15 @@ def staff_context_for_user(user: dict[str, Any] | None) -> dict[str, Any]:
         ).fetchone()
         if row:
             base.update(dict(row))
+            if _staff_access_disabled(base):
+                base.pop("organization_id", None)
+                base.pop("resolved_organization_id", None)
+                base.pop("organization_membership_count", None)
+                base["organization_scope_status"] = "staff_inactive"
+                base["role"] = "readonly"
+                base["is_owner"] = 0
+                base["permissions_json"] = "{}"
+                return {**base, "permissions": _no_permissions()}
             try:
                 membership_count = int(base.pop("organization_membership_count", 0) or 0)
                 organization_id = int(base.pop("resolved_organization_id", 0) or 0)

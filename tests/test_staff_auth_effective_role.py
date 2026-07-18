@@ -64,6 +64,7 @@ def test_login_payload_uses_staff_role_over_legacy_admin(monkeypatch):
             "email": "mandy@viltrox.com",
             "name": "Mandy",
             "creator_code": "mandy",
+            "status": "approved",
             "role": "admin",
             "points_balance": 0,
             "points_pending": 0,
