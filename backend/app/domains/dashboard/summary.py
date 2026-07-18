@@ -387,10 +387,41 @@ def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: in
     total_engagement = _as_int(_row_value(row, "total_engagement"))
     engagement_rate = (total_engagement / total_views) if total_views > 0 else None
     view_coverage_pct = (view_covered / evidence_total) if evidence_total > 0 else 0.0
+    # 2026-07-18 体检修:total_views 是生涯累计,此前被前端当 30d 口径展示
+    # (2.17B 冒充月增量)。补真 30d 窗口(按视频发布时间 published_at_norm),
+    # 前端 all 口径改吃这里;生涯字段保留兼容旧读方。
+    window_where = (
+        f"{evidence_where} AND " if evidence_where else "WHERE "
+    ) + f"published_at_norm >= NOW() - INTERVAL '{int(window_days)} days'"
+    window_row = get_conn().execute(
+        f"""
+        SELECT
+            COUNT(*) AS evidence_count,
+            COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views,
+            COALESCE(SUM(
+                CASE
+                    WHEN view_count IS NOT NULL THEN COALESCE(like_count, 0) + COALESCE(comment_count, 0)
+                    ELSE 0
+                END
+            ), 0) AS total_engagement
+        FROM vkpi_kol_video_evidence
+        {window_where}
+        """
+    ).fetchone()
+    window_views = _as_int(_row_value(window_row, "total_views"))
+    window_engagement = _as_int(_row_value(window_row, "total_engagement"))
+    window_count = _as_int(_row_value(window_row, "evidence_count"))
     return {
         "active_roster_by_scope": active_roster_by_scope,
         "active_30d_by_scope": _build_evidence_active_30d_summary(window_days=window_days, staff_scope_id=staff_scope_id),
         "total_exposure": total_views,
+        "total_exposure_30d": window_views if window_count > 0 else None,
+        "evidence_30d_count": window_count,
+        "engagement_30d": {
+            "total_engagement": window_engagement,
+            "total_views": window_views,
+            "engagement_rate": (window_engagement / window_views) if window_views > 0 else None,
+        },
         "engagement": {
             "total_engagement": total_engagement,
             "total_views": total_views,
@@ -707,6 +738,14 @@ def build_dashboard_summary(
         "funnel", effective_staff_id,
         lambda: _build_funnel_summary(staff_scope_id=effective_staff_id),
     )
+    # 2026-07-18 体检修:summary.generated_at 此前从不赋值 → 真值卡新鲜度恒
+    # 「时间待接入」。真实时间戳一直存在,取 metric_run 兜底 evidence 刷新时间。
+    if not summary.get("generated_at"):
+        run_generated = (result.get("metric_run") or {}).get("generated_at")
+        evidence_block = summary.get("evidence_metrics") or {}
+        coverage_block = evidence_block.get("coverage") if isinstance(evidence_block, dict) else {}
+        evidence_refreshed = (coverage_block or {}).get("last_refreshed_at")
+        summary["generated_at"] = run_generated or evidence_refreshed
     summary["metric_scope"] = normalized_scope
     summary["scope_label"] = scope_maturity["scope_label"]
     summary["snapshot_days"] = scope_maturity["snapshot_days"]

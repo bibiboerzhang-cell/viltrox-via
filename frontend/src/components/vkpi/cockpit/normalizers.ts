@@ -322,8 +322,12 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
   const rosterAll = int(evidenceRoster.all ?? summary.active_roster) ?? (kolCount != null || officialCount != null ? (kolCount || 0) + (officialCount || 0) : null);
   const rosterKol = int(evidenceRoster.kol) ?? kolCount;
   const rosterCompany = int(evidenceRoster.company) ?? officialCount;
-  const totalExposure = number(evidenceMetrics.total_exposure);
-  const evidenceRate = number(evidenceEngagement.engagement_rate);
+  // 2026-07-18 体检修:total_exposure 是生涯累计(2.17B),卡口径是 30d 增量——
+  // all 口径改吃后端新给的真 30d 窗口字段(按视频发布时间),绝不再拿 lifetime 冒充。
+  const evidenceEngagement30 = record(evidenceMetrics.engagement_30d);
+  const totalExposure = number(evidenceMetrics.total_exposure_30d);
+  const evidence30Count = int(evidenceMetrics.evidence_30d_count);
+  const evidenceRate = number(evidenceEngagement30.engagement_rate);
   const engagementPercent = evidenceRate == null ? null : evidenceRate * 100;
   const viewCovered = int(evidenceCoverage.view_covered);
   const coveragePct = number(evidenceCoverage.view_coverage_pct);
@@ -360,7 +364,7 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
       company: number(evidenceActive30.company ?? evidenceActive30.owned) != null ? metricData(number(evidenceActive30.company ?? evidenceActive30.owned), "#06b6d4", { source: "owned_matrix", sourceLabel: summaryFreshness, trend: evidenceActive30Text }) : windowMetricData(number(active30ByScope.owned ?? active30ByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 active_30d 累计中` }),
     },
     exposure: {
-      all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: evidenceCoverageText, anomaly: exposureAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
+      all: totalExposure != null ? metricData(totalExposure, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · 近30天发布 ${evidence30Count != null ? evidence30Count.toLocaleString() : DASH} 条视频`, anomaly: exposureAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(exposureByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 不使用 lifetime 代替 30d` }),
       // 2026-06-12 波3 R6:KOL 口径不再复用全量 totalExposure(避免「KOL 曝光=全部曝光」假象)
       kol: windowMetricData(number(exposureByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 30d 曝光累计中(不复用全量口径)` }),
       // 官方矩阵 channel-level 30d 真实增量(summary.exposure_30d_by_scope.owned/company,由 _build_company_window_metrics 写入);
@@ -368,7 +372,7 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
       company: number(exposureByScope.owned ?? exposureByScope.company) != null ? metricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", { source: "owned_matrix", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · 官方矩阵 30d` }) : windowMetricData(number(exposureByScope.owned ?? exposureByScope.company), "#06b6d4", dashboard, "company", { waiting: `${maturityLabel(dashboard, "company")} · 官方 30d 曝光累计中` }),
     },
     engagement: {
-      all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: evidenceVideoText, anomaly: engagementAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
+      all: engagementPercent != null ? metricData(engagementPercent, "#a855f7", { source: "evidence_metrics", sourceLabel: summaryFreshness, trend: `${summaryFreshness} · 近30天窗口互动率`, anomaly: engagementAnomaly ? SINGLE_SOURCE_WARNING : null }) : windowMetricData(number(engagementByScope.all), "#a855f7", dashboard, "all", { waiting: `${maturityLabel(dashboard, "all")} · 互动率累计中` }),
       // 2026-06-12 波3 R6:KOL 口径不再复用全量 engagementPercent
       kol: windowMetricData(number(engagementByScope.kol), "#ec4899", dashboard, "kol", { waiting: `${maturityLabel(dashboard, "kol")} · KOL 互动率累计中(不复用全量口径)` }),
       // 官方矩阵最新快照真实互动率(summary.engagement_rate_by_scope.owned/company,百分数,由 _build_company_window_metrics 写入)。
@@ -652,7 +656,10 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
     generationStatus: String(attempt.generation_status || ""),
     providersAttempted: list(attempt.providers_attempted).map((value) => String(value)),
   } : null;
-  if (hot.available && hotContent.headline) {
+  // 2026-07-18 体检修:keep_last 只允许「昨天的快照带过期徽章」,不允许无限老化——
+  // 超 48h 按不可用走诚实空态,防止调度断档时旗舰卡长期展示僵尸内容。
+  const hotAgeHours = Number(hotContent.age_hours ?? hot.age_hours ?? 0) || 0;
+  if (hot.available && hotContent.headline && hotAgeHours <= 48) {
     const freshnessStatus = String(hotContent.freshness_status || hot.freshness_status || "unknown");
     const freshnessLabel = String(hotContent.freshness_label || hot.freshness_label || "");
     const isStale = freshnessStatus === "stale";
@@ -754,7 +761,10 @@ export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: Ra
   const radarFreshness = String(radarContent.freshness_status || radar.freshness_status || "unknown");
   const radarFreshnessLabel = String(radarContent.freshness_label || radar.freshness_label || "");
   const radarGlobalSources = list(radarContent.sources);
-  const radarItems = (radar.available && Array.isArray(record(radar.content).items))
+  // 2026-07-18 体检修:雷达停更时快照无限老化,此前 18 天前的旧闻仍置顶信号卡。
+  // 超 72h 的雷达项整组隐藏(只留 market-intelligence 信号),72h 内 stale 保留角标展示。
+  const radarAgeHours = Number(radarContent.age_hours ?? radar.age_hours ?? 0) || 0;
+  const radarItems = (radar.available && radarAgeHours <= 72 && Array.isArray(record(radar.content).items))
     ? list(radarContent.items).slice(0, 5).map((it, i) => {
         const d = record(it);
         const isThreat = String(d.impact || "").includes("威胁");

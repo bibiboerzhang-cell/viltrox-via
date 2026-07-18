@@ -192,6 +192,7 @@ export function EventRadarModule({
           time_window: timeWindow as "upcoming" | "30d" | "90d" | "past" | "date_pending",
           country: normalizedCountry || undefined,
           region: stateCode || undefined,
+          city: cityFilter || undefined,
           start_from: startFrom || undefined,
           start_to: startTo || undefined,
         }),
@@ -237,7 +238,7 @@ export function EventRadarModule({
     } finally {
       setLoading(false);
     }
-  }, [apiToken, country, decision, evidenceStatus, lane, limit, offset, sourceKind, stateCode, startFrom, startTo, timeWindow]);
+  }, [apiToken, cityFilter, country, decision, evidenceStatus, lane, limit, offset, sourceKind, stateCode, startFrom, startTo, timeWindow]);
 
   React.useEffect(() => {
     void load();

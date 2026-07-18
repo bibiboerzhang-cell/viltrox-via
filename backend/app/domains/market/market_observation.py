@@ -146,6 +146,17 @@ def _observe_from_competitor_radar() -> list[dict[str, Any]]:
         return []
     if not isinstance(radar, dict) or not radar.get("available"):
         return []
+    # 2026-07-18 体检修:雷达生成停更时快照无限老化,此前每天照发「今日竞品
+    # 观察」,把 18 天前的旧闻当新信号灌进 market_observations。未过就绪门或
+    # 快照超 72h 一律不发——宁缺勿假。
+    if not radar.get("is_ready"):
+        return []
+    try:
+        age_hours = float(radar.get("age_hours") or 0.0)
+    except (TypeError, ValueError):
+        age_hours = 0.0
+    if age_hours > 72:
+        return []
     content = radar.get("content") or {}
     items = content.get("items") if isinstance(content, dict) else None
     if not isinstance(items, list):
