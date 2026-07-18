@@ -157,7 +157,7 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
     _TIER_RANK = {"national_chain": 4, "regional_chain": 3, "local_store": 2, "online_focus": 1, "unknown": 0}
     merged: list[dict[str, Any]] = []
     for key, members in groups.items():
-        members.sort(key=lambda m: (-(m["prominence_score"] or -1), str(m["name"])))
+        members.sort(key=lambda m: (m["prominence_score"] is None, -(m["prominence_score"] if m["prominence_score"] is not None else 0), str(m["name"])))
         top = members[0]
         confirmed_members = [m for m in members if m["carries_viltrox"] == "confirmed"]
         best_tier = max(members, key=lambda m: _TIER_RANK.get(m["scale_tier"], 0))["scale_tier"]
@@ -185,7 +185,7 @@ def dealer_rankings(*, limit: int = 200) -> dict[str, Any]:
                 for m in members
             ]
         merged.append(entry)
-    merged.sort(key=lambda e: (-(e["prominence_score"] or -1), str(e["name"])))
+    merged.sort(key=lambda e: (e["prominence_score"] is None, -(e["prominence_score"] if e["prominence_score"] is not None else 0), str(e["name"])))
     rankings: list[dict[str, Any]] = []
     viltrox_confirmed = 0
     rank = 0
