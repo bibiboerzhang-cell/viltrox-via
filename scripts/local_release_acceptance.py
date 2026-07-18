@@ -714,6 +714,12 @@ def concise_summary(report: Mapping[str, Any]) -> str:
             f"p95={overall.get('latency_p95_ms', 0)}ms")
     failed = overall.get("failed_endpoint_ids", [])
     if failed: text += "; failed=" + ",".join(str(item) for item in failed[:8]) + (f",+{len(failed)-8}" if len(failed) > 8 else "")
+    # p95 预算闸(2026-07-18,先警告不硬拦):基线实测 暖 251-258ms / 冷 ~1237ms /
+    # freeze 带载 1141-1262ms。默认阈值 1500ms 高于带载最差,只抓真回归。
+    warn_ms = float(os.getenv("VKPI_P95_WARN_MS", "1500") or 1500)
+    p95_val = float(overall.get("latency_p95_ms", 0) or 0)
+    if p95_val > warn_ms:
+        text += f"; WARNING p95 {p95_val:.0f}ms exceeds budget {warn_ms:.0f}ms (baseline warm 255ms)"
     return text
 
 
