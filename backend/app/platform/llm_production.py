@@ -693,9 +693,8 @@ def generate_google_content(
         raise
 
     usage_metadata = _google_usage_metadata(response)
-    # 2026-07-18 $150 对账修:接地检索灌入的 toolUsePromptTokenCount 此前从未
-    # 计入 input——搜索接地调用的真实计费 input 是 prompt 的数倍到数十倍,
-    # 台账因此只记到 Google 实扣的零头(48h 台账 $27 vs 实扣 $150)。
+    # 2026-07-18 $150 对账修:接地检索灌入的 toolUsePromptTokenCount 此前
+    # 从未计入 input(真实计费 input 是 prompt 的数倍;台账 $27 vs 实扣 $150)。
     input_tokens = _usage_int(
         usage_metadata, "prompt_token_count", "promptTokenCount"
     ) + _usage_int(
