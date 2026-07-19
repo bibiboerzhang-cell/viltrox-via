@@ -1,0 +1,575 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "7475 Clairemont Mesa Blvd",
+   "brand_listing_url": "https://georgescamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "San Diego",
+   "coordinates": {
+    "lat": 32.832630616853,
+    "lng": -117.158060040068,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://georgescamera.com/contact-us",
+   "name": "George's Camera - Clairemont Mesa Blvd · San Diego",
+   "observed_at": "2026-07-19T04:50:14Z",
+   "organization_key_material": "GEORGES CAMERA EXCHANGE",
+   "phone": "(858) 633-1510",
+   "postal_code": "92111",
+   "retailer_host": "georgescamera.com",
+   "source_id": "georgescamera_store_page",
+   "state": "CA",
+   "website_url": "https://georgescamera.com"
+  },
+  {
+   "address": "2117 Chestnut St.",
+   "brand_listing_url": "https://www.firesidecamera.com/about",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "San Francisco",
+   "coordinates": {
+    "lat": 37.80051052563,
+    "lng": -122.438190632054,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.firesidecamera.com/about",
+   "name": "Fireside Camera · San Francisco",
+   "observed_at": "2026-07-19T04:49:07Z",
+   "organization_key_material": "FIRESIDE CAMERA INC",
+   "phone": "415.567.8131",
+   "postal_code": "94123",
+   "retailer_host": "firesidecamera.com",
+   "source_id": "firesidecamera_store_page",
+   "state": "CA",
+   "website_url": "https://www.firesidecamera.com"
+  },
+  {
+   "address": "1027 Marsh Street Suite B",
+   "brand_listing_url": "https://photoshopslo.com/location",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "San Luis Obispo",
+   "coordinates": {
+    "lat": 35.280477654221,
+    "lng": -120.659752266518,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://photoshopslo.com/location",
+   "name": "The Photo Shop · San Luis Obispo",
+   "observed_at": "2026-07-19T05:03:58Z",
+   "organization_key_material": "THE PHOTO SHOP",
+   "phone": "(805) 543-4025",
+   "postal_code": "93401",
+   "retailer_host": "photoshopslo.com",
+   "source_id": "photoshopslo_store_page",
+   "state": "CA",
+   "website_url": "https://photoshopslo.com"
+  },
+  {
+   "address": "211 E. Weddell Dr.",
+   "brand_listing_url": "https://www.vmivideo.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Sunnyvale",
+   "coordinates": {
+    "lat": 37.397883355365,
+    "lng": -122.021252351444,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.vmivideo.com/contact",
+   "name": "VMI Video - San Francisco Bay (Headquarters) · Sunnyvale",
+   "observed_at": "2026-07-19T05:06:00Z",
+   "organization_key_material": "VMI INC",
+   "phone": "408-745-1700",
+   "postal_code": "94089",
+   "retailer_host": "vmivideo.com",
+   "source_id": "vmivideo_store_page",
+   "state": "CA",
+   "website_url": "https://www.vmivideo.com"
+  },
+  {
+   "address": "23845 Hawthorne Blvd",
+   "brand_listing_url": "https://www.paulsphoto.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Torrance",
+   "coordinates": {
+    "lat": 33.807891971151,
+    "lng": -118.351276917544,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.paulsphoto.com/contact",
+   "name": "Paul's Photo · Torrance",
+   "observed_at": "2026-07-19T04:57:34Z",
+   "organization_key_material": "PAUL'S PHOTOP INC",
+   "phone": "(310) 375-7014",
+   "postal_code": "90505",
+   "retailer_host": "paulsphoto.com",
+   "source_id": "paulsphoto_store_page",
+   "state": "CA",
+   "website_url": "https://www.paulsphoto.com"
+  },
+  {
+   "address": "5348 Topanga Canyon Blvd. #101",
+   "brand_listing_url": "https://telescopes.net/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Woodland Hills",
+   "coordinates": {
+    "lat": 34.167314464794,
+    "lng": -118.605687985059,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://telescopes.net/contact",
+   "name": "Woodland Hills Camera & Telescopes · Woodland Hills",
+   "observed_at": "2026-07-17T23:21:17Z",
+   "organization_key_material": "WOODLAND HILLS CAMERA",
+   "phone": "818-347-2270",
+   "postal_code": "91364",
+   "retailer_host": "telescopes.net",
+   "source_id": "telescopes_store_page",
+   "state": "CA",
+   "website_url": "https://telescopes.net"
+  },
+  {
+   "address": "5030 N. Academy Blvd.",
+   "brand_listing_url": "https://www.cameraworksco.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Colorado Springs",
+   "coordinates": {
+    "lat": 38.903632278642,
+    "lng": -104.773808097129,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameraworksco.com/contact",
+   "name": "Cameraworks · Colorado Springs",
+   "observed_at": "2026-07-17T19:43:56Z",
+   "organization_key_material": "CAMERAWORKS",
+   "phone": "(719) 594-6966",
+   "postal_code": "80918",
+   "retailer_host": "cameraworksco.com",
+   "source_id": "cameraworksco_store_page",
+   "state": "CO",
+   "website_url": "https://www.cameraworksco.com/"
+  },
+  {
+   "address": "8136 S. Grant Way",
+   "brand_listing_url": "https://cinemashot.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Littleton",
+   "coordinates": {
+    "lat": 39.568715483568,
+    "lng": -104.985039930093,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://cinemashot.com/contact/",
+   "name": "Cinema Shot · Littleton",
+   "observed_at": "2026-07-17T19:46:38Z",
+   "organization_key_material": "CINEMA SHOT",
+   "phone": "303-997-4420",
+   "postal_code": "80122",
+   "retailer_host": "cinemashot.com",
+   "source_id": "cinemashot_store_page",
+   "state": "CO",
+   "website_url": "https://cinemashot.com"
+  },
+  {
+   "address": "5855 S. Broadway",
+   "brand_listing_url": "https://www.englewoodcamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Littleton",
+   "coordinates": {
+    "lat": 39.610519081152,
+    "lng": -104.988145179289,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.englewoodcamera.com/contact-us",
+   "name": "Englewood Camera · Littleton",
+   "observed_at": "2026-07-17T22:07:48Z",
+   "organization_key_material": "ENGLEWOOD PHOTOGRAPHIC SERVICES",
+   "phone": "(303) 797-0700",
+   "postal_code": "80121",
+   "retailer_host": "englewoodcamera.com",
+   "source_id": "englewoodcamera_store_page",
+   "state": "CO",
+   "website_url": "https://www.englewoodcamera.com"
+  },
+  {
+   "address": "22 River Street",
+   "brand_listing_url": "https://www.milfordphoto.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Milford",
+   "coordinates": {
+    "lat": 41.222781995107,
+    "lng": -73.056999198056,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.milfordphoto.com/contact/",
+   "name": "Milford Photo · Milford",
+   "observed_at": "2026-07-19T04:55:44Z",
+   "organization_key_material": "MILFORD PHOTO INC",
+   "phone": "(203) 882-3415",
+   "postal_code": "06460",
+   "retailer_host": "milfordphoto.com",
+   "source_id": "milfordphoto_store_page",
+   "state": "CT",
+   "website_url": "https://www.milfordphoto.com/"
+  },
+  {
+   "address": "2701 Summer Street",
+   "brand_listing_url": "https://camerawholesalers.com/pages/visit-our-store",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Stamford",
+   "coordinates": {
+    "lat": 41.069452220865,
+    "lng": -73.549073006583,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://camerawholesalers.com/pages/visit-our-store",
+   "name": "Camera Wholesalers · Stamford",
+   "observed_at": "2026-07-17T21:02:51Z",
+   "organization_key_material": "CAMERA WHOLESALERS INC",
+   "phone": "203-357-0467",
+   "postal_code": "06905",
+   "retailer_host": "camerawholesalers.com",
+   "source_id": "camerawholesalers_store_page",
+   "state": "CT",
+   "website_url": "https://camerawholesalers.com"
+  },
+  {
+   "address": "1225 I Street NW, Suite 110",
+   "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Washington",
+   "coordinates": {
+    "lat": 38.901380543229,
+    "lng": -77.028492886011,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+   "name": "District Camera and Imaging - Washington, DC · Washington",
+   "observed_at": "2026-07-17T21:12:26Z",
+   "organization_key_material": "DISTRICT CAMERA AND IMAGING",
+   "phone": "202-483-0090",
+   "postal_code": "20005",
+   "retailer_host": "districtcamera.com",
+   "source_id": "districtcamera_store_page",
+   "state": "DC",
+   "website_url": "https://www.districtcamera.com"
+  },
+  {
+   "address": "2000 Pennsylvania Avenue NW",
+   "brand_listing_url": "https://www.prophotodc.com/about-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Washington",
+   "coordinates": {
+    "lat": 38.900676447516,
+    "lng": -77.044997337638,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.prophotodc.com/about-us",
+   "name": "PRO PHOTO · Washington",
+   "observed_at": "2026-07-19T04:59:01Z",
+   "organization_key_material": "PRO PHOTO",
+   "phone": "202-223-1292",
+   "postal_code": "20006",
+   "retailer_host": "prophotodc.com",
+   "source_id": "prophotodc_store_page",
+   "state": "DC",
+   "website_url": "https://www.prophotodc.com/"
+  },
+  {
+   "address": "1110 Douglas Avenue #1001",
+   "brand_listing_url": "https://encorebroadcast.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Altamonte Springs",
+   "coordinates": {
+    "lat": 28.686859515851,
+    "lng": -81.390589271958,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://encorebroadcast.com/contact-us/",
+   "name": "Encore Broadcast Solutions - Orlando (Altamonte Springs) · Altamonte Springs",
+   "observed_at": "2026-07-19T04:48:57Z",
+   "organization_key_material": "ENCORE BROADCAST EQUIPMENT SALES INC",
+   "phone": "321-262-6514",
+   "postal_code": "32714",
+   "retailer_host": "encorebroadcast.com",
+   "source_id": "encorebroadcast_store_page",
+   "state": "FL",
+   "website_url": "https://encorebroadcast.com/"
+  },
+  {
+   "address": "202 East Lake Avenue",
+   "brand_listing_url": "https://marshallscamera.com/about-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Auburndale",
+   "coordinates": {
+    "lat": 28.065117104943,
+    "lng": -81.787452469048,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://marshallscamera.com/about-us",
+   "name": "Marshall's Camera · Auburndale",
+   "observed_at": "2026-07-19T04:54:20Z",
+   "organization_key_material": "MARSHALL'S CAMERA",
+   "phone": "863/967-3942",
+   "postal_code": "33823",
+   "retailer_host": "marshallscamera.com",
+   "source_id": "marshallscamera_store_page",
+   "state": "FL",
+   "website_url": "https://marshallscamera.com"
+  },
+  {
+   "address": "4760 Woolbright Road, Suite 105",
+   "brand_listing_url": "https://reefphoto.com/pages/visit-the-store",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Boynton Beach",
+   "coordinates": {
+    "lat": 26.51183506561,
+    "lng": -80.120510019741,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://reefphoto.com/pages/visit-the-store",
+   "name": "Reef Photo & Video · Boynton Beach",
+   "observed_at": "2026-07-17T22:55:33Z",
+   "organization_key_material": "REEF PHOTO & VIDEO, INC",
+   "phone": "954-537-0644",
+   "postal_code": "33436",
+   "retailer_host": "reefphoto.com",
+   "source_id": "reefphoto_store_page",
+   "state": "FL",
+   "website_url": "https://reefphoto.com"
+  },
+  {
+   "address": "6709 State Road 70 E.",
+   "brand_listing_url": "https://www.gulfcoastcamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Bradenton",
+   "coordinates": {
+    "lat": 27.446023155217,
+    "lng": -82.474425739641,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.gulfcoastcamera.com/contact-us",
+   "name": "Bradenton / Sarasota · Bradenton",
+   "observed_at": "2026-07-19T04:50:45Z",
+   "organization_key_material": "GULF COAST CAMERA LLC",
+   "phone": "(941) 896-9921",
+   "postal_code": "34203",
+   "retailer_host": "gulfcoastcamera.com",
+   "source_id": "gulfcoastcamera_store_page",
+   "state": "FL",
+   "website_url": "https://www.gulfcoastcamera.com"
+  },
+  {
+   "address": "6709 State Road 70 East",
+   "brand_listing_url": "https://jpiphoto.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Bradenton",
+   "coordinates": {
+    "lat": 27.446023155217,
+    "lng": -82.474425739641,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://jpiphoto.com/",
+   "name": "Johnson Photo Imaging · Bradenton",
+   "observed_at": "2026-07-17T22:21:09Z",
+   "organization_key_material": "JOHNSON PHOTO IMAGING",
+   "phone": "(941) 896-9921",
+   "postal_code": "34203",
+   "retailer_host": "jpiphoto.com",
+   "source_id": "jpiphoto_store_page",
+   "state": "FL",
+   "website_url": "https://jpiphoto.com/"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

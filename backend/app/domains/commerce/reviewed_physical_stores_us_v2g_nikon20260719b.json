@@ -1,0 +1,606 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "nikon_usa_pdf_20260716",
+ "stores": [
+  {
+   "address": "11929 SW Canyon Road",
+   "brand_listing_url": "https://www.theshutterbug.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Beaverton",
+   "coordinates": {
+    "lat": 45.489184269763,
+    "lng": -122.799677474911,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.theshutterbug.com/contact",
+   "name": "The Shutterbug Beaverton · Beaverton",
+   "observed_at": "2026-07-17T00:02:09Z",
+   "organization_key_material": "The Shutterbug Inc",
+   "phone": "(503) 639-5088",
+   "postal_code": "97005",
+   "retailer_host": "theshutterbug.com",
+   "source_id": "theshutterbug_store_page",
+   "state": "OR",
+   "website_url": "https://www.theshutterbug.com"
+  },
+  {
+   "address": "161 W. Ellendale",
+   "brand_listing_url": "https://www.focalpointphoto.com/about-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Dallas",
+   "coordinates": {
+    "lat": 44.929065902088,
+    "lng": -123.314318527781,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.focalpointphoto.com/about-us",
+   "name": "Focal Point Photography · Dallas",
+   "observed_at": "2026-07-16T23:53:13Z",
+   "organization_key_material": "Focal Point Photography",
+   "phone": "503-623-6300",
+   "postal_code": "97338",
+   "retailer_host": "focalpointphoto.com",
+   "source_id": "focalpointphoto_store_page",
+   "state": "OR",
+   "website_url": "https://www.focalpointphoto.com"
+  },
+  {
+   "address": "6401 SW Macadam Ave",
+   "brand_listing_url": "https://www.camerasolutionsinc.com/store-location",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.477898489143,
+    "lng": -122.67238826332,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.camerasolutionsinc.com/store-location",
+   "name": "Camera Solutions Inc. · Portland",
+   "observed_at": "2026-07-16T23:51:21Z",
+   "organization_key_material": "Camera Solutions Inc.",
+   "phone": "503-452-3907",
+   "postal_code": "97239",
+   "retailer_host": "camerasolutionsinc.com",
+   "source_id": "camerasolutionsinc_store_page",
+   "state": "OR",
+   "website_url": "https://www.camerasolutionsinc.com"
+  },
+  {
+   "address": "1112 NW 19th Ave",
+   "brand_listing_url": "https://prophotosupply.com/pages/location-hours",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.530784120456,
+    "lng": -122.69044586827,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://prophotosupply.com/pages/location-hours",
+   "name": "Pro Photo Supply Main Store · Portland",
+   "observed_at": "2026-07-16T23:59:15Z",
+   "organization_key_material": "Pro Photo Supply Inc",
+   "phone": "503-241-1112",
+   "postal_code": "97209",
+   "retailer_host": "prophotosupply.com",
+   "source_id": "prophotosupply_store_page",
+   "state": "OR",
+   "website_url": "https://prophotosupply.com/"
+  },
+  {
+   "address": "1815 NW Northrup St",
+   "brand_listing_url": "https://prophotosupply.com/pages/location-hours",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.531435203341,
+    "lng": -122.689738634419,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://prophotosupply.com/pages/location-hours",
+   "name": "Pro Photo Supply Photo Lab · Portland",
+   "observed_at": "2026-07-16T23:59:15Z",
+   "organization_key_material": "Pro Photo Supply Inc",
+   "phone": "503-241-1112",
+   "postal_code": "97209",
+   "retailer_host": "prophotosupply.com",
+   "source_id": "prophotosupply_store_page",
+   "state": "OR",
+   "website_url": "https://prophotosupply.com/"
+  },
+  {
+   "address": "714 SW Washington ST",
+   "brand_listing_url": "https://www.theshutterbug.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.520672309412,
+    "lng": -122.679112090023,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.theshutterbug.com/contact",
+   "name": "The Shutterbug Portland · Portland",
+   "observed_at": "2026-07-17T00:02:09Z",
+   "organization_key_material": "The Shutterbug Inc",
+   "phone": "(503) 227-3456",
+   "postal_code": "97205",
+   "retailer_host": "theshutterbug.com",
+   "source_id": "theshutterbug_store_page",
+   "state": "OR",
+   "website_url": "https://www.theshutterbug.com"
+  },
+  {
+   "address": "3932 Commercial St SE",
+   "brand_listing_url": "https://www.theshutterbug.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Salem",
+   "coordinates": {
+    "lat": 44.899637126807,
+    "lng": -123.038780782209,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.theshutterbug.com/contact",
+   "name": "The Shutterbug Salem · Salem",
+   "observed_at": "2026-07-17T00:02:09Z",
+   "organization_key_material": "The Shutterbug Inc",
+   "phone": "503-364-8044",
+   "postal_code": "97302",
+   "retailer_host": "theshutterbug.com",
+   "source_id": "theshutterbug_store_page",
+   "state": "OR",
+   "website_url": "https://www.theshutterbug.com"
+  },
+  {
+   "address": "1439 W. Fairmont St.",
+   "brand_listing_url": "https://danscamera.com/about-us/hours-location-directions",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Allentown",
+   "coordinates": {
+    "lat": 40.617437778769,
+    "lng": -75.495628040459,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://danscamera.com/about-us/hours-location-directions",
+   "name": "Dan's Camera City - Allentown Store · Allentown",
+   "observed_at": "2026-07-16T23:52:29Z",
+   "organization_key_material": "Dan's Camera City Inc",
+   "phone": "(610) 434-2313",
+   "postal_code": "18102",
+   "retailer_host": "danscamera.com",
+   "source_id": "danscamera_store_page",
+   "state": "PA",
+   "website_url": "https://danscamera.com"
+  },
+  {
+   "address": "3415 Pleasant Valley Blvd",
+   "brand_listing_url": "https://thefilmcenter.net",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Altoona",
+   "coordinates": {
+    "lat": 40.482485034208,
+    "lng": -78.401436970521,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://thefilmcenter.net",
+   "name": "The Film Center · Altoona",
+   "observed_at": "2026-07-17T00:01:53Z",
+   "organization_key_material": "The Film Center",
+   "phone": "814-946-3648",
+   "postal_code": "16602",
+   "retailer_host": "thefilmcenter.net",
+   "source_id": "thefilmcenter_store_page",
+   "state": "PA",
+   "website_url": "https://thefilmcenter.net"
+  },
+  {
+   "address": "1019 Wayne Avenue",
+   "brand_listing_url": "https://www.lacameras.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Chambersburg",
+   "coordinates": {
+    "lat": 39.911524488879,
+    "lng": -77.650901739238,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.lacameras.com",
+   "name": "L.A. Cameras · Chambersburg",
+   "observed_at": "2026-07-16T23:56:16Z",
+   "organization_key_material": "L A Cameras",
+   "phone": "717-263-0043",
+   "postal_code": "17201",
+   "retailer_host": "lacameras.com",
+   "source_id": "lacameras_store_page",
+   "state": "PA",
+   "website_url": "https://www.lacameras.com"
+  },
+  {
+   "address": "2755 Philmont Ave",
+   "brand_listing_url": "https://www.cameraspot.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Huntingdon Valley",
+   "coordinates": {
+    "lat": 40.12247779881,
+    "lng": -75.048121916459,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameraspot.com/contact-us",
+   "name": "Jack's Cameras - Headquarters · Huntingdon Valley",
+   "observed_at": "2026-07-16T23:55:38Z",
+   "organization_key_material": "Jack's Cameras Inc",
+   "phone": "215.969.5101",
+   "postal_code": "19006",
+   "retailer_host": "cameraspot.com",
+   "source_id": "cameraspot_store_page",
+   "state": "PA",
+   "website_url": "https://www.cameraspot.com"
+  },
+  {
+   "address": "810 West Second Street",
+   "brand_listing_url": "https://cardinalcamera.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lansdale",
+   "coordinates": {
+    "lat": 40.247801805883,
+    "lng": -75.291959859844,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://cardinalcamera.com",
+   "name": "Cardinal Camera - Lansdale · Lansdale",
+   "observed_at": "2026-07-16T23:51:59Z",
+   "organization_key_material": "CARDINAL CAMERA & VIDEO CENTER",
+   "phone": "(215) 855-4818",
+   "postal_code": "19446",
+   "retailer_host": "cardinalcamera.com",
+   "source_id": "cardinalcamera_store_page",
+   "state": "PA",
+   "website_url": "https://cardinalcamera.com"
+  },
+  {
+   "address": "4401 New Falls Road",
+   "brand_listing_url": "https://allenscamera.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Levittown",
+   "coordinates": {
+    "lat": 40.135396966081,
+    "lng": -74.883149497909,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://allenscamera.com/contact/",
+   "name": "Allen's Camera · Levittown",
+   "observed_at": "2026-07-16T23:48:38Z",
+   "organization_key_material": "Allen's Camera",
+   "phone": "215-547-2841",
+   "postal_code": "19056",
+   "retailer_host": "allenscamera.com",
+   "source_id": "allenscamera_store_page",
+   "state": "PA",
+   "website_url": "https://allenscamera.com"
+  },
+  {
+   "address": "19051 Park Ave. Plaza",
+   "brand_listing_url": "https://vantuil.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Meadville",
+   "coordinates": {
+    "lat": 41.623347258594,
+    "lng": -80.160409184148,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://vantuil.com/contact-us",
+   "name": "Van Tuil Meadville · Meadville",
+   "observed_at": "2026-07-17T00:02:34Z",
+   "organization_key_material": "Van Tuil Discount Photo",
+   "phone": "(814) 336-5315",
+   "postal_code": "16335",
+   "retailer_host": "vantuil.com",
+   "source_id": "vantuil_store_page",
+   "state": "PA",
+   "website_url": "https://vantuil.com/"
+  },
+  {
+   "address": "28 South 2nd Street",
+   "brand_listing_url": "https://www.uniquephoto.com/philadelphia",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Philadelphia",
+   "coordinates": {
+    "lat": 39.949258156729,
+    "lng": -75.143966144167,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.uniquephoto.com/philadelphia",
+   "name": "Unique Photo Philadelphia Store · Philadelphia",
+   "observed_at": "2026-07-17T00:02:25Z",
+   "organization_key_material": "Unique Photo, Inc",
+   "phone": "(215) 608-2222",
+   "postal_code": "19106",
+   "retailer_host": "uniquephoto.com",
+   "source_id": "uniquephoto_store_page",
+   "state": "PA",
+   "website_url": "https://www.uniquephoto.com"
+  },
+  {
+   "address": "241 N. 12th St",
+   "brand_listing_url": "https://webbcam.net/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Philadelphia",
+   "coordinates": {
+    "lat": 39.956808810961,
+    "lng": -75.158735342166,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://webbcam.net/contact",
+   "name": "Webbcam LLC Photo · Philadelphia",
+   "observed_at": "2026-07-17T00:02:53Z",
+   "organization_key_material": "Webbcam LLC",
+   "phone": "215-923-8380",
+   "postal_code": "19107",
+   "retailer_host": "webbcam.net",
+   "source_id": "webbcam_store_page",
+   "state": "PA",
+   "website_url": "https://webbcam.net/"
+  },
+  {
+   "address": "523 East Ohio Street",
+   "brand_listing_url": "https://www.berniesphoto.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Pittsburgh",
+   "coordinates": {
+    "lat": 40.453569626026,
+    "lng": -79.999808109304,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.berniesphoto.com",
+   "name": "Bernie's Photo Center · Pittsburgh",
+   "observed_at": "2026-07-16T23:49:51Z",
+   "organization_key_material": "Bernies Photo Center Inc",
+   "phone": "412-231-1717",
+   "postal_code": "15212",
+   "retailer_host": "berniesphoto.com",
+   "source_id": "berniesphoto_store_page",
+   "state": "PA",
+   "website_url": "https://www.berniesphoto.com"
+  },
+  {
+   "address": "1139 Street Road",
+   "brand_listing_url": "https://nycv.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Southampton",
+   "coordinates": {
+    "lat": 40.169072199395,
+    "lng": -75.033864034247,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://nycv.com",
+   "name": "New York Camera & Video · Southampton",
+   "observed_at": "2026-07-16T23:57:43Z",
+   "organization_key_material": "New York Camera & Video Inc",
+   "phone": "(215) 357-6222",
+   "postal_code": "18966",
+   "retailer_host": "nycv.com",
+   "source_id": "nycv_store_page",
+   "state": "PA",
+   "website_url": "https://nycv.com"
+  },
+  {
+   "address": "724 Main Street",
+   "brand_listing_url": "https://www.stroudsburgfoto.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "nikon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Stroudsburg",
+   "coordinates": {
+    "lat": 40.985284322951,
+    "lng": -75.194664023488,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.stroudsburgfoto.com/",
+   "name": "Stroudsburg Foto Shop Inc · Stroudsburg",
+   "observed_at": "2026-07-19T05:10:22Z",
+   "organization_key_material": "Stroudsburg Foto Shop Inc",
+   "phone": "(570) 421-2830",
+   "postal_code": "18360",
+   "retailer_host": "stroudsburgfoto.com",
+   "source_id": "stroudsburgfoto_store_page",
+   "state": "PA",
+   "website_url": "https://www.stroudsburgfoto.com/"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

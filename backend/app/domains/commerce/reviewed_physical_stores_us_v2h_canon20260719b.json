@@ -1,0 +1,513 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "120 W. South Boundary Street",
+   "brand_listing_url": "https://kohnes.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Perrysburg",
+   "coordinates": {
+    "lat": 41.545436129784,
+    "lng": -83.620703188083,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://kohnes.com/",
+   "name": "Kohne Camera & Photo + The Print Refinery · Perrysburg",
+   "observed_at": "2026-07-17T21:02:21Z",
+   "organization_key_material": "CAMERA & THE PRINT REFINERY & PRESSED ART BY POLY",
+   "phone": "419-385-9500",
+   "postal_code": "43551",
+   "retailer_host": "kohnes.com",
+   "source_id": "kohnes_store_page",
+   "state": "OH",
+   "website_url": "https://kohnes.com/"
+  },
+  {
+   "address": "3400 S. Kelly Ave.",
+   "brand_listing_url": "https://www.petra.com/b2b",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Edmond",
+   "coordinates": {
+    "lat": 35.622957717611,
+    "lng": -97.495974355143,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.petra.com/b2b",
+   "name": "The Petra B2B Store · Edmond",
+   "observed_at": "2026-07-17T23:26:03Z",
+   "organization_key_material": "PETRA INDUSTRIES LLC",
+   "phone": "405-216-2166",
+   "postal_code": "73013",
+   "retailer_host": "petra.com",
+   "source_id": "petra_store_page",
+   "state": "OK",
+   "website_url": "https://www.petra.com"
+  },
+  {
+   "address": "9010 N 121st East Ave",
+   "brand_listing_url": "https://www.target.com/store-locator/find-stores/Owasso/9010-N-121st-East-Ave",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Owasso",
+   "coordinates": {
+    "lat": 36.284591942127,
+    "lng": -95.840652523574,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.target.com/store-locator/find-stores/Owasso/9010-N-121st-East-Ave",
+   "name": "Owasso · Owasso",
+   "observed_at": "2026-07-19T05:02:56Z",
+   "organization_key_material": "TARGET",
+   "phone": "918-401-8000",
+   "postal_code": "74055-5358",
+   "retailer_host": "target.com",
+   "source_id": "target_store_page",
+   "state": "OK",
+   "website_url": "https://www.target.com"
+  },
+  {
+   "address": "161 W Ellendale",
+   "brand_listing_url": "https://focalpointphoto.com/about-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Dallas",
+   "coordinates": {
+    "lat": 44.929065902088,
+    "lng": -123.314318527781,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://focalpointphoto.com/about-us",
+   "name": "Focal Point Photography · Dallas",
+   "observed_at": "2026-07-19T04:49:15Z",
+   "organization_key_material": "FOCAL POINT ENTERPRISES",
+   "phone": "(503) 623-6300",
+   "postal_code": "97338",
+   "retailer_host": "focalpointphoto.com",
+   "source_id": "focalpointphoto_store_page",
+   "state": "OR",
+   "website_url": "https://focalpointphoto.com"
+  },
+  {
+   "address": "207 Coburg Road",
+   "brand_listing_url": "https://www.theshutterbug.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Eugene",
+   "coordinates": {
+    "lat": 44.063925897742,
+    "lng": -123.077345543615,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.theshutterbug.com/contact-us",
+   "name": "The Shutterbug Coburg Road · Eugene",
+   "observed_at": "2026-07-19T05:04:18Z",
+   "organization_key_material": "THE SHUTTERBUG INC",
+   "phone": "(541) 484-1554",
+   "postal_code": "97401",
+   "retailer_host": "theshutterbug.com",
+   "source_id": "theshutterbug_store_page",
+   "state": "OR",
+   "website_url": "https://www.theshutterbug.com"
+  },
+  {
+   "address": "6401 SW Macadam Ave",
+   "brand_listing_url": "https://www.camerasolutionsinc.com/visit-our-store",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.477898489143,
+    "lng": -122.67238826332,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.camerasolutionsinc.com/visit-our-store",
+   "name": "Camera Solutions · Portland",
+   "observed_at": "2026-07-17T19:40:17Z",
+   "organization_key_material": "CAMERA SOLUTIONS INC",
+   "phone": "(503) 452-3907",
+   "postal_code": "97239",
+   "retailer_host": "camerasolutionsinc.com",
+   "source_id": "camerasolutionsinc_store_page",
+   "state": "OR",
+   "website_url": "https://www.camerasolutionsinc.com"
+  },
+  {
+   "address": "1815 NW Northrup St.",
+   "brand_listing_url": "https://www.prophotosupply.com/pages/location-hours",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.531435203341,
+    "lng": -122.689738634419,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.prophotosupply.com/pages/location-hours",
+   "name": "Photo Lab · Portland",
+   "observed_at": "2026-07-19T04:58:56Z",
+   "organization_key_material": "PRO PHOTO SUPPLY INC",
+   "phone": "503-241-1112",
+   "postal_code": "97209",
+   "retailer_host": "prophotosupply.com",
+   "source_id": "prophotosupply_store_page",
+   "state": "OR",
+   "website_url": "https://www.prophotosupply.com"
+  },
+  {
+   "address": "1112 NW 19th Ave.",
+   "brand_listing_url": "https://www.prophotosupply.com/pages/location-hours",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.530784120456,
+    "lng": -122.69044586827,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.prophotosupply.com/pages/location-hours",
+   "name": "Store & Rental · Portland",
+   "observed_at": "2026-07-19T04:58:56Z",
+   "organization_key_material": "PRO PHOTO SUPPLY INC",
+   "phone": "503-241-1112",
+   "postal_code": "97209",
+   "retailer_host": "prophotosupply.com",
+   "source_id": "prophotosupply_store_page",
+   "state": "OR",
+   "website_url": "https://www.prophotosupply.com"
+  },
+  {
+   "address": "714 SW Washington ST.",
+   "brand_listing_url": "https://www.theshutterbug.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Portland",
+   "coordinates": {
+    "lat": 45.520672309412,
+    "lng": -122.679112090023,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.theshutterbug.com/contact-us",
+   "name": "The Shutterbug Portland · Portland",
+   "observed_at": "2026-07-19T05:04:18Z",
+   "organization_key_material": "THE SHUTTERBUG INC",
+   "phone": "(503) 227-3456",
+   "postal_code": "97205",
+   "retailer_host": "theshutterbug.com",
+   "source_id": "theshutterbug_store_page",
+   "state": "OR",
+   "website_url": "https://www.theshutterbug.com"
+  },
+  {
+   "address": "1439 W. Fairmont St.",
+   "brand_listing_url": "https://danscamera.com/about-us/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Allentown",
+   "coordinates": {
+    "lat": 40.617437778769,
+    "lng": -75.495628040459,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://danscamera.com/about-us/contact-us/",
+   "name": "Dan's Camera City · Allentown",
+   "observed_at": "2026-07-17T19:52:45Z",
+   "organization_key_material": "DAN'S CAMERA CITY",
+   "phone": "(610) 434-2313",
+   "postal_code": "18102",
+   "retailer_host": "danscamera.com",
+   "source_id": "danscamera_store_page",
+   "state": "PA",
+   "website_url": "https://danscamera.com"
+  },
+  {
+   "address": "154 W Main St",
+   "brand_listing_url": "https://www.townecamera.com/where-to-find-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Bloomsburg",
+   "coordinates": {
+    "lat": 41.001994274021,
+    "lng": -76.459034275942,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.townecamera.com/where-to-find-us",
+   "name": "Towne Camera · Bloomsburg",
+   "observed_at": "2026-07-17T23:13:16Z",
+   "organization_key_material": "TOWNE CAMERA",
+   "phone": "570-441-1165",
+   "postal_code": "17815",
+   "retailer_host": "townecamera.com",
+   "source_id": "townecamera_store_page",
+   "state": "PA",
+   "website_url": "https://www.townecamera.com"
+  },
+  {
+   "address": "23 West State Street",
+   "brand_listing_url": "https://rutherfordscamerashop.com/contact.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Doylestown",
+   "coordinates": {
+    "lat": 40.30979529532,
+    "lng": -75.131053503839,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://rutherfordscamerashop.com/contact.html",
+   "name": "Rutherford's Camera Shop · Doylestown",
+   "observed_at": "2026-07-19T05:00:09Z",
+   "organization_key_material": "RUTHERFORD'S CAMERA SHOP",
+   "phone": "215-348-4221",
+   "postal_code": "18901",
+   "retailer_host": "rutherfordscamerashop.com",
+   "source_id": "rutherfordscamerashop_store_page",
+   "state": "PA",
+   "website_url": "https://rutherfordscamerashop.com"
+  },
+  {
+   "address": "319 S. 10th Street",
+   "brand_listing_url": "https://fineartphotoinc.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lemoyne",
+   "coordinates": {
+    "lat": 40.236239391365,
+    "lng": -76.896989939232,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://fineartphotoinc.com/",
+   "name": "Fine Art Photo Inc. · Lemoyne",
+   "observed_at": "2026-07-17T21:17:46Z",
+   "organization_key_material": "FINE ART PHOTO INC",
+   "phone": "(717) 761-8543",
+   "postal_code": "17043",
+   "retailer_host": "fineartphotoinc.com",
+   "source_id": "fineartphotoinc_store_page",
+   "state": "PA",
+   "website_url": "https://fineartphotoinc.com/"
+  },
+  {
+   "address": "4401 New Falls Road",
+   "brand_listing_url": "https://www.allenscamera.com/pages/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Levittown",
+   "coordinates": {
+    "lat": 40.135396966081,
+    "lng": -74.883149497909,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.allenscamera.com/pages/contact",
+   "name": "Allen's Camera Shop · Levittown",
+   "observed_at": "2026-07-19T04:42:28Z",
+   "organization_key_material": "ALLEN'S CAMERA SHOP",
+   "phone": "1-215-547-2841",
+   "postal_code": "19056",
+   "retailer_host": "allenscamera.com",
+   "source_id": "allenscamera_store_page",
+   "state": "PA",
+   "website_url": "https://www.allenscamera.com"
+  },
+  {
+   "address": "245 Lancaster Ave.",
+   "brand_listing_url": "https://www.qvc.com/content/about-us/qvc-outlet-stores.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Malvern",
+   "coordinates": {
+    "lat": 40.040282385928,
+    "lng": -75.54320727955,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.qvc.com/content/about-us/qvc-outlet-stores.html",
+   "name": "QVC Outlet · Malvern",
+   "observed_at": "2026-07-19T04:59:36Z",
+   "organization_key_material": "QVC NETWORK, INC.",
+   "phone": "866-302-4633",
+   "postal_code": "19355",
+   "retailer_host": "qvc.com",
+   "source_id": "qvc_store_page",
+   "state": "PA",
+   "website_url": "https://www.qvc.com"
+  },
+  {
+   "address": "28 S 2nd St",
+   "brand_listing_url": "https://www.uniquephoto.com/philadelphia",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Philadelphia",
+   "coordinates": {
+    "lat": 39.949258156729,
+    "lng": -75.143966144167,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.uniquephoto.com/philadelphia",
+   "name": "Unique Photo Philadelphia · Philadelphia",
+   "observed_at": "2026-07-19T05:04:46Z",
+   "organization_key_material": "UNIQUE PHOTO",
+   "phone": "(215) 608-2222",
+   "postal_code": "19106",
+   "retailer_host": "uniquephoto.com",
+   "source_id": "uniquephoto_store_page",
+   "state": "PA",
+   "website_url": "https://www.uniquephoto.com/"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

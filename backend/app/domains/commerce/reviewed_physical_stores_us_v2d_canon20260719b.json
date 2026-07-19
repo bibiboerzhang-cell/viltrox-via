@@ -1,0 +1,451 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "4725 Bougainville Drive Building No. 631",
+   "brand_listing_url": "https://www.mynavyexchange.com/store-details/navy-exchange-mall-at-pearl-harbor-in-honolulu-hi",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Honolulu",
+   "coordinates": {
+    "lat": 21.349070820935,
+    "lng": -157.932730132699,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.mynavyexchange.com/store-details/navy-exchange-mall-at-pearl-harbor-in-honolulu-hi",
+   "name": "Navy Exchange Mall at Pearl Harbor · Honolulu",
+   "observed_at": "2026-07-19T04:56:08Z",
+   "organization_key_material": "NAVY EXCHANGE SERVICE COMMAND",
+   "phone": "(808) 423-3330",
+   "postal_code": "96818",
+   "retailer_host": "mynavyexchange.com",
+   "source_id": "mynavyexchange_store_page",
+   "state": "HI",
+   "website_url": "https://www.mynavyexchange.com"
+  },
+  {
+   "address": "690 Pohukaina St",
+   "brand_listing_url": "https://www.fisherhawaii.net/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Honolulu",
+   "coordinates": {
+    "lat": 21.299288756485,
+    "lng": -157.859310039681,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fisherhawaii.net/contact-us/",
+   "name": "Pohukaina Store · Honolulu",
+   "observed_at": "2026-07-17T22:09:30Z",
+   "organization_key_material": "FISHER HAWAII",
+   "phone": "(808) 356-1800",
+   "postal_code": "96813",
+   "retailer_host": "fisherhawaii.net",
+   "source_id": "fisherhawaii_store_page",
+   "state": "HI",
+   "website_url": "https://www.fisherhawaii.net/"
+  },
+  {
+   "address": "6721 Douglas Ave.",
+   "brand_listing_url": "https://www.christianphoto.biz/contact-us.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Urbandale",
+   "coordinates": {
+    "lat": 41.629441843615,
+    "lng": -93.708896030224,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.christianphoto.biz/contact-us.html",
+   "name": "Christian Photo · Urbandale",
+   "observed_at": "2026-07-17T21:05:25Z",
+   "organization_key_material": "CHRISTIAN PHOTO",
+   "phone": "515-270-8030",
+   "postal_code": "50322",
+   "retailer_host": "christianphoto.biz",
+   "source_id": "christianphoto_store_page",
+   "state": "IA",
+   "website_url": "https://www.christianphoto.biz/"
+  },
+  {
+   "address": "610 W. Hubbard Ave, Suite 109",
+   "brand_listing_url": "https://www.cameracorral.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Coeur d'Alene",
+   "coordinates": {
+    "lat": 47.68283501518,
+    "lng": -116.792049393928,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameracorral.com/contact/",
+   "name": "Camera Corral · Coeur d'Alene",
+   "observed_at": "2026-07-17T23:09:49Z",
+   "organization_key_material": "THE CAMERA CORRAL",
+   "phone": "208-664-2420",
+   "postal_code": "83814",
+   "retailer_host": "cameracorral.com",
+   "source_id": "cameracorral_store_page",
+   "state": "ID",
+   "website_url": "https://www.cameracorral.com/"
+  },
+  {
+   "address": "1740 W. Carroll Ave",
+   "brand_listing_url": "https://progearrental.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Chicago",
+   "coordinates": {
+    "lat": 41.887834025788,
+    "lng": -87.670500142907,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://progearrental.com/",
+   "name": "ProGear Rental · Chicago",
+   "observed_at": "2026-07-17T22:52:54Z",
+   "organization_key_material": "PROGEAR",
+   "phone": "312-376-3770",
+   "postal_code": "60612",
+   "retailer_host": "progearrental.com",
+   "source_id": "progearrental_store_page",
+   "state": "IL",
+   "website_url": "https://progearrental.com/"
+  },
+  {
+   "address": "20 E. Burlington Ave.",
+   "brand_listing_url": "https://www.lagrangecamera.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "La Grange",
+   "coordinates": {
+    "lat": 41.816090072609,
+    "lng": -87.868786795945,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.lagrangecamera.com/",
+   "name": "La Grange Camera & Video · La Grange",
+   "observed_at": "2026-07-19T04:53:29Z",
+   "organization_key_material": "LA GRANGE CAMERA",
+   "phone": "708-352-0070",
+   "postal_code": "60525",
+   "retailer_host": "lagrangecamera.com",
+   "source_id": "lagrangecamera_store_page",
+   "state": "IL",
+   "website_url": "https://www.lagrangecamera.com/"
+  },
+  {
+   "address": "5501 U.S. Hwy 30 W",
+   "brand_listing_url": "https://www.sweetwater.com/our-campus/directions",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Fort Wayne",
+   "coordinates": {
+    "lat": 41.125008182611,
+    "lng": -85.212965549377,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.sweetwater.com/our-campus/directions",
+   "name": "Sweetwater Music Store · Fort Wayne",
+   "observed_at": "2026-07-19T05:02:43Z",
+   "organization_key_material": "SWEETWATER",
+   "phone": "(260) 432-8176",
+   "postal_code": "46818",
+   "retailer_host": "sweetwater.com",
+   "source_id": "sweetwater_store_page",
+   "state": "IN",
+   "website_url": "https://www.sweetwater.com"
+  },
+  {
+   "address": "5550 N Keystone Ave",
+   "brand_listing_url": "https://www.meijer.com/stores/keystone-ave.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Indianapolis",
+   "coordinates": {
+    "lat": 39.85386722371,
+    "lng": -86.122172657462,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.meijer.com/stores/keystone-ave.html",
+   "name": "Keystone Ave · Indianapolis",
+   "observed_at": "2026-07-19T04:54:46Z",
+   "organization_key_material": "MEIJER INC",
+   "phone": "(317) 610-2200",
+   "postal_code": "46220",
+   "retailer_host": "meijer.com",
+   "source_id": "meijer_store_page",
+   "state": "IN",
+   "website_url": "https://www.meijer.com/"
+  },
+  {
+   "address": "220 E St Clair St",
+   "brand_listing_url": "https://robertscamera.com/location",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Indianapolis",
+   "coordinates": {
+    "lat": 39.777948030536,
+    "lng": -86.153250842771,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://robertscamera.com/location",
+   "name": "Roberts Camera · Indianapolis",
+   "observed_at": "2026-07-17T22:57:02Z",
+   "organization_key_material": "ROBERTS CAMERA",
+   "phone": "1-317-636-5544",
+   "postal_code": "46204",
+   "retailer_host": "robertscamera.com",
+   "source_id": "robertscamera_store_page",
+   "state": "IN",
+   "website_url": "https://robertscamera.com/"
+  },
+  {
+   "address": "6750 Broadway Avenue",
+   "brand_listing_url": "https://garycameradigital.com/store-location",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Merrillville",
+   "coordinates": {
+    "lat": 41.496490562266,
+    "lng": -87.336115871073,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://garycameradigital.com/store-location",
+   "name": "Gary Camera & Digital · Merrillville",
+   "observed_at": "2026-07-17T21:22:29Z",
+   "organization_key_material": "GARY CAMERA & VIDEO",
+   "phone": "(219) 769-2451",
+   "postal_code": "46410",
+   "retailer_host": "garycameradigital.com",
+   "source_id": "garycameradigital_store_page",
+   "state": "IN",
+   "website_url": "https://garycameradigital.com/"
+  },
+  {
+   "address": "1601 Village West Parkway",
+   "brand_listing_url": "https://www.nfm.com/stores",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Kansas City",
+   "coordinates": {
+    "lat": 39.121219142476,
+    "lng": -94.821263364581,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.nfm.com/stores",
+   "name": "Kansas City Store · Kansas City",
+   "observed_at": "2026-07-19T04:56:15Z",
+   "organization_key_material": "NEBRASKA FURNITURE MART INC",
+   "phone": "(800) 407-5000",
+   "postal_code": "66111",
+   "retailer_host": "nfm.com",
+   "source_id": "nfm_store_page",
+   "state": "KS",
+   "website_url": "https://www.nfm.com"
+  },
+  {
+   "address": "538 Terry Lane",
+   "brand_listing_url": "https://www.krphotodigital.com/about.htm",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Fort Mitchell",
+   "coordinates": {
+    "lat": 39.047800962866,
+    "lng": -84.579033721703,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.krphotodigital.com/about.htm",
+   "name": "K & R Photographics · Fort Mitchell",
+   "observed_at": "2026-07-19T04:52:46Z",
+   "organization_key_material": "K & R PHOTOGRAPHICS",
+   "phone": "859-341-6986",
+   "postal_code": "41017",
+   "retailer_host": "krphotodigital.com",
+   "source_id": "krphotodigital_store_page",
+   "state": "KY",
+   "website_url": "https://www.krphotodigital.com"
+  },
+  {
+   "address": "1100 Winchester Road",
+   "brand_listing_url": "https://murphyscamera.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lexington",
+   "coordinates": {
+    "lat": 38.042017217107,
+    "lng": -84.46628556307,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://murphyscamera.com/contact",
+   "name": "Lexington Location · Lexington",
+   "observed_at": "2026-07-19T04:55:56Z",
+   "organization_key_material": "MURPHY'S CAMERA",
+   "phone": "(859) 255-1012",
+   "postal_code": "40505",
+   "retailer_host": "murphyscamera.com",
+   "source_id": "murphyscamera_store_page",
+   "state": "KY",
+   "website_url": "https://murphyscamera.com/"
+  },
+  {
+   "address": "1440 Bardstown Road",
+   "brand_listing_url": "https://murphyscamera.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Louisville",
+   "coordinates": {
+    "lat": 38.232653554101,
+    "lng": -85.710642109985,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://murphyscamera.com/contact",
+   "name": "Louisville - Main Location · Louisville",
+   "observed_at": "2026-07-19T04:55:56Z",
+   "organization_key_material": "MURPHY'S CAMERA",
+   "phone": "(502) 485-1500",
+   "postal_code": "40204",
+   "retailer_host": "murphyscamera.com",
+   "source_id": "murphyscamera_store_page",
+   "state": "KY",
+   "website_url": "https://murphyscamera.com/"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

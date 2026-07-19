@@ -1,0 +1,451 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "6123 University Dr NW",
+   "brand_listing_url": "https://www.gigaparts.com/huntsville",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Huntsville",
+   "coordinates": {
+    "lat": 34.743576639612,
+    "lng": -86.676054819798,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.gigaparts.com/huntsville",
+   "name": "GigaParts Huntsville · Huntsville",
+   "observed_at": "2026-07-17T21:23:37Z",
+   "organization_key_material": "GIGAPARTS INC",
+   "phone": "(256) 535-4442",
+   "postal_code": "35806",
+   "retailer_host": "gigaparts.com",
+   "source_id": "gigaparts_store_page",
+   "state": "AL",
+   "website_url": "https://www.gigaparts.com"
+  },
+  {
+   "address": "Bldg. 787 Sixth Street",
+   "brand_listing_url": "https://www.shopmyexchange.com/exchange-stores/Little-Rock-Main-Exchange/LR010",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Little Rock",
+   "coordinates": {
+    "lat": 34.900317280585,
+    "lng": -92.146692143762,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.shopmyexchange.com/exchange-stores/Little-Rock-Main-Exchange/LR010",
+   "name": "Little Rock Main Exchange · Little Rock",
+   "observed_at": "2026-07-19T04:41:54Z",
+   "organization_key_material": "AAFES HEADQUARTERS",
+   "phone": "(501) 988-2337",
+   "postal_code": "720994947",
+   "retailer_host": "shopmyexchange.com",
+   "source_id": "shopmyexchange_store_page",
+   "state": "AR",
+   "website_url": "https://www.shopmyexchange.com"
+  },
+  {
+   "address": "4834 N 7th Street",
+   "brand_listing_url": "https://www.larmonphoto.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Phoenix",
+   "coordinates": {
+    "lat": 33.507856321302,
+    "lng": -112.065082658448,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.larmonphoto.com/contact-us",
+   "name": "FOTO FORUM · Phoenix",
+   "observed_at": "2026-07-19T04:49:43Z",
+   "organization_key_material": "FOTO FORUM",
+   "phone": "(602) 263-0084",
+   "postal_code": "85014",
+   "retailer_host": "larmonphoto.com",
+   "source_id": "larmonphoto_store_page",
+   "state": "AZ",
+   "website_url": "https://www.larmonphoto.com/"
+  },
+  {
+   "address": "606 W. University Drive",
+   "brand_listing_url": "https://www.tempecamera.biz/aboutus.asp",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Tempe",
+   "coordinates": {
+    "lat": 33.42196481961,
+    "lng": -111.947388433371,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.tempecamera.biz/aboutus.asp",
+   "name": "Tempe Camera Repair Inc · Tempe",
+   "observed_at": "2026-07-19T05:03:11Z",
+   "organization_key_material": "TEMPE CAMERA REPAIR INC",
+   "phone": "(480) 966-6954",
+   "postal_code": "85281",
+   "retailer_host": "tempecamera.biz",
+   "source_id": "tempecamera_store_page",
+   "state": "AZ",
+   "website_url": "https://www.tempecamera.biz/"
+  },
+  {
+   "address": "1680 W. Lincoln Ave.",
+   "brand_listing_url": "https://mojocameras.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Anaheim",
+   "coordinates": {
+    "lat": 33.832360082256,
+    "lng": -117.94164095401,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://mojocameras.com/",
+   "name": "MOJO CAMERAS & COMPUTERS · Anaheim",
+   "observed_at": "2026-07-19T04:55:51Z",
+   "organization_key_material": "MOJO CAMERAS & COMPUTERS",
+   "phone": "(714) 520-2000",
+   "postal_code": "92801",
+   "retailer_host": "mojocameras.com",
+   "source_id": "mojocameras_store_page",
+   "state": "CA",
+   "website_url": "https://mojocameras.com/"
+  },
+  {
+   "address": "801 South Main St.",
+   "brand_listing_url": "https://www.abelcine.com/locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Burbank",
+   "coordinates": {
+    "lat": 34.165504867314,
+    "lng": -118.312694951291,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.abelcine.com/locations",
+   "name": "AbelCine Los Angeles · Burbank",
+   "observed_at": "2026-07-19T04:41:59Z",
+   "organization_key_material": "ABEL CINE TECH INC",
+   "phone": "888-700-4416",
+   "postal_code": "91506",
+   "retailer_host": "abelcine.com",
+   "source_id": "abelcine_store_page",
+   "state": "CA",
+   "website_url": "https://www.abelcine.com"
+  },
+  {
+   "address": "3403 West Pacific Ave",
+   "brand_listing_url": "https://www.bandpro.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Burbank",
+   "coordinates": {
+    "lat": 34.188420300124,
+    "lng": -118.347939504658,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.bandpro.com/contact-us",
+   "name": "Band Pro Film & Digital, Inc. · Burbank",
+   "observed_at": "2026-07-19T04:44:01Z",
+   "organization_key_material": "BAND PRO FILM DIGITAL, INC",
+   "phone": "(818) 841-9655",
+   "postal_code": "91505",
+   "retailer_host": "bandpro.com",
+   "source_id": "bandpro_store_page",
+   "state": "CA",
+   "website_url": "https://www.bandpro.com"
+  },
+  {
+   "address": "1400 West Burbank Blvd.",
+   "brand_listing_url": "https://www.filmtools.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Burbank",
+   "coordinates": {
+    "lat": 34.1824696601,
+    "lng": -118.326738878987,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.filmtools.com/contact-us",
+   "name": "Filmtools Flagship Store · Burbank",
+   "observed_at": "2026-07-19T04:49:02Z",
+   "organization_key_material": "FILMTOOLS",
+   "phone": "818-845-8066",
+   "postal_code": "91506",
+   "retailer_host": "filmtools.com",
+   "source_id": "filmtools_store_page",
+   "state": "CA",
+   "website_url": "https://www.filmtools.com"
+  },
+  {
+   "address": "1600 South Winchester Boulevard",
+   "brand_listing_url": "https://sanjosecamera.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Campbell",
+   "coordinates": {
+    "lat": 37.294369358053,
+    "lng": -121.949725887697,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://sanjosecamera.com",
+   "name": "San Jose Camera & Video · Campbell",
+   "observed_at": "2026-07-19T05:01:02Z",
+   "organization_key_material": "SAN JOSE CAMERA SHOP INC",
+   "phone": "+14083741880",
+   "postal_code": "",
+   "retailer_host": "sanjosecamera.com",
+   "source_id": "sanjosecamera_store_page",
+   "state": "CA",
+   "website_url": "https://sanjosecamera.com"
+  },
+  {
+   "address": "1819 Victory Blvd.",
+   "brand_listing_url": "https://www.evsrentals.com/contact-evs",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Glendale",
+   "coordinates": {
+    "lat": 34.16301909196,
+    "lng": -118.302661939605,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.evsrentals.com/contact-evs",
+   "name": "EVS Glendale (Express Video Supply, Inc.) · Glendale",
+   "observed_at": "2026-07-17T21:17:04Z",
+   "organization_key_material": "EXPRESS VIDEO SUPPLY, INC.",
+   "phone": "818.552.4590",
+   "postal_code": "91201",
+   "retailer_host": "evsrentals.com",
+   "source_id": "evsrentals_store_page",
+   "state": "CA",
+   "website_url": "https://www.evsrentals.com"
+  },
+  {
+   "address": "23052 Lake Forest Dr Suite D-1",
+   "brand_listing_url": "https://www.occamera.com/about-us.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Laguna Hills",
+   "coordinates": {
+    "lat": 33.629040092202,
+    "lng": -117.726936874429,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.occamera.com/about-us.html",
+   "name": "OC Camera · Laguna Hills",
+   "observed_at": "2026-07-19T04:57:05Z",
+   "organization_key_material": "OC CAMERA",
+   "phone": "(949) 347-1276",
+   "postal_code": "92653",
+   "retailer_host": "occamera.com",
+   "source_id": "occamera_store_page",
+   "state": "CA",
+   "website_url": "https://www.occamera.com"
+  },
+  {
+   "address": "225 Cannery Row",
+   "brand_listing_url": "https://www.backscatter.com/Contact-Us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Monterey",
+   "coordinates": {
+    "lat": 36.610738892079,
+    "lng": -121.897085437995,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.backscatter.com/Contact-Us",
+   "name": "Backscatter West Coast Headquarters · Monterey",
+   "observed_at": "2026-07-17T21:49:11Z",
+   "organization_key_material": "BACKSCATTER",
+   "phone": "+1-831-645-1082",
+   "postal_code": "93940",
+   "retailer_host": "backscatter.com",
+   "source_id": "backscatter_store_page",
+   "state": "CA",
+   "website_url": "https://www.backscatter.com"
+  },
+  {
+   "address": "10201 Reseda Blvd, Shop #108",
+   "brand_listing_url": "https://imagenationshop.com/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Northridge",
+   "coordinates": {
+    "lat": 34.255890448002,
+    "lng": -118.536163567372,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://imagenationshop.com/",
+   "name": "iMAGENATION · Northridge",
+   "observed_at": "2026-07-17T21:31:06Z",
+   "organization_key_material": "IMAGENATION",
+   "phone": "818-818-5522",
+   "postal_code": "91324",
+   "retailer_host": "imagenationshop.com",
+   "source_id": "imagenationshop_store_page",
+   "state": "CA",
+   "website_url": "https://imagenationshop.com/"
+  },
+  {
+   "address": "3837 30th Street",
+   "brand_listing_url": "https://georgescamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "San Diego",
+   "coordinates": {
+    "lat": 32.747596025789,
+    "lng": -117.129996978992,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://georgescamera.com/contact-us",
+   "name": "George's Camera - 30th Street · San Diego",
+   "observed_at": "2026-07-19T04:50:14Z",
+   "organization_key_material": "GEORGES CAMERA EXCHANGE",
+   "phone": "(619) 297-3544",
+   "postal_code": "92104",
+   "retailer_host": "georgescamera.com",
+   "source_id": "georgescamera_store_page",
+   "state": "CA",
+   "website_url": "https://georgescamera.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

@@ -1,0 +1,234 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "4401 4TH AVE S",
+   "brand_listing_url": "https://www.costco.com/warehouse-locations/seattle-wa-101.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "SEATTLE",
+   "coordinates": {
+    "lat": 47.565319261258,
+    "lng": -122.329512678417,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.costco.com/warehouse-locations/seattle-wa-101.html",
+   "name": "Seattle, WA Warehouse · SEATTLE",
+   "observed_at": "2026-07-19T04:47:29Z",
+   "organization_key_material": "COSTCO WHOLESALE CORPORATION",
+   "phone": "(206) 622-4110",
+   "postal_code": "98134-2302",
+   "retailer_host": "costco.com",
+   "source_id": "costco_store_page",
+   "state": "WA",
+   "website_url": "https://www.costco.com"
+  },
+  {
+   "address": "811 Republican St.",
+   "brand_listing_url": "https://www.glazerscamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Seattle",
+   "coordinates": {
+    "lat": 47.623158087784,
+    "lng": -122.340856778192,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.glazerscamera.com/contact-us",
+   "name": "Glazer's Camera Main Store · Seattle",
+   "observed_at": "2026-07-19T04:50:19Z",
+   "organization_key_material": "GLAZERS CAMERA SUPPLY",
+   "phone": "(206) 624-1100",
+   "postal_code": "98109",
+   "retailer_host": "glazerscamera.com",
+   "source_id": "glazerscamera_store_page",
+   "state": "WA",
+   "website_url": "https://www.glazerscamera.com"
+  },
+  {
+   "address": "18325 Aurora Ave N",
+   "brand_listing_url": "https://www.fredmeyer.com/stores/details/701/00209",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Shoreline",
+   "coordinates": {
+    "lat": 47.761834684651,
+    "lng": -122.346209513425,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fredmeyer.com/stores/details/701/00209",
+   "name": "Shoreline Fred Meyer · Shoreline",
+   "observed_at": "2026-07-17T20:07:40Z",
+   "organization_key_material": "FRED MEYER INC",
+   "phone": "206-546-0720",
+   "postal_code": "98133",
+   "retailer_host": "fredmeyer.com",
+   "source_id": "fredmeyer_store_page",
+   "state": "WA",
+   "website_url": "https://www.fredmeyer.com"
+  },
+  {
+   "address": "529 N. Monroe Ave",
+   "brand_listing_url": "https://www.cameracornergreenbay.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Green Bay",
+   "coordinates": {
+    "lat": 44.516474272812,
+    "lng": -88.007670489587,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameracornergreenbay.com",
+   "name": "Camera Corner Connecting Point · Green Bay",
+   "observed_at": "2026-07-17T21:55:10Z",
+   "organization_key_material": "CAMERA CORNER",
+   "phone": "920-435-5353",
+   "postal_code": "54301",
+   "retailer_host": "cameracornergreenbay.com",
+   "source_id": "cameracornergreenbay_store_page",
+   "state": "WI",
+   "website_url": "https://www.cameracornergreenbay.com"
+  },
+  {
+   "address": "4232 East Towne Boulevard",
+   "brand_listing_url": "https://www.cameracompany.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Madison",
+   "coordinates": {
+    "lat": 43.124617480513,
+    "lng": -89.310016127502,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameracompany.com/contact",
+   "name": "The Camera Company - Eastside · Madison",
+   "observed_at": "2026-07-19T05:03:30Z",
+   "organization_key_material": "THE CAMERA COMPANY",
+   "phone": "(608) 246-9052",
+   "postal_code": "53704",
+   "retailer_host": "cameracompany.com",
+   "source_id": "cameracompany_store_page",
+   "state": "WI",
+   "website_url": "https://www.cameracompany.com"
+  },
+  {
+   "address": "6742 Odana Rd.",
+   "brand_listing_url": "https://www.cameracompany.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Madison",
+   "coordinates": {
+    "lat": 43.056684776585,
+    "lng": -89.497496395418,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameracompany.com/contact",
+   "name": "The Camera Company - Westside · Madison",
+   "observed_at": "2026-07-19T05:03:30Z",
+   "organization_key_material": "THE CAMERA COMPANY",
+   "phone": "(608) 234-5280",
+   "postal_code": "53719",
+   "retailer_host": "cameracompany.com",
+   "source_id": "cameracompany_store_page",
+   "state": "WI",
+   "website_url": "https://www.cameracompany.com"
+  },
+  {
+   "address": "7965 S Main Street",
+   "brand_listing_url": "https://www.impulsecameras.com/pages/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Oak Creek",
+   "coordinates": {
+    "lat": 42.90027046762,
+    "lng": -87.917778735661,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.impulsecameras.com/pages/contact",
+   "name": "Impulse Cameras · Oak Creek",
+   "observed_at": "2026-07-17T21:31:54Z",
+   "organization_key_material": "IMPULSE PRODUCTIONS LLC",
+   "phone": "414-574-0110",
+   "postal_code": "53154",
+   "retailer_host": "impulsecameras.com",
+   "source_id": "impulsecameras_store_page",
+   "state": "WI",
+   "website_url": "https://www.impulsecameras.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

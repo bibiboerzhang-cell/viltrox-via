@@ -1,0 +1,544 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "11870 W. State Road 84 Unit C7",
+   "brand_listing_url": "https://www.sunshinephotostore.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Davie",
+   "coordinates": {
+    "lat": 26.112543160486,
+    "lng": -80.307506735791,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.sunshinephotostore.com/contact-us",
+   "name": "Sunshine Photo and Electronics Inc. · Davie",
+   "observed_at": "2026-07-19T05:02:37Z",
+   "organization_key_material": "SUNSHINE PHOTO AND ELECTRONICS INC.",
+   "phone": "+1 (954) 200-6961",
+   "postal_code": "33325",
+   "retailer_host": "sunshinephotostore.com",
+   "source_id": "sunshinephotostore_store_page",
+   "state": "FL",
+   "website_url": "https://www.sunshinephotostore.com/"
+  },
+  {
+   "address": "217 NE 4th Ave",
+   "brand_listing_url": "https://delraycamerastudio.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Delray Beach",
+   "coordinates": {
+    "lat": 26.465650045705,
+    "lng": -80.068931657658,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://delraycamerastudio.com",
+   "name": "Delray Camera & Studio · Delray Beach",
+   "observed_at": "2026-07-17T22:03:21Z",
+   "organization_key_material": "DELRAY CAMERA AND STUDIO",
+   "phone": "(561) 278-3331",
+   "postal_code": "33483",
+   "retailer_host": "delraycamerastudio.com",
+   "source_id": "delraycamerastudio_store_page",
+   "state": "FL",
+   "website_url": "https://delraycamerastudio.com"
+  },
+  {
+   "address": "7260 N Kendall Dr.",
+   "brand_listing_url": "https://www.brandsmartusa.com/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Kendall",
+   "coordinates": {
+    "lat": 25.688670777835,
+    "lng": -80.312737191761,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.brandsmartusa.com/store-locator",
+   "name": "Dadeland · Kendall",
+   "observed_at": "2026-07-19T04:44:53Z",
+   "organization_key_material": "BRANDSMART USA",
+   "phone": "(786) 401-1700",
+   "postal_code": "33156",
+   "retailer_host": "brandsmartusa.com",
+   "source_id": "brandsmartusa_store_page",
+   "state": "FL",
+   "website_url": "https://www.brandsmartusa.com"
+  },
+  {
+   "address": "10801 Starkey Road",
+   "brand_listing_url": "https://www.hsn.com/support/customer-service-faq/where-are-the-hsn-outlets-and-when-are-they-open",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Largo",
+   "coordinates": {
+    "lat": 27.870102595919,
+    "lng": -82.762260104093,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.hsn.com/support/customer-service-faq/where-are-the-hsn-outlets-and-when-are-they-open",
+   "name": "HSN Retail Outlet of Bardmoor · Largo",
+   "observed_at": "2026-07-19T04:51:18Z",
+   "organization_key_material": "HOME SHOPPING NETWORK, INC.",
+   "phone": "(727) 872-4200",
+   "postal_code": "33777",
+   "retailer_host": "hsn.com",
+   "source_id": "hsn_store_page",
+   "state": "FL",
+   "website_url": "https://www.hsn.com"
+  },
+  {
+   "address": "7500 NW 25th St Unit # 1",
+   "brand_listing_url": "https://avcstore.com/pages/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Miami",
+   "coordinates": {
+    "lat": 25.797050354476,
+    "lng": -80.318556520915,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://avcstore.com/pages/contact-us",
+   "name": "AVC Store (AVC Photo Store & School) · Miami",
+   "observed_at": "2026-07-17T20:52:23Z",
+   "organization_key_material": "AVC PHOTO & VIDEO SPECIALTY STORE",
+   "phone": "(305) 717-0902",
+   "postal_code": "33122",
+   "retailer_host": "avcstore.com",
+   "source_id": "avcstore_store_page",
+   "state": "FL",
+   "website_url": "https://avcstore.com"
+  },
+  {
+   "address": "4320 NW 167 St.",
+   "brand_listing_url": "https://www.brandsmartusa.com/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Miami",
+   "coordinates": {
+    "lat": 25.92500403575,
+    "lng": -80.271481396158,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.brandsmartusa.com/store-locator",
+   "name": "Miami · Miami",
+   "observed_at": "2026-07-19T04:44:53Z",
+   "organization_key_material": "BRANDSMART USA",
+   "phone": "(305) 624-5400",
+   "postal_code": "33054",
+   "retailer_host": "brandsmartusa.com",
+   "source_id": "brandsmartusa_store_page",
+   "state": "FL",
+   "website_url": "https://www.brandsmartusa.com"
+  },
+  {
+   "address": "4836 SW 72 Ave",
+   "brand_listing_url": "https://www.proavsys.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Miami",
+   "coordinates": {
+    "lat": 25.725390912857,
+    "lng": -80.310769172007,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.proavsys.com/contact-us",
+   "name": "PROFESSIONAL AUDIO AND VIDEO SYSTEMS CORP · Miami",
+   "observed_at": "2026-07-19T04:59:13Z",
+   "organization_key_material": "PROFESSIONAL AUDIO AND VIDEO SYSTEMS CORP",
+   "phone": "305.669.2778",
+   "postal_code": "33155",
+   "retailer_host": "proavsys.com",
+   "source_id": "proavsys_store_page",
+   "state": "FL",
+   "website_url": "https://www.proavsys.com"
+  },
+  {
+   "address": "16051 S Dixie Hwy",
+   "brand_listing_url": "https://www.brandsmartusa.com/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Miami",
+   "coordinates": {
+    "lat": 25.620886878431,
+    "lng": -80.344743881301,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.brandsmartusa.com/store-locator",
+   "name": "South Dade · Miami",
+   "observed_at": "2026-07-19T04:44:53Z",
+   "organization_key_material": "BRANDSMART USA",
+   "phone": "(786) 242-6200",
+   "postal_code": "33157",
+   "retailer_host": "brandsmartusa.com",
+   "source_id": "brandsmartusa_store_page",
+   "state": "FL",
+   "website_url": "https://www.brandsmartusa.com"
+  },
+  {
+   "address": "634 N. Mills Ave",
+   "brand_listing_url": "https://cphfun.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Orlando",
+   "coordinates": {
+    "lat": 28.552407315574,
+    "lng": -81.364503624104,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://cphfun.com",
+   "name": "Colonial Photo & Hobby · Orlando",
+   "observed_at": "2026-07-17T19:49:29Z",
+   "organization_key_material": "COLONIAL PHOTO & HOBBY INC",
+   "phone": "407-841-1485",
+   "postal_code": "32803",
+   "retailer_host": "cphfun.com",
+   "source_id": "cphfun_store_page",
+   "state": "FL",
+   "website_url": "https://cphfun.com"
+  },
+  {
+   "address": "7160 N 9th Ave",
+   "brand_listing_url": "https://www.gulfcoastcamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Pensacola",
+   "coordinates": {
+    "lat": 30.498211654415,
+    "lng": -87.186962472011,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.gulfcoastcamera.com/contact-us",
+   "name": "Pensacola Headquarters · Pensacola",
+   "observed_at": "2026-07-19T04:50:45Z",
+   "organization_key_material": "GULF COAST CAMERA LLC",
+   "phone": "(850) 476-2697",
+   "postal_code": "32504",
+   "retailer_host": "gulfcoastcamera.com",
+   "source_id": "gulfcoastcamera_store_page",
+   "state": "FL",
+   "website_url": "https://www.gulfcoastcamera.com"
+  },
+  {
+   "address": "5376 Fruitville Rd.",
+   "brand_listing_url": "https://www.hsn.com/support/customer-service-faq/where-are-the-hsn-outlets-and-when-are-they-open",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Sarasota",
+   "coordinates": {
+    "lat": 27.337752606759,
+    "lng": -82.460960169399,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.hsn.com/support/customer-service-faq/where-are-the-hsn-outlets-and-when-are-they-open",
+   "name": "HSN Retail Outlet of Sarasota · Sarasota",
+   "observed_at": "2026-07-19T04:51:18Z",
+   "organization_key_material": "HOME SHOPPING NETWORK, INC.",
+   "phone": "941-866-6022",
+   "postal_code": "34232",
+   "retailer_host": "hsn.com",
+   "source_id": "hsn_store_page",
+   "state": "FL",
+   "website_url": "https://www.hsn.com"
+  },
+  {
+   "address": "2104 W. Kennedy Boulevard",
+   "brand_listing_url": "https://encorebroadcast.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Tampa",
+   "coordinates": {
+    "lat": 27.944676533606,
+    "lng": -82.481021584003,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://encorebroadcast.com/contact-us/",
+   "name": "Encore Broadcast Solutions - Tampa · Tampa",
+   "observed_at": "2026-07-19T04:48:57Z",
+   "organization_key_material": "ENCORE BROADCAST EQUIPMENT SALES INC",
+   "phone": "813-253-2774",
+   "postal_code": "33606",
+   "retailer_host": "encorebroadcast.com",
+   "source_id": "encorebroadcast_store_page",
+   "state": "FL",
+   "website_url": "https://encorebroadcast.com/"
+  },
+  {
+   "address": "8515 West Hillsborough Ave",
+   "brand_listing_url": "https://www.hsn.com/support/customer-service-faq/where-are-the-hsn-outlets-and-when-are-they-open",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Tampa",
+   "coordinates": {
+    "lat": 27.996790006414,
+    "lng": -82.579871220005,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.hsn.com/support/customer-service-faq/where-are-the-hsn-outlets-and-when-are-they-open",
+   "name": "HSN Retail Outlet of Tampa · Tampa",
+   "observed_at": "2026-07-19T04:51:18Z",
+   "organization_key_material": "HOME SHOPPING NETWORK, INC.",
+   "phone": "813-371-2900",
+   "postal_code": "33615",
+   "retailer_host": "hsn.com",
+   "source_id": "hsn_store_page",
+   "state": "FL",
+   "website_url": "https://www.hsn.com"
+  },
+  {
+   "address": "3763 Roswell Rd",
+   "brand_listing_url": "https://www.wolfcamera.us/your-projects",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Atlanta",
+   "coordinates": {
+    "lat": 33.857695010999,
+    "lng": -84.381486521533,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.wolfcamera.us/your-projects",
+   "name": "Wolf Camera and Photo Design - Buckhead · Atlanta",
+   "observed_at": "2026-07-19T05:06:57Z",
+   "organization_key_material": "WOLF CAMERA & IMAGE",
+   "phone": "404-709-2981",
+   "postal_code": "30342",
+   "retailer_host": "wolfcamera.us",
+   "source_id": "wolfcamera_store_page",
+   "state": "GA",
+   "website_url": "https://www.wolfcamera.us"
+  },
+  {
+   "address": "6124 Roswell Rd",
+   "brand_listing_url": "https://www.wolfcamera.us/your-projects",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Sandy Springs",
+   "coordinates": {
+    "lat": 33.922170095323,
+    "lng": -84.379232746032,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.wolfcamera.us/your-projects",
+   "name": "Wolf Camera and Photo Design - Sandy Springs · Sandy Springs",
+   "observed_at": "2026-07-19T05:06:57Z",
+   "organization_key_material": "WOLF CAMERA & IMAGE",
+   "phone": "(678)235-9081",
+   "postal_code": "30328",
+   "retailer_host": "wolfcamera.us",
+   "source_id": "wolfcamera_store_page",
+   "state": "GA",
+   "website_url": "https://www.wolfcamera.us"
+  },
+  {
+   "address": "1072 Fort Street Mall",
+   "brand_listing_url": "https://www.fisherhawaii.net/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Honolulu",
+   "coordinates": {
+    "lat": 21.309696677753,
+    "lng": -157.861494482514,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fisherhawaii.net/contact-us/",
+   "name": "Downtown Store · Honolulu",
+   "observed_at": "2026-07-17T22:09:30Z",
+   "organization_key_material": "FISHER HAWAII",
+   "phone": "(808) 524-0700",
+   "postal_code": "96813",
+   "retailer_host": "fisherhawaii.net",
+   "source_id": "fisherhawaii_store_page",
+   "state": "HI",
+   "website_url": "https://www.fisherhawaii.net/"
+  },
+  {
+   "address": "950 Mapunapuna St",
+   "brand_listing_url": "https://www.fisherhawaii.net/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Honolulu",
+   "coordinates": {
+    "lat": 21.343523887782,
+    "lng": -157.898641334419,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fisherhawaii.net/contact-us/",
+   "name": "Mapunapuna Warehouse & Distribution Center · Honolulu",
+   "observed_at": "2026-07-17T22:09:30Z",
+   "organization_key_material": "FISHER HAWAII",
+   "phone": "(808) 524-8770",
+   "postal_code": "96819",
+   "retailer_host": "fisherhawaii.net",
+   "source_id": "fisherhawaii_store_page",
+   "state": "HI",
+   "website_url": "https://www.fisherhawaii.net/"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

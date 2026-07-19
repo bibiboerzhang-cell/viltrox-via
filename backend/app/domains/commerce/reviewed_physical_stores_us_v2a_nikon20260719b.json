@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "531 West 4th Ave",
+      "brand_listing_url": "https://www.stewartsphoto.com/service/store-hours-and-location/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Anchorage",
+      "coordinates": {
+        "lat": 61.218613656943,
+        "lng": -149.892120505846,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.stewartsphoto.com/service/store-hours-and-location/",
+      "name": "Stewart's Photo Shop · Anchorage",
+      "observed_at": "2026-07-17T00:00:47Z",
+      "organization_key_material": "Stewart's Photo Inc",
+      "phone": "907.272.8581",
+      "postal_code": "99501",
+      "retailer_host": "stewartsphoto.com",
+      "source_id": "stewartsphoto_store_page",
+      "state": "AK",
+      "website_url": "https://www.stewartsphoto.com/"
+    },
+    {
+      "address": "1625 East University Drive STE 103",
+      "brand_listing_url": "https://cameragraphics.net",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Auburn",
+      "coordinates": {
+        "lat": 32.619151293118,
+        "lng": -85.447678510866,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://cameragraphics.net",
+      "name": "Cameragraphics · Auburn",
+      "observed_at": "2026-07-16T23:51:37Z",
+      "organization_key_material": "Cameragraphics, Inc",
+      "phone": "334-821-2524",
+      "postal_code": "36830",
+      "retailer_host": "cameragraphics.net",
+      "source_id": "cameragraphics_store_page",
+      "state": "AL",
+      "website_url": "https://cameragraphics.net"
+    },
+    {
+      "address": "6123 University Dr NW",
+      "brand_listing_url": "https://www.gigaparts.com/huntsville",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Huntsville",
+      "coordinates": {
+        "lat": 34.743576639612,
+        "lng": -86.676054819798,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.gigaparts.com/huntsville",
+      "name": "GigaParts Huntsville · Huntsville",
+      "observed_at": "2026-07-16T23:54:17Z",
+      "organization_key_material": "GigaParts, Inc.",
+      "phone": "(256) 384-1008",
+      "postal_code": "35806",
+      "retailer_host": "gigaparts.com",
+      "source_id": "gigaparts_store_page",
+      "state": "AL",
+      "website_url": "https://www.gigaparts.com"
+    },
+    {
+      "address": "90 Springdale Blvd",
+      "brand_listing_url": "https://www.calagaz.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Mobile",
+      "coordinates": {
+        "lat": 30.685991330632,
+        "lng": -88.123428564395,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.calagaz.com",
+      "name": "Calagaz Photo and Digital Imaging · Mobile",
+      "observed_at": "2026-07-16T23:50:30Z",
+      "organization_key_material": "Calagaz Photo Supply Inc",
+      "phone": "(251) 478-0487",
+      "postal_code": "36606",
+      "retailer_host": "calagaz.com",
+      "source_id": "calagaz_store_page",
+      "state": "AL",
+      "website_url": "https://www.calagaz.com"
+    },
+    {
+      "address": "3500 Se Club Blvd",
+      "brand_listing_url": "https://www.samsclub.com/clubs/bentonville-ar-sams-club/4969",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bentonville",
+      "coordinates": {
+        "lat": 36.353582180492,
+        "lng": -94.172248910416,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.samsclub.com/clubs/bentonville-ar-sams-club/4969",
+      "name": "Bentonville Sam's Club #4969 · Bentonville",
+      "observed_at": "2026-07-16T23:59:59Z",
+      "organization_key_material": "SAM'S CLUB",
+      "phone": "(479) 621-5537",
+      "postal_code": "72712",
+      "retailer_host": "samsclub.com",
+      "source_id": "samsclub_store_page",
+      "state": "AR",
+      "website_url": "https://www.samsclub.com"
+    },
+    {
+      "address": "11400 North Rodney Parham Rd",
+      "brand_listing_url": "https://www.bedfords.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Little Rock",
+      "coordinates": {
+        "lat": 34.772161087491,
+        "lng": -92.400016991003,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bedfords.com/contact",
+      "name": "Bedford Camera & Video: Little Rock · Little Rock",
+      "observed_at": "2026-07-16T23:49:35Z",
+      "organization_key_material": "Bedford Camera & Video Inc",
+      "phone": "501-224-2020",
+      "postal_code": "72212",
+      "retailer_host": "bedfords.com",
+      "source_id": "bedfords_store_page",
+      "state": "AR",
+      "website_url": "https://www.bedfords.com"
+    },
+    {
+      "address": "4834 N 7th Street",
+      "brand_listing_url": "https://www.larmonphoto.com/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Phoenix",
+      "coordinates": {
+        "lat": 33.507856321302,
+        "lng": -112.065082658448,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.larmonphoto.com/about-us",
+      "name": "Foto Forum · Phoenix",
+      "observed_at": "2026-07-19T05:09:00Z",
+      "organization_key_material": "Foto Forum",
+      "phone": "(602) 263-0084",
+      "postal_code": "85014",
+      "retailer_host": "larmonphoto.com",
+      "source_id": "larmonphoto_store_page",
+      "state": "AZ",
+      "website_url": "https://www.larmonphoto.com/"
+    },
+    {
+      "address": "530 W. University Dr.",
+      "brand_listing_url": "https://www.tempecamera.biz/About-Us-s/302.htm",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Tempe",
+      "coordinates": {
+        "lat": 33.421966175589,
+        "lng": -111.946256738913,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.tempecamera.biz/About-Us-s/302.htm",
+      "name": "TCR Photo Imaging Center · Tempe",
+      "observed_at": "2026-07-17T00:01:19Z",
+      "organization_key_material": "Tempe Camera Repair Inc",
+      "phone": "480-966-6954",
+      "postal_code": "85281",
+      "retailer_host": "tempecamera.biz",
+      "source_id": "tempecamera_store_page",
+      "state": "AZ",
+      "website_url": "https://www.tempecamera.biz"
+    },
+    {
+      "address": "606 W. University Drive",
+      "brand_listing_url": "https://www.tempecamera.biz/About-Us-s/302.htm",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Tempe",
+      "coordinates": {
+        "lat": 33.42196481961,
+        "lng": -111.947388433371,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.tempecamera.biz/About-Us-s/302.htm",
+      "name": "Tempe Camera (Main Building) · Tempe",
+      "observed_at": "2026-07-17T00:01:19Z",
+      "organization_key_material": "Tempe Camera Repair Inc",
+      "phone": "480-966-6954",
+      "postal_code": "85281",
+      "retailer_host": "tempecamera.biz",
+      "source_id": "tempecamera_store_page",
+      "state": "AZ",
+      "website_url": "https://www.tempecamera.biz"
+    },
+    {
+      "address": "3813 N. Oracle Road",
+      "brand_listing_url": "https://www.tucsoncamerarepair.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Tucson",
+      "coordinates": {
+        "lat": 32.276050892526,
+        "lng": -110.978307463781,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.tucsoncamerarepair.com",
+      "name": "Tucson Camera Repair · Tucson",
+      "observed_at": "2026-07-17T00:02:14Z",
+      "organization_key_material": "Tucson Camera Repair",
+      "phone": "(520) 887-1841",
+      "postal_code": "85705",
+      "retailer_host": "tucsoncamerarepair.com",
+      "source_id": "tucsoncamerarepair_store_page",
+      "state": "AZ",
+      "website_url": "https://www.tucsoncamerarepair.com"
+    },
+    {
+      "address": "2095 Rose Street",
+      "brand_listing_url": "https://lookingglassphoto.com/pages/looking-glass-on-rose",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Berkeley",
+      "coordinates": {
+        "lat": 37.882040732751,
+        "lng": -122.269717266391,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://lookingglassphoto.com/pages/looking-glass-on-rose",
+      "name": "Looking Glass Photographic Outfitters · Berkeley",
+      "observed_at": "2026-07-16T23:56:47Z",
+      "organization_key_material": "Looking Glass Photographic Art",
+      "phone": "510-548-6888",
+      "postal_code": "94709",
+      "retailer_host": "lookingglassphoto.com",
+      "source_id": "lookingglassphoto_store_page",
+      "state": "CA",
+      "website_url": "https://www.lookingglassphoto.com"
+    },
+    {
+      "address": "801 South Main St",
+      "brand_listing_url": "https://www.abelcine.com/locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Burbank",
+      "coordinates": {
+        "lat": 34.165504867314,
+        "lng": -118.312694951291,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.abelcine.com/locations",
+      "name": "AbelCine Los Angeles · Burbank",
+      "observed_at": "2026-07-16T23:48:10Z",
+      "organization_key_material": "Abel Cine",
+      "phone": "888-700-4416",
+      "postal_code": "91506",
+      "retailer_host": "abelcine.com",
+      "source_id": "abelcine_store_page",
+      "state": "CA",
+      "website_url": "https://www.abelcine.com"
+    },
+    {
+      "address": "1400 West Burbank Blvd.",
+      "brand_listing_url": "https://www.filmtools.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Burbank",
+      "coordinates": {
+        "lat": 34.1824696601,
+        "lng": -118.326738878987,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.filmtools.com/contact-us",
+      "name": "Filmtools Flagship Store - Burbank · Burbank",
+      "observed_at": "2026-07-16T23:53:02Z",
+      "organization_key_material": "Filmtools Inc.",
+      "phone": "818-845-8066",
+      "postal_code": "91506",
+      "retailer_host": "filmtools.com",
+      "source_id": "filmtools_store_page",
+      "state": "CA",
+      "website_url": "https://www.filmtools.com"
+    },
+    {
+      "address": "722 N. Mariposa St",
+      "brand_listing_url": "https://hotrodcameras.com/pages/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Burbank",
+      "coordinates": {
+        "lat": 34.180099818086,
+        "lng": -118.324414256932,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://hotrodcameras.com/pages/contact-us",
+      "name": "Hot Rod Cameras · Burbank",
+      "observed_at": "2026-07-16T23:54:56Z",
+      "organization_key_material": "Hot Rod Cameras LLC",
+      "phone": "(323) 230-3589",
+      "postal_code": "91506",
+      "retailer_host": "hotrodcameras.com",
+      "source_id": "hotrodcameras_store_page",
+      "state": "CA",
+      "website_url": "https://hotrodcameras.com"
+    },
+    {
+      "address": "1600 S Winchester Blvd",
+      "brand_listing_url": "https://sanjosecamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Campbell",
+      "coordinates": {
+        "lat": 37.294369358053,
+        "lng": -121.949725887697,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://sanjosecamera.com/contact-us",
+      "name": "San Jose Camera & Video · Campbell",
+      "observed_at": "2026-07-17T00:00:18Z",
+      "organization_key_material": "San Jose Camera Shop, Inc",
+      "phone": "(408) 374-1880",
+      "postal_code": "95008-0503",
+      "retailer_host": "sanjosecamera.com",
+      "source_id": "sanjosecamera_store_page",
+      "state": "CA",
+      "website_url": "https://sanjosecamera.com"
+    },
+    {
+      "address": "3961 Sepulveda Blvd Suite 206",
+      "brand_listing_url": "https://www.bluewaterphotostore.com/store-hours",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Culver City",
+      "coordinates": {
+        "lat": 34.009657356222,
+        "lng": -118.41468590392,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.bluewaterphotostore.com/store-hours",
+      "name": "Bluewater Photo & Video · Culver City",
+      "observed_at": "2026-07-16T23:50:15Z",
+      "organization_key_material": "Bluewater Photo",
+      "phone": "310-633-5052",
+      "postal_code": "90230",
+      "retailer_host": "bluewaterphotostore.com",
+      "source_id": "bluewaterphotostore_store_page",
+      "state": "CA",
+      "website_url": "https://www.bluewaterphotostore.com/"
+    },
+    {
+      "address": "7899 N. Blackstone Ave",
+      "brand_listing_url": "https://www.hornphoto.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Fresno",
+      "coordinates": {
+        "lat": 36.850999956423,
+        "lng": -119.790978722777,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.hornphoto.com",
+      "name": "Horn Photo · Fresno",
+      "observed_at": "2026-07-16T23:54:51Z",
+      "organization_key_material": "Horn Photo, Inc",
+      "phone": "(559) 225-5080",
+      "postal_code": "93720",
+      "retailer_host": "hornphoto.com",
+      "source_id": "hornphoto_store_page",
+      "state": "CA",
+      "website_url": "https://www.hornphoto.com"
+    },
+    {
+      "address": "23052 Lake Forest Dr Suite D-1",
+      "brand_listing_url": "https://www.occamera.com/aboutus.asp",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Laguna Hills",
+      "coordinates": {
+        "lat": 33.629040092202,
+        "lng": -117.726936874429,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.occamera.com/aboutus.asp",
+      "name": "OC Camera Inc · Laguna Hills",
+      "observed_at": "2026-07-19T05:09:39Z",
+      "organization_key_material": "OC Camera Inc",
+      "phone": "(949) 347-1276",
+      "postal_code": "92653",
+      "retailer_host": "occamera.com",
+      "source_id": "occamera_store_page",
+      "state": "CA",
+      "website_url": "https://www.occamera.com"
+    },
+    {
+      "address": "5467 E. Carson St.",
+      "brand_listing_url": "https://tuttlecameras.com/index.php?dispatch=pages.view&page_id=20",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Long Beach",
+      "coordinates": {
+        "lat": 33.83235838473,
+        "lng": -118.125810375449,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://tuttlecameras.com/index.php?dispatch=pages.view&page_id=20",
+      "name": "Tuttle Cameras · Long Beach",
+      "observed_at": "2026-07-17T00:02:19Z",
+      "organization_key_material": "Tuttle Camera Inc",
+      "phone": "562-354-6080",
+      "postal_code": "90808",
+      "retailer_host": "tuttlecameras.com",
+      "source_id": "tuttlecameras_store_page",
+      "state": "CA",
+      "website_url": "https://tuttlecameras.com"
+    },
+    {
+      "address": "225 Cannery Row",
+      "brand_listing_url": "https://www.backscatter.com/Contact-Us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Monterey",
+      "coordinates": {
+        "lat": 36.610738892079,
+        "lng": -121.897085437995,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.backscatter.com/Contact-Us",
+      "name": "Backscatter West Coast Headquarters & Showroom · Monterey",
+      "observed_at": "2026-07-16T23:49:23Z",
+      "organization_key_material": "Backscatter",
+      "phone": "+1 831-645-1082",
+      "postal_code": "93940",
+      "retailer_host": "backscatter.com",
+      "source_id": "backscatter_store_page",
+      "state": "CA",
+      "website_url": "https://www.backscatter.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

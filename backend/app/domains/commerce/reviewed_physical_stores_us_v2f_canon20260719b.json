@@ -1,0 +1,513 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "4333 S. 70th Street, Ste 7",
+   "brand_listing_url": "https://www.rockbrookcamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lincoln",
+   "coordinates": {
+    "lat": 40.769315497362,
+    "lng": -96.625345502735,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.rockbrookcamera.com/contact-us",
+   "name": "Rockbrook Camera at Pioneer Place · Lincoln",
+   "observed_at": "2026-07-19T05:00:04Z",
+   "organization_key_material": "ROCKBROOK CAMERA & VIDEO",
+   "phone": "402-488-4200",
+   "postal_code": "68516",
+   "retailer_host": "rockbrookcamera.com",
+   "source_id": "rockbrookcamera_store_page",
+   "state": "NE",
+   "website_url": "https://www.rockbrookcamera.com/"
+  },
+  {
+   "address": "700 South 72nd St",
+   "brand_listing_url": "https://www.nfm.com/stores",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Omaha",
+   "coordinates": {
+    "lat": 41.254261237415,
+    "lng": -96.024019870927,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.nfm.com/stores",
+   "name": "Omaha Store & Mrs. B's · Omaha",
+   "observed_at": "2026-07-19T04:56:15Z",
+   "organization_key_material": "NEBRASKA FURNITURE MART INC",
+   "phone": "(402) 255-6327",
+   "postal_code": "68114",
+   "retailer_host": "nfm.com",
+   "source_id": "nfm_store_page",
+   "state": "NE",
+   "website_url": "https://www.nfm.com"
+  },
+  {
+   "address": "2909 S. 169th Plaza, Ste 100",
+   "brand_listing_url": "https://www.rockbrookcamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Omaha",
+   "coordinates": {
+    "lat": 41.233070688829,
+    "lng": -96.178311148829,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.rockbrookcamera.com/contact-us",
+   "name": "Rockbrook Camera at Legacy · Omaha",
+   "observed_at": "2026-07-19T05:00:04Z",
+   "organization_key_material": "ROCKBROOK CAMERA & VIDEO",
+   "phone": "402-691-0003",
+   "postal_code": "68130",
+   "retailer_host": "rockbrookcamera.com",
+   "source_id": "rockbrookcamera_store_page",
+   "state": "NE",
+   "website_url": "https://www.rockbrookcamera.com/"
+  },
+  {
+   "address": "80 Carter Drive",
+   "brand_listing_url": "https://www.beachcamera.com/pages/retail-store",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Edison",
+   "coordinates": {
+    "lat": 40.53070024199,
+    "lng": -74.395528796408,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.beachcamera.com/pages/retail-store",
+   "name": "Beach Camera Retail Store · Edison",
+   "observed_at": "2026-07-17T19:29:38Z",
+   "organization_key_material": "BEACH CAMERA",
+   "phone": "732-387-3221",
+   "postal_code": "08817",
+   "retailer_host": "beachcamera.com",
+   "source_id": "beachcamera_store_page",
+   "state": "NJ",
+   "website_url": "https://www.beachcamera.com"
+  },
+  {
+   "address": "123 US Hwy 46 (West)",
+   "brand_listing_url": "https://www.uniquephoto.com/fairfield",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Fairfield",
+   "coordinates": {
+    "lat": 40.86962349048,
+    "lng": -74.308625681853,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.uniquephoto.com/fairfield",
+   "name": "Unique Photo Fairfield · Fairfield",
+   "observed_at": "2026-07-19T05:04:46Z",
+   "organization_key_material": "UNIQUE PHOTO",
+   "phone": "(973) 377-2007",
+   "postal_code": "07004",
+   "retailer_host": "uniquephoto.com",
+   "source_id": "uniquephoto_store_page",
+   "state": "NJ",
+   "website_url": "https://www.uniquephoto.com/"
+  },
+  {
+   "address": "1797 Ave of the States, Unit 7",
+   "brand_listing_url": "https://www.focuscamera.com/pages/store-locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lakewood",
+   "coordinates": {
+    "lat": 40.078135061578,
+    "lng": -74.190711511531,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.focuscamera.com/pages/store-locations",
+   "name": "Lakewood Store · Lakewood",
+   "observed_at": "2026-07-17T22:10:20Z",
+   "organization_key_material": "FOCUS CAMERA INC",
+   "phone": "732-333-6855",
+   "postal_code": "08701",
+   "retailer_host": "focuscamera.com",
+   "source_id": "focuscamera_store_page",
+   "state": "NJ",
+   "website_url": "https://www.focuscamera.com"
+  },
+  {
+   "address": "40 Main Street",
+   "brand_listing_url": "https://www.madisonphoto.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Madison",
+   "coordinates": {
+    "lat": 40.759230918379,
+    "lng": -74.415689337658,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.madisonphoto.com/contact-us",
+   "name": "Madison PhotoPlus · Madison",
+   "observed_at": "2026-07-19T04:54:07Z",
+   "organization_key_material": "MADISON PHOTO SHOP",
+   "phone": "973-966-2900",
+   "postal_code": "07940",
+   "retailer_host": "madisonphoto.com",
+   "source_id": "madisonphoto_store_page",
+   "state": "NJ",
+   "website_url": "https://www.madisonphoto.com"
+  },
+  {
+   "address": "85 Godwin Ave",
+   "brand_listing_url": "https://wholesalephoto.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Midland Park",
+   "coordinates": {
+    "lat": 40.984451637944,
+    "lng": -74.137434001448,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://wholesalephoto.com/contact-us",
+   "name": "Wholesale Photo · Midland Park",
+   "observed_at": "2026-07-19T05:06:36Z",
+   "organization_key_material": "WHOLESALE PHOTO SUPPLY",
+   "phone": "(833) 682-9331",
+   "postal_code": "07432",
+   "retailer_host": "wholesalephoto.com",
+   "source_id": "wholesalephoto_store_page",
+   "state": "NJ",
+   "website_url": "https://wholesalephoto.com"
+  },
+  {
+   "address": "270 Westwood Ave",
+   "brand_listing_url": "https://www.bergencountycamera.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Westwood",
+   "coordinates": {
+    "lat": 40.992965802286,
+    "lng": -74.030028279222,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.bergencountycamera.com/contact",
+   "name": "Bergen County Camera · Westwood",
+   "observed_at": "2026-07-19T04:44:14Z",
+   "organization_key_material": "BERGEN COUNTY CAMERA",
+   "phone": "201-664-4113",
+   "postal_code": "07675",
+   "retailer_host": "bergencountycamera.com",
+   "source_id": "bergencountycamera_store_page",
+   "state": "NJ",
+   "website_url": "https://www.bergencountycamera.com/"
+  },
+  {
+   "address": "Industry City 88 35th St, 4th Fl.",
+   "brand_listing_url": "https://www.abelcine.com/locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Brooklyn",
+   "coordinates": {
+    "lat": 40.656674950458,
+    "lng": -74.006930758739,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.abelcine.com/locations",
+   "name": "AbelCine New York · Brooklyn",
+   "observed_at": "2026-07-19T04:41:59Z",
+   "organization_key_material": "ABEL CINE TECH INC",
+   "phone": "888-223-1599",
+   "postal_code": "11232",
+   "retailer_host": "abelcine.com",
+   "source_id": "abelcine_store_page",
+   "state": "NY",
+   "website_url": "https://www.abelcine.com"
+  },
+  {
+   "address": "895 McDonald Ave",
+   "brand_listing_url": "https://www.focuscamera.com/pages/store-locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Brooklyn",
+   "coordinates": {
+    "lat": 40.63310715036,
+    "lng": -73.97753263919,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.focuscamera.com/pages/store-locations",
+   "name": "Brooklyn Store · Brooklyn",
+   "observed_at": "2026-07-17T22:10:20Z",
+   "organization_key_material": "FOCUS CAMERA INC",
+   "phone": "718-431-7900",
+   "postal_code": "11218",
+   "retailer_host": "focuscamera.com",
+   "source_id": "focuscamera_store_page",
+   "state": "NY",
+   "website_url": "https://www.focuscamera.com"
+  },
+  {
+   "address": "4415 14th Ave",
+   "brand_listing_url": "https://www.duddyselectronics.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Brooklyn",
+   "coordinates": {
+    "lat": 40.636347346065,
+    "lng": -73.987058624773,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.duddyselectronics.com",
+   "name": "Duddy's Electronics · Brooklyn",
+   "observed_at": "2026-07-17T21:14:24Z",
+   "organization_key_material": "DUDDY'S ELECTRONICS & APPLIANCES INC",
+   "phone": "718-851-9400",
+   "postal_code": "11219",
+   "retailer_host": "duddyselectronics.com",
+   "source_id": "duddyselectronics_store_page",
+   "state": "NY",
+   "website_url": "https://www.duddyselectronics.com"
+  },
+  {
+   "address": "325 38th Street",
+   "brand_listing_url": "https://kmcamera.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Brooklyn",
+   "coordinates": {
+    "lat": 40.654179391327,
+    "lng": -74.007016234943,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://kmcamera.com",
+   "name": "K&M Rentals (Brooklyn Location) · Brooklyn",
+   "observed_at": "2026-07-17T22:22:08Z",
+   "organization_key_material": "K&M CAMERA",
+   "phone": "212-523-0954",
+   "postal_code": "11232",
+   "retailer_host": "kmcamera.com",
+   "source_id": "kmcamera_store_page",
+   "state": "NY",
+   "website_url": "https://kmcamera.com"
+  },
+  {
+   "address": "2635 Delaware Ave",
+   "brand_listing_url": "https://www.cameraspot.com/contact-location",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Buffalo",
+   "coordinates": {
+    "lat": 42.955281904139,
+    "lng": -78.86914132593,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameraspot.com/contact-location",
+   "name": "Delaware Camera - Buffalo · Buffalo",
+   "observed_at": "2026-07-19T04:52:10Z",
+   "organization_key_material": "JACK'S CAMERAS, INC.",
+   "phone": "716-877-3317",
+   "postal_code": "14216",
+   "retailer_host": "cameraspot.com",
+   "source_id": "cameraspot_store_page",
+   "state": "NY",
+   "website_url": "https://www.cameraspot.com"
+  },
+  {
+   "address": "125 Gazza Blvd",
+   "brand_listing_url": "https://www.adwarvideo.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Farmingdale",
+   "coordinates": {
+    "lat": 40.746639561604,
+    "lng": -73.417168261593,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.adwarvideo.com/contact",
+   "name": "Adwar Video · Farmingdale",
+   "observed_at": "2026-07-19T05:05:49Z",
+   "organization_key_material": "VIDEO HI-TECH CORP",
+   "phone": "(631) 777-7070",
+   "postal_code": "11735",
+   "retailer_host": "adwarvideo.com",
+   "source_id": "adwarvideo_store_page",
+   "state": "NY",
+   "website_url": "https://www.adwarvideo.com"
+  },
+  {
+   "address": "731 Franklin Ave.",
+   "brand_listing_url": "https://www.neptunephoto.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Garden City",
+   "coordinates": {
+    "lat": 40.725709357239,
+    "lng": -73.634081087016,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.neptunephoto.com/contact",
+   "name": "Neptune Photo Inc. · Garden City",
+   "observed_at": "2026-07-19T04:56:19Z",
+   "organization_key_material": "NEPTUNE PHOTO INC",
+   "phone": "516-741-4484",
+   "postal_code": "11530",
+   "retailer_host": "neptunephoto.com",
+   "source_id": "neptunephoto_store_page",
+   "state": "NY",
+   "website_url": "https://www.neptunephoto.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

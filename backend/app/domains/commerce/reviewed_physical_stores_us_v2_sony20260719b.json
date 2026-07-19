@@ -1,0 +1,265 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "sony_dealer_directory_20260718",
+ "stores": [
+  {
+   "address": "7071 N. 138th Ave Bldg 1540",
+   "brand_listing_url": "https://www.shopmyexchange.com/exchange-stores/Luke-AFB-Main-Exchange/AZ/GLENDALE/7071-N-138TH-AVE-BLDG-1540/1202000",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Glendale",
+   "coordinates": {
+    "lat": 33.538215089024,
+    "lng": -112.356671468981,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.shopmyexchange.com/exchange-stores/Luke-AFB-Main-Exchange/AZ/GLENDALE/7071-N-138TH-AVE-BLDG-1540/1202000",
+   "name": "Luke AFB Main Exchange · Glendale",
+   "observed_at": "2026-07-18T19:21:43Z",
+   "organization_key_material": "Army & Airforce Exchange",
+   "phone": "623-935-2671",
+   "postal_code": "853072006",
+   "retailer_host": "shopmyexchange.com",
+   "source_id": "shopmyexchange_store_page",
+   "state": "AZ",
+   "website_url": "https://www.shopmyexchange.com"
+  },
+  {
+   "address": "801 South Main St.",
+   "brand_listing_url": "https://www.abelcine.com/locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Burbank",
+   "coordinates": {
+    "lat": 34.165504867314,
+    "lng": -118.312694951291,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.abelcine.com/locations",
+   "name": "AbelCine Los Angeles · Burbank",
+   "observed_at": "2026-07-18T19:19:40Z",
+   "organization_key_material": "Abel Cine Tech",
+   "phone": "888-700-4416",
+   "postal_code": "91506",
+   "retailer_host": "abelcine.com",
+   "source_id": "abelcine_store_page",
+   "state": "CA",
+   "website_url": "https://www.abelcine.com"
+  },
+  {
+   "address": "181 Second Street",
+   "brand_listing_url": "https://www.gassersphoto.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "San Francisco",
+   "coordinates": {
+    "lat": 37.787044954283,
+    "lng": -122.398485432162,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.gassersphoto.com",
+   "name": "Adolph Gasser's · San Francisco",
+   "observed_at": "2026-07-18T19:20:13Z",
+   "organization_key_material": "Adolph Gasser, Inc",
+   "phone": "415.495.3852",
+   "postal_code": "94105",
+   "retailer_host": "gassersphoto.com",
+   "source_id": "gassersphoto_store_page",
+   "state": "CA",
+   "website_url": "https://www.gassersphoto.com"
+  },
+  {
+   "address": "8000 Miller Ct E",
+   "brand_listing_url": "https://www.amitrace.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Norcross",
+   "coordinates": {
+    "lat": 33.954252153606,
+    "lng": -84.215857861505,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.amitrace.com/contact",
+   "name": "Amitrace Computer systems · Norcross",
+   "observed_at": "2026-07-19T05:11:19Z",
+   "organization_key_material": "Amitrace Computer systems",
+   "phone": "(770) 263-9190",
+   "postal_code": "30071",
+   "retailer_host": "amitrace.com",
+   "source_id": "amitrace_store_page",
+   "state": "GA",
+   "website_url": "https://www.amitrace.com"
+  },
+  {
+   "address": "Industry City 88 35th St, 4th Fl",
+   "brand_listing_url": "https://www.abelcine.com/locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Brooklyn",
+   "coordinates": {
+    "lat": 40.656674950458,
+    "lng": -74.006930758739,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.abelcine.com/locations",
+   "name": "AbelCine New York · Brooklyn",
+   "observed_at": "2026-07-18T19:19:40Z",
+   "organization_key_material": "Abel Cine Tech",
+   "phone": "888-223-1599",
+   "postal_code": "11232",
+   "retailer_host": "abelcine.com",
+   "source_id": "abelcine_store_page",
+   "state": "NY",
+   "website_url": "https://www.abelcine.com"
+  },
+  {
+   "address": "226 West 26th Street",
+   "brand_listing_url": "https://sales.allmobilevideo.com/amv-broadcast-sales",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "New York",
+   "coordinates": {
+    "lat": 40.74640477804,
+    "lng": -73.995367780375,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://sales.allmobilevideo.com/amv-broadcast-sales",
+   "name": "AMV Broadcast Sales · New York",
+   "observed_at": "2026-07-19T05:11:25Z",
+   "organization_key_material": "AMV Broadcast Sales, Inc.",
+   "phone": "(212) 586-8616",
+   "postal_code": "10019",
+   "retailer_host": "allmobilevideo.com",
+   "source_id": "allmobilevideo_store_page",
+   "state": "NY",
+   "website_url": "https://www.allmobilevideo.com/"
+  },
+  {
+   "address": "15-17 West 36th Street",
+   "brand_listing_url": "https://www.willoughbys.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "New York",
+   "coordinates": {
+    "lat": 40.750014678875,
+    "lng": -73.98415692573,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.willoughbys.com/contact-us",
+   "name": "Willoughby's Photo Emporium · New York",
+   "observed_at": "2026-07-18T19:19:26Z",
+   "organization_key_material": "18 Cons Elctrncs & Photo",
+   "phone": "855-851-5151",
+   "postal_code": "10018",
+   "retailer_host": "willoughbys.com",
+   "source_id": "willoughbys_store_page",
+   "state": "NY",
+   "website_url": "https://www.willoughbys.com/"
+  },
+  {
+   "address": "1168 Wantagh Avenue",
+   "brand_listing_url": "https://www.17thstreet.com/ny-store",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "sony",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://electronics.sony.com/retailers?path=%2Fretailers",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Wantagh",
+   "coordinates": {
+    "lat": 40.694789178066,
+    "lng": -73.507538706792,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.17thstreet.com/ny-store",
+   "name": "17th Street Photo Supply · Wantagh",
+   "observed_at": "2026-07-18T19:19:15Z",
+   "organization_key_material": "17Th St Photo Supply",
+   "phone": "1-800-664-1971",
+   "postal_code": "11793",
+   "retailer_host": "17thstreet.com",
+   "source_id": "17thstreet_store_page",
+   "state": "NY",
+   "website_url": "https://www.17thstreet.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

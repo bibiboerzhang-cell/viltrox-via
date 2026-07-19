@@ -1,0 +1,544 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "1 Washington Street",
+   "brand_listing_url": "https://www.staples.com/stores/ma/boston/1-washington-street",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Boston",
+   "coordinates": {
+    "lat": 42.308236567853,
+    "lng": -71.083179643006,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.staples.com/stores/ma/boston/1-washington-street",
+   "name": "Staples Boston · Boston",
+   "observed_at": "2026-07-19T05:02:12Z",
+   "organization_key_material": "STAPLES",
+   "phone": "(617) 248-8975",
+   "postal_code": "02108",
+   "retailer_host": "staples.com",
+   "source_id": "staples_store_page",
+   "state": "MA",
+   "website_url": "https://www.staples.com"
+  },
+  {
+   "address": "160 Alewife Brook Pkwy",
+   "brand_listing_url": "https://www.staples.com/stores/ma/cambridge/160-alewife-brook-pkwy",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Cambridge",
+   "coordinates": {
+    "lat": 42.389901931138,
+    "lng": -71.142121940028,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.staples.com/stores/ma/cambridge/160-alewife-brook-pkwy",
+   "name": "Staples Cambridge · Cambridge",
+   "observed_at": "2026-07-19T05:02:12Z",
+   "organization_key_material": "STAPLES",
+   "phone": "(617) 547-3948",
+   "postal_code": "02138",
+   "retailer_host": "staples.com",
+   "source_id": "staples_store_page",
+   "state": "MA",
+   "website_url": "https://www.staples.com"
+  },
+  {
+   "address": "9 West Rd #1",
+   "brand_listing_url": "https://orleanscamera.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Orleans",
+   "coordinates": {
+    "lat": 41.780919181687,
+    "lng": -70.000529632191,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://orleanscamera.com/contact/",
+   "name": "Orleans Camera · Orleans",
+   "observed_at": "2026-07-17T22:43:33Z",
+   "organization_key_material": "ORLEANS CAMERA INC.",
+   "phone": "508-240-1300",
+   "postal_code": "02653",
+   "retailer_host": "orleanscamera.com",
+   "source_id": "orleanscamera_store_page",
+   "state": "MA",
+   "website_url": "https://orleanscamera.com"
+  },
+  {
+   "address": "165 Middlesex Ave.",
+   "brand_listing_url": "https://www.staples.com/stores/ma/somerville/165-middlesex-ave",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Somerville",
+   "coordinates": {
+    "lat": 42.394456775463,
+    "lng": -71.08348187315,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.staples.com/stores/ma/somerville/165-middlesex-ave",
+   "name": "Staples Somerville · Somerville",
+   "observed_at": "2026-07-19T05:02:12Z",
+   "organization_key_material": "STAPLES",
+   "phone": "(617) 623-7980",
+   "postal_code": "02145",
+   "retailer_host": "staples.com",
+   "source_id": "staples_store_page",
+   "state": "MA",
+   "website_url": "https://www.staples.com"
+  },
+  {
+   "address": "3838 Falls Road",
+   "brand_listing_url": "https://www.servicephoto.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Baltimore",
+   "coordinates": {
+    "lat": 39.334574218448,
+    "lng": -76.636121671785,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.servicephoto.com/contact-us",
+   "name": "Service Photo · Baltimore",
+   "observed_at": "2026-07-19T05:01:17Z",
+   "organization_key_material": "SERVICE PHOTO SUPPLY INC",
+   "phone": "(410) 235-6200",
+   "postal_code": "21211",
+   "retailer_host": "servicephoto.com",
+   "source_id": "servicephoto_store_page",
+   "state": "MD",
+   "website_url": "https://www.servicephoto.com"
+  },
+  {
+   "address": "2275 W Stadium Blvd",
+   "brand_listing_url": "https://cameramall.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Ann Arbor",
+   "coordinates": {
+    "lat": 42.275340390481,
+    "lng": -83.777600281137,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://cameramall.com",
+   "name": "CameraMall · Ann Arbor",
+   "observed_at": "2026-07-17T21:57:09Z",
+   "organization_key_material": "CAMERAMALL",
+   "phone": "734-997-5031",
+   "postal_code": "48103",
+   "retailer_host": "cameramall.com",
+   "source_id": "cameramall_store_page",
+   "state": "MI",
+   "website_url": "https://cameramall.com"
+  },
+  {
+   "address": "2015 W. Stadium Blvd.",
+   "brand_listing_url": "https://www.procam.com/locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Ann Arbor",
+   "coordinates": {
+    "lat": 42.270138112463,
+    "lng": -83.77374513299,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.procam.com/locations",
+   "name": "PROCAM Ann Arbor · Ann Arbor",
+   "observed_at": "2026-07-19T04:59:07Z",
+   "organization_key_material": "PROCAM",
+   "phone": "(734) 977-6226",
+   "postal_code": "48103",
+   "retailer_host": "procam.com",
+   "source_id": "procam_store_page",
+   "state": "MI",
+   "website_url": "https://www.procam.com"
+  },
+  {
+   "address": "33501 Woodward Ave.",
+   "brand_listing_url": "https://woodwardcamera.com/pages/contact-1",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Birmingham",
+   "coordinates": {
+    "lat": 42.535157718889,
+    "lng": -83.203155349172,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://woodwardcamera.com/pages/contact-1",
+   "name": "Woodward Camera · Birmingham",
+   "observed_at": "2026-07-17T23:21:33Z",
+   "organization_key_material": "WOODWARD CAMERA",
+   "phone": "248-642-1985",
+   "postal_code": "48009",
+   "retailer_host": "woodwardcamera.com",
+   "source_id": "woodwardcamera_store_page",
+   "state": "MI",
+   "website_url": "https://woodwardcamera.com/"
+  },
+  {
+   "address": "3602 S. Westnedge Ave.",
+   "brand_listing_url": "https://normancamera.com/pages/about-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Kalamazoo",
+   "coordinates": {
+    "lat": 42.255625099783,
+    "lng": -85.589694456154,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://normancamera.com/pages/about-us",
+   "name": "Kalamazoo Store · Kalamazoo",
+   "observed_at": "2026-07-17T22:37:36Z",
+   "organization_key_material": "NORMAN CAMERA CO",
+   "phone": "269-343-0460",
+   "postal_code": "49008",
+   "retailer_host": "normancamera.com",
+   "source_id": "normancamera_store_page",
+   "state": "MI",
+   "website_url": "https://normancamera.com"
+  },
+  {
+   "address": "21 University Avenue NE",
+   "brand_listing_url": "https://www.westphoto.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Minneapolis",
+   "coordinates": {
+    "lat": 44.988264203354,
+    "lng": -93.256438406177,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.westphoto.com",
+   "name": "West Photo · Minneapolis",
+   "observed_at": "2026-07-19T05:06:30Z",
+   "organization_key_material": "WEST PHOTO SHOP",
+   "phone": "612-379-2321",
+   "postal_code": "55413",
+   "retailer_host": "westphoto.com",
+   "source_id": "westphoto_store_page",
+   "state": "MN",
+   "website_url": "https://www.westphoto.com"
+  },
+  {
+   "address": "3724 Oregon Ave. South",
+   "brand_listing_url": "https://zsyst.com/contact-us/directions-hours/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Saint Louis Park",
+   "coordinates": {
+    "lat": 44.936451971901,
+    "lng": -93.374431811243,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://zsyst.com/contact-us/directions-hours/",
+   "name": "Z Systems, inc. · Saint Louis Park",
+   "observed_at": "2026-07-19T05:08:09Z",
+   "organization_key_material": "Z SYSTEMS INC",
+   "phone": "(952) 974-3140",
+   "postal_code": "55426",
+   "retailer_host": "zsyst.com",
+   "source_id": "zsyst_store_page",
+   "state": "MN",
+   "website_url": "https://zsyst.com/"
+  },
+  {
+   "address": "214 Waite Avenue South",
+   "brand_listing_url": "https://stcloudcameraandphoto.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "St Cloud",
+   "coordinates": {
+    "lat": 45.549458257849,
+    "lng": -94.213726671518,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://stcloudcameraandphoto.com/contact-us/",
+   "name": "St. Cloud Camera & Photo · St Cloud",
+   "observed_at": "2026-07-19T05:01:51Z",
+   "organization_key_material": "ST. CLOUD CAMERA & PHOTO",
+   "phone": "320-258-5557",
+   "postal_code": "56301",
+   "retailer_host": "stcloudcameraandphoto.com",
+   "source_id": "stcloudcameraandphoto_store_page",
+   "state": "MN",
+   "website_url": "https://stcloudcameraandphoto.com/"
+  },
+  {
+   "address": "9240 Manchester Rd",
+   "brand_listing_url": "https://www.schillers.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "St. Louis",
+   "coordinates": {
+    "lat": 38.611367083593,
+    "lng": -90.358081261702,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.schillers.com",
+   "name": "Schiller's · St. Louis",
+   "observed_at": "2026-07-19T05:01:07Z",
+   "organization_key_material": "SCHILLER, W & CO",
+   "phone": "(314) 968-3650",
+   "postal_code": "63144",
+   "retailer_host": "schillers.com",
+   "source_id": "schillers_store_page",
+   "state": "MO",
+   "website_url": "https://www.schillers.com"
+  },
+  {
+   "address": "103 Thornhill Drive",
+   "brand_listing_url": "https://www.stewartscamera.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Hattiesburg",
+   "coordinates": {
+    "lat": 31.325670285391,
+    "lng": -89.3503054625,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.stewartscamera.com",
+   "name": "Stewart's Camera Center · Hattiesburg",
+   "observed_at": "2026-07-19T05:02:18Z",
+   "organization_key_material": "STEWARTS CAMERA CENTER",
+   "phone": "601-268-1688",
+   "postal_code": "39402",
+   "retailer_host": "stewartscamera.com",
+   "source_id": "stewartscamera_store_page",
+   "state": "MS",
+   "website_url": "https://www.stewartscamera.com"
+  },
+  {
+   "address": "1262 Stoneridge Drive",
+   "brand_listing_url": "https://bozemancamera.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Bozeman",
+   "coordinates": {
+    "lat": 45.691417258483,
+    "lng": -111.063256026752,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://bozemancamera.com/contact-us/",
+   "name": "Bozeman Camera & Repair · Bozeman",
+   "observed_at": "2026-07-17T19:33:48Z",
+   "organization_key_material": "BOZEMAN CAMERA REPAIR",
+   "phone": "(406) 586-8300",
+   "postal_code": "59718",
+   "retailer_host": "bozemancamera.com",
+   "source_id": "bozemancamera_store_page",
+   "state": "MT",
+   "website_url": "https://bozemancamera.com/"
+  },
+  {
+   "address": "569 Merrimon Ave",
+   "brand_listing_url": "https://www.ballphotosupply.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Asheville",
+   "coordinates": {
+    "lat": 35.618426552393,
+    "lng": -82.554124334598,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.ballphotosupply.com/contact-us",
+   "name": "Ball Photo Supply · Asheville",
+   "observed_at": "2026-07-19T04:43:56Z",
+   "organization_key_material": "BALL PHOTO SUPPLY",
+   "phone": "(828) 252-2443",
+   "postal_code": "28804",
+   "retailer_host": "ballphotosupply.com",
+   "source_id": "ballphotosupply_store_page",
+   "state": "NC",
+   "website_url": "https://www.ballphotosupply.com"
+  },
+  {
+   "address": "805 S Kings Dr",
+   "brand_listing_url": "https://biggscamera.com/contact-us",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Charlotte",
+   "coordinates": {
+    "lat": 35.207829823579,
+    "lng": -80.835758412776,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://biggscamera.com/contact-us",
+   "name": "Biggs Camera · Charlotte",
+   "observed_at": "2026-07-17T21:51:28Z",
+   "organization_key_material": "BIGGS CAMERA IMAGE CENTER INC",
+   "phone": "704-377-3492",
+   "postal_code": "28204",
+   "retailer_host": "biggscamera.com",
+   "source_id": "biggscamera_store_page",
+   "state": "NC",
+   "website_url": "https://biggscamera.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

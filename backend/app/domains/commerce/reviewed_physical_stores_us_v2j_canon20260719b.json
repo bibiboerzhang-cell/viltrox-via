@@ -1,0 +1,482 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "2120 Avenue Q",
+   "brand_listing_url": "https://www.lav.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lubbock",
+   "coordinates": {
+    "lat": 33.575255089839,
+    "lng": -101.855416124029,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.lav.com/contact/",
+   "name": "Lubbock Audio Visual, Inc. (Lubbock) · Lubbock",
+   "observed_at": "2026-07-19T04:54:01Z",
+   "organization_key_material": "LUBBOCK AUDIO VISUAL, INC.",
+   "phone": "806-744-2559",
+   "postal_code": "79411",
+   "retailer_host": "lav.com",
+   "source_id": "lav_store_page",
+   "state": "TX",
+   "website_url": "https://www.lav.com"
+  },
+  {
+   "address": "3001 W Illinois Suite 2A",
+   "brand_listing_url": "https://www.lav.com/contact/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Midland",
+   "coordinates": {
+    "lat": 31.993240073927,
+    "lng": -102.108586538699,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.lav.com/contact/",
+   "name": "LAV Permian Basin · Midland",
+   "observed_at": "2026-07-19T04:54:01Z",
+   "organization_key_material": "LUBBOCK AUDIO VISUAL, INC.",
+   "phone": "432-218-9829",
+   "postal_code": "79701",
+   "retailer_host": "lav.com",
+   "source_id": "lav_store_page",
+   "state": "TX",
+   "website_url": "https://www.lav.com"
+  },
+  {
+   "address": "5600 Nebraska Furniture Mart Dr",
+   "brand_listing_url": "https://www.nfm.com/stores",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "The Colony",
+   "coordinates": {
+    "lat": 33.073029329806,
+    "lng": -96.870933288438,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.nfm.com/stores",
+   "name": "Dallas-Fort Worth Store · The Colony",
+   "observed_at": "2026-07-19T04:56:15Z",
+   "organization_key_material": "NEBRASKA FURNITURE MART INC",
+   "phone": "(972) 668-0191",
+   "postal_code": "75056",
+   "retailer_host": "nfm.com",
+   "source_id": "nfm_store_page",
+   "state": "TX",
+   "website_url": "https://www.nfm.com"
+  },
+  {
+   "address": "2466 Washington Blvd",
+   "brand_listing_url": "https://www.farrs.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Ogden",
+   "coordinates": {
+    "lat": 41.221356757629,
+    "lng": -111.970403864905,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.farrs.com",
+   "name": "Farr's Jewelry & Cameras · Ogden",
+   "observed_at": "2026-07-17T20:02:31Z",
+   "organization_key_material": "FARR & COMPANY",
+   "phone": "(801) 621-7666",
+   "postal_code": "84401",
+   "retailer_host": "farrs.com",
+   "source_id": "farrs_store_page",
+   "state": "UT",
+   "website_url": "https://www.farrs.com"
+  },
+  {
+   "address": "2121 South State St.",
+   "brand_listing_url": "https://www.allenscamera.net/pages/locations",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Salt Lake City",
+   "coordinates": {
+    "lat": 40.724915661521,
+    "lng": -111.888144593974,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.allenscamera.net/pages/locations",
+   "name": "Allen's Camera - Salt Lake City · Salt Lake City",
+   "observed_at": "2026-07-19T04:42:35Z",
+   "organization_key_material": "ALLEN'S CAMERA",
+   "phone": "(801) 278-0281",
+   "postal_code": "84115",
+   "retailer_host": "allenscamera.net",
+   "source_id": "allenscamera_store_page",
+   "state": "UT",
+   "website_url": "https://www.allenscamera.net"
+  },
+  {
+   "address": "170 East 2100 South",
+   "brand_listing_url": "https://www.goclearvista.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Salt Lake City",
+   "coordinates": {
+    "lat": 40.7253866707,
+    "lng": -111.886441166491,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.goclearvista.com/contact-us/",
+   "name": "ClearVista · Salt Lake City",
+   "observed_at": "2026-07-17T21:06:50Z",
+   "organization_key_material": "CLEARVISTA",
+   "phone": "801-486-5757",
+   "postal_code": "84115",
+   "retailer_host": "goclearvista.com",
+   "source_id": "goclearvista_store_page",
+   "state": "UT",
+   "website_url": "https://www.goclearvista.com"
+  },
+  {
+   "address": "470 W. Lawndale Drive, Unit G",
+   "brand_listing_url": "https://mediarighton.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Salt Lake City",
+   "coordinates": {
+    "lat": 40.713848673292,
+    "lng": -111.903125898246,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://mediarighton.com/contact-us/",
+   "name": "Media Right · Salt Lake City",
+   "observed_at": "2026-07-19T04:54:40Z",
+   "organization_key_material": "MEDIARIGHT LLC",
+   "phone": "801-293-9400",
+   "postal_code": "84115",
+   "retailer_host": "mediarighton.com",
+   "source_id": "mediarighton_store_page",
+   "state": "UT",
+   "website_url": "https://mediarighton.com"
+  },
+  {
+   "address": "3409 Wilson Blvd",
+   "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Arlington",
+   "coordinates": {
+    "lat": 38.883244058305,
+    "lng": -77.100141836211,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+   "name": "District Camera and Imaging - Arlington · Arlington",
+   "observed_at": "2026-07-17T21:12:26Z",
+   "organization_key_material": "DISTRICT CAMERA AND IMAGING",
+   "phone": "703-250-5555",
+   "postal_code": "22201",
+   "retailer_host": "districtcamera.com",
+   "source_id": "districtcamera_store_page",
+   "state": "VA",
+   "website_url": "https://www.districtcamera.com"
+  },
+  {
+   "address": "6025-G Burke Centre Pkwy",
+   "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Burke",
+   "coordinates": {
+    "lat": 38.786492507362,
+    "lng": -77.298403503752,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+   "name": "District Camera and Imaging - Burke · Burke",
+   "observed_at": "2026-07-17T21:12:26Z",
+   "organization_key_material": "DISTRICT CAMERA AND IMAGING",
+   "phone": "703-250-5555",
+   "postal_code": "22015",
+   "retailer_host": "districtcamera.com",
+   "source_id": "districtcamera_store_page",
+   "state": "VA",
+   "website_url": "https://www.districtcamera.com"
+  },
+  {
+   "address": "109 S. Carlton St",
+   "brand_listing_url": "https://www.crutchfield.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Harrisonburg",
+   "coordinates": {
+    "lat": 38.443021097912,
+    "lng": -78.856398713979,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.crutchfield.com",
+   "name": "Crutchfield Harrisonburg Store · Harrisonburg",
+   "observed_at": "2026-07-17T19:51:43Z",
+   "organization_key_material": "CRUTCHFIELD CORP",
+   "phone": "540-434-1000",
+   "postal_code": "22801",
+   "retailer_host": "crutchfield.com",
+   "source_id": "crutchfield_store_page",
+   "state": "VA",
+   "website_url": "https://www.crutchfield.com"
+  },
+  {
+   "address": "3236 Cove Rd NW",
+   "brand_listing_url": "https://www.leehartman.com/home-theater-camera/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Roanoke",
+   "coordinates": {
+    "lat": 37.302773821942,
+    "lng": -79.981865733313,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.leehartman.com/home-theater-camera/",
+   "name": "Lee Hartman & Sons, Inc. Showroom · Roanoke",
+   "observed_at": "2026-07-19T04:53:33Z",
+   "organization_key_material": "LEE HARTMAN & SONS,INC.",
+   "phone": "540-366-3493",
+   "postal_code": "24017",
+   "retailer_host": "leehartman.com",
+   "source_id": "leehartman_store_page",
+   "state": "VA",
+   "website_url": "https://www.leehartman.com"
+  },
+  {
+   "address": "35100 ENCHANTED PKWY S",
+   "brand_listing_url": "https://www.costco.com/warehouse-locations/federal-way-wa-74.html",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "FEDERAL WAY",
+   "coordinates": {
+    "lat": 47.28732191645,
+    "lng": -122.313407209988,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.costco.com/warehouse-locations/federal-way-wa-74.html",
+   "name": "Federal Way, WA Warehouse · FEDERAL WAY",
+   "observed_at": "2026-07-19T04:47:29Z",
+   "organization_key_material": "COSTCO WHOLESALE CORPORATION",
+   "phone": "(253) 874-3652",
+   "postal_code": "98003-8314",
+   "retailer_host": "costco.com",
+   "source_id": "costco_store_page",
+   "state": "WA",
+   "website_url": "https://www.costco.com"
+  },
+  {
+   "address": "6100 E Lake Sammamish Pkwy Se",
+   "brand_listing_url": "https://www.fredmeyer.com/stores/details/701/00658",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Issaquah",
+   "coordinates": {
+    "lat": 47.547599528617,
+    "lng": -122.040886894656,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fredmeyer.com/stores/details/701/00658",
+   "name": "Issaquah Fred Meyer · Issaquah",
+   "observed_at": "2026-07-17T20:07:40Z",
+   "organization_key_material": "FRED MEYER INC",
+   "phone": "425-416-1100",
+   "postal_code": "98029",
+   "retailer_host": "fredmeyer.com",
+   "source_id": "fredmeyer_store_page",
+   "state": "WA",
+   "website_url": "https://www.fredmeyer.com"
+  },
+  {
+   "address": "6708 NE 181st St.",
+   "brand_listing_url": "https://www.kenmorecamera.com/contactus.asp",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Kenmore",
+   "coordinates": {
+    "lat": 47.759612121917,
+    "lng": -122.251377620206,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.kenmorecamera.com/contactus.asp",
+   "name": "Kenmore Camera · Kenmore",
+   "observed_at": "2026-07-19T04:53:07Z",
+   "organization_key_material": "KENMORE CAMERA",
+   "phone": "1-888-485-7447",
+   "postal_code": "98028",
+   "retailer_host": "kenmorecamera.com",
+   "source_id": "kenmorecamera_store_page",
+   "state": "WA",
+   "website_url": "https://www.kenmorecamera.com"
+  },
+  {
+   "address": "10015 Gravelly Lake Dr SW",
+   "brand_listing_url": "https://robis.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lakewood",
+   "coordinates": {
+    "lat": 47.166539837772,
+    "lng": -122.520592044377,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://robis.com/contact",
+   "name": "robis Lakewood Camera + The Print Refinery · Lakewood",
+   "observed_at": "2026-07-17T19:53:06Z",
+   "organization_key_material": "DBA ROBI'S CAMERA CENTER",
+   "phone": "(253) 584-0210",
+   "postal_code": "98499",
+   "retailer_host": "robis.com",
+   "source_id": "robis_store_page",
+   "state": "WA",
+   "website_url": "https://robis.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}

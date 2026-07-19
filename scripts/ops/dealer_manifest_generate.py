@@ -97,7 +97,9 @@ _FILE_TAG = "nikon"
 
 
 def _chunk_paths(out_dir: Path, chunk_count: int) -> list[Path]:
-    if chunk_count <= 1:
+    if chunk_count <= 0:
+        return []  # 零店时别造路径:否则 zip(strict) 在 counters 打印前就炸,吞掉诊断
+    if chunk_count == 1:
         return [out_dir / f"reviewed_physical_stores_us_v2_{_FILE_TAG}.json"]
     return [
         out_dir / f"reviewed_physical_stores_us_v2{string.ascii_lowercase[index]}_{_FILE_TAG}.json"
