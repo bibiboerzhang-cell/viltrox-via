@@ -507,7 +507,7 @@ def _attach_reason(
         if (
             str(response.get("status") or "") == "success"
             and str(response.get("provider") or "").strip().lower() == provider
-            and str(response.get("model") or "").strip() == model
+            and str(response.get("model") or "").strip().startswith(model)
             and _valid_reason_payload(candidate)
         )
         else None

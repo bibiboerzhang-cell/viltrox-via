@@ -746,7 +746,7 @@ def run_contract_polish_for_job(payload: dict[str, Any], *, staff: dict[str, Any
     if not (
         resp.get("status") == "success"
         and str(resp.get("provider") or "").strip().lower() == "openai"
-        and str(resp.get("model") or "").strip() == OPENAI_MODEL
+        and str(resp.get("model") or "").strip().startswith(OPENAI_MODEL)
         and _valid_polish_payload(parsed, set(clean))
     ):
         return {"status": "failed", "reason": _polish_failure_code(resp)}

@@ -764,7 +764,7 @@ def analyze_content_fit(
         exact_response = (
             str(resp.get("status") or "") == "success"
             and str(resp.get("provider") or "").strip().lower() == provider
-            and str(resp.get("model") or "").strip() == model
+            and str(resp.get("model") or "").strip().startswith(model)
         )
         if exact_response and _valid_content_fit_payload(candidate):
             parsed = candidate

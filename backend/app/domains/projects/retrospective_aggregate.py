@@ -333,7 +333,7 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
     if not (
         resp.get("status") == "success"
         and str(resp.get("provider") or "").strip().lower() == "openai"
-        and str(resp.get("model") or "").strip() == OPENAI_MODEL
+        and str(resp.get("model") or "").strip().startswith(OPENAI_MODEL)
         and _valid_retrospective_payload(parsed)
     ):
         # 失败/兜底:不写 cache,只反映在 apify_jobs.status

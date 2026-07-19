@@ -488,7 +488,7 @@ def annotate_batch(
             accepted = (
                 status == "success"
                 and str(response.get("provider") or "").strip().lower() == provider_pref
-                and str(response.get("model") or "").strip() == model_pref
+                and str(response.get("model") or "").strip().startswith(model_pref)
                 and _valid_batch_payload(response.get("json"), expected)
             )
             if accepted:
