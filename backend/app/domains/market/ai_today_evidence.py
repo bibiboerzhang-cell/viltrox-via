@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import re
+from datetime import datetime, timezone
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -127,7 +128,10 @@ _OWN_OFFICIAL_CHANNEL_COND = """EXISTS (
 _SAMPLE_POOL_BASE_WHERE = """e.is_active IS NOT FALSE
               AND COALESCE(e.evidence_type, 'video')='video'
               AND COALESCE(e.content_url, '') != ''
-              AND (deep.id IS NOT NULL OR final_cache.id IS NOT NULL)"""
+              AND (deep.id IS NOT NULL OR final_cache.id IS NOT NULL)
+              AND COALESCE(e.publish_date, e.posted_at::timestamptz) >= now() - interval '90 days'"""
+# 2026-07-19 用户投诉修:「外部市场样例」此前无任何日期闸,398 天前的旧视频天天
+# 霸榜冒充「当下热点」参考——采样池收紧到近 90 天(publish_date 兜底 posted_at)。
 
 _OWN_CONTENT_EXCLUDED_COUNT_SQL = f"""
             SELECT
@@ -354,6 +358,22 @@ def _rank_video_candidates(
             if row.get("thumbnail_url")
             else 0
         )
+        # 2026-07-19:时间衰减项——确定性排序此前让旧高分片天天霸榜;
+        # 每 9 天扣 1 分封顶 20,同分时新片自然胜出(采样池另有 90 天硬闸)。
+        freshness_penalty = 0.0
+        published_ref = row.get("publish_date") or row.get("posted_at")
+        if published_ref is not None:
+            try:
+                if isinstance(published_ref, str):
+                    published_dt = datetime.fromisoformat(published_ref.replace("Z", "+00:00"))
+                else:
+                    published_dt = published_ref
+                if published_dt.tzinfo is None:
+                    published_dt = published_dt.replace(tzinfo=timezone.utc)
+                age_days = max(0.0, (datetime.now(timezone.utc) - published_dt).total_seconds() / 86400)
+                freshness_penalty = min(20.0, age_days / 9.0)
+            except (TypeError, ValueError):
+                freshness_penalty = 0.0
         score = (
             len(matches) * 14
             + (12 if row.get("deep_result_id") else 0)
@@ -362,6 +382,7 @@ def _rank_video_candidates(
             + (8 if analysis["viltrox_detected"].lower() not in ("", "false", "none", "null", "0") else 0)
             + min(16, math.log10(views + 1) * 3)
             + min(10, max(0, fit) / 10)
+            - freshness_penalty
         )
         scored.append((score, row, analysis | {"matches": " / ".join(matches[:3])}))
 
@@ -421,7 +442,7 @@ def _rank_video_candidates(
                 "like_count": row.get("like_count"),
                 "comment_count": row.get("comment_count"),
                 "duration_seconds": row.get("duration_seconds"),
-                "published_at": row.get("publish_date"),
+                "published_at": row.get("publish_date") or row.get("posted_at"),
                 "fit_score": fit,
                 "match_terms": [part for part in str(analysis.get("matches") or "").split(" / ") if part],
                 "why_recommended": str(reason)[:500],

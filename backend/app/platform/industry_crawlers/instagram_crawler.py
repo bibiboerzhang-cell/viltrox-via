@@ -217,8 +217,26 @@ class InstagramCrawler:
             # 走 search,但默认 actor 不一定支持,作为兜底
             input_payload["searchType"] = "user"
             input_payload["search"] = ref["value"]
-        
+
         result = self._start_run(input_payload)
+        # 2026-07-19 韧性修:profile-scraper 对大粉丝号会阶段性空返回(07-17/18
+        # 五官号连续两天 0 items,同期 instagram-scraper 正常)。空返回自动用
+        # posts actor 的 resultsType=details 兜底——同为 profile 形状
+        # (followersCount/postsCount/latestPosts 同键),实测 viltrox.official 可用。
+        if ref["kind"] == "handle" and not (result.get("items") or []):
+            fallback = self._start_run(
+                {
+                    "directUrls": [f"https://www.instagram.com/{ref['value'].lstrip('@')}/"],
+                    "resultsType": "details",
+                    "resultsLimit": 1,
+                    "addParentData": False,
+                },
+                actor_id=self.posts_actor_id,
+            )
+            if fallback.get("items"):
+                fallback["query"] = ref
+                fallback["profile_source"] = "instagram_scraper_details_fallback"
+                return fallback
         result["query"] = ref
         return result
 
