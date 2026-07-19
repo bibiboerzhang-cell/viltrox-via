@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "7475 Clairemont Mesa Blvd",
+      "brand_listing_url": "https://georgescamera.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "San Diego",
+      "coordinates": {
+        "lat": 32.832630616853,
+        "lng": -117.158060040068,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://georgescamera.com/contact",
+      "name": "George's Camera - Kearny Mesa · San Diego",
+      "observed_at": "2026-07-16T23:54:12Z",
+      "organization_key_material": "George's Camera Exchange Inc",
+      "phone": "(858) 633-1510",
+      "postal_code": "92111",
+      "retailer_host": "georgescamera.com",
+      "source_id": "georgescamera_store_page",
+      "state": "CA",
+      "website_url": "https://georgescamera.com"
+    },
+    {
+      "address": "3837 30th Street",
+      "brand_listing_url": "https://georgescamera.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "San Diego",
+      "coordinates": {
+        "lat": 32.747596025789,
+        "lng": -117.129996978992,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://georgescamera.com/contact",
+      "name": "George's Camera - North Park · San Diego",
+      "observed_at": "2026-07-16T23:54:12Z",
+      "organization_key_material": "George's Camera Exchange Inc",
+      "phone": "(619) 297-3544",
+      "postal_code": "92104",
+      "retailer_host": "georgescamera.com",
+      "source_id": "georgescamera_store_page",
+      "state": "CA",
+      "website_url": "https://georgescamera.com"
+    },
+    {
+      "address": "120 Maiden Ln",
+      "brand_listing_url": "https://www.camerawest.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "San Francisco",
+      "coordinates": {
+        "lat": 37.788116086179,
+        "lng": -122.406494638779,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.camerawest.com/pages/contact",
+      "name": "Camera West - San Francisco · San Francisco",
+      "observed_at": "2026-07-16T23:51:28Z",
+      "organization_key_material": "Camera West Inc",
+      "phone": "+1 925 935 1424",
+      "postal_code": "94108",
+      "retailer_host": "camerawest.com",
+      "source_id": "camerawest_store_page",
+      "state": "CA",
+      "website_url": "https://www.camerawest.com/"
+    },
+    {
+      "address": "463 Bush Street",
+      "brand_listing_url": "https://www.camerawest.com/pages/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "San Francisco",
+      "coordinates": {
+        "lat": 37.790577357902,
+        "lng": -122.405048634792,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.camerawest.com/pages/contact",
+      "name": "Leica Store San Francisco, Gallery & Bookshop · San Francisco",
+      "observed_at": "2026-07-16T23:51:28Z",
+      "organization_key_material": "Camera West Inc",
+      "phone": "+1 415 801 5066",
+      "postal_code": "94108",
+      "retailer_host": "camerawest.com",
+      "source_id": "camerawest_store_page",
+      "state": "CA",
+      "website_url": "https://www.camerawest.com/"
+    },
+    {
+      "address": "616 E Thousand Oaks Blvd",
+      "brand_listing_url": "https://www.hoopercamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Thousand Oaks",
+      "coordinates": {
+        "lat": 34.178812062785,
+        "lng": -118.866551602802,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.hoopercamera.com/contact-us",
+      "name": "Hooper Camera & Imaging · Thousand Oaks",
+      "observed_at": "2026-07-16T23:54:47Z",
+      "organization_key_material": "Hooper Camera & Imaging",
+      "phone": "(805) 494-3080",
+      "postal_code": "91360",
+      "retailer_host": "hoopercamera.com",
+      "source_id": "hoopercamera_store_page",
+      "state": "CA",
+      "website_url": "https://www.hoopercamera.com"
+    },
+    {
+      "address": "23845 Hawthorne Blvd.",
+      "brand_listing_url": "https://paulphoto.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Torrance",
+      "coordinates": {
+        "lat": 33.807891971151,
+        "lng": -118.351276917544,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://paulphoto.com/contact",
+      "name": "Paul's Photo Inc · Torrance",
+      "observed_at": "2026-07-19T03:36:36Z",
+      "organization_key_material": "Paul's Photo Inc",
+      "phone": "(310) 375-7014",
+      "postal_code": "90505",
+      "retailer_host": "paulphoto.com",
+      "source_id": "paulphoto_store_page",
+      "state": "CA",
+      "website_url": "https://paulphoto.com/"
+    },
+    {
+      "address": "23845 Hawthorne Blvd.",
+      "brand_listing_url": "https://paulsphoto.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Torrance",
+      "coordinates": {
+        "lat": 33.807891971151,
+        "lng": -118.351276917544,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://paulsphoto.com/contact",
+      "name": "Paul's Photo · Torrance",
+      "observed_at": "2026-07-16T23:58:04Z",
+      "organization_key_material": "Paul's Photo",
+      "phone": "(310) 375-7014",
+      "postal_code": "90505",
+      "retailer_host": "paulsphoto.com",
+      "source_id": "paulsphoto_store_page",
+      "state": "CA",
+      "website_url": "https://paulsphoto.com"
+    },
+    {
+      "address": "2500 Pearl Street",
+      "brand_listing_url": "https://mikescamera.com/store-locator-and-contact-information",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Boulder",
+      "coordinates": {
+        "lat": 40.021285719781,
+        "lng": -105.263125985937,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://mikescamera.com/store-locator-and-contact-information",
+      "name": "Mike's Camera Boulder · Boulder",
+      "observed_at": "2026-07-16T23:57:22Z",
+      "organization_key_material": "Mike's Camera",
+      "phone": "(303) 443-1715",
+      "postal_code": "80302",
+      "retailer_host": "mikescamera.com",
+      "source_id": "mikescamera_store_page",
+      "state": "CO",
+      "website_url": "https://mikescamera.com"
+    },
+    {
+      "address": "75 Asylum St",
+      "brand_listing_url": "https://camerabar.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Hartford",
+      "coordinates": {
+        "lat": 41.766872937231,
+        "lng": -72.674793096032,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://camerabar.com",
+      "name": "Camera Bar · Hartford",
+      "observed_at": "2026-07-16T23:50:33Z",
+      "organization_key_material": "Camera Bar LLC",
+      "phone": "(860) 525-2159",
+      "postal_code": "06103",
+      "retailer_host": "camerabar.com",
+      "source_id": "camerabar_store_page",
+      "state": "CT",
+      "website_url": "https://camerabar.com"
+    },
+    {
+      "address": "22 River Street",
+      "brand_listing_url": "https://www.milfordphoto.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Milford",
+      "coordinates": {
+        "lat": 41.222781995107,
+        "lng": -73.056999198056,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.milfordphoto.com",
+      "name": "Milford Photo, Inc. · Milford",
+      "observed_at": "2026-07-16T23:57:26Z",
+      "organization_key_material": "Milford Photo, Inc.",
+      "phone": "203-882-3415",
+      "postal_code": "06460",
+      "retailer_host": "milfordphoto.com",
+      "source_id": "milfordphoto_store_page",
+      "state": "CT",
+      "website_url": "https://www.milfordphoto.com"
+    },
+    {
+      "address": "2701 Summer Street (located at the Crowne Plaza Stamford Hotel)",
+      "brand_listing_url": "https://camerawholesalers.com/pages/visit-our-store",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Stamford",
+      "coordinates": {
+        "lat": 41.069452220865,
+        "lng": -73.549073006583,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://camerawholesalers.com/pages/visit-our-store",
+      "name": "Camera Wholesalers · Stamford",
+      "observed_at": "2026-07-16T23:51:33Z",
+      "organization_key_material": "Camera Wholesalers, Inc.",
+      "phone": "203-357-0467",
+      "postal_code": "06905",
+      "retailer_host": "camerawholesalers.com",
+      "source_id": "camerawholesalers_store_page",
+      "state": "CT",
+      "website_url": "https://camerawholesalers.com"
+    },
+    {
+      "address": "1225 I Street NW, Suite 110",
+      "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Washington",
+      "coordinates": {
+        "lat": 38.901380543229,
+        "lng": -77.028492886011,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+      "name": "District Camera and Imaging - Washington, DC Store · Washington",
+      "observed_at": "2026-07-16T23:52:49Z",
+      "organization_key_material": "District Camera and Imaging",
+      "phone": "202-483-0090",
+      "postal_code": "20005",
+      "retailer_host": "districtcamera.com",
+      "source_id": "districtcamera_store_page",
+      "state": "DC",
+      "website_url": "https://www.districtcamera.com"
+    },
+    {
+      "address": "2000 Pennsylvania Ave. NW",
+      "brand_listing_url": "https://www.prophotodc.com/service/about-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Washington",
+      "coordinates": {
+        "lat": 38.900676447516,
+        "lng": -77.044997337638,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.prophotodc.com/service/about-us/",
+      "name": "Pro Photo · Washington",
+      "observed_at": "2026-07-16T23:59:10Z",
+      "organization_key_material": "Pro Photo Repairs & Sales",
+      "phone": "202.223.1292",
+      "postal_code": "20006",
+      "retailer_host": "prophotodc.com",
+      "source_id": "prophotodc_store_page",
+      "state": "DC",
+      "website_url": "https://www.prophotodc.com"
+    },
+    {
+      "address": "6709 State Road 70 E",
+      "brand_listing_url": "https://gulfcoastcamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bradenton",
+      "coordinates": {
+        "lat": 27.446023155217,
+        "lng": -82.474425739641,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://gulfcoastcamera.com/contact-us",
+      "name": "Gulf Coast Camera Bradenton / Sarasota · Bradenton",
+      "observed_at": "2026-07-16T23:54:37Z",
+      "organization_key_material": "Gulf Coast Camera LLC",
+      "phone": "(941) 896-9921",
+      "postal_code": "34203",
+      "retailer_host": "gulfcoastcamera.com",
+      "source_id": "gulfcoastcamera_store_page",
+      "state": "FL",
+      "website_url": "https://gulfcoastcamera.com"
+    },
+    {
+      "address": "6709 State Road 70 East",
+      "brand_listing_url": "https://jpiphoto.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Bradenton",
+      "coordinates": {
+        "lat": 27.446023155217,
+        "lng": -82.474425739641,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://jpiphoto.com/contact-us",
+      "name": "Johnson PhotoImaging Inc · Bradenton",
+      "observed_at": "2026-07-16T23:55:42Z",
+      "organization_key_material": "Johnson Photoimaging Inc",
+      "phone": "(941) 896-9921",
+      "postal_code": "34203",
+      "retailer_host": "jpiphoto.com",
+      "source_id": "jpiphoto_store_page",
+      "state": "FL",
+      "website_url": "https://jpiphoto.com"
+    },
+    {
+      "address": "11870 W. State Road 84, Unit C7",
+      "brand_listing_url": "https://sunshinephotostore.com/contact-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Davie",
+      "coordinates": {
+        "lat": 26.112543160486,
+        "lng": -80.307506735791,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://sunshinephotostore.com/contact-us/",
+      "name": "Sunshine Photo and Electronics Store · Davie",
+      "observed_at": "2026-07-17T00:01:01Z",
+      "organization_key_material": "Sunshine Photo and Electronics",
+      "phone": "+1.954.200.6961",
+      "postal_code": "33325",
+      "retailer_host": "sunshinephotostore.com",
+      "source_id": "sunshinephotostore_store_page",
+      "state": "FL",
+      "website_url": "https://sunshinephotostore.com/"
+    },
+    {
+      "address": "217 Northeast 4th Ave",
+      "brand_listing_url": "https://delraycamerastudio.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Delray Beach",
+      "coordinates": {
+        "lat": 26.465650045705,
+        "lng": -80.068931657658,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://delraycamerastudio.com",
+      "name": "Delray Camera & Studio · Delray Beach",
+      "observed_at": "2026-07-16T23:52:35Z",
+      "organization_key_material": "Delray Camera Shop",
+      "phone": "(561) 278-3331",
+      "postal_code": "33483",
+      "retailer_host": "delraycamerastudio.com",
+      "source_id": "delraycamerastudio_store_page",
+      "state": "FL",
+      "website_url": "https://delraycamerastudio.com"
+    },
+    {
+      "address": "7500 NW 25th St Unit # 1",
+      "brand_listing_url": "https://www.avcstore.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Miami",
+      "coordinates": {
+        "lat": 25.797050354476,
+        "lng": -80.318556520915,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.avcstore.com",
+      "name": "AVC Photo Store & School · Miami",
+      "observed_at": "2026-07-16T23:49:09Z",
+      "organization_key_material": "AVC Photo Store & School",
+      "phone": "(305) 717-0902",
+      "postal_code": "33122",
+      "retailer_host": "avcstore.com",
+      "source_id": "avcstore_store_page",
+      "state": "FL",
+      "website_url": "https://www.avcstore.com"
+    },
+    {
+      "address": "14321 South Dixie Highway",
+      "brand_listing_url": "https://www.pitmanphotosupply.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Miami",
+      "coordinates": {
+        "lat": 25.6370739406,
+        "lng": -80.337209229476,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.pitmanphotosupply.com/contact-us",
+      "name": "Pitman Photo Supply · Miami",
+      "observed_at": "2026-07-16T23:58:32Z",
+      "organization_key_material": "Pitman Photo Inc",
+      "phone": "305-256-9558",
+      "postal_code": "33176-7225",
+      "retailer_host": "pitmanphotosupply.com",
+      "source_id": "pitmanphotosupply_store_page",
+      "state": "FL",
+      "website_url": "https://www.pitmanphotosupply.com"
+    },
+    {
+      "address": "5405 Main Street",
+      "brand_listing_url": "https://pascocamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "New Port Richey",
+      "coordinates": {
+        "lat": 28.250289467541,
+        "lng": -82.725236877145,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://pascocamera.com",
+      "name": "Pasco Camera Inc. · New Port Richey",
+      "observed_at": "2026-07-16T23:57:57Z",
+      "organization_key_material": "PASCO CAMERA INC.",
+      "phone": "(727) 844-0904",
+      "postal_code": "34652",
+      "retailer_host": "pascocamera.com",
+      "source_id": "pascocamera_store_page",
+      "state": "FL",
+      "website_url": "https://pascocamera.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

@@ -1,0 +1,637 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "nikon_usa_pdf_20260716",
+  "stores": [
+    {
+      "address": "1401 Northwest Hwy Suite 101",
+      "brand_listing_url": "https://garland-camera.com/pages/about-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Garland",
+      "coordinates": {
+        "lat": 32.864253251205,
+        "lng": -96.648410558185,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://garland-camera.com/pages/about-us",
+      "name": "Garland Camera · Garland",
+      "observed_at": "2026-07-16T23:53:59Z",
+      "organization_key_material": "Garland Camera & Repair Inc",
+      "phone": "(972) 278-0717",
+      "postal_code": "75041",
+      "retailer_host": "garland-camera.com",
+      "source_id": "garlandcamera_store_page",
+      "state": "TX",
+      "website_url": "https://garland-camera.com"
+    },
+    {
+      "address": "5900 Richmond Ave.",
+      "brand_listing_url": "https://www.houstoncameraexchange.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Houston",
+      "coordinates": {
+        "lat": 29.731570108316,
+        "lng": -95.482260450784,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.houstoncameraexchange.com/contact-us",
+      "name": "Houston Camera Exchange · Houston",
+      "observed_at": "2026-07-16T23:55:00Z",
+      "organization_key_material": "Houston Camera Exchange",
+      "phone": "(713) 789-6901",
+      "postal_code": "77057",
+      "retailer_host": "houstoncameraexchange.com",
+      "source_id": "houstoncameraexchange_store_page",
+      "state": "TX",
+      "website_url": "https://www.houstoncameraexchange.com"
+    },
+    {
+      "address": "114 E Main St",
+      "brand_listing_url": "https://www.humblecamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Humble",
+      "coordinates": {
+        "lat": 29.998140887237,
+        "lng": -95.26544075395,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.humblecamera.com",
+      "name": "Humble Camera Center · Humble",
+      "observed_at": "2026-07-16T23:55:04Z",
+      "organization_key_material": "Humble Camera Center",
+      "phone": "281-540-4101",
+      "postal_code": "77338",
+      "retailer_host": "humblecamera.com",
+      "source_id": "humblecamera_store_page",
+      "state": "TX",
+      "website_url": "https://www.humblecamera.com"
+    },
+    {
+      "address": "3432 34th Street",
+      "brand_listing_url": "https://www.armadillocamera.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lubbock",
+      "coordinates": {
+        "lat": 33.56331964893,
+        "lng": -101.888537298141,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.armadillocamera.com/contact-us",
+      "name": "Armadillo Camera · Lubbock",
+      "observed_at": "2026-07-16T23:48:58Z",
+      "organization_key_material": "Armadillo Camera Sales & Servi",
+      "phone": "(806) 795-6405",
+      "postal_code": "79410",
+      "retailer_host": "armadillocamera.com",
+      "source_id": "armadillocamera_store_page",
+      "state": "TX",
+      "website_url": "https://www.armadillocamera.com"
+    },
+    {
+      "address": "6635 San Pedro Ave.",
+      "brand_listing_url": "https://camerax.com/about-us/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "San Antonio",
+      "coordinates": {
+        "lat": 29.500060520323,
+        "lng": -98.499326886951,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://camerax.com/about-us/",
+      "name": "The Camera Exchange - San Antonio · San Antonio",
+      "observed_at": "2026-07-17T00:01:39Z",
+      "organization_key_material": "The Camera Exchange Inc",
+      "phone": "210-349-4400",
+      "postal_code": "78216",
+      "retailer_host": "camerax.com",
+      "source_id": "camerax_store_page",
+      "state": "TX",
+      "website_url": "https://camerax.com"
+    },
+    {
+      "address": "2466 Washington Blvd.",
+      "brand_listing_url": "https://farrs.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Ogden",
+      "coordinates": {
+        "lat": 41.221356757629,
+        "lng": -111.970403864905,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://farrs.com",
+      "name": "Farr's Jewelry · Ogden",
+      "observed_at": "2026-07-16T23:52:59Z",
+      "organization_key_material": "Farrs Jewelry",
+      "phone": "(801) 621-7666",
+      "postal_code": "84401",
+      "retailer_host": "farrs.com",
+      "source_id": "farrs_store_page",
+      "state": "UT",
+      "website_url": "https://farrs.com"
+    },
+    {
+      "address": "626 North State Street",
+      "brand_listing_url": "https://allenscamera.net/pages/locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Orem",
+      "coordinates": {
+        "lat": 40.30858736583,
+        "lng": -111.699923740661,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://allenscamera.net/pages/locations",
+      "name": "Allen's Camera - Orem · Orem",
+      "observed_at": "2026-07-16T23:48:35Z",
+      "organization_key_material": "Allen's Camera & Sound Inc",
+      "phone": "(801) 224-0006",
+      "postal_code": "84057",
+      "retailer_host": "allenscamera.net",
+      "source_id": "allenscamera_store_page",
+      "state": "UT",
+      "website_url": "https://allenscamera.net"
+    },
+    {
+      "address": "333 North Freedom Blvd.",
+      "brand_listing_url": "https://allenscamera.net/pages/locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Provo",
+      "coordinates": {
+        "lat": 40.238207606844,
+        "lng": -111.66226978029,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://allenscamera.net/pages/locations",
+      "name": "Allen's Camera - Provo · Provo",
+      "observed_at": "2026-07-16T23:48:35Z",
+      "organization_key_material": "Allen's Camera & Sound Inc",
+      "phone": "(801) 373-4440",
+      "postal_code": "84601",
+      "retailer_host": "allenscamera.net",
+      "source_id": "allenscamera_store_page",
+      "state": "UT",
+      "website_url": "https://allenscamera.net"
+    },
+    {
+      "address": "2121 South State St.",
+      "brand_listing_url": "https://allenscamera.net/pages/locations",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "SLC",
+      "coordinates": {
+        "lat": 40.724915661521,
+        "lng": -111.888144593974,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://allenscamera.net/pages/locations",
+      "name": "Allen's Camera - Salt Lake City · SLC",
+      "observed_at": "2026-07-16T23:48:35Z",
+      "organization_key_material": "Allen's Camera & Sound Inc",
+      "phone": "(801) 278-0281",
+      "postal_code": "84115",
+      "retailer_host": "allenscamera.net",
+      "source_id": "allenscamera_store_page",
+      "state": "UT",
+      "website_url": "https://allenscamera.net"
+    },
+    {
+      "address": "305 West 700 South",
+      "brand_listing_url": "https://www.pictureline.com/pages/hours-location",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Salt Lake City",
+      "coordinates": {
+        "lat": 40.754060668548,
+        "lng": -111.899871229854,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.pictureline.com/pages/hours-location",
+      "name": "The Salt Lake City Store · Salt Lake City",
+      "observed_at": "2026-07-16T23:58:27Z",
+      "organization_key_material": "Pictureline Inc",
+      "phone": "801-364-1200",
+      "postal_code": "84101",
+      "retailer_host": "pictureline.com",
+      "source_id": "pictureline_store_page",
+      "state": "UT",
+      "website_url": "https://www.pictureline.com"
+    },
+    {
+      "address": "3409 Wilson Boulevard",
+      "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Arlington",
+      "coordinates": {
+        "lat": 38.883244058305,
+        "lng": -77.100141836211,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+      "name": "District Camera and Imaging - Arlington, VA Store · Arlington",
+      "observed_at": "2026-07-16T23:52:49Z",
+      "organization_key_material": "District Camera and Imaging",
+      "phone": "703-250-5555",
+      "postal_code": "22201",
+      "retailer_host": "districtcamera.com",
+      "source_id": "districtcamera_store_page",
+      "state": "VA",
+      "website_url": "https://www.districtcamera.com"
+    },
+    {
+      "address": "44710 Cape Ct STE 122",
+      "brand_listing_url": "https://acephoto.net/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Ashburn",
+      "coordinates": {
+        "lat": 39.017981874292,
+        "lng": -77.454241756272,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://acephoto.net/",
+      "name": "Ace Photo · Ashburn",
+      "observed_at": "2026-07-16T23:48:19Z",
+      "organization_key_material": "Ace Photo Inc",
+      "phone": "703-430-3333",
+      "postal_code": "20147",
+      "retailer_host": "acephoto.net",
+      "source_id": "acephoto_store_page",
+      "state": "VA",
+      "website_url": "https://acephoto.net/"
+    },
+    {
+      "address": "6025 Burke Centre Parkway Ste G",
+      "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Burke",
+      "coordinates": {
+        "lat": 38.786492507362,
+        "lng": -77.298403503752,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+      "name": "District Camera and Imaging - Burke, VA Store · Burke",
+      "observed_at": "2026-07-16T23:52:49Z",
+      "organization_key_material": "District Camera and Imaging",
+      "phone": "703-250-5555",
+      "postal_code": "22015",
+      "retailer_host": "districtcamera.com",
+      "source_id": "districtcamera_store_page",
+      "state": "VA",
+      "website_url": "https://www.districtcamera.com"
+    },
+    {
+      "address": "825 Gardens Blvd",
+      "brand_listing_url": "https://www.crutchfield.com/S-K0ZAtbUu63L/stores/charlottesville.html",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Charlottesville",
+      "coordinates": {
+        "lat": 38.085248705913,
+        "lng": -78.471441953555,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.crutchfield.com/S-K0ZAtbUu63L/stores/charlottesville.html",
+      "name": "Crutchfield Charlottesville Store · Charlottesville",
+      "observed_at": "2026-07-16T23:52:24Z",
+      "organization_key_material": "CRUTCHFIELD CORP",
+      "phone": "1-434-817-1100",
+      "postal_code": "22901",
+      "retailer_host": "crutchfield.com",
+      "source_id": "crutchfield_store_page",
+      "state": "VA",
+      "website_url": "https://www.crutchfield.com"
+    },
+    {
+      "address": "3236 Cove Rd NW",
+      "brand_listing_url": "https://www.leehartman.com/home-theater-camera/",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Roanoke",
+      "coordinates": {
+        "lat": 37.302773821942,
+        "lng": -79.981865733313,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.leehartman.com/home-theater-camera/",
+      "name": "Lee Hartman & Sons - Roanoke Showroom · Roanoke",
+      "observed_at": "2026-07-16T23:56:43Z",
+      "organization_key_material": "Lee Hartman & Sons Inc",
+      "phone": "540-366-3493",
+      "postal_code": "24017",
+      "retailer_host": "leehartman.com",
+      "source_id": "leehartman_store_page",
+      "state": "VA",
+      "website_url": "https://www.leehartman.com/"
+    },
+    {
+      "address": "306 Lee Hwy.",
+      "brand_listing_url": "https://www.mccamera.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Warrenton",
+      "coordinates": {
+        "lat": 38.728057121117,
+        "lng": -77.801406619503,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.mccamera.com",
+      "name": "McClanahan Camera · Warrenton",
+      "observed_at": "2026-07-16T23:57:08Z",
+      "organization_key_material": "Mc Clanahan Camera",
+      "phone": "540-347-2533",
+      "postal_code": "20186",
+      "retailer_host": "mccamera.com",
+      "source_id": "mccamera_store_page",
+      "state": "VA",
+      "website_url": "https://www.mccamera.com"
+    },
+    {
+      "address": "6708 NE 181st St",
+      "brand_listing_url": "https://www.kenmorecamera.com/t-about.aspx",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Kenmore",
+      "coordinates": {
+        "lat": 47.759612121917,
+        "lng": -122.251377620206,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.kenmorecamera.com/t-about.aspx",
+      "name": "Kenmore Camera · Kenmore",
+      "observed_at": "2026-07-16T23:56:09Z",
+      "organization_key_material": "Kenmore Camera Inc",
+      "phone": "1-888-485-7447",
+      "postal_code": "98028",
+      "retailer_host": "kenmorecamera.com",
+      "source_id": "kenmorecamera_store_page",
+      "state": "WA",
+      "website_url": "https://www.kenmorecamera.com"
+    },
+    {
+      "address": "10015 Gravelly Lake Dr SW",
+      "brand_listing_url": "https://robis.com",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Lakewood",
+      "coordinates": {
+        "lat": 47.166539837772,
+        "lng": -122.520592044377,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://robis.com",
+      "name": "Robi's Lakewood Camera + The Print Refinery · Lakewood",
+      "observed_at": "2026-07-16T23:59:35Z",
+      "organization_key_material": "Robi's Camera Center",
+      "phone": "(253) 584-0210",
+      "postal_code": "98499",
+      "retailer_host": "robis.com",
+      "source_id": "robis_store_page",
+      "state": "WA",
+      "website_url": "https://robis.com"
+    },
+    {
+      "address": "4401 4TH AVE S",
+      "brand_listing_url": "https://www.costco.com/warehouse-locations/seattle-wa-1.html",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "SEATTLE",
+      "coordinates": {
+        "lat": 47.565319261258,
+        "lng": -122.329512678417,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.costco.com/warehouse-locations/seattle-wa-1.html",
+      "name": "Seattle Warehouse · SEATTLE",
+      "observed_at": "2026-07-16T23:52:19Z",
+      "organization_key_material": "COSTCO WHOLESALE CORPORATION",
+      "phone": "(206) 622-3136",
+      "postal_code": "98134-2311",
+      "retailer_host": "costco.com",
+      "source_id": "costco_store_page",
+      "state": "WA",
+      "website_url": "https://www.costco.com"
+    },
+    {
+      "address": "811 Republican St.",
+      "brand_listing_url": "https://www.glazerscamera.com/pages/hours-directions",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "nikon",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://www.nikonusa.com/where-to-buy/nikon_img_auth_dealers.pdf",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Seattle",
+      "coordinates": {
+        "lat": 47.623158087784,
+        "lng": -122.340856778192,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.glazerscamera.com/pages/hours-directions",
+      "name": "Glazer's Camera Retail Store · Seattle",
+      "observed_at": "2026-07-16T23:54:22Z",
+      "organization_key_material": "Glazer's Camera Supply Inc.",
+      "phone": "(206) 624-1100",
+      "postal_code": "98109",
+      "retailer_host": "glazerscamera.com",
+      "source_id": "glazerscamera_store_page",
+      "state": "WA",
+      "website_url": "https://www.glazerscamera.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}

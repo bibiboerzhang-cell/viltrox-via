@@ -1,0 +1,420 @@
+{
+ "claim_status": "descriptive_only",
+ "google_places_status": "pending",
+ "schema": "vkpi.reviewed-physical-store-manifest/v1",
+ "source_registry_id": "canon_usa_pdf_20260717",
+ "stores": [
+  {
+   "address": "45 Washington Boulevard",
+   "brand_listing_url": "https://www.hoyersphoto.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Williamsport",
+   "coordinates": {
+    "lat": 41.247036907689,
+    "lng": -77.003960725316,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.hoyersphoto.com/contact",
+   "name": "Hoyer's Photo · Williamsport",
+   "observed_at": "2026-07-17T22:17:20Z",
+   "organization_key_material": "HOYERS LLC",
+   "phone": "(570) 326-0551",
+   "postal_code": "17701",
+   "retailer_host": "hoyersphoto.com",
+   "source_id": "hoyersphoto_store_page",
+   "state": "PA",
+   "website_url": "https://www.hoyersphoto.com"
+  },
+  {
+   "address": "912 W. 41st Street",
+   "brand_listing_url": "https://haroldsphoto.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Sioux Falls",
+   "coordinates": {
+    "lat": 43.514914758878,
+    "lng": -96.736419173331,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://haroldsphoto.com",
+   "name": "Harold's Photo · Sioux Falls",
+   "observed_at": "2026-07-17T21:25:26Z",
+   "organization_key_material": "HAROLDS PHOTO CENTER",
+   "phone": "605-336-2833",
+   "postal_code": "57105",
+   "retailer_host": "haroldsphoto.com",
+   "source_id": "haroldsphoto_store_page",
+   "state": "SD",
+   "website_url": "https://haroldsphoto.com"
+  },
+  {
+   "address": "817 West Howard Lane",
+   "brand_listing_url": "https://www.omegabroadcast.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Austin",
+   "coordinates": {
+    "lat": 30.421244793034,
+    "lng": -97.665019843566,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.omegabroadcast.com/contact-us/",
+   "name": "Omega Broadcast & Cinema · Austin",
+   "observed_at": "2026-07-17T22:43:00Z",
+   "organization_key_material": "OMEGA BROADCAST GROUP",
+   "phone": "(512) 251-7778",
+   "postal_code": "78753",
+   "retailer_host": "omegabroadcast.com",
+   "source_id": "omegabroadcast_store_page",
+   "state": "TX",
+   "website_url": "https://www.omegabroadcast.com"
+  },
+  {
+   "address": "1401 Northwest Hwy #101",
+   "brand_listing_url": "https://garlandcamera.store",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Garland",
+   "coordinates": {
+    "lat": 32.864253251205,
+    "lng": -96.648410558185,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://garlandcamera.store",
+   "name": "Garland Camera & Repair · Garland",
+   "observed_at": "2026-07-17T21:22:14Z",
+   "organization_key_material": "GARLAND CAMERA & REPAIR INC",
+   "phone": "(972) 278-0717",
+   "postal_code": "75041",
+   "retailer_host": "garlandcamera.store",
+   "source_id": "garlandcamera_store_page",
+   "state": "TX",
+   "website_url": "https://garlandcamera.store"
+  },
+  {
+   "address": "2466 Washington Blvd",
+   "brand_listing_url": "https://www.farrs.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Ogden",
+   "coordinates": {
+    "lat": 41.221356757629,
+    "lng": -111.970403864905,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.farrs.com",
+   "name": "Farr's Jewelry & Cameras · Ogden",
+   "observed_at": "2026-07-17T20:02:31Z",
+   "organization_key_material": "FARR & COMPANY",
+   "phone": "(801) 621-7666",
+   "postal_code": "84401",
+   "retailer_host": "farrs.com",
+   "source_id": "farrs_store_page",
+   "state": "UT",
+   "website_url": "https://www.farrs.com"
+  },
+  {
+   "address": "170 East 2100 South",
+   "brand_listing_url": "https://www.goclearvista.com/contact-us/",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Salt Lake City",
+   "coordinates": {
+    "lat": 40.7253866707,
+    "lng": -111.886441166491,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.goclearvista.com/contact-us/",
+   "name": "ClearVista · Salt Lake City",
+   "observed_at": "2026-07-17T21:06:50Z",
+   "organization_key_material": "CLEARVISTA",
+   "phone": "801-486-5757",
+   "postal_code": "84115",
+   "retailer_host": "goclearvista.com",
+   "source_id": "goclearvista_store_page",
+   "state": "UT",
+   "website_url": "https://www.goclearvista.com"
+  },
+  {
+   "address": "3409 Wilson Blvd",
+   "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Arlington",
+   "coordinates": {
+    "lat": 38.883244058305,
+    "lng": -77.100141836211,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+   "name": "District Camera and Imaging - Arlington · Arlington",
+   "observed_at": "2026-07-17T21:12:26Z",
+   "organization_key_material": "DISTRICT CAMERA AND IMAGING",
+   "phone": "703-250-5555",
+   "postal_code": "22201",
+   "retailer_host": "districtcamera.com",
+   "source_id": "districtcamera_store_page",
+   "state": "VA",
+   "website_url": "https://www.districtcamera.com"
+  },
+  {
+   "address": "6025-G Burke Centre Pkwy",
+   "brand_listing_url": "https://www.districtcamera.com/pages/store-locator",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Burke",
+   "coordinates": {
+    "lat": 38.786492507362,
+    "lng": -77.298403503752,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.districtcamera.com/pages/store-locator",
+   "name": "District Camera and Imaging - Burke · Burke",
+   "observed_at": "2026-07-17T21:12:26Z",
+   "organization_key_material": "DISTRICT CAMERA AND IMAGING",
+   "phone": "703-250-5555",
+   "postal_code": "22015",
+   "retailer_host": "districtcamera.com",
+   "source_id": "districtcamera_store_page",
+   "state": "VA",
+   "website_url": "https://www.districtcamera.com"
+  },
+  {
+   "address": "109 S. Carlton St",
+   "brand_listing_url": "https://www.crutchfield.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Harrisonburg",
+   "coordinates": {
+    "lat": 38.443021097912,
+    "lng": -78.856398713979,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.crutchfield.com",
+   "name": "Crutchfield Harrisonburg Store · Harrisonburg",
+   "observed_at": "2026-07-17T19:51:43Z",
+   "organization_key_material": "CRUTCHFIELD CORP",
+   "phone": "540-434-1000",
+   "postal_code": "22801",
+   "retailer_host": "crutchfield.com",
+   "source_id": "crutchfield_store_page",
+   "state": "VA",
+   "website_url": "https://www.crutchfield.com"
+  },
+  {
+   "address": "6100 E Lake Sammamish Pkwy Se",
+   "brand_listing_url": "https://www.fredmeyer.com/stores/details/701/00658",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Issaquah",
+   "coordinates": {
+    "lat": 47.547599528617,
+    "lng": -122.040886894656,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fredmeyer.com/stores/details/701/00658",
+   "name": "Issaquah Fred Meyer · Issaquah",
+   "observed_at": "2026-07-17T20:07:40Z",
+   "organization_key_material": "FRED MEYER INC",
+   "phone": "425-416-1100",
+   "postal_code": "98029",
+   "retailer_host": "fredmeyer.com",
+   "source_id": "fredmeyer_store_page",
+   "state": "WA",
+   "website_url": "https://www.fredmeyer.com"
+  },
+  {
+   "address": "10015 Gravelly Lake Dr SW",
+   "brand_listing_url": "https://robis.com/contact",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Lakewood",
+   "coordinates": {
+    "lat": 47.166539837772,
+    "lng": -122.520592044377,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://robis.com/contact",
+   "name": "robis Lakewood Camera + The Print Refinery · Lakewood",
+   "observed_at": "2026-07-17T19:53:06Z",
+   "organization_key_material": "DBA ROBI'S CAMERA CENTER",
+   "phone": "(253) 584-0210",
+   "postal_code": "98499",
+   "retailer_host": "robis.com",
+   "source_id": "robis_store_page",
+   "state": "WA",
+   "website_url": "https://robis.com"
+  },
+  {
+   "address": "18325 Aurora Ave N",
+   "brand_listing_url": "https://www.fredmeyer.com/stores/details/701/00209",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Shoreline",
+   "coordinates": {
+    "lat": 47.761834684651,
+    "lng": -122.346209513425,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.fredmeyer.com/stores/details/701/00209",
+   "name": "Shoreline Fred Meyer · Shoreline",
+   "observed_at": "2026-07-17T20:07:40Z",
+   "organization_key_material": "FRED MEYER INC",
+   "phone": "206-546-0720",
+   "postal_code": "98133",
+   "retailer_host": "fredmeyer.com",
+   "source_id": "fredmeyer_store_page",
+   "state": "WA",
+   "website_url": "https://www.fredmeyer.com"
+  },
+  {
+   "address": "529 N. Monroe Ave",
+   "brand_listing_url": "https://www.cameracornergreenbay.com",
+   "brand_relationships": [
+    {
+     "authorization_status": "unverified",
+     "brand_key": "canon",
+     "evidence_scope": "organization_and_city_only",
+     "evidence_url": "https://www.usa.canon.com/content/dam/canon-assets/authorized-dealers/canon-ad-06-15-26.pdf",
+     "relationship_status": "official_directory_listed"
+    }
+   ],
+   "city": "Green Bay",
+   "coordinates": {
+    "lat": 44.516474272812,
+    "lng": -88.007670489587,
+    "match_level": "exact_address",
+    "provider": "us_census_geocoder",
+    "value_status": "observed"
+   },
+   "location_source_url": "https://www.cameracornergreenbay.com",
+   "name": "Camera Corner Connecting Point · Green Bay",
+   "observed_at": "2026-07-17T21:55:10Z",
+   "organization_key_material": "CAMERA CORNER",
+   "phone": "920-435-5353",
+   "postal_code": "54301",
+   "retailer_host": "cameracornergreenbay.com",
+   "source_id": "cameracornergreenbay_store_page",
+   "state": "WI",
+   "website_url": "https://www.cameracornergreenbay.com"
+  }
+ ],
+ "truth_boundaries": {
+  "canonical_address_source": "retailer_owned_store_page",
+  "coordinate_source": "us_census_geocoder_address_match",
+  "google_places_is_canonical": false,
+  "manufacturer_directory_proves_branch_inventory": false,
+  "manufacturer_directory_proves_viltrox_authorization": false,
+  "product_page_proves_current_inventory": false,
+  "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+ }
+}
