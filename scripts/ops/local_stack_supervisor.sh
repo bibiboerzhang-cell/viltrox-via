@@ -49,6 +49,7 @@ ensure_scheduler() {
     log "scheduler_daemon 不在,拉起(白名单模式)"
     VKPI_SCHEDULER_TASK_ALLOWLIST="$SCHEDULER_ALLOWLIST" \
     VKPI_SCHEDULER_FIRE_RECOVERY_INTERVAL_SECONDS=900 \
+    VKPI_EXTERNAL_SIGNAL_AUTOWRITE_ENABLED=1 \
       nohup bash "$ROOT/scripts/run_scheduler_daemon.sh" >> "$ROOT/runtime/logs/scheduler-daemon.log" 2>&1 &
   fi
 }
