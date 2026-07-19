@@ -8,6 +8,7 @@ from app.domains.kol import pool as kol_pool
 from app.domains import media as media_cache
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
+from app.core.logging import get_logger
 from app.domains import channels
 from app.domains.channels import refill as channel_refill
 from app.platform.apify_budget import (
@@ -15,6 +16,8 @@ from app.platform.apify_budget import (
     ApifyBudgetBlocked,
     ApifyBudgetDecision,
 )
+
+_worker_logger = get_logger(__name__)
 
 
 TERMINAL_STATUSES = {"done", "partial_done", "failed", "prefilter_rejected", "cancelled", "timeout"}
@@ -150,7 +153,8 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
             )
             conn.commit()
         except Exception:
-            pass  # 回写失败不掩盖原始异常;任务表已带 message 可诊断
+            # 回写失败不掩盖原始异常;任务表已带 message 可诊断。
+            _worker_logger.debug("official_channel_sync.error_markback_failed", exc_info=True)
         await queue.set_status(
             task_id,
             "failed",

@@ -322,12 +322,10 @@ export function normalizeDashboardMetrics(bundle: RawRecord, kolRows: RawList = 
   const rosterAll = int(evidenceRoster.all ?? summary.active_roster) ?? (kolCount != null || officialCount != null ? (kolCount || 0) + (officialCount || 0) : null);
   const rosterKol = int(evidenceRoster.kol) ?? kolCount;
   const rosterCompany = int(evidenceRoster.company) ?? officialCount;
-  // 2026-07-18 体检修:total_exposure 是生涯累计(2.17B),卡口径是 30d 增量——
-  // all 口径改吃后端新给的真 30d 窗口字段(按视频发布时间),绝不再拿 lifetime 冒充。
-  const evidenceEngagement30 = record(evidenceMetrics.engagement_30d);
+  // 2026-07-18 体检修:all 口径改吃真 30d 窗口字段,绝不再拿 lifetime(2.17B)冒充月增量。
   const totalExposure = number(evidenceMetrics.total_exposure_30d);
   const evidence30Count = int(evidenceMetrics.evidence_30d_count);
-  const evidenceRate = number(evidenceEngagement30.engagement_rate);
+  const evidenceRate = number(record(evidenceMetrics.engagement_30d).engagement_rate);
   const engagementPercent = evidenceRate == null ? null : evidenceRate * 100;
   const viewCovered = int(evidenceCoverage.view_covered);
   const coveragePct = number(evidenceCoverage.view_coverage_pct);
@@ -656,10 +654,8 @@ export function normalizeAiInsight(copilotBrief: RawValue = {}, tasks: RawValue 
     generationStatus: String(attempt.generation_status || ""),
     providersAttempted: list(attempt.providers_attempted).map((value) => String(value)),
   } : null;
-  // 2026-07-18 体检修:keep_last 只允许「昨天的快照带过期徽章」,不允许无限老化——
-  // 超 48h 按不可用走诚实空态,防止调度断档时旗舰卡长期展示僵尸内容。
-  const hotAgeHours = Number(hotContent.age_hours ?? hot.age_hours ?? 0) || 0;
-  if (hot.available && hotContent.headline && hotAgeHours <= 48) {
+  // 2026-07-18 体检修:keep_last 只许昨日快照带徽章,超 48h 走诚实空态(防僵尸内容)。
+  if (hot.available && hotContent.headline && (Number(hotContent.age_hours ?? hot.age_hours ?? 0) || 0) <= 48) {
     const freshnessStatus = String(hotContent.freshness_status || hot.freshness_status || "unknown");
     const freshnessLabel = String(hotContent.freshness_label || hot.freshness_label || "");
     const isStale = freshnessStatus === "stale";
@@ -761,8 +757,7 @@ export function normalizeSignals(marketCards: RawValue = {}, competitorRadar: Ra
   const radarFreshness = String(radarContent.freshness_status || radar.freshness_status || "unknown");
   const radarFreshnessLabel = String(radarContent.freshness_label || radar.freshness_label || "");
   const radarGlobalSources = list(radarContent.sources);
-  // 2026-07-18 体检修:雷达停更时快照无限老化,此前 18 天前的旧闻仍置顶信号卡。
-  // 超 72h 的雷达项整组隐藏(只留 market-intelligence 信号),72h 内 stale 保留角标展示。
+  // 2026-07-18 体检修:雷达超 72h 整组隐藏(防 18 天旧闻置顶),72h 内 stale 保留角标。
   const radarAgeHours = Number(radarContent.age_hours ?? radar.age_hours ?? 0) || 0;
   const radarItems = (radar.available && radarAgeHours <= 72 && Array.isArray(record(radar.content).items))
     ? list(radarContent.items).slice(0, 5).map((it, i) => {

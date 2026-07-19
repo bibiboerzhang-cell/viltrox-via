@@ -243,11 +243,39 @@ def board_requirement_for_board_series(board_param: str) -> frozenset[str] | Non
     return None
 
 
+def board_gate_allows(staff: Any, path: str, query_board: Any) -> bool:
+    """board.* 可见性闸(推断+检查+灰度合一;实现集中在此,main.py 只调一行)。
+
+    灰度:BOARD_RBAC_ENFORCE=0(默认)只记 would_block 不拦,观察一个部署
+    周期零误杀后置 1。纯内存 dict 查找,零额外查库。
+    """
+    import os
+
+    from app.core.logging import get_logger
+    from app.core.permissions import check_board_permission
+
+    boards = board_requirement_for_request(path)
+    if path == "/api/admin/vkpi/board-series":
+        boards = board_requirement_for_board_series(str(query_board or ""))
+    if not boards or check_board_permission(staff, boards):
+        return True
+    if str(os.getenv("BOARD_RBAC_ENFORCE", "0") or "0").strip() in {"1", "true", "yes"}:
+        return False
+    get_logger(__name__).warning(
+        "board_rbac.would_block | path=%s staff_id=%s boards=%s",
+        path,
+        (staff or {}).get("id"),
+        ",".join(sorted(boards)),
+    )
+    return True
+
+
 __all__ = [
     "DB_REQUEST_ADMISSION_LIMIT",
     "DB_REQUEST_ADMISSION_TIMEOUT_SEC",
     "PRIVATE_INTERNAL_UPLOAD_PREFIXES",
     "admin_permission_for_request",
+    "board_gate_allows",
     "board_requirement_for_board_series",
     "board_requirement_for_request",
     "db_admission_unavailable_response",
