@@ -15,7 +15,12 @@ source scripts/runtime_env.sh > /dev/null 2>&1
 # vkpi_employee_channels 被 vkpi_channel_audit FK 引用,不能 TRUNCATE——
 # 走 staging schema + 按 id UPSERT(只刷同步状态与画像列,本地 audit 不动)。
 SYNCED_TABLES=(vkpi_channel_metrics vkpi_channel_metrics_filled vkpi_channel_post_metrics)
+# comments/commenter_profiles 本地也有手动采集写入,kol_pool 本地有 L0 回填——
+# 全部走 UPSERT 防丢本地行(kol_pool 只从 prod 补新行,不覆盖本地已有列值:
+# 见下方 kol_pool 特例)。
 UPSERT_TABLES=(vkpi_employee_channels)
+# 补差表:prod/本地对同一条自然键各有各的 id → 去 id 整行补插,任意唯一键冲突跳过
+FILL_TABLES=(vkpi_comments vkpi_commenter_profiles)
 
 LATEST_DIR="$(ls -dt runtime/prod-sync/*/ 2>/dev/null | head -1 || true)"
 DUMP="${LATEST_DIR%/}/prod-db.dump"
@@ -48,6 +53,20 @@ SQL
   COLS=$(psql "$LOCAL_DATABASE_URL" -t -A -c "SELECT string_agg(quote_ident(column_name), ',') FROM information_schema.columns WHERE table_schema='public' AND table_name='$t' AND column_name <> 'id'")
   SETS=$(psql "$LOCAL_DATABASE_URL" -t -A -c "SELECT string_agg(quote_ident(column_name) || '=EXCLUDED.' || quote_ident(column_name), ',') FROM information_schema.columns WHERE table_schema='public' AND table_name='$t' AND column_name <> 'id'")
   psql "$LOCAL_DATABASE_URL" -c "INSERT INTO public.$t (id, $COLS) SELECT id, $COLS FROM prod_sync_staging.$t ON CONFLICT (id) DO UPDATE SET $SETS" > /dev/null
+  psql "$LOCAL_DATABASE_URL" -c "DROP SCHEMA prod_sync_staging CASCADE" > /dev/null
+done
+
+for t in "${FILL_TABLES[@]}"; do
+  psql "$LOCAL_DATABASE_URL" > /dev/null <<SQL
+DROP SCHEMA IF EXISTS prod_sync_staging CASCADE;
+CREATE SCHEMA prod_sync_staging;
+CREATE TABLE prod_sync_staging.$t (LIKE public.$t INCLUDING DEFAULTS);
+SQL
+  pg_restore --data-only --no-owner --no-acl --table="$t" -f - "$DUMP" \
+    | sed "s/^COPY public\.$t /COPY prod_sync_staging.$t /" \
+    | psql "$LOCAL_DATABASE_URL" > /dev/null
+  COLS=$(psql "$LOCAL_DATABASE_URL" -t -A -c "SELECT string_agg(quote_ident(column_name), ',') FROM information_schema.columns WHERE table_schema='public' AND table_name='$t' AND column_name <> 'id'")
+  psql "$LOCAL_DATABASE_URL" -c "INSERT INTO public.$t ($COLS) SELECT $COLS FROM prod_sync_staging.$t ON CONFLICT DO NOTHING" > /dev/null
   psql "$LOCAL_DATABASE_URL" -c "DROP SCHEMA prod_sync_staging CASCADE" > /dev/null
 done
 
