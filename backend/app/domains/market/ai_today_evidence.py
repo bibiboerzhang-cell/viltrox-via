@@ -600,3 +600,31 @@ def _read_hot_brands(
     except Exception:
         logger.debug("ai_today.read_hot_brands_failed", exc_info=True)
         return []
+
+def _evidence_conn():
+    from app.db.connection import get_conn
+    return get_conn()
+
+
+def recent_recommended_lines(days: int = 3) -> list[str]:
+    """近 N 天快照已推的产品/方案行,作为策略 prompt 的去重负面清单。best-effort。"""
+    lines: list[str] = []
+    try:
+        rows = _evidence_conn().execute(
+            "SELECT content_json FROM vkpi_ai_today_hot "
+            "WHERE snapshot_date >= CURRENT_DATE - ? ORDER BY snapshot_date DESC LIMIT 5",
+            (int(days),),
+        ).fetchall()
+        for row in rows:
+            try:
+                content = json.loads(dict(row).get("content_json") or "{}")
+            except (TypeError, ValueError):
+                continue
+            for key in ("product_recommendations", "shooting_plans"):
+                for item in (content.get(key) or [])[:4]:
+                    text = str(item or "").strip()
+                    if text and text[:60] not in {l[:60] for l in lines}:
+                        lines.append(text)
+    except Exception:
+        logging.getLogger(__name__).debug("ai_today.recent_lines_unavailable", exc_info=True)
+    return lines[:10]
