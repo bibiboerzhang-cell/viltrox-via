@@ -941,6 +941,7 @@ async def job_vkpi_cost_snapshot():
 # ──────────────────────────────────────────────
 from .jobs_tasks_intel import (  # noqa: E402,F401
     _run_brief_agent_daily,
+    job_market_mention_sentiment,
     job_market_voice_alerts,
     job_sentiment_annotate,
     job_vkpi_market_listening_daily,

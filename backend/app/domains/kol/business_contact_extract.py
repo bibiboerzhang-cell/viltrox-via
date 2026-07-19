@@ -695,7 +695,7 @@ def _about_backlog_rows(db: Any, limit: int) -> tuple[int, list[dict[str, Any]]]
             try:
                 db.rollback()
             except Exception:
-                pass
+                logger.debug("回滚失败(best-effort)", exc_info=True)
     return 0, []
 
 
@@ -770,7 +770,7 @@ def fetch_about_and_enrich(batch_size: int = 50, *, dry_run: bool = True, staff:
             try:
                 db.rollback()
             except Exception:
-                pass
+                logger.debug("回滚失败(best-effort)", exc_info=True)
     return {
         "status": status, "target_backlog": total, "attempted": attempted,
         "emails_found": emails_found, "rows_updated": rows_updated, "no_about": no_about,
