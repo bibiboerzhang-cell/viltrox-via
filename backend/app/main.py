@@ -52,12 +52,19 @@ from app.services.security.admin_access import apply_admin_security_headers, get
 from app.services.via import build_via_event_bus
 from app.core.logging import get_logger
 from app.core.security import AUTH_COOKIE_NAME, get_current_user
-from app.core.permissions import check_system_permission, check_tab_permission, staff_context_for_user
+from app.core.permissions import (
+    check_board_permission,
+    check_system_permission,
+    check_tab_permission,
+    staff_context_for_user,
+)
 from app.main_health import build_deep_health_payload
 from app.main_request_guards import (
     DB_REQUEST_ADMISSION_TIMEOUT_SEC as _DB_REQUEST_ADMISSION_TIMEOUT_SEC,
     PRIVATE_INTERNAL_UPLOAD_PREFIXES as _PRIVATE_INTERNAL_UPLOAD_PREFIXES,
     admin_permission_for_request as _admin_permission_for_request,
+    board_requirement_for_board_series as _board_requirement_for_board_series,
+    board_requirement_for_request as _board_requirement_for_request,
     db_admission_unavailable_response,
     db_request_admission_limiter as _db_request_admission_limiter,
     request_path_requires_db_admission,
@@ -401,7 +408,24 @@ def _admin_rbac_allowed(request) -> bool:
     request.state.vkpi_authorized_staff = staff
     if is_system:
         return check_system_permission(staff, permission_key, level)
-    return check_tab_permission(staff, permission_key, level)
+    if not check_tab_permission(staff, permission_key, level):
+        return False
+    # 2026-07-18 权限双洞修:board.* 板块可见性后端接闸(此前纯前端遮挡,
+    # 直连 API 可越权)。灰度:BOARD_RBAC_ENFORCE=0(默认)只记 would_block
+    # 不拦,观察一个部署周期零误杀后置 1。纯内存 dict 查找,零额外查库。
+    boards = _board_requirement_for_request(path)
+    if path == "/api/admin/vkpi/board-series":
+        boards = _board_requirement_for_board_series(request.query_params.get("board"))
+    if boards and not check_board_permission(staff, boards):
+        if str(os.getenv("BOARD_RBAC_ENFORCE", "0") or "0").strip() in {"1", "true", "yes"}:
+            return False
+        logger.warning(
+            "board_rbac.would_block | path=%s staff_id=%s boards=%s",
+            path,
+            staff.get("id"),
+            ",".join(sorted(boards)),
+        )
+    return True
 
 
 def _admin_rbac_allowed_bounded(request) -> bool:

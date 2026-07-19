@@ -10,7 +10,9 @@ cd "${PROJECT_ROOT}"
 source scripts/runtime_env.sh > /dev/null 2>&1
 
 # 同步类表白名单(加表须人工评审:必须是本地零原创写入的表)
-SYNCED_TABLES=(vkpi_channel_metrics vkpi_channel_metrics_filled)
+# 2026-07-18 体检修:只导两张 metrics 表让本地断更诊断永远看旧账(channels 行
+# 停在 06-14、post_metrics 停 07-10 全是镜像假象)——补齐渠道行与帖子层。
+SYNCED_TABLES=(vkpi_channel_metrics vkpi_channel_metrics_filled vkpi_employee_channels vkpi_channel_post_metrics)
 
 LATEST_DIR="$(ls -dt runtime/prod-sync/*/ 2>/dev/null | head -1 || true)"
 DUMP="${LATEST_DIR%/}/prod-db.dump"

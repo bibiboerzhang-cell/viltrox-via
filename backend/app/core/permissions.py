@@ -273,6 +273,33 @@ def check_tab_permission(staff: dict[str, Any], tab_key: str, level: str = "read
     return _level_allows(perms.get(tab, "none"), level)
 
 
+BOARD_PERMISSION_KEY_PREFIX = "board."
+
+
+def check_board_permission(staff: dict[str, Any], nav_keys: Any) -> bool:
+    """board.* 板块可见性闸(2026-07-18 权限双洞修)。
+
+    前端权限抽屉写 board.<navKey>(值域 read/none)进 permissions_json,此前
+    后端零消费——owner 藏板块后员工直连 API 仍可读写。规则(与前端
+    boardLevelFor 口径一字不差):owner 豁免;缺键视为 read(放行,20/21 员工
+    无 board 键不会被误锁);nav_keys 为 OR 语义——任一板块的值 ≠ 'none' 即放行。
+    这是可见性闸不是读写闸:通过后仍要过既有 tab level + own-only 行级过滤。
+    """
+    if _staff_access_disabled(staff):
+        return False
+    if is_owner(staff):
+        return True
+    keys = {str(k) for k in (nav_keys or ()) if str(k or "").strip()}
+    if not keys:
+        return True
+    perms = _parse_permissions(staff.get("permissions_json") or staff.get("permissions"))
+    for key in keys:
+        value = str(perms.get(f"{BOARD_PERMISSION_KEY_PREFIX}{key}", "") or "").strip().lower()
+        if value != "none":
+            return True
+    return False
+
+
 def check_system_permission(staff: dict[str, Any], permission_key: str, level: str = "read") -> bool:
     if _staff_access_disabled(staff):
         return False

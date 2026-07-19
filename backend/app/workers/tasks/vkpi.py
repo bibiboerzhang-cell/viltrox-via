@@ -138,6 +138,19 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
             return
         message = f"{type(exc).__name__}: {str(exc)[:500]}"
         task_enqueue.upsert_task_item(task_id, item_key, status="failed", error=message)
+        # 2026-07-18 体检修:凡在 _mark 之前炸掉,渠道行保持上次成功态+空错误,
+        # 断更完全不可诊断——异常路径也回写渠道行的失败态。
+        try:
+            from app.db.connection import get_conn
+
+            conn = get_conn()
+            conn.execute(
+                "UPDATE vkpi_employee_channels SET last_sync_status='error', last_sync_error=?, last_sync_at=NOW() WHERE id=?",
+                (message[:500], int(channel_id)),
+            )
+            conn.commit()
+        except Exception:
+            pass  # 回写失败不掩盖原始异常;任务表已带 message 可诊断
         await queue.set_status(
             task_id,
             "failed",

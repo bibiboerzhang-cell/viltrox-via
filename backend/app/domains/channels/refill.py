@@ -450,7 +450,24 @@ def _sync_instagram(
     items = _items(result.get("items"))
     if str(result.get("sync_status") or "") != "synced" or not items:
         _progress(progress_callback, 40, "Instagram crawler 完成")
-        return _mark_with_progress(channel, status=str(result.get("sync_status") or "no_results"), message=str(result.get("error") or result.get("message") or "Instagram 未返回账号资料。"), staff=staff, progress_callback=progress_callback, cancel_check=cancel_check)
+        # 2026-07-18 体检修:actor SUCCEEDED 但 0 items 时 crawler 带回
+        # sync_status='synced',空结果被标成功(状态绿但永不更新)——空 items
+        # 一律强制 no_results,错误信息写明是 actor 空返回而非预算/token 问题。
+        empty_status = str(result.get("sync_status") or "no_results")
+        if not items:
+            empty_status = "no_results"
+        return _mark_with_progress(
+            channel,
+            status=empty_status,
+            message=str(
+                result.get("error")
+                or result.get("message")
+                or "Instagram profile-scraper 返回 0 条(actor 对该账号空返回,非预算/token 问题)。"
+            ),
+            staff=staff,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
     profile = items[0]
     profile_posts = _items(profile.get("latestPosts"))
     posts = profile_posts or items

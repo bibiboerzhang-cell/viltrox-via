@@ -138,6 +138,9 @@ try:
                 filtered = getattr(self, "_vkpi_filtered_task_ids", [])
                 filtered.append(task_key)
                 self._vkpi_filtered_task_ids = filtered
+                # 2026-07-18 体检修:此前零日志静默过滤——官号日报两 id 漏白名单
+                # 无声熄火 6 天没人察觉。过滤必须在日志面可见。
+                logger.warning("scheduler.job_filtered_by_allowlist | task=%s", task_key)
                 return None
             guarded = guard_scheduled_callable(
                 task_key,

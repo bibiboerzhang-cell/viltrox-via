@@ -171,11 +171,85 @@ def admin_permission_for_request(path: str, method: str) -> tuple[str, str, bool
     return None
 
 
+# ── board.* 板块可见性映射(2026-07-18 权限双洞修)─────────────────────────
+# 前端权限抽屉写 board.<navKey> 进 permissions_json,此前后端零消费(纯前端遮挡,
+# 直连 API 可越权)。此表把 /api/admin/vkpi/ 下的第一路径段映射到 navKey 集合;
+# 共享前缀映射到多板块(OR 语义:任一板块可见即放行)。未命中 → 不闸。
+# 语义:board.* 是「可见性闸」非读写闸——显式 'none' 才拦,写权仍由 tab level 管。
+_BOARD_ROUTE_PREFIX = "/api/admin/vkpi/"
+_BOARD_NAV_KEYS = frozenset({
+    "dashboard", "my-kol", "kol-pool", "kolProfile", "projects", "events",
+    "shopify", "dealers", "intelligent", "marketVoice", "sku360",
+    "creativeLibrary", "replyQueue", "launchpad", "autonomy", "strategyBoard",
+    "gtmCommand",
+})
+_BOARD_ROUTE_RULES: tuple[tuple[str, frozenset[str]], ...] = (
+    # 顺序敏感:更长/更具体的前缀在前。
+    ("kol-smart-search", frozenset({"kol-pool"})),
+    ("kol-search-history", frozenset({"kol-pool", "kolProfile"})),
+    ("kol-pool", frozenset({"kol-pool", "kolProfile"})),
+    ("event-radar", frozenset({"events"})),
+    ("events", frozenset({"events"})),
+    ("inventory", frozenset({"events"})),
+    ("dashboard", frozenset({"dashboard"})),
+    ("alerts", frozenset({"dashboard"})),
+    ("my-kol", frozenset({"my-kol"})),
+    ("projects", frozenset({"projects", "launchpad"})),
+    ("shopify", frozenset({"shopify"})),
+    ("goaffpro", frozenset({"shopify"})),
+    ("attribution", frozenset({"shopify", "projects"})),
+    ("dealers", frozenset({"dealers"})),
+    ("intelligent", frozenset({"intelligent"})),
+    ("marketing-advisor", frozenset({"intelligent"})),
+    ("market/voice-feed", frozenset({"marketVoice"})),
+    ("market/voice-report", frozenset({"marketVoice"})),
+    ("market/prd-referrals", frozenset({"marketVoice"})),
+    ("sku/", frozenset({"sku360", "launchpad", "gtmCommand", "strategyBoard"})),
+    ("industry-data/product-campaign-card", frozenset({"sku360"})),
+    ("creative-segments", frozenset({"creativeLibrary"})),
+    ("reply-queue", frozenset({"replyQueue", "marketVoice"})),
+    ("launch", frozenset({"launchpad"})),
+    ("publish", frozenset({"launchpad"})),
+    ("product-analysis", frozenset({"launchpad"})),
+    ("rates", frozenset({"launchpad"})),
+    ("roster", frozenset({"launchpad"})),
+    ("autonomy", frozenset({"autonomy"})),
+    ("prediction-ledger", frozenset({"autonomy"})),
+    ("agents/loop/trace", frozenset({"autonomy"})),
+    ("actions/inbox", frozenset({"autonomy", "gtmCommand"})),
+    ("learning/weekly-scorecard", frozenset({"autonomy", "strategyBoard"})),
+    ("strategy/", frozenset({"strategyBoard"})),
+    ("gtm/", frozenset({"gtmCommand"})),
+    ("market-brain/", frozenset({"gtmCommand"})),
+)
+
+
+def board_requirement_for_request(path: str) -> frozenset[str] | None:
+    """Return the navKey set whose visibility guards this path, or None (no gate)."""
+    if not path.startswith(_BOARD_ROUTE_PREFIX):
+        return None
+    rest = path[len(_BOARD_ROUTE_PREFIX):]
+    for prefix, boards in _BOARD_ROUTE_RULES:
+        if rest.startswith(prefix):
+            return boards
+    return None
+
+
+def board_requirement_for_board_series(board_param: str) -> frozenset[str] | None:
+    """board-series 以 ?board=<key> 区分板块;非注册键(旧 V2 占位等)不闸。"""
+    key = str(board_param or "").strip()
+    if key in _BOARD_NAV_KEYS:
+        return frozenset({key})
+    return None
+
+
 __all__ = [
     "DB_REQUEST_ADMISSION_LIMIT",
     "DB_REQUEST_ADMISSION_TIMEOUT_SEC",
     "PRIVATE_INTERNAL_UPLOAD_PREFIXES",
     "admin_permission_for_request",
+    "board_requirement_for_board_series",
+    "board_requirement_for_request",
     "db_admission_unavailable_response",
     "db_request_admission_limiter",
     "request_path_requires_db_admission",
