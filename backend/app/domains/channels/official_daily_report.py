@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import CLAUDE_MODEL, GEMINI_MODEL
@@ -340,7 +340,8 @@ def generate_one(channel: dict[str, Any], *, report_date: str, round_key: str = 
 def generate_official_daily_reports(*, round_key: str = "daily", language: str = "zh", report_date: str | None = None) -> dict[str, Any]:
     """每日 cron 入口:循环 18 官号各生成一份报告。预算闸逐账号硬限,超限即停余下。"""
     conn = get_conn()
-    rdate = report_date or date.today().isoformat()
+    # 平台口径:统一 UTC 日;date.today() 吃机器本地日,UTC 跨天后会错标昨日
+    rdate = report_date or datetime.now(tz=timezone.utc).date().isoformat()
     channels = _official_channels(conn)
     results: list[dict[str, Any]] = []
     ok = skipped = blocked = failed = 0
