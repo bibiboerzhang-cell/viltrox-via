@@ -869,6 +869,48 @@ def scan_delivered_into_windows(
 _WINDOW_SCANNABLE_STATUSES = ("pending", "scanning", "matched")
 
 
+def close_expired_windows(
+    staff: dict[str, Any] | None = None,
+    *,
+    grace_days: int = 3,
+) -> dict[str, Any]:
+    """过期观察窗自动收口(2026-07-18 收口面D:全库此前零 closed/content_missing 写入方)。
+
+    ends_at + grace 已过且仍处活动态的窗口:有 matched_content_post_id → 'closed'
+    (观察完成);无 → 'content_missing'(到期未见内容,进人工视野)。
+    红线:只改窗口行自身 status/updated_at;绝不动 assignment/project/cost,零裁决。
+    """
+    del staff  # 全库收口不吃 scope(过期是客观事实);保留参数与其他任务体同形。
+    days = max(0, min(int(grace_days or 0), 30))
+    conn = get_conn()
+    closed_cur = conn.execute(
+        """
+        UPDATE vkpi_project_content_observation_windows
+        SET status='closed', updated_at=NOW()
+        WHERE status IN ('pending','scanning','matched')
+          AND matched_content_post_id IS NOT NULL
+          AND ends_at IS NOT NULL
+          AND ends_at < NOW() - (? * INTERVAL '1 day')
+        """,
+        (days,),
+    )
+    closed = int(getattr(closed_cur, "rowcount", 0) or 0)
+    missing_cur = conn.execute(
+        """
+        UPDATE vkpi_project_content_observation_windows
+        SET status='content_missing', updated_at=NOW()
+        WHERE status IN ('pending','scanning')
+          AND matched_content_post_id IS NULL
+          AND ends_at IS NOT NULL
+          AND ends_at < NOW() - (? * INTERVAL '1 day')
+        """,
+        (days,),
+    )
+    missing = int(getattr(missing_cur, "rowcount", 0) or 0)
+    conn.commit()
+    return {"status": "ok", "closed": closed, "content_missing": missing, "grace_days": days}
+
+
 def _mark_window_scanned(conn: Any, window_id: int, matched: bool) -> None:
     """只在本窗口行上记一次扫描痕迹(scan_count+1、last_scan_at、可选 status→scanning)。
 

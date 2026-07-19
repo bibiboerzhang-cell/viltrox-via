@@ -411,7 +411,12 @@ async def job_vkpi_market_intelligence_refresh():
                 return {"committed": False, "reason": str(exc)[:100], "expired_swept": expired}
 
         result = await asyncio.to_thread(_refresh)
-        logger.info("scheduler.vkpi_market_intelligence_refresh", extra=result)
+        # 2026-07-18 体检修:零插入此前静默记 info,54 天断粮账面全绿——
+        # 空产出升 warning,让断供在日志面显性化(run 行同步改记 'empty')。
+        if result.get("committed") and not result.get("inserted"):
+            logger.warning("scheduler.vkpi_market_intelligence_refresh_empty", extra=result)
+        else:
+            logger.info("scheduler.vkpi_market_intelligence_refresh", extra=result)
     except Exception:
         logger.exception("scheduler.vkpi_market_intelligence_refresh_failed")
 
@@ -579,6 +584,20 @@ async def job_fulfillment_delivered_scan():
                     )
         except Exception:
             logger.debug("scheduler.fulfillment_delivered_scan_audit_skipped", exc_info=True)
+        # 2026-07-18 收口面D:同一 gate 下顺带收口过期窗(closed/content_missing
+        # 此前全库零写入方,过期窗永久 pending)。失败不拖垮开窗主流程。
+        try:
+            closed_out = await asyncio.to_thread(observation_windows.close_expired_windows)
+            if closed_out.get("closed") or closed_out.get("content_missing"):
+                logger.info(
+                    "scheduler.fulfillment_windows_closed",
+                    extra={
+                        "windows_closed": closed_out.get("closed"),
+                        "windows_content_missing": closed_out.get("content_missing"),
+                    },
+                )
+        except Exception:
+            logger.debug("scheduler.fulfillment_window_close_skipped", exc_info=True)
         _record_scheduler_run("project_shipment_sync", ok=True)
     except Exception as exc:
         logger.exception("scheduler.fulfillment_delivered_scan_failed")

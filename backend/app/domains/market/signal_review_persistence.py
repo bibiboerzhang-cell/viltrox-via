@@ -73,6 +73,9 @@ def write_reviewed_competitor_signals(
         insert_count=len(insert_rows),
         skipped_existing=len(existing),
     )
+    # 2026-07-18 体检修:零插入 run 此前照记 committed,54 天断粮账面全绿——
+    # 空 run 改记 'empty'(唯一挑 run 的读方本就过滤 signal_count>0,安全)。
+    run_status = "committed" if insert_rows else "empty"
     conn.execute(
         """
         INSERT INTO vkpi_competitor_signal_runs (
@@ -80,7 +83,7 @@ def write_reviewed_competitor_signals(
           committed_by, created_at, committed_at
         ) VALUES (?,?,?,?,?,?,?)
         """,
-        (run_uid, "committed", json.dumps(source_summary, ensure_ascii=False), len(insert_rows), committed_by, now, now),
+        (run_uid, run_status, json.dumps(source_summary, ensure_ascii=False), len(insert_rows), committed_by, now, now),
     )
     run_row = conn.execute("SELECT id FROM vkpi_competitor_signal_runs WHERE run_uid=?", (run_uid,)).fetchone()
     run_id = int(run_row["id"])

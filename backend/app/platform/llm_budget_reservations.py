@@ -237,6 +237,62 @@ def _open_reserved_for_scope(
     return float((dict(row).get("reserved") if row else 0.0) or 0.0)
 
 
+_REAP_TTL_HOURS_DEFAULT = 24.0
+_REAP_MIN_INTERVAL_SECONDS = 600.0
+_last_reap_monotonic: float = 0.0
+
+
+def reap_stale_reservations(*, ttl_hours: float | None = None) -> int:
+    """超龄开放态预约(reserved/provider_started/unknown)→ 'expired',释放占用额度。
+
+    2026-07-18 体检修:'unknown' 的 fail-closed 设计(结果不可证则继续占额度)
+    没有任何回收器,81 笔僵尸预约永久占 $5.84,雷达 $1 日闸已被吃 16%——
+    单调恶化直至相关 scope 永久 budget_blocked。真实 provider 调用分钟级落定,
+    TTL 24h(VKPI_LLM_RESERVATION_TTL_HOURS 可调)远在安全边界外。
+    'expired'(迁移 273)不被 _open_reserved_for_scope 计入;行保留可审计。
+    """
+    import os as _os
+
+    try:
+        hours = float(ttl_hours or _os.getenv("VKPI_LLM_RESERVATION_TTL_HOURS", "") or _REAP_TTL_HOURS_DEFAULT)
+    except (TypeError, ValueError):
+        hours = _REAP_TTL_HOURS_DEFAULT
+    hours = max(1.0, hours)
+    conn = get_conn()
+    cursor = conn.execute(
+        """
+        UPDATE vkpi_llm_budget_reservations
+        SET state='expired', updated_at=NOW()
+        WHERE state IN ('reserved','provider_started','unknown')
+          AND reserved_at < NOW() - (? * INTERVAL '1 hour')
+        """,
+        (hours,),
+    )
+    reaped = int(getattr(cursor, "rowcount", 0) or 0)
+    conn.commit()
+    if reaped:
+        logger.warning(
+            "vkpi.llm_reservations.reaped_stale",
+            extra={"count": reaped, "ttl_hours": hours},
+        )
+    return reaped
+
+
+def _maybe_reap_stale_reservations() -> None:
+    """机会式触发(每进程节流 10 分钟),预约路径自愈,不依赖调度器活着。"""
+    global _last_reap_monotonic
+    import time as _time
+
+    now = _time.monotonic()
+    if now - _last_reap_monotonic < _REAP_MIN_INTERVAL_SECONDS:
+        return
+    _last_reap_monotonic = now
+    try:
+        reap_stale_reservations()
+    except Exception:
+        logger.debug("vkpi.llm_reservations.reap_failed", exc_info=True)
+
+
 def reserve_llm_budget(
     *,
     provider: str,
@@ -270,6 +326,10 @@ def reserve_llm_budget(
             f"reservation_schema_unavailable:{type(exc).__name__}",
             estimated_cost_usd=estimate,
         ) from exc
+
+    # 2026-07-18:预约前机会式回收僵尸预约(节流 10 分钟),防 unknown 泄漏
+    # 单调吃满 scope 日闸。独立事务,失败不阻断预约主流程。
+    _maybe_reap_stale_reservations()
 
     # Roll an expired cron window before acquiring the transaction's cap locks.
     # The helper owns its own commit, so it must run before the atomic section.

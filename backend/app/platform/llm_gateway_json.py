@@ -417,12 +417,29 @@ def invoke_json(
                 metadata=metadata,
                 staff=staff,
             )
+            # 2026-07-18 体检修:此前只落泛化 budget_blocked,scope 断供全靠盲诊
+            # (KOL 三任务断供因此瞎猜 3 天)。被拒 scope 与拒因一并落库。
+            blocked_scopes = [
+                {
+                    "scope": str(check.get("scope") or ""),
+                    "reason": (
+                        "scope_not_configured"
+                        if not check.get("configured")
+                        else "hard_stopped"
+                        if check.get("hard_stopped")
+                        else "cap_exceeded"
+                    ),
+                }
+                for check in budget_checks
+                if isinstance(check, dict) and not check.get("allowed")
+            ]
             errors.append(
                 {
                     "provider": provider,
                     "model": model_id,
                     "status": "budget_blocked",
                     "error": "budget_blocked",
+                    "blocked_scopes": blocked_scopes,
                 }
             )
             continue

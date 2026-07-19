@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +129,21 @@ def _classify_row(row: dict[str, Any]) -> dict[str, Any]:
     mention_text = _text(row.get("mention_text"))
     product_sku = _text(row.get("product_sku")).lower()
     competitors = _split_csv(row.get("competitor_product"))
+    # 2026-07-18 体检修(空列锁):listening 写入端 competitor_product 恒空串,
+    # x/reddit 新料永远进不了 competitor_signal 类目 → 54 天零新信号。
+    # 列空时从正文按品牌词典兜底识别(词边界匹配,复用 competitor_brain 口径)。
+    if not competitors and mention_text:
+        try:
+            from app.domains.market.competitor_brain_helpers import _find_competitor_terms
+
+            competitors = _find_competitor_terms(mention_text)
+        except Exception:
+            competitors = []
     score = _safe_float(row.get("score"))
+    # 分尺锁:x 的 score 是原始 likes(0-115),老料是 0-1 相关度——夹回 0-1,
+    # 防 likes 值直接顶满 severity=high。原始数仍在行内不丢。
+    if score > 1.0:
+        score = 1.0
     signal_type = _signal_type(mention_text, competitors, metadata)
     category = _primary_category(product_sku, competitors, signal_type, score)
     if category == "viltrox_mention":
@@ -187,18 +201,27 @@ def _classify_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _market_mentions(limit: int, run_id: int | None = None) -> list[dict[str, Any]]:
     safe_limit = max(1, min(500, int(limit or 100)))
+    # 2026-07-18 体检修(冻料重嚼):无时间窗 + 纯 score 排序让提取器每天重读
+    # 5 月冻料/被 x 原始 likes 分尺霸榜。默认口径改「近 45 天优先、时间新→旧」;
+    # 显式 run_id 仍读该 run 全量(冒烟/回放路径不变)。
     where = ""
     params: list[Any] = []
     if run_id is not None:
         where = "WHERE m.run_id=?"
         params.append(int(run_id))
+        order = "ORDER BY m.score DESC, m.id ASC"
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=45)
+        where = "WHERE m.created_at >= ?"
+        params.append(cutoff)
+        order = "ORDER BY m.created_at DESC, m.score DESC, m.id ASC"
     rows = get_conn().execute(
         f"""
         SELECT m.*, s.source_url AS joined_source_url
         FROM vkpi_market_mentions m
         LEFT JOIN vkpi_market_sources s ON s.id=m.source_id
         {where}
-        ORDER BY m.score DESC, m.id ASC
+        {order}
         LIMIT ?
         """,
         (*params, safe_limit),

@@ -542,6 +542,21 @@ def _persist_listening_posts(conn: Any, platform: str, records: list[dict[str, A
             title = str(record.get("title") or "").strip()
             excerpt = str(record.get("excerpt") or "").strip()
             mention_text = " · ".join(part for part in (title, excerpt) if part)[:1000]
+            # 2026-07-18 体检修(空列锁+分尺锁):competitor_product 此前恒空串,
+            # 信号分类器的 competitor_signal 类目永远吃不到 x/reddit 新料;score
+            # 落原始 likes(0-115)压过老料 0-1 相关度分。写入即富化+归一,
+            # 原始互动数保留在 metadata_json。
+            try:
+                from app.domains.market.competitor_brain_helpers import _find_competitor_terms
+
+                competitor_csv = ",".join(_find_competitor_terms(mention_text))
+            except Exception:
+                competitor_csv = ""
+            raw_score = float(record.get("score") or 0.0)
+            normalized_score = raw_score if raw_score <= 1.0 else min(1.0, raw_score / 1000.0)
+            mention_meta = dict(record.get("mention_meta") or {})
+            if raw_score > 1.0:
+                mention_meta["raw_engagement_score"] = raw_score
             conn.execute(
                 """
                 INSERT INTO vkpi_market_mentions
@@ -556,10 +571,10 @@ def _persist_listening_posts(conn: Any, platform: str, records: list[dict[str, A
                     str(record.get("handle") or "")[:120],
                     mention_text,
                     "",
+                    competitor_csv,
                     "",
-                    "",
-                    float(record.get("score") or 0.0),
-                    _json_dump(record.get("mention_meta") or {}),
+                    normalized_score,
+                    _json_dump(mention_meta),
                     now,
                 ),
             )
