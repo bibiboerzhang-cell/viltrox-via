@@ -31,8 +31,12 @@ def _fake_brief() -> dict:
 
 
 def _fake_radar() -> dict:
+    # 2026-07-18 超龄闸后:未过就绪门或快照超 72h 的雷达不再产观察——
+    # 测试样本必须自带新鲜就绪态(与真实 getter 的顶层字段同形)。
     return {
         "available": True,
+        "is_ready": True,
+        "age_hours": 2.0,
         "model": "gemini",
         "content": {
             "items": [
