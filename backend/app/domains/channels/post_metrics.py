@@ -124,7 +124,13 @@ def _parse_datetime(value: Any) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        return None
+        # 2026-07-19 体检修:X 抓取器 createdAt 是 Twitter 传统格式
+        # ("Mon Jul 13 03:55:00 +0000 2026"),此前只认 ISO → X 帖 posted_at
+        # 100% NULL(prod 2850/2850),时间轴/时序全失真。
+        try:
+            parsed = datetime.strptime(text, "%a %b %d %H:%M:%S %z %Y")
+        except ValueError:
+            return None
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
