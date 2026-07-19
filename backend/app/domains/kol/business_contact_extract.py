@@ -6,8 +6,9 @@
   - 默认 feature_flag business_email_enrichment = OFF;关时函数直接返回 disabled,不写库不调 Apify。
 红线:不触 viltrox_fit_score;只写 vkpi_kol_pool.email/other_contacts_json/contact_* 与 vkpi_kol_pool_contacts。
 
-本文件为设计骨架:Apify 专抓 about 页(Jianbo 已授权)接入点为 _budget_ok + TODO;上线前需
-跑 .venv py_compile + 单测 + Jianbo 拍板辖区(consent_basis/destination_region 枚举)。
+Apify 专抓 about 页已实现(Jianbo 已授权;2026-07-19 用户明令放行 Apify 花费,provider:apify
+月帽已提至 $150):批量入口 fetch_about_and_enrich(默认 dry_run),单条兜底在 enrich_business_contacts。
+Apify 直呼走 durable claim(acquire/apify_execution_context/finalize)+ call_apify_actor 内建预检记账。
 """
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ FEATURE_FLAG = "business_email_enrichment"  # 默认 OFF(不进 DEFAULT_FLAG_ENA
 
 # 仅匹配「显式商务联系行」附近的邮箱,避免全文扫描。先找触发词锚点,再取同行邮箱。
 _BUSINESS_ANCHORS = (
-    "business inquiries", "business inquiry", "for business", "business email",
+    "business inquiries", "business inquiry", "business enquiries", "business enquiry",
+    "for business", "business email",
     "商务合作", "商务", "合作请联系", "contact:", "contact me", "reach me", "联系邮箱",
 )
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -190,7 +192,8 @@ def extract_contacts_multi_source(
         if any(j in low for j in _CDN_JUNK):
             continue
         host = low.split("//", 1)[-1].split("/", 1)[0]
-        social = next((tag for h, tag in _SOCIAL_HOSTS.items() if h in host), "")
+        # 精确 host 匹配(== 或子域后缀),不能用 substring:jurjax.com 含 "x.com" 会误判 twitter
+        social = next((tag for h, tag in _SOCIAL_HOSTS.items() if host == h or host.endswith("." + h)), "")
         if social:
             _add(f"{social}_link", u, SOURCE_RAW_BIO, 0.6, u)
         elif any(h in low for h in _LINK_HUBS):
@@ -244,8 +247,19 @@ def enrich_contacts_l0(
         }
     if not contacts:
         return {"status": "no_contacts", "kol_pool_id": int(kol_pool_id)}
-    now = _utcnow()
     actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
+    _merge_contacts_into_pool(db, int(kol_pool_id), d, contacts, best_email=best_email, actor=actor)
+    return {"status": "ok", "kol_pool_id": int(kol_pool_id), "found": len(contacts), "email": best_email, "by_type": by_type}
+
+
+def _merge_contacts_into_pool(
+    db: Any, kol_pool_id: int, d: dict[str, Any], contacts: list[dict[str, Any]], *,
+    best_email: str, actor: Any = None, consent_basis: str = "public_scan",
+    pool_source_label: str = "raw_scan", source_url: str = "",
+) -> None:
+    """L0/L1 共享写库合并:vkpi_kol_pool_contacts 审计行(冲突不覆盖)+ other_contacts_json 并集
+    + 主表 email/contact_source 只填空不覆盖。d 需含 email/other_contacts_json 现值。commit 在内。"""
+    now = _utcnow()
     for cc in contacts:
         conf = round(float(cc.get("confidence") or 0.0), 2)
         db.execute(
@@ -258,7 +272,7 @@ def enrich_contacts_l0(
             ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
             """,
             (int(kol_pool_id), cc["contact_type"], cc["contact_value"],
-             cc.get("source_type") or "raw_bio_scan", "", "public_scan", conf >= 0.85, actor,
+             cc.get("source_type") or "raw_bio_scan", source_url, consent_basis, conf >= 0.85, actor,
              conf, (cc.get("evidence_text") or "")[:280], now, now, now),
         )
     try:
@@ -281,15 +295,14 @@ def enrich_contacts_l0(
         UPDATE vkpi_kol_pool
         SET email=CASE WHEN COALESCE(email,'')='' THEN ? ELSE email END,
             other_contacts_json=?,
-            contact_source=CASE WHEN COALESCE(contact_source,'')='' THEN 'raw_scan' ELSE contact_source END,
+            contact_source=CASE WHEN COALESCE(contact_source,'')='' THEN ? ELSE contact_source END,
             contact_first_seen_at=COALESCE(contact_first_seen_at, ?),
             updated_at=?
         WHERE id=?
         """,
-        (best_email, json.dumps(existing, ensure_ascii=False), now, now, int(kol_pool_id)),
+        (best_email, json.dumps(existing, ensure_ascii=False), pool_source_label, now, now, int(kol_pool_id)),
     )
     db.commit()
-    return {"status": "ok", "kol_pool_id": int(kol_pool_id), "found": len(contacts), "email": best_email, "by_type": by_type}
 
 
 def backfill_contacts_l0(*, limit: int | None = None, only_missing_email: bool = False) -> dict[str, Any]:
@@ -568,27 +581,77 @@ def add_manual_contact(
     return {"status": "saved", "kol_pool_id": int(kol_pool_id), "saved": len(new_entries), "contacts": existing}
 
 
-def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_pool_id: int, staff: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
-    """Apify 专抓 about 页(默认仅 youtube 有现成 about 抓取链路)。
+def _about_claim_task_id(kol_pool_id: int) -> str:
+    """稳定 task_id(不带日期):claim 表 state='completed' 兼作「已花钱抓过」标记,批量选人时排除。"""
+    return f"contact_about:{int(kol_pool_id)}"
 
-    复用既有 YouTubeCrawler + record_apify_run_cost 记账(industry_crawlers),不新写 ApifyClient。
-    返回 (raw_platform_data 形 dict, apify_run_ref)。任一异常 → 返回 ({}, '') 不阻断。
-    记账由 crawler 内 record_apify_run_cost 落 vkpi_provider_budget_caps('provider:apify'),此处再补一条
-    带 kol_pool_id/about 用途的 record_cost 留痕 apify_run_ref(便于合规追溯单条富化的 Apify 归因)。
-    红线:抓回的 raw 只喂 extract_public_business_contacts;绝不触 viltrox_fit_score。
+
+def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_pool_id: int, staff: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
+    """Apify 专抓 about 页(默认仅 youtube 有现成 about 抓取链路;Jianbo 已授权)。
+
+    复用既有 YouTubeCrawler + call_apify_actor 管线(内建 provider:apify 预检 + record_apify_run_cost 记账),
+    不新写 ApifyClient。本功能=「Apify 专抓」授权项:置空 api_key 强制走 Apify 车道(streamers/youtube-scraper
+    profile 模式 max_posts=1),不吃 Data API 优先分支,保证 claim/预检/记账真实生效。
+    Apify 直呼必走 durable claim:acquire → apify_execution_context → finalize(缺 context 时
+    call_apify_actor 会以 durable_execution_context_required 拒发)。已有外层 context 则复用不重复抢。
+    返回 (raw_platform_data 形 dict, apify_run_ref)。任一异常 → 返回 ({}, '') 不阻断批次。
+    红线:抓回的 raw 只喂联系方式抽取;绝不触 viltrox_fit_score。
     """
     if platform != "youtube":
         return {}, ""
     try:
+        from app.platform.apify_budget import (
+            acquire_provider_execution_claim,
+            apify_execution_context,
+            current_apify_execution_context,
+            finalize_provider_execution_claim,
+        )
         from app.platform.industry_crawlers import get_crawler
         crawler = get_crawler("youtube")
         if crawler is None:
             return {}, ""
-        result = crawler.crawl_channel_profile(profile_url or handle, max_posts=1)
+        crawler.api_key = ""  # 强制 Apify 车道(见 docstring);无 APIFY_TOKEN 时 configured=False 直接不抓
+        if not crawler.configured:
+            return {}, ""
+        task_id = _about_claim_task_id(kol_pool_id)
+        own_claim = current_apify_execution_context() is None
+        fence = acquire_provider_execution_claim(
+            task_id, "business_contact_extract", job_type="business_email_about_scrape", lease_seconds=900,
+        ) if own_claim else 0
+        state = "failed"
+        try:
+            from contextlib import nullcontext
+            with (apify_execution_context(task_id, fence) if own_claim else nullcontext()):
+                result = crawler.crawl_channel_profile(profile_url or handle, max_posts=1)
+            status = str((result or {}).get("provider_status") or "") if isinstance(result, dict) else ""
+            # completed=已真实花钱(含 no_results 空频道);error/not_configured/quota → failed 允许重试
+            state = "completed" if status in {"ok", "no_results"} else "failed"
+        finally:
+            if own_claim:
+                try:
+                    finalize_provider_execution_claim(task_id, fence, state)
+                except Exception:
+                    logger.debug("about-scrape claim finalize failed task=%s", task_id, exc_info=True)
         if not isinstance(result, dict) or str(result.get("provider_status") or "") != "ok":
             return {}, ""
         items = result.get("items") or []
         profile = items[0] if items and isinstance(items[0], dict) else {}
+        # streamers/youtube-scraper 把 about 页「链接区」放 channelDescriptionLinks(原始 actor item 保留在
+        # videos[0]),normalized profile 只带 channelDescription 文本 → 这里拼回 about blob 供抽取扫描。
+        vids = result.get("videos") if isinstance(result.get("videos"), list) else []
+        v0 = vids[0] if vids and isinstance(vids[0], dict) else {}
+        raw_links = v0.get("channelDescriptionLinks") or ((v0.get("aboutChannelInfo") or {}).get("channelDescriptionLinks")) or []
+        link_lines: list[str] = []
+        for lnk in raw_links if isinstance(raw_links, list) else []:
+            if not isinstance(lnk, dict):
+                continue
+            u = str(lnk.get("url") or "").strip()
+            if u and "://" not in u and "." in u and " " not in u:
+                u = "https://" + u  # about 链接区常存裸域名(Barrerastudios.com)
+            if u:
+                link_lines.append(f"{str(lnk.get('text') or '').strip()}: {u}".lstrip(": ").strip())
+        if link_lines:
+            profile = {**profile, "about": "\n".join(link_lines)}
         apify_run_ref = str(((result.get("raw") or {}).get("apify_run_id")) or result.get("apify_run_id") or "")
         # 补一条带 kol_pool_id + about 用途的归因记账(crawler 已记主成本,此处 cost_usd=0 仅留 ref)。
         try:
@@ -603,7 +666,113 @@ def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_poo
             )
         except Exception:
             logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-            pass
         return ({"profile": profile}, apify_run_ref)
     except Exception:
+        logger.warning("about-scrape failed kol=%s", kol_pool_id, exc_info=True)
         return {}, ""
+
+
+def _about_backlog_rows(db: Any, limit: int) -> tuple[int, list[dict[str, Any]]]:
+    """目标人群:youtube、主表 email 空、有 handle/profile_url;排除已 completed 抓过的(claim 表标记)。
+    返回 (全量 backlog 数, 本批行)。claim 表缺失(极端本地环境)时回退不带排除的查询。"""
+    base = (
+        "FROM vkpi_kol_pool p WHERE p.platform='youtube' AND COALESCE(p.email,'')='' "
+        "AND (COALESCE(p.handle,'')<>'' OR COALESCE(p.profile_url,'')<>'')"
+    )
+    excl = (
+        " AND NOT EXISTS (SELECT 1 FROM vkpi_provider_execution_claims c "
+        "WHERE c.task_id=('contact_about:' || CAST(p.id AS TEXT)) AND c.state='completed')"
+    )
+    for where in (base + excl, base):
+        try:
+            total = int(dict(db.execute(f"SELECT COUNT(*) AS n {where}").fetchone())["n"])
+            rows = [dict(r) for r in db.execute(
+                f"SELECT p.id, p.handle, p.profile_url, p.email, p.other_contacts_json {where} ORDER BY p.id LIMIT ?",
+                (int(limit),),
+            ).fetchall()]
+            return total, rows
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    return 0, []
+
+
+def fetch_about_and_enrich(batch_size: int = 50, *, dry_run: bool = True, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """L1 批量:Apify 专抓 YouTube about/频道描述补邮箱(Jianbo 已授权;2026-07-19 用户放行花费)。
+
+    每条:双闸预检(_budget_ok)→ durable claim + call_apify_actor(_apify_scrape_about 内)→
+    extract_contacts_multi_source 抽联系方式(about 页 email 重标 youtube_about_declared=公开声明白名单源)→
+    _merge_contacts_into_pool 只填空不覆盖。单条失败隔离;单 run 硬上限 batch_size(≤50)。
+    dry_run=True 只报 backlog/本批人数/预估成本,零外调零写库。
+    红线:只写联系列;绝不触 viltrox_fit_score / rule_v0。
+    """
+    batch = max(1, min(50, int(batch_size or 1)))
+    db = get_conn()
+    total, rows = _about_backlog_rows(db, batch)
+    est_cost = round(len(rows) * APIFY_ABOUT_EST_COST_USD, 2)
+    if dry_run:
+        return {
+            "status": "dry_run", "target_backlog": total, "batch": len(rows),
+            "est_cost_usd": est_cost, "flag_enabled": _flag_enabled(),
+            "budget_ok": _budget_ok(est_cost=APIFY_ABOUT_EST_COST_USD),
+            "sample": [{"id": r["id"], "handle": r.get("handle")} for r in rows[:10]],
+        }
+    if not _flag_enabled():
+        return {"status": "disabled", "reason": "feature_flag business_email_enrichment OFF", "target_backlog": total}
+    actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
+    attempted = emails_found = rows_updated = no_about = failed = 0
+    items: list[dict[str, Any]] = []
+    status = "done"
+    for r in rows:
+        kid = int(r["id"])
+        if not _budget_ok(est_cost=APIFY_ABOUT_EST_COST_USD):
+            status = "budget_blocked"
+            items.append({"id": kid, "status": "budget_blocked"})
+            break
+        attempted += 1
+        try:
+            scraped_raw, run_ref = _apify_scrape_about(
+                platform="youtube", handle=str(r.get("handle") or ""),
+                profile_url=str(r.get("profile_url") or ""), kol_pool_id=kid, staff=staff,
+            )
+            if not scraped_raw:
+                no_about += 1
+                items.append({"id": kid, "status": "no_about", "run_ref": run_ref})
+                continue
+            contacts = extract_contacts_multi_source(scraped_raw, platform="youtube")
+            for cc in contacts:
+                if cc.get("contact_type") == "email":
+                    cc["source_type"] = SOURCE_YOUTUBE_ABOUT  # about 页描述=创作者公开声明(白名单源)
+            emails = sorted(
+                [c for c in contacts if c["contact_type"] == "email"],
+                key=lambda c: -float(c.get("confidence") or 0),
+            )
+            best_email = emails[0]["contact_value"] if emails else ""
+            if emails:
+                emails_found += 1
+            if contacts:
+                _merge_contacts_into_pool(
+                    db, kid, r, contacts, best_email=best_email, actor=actor,
+                    consent_basis="legitimate_interest_public_business",
+                    pool_source_label=SOURCE_YOUTUBE_ABOUT,
+                    source_url=str(r.get("profile_url") or ""),
+                )
+            if best_email:
+                rows_updated += 1
+            items.append({"id": kid, "status": "ok" if best_email else "no_email",
+                          "email": best_email, "contacts": len(contacts), "run_ref": run_ref})
+        except Exception:
+            failed += 1
+            logger.warning("fetch_about_and_enrich item failed kol=%s", kid, exc_info=True)
+            items.append({"id": kid, "status": "error"})
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    return {
+        "status": status, "target_backlog": total, "attempted": attempted,
+        "emails_found": emails_found, "rows_updated": rows_updated, "no_about": no_about,
+        "failed": failed, "est_cost_usd": round(attempted * APIFY_ABOUT_EST_COST_USD, 2), "items": items,
+    }
