@@ -31,15 +31,17 @@ ensure_admin_web() {
 
 ensure_apify_pool() {
   local alive
+  # 2026-07-19 用户令迸发:bulk 3→6(共 7 道)+ BURST_TIER=2(profile/comments 双宽,
+  # Gemini 保持单宽);账户实测 SCALE $250/月、256GB、128 并发,内部 provider:apify 帽已提 $150。
   alive=$(pgrep -f "app.workers.apify_jobs_worker" | wc -l | tr -d ' ')
-  if [[ "$alive" -lt 4 ]]; then
-    log "apify 车道存活 $alive/4,补齐"
+  if [[ "$alive" -lt 7 ]]; then
+    log "apify 车道存活 $alive/7,补齐"
     # 清掉死 pidfile 防 pool 脚本误判已在跑
-    for l in interactive bulk1 bulk2 bulk3; do
+    for l in interactive bulk1 bulk2 bulk3 bulk4 bulk5 bulk6; do
       local pf="$ROOT/runtime/worker-$l.pid"
       if [[ -f "$pf" ]] && ! kill -0 "$(cat "$pf" 2>/dev/null)" 2>/dev/null; then rm -f "$pf"; fi
     done
-    APIFY_WORKER_POOL_BULK_COUNT=3 bash "$ROOT/scripts/start_apify_worker_pool.sh" >> "$LOG" 2>&1 \
+    APIFY_WORKER_POOL_BULK_COUNT=6 APIFY_WORKER_BURST_TIER=2 bash "$ROOT/scripts/start_apify_worker_pool.sh" >> "$LOG" 2>&1 \
       || log "apify pool 拉起失败(可能部分车道已在跑)"
   fi
 }

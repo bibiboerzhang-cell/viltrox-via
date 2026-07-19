@@ -16,8 +16,10 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 BULK_COUNT="${APIFY_WORKER_POOL_BULK_COUNT:-2}"
-if [[ ! "$BULK_COUNT" =~ ^[1-4]$ ]]; then
-  echo "APIFY_WORKER_POOL_BULK_COUNT must be within 1..4" >&2
+# 2026-07-19 用户令放开迸发:账户实测 SCALE 计划(256GB/128 并发),上限 4→8;
+# 真实付费并发仍由 BURST_TIER 按家族治理,车道数只决定混合负载并行度。
+if [[ ! "$BULK_COUNT" =~ ^[1-8]$ ]]; then
+  echo "APIFY_WORKER_POOL_BULK_COUNT must be within 1..8" >&2
   exit 2
 fi
 
