@@ -208,6 +208,22 @@ def _keyword_counts(text: str, mapping: dict[str, list[str] | tuple[str, ...]]) 
     return counts
 
 
+def derive_primary_topic(row: dict[str, Any]) -> tuple[str, list[str]]:
+    """规则分类主题:文本团 × industry_clusters 关键词计数,top1 主题 + top2-3 副题。
+
+    零 LLM、确定性、可幂等重跑;命中 0 个 cluster 时返回空(诚实空值,不猜)。
+    """
+    clusters = _load_clusters()
+    if not clusters:
+        return "", []
+    posts = _posts(row)
+    counts = _keyword_counts(_text_blob(row, posts), clusters)
+    top = counts.most_common(3)
+    if not top or top[0][1] < 1:
+        return "", []
+    return top[0][0], [name for name, _ in top[1:3]]
+
+
 def _product_term(value: Any) -> str:
     return re.sub(r"\s+", " ", _text(value).lower().replace("_", " ")).strip()
 

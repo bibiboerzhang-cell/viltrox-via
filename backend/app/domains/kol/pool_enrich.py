@@ -225,6 +225,36 @@ def enrich_item(
         except Exception:
             logger.debug("回滚失败(best-effort)", exc_info=True)
         logger.warning("commerce flags extract skipped kol=%s", kol_pool_id, exc_info=True)
+    # primary_topic 前向填充(2026-07-19 挂账刀②):同一份 raw 规则分类,只填空不覆盖
+    # (含未来人工填写);存量由 backfill_primary_topic.py 清偿。独立 UPDATE + 独立提交,
+    # 异常静默跳过。红线:纯数据列,零触 viltrox_fit_score / rule_v0 公式。
+    try:
+        from app.domains.kol.eleven_dimensions import derive_primary_topic
+
+        topic, secondary = derive_primary_topic(
+            {
+                "display_name": display_name,
+                "handle": item.get("handle"),
+                "bio": bio,
+                "raw_platform_data": raw_data,
+            }
+        )
+        if topic:
+            conn.execute(
+                """
+                UPDATE vkpi_kol_pool
+                SET primary_topic=?, secondary_topics_json=?
+                WHERE id=? AND (primary_topic IS NULL OR TRIM(primary_topic) = '')
+                """,
+                (topic, _json(secondary), int(kol_pool_id)),
+            )
+            conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("回滚失败(best-effort)", exc_info=True)
+        logger.warning("primary_topic derive skipped kol=%s", kol_pool_id, exc_info=True)
     # 第二道闸(2026-07-12 两粉号案):followers 已回填真值 → 立即重过触达门槛,
     # 命中给 raw_platform_data 打 low_reach 标(推荐/发现/召回三出口据此不展示;行保留)。
     # best-effort 绝不阻断富化;判据复用 discovery_filters 单一真源;零触 viltrox_fit_score。
