@@ -186,6 +186,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_kol_auto_poll,
     job_llm_batch_poll,
     job_logistics_track_sync,
+    job_market_mention_sentiment,
     job_market_voice_alerts,
     job_ops_threshold_alerts,
     job_pending_asset_cleanup,

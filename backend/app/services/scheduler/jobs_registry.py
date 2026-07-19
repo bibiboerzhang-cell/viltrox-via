@@ -38,6 +38,7 @@ from app.services.scheduler.jobs import (
     job_provider_health_check,
     job_rate_limit_cleanup,
     job_runtime_metrics_snapshot,
+    job_market_mention_sentiment,
     job_scheduler_fire_stale_recovery,
     job_sentiment_annotate,
     job_token_broker_reset_daily,
@@ -309,6 +310,16 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
         trigger=CronTrigger(hour=4, minute=40),
         id="vkpi_sentiment_annotate",
         name="V0g packed comment sentiment annotate (config-gated OFF, <=200/run)",
+        max_instances=1,
+        coalesce=True,
+    )
+    # ── mentions 情感批注(同管线 mentions 版;config-gate vkpi_market_mention_sentiment,默认 OFF)──
+    # 排在 04:50,与 04:40 的评论批注错峰共用同一模型绑定。
+    _scheduler.add_job(
+        job_market_mention_sentiment,
+        trigger=CronTrigger(hour=4, minute=50),
+        id="vkpi_market_mention_sentiment",
+        name="Market mention sentiment annotate (config-gated OFF, <=200/run)",
         max_instances=1,
         coalesce=True,
     )

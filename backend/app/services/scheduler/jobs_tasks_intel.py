@@ -386,6 +386,45 @@ async def job_sentiment_annotate():
         _record_scheduler_run("vkpi_sentiment_annotate", ok=False, error=str(exc)[:240])
 
 
+async def job_market_mention_sentiment():
+    """mentions 情感批注(打包 LLM,2026-07-19 挂账刀③):vkpi_market_mentions.sentiment
+    空的行每轮批注 ≤200 条,直写自带 sentiment 列(score/aspects 进 metadata_json)。
+    与 job_sentiment_annotate 同一套打包管线/停跑纪律,共用模型绑定,独立 cost_scope。
+
+    config-gate:scheduler_tasks.vkpi_market_mention_sentiment —— **默认关**。开启:
+      INSERT INTO scheduler_tasks (task_key, label, enabled, risk_level)
+      VALUES ('vkpi_market_mention_sentiment', 'mentions 情感批注(LLM 打包)', TRUE, 'high')
+      ON CONFLICT (task_key) DO UPDATE SET enabled = TRUE;
+    成本:存量 267 行 pack=40 ≈ 7 次调用,gemini-flash 全量 <$0.01;单 run 上限 200。
+    """
+    if not _scheduler_task_enabled("vkpi_market_mention_sentiment"):
+        return
+    try:
+        import asyncio
+
+        from app.domains.market import mention_sentiment_annotate
+
+        result = await asyncio.to_thread(
+            mention_sentiment_annotate.annotate_mentions_batch,
+            mention_sentiment_annotate.run_hard_cap(),
+            dry_run=False,
+        )
+        logger.info(
+            "scheduler.vkpi_market_mention_sentiment",
+            extra={
+                "result": {
+                    k: result.get(k)
+                    for k in ("selected", "annotated", "skipped_unparsed", "halted_reason")
+                }
+            },
+        )
+        halted = str(result.get("halted_reason") or "")
+        _record_scheduler_run("vkpi_market_mention_sentiment", ok=not halted, error=halted[:240])
+    except Exception as exc:
+        logger.exception("scheduler.vkpi_market_mention_sentiment_failed")
+        _record_scheduler_run("vkpi_market_mention_sentiment", ok=False, error=str(exc)[:240])
+
+
 async def job_vkpi_official_visual_scan():
     """官号视频画质分析(增量):每轮跑少量未分析的官号视频(Gemini final_v1 → content_quality_score),
     fit-safe 落 vkpi_official_post_visual,不进 kol_pool。config-gate(scheduler_tasks.vkpi_official_visual_scan);
