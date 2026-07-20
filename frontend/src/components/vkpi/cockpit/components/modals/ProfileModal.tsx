@@ -45,6 +45,9 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
   const [nameVal, setNameVal] = useState(user.name || "");
   const [savingBasic, setSavingBasic] = useState(false);
   const [basicMsg, setBasicMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // 头像展示:有真头像图就显示图,加载失败回退首字母渐变块;上传成功即用响应里的新 URL 就地刷新。
+  const [avatarUrl, setAvatarUrl] = useState(String(user.avatarUrl || ""));
+  const [avatarBroken, setAvatarBroken] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const saveProfile = async () => {
     if (savingBasic) return;
@@ -64,8 +67,14 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
     setBasicMsg(null); setSavingBasic(true);
     try {
       const res: any = await uploadMyAvatar(apiToken, file);
-      if (res && (res.status === "success" || res.user || res.token)) setBasicMsg({ ok: true, text: "头像已更新 · 刷新生效" });
-      else setBasicMsg({ ok: false, text: (res && res.message) || "上传失败" });
+      if (res && (res.status === "success" || res.user || res.token)) {
+        // 用响应里的新头像 URL 立即更新本模态展示;顶栏走 /me 重取,刷新页面后同步。
+        const nextUrl = String((res.user && res.user.avatar_url) || "");
+        if (nextUrl) { setAvatarUrl(nextUrl); setAvatarBroken(false); }
+        setBasicMsg({ ok: true, text: "头像已更新 · 刷新生效" });
+      } else {
+        setBasicMsg({ ok: false, text: (res && res.message) || "上传失败" });
+      }
     } catch (err: any) { setBasicMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
     finally { setSavingBasic(false); if (fileRef.current) fileRef.current.value = ""; }
   };
@@ -75,12 +84,20 @@ export function ProfileModal({ user, onClose, t, apiToken }: any) {
       e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white" }, e(X, { size: 14 }))
     ),
     e("div", { className: "p-5 space-y-4" },
-      // Avatar
+      // Avatar:有真头像图优先显示(key 绑 URL,换图强制重挂载重试);无图或加载失败回退首字母渐变块。
       e("div", { className: "flex items-center gap-4" },
-        e("div", {
-          className: "shrink-0 w-16 h-16 rounded-full flex items-center justify-center text-[20px] font-bold text-white",
-          style: { background: user.avatarGradient }
-        }, user.avatar),
+        avatarUrl && !avatarBroken
+          ? e("img", {
+              key: avatarUrl,
+              src: avatarUrl,
+              alt: user.name,
+              onError: () => setAvatarBroken(true),
+              className: "shrink-0 w-16 h-16 rounded-full border border-white/20 object-cover"
+            })
+          : e("div", {
+              className: "shrink-0 w-16 h-16 rounded-full flex items-center justify-center text-[20px] font-bold text-white",
+              style: { background: user.avatarGradient }
+            }, user.avatar),
         e("div", { className: "flex-1" },
           // 更换头像:点 → 触发隐藏 file input → POST /api/auth/me/avatar
           e("button", {
