@@ -37,6 +37,9 @@ import {
   display,
   durationLabel,
   numberLabel,
+  profileStatusCopyFor,
+  profileUiState,
+  type ProfileUiState,
   urlTypeLabel,
   youtubeEmbedUrl,
   type Row,
@@ -287,18 +290,6 @@ function VideoMediaSummary({
       </div>
     </div>
   );
-}
-
-type ProfileUiState = "idle" | "queued" | "running" | "ready" | "partial" | "failed";
-
-function profileUiState(rawValue: unknown, isExecuting: boolean): ProfileUiState {
-  const raw = cleanText(rawValue).toLowerCase();
-  if (["ready", "already_ready", "already_fresh", "done", "executed"].includes(raw)) return "ready";
-  if (raw.includes("failed") || ["error", "timeout", "unsupported", "provider_error"].includes(raw)) return "failed";
-  if (["queued", "already_queued", "pending"].includes(raw)) return "queued";
-  if (["running", "processing", "retrying", "in_progress"].includes(raw)) return "running";
-  if (["partial", "degraded"].includes(raw)) return "partial";
-  return isExecuting ? "running" : "idle";
 }
 
 export function UrlSummary({
@@ -599,20 +590,9 @@ export function UrlSummary({
   const executeDone = Boolean(result.execute && (
     isVideo ? videoReady : profileState === "ready"
   ));
-  // profile 自动 execute 的“已入库”只认后端 ready；queued/running/partial 分别告知，
-  // 手动按钮仅在明确失败时作重试兜底。
   const profileFailed = !isVideo && profileState === "failed";
   const profileRetryable = profileFailed && canExecute;
-  const profileStatusPresentation: Record<Exclude<ProfileUiState, "failed">, { label: string; title: string }> = {
-    idle: { label: "等待资料抓取状态", title: "后端尚未返回可确认的抓取结果" },
-    queued: { label: "资料抓取已排队", title: "任务已进入队列，尚未宣称资料已入库" },
-    running: { label: "资料抓取进行中...", title: "worker 正在抓取，完成后才标记入库" },
-    ready: { label: "资料已抓取并入库", title: "后端已明确返回 ready" },
-    partial: { label: "资料部分完成，等待补齐", title: "部分资料可用，但抓取尚未全部完成" },
-  };
-  const profileStatusCopy = profileState === "failed"
-    ? { label: "资料抓取失败", title: "后端返回失败，可手动重试" }
-    : profileStatusPresentation[profileState];
+  const profileStatusCopy = profileStatusCopyFor(profileState);
   const showActionButton = isVideo ? (!result.execute || analysisFailed) : profileRetryable;
   const actionLabel = isVideo
     ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"

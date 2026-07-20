@@ -641,10 +641,8 @@ export function SmartKolInputPanel({
         ) {
           autoProfile = urlPayload;
         }
-        // 刀1·流1(2026-06-16):video URL 也自动 execute,贴视频链接不必再点「只分析此视频/建档并分析」。
-        // 门槛与 urlCanExecute 的 video 正常分支一致:创作者已解析 + 后端就绪 + 合法操作。runUrlExecute 对
-        // video 走 video_deep,入 evidence + 排 final_v1(幂等 already_analyzed/already_queued);视频/分镜随
-        // worker 完成经会话轮询自动内联回填。失败时 videoJobLastError 置位,手动重试按钮按 urlCanExecute 自然复现。
+        // video URL 自动 execute(与 urlCanExecute video 分支同门槛):入 evidence + 排 final_v1 幂等,
+        // 结果随会话轮询内联回填;失败置 videoJobLastError,手动重试按钮自然复现。
         if (!autoProfile && urlPayload.url_type === "video" && !urlPayload.execute) {
           const vFlow = asRecord(urlPayload.video_flow);
           const vCreator = asRecord(urlPayload.creator_identity || vFlow.creator_identity);
