@@ -84,7 +84,7 @@ LANE_OVERRIDE_TEMPLATE_RELATIVE="scripts/ops/systemd/vkpi-lane-overrides.env"
 REMOTE_LANE_OVERRIDE_DIR="/etc/vkpi"
 REMOTE_LANE_OVERRIDE_FILE="${REMOTE_LANE_OVERRIDE_DIR}/vkpi-lane-overrides.env"
 MAX_WORKER_AGE_SECONDS="${VKPI_VERIFY_MAX_WORKER_AGE_SECONDS:-180}"
-EXPECTED_WORKER_COUNT=7
+EXPECTED_WORKER_COUNT=16
 WORKER_SYSTEMD_UNITS=(
   vkpi-worker-interactive.service
   vkpi-worker-bulk@1.service
@@ -93,6 +93,15 @@ WORKER_SYSTEMD_UNITS=(
   vkpi-worker-bulk@4.service
   vkpi-worker-bulk@5.service
   vkpi-worker-bulk@6.service
+  vkpi-worker-bulk@7.service
+  vkpi-worker-bulk@8.service
+  vkpi-worker-bulk@9.service
+  vkpi-worker-bulk@10.service
+  vkpi-worker-bulk@11.service
+  vkpi-worker-bulk@12.service
+  vkpi-worker-bulk@13.service
+  vkpi-worker-bulk@14.service
+  vkpi-worker-bulk@15.service
 )
 POST_DEPLOY_BROWSER_URL="${VKPI_BROWSER_GATE_URL:-}"
 POST_DEPLOY_BROWSER_TOKEN="${VKPI_BROWSER_GATE_TOKEN:-}"

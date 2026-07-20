@@ -19,7 +19,7 @@ def test_reviewed_job_families_map_to_separate_resource_groups() -> None:
     assert slots.resource_group_for_job({"job_type": "session_advance"}) is None
 
 
-def test_resource_limits_default_to_one_and_can_only_opt_into_two() -> None:
+def test_resource_limits_default_to_one_and_opt_in_capped_at_sixteen() -> None:
     assert slots.resource_slot_limits({}) == {
         "profile_media": 1,
         "comments_pipeline": 1,
@@ -33,7 +33,9 @@ def test_resource_limits_default_to_one_and_can_only_opt_into_two() -> None:
         }
     )
     assert set(configured.values()) == {2}
-    for bad in ("0", "3", "many"):
+    wide = slots.resource_slot_limits({"APIFY_WORKER_GEMINI_VIDEO_CONCURRENCY": "16"})
+    assert wide["gemini_video"] == 16
+    for bad in ("0", "17", "many"):
         with pytest.raises(ValueError):
             slots.resource_slot_limits({"APIFY_WORKER_COMMENTS_CONCURRENCY": bad})
 

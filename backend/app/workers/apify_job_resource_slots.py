@@ -6,11 +6,11 @@ shared provider or media pipeline from an unsafe fan-out.  This module maps
 the long-running job families to explicit resource groups and supplies the
 small, deterministic slot-selection primitive used by the worker.
 
-The production hard maximum is deliberately two slots.  A higher lane count
-may still improve overlap between different resource groups, but no single
-provider family can be fanned out beyond the only candidate tier supported by
-the current capacity model.  Raising that ceiling requires code review and
-isolated staging evidence; an environment variable alone cannot do it.
+2026-07-20 容量评审(owner 明令满功率):硬顶 2→16。实测口径:Gemini 付费
+Tier 2(3000 RPM/3M TPM)撑得住 16 路视频深析;Apify SCALE 128 并发/256GB
+(16 路仅用 12%);prod 8 核 30GB 负载 <0.3。费用护栏不在并发层——LLM 预算
+预约(单任务+cron 帽)与 Apify durable claim 记账全程兜底。env 取值仍被
+[1, MAX] 校验,fail-closed 语义不变。
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from typing import Any
 
 
 RESOURCE_SLOT_SCOPE = "vkpi_apify_worker_resource_slot"
-MAX_RESOURCE_SLOT_CAP = 2
+MAX_RESOURCE_SLOT_CAP = 16
 
 RESOURCE_ENV_NAMES: Mapping[str, str] = {
     "profile_media": "APIFY_WORKER_PROFILE_MEDIA_CONCURRENCY",
@@ -42,9 +42,9 @@ _JOB_RESOURCE_GROUPS: Mapping[str, str] = {
 def resource_slot_limits(env: Mapping[str, str]) -> dict[str, int]:
     """Return reviewed resource limits, rejecting unsafe configuration.
 
-    Defaults preserve the current single-resource execution shape.  ``2`` is
-    the sole opt-in burst tier; zero, negative, non-numeric, or greater values
-    fail startup instead of silently widening provider pressure.
+    Defaults preserve the current single-resource execution shape.  Values in
+    [1, 16] are reviewed burst tiers; zero, negative, non-numeric, or greater
+    values fail startup instead of silently widening provider pressure.
     """
 
     limits: dict[str, int] = {}

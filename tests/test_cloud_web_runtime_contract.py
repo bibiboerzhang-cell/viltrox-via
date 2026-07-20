@@ -328,9 +328,9 @@ def test_deploy_restarts_and_validates_exact_seven_service_worker_fleet() -> Non
 
     expected_units = [
         "vkpi-worker-interactive.service",
-        *(f"vkpi-worker-bulk@{index}.service" for index in range(1, 7)),
+        *(f"vkpi-worker-bulk@{index}.service" for index in range(1, 16)),
     ]
-    assert "EXPECTED_WORKER_COUNT=7" in deploy
+    assert "EXPECTED_WORKER_COUNT=16" in deploy
     fleet_block = deploy.split("WORKER_SYSTEMD_UNITS=(", 1)[1].split(")", 1)[0]
     configured_units = [line.strip() for line in fleet_block.splitlines() if line.strip()]
     assert configured_units == expected_units
