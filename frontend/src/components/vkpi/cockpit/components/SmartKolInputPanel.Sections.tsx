@@ -32,7 +32,7 @@ import {
   historyKindMeta,
   historyLabel,
   historySessionId,
-  historyStatusMeta,
+  historySessionStatusMeta,
   isSearchSessionTerminal,
   looksLikeRetailer,
   mergeKolRecallSnapshots,
@@ -125,7 +125,7 @@ export function HistoryStrip({
   const shown = expanded
     ? source.filter((item) => {
         if (!normalizedFilter) return true;
-        return [historyLabel(item), historyKindMeta(item).label, historyStatusMeta(item.status || "ready").label]
+        return [historyLabel(item), historyKindMeta(item).label, historySessionStatusMeta(item).label]
           .join(" ")
           .toLowerCase()
           .includes(normalizedFilter);
@@ -234,7 +234,7 @@ export function HistoryStrip({
           const sessionId = historySessionId(item);
           const label = historyLabel(item);
           const kind = historyKindMeta(item);
-          const st = historyStatusMeta(item.status || "ready");
+          const st = historySessionStatusMeta(item);
           const searchTimeValue = item.created_at || item.updated_at;
           const archiveTimeValue = item.archived_at;
           const relativeValue = tab === "archived" ? archiveTimeValue || searchTimeValue : searchTimeValue;

@@ -943,4 +943,43 @@ describe("SmartKolInputPanel URL result mapping", () => {
     await waitFor(() => expect(screen.getByText(/已发现并入队:22/)).toBeTruthy());
   });
 
+  it("官方自有账号视频:显示建档跳过说明,不显示失败/假排队", () => {
+    renderSummary(videoResult({
+      execute: true,
+      in_pool: false,
+      matched_kol_pool_id: null,
+      creator_identity: {
+        platform: "youtube",
+        channel_id: "UCuxYiOaEKhjzNiLibedo24Q",
+        display_name: "Viltrox Official",
+      },
+      video_flow: {
+        status: "official_channel_video",
+        operation: "video_url_resolve",
+        job_status: "done",
+        ai_analysis: { state: "skipped", reason: "official_channel_video" },
+      },
+    }));
+    expect(screen.getByText(/官方自有账号的视频/)).toBeTruthy();
+    expect(screen.queryByText(/分析失败/)).toBeNull();
+    expect(screen.queryByText(/AI 深析与时间戳正在排队/)).toBeNull();
+    expect(screen.queryByText(/没识别到创作者/)).toBeNull();
+  });
+
+  it("创作者留待后台解析的 dry-run:提示后台识别而非「没识别到创作者」,按钮可用", () => {
+    renderSummary(videoResult({
+      execute: false,
+      in_pool: false,
+      matched_kol_pool_id: null,
+      handle: "",
+      channel_id: "",
+      creator_identity: {},
+      video_metadata: {},
+      video_flow: { status: "provider_refresh_pending", operation: "video_creator_resolve" },
+    }));
+    expect(screen.getByText(/创作者会在启动分析后由后台自动识别/)).toBeTruthy();
+    expect(screen.queryByText(/没识别到创作者/)).toBeNull();
+    expect(screen.getByRole("button", { name: /建档并分析/ })).not.toBeDisabled();
+  });
+
 });

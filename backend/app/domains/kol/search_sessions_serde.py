@@ -95,6 +95,13 @@ def _normalize_status(value: Any, *, item: bool = False) -> str:
         return "skipped" if item else "partial"
     if text in {"ai_disabled", "not_requested"}:
         return "skipped" if item else "ready"
+    # 视频 URL dry-run 的两个真实中间态:URL 已识别、创作者留待后台解析——
+    # 诚实映射为「已识别」,不再落成 unknown(unknown 会让历史回放误判成已执行)。
+    if text in {"provider_refresh_pending", "creator_not_in_pool"}:
+        return "identified" if item else "ready"
+    # 官方自有账号的视频:按设计不建档、不做深析,终态=跳过(非失败非排队)。
+    if text == "official_channel_video":
+        return "skipped" if item else "ready"
     return "unknown" if item else "planned"
 
 

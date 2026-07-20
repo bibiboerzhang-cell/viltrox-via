@@ -19,6 +19,8 @@ _READY_FLOW_STATUSES = {
     "already_fresh",
     "done",
     "executed",
+    # 官方自有账号视频:建档/深析按设计跳过,对外是正常完成态。
+    "official_channel_video",
 }
 
 

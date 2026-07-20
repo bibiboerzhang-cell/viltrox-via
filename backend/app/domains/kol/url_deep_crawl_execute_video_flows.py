@@ -299,6 +299,52 @@ def _execute_new_creator_video_flow(
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
 
+    # 官方自有账号兜底闸:任何抵达建档口的路径都不许把官方渠道写进 KOL 池。
+    # (主判定在 video_url_resolver 的 worker 链;这里防旧调用路径/回放绕过。)
+    from app.domains.kol.video_url_resolver import find_official_channel_match
+
+    official = find_official_channel_match(
+        video_flow.get("creator_identity") if isinstance(video_flow.get("creator_identity"), dict) else {}
+    )
+    if official:
+        run_id = _record_deep_crawl_run(
+            conn,
+            kol_pool_id=None,
+            source_url=classified.normalized_url,
+            url_type="video",
+            mode=_video_execute_mode(body),
+            status="ready",
+            dry_run=False,
+            summary={
+                "operation": "new_creator_video_analysis",
+                "status": "official_channel_video",
+                "reason": "creator is a company-owned official channel; enrollment and analysis skipped by design",
+                "official_channel": official,
+                "creator_identity": video_flow.get("creator_identity"),
+                "video_metadata": video_flow.get("video_metadata"),
+                "viltrox_fit_score_changed_ids": [],
+            },
+        )
+        return {
+            **video_flow,
+            "status": "official_channel_video",
+            "operation": "new_creator_video_analysis",
+            "message": "官方自有账号的视频：不建人选档案，也不做深度分析，仅保留视频基础数据。",
+            "official_channel": official,
+            "ai_analysis": {
+                "state": "skipped",
+                "reason": "official_channel_video",
+                "provider_calls_allowed": False,
+            },
+            "run_id": run_id,
+            "business_tables_written": bool(run_id),
+            "worker_touched": False,
+            "llm_calls_performed": False,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+
     try:
         crawl = _crawl_profile_basics(profile_classified, target=_profile_target(profile_classified), max_posts=max_posts)
         if str(crawl.get("status") or "").lower() not in {"ok", "synced"}:

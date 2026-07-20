@@ -34,6 +34,8 @@ _BASE_COMPLETE_STATUSES = frozenset(
         "ai_disabled",
         "not_requested",
         "skipped_non_video",
+        # 官方自有账号:建档与深析按设计跳过,属正常完成而非失败。
+        "official_channel_video",
     }
 )
 
@@ -192,6 +194,56 @@ def _emit(
     return value
 
 
+def find_official_channel_match(identity: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Match a resolved creator identity against the company's own channels.
+
+    官方自有账号(vkpi_employee_channels)按设计不进 KOL 池;命中即返回该渠道的
+    公开字段,供调用方走「建档跳过」的诚实终态。表只有几十行,读全表在 Python
+    里精确匹配(平台 + handle/channel_id/主页 URL),不用 LIKE/模糊。
+    """
+
+    identity = identity if isinstance(identity, dict) else {}
+    platform = _text(identity.get("platform")).lower()
+    handle = _text(identity.get("handle")).lstrip("@").lower()
+    channel_id = _text(identity.get("channel_id")).lower()
+    profile_url = _text(identity.get("profile_url")).lower().rstrip("/")
+    if not platform or not (handle or channel_id or profile_url):
+        return None
+    try:
+        conn = get_conn()
+        rows = conn.execute(
+            """
+            SELECT id, platform, account_handle, account_display_name, account_url
+            FROM vkpi_employee_channels
+            WHERE deleted_at IS NULL
+            """
+        ).fetchall()
+    except Exception:
+        # 官方渠道表不可用时不阻断视频链路;当作无命中继续正常流程。
+        return None
+    for row in rows:
+        data = dict(row)
+        if _text(data.get("platform")).lower() != platform:
+            continue
+        row_handle = _text(data.get("account_handle")).lstrip("@").lower()
+        row_url = _text(data.get("account_url")).lower().rstrip("/")
+        matched = bool(
+            (handle and row_handle and handle == row_handle)
+            # channel_id 只有平台原生长 ID(如 YouTube UC…)才做包含匹配,短串不冒险。
+            or (len(channel_id) >= 12 and row_url and channel_id in row_url)
+            or (profile_url and row_url and profile_url == row_url)
+        )
+        if matched:
+            return {
+                "id": data.get("id"),
+                "platform": data.get("platform"),
+                "handle": data.get("account_handle"),
+                "display_name": data.get("account_display_name"),
+                "account_url": data.get("account_url"),
+            }
+    return None
+
+
 def _ai_terminal_state(flow: dict[str, Any]) -> tuple[str, str, str]:
     ai = flow.get("ai_analysis") if isinstance(flow.get("ai_analysis"), dict) else {}
     state = _text(ai.get("state") or flow.get("status")).lower()
@@ -274,6 +326,49 @@ def run_video_url_resolve_for_job(
             "provider_calls_performed": bool(video_flow.get("provider_calls_performed")),
         }
     current = _emit(progress_callback, _progress(current, "identify_creator", "ready"))
+
+    if not matches:
+        official = find_official_channel_match(
+            video_flow.get("creator_identity")
+            if isinstance(video_flow.get("creator_identity"), dict)
+            else {}
+        )
+        if official:
+            # 官方自有账号的视频:按设计不进 KOL 池,不建档、不做深析。
+            # 诚实终态(跳过而非失败/假排队),视频基础数据与创作者身份照常回填。
+            current = _progress(current, "cache_media", "skipped", reason="official_channel_video")
+            _emit(progress_callback, current)
+            current = _progress(
+                current,
+                "ai_analysis",
+                "skipped",
+                overall="ready",
+                base_status="ready",
+                reason="official_channel_video",
+            )
+            _emit(progress_callback, current)
+            return {
+                "status": "official_channel_video",
+                "operation": "video_url_resolve",
+                "official_channel": official,
+                "creator_identity": video_flow.get("creator_identity"),
+                "video_metadata": video_flow.get("video_metadata"),
+                "video_flow": {
+                    "status": "official_channel_video",
+                    "operation": "video_url_resolve",
+                    "message": "官方自有账号的视频：不建人选档案，也不做深度分析，仅保留视频基础数据。",
+                    "viltrox_fit_score_untouched": True,
+                },
+                "ai_analysis": {
+                    "state": "skipped",
+                    "reason": "official_channel_video",
+                    "provider_calls_allowed": False,
+                },
+                "resolution_progress": current,
+                "provider_calls_performed": bool(video_flow.get("provider_calls_performed")),
+                "llm_calls_performed": False,
+                "viltrox_fit_score_untouched": True,
+            }
 
     # The existing execute flows own evidence writes, optional R2 warming and
     # the single reviewed final_v1 preflight/enqueue.  Do not duplicate those

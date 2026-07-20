@@ -658,7 +658,10 @@ export function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKol
   const analysis = asRecord(payload.analysis || summary.analysis);
   const jobLastError = cleanText(payload.job_last_error || summary.job_last_error || payload.search_session_last_error);
   const jobStatus = cleanText(payload.job_status || payload.search_session_last_job_status || item.status);
-  const itemStatus = cleanText(item.status || summary.item_status || videoFlow.status || profileFlow.status);
+  // 旧空壳会话的 item.status 可能是 unknown(dry-run 从未执行):当空处理,
+  // 让 payload 里保存的真实 flow 状态(如 provider_refresh_pending)透出来。
+  const rawItemStatus = cleanText(item.status || summary.item_status || videoFlow.status || profileFlow.status);
+  const itemStatus = rawItemStatus === "unknown" ? "" : rawItemStatus;
   const urlType = cleanText(payload.url_type || session.query_type).includes("video") ? "video" : cleanText(payload.url_type || session.query_type).includes("profile") ? "profile" : "unknown";
   const terminal = terminalSessionStatus(session.status) || terminalSessionStatus(itemStatus);
   const nextAction = jobLastError
@@ -668,7 +671,10 @@ export function urlResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKol
       : "任务正在队列中运行，完成后会自动回填。";
   return {
     method: "search_session_history",
-    execute: Boolean(summary.execute || terminal || ["queued", "running", "already_queued"].includes(itemStatus)),
+    // 诚实回放:只有摘要明说 execute 过、或 item 真在排队/运行,才算已执行。
+    // 旧逻辑把「会话已终态」也当成已执行——dry-run 空壳会话(ready+从未执行)
+    // 会被误标 execute=true → 前端渲染假「深析排队中」并禁用启动按钮。
+    execute: Boolean(summary.execute || ["queued", "running", "already_queued"].includes(itemStatus)),
     url: {
       input: session.query_text,
       normalized: cleanText(item.source_url || session.query_text),
@@ -832,6 +838,15 @@ export function historyStatusMeta(value: unknown): { label: string; cls: string;
   if (label === "查找中") return { label, cls: "text-amber-300/85", dot: "#fbbf24" };
   if (label === "未完成") return { label, cls: "text-rose-300/85", dot: "#fb7185" };
   return { label, cls: "text-slate-500", dot: "#64748b" };
+}
+
+// 历史卡状态:优先读会话级诚实终态。不支持的平台链接(如 bilibili)标「不支持」,
+// 不再显示「部分完成/未完成」诱导用户等待或重试。
+export function historySessionStatusMeta(session: VkpiKolSearchHistoryItem): { label: string; cls: string; dot: string } {
+  if (cleanText(asRecord(session.result_summary).result_state) === "unsupported") {
+    return { label: "不支持", cls: "text-slate-500", dot: "#64748b" };
+  }
+  return historyStatusMeta(session.status || "ready");
 }
 
 // 问题5 UI:相关度按名次分档(列表已按分排序,名次=相关度强弱),裸 score 进 title 供细看,

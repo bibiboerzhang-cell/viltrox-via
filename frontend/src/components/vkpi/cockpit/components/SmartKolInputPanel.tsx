@@ -264,6 +264,13 @@ export function SmartKolInputPanel({
     (
       (urlResult.url_type === "profile" && cleanText(profileFlow.status) === "dry_run_ready") ||
       (urlResult.url_type === "video" && Boolean(videoJobLastError) && ["failed", "blocked"].includes(videoJobStatus)) ||
+      // 创作者留待后台解析(provider_refresh_pending)或历史空壳回放(identified/无状态):
+      // 后端专用解析队列会在 worker 里识别创作者,execute 不再要求前端先看到创作者。
+      (
+        urlResult.url_type === "video" &&
+        !urlResult.execute &&
+        ["provider_refresh_pending", "identified", ""].includes(cleanText(videoFlow.status))
+      ) ||
       (
         urlResult.url_type === "video" &&
         ["dry_run_ready", "ready_to_execute"].includes(videoStatus) &&
@@ -657,10 +664,16 @@ export function SmartKolInputPanel({
                 urlPayload.channel_id,
             ),
           );
+          // 后台视频解析队列(2026-07)已接管创作者识别:dry-run 阶段拿不到创作者
+          // (供应商抓取延迟到 worker,video_flow.status=provider_refresh_pending)也照样
+          // 自动 execute——后端会把这类 URL 排进专用解析队列,分阶段回填创作者/媒体/分析。
+          // 旧门槛(必须先解析出创作者)是队列上线前的遗留,会让新鲜视频 URL 永远停在空壳会话。
+          const vDeferredResolution = cleanText(vFlow.status) === "provider_refresh_pending";
           if (
-            ["dry_run_ready", "ready_to_execute"].includes(vStatus) &&
-            vCreatorResolved &&
-            ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(vOp)
+            vDeferredResolution ||
+            (["dry_run_ready", "ready_to_execute"].includes(vStatus) &&
+              vCreatorResolved &&
+              ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(vOp))
           ) {
             autoVideo = urlPayload;
           }

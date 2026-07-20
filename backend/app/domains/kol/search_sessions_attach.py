@@ -52,6 +52,22 @@ def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]
         "item_status": item.get("status"),
         "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
     }
+    # 已解析出的创作者/视频信息随摘要落库(紧凑公开字段),历史列表不用翻 items 也有据可查。
+    video_flow = _dict(result.get("video_flow"))
+    identity = _dict(result.get("creator_identity") or video_flow.get("creator_identity"))
+    if any(_text(identity.get(key)) for key in ("handle", "channel_id", "display_name")):
+        summary["creator_identity"] = {
+            "platform": identity.get("platform"),
+            "handle": identity.get("handle"),
+            "channel_id": identity.get("channel_id"),
+            "display_name": identity.get("display_name"),
+        }
+    metadata = _dict(result.get("video_metadata") or video_flow.get("video_metadata"))
+    if _text(metadata.get("title")) or _text(metadata.get("channel_name")):
+        summary["video_title"] = metadata.get("title")
+        summary["video_channel"] = metadata.get("channel_name")
+    if result.get("url_type") not in {"profile", "video"}:
+        summary["message"] = "暂不支持该平台的链接，目前支持 YouTube / Instagram / TikTok。"
     recorded = record_items(int(session_id), [item], status=session_status, summary=summary)
     recorded["jobs_linked"] = _link_job_payloads(int(session_id), recorded.get("items") or [])
     return recorded
@@ -237,7 +253,7 @@ def _session_status_from_url_result(result: dict[str, Any]) -> str:
         return "running"
     if status in {"already_queued"}:
         return "running"
-    if status in {"already_analyzed", "ready", "ai_disabled", "not_requested"}:
+    if status in {"already_analyzed", "ready", "ai_disabled", "not_requested", "official_channel_video"}:
         return "ready"
     if status in {"failed", "creator_unresolved", "profile_crawl_failed", "crawl_failed"}:
         return "failed"

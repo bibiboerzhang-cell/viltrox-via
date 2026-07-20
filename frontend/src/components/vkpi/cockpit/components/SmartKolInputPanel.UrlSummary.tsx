@@ -582,7 +582,19 @@ export function UrlSummary({
     && onLocalEvaluation,
   );
   const retryableFailure = analysisFailed;
-  const videoReady = ["ready", "partial", "already_analyzed"].includes(cleanText(flowStatus || videoFlow.status).toLowerCase()) && !analysisFailed;
+  // 官方自有账号视频:后台已识别创作者是公司官方渠道,按设计不建档、不深析(仅展示基础数据)。
+  // 属正常终态:计入 videoReady,绝不能落进「深析排队中」的假等待。
+  const officialChannelVideo = Boolean(
+    isVideo && (
+      cleanText(videoAiAnalysis.reason) === "official_channel_video"
+      || cleanText(videoFlow.status) === "official_channel_video"
+      || flowStatus === "official_channel_video"
+    ),
+  );
+  const videoReady = (
+    ["ready", "partial", "already_analyzed", "official_channel_video"].includes(cleanText(flowStatus || videoFlow.status).toLowerCase())
+    || officialChannelVideo
+  ) && !analysisFailed;
   const videoPending = Boolean(isVideo && result.execute && !videoReady && !analysisFailed);
   const executeDone = Boolean(result.execute && (
     isVideo ? videoReady : profileState === "ready"
@@ -610,13 +622,22 @@ export function UrlSummary({
   const scrapeUnavailable = Boolean(
     isVideo && (cleanText(flowStatus || videoFlow.status) === "metadata_failed" || cleanText(videoFlow.metadata_error)),
   );
+  // 创作者尚未解析但并非失败:等启动分析后由后台识别(视频专用队列),不是「识别不到」。
+  const creatorResolutionDeferred = Boolean(
+    isVideo && !creatorResolved && !result.execute &&
+    ["provider_refresh_pending", "identified", ""].includes(cleanText(videoFlow.status)),
+  );
   const disabledReason = scrapeUnavailable
     ? "这条链接抓取失败：被平台反爬拦截，或内容私密/已删，拿不到视频与创作者。换一条公开的视频链接，或稍后重试。"
-    : isVideo && !creatorResolved
-      ? "没识别到创作者，无法建档。"
-      : result.url_type === "unknown"
-        ? "识别不了这个链接。"
-        : "";
+    : officialChannelVideo
+      ? ""
+      : isVideo && !creatorResolved
+        ? creatorResolutionDeferred
+          ? "创作者会在启动分析后由后台自动识别，点右侧按钮开始。"
+          : "没识别到创作者，无法建档。"
+        : result.url_type === "unknown"
+          ? "暂不支持此平台的链接，目前支持 YouTube / Instagram / TikTok 的账号或视频链接。"
+          : "";
 
   // P7·账号 URL 结果卡:把后端自动抓取的基础资料(头像/粉丝/简介/帖数)合并展示。
   // 优先 profile_flow.profile_data(execute 后写入),缺则用 creator_identity / 顶层 result 字段兜底,
@@ -918,6 +939,11 @@ export function UrlSummary({
           <span className="inline-flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> 视频基础数据已展示，AI 深析与时间戳正在排队。</span>
         </div>
       ) : null}
+      {officialChannelVideo ? (
+        <div className="mt-2 rounded-md border border-violet-300/20 bg-violet-400/[0.08] px-2 py-1.5 text-[10.5px] text-violet-100" role="status">
+          这是官方自有账号的视频：官方账号不建人选档案，也不做深度分析，仅展示视频基础数据。
+        </div>
+      ) : null}
       {disabledReason ? (
         <div className="mt-2 rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-2 py-1.5 text-[10.5px] text-amber-100">
           {disabledReason}
@@ -933,7 +959,9 @@ export function UrlSummary({
             {flowStatus === "partial"
               ? (isVideo ? "视频基础数据已入库 · 部分扩展数据未完成" : "资料部分抓取完成，已入库")
               : (isVideo
-                  ? analysisDisabled
+                  ? officialChannelVideo
+                    ? "官方账号视频 · 已保留基础数据，未建档"
+                    : analysisDisabled
                     ? "视频基础数据已入库 · AI 深析未启用"
                     : "视频基础数据已入库"
                   : deepAnalysisRunning
@@ -969,7 +997,8 @@ export function UrlSummary({
           fullVideoState.status === "error" ? "border-rose-300/20 bg-rose-500/[0.08] text-rose-100" : "border-cyan-300/20 bg-cyan-400/[0.08] text-cyan-100"
         }`}>{fullVideoState.msg}</div>
       ) : null}
-      {jobLastError && (!isVideo || !effectiveEvidenceId) ? (
+      {jobLastError && !officialChannelVideo && (!isVideo || !effectiveEvidenceId) ? (
+        // officialChannelVideo 的 ai_analysis.reason 是设计内跳过,不是失败,上面紫色横幅已诚实说明。
         <div className="mt-2 rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-2 py-1.5 text-[10.5px] text-rose-100">
           <div>分析失败：{jobFailureCopy.message}</div>
           {jobFailureCopy.code ? <div className="mt-1 font-mono text-[9px] text-rose-200/60">诊断码：{jobFailureCopy.code}</div> : null}

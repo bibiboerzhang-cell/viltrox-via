@@ -718,8 +718,10 @@ def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]
     recorded = _attach_url_result(int(session_id), result)
     desired = _session_status_from_url_result(result)
     state = desired
-    if not result.get("execute") and result.get("url_type") not in {"profile", "video"}:
-        desired, state = "partial", "unsupported"
+    if result.get("url_type") not in {"profile", "video"}:
+        # 不支持的平台链接(如 bilibili):诚实终态,不再挂「部分完成」假装还在跑。
+        # result_state=unsupported 供前端历史卡显示「不支持」而非笼统的失败。
+        desired, state = "failed", "unsupported"
     return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
 
 

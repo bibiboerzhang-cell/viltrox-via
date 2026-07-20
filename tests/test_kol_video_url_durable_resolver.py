@@ -160,6 +160,59 @@ def test_ai_off_keeps_base_evidence_ready_and_creates_no_fake_llm_state(monkeypa
     assert result["ai_analysis"]["provider_calls_allowed"] is False
 
 
+def test_official_channel_video_skips_enrollment_and_analysis(monkeypatch) -> None:
+    """官方自有账号的视频:不建档、不深析,诚实终态而非失败/假排队。"""
+
+    monkeypatch.setattr(url_deep_crawl, "_match_pool", lambda _classified: [])
+    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args: (_plan()[0], []))
+    monkeypatch.setattr(url_deep_crawl, "_video_creator_resolved", lambda _flow: True)
+    monkeypatch.setattr(
+        resolver,
+        "find_official_channel_match",
+        lambda _identity: {
+            "id": 113,
+            "platform": "youtube",
+            "handle": "viltroxofficial",
+            "display_name": "Viltrox Official",
+        },
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("official channel video must never reach creator build/analysis")
+
+    monkeypatch.setattr(url_deep_crawl, "_execute_new_creator_video_flow", _boom)
+    monkeypatch.setattr(url_deep_crawl, "_execute_existing_creator_video_flow", _boom)
+
+    result = resolver.run_video_url_resolve_for_job(
+        {"url": "https://www.youtube.com/watch?v=abcdefghijk"}
+    )
+
+    assert result["status"] == "official_channel_video"
+    assert result["official_channel"]["handle"] == "viltroxofficial"
+    assert result["resolution_progress"]["status"] == "ready"
+    assert result["resolution_progress"]["base_status"] == "ready"
+    steps = {step["key"]: step for step in result["resolution_progress"]["steps"]}
+    assert steps["cache_media"]["status"] == "skipped"
+    assert steps["ai_analysis"]["status"] == "skipped"
+    assert steps["ai_analysis"]["reason"] == "official_channel_video"
+    assert result["ai_analysis"]["provider_calls_allowed"] is False
+    assert result["viltrox_fit_score_untouched"] is True
+    # 会话项归约:跳过属正常完成,不得算失败/排队。
+    from app.domains.kol.search_sessions_serde import _normalize_status
+
+    assert _normalize_status("official_channel_video", item=True) == "skipped"
+    assert _normalize_status("official_channel_video") == "ready"
+
+
+def test_dry_run_intermediate_statuses_map_to_identified_not_unknown() -> None:
+    """dry-run 中间态(供应商延迟/未入池)映射为已识别;unknown 会让历史回放误判已执行。"""
+
+    from app.domains.kol.search_sessions_serde import _normalize_status
+
+    assert _normalize_status("provider_refresh_pending", item=True) == "identified"
+    assert _normalize_status("creator_not_in_pool", item=True) == "identified"
+
+
 def test_profile_provider_failure_uses_existing_retryable_media_category(monkeypatch) -> None:
     import pytest
 
