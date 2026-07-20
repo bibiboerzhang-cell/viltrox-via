@@ -1,0 +1,172 @@
+{
+  "claim_status": "descriptive_only",
+  "google_places_status": "pending",
+  "schema": "vkpi.reviewed-physical-store-manifest/v1",
+  "source_registry_id": "sony_alpha_core_20260720",
+  "stores": [
+    {
+      "address": "3625 Midway Dr J",
+      "brand_listing_url": "https://www.nelsonphotoandvideo.com/contact-us",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "sony",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://alphauniverse.com",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "San Diego",
+      "coordinates": {
+        "lat": 32.75233369848,
+        "lng": -117.215587363634,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.nelsonphotoandvideo.com/contact-us",
+      "name": "Nelson Photo & Video · San Diego",
+      "observed_at": "2026-07-20T08:31:48Z",
+      "organization_key_material": "Nelson Photo & Video",
+      "phone": "(619) 234-6621",
+      "postal_code": "92110",
+      "retailer_host": "nelsonphotoandvideo.com",
+      "source_id": "nelsonphotoandvideo_store_page",
+      "state": "CA",
+      "website_url": "https://www.nelsonphotoandvideo.com/"
+    },
+    {
+      "address": "2077 East 30th Street",
+      "brand_listing_url": "https://www.doddcamera.com/contact.aspx",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "sony",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://alphauniverse.com",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Cleveland",
+      "coordinates": {
+        "lat": 41.500262302766,
+        "lng": -81.666881108128,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.doddcamera.com/contact.aspx",
+      "name": "Dodd Camera East 30th Street (Cleveland) · Cleveland",
+      "observed_at": "2026-07-20T08:32:59Z",
+      "organization_key_material": "Dodd Camera",
+      "phone": "(216) 361-6800",
+      "postal_code": "44115",
+      "retailer_host": "doddcamera.com",
+      "source_id": "doddcamera_store_page",
+      "state": "OH",
+      "website_url": "https://www.doddcamera.com"
+    },
+    {
+      "address": "1301 Cameron Avenue Lewis Center",
+      "brand_listing_url": "https://www.doddcamera.com/contact.aspx",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "sony",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://alphauniverse.com",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Columbus",
+      "coordinates": {
+        "lat": 40.153881845654,
+        "lng": -82.999832092837,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.doddcamera.com/contact.aspx",
+      "name": "Dodd Camera Columbus · Columbus",
+      "observed_at": "2026-07-20T08:32:59Z",
+      "organization_key_material": "Dodd Camera",
+      "phone": "(614) 547-7096",
+      "postal_code": "43035",
+      "retailer_host": "doddcamera.com",
+      "source_id": "doddcamera_store_page",
+      "state": "OH",
+      "website_url": "https://www.doddcamera.com"
+    },
+    {
+      "address": "6212 Wilmington Pike",
+      "brand_listing_url": "https://www.doddcamera.com/contact.aspx",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "sony",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://alphauniverse.com",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Dayton",
+      "coordinates": {
+        "lat": 39.649080016763,
+        "lng": -84.110173936562,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.doddcamera.com/contact.aspx",
+      "name": "Dodd Camera Dayton (Austin Landing) · Dayton",
+      "observed_at": "2026-07-20T08:32:59Z",
+      "organization_key_material": "Dodd Camera",
+      "phone": "(937) 866-4595",
+      "postal_code": "45459",
+      "retailer_host": "doddcamera.com",
+      "source_id": "doddcamera_store_page",
+      "state": "OH",
+      "website_url": "https://www.doddcamera.com"
+    },
+    {
+      "address": "305 West 700 South",
+      "brand_listing_url": "https://www.pictureline.com/contact",
+      "brand_relationships": [
+        {
+          "authorization_status": "unverified",
+          "brand_key": "sony",
+          "evidence_scope": "organization_and_city_only",
+          "evidence_url": "https://alphauniverse.com",
+          "relationship_status": "official_directory_listed"
+        }
+      ],
+      "city": "Salt Lake City",
+      "coordinates": {
+        "lat": 40.754060668548,
+        "lng": -111.899871229854,
+        "match_level": "exact_address",
+        "provider": "us_census_geocoder",
+        "value_status": "observed"
+      },
+      "location_source_url": "https://www.pictureline.com/contact",
+      "name": "Pictureline Salt Lake City · Salt Lake City",
+      "observed_at": "2026-07-20T08:32:42Z",
+      "organization_key_material": "Pictureline",
+      "phone": "(801) 364-1200",
+      "postal_code": "84101",
+      "retailer_host": "pictureline.com",
+      "source_id": "pictureline_store_page",
+      "state": "UT",
+      "website_url": "https://www.pictureline.com"
+    }
+  ],
+  "truth_boundaries": {
+    "canonical_address_source": "retailer_owned_store_page",
+    "coordinate_source": "us_census_geocoder_address_match",
+    "google_places_is_canonical": false,
+    "manufacturer_directory_proves_branch_inventory": false,
+    "manufacturer_directory_proves_viltrox_authorization": false,
+    "product_page_proves_current_inventory": false,
+    "store_facts_source": "gemini_google_search_advisory_judge_pending_human_review"
+  }
+}
