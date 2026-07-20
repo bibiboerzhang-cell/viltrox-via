@@ -65,6 +65,9 @@ GENERATED_ROOT_COMPONENTS = {
     "tmp",
 }
 FORBIDDEN_NAMES = {
+    # 2026-07-20:macOS Finder 浏览目录即写 .DS_Store,冻结后仍会改写文件内容,
+    # 连续搅黄五班车(候选指纹漂移);快照/盘点双侧统一排除,Finder 从此无关。
+    ".ds_store",
     ".env",
     "id_ed25519",
     "id_rsa",
