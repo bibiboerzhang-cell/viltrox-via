@@ -962,22 +962,13 @@ def read_redeem_nested(redeem_path: str):
     return _serve_frontend()
 
 
+# 2026-07-20 /reset 404 修:密码重置链接指向 /reset,但此处从未注册 SPA 分发,
+# prod 落到 API 404。四个 public 预授权页同闸同响应,合并一个处理器(含新增 /reset)。
 @app.get("/login")
-def read_login():
-    if not IS_PUBLIC_APP:
-        raise HTTPException(status_code=404, detail="Public surface is disabled on this instance")
-    return _serve_frontend()
-
-
 @app.get("/activate")
-def read_activate():
-    if not IS_PUBLIC_APP:
-        raise HTTPException(status_code=404, detail="Public surface is disabled on this instance")
-    return _serve_frontend()
-
-
+@app.get("/reset")
 @app.get("/student-signup")
-def read_student_signup():
+def read_public_prelogin_surface():
     if not IS_PUBLIC_APP:
         raise HTTPException(status_code=404, detail="Public surface is disabled on this instance")
     return _serve_frontend()
