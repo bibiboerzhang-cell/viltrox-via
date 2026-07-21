@@ -64,8 +64,7 @@ import { TextResultSection } from "./SmartKolInputPanel.TextResult";
 
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 
-// 【K1 搜索模式映射表 2026-07-02】FilterBar 三档(平衡/精准/探索)→ 全网查找请求参数。
-// 只改参数映射,不动召回算法;数字与 FilterBar 的 hint/title 一致:
+// 【K1 搜索模式映射表】FilterBar 三档→全网查找参数;只改映射不动召回算法,数字与 FilterBar hint 一致:
 //   balanced  平衡: 库内召回 创作者8+测评7 / 全网候选 45 / 每平台 20
 //   precision 精准: 库内召回 创作者10+测评5 / 全网候选 30 / 每平台 12
 //   discovery 探索: 库内召回 创作者5+测评5  / 全网候选 50 / 每平台 20
@@ -76,9 +75,7 @@ const SEARCH_MODE_QUOTAS: Record<string, { creatorQuota: number; reviewerQuota: 
   discovery: { creatorQuota: 5,  reviewerQuota: 5, newDiscoveryLimit: 50, perPlatformLimit: 20 },
 };
 
-// 【K7】URL 多行批量:一次输入里抠出全部 http(s) URL(空格/换行分隔);上限 10 条防误粘。
-// 验收补强(2026-07-02):①去掉粘贴常见的尾缀标点(逗号/分号/引号/右括号),避免「url1, url2」把
-// 逗号带进后端解析;②去重(同链接粘两遍只分析一次)。社媒链接不含括号,尾缀剥离安全。
+// 【K7】URL 多行批量:抠出全部 http(s) URL,上限 10;剥尾缀标点+去重(社媒链接不含括号,剥离安全)。
 const URL_BATCH_MAX = 10;
 function extractUrls(raw: string): string[] {
   const matched = String(raw || "").match(/https?:\/\/[^\s]+/g) || [];
@@ -122,8 +119,7 @@ export function SmartKolInputPanel({
   // 区域语言本地化:目标市场码(空=全球英文;JP/KR/DE/… 按该区语言搜平台捞本地达人)。
   const [discoveryRegion, setDiscoveryRegion] = useState<string>("");
   // 刀1·流3 恒开(2026-06-16):全网发现不再挂开关,任何文字搜索都自动触发(见 run() 的 queueTextAdvance)。
-  // P0-6 地区口径:默认开,排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(按 country/market 地区判据,
-  // 含 ISO 码与中文地名),其余所有国家放行(含海外中文博主)。后端参数名保留 exclude_chinese。
+  // P0-6 地区口径:默认开,排除 CN/HK/TW 三地区(country/market 判据),海外中文博主放行;后端参数名保留 exclude_chinese。
   const [excludeChinese, setExcludeChinese] = useState(true);
   // 手动收藏:搜到≠自动归我。从「全网新发现」勾选若干 → 一键加入我的 MY KOL(收藏),由你挑。
   const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
@@ -641,8 +637,7 @@ export function SmartKolInputPanel({
         ) {
           autoProfile = urlPayload;
         }
-        // video URL 自动 execute(与 urlCanExecute video 分支同门槛):入 evidence + 排 final_v1 幂等,
-        // 结果随会话轮询内联回填;失败置 videoJobLastError,手动重试按钮自然复现。
+        // video URL 自动 execute(urlCanExecute 同门槛):evidence+final_v1 幂等,轮询回填,失败可手动重试。
         if (!autoProfile && urlPayload.url_type === "video" && !urlPayload.execute) {
           const vFlow = asRecord(urlPayload.video_flow);
           const vCreator = asRecord(urlPayload.creator_identity || vFlow.creator_identity);
@@ -667,8 +662,7 @@ export function SmartKolInputPanel({
           // 自动 execute——后端会把这类 URL 排进专用解析队列,分阶段回填创作者/媒体/分析。
           // 旧门槛(必须先解析出创作者)是队列上线前的遗留,会让新鲜视频 URL 永远停在空壳会话。
           const vDeferredResolution = cleanText(vFlow.status) === "provider_refresh_pending";
-          // 中国平台视频(bilibili/抖音/小红书):仅内容分析不建档,同样自动 execute
-          // 进入专用解析队列(与海外视频 URL 粘贴即分析的体验对齐)。
+          // 中国平台视频(B站/抖音/小红书):仅内容分析不建档,同样自动 execute 进专用队列。
           const vCnPlatform = Boolean(
             vFlow.cn_platform_video === true || cleanText(vFlow.status) === "cn_platform_video_planned",
           );
