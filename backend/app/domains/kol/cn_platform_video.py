@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import tempfile
 import urllib.request
 from typing import Any, Callable
@@ -569,8 +570,21 @@ def run_cn_platform_video_for_job(
     from app.services.media.video_download import download_direct_video_url
 
     llm_called = False
+    # CN CDN 对海外机房限速严重(prod 实测 read timeout):住宅代理优先、直连兜底,
+    # 超时放宽(读 60s/总 300s,env 可覆盖);200MB 帽由下载器默认沿用。
+    cn_proxy = (os.getenv("VKPI_CN_MEDIA_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
+    cn_socket = int(os.getenv("VKPI_CN_MEDIA_SOCKET_TIMEOUT_SEC", "60"))
+    cn_total = int(os.getenv("VKPI_CN_MEDIA_TOTAL_TIMEOUT_SEC", "300"))
     with tempfile.TemporaryDirectory(prefix="vkpi-cn-video-") as tmpdir:
-        download = download_direct_video_url(direct_video_url, tmpdir, referer=content_url)
+        download = download_direct_video_url(
+            direct_video_url, tmpdir, referer=content_url,
+            socket_timeout_sec=cn_socket, total_timeout_sec=cn_total, proxy_url=cn_proxy,
+        )
+        if (not download.get("success")) and cn_proxy:
+            download = download_direct_video_url(
+                direct_video_url, tmpdir, referer=content_url,
+                socket_timeout_sec=cn_socket, total_timeout_sec=cn_total,
+            )
         if not download.get("success") or not download.get("path"):
             reason = _text(download.get("error")) or f"direct_video_download_failed:{platform}"
             current = _progress(current, "cache_media", "failed", reason=reason[:200])

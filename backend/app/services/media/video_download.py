@@ -127,6 +127,7 @@ def download_direct_video_url(
     total_timeout_sec: int | None = None,
     precheck: bool = True,
     precheck_fetch: Callable[[str, dict[str, str], float], int] | None = None,
+    proxy_url: str = "",
 ) -> dict[str, Any]:
     """Download a direct CDN/play URL to a local MP4 file.
 
@@ -172,7 +173,15 @@ def download_direct_video_url(
     started = time.monotonic()
     try:
         req = urllib.request.Request(clean_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=socket_timeout) as resp, open(out_path, "wb") as fh:
+        proxy = str(proxy_url or "").strip()
+        if proxy:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+            )
+            open_ctx = opener.open(req, timeout=socket_timeout)
+        else:
+            open_ctx = urllib.request.urlopen(req, timeout=socket_timeout)
+        with open_ctx as resp, open(out_path, "wb") as fh:
             content_length = resp.headers.get("Content-Length")
             if content_length:
                 try:
