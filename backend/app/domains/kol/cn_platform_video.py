@@ -167,7 +167,7 @@ def _store_cn_analysis(
         try:
             conn.rollback()
         except Exception:
-            pass
+            logger.debug("回滚失败(best-effort)", exc_info=True)
         logger.warning("cn video analysis cache write failed", exc_info=True)
         return None
 

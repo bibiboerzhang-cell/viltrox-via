@@ -31,6 +31,12 @@ from tests.model_evidence_signing import (
 
 
 AS_OF = "2026-07-13T12:00:00Z"
+
+
+def _fresh_as_of() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 EVALUATION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33)))
 PROBE_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(33, 65)))
 EVALUATION_KEY_ID = "test-evaluation-v1"
@@ -68,7 +74,11 @@ def _evidence(
     model_version: str | None = None,
     actual_eval: bool = True,
     tasks: tuple[str, ...] = (),
+    as_of: str | None = None,
 ) -> dict:
+    # 2026-07-20 拆定时炸弹:固定 AS_OF(07-13)+ 端点真实时钟 + 7 天新鲜窗 → 07-21 起
+    # 三个端点测试集体过期。走真实时钟的测试传新鲜 as_of;其余仍用固定值保确定性。
+    stamp = as_of or AS_OF
     provider, model = binding.split("/", 1)
     version = model_version or model
     success_total = samples if successes is None else successes
@@ -126,7 +136,7 @@ def _evidence(
         dataset_provenance="eval_dataset:weekly_report_actual_eval_v2",
         dataset_actual=actual_eval,
         dataset_synthetic=False,
-        evaluated_at=AS_OF,
+        evaluated_at=stamp,
         provenance=f"eval_artifact:{binding}",
         samples=sample_rows,
     )
@@ -148,7 +158,7 @@ def _evidence(
             "response_model": version,
             "response_sha256": sample_rows[0]["response_sha256"],
             "evaluation_artifact_sha256": artifact["integrity"]["sha256"],
-            "as_of": AS_OF,
+            "as_of": stamp,
             "provenance": f"provider_probe:{binding}:sha256:abc",
         },
         private_key=PROBE_PRIVATE_KEY,
@@ -651,6 +661,7 @@ def test_system_models_endpoint_uses_structured_evidence_per_exact_binding(monke
                 "openai/gpt-5.6": _evidence(
                     samples=30,
                     tasks=("via_chat",),
+                    as_of=_fresh_as_of(),
                 )
             }
         ),
@@ -712,6 +723,7 @@ def test_model_switch_uses_exact_readiness_before_mocked_provider_probe_and_writ
                 "openai/gpt-5.6": _evidence(
                     samples=30,
                     tasks=("via_chat",),
+                    as_of=_fresh_as_of(),
                 )
             }
         ),
@@ -809,7 +821,7 @@ def test_gateway_executes_only_after_the_shared_dual_signed_readiness_gate(
     monkeypatch.setenv("OPENAI_API_KEY", "configured")
     monkeypatch.setenv(
         READINESS_EVIDENCE_ENV,
-        json.dumps({"openai/gpt-5.6": _evidence(samples=30)}),
+        json.dumps({"openai/gpt-5.6": _evidence(samples=30, as_of=_fresh_as_of())}),
     )
     calls: list[str] = []
     monkeypatch.setattr(gateway, "record_call", lambda **_kwargs: None)
