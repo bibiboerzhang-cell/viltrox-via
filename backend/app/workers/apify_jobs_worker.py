@@ -156,6 +156,15 @@ CLAIM_SELECT_SQL = f"""
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 """
+# 2026-07-21 泳道帮工(work-stealing):1 交互 + 15 批量编制下,交互任务只有单车道
+# 可认领=用户搜索小时级排队。batch 车道批量队列捞空时降级用无泳道过滤的同款 SELECT
+# 帮抢(优先序仍是 interactive 先行);交互车道语义不变。APIFY_WORKER_LANE_STEAL=0 可关。
+CLAIM_LANE_STEAL_ENABLED = (
+    CLAIM_LANE == "batch"
+    and str(os.environ.get("APIFY_WORKER_LANE_STEAL", "1")).strip().lower() not in {"0", "false", "off"}
+)
+CLAIM_SELECT_SQL_STEAL = CLAIM_SELECT_SQL.replace(CLAIM_LANE_SQL, "") if CLAIM_LANE_SQL else CLAIM_SELECT_SQL
+
 MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
 PROVIDER_RETRY_MAX_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_ATTEMPTS", "5")))
 PROVIDER_RETRY_BASE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_BASE_SECONDS", "60")))
@@ -571,6 +580,9 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(CLAIM_SELECT_SQL)
             job = cur.fetchone()
+            if not job and CLAIM_LANE_STEAL_ENABLED:
+                cur.execute(CLAIM_SELECT_SQL_STEAL)
+                job = cur.fetchone()
             if not job:
                 return None
             cur.execute(
