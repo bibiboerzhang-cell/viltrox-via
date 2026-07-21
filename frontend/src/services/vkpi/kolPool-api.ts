@@ -102,10 +102,12 @@ export async function getKolVideoAnalysisCache(
   token: string,
   evidenceId: string | number,
   deriveMethod: string,
-  options: { allowLocalEvaluationFallback?: boolean } = {},
+  // targetType 缺省 "video"(海外 evidence);CN 平台视频用 "cn_platform_video",
+  // target_id 形如 "<platform>:<video_id>"(与 vkpi_analysis_cache 落库键一致)。
+  options: { allowLocalEvaluationFallback?: boolean; targetType?: string } = {},
 ): Promise<VkpiKolVideoAnalysisCacheResponse> {
   const params = new URLSearchParams({
-    target_type: "video",
+    target_type: options.targetType || "video",
     target_id: String(evidenceId),
     derive_method: deriveMethod,
     _ts: String(Date.now()),

@@ -497,6 +497,15 @@ export function UrlSummary({
   const cnAnalysis = asRecord(videoFlow.cn_analysis || resultRow.cn_analysis);
   const cnSummary = cnPlatformVideo ? cleanText(cnAnalysis.content_summary) : "";
   const cnMediaDegraded = cnPlatformVideo && Boolean(videoFlow.media_degraded || resultRow.media_degraded);
+  // CN 深析缓存键=<platform>:<video_id>(vkpi_analysis_cache target_id 同款);富面板只在
+  // flow 明示分析已就绪(compact cn_analysis 或 ai_analysis=ready)时渲染,未就绪沿用横幅
+  // 诚实态不假排队;媒体降级(仅元数据)不渲染。
+  const cnVideoId = cleanText(result.video_id || videoFlow.video_id);
+  const cnAnalysisTargetId = cnPlatformVideo && platform && cnVideoId ? `${platform}:${cnVideoId}` : "";
+  const cnAnalysisReady = cnPlatformVideo && !cnMediaDegraded && (
+    Object.keys(cnAnalysis).length > 0
+    || cleanText(videoAiAnalysis.state).toLowerCase() === "ready"
+  );
   const videoReady = (
     ["ready", "partial", "already_analyzed", "official_channel_video", "cn_platform_video"].includes(cleanText(flowStatus || videoFlow.status).toLowerCase())
     || officialChannelVideo
@@ -840,6 +849,19 @@ export function UrlSummary({
         </div>
       ) : null}
       {cnPlatformVideo ? <CnPlatformVideoNotice degraded={cnMediaDegraded} summary={cnSummary} /> : null}
+      {cnAnalysisReady && !isImageCarousel && apiToken && cnAnalysisTargetId ? (
+        // CN 富面板:与海外视频同款 VideoSceneAnalysis,读 cn_platform_video 缓存的 final_v1 六层
+        // (分镜时间线/观众情绪/三值/归因/建议/评分)。摘要横幅保留在上方;不传 recommendation
+        // (CN 不建档,无账号 Fit),不传 onVideoUrl(后端仅对 target_type=video 解析 R2 地址)。
+        <div className="mt-2">
+          <VideoSceneAnalysis
+            key={cnAnalysisTargetId}
+            apiToken={apiToken}
+            evidenceId={cnAnalysisTargetId}
+            targetType="cn_platform_video"
+          />
+        </div>
+      ) : null}
       {disabledReason ? (
         <div className="mt-2 rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-2 py-1.5 text-[10.5px] text-amber-100">
           {disabledReason}

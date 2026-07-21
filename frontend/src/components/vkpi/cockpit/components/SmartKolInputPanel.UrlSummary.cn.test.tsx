@@ -126,7 +126,14 @@ describe("SmartKolInputPanel URL result mapping · 中国平台", () => {
     cleanup();
   });
 
-  it("中国平台视频终态:显示仅内容分析横幅+摘要,不显示失败/假排队/建档提示", () => {
+  it("中国平台视频终态:显示仅内容分析横幅+摘要,不显示失败/假排队/建档提示", async () => {
+    // 面板自取缓存:给终态响应(not_requested),避免挂 6s 轮询定时器。
+    api.getKolVideoAnalysisCache.mockResolvedValue({
+      target_type: "cn_platform_video",
+      target_id: "bilibili:BV1S6Kr6mEgi",
+      state: "not_requested",
+      entry: null,
+    } as unknown as VkpiKolVideoAnalysisCacheResponse);
     renderSummary(videoResult({
       execute: true,
       in_pool: false,
@@ -160,9 +167,120 @@ describe("SmartKolInputPanel URL result mapping · 中国平台", () => {
     expect(screen.queryByText(/分析失败/)).toBeNull();
     expect(screen.queryByText(/AI 深析与时间戳正在排队/)).toBeNull();
     expect(screen.queryByText(/没识别到创作者/)).toBeNull();
+    // 等面板异步读缓存落定(act 收口);缓存缺行时呈现诚实态,依然无假排队。
+    await waitFor(() => expect(screen.getByTestId("video-decision-overview")).toBeTruthy());
   });
 
-  it("中国平台视频媒体降级:诚实提示只保留元数据,不标失败", () => {
+  it("中国平台视频终态:渲染完整六层深析面板(分镜/评分/情绪),摘要行保留", async () => {
+    // final_v1 结构按本地 vkpi_analysis_cache id=15187(bilibili:BV1S6Kr6mEgi)真实行裁剪:
+    // 六层平铺在 result 根部(CN _shape_cn_final_v1 落库形状),非嵌套 video_analysis_final_v1。
+    api.getKolVideoAnalysisCache.mockImplementation(async (
+      _token: string,
+      targetId: string,
+      method: string,
+    ): Promise<VkpiKolVideoAnalysisCacheResponse> => {
+      if (method.includes("keyframe")) {
+        return { target_type: "cn_platform_video", target_id: targetId, state: "not_requested", entry: null } as VkpiKolVideoAnalysisCacheResponse;
+      }
+      return {
+        target_type: "cn_platform_video",
+        target_id: targetId,
+        state: "ready",
+        entry: {
+          target_type: "cn_platform_video",
+          target_id: targetId,
+          derive_method: "video_analysis_final_v1",
+          model: "gemini-2.5-flash",
+          status: "ready",
+          updated_at: "2026-07-21T02:28:30.729995+00:00",
+          result: {
+            schema_version: "video_analysis_final_v1",
+            status: "completed",
+            model: "gemini-2.5-flash",
+            target_type: "cn_platform_video",
+            target_id: "bilibili:BV1S6Kr6mEgi",
+            layer1_visual_content: {
+              content_summary: "视频是一个有趣的动物配音动画，一只狗和一只猫被配上拟人化的口型和对话。",
+              scene_timeline: [
+                { timestamp: "00:00", what: "狗盯着一个模糊的物体，眼神惊恐。", why_it_matters: "引入主要角色和核心冲突。" },
+                { timestamp: "00:08", what: "猫出现，并被PS上拟人化口型，与狗对视。", why_it_matters: "奠定视频的幽默基调。" },
+              ],
+              brand_exposure: "无Viltrox品牌露出。",
+            },
+            layer2_viewer_emotion: {
+              viewer_heart_score: 88,
+              one_sentence_viewer_reaction: "太可爱太搞笑了，这狗和猫的表情和歌词完美配合！",
+            },
+            layer3_three_values: {
+              channel_value: { score: 80, evidence: "该创作者展现了极强的内容创意、剪辑和配音能力。", confidence: 0.8 },
+            },
+            layer4_attribution: { product_contribution: "0%", kol_craft_contribution: "100%。" },
+            layer5_recommendations: {
+              cooperation_recommendation: { action: "接触并考虑合作", confidence: 0.85 },
+            },
+            layer6_flags_and_scores: {
+              scores: { content_quality_score: 92, marketing_value_score: 25, viewer_heart_score: 88 },
+              final_verdict: "这条视频本身对Viltrox的直接营销价值为零，但创作者制作水准极高，值得接触。",
+              risk_flags: ["产品无关性：本视频内容与摄影器材完全无关。"],
+            },
+            viltrox_fit_score_untouched: true,
+          },
+        },
+      } as unknown as VkpiKolVideoAnalysisCacheResponse;
+    });
+    renderSummary(videoResult({
+      execute: true,
+      in_pool: false,
+      matched_kol_pool_id: null,
+      platform: "bilibili",
+      video_id: "BV1S6Kr6mEgi",
+      url: {
+        input: "https://www.bilibili.com/video/BV1S6Kr6mEgi",
+        normalized: "https://www.bilibili.com/video/BV1S6Kr6mEgi",
+      },
+      creator_identity: { platform: "bilibili", display_name: "IPx的粉红豹" },
+      video_metadata: {
+        platform: "bilibili",
+        title: "《 双 枪 牛 仔 》",
+        content_url: "https://www.bilibili.com/video/BV1S6Kr6mEgi",
+        view_count: 3005478,
+        duration_seconds: 62,
+      },
+      video_flow: {
+        status: "cn_platform_video",
+        operation: "cn_platform_video_analysis",
+        cn_platform_video: true,
+        job_status: "done",
+        ai_analysis: { state: "ready", reason: "cn_platform_video_analysis" },
+        cn_analysis: { content_summary: "动物配音搞笑短片", scores: { content_quality: 92 } },
+      },
+    }));
+    // 读取按 cn_platform_video 缓存键发起(target_id=<platform>:<video_id>)。
+    await waitFor(() => {
+      expect(api.getKolVideoAnalysisCache.mock.calls.some((call) => (
+        call[1] === "bilibili:BV1S6Kr6mEgi"
+        && call[2] === "video_analysis_final_v1"
+        && (call[3] as { targetType?: string } | undefined)?.targetType === "cn_platform_video"
+      ))).toBe(true);
+    });
+    // 六层富面板:分镜时间线 + 双评分 + 观众情绪 + 结论。
+    await waitFor(() => expect(screen.getByText("分镜时间线")).toBeTruthy());
+    expect(screen.getByText("00:08")).toBeTruthy();
+    expect(screen.getByText("猫出现，并被PS上拟人化口型，与狗对视。")).toBeTruthy();
+    expect(screen.getByText("内容质量")).toBeTruthy();
+    expect(screen.getAllByText("92").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("25").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/太可爱太搞笑了/)).toBeTruthy();
+    expect(screen.getByTestId("video-decision-overview")).toBeTruthy();
+    // 摘要横幅保留;仍不出现假排队/建档文案。
+    expect(screen.getByText(/仅做内容分析，不建人选档案/)).toBeTruthy();
+    expect(screen.getByText(/动物配音搞笑短片/)).toBeTruthy();
+    expect(screen.queryByText(/AI 深析与时间戳正在排队/)).toBeNull();
+    expect(screen.queryByText(/分析失败/)).toBeNull();
+  });
+
+  it("中国平台视频媒体降级:仅元数据,不渲染富面板,不标失败", async () => {
+    api.getKolVideoAnalysisCache.mockClear();
     renderSummary(videoResult({
       execute: true,
       in_pool: false,
@@ -188,5 +306,11 @@ describe("SmartKolInputPanel URL result mapping · 中国平台", () => {
     expect(screen.getByText(/仅做内容分析，不建人选档案/)).toBeTruthy();
     expect(screen.getByText(/本次仅保留元数据/)).toBeTruthy();
     expect(screen.queryByText(/分析失败/)).toBeNull();
+    // 媒体降级=仅元数据:不渲染富面板,也不发起 cn 缓存读取。
+    expect(screen.queryByTestId("video-decision-overview")).toBeNull();
+    expect(screen.queryByText("分镜时间线")).toBeNull();
+    expect(api.getKolVideoAnalysisCache.mock.calls.some((call) => (
+      (call[3] as { targetType?: string } | undefined)?.targetType === "cn_platform_video"
+    ))).toBe(false);
   });
 });

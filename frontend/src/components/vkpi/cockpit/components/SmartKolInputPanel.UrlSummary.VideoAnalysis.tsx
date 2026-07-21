@@ -259,6 +259,7 @@ function isEvaluationOnlyAnalysis(result: Row, payload: Row): boolean {
 export function VideoSceneAnalysis({
   apiToken,
   evidenceId,
+  targetType = "video",
   fallbackFailure,
   disabledReason,
   disabledDetail,
@@ -266,7 +267,10 @@ export function VideoSceneAnalysis({
   onVideoUrl,
 }: {
   apiToken: string;
+  // 海外 evidence:数字 id + targetType="video";CN 平台视频:targetType="cn_platform_video",
+  // evidenceId 传缓存键 "<platform>:<video_id>"。两者读同一 final_v1 六层结构,渲染同款面板。
   evidenceId: string;
+  targetType?: string;
   fallbackFailure?: string;
   disabledReason?: string;
   disabledDetail?: string;
@@ -297,7 +301,7 @@ export function VideoSceneAnalysis({
     // 轮询只服务 queued/running/retrying/processing；blocked/failed 会立即停止并呈现真实原因。
     // ready 后展示 final_v1 + 时间戳；读取异常有限重试，不再静默伪装成“已完成”。
     const poll = () => {
-      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1")
+      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1", { targetType })
         .then((res) => {
           if (cancelled) return;
           // R2 缓存视频地址由后端按 evidence 解析,与分析就绪无关 —— 视频已缓存即可先点亮播放器,
@@ -354,7 +358,7 @@ export function VideoSceneAnalysis({
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [apiToken, disabledDetail, disabledReason, evidenceId, fallbackFailure, onVideoUrl]);
+  }, [apiToken, disabledDetail, disabledReason, evidenceId, fallbackFailure, onVideoUrl, targetType]);
   useEffect(() => {
     let cancelled = false;
     let timer = 0;
@@ -365,7 +369,7 @@ export function VideoSceneAnalysis({
     // QA 是 final_v1 的独立阶段；主分析先 ready 时也要继续补拉 QA，避免用户必须刷新页面。
     // not_requested 只短暂观察 5 次，给刚落 final_v1、QA job 尚未登记的窄窗口；没有任务时不会长轮询。
     const pollQa = () => {
-      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa")
+      getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa", { targetType })
         .then((res) => {
           if (cancelled) return;
           const state = cleanText(res.state).toLowerCase();
@@ -390,7 +394,7 @@ export function VideoSceneAnalysis({
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [apiToken, evidenceId]);
+  }, [apiToken, evidenceId, targetType]);
   const result = asRecord(entry?.result);
   const payload = asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
   const evaluationOnly = notice.state === "ready" && isEvaluationOnlyAnalysis(result, payload);
