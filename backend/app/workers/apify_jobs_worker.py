@@ -101,9 +101,7 @@ STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECL
 RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEARTBEAT_SECONDS", "30")))
 # DB 连接瞬断后重连前等待秒数。治 6/23 那次:连接丢失 → 未捕获 → worker 永久死 3.5 天。
 WORKER_DB_RECONNECT_SECONDS = max(2, int(os.environ.get("APIFY_WORKER_DB_RECONNECT_SECONDS", "5")))
-# T5 真实存活:每轮 poll(含空闲)向 vkpi_worker_heartbeat UPSERT 一行,
-# system_health._worker_online 据此判在线(MAX 全表聚合,与名字无关);逻辑 worker 名可经 env 覆盖。
-# 默认带主机名:多机/多车道认领时心跳行与 lease_owner 可辨,不再互相覆盖。
+# T5 真实存活:每轮 poll UPSERT vkpi_worker_heartbeat;worker 名默认带主机名防多车道互覆,可 env 覆盖。
 _DEFAULT_WORKER_NAME = f"apify_jobs_worker-{socket.gethostname()}-{os.getpid()}"
 WORKER_HEARTBEAT_NAME = os.environ.get("APIFY_WORKER_HEARTBEAT_NAME", _DEFAULT_WORKER_NAME).strip() or _DEFAULT_WORKER_NAME
 _WORKER_GIT_SHA_RAW = str(os.environ.get("APP_GIT_SHA") or "").strip().lower()
@@ -113,28 +111,22 @@ WORKER_BOOT_NONCE_SHA256 = hashlib.sha256(_WORKER_BOOT_NONCE.encode("utf-8")).he
 WORKER_STARTED_AT = str(os.environ.get("VKPI_WORKER_STARTED_AT") or "").strip() or (
     datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 )
-# 车道过滤:interactive/batch 互斥;all 仅作单 worker 兼容默认。
-# 未知值 fail-fast,避免配置拼错意外退化为抢全队列。
+# 车道过滤:interactive/batch 互斥,all 为单 worker 兼容默认;未知值 fail-fast。
 CLAIM_LANE = normalize_claim_lane(os.environ.get("APIFY_WORKER_CLAIM_LANE", "all"))
 CLAIM_LANE_SQL = claim_lane_sql(CLAIM_LANE)
 QUEUE_LANE_SQL = queue_lane_sql_expression("payload")
 QUEUE_PRIORITY_SQL = queue_priority_sql_expression("payload")
 QUEUE_SERVICE_PRIORITY_SQL = queue_service_priority_sql_expression("job_type", "created_at")
 RESOURCE_SLOT_LIMITS = resource_slot_limits(os.environ)
-# 双认领毒化防护(2026-07-07):本地算力 worker 领活只打 payload.local_lease_id 标记
-# (见 domains/local_workers/registry.py,绝不动 status),主 worker 若无视该标记
-# 会把同一行抢去双跑。两道过滤:
-# ① payload 带 local_lease_id 的行不抢(jsonb ->> 对缺键 / payload 为 NULL 均返 SQL NULL);
-# ② job_type 属本地算力专属类型集合的不抢(集合单一真源 = registry.SAFE_TASK_TYPES,
-#    dispatch_policy 同源 import,此处 import 别名 LOCAL_EXCLUSIVE_JOB_TYPES 防复制漂移)。
-# 类型集合为代码内常量白名单,拼进 SQL 的均为固定字面量,无注入面。
+# 双认领毒化防护:本地算力 worker 只打 payload.local_lease_id 标记(registry.py),
+# 主 worker 两道过滤:①带 local_lease_id 的行不抢;②本地专属 job_type 不抢
+# (单一真源 registry.SAFE_TASK_TYPES,别名 import 防漂移);拼 SQL 全为常量白名单,无注入面。
 _LOCAL_EXCLUSIVE_TYPES_SQL = ", ".join(f"'{t}'" for t in LOCAL_EXCLUSIVE_JOB_TYPES)
 CLAIM_LOCAL_GUARD_SQL = (
     "AND (payload->>'local_lease_id') IS NULL "
     f"AND job_type NOT IN ({_LOCAL_EXCLUSIVE_TYPES_SQL})"
 )
-# 认领 SELECT 抽成模块常量:_claim_job 原地引用,单测可对同一份 SQL 直接跑断言。
-# CLAIM_LANE_SQL 由 env 在 import 时定死,提前拼接与原 _claim_job 内 f-string 行为一致。
+# 认领 SELECT 抽成模块常量供单测断言;CLAIM_LANE_SQL 由 env 在 import 时定死。
 CLAIM_SELECT_SQL = f"""
     SELECT id, job_type, payload, attempts, next_retry_at, last_error_category
     FROM apify_jobs
@@ -156,9 +148,8 @@ CLAIM_SELECT_SQL = f"""
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 """
-# 2026-07-21 泳道帮工(work-stealing):1 交互 + 15 批量编制下,交互任务只有单车道
-# 可认领=用户搜索小时级排队。batch 车道批量队列捞空时降级用无泳道过滤的同款 SELECT
-# 帮抢(优先序仍是 interactive 先行);交互车道语义不变。APIFY_WORKER_LANE_STEAL=0 可关。
+# 泳道帮工:batch 车道批量捞空时用无泳道过滤的同款 SELECT 帮抢交互任务
+# (优先序 interactive 先行,插队语义不变);APIFY_WORKER_LANE_STEAL=0 可关。
 CLAIM_LANE_STEAL_ENABLED = (
     CLAIM_LANE == "batch"
     and str(os.environ.get("APIFY_WORKER_LANE_STEAL", "1")).strip().lower() not in {"0", "false", "off"}
@@ -177,8 +168,7 @@ PROVIDER_RETRY_ADOPT_WINDOW_MINUTES = max(0, int(os.environ.get("APIFY_WORKER_PR
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
 # 旧 min(6) 硬钳是预算安全时代产物;预算闸/台账已成熟,上限交给 env(全 fleet 同值,advisory lock 库级全局)。
 LLM_CONCURRENCY_LIMIT = max(1, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "2")))
-# 1200 太小:6 层 final_v1 JSON(含整条 scene_timeline)会被截断,分镜只剩前 ~35s。
-# 抬到 4096 容纳整段视频的分镜时间线(完整不截断);可经 env 覆盖。
+# 1200 会截断六层 final_v1(分镜只剩前 ~35s);4096 容纳整段分镜时间线,可 env 覆盖。
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
 # 0.05 是免费层口径(每条 job 前最多干等 20s,250 条批量净耗 ~83 分钟);付费层 RPM 数百,0.5 仍留 60 倍余量。
 GEMINI_QPS_LIMIT = max(0.0, float(os.environ.get("APIFY_WORKER_GEMINI_QPS", "0.5")))
