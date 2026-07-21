@@ -49,7 +49,8 @@ def _detect_excluded_region(item: dict[str, Any]) -> str:
     海外中文博主只要无大陆+港台地名即放行——单纯中文字符不命中)。"""
     if _country_in_excluded_region(item.get("country"), item.get("region")):
         return "CN/HK/TW"
-    blob = " ".join(str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle"))
+    # bio 为 K2 富化新增(频道简介/IG biography 常带真地区信号);无 bio 的 item 行为不变。
+    blob = " ".join(str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "bio"))
     if not blob.strip():
         return ""
     if _EXCLUDED_REGION_RE.search(blob) or _EXCLUDED_REGION_CITY_RE.search(blob):
@@ -116,9 +117,10 @@ def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms:
     """persona 启发式相关度(纯本地零 LLM):扫 item 文本对正/负词命中打分。
     返回 {score, relevance_score, relevance_tier, relevance_hits};score=relevance_score 供落库。
     red line:独立展示信号,绝不并入 viltrox_fit_score / rule_v0。CN/HK/TW 不在此扣分(交 _detect_excluded_region 排)。"""
-    # 只看候选**自身内容**(标题/频道名/handle);绝不含 search_query —— 那是查询词本身,会自命中致全 1.0。
+    # 只看候选**自身内容**(标题/频道名/handle/bio);绝不含 search_query —— 那是查询词本身,会自命中致全 1.0。
+    # bio 为 K2 富化新增(频道简介/IG biography),真摄影师的自述是最诚实的相关度证据;无 bio 行为不变。
     blob = " ".join(
-        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle")
+        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "bio")
     ).lower()
     if not pos_terms and not neg_terms:
         return {"score": 0.5, "relevance_score": 0.5, "relevance_tier": "中", "relevance_hits": []}
@@ -161,9 +163,12 @@ _HARD_AVOID_TERMS = frozenset({
 
 
 def _candidate_blob(item: dict[str, Any]) -> str:
-    """候选自身内容拼接(sample_title + channel_name + handle),小写。绝不含 search_query(查询词会自命中)。"""
+    """候选自身内容拼接(sample_title + channel_name + handle + bio),小写。绝不含 search_query(查询词会自命中)。
+
+    bio 为 K2 富化新增(YT channels.list 频道简介 / IG profile-scraper biography):真摄影师
+    的 bio 几乎必含 photographer/filmmaker 等信号,判据文本更真实;无 bio 的 item 行为不变。"""
     return " ".join(
-        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle")
+        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "bio")
     ).lower()
 
 

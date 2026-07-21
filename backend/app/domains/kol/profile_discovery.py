@@ -87,6 +87,7 @@ _PROVIDER_SHARED_NAMES = (
     "_candidate_platform_signals",
     "_detect_excluded_region",
     "_has_camera_signal",
+    "_has_cjk",
     "_int",
     "_is_discovery_garbage",
     "_is_hard_avoid",

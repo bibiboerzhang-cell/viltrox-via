@@ -30,6 +30,7 @@ from app.domains.kol.profile_discovery_candidates import (
     _strict_discovery_platforms,
 )
 from app.domains.kol.profile_discovery_localize import (
+    _has_cjk,
     _localize_search_terms,
     _market_to_language,
 )
@@ -269,6 +270,17 @@ async def discover_new_creators(
     # 英语区/空 market → search_term=query、relevance_language='en',与现状完全一致(零回归)。
     _relevance_language, _region_code = _market_to_language(market)
     search_term = _localize_search_terms(query, _relevance_language)
+    # K2 兜底(session 1089 案):localize 走 LLM,LLM 全灭时中文 query 原样搜 YT/IG →
+    # 捞中文圈 → 再被 CN/HK/TW 区域闸清空,全网新发现近乎归零。确定性零 LLM 兜底:
+    # 目标语言是英文而检索词仍含 CJK → 用 persona 英文正词(product_focus/ideal_types/
+    # verticals,KB 词天然英文)拼检索词;persona 也无英文词才保留原样(诚实降级,绝不杜撰)。
+    if _relevance_language == "en" and _has_cjk(search_term):
+        _en_fallback = [
+            t for t in _persona_positive_terms(product_focus, ideal_creator_types, verticals, "")
+            if not _has_cjk(t)
+        ]
+        if _en_fallback:
+            search_term = " ".join(_en_fallback[:8])
     safe_limit = max(1, min(_int(limit, 15), 50))
     safe_per_platform = max(1, min(_int(per_platform_limit, 15), 50))
     resolved_platforms = _strict_discovery_platforms(platforms, fallback=platform_hint)
