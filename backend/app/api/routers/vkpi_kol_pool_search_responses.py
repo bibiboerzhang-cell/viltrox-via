@@ -21,6 +21,8 @@ _READY_FLOW_STATUSES = {
     "executed",
     # 官方自有账号视频:建档/深析按设计跳过,对外是正常完成态。
     "official_channel_video",
+    # 中国平台视频:仅内容分析、不建档,对外是正常完成态。
+    "cn_platform_video",
 }
 
 

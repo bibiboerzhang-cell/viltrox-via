@@ -24,9 +24,66 @@ logger = get_logger(__name__)
 
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok"}
 
+# 中国平台「仅视频分析」通道:识别/取数/深析,但按地区规避红线绝不入 KOL 池。
+CN_VIDEO_ANALYSIS_PLATFORMS = {"bilibili", "douyin", "xiaohongshu"}
+CN_SHORT_LINK_HOSTS = {
+    "b23.tv": "bilibili",
+    "v.douyin.com": "douyin",
+    "xhslink.com": "xiaohongshu",
+}
+
 
 def _metadata_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _cn_platform_from_host(host: str) -> str:
+    """CN 平台判定(bilibili/douyin/xiaohongshu 含各自短链域)。"""
+    clean = str(host or "").lower()
+    if clean in CN_SHORT_LINK_HOSTS:
+        return CN_SHORT_LINK_HOSTS[clean]
+    if clean == "bilibili.com" or clean.endswith(".bilibili.com"):
+        return "bilibili"
+    if clean == "douyin.com" or clean.endswith(".douyin.com") or clean.endswith("iesdouyin.com"):
+        return "douyin"
+    if clean == "xiaohongshu.com" or clean.endswith(".xiaohongshu.com"):
+        return "xiaohongshu"
+    return ""
+
+
+def _cn_video_id(platform: str, host: str, path: str, query: str) -> str:
+    """CN 平台视频 ID 提取;短链取短码(worker 会展开短链后换真 ID 做缓存键)。
+
+    支持:bilibili.com/video/BV*|av* 与 b23.tv 短链;douyin.com/video/<digits>、
+    iesdouyin share 链与 v.douyin.com 短链;xiaohongshu.com/explore/<id>、
+    /discovery/item/<id> 与 xhslink.com 短链。识别不出返回 ""(诚实不硬猜)。
+    """
+    del query
+    clean_host = str(host or "").lower()
+    parts = [part for part in str(path or "").split("/") if part]
+    lowered = [part.lower() for part in parts]
+    if clean_host in CN_SHORT_LINK_HOSTS:
+        # 短码是最后一段(xhslink 形如 /o/<code> 或 /a/<code>)。
+        return parts[-1] if parts else ""
+    if platform == "bilibili":
+        for index, part in enumerate(lowered):
+            if part == "video" and index + 1 < len(parts):
+                candidate = parts[index + 1]
+                if candidate[:2].lower() == "bv" or candidate[:2].lower() == "av":
+                    return candidate
+        return ""
+    if platform == "douyin":
+        for index, part in enumerate(lowered):
+            if part == "video" and index + 1 < len(parts) and parts[index + 1].isdigit():
+                return parts[index + 1]
+        return ""
+    if platform == "xiaohongshu":
+        if lowered[:1] == ["explore"] and len(parts) >= 2:
+            return parts[1]
+        if lowered[:2] == ["discovery", "item"] and len(parts) >= 3:
+            return parts[2]
+        return ""
+    return ""
 
 
 def _public_video_metadata(metadata: dict[str, Any]) -> dict[str, Any]:

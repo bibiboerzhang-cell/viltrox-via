@@ -45,9 +45,11 @@ import {
   type Row,
 } from "./SmartKolInputPanel.helpers";
 import { ProfileInfoCard } from "./SmartKolInputPanel.Sections";
+import { VideoCreatorCard } from "./SmartKolInputPanel.UrlSummary.CreatorCard";
 import { humanizeLlmReason } from "../llmReasonCopy";
 import { VideoSceneAnalysis } from "./SmartKolInputPanel.UrlSummary.VideoAnalysis";
 import {
+  CnPlatformVideoNotice,
   dateLabel,
   firstSafeCachedVideoUrl,
   firstSafeHttpUrl,
@@ -66,106 +68,6 @@ const AccountUrlInlineOverview = lazy(() =>
     default: module.AccountUrlInlineOverview,
   })),
 );
-
-function VideoCreatorCard({
-  creator,
-  metadata,
-  onOpen,
-}: {
-  creator: Row;
-  metadata: Row;
-  onOpen?: () => void;
-}) {
-  const [failedAvatar, setFailedAvatar] = useState("");
-  const [expanded, setExpanded] = useState(false);
-  const avatar = proxiedImageUrl(safeHttpUrl(creator.avatar_url));
-  const handle = cleanText(creator.handle || creator.channel_name || metadata.channel_name);
-  const platform = cleanText(creator.platform || metadata.platform);
-  const channelId = cleanText(creator.channel_id || metadata.channel_id);
-  const name = display(creator.display_name || handle || channelId || "创作者");
-  const followers = numberLabel(creator.followers ?? creator.subscriber_count);
-  const posts = numberLabel(creator.posts_count ?? creator.video_count);
-  const bio = cleanText(creator.bio || creator.description);
-  const profileUrl = firstSafeHttpUrl(creator.profile_url, creator.channel_url);
-  const showImg = Boolean(avatar) && failedAvatar !== avatar;
-  // 全部字段(creator_identity 优先,video_metadata 兜底),空值过滤。
-  const allFields = publicFieldRows(metadata, creator);
-  return (
-    <div className="mt-2 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2">
-      <div className="flex items-start gap-3">
-        <span
-          className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-[14px] font-bold text-white"
-          style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
-        >
-          {showImg ? (
-            <img
-              src={avatar}
-              alt=""
-              className="h-full w-full rounded-full object-cover"
-              referrerPolicy="no-referrer"
-              onError={() => setFailedAvatar(avatar)}
-            />
-          ) : (
-            name.slice(0, 1).toUpperCase()
-          )}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="truncate text-[12px] font-medium text-slate-100">{name}</span>
-            {platform ? (
-              <span className="shrink-0 rounded border border-white/[0.08] px-1 text-[9px] text-slate-400">{platform}</span>
-            ) : null}
-            {followers ? (
-              <span className="shrink-0 rounded bg-amber-400/[0.10] px-1 text-[9px] font-semibold text-amber-200/90">{followers} 粉</span>
-            ) : null}
-            {posts ? (
-              <span className="shrink-0 rounded bg-cyan-400/[0.10] px-1 text-[9px] font-semibold text-cyan-200/90">{posts} 帖</span>
-            ) : null}
-            {onOpen ? (
-              <button
-                type="button"
-                onClick={onOpen}
-                className="shrink-0 text-[9px] font-medium text-cyan-300/80 hover:text-cyan-100"
-              >
-                查看档案 →
-              </button>
-            ) : null}
-          </div>
-          {bio ? (
-            <p className="mt-1 line-clamp-2 text-[10.5px] leading-relaxed text-slate-400">{bio}</p>
-          ) : null}
-          {profileUrl ? (
-            <a
-              href={profileUrl}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="mt-1 inline-block truncate text-[10px] text-cyan-300/80 hover:text-cyan-200 hover:underline"
-            >
-              {profileUrl}
-            </a>
-          ) : null}
-        </div>
-        {allFields.length ? (
-          <button
-            type="button"
-            onClick={() => setExpanded((cur) => !cur)}
-            className="shrink-0 rounded border border-white/[0.1] px-2 py-0.5 text-[9.5px] text-slate-400 transition-colors hover:border-cyan-300/30 hover:text-cyan-100"
-          >{expanded ? "收起原始字段" : `原始字段 ${allFields.length}`}</button>
-        ) : null}
-      </div>
-      {expanded && allFields.length ? (
-        <div className="mt-2 grid gap-x-3 gap-y-1 border-t border-white/[0.06] pt-2 text-[10px] sm:grid-cols-2">
-          {allFields.map(([key, value]) => (
-            <div key={key} className="flex min-w-0 gap-1.5">
-              <span className="shrink-0 text-slate-600">{key}</span>
-              <span className="min-w-0 flex-1 truncate text-slate-300" title={value}>{value}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function VideoMediaSummary({
   platform,
@@ -582,8 +484,21 @@ export function UrlSummary({
       || flowStatus === "official_channel_video"
     ),
   );
+  // 中国平台视频(bilibili/抖音/小红书):仅做内容分析,不建人选档案(设计定案)。
+  // 正常终态:计入 videoReady,不落假排队;分析摘要直接在横幅里展示。
+  const cnPlatformVideo = Boolean(
+    isVideo && !officialChannelVideo && (
+      videoFlow.cn_platform_video === true
+      || ["cn_platform_video", "cn_platform_video_planned"].includes(cleanText(videoFlow.status))
+      || ["cn_platform_video", "cn_platform_video_planned"].includes(flowStatus)
+      || ["cn_platform_video_analysis", "cached_analysis"].includes(cleanText(videoAiAnalysis.reason))
+    ),
+  );
+  const cnAnalysis = asRecord(videoFlow.cn_analysis || resultRow.cn_analysis);
+  const cnSummary = cnPlatformVideo ? cleanText(cnAnalysis.content_summary) : "";
+  const cnMediaDegraded = cnPlatformVideo && Boolean(videoFlow.media_degraded || resultRow.media_degraded);
   const videoReady = (
-    ["ready", "partial", "already_analyzed", "official_channel_video"].includes(cleanText(flowStatus || videoFlow.status).toLowerCase())
+    ["ready", "partial", "already_analyzed", "official_channel_video", "cn_platform_video"].includes(cleanText(flowStatus || videoFlow.status).toLowerCase())
     || officialChannelVideo
   ) && !analysisFailed;
   const videoPending = Boolean(isVideo && result.execute && !videoReady && !analysisFailed);
@@ -595,7 +510,7 @@ export function UrlSummary({
   const profileStatusCopy = profileStatusCopyFor(profileState);
   const showActionButton = isVideo ? (!result.execute || analysisFailed) : profileRetryable;
   const actionLabel = isVideo
-    ? retryableFailure ? "重试分析" : knownCreator ? "只分析此视频" : "建档并分析"
+    ? retryableFailure ? "重试分析" : cnPlatformVideo ? "分析此视频（不建档）" : knownCreator ? "只分析此视频" : "建档并分析"
     : "重试抓资料";
   // 抓取软失败(平台反爬拦截 / 私密 / 已删):后端把错误哨兵抬成 metadata_failed + metadata_error,
   // 这里诚实呈现真因,不再一概说「没识别到创作者」——否则用户会误以为是匹配问题,而非抓取被平台挡掉。
@@ -609,14 +524,14 @@ export function UrlSummary({
   );
   const disabledReason = scrapeUnavailable
     ? "这条链接抓取失败：被平台反爬拦截，或内容私密/已删，拿不到视频与创作者。换一条公开的视频链接，或稍后重试。"
-    : officialChannelVideo
+    : officialChannelVideo || cnPlatformVideo
       ? ""
       : isVideo && !creatorResolved
         ? creatorResolutionDeferred
           ? "创作者会在启动分析后由后台自动识别，点右侧按钮开始。"
           : "没识别到创作者，无法建档。"
         : result.url_type === "unknown"
-          ? "暂不支持此平台的链接，目前支持 YouTube / Instagram / TikTok 的账号或视频链接。"
+          ? "暂不支持此链接。支持 YouTube / Instagram / TikTok 的账号或视频链接；Bilibili / 抖音 / 小红书仅支持视频（笔记）链接，只做内容分析、不建档。"
           : "";
 
   // P7·账号 URL 结果卡:把后端自动抓取的基础资料(头像/粉丝/简介/帖数)合并展示。
@@ -924,6 +839,7 @@ export function UrlSummary({
           这是官方自有账号的视频：官方账号不建人选档案，也不做深度分析，仅展示视频基础数据。
         </div>
       ) : null}
+      {cnPlatformVideo ? <CnPlatformVideoNotice degraded={cnMediaDegraded} summary={cnSummary} /> : null}
       {disabledReason ? (
         <div className="mt-2 rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-2 py-1.5 text-[10.5px] text-amber-100">
           {disabledReason}
@@ -941,6 +857,10 @@ export function UrlSummary({
               : (isVideo
                   ? officialChannelVideo
                     ? "官方账号视频 · 已保留基础数据，未建档"
+                    : cnPlatformVideo
+                    ? cnMediaDegraded
+                      ? "中国平台视频 · 已保留元数据（视频源不可下载），未建档"
+                      : "中国平台视频 · 内容分析完成，未建档"
                     : analysisDisabled
                     ? "视频基础数据已入库 · AI 深析未启用"
                     : "视频基础数据已入库"
@@ -977,8 +897,8 @@ export function UrlSummary({
           fullVideoState.status === "error" ? "border-rose-300/20 bg-rose-500/[0.08] text-rose-100" : "border-cyan-300/20 bg-cyan-400/[0.08] text-cyan-100"
         }`}>{fullVideoState.msg}</div>
       ) : null}
-      {jobLastError && !officialChannelVideo && (!isVideo || !effectiveEvidenceId) ? (
-        // officialChannelVideo 的 ai_analysis.reason 是设计内跳过,不是失败,上面紫色横幅已诚实说明。
+      {jobLastError && !officialChannelVideo && !cnPlatformVideo && (!isVideo || !effectiveEvidenceId) ? (
+        // officialChannelVideo / cnPlatformVideo 的 ai_analysis.reason 是设计内终态,不是失败,上方横幅已诚实说明。
         <div className="mt-2 rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-2 py-1.5 text-[10.5px] text-rose-100">
           <div>分析失败：{jobFailureCopy.message}</div>
           {jobFailureCopy.code ? <div className="mt-1 font-mono text-[9px] text-rose-200/60">诊断码：{jobFailureCopy.code}</div> : null}

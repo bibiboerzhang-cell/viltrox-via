@@ -29,7 +29,8 @@ VIDEO_CACHE_CHUNK_BYTES = 8 * 1024
 VIDEO_CACHE_GC_RESERVE_BYTES = 200 * 1024 * 1024
 PUBLIC_IMAGE_CACHE_PREFIX = "/api/vkpi-media/image-cache"
 PUBLIC_VIDEO_CACHE_PREFIX = "/api/vkpi-media/video-cache"
-ITEM_VIDEO_CACHE_PLATFORMS = {"instagram", "tiktok"}
+# CN 三平台走「仅视频分析」通道:worker 下载后 cache_local_video_file 登记 R2 供前端播放。
+ITEM_VIDEO_CACHE_PLATFORMS = {"instagram", "tiktok", "bilibili", "douyin", "xiaohongshu"}
 VIDEO_CACHE_FAILURE_RETRY_HOURS = 168
 MEDIA_R2_PREFIX = os.getenv("VKPI_MEDIA_CACHE_R2_PREFIX", "vkpi/media-cache").strip().strip("/") or "vkpi/media-cache"
 MEDIA_R2_PUBLIC_BASE_URL = (
@@ -68,6 +69,12 @@ ALLOWED_VIDEO_HOST_SUFFIXES = (
     ".redd.it",
     ".redditmedia.com",
     ".twimg.com",
+    # CN 平台视频 CDN(bilibili / 抖音 / 小红书直链下载域,2026-07-20 实测)。
+    ".bilivideo.com",
+    ".douyinvod.com",
+    ".zjcdn.com",
+    ".douyin.com",
+    ".xhscdn.com",
 )
 IMAGE_KEYS = {
     "avatar",

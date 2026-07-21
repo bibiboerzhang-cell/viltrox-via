@@ -102,6 +102,11 @@ def _normalize_status(value: Any, *, item: bool = False) -> str:
     # 官方自有账号的视频:按设计不建档、不做深析,终态=跳过(非失败非排队)。
     if text == "official_channel_video":
         return "skipped" if item else "ready"
+    # 中国平台视频:仅内容分析、不建档。分析终态=ready;dry-run 计划=已识别。
+    if text == "cn_platform_video":
+        return "ready"
+    if text == "cn_platform_video_planned":
+        return "identified" if item else "ready"
     return "unknown" if item else "planned"
 
 
@@ -347,6 +352,13 @@ def _compact_flow(flow: dict[str, Any]) -> dict[str, Any]:
         "writes",
         "error",
         "elapsed_ms",
+        # 中国平台「仅视频分析」终态的展示字段(不建档;设计定案 2026-07-20)。
+        "cn_platform_video",
+        "cn_platform_notice",
+        "cn_analysis",
+        "media_degraded",
+        "media_degraded_reason",
+        "message",
     )
     compact = {key: flow.get(key) for key in keep if key in flow}
     raw_progress = _dict(flow.get("resolution_progress"))

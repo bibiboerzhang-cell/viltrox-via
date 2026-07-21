@@ -840,8 +840,9 @@ export function historyStatusMeta(value: unknown): { label: string; cls: string;
   return { label, cls: "text-slate-500", dot: "#64748b" };
 }
 
-// 历史卡状态:优先读会话级诚实终态。不支持的平台链接(如 bilibili)标「不支持」,
+// 历史卡状态:优先读会话级诚实终态。不支持的平台链接标「不支持」,
 // 不再显示「部分完成/未完成」诱导用户等待或重试。
+// (bilibili/抖音/小红书视频链接自 2026-07-20 起走「仅内容分析」通道,不再落 unsupported。)
 export function historySessionStatusMeta(session: VkpiKolSearchHistoryItem): { label: string; cls: string; dot: string } {
   if (cleanText(asRecord(session.result_summary).result_state) === "unsupported") {
     return { label: "不支持", cls: "text-slate-500", dot: "#64748b" };

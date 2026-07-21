@@ -549,6 +549,11 @@ _APIFY_DEFAULT_PRICING: dict[str, dict[str, float]] = {
     # B&H 付费 actor:实测 $0.09/start + $0.005/item ≈ $0.29-0.34/run
     "powerai/bhphotovideo-product-search-scraper": {"per_run": 0.32},
     "powerai/bhphotovideo-product-reviews-scraper": {"per_run": 0.32},
+    # CN 平台视频取数(apple_yang downloader 家族,2026-07-20 冒烟实测结算):
+    # bilibili $0.001/条、douyin $0.005/条、xhs $0.0035/条(PPE dataset-item 计费)。
+    "apple_yang/bilibili-video-audio-downloader": {"per_1000_items": 1.0},
+    "apple_yang/douyin-video-audio-downloader": {"per_1000_items": 5.0},
+    "apple_yang/rednote-video-audio-downloader": {"per_1000_items": 3.5},
 }
 
 # 快照键(persistent_cache,003 baseline 表;health_sentinel 同款模式,零新表零迁移)。

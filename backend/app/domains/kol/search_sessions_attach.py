@@ -253,7 +253,7 @@ def _session_status_from_url_result(result: dict[str, Any]) -> str:
         return "running"
     if status in {"already_queued"}:
         return "running"
-    if status in {"already_analyzed", "ready", "ai_disabled", "not_requested", "official_channel_video"}:
+    if status in {"already_analyzed", "ready", "ai_disabled", "not_requested", "official_channel_video", "cn_platform_video"}:
         return "ready"
     if status in {"failed", "creator_unresolved", "profile_crawl_failed", "crawl_failed"}:
         return "failed"

@@ -55,9 +55,12 @@ from app.utils.handles import extract_handle_from_url
 # original names so every internal reference and external import path is
 # unchanged (behavior-preserving refactor — see that module's header).
 from app.domains.kol.url_deep_crawl_helpers import (  # noqa: F401
+    CN_VIDEO_ANALYSIS_PLATFORMS,
     _all_raw_strings,
     _canonical_url,
     _channel_id_from_handle,
+    _cn_platform_from_host,
+    _cn_video_id,
     _compact_enqueue_result,
     _compact_profile_write_result,
     _compact_video_evidence_result,
@@ -170,7 +173,13 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
     classified = classify_url(url)
     matches = _match_pool(classified) if classified.platform in SUPPORTED_PLATFORMS else []
     video_flow: dict[str, Any] | None = None
-    if classified.url_type == "video" and classified.platform in SUPPORTED_PLATFORMS:
+    if classified.url_type == "video" and classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
+        # 中国平台「仅视频分析」:不匹配 KOL 池、不建档;真实取数/下载/深析
+        # 全部发生在 durable worker(enqueue_video_url_resolve_job 队列)里。
+        from app.domains.kol.cn_platform_video import cn_platform_video_flow_plan
+
+        video_flow = cn_platform_video_flow_plan(classified)
+    elif classified.url_type == "video" and classified.platform in SUPPORTED_PLATFORMS:
         video_flow, matches = _video_flow_plan(classified, matches)
 
     matched_id = matches[0]["kol_pool_id"] if len(matches) == 1 else None
@@ -193,7 +202,11 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
         "business_tables_written": False,
     }
 
-    if execute and classified.url_type == "profile" and profile_flow.get("status") == "ready_to_execute":
+    if classified.url_type == "video" and classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
+        # CN 平台视频的 execute 全在 durable worker 队列里发生;HTTP 层永远只
+        # 返回既定计划(_run_url_deep_crawl 会另行 enqueue_video_url_resolve_job)。
+        pass
+    elif execute and classified.url_type == "profile" and profile_flow.get("status") == "ready_to_execute":
         profile_flow = _execute_profile_flow(classified, matches, body)
         safety["crawl_performed"] = bool(profile_flow.get("crawl_performed"))
         safety["business_tables_written"] = bool(profile_flow.get("business_tables_written"))
@@ -262,6 +275,15 @@ def classify_url(raw_url: str) -> ClassifiedUrl:
     host = parsed.netloc.lower().removeprefix("www.")
     path = parsed.path.strip("/")
     lowered_path = path.lower()
+
+    cn_platform = _cn_platform_from_host(host)
+    if cn_platform:
+        # 中国平台走「仅视频分析」通道:能识别视频/短链就按 video 分类;
+        # 账号主页等其它形态诚实标注仅支持视频链接(不做 profile 建档)。
+        cn_video_id = _cn_video_id(cn_platform, host, path, parsed.query)
+        if cn_video_id:
+            return ClassifiedUrl(original, normalized, "video", cn_platform, "", "", cn_video_id, "cn_video_pattern")
+        return ClassifiedUrl(original, normalized, "unknown", cn_platform, "", "", "", "cn_platform_video_only")
 
     platform = (detect_platform_from_profile_url(normalized) or _platform_from_host(host) or "").lower()
     if platform not in SUPPORTED_PLATFORMS:
@@ -580,6 +602,15 @@ def _profile_flow_plan(
     *,
     execute: bool,
 ) -> dict[str, Any]:
+    if classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
+        return {
+            "status": "not_applicable",
+            "operation": "cn_platform_video_analysis",
+            "kol_pool_id": None,
+            "message": "中国平台视频：仅做内容分析，不建人选档案（按地区规避不入 KOL 池）。",
+            "crawl_performed": False,
+            "business_tables_written": False,
+        }
     if classified.url_type == "video":
         if len(matches) > 1:
             return {
@@ -721,6 +752,18 @@ def _next_action(
     *,
     video_flow: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
+        if classified.url_type == "video":
+            return {
+                "code": "cn_platform_video",
+                "label": "中国平台视频 · 仅内容分析",
+                "description": "识别为中国平台视频链接。确认后仅做视频内容分析（元数据 + 视频深析），不建人选档案。",
+            }
+        return {
+            "code": "cn_platform_video_only",
+            "label": "中国平台 · 仅支持视频链接",
+            "description": "bilibili / 抖音 / 小红书目前只支持粘贴具体视频（笔记）链接做内容分析，不支持账号主页。",
+        }
     if classified.url_type == "unknown":
         return {
             "code": "unsupported_or_unresolved_url",

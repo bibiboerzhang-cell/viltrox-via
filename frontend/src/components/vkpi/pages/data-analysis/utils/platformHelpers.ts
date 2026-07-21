@@ -15,6 +15,7 @@ export function normalizePlatform(value: unknown): string {
   if (raw.includes('linkedin')) return 'linkedin';
   if (raw.includes('xiaohongshu') || raw.includes('xhs') || raw.includes('小红书')) return 'xhs';
   if (raw.includes('bilibili')) return 'bilibili';
+  if (raw.includes('douyin') || raw.includes('抖音')) return 'douyin';
   if (raw === 'x' || raw.includes('twitter')) return 'x';
   if (raw.includes('threads')) return 'threads';
   if (raw.includes('reddit')) return 'reddit';
@@ -39,6 +40,7 @@ export function platformInitial(value: unknown): string {
     x: '𝕏',
     xhs: '红',
     bilibili: 'b',
+    douyin: '抖',
     reddit: 'r',
     threads: '@',
   };

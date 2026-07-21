@@ -667,8 +667,14 @@ export function SmartKolInputPanel({
           // 自动 execute——后端会把这类 URL 排进专用解析队列,分阶段回填创作者/媒体/分析。
           // 旧门槛(必须先解析出创作者)是队列上线前的遗留,会让新鲜视频 URL 永远停在空壳会话。
           const vDeferredResolution = cleanText(vFlow.status) === "provider_refresh_pending";
+          // 中国平台视频(bilibili/抖音/小红书):仅内容分析不建档,同样自动 execute
+          // 进入专用解析队列(与海外视频 URL 粘贴即分析的体验对齐)。
+          const vCnPlatform = Boolean(
+            vFlow.cn_platform_video === true || cleanText(vFlow.status) === "cn_platform_video_planned",
+          );
           if (
             vDeferredResolution ||
+            vCnPlatform ||
             (["dry_run_ready", "ready_to_execute"].includes(vStatus) &&
               vCreatorResolved &&
               ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(vOp))

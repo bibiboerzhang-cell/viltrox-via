@@ -162,5 +162,19 @@ export function VideoPoster({ source, title }: { source: string; title: string }
   );
 }
 
+// 中国平台(bilibili/抖音/小红书)「仅内容分析」横幅:设计定案不建人选档案;
+// 媒体降级(视频源不可下载)与 AI 内容摘要都在这一块诚实展示。
+export function CnPlatformVideoNotice({ degraded, summary }: { degraded: boolean; summary: string }) {
+  return (
+    <div className="mt-2 rounded-md border border-sky-300/20 bg-sky-400/[0.08] px-2 py-1.5 text-[10.5px] text-sky-100" role="status">
+      <div>中国平台视频：仅做内容分析，不建人选档案。</div>
+      {degraded ? (
+        <div className="mt-1 text-sky-200/80">这条视频源暂不可下载，本次仅保留元数据，没有做视频画面深析。</div>
+      ) : null}
+      {summary ? <div className="mt-1 leading-relaxed text-sky-50/90">内容摘要：{summary}</div> : null}
+    </div>
+  );
+}
+
 // A·上框:视频 URL 的创作者账号信息卡。主信息由 creator_identity/profile_data/池档案合并，
 // video_metadata 只补平台/频道标识，不再把视频文案误当账号简介；原始字段退到折叠区。

@@ -36,6 +36,8 @@ _BASE_COMPLETE_STATUSES = frozenset(
         "skipped_non_video",
         # 官方自有账号:建档与深析按设计跳过,属正常完成而非失败。
         "official_channel_video",
+        # 中国平台视频:仅内容分析、不建档,属正常完成态(设计定案)。
+        "cn_platform_video",
     }
 )
 
@@ -131,10 +133,16 @@ def enqueue_video_url_resolve_job(
 ) -> dict[str, Any]:
     """Queue one native video identity; never enqueue a profile-crawl job."""
 
-    from app.domains.kol.url_deep_crawl import SUPPORTED_PLATFORMS, classify_url
+    from app.domains.kol.url_deep_crawl import (
+        CN_VIDEO_ANALYSIS_PLATFORMS,
+        SUPPORTED_PLATFORMS,
+        classify_url,
+    )
 
     classified = classify_url(_text(url))
-    if classified.url_type != "video" or classified.platform not in SUPPORTED_PLATFORMS:
+    if classified.url_type != "video" or classified.platform not in (
+        SUPPORTED_PLATFORMS | CN_VIDEO_ANALYSIS_PLATFORMS
+    ):
         raise ValueError("video_url_resolve requires a supported video URL")
     lane = _text(queue_lane).lower() or "interactive"
     if lane not in {"interactive", "batch"}:
@@ -265,8 +273,8 @@ def run_video_url_resolve_for_job(
 ) -> dict[str, Any]:
     """Resolve metadata/creator/evidence, then use the gated final_v1 enqueue."""
 
-    del staff  # final_v1 uses durable actor/session lineage, not an HTTP credential
     from app.domains.kol.url_deep_crawl import (
+        CN_VIDEO_ANALYSIS_PLATFORMS,
         SUPPORTED_PLATFORMS,
         _execute_existing_creator_video_flow,
         _execute_new_creator_video_flow,
@@ -276,10 +284,20 @@ def run_video_url_resolve_for_job(
         classify_url,
     )
 
+    pre_classified = classify_url(_text(payload.get("url") or payload.get("source_url")))
+    if pre_classified.url_type == "video" and pre_classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
+        # 中国平台「仅视频分析」通道:不匹配池、不建档,整链在 cn_platform_video 内完成。
+        from app.domains.kol.cn_platform_video import run_cn_platform_video_for_job
+
+        return run_cn_platform_video_for_job(
+            payload, staff=staff, progress_callback=progress_callback
+        )
+    del staff  # final_v1 uses durable actor/session lineage, not an HTTP credential
+
     current = payload.get("video_url_resolution")
     current = current if isinstance(current, dict) else initial_video_url_resolution_progress()
     current = _emit(progress_callback, _progress(current, "resolve_video", "running"))
-    classified = classify_url(_text(payload.get("url") or payload.get("source_url")))
+    classified = pre_classified
     if classified.url_type != "video" or classified.platform not in SUPPORTED_PLATFORMS:
         raise ValueError("unsupported_video_url")
 
@@ -449,10 +467,12 @@ def video_url_session_sync_projection(payload: dict[str, Any]) -> dict[str, Any]
     patch: dict[str, Any] = {}
     if progress:
         patch["video_url_resolution"] = progress
-    for key in ("creator_identity", "video_metadata", "ai_analysis"):
+    for key in ("creator_identity", "video_metadata", "ai_analysis", "cn_analysis"):
         value = result.get(key)
         if isinstance(value, dict):
             patch[key] = value
+    if _text(result.get("cn_platform_notice")):
+        patch["cn_platform_notice"] = _text(result.get("cn_platform_notice"))
     if flow:
         from app.domains.kol.search_sessions_serde import _compact_flow
 

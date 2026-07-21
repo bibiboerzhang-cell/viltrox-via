@@ -966,6 +966,70 @@ describe("SmartKolInputPanel URL result mapping", () => {
     expect(screen.queryByText(/没识别到创作者/)).toBeNull();
   });
 
+  it("中国平台视频终态:显示仅内容分析横幅+摘要,不显示失败/假排队/建档提示", () => {
+    renderSummary(videoResult({
+      execute: true,
+      in_pool: false,
+      matched_kol_pool_id: null,
+      platform: "bilibili",
+      video_id: "BV1S6Kr6mEgi",
+      url: {
+        input: "https://www.bilibili.com/video/BV1S6Kr6mEgi",
+        normalized: "https://www.bilibili.com/video/BV1S6Kr6mEgi",
+      },
+      creator_identity: { platform: "bilibili", display_name: "IPx的粉红豹" },
+      video_metadata: {
+        platform: "bilibili",
+        title: "《 双 枪 牛 仔 》",
+        content_url: "https://www.bilibili.com/video/BV1S6Kr6mEgi",
+        view_count: 3005478,
+        duration_seconds: 62,
+      },
+      video_flow: {
+        status: "cn_platform_video",
+        operation: "cn_platform_video_analysis",
+        cn_platform_video: true,
+        job_status: "done",
+        ai_analysis: { state: "ready", reason: "cn_platform_video_analysis" },
+        cn_analysis: { content_summary: "动物配音搞笑短片", scores: { content_quality: 92 } },
+      },
+    }));
+    expect(screen.getByText(/仅做内容分析，不建人选档案/)).toBeTruthy();
+    expect(screen.getByText(/动物配音搞笑短片/)).toBeTruthy();
+    expect(screen.getByText(/中国平台视频 · 内容分析完成，未建档/)).toBeTruthy();
+    expect(screen.queryByText(/分析失败/)).toBeNull();
+    expect(screen.queryByText(/AI 深析与时间戳正在排队/)).toBeNull();
+    expect(screen.queryByText(/没识别到创作者/)).toBeNull();
+  });
+
+  it("中国平台视频媒体降级:诚实提示只保留元数据,不标失败", () => {
+    renderSummary(videoResult({
+      execute: true,
+      in_pool: false,
+      matched_kol_pool_id: null,
+      platform: "xiaohongshu",
+      video_id: "64608fa90000000027003d64",
+      url: {
+        input: "https://www.xiaohongshu.com/explore/64608fa90000000027003d64?xsec_token=T",
+        normalized: "https://www.xiaohongshu.com/explore/64608fa90000000027003d64?xsec_token=T",
+      },
+      creator_identity: { platform: "xiaohongshu", display_name: "小青柑" },
+      video_metadata: { platform: "xiaohongshu", title: "图文笔记", media_kind: "image" },
+      video_flow: {
+        status: "cn_platform_video",
+        operation: "cn_platform_video_analysis",
+        cn_platform_video: true,
+        media_degraded: true,
+        media_degraded_reason: "note_has_no_video_image_only",
+        job_status: "done",
+        ai_analysis: { state: "skipped", reason: "media_unavailable_metadata_only" },
+      },
+    }));
+    expect(screen.getByText(/仅做内容分析，不建人选档案/)).toBeTruthy();
+    expect(screen.getByText(/本次仅保留元数据/)).toBeTruthy();
+    expect(screen.queryByText(/分析失败/)).toBeNull();
+  });
+
   it("创作者留待后台解析的 dry-run:提示后台识别而非「没识别到创作者」,按钮可用", () => {
     renderSummary(videoResult({
       execute: false,

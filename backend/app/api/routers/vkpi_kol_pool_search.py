@@ -71,8 +71,17 @@ def _run_url_deep_crawl(
     classified = kol_url_deep_crawl.classify_url(str(body.get("url") or "")) if execute else None
     defer_provider = bool(
         classified
-        and classified.url_type in {"profile", "video"}
-        and classified.platform in kol_url_deep_crawl.SUPPORTED_PLATFORMS
+        and (
+            (
+                classified.url_type in {"profile", "video"}
+                and classified.platform in kol_url_deep_crawl.SUPPORTED_PLATFORMS
+            )
+            # 中国平台只支持视频链接:同样走 durable 队列(仅内容分析,不建档)。
+            or (
+                classified.url_type == "video"
+                and classified.platform in kol_url_deep_crawl.CN_VIDEO_ANALYSIS_PLATFORMS
+            )
+        )
     )
     crawl_body = {**body, "execute": False} if defer_provider else body
     result = kol_url_deep_crawl.dry_run_url_deep_crawl(crawl_body)
