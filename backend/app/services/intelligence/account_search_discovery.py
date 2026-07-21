@@ -327,6 +327,43 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
     }
 
 
+def _tiktok_collapse_author_videos(raw_items: List[Dict[str, Any]], safe_limit: int) -> List[Dict[str, Any]]:
+    """重复卡修(2026-07-21 sky_vanya 案)·TT 号主收敛:关键词搜出的视频流按 authorMeta.name
+    收敛成「每号主一条」(保 actor 相关度序首条)。多路短词变体 + 同号主多视频会让同一人
+    吃掉多个候选槽位并重复上墙——YT 快路径按 channelId 合并、IG 有 owner 收敛,TT 此前缺
+    这道 (platform, handle 小写) 去重。无 author 的条目保序排尾兜底。纯函数零 IO。"""
+    by_author: Dict[str, Dict[str, Any]] = {}
+    authorless: List[Dict[str, Any]] = []
+    for item in raw_items:
+        row = item if isinstance(item, dict) else {}
+        author = row.get("authorMeta") if isinstance(row.get("authorMeta"), dict) else {}
+        handle = str(author.get("name") or "").strip().lstrip("@").lower()
+        if not handle:
+            raw_author = row.get("author")
+            handle = str(raw_author or "").strip().lstrip("@").lower() if isinstance(raw_author, str) else ""
+        if not handle:
+            authorless.append(row)
+            continue
+        if handle not in by_author:
+            by_author[handle] = row
+    merged = list(by_author.values()) + authorless
+    return merged[: max(1, int(safe_limit or 1))]
+
+
+def _candidate_identity_key(item: Dict[str, Any]) -> str:
+    """归一候选身份键 (platform, handle 小写去 @);无 handle 退 channel_url/source_url 小写。
+    键为空 → 调用方放行(不误杀)。供聚合层「每号主一条」兜底去重,纯函数零 IO。"""
+    platform = str(item.get("platform") or "").strip().lower()
+    handle = str(item.get("handle") or "").strip().lstrip("@").lower()
+    if handle:
+        return f"{platform}:{handle}"
+    for key in ("channel_url", "source_url"):
+        url = str(item.get(key) or "").strip().lower()
+        if url:
+            return f"{platform}:{url}"
+    return ""
+
+
 def _instagram_collapse_owner_posts(raw_items: List[Dict[str, Any]], safe_limit: int) -> List[Dict[str, Any]]:
     """K2 扩量刀·IG 号主收敛:hashtag 帖子流按 ownerUsername 收敛成「每号主一帖」
     (保 hashtag 排序首帖),再截 safe_limit。治「20 帖只剩 13 号主、槽位被同号主
@@ -482,6 +519,10 @@ async def search_platform_content(
     raw_items = await _scan_service()._run_actor(actor_id, payload, timeout=timeout)
     ig_profiles: Dict[str, Dict[str, Any]] = {}
     ig_raw_posts = len(raw_items)
+    if normalized_platform == "tiktok" and raw_items:
+        # 重复卡修:视频流先按号主收敛(每号主一条),再截 safe_limit——否则同号主多视频/
+        # 多路检索变体重复项既吃槽位又重复上墙(sky_vanya 案)。
+        raw_items = _tiktok_collapse_author_videos(raw_items, safe_limit)
     if normalized_platform == "instagram" and raw_items:
         # K2:帖→号主收敛(每号主一帖)+ 批量档案富化(followers/bio/真名/头像)。
         # 富化失败诚实降级:候选照常返回,只是 followers 未知(读端归「分析中」)。
@@ -494,6 +535,7 @@ async def search_platform_content(
             logger.warning("scanner.instagram_profile_enrich_failed", extra={"error": str(exc)[:300]})
             ig_profiles = {}
     items: List[Dict[str, Any]] = []
+    seen_identities: set[str] = set()  # 聚合层兜底去重:(platform, handle 小写) 每号主一条
     for item in raw_items[:safe_limit]:
         handle = ""
         avatar_url = ""
@@ -586,8 +628,7 @@ async def search_platform_content(
         # 修 query-as-handle bug:去掉 normalized_query 兜底——无真 handle/name 时不再把整句查询
         # 当成创作者(此前造出 youtube.com/@整句 的假号混入发现结果)。
         clean_channel_name = _known_text(channel_name, handle) or "Unknown creator"
-        items.append(
-            {
+        candidate = {
                 "platform": normalized_platform,
                 "channel_name": clean_channel_name,
                 "handle": _known_text(handle, channel_name),
@@ -608,7 +649,14 @@ async def search_platform_content(
                 **({"followers": followers} if followers > 0 else {}),
                 **({"bio": bio} if bio else {}),
             }
-        )
+        # 重复卡修·聚合层兜底去重:同平台同 handle(小写去 @)只出一条(多路检索变体/
+        # 同号主多帖会产重复候选);键为空放行(不误杀)。首条保留=保 actor 相关度序。
+        identity_key = _candidate_identity_key(candidate)
+        if identity_key and identity_key in seen_identities:
+            continue
+        if identity_key:
+            seen_identities.add(identity_key)
+        items.append(candidate)
 
     return {
         "status": "done",

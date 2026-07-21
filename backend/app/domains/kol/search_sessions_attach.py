@@ -138,11 +138,18 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
 
     items: list[dict[str, Any]] = []
     rank = 1
+    # 重复卡修(2026-07-21):同批内按归一身份键(小写)去重——多路检索变体合并/大小写差异
+    # 不再产出重复会话项(DB 的 dedupe_key upsert 是最后防线,这里保证返回列表本身无重复行)。
+    seen_batch_keys: set[str] = set()
     for raw in _list(result.get("existing_matches")):
         if not isinstance(raw, dict):
             continue
         kol_pool_id = _int_or_none(raw.get("history_kol_pool_id") or _dict(raw.get("historical_match")).get("kol_pool_id"))
         source_url = _text(raw.get("channel_url") or raw.get("source_url"))
+        batch_key = f"existing:{kol_pool_id or source_url.lower() or rank}"
+        if batch_key in seen_batch_keys:
+            continue
+        seen_batch_keys.add(batch_key)
         items.append(
             {
                 "dedupe_key": f"existing:{kol_pool_id or source_url or rank}",
@@ -173,6 +180,10 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
         source_url = _text(raw.get("channel_url") or raw.get("source_url"))
         handle = _text(raw.get("handle") or raw.get("channel_name"))
         platform = _text(raw.get("platform") or (result.get("platforms") or [""])[0])
+        batch_key = f"new:{platform.lower()}:{handle.lstrip('@').lower() or source_url.lower() or rank}"
+        if batch_key in seen_batch_keys:
+            continue
+        seen_batch_keys.add(batch_key)
         items.append(
             {
                 "dedupe_key": f"new:{platform}:{handle or source_url or rank}",

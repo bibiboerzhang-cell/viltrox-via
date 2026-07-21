@@ -498,3 +498,36 @@ def test_split_profile_advance_pipeline_uses_public_monkeypatch_points(
         "status",
         "update",
     ]
+
+
+def test_attach_new_discovery_dedupes_same_handle_variants(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重复卡修(sky_vanya 案):同批内同平台同 handle(大小写差异)只落一条会话项。"""
+    from app.domains.kol import search_sessions_attach
+
+    captured: dict[str, Any] = {}
+
+    def fake_record_items(session_id: int, items: list[dict[str, Any]], *, status: str, summary: dict[str, Any]) -> dict[str, Any]:
+        captured["items"] = items
+        return {"id": session_id, "items": items, "status": status}
+
+    monkeypatch.setattr(search_sessions, "record_items", fake_record_items)
+    monkeypatch.setattr(search_sessions, "get_session", lambda _sid: {"result_summary": {}})
+
+    search_sessions_attach.attach_new_discovery_result(
+        411,
+        {
+            "status": "ready",
+            "platforms": ["tiktok"],
+            "existing_matches": [],
+            "new_creators": [
+                {"handle": "sky_vanya", "platform": "tiktok", "channel_url": "https://www.tiktok.com/@sky_vanya"},
+                {"handle": "other_creator", "platform": "tiktok", "channel_url": "https://www.tiktok.com/@other_creator"},
+                # 多路检索变体重复(大小写差异)→ 必须收敛,不再写出第二行/第二张卡。
+                {"handle": "Sky_Vanya", "platform": "tiktok", "channel_url": "https://www.tiktok.com/@sky_vanya"},
+            ],
+            "counts": {},
+        },
+    )
+
+    new_items = [item for item in captured["items"] if item["item_type"] == "new_creator"]
+    assert [item["payload"]["handle"] for item in new_items] == ["sky_vanya", "other_creator"]

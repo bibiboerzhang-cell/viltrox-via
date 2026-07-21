@@ -268,44 +268,63 @@ def _cached_external_image_path(url: str) -> tuple[Path, Path]:
     return VKPI_IMAGE_PROXY_CACHE_DIR / digest, VKPI_IMAGE_PROXY_CACHE_DIR / f"{digest}.content-type"
 
 
+def _fetch_external_image_once(url: str, host: str, *, send_referer: bool) -> tuple[bytes, str]:
+    headers = {
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    }
+    if send_referer:
+        headers["Referer"] = f"https://{host.split('.', 1)[-1]}/"
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=VKPI_IMAGE_PROXY_TIMEOUT_SEC) as response:  # nosec B310 - host allowlist above.
+        content_type = str(response.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip().lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=502, detail="upstream is not image")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = response.read(128 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > VKPI_IMAGE_PROXY_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="image too large")
+            chunks.append(chunk)
+    return b"".join(chunks), content_type
+
+
 def _fetch_external_image(url: str, host: str) -> tuple[bytes, str, bool]:
     """Fetch an allowlisted platform image. Returns (data, content_type, ok).
 
     ok=False means upstream failed (expired signature / blocked network) and data is
     the transparent fallback SVG — callers must NOT cache it as a real image.
+    头像瞬时失败修(2026-07-21 新面孔灰占位案):第一枪失败后立刻重试一枪且不带 Referer
+    (签名 CDN 冷抓偶发超时/部分边缘对非本站 Referer 403);仍失败才降级占位。
     """
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Referer": f"https://{host.split('.', 1)[-1]}/",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=VKPI_IMAGE_PROXY_TIMEOUT_SEC) as response:  # nosec B310 - host allowlist above.
-            content_type = str(response.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip().lower()
-            if not content_type.startswith("image/"):
-                raise HTTPException(status_code=502, detail="upstream is not image")
-            chunks: list[bytes] = []
-            total = 0
-            while True:
-                chunk = response.read(128 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > VKPI_IMAGE_PROXY_MAX_BYTES:
-                    raise HTTPException(status_code=413, detail="image too large")
-                chunks.append(chunk)
+        data, content_type = _fetch_external_image_once(url, host, send_referer=True)
+        return data, content_type, True
     except HTTPException:
         raise
-    except urllib.error.HTTPError as exc:
-        logger.info("media.image_proxy_upstream_unavailable", extra={"host": host, "status": exc.code})
-        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
-    except Exception as exc:
-        logger.info("media.image_proxy_fetch_failed", extra={"host": host, "reason": type(exc).__name__})
-        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
-    return b"".join(chunks), content_type, True
+    except Exception as first_exc:
+        first_reason = getattr(first_exc, "code", None) or type(first_exc).__name__
+        try:
+            data, content_type = _fetch_external_image_once(url, host, send_referer=False)
+            return data, content_type, True
+        except HTTPException:
+            raise
+        except urllib.error.HTTPError as exc:
+            logger.info(
+                "media.image_proxy_upstream_unavailable",
+                extra={"host": host, "status": exc.code, "first_reason": str(first_reason)},
+            )
+            return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
+        except Exception as exc:
+            logger.info(
+                "media.image_proxy_fetch_failed",
+                extra={"host": host, "reason": type(exc).__name__, "first_reason": str(first_reason)},
+            )
+            return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
 
 
 @router.get("/api/submissions/{submission_id}/video")

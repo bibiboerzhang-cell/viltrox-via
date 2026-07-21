@@ -153,37 +153,51 @@ export function mergeSearchSnapshotRecord(previous: Row, incoming: Row): Row {
   return merged;
 }
 
-function searchSnapshotItemKey(value: Row): string {
+// 重复卡修(2026-07-21 sky_vanya 案):同一会话项的身份键会随后端回填而「变形」——档案补全把
+// kol_pool_id 写上后,旧单键法(pool 优先)从 profile:平台:handle 变成 pool:id,后到快照匹配不上
+// 旧行 → 同一人被 push 成第二张卡。改产**全部别名键**(pool/profile/url/item),命中任一即合并,
+// 合并后把新增别名(如补上的 pool id)也注册到同一行,身份变形不再裂成两行。
+function searchSnapshotItemKeys(value: Row): string[] {
   const payload = asRecord(value.payload);
+  const keys: string[] = [];
   const poolId = Number(value.kol_pool_id || payload.kol_pool_id || 0);
-  if (Number.isFinite(poolId) && poolId > 0) return `pool:${poolId}`;
+  if (Number.isFinite(poolId) && poolId > 0) keys.push(`pool:${poolId}`);
   const platform = cleanText(value.platform || payload.platform).toLowerCase();
   const handle = cleanText(value.handle || payload.handle || payload.channel_name)
     .toLowerCase()
     .replace(/^@/, "");
-  if (platform && handle) return `profile:${platform}:${handle}`;
+  if (platform && handle) keys.push(`profile:${platform}:${handle}`);
   const sourceUrl = cleanText(value.source_url || payload.source_url || payload.profile_url || payload.channel_url).toLowerCase();
-  if (sourceUrl) return `url:${sourceUrl}`;
+  if (sourceUrl) keys.push(`url:${sourceUrl}`);
   const itemId = Number(value.id || 0);
-  return itemId > 0 ? `item:${itemId}` : "";
+  if (itemId > 0) keys.push(`item:${itemId}`);
+  return keys;
 }
 
 export function mergeSearchSnapshotItems(previous: Row[], incoming: Row[]): Row[] {
   const merged = previous.map((item) => ({ ...item }));
   const indexByKey = new Map<string, number>();
-  merged.forEach((item, index) => {
-    const key = searchSnapshotItemKey(item);
-    if (key) indexByKey.set(key, index);
-  });
+  const registerAliases = (item: Row, index: number) => {
+    searchSnapshotItemKeys(item).forEach((key) => {
+      if (!indexByKey.has(key)) indexByKey.set(key, index);
+    });
+  };
+  merged.forEach(registerAliases);
   incoming.forEach((item) => {
-    const key = searchSnapshotItemKey(item);
-    const existingIndex = key ? indexByKey.get(key) : undefined;
+    const keys = searchSnapshotItemKeys(item);
+    let existingIndex: number | undefined;
+    for (const key of keys) {
+      const idx = indexByKey.get(key);
+      if (idx != null) { existingIndex = idx; break; }
+    }
     if (existingIndex == null) {
       merged.push({ ...item });
-      if (key) indexByKey.set(key, merged.length - 1);
+      registerAliases(item, merged.length - 1);
       return;
     }
     merged[existingIndex] = mergeSearchSnapshotRecord(merged[existingIndex], item);
+    // 合并后重新注册:身份变形补上的新别名(pool id/source_url)也指向同一行。
+    registerAliases(merged[existingIndex], existingIndex);
   });
   return merged;
 }
@@ -488,6 +502,15 @@ export function discoveryAutoEnrolledFromSession(session: VkpiKolSearchHistoryIt
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+// 品牌官号排除数(诚实信息):后端 discover_new_creators 把竞品品牌官方账号挡在发现结果外,
+// counts.excluded_brand_official 记真实排除数;旧会话/旧后端无该键 → 0(静默不渲染,不编数字)。
+export function discoveryBrandExcludedFromSession(session: VkpiKolSearchHistoryItem | null): number {
+  const summary = asRecord(session?.result_summary);
+  const counts = asRecord(asRecord(summary.new_discovery).counts);
+  const value = Number(counts.excluded_brand_official);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
   const summary = asRecord(session.result_summary);
   const progress = asRecord(summary.progress);
@@ -604,7 +627,33 @@ export function looksLikeRetailer(item: any): boolean {
 }
 
 // 三框·框3:从会话抽 new_creator(Apify+平台发现)项,带头像/用户名/平台。
+// 重复卡修·渲染层兜底:同平台同 handle(小写去 @,退 profile_url)只出一张卡;后到重复项若带
+// kol_pool_id 而首张缺,则把 pool id 并给首张(勾选可直连),位置保持首见序。
 export function discoveryItemsFromSession(session: VkpiKolSearchHistoryItem | null): VkpiKolRecallItem[] {
+  const all = discoveryItemsFromSessionRaw(session);
+  const out: VkpiKolRecallItem[] = [];
+  const indexByIdentity = new Map<string, number>();
+  all.forEach((item) => {
+    const handle = cleanText(item.handle).toLowerCase().replace(/^@/, "");
+    const platform = cleanText(item.platform).toLowerCase();
+    const identity = handle && handle !== "unknown"
+      ? `${platform}:${handle}`
+      : cleanText(item.profile_url).toLowerCase();
+    const existingIndex = identity ? indexByIdentity.get(identity) : undefined;
+    if (existingIndex == null) {
+      if (identity) indexByIdentity.set(identity, out.length);
+      out.push(item);
+      return;
+    }
+    const kept = out[existingIndex];
+    if (!Number(kept.kol_pool_id) && Number(item.kol_pool_id)) {
+      out[existingIndex] = { ...kept, kol_pool_id: item.kol_pool_id };
+    }
+  });
+  return out;
+}
+
+function discoveryItemsFromSessionRaw(session: VkpiKolSearchHistoryItem | null): VkpiKolRecallItem[] {
   if (!session) return [];
   const out: VkpiKolRecallItem[] = [];
   sessionItems(session).forEach((item) => {
@@ -909,7 +958,14 @@ export function readableCreatorName(item: VkpiKolRecallItem): string {
   // 优先非「频道ID」的 handle(IG/TikTok 的 @用户名)→ 再非「频道ID」的真频道名 → 兜底
   if (handle && !YT_CHANNEL_ID_RE.test(handle)) return handle;
   if (displayName && !YT_CHANNEL_ID_RE.test(displayName)) return displayName;
-  return handle || displayName || "";
+  // 身份修(2026-07-21):UC 开头的裸频道 ID 永远不当显示名。富化前的旧入库行再探一层
+  // 会话 payload 里的真频道名;全无 → 诚实显示「YouTube 频道」(真名由回填脚本补)。
+  const src = (item.source_fields && typeof item.source_fields === "object" ? item.source_fields : {}) as Row;
+  const channelName = cleanText(src.channel_name);
+  if (channelName && !YT_CHANNEL_ID_RE.test(channelName) && channelName.toLowerCase() !== "unknown creator") {
+    return channelName;
+  }
+  return handle || displayName ? "YouTube 频道" : "";
 }
 
 // 契合命中 tags 中文化:海外创作者发现是英文搜索词命中,这里把常见摄影/创作术语映射成中文(生僻保留原文)。

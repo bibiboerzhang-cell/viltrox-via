@@ -26,6 +26,7 @@ import {
   PROFILE_REP_VIDEO_LIMIT,
   contentFitBadge,
   discoveryAutoEnrolledFromSession,
+  discoveryBrandExcludedFromSession,
   discoveryItemsFromSession,
   exposureLabel,
   freshnessMarks,
@@ -58,6 +59,7 @@ export {
   PENDING_SEARCH_SESSION_KEY,
   PROFILE_REP_VIDEO_LIMIT,
   discoveryAutoEnrolledFromSession,
+  discoveryBrandExcludedFromSession,
   discoveryItemsFromSession,
   historySessionId,
   isSearchSessionTerminal,
@@ -349,6 +351,12 @@ export function RecallMiniItem({
             className="h-full w-full rounded-full object-cover"
             referrerPolicy="no-referrer"
             onError={() => setImgError(true)}
+            // 头像修(2026-07-21):上游失败时 image-proxy 回 200 的 1×1 透明占位,onError 不触发,
+            // 卡面变成一片空渐变假头像。按自然尺寸识破占位 → 诚实退回首字母占位(刷新可重试真图)。
+            onLoad={(event) => {
+              const img = event.currentTarget;
+              if (img.naturalWidth <= 2 && img.naturalHeight <= 2) setImgError(true);
+            }}
           />
         ) : (
           name.slice(0, 1).toUpperCase()
@@ -609,6 +617,11 @@ export function ProfileInfoCard({ data, onOpen, apiToken }: { data: Row; onOpen?
             className="h-full w-full rounded-full object-cover"
             referrerPolicy="no-referrer"
             onError={() => setFailedAvatar(avatar)}
+            // 同 RecallMiniItem:识破 1×1 透明失败占位,诚实退回首字母(不摆假头像)。
+            onLoad={(event) => {
+              const img = event.currentTarget;
+              if (img.naturalWidth <= 2 && img.naturalHeight <= 2) setFailedAvatar(avatar);
+            }}
           />
         ) : (
           name.slice(0, 1).toUpperCase()

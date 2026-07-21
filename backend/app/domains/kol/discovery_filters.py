@@ -161,6 +161,116 @@ _HARD_AVOID_TERMS = frozenset({
     "recruiter", "stopwar", "political",
 })
 
+# ── 竞品品牌官号闸(2026-07-21,FEELWORLD 官号混入推荐案)────────────────────────────
+# 词表真源:competitor_brands.json(load_competitor_brands,「友商扩」那刀建的唯一竞品词表),
+# 绝不另建第二份品牌清单。判据 = 品牌词命中**身份字段**(handle/channel_name/display_name,
+# 绝不扫 sample_title/bio 的品牌词——「我评测了 FEELWORLD 监视器」是正常达人,不许误杀)
+# **并发**官号信号(handle/名称含 official / handle 即品牌名 / bio 品牌自称口吻)才拦。
+# red line:纯候选层 FILTER(只丢 + 诚实计数),零触任何评分字段/评分公式。
+_BRAND_SELF_VOICE_PATTERNS = (
+    "official channel", "official account", "official page", "official store",
+    "established in", "founded in", "we are a", "our products", "our brand",
+    "manufacturer of",
+)
+# 官号 handle 常见后缀(品牌名 + 后缀 = 官号强信号;短品牌名靠这份等值表防误杀,如
+# sonyofficial 拦、sonya_official(真人 Sonya)放行)。
+_BRAND_HANDLE_SUFFIXES = ("", "official", "lofficial", "global", "usa", "us", "uk", "eu", "hq")
+
+
+def _competitor_brand_terms() -> dict[str, list[str]]:
+    """竞品品牌词表(brand → keywords),lazy 复用 competitor_brands.json;失败回空表=闸不生效(fail-open)。"""
+    try:
+        from app.domains.kol.competitor_text import load_competitor_brands
+
+        return {brand: list(cfg.get("keywords") or []) for brand, cfg in load_competitor_brands().items()}
+    except Exception:
+        return {}
+
+
+def _brand_identity_hit(item: dict[str, Any], brand: str, keywords: list[str]) -> bool:
+    """品牌词是否命中候选**身份字段**(handle/channel_name/display_name/username)。
+
+    两种命中形态:① 词边界命中(handle 带分隔符,如 feelworld.uk / tamron_europe);
+    ② 粘连 handle 命中(feelworldlofficial):归一 handle 含品牌名——仅品牌名 ≥5 字符走子串
+    (防 sonya 误命中 sony),短品牌名只认「品牌名+官号后缀」等值。纯函数零 IO。"""
+    from app.domains.kol.competitor_text import _keyword_match
+
+    identity = " ".join(
+        str(item.get(k) or "") for k in ("handle", "channel_name", "display_name", "username")
+    ).lower()
+    if not identity.strip():
+        return False
+    handle_norm = re.sub(r"[^a-z0-9]", "", str(item.get("handle") or "").lower())
+    brand_norm = re.sub(r"[^a-z0-9]", "", brand)
+    for term in dict.fromkeys([brand, *keywords]):
+        term_text = str(term or "").strip().lower().lstrip("@")
+        if not term_text:
+            continue
+        if _keyword_match(identity, term_text):
+            return True
+    if handle_norm and brand_norm:
+        if len(brand_norm) >= 5 and brand_norm in handle_norm:
+            return True
+        if any(handle_norm == f"{brand_norm}{suffix}" for suffix in _BRAND_HANDLE_SUFFIXES):
+            return True
+    return False
+
+
+def _official_account_signal(item: dict[str, Any]) -> bool:
+    """官号信号:handle/名称含 official、或 bio 是品牌自述口吻("Official Channel"/"established in"/we 品牌自称)。"""
+    identity = " ".join(
+        str(item.get(k) or "") for k in ("handle", "channel_name", "display_name", "username")
+    ).lower()
+    if "official" in identity:
+        return True
+    bio = str(item.get("bio") or item.get("description") or "").lower()
+    return bool(bio) and any(pattern in bio for pattern in _BRAND_SELF_VOICE_PATTERNS)
+
+
+def _competitor_brand_official(item: dict[str, Any]) -> str:
+    """竞品品牌官号判据:品牌词命中身份字段 **并且** 官号信号并发才拦,返回命中品牌名(未命中 "")。
+
+    handle==品牌名(归一等值)本身即官号信号;仅 sample_title/bio 提到品牌的正常达人绝不命中。"""
+    if not isinstance(item, dict):
+        return ""
+    brands = _competitor_brand_terms()
+    if not brands:
+        return ""
+    handle_norm = re.sub(r"[^a-z0-9]", "", str(item.get("handle") or "").lower())
+    for brand, keywords in brands.items():
+        if not _brand_identity_hit(item, brand, keywords):
+            continue
+        brand_norm = re.sub(r"[^a-z0-9]", "", brand)
+        if handle_norm and brand_norm and handle_norm == brand_norm:
+            return brand  # handle 即品牌名 = 官号
+        if _official_account_signal(item):
+            return brand
+    return ""
+
+
+# ── bio 明显无关补强(askmonitorofficial 案:bio="Web Development and Data Analyst")──────
+# 双条件并发才丢(防误杀):① bio 实在且自述**非视觉职业**(web/软件/数据类);② 候选自身身份
+# (channel_name/handle/bio,故意不含 sample_title——搜索命中的视频标题是「查询词回声」不算自证)
+# 无任一相机/视觉创作信号。摄影+开发双栖者因 bio/handle 带相机信号而放行。纯函数零 IO。
+_NON_VISUAL_PROFESSION_TERMS = (
+    "web development", "web developer", "web design", "software engineer",
+    "software development", "software developer", "app development", "app developer",
+    "data analyst", "data analytics", "data scientist", "data engineer",
+    "full stack", "backend developer", "frontend developer",
+)
+
+
+def _is_bio_irrelevant(item: dict[str, Any]) -> bool:
+    bio = str(item.get("bio") or item.get("description") or "").strip().lower()
+    if len(bio) < 12:
+        return False  # bio 缺/太短 = 证据不足,放行(不误杀)
+    if not any(term in bio for term in _NON_VISUAL_PROFESSION_TERMS):
+        return False
+    identity = " ".join(
+        str(item.get(k) or "") for k in ("channel_name", "handle", "display_name", "bio")
+    ).lower()
+    return not any(term in identity for term in _CAMERA_SIGNAL_TERMS)
+
 
 def _candidate_blob(item: dict[str, Any]) -> str:
     """候选自身内容拼接(sample_title + channel_name + handle + bio),小写。绝不含 search_query(查询词会自命中)。

@@ -36,6 +36,7 @@ export function TextResultSection({
   discoveryItems,
   discoveryTotal = 0,
   discoveryAutoEnrolled = null,
+  discoveryBrandExcluded = 0,
   reachFloorDisplay = null,
   input,
   apiToken,
@@ -85,6 +86,8 @@ export function TextResultSection({
   discoveryItems: any[];
   discoveryTotal?: number;
   discoveryAutoEnrolled?: number | null;
+  /** 品牌官方账号排除数(诚实信息):>0 才渲染一行说明;旧后端无该键恒 0 静默。 */
+  discoveryBrandExcluded?: number;
   /** 触达展示闸折叠计数(2026-07-12「分析后再 po」):lowReach=低触达不展示(已入库仅不推荐)、
    *  analyzing=档案补全中,达标后自动放出;旧后端/无隐藏 → null 不渲染。 */
   reachFloorDisplay?: {
@@ -263,6 +266,15 @@ export function TextResultSection({
             ].filter(Boolean).join(" · ")}
           </div>
         ) : null}
+        {/* 品牌官号排除行(诚实信息,门面不暴露判据细节):后端已把品牌官方账号挡在发现结果外。 */}
+        {discoveryBrandExcluded > 0 ? (
+          <div
+            className="mb-2 rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-[10px] text-slate-400"
+            title="品牌官方账号不属于创作者合作对象,已从本次发现结果中排除"
+          >
+            品牌官方账号已排除 ×{discoveryBrandExcluded}
+          </div>
+        ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-slate-500">发现平台</span>
           {/* 【B5】Facebook 解锁为可选平台:后端 SUPPORTED_DISCOVERY_PLATFORMS 已含 facebook
@@ -400,8 +412,9 @@ export function TextResultSection({
               const effPid = Number(item.kol_pool_id) || resolvedPids.get(key) || 0;
               const picked = effPid > 0 && pickedIds.has(effPid);
               const resolving = resolvingKeys.has(key);
+              // 重复卡修:渲染 key 用「平台:handle」身份键(pool id 回填不换 key,不再裂成两张卡)。
               return (
-                <div key={`d-${item.kol_pool_id || item.handle || index}`} className="relative h-full">
+                <div key={`d-${key || item.kol_pool_id || index}`} className="relative h-full">
                   <RecallMiniItem item={item} index={index + 1} onOpen={openProductScopedItem} className="pr-6" />
                   <button
                     type="button"

@@ -508,3 +508,115 @@ def test_candidate_blob_includes_bio_for_camera_signal() -> None:
     assert discovery_filters._has_camera_signal(item)
     bare = {"handle": "someone", "channel_name": "Jane Doe", "sample_title": "morning walk"}
     assert not discovery_filters._has_camera_signal(bare)
+
+
+def test_tiktok_search_collapses_same_author_videos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """重复卡修(sky_vanya 案):同号主多视频/多路变体重复 → 每号主只出一条候选。"""
+
+    async def fake_run_actor(actor_id: str, payload: dict[str, Any], timeout: int = 600) -> list[dict[str, Any]]:
+        return [
+            {
+                "authorMeta": {"name": "sky_vanya", "nickName": "Sky Vanya", "fans": 5000},
+                "text": "camera unboxing",
+                "webVideoUrl": "https://www.tiktok.com/@sky_vanya/video/1",
+                "playCount": 9000,
+            },
+            {
+                "authorMeta": {"name": "other_creator", "nickName": "Other", "fans": 800},
+                "text": "lens review",
+                "webVideoUrl": "https://www.tiktok.com/@other_creator/video/2",
+                "playCount": 100,
+            },
+            {
+                # 同号主第二条视频(多路短词变体常见)→ 必须收敛,不再吃槽位/重复上墙。
+                "authorMeta": {"name": "Sky_Vanya", "nickName": "Sky Vanya", "fans": 5000},
+                "text": "camera b-roll",
+                "webVideoUrl": "https://www.tiktok.com/@sky_vanya/video/3",
+                "playCount": 7000,
+            },
+        ]
+
+    monkeypatch.setattr(account_scan_service, "provider_ready", lambda: True)
+    monkeypatch.setattr(account_scan_service, "_run_actor", fake_run_actor)
+
+    result = asyncio.run(account_scan_service.search_platform_content("tiktok", "camera lens", max_results=10))
+
+    handles = [item["handle"].lower() for item in result["items"]]
+    assert handles == ["sky_vanya", "other_creator"]
+    # 首条(actor 相关度序)保留:sample_title 来自第一条视频。
+    assert result["items"][0]["sample_title"] == "camera unboxing"
+
+
+def test_competitor_brand_official_gate_blocks_official_keeps_reviewer() -> None:
+    """品牌官号闸:词表命中身份字段 + 官号信号并发才拦;标题里提品牌的正常测评达人绝不误杀。"""
+    # FEELWORLD YT 官号(session 411 item 1608 实况:handle 粘连 official)。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "feelworldlofficial", "channel_name": "FEELWORLD", "sample_title": "FEELWORLD LUT7 monitor"}
+    ) == "feelworld"
+    # handle 即品牌名 = 官号(bio/official 词都缺也拦)。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "feelworld", "channel_name": "FEELWORLD Monitor"}
+    ) == "feelworld"
+    # bio 品牌自述口吻 + 品牌词命中身份字段 → 拦。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "godox_global", "channel_name": "Godox", "bio": "Official channel of Godox Photo Equipment"}
+    ) == "godox"
+    # 正常达人:品牌词只出现在视频标题/内容 → 放行(绝不误杀)。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "gearreviewer", "channel_name": "Honest Gear Reviews", "sample_title": "I reviewed the FEELWORLD monitor"}
+    ) == ""
+    # 短品牌名防误杀:真人 Sonya 的官方向 handle 不因 sony 子串被拦。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "sonyaofficial", "channel_name": "Sonya Rivera"}
+    ) == ""
+
+
+def test_bio_irrelevant_gate_blocks_non_visual_but_keeps_sparse_bio() -> None:
+    """bio 明显无关补强(askmonitorofficial 案):非视觉职业自述 + 自身零相机信号才丢。"""
+    assert discovery_filters._is_bio_irrelevant(
+        {"handle": "askmonitorofficial", "channel_name": "Ask Monitor", "bio": "Web Development and Data Analyst", "sample_title": "best camera monitor 2026"}
+    )
+    # 摄影+开发双栖:bio 带相机信号 → 放行。
+    assert not discovery_filters._is_bio_irrelevant(
+        {"handle": "hybrid_dev", "channel_name": "Hybrid", "bio": "Web developer by day, wedding photographer by night"}
+    )
+    # bio 缺/太短 = 证据不足 → 放行(不误杀)。
+    assert not discovery_filters._is_bio_irrelevant({"handle": "someone", "channel_name": "Jane Doe", "bio": ""})
+
+
+def test_discover_new_creators_excludes_brand_official_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """集成:品牌官号不入 new_creators/不自动入库,counts.excluded_brand_official 诚实计数。"""
+    enrolled: list[list[dict[str, Any]]] = []
+
+    async def fake_search(platform: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "done",
+            "items": [
+                {
+                    "handle": "feelworldlofficial",
+                    "channel_name": "FEELWORLD",
+                    "channel_url": "https://youtube.com/@feelworldlofficial",
+                    "sample_title": "FEELWORLD LUT7 field monitor filmmaking",
+                    "views": 9000,
+                },
+                {
+                    "handle": "real_filmmaker",
+                    "channel_name": "Real Filmmaker",
+                    "channel_url": "https://youtube.com/@real_filmmaker",
+                    "sample_title": "I reviewed the FEELWORLD monitor for filmmaking",
+                    "views": 8000,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(profile_discovery, "search_platform_content", fake_search)
+    monkeypatch.setattr(profile_discovery.history_match, "annotate_platform_items", lambda items, *, platform: items)
+    monkeypatch.setattr(profile_discovery, "_auto_enroll_discoveries", lambda items: enrolled.append(items) or 0)
+
+    result = asyncio.run(
+        profile_discovery.discover_new_creators(query_text="field monitor filmmaker", platforms=["youtube"], limit=10)
+    )
+
+    assert [item["handle"] for item in result["new_creators"]] == ["real_filmmaker"]
+    assert result["counts"]["excluded_brand_official"] == 1
+    assert all(item.get("handle") != "feelworldlofficial" for batch in enrolled for item in batch)

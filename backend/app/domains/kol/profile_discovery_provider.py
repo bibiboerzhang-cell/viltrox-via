@@ -10,9 +10,11 @@ from app.domains.kol import history_match
 from app.domains.kol.discovery_filters import (
     LOW_REACH_FLAG_LIKE_PATTERN,
     _candidate_key,
+    _competitor_brand_official,
     _detect_excluded_region,
     _has_camera_signal,
     _int,
+    _is_bio_irrelevant,
     _is_discovery_garbage,
     _is_hard_avoid,
     _persona_avoid_terms,
@@ -174,6 +176,41 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
     return enrolled
 
 
+def _warm_discovery_avatar_cache(new_creators: list[dict[str, Any]], *, max_items: int = 15) -> None:
+    """新面孔头像预热(2026-07-21 头像灰占位案):库内卡头像能显示的真通路 = image-proxy 磁盘缓存
+    已温(入库/浏览时抓过);新面孔第一次渲染必冷抓,签名 CDN 冷抓超时/瞬时失败就只剩占位。
+    这里把发现项 avatar_url 后台线程预热进同一份磁盘缓存(cache_image 幂等、短超时、逐条吞错),
+    前端首屏即命中缓存。best-effort:线程 daemon、任何异常静默,绝不阻断/拖慢发现主流程。"""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for item in new_creators[: max(0, int(max_items))]:
+        url = _text((item or {}).get("avatar_url"))
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    if not urls:
+        return
+
+    def _warm() -> None:
+        try:
+            from app.domains.media import cache_image
+
+            for url in urls:
+                try:
+                    cache_image(url, timeout=4)
+                except Exception:
+                    continue
+        except Exception:
+            logger.debug("discovery avatar warmup skipped", exc_info=True)
+
+    try:
+        import threading
+
+        threading.Thread(target=_warm, name="discovery-avatar-warmup", daemon=True).start()
+    except Exception:
+        logger.debug("discovery avatar warmup thread not started", exc_info=True)
+
+
 def _existing_match_pool_id(item: dict[str, Any]) -> int:
     """「库内已有」发现项的 pool 行 id(history_kol_pool_id 或 historical_match.kol_pool_id;缺 → 0)。"""
     pid = _int(item.get("history_kol_pool_id"))
@@ -316,7 +353,9 @@ async def discover_new_creators(
     _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
     _neg_terms = _persona_avoid_terms(avoid_types)
     errors: list[dict[str, Any]] = []
-    _gate_dropped = {"hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0}  # 闸门丢弃计数(可观测,用于调参)
+    # 闸门丢弃计数(可观测,用于调参):brand_official=竞品品牌官号(词表命中+官号信号并发才拦),
+    # bio_irrelevant=bio 自述明显非视觉职业且自身零相机信号(askmonitorofficial 类)。
+    _gate_dropped = {"hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0, "brand_official": 0, "bio_irrelevant": 0}
 
     async def _search_one_platform(platform: str) -> dict[str, Any]:
         """Run one platform search with error isolation; returns annotated items + meta.
@@ -392,6 +431,16 @@ async def discover_new_creators(
             if key in seen:
                 continue
             seen.add(key)
+            # 竞品品牌官号闸(FEELWORLD 官号混入案):词表(competitor_brands.json)命中身份字段
+            # **并发**官号信号才拦——不自动入库、不上新发现墙;「我评测了 FEELWORLD」类正常达人
+            # 只在标题/内容提品牌,不命中。库内已有的官号(existing_match)同口径拦,防经发现面回流。
+            if _competitor_brand_official(item):
+                _gate_dropped["brand_official"] += 1
+                logger.debug(
+                    "discovery_brand_official_excluded handle=%r platform=%s",
+                    item.get("handle"), platform,
+                )
+                continue
             if item.get("historical_match") or item.get("history_kol_pool_id"):
                 existing_matches.append(item)
                 continue
@@ -415,6 +464,15 @@ async def discover_new_creators(
             if not _has_camera_signal(item):
                 _gate_dropped["no_camera_signal"] += 1
                 continue
+            # bio 明显无关补强(askmonitorofficial 案):bio 自述非视觉职业 + 自身身份零相机信号
+            # 双条件并发才丢(sample_title 是查询词回声不算自证);bio 缺/短 → 证据不足放行,不误杀。
+            if _is_bio_irrelevant(item):
+                _gate_dropped["bio_irrelevant"] += 1
+                logger.debug(
+                    "discovery_bio_irrelevant_excluded handle=%r platform=%s",
+                    item.get("handle"), platform,
+                )
+                continue
             # 召回触达门槛(用户裁决 2026-07-11):followers 明确 < 门槛(默认 1000,env 可调)
             # 或互动信号实测全零(views/comments 实测都 0)→ 不进「全网新发现」结果流。
             # 与地区/相机闸同层的候选 FILTER;字段缺 / fast_path 填充 0 一律放行(不误杀);
@@ -433,12 +491,16 @@ async def discover_new_creators(
             survivors.append(item)
 
     # 闸门可观测:单行 INFO,丢弃明细(诚实——被丢=结果中静默缺席,非杜撰分)。便于调参。
-    _total_dropped = _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"] + _gate_dropped["low_reach"]
+    _total_dropped = (
+        _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"] + _gate_dropped["low_reach"]
+        + _gate_dropped["brand_official"] + _gate_dropped["bio_irrelevant"]
+    )
     if _total_dropped:
         logger.info(
-            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d low_reach=%d survivors=%d query=%r",
+            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d low_reach=%d brand_official=%d bio_irrelevant=%d survivors=%d query=%r",
             _total_dropped, _gate_dropped["hard_avoid"], _gate_dropped["no_camera_signal"],
-            _gate_dropped["low_reach"], len(survivors), query,
+            _gate_dropped["low_reach"], _gate_dropped["brand_official"], _gate_dropped["bio_irrelevant"],
+            len(survivors), query,
         )
     # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
     # Relevance remains primary. When candidates tie, prefer rows with observed
@@ -508,6 +570,13 @@ async def discover_new_creators(
     except Exception as exc:
         logger.info("auto_enroll_discovery batch skipped: %s", str(exc)[:200])
 
+    # 新面孔头像预热(后台线程 best-effort):让首屏卡片命中 image-proxy 磁盘缓存,
+    # 与库内卡同一条成功通路;失败静默,绝不阻断发现。
+    try:
+        _warm_discovery_avatar_cache(new_creators)
+    except Exception:
+        logger.debug("discovery avatar warmup call skipped", exc_info=True)
+
     status = "ready" if new_creators or existing_matches else "empty"
     if errors and (new_creators or existing_matches):
         status = "partial"
@@ -531,6 +600,10 @@ async def discover_new_creators(
             "auto_enrolled": auto_enrolled_count,
             # 召回触达门槛命中数(诚实可见,非静默;明细见 debug 日志 discovery_reach_floor_filtered)。
             "filtered_low_reach": _gate_dropped["low_reach"],
+            # 竞品品牌官号排除数(诚实可见;门面文案只说「品牌官方账号已排除」,不暴露词表/判据)。
+            "excluded_brand_official": _gate_dropped["brand_official"],
+            # bio 明显无关排除数(askmonitorofficial 类;双条件并发才丢,防误杀)。
+            "excluded_bio_irrelevant": _gate_dropped["bio_irrelevant"],
             # 「分析后再 po」折叠计数:followers 未知、已入库并点火补全的候选(会话读端不展示,
             # 前端据此显示「分析中 ×N」;补全回填达标后自动放出)。
             "analyzing": _analyzing_total,

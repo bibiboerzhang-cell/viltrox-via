@@ -40,7 +40,7 @@ import {
   PENDING_SEARCH_SESSION_KEY,
   PROFILE_REP_VIDEO_LIMIT,
   UrlSummary,
-  discoveryAutoEnrolledFromSession,
+  discoveryAutoEnrolledFromSession, discoveryBrandExcludedFromSession,
   discoveryItemsFromSession,
   historySessionId,
   isSearchSessionTerminal,
@@ -949,7 +949,7 @@ export function SmartKolInputPanel({
           recallItems={recallItems}
           discoveryItems={discoveryItems}
           discoveryTotal={discoveryTotal}
-          discoveryAutoEnrolled={discoveryAutoEnrolled}
+          discoveryAutoEnrolled={discoveryAutoEnrolled} discoveryBrandExcluded={discoveryBrandExcludedFromSession(activeSearchSession)}
           reachFloorDisplay={reachFloorDisplay}
           input={input}
           apiToken={apiToken}

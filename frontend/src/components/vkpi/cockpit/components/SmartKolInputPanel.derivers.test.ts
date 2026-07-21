@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { VkpiKolSearchHistoryItem } from "../../../../domains/kol";
+import type { VkpiKolRecallItem, VkpiKolSearchHistoryItem } from "../../../../domains/kol";
 import {
   advanceStatusLabel,
+  discoveryItemsFromSession,
   historyStatusMeta,
   isSearchSessionTerminal,
   mergeKolSearchSessionSnapshots,
   mergeSearchSnapshotItems,
+  readableCreatorName,
   searchSessionProgress,
   urlResultFromSession,
 } from "./SmartKolInputPanel.derivers";
@@ -38,6 +40,19 @@ describe("SmartKolInputPanel progressive search snapshots", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0].payload).toMatchObject({ avatar_url: "avatar.jpg", followers: 8000 });
+  });
+
+  it("keeps one row when a later snapshot materializes the pool id for the same creator", () => {
+    // 重复卡真根因(prod 会话 411 sky_vanya 案):档案补全把 kol_pool_id 写上后,旧单键法
+    // 从 profile: 键翻成 pool: 键 → 同一会话项被 push 成第二张卡。别名键合并后必须仍是一行。
+    const merged = mergeSearchSnapshotItems(
+      [{ id: 1609, item_type: "new_creator", status: "identified", payload: { platform: "tiktok", handle: "sky_vanya", avatar_url: "avatar.jpg" } }],
+      [{ id: 1609, item_type: "new_creator", status: "partial", kol_pool_id: 4758, payload: { platform: "tiktok", handle: "sky_vanya", followers: 5000 } }],
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].kol_pool_id).toBe(4758);
+    expect(merged[0].payload).toMatchObject({ avatar_url: "avatar.jpg", followers: 5000 });
   });
 
   it("keeps prior KOL rows while accepting fresh phase and count metadata", () => {
@@ -372,5 +387,43 @@ describe("SmartKolInputPanel progressive search snapshots", () => {
         bio: "Latest camera creator bio",
       },
     });
+  });
+});
+
+describe("SmartKolInputPanel discovery wall dedupe and identity", () => {
+  it("renders one card per platform+handle even if duplicate session items slip through", () => {
+    const session = {
+      id: 411,
+      status: "running",
+      items: [
+        { id: 1609, item_type: "new_creator", payload: { platform: "tiktok", handle: "sky_vanya", avatar_url: "a.jpg" } },
+        { id: 1622, item_type: "new_creator", kol_pool_id: 4758, payload: { platform: "tiktok", handle: "Sky_Vanya" } },
+        { id: 1610, item_type: "new_creator", payload: { platform: "tiktok", handle: "other_creator" } },
+      ],
+    } as unknown as VkpiKolSearchHistoryItem;
+
+    const items = discoveryItemsFromSession(session);
+
+    expect(items).toHaveLength(2);
+    expect(items[0].handle.toLowerCase()).toBe("sky_vanya");
+    // 后到重复项带 pool id → 并给首张卡(勾选可直连),不另出一张卡。
+    expect(Number(items[0].kol_pool_id)).toBe(4758);
+    expect(items[1].handle).toBe("other_creator");
+  });
+
+  it("never shows a bare UC channel id as the creator display name", () => {
+    const ucOnly = {
+      handle: "UCFIRm1Fv1VC4DZxmYyvNOTQ",
+      display_name: "",
+      source_fields: {},
+    } as unknown as VkpiKolRecallItem;
+    expect(readableCreatorName(ucOnly)).toBe("YouTube 频道");
+
+    const withChannelName = {
+      handle: "UCFIRm1Fv1VC4DZxmYyvNOTQ",
+      display_name: "",
+      source_fields: { channel_name: "Real Channel Name" },
+    } as unknown as VkpiKolRecallItem;
+    expect(readableCreatorName(withChannelName)).toBe("Real Channel Name");
   });
 });
