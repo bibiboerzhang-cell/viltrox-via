@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any
@@ -183,7 +184,8 @@ def _competitor_brand_terms() -> dict[str, list[str]]:
         from app.domains.kol.competitor_text import load_competitor_brands
 
         return {brand: list(cfg.get("keywords") or []) for brand, cfg in load_competitor_brands().items()}
-    except Exception:
+    except Exception as exc:
+        logging.getLogger("viltrox.discovery_filters").debug("竞品词表加载失败,官号闸 fail-open: %s", exc)
         return {}
 
 

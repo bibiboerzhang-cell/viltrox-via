@@ -74,7 +74,8 @@ describe("SettingsProductCostVerificationPanel", () => {
       {
         sourceType: "supplier_invoice",
         sourceRef: "invoice://INV-2026-77",
-        sourceObservedAt: "2026-07-15T13:30:00.000Z",
+        // 本地 datetime-local 输入 → UTC 的真契约;绝不硬编码某台机器的时区换算结果(时区炸弹)。
+        sourceObservedAt: new Date("2026-07-15T09:30").toISOString(),
         authorizationRef: "FIN-APPROVAL-77",
         reason: "财务已核对当前供应商发票",
         confirmedByHuman: true,
