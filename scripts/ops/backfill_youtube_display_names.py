@@ -22,10 +22,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 from pathlib import Path
 from typing import Any
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
+LOG = logging.getLogger("viltrox.ops.backfill_youtube_display_names")
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
@@ -75,7 +79,7 @@ def _fetch_channel_names(crawler: Any, channel_ids: list[str]) -> dict[str, dict
             {"part": "snippet", "id": ",".join(batch), "maxResults": BATCH_SIZE},
         )
         if _text(payload.get("provider_status")) != "ok":
-            print(f"[warn] channels.list batch failed status={payload.get('provider_status')} reason={payload.get('provider_reason')}")
+            LOG.warning("channels.list batch failed status=%s reason=%s", payload.get("provider_status"), payload.get("provider_reason"))
             continue
         for row in payload.get("items") or []:
             if not isinstance(row, dict):
@@ -102,20 +106,20 @@ def main() -> int:
 
     crawler = YouTubeCrawler()
     if not crawler.api_key:
-        print("[error] YOUTUBE_API_KEY 未配置,无法调用 channels.list;不杜撰,直接退出。")
+        LOG.error("YOUTUBE_API_KEY 未配置,无法调用 channels.list;不杜撰,直接退出。")
         return 2
 
     conn = get_conn()
     candidates = _load_candidates(conn)
     if args.limit > 0:
         candidates = candidates[: args.limit]
-    print(f"[info] UC 裸 ID 待补名行数: {len(candidates)}")
+    LOG.info("UC 裸 ID 待补名行数: %d", len(candidates))
     if not candidates:
         return 0
 
     names = _fetch_channel_names(crawler, [row["handle"] for row in candidates])
     quota_units = (len(candidates) + BATCH_SIZE - 1) // BATCH_SIZE
-    print(f"[info] channels.list 命中 {len(names)}/{len(candidates)} · 配额约 {quota_units} unit")
+    LOG.info("channels.list 命中 %d/%d · 配额约 %d unit", len(names), len(candidates), quota_units)
 
     updated = 0
     missing = 0
@@ -143,12 +147,13 @@ def main() -> int:
                 (entry["display_name"], int(entry["id"]), "UC"),
             )
             updated += 1
-        print(json.dumps({"action": "apply" if args.apply else "dry_run", **entry}, ensure_ascii=False))
+        LOG.info("%s", json.dumps({"action": "apply" if args.apply else "dry_run", **entry}, ensure_ascii=False))
     if args.apply:
         conn.commit()
-    print(
-        f"[done] mode={'apply' if args.apply else 'dry-run'} candidates={len(candidates)} "
-        f"resolved={len(plan)} updated={updated if args.apply else 0} unresolved={missing}"
+    LOG.info(
+        "done mode=%s candidates=%d resolved=%d updated=%d unresolved=%d",
+        "apply" if args.apply else "dry-run", len(candidates), len(plan),
+        updated if args.apply else 0, missing,
     )
     return 0
 
