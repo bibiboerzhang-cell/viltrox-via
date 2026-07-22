@@ -168,11 +168,24 @@ _HARD_AVOID_TERMS = frozenset({
 # 绝不扫 sample_title/bio 的品牌词——「我评测了 FEELWORLD 监视器」是正常达人,不许误杀)
 # **并发**官号信号(handle/名称含 official / handle 即品牌名 / bio 品牌自称口吻)才拦。
 # red line:纯候选层 FILTER(只丢 + 诚实计数),零触任何评分字段/评分公式。
-_BRAND_SELF_VOICE_PATTERNS = (
+# 企业自述口吻词组(词表官号信号 + 动态官号判据共用)。分两档:
+# 强口吻=几乎只出现在品牌官号 bio(个人创作者不会自称 official store/manufacturer/warranty);
+# 弱口吻=偏企业但真人双人组也可能用("we are a husband and wife photography team"),
+# 单独出现绝不定罪(防误杀第一)。"manufacture" 子串同时覆盖 manufacturer/manufactures/manufacturing。
+_CORPORATE_VOICE_STRONG_PATTERNS = (
     "official channel", "official account", "official page", "official store",
-    "established in", "founded in", "we are a", "our products", "our brand",
-    "manufacturer of",
+    "official website", "official site", "official youtube", "official instagram",
+    "official tiktok", "official facebook",
+    "established in", "founded in", "manufacture", "distributor",
+    "our products", "our brand", "customer service", "after-sales",
+    "warranty", "authorized dealer", "flagship store",
 )
+_CORPORATE_VOICE_WEAK_PATTERNS = (
+    "we are a", "we are the", "our team", "our mission", "we provide",
+    "we offer", "we specialize", "worldwide shipping", "free shipping",
+)
+# 词表路径沿用全量口吻词组(品牌词已命中身份字段,任一口吻即官号信号)——原十词组全被覆盖,行为超集。
+_BRAND_SELF_VOICE_PATTERNS = _CORPORATE_VOICE_STRONG_PATTERNS + _CORPORATE_VOICE_WEAK_PATTERNS
 # 官号 handle 常见后缀(品牌名 + 后缀 = 官号强信号;短品牌名靠这份等值表防误杀,如
 # sonyofficial 拦、sonya_official(真人 Sonya)放行)。
 _BRAND_HANDLE_SUFFIXES = ("", "official", "lofficial", "global", "usa", "us", "uk", "eu", "hq")
@@ -247,6 +260,92 @@ def _competitor_brand_official(item: dict[str, Any]) -> str:
             return brand  # handle 即品牌名 = 官号
         if _official_account_signal(item):
             return brand
+    return ""
+
+
+# ── 动态品牌官号判据(2026-07-21,Panavision/DZOFilm/Thypoch 漏网案,用户裁决:不扩静态词表)──
+# 词表路径(_competitor_brand_official)保留为高精度快路;这条**零词表依赖**,专兜没进
+# competitor_brands.json 的品牌官号。判据 = 官号形态信号(handle/名称含 official/区域后缀/
+# 品牌式名称)**并发** bio 企业自述口吻(强口吻 ≥1 或 ≥2,见 _corporate_voice_bio)才拦。
+# 防误杀第一优先:「个人名+official」真人创作者(yendrycayo_official/kunal_malhotraofficial 型)
+# bio 是个人口吻 → 口吻判据不命中 → 放行;bio 缺失/太短 = 证据不足 → 放行(词表路径仍兜高频竞品)。
+# red line:纯候选层 FILTER(只丢 + 诚实计数),零触任何评分字段/评分公式/规则引擎。
+_CORPORATE_VOICE_MIN_BIO_LEN = 20  # bio 短于此 = 证据不足,动态路径直接放行
+# 个人口吻信号:第一人称单数(i / i'm / my)几乎只出现在真人 bio;品牌官号自称 we/our/us。
+_PERSONAL_VOICE_RE = re.compile(r"\b(?:i|i['’]?m|my)\b")
+# handle 尾 token 的官号/区域后缀(带分隔符才认,如 tamron_europe / fujifilmx_us;
+# 防 markus 这类以 us 结尾的真人名误命中)。
+_OFFICIAL_FORM_SUFFIX_TOKENS = frozenset({
+    "official", "global", "hq", "team", "store", "shop",
+    "usa", "us", "uk", "eu", "europe", "asia", "japan", "india",
+})
+# 品牌式名称(SmallHD/FEELWORLD/DZOFilm 型,非「Firstname Lastname」人名形态):
+# 全大写词 ≥4 字符 / 词中驼峰 / 连续大写接小写。判宽无妨——形态只是半条腿,bio 口吻才定罪。
+_BRAND_STYLE_NAME_RE = re.compile(r"\b[A-Z]{4,}\b|[a-z][A-Z]|\b[A-Z]{2,}[a-z]")
+
+
+def _corporate_voice_bio(bio: Any) -> bool:
+    """bio 是否为品牌自述口吻(corporate voice)。防误杀第一的判规:
+
+    - 强口吻 ≥2 → 定罪(FEELWORLD 实况:"Official Channel"+"established in 2011");
+    - 强口吻 =1 且无第一人称个人口吻 → 定罪;
+    - 弱口吻 ≥3 且无个人口吻 → 定罪(单独 "we are a" 绝不定罪——真人双人组也这么写);
+    - 其余(含 bio 太短)→ 放行。纯函数零 IO。"""
+    text = str(bio or "").strip().lower()
+    if len(text) < _CORPORATE_VOICE_MIN_BIO_LEN:
+        return False
+    strong = sum(1 for p in _CORPORATE_VOICE_STRONG_PATTERNS if p in text)
+    if strong >= 2:
+        return True
+    if _PERSONAL_VOICE_RE.search(text):
+        return False
+    if strong >= 1:
+        return True
+    return sum(1 for p in _CORPORATE_VOICE_WEAK_PATTERNS if p in text) >= 3
+
+
+def _official_form_signal(item: dict[str, Any]) -> bool:
+    """官号形态信号(动态判据的半条腿,判宽无妨——另半条腿 bio 口吻才定罪):
+    ① handle/名称含 official/global;② handle 尾 token 是官号/区域后缀(带分隔符);
+    ③ 归一 handle 以 hq 结尾;④ 名称为品牌式非人名(全大写/驼峰)。纯函数零 IO。"""
+    identity = " ".join(
+        str(item.get(k) or "") for k in ("handle", "channel_name", "display_name", "username")
+    ).lower()
+    if not identity.strip():
+        return False
+    if "official" in identity or "global" in identity:
+        return True
+    handle = str(item.get("handle") or "").lower()
+    tokens = [t for t in re.split(r"[^a-z0-9]+", handle) if t]
+    if len(tokens) >= 2 and tokens[-1] in _OFFICIAL_FORM_SUFFIX_TOKENS:
+        return True
+    if re.sub(r"[^a-z0-9]", "", handle).endswith("hq"):
+        return True
+    raw_name = str(item.get("channel_name") or item.get("display_name") or "")
+    return bool(_BRAND_STYLE_NAME_RE.search(raw_name))
+
+
+def _dynamic_brand_official(item: dict[str, Any]) -> bool:
+    """动态品牌官号判据(零词表依赖):官号形态信号 **并发** bio 企业自述口吻才拦。
+
+    bio 缺失/太短 = 证据不足 → 放行(绝不凭形态单腿定罪;词表路径仍兜高频竞品)。"""
+    if not isinstance(item, dict):
+        return False
+    bio = str(item.get("bio") or item.get("description") or "").strip()
+    if len(bio) < _CORPORATE_VOICE_MIN_BIO_LEN:
+        return False
+    if not _official_form_signal(item):
+        return False
+    return _corporate_voice_bio(bio)
+
+
+def _brand_official_verdict(item: dict[str, Any]) -> str:
+    """品牌官号统一判据口:词表高精度快路优先("lexicon"),动态零词表路径兜漏网("dynamic"),
+    未命中 ""。调用方拿真值即拦;子串区分只供 diagnostics 子计数,门面文案不透判据。"""
+    if _competitor_brand_official(item):
+        return "lexicon"
+    if _dynamic_brand_official(item):
+        return "dynamic"
     return ""
 
 

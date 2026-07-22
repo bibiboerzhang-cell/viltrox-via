@@ -24,9 +24,11 @@ from app.domains.kol.discovery_filters import (  # noqa: F401
     _PERSONA_GENERIC_TERMS,
     _annotate_new_priority,
     _below_reach_floor,
+    _brand_official_verdict,
     _candidate_blob,
     _candidate_key,
     _competitor_brand_official,
+    _dynamic_brand_official,
     _country_in_excluded_region,
     _detect_excluded_region,
     _discovery_brand_collab_count,
@@ -85,6 +87,7 @@ _PROVIDER_IMPLEMENTATIONS = {
 }
 _PROVIDER_SHARED_NAMES = (
     "LOW_REACH_FLAG_LIKE_PATTERN",
+    "_brand_official_verdict",
     "_candidate_key",
     "_candidate_platform_signals",
     "_competitor_brand_official",

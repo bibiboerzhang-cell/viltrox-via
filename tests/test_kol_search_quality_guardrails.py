@@ -620,3 +620,120 @@ def test_discover_new_creators_excludes_brand_official_and_counts(monkeypatch: p
     assert [item["handle"] for item in result["new_creators"]] == ["real_filmmaker"]
     assert result["counts"]["excluded_brand_official"] == 1
     assert all(item.get("handle") != "feelworldlofficial" for batch in enrolled for item in batch)
+
+
+def test_dynamic_brand_official_blocks_off_lexicon_brand_accounts() -> None:
+    """动态官号判据(零词表):官号形态 + bio 企业自述口吻并发才拦;
+    词表外品牌官号(Panavision/DZOFilm/Thypoch 漏网案)拦得住,词表内仍走高精度快路。"""
+    # 词表外品牌(competitor_brands.json 无 panavision/dzofilm/thypoch)→ 走 dynamic 路径。
+    assert discovery_filters._brand_official_verdict({
+        "handle": "panavisionofficial",
+        "channel_name": "Panavision",
+        "bio": "The official account of Panavision. Founded in 1954, we design and manufacture camera systems for cinema productions worldwide.",
+    }) == "dynamic"
+    assert discovery_filters._brand_official_verdict({
+        "handle": "dzofilm_official",
+        "channel_name": "DZOFILM",
+        "bio": "DZOFILM Official Account. Cine lens manufacturer. Our products cover FF & S35 cinema lenses. Customer service: support@dzofilm.com",
+    }) == "dynamic"
+    assert discovery_filters._brand_official_verdict({
+        "handle": "thypoch_official",
+        "channel_name": "Thypoch",
+        "bio": "Official account of Thypoch. Founded in 2022, we craft full-frame photographic lenses. Warranty & support: service@thypoch.com",
+    }) == "dynamic"
+    # 词表内品牌仍走高精度快路(lexicon 优先于 dynamic)。
+    assert discovery_filters._brand_official_verdict({
+        "handle": "feelworldlofficial",
+        "channel_name": "FEELWORLD",
+        "bio": "Welcome to the FEELWORLD YouTube Official Channel. FEELWORLD & SEETEC was established in 2011, specializing in camera field monitors.",
+    }) == "lexicon"
+
+
+def test_dynamic_brand_official_zero_lexicon_dependency() -> None:
+    """动态路径自身零词表依赖:词表内品牌官号的「形态+口吻」同样命中(词表失效也兜得住)。
+    bio 全按真实官号口吻合成(official store/account、established in、warranty、customer service)。"""
+    brand_officials = [
+        {"handle": "neewerofficial", "channel_name": "NEEWER", "bio": "NEEWER official store for photography and video gear. Established in 2011. Worldwide shipping, 12-month warranty and customer service support."},
+        {"handle": "godox_global", "channel_name": "Godox", "bio": "Godox official account. Professional photography lighting manufacturer. Our products: flashes, LED lights and light modifiers."},
+        {"handle": "tamron_europe", "channel_name": "Tamron Europe", "bio": "Official account of Tamron Europe GmbH. Distributor of Tamron lenses and customer service for European markets."},
+        {"handle": "fujifilmx_us", "channel_name": "FUJIFILM X-US", "bio": "Welcome to the official FUJIFILM X Series account. Established in 1934, we manufacture cameras and lenses."},
+        # SmallHD 型:handle 无 official/后缀,品牌式名称(驼峰)+ 企业口吻 bio 也拦得住。
+        {"handle": "smallhd", "channel_name": "SmallHD", "bio": "SmallHD builds the industry's most versatile on-camera monitors. Our products are backed by warranty and customer service."},
+        {"handle": "feelworldlofficial", "channel_name": "FEELWORLD", "bio": "Welcome to the FEELWORLD YouTube Official Channel. FEELWORLD & SEETEC was established in 2011, specializing in camera field monitors."},
+    ]
+    for item in brand_officials:
+        assert discovery_filters._dynamic_brand_official(item), item["handle"]
+
+
+def test_dynamic_brand_official_never_kills_personal_official_creators() -> None:
+    """防误杀第一优先:「个人名+official」且 bio 个人口吻的真人创作者(池内实证反例)绝不拦;
+    bio 缺失/太短 = 证据不足 → 动态路径放行(词表路径仍兜高频竞品)。"""
+    creators = [
+        {"handle": "yendrycayo_official", "channel_name": "Yendry Cayo", "bio": "Actress & dancer. Mom of two. Living my dream one film at a time. Bookings: team@agency.com"},
+        {"handle": "thefilmguyofficial", "channel_name": "The Film Guy", "bio": "I make cinematic short films and teach filmmaking on this channel. New videos every Friday."},
+        {"handle": "hassanshaikhofficial", "channel_name": "Hassan Shaikh", "bio": "Filmmaker & photographer. I shoot weddings and travel films. DM for collabs."},
+        {"handle": "kunal_malhotraofficial", "channel_name": "Kunal Malhotra", "bio": "Photography YouTuber. I teach photography and share honest camera reviews. My presets below."},
+        {"handle": "techpulse_official1", "channel_name": "TechPulse", "bio": "Tech reviews by Sam. I test cameras, phones and gadgets so you don't have to."},
+        {"handle": "nadez_official", "channel_name": "Nadez", "bio": "Lagos-based creator. Fashion, lifestyle and street photography."},
+        # 真人双人组:「we are a / we offer」弱口吻单独出现绝不定罪。
+        {"handle": "we.create.films_official", "channel_name": "We Create Films", "bio": "We are a husband and wife filmmaking duo. We offer wedding videography in Austin."},
+    ]
+    for item in creators:
+        assert discovery_filters._brand_official_verdict(item) == "", item["handle"]
+    # bio 缺失/太短 = 证据不足 → 放行(绝不凭「形态单腿」定罪)。
+    assert not discovery_filters._dynamic_brand_official(
+        {"handle": "panavisionofficial", "channel_name": "Panavision", "bio": ""}
+    )
+    assert not discovery_filters._dynamic_brand_official(
+        {"handle": "brandish_official", "channel_name": "BRANDISH", "bio": "gear"}
+    )
+
+
+def test_discover_new_creators_dynamic_official_subcounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """集成:词表外品牌官号(Panavision 型)经动态判据拦下不入 new_creators/不自动入库;
+    counts.excluded_brand_official 总数沿用,lexicon/dynamic 子计数诚实分账。"""
+    enrolled: list[list[dict[str, Any]]] = []
+
+    async def fake_search(platform: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "done",
+            "items": [
+                {
+                    "handle": "panavisionofficial",
+                    "channel_name": "Panavision",
+                    "channel_url": "https://youtube.com/@panavisionofficial",
+                    "sample_title": "Panavision cinema camera systems",
+                    "bio": "The official account of Panavision. Founded in 1954, we design and manufacture camera systems for cinema productions worldwide.",
+                    "views": 9000,
+                },
+                {
+                    "handle": "feelworldlofficial",
+                    "channel_name": "FEELWORLD",
+                    "channel_url": "https://youtube.com/@feelworldlofficial",
+                    "sample_title": "FEELWORLD LUT7 field monitor filmmaking",
+                    "views": 8500,
+                },
+                {
+                    "handle": "real_filmmaker",
+                    "channel_name": "Real Filmmaker",
+                    "channel_url": "https://youtube.com/@real_filmmaker",
+                    "sample_title": "cinema camera b-roll tips for filmmakers",
+                    "views": 8000,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(profile_discovery, "search_platform_content", fake_search)
+    monkeypatch.setattr(profile_discovery.history_match, "annotate_platform_items", lambda items, *, platform: items)
+    monkeypatch.setattr(profile_discovery, "_auto_enroll_discoveries", lambda items: enrolled.append(items) or 0)
+
+    result = asyncio.run(
+        profile_discovery.discover_new_creators(query_text="cinema camera filmmaker", platforms=["youtube"], limit=10)
+    )
+
+    assert [item["handle"] for item in result["new_creators"]] == ["real_filmmaker"]
+    assert result["counts"]["excluded_brand_official"] == 2
+    assert result["counts"]["excluded_brand_official_lexicon"] == 1
+    assert result["counts"]["excluded_brand_official_dynamic"] == 1
+    blocked = {"panavisionofficial", "feelworldlofficial"}
+    assert all(item.get("handle") not in blocked for batch in enrolled for item in batch)

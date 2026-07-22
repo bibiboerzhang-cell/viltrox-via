@@ -9,8 +9,8 @@ from app.db.connection import get_conn
 from app.domains.kol import history_match
 from app.domains.kol.discovery_filters import (
     LOW_REACH_FLAG_LIKE_PATTERN,
+    _brand_official_verdict,
     _candidate_key,
-    _competitor_brand_official,
     _detect_excluded_region,
     _has_camera_signal,
     _int,
@@ -353,9 +353,13 @@ async def discover_new_creators(
     _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
     _neg_terms = _persona_avoid_terms(avoid_types)
     errors: list[dict[str, Any]] = []
-    # 闸门丢弃计数(可观测,用于调参):brand_official=竞品品牌官号(词表命中+官号信号并发才拦),
-    # bio_irrelevant=bio 自述明显非视觉职业且自身零相机信号(askmonitorofficial 类)。
-    _gate_dropped = {"hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0, "brand_official": 0, "bio_irrelevant": 0}
+    # 闸门丢弃计数(可观测,用于调参):brand_official=品牌官号总数(lexicon=词表快路命中/
+    # dynamic=零词表动态判据命中,两子计数只供排障),bio_irrelevant=bio 自述明显非视觉职业
+    # 且自身零相机信号(askmonitorofficial 类)。
+    _gate_dropped = {
+        "hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0, "brand_official": 0,
+        "brand_official_lexicon": 0, "brand_official_dynamic": 0, "bio_irrelevant": 0,
+    }
 
     async def _search_one_platform(platform: str) -> dict[str, Any]:
         """Run one platform search with error isolation; returns annotated items + meta.
@@ -431,14 +435,18 @@ async def discover_new_creators(
             if key in seen:
                 continue
             seen.add(key)
-            # 竞品品牌官号闸(FEELWORLD 官号混入案):词表(competitor_brands.json)命中身份字段
-            # **并发**官号信号才拦——不自动入库、不上新发现墙;「我评测了 FEELWORLD」类正常达人
-            # 只在标题/内容提品牌,不命中。库内已有的官号(existing_match)同口径拦,防经发现面回流。
-            if _competitor_brand_official(item):
+            # 品牌官号闸(FEELWORLD 官号混入案 + Panavision/DZOFilm/Thypoch 漏网案):
+            # 词表快路 = competitor_brands.json 命中身份字段**并发**官号信号才拦;词表外品牌
+            # 走动态判据(官号形态 + bio 企业自述口吻并发,bio 缺=证据不足放行)。两路都
+            # 不自动入库、不上新发现墙;「我评测了 FEELWORLD」类正常达人只在标题/内容提品牌,
+            # 不命中。库内已有的官号(existing_match)同口径拦,防经发现面回流。
+            _brand_gate = _brand_official_verdict(item)
+            if _brand_gate:
                 _gate_dropped["brand_official"] += 1
+                _gate_dropped[f"brand_official_{_brand_gate}"] += 1
                 logger.debug(
-                    "discovery_brand_official_excluded handle=%r platform=%s",
-                    item.get("handle"), platform,
+                    "discovery_brand_official_excluded handle=%r platform=%s via=%s",
+                    item.get("handle"), platform, _brand_gate,
                 )
                 continue
             if item.get("historical_match") or item.get("history_kol_pool_id"):
@@ -600,8 +608,11 @@ async def discover_new_creators(
             "auto_enrolled": auto_enrolled_count,
             # 召回触达门槛命中数(诚实可见,非静默;明细见 debug 日志 discovery_reach_floor_filtered)。
             "filtered_low_reach": _gate_dropped["low_reach"],
-            # 竞品品牌官号排除数(诚实可见;门面文案只说「品牌官方账号已排除」,不暴露词表/判据)。
+            # 品牌官号排除数(诚实可见;门面文案只说「品牌官方账号已排除」,不暴露词表/判据)。
+            # 子计数 lexicon(词表快路)/dynamic(零词表动态判据)只供排障,不进门面文案。
             "excluded_brand_official": _gate_dropped["brand_official"],
+            "excluded_brand_official_lexicon": _gate_dropped["brand_official_lexicon"],
+            "excluded_brand_official_dynamic": _gate_dropped["brand_official_dynamic"],
             # bio 明显无关排除数(askmonitorofficial 类;双条件并发才丢,防误杀)。
             "excluded_bio_irrelevant": _gate_dropped["bio_irrelevant"],
             # 「分析后再 po」折叠计数:followers 未知、已入库并点火补全的候选(会话读端不展示,
