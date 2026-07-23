@@ -101,6 +101,9 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   const activeTaskIdsRef = useRef<Set<string>>(new Set());
   const apiTokenRef = useRef(apiToken);
   const inFlightRef = useRef(false);
+  // 3s 轮询多数拍次数据毫无变化;记录上一拍指纹,内容相同就跳过 setTasks,
+  // 避免 tasks 引用每 3s 换新 → context value 换新 → 全部 useTaskCenter 消费方空转重渲染。
+  const lastTasksFingerprintRef = useRef('');
 
   const activeTasks = useMemo(() => tasks.filter((task) => !isTerminalTask(task)), [tasks]);
   apiTokenRef.current = apiToken;
@@ -130,7 +133,11 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
         }
       });
       previousTasksRef.current = new Map(nextTasks.map((task) => [task.task_id, task]));
-      setTasks(nextTasks);
+      const fingerprint = JSON.stringify(nextTasks);
+      if (fingerprint !== lastTasksFingerprintRef.current) {
+        lastTasksFingerprintRef.current = fingerprint;
+        setTasks(nextTasks);
+      }
     } finally {
       inFlightRef.current = false;
     }
@@ -180,6 +187,7 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   useEffect(() => {
     if (!apiToken) {
       setTasks([]);
+      lastTasksFingerprintRef.current = '';
       previousTasksRef.current = new Map();
       eventSourcesRef.current.forEach((source) => source.close());
       eventSourcesRef.current.clear();

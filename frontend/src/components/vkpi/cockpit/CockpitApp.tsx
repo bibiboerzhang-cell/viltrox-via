@@ -172,6 +172,8 @@ export function CockpitApp(props: any = {}) {
   // V6.14.2: i18n + role
   const [lang, setLang] = useState("zh");
   const t = useMemo(() => makeT(lang), [lang]);
+  // I18n Provider value 稳定引用:内联对象每次渲染换新会击穿全部 useT 消费方的 memo;setLang 引用恒定。
+  const i18nValue = useMemo(() => ({ t, lang, setLang }), [t, lang]);
   const [viewingAs, setViewingAs] = useState<any>(null);  // Admin 切换查看身份
   const {
     currentUser,
@@ -586,7 +588,7 @@ export function CockpitApp(props: any = {}) {
   }, []);
 
   return e(LazyMotion, { features: domMax },
-   e(I18nContext.Provider, { value: { t, lang, setLang } },
+   e(I18nContext.Provider, { value: i18nValue },
    e("div", { className: "relative min-h-screen bg-bg text-ink-2" },
     e("div", {
       className: "pointer-events-none fixed inset-0",

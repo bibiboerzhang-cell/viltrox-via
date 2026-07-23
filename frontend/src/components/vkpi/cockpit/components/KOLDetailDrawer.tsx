@@ -491,6 +491,13 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       setLlmDeepAnalysis(null);
       return;
     }
+    if (detailLoading) {
+      // detail_bundle 在途(其自带 dimensions11/llm):先等 bundle,不抢发两条注定被覆盖的独立请求;
+      // bundle 失败时 detailLoading 翻 false 且 bundle 仍空 → effect 重跑走下方兜底拉取。
+      setDimensions11(null);
+      setLlmDeepAnalysis(null);
+      return;
+    }
     let cancelled = false;
     setDimensions11(null);
     setLlmDeepAnalysis(null);
@@ -507,7 +514,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     return () => {
       cancelled = true;
     };
-  }, [apiToken, item?.id, detailBundle]);
+  }, [apiToken, item?.id, detailBundle, detailLoading]);
 
   React.useEffect(() => {
     const ready = Number(recordOr(videoAnalysisSummary).ready_count);
