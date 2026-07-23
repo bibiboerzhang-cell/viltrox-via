@@ -282,6 +282,7 @@ allowed = {
     "LLM_MONTHLY_BUDGET_USD",
     "POSTGRES_POOL_MIN_SIZE",
     "POSTGRES_POOL_MAX_SIZE",
+    "DB_USE_PGBOUNCER",
 }
 values = {}
 for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -324,11 +325,16 @@ for key in (
     "APIFY_WORKER_COMMENTS_CONCURRENCY",
     "APIFY_WORKER_GEMINI_VIDEO_CONCURRENCY",
 ):
-    integer(key, 1, 2)
+    # 2026-07-22 满功率收编:资源槽是 DB 全局信号量,代码侧硬上限 MAX_RESOURCE_SLOT_CAP=16
+    # (apify_job_resource_slots.py env range fail-closed),验证器同界。
+    integer(key, 1, 16)
 pool_min = integer("POSTGRES_POOL_MIN_SIZE", 1, 16)
 pool_max = integer("POSTGRES_POOL_MAX_SIZE", 1, 64)
 if pool_min > pool_max:
     raise SystemExit("POSTGRES_POOL_MIN_SIZE exceeds POSTGRES_POOL_MAX_SIZE")
+# 2026-07-22 多并发地基:worker 车道用 session 级 advisory lock(Gemini QPS 闸/LLM
+# slot),PgBouncer transaction pooling 下 session 锁会漂移——车道永远直连,值只许 0。
+integer("DB_USE_PGBOUNCER", 0, 0)
 PY
 }
 if ! validate_lane_override_template; then

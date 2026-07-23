@@ -24,12 +24,26 @@ from typing import Any, Callable, Iterator
 
 import psycopg
 
-from app.core.config import DB_RUNTIME_URL
+from app.core.config import DATABASE_URL, DB_RUNTIME_URL
 from app.core.logging import get_logger
 from app.db.connection import db_connection_sync_scope, get_conn, is_postgres_runtime
 
 
 logger = get_logger(__name__)
+
+
+def _session_lock_dsn() -> str:
+    """Direct-PostgreSQL DSN for session-level advisory-lock leases.
+
+    Leader/fire leases hold ``pg_advisory_lock`` for the lifetime of one raw
+    connection.  Under PgBouncer transaction pooling (DB_RUNTIME_URL points at
+    6432 once DATABASE_POOL_URL is configured) every autocommit statement can
+    land on a different server connection, so a session lock acquired on one
+    server connection leaks into the pool and the unlock misses it — duplicate
+    scheduler leaders become possible.  These leases therefore always dial the
+    direct DATABASE_URL; behaviour is unchanged while no pooler is configured.
+    """
+    return DATABASE_URL or DB_RUNTIME_URL
 
 _LEADER_LOCK_SCOPE = "vkpi_scheduler_fleet"
 _LEADER_LOCK_KEY = "apscheduler_leader_v1"
@@ -112,7 +126,7 @@ class SchedulerLeaderLease:
         postgres_enabled: bool | None = None,
     ) -> None:
         self.identity = str(identity or "scheduler")[:240]
-        self.dsn = DB_RUNTIME_URL if dsn is None else str(dsn or "")
+        self.dsn = _session_lock_dsn() if dsn is None else str(dsn or "")
         self._connect_fn = connect_fn or psycopg.connect
         self._postgres_enabled = is_postgres_runtime() if postgres_enabled is None else bool(postgres_enabled)
         self._conn: Any | None = None
@@ -227,7 +241,7 @@ class ScheduledFireExecutionLease:
         self.fire_lock_key = str(fire_lock_key or "").strip()[:500]
         if not self.fire_lock_key:
             raise ValueError("scheduled fire lock key required")
-        self.dsn = DB_RUNTIME_URL if dsn is None else str(dsn or "")
+        self.dsn = _session_lock_dsn() if dsn is None else str(dsn or "")
         self._connect_fn = connect_fn or psycopg.connect
         self._postgres_enabled = (
             is_postgres_runtime() if postgres_enabled is None else bool(postgres_enabled)

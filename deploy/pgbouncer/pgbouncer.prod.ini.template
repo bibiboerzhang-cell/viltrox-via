@@ -1,0 +1,57 @@
+;; V-KPI production PgBouncer 成品配置模板(2026-07-22 多并发地基)。
+;; 由 scripts/ops/install_pgbouncer_prod.sh 渲染安装到 /etc/pgbouncer/pgbouncer.ini。
+;; 占位符 @DB_NAME@ / @DB_HOST@ / @DB_PORT@ / @APP_DB_USER@ / @AUTH_TYPE@ 由安装脚本
+;; 从 /opt/viltrox-2.0/.env 的 DATABASE_URL 解析注入——本文件与仓库里绝不出现真密钥,
+;; 密码只进 /etc/pgbouncer/userlist.txt(0600 postgres:postgres,同样由脚本生成)。
+;;
+;; 连接预算依据(prod 实测:PG max_connections=200,当前 41 连接,主机 8C/31G):
+;;   走 PgBouncer 的只有 web(admin-web gunicorn);16 条 apify 车道、redis worker、
+;;   scheduler 租约全部保持直连 5432——worker/scheduler 侧用 session 级 advisory lock
+;;   (Gemini QPS 闸、LLM slot、scheduler leader),transaction pooling 下 session 锁
+;;   会漂移到别的 server 连接上,等于闸失效,绝不可过池。
+;;   PG 侧最坏账:16 车道×6 + redis 16 + 租约~4 + 运维~10 + PgBouncer≤40 ≈ 166 < 200。
+
+[databases]
+@DB_NAME@ = host=@DB_HOST@ port=@DB_PORT@ dbname=@DB_NAME@
+
+[pgbouncer]
+listen_addr = 127.0.0.1
+listen_port = 6432
+unix_socket_dir = /var/run/postgresql
+
+;; auth:userlist + SCRAM(pgbouncer>=1.14;安装脚本探测版本,过老自动降 md5)。
+;; userlist.txt 存明文密码(0600):这是对 PG 侧 password_encryption=scram-sha-256
+;; 最稳的组合——client→bouncer 与 bouncer→server 两段都能完成挑战,不依赖 hash 形态。
+auth_type = @AUTH_TYPE@
+auth_file = /etc/pgbouncer/userlist.txt
+admin_users = @APP_DB_USER@
+stats_users = @APP_DB_USER@
+
+;; 事务级池:web 是浏览器轮询型短事务负载,transaction pooling 收益最大。
+;; app 侧已内建适配:DB_USE_PGBOUNCER=1 时 psycopg prepare_threshold=None
+;; (backend/app/db/connection.py:325),不会踩 server-side prepared statement 雷。
+pool_mode = transaction
+
+;; client 侧上限:web 最坏 WEB_CONCURRENCY(6)×POSTGRES_POOL_MAX_SIZE(16)=96,400 给足余量。
+max_client_conn = 400
+;; server 侧:default 25 + reserve 10,再由 max_db_connections=40 兜底封顶。
+default_pool_size = 25
+min_pool_size = 4
+reserve_pool_size = 10
+reserve_pool_timeout = 3
+max_db_connections = 40
+
+query_wait_timeout = 60
+server_idle_timeout = 300
+server_lifetime = 3600
+server_connect_timeout = 5
+tcp_keepalive = 1
+
+;; psycopg2 遗产参数;psycopg3 不发,但留着无害。
+ignore_startup_parameters = extra_float_digits
+
+;; 轮询型负载 log_connections 会刷爆 journal,只留错误。
+log_connections = 0
+log_disconnections = 0
+log_pooler_errors = 1
+pidfile = /var/run/postgresql/pgbouncer.pid

@@ -112,6 +112,9 @@ def test_lane_override_is_nonsecret_allowlisted_and_atomically_installed() -> No
         "LLM_MONTHLY_BUDGET_USD",
         "POSTGRES_POOL_MIN_SIZE",
         "POSTGRES_POOL_MAX_SIZE",
+        # 2026-07-22 多并发地基:车道永远直连 5432(session advisory lock 与
+        # PgBouncer transaction pooling 不相容),值被 deploy 验证器钉死为 0。
+        "DB_USE_PGBOUNCER",
     }
     entries: dict[str, str] = {}
     for raw in template.splitlines():
@@ -123,6 +126,9 @@ def test_lane_override_is_nonsecret_allowlisted_and_atomically_installed() -> No
         assert re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value)
         entries[key] = value
     assert set(entries) == allowed
+    assert entries["DB_USE_PGBOUNCER"] == "0"
+    assert entries["POSTGRES_POOL_MAX_SIZE"] == "6"
+    assert 'integer("DB_USE_PGBOUNCER", 0, 0)' in deploy
     assert not any(
         marker in key for key in entries for marker in ("SECRET", "TOKEN", "PASSWORD", "API_KEY")
     )

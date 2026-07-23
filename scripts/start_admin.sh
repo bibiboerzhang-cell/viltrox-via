@@ -12,6 +12,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_ADMIN_WEB_CONTRACT="${VKPI_SYSTEMD_ADMIN_WEB_CONTRACT:-0}"
 SYSTEMD_DATABASE_URL="${DATABASE_URL:-}"
 SYSTEMD_REDIS_URL="${REDIS_URL:-}"
+# 多并发地基(2026-07-22):并发/池覆盖也要在 runtime_env.sh 读任何 .env 之前捕获。
+# 刻意用 VKPI_ 前缀新名字——历史 .env 里绝不可能有它们,stale .env 无法借尸还魂。
+SYSTEMD_WEB_CONCURRENCY="${VKPI_WEB_CONCURRENCY:-}"
+SYSTEMD_WEB_POOL_MAX="${VKPI_WEB_POOL_MAX_SIZE:-}"
 if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then
   export ENVIRONMENT=production
   export RUNTIME_ENV_QUIET=1
@@ -30,17 +34,40 @@ if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then
   export LOCAL_RUNTIME_FORCE_STACK=0
   export HOST=127.0.0.1
   export PORT=8001
-  export WEB_CONCURRENCY=2
+  # ── 多并发地基(2026-07-22)──────────────────────────────────────────────
+  # 缺省仍是评审过的 2 进程 × 16 池(直连 PG 最坏 2×16=32,PG max_connections=200)。
+  # 提并发不改本文件:在 unit 的 argv-level env、或追加在 EnvironmentFile= 列表
+  # 末尾的第二 env 文件(如新建 /etc/vkpi/vkpi-web-overrides.env——systemd 后读者胜;
+  # 千万别复用 vkpi-lane-overrides.env,那是 worker 文件且带 DB_USE_PGBOUNCER=0,
+  # 会顺手关掉 web 的 PgBouncer)设 VKPI_WEB_CONCURRENCY / VKPI_WEB_POOL_MAX_SIZE:
+  #   直连 PG(未开 PgBouncer):最多 VKPI_WEB_CONCURRENCY=4 + VKPI_WEB_POOL_MAX_SIZE=12
+  #     前提:/etc/vkpi/vkpi-lane-overrides.env 已把车道 POSTGRES_POOL_MAX_SIZE 降到 6。
+  #     预算:web 4×12=48 + 车道 16×6=96 + redis worker 16 + 租约/运维~14 ≈ 174 < 200。
+  #   PgBouncer 生效后(.env 有 DATABASE_POOL_URL=...:6432/...,web 自动走池):
+  #     VKPI_WEB_CONCURRENCY=6 + VKPI_WEB_POOL_MAX_SIZE=16(client 连接打 6432,
+  #     PG 侧被 default_pool_size=25+reserve 10 封顶,直连账 ≈166 < 200)。
+  WEB_CONCURRENCY_EFFECTIVE=2
+  if [[ "$SYSTEMD_WEB_CONCURRENCY" =~ ^[0-9]+$ ]]; then
+    WEB_CONCURRENCY_EFFECTIVE="$SYSTEMD_WEB_CONCURRENCY"
+  fi
+  (( WEB_CONCURRENCY_EFFECTIVE < 1 )) && WEB_CONCURRENCY_EFFECTIVE=1
+  (( WEB_CONCURRENCY_EFFECTIVE > 8 )) && WEB_CONCURRENCY_EFFECTIVE=8
+  export WEB_CONCURRENCY="$WEB_CONCURRENCY_EFFECTIVE"
   export ADMIN_DAEMON=0
   export ENABLE_SCHEDULER=1
   export ENABLE_BROWSER=0
   export ENABLE_UPLOAD_CLEANUP=0
-  # Bound the two-process web fleet even when a stale shared .env still carries
-  # the historical 64-connection default.  Together with seven 16-connection
-  # Apify workers and one 16-connection Redis worker this caps the reviewed
-  # cloud topology at 160 connections, below PostgreSQL max_connections=200.
+  # Bound the web fleet even when a stale shared .env still carries the
+  # historical 64-connection default.  Pool max is override-able through the
+  # same reviewed channel (VKPI_WEB_POOL_MAX_SIZE, clamped 4..32).
+  WEB_POOL_MAX_EFFECTIVE=16
+  if [[ "$SYSTEMD_WEB_POOL_MAX" =~ ^[0-9]+$ ]]; then
+    WEB_POOL_MAX_EFFECTIVE="$SYSTEMD_WEB_POOL_MAX"
+  fi
+  (( WEB_POOL_MAX_EFFECTIVE < 4 )) && WEB_POOL_MAX_EFFECTIVE=4
+  (( WEB_POOL_MAX_EFFECTIVE > 32 )) && WEB_POOL_MAX_EFFECTIVE=32
   export POSTGRES_POOL_MIN_SIZE=2
-  export POSTGRES_POOL_MAX_SIZE=16
+  export POSTGRES_POOL_MAX_SIZE="$WEB_POOL_MAX_EFFECTIVE"
   export POSTGRES_POOL_TIMEOUT_SEC=30
   export RUNTIME_ENV_QUIET=1
 fi
@@ -51,6 +78,8 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8102}"
+# 本地/非 contract 路径缺省 2(笔记本直连本地 PG 足够);可直接 export WEB_CONCURRENCY 覆盖。
+# prod contract 路径的并发/池调法见上方 VKPI_WEB_CONCURRENCY / VKPI_WEB_POOL_MAX_SIZE 注释。
 WEB_CONCURRENCY="${WEB_CONCURRENCY:-2}"
 WORKER_CONNECTIONS="${WORKER_CONNECTIONS:-2000}"
 BACKLOG="${BACKLOG:-4096}"

@@ -63,8 +63,14 @@ def test_cloud_web_unit_uses_bounded_gunicorn_concurrency() -> None:
     start = _read("scripts/start_admin.sh")
     production_contract = start.split('if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then', 2)[2]
     assert "export POSTGRES_POOL_MIN_SIZE=2" in production_contract
-    assert "export POSTGRES_POOL_MAX_SIZE=16" in production_contract
+    # 2026-07-22 多并发地基:池上限缺省仍 16,但可经 VKPI_WEB_POOL_MAX_SIZE(clamp 4..32)
+    # 从 systemd argv/第二 EnvironmentFile 覆盖;stale .env 无法影响(只认 VKPI_ 前缀新名)。
+    assert "WEB_POOL_MAX_EFFECTIVE=16" in production_contract
+    assert 'export POSTGRES_POOL_MAX_SIZE="$WEB_POOL_MAX_EFFECTIVE"' in production_contract
     assert "export POSTGRES_POOL_TIMEOUT_SEC=30" in production_contract
+    # 并发同款机制:缺省 2,VKPI_WEB_CONCURRENCY 覆盖(clamp 1..8)。
+    assert "WEB_CONCURRENCY_EFFECTIVE=2" in production_contract
+    assert 'export WEB_CONCURRENCY="$WEB_CONCURRENCY_EFFECTIVE"' in production_contract
 
 
 def test_deploy_installs_reviewed_unit_before_restart() -> None:
@@ -657,3 +663,70 @@ def test_systemd_contract_survives_stale_env_and_emits_no_runtime_urls(tmp_path:
         "redis://",
     ):
         assert sensitive not in result.stderr
+
+
+def test_systemd_contract_honours_vkpi_web_concurrency_override(tmp_path: Path) -> None:
+    """VKPI_WEB_CONCURRENCY/VKPI_WEB_POOL_MAX_SIZE 是评审过的提并发通道(2026-07-22)。
+
+    stale .env 的 WEB_CONCURRENCY 依旧被合同压回;只有 VKPI_ 前缀新名生效,且有 clamp。
+    """
+    stale_env = tmp_path / "stale-production.env"
+    stale_env.write_text("WEB_CONCURRENCY=1\nENVIRONMENT=local\n", encoding="utf-8")
+    fake_python = tmp_path / "capture-web-concurrency.sh"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$WORKERS|$POSTGRES_POOL_MAX_SIZE\"\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o700)
+    env = os.environ.copy()
+    env.update(
+        {
+            "VKPI_SYSTEMD_ADMIN_WEB_CONTRACT": "1",
+            "PYTHON_BIN": str(fake_python),
+            "ENV_FILE": str(stale_env),
+            "DATABASE_URL": "postgresql://cloud_user:db-secret@db.internal:5432/vkpi",
+            "REDIS_URL": "redis://:redis-secret@redis.internal:6379/0",
+            "RUNTIME_ENV_QUIET": "1",
+            "VKPI_WEB_CONCURRENCY": "6",
+            "VKPI_WEB_POOL_MAX_SIZE": "12",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/start_admin.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "6|12"
+
+    # clamp:99 进程 → 8;池 999 → 32
+    env["VKPI_WEB_CONCURRENCY"] = "99"
+    env["VKPI_WEB_POOL_MAX_SIZE"] = "999"
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/start_admin.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "8|32"
+
+    # 非数字/缺省 → 评审缺省 2|16
+    env["VKPI_WEB_CONCURRENCY"] = "bogus"
+    env.pop("VKPI_WEB_POOL_MAX_SIZE")
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/start_admin.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "2|16"

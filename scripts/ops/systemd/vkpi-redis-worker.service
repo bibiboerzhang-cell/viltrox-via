@@ -20,7 +20,12 @@ ExecStartPre=/usr/bin/env VKPI_JOB_RESULTS_DIR=/opt/viltrox-2.0/runtime/job-resu
 # argv-level assignments cannot be weakened by stale values in EnvironmentFile.
 # The stale-backlog override stays off until the 16 historical messages have
 # been explicitly adjudicated; startup fails before XREADGROUP while they exist.
-ExecStart=/usr/bin/env APP_ROLE=worker ENVIRONMENT=production DB_RUNTIME_BACKEND=postgres ENABLE_LOCAL_ORCHESTRATOR=0 ENABLE_SCHEDULER=0 ENABLE_BROWSER=0 ENABLE_UPLOAD_CLEANUP=0 WORKER_SERVICE_PROCESSES=1 WORKER_ASYNC_CONSUMERS=2 VKPI_REDIS_WORKER_MAX_CONSUMERS=2 VKPI_REDIS_WORKER_HEARTBEAT_NAME=redis-worker-main VKPI_REDIS_WORKER_ALLOW_STALE_BACKLOG=0 VKPI_REDIS_WORKER_MAX_BACKLOG_AGE_HOURS=24 POSTGRES_POOL_MIN_SIZE=2 POSTGRES_POOL_MAX_SIZE=16 POSTGRES_POOL_TIMEOUT_SEC=30 VKPI_JOB_RESULTS_DIR=/opt/viltrox-2.0/runtime/job-results HOME=/tmp/vkpi-redis-worker-home XDG_CACHE_HOME=/tmp/vkpi-redis-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python -m app.workers.worker_main
+# DB_USE_PGBOUNCER=0: workers must stay on direct 5432 forever — worker paths use
+# session-level advisory locks (Gemini QPS gate / LLM slots) which break under
+# PgBouncer transaction pooling.  This pins the worker direct even after .env
+# gains DATABASE_POOL_URL for the web role (config.py auto-enables the pooler
+# whenever DATABASE_POOL_URL is set).
+ExecStart=/usr/bin/env APP_ROLE=worker ENVIRONMENT=production DB_RUNTIME_BACKEND=postgres DB_USE_PGBOUNCER=0 ENABLE_LOCAL_ORCHESTRATOR=0 ENABLE_SCHEDULER=0 ENABLE_BROWSER=0 ENABLE_UPLOAD_CLEANUP=0 WORKER_SERVICE_PROCESSES=1 WORKER_ASYNC_CONSUMERS=2 VKPI_REDIS_WORKER_MAX_CONSUMERS=2 VKPI_REDIS_WORKER_HEARTBEAT_NAME=redis-worker-main VKPI_REDIS_WORKER_ALLOW_STALE_BACKLOG=0 VKPI_REDIS_WORKER_MAX_BACKLOG_AGE_HOURS=24 POSTGRES_POOL_MIN_SIZE=2 POSTGRES_POOL_MAX_SIZE=16 POSTGRES_POOL_TIMEOUT_SEC=30 VKPI_JOB_RESULTS_DIR=/opt/viltrox-2.0/runtime/job-results HOME=/tmp/vkpi-redis-worker-home XDG_CACHE_HOME=/tmp/vkpi-redis-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python -m app.workers.worker_main
 Restart=on-failure
 RestartSec=10
 KillMode=mixed
