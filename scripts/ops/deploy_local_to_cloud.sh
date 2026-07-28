@@ -1,6 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The deploy process prepends private immutable ``ssh``/``scp`` wrapper links to
+# PATH so every direct call, child shell, Python subprocess, and rsync remote
+# shell shares one ControlMaster.  Wrapper mode exits before any deploy gate or
+# repository read.
+run_deploy_ssh_transport_wrapper() {
+  local tool="${0##*/}" real_binary=""
+  local control_path="${VKPI_DEPLOY_SSH_CONTROL_PATH:-}"
+  local connect_timeout="${VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-}"
+  local control_persist="${VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS:-}"
+
+  case "${tool}" in
+    ssh) real_binary="${VKPI_DEPLOY_REAL_SSH:-}" ;;
+    scp) real_binary="${VKPI_DEPLOY_REAL_SCP:-}" ;;
+    *)
+      echo "Deployment SSH transport wrapper must be invoked as ssh or scp." >&2
+      exit 64
+      ;;
+  esac
+  if [ "${real_binary#/}" = "${real_binary}" ] || [ ! -x "${real_binary}" ]; then
+    echo "Deployment SSH transport wrapper has no trusted real ${tool} binary." >&2
+    exit 64
+  fi
+  if [ "${control_path#/}" = "${control_path}" ] \
+    || ! [[ "${connect_timeout}" =~ ^[1-9][0-9]*$ ]] \
+    || ! [[ "${control_persist}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Deployment SSH transport wrapper configuration is invalid." >&2
+    exit 64
+  fi
+
+  exec "${real_binary}" \
+    -o BatchMode=yes \
+    -o ControlMaster=auto \
+    -o "ControlPersist=${control_persist}" \
+    -o "ControlPath=${control_path}" \
+    -o ConnectionAttempts=1 \
+    -o "ConnectTimeout=${connect_timeout}" \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
+    "$@"
+}
+
+if [ "${VKPI_DEPLOY_SSH_WRAPPER_MODE:-0}" = "1" ]; then
+  run_deploy_ssh_transport_wrapper "$@"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
@@ -122,6 +167,215 @@ if ! VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1 \
 fi
 
 SSH_TARGET="${SSH_TARGET:-viltrox}"
+SSH_CONNECT_TIMEOUT_SECONDS="${VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
+SSH_INITIAL_CONNECT_ATTEMPTS="${VKPI_DEPLOY_SSH_INITIAL_CONNECT_ATTEMPTS:-3}"
+SSH_CONTROL_PERSIST_SECONDS="${VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS:-3600}"
+SSH_TRANSPORT_DIR=""
+SSH_WRAPPER_SNAPSHOT=""
+SSH_CONTROL_PATH=""
+SSH_REAL_BIN=""
+SCP_REAL_BIN=""
+SSH_TRANSPORT_READY=0
+SSH_ORIGINAL_PATH="${PATH}"
+SSH_ORIGINAL_RSYNC_RSH_SET=0
+SSH_ORIGINAL_RSYNC_RSH=""
+if [ "${RSYNC_RSH+x}" = x ]; then
+  SSH_ORIGINAL_RSYNC_RSH_SET=1
+  SSH_ORIGINAL_RSYNC_RSH="${RSYNC_RSH}"
+fi
+
+setup_deploy_ssh_transport() {
+  local attempt=1
+  local tmp_base="${TMPDIR:-/tmp}"
+  local wrapper_mode=""
+  local wrapper_path=""
+
+  if ! [[ "${SSH_CONNECT_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] \
+    || [ "${SSH_CONNECT_TIMEOUT_SECONDS}" -gt 60 ]; then
+    echo "VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS must be an integer from 1 through 60." >&2
+    return 1
+  fi
+  if ! [[ "${SSH_INITIAL_CONNECT_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] \
+    || [ "${SSH_INITIAL_CONNECT_ATTEMPTS}" -gt 3 ]; then
+    echo "VKPI_DEPLOY_SSH_INITIAL_CONNECT_ATTEMPTS must be an integer from 1 through 3." >&2
+    return 1
+  fi
+  if ! [[ "${SSH_CONTROL_PERSIST_SECONDS}" =~ ^[1-9][0-9]*$ ]] \
+    || [ "${SSH_CONTROL_PERSIST_SECONDS}" -gt 7200 ]; then
+    echo "VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS must be an integer from 1 through 7200." >&2
+    return 1
+  fi
+
+  SSH_REAL_BIN="$(type -P ssh || true)"
+  SCP_REAL_BIN="$(type -P scp || true)"
+  if [ "${SSH_REAL_BIN#/}" = "${SSH_REAL_BIN}" ] || [ ! -x "${SSH_REAL_BIN}" ] \
+    || [ "${SCP_REAL_BIN#/}" = "${SCP_REAL_BIN}" ] || [ ! -x "${SCP_REAL_BIN}" ]; then
+    echo "Deployment requires absolute executable ssh and scp clients." >&2
+    return 1
+  fi
+
+  SSH_TRANSPORT_DIR="$(mktemp -d "${tmp_base%/}/vkpi-deploy-ssh.XXXXXX")" || return 1
+  chmod 700 "${SSH_TRANSPORT_DIR}"
+  SSH_WRAPPER_SNAPSHOT="${SSH_TRANSPORT_DIR}/transport-wrapper"
+  SSH_CONTROL_PATH="${SSH_TRANSPORT_DIR}/master.sock"
+  if [ "${#SSH_CONTROL_PATH}" -gt 96 ]; then
+    echo "Deployment SSH control socket path is too long for a portable Unix socket." >&2
+    return 1
+  fi
+  install -m 0500 \
+    "${PROJECT_ROOT}/scripts/ops/deploy_local_to_cloud.sh" \
+    "${SSH_WRAPPER_SNAPSHOT}"
+  ln "${SSH_WRAPPER_SNAPSHOT}" "${SSH_TRANSPORT_DIR}/ssh"
+  ln "${SSH_WRAPPER_SNAPSHOT}" "${SSH_TRANSPORT_DIR}/scp"
+
+  # Freeze wrapper code before any remote mutation.  The worktree is replaced
+  # during deploy and cannot remain the executable backing rollback transport.
+  for wrapper_path in \
+    "${SSH_WRAPPER_SNAPSHOT}" \
+    "${SSH_TRANSPORT_DIR}/ssh" \
+    "${SSH_TRANSPORT_DIR}/scp"; do
+    if [ ! -f "${wrapper_path}" ] || [ -L "${wrapper_path}" ]; then
+      echo "Deployment SSH wrapper snapshot is not a regular non-symlink file." >&2
+      return 1
+    fi
+    if wrapper_mode="$(stat -f '%Lp' "${wrapper_path}" 2>/dev/null)"; then
+      :
+    elif wrapper_mode="$(stat -c '%a' "${wrapper_path}" 2>/dev/null)"; then
+      :
+    else
+      echo "Deployment SSH wrapper snapshot permissions could not be verified." >&2
+      return 1
+    fi
+    if [ "${wrapper_mode}" != "500" ]; then
+      echo "Deployment SSH wrapper snapshot must have exact mode 0500." >&2
+      return 1
+    fi
+  done
+  if [ ! "${SSH_WRAPPER_SNAPSHOT}" -ef "${SSH_TRANSPORT_DIR}/ssh" ] \
+    || [ ! "${SSH_WRAPPER_SNAPSHOT}" -ef "${SSH_TRANSPORT_DIR}/scp" ] \
+    || ! cmp -s "${PROJECT_ROOT}/scripts/ops/deploy_local_to_cloud.sh" "${SSH_WRAPPER_SNAPSHOT}" \
+    || ! cmp -s "${SSH_WRAPPER_SNAPSHOT}" "${SSH_TRANSPORT_DIR}/ssh" \
+    || ! cmp -s "${SSH_WRAPPER_SNAPSHOT}" "${SSH_TRANSPORT_DIR}/scp"; then
+    echo "Deployment SSH wrapper snapshot identity or content verification failed." >&2
+    return 1
+  fi
+
+  # Only this transport bootstrap is retried, and at most three times.  It runs
+  # no remote command.  Every later command executes exactly once and inherits
+  # ConnectionAttempts=1 through the private PATH wrapper.
+  while [ "${attempt}" -le "${SSH_INITIAL_CONNECT_ATTEMPTS}" ]; do
+    if "${SSH_REAL_BIN}" \
+      -o BatchMode=yes \
+      -o ControlMaster=yes \
+      -o "ControlPersist=${SSH_CONTROL_PERSIST_SECONDS}" \
+      -o "ControlPath=${SSH_CONTROL_PATH}" \
+      -o ConnectionAttempts=1 \
+      -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}" \
+      -o ServerAliveInterval=15 \
+      -o ServerAliveCountMax=3 \
+      -M -N -f "${SSH_TARGET}" \
+      && "${SSH_REAL_BIN}" -o "ControlPath=${SSH_CONTROL_PATH}" -O check "${SSH_TARGET}" >/dev/null 2>&1; then
+      SSH_TRANSPORT_READY=1
+      break
+    fi
+    if [ -S "${SSH_CONTROL_PATH}" ]; then
+      "${SSH_REAL_BIN}" \
+        -o "ControlPath=${SSH_CONTROL_PATH}" \
+        -O exit "${SSH_TARGET}" >/dev/null 2>&1 || true
+      if "${SSH_REAL_BIN}" \
+        -o "ControlPath=${SSH_CONTROL_PATH}" \
+        -O check "${SSH_TARGET}" >/dev/null 2>&1; then
+        echo "Refusing deploy because a failed SSH bootstrap left a live ControlMaster; preserving its private directory." >&2
+        return 1
+      fi
+    fi
+    rm -f -- "${SSH_CONTROL_PATH}"
+    if [ "${attempt}" -lt "${SSH_INITIAL_CONNECT_ATTEMPTS}" ]; then
+      sleep 1
+    fi
+    attempt=$((attempt + 1))
+  done
+  if [ "${SSH_TRANSPORT_READY}" != "1" ]; then
+    echo "Refusing deploy because the bounded SSH ControlMaster bootstrap failed." >&2
+    return 1
+  fi
+
+  export VKPI_DEPLOY_SSH_WRAPPER_MODE=1
+  export VKPI_DEPLOY_REAL_SSH="${SSH_REAL_BIN}"
+  export VKPI_DEPLOY_REAL_SCP="${SCP_REAL_BIN}"
+  export VKPI_DEPLOY_SSH_CONTROL_PATH="${SSH_CONTROL_PATH}"
+  export VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS="${SSH_CONNECT_TIMEOUT_SECONDS}"
+  export VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS="${SSH_CONTROL_PERSIST_SECONDS}"
+  PATH="${SSH_TRANSPORT_DIR}:${PATH}"
+  export PATH
+  RSYNC_RSH="${SSH_TRANSPORT_DIR}/ssh"
+  export RSYNC_RSH
+  hash -r
+  echo "[deploy] SSH transport ready: one private ControlMaster, ${SSH_INITIAL_CONNECT_ATTEMPTS} bounded bootstrap attempt(s) maximum."
+}
+
+cleanup_deploy_ssh_transport() {
+  local preserve_transport=0
+  local safe_to_remove=0
+
+  if [ -n "${SSH_TRANSPORT_DIR}" ]; then
+    if [ -n "${SSH_CONTROL_PATH}" ] && [ -S "${SSH_CONTROL_PATH}" ]; then
+      if [ -n "${SSH_REAL_BIN}" ] && [ -x "${SSH_REAL_BIN}" ]; then
+        if ! "${SSH_REAL_BIN}" \
+          -o "ControlPath=${SSH_CONTROL_PATH}" \
+          -O exit "${SSH_TARGET}" >/dev/null 2>&1; then
+          echo "[deploy] WARNING: SSH ControlMaster exit request failed; checking whether it is still alive." >&2
+        fi
+        # An exit request can fail or be asynchronous.  Never unlink a live
+        # control socket: check after every exit request and preserve the whole
+        # private directory when the master still answers.
+        if "${SSH_REAL_BIN}" \
+          -o "ControlPath=${SSH_CONTROL_PATH}" \
+          -O check "${SSH_TARGET}" >/dev/null 2>&1; then
+          preserve_transport=1
+        else
+          safe_to_remove=1
+        fi
+      else
+        preserve_transport=1
+      fi
+    else
+      # No Unix-domain control socket remains, so no master can be reached
+      # through this deployment-private transport directory.
+      safe_to_remove=1
+    fi
+  fi
+  SSH_TRANSPORT_READY=0
+  PATH="${SSH_ORIGINAL_PATH}"
+  export PATH
+  if [ "${SSH_ORIGINAL_RSYNC_RSH_SET}" = "1" ]; then
+    RSYNC_RSH="${SSH_ORIGINAL_RSYNC_RSH}"
+    export RSYNC_RSH
+  else
+    unset RSYNC_RSH
+  fi
+  unset VKPI_DEPLOY_SSH_WRAPPER_MODE VKPI_DEPLOY_REAL_SSH VKPI_DEPLOY_REAL_SCP
+  unset VKPI_DEPLOY_SSH_CONTROL_PATH VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS
+  unset VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS
+  hash -r
+  if [ -n "${SSH_TRANSPORT_DIR}" ]; then
+    if [ "${preserve_transport}" = "1" ]; then
+      chmod 700 "${SSH_TRANSPORT_DIR}" >/dev/null 2>&1 || true
+      echo "[deploy] WARNING: SSH ControlMaster is still alive; preserving mode-0700 transport directory: ${SSH_TRANSPORT_DIR}" >&2
+    elif [ "${safe_to_remove}" = "1" ]; then
+      rm -f -- \
+        "${SSH_TRANSPORT_DIR}/ssh" \
+        "${SSH_TRANSPORT_DIR}/scp" \
+        "${SSH_WRAPPER_SNAPSHOT}" \
+        "${SSH_CONTROL_PATH}"
+      rmdir -- "${SSH_TRANSPORT_DIR}" >/dev/null 2>&1 || true
+      SSH_TRANSPORT_DIR=""
+      SSH_WRAPPER_SNAPSHOT=""
+      SSH_CONTROL_PATH=""
+    fi
+  fi
+}
+
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 SERVICE_NAME="${SERVICE_NAME:-viltrox-2.0-test.service}"
 REMOTE_SERVICE_UNIT_RELATIVE="${REMOTE_SERVICE_UNIT_RELATIVE:-scripts/ops/systemd/viltrox-2.0-test.service}"
@@ -939,6 +1193,9 @@ cleanup_post_deploy_evidence() {
   if [ -n "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}" ]; then
     rm -rf -- "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}"
   fi
+  # Keep the master available through rollback and remote evidence cleanup.
+  # Remove its private directory only after the master is confirmed gone.
+  cleanup_deploy_ssh_transport
   return "${original_rc}"
 }
 trap cleanup_post_deploy_evidence EXIT
@@ -1083,6 +1340,7 @@ fi
 MIGRATION_MANIFEST_CSV="$(find "${PROJECT_ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
 
 run_predeploy_embedded_browser_gate
+setup_deploy_ssh_transport
 capture_remote_sync_unit_state
 sync_state="${SYNC_SERVICE_ACTIVE_STATE}"
 if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
