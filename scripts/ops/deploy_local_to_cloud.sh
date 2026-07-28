@@ -505,6 +505,19 @@ STAGING_REDIS_WORKER_UNIT_WAS_ENABLED=""
 STAGING_REDIS_WORKER_UNIT_WAS_MASKED=""
 STAGING_REDIS_WORKER_CAPTURED_STATE=""
 STAGING_REDIS_WORKER_UNIT_STATE=""
+PGBOUNCER_SERVICE="pgbouncer.service"
+PGBOUNCER_SOCKET="pgbouncer.socket"
+PGBOUNCER_PORT="6432"
+PGBOUNCER_STATE_CAPTURED=0
+PGBOUNCER_MAY_HAVE_BEEN_MUTATED=0
+PGBOUNCER_QUIESCED=0
+PGBOUNCER_RESTORED=0
+PGBOUNCER_SERVICE_LOAD_STATE=""
+PGBOUNCER_SERVICE_ACTIVE_STATE=""
+PGBOUNCER_SERVICE_UNIT_FILE_STATE=""
+PGBOUNCER_SOCKET_LOAD_STATE=""
+PGBOUNCER_SOCKET_ACTIVE_STATE=""
+PGBOUNCER_SOCKET_UNIT_FILE_STATE=""
 DATABASE_RELEASE_STRATEGY="in-place"
 DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG=""
 DATABASE_OWNER_RELEASE_ID=""
@@ -525,6 +538,13 @@ SYNC_SERVICE_ACTIVE_STATE=""
 SYNC_SERVICE_UNIT_FILE_STATE=""
 SYNC_TIMER_ACTIVE_STATE=""
 SYNC_TIMER_UNIT_FILE_STATE=""
+
+if [ "${PGBOUNCER_SERVICE}" != "pgbouncer.service" ] \
+  || [ "${PGBOUNCER_SOCKET}" != "pgbouncer.socket" ] \
+  || [ "${PGBOUNCER_PORT}" != "6432" ]; then
+  echo "The reviewed PgBouncer service, socket, and listener must remain fixed." >&2
+  exit 1
+fi
 
 if [ -n "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" ] || [ -n "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" ]; then
   if [ -z "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" ] || [ -z "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" ]; then
@@ -966,6 +986,155 @@ capture_remote_sync_unit_state() {
   SYNC_UNITS_CAPTURED=1
 }
 
+capture_remote_pgbouncer_unit_state() {
+  local captured
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_SERVICE}" != "pgbouncer.service" ] \
+    || [ "${PGBOUNCER_SOCKET}" != "pgbouncer.socket" ] \
+    || [ "${PGBOUNCER_PORT}" != "6432" ]; then
+    echo "Refusing staging clone because the PgBouncer service/socket scope is not reviewed." >&2
+    return 1
+  fi
+  if ! captured="$(ssh "${SSH_TARGET}" "command -v ss >/dev/null || { echo 'ss is required for PgBouncer listener verification' >&2; exit 1; }; service_load=\$(systemctl show --property LoadState --value '${PGBOUNCER_SERVICE}'); service_active=\$(systemctl show --property ActiveState --value '${PGBOUNCER_SERVICE}'); service_file=\$(systemctl show --property UnitFileState --value '${PGBOUNCER_SERVICE}'); socket_load=\$(systemctl show --property LoadState --value '${PGBOUNCER_SOCKET}'); socket_active=\$(systemctl show --property ActiveState --value '${PGBOUNCER_SOCKET}'); socket_file=\$(systemctl show --property UnitFileState --value '${PGBOUNCER_SOCKET}'); printf '%s:%s:%s:%s:%s:%s\n' \"\${service_load}\" \"\${service_active}\" \"\${service_file}\" \"\${socket_load}\" \"\${socket_active}\" \"\${socket_file}\"")"; then
+    echo "Refusing staging clone because PgBouncer service/socket state is unreadable." >&2
+    return 1
+  fi
+  IFS=: read -r PGBOUNCER_SERVICE_LOAD_STATE PGBOUNCER_SERVICE_ACTIVE_STATE \
+    PGBOUNCER_SERVICE_UNIT_FILE_STATE PGBOUNCER_SOCKET_LOAD_STATE \
+    PGBOUNCER_SOCKET_ACTIVE_STATE PGBOUNCER_SOCKET_UNIT_FILE_STATE <<<"${captured}"
+  if [ "${PGBOUNCER_SERVICE_LOAD_STATE}" != "loaded" ] \
+    || [ "${PGBOUNCER_SOCKET_LOAD_STATE}" != "loaded" ]; then
+    echo "Refusing staging clone because the reviewed PgBouncer units are not loaded." >&2
+    return 1
+  fi
+  for active_state in "${PGBOUNCER_SERVICE_ACTIVE_STATE}" "${PGBOUNCER_SOCKET_ACTIVE_STATE}"; do
+    case "${active_state}" in
+      active|inactive) ;;
+      *)
+        echo "Refusing staging clone because a PgBouncer unit has an unrestorable active state: ${active_state}." >&2
+        return 1
+        ;;
+    esac
+  done
+  for unit_file_state in "${PGBOUNCER_SERVICE_UNIT_FILE_STATE}" "${PGBOUNCER_SOCKET_UNIT_FILE_STATE}"; do
+    case "${unit_file_state}" in
+      enabled|disabled|static|indirect) ;;
+      *)
+        echo "Refusing staging clone because a PgBouncer unit has an unrestorable unit-file state: ${unit_file_state}." >&2
+        return 1
+        ;;
+    esac
+  done
+  PGBOUNCER_STATE_CAPTURED=1
+}
+
+restore_remote_pgbouncer_state() {
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_MAY_HAVE_BEEN_MUTATED}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_STATE_CAPTURED}" != "1" ]; then
+    echo "Cannot restore PgBouncer without a captured pre-mutation state." >&2
+    return 1
+  fi
+  # The remote EXIT trap is deliberately fail-closed: if a pre/postcondition
+  # fails after unmask/start, both activation paths are stopped and runtime
+  # masked again.  No persistent enablement or PgBouncer config is modified.
+  if ! ssh "${SSH_TARGET}" \
+    "bash -s -- '${PGBOUNCER_SERVICE}' '${PGBOUNCER_SOCKET}' '${PGBOUNCER_PORT}' '${PGBOUNCER_SERVICE_LOAD_STATE}' '${PGBOUNCER_SERVICE_ACTIVE_STATE}' '${PGBOUNCER_SERVICE_UNIT_FILE_STATE}' '${PGBOUNCER_SOCKET_LOAD_STATE}' '${PGBOUNCER_SOCKET_ACTIVE_STATE}' '${PGBOUNCER_SOCKET_UNIT_FILE_STATE}'" <<'REMOTE_PGBOUNCER_RESTORE'
+set -euo pipefail
+service="$1"
+socket="$2"
+port="$3"
+service_load="$4"
+service_active="$5"
+service_file="$6"
+socket_load="$7"
+socket_active="$8"
+socket_file="$9"
+restore_complete=0
+fail_closed_pgbouncer() {
+  if [ "${restore_complete}" != 1 ]; then
+    sudo systemctl stop "${socket}" "${service}" >/dev/null 2>&1 || true
+    sudo systemctl mask --runtime "${socket}" "${service}" >/dev/null 2>&1 || true
+  fi
+}
+runtime_mask_state() {
+  local unit="$1" mask_path="/run/systemd/system/$1"
+  if [ -L "${mask_path}" ] && [ "$(readlink -- "${mask_path}")" = /dev/null ]; then
+    printf 'masked'
+  elif [ ! -e "${mask_path}" ] && [ ! -L "${mask_path}" ]; then
+    printf 'clear'
+  else
+    printf 'invalid'
+  fi
+}
+trap fail_closed_pgbouncer EXIT
+service_mask="$(runtime_mask_state "${service}")"
+socket_mask="$(runtime_mask_state "${socket}")"
+case "${service_mask}:${socket_mask}" in
+  masked:masked)
+    sudo systemctl unmask --runtime "${socket}" "${service}" >/dev/null
+    sudo systemctl daemon-reload
+    ;;
+  clear:clear)
+    ;;
+  *)
+    echo "PgBouncer runtime masks are mixed or unsafe before restore" >&2
+    exit 1
+    ;;
+esac
+[ "$(systemctl show --property LoadState --value "${service}")" = "${service_load}" ] \
+  && [ "$(systemctl show --property LoadState --value "${socket}")" = "${socket_load}" ] \
+  || { echo "PgBouncer LoadState changed during restore" >&2; exit 1; }
+[ "$(systemctl show --property UnitFileState --value "${service}")" = "${service_file}" ] \
+  && [ "$(systemctl show --property UnitFileState --value "${socket}")" = "${socket_file}" ] \
+  || { echo "PgBouncer UnitFileState was not restored" >&2; exit 1; }
+sudo systemctl stop "${socket}" "${service}"
+[ "${socket_active}" != active ] || sudo systemctl start "${socket}"
+[ "${service_active}" != active ] || sudo systemctl start "${service}"
+[ "$(systemctl show --property ActiveState --value "${service}")" = "${service_active}" ] \
+  && [ "$(systemctl show --property ActiveState --value "${socket}")" = "${socket_active}" ] \
+  || { echo "PgBouncer service/socket ActiveState was not restored" >&2; exit 1; }
+[ "$(systemctl show --property UnitFileState --value "${service}")" = "${service_file}" ] \
+  && [ "$(systemctl show --property UnitFileState --value "${socket}")" = "${socket_file}" ] \
+  || { echo "PgBouncer service/socket UnitFileState changed after activation" >&2; exit 1; }
+if [ "${service_active}" = active ]; then
+  main_pid="$(systemctl show --property MainPID --value "${service}")"
+  case "${main_pid}" in ""|0|*[!0-9]*)
+    echo "PgBouncer service MainPID is invalid after restore" >&2
+    exit 1
+  esac
+fi
+if [ "${service_active}" = active ] || [ "${socket_active}" = active ]; then
+  listener_ready=0
+  for _attempt in $(seq 1 20); do
+    if ss -H -ltn "sport = :${port}" | grep -q .; then
+      listener_ready=1
+      break
+    fi
+    sleep 0.25
+  done
+  [ "${listener_ready}" = 1 ] \
+    || { echo "PgBouncer listener did not return after restore" >&2; exit 1; }
+elif ss -H -ltn "sport = :${port}" | grep -q .; then
+  echo "PgBouncer listener is present after inactive restore" >&2
+  exit 1
+fi
+restore_complete=1
+trap - EXIT
+REMOTE_PGBOUNCER_RESTORE
+  then
+    echo "CRITICAL: captured PgBouncer service/socket state could not be restored; both remain fail-closed." >&2
+    return 1
+  fi
+  PGBOUNCER_RESTORED=1
+}
+
 restore_remote_sync_unit_state() {
   local service_unmask_runtime=1 timer_unmask_runtime=1
   local service_should_start=0 timer_should_start=0
@@ -1033,6 +1202,12 @@ attempt_automatic_rollback() {
         ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' write-receipt --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --env-fingerprint-clone '${STAGING_CLONE_ENV_SHA256}' --migration-version '${LATEST_MIGRATION}' --state rollback-restored --rollback-env-fingerprint '${rollback_env_sha256}' >/dev/null" || return 1
       fi
     fi
+  fi
+  # PgBouncer must regain its captured active/inactive state before any
+  # restored web, Redis, or Apify consumer is started.
+  if ! restore_remote_pgbouncer_state; then
+    echo "[deploy] CRITICAL: rollback database is restored but PgBouncer is not; application consumers remain stopped." >&2
+    return 1
   fi
   if [ "${STAGING_REDIS_WORKER_UNIT_WAS_MASKED}" = "1" ]; then
     if ! ssh "${SSH_TARGET}" "sudo systemctl mask '${STAGING_REDIS_WORKER_SERVICE}' >/dev/null && sudo systemctl daemon-reload"; then
@@ -1213,11 +1388,18 @@ cleanup_post_deploy_evidence() {
       # A failed rollback intentionally leaves sync fail-closed.  Resuming a
       # timer against an untrusted app/database state would compound failure.
       attempt_automatic_rollback || true
-    elif [ "${SYNC_UNITS_MAY_HAVE_BEEN_MUTATED}" = "1" ] \
-      && [ "${SYNC_UNITS_RESTORED}" != "1" ]; then
-      # Before prepare there is no release state to roll back, but a local
-      # build/backup/staging failure must still restore the captured timer.
-      restore_remote_sync_unit_state || true
+    else
+      # Before prepare there is no release state to roll back.  Reassert every
+      # captured unit independently so a partial restore cannot suppress the
+      # other EXIT-trap recovery attempt.
+      if [ "${PGBOUNCER_MAY_HAVE_BEEN_MUTATED}" = "1" ] \
+        && [ "${PGBOUNCER_RESTORED}" != "1" ]; then
+        restore_remote_pgbouncer_state || true
+      fi
+      if [ "${SYNC_UNITS_MAY_HAVE_BEEN_MUTATED}" = "1" ] \
+        && [ "${SYNC_UNITS_RESTORED}" != "1" ]; then
+        restore_remote_sync_unit_state || true
+      fi
     fi
   fi
   if [ -n "${REMOTE_LOG_BASELINE}" ] || [ -n "${REMOTE_ACCEPTANCE_REPORT}" ]; then
@@ -1264,6 +1446,96 @@ for journal_unit in "${JOURNAL_SYSTEMD_UNITS[@]}"; do
   JOURNAL_SYSTEMD_UNIT_FLAGS+=" --unit ${journal_unit}"
 done
 
+quiesce_remote_pgbouncer_for_clone() {
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_STATE_CAPTURED}" != "1" ]; then
+    echo "Refusing staging clone PgBouncer quiesce without captured state." >&2
+    return 1
+  fi
+  # Set before SSH because validation/stop/mask can fail after a unit changed.
+  # The remote trap leaves both activation paths stopped and runtime-masked.
+  PGBOUNCER_MAY_HAVE_BEEN_MUTATED=1
+  PGBOUNCER_RESTORED=0
+  if ! ssh "${SSH_TARGET}" \
+    "bash -s -- '${PGBOUNCER_SERVICE}' '${PGBOUNCER_SOCKET}' '${PGBOUNCER_PORT}' '${PGBOUNCER_SERVICE_LOAD_STATE}' '${PGBOUNCER_SERVICE_ACTIVE_STATE}' '${PGBOUNCER_SERVICE_UNIT_FILE_STATE}' '${PGBOUNCER_SOCKET_LOAD_STATE}' '${PGBOUNCER_SOCKET_ACTIVE_STATE}' '${PGBOUNCER_SOCKET_UNIT_FILE_STATE}'" <<'REMOTE_PGBOUNCER_QUIESCE'
+set -euo pipefail
+service="$1"
+socket="$2"
+port="$3"
+service_load="$4"
+service_active="$5"
+service_file="$6"
+socket_load="$7"
+socket_active="$8"
+socket_file="$9"
+quiesce_complete=0
+fail_closed_pgbouncer() {
+  if [ "${quiesce_complete}" != 1 ]; then
+    sudo systemctl stop "${socket}" "${service}" >/dev/null 2>&1 || true
+    sudo systemctl mask --runtime "${socket}" "${service}" >/dev/null 2>&1 || true
+  fi
+}
+runtime_mask_state() {
+  local unit="$1" mask_path="/run/systemd/system/$1"
+  if [ -L "${mask_path}" ] && [ "$(readlink -- "${mask_path}")" = /dev/null ]; then
+    printf 'masked'
+  elif [ ! -e "${mask_path}" ] && [ ! -L "${mask_path}" ]; then
+    printf 'clear'
+  else
+    printf 'invalid'
+  fi
+}
+trap fail_closed_pgbouncer EXIT
+service_mask="$(runtime_mask_state "${service}")"
+socket_mask="$(runtime_mask_state "${socket}")"
+case "${service_mask}:${socket_mask}" in
+  clear:clear)
+    [ "$(systemctl show --property LoadState --value "${service}")" = "${service_load}" ] \
+      && [ "$(systemctl show --property LoadState --value "${socket}")" = "${socket_load}" ] \
+      || { echo "PgBouncer LoadState changed before quiesce" >&2; exit 1; }
+    [ "$(systemctl show --property ActiveState --value "${service}")" = "${service_active}" ] \
+      && [ "$(systemctl show --property ActiveState --value "${socket}")" = "${socket_active}" ] \
+      || { echo "PgBouncer ActiveState changed before quiesce" >&2; exit 1; }
+    [ "$(systemctl show --property UnitFileState --value "${service}")" = "${service_file}" ] \
+      && [ "$(systemctl show --property UnitFileState --value "${socket}")" = "${socket_file}" ] \
+      || { echo "PgBouncer UnitFileState changed before quiesce" >&2; exit 1; }
+    # Closing and masking the socket first prevents systemd from reactivating
+    # the service while its min_pool_size server connections are draining.
+    sudo systemctl stop "${socket}"
+    sudo systemctl mask --runtime "${socket}" >/dev/null
+    sudo systemctl stop "${service}"
+    sudo systemctl mask --runtime "${service}" >/dev/null
+    ;;
+  masked:masked)
+    ;;
+  *)
+    echo "PgBouncer runtime masks are mixed or unsafe before quiesce" >&2
+    exit 1
+    ;;
+esac
+for unit in "${socket}" "${service}"; do
+  [ "$(systemctl show --property ActiveState --value "${unit}")" = inactive ] \
+    || { echo "PgBouncer unit failed to stop: ${unit}" >&2; exit 1; }
+  mask_path="/run/systemd/system/${unit}"
+  [ -L "${mask_path}" ] && [ "$(readlink -- "${mask_path}")" = /dev/null ] \
+    || { echo "PgBouncer runtime mask missing: ${unit}" >&2; exit 1; }
+done
+if ss -H -ltn "sport = :${port}" | grep -q .; then
+  echo "PgBouncer listener remains on 6432 after quiesce" >&2
+  exit 1
+fi
+quiesce_complete=1
+trap - EXIT
+REMOTE_PGBOUNCER_QUIESCE
+  then
+    echo "[deploy] PgBouncer service/socket could not be quiesced safely; both remain fail-closed." >&2
+    return 1
+  fi
+  PGBOUNCER_QUIESCED=1
+}
+
 quiesce_remote_sync_units() {
   if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
     echo "Refusing sync quiesce without a captured service/timer state." >&2
@@ -1294,6 +1566,9 @@ quiesce_remote_release_consumers() {
   SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
   if ! ssh "${SSH_TARGET}" "for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl is-active --quiet \"\${unit}\" || { echo \"required release consumer is not active before quiesce: \${unit}\" >&2; exit 1; }; done; if [ '${expected_redis_state}' = active ]; then systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}' || { echo 'captured active Redis worker changed state before quiesce' >&2; exit 1; }; redis_unit='${STAGING_REDIS_WORKER_SERVICE}'; else if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'captured inactive Redis worker changed state before quiesce' >&2; exit 1; fi; redis_unit=''; fi; sudo systemctl stop '${SYNC_TIMER}'; sudo systemctl mask --runtime '${SYNC_TIMER}' >/dev/null; sudo systemctl stop '${SYNC_SERVICE}'; sudo systemctl mask --runtime '${SYNC_SERVICE}' >/dev/null; for sync_unit in '${SYNC_TIMER}' '${SYNC_SERVICE}'; do if systemctl is-active --quiet \"\${sync_unit}\"; then echo \"sync unit failed to stop: \${sync_unit}\" >&2; exit 1; fi; sync_mask_path=\"/run/systemd/system/\${sync_unit}\"; if [ ! -L \"\${sync_mask_path}\" ] || [ \"\$(readlink -- \"\${sync_mask_path}\")\" != /dev/null ]; then echo \"sync unit failed to mask: \${sync_unit}\" >&2; exit 1; fi; done; sudo systemctl stop '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS} \${redis_unit}; for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do if systemctl is-active --quiet \"\${unit}\"; then echo \"release consumer failed to stop: \${unit}\" >&2; exit 1; fi; done; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'Redis worker failed to stop' >&2; exit 1; fi"; then
     echo "[deploy] complete web/worker fleet could not be quiesced before release mutation." >&2
+    return 1
+  fi
+  if ! quiesce_remote_pgbouncer_for_clone; then
     return 1
   fi
   RELEASE_CONSUMERS_QUIESCED=1
@@ -1381,6 +1656,9 @@ MIGRATION_MANIFEST_CSV="$(find "${PROJECT_ROOT}/migrations" -maxdepth 1 -type f 
 run_predeploy_embedded_browser_gate
 setup_deploy_ssh_transport
 capture_remote_sync_unit_state
+if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
+  capture_remote_pgbouncer_unit_state
+fi
 sync_state="${SYNC_SERVICE_ACTIVE_STATE}"
 if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
   echo "Refusing deploy while ${SYNC_SERVICE} is ${sync_state}. Set ALLOW_DURING_SYNC=1 only for an intentional ops override." >&2
@@ -2078,8 +2356,9 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   fi
   # CREATE DATABASE ... TEMPLATE requires the source database to have no app
   # connections.  The common quiesce step above covers this and app-only releases.
-  if [ "${RELEASE_CONSUMERS_QUIESCED}" != "1" ]; then
-    echo "Refusing staging clone creation while release consumers are not quiesced." >&2
+  if [ "${RELEASE_CONSUMERS_QUIESCED}" != "1" ] \
+    || [ "${PGBOUNCER_QUIESCED}" != "1" ]; then
+    echo "Refusing staging clone creation while release consumers or PgBouncer are not quiesced." >&2
     exit 1
   fi
 
@@ -2223,6 +2502,10 @@ fi
 # make systemd observe the byte-checked replacement before any state restore.
 ssh "${SSH_TARGET}" "set -eu; sync_unit_source='${REMOTE_CURRENT_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'; sync_unit_target='/etc/systemd/system/${SYNC_SERVICE}'; if [ ! -f \"\${sync_unit_source}\" ] || [ -L \"\${sync_unit_source}\" ]; then echo 'reviewed sync service source is not a regular non-symlink file' >&2; exit 1; fi; sync_unit_tmp=\$(sudo mktemp '/etc/systemd/system/.${SYNC_SERVICE}.XXXXXX'); cleanup_sync_unit_tmp() { if [ -n \"\${sync_unit_tmp}\" ]; then sudo rm -f -- \"\${sync_unit_tmp}\"; fi; }; trap cleanup_sync_unit_tmp EXIT; sudo install -o root -g root -m 0644 \"\${sync_unit_source}\" \"\${sync_unit_tmp}\"; if [ -L \"\${sync_unit_tmp}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sync_unit_tmp}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sync_unit_source}\" \"\${sync_unit_tmp}\"; then echo 'staged sync service owner, mode, or content verification failed' >&2; exit 1; fi; sudo mv -f -- \"\${sync_unit_tmp}\" \"\${sync_unit_target}\"; sync_unit_tmp=''; trap - EXIT; if [ ! -f \"\${sync_unit_target}\" ] || [ -L \"\${sync_unit_target}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sync_unit_target}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sync_unit_source}\" \"\${sync_unit_target}\"; then echo 'installed sync service owner, mode, or content verification failed' >&2; exit 1; fi; sudo systemctl daemon-reload"
 ssh "${SSH_TARGET}" "sudo systemctl unmask '${STAGING_REDIS_WORKER_SERVICE}' >/dev/null 2>&1 || true; sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '/etc/systemd/system/${SERVICE_NAME}' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '/etc/systemd/system/vkpi-worker-interactive.service' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '/etc/systemd/system/vkpi-worker-bulk@.service' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}' '/etc/systemd/system/${STAGING_REDIS_WORKER_SERVICE}' && sudo install -d -o root -g root -m 0755 '${REMOTE_LANE_OVERRIDE_DIR}' && [ ! -L '${REMOTE_LANE_OVERRIDE_DIR}' ] && [ \"\$(sudo stat -c '%u:%g:%a' '${REMOTE_LANE_OVERRIDE_DIR}')\" = '0:0:755' ] && lane_tmp=\$(sudo mktemp '${REMOTE_LANE_OVERRIDE_DIR}/.vkpi-lane-overrides.env.XXXXXX') && cleanup_lane_tmp() { if [ -n \"\${lane_tmp}\" ]; then sudo rm -f -- \"\${lane_tmp}\"; fi; } && trap cleanup_lane_tmp EXIT && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' \"\${lane_tmp}\" && sudo cmp -s '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' \"\${lane_tmp}\" && sudo mv -f -- \"\${lane_tmp}\" '${REMOTE_LANE_OVERRIDE_FILE}' && lane_tmp='' && trap - EXIT && [ ! -L '${REMOTE_LANE_OVERRIDE_FILE}' ] && [ \"\$(sudo stat -c '%u:%g:%a' '${REMOTE_LANE_OVERRIDE_FILE}')\" = '0:0:644' ] && sudo cmp -s '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' '${REMOTE_LANE_OVERRIDE_FILE}' && sudo systemctl daemon-reload"
+
+# A clone needs PgBouncer stopped only for CREATE DATABASE ... TEMPLATE.  Put
+# its captured state back before any new release consumer can connect.
+restore_remote_pgbouncer_state
 
 REDIS_WORKER_RESTART_NOT_BEFORE="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")"
 REDIS_WORKER_MAIN_PID="$(ssh "${SSH_TARGET}" "sudo systemctl enable --now '${STAGING_REDIS_WORKER_SERVICE}' && systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}' && systemctl is-enabled --quiet '${STAGING_REDIS_WORKER_SERVICE}' && systemctl show --property MainPID --value '${STAGING_REDIS_WORKER_SERVICE}'")"

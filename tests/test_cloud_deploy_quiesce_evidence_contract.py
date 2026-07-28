@@ -87,6 +87,141 @@ def test_sync_timer_and_service_are_captured_quiesced_and_restored() -> None:
     assert success_restore < accepted
 
 
+def test_staging_clone_captures_and_quiesces_pgbouncer_service_and_socket() -> None:
+    deploy = _deploy()
+
+    assert 'PGBOUNCER_SERVICE="pgbouncer.service"' in deploy
+    assert 'PGBOUNCER_SOCKET="pgbouncer.socket"' in deploy
+    assert 'PGBOUNCER_PORT="6432"' in deploy
+
+    capture = deploy.split("capture_remote_pgbouncer_unit_state()", 1)[1].split(
+        "restore_remote_pgbouncer_state()", 1
+    )[0]
+    for required in (
+        'if [ "${STAGING_DB_CLONE_MODE}" != "1" ]',
+        "--property LoadState",
+        "--property ActiveState",
+        "--property UnitFileState",
+        "'${PGBOUNCER_SERVICE}'",
+        "'${PGBOUNCER_SOCKET}'",
+        "PGBOUNCER_STATE_CAPTURED=1",
+    ):
+        assert required in capture
+
+    top_level = deploy[
+        deploy.index("setup_deploy_ssh_transport\n") :
+        deploy.index("sync_state=", deploy.index("setup_deploy_ssh_transport\n"))
+    ]
+    assert (
+        'if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then\n'
+        "  capture_remote_pgbouncer_unit_state\n"
+        "fi"
+    ) in top_level
+
+    quiesce = deploy.split("quiesce_remote_pgbouncer_for_clone()", 1)[1].split(
+        "quiesce_remote_release_consumers()", 1
+    )[0]
+    socket_stop = quiesce.index('sudo systemctl stop "${socket}"')
+    socket_mask = quiesce.index('sudo systemctl mask --runtime "${socket}"')
+    service_stop = quiesce.index('sudo systemctl stop "${service}"')
+    service_mask = quiesce.index('sudo systemctl mask --runtime "${service}"')
+    assert socket_stop < socket_mask < service_stop < service_mask
+    assert 'mask_path="/run/systemd/system/${unit}"' in quiesce
+    assert 'readlink -- "${mask_path}"' in quiesce
+    assert 'ss -H -ltn "sport = :${port}"' in quiesce
+    assert "PgBouncer listener remains on 6432 after quiesce" in quiesce
+    assert "PGBOUNCER_MAY_HAVE_BEEN_MUTATED=1" in quiesce
+    assert "PGBOUNCER_QUIESCED=1" in quiesce
+    assert "systemctl enable" not in quiesce
+    assert "systemctl disable" not in quiesce
+
+    release_quiesce = deploy.split("quiesce_remote_release_consumers()", 1)[1].split(
+        "fetch_predeploy_runtime_health()", 1
+    )[0]
+    assert "quiesce_remote_pgbouncer_for_clone" in release_quiesce
+    clone_gate = deploy[
+        deploy.index('if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then', 2000) :
+        deploy.index("STAGING_CLONE_CREATE_JSON=", 2000)
+    ]
+    assert 'PGBOUNCER_QUIESCED}" != "1"' in clone_gate
+
+
+def test_pgbouncer_restore_is_exact_idempotent_and_precedes_all_consumers() -> None:
+    deploy = _deploy()
+    restore = deploy.split("restore_remote_pgbouncer_state()", 1)[1].split(
+        "restore_remote_sync_unit_state()", 1
+    )[0]
+
+    for required in (
+        'if [ "${STAGING_DB_CLONE_MODE}" != "1" ]',
+        'if [ "${PGBOUNCER_MAY_HAVE_BEEN_MUTATED}" != "1" ]',
+        'sudo systemctl unmask --runtime "${socket}" "${service}"',
+        "sudo systemctl daemon-reload",
+        "'${PGBOUNCER_SERVICE_ACTIVE_STATE}'",
+        "'${PGBOUNCER_SOCKET_ACTIVE_STATE}'",
+        "'${PGBOUNCER_SERVICE_UNIT_FILE_STATE}'",
+        "'${PGBOUNCER_SOCKET_UNIT_FILE_STATE}'",
+        'sudo systemctl stop "${socket}" "${service}"',
+        "--property MainPID",
+        "PgBouncer service MainPID is invalid after restore",
+        "fail_closed_pgbouncer",
+        "PGBOUNCER_RESTORED=1",
+    ):
+        assert required in restore
+    assert "systemctl enable" not in restore
+    assert "systemctl disable" not in restore
+
+    rollback = deploy.split("attempt_automatic_rollback()", 1)[1].split(
+        "cleanup_post_deploy_evidence()", 1
+    )[0]
+    rollback_restore = rollback.index("restore_remote_pgbouncer_state")
+    rollback_redis_start = rollback.index(
+        "sudo systemctl start '${STAGING_REDIS_WORKER_SERVICE}'"
+    )
+    rollback_web_start = rollback.index(
+        "sudo systemctl restart '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}"
+    )
+    assert rollback_restore < rollback_redis_start < rollback_web_start
+
+    success = deploy.split(
+        "# A clone needs PgBouncer stopped only for CREATE DATABASE ... TEMPLATE.",
+        1,
+    )[1]
+    success_restore = success.index("restore_remote_pgbouncer_state")
+    redis_start = success.index("sudo systemctl enable --now '${STAGING_REDIS_WORKER_SERVICE}'")
+    web_start = success.index("sudo systemctl restart '${SERVICE_NAME}'")
+    worker_start = success.index("sudo systemctl restart ${WORKER_SYSTEMD_UNIT_ARGS}")
+    assert success_restore < redis_start < web_start < worker_start
+
+    cleanup = deploy.split("cleanup_post_deploy_evidence()", 1)[1].split(
+        "trap cleanup_post_deploy_evidence EXIT", 1
+    )[0]
+    assert "PGBOUNCER_MAY_HAVE_BEEN_MUTATED" in cleanup
+    assert "restore_remote_pgbouncer_state || true" in cleanup
+
+
+def test_non_clone_deploy_never_touches_pgbouncer_units() -> None:
+    deploy = _deploy()
+    # There are no hidden call sites: one conditional capture, one release
+    # quiesce, and three idempotent restore paths (rollback, trap, success).
+    assert deploy.count("capture_remote_pgbouncer_unit_state") == 2
+    assert deploy.count("quiesce_remote_pgbouncer_for_clone") == 2
+    assert deploy.count("restore_remote_pgbouncer_state") == 4
+    for function_name, next_function in (
+        ("capture_remote_pgbouncer_unit_state()", "restore_remote_pgbouncer_state()"),
+        ("restore_remote_pgbouncer_state()", "restore_remote_sync_unit_state()"),
+        ("quiesce_remote_pgbouncer_for_clone()", "quiesce_remote_release_consumers()"),
+    ):
+        body = deploy.split(function_name, 1)[1].split(next_function, 1)[0]
+        guard = body.index('if [ "${STAGING_DB_CLONE_MODE}" != "1" ]')
+        first_remote_touch = min(
+            position
+            for marker in ("ssh ", "systemctl ")
+            if (position := body.find(marker)) >= 0
+        )
+        assert guard < body.index("return 0", guard) < first_remote_touch
+
+
 def test_default_postdeploy_evidence_is_durable_and_never_deleted_on_success() -> None:
     deploy = _deploy()
 
