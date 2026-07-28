@@ -580,6 +580,10 @@ def run_migrations_only(
     os.environ.update(
         {
             "APP_ROLE": "migration-runner",
+            # Migrations run while the release-bound PgBouncer service is
+            # deliberately quiesced.  The direct URL was identity-checked
+            # above, so never inherit a systemd or dotenv pool override here.
+            "DB_USE_PGBOUNCER": "0",
             "DB_RUNTIME_BACKEND": "postgres",
             "ENABLE_BROWSER": "0",
             "ENABLE_LOCAL_ORCHESTRATOR": "0",

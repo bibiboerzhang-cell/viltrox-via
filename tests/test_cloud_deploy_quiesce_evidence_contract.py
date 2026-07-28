@@ -184,7 +184,7 @@ def test_pgbouncer_restore_is_exact_idempotent_and_precedes_all_consumers() -> N
     assert rollback_restore < rollback_redis_start < rollback_web_start
 
     success = deploy.split(
-        "# A clone needs PgBouncer stopped only for CREATE DATABASE ... TEMPLATE.",
+        "# The static dual map must still match the prepared hash before PgBouncer",
         1,
     )[1]
     success_restore = success.index("restore_remote_pgbouncer_state")
@@ -203,9 +203,9 @@ def test_pgbouncer_restore_is_exact_idempotent_and_precedes_all_consumers() -> N
 def test_non_clone_deploy_never_touches_pgbouncer_units() -> None:
     deploy = _deploy()
     # There are no hidden call sites: one conditional capture, one release
-    # quiesce, and three idempotent restore paths (rollback, trap, success).
+    # quiesce, one rollback re-quiesce, and three idempotent restore paths.
     assert deploy.count("capture_remote_pgbouncer_unit_state") == 2
-    assert deploy.count("quiesce_remote_pgbouncer_for_clone") == 2
+    assert deploy.count("quiesce_remote_pgbouncer_for_clone") == 3
     assert deploy.count("restore_remote_pgbouncer_state") == 4
     for function_name, next_function in (
         ("capture_remote_pgbouncer_unit_state()", "restore_remote_pgbouncer_state()"),
@@ -220,6 +220,93 @@ def test_non_clone_deploy_never_touches_pgbouncer_units() -> None:
             if (position := body.find(marker)) >= 0
         )
         assert guard < body.index("return 0", guard) < first_remote_touch
+
+
+def test_staging_clone_binds_effective_web_runtime_and_dual_map_transaction() -> None:
+    deploy = _deploy()
+
+    capture_runtime = deploy.index(
+        'capture_remote_web_database_runtime "${STAGING_SOURCE_DATABASE}"'
+    )
+    capture_map = deploy.index("capture_remote_pgbouncer_database_map", capture_runtime)
+    first_mutation = deploy.index("\nquiesce_remote_sync_units\n", capture_map)
+    clone_create = deploy.index("STAGING_CLONE_CREATE_JSON=", first_mutation)
+    prepare_map = deploy.index("prepare_remote_pgbouncer_database_map", clone_create)
+    env_switch = deploy.index("staging_db_clone.py' switch-env", prepare_map)
+    static_verify = deploy.index(
+        "\nverify_remote_pgbouncer_database_map\n", env_switch
+    )
+    service_restore = deploy.index(
+        "\nrestore_remote_pgbouncer_state\n", static_verify
+    )
+    source_probe = deploy.index(
+        'probe_remote_pgbouncer_database "${STAGING_SOURCE_DATABASE}"',
+        service_restore,
+    )
+    target_probe = deploy.index(
+        'probe_remote_pgbouncer_database "${STAGING_CLONE_DATABASE}"',
+        source_probe,
+    )
+    redis_start = deploy.index(
+        "sudo systemctl enable --now '${STAGING_REDIS_WORKER_SERVICE}'",
+        target_probe,
+    )
+    assert (
+        capture_runtime
+        < capture_map
+        < first_mutation
+        < clone_create
+        < prepare_map
+        < env_switch
+        < static_verify
+        < service_restore
+        < source_probe
+        < target_probe
+        < redis_start
+    )
+    assert (
+        'PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE="${PGBOUNCER_WEB_POOL_EFFECTIVE}"'
+        in deploy
+    )
+    assert deploy.count(
+        '"${PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE}"'
+    ) >= 4
+
+    rollback = deploy.split("attempt_automatic_rollback()", 1)[1].split(
+        "cleanup_post_deploy_evidence()", 1
+    )[0]
+    stop_consumers = rollback.index("complete web/worker fleet")
+    requiesce = rollback.index("quiesce_remote_pgbouncer_for_clone", stop_consumers)
+    restore_layout = rollback.index("atomic_release_layout.py' restore", requiesce)
+    restore_map = rollback.index("restore_remote_pgbouncer_database_map", restore_layout)
+    restore_service = rollback.index("restore_remote_pgbouncer_state", restore_map)
+    rollback_probe = rollback.index(
+        'probe_remote_pgbouncer_database "${PREDEPLOY_DATABASE_NAME}"',
+        restore_service,
+    )
+    restart_web = rollback.index(
+        "sudo systemctl restart '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}",
+        rollback_probe,
+    )
+    assert (
+        stop_consumers
+        < requiesce
+        < restore_layout
+        < restore_map
+        < restore_service
+        < rollback_probe
+        < restart_web
+    )
+
+    final_verify = deploy.rindex("verify_remote_pgbouncer_database_map")
+    final_target_probe = deploy.rindex(
+        'probe_remote_pgbouncer_database "${STAGING_CLONE_DATABASE}"'
+    )
+    accepted = deploy.rindex("DEPLOY_ACCEPTED=1")
+    assert final_verify < final_target_probe < accepted
+    assert '"DB_USE_PGBOUNCER": "0"' in (
+        ROOT / "scripts" / "ops" / "staging_db_clone.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_default_postdeploy_evidence_is_durable_and_never_deleted_on_success() -> None:

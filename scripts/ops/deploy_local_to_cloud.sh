@@ -508,10 +508,21 @@ STAGING_REDIS_WORKER_UNIT_STATE=""
 PGBOUNCER_SERVICE="pgbouncer.service"
 PGBOUNCER_SOCKET="pgbouncer.socket"
 PGBOUNCER_PORT="6432"
+PGBOUNCER_CONFIG_PATH="/etc/pgbouncer/pgbouncer.ini"
+PGBOUNCER_MAP_BACKUP_PATH="/etc/pgbouncer/.vkpi-release-map-${RELEASE_ID}.ini"
+PGBOUNCER_MAP_RECEIPT_PATH="/etc/pgbouncer/.vkpi-release-map-${RELEASE_ID}.json"
 PGBOUNCER_STATE_CAPTURED=0
 PGBOUNCER_MAY_HAVE_BEEN_MUTATED=0
 PGBOUNCER_QUIESCED=0
 PGBOUNCER_RESTORED=0
+PGBOUNCER_MAP_CAPTURED=0
+PGBOUNCER_MAP_MUTATION_INTENT=0
+PGBOUNCER_MAP_PREPARED=0
+PGBOUNCER_MAP_RESTORED=0
+PGBOUNCER_MAP_CONFIG_SHA_BEFORE=""
+PGBOUNCER_MAP_CONFIG_SHA_AFTER=""
+PGBOUNCER_WEB_POOL_EFFECTIVE=""
+PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE=""
 PGBOUNCER_SERVICE_LOAD_STATE=""
 PGBOUNCER_SERVICE_ACTIVE_STATE=""
 PGBOUNCER_SERVICE_UNIT_FILE_STATE=""
@@ -541,8 +552,9 @@ SYNC_TIMER_UNIT_FILE_STATE=""
 
 if [ "${PGBOUNCER_SERVICE}" != "pgbouncer.service" ] \
   || [ "${PGBOUNCER_SOCKET}" != "pgbouncer.socket" ] \
-  || [ "${PGBOUNCER_PORT}" != "6432" ]; then
-  echo "The reviewed PgBouncer service, socket, and listener must remain fixed." >&2
+  || [ "${PGBOUNCER_PORT}" != "6432" ] \
+  || [ "${PGBOUNCER_CONFIG_PATH}" != "/etc/pgbouncer/pgbouncer.ini" ]; then
+  echo "The reviewed PgBouncer service, socket, listener, and config must remain fixed." >&2
   exit 1
 fi
 
@@ -997,7 +1009,7 @@ capture_remote_pgbouncer_unit_state() {
     echo "Refusing staging clone because the PgBouncer service/socket scope is not reviewed." >&2
     return 1
   fi
-  if ! captured="$(ssh "${SSH_TARGET}" "command -v ss >/dev/null || { echo 'ss is required for PgBouncer listener verification' >&2; exit 1; }; service_load=\$(systemctl show --property LoadState --value '${PGBOUNCER_SERVICE}'); service_active=\$(systemctl show --property ActiveState --value '${PGBOUNCER_SERVICE}'); service_file=\$(systemctl show --property UnitFileState --value '${PGBOUNCER_SERVICE}'); socket_load=\$(systemctl show --property LoadState --value '${PGBOUNCER_SOCKET}'); socket_active=\$(systemctl show --property ActiveState --value '${PGBOUNCER_SOCKET}'); socket_file=\$(systemctl show --property UnitFileState --value '${PGBOUNCER_SOCKET}'); printf '%s:%s:%s:%s:%s:%s\n' \"\${service_load}\" \"\${service_active}\" \"\${service_file}\" \"\${socket_load}\" \"\${socket_active}\" \"\${socket_file}\"")"; then
+  if ! captured="$(ssh "${SSH_TARGET}" "command -v ss >/dev/null || { echo 'ss is required for PgBouncer listener verification' >&2; exit 1; }; exec_start=\$(systemctl show --property ExecStart --value '${PGBOUNCER_SERVICE}'); case \"\${exec_start}\" in *'/usr/sbin/pgbouncer /etc/pgbouncer/pgbouncer.ini'*) ;; *) echo 'PgBouncer ExecStart is outside the reviewed config boundary' >&2; exit 1;; esac; [ \"\$(printf '%s' \"\${exec_start}\" | grep -oF '/etc/pgbouncer/pgbouncer.ini' | wc -l)\" -eq 1 ] || { echo 'PgBouncer ExecStart has an ambiguous config path' >&2; exit 1; }; service_load=\$(systemctl show --property LoadState --value '${PGBOUNCER_SERVICE}'); service_active=\$(systemctl show --property ActiveState --value '${PGBOUNCER_SERVICE}'); service_file=\$(systemctl show --property UnitFileState --value '${PGBOUNCER_SERVICE}'); socket_load=\$(systemctl show --property LoadState --value '${PGBOUNCER_SOCKET}'); socket_active=\$(systemctl show --property ActiveState --value '${PGBOUNCER_SOCKET}'); socket_file=\$(systemctl show --property UnitFileState --value '${PGBOUNCER_SOCKET}'); printf '%s:%s:%s:%s:%s:%s\n' \"\${service_load}\" \"\${service_active}\" \"\${service_file}\" \"\${socket_load}\" \"\${socket_active}\" \"\${socket_file}\"")"; then
     echo "Refusing staging clone because PgBouncer service/socket state is unreadable." >&2
     return 1
   fi
@@ -1028,6 +1040,285 @@ capture_remote_pgbouncer_unit_state() {
     esac
   done
   PGBOUNCER_STATE_CAPTURED=1
+}
+
+capture_remote_web_database_runtime() {
+  local expected_database="$1" runtime_json pool_effective
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if ! runtime_json="$(ssh "${SSH_TARGET}" \
+    "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${SERVICE_NAME}' '${expected_database}'" <<'PY'
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+service, expected_database = sys.argv[1:]
+if not re.fullmatch(r"[A-Za-z0-9@_.-]+\.service", service):
+    raise SystemExit("web service identity is invalid")
+if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", expected_database):
+    raise SystemExit("expected database identity is invalid")
+main_pid = subprocess.run(
+    ["systemctl", "show", "--property", "MainPID", "--value", service],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+if not main_pid.isdigit() or int(main_pid) <= 0:
+    raise SystemExit("web service MainPID is invalid")
+raw = Path(f"/proc/{main_pid}/environ").read_bytes()
+values: dict[str, str] = {}
+for entry in raw.split(b"\0"):
+    if not entry or b"=" not in entry:
+        continue
+    key, value = entry.split(b"=", 1)
+    name = key.decode("ascii")
+    if name in values:
+        raise SystemExit("web process environment contains a duplicate key")
+    values[name] = value.decode("utf-8")
+
+def boolean(name: str) -> bool:
+    value = values.get(name, "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"{name} is not an explicit boolean")
+
+def endpoint(name: str, expected_port: int) -> dict[str, object]:
+    value = values.get(name, "")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port if parsed.port is not None else 5432
+        query = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        raise SystemExit(f"{name} is invalid") from None
+    overrides = {"host", "hostaddr", "port", "dbname", "database", "service"}
+    database = unquote(parsed.path[1:]) if parsed.path.startswith("/") else ""
+    if (
+        parsed.scheme not in {"postgres", "postgresql"}
+        or parsed.hostname != "127.0.0.1"
+        or port != expected_port
+        or parsed.fragment
+        or parsed.path.count("/") != 1
+        or database != expected_database
+        or any(key.lower() in overrides for key, _value in query)
+    ):
+        raise SystemExit(f"{name} does not match the reviewed database endpoint")
+    return {"host": "127.0.0.1", "port": port, "database_name": database}
+
+direct = endpoint("DATABASE_URL", 5432)
+pool = endpoint("DATABASE_POOL_URL", 6432)
+print(json.dumps({
+    "schema_version": "vkpi-effective-web-database/v1",
+    "operation": "inspect-effective-runtime",
+    "service": service,
+    "main_pid": int(main_pid),
+    "pool_enabled": boolean("DB_USE_PGBOUNCER"),
+    "direct": direct,
+    "pool": pool,
+    "credentials_included": False,
+}, sort_keys=True, separators=(",", ":")))
+PY
+  )"; then
+    echo "Refusing staging clone because the effective Web database runtime is unproven." >&2
+    return 1
+  fi
+  if ! pool_effective="$(printf '%s' "${runtime_json}" \
+    | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,re,sys
+p=json.load(sys.stdin)
+expected=sys.argv[1]
+assert p["schema_version"]=="vkpi-effective-web-database/v1"
+assert p["operation"]=="inspect-effective-runtime"
+assert p["credentials_included"] is False
+assert isinstance(p["main_pid"],int) and p["main_pid"]>0
+assert p["direct"]=={"host":"127.0.0.1","port":5432,"database_name":expected}
+assert p["pool"]=={"host":"127.0.0.1","port":6432,"database_name":expected}
+assert isinstance(p["pool_enabled"],bool)
+print("1" if p["pool_enabled"] else "0")' "${expected_database}")"; then
+    echo "Refusing staging clone because the effective Web runtime receipt is invalid." >&2
+    return 1
+  fi
+  PGBOUNCER_WEB_POOL_EFFECTIVE="${pool_effective}"
+}
+
+verify_remote_web_database_runtime() {
+  local expected_database="$1" expected_pool_effective="$2" observed
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  observed="${PGBOUNCER_WEB_POOL_EFFECTIVE}"
+  if ! capture_remote_web_database_runtime "${expected_database}"; then
+    PGBOUNCER_WEB_POOL_EFFECTIVE="${observed}"
+    return 1
+  fi
+  if [ "${PGBOUNCER_WEB_POOL_EFFECTIVE}" != "${expected_pool_effective}" ]; then
+    echo "Effective Web PgBouncer mode changed across the release boundary." >&2
+    PGBOUNCER_WEB_POOL_EFFECTIVE="${observed}"
+    return 1
+  fi
+  PGBOUNCER_WEB_POOL_EFFECTIVE="${expected_pool_effective}"
+}
+
+capture_remote_pgbouncer_database_map() {
+  local inspect_json
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if ! inspect_json="$(ssh "${SSH_TARGET}" \
+    "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 python3 -B - inspect --config '${PGBOUNCER_CONFIG_PATH}' --source-db '${STAGING_SOURCE_DATABASE}'" \
+    <"${PROJECT_ROOT}/scripts/ops/pgbouncer_release_map.py")"; then
+    echo "Refusing staging clone because the PgBouncer source mapping is unsafe." >&2
+    return 1
+  fi
+  if ! PGBOUNCER_MAP_CONFIG_SHA_BEFORE="$(printf '%s' "${inspect_json}" \
+    | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,re,sys
+p=json.load(sys.stdin)
+source=sys.argv[1]
+assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
+assert p["operation"]=="inspect"
+assert p["mapping_endpoint"]=="127.0.0.1:5432"
+assert p["database_mapping_credentials_included"] is False
+assert source in p["databases"]
+assert p["mapping_count"]==len(p["databases"]) and p["mapping_count"]>=1
+assert re.fullmatch(r"[0-9a-f]{64}",p["config_sha256"])
+print(p["config_sha256"])' "${STAGING_SOURCE_DATABASE}")"; then
+    echo "Refusing staging clone because the PgBouncer source-map receipt is invalid." >&2
+    return 1
+  fi
+  PGBOUNCER_MAP_CAPTURED=1
+}
+
+prepare_remote_pgbouncer_database_map() {
+  local prepare_json
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_MAP_CAPTURED}" != "1" ] \
+    || [ "${PGBOUNCER_QUIESCED}" != "1" ]; then
+    echo "Refusing PgBouncer map mutation without captured config and quiesced units." >&2
+    return 1
+  fi
+  PGBOUNCER_MAP_MUTATION_INTENT=1
+  if ! prepare_json="$(ssh "${SSH_TARGET}" \
+    "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/pgbouncer_release_map.py' prepare --config '${PGBOUNCER_CONFIG_PATH}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --backup '${PGBOUNCER_MAP_BACKUP_PATH}' --receipt '${PGBOUNCER_MAP_RECEIPT_PATH}' --expected-sha256 '${PGBOUNCER_MAP_CONFIG_SHA_BEFORE}'")"; then
+    echo "PgBouncer dual-map preparation failed; rollback recovery is armed." >&2
+    return 1
+  fi
+  if ! PGBOUNCER_MAP_CONFIG_SHA_AFTER="$(printf '%s' "${prepare_json}" \
+    | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,re,sys
+p=json.load(sys.stdin)
+source,target,before=sys.argv[1:]
+assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
+assert p["operation"]=="prepare"
+assert p["databases"]==[source,target] and p["mapping_count"]==2
+assert p["mapping_endpoint"]=="127.0.0.1:5432"
+assert p["database_mapping_credentials_included"] is False
+assert p["config_sha256_before"]==before
+assert p["backup_sha256"]==before
+assert p["config_sha256_after"]==p["config_sha256"]
+assert re.fullmatch(r"[0-9a-f]{64}",p["config_sha256_after"])
+print(p["config_sha256_after"])' \
+      "${STAGING_SOURCE_DATABASE}" "${STAGING_CLONE_DATABASE}" \
+      "${PGBOUNCER_MAP_CONFIG_SHA_BEFORE}")"; then
+    echo "PgBouncer dual-map preparation receipt is invalid." >&2
+    return 1
+  fi
+  PGBOUNCER_MAP_PREPARED=1
+}
+
+verify_remote_pgbouncer_database_map() {
+  local verify_json
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_MAP_PREPARED}" != "1" ] \
+    || ! [[ "${PGBOUNCER_MAP_CONFIG_SHA_AFTER}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Cannot verify PgBouncer dual map without its prepared receipt." >&2
+    return 1
+  fi
+  if ! verify_json="$(ssh "${SSH_TARGET}" \
+    "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/pgbouncer_release_map.py' verify --config '${PGBOUNCER_CONFIG_PATH}' --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}' --expected-sha256 '${PGBOUNCER_MAP_CONFIG_SHA_AFTER}'")"; then
+    echo "PgBouncer dual-map verification failed." >&2
+    return 1
+  fi
+  printf '%s' "${verify_json}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
+p=json.load(sys.stdin)
+source,target,expected=sys.argv[1:]
+assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
+assert p["operation"]=="verify" and p["verified"] is True
+assert p["databases"]==[source,target] and p["mapping_count"]==2
+assert p["config_sha256"]==expected
+assert p["mapping_endpoint"]=="127.0.0.1:5432"
+assert p["database_mapping_credentials_included"] is False' \
+    "${STAGING_SOURCE_DATABASE}" "${STAGING_CLONE_DATABASE}" \
+    "${PGBOUNCER_MAP_CONFIG_SHA_AFTER}"
+}
+
+restore_remote_pgbouncer_database_map() {
+  local restore_json
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ] \
+    || [ "${PGBOUNCER_MAP_MUTATION_INTENT}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_QUIESCED}" != "1" ] \
+    || ! [[ "${PGBOUNCER_MAP_CONFIG_SHA_BEFORE}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Cannot restore PgBouncer config without quiesced units and captured hash." >&2
+    return 1
+  fi
+  if ! restore_json="$(ssh "${SSH_TARGET}" \
+    "set -eu; backup='${PGBOUNCER_MAP_BACKUP_PATH}'; receipt='${PGBOUNCER_MAP_RECEIPT_PATH}'; helper='${REMOTE_RELEASE_DIR}/scripts/ops/pgbouncer_release_map.py'; if sudo -n -u postgres test -e \"\${backup}\" && sudo -n -u postgres test -e \"\${receipt}\"; then sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B \"\${helper}\" restore-original --config '${PGBOUNCER_CONFIG_PATH}' --backup \"\${backup}\" --receipt \"\${receipt}\"; elif ! sudo -n -u postgres test -e \"\${receipt}\"; then sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B \"\${helper}\" inspect --config '${PGBOUNCER_CONFIG_PATH}' --source-db '${STAGING_SOURCE_DATABASE}'; else echo 'PgBouncer map receipt exists without its backup' >&2; exit 1; fi")"; then
+    echo "CRITICAL: PgBouncer original config could not be recovered." >&2
+    return 1
+  fi
+  if ! printf '%s' "${restore_json}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
+p=json.load(sys.stdin)
+source,expected=sys.argv[1:]
+assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
+assert p["operation"] in {"restore-original","inspect"}
+assert p["config_sha256"]==expected
+assert source in p["databases"]
+assert p["mapping_endpoint"]=="127.0.0.1:5432"
+assert p["database_mapping_credentials_included"] is False
+if p["operation"]=="restore-original":
+    assert p["restored"] is True and p["backup_sha256"]==expected' \
+      "${STAGING_SOURCE_DATABASE}" "${PGBOUNCER_MAP_CONFIG_SHA_BEFORE}"; then
+    echo "CRITICAL: PgBouncer original-config recovery receipt is invalid." >&2
+    return 1
+  fi
+  PGBOUNCER_MAP_RESTORED=1
+}
+
+probe_remote_pgbouncer_database() {
+  local expected_database="$1" probe_json
+  if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+    return 0
+  fi
+  if [ "${PGBOUNCER_RESTORED}" != "1" ]; then
+    echo "Cannot probe PgBouncer before its reviewed service state is restored." >&2
+    return 1
+  fi
+  if ! probe_json="$(ssh "${SSH_TARGET}" \
+    "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/pgbouncer_release_map.py' probe --env-file '${REMOTE_ROOT}/.env' --expected-db '${expected_database}'")"; then
+    echo "PgBouncer route probe failed for the reviewed database alias." >&2
+    return 1
+  fi
+  printf '%s' "${probe_json}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
+p=json.load(sys.stdin)
+expected=sys.argv[1]
+assert p=={
+  "schema_version":"vkpi-pgbouncer-release-map/v1",
+  "operation":"probe",
+  "connected":True,
+  "database_name":expected,
+  "mapping_endpoint":"127.0.0.1:6432",
+  "credentials_included":False,
+}' "${expected_database}"
 }
 
 restore_remote_pgbouncer_state() {
@@ -1175,6 +1466,12 @@ attempt_automatic_rollback() {
     echo "[deploy] CRITICAL: complete web/worker fleet could not be quiesced before rollback." >&2
     return 1
   fi
+  if [ "${PGBOUNCER_MAP_MUTATION_INTENT}" = "1" ]; then
+    if ! quiesce_remote_pgbouncer_for_clone; then
+      echo "[deploy] CRITICAL: PgBouncer could not be re-quiesced before config rollback." >&2
+      return 1
+    fi
+  fi
   if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' restore --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system && sudo systemctl daemon-reload"; then
     echo "[deploy] CRITICAL: filesystem, environment, or unit rollback failed; operator intervention required." >&2
     return 1
@@ -1203,10 +1500,21 @@ attempt_automatic_rollback() {
       fi
     fi
   fi
-  # PgBouncer must regain its captured active/inactive state before any
-  # restored web, Redis, or Apify consumer is started.
+  # Restore the original PgBouncer bytes while both activation paths are
+  # runtime-masked.  Only then may its captured service state return.
+  if [ "${PGBOUNCER_MAP_MUTATION_INTENT}" = "1" ]; then
+    if ! restore_remote_pgbouncer_database_map; then
+      echo "[deploy] CRITICAL: rollback database is restored but PgBouncer config is not; consumers remain stopped." >&2
+      return 1
+    fi
+  fi
   if ! restore_remote_pgbouncer_state; then
     echo "[deploy] CRITICAL: rollback database is restored but PgBouncer is not; application consumers remain stopped." >&2
+    return 1
+  fi
+  if [ "${PGBOUNCER_SERVICE_ACTIVE_STATE}" = "active" ] \
+    && ! probe_remote_pgbouncer_database "${PREDEPLOY_DATABASE_NAME}"; then
+    echo "[deploy] CRITICAL: rollback PgBouncer source route could not be proven; consumers remain stopped." >&2
     return 1
   fi
   if [ "${STAGING_REDIS_WORKER_UNIT_WAS_MASKED}" = "1" ]; then
@@ -1251,6 +1559,11 @@ attempt_automatic_rollback() {
   fi
   if ! ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS} && systemctl is-active --quiet '${SERVICE_NAME}' && for unit in ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl is-active --quiet \"\${unit}\"; done"; then
     echo "[deploy] CRITICAL: restored web/worker service restart failed; operator intervention required." >&2
+    return 1
+  fi
+  if ! verify_remote_web_database_runtime \
+    "${PREDEPLOY_DATABASE_NAME}" "${PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE}"; then
+    echo "[deploy] CRITICAL: restored Web database runtime does not match the captured source." >&2
     return 1
   fi
   if ! rollback_health="$(ssh "${SSH_TARGET}" "for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null; then exit 0; fi; sleep 2; done; exit 1")"; then
@@ -2005,6 +2318,19 @@ if [ "${RESCUE_ROLLBACK_MODE}" = "1" ] \
   ROLLBACK_ANCHOR_ENV_FINGERPRINT="${PREDEPLOY_ENV_SHA256}"
 fi
 
+if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
+  # Bind the real running Web process, not only the base dotenv.  Reviewed
+  # systemd drop-ins may enable PgBouncer after the main file is loaded.
+  capture_remote_web_database_runtime "${STAGING_SOURCE_DATABASE}"
+  PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE="${PGBOUNCER_WEB_POOL_EFFECTIVE}"
+  if [ "${PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE}" = "1" ] \
+    && [ "${PGBOUNCER_SERVICE_ACTIVE_STATE}" != "active" ]; then
+    echo "Refusing staging clone because Web uses PgBouncer but its service is inactive." >&2
+    exit 1
+  fi
+  capture_remote_pgbouncer_database_map
+fi
+
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   if [ "${STAGING_SOURCE_KIND}" != "legacy-base" ] \
     || [ "${PREDEPLOY_DATABASE_NAME}" != "viltrox2_test" ] \
@@ -2368,6 +2694,10 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     exit 1
   fi
 
+  # PgBouncer is still stopped and runtime-masked here.  Install exactly the
+  # old+new aliases before either URL or current pointer can name the clone.
+  prepare_remote_pgbouncer_database_map
+
   STAGING_CLONE_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' switch-env --env-file '${REMOTE_ROOT}/.env' --expected-source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
   read -r STAGING_CLONE_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_CLONE_ENV_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
   if [ "${STAGING_CLONE_ENV_DATABASE}" != "${STAGING_CLONE_DATABASE}" ] \
@@ -2503,9 +2833,15 @@ fi
 ssh "${SSH_TARGET}" "set -eu; sync_unit_source='${REMOTE_CURRENT_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'; sync_unit_target='/etc/systemd/system/${SYNC_SERVICE}'; if [ ! -f \"\${sync_unit_source}\" ] || [ -L \"\${sync_unit_source}\" ]; then echo 'reviewed sync service source is not a regular non-symlink file' >&2; exit 1; fi; sync_unit_tmp=\$(sudo mktemp '/etc/systemd/system/.${SYNC_SERVICE}.XXXXXX'); cleanup_sync_unit_tmp() { if [ -n \"\${sync_unit_tmp}\" ]; then sudo rm -f -- \"\${sync_unit_tmp}\"; fi; }; trap cleanup_sync_unit_tmp EXIT; sudo install -o root -g root -m 0644 \"\${sync_unit_source}\" \"\${sync_unit_tmp}\"; if [ -L \"\${sync_unit_tmp}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sync_unit_tmp}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sync_unit_source}\" \"\${sync_unit_tmp}\"; then echo 'staged sync service owner, mode, or content verification failed' >&2; exit 1; fi; sudo mv -f -- \"\${sync_unit_tmp}\" \"\${sync_unit_target}\"; sync_unit_tmp=''; trap - EXIT; if [ ! -f \"\${sync_unit_target}\" ] || [ -L \"\${sync_unit_target}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sync_unit_target}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sync_unit_source}\" \"\${sync_unit_target}\"; then echo 'installed sync service owner, mode, or content verification failed' >&2; exit 1; fi; sudo systemctl daemon-reload"
 ssh "${SSH_TARGET}" "sudo systemctl unmask '${STAGING_REDIS_WORKER_SERVICE}' >/dev/null 2>&1 || true; sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '/etc/systemd/system/${SERVICE_NAME}' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '/etc/systemd/system/vkpi-worker-interactive.service' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '/etc/systemd/system/vkpi-worker-bulk@.service' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}' '/etc/systemd/system/${STAGING_REDIS_WORKER_SERVICE}' && sudo install -d -o root -g root -m 0755 '${REMOTE_LANE_OVERRIDE_DIR}' && [ ! -L '${REMOTE_LANE_OVERRIDE_DIR}' ] && [ \"\$(sudo stat -c '%u:%g:%a' '${REMOTE_LANE_OVERRIDE_DIR}')\" = '0:0:755' ] && lane_tmp=\$(sudo mktemp '${REMOTE_LANE_OVERRIDE_DIR}/.vkpi-lane-overrides.env.XXXXXX') && cleanup_lane_tmp() { if [ -n \"\${lane_tmp}\" ]; then sudo rm -f -- \"\${lane_tmp}\"; fi; } && trap cleanup_lane_tmp EXIT && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' \"\${lane_tmp}\" && sudo cmp -s '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' \"\${lane_tmp}\" && sudo mv -f -- \"\${lane_tmp}\" '${REMOTE_LANE_OVERRIDE_FILE}' && lane_tmp='' && trap - EXIT && [ ! -L '${REMOTE_LANE_OVERRIDE_FILE}' ] && [ \"\$(sudo stat -c '%u:%g:%a' '${REMOTE_LANE_OVERRIDE_FILE}')\" = '0:0:644' ] && sudo cmp -s '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' '${REMOTE_LANE_OVERRIDE_FILE}' && sudo systemctl daemon-reload"
 
-# A clone needs PgBouncer stopped only for CREATE DATABASE ... TEMPLATE.  Put
-# its captured state back before any new release consumer can connect.
+# The static dual map must still match the prepared hash before PgBouncer is
+# allowed to listen.  Then prove both aliases through 6432 before any new
+# release consumer can connect.
+verify_remote_pgbouncer_database_map
 restore_remote_pgbouncer_state
+if [ "${PGBOUNCER_SERVICE_ACTIVE_STATE}" = "active" ]; then
+  probe_remote_pgbouncer_database "${STAGING_SOURCE_DATABASE}"
+  probe_remote_pgbouncer_database "${STAGING_CLONE_DATABASE}"
+fi
 
 REDIS_WORKER_RESTART_NOT_BEFORE="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")"
 REDIS_WORKER_MAIN_PID="$(ssh "${SSH_TARGET}" "sudo systemctl enable --now '${STAGING_REDIS_WORKER_SERVICE}' && systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}' && systemctl is-enabled --quiet '${STAGING_REDIS_WORKER_SERVICE}' && systemctl show --property MainPID --value '${STAGING_REDIS_WORKER_SERVICE}'")"
@@ -2515,6 +2851,8 @@ if ! [[ "${REDIS_WORKER_MAIN_PID}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 ssh "${SSH_TARGET}" "sudo systemctl restart '${SERVICE_NAME}' && systemctl is-active '${SERVICE_NAME}' && cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 30); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' >/dev/null; then exit 0; fi; sleep 1; done; echo 'authenticated health check failed after service restart: ${HEALTH_URL}' >&2; exit 1"
+verify_remote_web_database_runtime \
+  "${STAGING_CLONE_DATABASE}" "${PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE}"
 
 ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' | env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/verify_redis_worker_health.py --expected-head '${LOCAL_GIT_SHA}' --expected-count 1 --expected-main-pid '${REDIS_WORKER_MAIN_PID}' --min-ready-sequence 3 --worker-not-before '${REDIS_WORKER_RESTART_NOT_BEFORE}' --max-age-seconds '${MAX_WORKER_AGE_SECONDS}' >/dev/null; then exit 0; fi; sleep 2; done; echo 'dedicated Redis worker failed strict readiness after restart: ${HEALTH_URL}' >&2; exit 1"
 
@@ -2763,6 +3101,15 @@ else
 fi
 
 restore_remote_sync_unit_state
+if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
+  verify_remote_pgbouncer_database_map
+  if [ "${PGBOUNCER_SERVICE_ACTIVE_STATE}" = "active" ]; then
+    probe_remote_pgbouncer_database "${STAGING_SOURCE_DATABASE}"
+    probe_remote_pgbouncer_database "${STAGING_CLONE_DATABASE}"
+  fi
+  verify_remote_web_database_runtime \
+    "${STAGING_CLONE_DATABASE}" "${PGBOUNCER_WEB_POOL_EFFECTIVE_BEFORE}"
+fi
 ssh "${SSH_TARGET}" "set -eu; current_path=\$(readlink -f -- '${REMOTE_CURRENT_DIR}'); previous_path=\$(readlink -f -- '${REMOTE_ROOT}/previous'); [ \"\${current_path}\" = '${REMOTE_RELEASE_DIR}' ] || { echo 'post-deploy current pointer does not name the accepted release' >&2; exit 1; }; case \"\${previous_path}\" in '${REMOTE_RELEASES_DIR}'/*) ;; *) echo 'post-deploy previous pointer escapes releases' >&2; exit 1;; esac; if [ -n '${EXPECTED_PREVIOUS_RELEASE_DIR}' ] && [ \"\${previous_path}\" != '${EXPECTED_PREVIOUS_RELEASE_DIR}' ]; then echo 'post-deploy previous pointer does not name the rescue rollback anchor' >&2; exit 1; fi; current_id=\${current_path##*/}; previous_id=\${previous_path##*/}; sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id \"\${current_id}\" --expected-owner-uid 0 --expected-owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id \"\${previous_id}\" --expected-owner-uid 0 --expected-owner-gid 0"
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py' write-success-marker --marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}' --plan-sha256 '${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' >/dev/null"
