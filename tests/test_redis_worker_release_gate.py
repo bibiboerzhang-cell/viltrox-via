@@ -791,11 +791,23 @@ def test_deploy_enables_unit_and_binds_release_gate_to_systemd_main_pid() -> Non
         'rollback_health="${rollback_candidate_health}"',
         rollback_wait_pid_at,
     )
-    rollback_final_pid_at = rollback.index(
-        '--expected-main-pid "${rollback_redis_main_pid}"',
+    rollback_runtime_gate_at = rollback.index(
+        '"${PROJECT_ROOT}/scripts/verify_runtime_health.py"',
         rollback_promote_at,
     )
-    restore_sync_at = rollback.index("restore_remote_sync_unit_state", rollback_final_pid_at)
+    rollback_final_refresh_at = rollback.index(
+        'rollback_candidate_health="$(ssh "${SSH_TARGET}"',
+        rollback_runtime_gate_at,
+    )
+    rollback_final_pid_at = rollback.index(
+        '--expected-main-pid "${rollback_redis_main_pid}"',
+        rollback_final_refresh_at,
+    )
+    rollback_final_promote_at = rollback.index(
+        'rollback_health="${rollback_candidate_health}"',
+        rollback_final_pid_at,
+    )
+    restore_sync_at = rollback.index("restore_remote_sync_unit_state", rollback_final_promote_at)
     assert (
         restore_at
         < rollback_not_before_at
@@ -805,8 +817,12 @@ def test_deploy_enables_unit_and_binds_release_gate_to_systemd_main_pid() -> Non
         < rollback_fresh_health_at
         < rollback_wait_pid_at
         < rollback_promote_at
+        < rollback_runtime_gate_at
+        < rollback_final_refresh_at
         < rollback_final_pid_at
+        < rollback_final_promote_at
         < restore_sync_at
     )
+    assert rollback.count('rollback_candidate_health="$(ssh "${SSH_TARGET}"') == 2
     assert rollback.count('--expected-main-pid "${rollback_redis_main_pid}"') == 2
     assert rollback.count("--min-ready-sequence 3") == 2

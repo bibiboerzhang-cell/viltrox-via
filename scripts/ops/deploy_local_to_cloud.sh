@@ -886,17 +886,22 @@ attempt_automatic_rollback() {
     return 1
   fi
   if [ "${STAGING_REDIS_WORKER_UNIT_WAS_ACTIVE}" = "1" ]; then
-    if ! printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
-      "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
-      --expected-head "${PREDEPLOY_APP_SHA}" \
-      --expected-count 1 \
-      --expected-main-pid "${rollback_redis_main_pid}" \
-      --min-ready-sequence 3 \
-      --worker-not-before "${rollback_redis_not_before}" \
-      --max-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
+    # Close the gap between the readiness poll and rollback completion.  The
+    # worker may restart or lose readiness after the polling snapshot passed,
+    # so the final gate must validate a newly fetched snapshot.
+    if ! rollback_candidate_health="$(ssh "${SSH_TARGET}" "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null")" \
+      || ! printf '%s' "${rollback_candidate_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
+        "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
+        --expected-head "${PREDEPLOY_APP_SHA}" \
+        --expected-count 1 \
+        --expected-main-pid "${rollback_redis_main_pid}" \
+        --min-ready-sequence 3 \
+        --worker-not-before "${rollback_redis_not_before}" \
+        --max-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
       echo "[deploy] CRITICAL: restored Redis worker failed strict runtime validation." >&2
       return 1
     fi
+    rollback_health="${rollback_candidate_health}"
   fi
   if ! restore_remote_sync_unit_state; then
     echo "[deploy] CRITICAL: rollback runtime is restored but sync unit state is not; units remain fail-closed." >&2
