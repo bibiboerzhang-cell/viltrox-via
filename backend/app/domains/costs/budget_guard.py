@@ -4,17 +4,21 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal
 from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.costs.budget_guard_persistence import (
+    clean_value as _persistence_clean_value,
+    cost_decimal as _cost_decimal,
+    ensure_sqlite_budget_schema as _ensure_sqlite_budget_schema,
+    money_db_param as _persistence_money_db_param,
+    micro_usd as _micro_usd,
+)
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)
-
-_USD_QUANTUM = Decimal("0.000001")
-_MICRO_USD_PER_USD = Decimal("1000000")
 
 
 def _utcnow() -> str:
@@ -87,38 +91,15 @@ def _resolve_staff(value: Any) -> int | None:
 
 
 def _clean_value(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        return float(value)
-    return value
+    return _persistence_clean_value(value)
 
 
 def _clean_row(row: Any) -> dict[str, Any]:
     return {key: _clean_value(value) for key, value in dict(row).items()}
 
 
-def _cost_decimal(value: Any) -> Decimal:
-    """Return one non-negative database-representable micro-USD amount."""
-
-    try:
-        parsed = Decimal(str(value if value not in (None, "") else 0))
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise ValueError("cost_usd_invalid") from exc
-    if not parsed.is_finite() or parsed < 0:
-        raise ValueError("cost_usd_invalid")
-    try:
-        return parsed.quantize(_USD_QUANTUM, rounding=ROUND_HALF_UP)
-    except InvalidOperation as exc:
-        raise ValueError("cost_usd_invalid") from exc
-
-
 def _money_db_param(value: Decimal) -> Decimal | str:
-    """psycopg accepts Decimal; sqlite3 requires a text representation."""
-
-    return value if is_postgres_runtime() else format(value, "f")
-
-
-def _micro_usd(value: Decimal) -> int:
-    return int((value * _MICRO_USD_PER_USD).to_integral_exact())
+    return _persistence_money_db_param(value, postgres=is_postgres_runtime())
 
 
 def ensure_budget_schema() -> None:
@@ -129,51 +110,7 @@ def ensure_budget_schema() -> None:
     """
     if is_postgres_runtime():
         return
-    conn = get_conn()
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS vkpi_ai_cost_ledger (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          cron_task TEXT,
-          ai_provider TEXT,
-          model_name TEXT,
-          cost_usd REAL,
-          tokens_in INTEGER,
-          tokens_out INTEGER,
-          kol_pool_id INTEGER,
-          staff_id INTEGER,
-          task_item_id INTEGER,
-          metadata_json TEXT NOT NULL DEFAULT '{}',
-          occurred_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_vkpi_ai_cost_ledger_time
-          ON vkpi_ai_cost_ledger (occurred_at);
-
-        CREATE INDEX IF NOT EXISTS idx_vkpi_ai_cost_ledger_cron_time
-          ON vkpi_ai_cost_ledger (cron_task, occurred_at);
-
-        CREATE TABLE IF NOT EXISTS vkpi_provider_budget_caps (
-          scope TEXT PRIMARY KEY,
-          cap_usd REAL,
-          current_spend REAL DEFAULT 0,
-          warning_at REAL DEFAULT 0.80,
-          hard_stop_at REAL DEFAULT 1.00,
-          reset_at TEXT,
-          fallback_action TEXT,
-          metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-
-        INSERT OR IGNORE INTO vkpi_provider_budget_caps
-            (scope, cap_usd, current_spend, warning_at, hard_stop_at, reset_at, fallback_action, metadata_json)
-        VALUES
-            ('single_call', 0.50, 0, 0.80, 1.00, NULL, 'fallback_to_rule_v0', '{"seeded_by":"budget_guard_sqlite","tier":"hard_stop"}'),
-            ('cron:p4_evidence_summary', 10.00, 0, 0.80, 1.00, NULL, 'fallback_to_evidence_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"P4"}'),
-            ('cron:p4_gemini_single_kol', 3.00, 0, 0.80, 1.00, NULL, 'fallback_to_preflight_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"P4","provider":"gemini"}'),
-            ('cron:market_provider_smoke', 1.00, 0, 0.80, 1.00, NULL, 'fallback_to_preflight_only', '{"seeded_by":"budget_guard_sqlite","tier":"cron","package":"market_intelligence","provider":"llm"}');
-        """
-    )
-    conn.commit()
+    _ensure_sqlite_budget_schema(get_conn())
 
 
 def _budget_payload(row: dict[str, Any], *, estimated_cost: float = 0.0) -> dict[str, Any]:

@@ -31,9 +31,19 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
+from scripts.ops.vkpi_stage1_model_canary_reporting import (  # noqa: E402
+    AUTHORIZATION_ENV,
+    CANARY_EXPECTED_RESPONSE,
+    CANARY_VERSION,
+    base_report as _base_report,
+    result_row as _result_row,
+    sha256_text as _sha256_text,
+)
 from app.core.config import IS_PRODUCTION  # noqa: E402
 from app.core.model_registry import current_task_model_binding  # noqa: E402
 from app.platform import llm_budget_reservations, llm_gateway  # noqa: E402
@@ -44,8 +54,6 @@ from app.platform.models.runtime import (  # noqa: E402
 )
 
 
-CANARY_VERSION = "vkpi_stage1_exact_model_canary_v1"
-AUTHORIZATION_ENV = "VKPI_LLM_STAGE1_CANARY_LIVE_AUTHORIZATION"
 EXPECTED_UNIQUE_BINDINGS = 8
 MAX_CALLS_HARD_LIMIT = 8
 MAX_OUTPUT_TOKENS_HARD_LIMIT = 128
@@ -64,7 +72,6 @@ CANARY_PROMPT = (
     "V-KPI exact-model connectivity canary. Reply with exactly "
     "VKPI_STAGE1_CANARY_OK and nothing else."
 )
-CANARY_EXPECTED_RESPONSE = "VKPI_STAGE1_CANARY_OK"
 _SAFE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
 _SAFE_PROVIDER_STATUSES = frozenset(
     {
@@ -149,10 +156,6 @@ def _canonical_json(value: Any) -> bytes:
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def _sha256_text(value: str) -> str:
-    return _sha256_bytes(str(value or "").encode("utf-8")) if value else ""
 
 
 def _decimal(value: Decimal | float | str) -> Decimal:
@@ -317,68 +320,6 @@ def build_plan(
         estimated_cost_usd=estimated_total,
         manifest_sha256=_sha256_bytes(_canonical_json(manifest)),
     )
-
-
-def _result_row(
-    row: BindingPlan,
-    *,
-    status: str,
-    response_model: str = "",
-    latency_ms: int = 0,
-    response_sha256: str = "",
-) -> dict[str, Any]:
-    return {
-        "binding": row.binding,
-        "requested_model": row.model,
-        "response_model": response_model,
-        "status": status,
-        "latency_ms": max(0, int(latency_ms or 0)),
-        "response_sha256": response_sha256,
-        "claim_status": "descriptive_only",
-    }
-
-
-def _base_report(plan: CanaryPlan, *, live: bool) -> dict[str, Any]:
-    selected = {row.binding for row in plan.selected}
-    return {
-        "version": CANARY_VERSION,
-        "mode": "live" if live else "dry_run",
-        "claim_status": "descriptive_only",
-        "attestation_status": "unsigned_not_readiness_evidence",
-        "production_authorized": False,
-        "plan_sha256": plan.manifest_sha256,
-        "response_contract_sha256": _sha256_text(CANARY_EXPECTED_RESPONSE),
-        "provider_calls_performed": 0,
-        "all_selected_bindings_succeeded": None,
-        "accounting": {
-            "precision": "micro_usd",
-            "required_for_live_success": True,
-            "verified_calls": 0,
-            "observed_cost_micro_usd": 0,
-        },
-        "safety_limits": {
-            "unique_task_bindings": len(plan.bindings),
-            "max_calls": plan.max_calls,
-            "max_output_tokens": plan.max_output_tokens,
-            "per_call_timeout_seconds": plan.per_call_timeout_seconds,
-            "total_timeout_seconds": plan.total_timeout_seconds,
-            "max_cost_usd": float(plan.max_cost_usd),
-            "estimated_cost_usd": float(plan.estimated_cost_usd),
-        },
-        "authorization": {
-            "required_env": AUTHORIZATION_ENV,
-            "required_value": plan.authorization_value if not live else "[redacted]",
-            "plan_bound": True,
-            "authorized": False,
-        },
-        "results": [
-            _result_row(
-                row,
-                status=("dry_run" if row.binding in selected else "not_selected"),
-            )
-            for row in plan.bindings
-        ],
-    }
 
 
 def _truthy(value: Any) -> bool:
