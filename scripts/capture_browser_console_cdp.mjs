@@ -25,6 +25,7 @@ const NETWORK_EVENT_CHANNELS = [
   "Network.loadingFailed",
 ];
 const AUTH_PROBE_TIMEOUT_MS = 5000;
+const API_IDLE_GRACE_MS = 1000;
 const DEFAULT_PAGE_MANIFEST = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "browser_gate_pages.json",
@@ -299,8 +300,6 @@ class CdpSession {
         family: this.currentPageFamily,
         same_origin_api: sameOriginApi,
         long_lived: resourceType === "EventSource" || resourceType === "WebSocket",
-        response_received: false,
-        response_status: null,
         method: String(request.method || "GET").toUpperCase().slice(0, 16),
         resource_type: resourceType.slice(0, 32),
         url: captureUrl(url),
@@ -318,10 +317,6 @@ class CdpSession {
       const pageFamily = request?.family || this.currentPageFamily;
       const url = captureUrl(response.url);
       const status = Number(response.status);
-      if (request) {
-        request.response_received = true;
-        request.response_status = Number.isFinite(status) ? status : null;
-      }
       this.networkResponseTotal += 1;
       this.networkLastActivityAt.set(pageFamily, Date.now());
       if (Number.isFinite(status) && status >= 400) this.networkResponseErrorTotal += 1;
@@ -427,39 +422,12 @@ class CdpSession {
           family: String(request.family || ""),
           method: String(request.method || ""),
           resource_type: String(request.resource_type || ""),
-          response_received: request.response_received === true,
-          response_status: Number.isFinite(request.response_status)
-            ? request.response_status
-            : null,
           url: String(request.url || ""),
         };
       })
       .filter((request) => !family || request.family === family)
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
       .slice(0, 20);
-  }
-
-  async reconcileCompletedInflightApiForFamily(family = "") {
-    let reconciled = 0;
-    for (const [requestId, requestFamily] of [...this.inflightSameOriginApi.entries()]) {
-      if (family && requestFamily !== family) continue;
-      const request = this.networkRequests.get(requestId);
-      if (!request || request.response_received !== true) continue;
-      try {
-        // Chromium can occasionally omit/delay loadingFinished for a completed
-        // Fetch. Network.getResponseBody succeeds only after the response body
-        // is available; never retain the body, only use that protocol proof to
-        // reconcile the in-flight bookkeeping.
-        await this.send("Network.getResponseBody", { requestId });
-      } catch {
-        continue;
-      }
-      this.inflightSameOriginApi.delete(requestId);
-      request.body_reconciled = true;
-      this.networkLastActivityAt.set(requestFamily, Date.now());
-      reconciled += 1;
-    }
-    return reconciled;
   }
 
   beginFullDocumentNavigation() {
@@ -617,8 +585,12 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
   }
   await sleep(settleMs);
   let apiIdle = false;
-  while (Date.now() < deadline) {
-    await session.reconcileCompletedInflightApiForFamily(page.family);
+  // A request may begin immediately before the primary page deadline. Give
+  // Chromium one short, explicitly budgeted terminal-event window; completion
+  // still requires Network.loadingFinished/loadingFailed and is never inferred
+  // from headers, response bytes, or a second probe.
+  const apiIdleDeadline = Math.max(deadline, Date.now() + API_IDLE_GRACE_MS);
+  while (Date.now() < apiIdleDeadline) {
     const inflight = session.inflightApiForFamily(page.family);
     const lastActivity = session.networkLastActivityAt.get(page.family) || startedAt;
     if (inflight === 0 && Date.now() - lastActivity >= 500) {
@@ -667,7 +639,6 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
 async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    await session.reconcileCompletedInflightApiForFamily();
     const lastActivity = Math.max(0, ...session.networkLastActivityAt.values());
     if (
       session.inflightSameOriginApi.size === 0

@@ -642,8 +642,8 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         "pageManifest.pages",
         "navigateAndProbePage",
         "beginFullDocumentNavigation",
-        "reconcileCompletedInflightApiForFamily",
-        '"Network.getResponseBody"',
+        "const API_IDLE_GRACE_MS = 1000",
+        "const apiIdleDeadline = Math.max(deadline, Date.now() + API_IDLE_GRACE_MS)",
         "waitForFinalSameOriginApiIdle",
         "final same-origin API requests did not become idle before timeout",
         "navigation_discarded_prior_api: navigationDiscardedPriorApi",
@@ -662,6 +662,7 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
     assert "?token=" not in source
     assert "?access_token=" not in source
     assert "--token" not in source
+    assert "Network.getResponseBody" not in source
 
     network_enable = source.index('await session.send("Network.enable")')
     cookie_injection = source.index('await session.send("Network.setCookie", {')

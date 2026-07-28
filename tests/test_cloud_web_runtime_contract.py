@@ -702,6 +702,7 @@ def test_default_browser_token_ttl_covers_the_complete_fail_closed_capture_budge
     assert 900 >= (budget_ms + 999) // 1000
     assert "+  5000 * (BROWSER_GATE_PAGE_COUNT + 1)" in deploy
     assert "+  BROWSER_GATE_PAGE_COUNT * (BROWSER_GATE_PAGE_TIMEOUT_MS + BROWSER_GATE_PAGE_SETTLE_MS)" in deploy
+    assert "+  1000 * BROWSER_GATE_PAGE_COUNT" in deploy
 
 
 def test_backup_owns_its_separate_write_surface_and_never_chowns_history() -> None:
