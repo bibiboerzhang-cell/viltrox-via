@@ -56,7 +56,7 @@ if [ "${VKPI_BACKUP_ENCRYPT_ENV}" = "1" ]; then
     echo "VKPI_BACKUP_GPG_PASSPHRASE_FILE is required when encrypted backup is enabled" >&2
     exit 1
   fi
-  if ! "${LOCAL_PYTHON_BIN}" - "${VKPI_BACKUP_GPG_PASSPHRASE_FILE}" <<'PY'
+  if ! PYTHONDONTWRITEBYTECODE=1 "${LOCAL_PYTHON_BIN}" -B - "${VKPI_BACKUP_GPG_PASSPHRASE_FILE}" <<'PY'
 from __future__ import annotations
 
 import os
@@ -160,7 +160,7 @@ done
 remote_pgservice="${REMOTE_BACKUP_DIR}/.pgservice.tmp.$$"
 remote_pgpass="${REMOTE_BACKUP_DIR}/.pgpass.tmp.$$"
 remote_command_err="${REMOTE_BACKUP_DIR}/.command.err.tmp.$$"
-if ! "${PYTHON_BIN}" - "${remote_pgservice}" "${remote_pgpass}" <<'PY'
+if ! PYTHONDONTWRITEBYTECODE=1 "${PYTHON_BIN}" -B - "${remote_pgservice}" "${remote_pgpass}" <<'PY'
 from __future__ import annotations
 
 import os
@@ -410,7 +410,7 @@ REMOTE_ENV
   fi
   printf '%s  environment.gpg\n' "${ENV_CIPHERTEXT_SHA}" > "${TMP_ENV_SIDECAR}"
   chmod 600 "${TMP_ENV_SIDECAR}"
-  if ! "${LOCAL_PYTHON_BIN}" - \
+  if ! PYTHONDONTWRITEBYTECODE=1 "${LOCAL_PYTHON_BIN}" -B - \
     "${TMP_OFFHOST_RECEIPT}" "${STAMP}" "${ACTUAL_SHA}" "${ENV_CIPHERTEXT_SHA}" <<'PY'
 from __future__ import annotations
 
@@ -513,7 +513,7 @@ if ! [[ "${db_sha:-}" =~ ^[0-9a-f]{64}$ ]] || [ "${db_name:-}" != "prod-db.dump"
   echo "remote database sidecar is invalid during off-host receipt verification" >&2
   exit 1
 fi
-"${remote_python}" - off-host-backup-receipt.json "${db_sha}" "${env_sha}" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 "${remote_python}" -B - off-host-backup-receipt.json "${db_sha}" "${env_sha}" <<'PY'
 from __future__ import annotations
 
 import json

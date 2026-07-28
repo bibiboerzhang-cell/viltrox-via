@@ -15,7 +15,7 @@ LOCAL_DIR="${LOCAL_DIR:-runtime/prod-sync/${STAMP}-baseline-reset}"
 
 mkdir -p "${LOCAL_DIR}"
 
-ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && STAMP='${STAMP}' SNAPSHOT_DATE='${SNAPSHOT_DATE}' PYTHONPATH=backend '${PYTHON_BIN}' - <<'PY'
+ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && STAMP='${STAMP}' SNAPSHOT_DATE='${SNAPSHOT_DATE}' PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend '${PYTHON_BIN}' -B - <<'PY'
 import json
 import os
 from datetime import datetime

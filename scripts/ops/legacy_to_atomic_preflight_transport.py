@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
+sys.dont_write_bytecode = True
+
 import argparse
 import json
 import shlex
@@ -50,7 +54,10 @@ def ssh_command(
     python_path = validate_remote_python_value(args.remote_python, root)
     health_url = validate_health_url(args.health_url)
     remote_arguments = [
+        "env",
+        "PYTHONDONTWRITEBYTECODE=1",
         python_path,
+        "-B",
         "-",
         "--remote-collect",
         "--root",

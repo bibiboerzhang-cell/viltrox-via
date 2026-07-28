@@ -70,11 +70,22 @@ def enroll_candidates(candidates: list[dict[str, Any]], *, staff: dict[str, Any]
             "note": "外部候选已落 Pool(source_type=discovered,数据薄);进 MY KOL 仍需手动勾选;零触 viltrox_fit_score。"}
 
 
-def federated_discover_and_enroll(query: str, *, limit: int = 20, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def federated_discover_and_enroll(
+    query: str,
+    *,
+    limit: int = 20,
+    staff: dict[str, Any] | None = None,
+    include_external: bool = False,
+) -> dict[str, Any]:
     """联邦发现 + 自动落库:搜 → 外部候选落 Pool → 返回汇总。"""
     from app.domains.discovery import federation
 
-    found = federation.federated_search(query, limit=limit, staff=staff)
+    found = federation.federated_search(
+        query,
+        limit=limit,
+        staff=staff,
+        include_external=bool(include_external),
+    )
     results = found.get("results", []) if found.get("status") == "ok" else []
     enroll = enroll_candidates(results, staff=staff)
     return {

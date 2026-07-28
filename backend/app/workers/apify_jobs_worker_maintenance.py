@@ -14,12 +14,92 @@ from psycopg.rows import dict_row
 from app.core.logging import get_logger
 from app.workers.apify_jobs_worker_helpers import (
     _error_category,
+    _json,
     _provider_retry_reason,
 )
 from app.workers.apify_jobs_worker_session import _sync_search_session_job
 
 
 logger = get_logger(__name__)
+_TERMINAL_JOB_STATUSES = frozenset({"done", "blocked", "failed", "triage"})
+
+
+def _reconcile_zero_item_profile_advance_session(
+    conn: psycopg.Connection[Any],
+    row: dict[str, Any],
+) -> bool:
+    """Close a terminal profile-advance session that never created item lineage.
+
+    ``smart_search_profile_advance`` is session-scoped until its first candidate
+    item is persisted.  If the worker connection is terminated before that
+    write, the generic item-lineage reducer has nothing to replay.  Keep this
+    fallback deliberately narrow and repeat every predicate in the UPDATE so a
+    concurrent retry or item write wins without being overwritten.
+    """
+
+    if str(row.get("job_type") or "").strip().lower() != "smart_search_profile_advance":
+        return False
+    if int(row.get("session_item_count") or 0) != 0:
+        return False
+    raw_status = str(row.get("status") or "").strip().lower()
+    if raw_status not in _TERMINAL_JOB_STATUSES:
+        return False
+    try:
+        job_id = int(row["id"])
+        session_id = int(row["session_id"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    reason = str(row.get("last_error") or "").strip()[:1000]
+    summary_patch = {
+        "status": "failed",
+        "job_id": job_id,
+        "terminal_job_status": raw_status,
+        "error": reason or f"terminal_job_without_items:{raw_status}",
+        "reconciled_reason": "terminal_job_without_items",
+        "viltrox_fit_score_untouched": True,
+    }
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                UPDATE vkpi_kol_search_sessions AS session
+                SET status='failed',
+                    result_summary_json =
+                        COALESCE(session.result_summary_json, '{}'::jsonb)
+                        || jsonb_build_object(
+                            'phase', 'failed',
+                            'terminal_synced_at', NOW(),
+                            'smart_search_profile_advance_job',
+                            COALESCE(
+                                session.result_summary_json->'smart_search_profile_advance_job',
+                                '{}'::jsonb
+                            ) || %s::jsonb
+                        ),
+                    updated_at=NOW()
+                WHERE session.id=%s
+                  AND session.status='running'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM vkpi_kol_search_session_items AS item
+                      WHERE item.session_id=session.id
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM apify_jobs AS job
+                      WHERE job.id=%s
+                        AND job.job_type='smart_search_profile_advance'
+                        AND job.status IN ('done', 'blocked', 'failed', 'triage')
+                        AND CASE
+                            WHEN COALESCE(job.payload->>'search_session_id', '') ~ '^[0-9]+$'
+                            THEN (job.payload->>'search_session_id')::bigint
+                        END = session.id
+                  )
+                RETURNING session.id
+                """,
+                (_json(summary_patch), session_id, job_id),
+            )
+            return bool(cur.fetchone())
 
 
 def _reconcile_terminal_search_session_jobs(
@@ -46,6 +126,7 @@ def _reconcile_terminal_search_session_jobs(
                     job.id,
                     job.status,
                     job.last_error,
+                    job.job_type,
                     CASE
                         WHEN COALESCE(job.payload->>'search_session_id', '') ~ '^[0-9]+$'
                         THEN (job.payload->>'search_session_id')::bigint
@@ -59,6 +140,7 @@ def _reconcile_terminal_search_session_jobs(
                     job.id,
                     job.status,
                     job.last_error,
+                    job.job_type,
                     CASE
                         WHEN COALESCE(lineage.value->>'search_session_id', '') ~ '^[0-9]+$'
                         THEN (lineage.value->>'search_session_id')::bigint
@@ -73,7 +155,17 @@ def _reconcile_terminal_search_session_jobs(
                 ) AS lineage(value)
                 WHERE job.status IN ('done', 'blocked', 'failed', 'triage')
             )
-            SELECT DISTINCT lineage.id, lineage.status, lineage.last_error
+            SELECT DISTINCT
+                lineage.id,
+                lineage.status,
+                lineage.last_error,
+                lineage.job_type,
+                lineage.session_id,
+                (
+                    SELECT COUNT(*)
+                    FROM vkpi_kol_search_session_items AS item
+                    WHERE item.session_id=lineage.session_id
+                ) AS session_item_count
             FROM terminal_lineage AS lineage
             JOIN vkpi_kol_search_sessions AS session
               ON session.id=lineage.session_id
@@ -96,7 +188,8 @@ def _reconcile_terminal_search_session_jobs(
             raw_status=raw_status,
             reason=str(row.get("last_error") or ""),
         ):
-            continue
+            if not _reconcile_zero_item_profile_advance_session(conn, row):
+                continue
         replayed.append(row)
     if replayed:
         logger.info(

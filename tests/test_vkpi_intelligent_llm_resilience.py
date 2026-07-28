@@ -5,6 +5,9 @@ import pytest
 from app.api.routers import vkpi_intelligent
 
 
+_MANAGER = {"id": 1, "staff_id": 1, "role": "admin", "is_owner": 1}
+
+
 @pytest.fixture(autouse=True)
 def _clear_ask_cache() -> None:
     with vkpi_intelligent._ASK_CACHE_LOCK:
@@ -47,8 +50,8 @@ def test_search_failure_skips_synth_and_is_not_cached(monkeypatch: pytest.Monkey
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not synthesize without evidence")),
     )
 
-    first = vkpi_intelligent.intelligent_ask({"question": "请分析候选"}, staff={"id": 1})
-    second = vkpi_intelligent.intelligent_ask({"question": "请分析候选"}, staff={"id": 1})
+    first = vkpi_intelligent.intelligent_ask({"question": "请分析候选"}, staff=_MANAGER)
+    second = vkpi_intelligent.intelligent_ask({"question": "请分析候选"}, staff=_MANAGER)
 
     assert first["status"] == "degraded"
     assert second["status"] == "degraded"

@@ -6,6 +6,9 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.api.routers import vkpi_kol_pool_search as search_routes
 from app.api.routers import (
     account_scanner,
@@ -282,11 +285,13 @@ def test_apify_leaf_inventory_is_explicit_and_opaque_network_wrapper_is_unused()
             if name in calls:
                 calls[name].append(f"{path.relative_to(root)}:{node.lineno}")
 
-    # 34 = 33 + listening_executors(2026-07-16 市场监听接线:X/Reddit 经 call_apify_actor
+    # 33 + listening_executors(2026-07-16 市场监听接线:X/Reddit 经 call_apify_actor
     # 走预算预检+记账,属显式登记的合法叶子)。
-    # 35 = 34 + services/scraping/apify_cn.py(2026-07-20 CN 三平台「仅视频分析」通道:
+    # 34 = 33 + services/scraping/apify_cn.py(2026-07-20 CN 三平台「仅视频分析」通道:
     # bilibili/抖音/小红书视频元数据+直链取数,durable claim + 预算预检 + record_apify_run 记账)。
-    assert len(calls["call_apify_actor"]) == 35
+    # 联邦发现不再自造第 35 个通用 payload 叶子；它复用已登记的按平台 discovery
+    # adapters，避免把 YouTube 输入误发给 TikTok/Instagram actor。
+    assert len(calls["call_apify_actor"]) == 34
     assert calls["run_apify_network"] == []
     media_source = inspect.getsource(
         __import__("app.workers.apify_jobs_worker_media", fromlist=["_scrape_with_apify_timeout"])._scrape_with_apify_timeout
@@ -455,6 +460,76 @@ def test_inprocess_queue_rejects_provider_job_before_fake_queued_state():
     else:  # pragma: no cover - explicit fail-closed contract
         raise AssertionError("provider job was accepted by in-process queue")
     assert queue._generic_status == {}
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        vkpi_kol_pool.kol_pool_federated_search_refresh,
+        vkpi_kol_pool.kol_onboarding_sweep,
+    ],
+)
+def test_external_discovery_routes_require_manager_before_handler(handler):
+    dependency = inspect.signature(handler).parameters["staff"].default.dependency
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            dependency(
+                staff={
+                    "id": 18,
+                    "role": "employee",
+                    "is_owner": 0,
+                    "permissions": {"vkpi": "write"},
+                }
+            )
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "management permission required"
+
+
+@pytest.mark.parametrize(
+    "handler,args",
+    [
+        (vkpi_kol_pool.kol_pool_federated_search_refresh, ("camera creators", 20)),
+        (vkpi_kol_pool.kol_onboarding_sweep, ("camera creators",)),
+    ],
+)
+def test_external_discovery_routes_reject_inprocess_queue(handler, args):
+    queue = InProcessJobQueue(SimpleNamespace())
+    request = _request(queue)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            handler(
+                request,
+                *args,
+                staff={"id": 1, "role": "manager"},
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "durable_queue_required" in str(exc_info.value.detail)
+    assert queue._generic_status == {}
+
+
+def test_federated_refresh_rejects_empty_durable_job_id():
+    class EmptyIdQueue:
+        backend_name = "redis-stream"
+
+        async def enqueue(self, *_args, **_kwargs):
+            return ""
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            vkpi_kol_pool.kol_pool_federated_search_refresh(
+                _request(EmptyIdQueue()),
+                "camera creators",
+                20,
+                staff={"id": 1, "role": "manager"},
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "durable job queue returned no job id"
 
 
 def test_cron_and_daily_sync_have_no_direct_provider_invocations():

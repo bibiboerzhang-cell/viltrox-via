@@ -12,6 +12,7 @@ execute_action(action_id, staff) -> {"ok":bool,"outcome":"success|failed|skipped
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any
@@ -526,23 +527,44 @@ def _exec_skip_reminder(action: dict[str, Any], staff: dict[str, Any] | None) ->
 
 
 def _exec_discovery_enroll(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
-    """用透 Apify · 联邦发现补人 → 候选自动落 Pool(智能闭环"该补谁"的执行端)。
+    """用透 Apify · 把联邦发现补人排入 durable workflow。
 
-    query 取自 payload.query / entity_id。落库走 enroll(去重 + source=discovered)。
-    红线:只落新档(数据薄诚实),零触 viltrox_fit_score;商业源未配置则只自有源(诚实)。
+    本执行器的成功只表示任务已可靠入队；真实 found/enrolled 结果由任务回执给出，
+    不在审批请求内同步等待或提前冒充业务结果。
     """
     payload = action.get("payload_json") if isinstance(action.get("payload_json"), dict) else {}
     query = str(payload.get("query") or action.get("entity_id") or "").strip()
     if not query:
         return {"outcome": "skipped", "reason": "discovery_no_query", "detail": {}}
-    from app.domains.discovery import enroll
+    from app.domains.kol import onboarding_workflow
+    from app.services.jobs.queue import build_job_queue
 
-    res = enroll.federated_discover_and_enroll(query, limit=int(payload.get("limit") or 20), staff=staff)
-    return {"outcome": "success", "reason": "", "detail": {
-        "query": query, "found": res.get("found"), "enrolled": res.get("enrolled"),
-        "skipped": res.get("skipped"), "sources": res.get("sources"),
-        "note": "联邦发现→落 Pool;进 MY KOL 仍需手动勾选。",
-    }}
+    async def enqueue() -> dict[str, Any]:
+        queue = build_job_queue()
+        if queue is None:
+            raise RuntimeError("durable job queue unavailable")
+        try:
+            return await onboarding_workflow.enqueue_kol_onboarding(
+                queue,
+                query,
+                limit=int(payload.get("limit") or 20),
+                staff=staff,
+            )
+        finally:
+            await queue.close()
+
+    res = asyncio.run(enqueue())
+    return {
+        "outcome": "success",
+        "reason": "",
+        "detail": {
+            "query": query,
+            "execution_status": "queued",
+            "business_outcome": "pending",
+            "enqueue": res,
+            "note": "已排入联邦发现→落 Pool Workflow；进 MY KOL 仍需手动勾选。",
+        },
+    }
 
 
 _DISPATCH = {

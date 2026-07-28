@@ -129,6 +129,28 @@ def test_fully_bound_plan_is_deterministic_and_only_ready_for_authorization(
     }
 
 
+def test_atomic_helper_remediation_carries_split_cli_import_closure(
+    tmp_path: Path,
+) -> None:
+    plan = _build(tmp_path, _bound_args())
+    helper = next(
+        step
+        for step in plan["steps"]
+        if step["check_id"] == "release.atomic_helper_present"
+    )
+    relative = "scripts/ops/atomic_release_cli.py"
+
+    assert plan["source_artifact_sha256"][relative]
+    assert any(relative in command for command in helper["preconditions"])
+    assert any(relative in command for command in helper["apply_commands"])
+    assert any(relative in command for command in helper["rollback_commands"])
+    assert any(relative in command for command in helper["verification_commands"])
+    assert any(
+        "atomic_release_layout.py --help" in command
+        for command in helper["verification_commands"]
+    )
+
+
 def test_build_rejects_check_drift_instead_of_guessing(tmp_path: Path) -> None:
     preflight = _preflight()
     preflight["blocking_check_ids"] = preflight["blocking_check_ids"][:-1]

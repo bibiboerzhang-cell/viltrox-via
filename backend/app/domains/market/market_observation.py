@@ -22,7 +22,8 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# 观察快照表(迁移 202_vkpi_market_observations.sql)。落库为加性:实时合成路径不变。
+# 观察快照表(迁移 202_vkpi_market_observations.sql)。
+# GET 实时合成必须保持纯读；只有显式 refresh 写路径可以调用持久化函数。
 _TABLE = "vkpi_market_observations"
 
 # 观察类型(中文口径,与产品语言一致)
@@ -84,7 +85,9 @@ def _observe_from_market_brain() -> list[dict[str, Any]]:
     try:
         from app.domains.market import market_brain
 
-        brief = market_brain.build_daily_brief()
+        # build_daily_brief 默认会治理并 UPDATE 过期信号。市场趋势 GET 的
+        # 纯读边界必须关闭该副作用；过期数据仍由其查询条件排除。
+        brief = market_brain.build_daily_brief(sweep_expired=False)
     except Exception:
         logger.debug("market_observation.market_brain_failed", exc_info=True)
         return []
@@ -383,18 +386,46 @@ def generate_observations(staff: dict[str, Any] | None = None) -> dict[str, Any]
     for o in observations:
         by_kind[o["kind"]] = by_kind.get(o["kind"], 0) + 1
 
-    # 加性落库:本批观察持久化以累积历史(幂等 upsert);失败不影响实时返回。
-    persisted = _persist_observations(observations)
-
     return {
         "status": "ok",
         "count": len(observations),
         "observations": observations,
         "sources_used": sources_used,
         "by_kind": by_kind,
-        "persisted": persisted,
+        "persisted": 0,
+        "write_db": False,
         "note": (
             "N7 市场观察:只读合成 market_brain/competitor_radar/bet_ledger 真数据;"
+            "best-effort,无真数据诚实返回空,零臆造,零触 viltrox_fit_score。"
+        ),
+    }
+
+
+def refresh_observations(staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """显式刷新市场观察并累积历史快照。
+
+    这是唯一允许调用 ``_persist_observations`` 的公开写路径，供受写权限保护的
+    POST 后台任务使用。实时 GET 必须只调用 ``generate_observations``。
+    """
+    # GET 过去间接承担的过期信号治理一并迁入显式写路径，避免改变治理效果。
+    try:
+        from app.domains.market import market_brain
+
+        expired_signals_swept = market_brain.mark_expired_signals()
+    except Exception:
+        logger.debug("market_observation.expiry_sweep_failed", exc_info=True)
+        expired_signals_swept = 0
+
+    result = generate_observations(staff=staff)
+    observations = result.get("observations") or []
+    persisted = _persist_observations(observations if isinstance(observations, list) else [])
+    return {
+        **result,
+        "persisted": persisted,
+        "write_db": True,
+        "expired_signals_swept": int(expired_signals_swept or 0),
+        "note": (
+            "N7 市场观察刷新:合成真实来源并加性写入历史快照;"
             "best-effort,无真数据诚实返回空,零臆造,零触 viltrox_fit_score。"
         ),
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys as _stdout_sys
 from pathlib import Path as _StdoutPath
 
+_stdout_sys.dont_write_bytecode = True
 _STDOUT_UTILS_DIR = _StdoutPath(__file__).resolve().parents[1]
 if str(_STDOUT_UTILS_DIR) not in _stdout_sys.path:
     _stdout_sys.path.insert(1, str(_STDOUT_UTILS_DIR))
@@ -154,7 +155,10 @@ print(json.dumps({
 
 
 def check_remote(target: str, root: str) -> dict[str, object]:
-    command = f"cd {shlex.quote(root)} && python3 - <<'PY'\n{REMOTE_SNIPPET}\nPY"
+    command = (
+        f"cd {shlex.quote(root)} && "
+        f"env PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'\n{REMOTE_SNIPPET}\nPY"
+    )
     completed = subprocess.run(["ssh", target, command], check=False, text=True, capture_output=True)
     if completed.returncode != 0:
         return {

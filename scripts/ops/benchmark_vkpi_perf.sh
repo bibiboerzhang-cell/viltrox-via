@@ -18,7 +18,7 @@ if [ "${ALLOW_DURING_SYNC}" != "1" ] && [ "${sync_state}" = "active" -o "${sync_
   exit 0
 fi
 
-RUNS="${RUNS}" PYTHONPATH=backend "${PYTHON_BIN}" - <<'PY'
+PYTHONDONTWRITEBYTECODE=1 RUNS="${RUNS}" PYTHONPATH=backend "${PYTHON_BIN}" -B - <<'PY'
 import json
 import os
 import statistics

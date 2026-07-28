@@ -90,6 +90,8 @@ def test_synthesis_structure_and_kinds(monkeypatch) -> None:
 
     # by_kind 计数与 observations 一致
     assert sum(out["by_kind"].values()) == out["count"]
+    assert out["write_db"] is False
+    assert out["persisted"] == 0
 
 
 def test_competitor_observation_has_brand_and_impact(monkeypatch) -> None:
@@ -145,3 +147,82 @@ def test_best_effort_survives_source_exception(monkeypatch) -> None:
     assert out["status"] == "ok"
     assert out["sources_used"] == ["competitor_radar"]
     assert all(o["kind"] == mo.KIND_COMPETITOR for o in out["observations"])
+
+
+def test_generate_observations_never_persists(monkeypatch) -> None:
+    _patch_all(monkeypatch)
+
+    def _unexpected_write(_observations):
+        raise AssertionError("read path must not persist observations")
+
+    monkeypatch.setattr(mo, "_persist_observations", _unexpected_write)
+    out = mo.generate_observations()
+
+    assert out["count"] > 0
+    assert out["write_db"] is False
+    assert out["persisted"] == 0
+
+
+def test_market_brain_source_disables_expiry_write(monkeypatch) -> None:
+    from app.domains.market import market_brain
+
+    calls: list[dict] = []
+
+    def _brief(*_args, **kwargs):
+        calls.append(kwargs)
+        return {"status": "ok", "sections": {}}
+
+    monkeypatch.setattr(market_brain, "build_daily_brief", _brief)
+
+    assert mo._observe_from_market_brain() == []
+    assert calls == [{"sweep_expired": False}]
+
+
+def test_market_brain_read_only_mode_skips_expiry_update(monkeypatch) -> None:
+    from app.domains.market import market_brain, prediction
+
+    monkeypatch.setattr(
+        market_brain,
+        "mark_expired_signals",
+        lambda: (_ for _ in ()).throw(AssertionError("read-only mode must not update")),
+    )
+    monkeypatch.setattr(
+        prediction,
+        "predict_opportunities",
+        lambda: {
+            "status": "ok",
+            "product_hints": [],
+            "rising_channels": [],
+            "opportunities": [],
+            "confidence_cap": "medium",
+        },
+    )
+    monkeypatch.setattr(market_brain, "_fresh_competitor_moves", lambda: [])
+    monkeypatch.setattr(market_brain, "_today_actions", lambda: [])
+
+    result = market_brain.build_daily_brief(sweep_expired=False)
+
+    assert result["status"] == "ok"
+    assert result["expired_signals_swept"] == 0
+
+
+def test_refresh_observations_is_the_explicit_write_path(monkeypatch) -> None:
+    from app.domains.market import market_brain
+
+    _patch_all(monkeypatch)
+    persisted_batches: list[list[dict]] = []
+    monkeypatch.setattr(market_brain, "mark_expired_signals", lambda: 3)
+
+    def _persist(observations):
+        persisted_batches.append(observations)
+        return len(observations)
+
+    monkeypatch.setattr(mo, "_persist_observations", _persist)
+    out = mo.refresh_observations(staff={"id": 7})
+
+    assert out["count"] > 0
+    assert out["write_db"] is True
+    assert out["persisted"] == out["count"]
+    assert out["expired_signals_swept"] == 3
+    assert len(persisted_batches) == 1
+    assert persisted_batches[0] == out["observations"]

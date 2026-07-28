@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.platform.apify_budget import current_apify_execution_context
 
 logger = get_logger(__name__)
 
@@ -39,7 +40,12 @@ def unified_search(query: str, *, include_external: bool = False, limit: int = 2
 
     from app.domains.discovery import federation
 
-    fed = federation.federated_search(q, limit=limit, staff=staff)
+    fed = federation.federated_search(
+        q,
+        limit=limit,
+        staff=staff,
+        include_external=bool(include_external),
+    )
     results = fed.get("results", []) if fed.get("status") == "ok" else []
     provider_status = fed.get("sources", {})
 
@@ -50,11 +56,19 @@ def unified_search(query: str, *, include_external: bool = False, limit: int = 2
     providers = federation.list_providers("discovery")
     external_ready = [p["name"] for p in providers
                       if p.get("enabled") and p.get("adapter_ready") and p["name"] != "internal_pool"]
+    external_execution_authorized = bool(
+        include_external and current_apify_execution_context() is not None
+    )
     cost_gate = {
         "external_providers_ready": external_ready,
         "external_search_enabled": bool(external_ready),
-        "incurs_cost": bool(external_ready) and bool(include_external),
-        "note": "自有池召回免费;外部抓取(Apify/商业源)烧钱——配 actor + include_external 才跑,默认 off。",
+        "external_search_requested": bool(include_external),
+        "external_execution_authorized": external_execution_authorized,
+        "incurs_cost": bool(external_ready) and external_execution_authorized,
+        "note": (
+            "自有池召回免费;GET 即使请求 external 也只返回待后台刷新，"
+            "付费外部抓取仅在耐久 Worker 的预算闸内执行。"
+        ),
     }
 
     return {

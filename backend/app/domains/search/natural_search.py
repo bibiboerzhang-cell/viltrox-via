@@ -17,6 +17,24 @@ logger = get_logger(__name__)
 # attacker-controlled / oversized DB payload could force the parser to allocate
 # unbounded memory (DoS). 50 KB comfortably covers legitimate JSON columns.
 MAX_JSON_INPUT_BYTES = 50 * 1024
+MAX_QUERY_LENGTH = 80
+MAX_SEARCH_TOKENS = 12
+
+# Cross-dataset natural search returns memory, recommendation, competitor and
+# alert evidence in addition to KOL rows. Until each source has one proven
+# row-level scope predicate, only the same management roles used by global
+# search may access this surface. Request callers pass ``staff`` explicitly;
+# trusted offline report scripts may continue to omit it.
+_UNRESTRICTED_SEARCH_ROLES = frozenset(
+    {
+        "admin",
+        "manager",
+        "lead",
+        "marketing_lead",
+        "marketing_manager",
+        "marketing-manager",
+    }
+)
 
 SOURCE_WEIGHTS = {
     "kol_pool": 8,
@@ -48,6 +66,18 @@ TOKEN_ALIASES = {
 from app.core.coerce import _text
 
 
+def has_unrestricted_search_access(staff: Any) -> bool:
+    """Return whether ``staff`` may read unscoped cross-dataset evidence."""
+    if not isinstance(staff, dict):
+        return False
+    try:
+        is_owner = int(staff.get("is_owner") or 0) == 1
+    except (TypeError, ValueError):
+        is_owner = False
+    role = str(staff.get("role") or "").strip().lower()
+    return is_owner or role in _UNRESTRICTED_SEARCH_ROLES
+
+
 def _lower(value: Any) -> str:
     return _text(value).lower()
 
@@ -69,7 +99,10 @@ def _tokens(query: str) -> list[str]:
         # \u7cbe\u6392\u7531 _score_row \u8d1f\u8d23(\u5168\u4e32\u7cbe\u786e\u547d\u4e2d\u5f97\u5206\u66f4\u9ad8)\u3002jieba/PG \u5168\u6587\u4e3a\u540e\u7eed\u7cbe\u5ea6\u4e13\u9879\u3002
         if _is_cjk_token(token) and len(token) > 2:
             expanded.extend(token[i:i + 2] for i in range(len(token) - 1))
-    return list(dict.fromkeys(expanded))
+    # One token expands into one OR group per searched column. Bound the
+    # deduplicated expansion so an authenticated request cannot manufacture an
+    # arbitrarily large SQL expression, especially through CJK 2-grams.
+    return list(dict.fromkeys(expanded))[:MAX_SEARCH_TOKENS]
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -349,8 +382,14 @@ def search(
     limit: int = 20,
     json_out: str = "",
     md_out: str = "",
+    staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    tokens = _tokens(query)
+    normalized_query = str(query or "").strip()
+    if len(normalized_query) > MAX_QUERY_LENGTH:
+        raise ValueError(f"query must be at most {MAX_QUERY_LENGTH} characters")
+    if staff is not None and not has_unrestricted_search_access(staff):
+        raise PermissionError("cross-dataset natural search requires manager access")
+    tokens = _tokens(normalized_query)
     if not tokens:
         raise ValueError("query must contain at least one searchable token")
     safe_limit = max(1, min(100, int(limit or 20)))
@@ -364,7 +403,7 @@ def search(
     items.extend(_search_alerts(tokens, per_source_limit))
     ranked = sorted(items, key=lambda item: (-int(item.get("score") or 0), item.get("result_type") or "", item.get("title") or ""))[:safe_limit]
     payload = {
-        "query": query,
+        "query": normalized_query,
         "tokens": tokens,
         "provider_calls": False,
         "write_db": False,

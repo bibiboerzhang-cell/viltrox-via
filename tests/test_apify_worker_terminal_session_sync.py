@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from typing import Any
 
@@ -117,9 +118,15 @@ def test_session_sync_module_has_real_lineage_parser() -> None:
 
 
 class _RepairCursor:
-    def __init__(self, rows: list[dict[str, Any]], calls: list[tuple[str, tuple[Any, ...]]]) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        calls: list[tuple[str, tuple[Any, ...]]],
+        one_row: dict[str, Any] | None = None,
+    ) -> None:
         self.rows = rows
         self.calls = calls
+        self.one_row = one_row
 
     def __enter__(self):
         return self
@@ -133,14 +140,27 @@ class _RepairCursor:
     def fetchall(self):
         return self.rows
 
+    def fetchone(self):
+        return self.one_row
+
 
 class _RepairConn:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        one_row: dict[str, Any] | None = None,
+    ) -> None:
         self.rows = rows
+        self.one_row = one_row
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def cursor(self, **_kwargs):
-        return _RepairCursor(self.rows, self.calls)
+        return _RepairCursor(self.rows, self.calls, self.one_row)
+
+    @contextmanager
+    def transaction(self):
+        yield
 
 
 def test_startup_repair_replays_only_selected_terminal_jobs(monkeypatch) -> None:
@@ -167,3 +187,77 @@ def test_startup_repair_replays_only_selected_terminal_jobs(monkeypatch) -> None
     assert "session.status='running'" in conn.calls[0][0]
     assert "job.status IN ('done', 'blocked', 'failed', 'triage')" in conn.calls[0][0]
     assert conn.calls[0][1] == (1000,)
+
+
+def test_startup_repair_closes_zero_item_profile_advance_after_admin_shutdown(
+    monkeypatch,
+) -> None:
+    conn = _RepairConn(
+        [
+            {
+                "id": 2450,
+                "status": "triage",
+                "last_error": "OperationalError: AdminShutdown",
+                "job_type": "smart_search_profile_advance",
+                "session_id": 451,
+                "session_item_count": 0,
+            }
+        ],
+        one_row={"id": 451},
+    )
+    monkeypatch.setattr(
+        maintenance,
+        "_sync_search_session_job",
+        lambda *_args, **_kwargs: False,
+    )
+
+    result = maintenance._reconcile_terminal_search_session_jobs(conn, limit=1000)
+
+    assert [row["id"] for row in result] == [2450]
+    assert len(conn.calls) == 2
+    update_sql, update_params = conn.calls[1]
+    assert "SET status='failed'" in update_sql
+    assert "session.status='running'" in update_sql
+    assert "NOT EXISTS" in update_sql
+    assert "job.job_type='smart_search_profile_advance'" in update_sql
+    assert "job.status IN ('done', 'blocked', 'failed', 'triage')" in update_sql
+    assert update_params[1:] == (451, 2450)
+    summary_patch = json.loads(update_params[0])
+    assert summary_patch == {
+        "status": "failed",
+        "job_id": 2450,
+        "terminal_job_status": "triage",
+        "error": "OperationalError: AdminShutdown",
+        "reconciled_reason": "terminal_job_without_items",
+        "viltrox_fit_score_untouched": True,
+    }
+
+
+def test_zero_item_profile_advance_repair_is_idempotent_after_terminal_update() -> None:
+    conn = _RepairConn([], one_row=None)
+    row = {
+        "id": 2450,
+        "status": "triage",
+        "last_error": "OperationalError: AdminShutdown",
+        "job_type": "smart_search_profile_advance",
+        "session_id": 451,
+        "session_item_count": 0,
+    }
+
+    assert maintenance._reconcile_zero_item_profile_advance_session(conn, row) is False
+    assert len(conn.calls) == 1
+    assert "session.status='running'" in conn.calls[0][0]
+
+
+def test_profile_advance_fallback_never_closes_session_that_has_items() -> None:
+    conn = _RepairConn([], one_row={"id": 451})
+    row = {
+        "id": 2450,
+        "status": "triage",
+        "job_type": "smart_search_profile_advance",
+        "session_id": 451,
+        "session_item_count": 1,
+    }
+
+    assert maintenance._reconcile_zero_item_profile_advance_session(conn, row) is False
+    assert conn.calls == []

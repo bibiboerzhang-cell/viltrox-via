@@ -10,6 +10,8 @@ import json
 import re
 from typing import Any
 
+from app.platform.llm_gateway_json import _json_container_candidates
+
 
 VIDEO_V2_SCORE_KEYS = (
     "video_specialty",
@@ -274,34 +276,37 @@ def _syntax_repair_candidates(raw: str) -> list[str]:
 def _parse_json_response_text(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-    parsed: Any = None
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            raise
-        sliced = raw[start : end + 1]
+    candidates = [raw, *_json_container_candidates(raw)]
+    seen: set[str] = set()
+    last_error: Exception | None = None
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
         try:
-            parsed = json.loads(sliced)
-        except json.JSONDecodeError:
-            original_strings = _string_tokens(sliced)
-            for candidate in _syntax_repair_candidates(sliced):
+            parsed: Any = json.loads(candidate)
+        except json.JSONDecodeError as original_error:
+            last_error = original_error
+            original_strings = _string_tokens(candidate)
+            for repaired in _syntax_repair_candidates(candidate):
                 # 保险丝:修复只许动 token 间语法——候选的字符串字面量
                 # 序列必须与原文逐一相同,否则弃用该候选(宁可报原始错)。
-                if _string_tokens(candidate) != original_strings:
+                if _string_tokens(repaired) != original_strings:
                     continue
                 try:
-                    parsed = json.loads(candidate)
+                    parsed = json.loads(repaired)
                     break
                 except json.JSONDecodeError:
                     continue
             else:
-                raise
-    if not isinstance(parsed, dict):
-        raise ValueError("Gemini response JSON root must be an object")
-    return parsed
+                continue
+        if isinstance(parsed, dict):
+            return parsed
+        last_error = ValueError("Gemini response JSON root must be an object")
+    if last_error is not None:
+        raise last_error
+    raise ValueError("Gemini response JSON root must be an object")
 
 
 def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:

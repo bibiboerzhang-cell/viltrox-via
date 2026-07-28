@@ -19,6 +19,11 @@ _EVENT_SCOPE_FETCH_MULTIPLIER = 5
 _PG_TRGM_CAPABILITY: bool | None = None
 
 
+def _has_unrestricted_search_access(staff) -> bool:
+    """Share the natural/global manager-role contract without changing retrieval."""
+    return natural_search.has_unrestricted_search_access(staff)
+
+
 def _escape_like(value: str) -> str:
     """Treat user-entered LIKE metacharacters as text, not scan wildcards."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -116,13 +121,19 @@ def _pg_trgm_available(conn) -> bool:
 
 @router.get("/search")
 def vkpi_search(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=1, max_length=natural_search.MAX_QUERY_LENGTH),
     limit: int = Query(default=20, ge=1, le=100),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    del staff
+    if not _has_unrestricted_search_access(staff):
+        raise HTTPException(
+            status_code=403,
+            detail="跨库搜索当前仅对管理角色开放",
+        )
     try:
-        return natural_search.search(q, limit=limit)
+        return natural_search.search(q, limit=limit, staff=staff)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -144,10 +155,7 @@ def vkpi_global_search(
     ——管理层全量;非管理层套 C3 轻隔离口径(X4-MEDIUM 修复 2026-07-03):
     KOL 限本人可见集(收藏∪项目合作∪共享∪认领)、项目限本人参与集、活动限本人在队。
     """
-    _role = str(staff.get("role") or "").strip().lower()
-    _is_manager = int(staff.get("is_owner") or 0) == 1 or _role in {
-        "admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"
-    }
+    _is_manager = _has_unrestricted_search_access(staff)
     _me = 0 if _is_manager else int(staff.get("staff_id") or 0)
     keyword = str(q or "").strip().lower()
     if not keyword:

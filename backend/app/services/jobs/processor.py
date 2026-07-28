@@ -17,6 +17,7 @@ from app.workers.tasks.ingestion import (
 )
 from app.workers.tasks.intelligence import process_scan_account_job, process_scan_matrix_job
 from app.workers.tasks.kol_score import process_score_kol_content_job
+from app.workers.tasks.market import process_market_trends_refresh_job
 from app.workers.tasks.provider_workflows import (
     process_apify_batch_refresh_job,
     process_comment_intelligence_post_job,
@@ -75,6 +76,7 @@ JOB_HANDLERS = {
     "kol_apify_enrich": process_kol_apify_enrich_job,
     "kol_apify_enrich_candidates": process_kol_apify_enrich_candidates_job,
     "kol_onboarding": process_kol_onboarding_job,
+    "market_trends_refresh": process_market_trends_refresh_job,
     "official_visual_scan": process_official_visual_scan_job,
     "project_video_metadata_refresh": process_project_video_metadata_refresh_job,
     "score_kol_content": process_score_kol_content_job,

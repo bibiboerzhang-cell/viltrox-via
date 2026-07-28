@@ -353,3 +353,66 @@ def test_query_and_limit_caps_apply_to_direct_calls(monkeypatch):
         for key in ("kols", "projects", "events")
     )
     assert "natural_search" not in inspect.getsource(search_router.vkpi_global_search)
+
+
+def test_cross_dataset_search_denies_non_manager_before_domain_call(monkeypatch):
+    monkeypatch.setattr(
+        search_router.natural_search,
+        "search",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("denied request must not reach natural search")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        search_router.vkpi_search(
+            q="camera",
+            limit=20,
+            staff={"staff_id": 7, "role": "employee", "is_owner": 0},
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_cross_dataset_search_passes_manager_staff_to_domain(monkeypatch):
+    captured: dict = {}
+
+    def fake_search(query: str, **kwargs):
+        captured["query"] = query
+        captured.update(kwargs)
+        return {"query": query, "items": []}
+
+    monkeypatch.setattr(search_router.natural_search, "search", fake_search)
+
+    result = search_router.vkpi_search(q="camera", limit=7, staff=_MANAGER)
+
+    assert result["items"] == []
+    assert captured == {"query": "camera", "limit": 7, "staff": _MANAGER}
+
+
+def test_cross_dataset_query_and_token_expansion_are_bounded():
+    with pytest.raises(HTTPException) as exc_info:
+        search_router.vkpi_search(
+            q="x" * (search_router.natural_search.MAX_QUERY_LENGTH + 1),
+            limit=20,
+            staff=_MANAGER,
+        )
+    assert exc_info.value.status_code == 400
+
+    varied_cjk = "".join(chr(0x4E00 + index) for index in range(60))
+    tokens = search_router.natural_search._tokens(varied_cjk)
+    assert len(tokens) == search_router.natural_search.MAX_SEARCH_TOKENS
+
+
+def test_domain_rejects_explicit_unscoped_staff_without_touching_db(monkeypatch):
+    monkeypatch.setattr(
+        search_router.natural_search,
+        "get_conn",
+        lambda: (_ for _ in ()).throw(AssertionError("permission check must run first")),
+    )
+
+    with pytest.raises(PermissionError):
+        search_router.natural_search.search(
+            "camera",
+            staff={"staff_id": 7, "role": "employee", "is_owner": 0},
+        )

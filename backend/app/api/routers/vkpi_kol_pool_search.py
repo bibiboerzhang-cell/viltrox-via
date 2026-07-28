@@ -850,8 +850,8 @@ async def smart_kol_search_profile_advance_job(
 
 @router.get("/kol-recall")
 def recall_kol_profiles(
-    query_text: str = Query(default=""),
-    product_sku: str = Query(default=""),
+    query_text: str = Query(default="", max_length=256),
+    product_sku: str = Query(default="", max_length=256),
     candidate_limit: int = Query(default=50, ge=1, le=500),
     limit: int = Query(default=10, ge=1, le=50),
     creator_quota: int = Query(default=7, ge=0, le=50),
@@ -867,8 +867,13 @@ def recall_kol_profiles(
     create_session: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """Vector recall endpoint for KOL Index; does not affect KOL Pool ranking."""
+    """Provider-free KOL preview; all paid/deep recall stays in POST workers."""
     try:
+        if create_session or session_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="GET /kol-recall is read-only; use POST /kol-smart-search to create or update a search session",
+            )
         result = kol_profile_recall.recall_kol_profiles(
             query_text=query_text,
             product_sku=product_sku,
@@ -883,25 +888,11 @@ def recall_kol_profiles(
             type_weight=type_weight,
             type_boost_enabled=type_boost_enabled,
             exclude_chinese=exclude_chinese,
+            provider_free=True,
         )
-        session = kol_search_sessions.ensure_session_for_result(
-            session_id=session_id,
-            create=bool(create_session),
-            query_text=query_text or product_sku,
-            query_type="text_recall",
-            source="kol_recall",
-            input_payload={
-                "query_text": query_text,
-                "product_sku": product_sku,
-                "candidate_limit": candidate_limit,
-                "limit": limit,
-                "creator_quota": creator_quota,
-                "reviewer_quota": reviewer_quota,
-            },
-            staff=staff,
-        )
-        if session:
-            result["search_session"] = kol_search_sessions.attach_recall_result(int(session["id"]), result)
+        result["provider_calls"] = False
+        result["write_db"] = False
+        result["execution_mode"] = "provider_free_preview"
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

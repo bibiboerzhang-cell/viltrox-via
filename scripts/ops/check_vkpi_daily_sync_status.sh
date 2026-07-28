@@ -6,7 +6,7 @@ SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
 LOG_DATE="${LOG_DATE:-$(date -u +%Y%m%d)}"
 LOG_PATH="${LOG_PATH:-/var/log/vkpi/sync_daily_${LOG_DATE}.log}"
 
-ssh "${SSH_TARGET}" "SYNC_SERVICE='${SYNC_SERVICE}' LOG_PATH='${LOG_PATH}' python3 -" <<'PY'
+ssh "${SSH_TARGET}" "SYNC_SERVICE='${SYNC_SERVICE}' LOG_PATH='${LOG_PATH}' PYTHONDONTWRITEBYTECODE=1 python3 -B -" <<'PY'
 from __future__ import annotations
 
 import json

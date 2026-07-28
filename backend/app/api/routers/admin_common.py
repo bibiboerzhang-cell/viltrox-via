@@ -407,10 +407,17 @@ def _upsert_admin_user_account(payload: dict[str, Any]) -> dict[str, Any]:
             INSERT INTO users
                 (created_at, email, password_hash, name, status, role, email_verified)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
             """,
             (now, email, hash_password(password), name, status, role, email_verified),
         )
-        uid = int(cur.lastrowid)
+        created = cur.fetchone()
+        if not created:
+            raise RuntimeError("user insert did not return an id")
+        try:
+            uid = int(created["id"])
+        except (KeyError, TypeError):
+            uid = int(created[0])
         conn.execute("UPDATE users SET creator_code=? WHERE id=?", (_creator_code_for_user_id(uid), uid))
     conn.commit()
     invalidate_user_cache(uid)

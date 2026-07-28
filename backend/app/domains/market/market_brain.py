@@ -74,13 +74,19 @@ def _today_actions(limit: int = 5) -> list[dict[str, Any]]:
              "expected_gain": dict(r).get("expected_gain"), "risk": dict(r).get("risk_level")} for r in rows]
 
 
-def build_daily_brief(staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_daily_brief(
+    staff: dict[str, Any] | None = None,
+    *,
+    sweep_expired: bool = True,
+) -> dict[str, Any]:
     """Market Brain v1 日报:每日合成 5 件(产品热/上升渠道/竞品动/机会窗/今日建议)。
 
-    先治理过期信号再采纳;每段标 data_status(诚实:无真数据=stale_or_empty,不伪造)。
+    ``sweep_expired=True`` 保留日报端点原有的过期治理；纯读调用方必须显式传
+    ``False``，只通过查询条件排除过期信号。每段标 data_status
+    (诚实:无真数据=stale_or_empty,不伪造)。
     """
     del staff
-    expired = mark_expired_signals()
+    expired = mark_expired_signals() if sweep_expired else 0
     try:
         from app.domains.market import prediction
 

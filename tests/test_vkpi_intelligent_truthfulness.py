@@ -3,8 +3,12 @@ from __future__ import annotations
 import threading
 
 import pytest
+from fastapi import HTTPException
 
 from app.api.routers import vkpi_intelligent
+
+
+_MANAGER = {"id": 1, "staff_id": 1, "role": "admin", "is_owner": 1}
 
 
 @pytest.fixture(autouse=True)
@@ -156,8 +160,8 @@ def test_degraded_answer_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(vkpi_intelligent, "_try_synth", degraded)
-    first = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff={"id": 1})
-    second = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff={"id": 1})
+    first = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff=_MANAGER)
+    second = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff=_MANAGER)
 
     assert calls["n"] == 2
     assert first["cached"] is False
@@ -174,8 +178,8 @@ def test_successful_synth_answer_is_cached(monkeypatch: pytest.MonkeyPatch) -> N
         return vkpi_intelligent._answer(answer="真实综合答案", mode="synth")
 
     monkeypatch.setattr(vkpi_intelligent, "_try_synth", success)
-    first = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff={"id": 1})
-    second = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff={"id": 1})
+    first = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff=_MANAGER)
+    second = vkpi_intelligent.intelligent_ask({"question": "如何安排合作?"}, staff=_MANAGER)
 
     assert calls["n"] == 1
     assert first["cached"] is False
@@ -187,6 +191,44 @@ def test_answer_contract_rejects_empty_and_oversized_text() -> None:
     assert vkpi_intelligent._valid_synth_json({"answer": ""})[0] is False
     assert vkpi_intelligent._valid_synth_json({"answer": "x" * 6001})[0] is False
     assert vkpi_intelligent._valid_synth_json([])[0] is False
+
+
+def test_intelligent_ask_denies_non_manager_before_any_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        vkpi_intelligent,
+        "_try_intent",
+        lambda question: (_ for _ in ()).throw(
+            AssertionError("denied request must not enter intent lane")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        vkpi_intelligent.intelligent_ask(
+            {"question": "请分析全部候选"},
+            staff={"id": 7, "staff_id": 7, "role": "employee", "is_owner": 0},
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_intelligent_ask_rejects_oversized_question_before_any_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vkpi_intelligent,
+        "_try_intent",
+        lambda question: (_ for _ in ()).throw(
+            AssertionError("oversized request must not enter intent lane")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        vkpi_intelligent.intelligent_ask(
+            {"question": "x" * (vkpi_intelligent.INTELLIGENT_QUESTION_MAX_LENGTH + 1)},
+            staff=_MANAGER,
+        )
+
+    assert exc_info.value.status_code == 422
 
 
 def test_gateway_attempt_limit_prevents_a_second_billable_provider(

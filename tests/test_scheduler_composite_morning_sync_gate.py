@@ -109,6 +109,38 @@ def test_dedicated_daily_sync_path_does_not_use_composite_scheduler_task() -> No
     script = (ROOT / "scripts/cron_daily_sync.py").read_text(encoding="utf-8")
 
     assert "scripts/cron_daily_sync.py" in unit
+    assert "WorkingDirectory=/opt/viltrox-2.0/current" in unit
+    assert "Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend" in unit
+    assert "Environment=PYTHONDONTWRITEBYTECODE=1" in unit
+    assert (
+        "env PYTHONDONTWRITEBYTECODE=1 "
+        "/opt/viltrox-2.0/.venv/bin/python -B scripts/cron_daily_sync.py"
+    ) in unit
+    assert ".venv/bin/python scripts/cron_daily_sync.py" not in unit
     assert "daily_incremental_sync" in script
     assert "vkpi_morning_sync" not in unit
     assert "morning_sync" not in script
+
+
+def test_daily_timer_installer_keeps_both_remote_python_paths_bytecode_free() -> None:
+    installer = (ROOT / "scripts/ops/install_vkpi_daily_timers.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert installer.count("WorkingDirectory=${REMOTE_ROOT}/current") == 2
+    assert installer.count(
+        "Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend"
+    ) == 2
+    assert installer.count("Environment=PYTHONDONTWRITEBYTECODE=1") == 2
+    assert installer.count(
+        "env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B "
+        "scripts/cron_daily_sync.py"
+    ) == 2
+    assert (
+        "${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py "
+        "--official-max-posts 50 --skip-kol --include-qualified-kol "
+        "--kol-tiers hot --kol-stale-days 1 --kol-max-posts 2"
+    ) in installer
+    assert "WorkingDirectory=${REMOTE_ROOT}\n" not in installer
+    assert "Environment=PYTHONPATH=backend" not in installer
+    assert " .venv/bin/python" not in installer

@@ -698,6 +698,7 @@ def semantic_recall(
     limit: int = DEFAULT_LIMIT,
     conn: Any = None,
     embed_fn: Callable[[str], tuple[list[float], dict[str, Any]]] | None = None,
+    provider_free: bool = False,
 ) -> dict[str, Any]:
     """语义召回三段式:①召回(embedding 优先/决定性降级)②十一维粗排 ③LLM top-20 重排。
 
@@ -717,13 +718,18 @@ def semantic_recall(
     degraded_reason = ""
     embedding_meta: dict[str, Any] = {}
     excluded_region = 0
-    try:
-        candidates, embedding_meta = _embedding_recall(db, query, RECALL_CANDIDATE_LIMIT, embed_fn=embed_fn)
-    except Exception as exc:  # noqa: BLE001 — 无网/无 key/预算闸/Qdrant 缺,全走降级
-        degraded_reason = _stable_failure_reason(exc, operation="embedding")
-        logger.warning("semantic_recall embedding degraded reason=%s", degraded_reason, exc_info=True)
+    if provider_free:
         recall_method = RECALL_METHOD_FALLBACK
+        degraded_reason = "provider_free_preview"
         candidates = _ngram_recall(db, query, RECALL_CANDIDATE_LIMIT)
+    else:
+        try:
+            candidates, embedding_meta = _embedding_recall(db, query, RECALL_CANDIDATE_LIMIT, embed_fn=embed_fn)
+        except Exception as exc:  # noqa: BLE001 — 无网/无 key/预算闸/Qdrant 缺,全走降级
+            degraded_reason = _stable_failure_reason(exc, operation="embedding")
+            logger.warning("semantic_recall embedding degraded reason=%s", degraded_reason, exc_info=True)
+            recall_method = RECALL_METHOD_FALLBACK
+            candidates = _ngram_recall(db, query, RECALL_CANDIDATE_LIMIT)
 
     # 地区排除(P0-6 口径:CN/HK/TW;country 为空放行)
     kept: list[dict[str, Any]] = []
@@ -765,7 +771,13 @@ def semantic_recall(
     stages["coarse"] = coarse_meta
 
     # ── ③ 重排段:LLM top-20 + 当日缓存;预算不足诚实 skipped 保粗排序 ──
-    stages["rerank"] = _rerank_stage(db, query, candidates)
+    if provider_free:
+        stages["rerank"] = {
+            "status": "skipped",
+            "cost_note": "provider_free_preview_zero_cost",
+        }
+    else:
+        stages["rerank"] = _rerank_stage(db, query, candidates)
 
     items = [_format_item(i + 1, item) for i, item in enumerate(candidates[:safe_limit])]
     return {
@@ -777,7 +789,10 @@ def semantic_recall(
             "excluded_region_count": excluded_region,
             "returned_count": len(items),
             "note": (
-                "三段式语义召回:①embedding 优先/决定性 3-gram 降级 ②final_v1 十一维余弦粗排 "
+                "Provider-free 预览:①本地 3-gram 召回 ②final_v1 十一维余弦粗排 "
+                "③跳过 LLM 重排;零外部调用、零缓存写入。"
+                if provider_free
+                else "三段式语义召回:①embedding 优先/决定性 3-gram 降级 ②final_v1 十一维余弦粗排 "
                 "③LLM top-20 重排(当日缓存)。纯读展示信号,不参与 V6 Fit 评分,零触 rule_v0。"
             ),
         },

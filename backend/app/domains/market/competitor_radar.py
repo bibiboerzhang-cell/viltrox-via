@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.costs import budget_guard
 from app.domains.market.ai_today import (
     _RESULT_CONTRACT_VERSION,
@@ -545,6 +545,12 @@ def normalize_signal_item(
 
 
 def _ensure_schema() -> None:
+    # PostgreSQL schema is migration-owned
+    # (152_vkpi_competitor_radar.sql).  Runtime DDL on a GET or scheduler
+    # execution can block behind unrelated transactions and fan the wait out
+    # across the web pool.  SQLite keeps its idempotent fixture bootstrap.
+    if is_postgres_runtime():
+        return
     conn = get_conn()
     conn.execute(
         """
@@ -552,7 +558,7 @@ def _ensure_schema() -> None:
             snapshot_date DATE PRIMARY KEY,
             content_json  TEXT NOT NULL,
             model         TEXT,
-            created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )

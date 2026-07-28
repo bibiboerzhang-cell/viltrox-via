@@ -34,11 +34,80 @@ def _repo(tmp_path: Path) -> Path:
 python3 - <<'PY'
 import json
 import os
+import subprocess
+import tempfile
 from pathlib import Path
+with tempfile.TemporaryDirectory() as raw:
+    fixture = Path(raw)
+    subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "nested@example.invalid"],
+        cwd=fixture,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Nested Fixture"],
+        cwd=fixture,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(fixture), "config", "test.bridge", "isolated"],
+        cwd=Path.cwd(),
+        check=True,
+    )
+    (fixture / "README.md").write_text("nested\\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=fixture, check=True)
+    subprocess.run(["git", "commit", "-qm", "nested"], cwd=fixture, check=True)
+    nested_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=fixture, text=True
+    ).strip()
+    nested_toplevel = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=fixture, text=True
+    ).strip()
+    nested_config = subprocess.check_output(
+        ["git", "-C", str(fixture), "config", "--get", "test.bridge"],
+        cwd=Path.cwd(),
+        text=True,
+    ).strip()
+blocked_mutation = subprocess.run(
+    ["git", "config", "core.worktree", "/tmp/forbidden"],
+    cwd=Path.cwd(),
+    capture_output=True,
+    text=True,
+    check=False,
+)
+blocked_symbolic_ref = subprocess.run(
+    ["git", "symbolic-ref", "HEAD", "refs/heads/forbidden"],
+    cwd=Path.cwd(),
+    capture_output=True,
+    text=True,
+    check=False,
+)
 Path("verify-env.json").write_text(json.dumps({
+    "GIT_DIR": os.environ.get("GIT_DIR"),
+    "GIT_OPTIONAL_LOCKS": os.environ.get("GIT_OPTIONAL_LOCKS"),
+    "GIT_WORK_TREE": os.environ.get("GIT_WORK_TREE"),
+    "VKPI_FREEZE_GIT_BRIDGE": os.environ.get("VKPI_FREEZE_GIT_BRIDGE"),
     "VITE_APP_GIT_SHA": os.environ.get("VITE_APP_GIT_SHA"),
     "VITE_APP_GIT_BRANCH": os.environ.get("VITE_APP_GIT_BRANCH"),
     "VITE_APP_BUILD_TIME": os.environ.get("VITE_APP_BUILD_TIME"),
+    "blocked_snapshot_mutation_rc": blocked_mutation.returncode,
+    "blocked_symbolic_ref_rc": blocked_symbolic_ref.returncode,
+    "git_head": subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True
+    ).strip(),
+    "git_status": subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        text=True,
+    ).strip(),
+    "git_toplevel": subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip(),
+    "nested_fixture_commit_ok": len(nested_head) == 40,
+    "nested_fixture_config_isolated": nested_config == "isolated",
+    "nested_fixture_toplevel_ok": (
+        Path(nested_toplevel).resolve() == fixture.resolve()
+    ),
 }, sort_keys=True), encoding="utf-8")
 PY
 exit 0
@@ -108,6 +177,15 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    common_worktree_before = subprocess.run(
+        ["git", "config", "--local", "--get", "core.worktree"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert common_worktree_before.returncode == 1
     fake_bin = tmp_path / "bin"
     fake_npm = fake_bin / "npm"
     _write(
@@ -155,12 +233,83 @@ payload = {
     assert build_info["gitBranch"] == identity["git_branch"]
     assert build_info["builtAt"] == identity["build_time"]
     assert verify_env == {
+        "GIT_DIR": None,
+        "GIT_OPTIONAL_LOCKS": None,
+        "GIT_WORK_TREE": None,
+        "VKPI_FREEZE_GIT_BRIDGE": "readonly-path-wrapper",
         "VITE_APP_BUILD_TIME": identity["build_time"],
         "VITE_APP_GIT_BRANCH": identity["git_branch"],
         "VITE_APP_GIT_SHA": identity["git_sha"],
+        "blocked_snapshot_mutation_rc": 126,
+        "blocked_symbolic_ref_rc": 126,
+        "git_head": identity["git_sha"],
+        "git_status": "",
+        "git_toplevel": str(root),
+        "nested_fixture_commit_ok": True,
+        "nested_fixture_config_isolated": True,
+        "nested_fixture_toplevel_ok": True,
     }
+    assert not (output / ".git").exists()
+    assert not (output / ".git").is_symlink()
+    common_worktree_after = subprocess.run(
+        ["git", "config", "--local", "--get", "core.worktree"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert common_worktree_after.returncode == 1
     assert payload["build"]["build_info"] == build_info
     assert payload["build"]["build_info_sha256"]
+
+
+def test_freeze_rechecks_source_after_static_verify(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    verify = root / "scripts" / "verify.sh"
+    _write(
+        verify,
+        """#!/usr/bin/env bash
+python3 - <<'PY'
+import subprocess
+from pathlib import Path
+source = Path(
+    subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+)
+(source / "backend" / "app.py").write_text("VALUE = 999\\n", encoding="utf-8")
+PY
+""",
+    )
+    os.chmod(verify, 0o755)
+    subprocess.run(["git", "add", "scripts/verify.sh"], cwd=root, check=True)
+    commit_env = os.environ.copy()
+    commit_env.update(
+        {
+            "GIT_AUTHOR_EMAIL": "freeze@example.invalid",
+            "GIT_AUTHOR_NAME": "Freeze Test",
+            "GIT_COMMITTER_EMAIL": "freeze@example.invalid",
+            "GIT_COMMITTER_NAME": "Freeze Test",
+        }
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "mutating verifier fixture"],
+        cwd=root,
+        env=commit_env,
+        check=True,
+    )
+
+    output = tmp_path / "candidate"
+    args = _freeze_args(root, output)
+    args.skip_archive = True
+    args.skip_verify = False
+
+    with pytest.raises(
+        FreezeError, match="worktree drifted during candidate build and verification"
+    ):
+        freeze_candidate(args)
+    assert not output.exists()
 
 
 def test_offline_verify_detects_candidate_tamper(tmp_path: Path) -> None:

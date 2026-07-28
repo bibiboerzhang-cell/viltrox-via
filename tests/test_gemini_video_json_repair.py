@@ -12,6 +12,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.services.ai.analyzers.gemini_video_results import (  # noqa: E402
+    InvalidFinalV1ResultError,
+    _normalise_final_v1_result,
     _parse_json_response_text,
 )
 
@@ -43,6 +45,35 @@ def test_missing_comma_after_object_repaired():
 def test_prose_wrapped_object_still_extracted():
     raw = 'Here is the analysis:\n{"a": 1}\nHope this helps.'
     assert _parse_json_response_text(raw) == {"a": 1}
+
+
+def test_concatenated_objects_use_first_balanced_top_level_object():
+    raw = '{"a": 1, "text": "literal } { stays inside"}\n{"b": 2}'
+    assert _parse_json_response_text(raw) == {
+        "a": 1,
+        "text": "literal } { stays inside",
+    }
+
+
+def test_fenced_prose_and_concatenated_object_still_extract_first_object():
+    raw = (
+        "Here is the analysis:\n"
+        "```json\n"
+        '{"a": {"nested": true}}\n'
+        "```\n"
+        'Follow-up metadata: {"ignored": true}'
+    )
+    assert _parse_json_response_text(raw) == {"a": {"nested": True}}
+
+
+def test_concatenated_json_does_not_bypass_final_v1_schema_validation():
+    parsed = _parse_json_response_text(
+        '{"note": "not a final-v1 payload"}\n'
+        '{"layer1_visual_content": {"content_summary": "ignored second object"}}'
+    )
+
+    with pytest.raises(InvalidFinalV1ResultError, match="missing_core_content"):
+        _normalise_final_v1_result(parsed, subtitle_used=False)
 
 
 def test_unrepairable_json_still_raises():

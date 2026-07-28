@@ -20,7 +20,7 @@ status_json="$("${SYNC_STATUS_SCRIPT}")"
 echo "${status_json}"
 
 eval "$(
-  STATUS_JSON="${status_json}" python3 - <<'PY'
+  STATUS_JSON="${status_json}" PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
 import json
 import os
 import shlex
@@ -70,8 +70,8 @@ args=( "scripts/vkpi_brand_signal_scan.py" "--source" "${SOURCE}" "--limit" "${L
 if [ -n "${SINCE}" ]; then
   args+=( "--since" "${SINCE}" )
 fi
-PYTHONPATH=backend "${PYTHON_BIN}" "${args[@]}"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend "${PYTHON_BIN}" -B "${args[@]}"
 SH
 else
-  "${PYTHON_BIN}" "${args[@]}"
+  PYTHONDONTWRITEBYTECODE=1 "${PYTHON_BIN}" -B "${args[@]}"
 fi

@@ -5,13 +5,21 @@
 """
 from __future__ import annotations
 
+import asyncio
+import math
 from typing import Any, Callable
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
-from app.platform.apify_budget import call_apify_actor, current_apify_execution_context
+from app.db.connection import (
+    db_connection_sync_reusing_scope,
+    db_connection_sync_scope,
+    get_conn,
+    table_exists,
+)
+from app.platform.apify_budget import current_apify_execution_context
 
 logger = get_logger(__name__)
+MAX_DISCOVERY_QUERY_LENGTH = 256
 
 _TABLE = "vkpi_discovery_providers"
 
@@ -23,6 +31,13 @@ _CUSTOM: dict[str, Callable[[str, int], list[dict[str, Any]]]] = {}
 def register_provider(name: str, fn: Callable[[str, int], list[dict[str, Any]]]) -> None:
     """注册一个发现源适配器(接 Modash/HypeAuditor 等时调用)。"""
     _CUSTOM[str(name)] = fn
+
+
+def _local_read_scope():
+    """Use the request lease for previews and a short standalone lease in workers."""
+    if current_apify_execution_context() is None:
+        return db_connection_sync_reusing_scope()
+    return db_connection_sync_scope()
 
 
 def list_providers(kind: str = "") -> list[dict[str, Any]]:
@@ -51,7 +66,8 @@ def list_providers(kind: str = "") -> list[dict[str, Any]]:
 def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
     """复用我们的 Apify 做平台搜索(自持、不另花新供应商钱)。
 
-    env 门控:仅当 VKPI_APIFY_SEARCH_ACTOR 设了 actor 才跑(避免意外 Apify 计费);未设 → not_configured。
+    只允许 durable provider worker 执行；按平台复用既有、已审计的 actor
+    输入适配器和统一预算账本。
     """
     # Read/user request paths may inspect the internal pool immediately, but a
     # paid provider run is only legal inside a centrally claimed durable job.
@@ -60,80 +76,98 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
     if current_apify_execution_context() is None:
         return [], "background_refresh_required"
 
-    import json
-    import os
+    # Reuse the reviewed platform-specific discovery adapters.  The previous
+    # generic actor loop sent the same ``searchQueries`` payload to every
+    # platform, even though TikTok and Instagram require different contracts;
+    # production consequently advertised apify_search as enabled while having
+    # no executable actor configuration.  The shared adapters already own the
+    # actor ids, payload contracts, throttles, normalization, and budget ledger.
+    from app.services.intelligence.account_search_discovery import search_platform_content
 
-    # 多平台:VKPI_APIFY_SEARCH_ACTORS = {"youtube":"...","tiktok":"...","instagram":"..."}(JSON);
-    # 兼容旧单一 VKPI_APIFY_SEARCH_ACTOR(当 youtube)。
-    actors: dict[str, str] = {}
-    raw = os.getenv("VKPI_APIFY_SEARCH_ACTORS", "").strip()
-    if raw:
-        try:
-            actors = {str(k): str(v) for k, v in (json.loads(raw) or {}).items() if v}
-        except Exception:
-            actors = {}
-    single = os.getenv("VKPI_APIFY_SEARCH_ACTOR", "").strip()
-    if single:
-        actors.setdefault("youtube", single)
-    if not actors:
-        return [], "not_configured"
-    try:
-        from app.services.scraping import apify as apify_svc
-
-        if not apify_svc._apify_available() or apify_svc._client is None:
-            return [], "not_configured"
-    except Exception:
-        return [], "not_configured"
-    per = max(1, int(limit) // max(1, len(actors)))
+    platforms = ("youtube", "tiktok", "instagram")
+    per = max(1, math.ceil(max(1, int(limit)) / len(platforms)))
     out: list[dict[str, Any]] = []
-    for platform, actor in actors.items():
+    statuses: list[str] = []
+    for platform in platforms:
         try:
-            run = call_apify_actor(
-                apify_svc._client,
-                actor,
-                platform=platform,
-                operation="federation_search",
-                source="discovery.federation",
-                run_input={"searchQueries": [query], "maxResults": per},
-            )
-            # C5 成本记账收口:联邦搜索 run 统一记账(幂等 by run_id;失败绝不影响搜索)。
-            try:
-                from app.domains.costs.budget_guard import record_apify_run
-
-                record_apify_run(
-                    run,
-                    actor_id=str(actor),
-                    platform=str(platform),
-                    operation="federation_search",
-                    source="discovery.federation",
+            result = asyncio.run(
+                search_platform_content(
+                    platform,
+                    query,
+                    max_results=per,
                 )
-            except Exception:
-                logger.warning("federation.apify_cost_record_failed", exc_info=True)
-            taken = 0
-            for x in apify_svc._client.dataset(run["defaultDatasetId"]).iterate_items():
-                out.append({
-                    "source": "apify_search",
-                    "platform": platform,
-                    "external_id": str(x.get("id") or x.get("channelId") or x.get("url") or ""),
-                    "name": x.get("channelName") or x.get("title") or x.get("name") or x.get("nickName") or "",
-                    "followers": x.get("numberOfSubscribers") or x.get("subscribers") or x.get("fans"),
-                    "handle": x.get("channelUrl") or x.get("url") or "",
-                    "in_pool": False,
-                })
-                taken += 1
-                if taken >= per:
-                    break
+            )
+            status = str(result.get("status") or "error")
+            statuses.append(status)
+            for item in result.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                handle = str(
+                    item.get("handle")
+                    or item.get("channel_url")
+                    or item.get("profile_url")
+                    or item.get("source_url")
+                    or ""
+                ).strip()
+                out.append(
+                    {
+                        "source": "apify_search",
+                        "platform": platform,
+                        "external_id": str(
+                            item.get("channel_id")
+                            or item.get("id")
+                            or item.get("handle")
+                            or handle
+                            or ""
+                        ),
+                        "name": (
+                            item.get("channel_name")
+                            or item.get("display_name")
+                            or item.get("name")
+                            or item.get("handle")
+                            or ""
+                        ),
+                        "followers": item.get("followers") or item.get("subscribers"),
+                        "handle": handle,
+                        "in_pool": False,
+                        "provider_status": status,
+                    }
+                )
         except Exception:
-            logger.warning("federation.apify_search_platform_failed", extra={"platform": platform}, exc_info=True)
-            continue
-    return (out[:limit], "ok") if out else (out, "not_configured")
+            statuses.append("error")
+            logger.warning(
+                "federation.apify_search_platform_failed",
+                extra={"platform": platform},
+                exc_info=True,
+            )
+    if out:
+        return out[:limit], "ok" if all(status in {"done", "ok"} for status in statuses) else "partial"
+    if statuses and all(status in {"provider_unavailable", "actor_not_configured", "unsupported_platform"} for status in statuses):
+        return [], "not_configured"
+    return [], "no_results" if any(status in {"done", "ok"} for status in statuses) else "error"
 
 
-def _run_provider(name: str, query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
+def _run_provider(
+    name: str,
+    query: str,
+    limit: int,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
     if name == "internal_pool":
         from app.domains.intelligence import semantic_recall
 
-        r = semantic_recall.unified_recall(query, kinds=("kol",), limit=limit)
+        # Release the local read lease before a durable worker starts waiting
+        # on an external actor.  Otherwise one search can pin a DB connection
+        # for the entire provider run.
+        with _local_read_scope():
+            r = semantic_recall.unified_recall(
+                query,
+                kinds=("kol",),
+                limit=limit,
+                staff=staff,
+                provider_free=True,
+            )
         items = [
             {"source": "internal_pool", "kol_pool_id": x.get("id"), "name": x.get("title"),
              "platform": "", "score": x.get("score"), "in_pool": True}
@@ -164,20 +198,48 @@ def _dedupe(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def federated_search(query: str, *, limit: int = 20, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def federated_search(
+    query: str,
+    *,
+    limit: int = 20,
+    staff: dict[str, Any] | None = None,
+    include_external: bool = False,
+) -> dict[str, Any]:
     """跨启用源联邦发现 → 归一去重。商业源未配置则 not_configured(不报错)。"""
-    del staff
     q = str(query or "").strip()
     if not q:
         return {"status": "empty_query", "results": [], "sources": {}}
-    providers = [p for p in list_providers("discovery") if p["enabled"]]
+    if len(q) > MAX_DISCOVERY_QUERY_LENGTH:
+        raise ValueError(
+            f"query must be at most {MAX_DISCOVERY_QUERY_LENGTH} characters"
+        )
+    # Provider registry reads must finish and release their transaction before
+    # a durable worker waits on external networks.  A dedicated short scope
+    # also avoids rolling back any request-owned outer transaction.
+    with _local_read_scope():
+        providers = [p for p in list_providers("discovery") if p["enabled"]]
     if not any(p["name"] == "internal_pool" for p in providers):
         providers.append({"name": "internal_pool"})  # 自有源恒可用兜底
     results: list[dict[str, Any]] = []
     sources: dict[str, Any] = {}
+    external_allowed = bool(
+        include_external and current_apify_execution_context() is not None
+    )
     for p in providers:
-        items, status = _run_provider(p["name"], q, limit)
-        sources[p["name"]] = {"count": len(items), "status": status}
+        provider_name = str(p["name"])
+        if provider_name != "internal_pool" and not external_allowed:
+            sources[provider_name] = {
+                "count": 0,
+                "status": "background_refresh_required",
+            }
+            continue
+        items, status = _run_provider(
+            provider_name,
+            q,
+            limit,
+            staff=staff,
+        )
+        sources[provider_name] = {"count": len(items), "status": status}
         results.extend(items)
     deduped = _dedupe(results)
     return {

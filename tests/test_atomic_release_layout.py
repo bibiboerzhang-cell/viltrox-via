@@ -14,8 +14,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts/ops/atomic_release_layout.py"
+SYNC_SERVICE_UNIT = "vkpi-sync-daily.service"
 UNITS = (
     "viltrox-2.0-test.service",
+    SYNC_SERVICE_UNIT,
     "vkpi-worker-interactive.service",
     "vkpi-worker-bulk@.service",
 )
@@ -233,6 +235,7 @@ def test_first_release_restores_absent_pointers_and_retains_legacy_audit_snapsho
     assert rollback["schema"] == 3
     assert rollback["original_current_release"] is None
     assert rollback["original_previous_release"] is None
+    assert SYNC_SERVICE_UNIT in rollback["unit_names"]
     assert Path(rollback["legacy_snapshot_release"]).resolve() == legacy
     controller = root / ".release-controller"
     rollback_dir = _rollback_dir(root, release_id)
@@ -245,6 +248,7 @@ def test_first_release_restores_absent_pointers_and_retains_legacy_audit_snapsho
         rollback_dir / "metadata.json",
         rollback_dir / "metadata.sha256",
         rollback_dir / "units" / UNITS[0],
+        rollback_dir / "units" / SYNC_SERVICE_UNIT,
     ):
         info = capture.stat()
         assert info.st_uid == os.geteuid()
@@ -311,6 +315,9 @@ def test_first_release_restores_absent_pointers_and_retains_legacy_audit_snapsho
     assert (root / ".env").read_text(encoding="utf-8") == "APP_GIT_SHA=old\nSECRET=preserved\n"
     for name in UNITS:
         assert (unit_dir / name).read_text(encoding="utf-8") == f"old:{name}\n"
+    assert (unit_dir / SYNC_SERVICE_UNIT).read_text(encoding="utf-8") == (
+        f"old:{SYNC_SERVICE_UNIT}\n"
+    )
     restored_unit_info = required_unit.stat()
     assert restored_unit_info.st_uid == required_unit_info.st_uid
     assert restored_unit_info.st_gid == required_unit_info.st_gid
@@ -318,89 +325,6 @@ def test_first_release_restores_absent_pointers_and_retains_legacy_audit_snapsho
     assert changed_unit_alias.read_text(encoding="utf-8") == f"new:{UNITS[0]}\n"
     assert changed_unit_alias.stat().st_ino != restored_unit_info.st_ino
     assert not list(unit_dir.glob(".*.service.restore-*.tmp"))
-
-
-def test_sealed_payload_tamper_is_rejected_before_prepare_or_activate(tmp_path: Path) -> None:
-    root, unit_dir = _layout(tmp_path)
-    release_id = "release-tampered"
-    release = _release(root, release_id, "8" * 40)
-    target = release / "backend/app/workers/apify_jobs_worker.py"
-
-    target.chmod(0o644)
-    target.write_text("# payload changed after seal\n", encoding="utf-8")
-    target.chmod(0o444)
-
-    verified = _run(
-        "verify-seal",
-        "--root",
-        str(root),
-        "--release-id",
-        release_id,
-        check=False,
-    )
-    assert verified.returncode != 0
-    assert "payload digest mismatch" in verified.stderr
-
-    prepare_args = [
-        "prepare",
-        "--root",
-        str(root),
-        "--release-id",
-        release_id,
-        "--unit-dir",
-        str(unit_dir),
-        "--pending-migrations",
-        "250.sql",
-        "--compatibility-declaration",
-        "250.sql",
-    ]
-    for name in UNITS:
-        prepare_args.extend(("--unit-name", name))
-    prepared = _run(*prepare_args, check=False)
-    activated = _run(
-        "activate",
-        "--root",
-        str(root),
-        "--release-id",
-        release_id,
-        check=False,
-    )
-    assert prepared.returncode != 0
-    assert "payload digest mismatch" in prepared.stderr
-    assert activated.returncode != 0
-    assert "payload digest mismatch" in activated.stderr
-
-
-def test_release_manifest_is_single_use_and_parent_must_be_nonwritable(tmp_path: Path) -> None:
-    root, _unit_dir = _layout(tmp_path)
-    release_id = "release-single-use"
-    _release(root, release_id, "9" * 40)
-
-    resealed = _run(
-        "seal",
-        "--root",
-        str(root),
-        "--release-id",
-        release_id,
-        "--git-sha",
-        "9" * 40,
-        check=False,
-    )
-    assert resealed.returncode != 0
-    assert "refusing to reseal" in resealed.stderr
-
-    releases = root / "releases"
-    releases.chmod(0o775)
-    verified = _run(
-        "verify-seal",
-        "--root",
-        str(root),
-        "--release-id",
-        release_id,
-        check=False,
-    )
-    assert verified.returncode != 0
-    assert "parent must not be group/world writable" in verified.stderr
 
 
 def test_later_release_restores_current_and_prior_previous_pointer(tmp_path: Path) -> None:

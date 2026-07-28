@@ -26,6 +26,7 @@ from app.core.logging import get_logger
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import account_dossier as kol_account_dossier
@@ -278,7 +279,12 @@ def kol_recommendation_card(
 
 
 @router.get("/kol-pool/unified-search")
-def kol_unified_search(q: str, external: bool = False, limit: int = 20, staff=Depends(require_tab("vkpi", "read"))) -> dict:
+def kol_unified_search(
+    q: str = Query(..., min_length=1, max_length=256),
+    external: bool = False,
+    limit: int = Query(default=20, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
     """段2 · 统一搜索响应模型:source/status/cost_gate/provider_status/candidate_ids/history_match 一个形。"""
     from app.domains.kol import unified_search
 
@@ -294,7 +300,11 @@ def kol_pool_discovery_providers(staff=Depends(require_tab("vkpi", "read"))) -> 
 
 
 @router.get("/kol-pool/discovery/federated-search")
-def kol_pool_federated_search(q: str, limit: int = 20, staff=Depends(require_tab("vkpi", "read"))) -> dict:
+def kol_pool_federated_search(
+    q: str = Query(..., min_length=1, max_length=256),
+    limit: int = Query(default=20, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
     """联邦发现即时预览。
 
     读路径只查自有/已物化数据；付费外部源返回
@@ -310,9 +320,9 @@ def kol_pool_federated_search(q: str, limit: int = 20, staff=Depends(require_tab
 @router.post("/kol-pool/discovery/federated-search/refresh")
 async def kol_pool_federated_search_refresh(
     request: Request,
-    q: str,
-    limit: int = 20,
-    staff=Depends(require_tab("vkpi", "write")),
+    q: str = Query(..., min_length=1, max_length=256),
+    limit: int = Query(default=20, ge=1, le=100),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict:
     """持久化刷新联邦外部源；结果由通用任务进度/结果端点读取。"""
     query = str(q or "").strip()
@@ -321,13 +331,23 @@ async def kol_pool_federated_search_refresh(
     queue = getattr(request.app.state, "job_queue", None)
     if queue is None:
         raise HTTPException(status_code=503, detail="durable job queue unavailable")
+    if str(getattr(queue, "backend_name", "")) == "inprocess":
+        raise HTTPException(
+            status_code=503,
+            detail="durable_queue_required:inprocess_queue_has_no_provider_execution_fence",
+        )
     safe_limit = max(1, min(int(limit or 20), 100))
-    task_id = await queue.enqueue(
-        "discovery_federated_search",
-        {"query": query, "limit": safe_limit, "staff": dict(staff or {})},
-        lock_key=f"discovery_federated_search:{query.casefold()}:{safe_limit}",
-        timeout_seconds=1200,
-    )
+    try:
+        task_id = await queue.enqueue(
+            "discovery_federated_search",
+            {"query": query, "limit": safe_limit, "staff": dict(staff or {})},
+            lock_key=f"discovery_federated_search:{query.casefold()}:{safe_limit}",
+            timeout_seconds=1200,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not str(task_id or "").strip():
+        raise HTTPException(status_code=503, detail="durable job queue returned no job id")
     return {
         "status": "queued",
         "job_id": task_id,
@@ -339,31 +359,51 @@ async def kol_pool_federated_search_refresh(
 @router.post("/kol-pool/onboarding-sweep")
 async def kol_onboarding_sweep(
     request: Request,
-    q: str,
-    staff=Depends(require_tab("vkpi", "write")),
+    q: str = Query(..., min_length=1, max_length=256),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict:
     """阶段②·KOL 建档 Durable Workflow:联邦发现+落库→富集→记忆(可恢复,串起 Apify 线)。"""
+    from app.domains.kol import onboarding_workflow
+
     query = str(q or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="q required")
-    queue = getattr(request.app.state, "job_queue", None)
-    if queue is None:
-        raise HTTPException(status_code=503, detail="durable job queue unavailable")
-    task_id = await queue.enqueue(
-        "kol_onboarding",
-        {"query": query, "staff": dict(staff or {})},
-        lock_key=f"kol_onboarding:{query.casefold()}",
-        timeout_seconds=3600,
-    )
-    return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
+    try:
+        result = await onboarding_workflow.enqueue_kol_onboarding(
+            getattr(request.app.state, "job_queue", None),
+            query,
+            staff=staff,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        **result,
+        "progressive": True,
+        "initial_stage": "queued",
+    }
 
 
 @router.post("/kol-pool/discovery/enroll")
-def kol_pool_discovery_enroll(q: str, limit: int = 20, staff=Depends(require_tab("vkpi", "write"))) -> dict:
-    """链1 KOL 自增长:联邦发现 → 外部候选自动落 Pool + 去重(进 MY KOL 仍手动勾选)。"""
-    from app.domains.discovery import enroll
+async def kol_pool_discovery_enroll(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=256),
+    limit: int = Query(default=20, ge=1, le=100),
+    staff=Depends(require_manager_tab("vkpi", "write")),
+) -> dict:
+    """链1 KOL 自增长:排入有预算与执行闸的发现→落池 Workflow。"""
+    from app.domains.kol import onboarding_workflow
 
-    return enroll.federated_discover_and_enroll(q, limit=int(limit), staff=staff)
+    try:
+        return await onboarding_workflow.enqueue_kol_onboarding(
+            getattr(request.app.state, "job_queue", None),
+            q,
+            limit=int(limit),
+            staff=staff,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/enrichment")

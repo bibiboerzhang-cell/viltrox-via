@@ -24,7 +24,7 @@ if [ -z "${JOB_NAME}" ]; then
   exit 1
 fi
 
-python3 -m json.tool >/dev/null <<<"${PAYLOAD_JSON}"
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m json.tool >/dev/null <<<"${PAYLOAD_JSON}"
 
 sync_state="$(ssh "${SSH_TARGET}" "systemctl is-active '${SYNC_SERVICE}' 2>/dev/null || true")"
 if [ "${ALLOW_DURING_SYNC}" != "1" ] && { [ "${sync_state}" = "active" ] || [ "${sync_state}" = "activating" ]; }; then
@@ -41,7 +41,7 @@ REMOTE_LOG="runtime/ops/${STAMP}-${JOB_NAME}.log"
 
 printf '%s' "${PAYLOAD_JSON}" | ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && mkdir -p runtime/ops && cat > '${REMOTE_PAYLOAD}'"
 
-ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && JOB_NAME='${JOB_NAME}' PAYLOAD_FILE='${REMOTE_PAYLOAD}' LOG_FILE='${REMOTE_LOG}' PYTHONPATH=backend '${PYTHON_BIN}' - <<'PY'
+ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && JOB_NAME='${JOB_NAME}' PAYLOAD_FILE='${REMOTE_PAYLOAD}' LOG_FILE='${REMOTE_LOG}' PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend '${PYTHON_BIN}' -B - <<'PY'
 import asyncio
 import json
 import os

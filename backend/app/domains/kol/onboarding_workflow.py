@@ -20,14 +20,70 @@ def _require_fence() -> dict[str, Any]:
     return workflow_engine.require_workflow_fence()
 
 
-def build_kol_onboarding_steps(query: str, staff: dict[str, Any] | None = None) -> list[Step]:
+async def enqueue_kol_onboarding(
+    queue: Any,
+    query: str,
+    *,
+    limit: int = 20,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue the external discovery/enrolment workflow on a fenced backend."""
+    from app.domains.discovery import federation
+
+    q = str(query or "").strip()
+    if not q:
+        raise ValueError("query required")
+    if len(q) > federation.MAX_DISCOVERY_QUERY_LENGTH:
+        raise ValueError(
+            f"query must be at most {federation.MAX_DISCOVERY_QUERY_LENGTH} characters"
+        )
+    if queue is None:
+        raise RuntimeError("durable job queue unavailable")
+    if str(getattr(queue, "backend_name", "")) == "inprocess":
+        raise RuntimeError(
+            "durable_queue_required:inprocess_queue_has_no_provider_execution_fence"
+        )
+    safe_limit = max(1, min(100, int(limit or 20)))
+    task_id = await queue.enqueue(
+        "kol_onboarding",
+        {
+            "query": q,
+            "limit": safe_limit,
+            "staff": dict(staff or {}),
+        },
+        lock_key=f"kol_onboarding:{q.casefold()}",
+        timeout_seconds=3600,
+    )
+    if not str(task_id or "").strip():
+        raise RuntimeError("durable job queue returned no job id")
+    return {
+        "status": "queued",
+        "job_id": str(task_id),
+        "query": q,
+        "limit": safe_limit,
+        "business_outcome": "pending",
+        "external_execution": "durable_worker",
+    }
+
+
+def build_kol_onboarding_steps(
+    query: str,
+    staff: dict[str, Any] | None = None,
+    *,
+    limit: int = 20,
+) -> list[Step]:
     """KOL 建档 3 步(复用 enroll / apify_enrich / agent_memory_writer)。"""
 
     def s_discover(state: dict[str, Any]) -> dict[str, Any]:
         from app.domains.discovery import enroll
 
         execution = _require_fence()
-        r = enroll.federated_discover_and_enroll(query, limit=20, staff=staff)
+        r = enroll.federated_discover_and_enroll(
+            query,
+            limit=max(1, min(100, int(limit or 20))),
+            staff=staff,
+            include_external=True,
+        )
         return {
             "found": r.get("found", 0),
             "enrolled": r.get("enrolled", 0),
@@ -75,7 +131,12 @@ def build_kol_onboarding_steps(query: str, staff: dict[str, Any] | None = None) 
     return [("federated_discover", s_discover), ("enrich_new", s_enrich), ("write_memory", s_memory)]
 
 
-def start_kol_onboarding(query: str, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def start_kol_onboarding(
+    query: str,
+    staff: dict[str, Any] | None = None,
+    *,
+    limit: int = 20,
+) -> dict[str, Any]:
     """起一轮 KOL 建档:建 run → 跑三步(可恢复)。"""
     q = str(query or "").strip()
     if not q:
@@ -86,7 +147,10 @@ def start_kol_onboarding(query: str, staff: dict[str, Any] | None = None) -> dic
     run_id = started.get("run_id")
     if not run_id:
         return {"status": "unavailable", "detail": started}
-    res = workflow_engine.run(int(run_id), build_kol_onboarding_steps(q, staff))
+    res = workflow_engine.run(
+        int(run_id),
+        build_kol_onboarding_steps(q, staff, limit=limit),
+    )
     return {"run_id": run_id, **res}
 
 

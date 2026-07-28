@@ -68,7 +68,12 @@ def _recall_kind(kind: str, tokens: list[str], limit: int) -> list[dict[str, Any
     return out[:limit]
 
 
-def _vector_recall_kol(query: str, limit: int) -> list[dict[str, Any]]:
+def _vector_recall_kol(
+    query: str,
+    limit: int,
+    *,
+    provider_free: bool = False,
+) -> list[dict[str, Any]]:
     """KOL 向量召回(profile_recall / Qdrant + embedding)。
 
     解决词法对中文/跨语言/语义查询返 0 的硬伤(_tokenize 把整句压成一个 token 永不匹配)。
@@ -78,7 +83,11 @@ def _vector_recall_kol(query: str, limit: int) -> list[dict[str, Any]]:
     try:
         from app.domains.kol import profile_recall
 
-        r = profile_recall.recall_kol_profiles(query_text=str(query), limit=int(limit))
+        r = profile_recall.recall_kol_profiles(
+            query_text=str(query),
+            limit=int(limit),
+            provider_free=bool(provider_free),
+        )
         items = r.get("items") if isinstance(r, dict) else None
         if not items:
             return []
@@ -91,7 +100,7 @@ def _vector_recall_kol(query: str, limit: int) -> list[dict[str, Any]]:
             out.append({
                 "kind": "kol", "id": rid, "title": title,
                 "score": round(max(0.1, 1.0 - i * 0.05), 4),  # 排名保序,向量项强于词法
-                "recall": "vector",
+                "recall": "provider_free_pool_text" if provider_free else "vector",
                 "platform": it.get("platform"),
             })
         return out[: max(1, int(limit))]
@@ -100,26 +109,38 @@ def _vector_recall_kol(query: str, limit: int) -> list[dict[str, Any]]:
         return []
 
 
-def unified_recall(query: str, *, kinds: tuple[str, ...] = ("kol", "video", "project", "event"),
-                   limit: int = 10, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def unified_recall(
+    query: str,
+    *,
+    kinds: tuple[str, ...] = ("kol", "video", "project", "event"),
+    limit: int = 10,
+    staff: dict[str, Any] | None = None,
+    provider_free: bool = False,
+) -> dict[str, Any]:
     """一句话跨信号召回。返回各信号 top 命中 + 统一排序。
 
     KOL 走向量召回(语义,解中文/跨语言),失败优雅降级词法;其余信号词法。recall_method 如实标。
     """
-    del staff
+    valid = [k for k in kinds if k in _KINDS]
+    if staff is not None and any(kind != "kol" for kind in valid):
+        from app.domains.staff import is_manager_staff
+
+        if not is_manager_staff(staff):
+            raise PermissionError(
+                "cross-signal recall requires manager access until row-level scopes are complete"
+            )
     q = str(query or "").strip()
     tokens = _tokenize(q)
     if not tokens:
         return {"status": "empty_query", "query": q, "results": [], "recall_method": "none"}
-    valid = [k for k in kinds if k in _KINDS]
     per_kind: dict[str, list[dict[str, Any]]] = {}
     flat: list[dict[str, Any]] = []
     used_vector = False
     for k in valid:
         items: list[dict[str, Any]] = []
         if k == "kol":
-            items = _vector_recall_kol(q, limit)
-            if items:
+            items = _vector_recall_kol(q, limit, provider_free=provider_free)
+            if items and not provider_free:
                 used_vector = True
         if not items:
             items = _recall_kind(k, tokens, limit)
@@ -130,8 +151,18 @@ def unified_recall(query: str, *, kinds: tuple[str, ...] = ("kol", "video", "pro
         "status": "ok",
         "query": q,
         "tokens": tokens,
-        "recall_method": "vector_kol+lexical" if used_vector else "lexical_v0",
+        "recall_method": (
+            "provider_free_pool_text+lexical"
+            if provider_free
+            else "vector_kol+lexical"
+            if used_vector
+            else "lexical_v0"
+        ),
         "by_kind": {k: len(v) for k, v in per_kind.items()},
         "results": flat[: max(1, min(int(limit or 10), 50))],
-        "note": "KOL 向量召回(Qdrant/embedding 语义,解中文)+ 其余词法兜底;向量失败自动降级;绝不并入 viltrox_fit_score。",
+        "note": (
+            "KOL 本地池文本召回(provider-free)+其余词法兜底;不调用 embedding/Qdrant/LLM;绝不并入 viltrox_fit_score。"
+            if provider_free
+            else "KOL 向量召回(Qdrant/embedding 语义,解中文)+ 其余词法兜底;向量失败自动降级;绝不并入 viltrox_fit_score。"
+        ),
     }

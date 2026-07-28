@@ -21,7 +21,7 @@ status_json="$("${SYNC_STATUS_SCRIPT}")"
 echo "${status_json}"
 
 eval "$(
-  STATUS_JSON="${status_json}" python3 - <<'PY'
+  STATUS_JSON="${status_json}" PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
 import json
 import os
 import shlex
@@ -58,11 +58,11 @@ if [ -n "${exec_main_status}" ] && [ "${exec_main_status}" != "0" ]; then
   exit 2
 fi
 
-r2_json="$("${R2_READINESS_SCRIPT}" --remote "${SSH_TARGET}" --remote-root "${REMOTE_ROOT}" || true)"
+r2_json="$(PYTHONDONTWRITEBYTECODE=1 "${R2_READINESS_SCRIPT}" --remote "${SSH_TARGET}" --remote-root "${REMOTE_ROOT}" || true)"
 echo "${r2_json}"
 
 remote_ready="$(
-  R2_JSON="${r2_json}" python3 - <<'PY'
+  R2_JSON="${r2_json}" PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
 import json
 import os
 payload = json.loads(os.environ["R2_JSON"])
@@ -95,8 +95,8 @@ fi
 if [ -n "${PLATFORM}" ]; then
   args+=( "--platform" "${PLATFORM}" )
 fi
-PYTHONPATH=backend "${PYTHON_BIN}" "${args[@]}"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend "${PYTHON_BIN}" -B "${args[@]}"
 SH
 else
-  "${PYTHON_BIN}" "${args[@]}"
+  PYTHONDONTWRITEBYTECODE=1 "${PYTHON_BIN}" -B "${args[@]}"
 fi

@@ -24,7 +24,7 @@ import threading
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 
@@ -36,6 +36,7 @@ router = APIRouter(prefix="/api/admin/vkpi/intelligent", tags=["vkpi-intelligent
 _ASK_CACHE: dict[str, dict[str, Any]] = {}
 _ASK_CACHE_LOCK = threading.Lock()
 _ASK_CACHE_MAX = 512  # 软上限,超出清空当日缓存,防内存无限涨(单进程串行足够)。
+INTELLIGENT_QUESTION_MAX_LENGTH = 256
 
 # LLM 综合调用的预算键与超时(秒)。check_budget 失败即诚实降级,不烧钱。
 _SYNTH_BUDGET_SCOPE = "vkpi_intelligent_ask"
@@ -427,8 +428,24 @@ def intelligent_ask(
 ) -> dict[str, Any]:
     """三车道分诊问答。请求体:{question}。返回 {answer, mode, evidence, actions, cached}。"""
     question = str(payload.get("question") or "").strip()
+    # intent/search/synth currently aggregate across tables whose row-level
+    # predicates are not yet uniform. Fail closed before cache, DB or provider
+    # work; global search remains available to non-managers with its proven
+    # KOL/project/event visibility predicates.
+    from app.domains.search import natural_search
+
+    if not natural_search.has_unrestricted_search_access(staff):
+        raise HTTPException(
+            status_code=403,
+            detail="智能跨库问答当前仅对管理角色开放",
+        )
     if not question:
         return _answer(answer="请输入一个问题。", mode="degraded")
+    if len(question) > INTELLIGENT_QUESTION_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"question 最长 {INTELLIGENT_QUESTION_MAX_LENGTH} 个字符",
+        )
     thread_id = str(payload.get("thread_id") or "legacy").strip()[:80] or "legacy"
 
     # 当日缓存命中直接回(cached=True)。必须按 org/staff/thread 分区。

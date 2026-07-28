@@ -7,9 +7,10 @@ OnFailure=vkpi-sync-daily-alert@%n.service
 [Service]
 Type=oneshot
 RestartPreventExitStatus=75 76
-WorkingDirectory=/opt/viltrox-2.0
-Environment=PYTHONPATH=backend
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 >> /var/log/vkpi/sync_daily_$(date -u +%%Y%%m%%d).log 2>&1'
+WorkingDirectory=/opt/viltrox-2.0/current
+Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && env PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python -B scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 >> /var/log/vkpi/sync_daily_$(date -u +%%Y%%m%%d).log 2>&1'
 # Legacy KOL Pool refresh is intentionally excluded until P1.X.A tier selection replaces full-pool daily refresh.
 # TODO: Consider lowering to 2h after official-only runtime is observed for one week.
 TimeoutStartSec=6h

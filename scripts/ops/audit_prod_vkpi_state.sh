@@ -5,7 +5,7 @@ SSH_TARGET="${SSH_TARGET:-viltrox}"
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 
-ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && PYTHONPATH=backend '${PYTHON_BIN}' - <<'PY'
+ssh "${SSH_TARGET}" "cd '${REMOTE_ROOT}' && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend '${PYTHON_BIN}' -B - <<'PY'
 import json
 from app.db.connection import get_conn
 

@@ -1,16 +1,13 @@
 """AI Today 今日热点 —— 每早 8 点用两阶段证据链生成市场建议。
 
-红线 / 安全:
+安全边界:
 - LLM 调用前过预算闸 `check_budget("cron:ai_today_hot", est)`(硬上限,见 migration 150 seed)。
 - 第一阶段固定由 Gemini 2.5 Pro + Google Search 发现热点、来源和视频候选。
 - 第二阶段固定由 Claude Opus 4.7 只依据第一阶段 Evidence Bundle 生成策略。
 - 只写本域表 `vkpi_ai_today_hot`,绝不碰 vkpi_kol_pool / viltrox_fit_score / 指纹。
 - 任一阶段失败、无可回跳来源或模型绑定漂移时只返回 degraded,不覆盖 latest。
 - 不存在 Claude discovery fallback,也不允许第二阶段发明证据包之外的视频或事实。
-- 【AI Today 只看外部世界】「外部市场样例」在采样查询层排除三类自家内容(非显示层遮罩):
-  ①标题/正文含 viltrox(strpos 参数化,判据同 my_kol_board_ext);②官号帖(账号命中
-  vkpi_employee_channels);③合作产出(evidence 挂 project_id)。池收窄如实显示,绝不
-  回填自家内容凑数;池空=诚实空态。hot_brands / 市场信号来源同口径剔除自家品牌。
+- 外部市场样例在查询层排除 Viltrox 文本、官号和 project_id 合作内容；池空即空态，不回填，hot_brands 同口径。
 """
 from __future__ import annotations
 
@@ -29,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.costs import budget_guard
 from app.domains.kol.my_kol_board_ext_sql import VILTROX_TOKEN
 from app.domains.market.ai_today_contracts import (
@@ -120,8 +117,7 @@ def _recommended_video_rows(limit: int = 240) -> list[dict[str, Any]]:
 
 
 def _rank_video_candidates(
-    rows: list[dict[str, Any]],
-    content: dict[str, Any],
+    rows: list[dict[str, Any]], content: dict[str, Any]
 ) -> list[dict[str, Any]]:
     return _rank_video_candidates_impl(
         rows,
@@ -177,22 +173,28 @@ def _parse_json(raw: str) -> dict[str, Any]:
 
 
 def _ensure_schema() -> None:
-    get_conn().execute(
+    # PostgreSQL schema is migration-owned (150_vkpi_ai_today_hot.sql).
+    # Running DDL from a read/generation request can wait behind an unrelated
+    # transaction and recreate the same lock fan-out that previously stalled
+    # the whole web process.  Keep only the SQLite bootstrap used by isolated
+    # tests and local fixtures.
+    if is_postgres_runtime():
+        return
+    conn = get_conn()
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS vkpi_ai_today_hot (
             snapshot_date DATE PRIMARY KEY,
             content_json  TEXT NOT NULL,
             model         TEXT,
-            created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
-    get_conn().commit()
+    conn.commit()
 
 
-def _generation_parts(
-    result: Any,
-) -> tuple[str, str, Any, dict[str, Any]]:
+def _generation_parts(result: Any) -> tuple[str, str, Any, dict[str, Any]]:
     """Normalize current and legacy generation results without weakening list types."""
     if isinstance(result, tuple) and len(result) >= 4:
         provenance = dict(result[3]) if isinstance(result[3], dict) else {}
@@ -218,9 +220,7 @@ def _provider_call_attempted(provenance: Any) -> bool:
 
 
 def _call_generator(
-    generator: Callable[..., Any],
-    prompt: str,
-    validator: Callable[[Any], dict[str, Any]],
+    generator: Callable[..., Any], prompt: str, validator: Callable[[Any], dict[str, Any]]
 ) -> Any:
     """Keep legacy test/caller generators usable while the real generator accepts a validator."""
     try:
@@ -235,8 +235,7 @@ def _call_generator(
 
 
 def _generate(
-    prompt: str,
-    validator: Callable[[Any], dict[str, Any]] | None = None,
+    prompt: str, validator: Callable[[Any], dict[str, Any]] | None = None
 ) -> tuple[str, str, list[dict[str, Any]], dict[str, Any]]:
     """Run Google Search through the strict grounded-JSON boundary.
 

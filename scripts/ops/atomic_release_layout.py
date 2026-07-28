@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 
 if __package__:
+    from .atomic_release_cli import build_parser as _build_parser
     from .atomic_release_integrity import (
         RELEASE_MANIFEST_NAME,
         make_release_immutable as _make_release_immutable,
@@ -68,6 +69,7 @@ if __package__:
         worker_runtime_preflight,
     )
 else:
+    from atomic_release_cli import build_parser as _build_parser
     from atomic_release_integrity import (
         RELEASE_MANIFEST_NAME,
         make_release_immutable as _make_release_immutable,
@@ -569,6 +571,74 @@ def verify_seal(args: argparse.Namespace) -> None:
     )
 
 
+def _release_build_sha(release: Path, *, label: str) -> str:
+    payload, _info = _read_regular_single_link(
+        release / "BUILD_GIT_SHA",
+        label=f"{label} BUILD_GIT_SHA",
+    )
+    try:
+        value = payload.decode("ascii").strip()
+    except UnicodeDecodeError as exc:
+        raise LayoutError(f"{label} BUILD_GIT_SHA is invalid") from exc
+    if len(value) != 40 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise LayoutError(f"{label} BUILD_GIT_SHA is invalid")
+    return value
+
+
+def _rollback_activation_anchor(
+    root: Path,
+    *,
+    new_release: Path,
+    observed_current: Path | None,
+    rollback_anchor_release_id: str,
+) -> Path | None:
+    """Return the sealed release that automatic restore may activate.
+
+    The normal path proves the observed current release is still immutable.
+    Rescue mode deliberately leaves a contaminated current tree untouched and
+    instead binds rollback to a separately sealed release with the exact same
+    Git identity as the running pre-deploy release.
+    """
+
+    if observed_current is None:
+        if rollback_anchor_release_id:
+            raise LayoutError(
+                "rollback anchor requires an observed atomic current release"
+            )
+        return None
+
+    if not rollback_anchor_release_id:
+        _verify_sealed_release(
+            root,
+            observed_current,
+            shared_aliases=RELEASE_SHARED_ALIASES,
+        )
+        return observed_current
+
+    rollback_anchor = _inside_releases(
+        root,
+        root / "releases" / _id(rollback_anchor_release_id),
+    )
+    if rollback_anchor == new_release:
+        raise LayoutError("rollback anchor must not be the release being prepared")
+    anchor_manifest = _verify_sealed_release(
+        root,
+        rollback_anchor,
+        shared_aliases=RELEASE_SHARED_ALIASES,
+    )
+    observed_sha = _release_build_sha(
+        observed_current,
+        label="observed current release",
+    )
+    if anchor_manifest.get("git_sha") != observed_sha:
+        raise LayoutError(
+            "rollback anchor Git SHA does not match observed current BUILD_GIT_SHA"
+        )
+    return rollback_anchor
+
+
 def _snapshot_legacy(root: Path, release_id: str) -> Path:
     legacy = root / "releases" / f"legacy-before-{release_id}"
     if legacy.exists():
@@ -625,6 +695,14 @@ def prepare(args: argparse.Namespace) -> None:
     release_id = _id(args.release_id)
     new_release = _inside_releases(root, root / "releases" / release_id)
     _verify_sealed_release(root, new_release, shared_aliases=RELEASE_SHARED_ALIASES)
+    original_previous = _existing_link_target(root, "previous")
+    observed_current = _existing_link_target(root, "current")
+    activation_anchor = _rollback_activation_anchor(
+        root,
+        new_release=new_release,
+        observed_current=observed_current,
+        rollback_anchor_release_id=args.rollback_anchor_release_id,
+    )
     unit_dir = Path(args.unit_dir).resolve()
     units = _unit_names(args.unit_name)
     optional_units = _optional_unit_names(args.optional_unit_name)
@@ -670,10 +748,7 @@ def prepare(args: argparse.Namespace) -> None:
     if rollback_candidate.exists() or rollback_candidate.is_symlink():
         raise LayoutError(f"rollback capture already exists: {rollback_candidate}")
 
-    original_previous = _existing_link_target(root, "previous")
-    original_current = _existing_link_target(root, "current")
     legacy_snapshot: Path | None = None
-    activation_anchor = original_current
     if activation_anchor is None:
         legacy_snapshot = _snapshot_legacy(root, release_id)
         activation_anchor = legacy_snapshot
@@ -700,10 +775,13 @@ def prepare(args: argparse.Namespace) -> None:
             str(original_previous) if original_previous else None
         ),
         "original_current_release": (
-            str(original_current) if original_current else None
+            str(activation_anchor) if observed_current else None
         ),
         "original_previous_release": (
             str(original_previous) if original_previous else None
+        ),
+        "observed_predeploy_current_release": (
+            str(observed_current) if observed_current else None
         ),
         "legacy_snapshot_release": str(legacy_snapshot) if legacy_snapshot else None,
         "environment_file": _capture_metadata(env_payload, env_info),
@@ -886,76 +964,19 @@ def restore(args: argparse.Namespace) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser()
-    subparsers = result.add_subparsers(dest="command", required=True)
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--root", required=True)
-    common.add_argument("--release-id", required=True)
-
-    seal_parser = subparsers.add_parser("seal", parents=[common])
-    seal_parser.add_argument("--git-sha", required=True)
-    seal_parser.add_argument("--pending-migrations", default="")
-    seal_parser.add_argument("--compatibility-declaration", default="")
-    seal_parser.add_argument("--database-strategy", default="in-place")
-    seal_parser.add_argument("--source-database", default="")
-    seal_parser.add_argument("--target-database", default="")
-    seal_parser.add_argument("--env-fingerprint-before", default="")
-    seal_parser.add_argument("--database-owner-release-id", default="")
-    seal_parser.add_argument("--owner-uid", type=int)
-    seal_parser.add_argument("--owner-gid", type=int)
-    seal_parser.set_defaults(action=seal)
-
-    verify_seal_parser = subparsers.add_parser("verify-seal", parents=[common])
-    verify_seal_parser.add_argument("--expected-owner-uid", type=int)
-    verify_seal_parser.add_argument("--expected-owner-gid", type=int)
-    verify_seal_parser.set_defaults(action=verify_seal)
-
-    layout_parser = subparsers.add_parser("worker-layout-preflight", parents=[common])
-    layout_parser.add_argument("--app-user", required=True)
-    layout_parser.add_argument("--app-group", required=True)
-    layout_parser.add_argument("--provision-missing", action="store_true")
-    layout_parser.set_defaults(action=worker_layout_preflight)
-
-    runtime_parser = subparsers.add_parser("worker-runtime-preflight")
-    runtime_parser.add_argument("--root", required=True)
-    runtime_parser.add_argument("--release-path", required=True)
-    runtime_parser.add_argument("--app-user", required=True)
-    runtime_parser.add_argument("--app-group", required=True)
-    runtime_parser.add_argument("--job-results-dir", default="")
-    runtime_parser.add_argument("--require-sandbox-readonly", action="store_true")
-    runtime_parser.set_defaults(action=worker_runtime_preflight)
-
-    prepare_parser = subparsers.add_parser("prepare", parents=[common])
-    prepare_parser.add_argument("--unit-dir", required=True)
-    prepare_parser.add_argument("--unit-name", action="append", default=[])
-    prepare_parser.add_argument("--optional-unit-name", action="append", default=[])
-    prepare_parser.add_argument("--optional-unit-state", action="append", default=[])
-    prepare_parser.add_argument("--pending-migrations", default="")
-    prepare_parser.add_argument("--compatibility-declaration", default="")
-    prepare_parser.add_argument("--database-strategy", default="in-place")
-    prepare_parser.add_argument("--source-database", default="")
-    prepare_parser.add_argument("--target-database", default="")
-    prepare_parser.add_argument("--env-fingerprint-before", default="")
-    prepare_parser.add_argument("--database-owner-release-id", default="")
-    prepare_parser.set_defaults(action=prepare)
-
-    activate_parser = subparsers.add_parser("activate", parents=[common])
-    activate_parser.set_defaults(action=activate)
-
-    state_parser = subparsers.add_parser("rollback-unit-state", parents=[common])
-    state_parser.add_argument("--unit-name", required=True)
-    state_parser.set_defaults(action=rollback_unit_state)
-
-    inspect_parser = subparsers.add_parser("inspect-unit-state")
-    inspect_parser.add_argument("--unit-dir", required=True)
-    inspect_parser.add_argument("--unit-name", required=True)
-    inspect_parser.add_argument("--systemctl-bin", default="/usr/bin/systemctl")
-    inspect_parser.set_defaults(action=inspect_unit_state)
-
-    restore_parser = subparsers.add_parser("restore", parents=[common])
-    restore_parser.add_argument("--unit-dir", required=True)
-    restore_parser.set_defaults(action=restore)
-    return result
+    return _build_parser(
+        {
+            "seal": seal,
+            "verify_seal": verify_seal,
+            "worker_layout_preflight": worker_layout_preflight,
+            "worker_runtime_preflight": worker_runtime_preflight,
+            "prepare": prepare,
+            "activate": activate,
+            "rollback_unit_state": rollback_unit_state,
+            "inspect_unit_state": inspect_unit_state,
+            "restore": restore,
+        }
+    )
 
 
 def main() -> int:

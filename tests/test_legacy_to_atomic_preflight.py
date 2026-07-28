@@ -215,7 +215,10 @@ def test_ssh_transport_uses_stdin_and_rejects_injection() -> None:
     assert command[:2] == ["ssh", "-o"]
     assert "--" in command
     assert command[-2] == "viltrox"
-    assert command[-1].startswith("/opt/viltrox-2.0/.venv/bin/python - --remote-collect")
+    assert command[-1].startswith(
+        "env PYTHONDONTWRITEBYTECODE=1 "
+        "/opt/viltrox-2.0/.venv/bin/python -B - --remote-collect"
+    )
     assert "sudo" not in command[-1]
     assert ">" not in command[-1]
 

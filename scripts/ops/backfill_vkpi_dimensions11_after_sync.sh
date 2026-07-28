@@ -19,7 +19,7 @@ status_json="$("${SYNC_STATUS_SCRIPT}")"
 echo "${status_json}"
 
 eval "$(
-  STATUS_JSON="${status_json}" python3 - <<'PY'
+  STATUS_JSON="${status_json}" PYTHONDONTWRITEBYTECODE=1 python3 -B - <<'PY'
 import json
 import os
 import shlex
@@ -62,11 +62,11 @@ if [ "${RUN_REMOTE}" = "1" ]; then
   quote() { printf "%q" "$1"; }
   ssh "${SSH_TARGET}" "cd $(quote "${REMOTE_ROOT}") && LIMIT=$(quote "${LIMIT}") SOURCE_TYPE=$(quote "${SOURCE_TYPE}") PYTHON_BIN=$(quote "${REMOTE_PYTHON_BIN}") bash -s" <<'SH'
 set -euo pipefail
-PYTHONPATH=backend "${PYTHON_BIN}" scripts/vkpi_dimensions11_dry_run.py \
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend "${PYTHON_BIN}" -B scripts/vkpi_dimensions11_dry_run.py \
   --limit "${LIMIT}" \
   --source-type "${SOURCE_TYPE}" \
   --write-db
 SH
 else
-  "${PYTHON_BIN}" "${args[@]}"
+  PYTHONDONTWRITEBYTECODE=1 "${PYTHON_BIN}" -B "${args[@]}"
 fi

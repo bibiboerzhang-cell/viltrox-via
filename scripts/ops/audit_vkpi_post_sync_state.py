@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys as _stdout_sys
 from pathlib import Path as _StdoutPath
 
+_stdout_sys.dont_write_bytecode = True
 _STDOUT_UTILS_DIR = _StdoutPath(__file__).resolve().parents[1]
 if str(_STDOUT_UTILS_DIR) not in _stdout_sys.path:
     _stdout_sys.path.insert(1, str(_STDOUT_UTILS_DIR))
@@ -219,7 +220,10 @@ def local_service_state(service: str) -> str:
 
 
 def audit_remote(target: str, root: str) -> dict[str, Any]:
-    command = f"cd {shlex.quote(root)} && .venv/bin/python - <<'PY'\n{REMOTE_AUDIT}\nPY"
+    command = (
+        f"cd {shlex.quote(root)} && "
+        f"env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B - <<'PY'\n{REMOTE_AUDIT}\nPY"
+    )
     result = run(["ssh", target, command], timeout=90)
     if result.returncode != 0:
         return {
@@ -235,7 +239,10 @@ def audit_remote(target: str, root: str) -> dict[str, Any]:
 
 
 def audit_local(root: str) -> dict[str, Any]:
-    command = f"cd {shlex.quote(root)} && .venv/bin/python - <<'PY'\n{REMOTE_AUDIT}\nPY"
+    command = (
+        f"cd {shlex.quote(root)} && "
+        f"env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B - <<'PY'\n{REMOTE_AUDIT}\nPY"
+    )
     result = run(["bash", "-lc", command], timeout=90)
     if result.returncode != 0:
         return {

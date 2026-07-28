@@ -32,6 +32,15 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Iterator, Sequence
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ops.freeze_git_bridge import (  # noqa: E402
+    GIT_REPOSITORY_BINDING_ENV,
+    GitBridgeError,
+    readonly_snapshot_git_environment as _readonly_snapshot_git_environment,
+)
+
 
 SCHEMA = "vkpi.local-worktree-candidate/v1"
 MAX_SOURCE_FILE_BYTES = 256 * 1024 * 1024
@@ -466,7 +475,13 @@ def _run_static_verify(
     log_path: Path,
     identity: BuildIdentity,
 ) -> None:
+    source_top = Path(_run_git_text(source, "rev-parse", "--show-toplevel")).resolve()
+    if source_top != source:
+        raise FreezeError("source Git worktree binding does not match freeze root")
+
     env = os.environ.copy()
+    for name in GIT_REPOSITORY_BINDING_ENV:
+        env.pop(name, None)
     env.update(
         {
             "APP_BUILD_TIME": identity.build_time,
@@ -482,13 +497,41 @@ def _run_static_verify(
         }
     )
     env.update(identity.vite_environment())
-    with _borrow_dependencies(snapshot, source):
-        _run_logged(
-            ["bash", "scripts/verify.sh"],
-            cwd=snapshot,
-            env=env,
-            log_path=log_path,
-        )
+    with _readonly_snapshot_git_environment(snapshot, source) as git_environment:
+        env.update(git_environment)
+        with _borrow_dependencies(snapshot, source):
+            _run_logged(
+                ["bash", "scripts/verify.sh"],
+                cwd=snapshot,
+                env=env,
+                log_path=log_path,
+            )
+
+
+def _assert_source_state_unchanged(
+    source: Path,
+    *,
+    entries: Sequence[FileEntry],
+    status: bytes,
+    head: str,
+    branch: str,
+    phase: str,
+) -> None:
+    observed_head = _run_git_text(source, "rev-parse", "HEAD")
+    observed_branch = _run_git_text(
+        source, "branch", "--show-current"
+    ) or _run_git_text(source, "rev-parse", "--abbrev-ref", "HEAD")
+    observed_status = _run_git_bytes(
+        source, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    observed_entries = _inventory_source(source)
+    if (
+        observed_head != head
+        or observed_branch != branch
+        or observed_status != status
+        or observed_entries != entries
+    ):
+        raise FreezeError(f"worktree drifted during {phase}")
 
 
 def _deterministic_tar(
@@ -590,12 +633,14 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
     manifest_path = output.with_suffix(output.suffix + ".manifest.json")
     try:
         _copy_inventory(source, temporary, entries_before)
-        entries_after = _inventory_source(source)
-        status_after = _run_git_bytes(
-            source, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+        _assert_source_state_unchanged(
+            source,
+            entries=entries_before,
+            status=status_before,
+            head=head,
+            branch=branch,
+            phase="candidate copy",
         )
-        if entries_after != entries_before or status_after != status_before:
-            raise FreezeError("worktree drifted during candidate copy")
 
         # The source may contain stale deployment stamps from an earlier build.
         # Replace them only inside the frozen snapshot, before any Vite or
@@ -635,6 +680,18 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
             }
         else:
             archive_payload = None
+
+        # Build and verification borrow dependency directories from the source,
+        # and verification receives a read-only Git identity binding. Recheck
+        # bytes, status, HEAD, and branch before making the candidate visible.
+        _assert_source_state_unchanged(
+            source,
+            entries=entries_before,
+            status=status_before,
+            head=head,
+            branch=branch,
+            phase="candidate build and verification",
+        )
 
         os.replace(temporary, output)
         payload: dict[str, object] = {
@@ -859,7 +916,7 @@ def main() -> int:
     args = parser().parse_args()
     try:
         payload = args.action(args)
-    except (FreezeError, OSError, subprocess.SubprocessError) as exc:
+    except (FreezeError, GitBridgeError, OSError, subprocess.SubprocessError) as exc:
         sys.stderr.write(f"candidate freeze failed: {exc}\n")
         return 1
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")

@@ -886,16 +886,19 @@ def test_intelligent_cache_is_scoped_by_org_staff_and_thread(monkeypatch: pytest
     monkeypatch.setattr(vkpi_intelligent, "_try_intent", intent)
     user_a = {
         "id": 11,
+        "role": "admin",
         "organization_id": 1,
         "organization_scope_status": "resolved",
     }
     user_b = {
         "id": 12,
+        "role": "admin",
         "organization_id": 1,
         "organization_scope_status": "resolved",
     }
     same_staff_other_org = {
         "id": 11,
+        "role": "admin",
         "organization_id": 2,
         "organization_scope_status": "resolved",
     }
@@ -927,7 +930,11 @@ def test_unresolved_intelligent_scope_never_seeds_cache(monkeypatch: pytest.Monk
         return vkpi_intelligent._answer(answer="uncached", mode="intent")
 
     monkeypatch.setattr(vkpi_intelligent, "_try_intent", intent)
-    unresolved = {"id": 11, "organization_scope_status": "ambiguous"}
+    unresolved = {
+        "id": 11,
+        "role": "admin",
+        "organization_scope_status": "ambiguous",
+    }
     vkpi_intelligent.intelligent_ask({"question": "same", "thread_id": "t1"}, staff=unresolved)
     vkpi_intelligent.intelligent_ask({"question": "same", "thread_id": "t1"}, staff=unresolved)
     assert calls["count"] == 2

@@ -10,9 +10,10 @@ Wire into main:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Literal
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.core.security import require_admin_async as require_admin
 from app.services.intelligence import market as market_svc
 from app.services.intelligence import brand as brand_svc
@@ -55,9 +56,9 @@ def market_trends(
     """N7 市场趋势 / 观察:只读合成 market_brain + competitor_radar + bet_ledger 真数据。
 
     返回结构化观察 {topic, kind, source, evidence_refs, confidence, suggested_action}。
-    默认实时合成(并加性落库累积历史);best-effort,无真数据诚实返回空。
+    默认实时纯读合成;best-effort,无真数据诚实返回空。
     history=true 时改读历史快照表(累积视图,只读),不触发新合成。
-    纯只读 / 加性,绝不触 viltrox_fit_score。可选 kind 过滤(热点 / 竞品 / 机会 / 风险)。
+    纯只读,绝不写库或触 viltrox_fit_score。可选 kind 过滤(热点 / 竞品 / 机会 / 风险)。
     """
     from datetime import datetime, timezone
 
@@ -79,6 +80,50 @@ def market_trends(
         }
     result["generated_at"] = datetime.now(timezone.utc).isoformat()
     return result
+
+
+@router.post("/intelligence/market/trends/refresh", status_code=202)
+async def refresh_market_trends(
+    request: Request,
+    staff: dict = Depends(require_manager_tab("vkpi", "write")),
+):
+    """显式入队刷新市场趋势并写入历史快照。
+
+    写动作与 GET 完全分离；只有具备 vkpi:write 的管理层可触发。实际合成与
+    upsert 由后台 Worker 完成，HTTP 请求不直接抓取或写业务表。
+    """
+    queue = getattr(request.app.state, "job_queue", None)
+    if queue is None:
+        raise HTTPException(status_code=503, detail="durable job queue unavailable")
+
+    staff_id = int(staff.get("id") or staff.get("staff_id") or 0)
+    user_id = int(staff.get("user_id") or 0)
+    try:
+        task_id = await queue.enqueue(
+            "market_trends_refresh",
+            {
+                "staff": dict(staff or {}),
+                "staff_id": staff_id,
+                "user_id": user_id,
+                "reason": "manual_market_trends_refresh",
+                "endpoint": "/api/intelligence/market/trends/refresh",
+            },
+            lock_key="market_trends_refresh:global",
+            timeout_seconds=300,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not str(task_id or "").strip():
+        raise HTTPException(status_code=503, detail="durable job queue returned no job id")
+    return {
+        "status": "queued",
+        "job_id": task_id,
+        "progressive": True,
+        "initial_stage": "queued",
+        "request_write_mode": "queue_only",
+        "queue_acceptance": "accepted_or_deduplicated",
+        "business_write_deferred": True,
+    }
 
 
 @router.get("/intelligence/market/benchmarks")

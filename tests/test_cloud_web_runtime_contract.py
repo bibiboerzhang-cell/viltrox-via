@@ -87,6 +87,68 @@ def test_deploy_installs_reviewed_unit_before_restart() -> None:
     assert "Reviewed web service unit is missing" in deploy
 
 
+def test_deploy_sync_unit_is_reviewed_verified_installed_and_rollback_captured() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    assert (
+        'REMOTE_SYNC_SERVICE_UNIT_RELATIVE="${REMOTE_SYNC_SERVICE_UNIT_RELATIVE:-'
+        'scripts/ops/systemd/vkpi-sync-daily.service}"'
+    ) in deploy
+    assert (
+        '[[ "${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" =~ '
+        "^scripts/ops/systemd/[A-Za-z0-9@_.-]+\\.service$ ]]"
+    ) in deploy
+    assert (
+        '"${REMOTE_SYNC_SERVICE_UNIT_RELATIVE##*/}" != "${SYNC_SERVICE}"'
+    ) in deploy
+    assert (
+        '[ -L "${PROJECT_ROOT}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ]'
+    ) in deploy
+
+    verify_lines = [
+        line for line in deploy.splitlines() if "systemd-analyze verify" in line
+    ]
+    assert len(verify_lines) == 2
+    assert all(
+        "'${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'" in line
+        for line in verify_lines
+    )
+
+    prepare = next(
+        line
+        for line in deploy.splitlines()
+        if "atomic_release_layout.py' prepare" in line
+    )
+    assert "--unit-name '${SYNC_SERVICE}'" in prepare
+
+    activate_at = deploy.index("atomic_release_layout.py' activate")
+    sync_install_at = deploy.index(
+        "sync_unit_source='${REMOTE_CURRENT_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'",
+        activate_at,
+    )
+    reload_at = deploy.index("sudo systemctl daemon-reload", sync_install_at)
+    restore_sync_at = deploy.rindex("restore_remote_sync_unit_state\n")
+    assert activate_at < sync_install_at < reload_at < restore_sync_at
+    install = deploy[sync_install_at:reload_at]
+    for required in (
+        "sync_unit_target='/etc/systemd/system/${SYNC_SERVICE}'",
+        "sudo install -o root -g root -m 0644",
+        "sudo mv -f --",
+        "sudo stat -c '%u:%g:%a'",
+        "'0:0:644'",
+        "sudo cmp -s",
+        "trap cleanup_sync_unit_tmp EXIT",
+    ):
+        assert required in install
+
+    rollback = deploy.split("attempt_automatic_rollback()", 1)[1].split(
+        "cleanup_post_deploy_evidence()", 1
+    )[0]
+    restore_at = rollback.index("atomic_release_layout.py' restore")
+    sync_state_at = rollback.index("restore_remote_sync_unit_state")
+    assert restore_at < sync_state_at
+
+
 def test_deploy_uses_atomic_release_and_fail_closed_migration_contract() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
@@ -229,6 +291,85 @@ def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> Non
         'frontend/dist/index.html | head -1)"'
         not in deploy
     )
+
+
+def test_deploy_rescue_requires_same_sha_frozen_anchor_and_explicit_confirmation() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    for required in (
+        "VKPI_RESCUE_ROLLBACK_CANDIDATE_DIR",
+        "VKPI_RESCUE_ROLLBACK_CANDIDATE_MANIFEST",
+        "VKPI_RESCUE_ROLLBACK_CONFIRM",
+        "must be supplied together",
+        '"RESCUE_ROLLBACK:${PREDEPLOY_APP_SHA}"',
+        'ROLLBACK_ANCHOR_RELEASE_ID="rollback-anchor-${RELEASE_ID}-${PREDEPLOY_APP_SHA:0:12}"',
+    ):
+        assert required in deploy
+
+    bind = deploy.split("bind_rescue_rollback_candidate()", 1)[1].split("}\n", 1)[0]
+    assert "source.get(\"head\")" in bind
+    assert 'head != sys.argv[2]' in bind
+    assert "source.get(\"branch\")" in bind
+
+    verify = deploy.split("verify_rescue_rollback_candidate()", 1)[1].split(
+        "}\n", 1
+    )[0]
+    for required in (
+        "freeze_worktree_candidate.py",
+        "verify-deploy-source",
+        '--manifest "${RESCUE_ROLLBACK_CANDIDATE_MANIFEST}"',
+        '--snapshot "${RESCUE_ROLLBACK_CANDIDATE_DIR}"',
+        '--expected-head "${PREDEPLOY_APP_SHA}"',
+        '--expected-branch "${RESCUE_ROLLBACK_CANDIDATE_BRANCH}"',
+    ):
+        assert required in verify
+
+    rescue = deploy.split(
+        "# Rebuild the running SHA from a separately frozen clean worktree.",
+        1,
+    )[1].split(
+        "# Capture the exact effective env/units",
+        1,
+    )[0]
+    assert "Refusing to reuse an existing rescue rollback destination" in rescue
+    assert (
+        '-- "${RESCUE_ROLLBACK_CANDIDATE_DIR}/" '
+        '"${SSH_TARGET}:${REMOTE_ROLLBACK_ANCHOR_DIR}/"'
+    ) in rescue
+    assert "--git-sha '${PREDEPLOY_APP_SHA}'" in rescue
+    assert "--pending-migrations '' --compatibility-declaration ''" in rescue
+    assert "--database-strategy '${ROLLBACK_ANCHOR_DATABASE_STRATEGY}'" in rescue
+    assert rescue.count("verify_rescue_rollback_candidate") == 2
+    assert "atomic_release_layout.py' verify-seal" in rescue
+
+    prepare = next(
+        line
+        for line in deploy.splitlines()
+        if "atomic_release_layout.py' prepare" in line
+    )
+    assert "${ROLLBACK_ANCHOR_PREPARE_OPTION}" in prepare
+    assert (
+        'ROLLBACK_ANCHOR_PREPARE_OPTION="--rollback-anchor-release-id '
+        '${ROLLBACK_ANCHOR_RELEASE_ID}"'
+    ) in deploy
+
+
+def test_deploy_acceptance_reverifies_current_and_previous_seals() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    restored = deploy.rindex("restore_remote_sync_unit_state\n")
+    seal_pair = deploy.index(
+        "post-deploy current pointer does not name the accepted release",
+        restored,
+    )
+    accepted = deploy.rindex("DEPLOY_ACCEPTED=1")
+    assert restored < seal_pair < accepted
+    block = deploy[seal_pair:accepted]
+    assert "post-deploy previous pointer escapes releases" in block
+    assert "post-deploy previous pointer does not name the rescue rollback anchor" in block
+    assert block.count("atomic_release_layout.py' verify-seal") == 2
+    assert '--release-id \\"\\${current_id}\\"' in block
+    assert '--release-id \\"\\${previous_id}\\"' in block
 
 
 def test_deploy_remote_python_cannot_write_bytecode_into_release() -> None:

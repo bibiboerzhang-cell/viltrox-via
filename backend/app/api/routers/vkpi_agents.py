@@ -64,12 +64,17 @@ def read_plan(
 def unified_recall(
     q: str,
     limit: int = 10,
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_manager_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """B3 · 一句话跨信号召回:相关 KOL/视频/项目/活动(词法兜底,向量后端就绪自动升级)。"""
     from app.domains.intelligence import semantic_recall
 
-    return semantic_recall.unified_recall(q, limit=int(limit), staff=staff)
+    return semantic_recall.unified_recall(
+        q,
+        limit=int(limit),
+        staff=staff,
+        provider_free=True,
+    )
 
 
 @router.get("/tenant/current")
@@ -209,16 +214,18 @@ def marketing_brain_daily(staff=Depends(require_tab("vkpi", "read"))) -> dict[st
     """cut1 · Market Brain v1 日报:每日合成产品热/上升渠道/竞品动/机会窗/今日建议(只读)。"""
     from app.domains.market import market_brain
 
-    return market_brain.build_daily_brief(staff)
+    return market_brain.build_daily_brief(staff, sweep_expired=False)
 
 
 @router.post("/marketing-brain/refresh")
-def marketing_brain_refresh(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+def marketing_brain_refresh(
+    staff=Depends(require_manager_tab("vkpi", "write")),
+) -> dict[str, Any]:
     """cut1 · 活体化:治理过期信号 + 重出日报(运营手动刷;调度器每日自动跑)。"""
     from app.domains.market import market_brain
 
     expired = market_brain.mark_expired_signals()
-    brief = market_brain.build_daily_brief(staff)
+    brief = market_brain.build_daily_brief(staff, sweep_expired=False)
     return {"status": "ok", "expired_swept": expired, "brief": brief}
 
 

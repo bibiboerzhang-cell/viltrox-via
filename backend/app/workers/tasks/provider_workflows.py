@@ -125,6 +125,7 @@ async def process_discovery_federated_search_job(queue: Any, raw_job: dict[str, 
             str(payload.get("query") or ""),
             limit=max(1, min(100, int(payload.get("limit") or 20))),
             staff=payload.get("staff") if isinstance(payload.get("staff"), dict) else None,
+            include_external=True,
         )
 
     await _run(queue, raw_job, operation, summary=lambda r: f"results={len(r.get('results') or [])}")
@@ -224,6 +225,7 @@ async def process_kol_onboarding_job(queue: Any, raw_job: dict[str, Any]) -> Non
             onboarding_workflow.start_kol_onboarding,
             str(payload.get("query") or ""),
             payload.get("staff") if isinstance(payload.get("staff"), dict) else {},
+            limit=max(1, min(100, int(payload.get("limit") or 20))),
         )
 
     await _run(queue, raw_job, operation, summary=lambda r: f"status={r.get('status', 'done')}")

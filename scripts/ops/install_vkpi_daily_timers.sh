@@ -41,9 +41,10 @@ OnFailure=vkpi-sync-daily-alert@%n.service
 [Service]
 Type=oneshot
 RestartPreventExitStatus=75 76
-WorkingDirectory=${REMOTE_ROOT}
-Environment=PYTHONPATH=backend
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
+WorkingDirectory=${REMOTE_ROOT}/current
+Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
 # Legacy KOL Pool refresh is intentionally excluded until P1.X.A tier selection replaces full-pool daily refresh.
 # TODO: Consider lowering to 2h after official-only runtime is observed for one week.
 TimeoutStartSec=6h
@@ -90,9 +91,10 @@ OnFailure=vkpi-sync-daily-alert@%n.service
 [Service]
 Type=oneshot
 RestartPreventExitStatus=75 76
-WorkingDirectory=${REMOTE_ROOT}
-Environment=PYTHONPATH=backend
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && if systemctl is-active --quiet vkpi-sync-daily.service; then printf '\''{"event":"qualified_kol_refresh_skipped","reason":"vkpi-sync-daily.service active","at":"%s"}\n'\'' "\$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/qualified_kol_refresh_skip.log; exit 0; fi; .venv/bin/python scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days ${QUALIFIED_KOL_STALE_DAYS} --kol-limit ${QUALIFIED_KOL_LIMIT} --kol-max-posts 1 --kol-error-stop-threshold 3 >> /var/log/vkpi/qualified_kol_refresh_\$(date -u +%%Y%%m%%d).log 2>&1'
+WorkingDirectory=${REMOTE_ROOT}/current
+Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && if systemctl is-active --quiet vkpi-sync-daily.service; then printf '\''{"event":"qualified_kol_refresh_skipped","reason":"vkpi-sync-daily.service active","at":"%s"}\n'\'' "\$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/qualified_kol_refresh_skip.log; exit 0; fi; env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days ${QUALIFIED_KOL_STALE_DAYS} --kol-limit ${QUALIFIED_KOL_LIMIT} --kol-max-posts 1 --kol-error-stop-threshold 3 >> /var/log/vkpi/qualified_kol_refresh_\$(date -u +%%Y%%m%%d).log 2>&1'
 TimeoutStartSec=2h
 Nice=10
 IOSchedulingClass=best-effort
