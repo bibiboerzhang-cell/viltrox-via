@@ -874,12 +874,12 @@ def main(argv: list[str] | None = None) -> int:
                 expected_database=args.expected_db,
             )
     except PgbouncerMapError as exc:
-        print(f"pgbouncer release map error: {exc}", file=sys.stderr)
+        sys.stderr.write(f"pgbouncer release map error: {exc}\n")
         return 2
     except OSError:
-        print("pgbouncer release map error: filesystem operation failed", file=sys.stderr)
+        sys.stderr.write("pgbouncer release map error: filesystem operation failed\n")
         return 2
-    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    sys.stdout.write(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
     return 0
 
 
