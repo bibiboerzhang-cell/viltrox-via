@@ -870,11 +870,11 @@ export function ContentWallModule({
   const [kolRows, setKolRows] = React.useState<VkpiRecentVideoItem[] | null>(null);
   const [kolBusy, setKolBusy] = React.useState(false);
   const [kolError, setKolError] = React.useState("");
-
-  React.useEffect(() => {
+  const chooseSort = (next: "time" | "views") => {
+    if (next === sortBy) return;
+    setSortBy(next);
     setVisible(WALL_PAGE);
-  }, [kolId, vOnly, sortBy]);
-
+  };
   // 单 KOL 视图:与库详情弹窗同端点(会话级缓存;失败不缓存,重选自动重试)
   React.useEffect(() => {
     if (!apiToken || !kolId) {
@@ -924,7 +924,12 @@ export function ContentWallModule({
         <select
           aria-label="按 KOL 筛选"
           value={String(kolId)}
-          onChange={(ev) => setKolId(Number(ev.target.value) || 0)}
+          onChange={(ev) => {
+            const nextKolId = Number(ev.target.value) || 0;
+            if (nextKolId === kolId) return;
+            setKolId(nextKolId);
+            setVisible(WALL_PAGE);
+          }}
           className="max-w-[190px] rounded-xl border border-line bg-card px-2.5 py-1.5 text-[11px] text-ink outline-none focus:border-accent [&>option]:bg-[var(--ds-card)]"
           title="选单个收藏 KOL = 改走该 KOL 全量采集(与库详情同源)"
         >
@@ -938,7 +943,7 @@ export function ContentWallModule({
         <button
           type="button"
           className={`${CHIP} ${vOnly ? CHIP_ON : CHIP_OFF}`}
-          onClick={() => setVOnly((value) => !value)}
+          onClick={() => { setVOnly((value) => !value); setVisible(WALL_PAGE); }}
           title="只看合作产出与标题提及V(未判定隐藏)"
         >
           仅 V 相关
@@ -947,7 +952,7 @@ export function ContentWallModule({
           <button
             type="button"
             className={`${CHIP} ${sortBy === "time" ? CHIP_ON : CHIP_OFF}`}
-            onClick={() => setSortBy("time")}
+            onClick={() => chooseSort("time")}
             title="按发布时间排序"
           >
             最新
@@ -955,7 +960,7 @@ export function ContentWallModule({
           <button
             type="button"
             className={`${CHIP} ${sortBy === "views" ? CHIP_ON : CHIP_OFF}`}
-            onClick={() => setSortBy("views")}
+            onClick={() => chooseSort("views")}
             title="按实测播放排序(未实测排最后)"
           >
             播放
