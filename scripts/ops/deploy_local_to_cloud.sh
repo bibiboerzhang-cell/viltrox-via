@@ -701,6 +701,8 @@ restore_remote_sync_unit_state() {
 attempt_automatic_rollback() {
   local rollback_not_before rollback_health rollback_migration rollback_env_state
   local rollback_database rollback_env_sha256
+  local rollback_candidate_health="" rollback_redis_not_before="" rollback_redis_main_pid=""
+  local rollback_redis_ready=0
   echo "[deploy] acceptance failed; restoring previous application release, environment, database identity, and reviewed units..." >&2
   rollback_not_before="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")" || return 1
   # Restore shared env/current/unit state only after every process that can read
@@ -756,8 +758,13 @@ attempt_automatic_rollback() {
       fi
     fi
     if [ "${STAGING_REDIS_WORKER_UNIT_WAS_ACTIVE}" = "1" ]; then
-      if ! ssh "${SSH_TARGET}" "sudo systemctl start '${STAGING_REDIS_WORKER_SERVICE}' && systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'"; then
+      rollback_redis_not_before="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")" || return 1
+      if ! rollback_redis_main_pid="$(ssh "${SSH_TARGET}" "sudo systemctl start '${STAGING_REDIS_WORKER_SERVICE}' && systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}' && systemctl show --property MainPID --value '${STAGING_REDIS_WORKER_SERVICE}'")"; then
         echo "[deploy] CRITICAL: restored Redis worker active state could not be restored." >&2
+        return 1
+      fi
+      if ! [[ "${rollback_redis_main_pid}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "[deploy] CRITICAL: restored Redis worker systemd MainPID is invalid." >&2
         return 1
       fi
     elif ! ssh "${SSH_TARGET}" "sudo systemctl stop '${STAGING_REDIS_WORKER_SERVICE}' && ! systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'"; then
@@ -780,6 +787,33 @@ attempt_automatic_rollback() {
   if ! rollback_health="$(ssh "${SSH_TARGET}" "for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null; then exit 0; fi; sleep 2; done; exit 1")"; then
     echo "[deploy] CRITICAL: restored release did not return authenticated health." >&2
     return 1
+  fi
+  if [ "${STAGING_REDIS_WORKER_UNIT_WAS_ACTIVE}" = "1" ]; then
+    # Authenticated web health can recover before the dedicated Redis worker
+    # has completed the two same-PID heartbeat cycles required by the strict
+    # gate.  Re-fetch on every attempt instead of validating the first web
+    # snapshot forever.  Ninety attempts cover the reviewed 60-second maximum
+    # heartbeat interval twice, plus startup/scheduling margin.
+    for attempt in $(seq 1 90); do
+      if rollback_candidate_health="$(ssh "${SSH_TARGET}" "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null")" \
+        && printf '%s' "${rollback_candidate_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
+          "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
+          --expected-head "${PREDEPLOY_APP_SHA}" \
+          --expected-count 1 \
+          --expected-main-pid "${rollback_redis_main_pid}" \
+          --min-ready-sequence 3 \
+          --worker-not-before "${rollback_redis_not_before}" \
+          --max-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
+        rollback_health="${rollback_candidate_health}"
+        rollback_redis_ready=1
+        break
+      fi
+      sleep 2
+    done
+    if [ "${rollback_redis_ready}" != "1" ]; then
+      echo "[deploy] CRITICAL: restored Redis worker did not reach strict same-PID readiness." >&2
+      return 1
+    fi
   fi
   rollback_migration="$(printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; print(str((json.load(sys.stdin).get("trust") or {}).get("db_migration_max") or ""))')"
   if { [ "${STAGING_DB_CLONE_MODE}" = "1" ] && [ "${rollback_migration}" != "${PREDEPLOY_MIGRATION}" ]; } \
@@ -855,7 +889,9 @@ attempt_automatic_rollback() {
       "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
       --expected-head "${PREDEPLOY_APP_SHA}" \
       --expected-count 1 \
-      --worker-not-before "${rollback_not_before}" \
+      --expected-main-pid "${rollback_redis_main_pid}" \
+      --min-ready-sequence 3 \
+      --worker-not-before "${rollback_redis_not_before}" \
       --max-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
       echo "[deploy] CRITICAL: restored Redis worker failed strict runtime validation." >&2
       return 1

@@ -677,6 +677,44 @@ def test_release_gate_binds_two_cycles_to_systemd_main_pid() -> None:
     assert "redis worker PID does not match systemd MainPID" in rejected["errors"]
 
 
+def test_release_gate_rejects_early_boot_snapshot_until_two_cycles_complete() -> None:
+    head = "a" * 40
+    payload = _health_payload(head)
+    worker = payload["trust"]["redis_worker_fleet"]["workers"][0]
+    worker["started_at"] = "2026-07-14T22:00:00Z"
+    worker["heartbeat"] = "2026-07-14T22:00:05Z"
+    worker["redis_readiness_at"] = "2026-07-14T22:00:05Z"
+    worker["redis_ready_sequence"] = 1
+    not_before = datetime(2026, 7, 14, 22, 0, tzinfo=timezone.utc)
+
+    early = redis_gate.validate_redis_worker_health(
+        payload,
+        expected_head=head,
+        expected_main_pid=4321,
+        min_ready_sequence=3,
+        worker_not_before=not_before,
+        now=datetime(2026, 7, 14, 22, 0, 5, tzinfo=timezone.utc),
+    )
+
+    assert early["pass"] is False
+    assert "redis worker has not sustained readiness for two heartbeat cycles" in early["errors"]
+    assert "redis worker boot has not survived two heartbeat cycles" in early["errors"]
+
+    worker["heartbeat"] = "2026-07-14T22:00:30Z"
+    worker["redis_readiness_at"] = "2026-07-14T22:00:30Z"
+    worker["redis_ready_sequence"] = 3
+    mature = redis_gate.validate_redis_worker_health(
+        payload,
+        expected_head=head,
+        expected_main_pid=4321,
+        min_ready_sequence=3,
+        worker_not_before=not_before,
+        now=datetime(2026, 7, 14, 22, 0, 30, tzinfo=timezone.utc),
+    )
+
+    assert mature["pass"] is True
+
+
 def test_systemd_unit_is_non_root_conservative_and_stale_safe() -> None:
     unit = (ROOT / "scripts/ops/systemd/vkpi-redis-worker.service").read_text(encoding="utf-8")
     assert "User=viltrox" in unit
@@ -727,3 +765,48 @@ def test_deploy_enables_unit_and_binds_release_gate_to_systemd_main_pid() -> Non
     disable_at = rollback.index("sudo systemctl disable --now", stop_all_at)
     restore_at = rollback.index("atomic_release_layout.py' restore")
     assert stop_all_at < disable_at < restore_at
+
+    rollback_not_before_at = rollback.index(
+        'rollback_redis_not_before="$(ssh "${SSH_TARGET}" "date -u',
+        restore_at,
+    )
+    rollback_start_at = rollback.index(
+        "sudo systemctl start '${STAGING_REDIS_WORKER_SERVICE}'",
+        rollback_not_before_at,
+    )
+    rollback_main_pid_at = rollback.index(
+        "systemctl show --property MainPID --value",
+        rollback_start_at,
+    )
+    rollback_poll_at = rollback.index("for attempt in $(seq 1 90); do", rollback_main_pid_at)
+    rollback_fresh_health_at = rollback.index(
+        'rollback_candidate_health="$(ssh "${SSH_TARGET}"',
+        rollback_poll_at,
+    )
+    rollback_wait_pid_at = rollback.index(
+        '--expected-main-pid "${rollback_redis_main_pid}"',
+        rollback_fresh_health_at,
+    )
+    rollback_promote_at = rollback.index(
+        'rollback_health="${rollback_candidate_health}"',
+        rollback_wait_pid_at,
+    )
+    rollback_final_pid_at = rollback.index(
+        '--expected-main-pid "${rollback_redis_main_pid}"',
+        rollback_promote_at,
+    )
+    restore_sync_at = rollback.index("restore_remote_sync_unit_state", rollback_final_pid_at)
+    assert (
+        restore_at
+        < rollback_not_before_at
+        < rollback_start_at
+        < rollback_main_pid_at
+        < rollback_poll_at
+        < rollback_fresh_health_at
+        < rollback_wait_pid_at
+        < rollback_promote_at
+        < rollback_final_pid_at
+        < restore_sync_at
+    )
+    assert rollback.count('--expected-main-pid "${rollback_redis_main_pid}"') == 2
+    assert rollback.count("--min-ready-sequence 3") == 2

@@ -641,8 +641,14 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         "browser_gate_pages.json",
         "pageManifest.pages",
         "navigateAndProbePage",
+        "beginFullDocumentNavigation",
+        "reconcileCompletedInflightApiForFamily",
+        '"Network.getResponseBody"',
         "waitForFinalSameOriginApiIdle",
-        'throw new Error("final same-origin API requests did not become idle before timeout")',
+        "final same-origin API requests did not become idle before timeout",
+        "navigation_discarded_prior_api: navigationDiscardedPriorApi",
+        "same_origin_api_inflight_diagnostics",
+        "navigation_discarded_same_origin_api_total",
         "external_media_403_allowed_origins: allowedExternalMedia403Origins",
         "response_error_count_total: session.networkResponseErrorTotal",
         "inflight_same_origin_api_final: session.inflightSameOriginApi.size",
@@ -666,10 +672,11 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         "async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)",
         1,
     )[1].split("async function waitForFinalSameOriginApiIdle", 1)[0]
+    discard_at = per_page_navigation.index("session.beginFullDocumentNavigation()")
     auth_at = per_page_navigation.index("await requireAuthentication(session)")
     target_at = per_page_navigation.index("const target = pageUrl", auth_at)
     navigate_at = per_page_navigation.index('await session.send("Page.navigate"', target_at)
-    assert auth_at < target_at < navigate_at
+    assert auth_at < target_at < discard_at < navigate_at
 
     page_loop = source.split(
         "for (const [pageIndex, page] of pageManifest.pages.entries())",

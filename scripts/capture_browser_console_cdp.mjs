@@ -209,6 +209,7 @@ class CdpSession {
     this.networkRequestTotal = 0;
     this.networkResponseTotal = 0;
     this.networkResponseErrorTotal = 0;
+    this.navigationDiscardedSameOriginApiTotal = 0;
     this.currentPageFamily = "bootstrap";
     this.contexts = new Map();
     this.loadCompleted = false;
@@ -298,6 +299,11 @@ class CdpSession {
         family: this.currentPageFamily,
         same_origin_api: sameOriginApi,
         long_lived: resourceType === "EventSource" || resourceType === "WebSocket",
+        response_received: false,
+        response_status: null,
+        method: String(request.method || "GET").toUpperCase().slice(0, 16),
+        resource_type: resourceType.slice(0, 32),
+        url: captureUrl(url),
       });
       if (sameOriginApi && resourceType !== "EventSource" && resourceType !== "WebSocket") {
         this.inflightSameOriginApi.set(requestId, this.currentPageFamily);
@@ -312,6 +318,10 @@ class CdpSession {
       const pageFamily = request?.family || this.currentPageFamily;
       const url = captureUrl(response.url);
       const status = Number(response.status);
+      if (request) {
+        request.response_received = true;
+        request.response_status = Number.isFinite(status) ? status : null;
+      }
       this.networkResponseTotal += 1;
       this.networkLastActivityAt.set(pageFamily, Date.now());
       if (Number.isFinite(status) && status >= 400) this.networkResponseErrorTotal += 1;
@@ -407,6 +417,59 @@ class CdpSession {
 
   inflightApiForFamily(family) {
     return [...this.inflightSameOriginApi.values()].filter((value) => value === family).length;
+  }
+
+  inflightApiDiagnostics(family = "") {
+    return [...this.inflightSameOriginApi.keys()]
+      .map((requestId) => {
+        const request = this.networkRequests.get(requestId) || {};
+        return {
+          family: String(request.family || ""),
+          method: String(request.method || ""),
+          resource_type: String(request.resource_type || ""),
+          response_received: request.response_received === true,
+          response_status: Number.isFinite(request.response_status)
+            ? request.response_status
+            : null,
+          url: String(request.url || ""),
+        };
+      })
+      .filter((request) => !family || request.family === family)
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+      .slice(0, 20);
+  }
+
+  async reconcileCompletedInflightApiForFamily(family = "") {
+    let reconciled = 0;
+    for (const [requestId, requestFamily] of [...this.inflightSameOriginApi.entries()]) {
+      if (family && requestFamily !== family) continue;
+      const request = this.networkRequests.get(requestId);
+      if (!request || request.response_received !== true) continue;
+      try {
+        // Chromium can occasionally omit/delay loadingFinished for a completed
+        // Fetch. Network.getResponseBody succeeds only after the response body
+        // is available; never retain the body, only use that protocol proof to
+        // reconcile the in-flight bookkeeping.
+        await this.send("Network.getResponseBody", { requestId });
+      } catch {
+        continue;
+      }
+      this.inflightSameOriginApi.delete(requestId);
+      request.body_reconciled = true;
+      this.networkLastActivityAt.set(requestFamily, Date.now());
+      reconciled += 1;
+    }
+    return reconciled;
+  }
+
+  beginFullDocumentNavigation() {
+    const staleRequestIds = [...this.inflightSameOriginApi.keys()];
+    for (const requestId of staleRequestIds) {
+      this.inflightSameOriginApi.delete(requestId);
+      this.networkRequests.delete(requestId);
+    }
+    this.navigationDiscardedSameOriginApiTotal += staleRequestIds.length;
+    return staleRequestIds.length;
   }
 }
 
@@ -515,14 +578,23 @@ async function requireAuthentication(session) {
 }
 
 async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs) {
-  session.currentPageFamily = page.family;
-  session.loadCompleted = false;
   // Re-prove the bearer immediately before every navigation.  HTTP 200 alone
   // is insufficient because /api/auth/me may encode auth failure in its JSON
   // body; require the complete body-aware success contract and stop before a
-  // stale token can create a cascade of unrelated page/API failures.
+  // stale token can create a cascade of unrelated page/API failures. Keep the
+  // current family unchanged during this probe so any timer fired by the old
+  // document cannot be attributed to the page that has not navigated yet.
   await requireAuthentication(session);
   const target = pageUrl(baseUrl, page.nav_key);
+  // Every reviewed page probe uses a top-level Page.navigate. Requests from the
+  // document being replaced are no longer part of the next page's readiness
+  // contract, and Chromium does not guarantee a loadingFailed event for every
+  // fetch canceled during that replacement. Clear the in-flight tracker only
+  // after authentication and immediately before Page.navigate; response/error
+  // evidence already collected for the prior page remains intact.
+  const navigationDiscardedPriorApi = session.beginFullDocumentNavigation();
+  session.currentPageFamily = page.family;
+  session.loadCompleted = false;
   const startedAt = Date.now();
   const responseStart = session.networkResponses.length;
   const failureStart = session.networkFailures.length;
@@ -546,6 +618,7 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
   await sleep(settleMs);
   let apiIdle = false;
   while (Date.now() < deadline) {
+    await session.reconcileCompletedInflightApiForFamily(page.family);
     const inflight = session.inflightApiForFamily(page.family);
     const lastActivity = session.networkLastActivityAt.get(page.family) || startedAt;
     if (inflight === 0 && Date.now() - lastActivity >= 500) {
@@ -579,17 +652,22 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
     lazy_error_present: proof.lazy_error_present === true,
     same_origin_api_idle: apiIdle,
     same_origin_api_inflight: session.inflightApiForFamily(page.family),
+    same_origin_api_inflight_diagnostics: apiIdle
+      ? []
+      : session.inflightApiDiagnostics(page.family),
     ready_state: String(proof.ready_state || ""),
     final_url: String(proof.final_url || ""),
     elapsed_ms: Date.now() - startedAt,
     observed_network_responses: session.networkResponses.length - responseStart,
     observed_network_failures: session.networkFailures.length - failureStart,
+    navigation_discarded_prior_api: navigationDiscardedPriorApi,
   };
 }
 
 async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    await session.reconcileCompletedInflightApiForFamily();
     const lastActivity = Math.max(0, ...session.networkLastActivityAt.values());
     if (
       session.inflightSameOriginApi.size === 0
@@ -599,7 +677,9 @@ async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
     }
     await sleep(100);
   }
-  throw new Error("final same-origin API requests did not become idle before timeout");
+  throw new Error(
+    `final same-origin API requests did not become idle before timeout: ${JSON.stringify(session.inflightApiDiagnostics())}`,
+  );
 }
 
 async function main() {
@@ -729,7 +809,10 @@ async function main() {
       );
       pages.push(pageResult);
       if (pageIndex === 0 && pageResult.page_settled !== true) {
-        throw new Error(`browser_gate_first_page_failed:${page.family}`);
+        throw new Error(
+          `browser_gate_first_page_failed:${page.family}:`
+          + `${JSON.stringify({ page: pageResult, inflight: session.inflightApiDiagnostics(page.family) })}`,
+        );
       }
     }
     const pageState = await session.send("Runtime.evaluate", {
@@ -752,6 +835,7 @@ async function main() {
       retained_response_count: session.networkResponses.length,
       loading_failure_count: session.networkFailures.length,
       inflight_same_origin_api_final: session.inflightSameOriginApi.size,
+      navigation_discarded_same_origin_api_total: session.navigationDiscardedSameOriginApiTotal,
     };
     const origins = [...new Set([...session.contexts.values()].map((item) => item.origin).filter(Boolean))].sort();
     const authenticatedSurface = (
@@ -822,6 +906,8 @@ async function main() {
           retained_response_count: finalNetworkSnapshot.retained_response_count,
           loading_failure_count: finalNetworkSnapshot.loading_failure_count,
           inflight_same_origin_api_final: finalNetworkSnapshot.inflight_same_origin_api_final,
+          navigation_discarded_same_origin_api_total:
+            finalNetworkSnapshot.navigation_discarded_same_origin_api_total,
         },
       },
     };
