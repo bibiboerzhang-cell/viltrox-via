@@ -10,6 +10,7 @@ run_deploy_ssh_transport_wrapper() {
   local control_path="${VKPI_DEPLOY_SSH_CONTROL_PATH:-}"
   local connect_timeout="${VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-}"
   local control_persist="${VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS:-}"
+  local fail_closed_proxy="${VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY:-}"
 
   case "${tool}" in
     ssh) real_binary="${VKPI_DEPLOY_REAL_SSH:-}" ;;
@@ -24,6 +25,8 @@ run_deploy_ssh_transport_wrapper() {
     exit 64
   fi
   if [ "${control_path#/}" = "${control_path}" ] \
+    || [ "${fail_closed_proxy#/}" = "${fail_closed_proxy}" ] \
+    || [ ! -x "${fail_closed_proxy}" ] \
     || ! [[ "${connect_timeout}" =~ ^[1-9][0-9]*$ ]] \
     || ! [[ "${control_persist}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Deployment SSH transport wrapper configuration is invalid." >&2
@@ -32,9 +35,10 @@ run_deploy_ssh_transport_wrapper() {
 
   exec "${real_binary}" \
     -o BatchMode=yes \
-    -o ControlMaster=auto \
+    -o ControlMaster=no \
     -o "ControlPersist=${control_persist}" \
     -o "ControlPath=${control_path}" \
+    -o "ProxyCommand=${fail_closed_proxy}" \
     -o ConnectionAttempts=1 \
     -o "ConnectTimeout=${connect_timeout}" \
     -o ServerAliveInterval=15 \
@@ -175,6 +179,7 @@ SSH_WRAPPER_SNAPSHOT=""
 SSH_CONTROL_PATH=""
 SSH_REAL_BIN=""
 SCP_REAL_BIN=""
+SSH_FAIL_CLOSED_PROXY=""
 SSH_TRANSPORT_READY=0
 SSH_ORIGINAL_PATH="${PATH}"
 SSH_ORIGINAL_RSYNC_RSH_SET=0
@@ -186,9 +191,11 @@ fi
 
 setup_deploy_ssh_transport() {
   local attempt=1
+  local effective_control_master=""
   local tmp_base="${TMPDIR:-/tmp}"
   local wrapper_mode=""
   local wrapper_path=""
+  local -a bootstrap_options=()
 
   if ! [[ "${SSH_CONNECT_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] \
     || [ "${SSH_CONNECT_TIMEOUT_SECONDS}" -gt 60 ]; then
@@ -208,9 +215,12 @@ setup_deploy_ssh_transport() {
 
   SSH_REAL_BIN="$(type -P ssh || true)"
   SCP_REAL_BIN="$(type -P scp || true)"
+  SSH_FAIL_CLOSED_PROXY="/usr/bin/false"
   if [ "${SSH_REAL_BIN#/}" = "${SSH_REAL_BIN}" ] || [ ! -x "${SSH_REAL_BIN}" ] \
-    || [ "${SCP_REAL_BIN#/}" = "${SCP_REAL_BIN}" ] || [ ! -x "${SCP_REAL_BIN}" ]; then
-    echo "Deployment requires absolute executable ssh and scp clients." >&2
+    || [ "${SCP_REAL_BIN#/}" = "${SCP_REAL_BIN}" ] || [ ! -x "${SCP_REAL_BIN}" ] \
+    || [ "${SSH_FAIL_CLOSED_PROXY#/}" = "${SSH_FAIL_CLOSED_PROXY}" ] \
+    || [ ! -x "${SSH_FAIL_CLOSED_PROXY}" ]; then
+    echo "Deployment requires absolute executable ssh, scp, and false clients." >&2
     return 1
   fi
 
@@ -260,20 +270,31 @@ setup_deploy_ssh_transport() {
     return 1
   fi
 
-  # Only this transport bootstrap is retried, and at most three times.  It runs
-  # no remote command.  Every later command executes exactly once and inherits
-  # ConnectionAttempts=1 through the private PATH wrapper.
+  bootstrap_options=(
+    -o BatchMode=yes
+    -o ControlMaster=yes
+    -o "ControlPersist=${SSH_CONTROL_PERSIST_SECONDS}"
+    -o "ControlPath=${SSH_CONTROL_PATH}"
+    -o ConnectionAttempts=1
+    -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
+    -o ServerAliveInterval=15
+    -o ServerAliveCountMax=3
+  )
+  effective_control_master="$(
+    "${SSH_REAL_BIN}" -G "${bootstrap_options[@]}" -N -f "${SSH_TARGET}" 2>/dev/null \
+      | awk '$1 == "controlmaster" { print $2; exit }'
+  )"
+  if [ "${effective_control_master}" != "true" ]; then
+    echo "Refusing deploy because the effective SSH bootstrap ControlMaster mode is not non-interactive true." >&2
+    return 1
+  fi
+
+  # Only this no-command transport bootstrap is retried, and at most three
+  # times.  Do not repeat -M after ControlMaster=yes: OpenSSH interprets the
+  # second enable as ControlMaster=ask and silently rejects non-interactive
+  # multiplexed sessions.
   while [ "${attempt}" -le "${SSH_INITIAL_CONNECT_ATTEMPTS}" ]; do
-    if "${SSH_REAL_BIN}" \
-      -o BatchMode=yes \
-      -o ControlMaster=yes \
-      -o "ControlPersist=${SSH_CONTROL_PERSIST_SECONDS}" \
-      -o "ControlPath=${SSH_CONTROL_PATH}" \
-      -o ConnectionAttempts=1 \
-      -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}" \
-      -o ServerAliveInterval=15 \
-      -o ServerAliveCountMax=3 \
-      -M -N -f "${SSH_TARGET}" \
+    if "${SSH_REAL_BIN}" "${bootstrap_options[@]}" -N -f "${SSH_TARGET}" \
       && "${SSH_REAL_BIN}" -o "ControlPath=${SSH_CONTROL_PATH}" -O check "${SSH_TARGET}" >/dev/null 2>&1; then
       SSH_TRANSPORT_READY=1
       break
@@ -299,6 +320,23 @@ setup_deploy_ssh_transport() {
     echo "Refusing deploy because the bounded SSH ControlMaster bootstrap failed." >&2
     return 1
   fi
+  # A control check proves only that the master process is alive.  Execute one
+  # harmless session through the socket, with direct TCP fallback disabled,
+  # before any remote read or mutation.  Every later command executes exactly
+  # once through this same fail-closed transport.
+  if ! "${SSH_REAL_BIN}" \
+    -o BatchMode=yes \
+    -o ControlMaster=no \
+    -o "ControlPath=${SSH_CONTROL_PATH}" \
+    -o "ProxyCommand=${SSH_FAIL_CLOSED_PROXY}" \
+    -o ConnectionAttempts=1 \
+    -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}" \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
+    "${SSH_TARGET}" true; then
+    echo "Refusing deploy because the SSH ControlMaster cannot execute a non-interactive session." >&2
+    return 1
+  fi
 
   export VKPI_DEPLOY_SSH_WRAPPER_MODE=1
   export VKPI_DEPLOY_REAL_SSH="${SSH_REAL_BIN}"
@@ -306,12 +344,13 @@ setup_deploy_ssh_transport() {
   export VKPI_DEPLOY_SSH_CONTROL_PATH="${SSH_CONTROL_PATH}"
   export VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS="${SSH_CONNECT_TIMEOUT_SECONDS}"
   export VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS="${SSH_CONTROL_PERSIST_SECONDS}"
+  export VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY="${SSH_FAIL_CLOSED_PROXY}"
   PATH="${SSH_TRANSPORT_DIR}:${PATH}"
   export PATH
   RSYNC_RSH="${SSH_TRANSPORT_DIR}/ssh"
   export RSYNC_RSH
   hash -r
-  echo "[deploy] SSH transport ready: one private ControlMaster, ${SSH_INITIAL_CONNECT_ATTEMPTS} bounded bootstrap attempt(s) maximum."
+  echo "[deploy] SSH transport ready: one private non-interactive ControlMaster, direct TCP fallback disabled, ${SSH_INITIAL_CONNECT_ATTEMPTS} bounded bootstrap attempt(s) maximum."
 }
 
 cleanup_deploy_ssh_transport() {
@@ -356,7 +395,7 @@ cleanup_deploy_ssh_transport() {
   fi
   unset VKPI_DEPLOY_SSH_WRAPPER_MODE VKPI_DEPLOY_REAL_SSH VKPI_DEPLOY_REAL_SCP
   unset VKPI_DEPLOY_SSH_CONTROL_PATH VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS
-  unset VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS
+  unset VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY
   hash -r
   if [ -n "${SSH_TRANSPORT_DIR}" ]; then
     if [ "${preserve_transport}" = "1" ]; then

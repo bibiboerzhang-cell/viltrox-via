@@ -49,8 +49,14 @@ def test_deploy_bootstraps_one_private_transport_before_any_remote_read() -> Non
     assert '[ "${SSH_INITIAL_CONNECT_ATTEMPTS}" -gt 3 ]' in setup_body
     assert "-o ControlMaster=yes" in setup_body
     assert "-o ConnectionAttempts=1" in setup_body
-    assert "-M -N -f \"${SSH_TARGET}\"" in setup_body
-    assert "Every later command executes exactly once" in setup_body
+    assert '"${bootstrap_options[@]}" -N -f "${SSH_TARGET}"' in setup_body
+    assert "-M -N" not in setup_body
+    assert 'effective_control_master}" != "true"' in setup_body
+    assert '"${SSH_TARGET}" true' in setup_body
+    assert "-o ControlMaster=no" in setup_body
+    assert '-o "ProxyCommand=${SSH_FAIL_CLOSED_PROXY}"' in setup_body
+    assert "Every later command executes exactly" in setup_body
+    assert "once through this same fail-closed transport" in setup_body
     bootstrap_exit = setup_body.index('-O exit "${SSH_TARGET}"')
     bootstrap_recheck = setup_body.index(
         '-O check "${SSH_TARGET}"', bootstrap_exit
@@ -63,6 +69,44 @@ def test_deploy_bootstraps_one_private_transport_before_any_remote_read() -> Non
     assert 'PATH="${SSH_TRANSPORT_DIR}:${PATH}"' in setup_body
     assert 'RSYNC_RSH="${SSH_TRANSPORT_DIR}/ssh"' in setup_body
     assert "export VKPI_DEPLOY_SSH_WRAPPER_MODE=1" in setup_body
+
+
+def test_bootstrap_effective_control_master_is_true_not_ask() -> None:
+    effective = subprocess.run(
+        [
+            "/usr/bin/ssh",
+            "-G",
+            "-o",
+            "ControlMaster=yes",
+            "-N",
+            "-f",
+            "example.invalid",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    ).stdout
+    doubled = subprocess.run(
+        [
+            "/usr/bin/ssh",
+            "-G",
+            "-o",
+            "ControlMaster=yes",
+            "-M",
+            "-N",
+            "-f",
+            "example.invalid",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    ).stdout
+
+    assert "controlmaster true\n" in effective
+    assert "controlmaster ask\n" not in effective
+    assert "controlmaster ask\n" in doubled
 
 
 def test_immutable_transport_wrapper_survives_later_source_replacement(
@@ -118,6 +162,7 @@ def test_immutable_transport_wrapper_survives_later_source_replacement(
         "VKPI_DEPLOY_SSH_CONTROL_PATH": str(control_path),
         "VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS": "10",
         "VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS": "3600",
+        "VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY": "/usr/bin/false",
         "VKPI_TEST_CAPTURE": str(capture),
     }
 
@@ -145,9 +190,10 @@ def test_transport_wrapper_covers_ssh_scp_python_children_and_rsync_without_retr
 
     for option in (
         "-o BatchMode=yes",
-        "-o ControlMaster=auto",
+        "-o ControlMaster=no",
         '-o "ControlPersist=${control_persist}"',
         '-o "ControlPath=${control_path}"',
+        '-o "ProxyCommand=${fail_closed_proxy}"',
         "-o ConnectionAttempts=1",
         '-o "ConnectTimeout=${connect_timeout}"',
         "-o ServerAliveInterval=15",
@@ -198,6 +244,7 @@ def test_transport_wrapper_executes_the_requested_client_once(
         "VKPI_DEPLOY_SSH_CONTROL_PATH": str(control_path),
         "VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS": "10",
         "VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS": "3600",
+        "VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY": "/usr/bin/false",
         "VKPI_TEST_CAPTURE": str(capture),
     }
 
@@ -216,11 +263,13 @@ def test_transport_wrapper_executes_the_requested_client_once(
         "-o",
         "BatchMode=yes",
         "-o",
-        "ControlMaster=auto",
+        "ControlMaster=no",
         "-o",
         "ControlPersist=3600",
         "-o",
         f"ControlPath={control_path}",
+        "-o",
+        "ProxyCommand=/usr/bin/false",
         "-o",
         "ConnectionAttempts=1",
         "-o",
