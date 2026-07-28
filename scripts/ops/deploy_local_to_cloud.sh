@@ -1500,29 +1500,39 @@ for line in content.decode("utf-8").splitlines():
     if not raw or raw.startswith("#") or "=" not in raw:
         continue
     key, value = raw.split("=", 1)
-    runtime_values[key.strip()] = value.strip().strip("'\"")
-    if key.strip() == "DATABASE_URL":
+    key = key.strip()
+    if key in runtime_values:
+        raise SystemExit(f"environment file contains duplicate key: {key}")
+    runtime_values[key] = value.strip().strip("'\"")
+    if key == "DATABASE_URL":
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         matches.append(value)
 if len(matches) != 1:
     raise SystemExit("expected exactly one active DATABASE_URL")
-if staging_clone_mode == "1" and runtime_values.get("DATABASE_POOL_URL", "").strip():
-    raise SystemExit("DATABASE_POOL_URL must be unset for staging clone")
-if (
-    staging_clone_mode == "1"
-    and runtime_values.get("DB_USE_PGBOUNCER", "").strip().lower()
-    in {"1", "true", "yes", "on"}
-):
+def database_name_from_url(value, label):
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        raise SystemExit(f"{label} is invalid") from None
+    name = unquote(parsed.path[1:]) if parsed.path.startswith("/") else ""
+    if parsed.scheme not in {"postgres", "postgresql"} or not name or "/" in name:
+        raise SystemExit(f"{label} database path is invalid")
+    return name
+
+database_name = database_name_from_url(matches[0], "DATABASE_URL")
+pool_url = runtime_values.get("DATABASE_POOL_URL", "").strip()
+pool_flag = runtime_values.get("DB_USE_PGBOUNCER", "1" if pool_url else "0").strip().lower()
+if pool_flag not in {"0", "false", "no", "off", "1", "true", "yes", "on"}:
+    raise SystemExit("DB_USE_PGBOUNCER must be an explicit boolean")
+pool_enabled = pool_flag in {"1", "true", "yes", "on"}
+if pool_enabled and not pool_url:
+    raise SystemExit("DB_USE_PGBOUNCER requires DATABASE_POOL_URL")
+if staging_clone_mode == "1" and pool_enabled:
     raise SystemExit("DB_USE_PGBOUNCER must be disabled for staging clone")
-try:
-    parsed = urlsplit(matches[0])
-except ValueError:
-    raise SystemExit("DATABASE_URL is invalid") from None
-database_name = unquote(parsed.path[1:]) if parsed.path.startswith("/") else ""
-if parsed.scheme not in {"postgres", "postgresql"} or not database_name or "/" in database_name:
-    raise SystemExit("DATABASE_URL database path is invalid")
+if pool_url and database_name_from_url(pool_url, "DATABASE_POOL_URL") != database_name:
+    raise SystemExit("DATABASE_POOL_URL database identity must match DATABASE_URL")
 root = path.parent.resolve()
 source_kind = "legacy-base"
 source_release_id = ""

@@ -30,6 +30,10 @@ def _url(database: str) -> str:
     )
 
 
+def _pool_url(database: str) -> str:
+    return _url(database).replace("db.internal:5432/", "db.internal:6432/")
+
+
 def _write_env(path: Path, database: str, *, app_sha: str = "old") -> None:
     path.write_text(
         f"DATABASE_URL='{_url(database)}'\nAPP_GIT_SHA={app_sha}\nSECRET={SECRET}\n",
@@ -188,6 +192,13 @@ def test_switch_env_is_atomic_preserves_non_database_values_and_cli_redacts_secr
 ) -> None:
     env_path = tmp_path / ".env"
     _write_env(env_path, staging_db_clone.SOURCE_DATABASE)
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f'DATABASE_POOL_URL="{_pool_url(staging_db_clone.SOURCE_DATABASE)}"\n'
+            "DB_USE_PGBOUNCER=0\n"
+        )
+    before = env_path.read_bytes().replace(b"\n", b"  \r\n")
+    env_path.write_bytes(before)
     before_mode = env_path.stat().st_mode & 0o777
     target = staging_db_clone.clone_name_for_release("release-one")
 
@@ -212,7 +223,13 @@ def test_switch_env_is_atomic_preserves_non_database_values_and_cli_redacts_secr
     assert SECRET not in result.stdout
     assert SECRET not in result.stderr
     assert staging_db_clone.read_database_identity(env_path) == target
-    assert f"SECRET={SECRET}" in env_path.read_text(encoding="utf-8")
+    after = env_path.read_bytes()
+    assert after == before.replace(
+        f"/{staging_db_clone.SOURCE_DATABASE}?".encode(),
+        f"/{target}?".encode(),
+    )
+    assert f"SECRET={SECRET}" in after.decode()
+    assert _pool_url(target) in after.decode()
     assert env_path.stat().st_mode & 0o777 == before_mode
     payload = json.loads(result.stdout)
     assert payload["database_name"] == target
@@ -293,16 +310,96 @@ def test_source_connection_drain_remains_fail_closed_after_timeout(
         )
 
 
-def test_clone_mode_rejects_pool_url_that_could_bypass_database_switch(
+def test_clone_mode_accepts_only_matching_disabled_pool_metadata(
     tmp_path: Path,
 ) -> None:
     env_path = tmp_path / ".env"
     _write_env(env_path, staging_db_clone.SOURCE_DATABASE)
     with env_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"DATABASE_POOL_URL={_url(staging_db_clone.SOURCE_DATABASE)}\n")
+        handle.write(
+            f"DATABASE_POOL_URL={_pool_url(staging_db_clone.SOURCE_DATABASE)}\n"
+            "DB_USE_PGBOUNCER=0\n"
+        )
 
-    with pytest.raises(staging_db_clone.CloneError, match="DATABASE_POOL_URL"):
+    assert staging_db_clone.env_state(env_path)["database_name"] == (
+        staging_db_clone.SOURCE_DATABASE
+    )
+
+    env_path.write_text(
+        env_path.read_text().replace(
+            _pool_url(staging_db_clone.SOURCE_DATABASE),
+            _pool_url(staging_db_clone.clone_name_for_release("mismatch")),
+        )
+    )
+    with pytest.raises(staging_db_clone.CloneError, match="must match DATABASE_URL"):
         staging_db_clone.env_state(env_path)
+
+
+def test_clone_mode_rejects_active_or_duplicate_pool_metadata(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    _write_env(env_path, staging_db_clone.SOURCE_DATABASE)
+    pool_line = f"DATABASE_POOL_URL={_pool_url(staging_db_clone.SOURCE_DATABASE)}\n"
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(pool_line + "DB_USE_PGBOUNCER=1\n")
+    with pytest.raises(staging_db_clone.CloneError, match="to be disabled"):
+        staging_db_clone.env_state(env_path)
+
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(pool_line)
+    with pytest.raises(staging_db_clone.CloneError, match="duplicate key"):
+        staging_db_clone.env_state(env_path)
+
+
+def test_switch_env_mismatch_cli_redacts_both_url_credentials(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    _write_env(env_path, staging_db_clone.SOURCE_DATABASE)
+    mismatch = staging_db_clone.clone_name_for_release("mismatch")
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"DATABASE_POOL_URL={_pool_url(mismatch)}\nDB_USE_PGBOUNCER=0\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(OPS / "staging_db_clone.py"),
+            "switch-env",
+            "--env-file",
+            str(env_path),
+            "--expected-source-db",
+            staging_db_clone.SOURCE_DATABASE,
+            "--target-db",
+            staging_db_clone.clone_name_for_release("target"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert SECRET not in result.stdout + result.stderr
+    assert "database identity must match" in result.stderr
+
+
+def test_switch_env_installs_both_database_paths_with_one_atomic_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_path = tmp_path / ".env"
+    source = staging_db_clone.SOURCE_DATABASE
+    target = staging_db_clone.clone_name_for_release("atomic-pool-switch")
+    _write_env(env_path, source)
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"DATABASE_POOL_URL={_pool_url(source)}\nDB_USE_PGBOUNCER=0\n")
+    replacements: list[bytes] = []
+    real_replace = staging_db_clone.os.replace
+
+    def observed_replace(temporary: Path, destination: Path) -> None:
+        replacements.append(Path(temporary).read_bytes())
+        real_replace(temporary, destination)
+
+    monkeypatch.setattr(staging_db_clone.os, "replace", observed_replace)
+    staging_db_clone.switch_environment_database(
+        env_path, expected_source=source, target=target
+    )
+    assert len(replacements) == 1
+    assert _url(target).encode() in replacements[0]
+    assert _pool_url(target).encode() in replacements[0]
 
 
 def test_app_only_env_state_accepts_matching_runtime_pool_identity(
@@ -411,7 +508,7 @@ def test_clone_a_app_only_b_migration_clone_c_preserves_database_lineage(
     with (root / ".env").open("a", encoding="utf-8") as handle:
         handle.write(f"DATABASE_POOL_URL={_url(database_a)}\n")
         handle.write("DB_USE_PGBOUNCER=1\n")
-    with pytest.raises(staging_db_clone.CloneError, match="DATABASE_POOL_URL"):
+    with pytest.raises(staging_db_clone.CloneError, match="to be disabled"):
         staging_db_clone.prove_active_source(
             root=root,
             expected_database=database_a,

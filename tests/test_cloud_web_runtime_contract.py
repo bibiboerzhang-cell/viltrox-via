@@ -606,20 +606,19 @@ def test_remote_release_acceptance_uses_the_production_nonroot_runtime_contract(
     assert "scripts/local_release_acceptance.py" in acceptance
 
 
-def test_database_identity_probe_allows_pool_metadata_for_app_only_releases() -> None:
+def test_database_identity_probe_allows_only_dormant_matching_pool_for_clone() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
     assert "'${REMOTE_ROOT}/.env' '${STAGING_DB_CLONE_MODE}'" in deploy
     assert "staging_clone_mode = sys.argv[2]" in deploy
     assert 'if staging_clone_mode not in {"0", "1"}:' in deploy
-    assert (
-        'if staging_clone_mode == "1" and '
-        'runtime_values.get("DATABASE_POOL_URL", "").strip():'
-    ) in deploy
-    assert (
-        'staging_clone_mode == "1"\n'
-        '    and runtime_values.get("DB_USE_PGBOUNCER", "").strip().lower()'
-    ) in deploy
+    assert "if key in runtime_values:" in deploy
+    assert "environment file contains duplicate key" in deploy
+    assert '"1" if pool_url else "0"' in deploy
+    assert "DB_USE_PGBOUNCER requires DATABASE_POOL_URL" in deploy
+    assert 'if staging_clone_mode == "1" and pool_enabled:' in deploy
+    assert "DB_USE_PGBOUNCER must be disabled for staging clone" in deploy
+    assert "DATABASE_POOL_URL database identity must match DATABASE_URL" in deploy
     assert 'DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG=""' in deploy
     assert (
         'DATABASE_RELEASE_STRATEGY="reuse-active-clone"\n'

@@ -8,8 +8,8 @@ The helper is intentionally narrow:
 * clone names are deterministic, release-bound, and identifier-safe;
 * PostgreSQL administration uses local peer authentication as the postgres OS
   account, so the application DATABASE_URL is never copied into argv or logs;
-* the only environment mutation replaces DATABASE_URL's database path while
-  preserving every other byte of the URL.
+* the only environment mutation replaces the database path in DATABASE_URL
+  and any disabled DATABASE_POOL_URL metadata in one atomic file replacement.
 
 It is invoked remotely by ``deploy_local_to_cloud.sh`` only after the immutable
 release and rollback capture have been prepared.
@@ -287,37 +287,47 @@ def replace_database_name(value: str, *, expected: str, target: str) -> str:
     )
 
 
-def _database_url_line(env_path: Path) -> tuple[list[str], int, str, str, str]:
+def _database_url_lines(
+    env_path: Path,
+) -> tuple[list[str], dict[str, tuple[int, str, str, str, str, str]]]:
     if not env_path.is_file() or env_path.is_symlink():
         raise CloneError("environment file must be a regular non-symlink file")
-    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-    matches: list[tuple[int, str, str, str]] = []
-    pattern = re.compile(r"^(\s*DATABASE_URL\s*=\s*)(.*?)(\r?\n)?$")
+    try:
+        lines = env_path.read_bytes().decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        raise CloneError("environment file must be valid UTF-8") from None
+    matches: dict[str, tuple[int, str, str, str, str, str]] = {}
+    pattern = re.compile(
+        r"^(\s*(DATABASE_URL|DATABASE_POOL_URL)\s*=\s*)(.*?)(\r?\n)?$"
+    )
     for index, line in enumerate(lines):
         if line.lstrip().startswith("#"):
             continue
         match = pattern.match(line)
         if not match:
             continue
-        raw = match.group(2).strip()
+        key = match.group(2)
+        if key in matches:
+            raise CloneError(f"environment file contains duplicate key: {key}")
+        body = match.group(3)
+        trailing = body[len(body.rstrip()) :]
+        raw = body.rstrip()
         quote_char = ""
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
             quote_char = raw[0]
             raw = raw[1:-1]
         if not raw:
-            raise CloneError("DATABASE_URL is empty")
-        matches.append((index, match.group(1), raw, quote_char))
-    if len(matches) != 1:
+            raise CloneError(f"{key} is empty")
+        newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+        matches[key] = (index, match.group(1), raw, quote_char, trailing, newline)
+    if "DATABASE_URL" not in matches:
         raise CloneError("environment file must contain exactly one active DATABASE_URL")
-    index, prefix, value, quote_char = matches[0]
-    newline = "\r\n" if lines[index].endswith("\r\n") else "\n"
-    if not lines[index].endswith(("\n", "\r")):
-        newline = ""
-    return lines, index, prefix, value, f"{quote_char}\0{newline}"
+    return lines, matches
 
 
 def read_database_identity(env_path: Path) -> str:
-    _lines, _index, _prefix, value, _format = _database_url_line(env_path)
+    _lines, matches = _database_url_lines(env_path)
+    _index, _prefix, value, _quote, _trailing, _newline = matches["DATABASE_URL"]
     return database_name_from_url(value)
 
 
@@ -335,26 +345,21 @@ def env_state(
     values = _load_environment_without_logging(env_path)
     database_name = read_database_identity(env_path)
     pool_url = values.get("DATABASE_POOL_URL", "").strip()
-    pool_enabled = values.get(
+    pool_flag = values.get(
         "DB_USE_PGBOUNCER",
         "1" if pool_url else "0",
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if not allow_runtime_pool and pool_url:
-        raise CloneError(
-            "staging clone requires DATABASE_POOL_URL to be unset so DATABASE_URL is authoritative"
-        )
+    ).strip().lower()
+    if pool_flag not in {"0", "false", "no", "off", "1", "true", "yes", "on"}:
+        raise CloneError("DB_USE_PGBOUNCER must be an explicit boolean")
+    pool_enabled = pool_flag in {"1", "true", "yes", "on"}
+    if pool_enabled and not pool_url:
+        raise CloneError("DB_USE_PGBOUNCER requires DATABASE_POOL_URL")
+    if pool_url and database_name_from_url(pool_url) != database_name:
+        raise CloneError("DATABASE_POOL_URL database identity must match DATABASE_URL")
     if not allow_runtime_pool and pool_enabled:
         raise CloneError(
             "staging clone requires DB_USE_PGBOUNCER to be disabled"
         )
-    if allow_runtime_pool and pool_enabled and not pool_url:
-        raise CloneError("DB_USE_PGBOUNCER requires DATABASE_POOL_URL")
-    if allow_runtime_pool and pool_url:
-        pool_database_name = database_name_from_url(pool_url)
-        if pool_database_name != database_name:
-            raise CloneError(
-                "DATABASE_POOL_URL database identity must match DATABASE_URL"
-            )
     return {
         "database_name": database_name,
         "env_sha256": env_fingerprint(env_path),
@@ -367,10 +372,18 @@ def switch_environment_database(
     expected_source: str,
     target: str,
 ) -> dict[str, str]:
-    lines, index, prefix, value, formatting = _database_url_line(env_path)
-    quote_char, newline = formatting.split("\0", 1)
-    replacement = replace_database_name(value, expected=expected_source, target=target)
-    lines[index] = f"{prefix}{quote_char}{replacement}{quote_char}{newline}"
+    env_state(env_path)
+    lines, matches = _database_url_lines(env_path)
+    for key in ("DATABASE_URL", "DATABASE_POOL_URL"):
+        if key not in matches:
+            continue
+        index, prefix, value, quote_char, trailing, newline = matches[key]
+        replacement = replace_database_name(
+            value, expected=expected_source, target=target
+        )
+        lines[index] = (
+            f"{prefix}{quote_char}{replacement}{quote_char}{trailing}{newline}"
+        )
 
     info = env_path.stat()
     temporary: Path | None = None
