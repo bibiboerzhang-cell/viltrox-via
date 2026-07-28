@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start one reserved interactive lane plus two or more batch lanes.
+# Start one reserved interactive lane plus up to fifteen batch lanes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,11 +15,12 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
 fi
 
-BULK_COUNT="${APIFY_WORKER_POOL_BULK_COUNT:-2}"
-# 2026-07-19 用户令放开迸发:账户实测 SCALE 计划(256GB/128 并发),上限 4→8;
-# 真实付费并发仍由 BURST_TIER 按家族治理,车道数只决定混合负载并行度。
-if [[ ! "$BULK_COUNT" =~ ^[1-8]$ ]]; then
-  echo "APIFY_WORKER_POOL_BULK_COUNT must be within 1..8" >&2
+BULK_COUNT="${APIFY_WORKER_POOL_BULK_COUNT:-15}"
+# Fifteen bulk lanes plus the reserved interactive lane reproduce the reviewed
+# sixteen-process local topology. Paid/provider concurrency remains governed by
+# BURST_TIER and the family-specific runtime budgets below.
+if [[ ! "$BULK_COUNT" =~ ^([1-9]|1[0-5])$ ]]; then
+  echo "APIFY_WORKER_POOL_BULK_COUNT must be within 1..15" >&2
   exit 2
 fi
 

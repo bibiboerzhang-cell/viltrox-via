@@ -8,9 +8,9 @@ export APP_ROLE="${APP_ROLE:-worker}"
 export RUNTIME_ENV_QUIET=1
 source "$ROOT/scripts/runtime_env.sh"
 
-BULK_COUNT="${APIFY_WORKER_POOL_BULK_COUNT:-2}"
+BULK_COUNT="${APIFY_WORKER_POOL_BULK_COUNT:-15}"
 WAIT_SECONDS="${APIFY_WORKER_DRAIN_WAIT_SECONDS:-0}"
-if [[ ! "$BULK_COUNT" =~ ^[1-4]$ ]] || [[ ! "$WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
+if [[ ! "$BULK_COUNT" =~ ^([1-9]|1[0-5])$ ]] || [[ ! "$WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "invalid pool or drain configuration" >&2
   exit 2
 fi
