@@ -61,119 +61,73 @@ DEFAULT_MONTHLY_BUDGET_USD = 50
 
 
 def ensure_vkpi_comments_schema() -> None:
-    """Create P1.3 comment tables when the migration has not been run yet."""
-    conn = get_conn()
+    """Create comment tables for the local SQLite fallback.
+
+    PostgreSQL schema ownership belongs exclusively to the migration runner.
+    Runtime CREATE/ALTER/INDEX statements require heavyweight relation locks
+    even when guarded by ``IF NOT EXISTS`` and can block unrelated API reads.
+    """
     if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_comments (
-              id BIGSERIAL PRIMARY KEY,
-              account_id BIGINT,
-              post_id BIGINT,
-              post_table VARCHAR(50) DEFAULT 'industry_posts',
-              external_post_id VARCHAR(200),
-              platform VARCHAR(50) NOT NULL,
-              external_comment_id VARCHAR(200) NOT NULL,
-              comment_text TEXT,
-              language_detected VARCHAR(10),
-              author_handle VARCHAR(200),
-              author_id VARCHAR(200),
-              is_op BOOLEAN DEFAULT FALSE,
-              parent_comment_id VARCHAR(200),
-              depth SMALLINT DEFAULT 0,
-              likes_count INT DEFAULT 0,
-              reply_count INT DEFAULT 0,
-              created_at TIMESTAMPTZ,
-              fetched_at TIMESTAMPTZ DEFAULT NOW(),
-              sentiment_id BIGINT,
-              pillar_id INT,
-              raw_data_json TEXT,
-              author_avatar_url TEXT,
-              CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
-            )
-            """
+        return
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_comments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_id INTEGER,
+          post_id INTEGER,
+          post_table TEXT DEFAULT 'industry_posts',
+          external_post_id TEXT,
+          platform TEXT NOT NULL,
+          external_comment_id TEXT NOT NULL,
+          comment_text TEXT,
+          language_detected TEXT,
+          author_handle TEXT,
+          author_id TEXT,
+          is_op INTEGER DEFAULT 0,
+          parent_comment_id TEXT,
+          depth INTEGER DEFAULT 0,
+          likes_count INTEGER DEFAULT 0,
+          reply_count INTEGER DEFAULT 0,
+          created_at TEXT,
+          fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          sentiment_id INTEGER,
+          pillar_id INTEGER,
+          raw_data_json TEXT,
+          author_avatar_url TEXT,
+          CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
         )
-        # C6 零新抓提列(migration 208):评论者头像 URL 列。旧库自愈补列,保证下方 INSERT 不因缺列崩。
-        conn.execute("ALTER TABLE vkpi_comments ADD COLUMN IF NOT EXISTS author_avatar_url TEXT")
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_comments (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              account_id INTEGER,
-              post_id INTEGER,
-              post_table TEXT DEFAULT 'industry_posts',
-              external_post_id TEXT,
-              platform TEXT NOT NULL,
-              external_comment_id TEXT NOT NULL,
-              comment_text TEXT,
-              language_detected TEXT,
-              author_handle TEXT,
-              author_id TEXT,
-              is_op INTEGER DEFAULT 0,
-              parent_comment_id TEXT,
-              depth INTEGER DEFAULT 0,
-              likes_count INTEGER DEFAULT 0,
-              reply_count INTEGER DEFAULT 0,
-              created_at TEXT,
-              fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
-              sentiment_id INTEGER,
-              pillar_id INTEGER,
-              raw_data_json TEXT,
-              author_avatar_url TEXT,
-              CONSTRAINT vkpi_comments_external_uniq UNIQUE (platform, external_comment_id)
-            )
-            """
-        )
-        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(vkpi_comments)").fetchall()}
-        if "author_avatar_url" not in columns:
-            conn.execute("ALTER TABLE vkpi_comments ADD COLUMN author_avatar_url TEXT")
+        """
+    )
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(vkpi_comments)").fetchall()}
+    if "author_avatar_url" not in columns:
+        conn.execute("ALTER TABLE vkpi_comments ADD COLUMN author_avatar_url TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_account ON vkpi_comments(account_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_post ON vkpi_comments(post_id, post_table)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_platform ON vkpi_comments(platform)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_external_post ON vkpi_comments(platform, external_post_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_sentiment_pending ON vkpi_comments(id) WHERE sentiment_id IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_pillar_pending ON vkpi_comments(id) WHERE pillar_id IS NULL")
-    if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_comments_collection_runs (
-              id BIGSERIAL PRIMARY KEY,
-              post_id BIGINT,
-              post_table VARCHAR(50),
-              platform VARCHAR(50) NOT NULL,
-              status VARCHAR(20) NOT NULL,
-              fetched_count INT DEFAULT 0,
-              new_count INT DEFAULT 0,
-              duplicate_count INT DEFAULT 0,
-              error_message TEXT,
-              cost_cents INT DEFAULT 0,
-              staff_id INT,
-              triggered_by VARCHAR(50),
-              created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-            """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_comments_collection_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          post_id INTEGER,
+          post_table TEXT,
+          platform TEXT NOT NULL,
+          status TEXT NOT NULL,
+          fetched_count INTEGER DEFAULT 0,
+          new_count INTEGER DEFAULT 0,
+          duplicate_count INTEGER DEFAULT 0,
+          error_message TEXT,
+          cost_cents INTEGER DEFAULT 0,
+          staff_id INTEGER,
+          triggered_by TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_comments_collection_runs (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              post_id INTEGER,
-              post_table TEXT,
-              platform TEXT NOT NULL,
-              status TEXT NOT NULL,
-              fetched_count INTEGER DEFAULT 0,
-              new_count INTEGER DEFAULT 0,
-              duplicate_count INTEGER DEFAULT 0,
-              error_message TEXT,
-              cost_cents INTEGER DEFAULT 0,
-              staff_id INTEGER,
-              triggered_by TEXT,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_runs_platform_time ON vkpi_comments_collection_runs(platform, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_comments_runs_post ON vkpi_comments_collection_runs(post_id, post_table)")
     conn.commit()

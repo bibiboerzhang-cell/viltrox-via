@@ -95,72 +95,46 @@ PILLAR_SEEDS = [
 
 
 def ensure_vkpi_pillar_schema() -> None:
-    """Create P1.5 pillar tables and seed defaults when migrations are absent."""
-    conn = get_conn()
+    """Create and seed pillar tables for the local SQLite fallback.
+
+    PostgreSQL tables, indexes, and seeds are owned by migration 052. Runtime
+    application paths must not issue DDL or seed writes.
+    """
     if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_pillars (
-              id SERIAL PRIMARY KEY,
-              pillar_key VARCHAR(50) UNIQUE NOT NULL,
-              display_name VARCHAR(100) NOT NULL,
-              description TEXT,
-              layer SMALLINT NOT NULL,
-              is_active BOOLEAN DEFAULT TRUE,
-              display_order INT DEFAULT 0,
-              created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-            """
+        return
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_pillars (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pillar_key TEXT UNIQUE NOT NULL,
+          display_name TEXT NOT NULL,
+          description TEXT,
+          layer INTEGER NOT NULL,
+          is_active INTEGER DEFAULT 1,
+          display_order INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_post_pillars (
-              id BIGSERIAL PRIMARY KEY,
-              post_id BIGINT NOT NULL,
-              post_table VARCHAR(50) NOT NULL,
-              pillar_id INT NOT NULL REFERENCES vkpi_pillars(id),
-              is_primary BOOLEAN DEFAULT FALSE,
-              confidence NUMERIC(3,2),
-              llm_provider VARCHAR(50),
-              llm_model VARCHAR(100),
-              prompt_version VARCHAR(20),
-              classified_at TIMESTAMPTZ DEFAULT NOW(),
-              CONSTRAINT vkpi_post_pillar_uniq UNIQUE (post_id, post_table, pillar_id, prompt_version)
-            )
-            """
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_post_pillars (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          post_id INTEGER NOT NULL,
+          post_table TEXT NOT NULL,
+          pillar_id INTEGER NOT NULL REFERENCES vkpi_pillars(id),
+          is_primary INTEGER DEFAULT 0,
+          confidence NUMERIC,
+          llm_provider TEXT,
+          llm_model TEXT,
+          prompt_version TEXT,
+          classified_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT vkpi_post_pillar_uniq UNIQUE (post_id, post_table, pillar_id, prompt_version)
         )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_pillars (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              pillar_key TEXT UNIQUE NOT NULL,
-              display_name TEXT NOT NULL,
-              description TEXT,
-              layer INTEGER NOT NULL,
-              is_active INTEGER DEFAULT 1,
-              display_order INTEGER DEFAULT 0,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_post_pillars (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              post_id INTEGER NOT NULL,
-              post_table TEXT NOT NULL,
-              pillar_id INTEGER NOT NULL REFERENCES vkpi_pillars(id),
-              is_primary INTEGER DEFAULT 0,
-              confidence NUMERIC,
-              llm_provider TEXT,
-              llm_model TEXT,
-              prompt_version TEXT,
-              classified_at TEXT DEFAULT CURRENT_TIMESTAMP,
-              CONSTRAINT vkpi_post_pillar_uniq UNIQUE (post_id, post_table, pillar_id, prompt_version)
-            )
-            """
-        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_post_pillars_post ON vkpi_post_pillars(post_id, post_table)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_post_pillars_pillar ON vkpi_post_pillars(pillar_id, classified_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_post_pillars_primary ON vkpi_post_pillars(post_id, post_table) WHERE is_primary")

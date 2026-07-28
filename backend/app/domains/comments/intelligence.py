@@ -28,50 +28,35 @@ def _now_iso() -> str:
 
 
 def ensure_vkpi_comment_intelligence_schema() -> None:
-    """Create pipeline run ledger when migrations are absent."""
-    conn = get_conn()
+    """Create the pipeline run ledger for the local SQLite fallback.
+
+    PostgreSQL schema ownership belongs to migration 054; runtime request and
+    worker paths must never acquire DDL relation locks.
+    """
     if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_comment_intelligence_runs (
-              id BIGSERIAL PRIMARY KEY,
-              run_uid TEXT UNIQUE NOT NULL,
-              post_id BIGINT NOT NULL,
-              post_table VARCHAR(50) NOT NULL DEFAULT 'industry_posts',
-              status VARCHAR(20) NOT NULL DEFAULT 'running',
-              triggered_by VARCHAR(50),
-              staff_id INT,
-              retry_of_run_id BIGINT,
-              params_json TEXT,
-              steps_json TEXT,
-              error_message TEXT,
-              started_at TIMESTAMPTZ DEFAULT NOW(),
-              finished_at TIMESTAMPTZ,
-              created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-            """
+        return
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_comment_intelligence_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_uid TEXT UNIQUE NOT NULL,
+          post_id INTEGER NOT NULL,
+          post_table TEXT NOT NULL DEFAULT 'industry_posts',
+          status TEXT NOT NULL DEFAULT 'running',
+          triggered_by TEXT,
+          staff_id INTEGER,
+          retry_of_run_id INTEGER,
+          params_json TEXT,
+          steps_json TEXT,
+          error_message TEXT,
+          started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          finished_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_comment_intelligence_runs (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              run_uid TEXT UNIQUE NOT NULL,
-              post_id INTEGER NOT NULL,
-              post_table TEXT NOT NULL DEFAULT 'industry_posts',
-              status TEXT NOT NULL DEFAULT 'running',
-              triggered_by TEXT,
-              staff_id INTEGER,
-              retry_of_run_id INTEGER,
-              params_json TEXT,
-              steps_json TEXT,
-              error_message TEXT,
-              started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-              finished_at TEXT,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
+        """
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_vkpi_ci_runs_post ON vkpi_comment_intelligence_runs(post_id, post_table, created_at DESC)"
     )

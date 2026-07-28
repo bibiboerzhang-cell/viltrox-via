@@ -88,56 +88,38 @@ def _now_iso() -> str:
 
 
 def ensure_vkpi_sentiment_schema() -> None:
-    """Create P1.4 sentiment tables when migration runner has not applied them."""
-    conn = get_conn()
+    """Create sentiment tables for the local SQLite fallback.
+
+    PostgreSQL tables and indexes are owned by migration 051. Runtime schema
+    changes are intentionally forbidden because they take relation locks.
+    """
     if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_sentiment_results (
-              id BIGSERIAL PRIMARY KEY,
-              comment_id BIGINT NOT NULL,
-              sentiment VARCHAR(20),
-              sentiment_confidence NUMERIC(3,2),
-              emotion VARCHAR(20),
-              emotion_confidence NUMERIC(3,2),
-              brand_attitude VARCHAR(20),
-              brand_attitude_confidence NUMERIC(3,2),
-              llm_provider VARCHAR(50),
-              llm_model VARCHAR(100),
-              prompt_version VARCHAR(20) NOT NULL,
-              language_detected VARCHAR(10),
-              input_tokens INT DEFAULT 0,
-              output_tokens INT DEFAULT 0,
-              cost_cents INT DEFAULT 0,
-              analyzed_at TIMESTAMPTZ DEFAULT NOW(),
-              CONSTRAINT vkpi_sentiment_uniq UNIQUE (comment_id, prompt_version)
-            )
-            """
+        return
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_sentiment_results (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          comment_id INTEGER NOT NULL,
+          sentiment TEXT,
+          sentiment_confidence NUMERIC,
+          emotion TEXT,
+          emotion_confidence NUMERIC,
+          brand_attitude TEXT,
+          brand_attitude_confidence NUMERIC,
+          llm_provider TEXT,
+          llm_model TEXT,
+          prompt_version TEXT NOT NULL,
+          language_detected TEXT,
+          input_tokens INTEGER DEFAULT 0,
+          output_tokens INTEGER DEFAULT 0,
+          cost_cents INTEGER DEFAULT 0,
+          analyzed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT vkpi_sentiment_uniq UNIQUE (comment_id, prompt_version)
         )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_sentiment_results (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              comment_id INTEGER NOT NULL,
-              sentiment TEXT,
-              sentiment_confidence NUMERIC,
-              emotion TEXT,
-              emotion_confidence NUMERIC,
-              brand_attitude TEXT,
-              brand_attitude_confidence NUMERIC,
-              llm_provider TEXT,
-              llm_model TEXT,
-              prompt_version TEXT NOT NULL,
-              language_detected TEXT,
-              input_tokens INTEGER DEFAULT 0,
-              output_tokens INTEGER DEFAULT 0,
-              cost_cents INTEGER DEFAULT 0,
-              analyzed_at TEXT DEFAULT CURRENT_TIMESTAMP,
-              CONSTRAINT vkpi_sentiment_uniq UNIQUE (comment_id, prompt_version)
-            )
-            """
-        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_sentiment_comment ON vkpi_sentiment_results(comment_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_sentiment_brand ON vkpi_sentiment_results(brand_attitude, analyzed_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_sentiment_negative ON vkpi_sentiment_results(analyzed_at DESC) WHERE sentiment = 'negative'")
