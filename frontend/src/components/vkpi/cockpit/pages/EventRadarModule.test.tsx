@@ -541,8 +541,10 @@ describe("EventRadarModule", () => {
         city: "Los Angeles",
         region: "CA",
         country_code: "US",
-        start_date: "2026-07-19",
-        end_date: "2026-07-23",
+        // Keep the fixture in the default "upcoming" window regardless of
+        // the wall clock running this release gate.
+        start_date: "2099-07-19",
+        end_date: "2099-07-23",
         decision_status: "needs_review",
         verification_status: "needs_review",
         freshness_status: "unverified",
