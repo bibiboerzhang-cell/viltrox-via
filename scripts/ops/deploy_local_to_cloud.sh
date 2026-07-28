@@ -1092,7 +1092,7 @@ if [ "${RESCUE_ROLLBACK_MODE}" = "1" ]; then
   verify_rescue_rollback_candidate
 fi
 if [ "${VILTROXTEST_RELEASE_SCOPE}" = "1" ]; then
-  if ! REMOTE_PREDEPLOY_DB_STATE_JSON="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}/.env'" <<'PY'
+  if ! REMOTE_PREDEPLOY_DB_STATE_JSON="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}/.env' '${STAGING_DB_CLONE_MODE}'" <<'PY'
 import hashlib
 import json
 import os
@@ -1147,6 +1147,9 @@ def read_controller_file(path, label):
         os.close(descriptor)
 
 path = Path(sys.argv[1])
+staging_clone_mode = sys.argv[2]
+if staging_clone_mode not in {"0", "1"}:
+    raise SystemExit("staging clone mode must be exactly 0 or 1")
 if not path.is_file() or path.is_symlink():
     raise SystemExit("shared environment file is not a regular file")
 content = path.read_bytes()
@@ -1165,9 +1168,13 @@ for line in content.decode("utf-8").splitlines():
         matches.append(value)
 if len(matches) != 1:
     raise SystemExit("expected exactly one active DATABASE_URL")
-if runtime_values.get("DATABASE_POOL_URL", "").strip():
+if staging_clone_mode == "1" and runtime_values.get("DATABASE_POOL_URL", "").strip():
     raise SystemExit("DATABASE_POOL_URL must be unset for staging clone")
-if runtime_values.get("DB_USE_PGBOUNCER", "").strip().lower() in {"1", "true", "yes", "on"}:
+if (
+    staging_clone_mode == "1"
+    and runtime_values.get("DB_USE_PGBOUNCER", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+):
     raise SystemExit("DB_USE_PGBOUNCER must be disabled for staging clone")
 try:
     parsed = urlsplit(matches[0])

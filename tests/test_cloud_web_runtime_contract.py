@@ -606,6 +606,22 @@ def test_remote_release_acceptance_uses_the_production_nonroot_runtime_contract(
     assert "scripts/local_release_acceptance.py" in acceptance
 
 
+def test_database_identity_probe_allows_pool_metadata_for_app_only_releases() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    assert "'${REMOTE_ROOT}/.env' '${STAGING_DB_CLONE_MODE}'" in deploy
+    assert "staging_clone_mode = sys.argv[2]" in deploy
+    assert 'if staging_clone_mode not in {"0", "1"}:' in deploy
+    assert (
+        'if staging_clone_mode == "1" and '
+        'runtime_values.get("DATABASE_POOL_URL", "").strip():'
+    ) in deploy
+    assert (
+        'staging_clone_mode == "1"\n'
+        '    and runtime_values.get("DB_USE_PGBOUNCER", "").strip().lower()'
+    ) in deploy
+
+
 def test_deploy_retains_failed_remote_acceptance_report_before_rollback() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     acceptance = deploy.split(
