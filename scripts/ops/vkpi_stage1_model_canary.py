@@ -59,6 +59,7 @@ DEFAULT_TOTAL_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_COST_USD = Decimal("0.01")
 CANARY_COST_SCOPE = "cron:vkpi_stage1_model_canary"
 CANARY_PURPOSE = "vkpi_stage1_model_canary"
+_SINGLE_CALL_SCOPE = "single_call"
 CANARY_PROMPT = (
     "V-KPI exact-model connectivity canary. Reply with exactly "
     "VKPI_STAGE1_CANARY_OK and nothing else."
@@ -130,7 +131,9 @@ class ReservationManager(Protocol):
     def release_llm_reservation(self, reservation_key: str) -> bool: ...
 
     def settle_llm_reservation(
-        self, reservation_key: str, actual_cost_usd: float
+        self,
+        reservation_key: str,
+        actual_cost_usd: Decimal | float | str,
     ) -> Mapping[str, Any]: ...
 
 
@@ -347,6 +350,12 @@ def _base_report(plan: CanaryPlan, *, live: bool) -> dict[str, Any]:
         "response_contract_sha256": _sha256_text(CANARY_EXPECTED_RESPONSE),
         "provider_calls_performed": 0,
         "all_selected_bindings_succeeded": None,
+        "accounting": {
+            "precision": "micro_usd",
+            "required_for_live_success": True,
+            "verified_calls": 0,
+            "observed_cost_micro_usd": 0,
+        },
         "safety_limits": {
             "unique_task_bindings": len(plan.bindings),
             "max_calls": plan.max_calls,
@@ -520,7 +529,7 @@ def _record_secret_free_ledger(
     reservation_key: str,
     plan_sha256: str,
     actual_cost_micro_usd: int | None,
-) -> None:
+) -> dict[str, Any]:
     input_tokens = _nonnegative_int(raw.get("input_tokens")) or 0
     output_tokens = _nonnegative_int(raw.get("output_tokens")) or 0
     response_model = str(safe_result.get("response_model") or "").strip()
@@ -558,6 +567,65 @@ def _record_secret_free_ledger(
     call = recorded.get("call") if isinstance(recorded, Mapping) else None
     if not isinstance(call, Mapping) or not str(call.get("call_uid") or "").strip():
         raise RuntimeError("usage_ledger_write_unconfirmed")
+    cost_ledger = (
+        recorded.get("cost_ledger") if isinstance(recorded, Mapping) else None
+    )
+    if not isinstance(cost_ledger, Mapping):
+        raise RuntimeError("cost_ledger_write_unconfirmed")
+    expected_micro = int(actual_cost_micro_usd or 0)
+    call_micro = _nonnegative_int(call.get("cost_micro_usd"))
+    mirror_micro = _nonnegative_int(cost_ledger.get("cost_micro_usd"))
+    ledger_id = _nonnegative_int(cost_ledger.get("ledger_id"))
+    if call_micro != expected_micro:
+        raise RuntimeError("usage_ledger_amount_mismatch")
+    if mirror_micro != expected_micro:
+        raise RuntimeError("cost_ledger_amount_mismatch")
+    if ledger_id is None or ledger_id <= 0:
+        raise RuntimeError("cost_ledger_id_missing")
+    return {
+        "call_uid": str(call.get("call_uid") or ""),
+        "call_cost_micro_usd": call_micro,
+        "cost_ledger_id": ledger_id,
+        "mirror_cost_micro_usd": mirror_micro,
+    }
+
+
+def _verify_four_ledger_accounting(
+    *,
+    expected_micro_usd: int,
+    expected_scopes: tuple[str, ...],
+    ledger_receipt: Mapping[str, Any],
+    settlement_receipt: Mapping[str, Any],
+) -> None:
+    expected = int(expected_micro_usd)
+    if _nonnegative_int(ledger_receipt.get("call_cost_micro_usd")) != expected:
+        raise RuntimeError("usage_ledger_amount_mismatch")
+    if _nonnegative_int(ledger_receipt.get("mirror_cost_micro_usd")) != expected:
+        raise RuntimeError("cost_ledger_amount_mismatch")
+    if not bool(settlement_receipt.get("readback_verified")):
+        raise RuntimeError("settlement_readback_unverified")
+    if (
+        _nonnegative_int(settlement_receipt.get("actual_cost_micro_usd"))
+        != expected
+    ):
+        raise RuntimeError("reservation_ledger_amount_mismatch")
+    raw_scopes = settlement_receipt.get("scopes_updated")
+    raw_deltas = settlement_receipt.get("scope_deltas_micro_usd")
+    if not isinstance(raw_scopes, list) or not raw_scopes:
+        raise RuntimeError("budget_scope_receipt_missing")
+    if not isinstance(raw_deltas, Mapping):
+        raise RuntimeError("budget_scope_delta_receipt_missing")
+    scopes = [str(scope or "") for scope in raw_scopes]
+    if any(not scope for scope in scopes) or len(scopes) != len(set(scopes)):
+        raise RuntimeError("budget_scope_receipt_invalid")
+    if _SINGLE_CALL_SCOPE in scopes or _SINGLE_CALL_SCOPE in raw_deltas:
+        raise RuntimeError("single_call_scope_must_not_accumulate")
+    if set(scopes) != set(expected_scopes):
+        raise RuntimeError("budget_scope_set_mismatch")
+    if set(scopes) != {str(scope) for scope in raw_deltas}:
+        raise RuntimeError("budget_scope_delta_receipt_mismatch")
+    if any(_nonnegative_int(raw_deltas.get(scope)) != expected for scope in scopes):
+        raise RuntimeError("budget_scope_delta_amount_mismatch")
 
 
 def _mark_unknown_best_effort(
@@ -671,6 +739,7 @@ def run_canary(
         )
 
         reservation_key = ""
+        reservation_scopes: tuple[str, ...] = ()
         try:
             reservation = reservations.reserve_llm_budget(
                 provider=row.provider,
@@ -691,8 +760,15 @@ def run_canary(
             reservation_key = str(
                 getattr(reservation, "reservation_key", "") or ""
             ).strip()
-            if not reservation_key:
-                raise RuntimeError("reservation_key_missing")
+            reservation_scopes = tuple(
+                str(scope or "").strip()
+                for scope in (
+                    getattr(reservation, "cumulative_scopes", ()) or ()
+                )
+                if str(scope or "").strip()
+            )
+            if not reservation_key or not reservation_scopes:
+                raise RuntimeError("reservation_receipt_incomplete")
         except Exception:
             result_by_binding[row.binding] = _result_row(
                 row, status="reservation_failed"
@@ -742,7 +818,7 @@ def run_canary(
         actual_cost_micro_usd = _actual_cost_micro_usd(row, raw_payload)
 
         try:
-            _record_secret_free_ledger(
+            ledger_receipt = _record_secret_free_ledger(
                 record_ledger,
                 row=row,
                 raw=raw_payload,
@@ -785,7 +861,7 @@ def run_canary(
         try:
             settlement = reservations.settle_llm_reservation(
                 reservation_key,
-                float(actual_cost_micro_usd) / 1_000_000,
+                Decimal(actual_cost_micro_usd) / Decimal(1_000_000),
             )
             if not bool(settlement.get("settled")):
                 raise RuntimeError("reservation_not_settled")
@@ -797,7 +873,25 @@ def run_canary(
             stop_after_boundary_failure = True
             continue
 
+        try:
+            _verify_four_ledger_accounting(
+                expected_micro_usd=actual_cost_micro_usd,
+                expected_scopes=reservation_scopes,
+                ledger_receipt=ledger_receipt,
+                settlement_receipt=settlement,
+            )
+        except Exception:
+            result_by_binding[row.binding] = _result_with_status(
+                safe_result, "accounting_mismatch"
+            )
+            stop_after_boundary_failure = True
+            continue
+
         observed_cost_usd += Decimal(actual_cost_micro_usd) / Decimal(1_000_000)
+        report["accounting"]["verified_calls"] += 1
+        report["accounting"]["observed_cost_micro_usd"] += int(
+            actual_cost_micro_usd
+        )
         if observed_cost_usd > plan.max_cost_usd:
             result_by_binding[row.binding] = _result_with_status(
                 safe_result, "cost_ceiling_exceeded"

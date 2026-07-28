@@ -16,6 +16,7 @@ import json
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.core.logging import get_logger
@@ -27,6 +28,8 @@ logger = get_logger(__name__)
 _OPEN_STATES = ("reserved", "provider_started", "unknown")
 _SINGLE_CALL_SCOPE = "single_call"
 _MONTHLY_SCOPE = "monthly_total"
+_USD_QUANTUM = Decimal("0.000001")
+_MICRO_USD_PER_USD = Decimal("1000000")
 _PROGRESS_METADATA_KEYS = frozenset(
     {
         "surface",
@@ -76,6 +79,35 @@ def _load_json_list(value: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [str(item) for item in raw if str(item or "").strip()]
+
+
+def _money_decimal(
+    value: Any,
+    *,
+    field: str,
+    reject_submicro: bool = True,
+) -> Decimal:
+    try:
+        parsed = Decimal(str(value if value not in (None, "") else 0))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"{field}_invalid") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"{field}_invalid")
+    try:
+        quantized = parsed.quantize(_USD_QUANTUM)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field}_invalid") from exc
+    if reject_submicro and quantized != parsed:
+        raise ValueError(f"{field}_precision_exceeds_micro_usd")
+    return quantized
+
+
+def _money_db_param(value: Decimal) -> Decimal | str:
+    return value if is_postgres_runtime() else format(value, "f")
+
+
+def _micro_usd(value: Decimal) -> int:
+    return int((value * _MICRO_USD_PER_USD).to_integral_exact())
 
 
 def _provider_scope(provider: str) -> str:
@@ -209,7 +241,7 @@ def _open_reserved_for_scope(
     *,
     provider_scope: str,
     cost_scope: str,
-) -> float:
+) -> Decimal:
     if scope == _MONTHLY_SCOPE:
         sql = (
             "SELECT COALESCE(SUM(estimated_cost_usd),0) AS reserved "
@@ -232,9 +264,13 @@ def _open_reserved_for_scope(
         )
         params = (cost_scope,)
     else:
-        return 0.0
+        return Decimal("0.000000")
     row = conn.execute(sql, params).fetchone()
-    return float((dict(row).get("reserved") if row else 0.0) or 0.0)
+    return _money_decimal(
+        (dict(row).get("reserved") if row else 0),
+        field="reserved_cost_usd",
+        reject_submicro=False,
+    )
 
 
 _REAP_TTL_HOURS_DEFAULT = 24.0
@@ -299,7 +335,7 @@ def reserve_llm_budget(
     model: str,
     purpose: str,
     prompt: str,
-    estimated_cost_usd: float,
+    estimated_cost_usd: Decimal | float | str,
     cost_scope: str = "",
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
@@ -309,22 +345,39 @@ def reserve_llm_budget(
 
     provider_key = str(provider or "").strip().lower()
     model_name = str(model or "").strip()
-    estimate = max(0.0, float(estimated_cost_usd or 0.0))
+    try:
+        estimate = _money_decimal(
+            estimated_cost_usd,
+            field="estimated_cost_usd",
+        )
+    except ValueError as exc:
+        reason = (
+            "estimate_precision_exceeds_micro_usd"
+            if str(exc).endswith("_precision_exceeds_micro_usd")
+            else "estimate_unavailable"
+        )
+        raise LlmBudgetBlocked(reason, estimated_cost_usd=0.0) from exc
     provider_budget_scope = _provider_scope(provider_key)
     clean_cost_scope = str(cost_scope or "").strip().lower()
     if not provider_key or not model_name:
         raise LlmBudgetBlocked("invalid_exact_model_binding", estimated_cost_usd=estimate)
     if estimate <= 0:
-        raise LlmBudgetBlocked("estimate_unavailable", estimated_cost_usd=estimate)
+        raise LlmBudgetBlocked(
+            "estimate_unavailable",
+            estimated_cost_usd=float(estimate),
+        )
     if not provider_budget_scope:
-        raise LlmBudgetBlocked("provider_budget_scope_unavailable", estimated_cost_usd=estimate)
+        raise LlmBudgetBlocked(
+            "provider_budget_scope_unavailable",
+            estimated_cost_usd=float(estimate),
+        )
 
     try:
         _ensure_schema()
     except Exception as exc:
         raise LlmBudgetBlocked(
             f"reservation_schema_unavailable:{type(exc).__name__}",
-            estimated_cost_usd=estimate,
+            estimated_cost_usd=float(estimate),
         ) from exc
 
     # 2026-07-18:预约前机会式回收僵尸预约(节流 10 分钟),防 unknown 泄漏
@@ -337,11 +390,14 @@ def reserve_llm_budget(
         try:
             from app.domains.costs import budget_guard
 
-            budget_guard.get_budget_status(clean_cost_scope, estimated_cost=estimate)
+            budget_guard.get_budget_status(
+                clean_cost_scope,
+                estimated_cost=float(estimate),
+            )
         except Exception as exc:
             raise LlmBudgetBlocked(
                 f"budget_window_unavailable:{type(exc).__name__}",
-                estimated_cost_usd=estimate,
+                estimated_cost_usd=float(estimate),
                 scope=clean_cost_scope,
             ) from exc
 
@@ -372,7 +428,7 @@ def reserve_llm_budget(
             conn.rollback()
             raise LlmBudgetBlocked(
                 "budget_scope_not_configured",
-                estimated_cost_usd=estimate,
+                estimated_cost_usd=float(estimate),
                 scope=missing_core[0],
             )
 
@@ -383,18 +439,29 @@ def reserve_llm_budget(
                 # Purpose-specific scopes are optional; the three core caps are
                 # mandatory and were checked above.
                 continue
-            cap = float(row.get("cap_usd") or 0.0)
+            cap = _money_decimal(
+                row.get("cap_usd"),
+                field=f"{scope}_cap_usd",
+                reject_submicro=False,
+            )
             if scope == _SINGLE_CALL_SCOPE:
                 if cap > 0 and estimate > cap:
                     conn.rollback()
                     raise LlmBudgetBlocked(
                         "hard_stop_or_projected_cap",
-                        estimated_cost_usd=estimate,
+                        estimated_cost_usd=float(estimate),
                         scope=scope,
                     )
                 continue
-            current = float(row.get("current_spend") or 0.0)
-            hard_stop = max(0.0, min(1.0, float(row.get("hard_stop_at") or 1.0)))
+            current = _money_decimal(
+                row.get("current_spend"),
+                field=f"{scope}_current_spend",
+                reject_submicro=False,
+            )
+            hard_stop = max(
+                Decimal("0"),
+                min(Decimal("1"), Decimal(str(row.get("hard_stop_at") or 1))),
+            )
             open_reserved = _open_reserved_for_scope(
                 conn,
                 scope,
@@ -405,7 +472,7 @@ def reserve_llm_budget(
                 conn.rollback()
                 raise LlmBudgetBlocked(
                     "hard_stop_or_projected_cap",
-                    estimated_cost_usd=estimate,
+                    estimated_cost_usd=float(estimate),
                     scope=scope,
                 )
             cumulative_scopes.append(scope)
@@ -428,7 +495,7 @@ def reserve_llm_budget(
                 provider_budget_scope,
                 clean_cost_scope,
                 _json(cumulative_scopes),
-                estimate,
+                _money_db_param(estimate),
                 _json(
                     {
                         "execution_class": "production",
@@ -454,7 +521,7 @@ def reserve_llm_budget(
             provider_scope=provider_budget_scope,
             cost_scope=clean_cost_scope,
             cumulative_scopes=tuple(cumulative_scopes),
-            estimated_cost_usd=estimate,
+            estimated_cost_usd=float(estimate),
         )
     except Exception:
         conn.rollback()
@@ -515,14 +582,17 @@ def release_llm_reservation(reservation_key: str) -> bool:
     return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
 
-def settle_llm_reservation(reservation_key: str, actual_cost_usd: float) -> dict[str, Any]:
+def settle_llm_reservation(
+    reservation_key: str,
+    actual_cost_usd: Decimal | float | str,
+) -> dict[str, Any]:
     """Settle one confirmed provider response and increment caps once."""
 
-    _ensure_schema()
     key = str(reservation_key or "").strip()
-    actual = max(0.0, float(actual_cost_usd or 0.0))
     if not key:
         return {"settled": False, "reason": "no_reservation"}
+    actual = _money_decimal(actual_cost_usd, field="actual_cost_usd")
+    _ensure_schema()
     conn = get_conn()
     lock = " FOR UPDATE" if is_postgres_runtime() else ""
     try:
@@ -536,24 +606,37 @@ def settle_llm_reservation(reservation_key: str, actual_cost_usd: float) -> dict
         data = dict(row)
         state = str(data.get("state") or "")
         if state == "settled":
+            persisted_actual = _money_decimal(
+                data.get("actual_cost_usd"),
+                field="persisted_actual_cost_usd",
+                reject_submicro=False,
+            )
             conn.rollback()
             return {
                 "settled": False,
                 "reason": "already_settled",
-                "actual_cost_usd": float(data.get("actual_cost_usd") or 0.0),
+                "actual_cost_usd": float(persisted_actual),
+                "actual_cost_micro_usd": _micro_usd(persisted_actual),
             }
         if state != "provider_started":
             conn.rollback()
             return {"settled": False, "reason": "provider_outcome_not_confirmed"}
 
         scopes = list(dict.fromkeys(_load_json_list(data.get("cumulative_scopes_json"))))
+        scope_spend_before: dict[str, Decimal] = {}
         for scope in sorted(scopes):
             cap_row = conn.execute(
-                "SELECT scope FROM vkpi_provider_budget_caps WHERE scope=?" + lock,
+                "SELECT scope,current_spend FROM vkpi_provider_budget_caps "
+                "WHERE scope=?" + lock,
                 (scope,),
             ).fetchone()
             if not cap_row:
                 raise RuntimeError(f"reservation budget scope disappeared: {scope}")
+            scope_spend_before[scope] = _money_decimal(
+                cap_row["current_spend"],
+                field=f"{scope}_current_spend_before",
+                reject_submicro=False,
+            )
         for scope in scopes:
             conn.execute(
                 """
@@ -561,7 +644,7 @@ def settle_llm_reservation(reservation_key: str, actual_cost_usd: float) -> dict
                 SET current_spend=COALESCE(current_spend,0)+?
                 WHERE scope=?
                 """,
-                (actual, scope),
+                (_money_db_param(actual), scope),
             )
         now = _utcnow()
         cursor = conn.execute(
@@ -570,15 +653,63 @@ def settle_llm_reservation(reservation_key: str, actual_cost_usd: float) -> dict
             SET state='settled',actual_cost_usd=?,settled_at=?,updated_at=?
             WHERE reservation_key=? AND state='provider_started'
             """,
-            (actual, now, now, key),
+            (_money_db_param(actual), now, now, key),
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             raise RuntimeError("reservation settlement lost its state fence")
+
+        settled_row = conn.execute(
+            "SELECT state,actual_cost_usd FROM vkpi_llm_budget_reservations "
+            "WHERE reservation_key=?",
+            (key,),
+        ).fetchone()
+        if settled_row is None or str(settled_row["state"] or "") != "settled":
+            raise RuntimeError("reservation settlement readback missing")
+        persisted_actual = _money_decimal(
+            settled_row["actual_cost_usd"],
+            field="persisted_actual_cost_usd",
+            reject_submicro=False,
+        )
+        if persisted_actual != actual:
+            raise RuntimeError("reservation settlement amount mismatch")
+
+        scope_spend_after: dict[str, Decimal] = {}
+        for scope in scopes:
+            cap_row = conn.execute(
+                "SELECT current_spend FROM vkpi_provider_budget_caps WHERE scope=?",
+                (scope,),
+            ).fetchone()
+            if cap_row is None:
+                raise RuntimeError(f"reservation budget scope readback missing: {scope}")
+            after = _money_decimal(
+                cap_row["current_spend"],
+                field=f"{scope}_current_spend_after",
+                reject_submicro=False,
+            )
+            if after - scope_spend_before[scope] != actual:
+                raise RuntimeError(
+                    f"reservation budget scope delta mismatch: {scope}"
+                )
+            scope_spend_after[scope] = after
         conn.commit()
         return {
             "settled": True,
-            "actual_cost_usd": actual,
+            "actual_cost_usd": float(persisted_actual),
+            "actual_cost_micro_usd": _micro_usd(persisted_actual),
             "scopes_updated": scopes,
+            "scope_deltas_micro_usd": {
+                scope: _micro_usd(scope_spend_after[scope] - scope_spend_before[scope])
+                for scope in scopes
+            },
+            "scope_spend_before_micro_usd": {
+                scope: _micro_usd(value)
+                for scope, value in scope_spend_before.items()
+            },
+            "scope_spend_after_micro_usd": {
+                scope: _micro_usd(value)
+                for scope, value in scope_spend_after.items()
+            },
+            "readback_verified": True,
         }
     except Exception:
         conn.rollback()

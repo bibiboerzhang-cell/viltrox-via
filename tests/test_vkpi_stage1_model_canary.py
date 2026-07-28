@@ -24,15 +24,31 @@ class _FakeReservations:
         self.fail_unknown = fail_unknown
         self.reserved: list[dict[str, object]] = []
         self.started: list[str] = []
-        self.settled: list[tuple[str, float]] = []
+        self.settled: list[tuple[str, Decimal | float | str]] = []
         self.unknown: list[str] = []
         self.released: list[str] = []
+        self.scopes: dict[str, tuple[str, ...]] = {}
 
     def reserve_llm_budget(self, **kwargs):
         if self.fail_reserve:
             raise RuntimeError("secret budget failure")
         self.reserved.append(kwargs)
-        return SimpleNamespace(reservation_key=f"reservation-{len(self.reserved)}")
+        provider = str(kwargs.get("provider") or "")
+        provider_scope = {
+            "google": "provider:gemini",
+            "anthropic": "provider:claude",
+        }.get(provider, f"provider:{provider}")
+        reservation_key = f"reservation-{len(self.reserved)}"
+        cumulative_scopes = (
+            "monthly_total",
+            provider_scope,
+            canary.CANARY_COST_SCOPE,
+        )
+        self.scopes[reservation_key] = cumulative_scopes
+        return SimpleNamespace(
+            reservation_key=reservation_key,
+            cumulative_scopes=cumulative_scopes,
+        )
 
     def mark_llm_provider_started(self, reservation_key: str) -> None:
         if self.fail_start:
@@ -45,7 +61,18 @@ class _FakeReservations:
         if self.fail_settle:
             raise RuntimeError("secret settle failure")
         self.settled.append((reservation_key, actual_cost_usd))
-        return {"settled": True}
+        actual_micro = int(round(float(actual_cost_usd) * 1_000_000))
+        scopes = list(self.scopes[reservation_key])
+        return {
+            "settled": True,
+            "actual_cost_usd": actual_cost_usd,
+            "actual_cost_micro_usd": actual_micro,
+            "scopes_updated": scopes,
+            "scope_deltas_micro_usd": {
+                scope: actual_micro for scope in scopes
+            },
+            "readback_verified": True,
+        }
 
     def mark_llm_provider_unknown(self, reservation_key: str) -> bool:
         if self.fail_unknown:
@@ -61,7 +88,18 @@ class _FakeReservations:
 def _ledger_collector(target: list[dict[str, object]]):
     def record(**kwargs):
         target.append(kwargs)
-        return {"call": {"call_uid": f"test-{len(target)}"}}
+        cost_micro = int(kwargs.get("cost_micro_usd") or 0)
+        return {
+            "call": {
+                "call_uid": f"test-{len(target)}",
+                "cost_micro_usd": cost_micro,
+            },
+            "cost_ledger": {
+                "recorded": True,
+                "ledger_id": len(target),
+                "cost_micro_usd": cost_micro,
+            },
+        }
 
     return record
 
@@ -267,6 +305,12 @@ def test_authorized_live_run_calls_each_exact_binding_once_and_redacts_content()
     assert reservations.unknown == []
     assert reservations.released == []
     assert len(ledger) == 8
+    assert report["accounting"] == {
+        "precision": "micro_usd",
+        "required_for_live_success": True,
+        "verified_calls": 8,
+        "observed_cost_micro_usd": 800,
+    }
     assert all(item["prompt"] == "" for item in ledger)
     assert all(item["update_budget_scopes"] is False for item in ledger)
     assert all(item["force_cost_ledger"] is True for item in ledger)
@@ -531,6 +575,50 @@ def test_settlement_failure_keeps_reservation_open_and_stops() -> None:
     assert {
         row["status"] for row in report["results"][1:]
     } == {"not_attempted_after_fail_closed"}
+
+
+def test_four_ledger_mismatch_stops_before_second_model() -> None:
+    plan = canary.build_plan()
+    reservations = _FakeReservations()
+    ledger: list[dict[str, object]] = []
+    calls: list[str] = []
+    original_settle = reservations.settle_llm_reservation
+
+    def mismatched_settlement(
+        reservation_key: str, actual_cost_usd: float
+    ) -> dict[str, object]:
+        receipt = original_settle(reservation_key, actual_cost_usd)
+        deltas = dict(receipt["scope_deltas_micro_usd"])
+        deltas["monthly_total"] = int(deltas["monthly_total"]) + 1
+        receipt["scope_deltas_micro_usd"] = deltas
+        return receipt
+
+    reservations.settle_llm_reservation = mismatched_settlement
+
+    def invoker(*args):
+        calls.append(str(args[0]))
+        return _success_invoker(*args)
+
+    report = canary.run_canary(
+        live=True,
+        environment=_authorized_environment(plan),
+        live_invoker=invoker,
+        provider_configured=lambda _provider: True,
+        budget_checker=lambda _row: True,
+        reservation_manager=reservations,
+        ledger_recorder=_ledger_collector(ledger),
+        is_production=False,
+    )
+
+    assert len(calls) == 1
+    assert len(ledger) == 1
+    assert len(reservations.settled) == 1
+    assert reservations.unknown == []
+    assert report["results"][0]["status"] == "accounting_mismatch"
+    assert {
+        row["status"] for row in report["results"][1:]
+    } == {"not_attempted_after_fail_closed"}
+    assert report["accounting"]["verified_calls"] == 0
 
 
 def test_cli_defaults_to_dry_run() -> None:

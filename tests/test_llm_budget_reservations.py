@@ -7,6 +7,7 @@ import pytest
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
 from app.platform import llm_budget_reservations as reservations
+from app.platform import llm_gateway
 from app.platform.llm_budget_reservations import (
     LlmBudgetBlocked,
     mark_llm_provider_started,
@@ -140,11 +141,15 @@ def test_settlement_updates_cumulative_scopes_once_and_not_single_call() -> None
     first = settle_llm_reservation(reservation.reservation_key, 0.25)
     second = settle_llm_reservation(reservation.reservation_key, 0.25)
 
-    assert first == {
-        "settled": True,
-        "actual_cost_usd": 0.25,
-        "scopes_updated": ["monthly_total", "provider:claude"],
+    assert first["settled"] is True
+    assert first["actual_cost_usd"] == 0.25
+    assert first["actual_cost_micro_usd"] == 250_000
+    assert first["scopes_updated"] == ["monthly_total", "provider:claude"]
+    assert first["scope_deltas_micro_usd"] == {
+        "monthly_total": 250_000,
+        "provider:claude": 250_000,
     }
+    assert first["readback_verified"] is True
     assert second["settled"] is False
     assert second["reason"] == "already_settled"
     budgets = {
@@ -208,6 +213,9 @@ def test_reserved_call_writes_both_ledgers_without_double_incrementing_caps() ->
     )
 
     assert recorded["call"]["prompt_hash"]
+    assert recorded["cost_ledger"]["ledger_id"] > 0
+    assert recorded["cost_ledger"]["cost_micro_usd"] == 1234
+    assert recorded["cost_ledger"]["persisted_cost_usd"] == "0.001234"
     assert "private-ledger-prompt" not in json.dumps(recorded, default=str)
     assert int(conn.execute("SELECT COUNT(*) AS n FROM vkpi_llm_calls").fetchone()["n"]) == llm_before + 1
     assert int(conn.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"]) == cost_before + 1
@@ -223,3 +231,158 @@ def test_reserved_call_writes_both_ledgers_without_double_incrementing_caps() ->
         "provider:claude": pytest.approx(0.0),
         "single_call": pytest.approx(0.0),
     }
+
+
+def test_update_budget_preserves_subcent_cap_and_spend() -> None:
+    _install_fixture()
+    budget_guard.update_budget(
+        "provider:micro-budget-unit",
+        {"cap_usd": "0.000050", "current_spend": "0.000033"},
+    )
+    row = get_conn().execute(
+        "SELECT cap_usd,current_spend FROM vkpi_provider_budget_caps WHERE scope=?",
+        ("provider:micro-budget-unit",),
+    ).fetchone()
+    assert round(float(row["cap_usd"]) * 1_000_000) == 50
+    assert round(float(row["current_spend"]) * 1_000_000) == 33
+
+
+@pytest.mark.parametrize("actual_micro", [1, 49, 50, 51, 553])
+def test_settlement_preserves_micro_usd_and_reads_every_scope_back(
+    actual_micro: int,
+) -> None:
+    _install_fixture()
+    reservation = reserve_llm_budget(
+        provider="anthropic",
+        model="claude-opus-4-7",
+        purpose="micro-unit",
+        prompt="safe",
+        estimated_cost_usd=0.000600,
+    )
+    mark_llm_provider_started(reservation.reservation_key)
+
+    settled = settle_llm_reservation(
+        reservation.reservation_key,
+        actual_micro / 1_000_000,
+    )
+
+    assert settled["settled"] is True
+    assert settled["actual_cost_micro_usd"] == actual_micro
+    assert settled["readback_verified"] is True
+    assert settled["scope_deltas_micro_usd"] == {
+        "monthly_total": actual_micro,
+        "provider:claude": actual_micro,
+    }
+    row = get_conn().execute(
+        "SELECT actual_cost_usd FROM vkpi_llm_budget_reservations "
+        "WHERE reservation_key=?",
+        (reservation.reservation_key,),
+    ).fetchone()
+    assert round(float(row["actual_cost_usd"]) * 1_000_000) == actual_micro
+
+
+@pytest.mark.parametrize("invalid", [-0.000001, float("nan"), 0.0000001])
+def test_settlement_rejects_invalid_or_submicro_cost(invalid: float) -> None:
+    _install_fixture()
+    reservation = reserve_llm_budget(
+        provider="anthropic",
+        model="claude-opus-4-7",
+        purpose="invalid-cost-unit",
+        prompt="safe",
+        estimated_cost_usd=0.001,
+    )
+    mark_llm_provider_started(reservation.reservation_key)
+
+    with pytest.raises(ValueError):
+        settle_llm_reservation(reservation.reservation_key, invalid)
+
+    state = get_conn().execute(
+        "SELECT state FROM vkpi_llm_budget_reservations WHERE reservation_key=?",
+        (reservation.reservation_key,),
+    ).fetchone()["state"]
+    assert state == "provider_started"
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        None,
+        {"recorded": True, "ledger_id": 0, "cost_micro_usd": 33},
+        {"recorded": True, "ledger_id": 1, "cost_micro_usd": 34},
+    ],
+)
+def test_forced_cost_mirror_requires_confirmed_exact_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    receipt: dict[str, object] | None,
+) -> None:
+    _install_fixture()
+    ensure_vkpi_product_industry_schema()
+
+    class Mirror:
+        @staticmethod
+        def record_cost(**_kwargs):
+            return receipt
+
+    monkeypatch.setattr(llm_gateway, "_budget_guard", lambda: Mirror())
+    with pytest.raises(RuntimeError, match="forced_ai_cost_ledger_write_failed"):
+        record_call(
+            provider="anthropic",
+            model="claude-opus-4-7",
+            purpose="forced-mirror-receipt-unit",
+            cost_micro_usd=33,
+            status="success",
+            cost_tag="single_call",
+            update_budget_scopes=False,
+            force_cost_ledger=True,
+        )
+
+
+def test_forced_cost_mirror_propagates_sanitized_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fixture()
+    ensure_vkpi_product_industry_schema()
+
+    class Mirror:
+        @staticmethod
+        def record_cost(**_kwargs):
+            raise RuntimeError("secret database detail")
+
+    monkeypatch.setattr(llm_gateway, "_budget_guard", lambda: Mirror())
+    with pytest.raises(
+        RuntimeError, match="^forced_ai_cost_ledger_write_failed$"
+    ) as caught:
+        record_call(
+            provider="anthropic",
+            model="claude-opus-4-7",
+            purpose="forced-mirror-failure-unit",
+            cost_micro_usd=33,
+            status="success",
+            cost_tag="single_call",
+            update_budget_scopes=False,
+            force_cost_ledger=True,
+        )
+    assert "secret database detail" not in str(caught.value)
+
+
+def test_forced_cost_mirror_requires_scope_before_call_row() -> None:
+    _install_fixture()
+    ensure_vkpi_product_industry_schema()
+    before = int(
+        get_conn().execute("SELECT COUNT(*) AS n FROM vkpi_llm_calls").fetchone()["n"]
+    )
+
+    with pytest.raises(RuntimeError, match="forced_ai_cost_ledger_scope_missing"):
+        record_call(
+            provider="anthropic",
+            model="claude-opus-4-7",
+            purpose="forced-mirror-scope-unit",
+            cost_micro_usd=33,
+            status="success",
+            force_cost_ledger=True,
+        )
+
+    after = int(
+        get_conn().execute("SELECT COUNT(*) AS n FROM vkpi_llm_calls").fetchone()["n"]
+    )
+    assert after == before

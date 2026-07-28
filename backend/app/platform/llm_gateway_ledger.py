@@ -36,6 +36,8 @@ def record_call(
     force_cost_ledger: bool = False,
 ) -> dict[str, Any]:
     gateway = _gateway_module()
+    if force_cost_ledger and not str(cost_tag or "").strip():
+        raise RuntimeError("forced_ai_cost_ledger_scope_missing")
     gateway.ensure_vkpi_product_industry_schema()
     uid = f"llm-{secrets.token_hex(8)}"
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
@@ -79,12 +81,13 @@ def record_call(
         ),
     )
     conn.commit()
+    cost_ledger: dict[str, Any] | None = None
     if cost_tag and (
         bool(force_cost_ledger) or status == "success" or int(micro or 0) > 0
     ):
         try:
             provider_scope = gateway._provider_budget_scope(provider)
-            gateway._budget_guard().record_cost(
+            cost_ledger = gateway._budget_guard().record_cost(
                 scope=cost_tag,
                 cron_task=purpose,
                 ai_provider=provider or "unknown",
@@ -106,14 +109,28 @@ def record_call(
                 ],
                 update_budget_scopes=bool(update_budget_scopes),
             )
-        except Exception:
+            if force_cost_ledger:
+                if not isinstance(cost_ledger, dict) or not bool(
+                    cost_ledger.get("recorded")
+                ):
+                    raise RuntimeError("forced_ai_cost_ledger_write_unconfirmed")
+                if int(cost_ledger.get("ledger_id") or 0) <= 0:
+                    raise RuntimeError("forced_ai_cost_ledger_id_missing")
+                if int(cost_ledger.get("cost_micro_usd") or 0) != int(micro or 0):
+                    raise RuntimeError("forced_ai_cost_ledger_amount_mismatch")
+        except Exception as exc:
             gateway.logger.warning(
                 "vkpi.llm_gateway.ai_cost_record_failed", exc_info=True
             )
+            if force_cost_ledger:
+                raise RuntimeError("forced_ai_cost_ledger_write_failed") from exc
     row = conn.execute(
         "SELECT * FROM vkpi_llm_calls WHERE call_uid=?", (uid,)
     ).fetchone()
-    return {"call": dict(row) if row else {"call_uid": uid}}
+    return {
+        "call": dict(row) if row else {"call_uid": uid},
+        "cost_ledger": cost_ledger,
+    }
 
 
 __all__ = ["record_call"]

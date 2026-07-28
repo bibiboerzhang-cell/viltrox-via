@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from app.core.logging import get_logger
@@ -12,6 +12,9 @@ from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)
+
+_USD_QUANTUM = Decimal("0.000001")
+_MICRO_USD_PER_USD = Decimal("1000000")
 
 
 def _utcnow() -> str:
@@ -91,6 +94,31 @@ def _clean_value(value: Any) -> Any:
 
 def _clean_row(row: Any) -> dict[str, Any]:
     return {key: _clean_value(value) for key, value in dict(row).items()}
+
+
+def _cost_decimal(value: Any) -> Decimal:
+    """Return one non-negative database-representable micro-USD amount."""
+
+    try:
+        parsed = Decimal(str(value if value not in (None, "") else 0))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("cost_usd_invalid") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError("cost_usd_invalid")
+    try:
+        return parsed.quantize(_USD_QUANTUM, rounding=ROUND_HALF_UP)
+    except InvalidOperation as exc:
+        raise ValueError("cost_usd_invalid") from exc
+
+
+def _money_db_param(value: Decimal) -> Decimal | str:
+    """psycopg accepts Decimal; sqlite3 requires a text representation."""
+
+    return value if is_postgres_runtime() else format(value, "f")
+
+
+def _micro_usd(value: Decimal) -> int:
+    return int((value * _MICRO_USD_PER_USD).to_integral_exact())
 
 
 def ensure_budget_schema() -> None:
@@ -356,8 +384,8 @@ def update_budget(scope: str, payload: dict[str, Any] | None = None, *, staff: d
     def pick(name: str, default: Any = None) -> Any:
         return payload[name] if name in payload else old_data.get(name, default)
 
-    cap_usd = max(0.0, _float(pick("cap_usd", 0)))
-    current_spend = max(0.0, _float(pick("current_spend", 0)))
+    cap_usd = _cost_decimal(pick("cap_usd", 0))
+    current_spend = _cost_decimal(pick("current_spend", 0))
     warning_at = _clamp_ratio(pick("warning_at", 0.8), 0.8)
     hard_stop_at = max(warning_at, _clamp_ratio(pick("hard_stop_at", 1.0), 1.0))
     reset_at = pick("reset_at")
@@ -384,7 +412,17 @@ def update_budget(scope: str, payload: dict[str, Any] | None = None, *, staff: d
             fallback_action=excluded.fallback_action,
             metadata_json=excluded.metadata_json
         """,
-        (scope_key, cap_usd, current_spend, warning_at, hard_stop_at, reset_at, fallback_action, _json(metadata), spend_explicit),
+        (
+            scope_key,
+            _money_db_param(cap_usd),
+            _money_db_param(current_spend),
+            warning_at,
+            hard_stop_at,
+            reset_at,
+            fallback_action,
+            _json(metadata),
+            spend_explicit,
+        ),
     )
     conn.commit()
     return get_budget_status(scope_key)
@@ -396,7 +434,7 @@ def record_cost(
     cron_task: str = "",
     ai_provider: str = "",
     model_name: str = "",
-    cost_usd: float = 0.0,
+    cost_usd: Decimal | float | str = 0.0,
     tokens_in: int = 0,
     tokens_out: int = 0,
     kol_pool_id: int | None = None,
@@ -410,60 +448,93 @@ def record_cost(
     ensure_budget_schema()
     scope_key = _normalize_scope(scope)
     actor_staff_id = staff_id or _resolve_staff(triggered_by)
-    cost = max(0.0, float(cost_usd or 0))
+    cost = _cost_decimal(cost_usd)
     provider = str(ai_provider or "unknown").strip().lower() or "unknown"
     # 供应商标签归一:llm_gateway 侧叫 google、视频侧叫 gemini,台账统一 gemini 防汇总分裂。
     if provider == "google":
         provider = "gemini"
     now = _utcnow()
     conn = get_conn()
-    conn.execute(
-        """
-        INSERT INTO vkpi_ai_cost_ledger
-            (cron_task, ai_provider, model_name, cost_usd, tokens_in, tokens_out,
-             kol_pool_id, staff_id, task_item_id, metadata_json, occurred_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            str(cron_task or scope_key or ""),
-            provider,
-            str(model_name or ""),
-            cost,
-            int(tokens_in or 0),
-            int(tokens_out or 0),
-            _int(kol_pool_id),
-            _int(actor_staff_id),
-            _int(task_item_id),
-            _json({**(metadata or {}), "scope": scope_key} if scope_key else (metadata or {})),
-            now,
-        ),
-    )
-    requested_scopes = [scope for scope in [scope_key, *(_normalize_scope(scope) for scope in (extra_scopes or []))] if scope]
-    # single_call[_*] are per-request ceilings: never accumulate current_spend on
-    # them or the shared row creeps past cap and hard-stops every later call
-    # (the flapping bug). Cumulative accounting stays on monthly_total/provider:*/cron:*.
-    scopes_to_update = (
-        [scope for scope in dict.fromkeys(requested_scopes) if not _is_single_call_ceiling_scope(scope)]
-        if update_budget_scopes
-        else []
-    )
-    for budget_scope in scopes_to_update:
-        conn.execute(
+    try:
+        inserted = conn.execute(
             """
-            UPDATE vkpi_provider_budget_caps
-            SET current_spend=COALESCE(current_spend, 0) + ?
-            WHERE scope=?
+            INSERT INTO vkpi_ai_cost_ledger
+                (cron_task, ai_provider, model_name, cost_usd, tokens_in, tokens_out,
+                 kol_pool_id, staff_id, task_item_id, metadata_json, occurred_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            RETURNING id
             """,
-            (cost, budget_scope),
+            (
+                str(cron_task or scope_key or ""),
+                provider,
+                str(model_name or ""),
+                _money_db_param(cost),
+                int(tokens_in or 0),
+                int(tokens_out or 0),
+                _int(kol_pool_id),
+                _int(actor_staff_id),
+                _int(task_item_id),
+                _json({**(metadata or {}), "scope": scope_key} if scope_key else (metadata or {})),
+                now,
+            ),
         )
-    conn.commit()
+        inserted_row = inserted.fetchone()
+        if inserted_row is None:
+            raise RuntimeError("cost_ledger_insert_unconfirmed")
+        ledger_id = int(inserted_row["id"])
+        persisted_row = conn.execute(
+            "SELECT cost_usd FROM vkpi_ai_cost_ledger WHERE id=?",
+            (ledger_id,),
+        ).fetchone()
+        if persisted_row is None:
+            raise RuntimeError("cost_ledger_readback_missing")
+        persisted_cost = _cost_decimal(persisted_row["cost_usd"])
+        if persisted_cost != cost:
+            raise RuntimeError("cost_ledger_readback_mismatch")
+
+        requested_scopes = [
+            scope
+            for scope in [
+                scope_key,
+                *(_normalize_scope(scope) for scope in (extra_scopes or [])),
+            ]
+            if scope
+        ]
+        # single_call[_*] are per-request ceilings: never accumulate current_spend on
+        # them or the shared row creeps past cap and hard-stops every later call
+        # (the flapping bug). Cumulative accounting stays on monthly_total/provider:*/cron:*.
+        scopes_to_update = (
+            [
+                scope
+                for scope in dict.fromkeys(requested_scopes)
+                if not _is_single_call_ceiling_scope(scope)
+            ]
+            if update_budget_scopes
+            else []
+        )
+        for budget_scope in scopes_to_update:
+            conn.execute(
+                """
+                UPDATE vkpi_provider_budget_caps
+                SET current_spend=COALESCE(current_spend, 0) + ?
+                WHERE scope=?
+                """,
+                (_money_db_param(cost), budget_scope),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return {
         "recorded": True,
+        "ledger_id": ledger_id,
         "scope": scope_key,
         "scopes_updated": list(dict.fromkeys(scopes_to_update)),
         "ai_provider": provider,
         "model_name": str(model_name or ""),
-        "cost_usd": cost,
+        "cost_usd": float(persisted_cost),
+        "persisted_cost_usd": format(persisted_cost, "f"),
+        "cost_micro_usd": _micro_usd(persisted_cost),
         "tokens_in": int(tokens_in or 0),
         "tokens_out": int(tokens_out or 0),
         "occurred_at": now,
