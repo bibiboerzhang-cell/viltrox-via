@@ -12,6 +12,9 @@ from app.services.jobs.results import load_job_result
 
 router = APIRouter(tags=["jobs"])
 
+_MAX_JSON_DECODE_PASSES = 2
+_RESULT_POINTER_KEYS = frozenset({"status", "result_path"})
+
 
 def _decode_json_field(data: dict, source_key: str, target_key: str) -> None:
     raw = data.get(source_key)
@@ -20,10 +23,26 @@ def _decode_json_field(data: dict, source_key: str, target_key: str) -> None:
     if isinstance(raw, (dict, list)):
         data[target_key] = raw
         return
-    try:
-        data[target_key] = json.loads(raw)
-    except Exception:
-        data[target_key] = raw
+    value = raw
+    for _ in range(_MAX_JSON_DECODE_PASSES):
+        if not isinstance(value, str):
+            break
+        try:
+            value = json.loads(value)
+        except Exception:
+            break
+    data[target_key] = value
+
+
+def _result_pointer_path(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    if not set(value).issubset(_RESULT_POINTER_KEYS):
+        return ""
+    result_path = value.get("result_path")
+    if not isinstance(result_path, str):
+        return ""
+    return result_path.strip()
 
 
 @router.get("/api/jobs/{task_id}")
@@ -52,11 +71,14 @@ async def get_job_status(task_id: str, request: Request, user=Depends(get_user_r
     _decode_json_field(data, "stats_json", "stats")
     _decode_json_field(data, "result_json", "result")
 
-    result_path = data.get("result_path")
-    if result_path and "result" not in data:
+    pointer_path = _result_pointer_path(data.get("result"))
+    result_path = data.get("result_path") or pointer_path
+    if result_path and (pointer_path or "result" not in data):
         try:
             data["result"] = load_job_result(result_path)
         except Exception as exc:
+            if pointer_path:
+                data.pop("result", None)
             data["result_load_error"] = str(exc)
 
     allowed = {

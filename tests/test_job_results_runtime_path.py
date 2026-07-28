@@ -50,6 +50,79 @@ def test_result_persistence_uses_absolute_configured_directory(
 
     assert persisted == directory / "task-123.json"
     assert json.loads(persisted.read_text(encoding="utf-8")) == {"ok": True}
+    assert results.load_job_result(str(persisted)) == {"ok": True}
+
+
+def test_result_loading_supports_default_local_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "backend" / "data" / "job_results"
+    monkeypatch.delenv("VKPI_JOB_RESULTS_DIR", raising=False)
+    monkeypatch.setattr(results, "DEFAULT_JOB_RESULTS_DIR", directory)
+
+    persisted = results.persist_job_result("task-default", {"items": [1, 2]})
+
+    assert results.load_job_result(persisted) == {"items": [1, 2]}
+    assert results.load_job_result("task-default.json") == {"items": [1, 2]}
+
+
+def test_result_loading_rejects_paths_outside_trusted_root_without_path_leak(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "job-results"
+    directory.mkdir()
+    outside = tmp_path / "arbitrary.json"
+    outside.write_text('{"secret":true}', encoding="utf-8")
+    monkeypatch.setenv("VKPI_JOB_RESULTS_DIR", str(directory))
+
+    for candidate in (str(outside), "../arbitrary.json"):
+        with pytest.raises(RuntimeError) as caught:
+            results.load_job_result(candidate)
+        assert str(caught.value) == "job result unavailable"
+        assert str(outside) not in str(caught.value)
+
+
+def test_result_loading_rejects_non_json_directory_and_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "job-results"
+    directory.mkdir()
+    non_json = directory / "result.txt"
+    non_json.write_text('{"ok":true}', encoding="utf-8")
+    json_directory = directory / "folder.json"
+    json_directory.mkdir()
+    real_json = directory / "real.json"
+    real_json.write_text('{"ok":true}', encoding="utf-8")
+    symlink = directory / "linked.json"
+    symlink.symlink_to(real_json)
+    monkeypatch.setenv("VKPI_JOB_RESULTS_DIR", str(directory))
+
+    for candidate in (non_json, json_directory, symlink):
+        with pytest.raises(RuntimeError) as caught:
+            results.load_job_result(str(candidate))
+        assert str(caught.value) == "job result unavailable"
+
+
+def test_result_loading_rejects_symlinked_parent_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "job-results"
+    directory.mkdir()
+    actual = directory / "actual"
+    actual.mkdir()
+    (actual / "result.json").write_text('{"ok":true}', encoding="utf-8")
+    linked_parent = directory / "linked"
+    linked_parent.symlink_to(actual, target_is_directory=True)
+    monkeypatch.setenv("VKPI_JOB_RESULTS_DIR", str(directory))
+
+    with pytest.raises(RuntimeError) as caught:
+        results.load_job_result(str(linked_parent / "result.json"))
+
+    assert str(caught.value) == "job result unavailable"
 
 
 def test_result_persistence_rejects_release_relative_override(
