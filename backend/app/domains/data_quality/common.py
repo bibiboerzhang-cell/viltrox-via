@@ -29,41 +29,32 @@ def _issue_key(*parts: Any) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 def ensure_data_quality_schema() -> None:
-    conn = get_conn()
+    """Create the SQLite compatibility table used by local/tests.
+
+    PostgreSQL schema ownership belongs to migration 274. Returning before
+    opening a connection keeps reads and action preflights free of runtime DDL
+    and commits.
+    """
     if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_data_quality_actions (
-                id BIGSERIAL PRIMARY KEY,
-                issue_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                reason TEXT DEFAULT '',
-                staff_id BIGINT,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
+        return
+
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_data_quality_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            issue_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reason TEXT DEFAULT '',
+            staff_id INTEGER,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_vkpi_data_quality_actions_issue ON vkpi_data_quality_actions(issue_id, created_at DESC)"
-        )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_data_quality_actions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                issue_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                reason TEXT DEFAULT '',
-                staff_id INTEGER,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_vkpi_data_quality_actions_issue ON vkpi_data_quality_actions(issue_id, created_at DESC)"
-        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vkpi_data_quality_actions_issue ON vkpi_data_quality_actions(issue_id, created_at DESC)"
+    )
     conn.commit()
 
 def _append_issue(issues: list[dict[str, Any]], *, issue_type: str, severity: str, title: str, entity_type: str, entity_id: Any = None, staff_id: Any = None, project_id: Any = None, kol_id: Any = None, detail: str = "", evidence: dict[str, Any] | None = None) -> None:

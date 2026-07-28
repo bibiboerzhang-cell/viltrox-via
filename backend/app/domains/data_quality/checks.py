@@ -17,7 +17,6 @@ from app.domains.data_quality.common import (
     _safe_rows,
     _staff_clause,
     _utcnow,
-    ensure_data_quality_schema,
 )
 from app.domains.data_quality.operational_issues import append_operational_quality_issues
 from app.platform.db.schema import ensure_vkpi_schema
@@ -62,7 +61,6 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
     ensure_vkpi_schema()
     ensure_vkpi_lineage_schema()
     ensure_vkpi_reconciliation_schema()
-    ensure_data_quality_schema()
     conn = get_conn()
     max_items = max(1, min(500, int(limit or 100)))
     issues: list[dict[str, Any]] = []
