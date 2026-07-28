@@ -327,23 +327,36 @@ def env_fingerprint(env_path: Path) -> str:
     return hashlib.sha256(env_path.read_bytes()).hexdigest()
 
 
-def env_state(env_path: Path) -> dict[str, str]:
+def env_state(
+    env_path: Path,
+    *,
+    allow_runtime_pool: bool = False,
+) -> dict[str, str]:
     values = _load_environment_without_logging(env_path)
-    if values.get("DATABASE_POOL_URL", "").strip():
+    database_name = read_database_identity(env_path)
+    pool_url = values.get("DATABASE_POOL_URL", "").strip()
+    pool_enabled = values.get(
+        "DB_USE_PGBOUNCER",
+        "1" if pool_url else "0",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not allow_runtime_pool and pool_url:
         raise CloneError(
             "staging clone requires DATABASE_POOL_URL to be unset so DATABASE_URL is authoritative"
         )
-    if values.get("DB_USE_PGBOUNCER", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
+    if not allow_runtime_pool and pool_enabled:
         raise CloneError(
             "staging clone requires DB_USE_PGBOUNCER to be disabled"
         )
+    if allow_runtime_pool and pool_enabled and not pool_url:
+        raise CloneError("DB_USE_PGBOUNCER requires DATABASE_POOL_URL")
+    if allow_runtime_pool and pool_url:
+        pool_database_name = database_name_from_url(pool_url)
+        if pool_database_name != database_name:
+            raise CloneError(
+                "DATABASE_POOL_URL database identity must match DATABASE_URL"
+            )
     return {
-        "database_name": read_database_identity(env_path),
+        "database_name": database_name,
         "env_sha256": env_fingerprint(env_path),
     }
 
@@ -678,9 +691,14 @@ def write_release_receipt(
     return receipt_path
 
 
-def prove_active_source(*, root: Path, expected_database: str) -> dict[str, str]:
+def prove_active_source(
+    *,
+    root: Path,
+    expected_database: str,
+    allow_runtime_pool: bool = False,
+) -> dict[str, str]:
     validate_source_database(expected_database)
-    state = env_state(root / ".env")
+    state = env_state(root / ".env", allow_runtime_pool=allow_runtime_pool)
     if state["database_name"] != expected_database:
         raise CloneError("active environment database identity mismatch")
     if expected_database == SOURCE_DATABASE:
@@ -807,6 +825,7 @@ def _parser() -> argparse.ArgumentParser:
     assert_env = subparsers.add_parser("assert-env")
     assert_env.add_argument("--env-file", required=True)
     assert_env.add_argument("--expected-db", required=True)
+    assert_env.add_argument("--allow-runtime-pool", action="store_true")
 
     switch = subparsers.add_parser("switch-env")
     switch.add_argument("--env-file", required=True)
@@ -844,6 +863,7 @@ def _parser() -> argparse.ArgumentParser:
     prove = subparsers.add_parser("prove-active-source")
     prove.add_argument("--root", required=True)
     prove.add_argument("--expected-db", required=True)
+    prove.add_argument("--allow-runtime-pool", action="store_true")
     return parser
 
 
@@ -859,7 +879,10 @@ def main() -> int:
         elif args.command == "env-state":
             _write_stdout_line(json.dumps(env_state(Path(args.env_file)), sort_keys=True))
         elif args.command == "assert-env":
-            state = env_state(Path(args.env_file))
+            state = env_state(
+                Path(args.env_file),
+                allow_runtime_pool=args.allow_runtime_pool,
+            )
             if state["database_name"] != args.expected_db:
                 raise CloneError(
                     f"environment database identity must be {args.expected_db}"
@@ -936,6 +959,7 @@ def main() -> int:
                     prove_active_source(
                         root=Path(args.root),
                         expected_database=args.expected_db,
+                        allow_runtime_pool=args.allow_runtime_pool,
                     ),
                     sort_keys=True,
                 )

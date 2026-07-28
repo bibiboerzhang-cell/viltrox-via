@@ -305,6 +305,53 @@ def test_clone_mode_rejects_pool_url_that_could_bypass_database_switch(
         staging_db_clone.env_state(env_path)
 
 
+def test_app_only_env_state_accepts_matching_runtime_pool_identity(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env"
+    _write_env(env_path, staging_db_clone.SOURCE_DATABASE)
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"DATABASE_POOL_URL={_url(staging_db_clone.SOURCE_DATABASE)}\n")
+        handle.write("DB_USE_PGBOUNCER=1\n")
+
+    state = staging_db_clone.env_state(env_path, allow_runtime_pool=True)
+
+    assert state["database_name"] == staging_db_clone.SOURCE_DATABASE
+    assert len(state["env_sha256"]) == 64
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(OPS / "staging_db_clone.py"),
+            "assert-env",
+            "--env-file",
+            str(env_path),
+            "--expected-db",
+            staging_db_clone.SOURCE_DATABASE,
+            "--allow-runtime-pool",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["database_name"] == staging_db_clone.SOURCE_DATABASE
+
+
+def test_app_only_env_state_rejects_mismatched_runtime_pool_identity(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env"
+    _write_env(env_path, staging_db_clone.SOURCE_DATABASE)
+    with env_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"DATABASE_POOL_URL={_url(staging_db_clone.clone_name_for_release('other'))}\n"
+        )
+        handle.write("DB_USE_PGBOUNCER=1\n")
+
+    with pytest.raises(staging_db_clone.CloneError, match="must match DATABASE_URL"):
+        staging_db_clone.env_state(env_path, allow_runtime_pool=True)
+
+
 def test_second_release_uses_proven_active_clone_and_never_legacy_base(
     tmp_path: Path,
 ) -> None:
@@ -361,9 +408,18 @@ def test_clone_a_app_only_b_migration_clone_c_preserves_database_lineage(
         database_owner_release_id="release-a",
         target_database=database_a,
     )
+    with (root / ".env").open("a", encoding="utf-8") as handle:
+        handle.write(f"DATABASE_POOL_URL={_url(database_a)}\n")
+        handle.write("DB_USE_PGBOUNCER=1\n")
+    with pytest.raises(staging_db_clone.CloneError, match="DATABASE_POOL_URL"):
+        staging_db_clone.prove_active_source(
+            root=root,
+            expected_database=database_a,
+        )
     proof_b = staging_db_clone.prove_active_source(
         root=root,
         expected_database=database_a,
+        allow_runtime_pool=True,
     )
 
     assert proof_b["database_name"] == database_a
@@ -695,7 +751,22 @@ def test_deploy_clone_path_is_tightly_scoped_ordered_and_rollback_bound() -> Non
     identity_at = rollback.index("staging_db_clone.py' assert-env", restore_at)
     drop_at = rollback.index("staging_db_clone.py' drop", identity_at)
     rollback_start_at = rollback.index("restored_redis_unit_state=", drop_at)
-    assert stop_all_at < disable_at < restore_at < identity_at < drop_at < rollback_start_at
+    service_restart_at = rollback.index(
+        "sudo systemctl restart '${SERVICE_NAME}'",
+        rollback_start_at,
+    )
+    assert (
+        stop_all_at
+        < disable_at
+        < restore_at
+        < identity_at
+        < drop_at
+        < rollback_start_at
+        < service_restart_at
+    )
+    assert "${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}" in rollback[
+        identity_at:service_restart_at
+    ]
     assert "STAGING_DB_CLONE_ACTIVATED" in rollback
     assert "rollback did not restore the exact Redis worker unit state" in rollback
 

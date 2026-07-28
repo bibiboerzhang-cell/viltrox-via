@@ -213,6 +213,7 @@ STAGING_REDIS_WORKER_UNIT_WAS_MASKED=""
 STAGING_REDIS_WORKER_CAPTURED_STATE=""
 STAGING_REDIS_WORKER_UNIT_STATE=""
 DATABASE_RELEASE_STRATEGY="in-place"
+DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG=""
 DATABASE_OWNER_RELEASE_ID=""
 PREDEPLOY_DATABASE_OWNER_RELEASE_ID=""
 ACTIVE_RELEASE_ID=""
@@ -715,7 +716,7 @@ attempt_automatic_rollback() {
   fi
   if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
     || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
-    if ! rollback_env_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${PREDEPLOY_DATABASE_NAME}'")"; then
+    if ! rollback_env_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${PREDEPLOY_DATABASE_NAME}' ${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}")"; then
       echo "[deploy] CRITICAL: restored environment database identity could not be verified." >&2
       return 1
     fi
@@ -1364,6 +1365,7 @@ elif [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ]; then
   # app manifest points to the original database-owning release and its
   # activated receipt so the next migration release can prove its real source.
   DATABASE_RELEASE_STRATEGY="reuse-active-clone"
+  DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG="--allow-runtime-pool"
   STAGING_SOURCE_DATABASE=""
   STAGING_CLONE_DATABASE="${PREDEPLOY_DATABASE_NAME}"
   DATABASE_OWNER_RELEASE_ID="${PREDEPLOY_DATABASE_OWNER_RELEASE_ID}"
@@ -1840,7 +1842,7 @@ fi
 
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
-  STAGING_FINAL_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${STAGING_CLONE_DATABASE}'")"
+  STAGING_FINAL_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${STAGING_CLONE_DATABASE}' ${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}")"
   read -r STAGING_FINAL_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_FINAL_ENV_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
   if [ "${STAGING_FINAL_ENV_DATABASE}" != "${STAGING_CLONE_DATABASE}" ] \
     || ! [[ "${STAGING_CLONE_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -1956,7 +1958,7 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
 fi
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
-  POST_RESTART_DB_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/staging_db_clone.py' prove-active-source --root '${REMOTE_ROOT}' --expected-db '${STAGING_CLONE_DATABASE}'")"
+  POST_RESTART_DB_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/staging_db_clone.py' prove-active-source --root '${REMOTE_ROOT}' --expected-db '${STAGING_CLONE_DATABASE}' ${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}")"
   read -r POST_RESTART_DATABASE POST_RESTART_ENV_SHA256 POST_RESTART_DB_OWNER POST_RESTART_ACTIVE_RELEASE < <(printf '%s' "${POST_RESTART_DB_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"], p["database_owner_release_id"], p["active_release_id"])')
   if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ]; then
     EXPECTED_POST_RESTART_DB_OWNER="${RELEASE_ID}"

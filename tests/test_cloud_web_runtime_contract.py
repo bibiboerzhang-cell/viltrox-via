@@ -620,6 +620,20 @@ def test_database_identity_probe_allows_pool_metadata_for_app_only_releases() ->
         'staging_clone_mode == "1"\n'
         '    and runtime_values.get("DB_USE_PGBOUNCER", "").strip().lower()'
     ) in deploy
+    assert 'DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG=""' in deploy
+    assert (
+        'DATABASE_RELEASE_STRATEGY="reuse-active-clone"\n'
+        '  DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG="--allow-runtime-pool"'
+    ) in deploy
+    assert deploy.count("${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}") == 3
+    assert (
+        "prove-active-source --root '${REMOTE_ROOT}' "
+        "--expected-db '${STAGING_CLONE_DATABASE}' "
+        "${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}"
+    ) in deploy
+    clone_helper = _read("scripts/ops/staging_db_clone.py")
+    assert "assert_env.add_argument(\"--allow-runtime-pool\"" in clone_helper
+    assert "prove.add_argument(\"--allow-runtime-pool\"" in clone_helper
 
 
 def test_deploy_retains_failed_remote_acceptance_report_before_rollback() -> None:
