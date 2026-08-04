@@ -253,7 +253,6 @@ def test_deploy_runs_canonical_gate_before_any_build_backup_or_remote_command() 
         "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
     )
     mutations = (
-        'npm --prefix frontend run build',
         '"${SCRIPT_DIR}/backup_prod_vkpi.sh"',
         '\nssh "${SSH_TARGET}"',
         "\nrsync -az",
@@ -264,6 +263,7 @@ def test_deploy_runs_canonical_gate_before_any_build_backup_or_remote_command() 
 
 def test_deploy_requires_embedded_production_browser_gate_before_remote_state() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    helper = _read("scripts/ops/run_isolated_candidate_web.sh")
     canonical_at = deploy.index(
         "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
     )
@@ -274,7 +274,18 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
 
     block = deploy[function_at:remote_state_at]
     for required in (
-        'PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/"',
+        'PREDEPLOY_BROWSER_URL=""',
+        "start_local_candidate_browser_runtime",
+        'CANDIDATE_ROOT="${DEPLOY_CANDIDATE_DIR}"',
+        'CANDIDATE_LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"',
+        'CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh"',
+        "os.setsid()",
+        "LOCAL_CANDIDATE_WEB_PGID",
+        'kill -TERM -- "-${pgid}"',
+        'kill -KILL -- "-${pgid}"',
+        "connect_ex",
+        "errno.ECONNREFUSED",
+        "cleanup_local_candidate_browser_runtime",
         "env -i",
         'ENVIRONMENT=local',
         'LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"',
@@ -292,6 +303,39 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         "verify_deploy_candidate",
     ):
         assert required in deploy
+    for required in (
+        'PYTHONPATH="${CANDIDATE_ROOT}/backend"',
+        'BIND="127.0.0.1:${CANDIDATE_PORT}"',
+        "-m gunicorn app.main:app",
+        "ENABLE_LOCAL_ORCHESTRATOR=0",
+        "ENABLE_SCHEDULER=0",
+        "VKPI_ADVISOR_EXTERNAL_AI_ENABLED=0",
+        "VKPI_RELEASE_VALIDATION_FENCE_PATH",
+        "vkpi-release-validation/v1",
+        "VKPI_SKIP_DOTENV=1",
+        "VKPI_ASYNC_ENABLED=0",
+        "VKPI_MEDIA_CACHE_STORAGE=local",
+        "CANDIDATE_LOCAL_ENV_FILE",
+        "PRIVATE_LOCAL_ENV_FILE",
+        "cleanup_private_local_env",
+        "before.st_uid != os.geteuid()",
+        "stat.S_IMODE(before.st_mode) & 0o077",
+        "SENTRY_DSN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "APIFY_TOKEN",
+        "YTDLP_PROXY",
+        'cd "${CANDIDATE_RUNTIME}"',
+    ):
+        assert required in helper
+    assert 'cd "${PROJECT_ROOT}"' not in helper
+    start_at = deploy.index("start_local_candidate_browser_runtime", function_at)
+    capture_at = deploy.index("scripts/capture_browser_console_cdp.mjs", start_at)
+    cleanup_at = deploy.index("cleanup_local_candidate_browser_runtime", capture_at)
+    ssh_setup_at = deploy.index("\nsetup_deploy_ssh_transport\n", cleanup_at)
+    assert function_at < start_at < capture_at < cleanup_at < ssh_setup_at
+    assert 'npm --prefix frontend run build' not in deploy
     mint = block.split('if ! token="$(' , 1)[1].split(')"; then', 1)[0]
     assert "env -i" in mint
     assert "PYTHONPATH=" not in mint
@@ -301,6 +345,30 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
     assert "TMPDIR=/tmp" in mint
     assert 'PATH="${PATH}"' not in mint
     assert 'HOME="${HOME:-/tmp}"' not in mint
+
+
+def test_candidate_browser_cleanup_is_fail_closed_and_promotes_exit_failure() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    cleanup = deploy.split("cleanup_local_candidate_browser_runtime()", 1)[1].split(
+        "cleanup_initial_deploy_resources()", 1
+    )[0]
+    initial_trap = deploy.split("cleanup_initial_deploy_resources()", 1)[1].split(
+        "bind_rescue_rollback_candidate()", 1
+    )[0]
+    final_trap = deploy.split("cleanup_post_deploy_evidence()", 1)[1].split(
+        "trap cleanup_post_deploy_evidence EXIT", 1
+    )[0]
+
+    assert "candidate_process_group_live" in cleanup
+    assert 'kill -TERM -- "-${pgid}"' in cleanup
+    assert 'kill -KILL -- "-${pgid}"' in cleanup
+    assert "connect_ex" in cleanup
+    assert "errno.ECONNREFUSED" in cleanup
+    assert "LOCAL_CANDIDATE_WEB_RUNTIME=\"\"" in cleanup
+    assert "trap - EXIT" in initial_trap
+    assert 'exit "${original_rc}"' in initial_trap
+    assert "trap - EXIT" in final_trap
+    assert 'exit "${original_rc}"' in final_trap
 
 
 def test_deploy_disables_inherited_xtrace_before_any_credential_or_child() -> None:

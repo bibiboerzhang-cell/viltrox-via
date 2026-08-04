@@ -24,10 +24,9 @@ def test_sync_timer_and_service_are_captured_quiesced_and_restored() -> None:
         deploy.index("MIGRATION_MANIFEST_CSV="),
     )
     early_sync_quiesce = deploy.index("\nquiesce_remote_sync_units\n", capture_call)
-    build = deploy.index('if [ "${SKIP_BUILD:-0}" != "1" ]', early_sync_quiesce)
     first_release_mutation = deploy.index(
         'ssh "${SSH_TARGET}" "sudo install -d',
-        build,
+        early_sync_quiesce,
     )
     quiesce_call = deploy.index("\nquiesce_remote_release_consumers\n", first_release_mutation)
     env_switch = deploy.index("staging_db_clone.py' switch-env", quiesce_call)
@@ -35,12 +34,12 @@ def test_sync_timer_and_service_are_captured_quiesced_and_restored() -> None:
     assert (
         capture_call
         < early_sync_quiesce
-        < build
         < first_release_mutation
         < quiesce_call
         < env_switch
         < pointer_switch
     )
+    assert 'npm --prefix frontend run build' not in deploy
 
     early_quiesce = deploy.split("quiesce_remote_sync_units()", 1)[1].split(
         "quiesce_remote_release_consumers()", 1

@@ -453,6 +453,9 @@ def _build_frontend(
     identity: BuildIdentity,
 ) -> dict[str, object]:
     env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("VITE_"):
+            env.pop(name, None)
     env.update({"CI": "1", "NODE_ENV": "production"})
     env.update(identity.vite_environment())
     with _borrow_dependencies(snapshot, source):
@@ -481,6 +484,14 @@ def _run_static_verify(
         raise FreezeError("source Git worktree binding does not match freeze root")
 
     env = os.environ.copy()
+    for name in tuple(env):
+        if name.startswith("VITE_"):
+            env.pop(name, None)
+    # This output path is reserved for the later canonical deploy gate.  A
+    # caller must not be able to redirect an ordinary freeze-time verifier to
+    # an arbitrary path or make the frozen snapshot appear reproducible by
+    # pre-seeding output outside the private gate runtime.
+    env.pop("VKPI_VERIFY_FRONTEND_OUT_DIR", None)
     for name in GIT_REPOSITORY_BINDING_ENV:
         env.pop(name, None)
     env.update(
@@ -507,6 +518,87 @@ def _run_static_verify(
                 env=env,
                 log_path=log_path,
             )
+
+
+def _regular_tree_inventory(root: Path) -> list[tuple[str, str, int, str]]:
+    """Inventory every node below a build directory without exclusions."""
+
+    try:
+        root_info = root.lstat()
+    except OSError as exc:
+        raise FreezeError("frontend reproducibility output is unavailable") from exc
+    if not stat.S_ISDIR(root_info.st_mode) or root.is_symlink():
+        raise FreezeError("frontend reproducibility output is unsafe")
+
+    inventory: list[tuple[str, str, int, str]] = []
+    for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+        base = Path(directory)
+        relative_base = base.relative_to(root)
+        names[:] = sorted(names)
+        for name in names:
+            path = base / name
+            relative = (relative_base / name).as_posix()
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
+                raise FreezeError(
+                    f"frontend reproducibility tree contains unsafe directory: {relative}"
+                )
+            inventory.append(("directory", relative, 0, ""))
+        for name in sorted(files):
+            path = base / name
+            relative = (relative_base / name).as_posix()
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+                raise FreezeError(
+                    f"frontend reproducibility tree contains unsafe file: {relative}"
+                )
+            if info.st_size > MAX_SOURCE_FILE_BYTES:
+                raise FreezeError(
+                    f"frontend reproducibility file exceeds limit: {relative}"
+                )
+            payload = path.read_bytes()
+            after = path.lstat()
+            if (
+                (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                or len(payload) != info.st_size
+            ):
+                raise FreezeError(
+                    f"frontend reproducibility file changed while reading: {relative}"
+                )
+            inventory.append(
+                (
+                    "file",
+                    relative,
+                    len(payload),
+                    hashlib.sha256(payload).hexdigest(),
+                )
+            )
+    return sorted(inventory)
+
+
+def _assert_frontend_dist_reproducible(candidate: Path, rebuilt: Path) -> None:
+    expected = _regular_tree_inventory(candidate)
+    observed = _regular_tree_inventory(rebuilt)
+    if observed != expected:
+        expected_map = {(row[0], row[1]): row for row in expected}
+        observed_map = {(row[0], row[1]): row for row in observed}
+        missing = sorted(set(expected_map) - set(observed_map))
+        extra = sorted(set(observed_map) - set(expected_map))
+        changed = sorted(
+            key
+            for key in set(expected_map) & set(observed_map)
+            if expected_map[key] != observed_map[key]
+        )
+        detail = {
+            "missing": [f"{kind}:{path}" for kind, path in missing[:10]],
+            "extra": [f"{kind}:{path}" for kind, path in extra[:10]],
+            "changed": [f"{kind}:{path}" for kind, path in changed[:10]],
+        }
+        raise FreezeError(
+            "frontend reproducibility mismatch: "
+            + json.dumps(detail, sort_keys=True, separators=(",", ":"))
+        )
 
 
 def _assert_source_state_unchanged(
@@ -905,6 +997,11 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     recorded_repo = source_record.get("repo") if isinstance(source_record, dict) else None
     if not isinstance(recorded_repo, str) or Path(recorded_repo).resolve() != source:
         raise FreezeError("deploy gate source repository binding mismatch")
+    build_record = manifest.get("build") if isinstance(manifest, dict) else None
+    require_reproducible_frontend = bool(
+        isinstance(build_record, dict) and build_record.get("executed") is True
+    )
+    reproducible_frontend_verified = False
     completed: subprocess.CompletedProcess[bytes] | None = None
     try:
         try:
@@ -914,6 +1011,9 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                 for name in GIT_REPOSITORY_BINDING_ENV:
                     environment.pop(name, None)
                 build_time = str(manifest["build"]["identity"]["build_time"])
+                rebuilt_frontend = (
+                    Path(environment["RUNTIME_ROOT"]) / "frontend-dist-rebuild"
+                )
                 environment.update(
                     {
                         "APP_BUILD_TIME": build_time,
@@ -924,6 +1024,7 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                         "VITE_APP_BUILD_TIME": build_time,
                         "VITE_APP_GIT_BRANCH": str(args.expected_branch),
                         "VITE_APP_GIT_SHA": str(args.expected_head),
+                        "VKPI_VERIFY_FRONTEND_OUT_DIR": str(rebuilt_frontend),
                         "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE": "0",
                         "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
                         "VKPI_VERIFY_REQUIRE_RUNTIME": "1",
@@ -942,6 +1043,12 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                             stdin=subprocess.DEVNULL,
                             check=False,
                         )
+                if completed.returncode == 0 and require_reproducible_frontend:
+                    _assert_frontend_dist_reproducible(
+                        snapshot / "frontend" / "dist",
+                        rebuilt_frontend,
+                    )
+                    reproducible_frontend_verified = True
         except (DeployGateRuntimeError, KeyError, TypeError) as exc:
             raise FreezeError(str(exc)) from exc
     finally:
@@ -950,6 +1057,11 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
         code = completed.returncode if completed is not None else "unavailable"
         raise FreezeError(f"candidate canonical deploy gate failed: {code}")
     after["canonical_deploy_gate"] = True
+    after["frontend_reproducible"] = (
+        reproducible_frontend_verified
+        if require_reproducible_frontend
+        else "not_required_for_unbuilt_fixture"
+    )
     return after
 
 

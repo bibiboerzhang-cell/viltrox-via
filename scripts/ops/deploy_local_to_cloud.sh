@@ -328,6 +328,156 @@ cleanup_deploy_verifier_bundle() {
   DEPLOY_VERIFIER_BUNDLE_READY=0
 }
 
+LOCAL_CANDIDATE_WEB_PID=""
+LOCAL_CANDIDATE_WEB_PGID=""
+LOCAL_CANDIDATE_WEB_PORT=""
+LOCAL_CANDIDATE_WEB_RUNTIME=""
+
+cleanup_local_candidate_browser_runtime() {
+  local pid="${LOCAL_CANDIDATE_WEB_PID}" pgid="${LOCAL_CANDIDATE_WEB_PGID}"
+  local port="${LOCAL_CANDIDATE_WEB_PORT}"
+  local runtime_root="${LOCAL_CANDIDATE_WEB_RUNTIME}" cleanup_failed=0 attempt state
+
+  candidate_process_group_live() {
+    ps -axo pgid=,stat= 2>/dev/null \
+      | awk -v expected="$1" \
+        '$1 == expected && $2 !~ /^Z/ { found=1 } END { exit(found ? 0 : 1) }'
+  }
+
+  if ! [[ "${pgid}" =~ ^[1-9][0-9]*$ ]] \
+    && [[ "${pid}" =~ ^[1-9][0-9]*$ ]] \
+    && kill -0 "${pid}" 2>/dev/null; then
+    state="$(ps -p "${pid}" -o pgid= 2>/dev/null | tr -d '[:space:]')"
+    if [ "${state}" = "${pid}" ]; then
+      pgid="${state}"
+      LOCAL_CANDIDATE_WEB_PGID="${state}"
+    fi
+  fi
+
+  if [[ "${pgid}" =~ ^[1-9][0-9]*$ ]]; then
+    if candidate_process_group_live "${pgid}"; then
+      kill -TERM -- "-${pgid}" 2>/dev/null || cleanup_failed=1
+      for attempt in $(seq 1 50); do
+        if ! candidate_process_group_live "${pgid}"; then
+          break
+        fi
+        sleep 0.1
+      done
+      if candidate_process_group_live "${pgid}"; then
+        kill -KILL -- "-${pgid}" 2>/dev/null || cleanup_failed=1
+      fi
+    fi
+  elif [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && kill -0 "${pid}" 2>/dev/null; then
+    # The launcher may fail before os.setsid() commits.  In that narrow state
+    # only the exact child PID is safe to signal; it cannot have spawned the
+    # candidate Gunicorn worker yet.
+    kill -TERM "${pid}" 2>/dev/null || cleanup_failed=1
+    for attempt in $(seq 1 50); do
+      if ! kill -0 "${pid}" 2>/dev/null; then
+        break
+      fi
+      state="$(ps -p "${pid}" -o stat= 2>/dev/null || true)"
+      case "${state}" in
+        *Z*) break ;;
+      esac
+      sleep 0.1
+    done
+    state="$(ps -p "${pid}" -o stat= 2>/dev/null || true)"
+    if kill -0 "${pid}" 2>/dev/null && [[ "${state}" != *Z* ]]; then
+      kill -KILL "${pid}" 2>/dev/null || cleanup_failed=1
+    fi
+  fi
+  if [[ "${pid}" =~ ^[1-9][0-9]*$ ]]; then
+    wait "${pid}" 2>/dev/null || true
+  fi
+  if [[ "${pgid}" =~ ^[1-9][0-9]*$ ]] \
+    && candidate_process_group_live "${pgid}"; then
+    echo "[deploy] CRITICAL: isolated candidate process group is still live: ${pgid}" >&2
+    cleanup_failed=1
+  elif [[ "${pid}" =~ ^[1-9][0-9]*$ ]] && kill -0 "${pid}" 2>/dev/null; then
+    echo "[deploy] CRITICAL: isolated candidate process is still live: ${pid}" >&2
+    cleanup_failed=1
+  else
+    LOCAL_CANDIDATE_WEB_PID=""
+    LOCAL_CANDIDATE_WEB_PGID=""
+  fi
+
+  if [[ "${port}" =~ ^[1-9][0-9]*$ ]]; then
+    if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B - "${port}" <<'PY'
+import errno
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    probe.settimeout(0.5)
+    result = probe.connect_ex(("127.0.0.1", port))
+if result == 0:
+    raise SystemExit("candidate browser listener is still accepting connections")
+if result != errno.ECONNREFUSED:
+    raise SystemExit(f"candidate browser listener state is ambiguous: {result}")
+PY
+    then
+      echo "[deploy] CRITICAL: isolated candidate browser port is still occupied: ${port}" >&2
+      cleanup_failed=1
+    else
+      LOCAL_CANDIDATE_WEB_PORT=""
+    fi
+  else
+    LOCAL_CANDIDATE_WEB_PORT=""
+  fi
+
+  if [ "${cleanup_failed}" -eq 0 ] && [ -n "${runtime_root}" ]; then
+    if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B - "${runtime_root}" <<'PY'
+from pathlib import Path
+import os
+import shutil
+import stat
+import sys
+
+path = Path(sys.argv[1])
+if (
+    path.parent != Path("/tmp")
+    or not path.name.startswith("vkpi-candidate-browser-runtime.")
+):
+    raise SystemExit("candidate browser runtime cleanup target is unsafe")
+try:
+    info = path.lstat()
+except FileNotFoundError:
+    raise SystemExit(0)
+if (
+    not stat.S_ISDIR(info.st_mode)
+    or path.is_symlink()
+    or info.st_uid != os.geteuid()
+):
+    raise SystemExit("candidate browser runtime cleanup target is unsafe")
+shutil.rmtree(path)
+PY
+    then
+      echo "[deploy] CRITICAL: isolated candidate browser runtime cleanup failed: ${runtime_root}" >&2
+      cleanup_failed=1
+    else
+      LOCAL_CANDIDATE_WEB_RUNTIME=""
+    fi
+  elif [ -z "${runtime_root}" ]; then
+    LOCAL_CANDIDATE_WEB_RUNTIME=""
+  fi
+  return "${cleanup_failed}"
+}
+
+cleanup_initial_deploy_resources() {
+  local original_rc=$?
+  set +e
+  trap - EXIT
+  if ! cleanup_local_candidate_browser_runtime; then
+    original_rc=1
+  fi
+  if ! cleanup_deploy_verifier_bundle; then
+    original_rc=1
+  fi
+  exit "${original_rc}"
+}
+
 bind_rescue_rollback_candidate() {
   RESCUE_ROLLBACK_CANDIDATE_BRANCH="$(
     "${PROJECT_ROOT}/.venv/bin/python" -B - \
@@ -371,7 +521,7 @@ if [ -z "${LOCAL_HEALTH_ENV_FILE}" ]; then
   exit 1
 fi
 verify_deploy_candidate
-trap cleanup_deploy_verifier_bundle EXIT
+trap cleanup_initial_deploy_resources EXIT
 seal_deploy_verifier_bundle
 verify_deploy_candidate
 
@@ -909,7 +1059,7 @@ BROWSER_GATE_PAGE_SETTLE_MS="${VKPI_BROWSER_GATE_PAGE_SETTLE_MS:-1000}"
 BROWSER_GATE_PAGE_TIMEOUT_MS="${VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS:-30000}"
 BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS:-}"
 POST_DEPLOY_CHROME_PATH="${PRODUCTION_CHROME_PATH}"
-PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/"
+PREDEPLOY_BROWSER_URL=""
 REMOTE_ACCEPTANCE_BASE_URL="${PRODUCTION_REMOTE_ACCEPTANCE_BASE_URL}"
 LOCAL_ACCEPTANCE_REPORT_TMP=""
 RELEASE_ID="${VKPI_RELEASE_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${LOCAL_GIT_SHA:0:12}}"
@@ -1373,6 +1523,127 @@ REMOTE_LOG_BASELINE=""
 REMOTE_ACCEPTANCE_REPORT=""
 DEPLOY_ACCEPTED=0
 
+start_local_candidate_browser_runtime() {
+  local candidate_build_time="" health_tmp="" observed_pid="" observed_pgid=""
+  local ready=0 attempt
+
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+  if [ -n "${LOCAL_CANDIDATE_WEB_PID}" ] \
+    || [ -n "${LOCAL_CANDIDATE_WEB_PGID}" ] \
+    || [ -n "${LOCAL_CANDIDATE_WEB_PORT}" ] \
+    || [ -n "${LOCAL_CANDIDATE_WEB_RUNTIME}" ]; then
+    echo "Isolated candidate browser runtime state is already occupied." >&2
+    return 1
+  fi
+
+  LOCAL_CANDIDATE_WEB_RUNTIME="$(
+    mktemp -d /tmp/vkpi-candidate-browser-runtime.XXXXXX
+  )"
+  chmod 700 "${LOCAL_CANDIDATE_WEB_RUNTIME}"
+  LOCAL_CANDIDATE_WEB_PORT="$(
+    "${PROJECT_ROOT}/.venv/bin/python" -I -B - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(listener.getsockname()[1])
+PY
+  )"
+  if ! [[ "${LOCAL_CANDIDATE_WEB_PORT}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Could not reserve an isolated candidate browser port." >&2
+    return 1
+  fi
+  candidate_build_time="$(tr -d '[:space:]' <"${DEPLOY_CANDIDATE_DIR}/BUILD_TIME")"
+  PREDEPLOY_BROWSER_URL="http://127.0.0.1:${LOCAL_CANDIDATE_WEB_PORT}/"
+
+  env -i \
+    PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
+    HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/home" \
+    XDG_CACHE_HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/cache" \
+    TMPDIR="${LOCAL_CANDIDATE_WEB_RUNTIME}/tmp" \
+    LANG=C.UTF-8 \
+    PROJECT_ROOT="${PROJECT_ROOT}" \
+    CANDIDATE_ROOT="${DEPLOY_CANDIDATE_DIR}" \
+    CANDIDATE_RUNTIME="${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
+    CANDIDATE_LOCAL_ENV_FILE="${PROJECT_ROOT}/.env" \
+    CANDIDATE_PORT="${LOCAL_CANDIDATE_WEB_PORT}" \
+    APP_GIT_SHA="${LOCAL_GIT_SHA}" \
+    APP_GIT_BRANCH="${LOCAL_GIT_BRANCH}" \
+    APP_BUILD_TIME="${candidate_build_time}" \
+    CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh" \
+    "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+      >>"${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-web.log" 2>&1 <<'PY' &
+import os
+
+launcher = os.environ["CANDIDATE_LAUNCHER"]
+os.setsid()
+os.execve("/bin/bash", ["/bin/bash", launcher], os.environ)
+PY
+  LOCAL_CANDIDATE_WEB_PID=$!
+
+  for attempt in $(seq 1 40); do
+    if ! kill -0 "${LOCAL_CANDIDATE_WEB_PID}" 2>/dev/null; then
+      break
+    fi
+    observed_pgid="$(
+      ps -p "${LOCAL_CANDIDATE_WEB_PID}" -o pgid= 2>/dev/null \
+        | tr -d '[:space:]'
+    )"
+    if [ "${observed_pgid}" = "${LOCAL_CANDIDATE_WEB_PID}" ]; then
+      LOCAL_CANDIDATE_WEB_PGID="${observed_pgid}"
+      break
+    fi
+    sleep 0.05
+  done
+  if [ "${LOCAL_CANDIDATE_WEB_PGID}" != "${LOCAL_CANDIDATE_WEB_PID}" ]; then
+    echo "Isolated candidate browser runtime did not obtain a private process group." >&2
+    return 1
+  fi
+
+  health_tmp="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/.candidate-health.tmp"
+  rm -f -- "${health_tmp}"
+  for attempt in $(seq 1 120); do
+    if curl --fail --silent --show-error --max-time 2 \
+      "${PREDEPLOY_BROWSER_URL}health" >"${health_tmp}" 2>/dev/null; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "${LOCAL_CANDIDATE_WEB_PID}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.25
+  done
+  if [ "${ready}" != "1" ]; then
+    echo "Isolated candidate browser runtime did not become healthy." >&2
+    return 1
+  fi
+  mv -- "${health_tmp}" "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-health.json"
+  chmod 600 "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-health.json"
+
+  observed_pid="$(cat -- "${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime/gunicorn.pid")"
+  observed_pgid="$(
+    ps -p "${LOCAL_CANDIDATE_WEB_PID}" -o pgid= 2>/dev/null \
+      | tr -d '[:space:]'
+  )"
+  if [ "${observed_pid}" != "${LOCAL_CANDIDATE_WEB_PID}" ] \
+    || [ "${observed_pgid}" != "${LOCAL_CANDIDATE_WEB_PGID}" ] \
+    || [ "${LOCAL_CANDIDATE_WEB_PGID}" != "${LOCAL_CANDIDATE_WEB_PID}" ]; then
+    echo "Isolated candidate browser runtime PID binding is invalid." >&2
+    return 1
+  fi
+  "${PROJECT_ROOT}/.venv/bin/python" -B \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
+    --expected-head "${LOCAL_GIT_SHA}" \
+    --expected-migration "${LATEST_MIGRATION}" \
+    --require-worker \
+    --expected-worker-count "${EXPECTED_WORKER_COUNT}" \
+    --max-worker-age-seconds 180 \
+    <"${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-health.json" \
+    >"${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-runtime-verdict.txt"
+  chmod 600 "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-runtime-verdict.txt"
+}
+
 run_predeploy_embedded_browser_gate() {
   local token=""
   local capture_status=0
@@ -1384,6 +1655,8 @@ run_predeploy_embedded_browser_gate() {
   mkdir -p -- "${PREDEPLOY_BROWSER_EVIDENCE_DIR}"
   chmod 700 "${PREDEPLOY_BROWSER_EVIDENCE_DIR}"
   rm -f -- "${capture_path}" "${report_path}"
+
+  start_local_candidate_browser_runtime
 
   if ! token="$(
     env -i \
@@ -1465,11 +1738,13 @@ if (
 PY
   chmod 600 "${capture_path}" "${report_path}"
 
-  # Browser execution must not race a source edit or swap in a different
-  # candidate after the canonical gate. Rebind both identities before SSH.
+  # The candidate process and its loopback listener must be gone before the
+  # first SSH call. Browser execution must also not race a source edit or swap
+  # in a different candidate after the canonical gate.
+  cleanup_local_candidate_browser_runtime
   assert_deploy_source_unchanged
   verify_deploy_candidate
-  echo "[deploy] local embedded-production browser gate passed: 21/21 (${PREDEPLOY_BROWSER_EVIDENCE_DIR})"
+  echo "[deploy] isolated frozen-candidate browser gate passed: 21/21 (${PREDEPLOY_BROWSER_EVIDENCE_DIR})"
 }
 
 capture_remote_sync_unit_state() {
@@ -2458,6 +2733,9 @@ report_final_activation_recovery_path() {
 cleanup_post_deploy_evidence() {
   local original_rc=$?
   set +e
+  if ! cleanup_local_candidate_browser_runtime; then
+    original_rc=1
+  fi
   if [ "${original_rc}" -ne 0 ] \
     && [ "${ROLLBACK_PREPARE_MAY_HAVE_COMMITTED}" = "1" ]; then
     reconcile_remote_prepare_commit_state || true
@@ -2538,7 +2816,8 @@ cleanup_post_deploy_evidence() {
   # Rollback validators also come from the frozen candidate, so retain the
   # digest-bound verifier bundle until every rollback/evidence action ends.
   cleanup_deploy_verifier_bundle
-  return "${original_rc}"
+  trap - EXIT
+  exit "${original_rc}"
 }
 trap cleanup_post_deploy_evidence EXIT
 
@@ -3608,14 +3887,11 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   assert_deploy_source_unchanged
 fi
 
-# Freeze timer-triggered writers before the potentially long build, backup and
-# release staging interval.  The formal fleet quiesce reasserts the mask before
-# any shared environment/database/current-pointer mutation.
+# Freeze timer-triggered writers before backup and release staging.  Frontend
+# bytes were already rebuilt in a private directory and compared file-for-file
+# with the frozen candidate before the first SSH call; never rebuild the ambient
+# source dist after remote writers have been quiesced.
 quiesce_remote_sync_units
-
-if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  npm --prefix frontend run build
-fi
 
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   verify_deploy_candidate

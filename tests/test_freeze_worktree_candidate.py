@@ -13,6 +13,7 @@ import pytest
 
 from scripts.ops.freeze_worktree_candidate import (
     FreezeError,
+    _assert_frontend_dist_reproducible,
     freeze_candidate,
     run_deploy_gate,
     verify_deploy_source,
@@ -95,6 +96,12 @@ Path("verify-env.json").write_text(json.dumps({
     "VITE_APP_GIT_SHA": os.environ.get("VITE_APP_GIT_SHA"),
     "VITE_APP_GIT_BRANCH": os.environ.get("VITE_APP_GIT_BRANCH"),
     "VITE_APP_BUILD_TIME": os.environ.get("VITE_APP_BUILD_TIME"),
+    "VITE_API_BASE": os.environ.get("VITE_API_BASE"),
+    "VITE_BROWSER_ASSIST": os.environ.get("VITE_BROWSER_ASSIST"),
+    "VITE_EXPERIMENTAL_NAV": os.environ.get("VITE_EXPERIMENTAL_NAV"),
+    "VKPI_VERIFY_FRONTEND_OUT_DIR": os.environ.get(
+        "VKPI_VERIFY_FRONTEND_OUT_DIR"
+    ),
     "blocked_snapshot_mutation_rc": blocked_mutation.returncode,
     "blocked_symbolic_ref_rc": blocked_symbolic_ref.returncode,
     "git_head": subprocess.check_output(
@@ -157,6 +164,117 @@ def _freeze_args(root: Path, output: Path) -> Namespace:
     )
 
 
+def _install_fake_frontend_npm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_npm = fake_bin / "npm"
+    _write(
+        fake_npm,
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+out = Path(sys.argv[sys.argv.index("--outDir") + 1])
+out.mkdir(parents=True, exist_ok=True)
+sha = os.environ["VITE_APP_GIT_SHA"]
+payload = {
+    "version": "0.0.0-test",
+    "gitSha": sha,
+    "gitShortSha": sha[:8],
+    "gitBranch": os.environ["VITE_APP_GIT_BRANCH"],
+    "builtAt": os.environ["VITE_APP_BUILD_TIME"],
+    "ambientVite": sorted(
+        name for name in os.environ
+        if name.startswith("VITE_") and name not in {
+            "VITE_APP_BUILD_TIME", "VITE_APP_GIT_BRANCH", "VITE_APP_GIT_SHA"
+        }
+    ),
+}
+(out / "index.html").write_text("<html></html>\\n", encoding="utf-8")
+(out / "build-info.json").write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+""",
+    )
+    os.chmod(fake_npm, 0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
+
+
+def _commit_fixture(root: Path, message: str) -> None:
+    commit_env = os.environ.copy()
+    commit_env.update(
+        {
+            "GIT_AUTHOR_EMAIL": "freeze@example.invalid",
+            "GIT_AUTHOR_NAME": "Freeze Test",
+            "GIT_COMMITTER_EMAIL": "freeze@example.invalid",
+            "GIT_COMMITTER_NAME": "Freeze Test",
+        }
+    )
+    subprocess.run(["git", "add", "scripts/verify.sh"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", message],
+        cwd=root,
+        env=commit_env,
+        check=True,
+    )
+
+
+def _built_deploy_gate_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, dict[str, object], Path]:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    _write(
+        root / "scripts" / "verify.sh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+mode="${VKPI_TEST_REBUILD_MODE:-match}"
+if [[ "${mode}" == "missing" ]]; then
+  exit 0
+fi
+"${PYTHON_BIN:?}" - "${mode}" "${VKPI_VERIFY_FRONTEND_OUT_DIR:?}" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+mode = sys.argv[1]
+destination = Path(sys.argv[2])
+shutil.copytree(Path("frontend/dist"), destination)
+if mode == "drift":
+    with destination.joinpath("index.html").open("a", encoding="utf-8") as handle:
+        handle.write("<!-- drift -->\\n")
+PY
+""",
+    )
+    os.chmod(root / "scripts" / "verify.sh", 0o755)
+    _commit_fixture(root, "reproducible deploy gate fixture")
+    venv_python = _create_test_venv(root)
+    _install_fake_frontend_npm(tmp_path, monkeypatch)
+
+    output = tmp_path / "candidate"
+    args = _freeze_args(root, output)
+    args.skip_archive = True
+    args.skip_build = False
+    payload = freeze_candidate(args)
+    assert payload["build"]["executed"] is True
+    return root, output, payload, venv_python
+
+
+def _deploy_gate_args(
+    root: Path, output: Path, payload: dict[str, object], venv_python: Path
+) -> Namespace:
+    source = payload["source"]
+    assert isinstance(source, dict)
+    return Namespace(
+        manifest=str(output.with_suffix(".manifest.json")),
+        snapshot=str(output),
+        expected_head=str(source["head"]),
+        expected_branch=str(source["branch"]),
+        source=str(root),
+        python=str(venv_python),
+    )
+
+
 def test_freeze_and_offline_verify_excludes_runtime_dependencies_and_env(
     tmp_path: Path,
 ) -> None:
@@ -200,31 +318,14 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
         check=False,
     )
     assert common_worktree_before.returncode == 1
-    fake_bin = tmp_path / "bin"
-    fake_npm = fake_bin / "npm"
-    _write(
-        fake_npm,
-        """#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-out = Path(sys.argv[sys.argv.index("--outDir") + 1])
-out.mkdir(parents=True, exist_ok=True)
-sha = os.environ["VITE_APP_GIT_SHA"]
-payload = {
-    "version": "0.0.0-test",
-    "gitSha": sha,
-    "gitShortSha": sha[:8],
-    "gitBranch": os.environ["VITE_APP_GIT_BRANCH"],
-    "builtAt": os.environ["VITE_APP_BUILD_TIME"],
-}
-(out / "index.html").write_text("<html></html>\\n", encoding="utf-8")
-(out / "build-info.json").write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-""",
+    _install_fake_frontend_npm(tmp_path, monkeypatch)
+    monkeypatch.setenv("VITE_API_BASE", "https://hostile.invalid/api")
+    monkeypatch.setenv("VITE_BROWSER_ASSIST", "1")
+    monkeypatch.setenv("VITE_EXPERIMENTAL_NAV", "1")
+    monkeypatch.setenv(
+        "VKPI_VERIFY_FRONTEND_OUT_DIR",
+        str(tmp_path / "hostile-frontend-output"),
     )
-    os.chmod(fake_npm, 0o755)
-    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
 
     output = tmp_path / "candidate"
     args = _freeze_args(root, output)
@@ -246,6 +347,7 @@ payload = {
     assert build_info["gitShortSha"] == identity["git_sha"][:8]
     assert build_info["gitBranch"] == identity["git_branch"]
     assert build_info["builtAt"] == identity["build_time"]
+    assert build_info["ambientVite"] == []
     assert verify_env == {
         "GIT_DIR": None,
         "GIT_OPTIONAL_LOCKS": None,
@@ -254,6 +356,10 @@ payload = {
         "VITE_APP_BUILD_TIME": identity["build_time"],
         "VITE_APP_GIT_BRANCH": identity["git_branch"],
         "VITE_APP_GIT_SHA": identity["git_sha"],
+        "VITE_API_BASE": None,
+        "VITE_BROWSER_ASSIST": None,
+        "VITE_EXPERIMENTAL_NAV": None,
+        "VKPI_VERIFY_FRONTEND_OUT_DIR": None,
         "blocked_snapshot_mutation_rc": 126,
         "blocked_symbolic_ref_rc": 126,
         "git_head": identity["git_sha"],
@@ -275,6 +381,99 @@ payload = {
     assert common_worktree_after.returncode == 1
     assert payload["build"]["build_info"] == build_info
     assert payload["build"]["build_info_sha256"]
+
+
+def test_frontend_reproducibility_inventory_rejects_any_drift(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate-dist"
+    rebuilt = tmp_path / "rebuilt-dist"
+    for root in (candidate, rebuilt):
+        _write(root / "index.html", '<script src="/assets/app-fixed.js"></script>\n')
+        _write(root / "assets" / "app-fixed.js", "const build = 'fixed';\n")
+        os.chmod(root / "index.html", 0o644)
+        os.chmod(root / "assets" / "app-fixed.js", 0o644)
+
+    _assert_frontend_dist_reproducible(candidate, rebuilt)
+
+    _write(rebuilt / "assets" / "app-fixed.js", "const build = 'changed';\n")
+    with pytest.raises(FreezeError, match="frontend reproducibility mismatch"):
+        _assert_frontend_dist_reproducible(candidate, rebuilt)
+
+    _write(rebuilt / "assets" / "app-fixed.js", "const build = 'fixed';\n")
+    _write(rebuilt / "assets" / "extra.js", "extra\n")
+    with pytest.raises(FreezeError, match="frontend reproducibility mismatch"):
+        _assert_frontend_dist_reproducible(candidate, rebuilt)
+
+    (rebuilt / "assets" / "extra.js").unlink()
+    (rebuilt / "assets" / "unsafe.js").symlink_to("app-fixed.js")
+    with pytest.raises(FreezeError, match="unsafe file"):
+        _assert_frontend_dist_reproducible(candidate, rebuilt)
+
+
+def test_built_deploy_gate_accepts_exact_frontend_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, output, payload, venv_python = _built_deploy_gate_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setenv("VKPI_TEST_REBUILD_MODE", "match")
+
+    result = run_deploy_gate(
+        _deploy_gate_args(root, output, payload, venv_python)
+    )
+
+    assert result["canonical_deploy_gate"] is True
+    assert result["frontend_reproducible"] is True
+    assert result["content_sha256"] == payload["candidate"]["content_sha256"]
+    assert verify_manifest(
+        Namespace(
+            manifest=str(output.with_suffix(".manifest.json")),
+            snapshot=str(output),
+        )
+    )["pass"] is True
+
+
+@pytest.mark.parametrize(
+    ("rebuild_mode", "error_pattern"),
+    [
+        ("drift", "frontend reproducibility mismatch"),
+        ("missing", "frontend reproducibility output is unavailable"),
+    ],
+)
+def test_built_deploy_gate_fails_closed_and_reverifies_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rebuild_mode: str,
+    error_pattern: str,
+) -> None:
+    root, output, payload, venv_python = _built_deploy_gate_fixture(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setenv("VKPI_TEST_REBUILD_MODE", rebuild_mode)
+    deploy_args = _deploy_gate_args(root, output, payload, venv_python)
+    revalidation_calls: list[str] = []
+    real_verify_deploy_source = verify_deploy_source
+
+    def tracked_verify_deploy_source(args: Namespace) -> dict[str, object]:
+        revalidation_calls.append(str(args.snapshot))
+        return real_verify_deploy_source(args)
+
+    monkeypatch.setattr(
+        "scripts.ops.freeze_worktree_candidate.verify_deploy_source",
+        tracked_verify_deploy_source,
+    )
+
+    with pytest.raises(FreezeError, match=error_pattern):
+        run_deploy_gate(deploy_args)
+
+    assert revalidation_calls == [str(output), str(output)]
+    assert verify_manifest(
+        Namespace(
+            manifest=str(output.with_suffix(".manifest.json")),
+            snapshot=str(output),
+        )
+    )["pass"] is True
 
 
 def test_freeze_rechecks_source_after_static_verify(tmp_path: Path) -> None:
@@ -489,6 +688,9 @@ Path(os.environ["VKPI_TEST_GATE_REPORT"]).write_text(json.dumps({
     "runtime_quiet": os.environ.get("RUNTIME_ENV_QUIET"),
     "app_git_sha": os.environ.get("APP_GIT_SHA"),
     "vite_app_git_sha": os.environ.get("VITE_APP_GIT_SHA"),
+    "vite_api_base": os.environ.get("VITE_API_BASE"),
+    "vite_browser_assist": os.environ.get("VITE_BROWSER_ASSIST"),
+    "vite_experimental_nav": os.environ.get("VITE_EXPERIMENTAL_NAV"),
 }, sort_keys=True), encoding="utf-8")
 runtime_root.joinpath("probe").write_text("isolated\\n")
 PY
@@ -536,6 +738,9 @@ PY
     monkeypatch.setenv("TMPDIR", str(output / "runtime"))
     monkeypatch.setenv("APP_GIT_SHA", "f" * 40)
     monkeypatch.setenv("VITE_APP_GIT_SHA", "e" * 40)
+    monkeypatch.setenv("VITE_API_BASE", "https://hostile.invalid/api")
+    monkeypatch.setenv("VITE_BROWSER_ASSIST", "1")
+    monkeypatch.setenv("VITE_EXPERIMENTAL_NAV", "1")
 
     result = run_deploy_gate(
         Namespace(
@@ -577,7 +782,10 @@ PY
         "runtime_root": observed["runtime_root"],
         "runtime_uid": os.geteuid(),
         "tmpdir": observed["runtime_root"],
+        "vite_api_base": None,
         "vite_app_git_sha": expected_head,
+        "vite_browser_assist": None,
+        "vite_experimental_nav": None,
         "xdg_cache_home": str(Path(observed["runtime_root"]) / "cache"),
     }
     isolated_runtime = Path(observed["runtime_root"])

@@ -69,7 +69,11 @@ _SCRUBBED_ENV_NAMES = {
     "XDG_CACHE_HOME",
 }
 
-_SCRUBBED_IDENTITY_PREFIXES = ("APP_GIT_", "VITE_APP_")
+# Every Vite-prefixed value is a build input.  A release build must not inherit
+# an operator's local proxy, experimental-navigation, browser-assist, or API
+# target switches.  The frozen build identity is injected explicitly after the
+# environment has been scrubbed.
+_SCRUBBED_ENV_PREFIXES = ("APP_GIT_", "VITE_")
 
 
 @dataclass(frozen=True)
@@ -184,7 +188,7 @@ def build_deploy_gate_environment(
         name: value
         for name, value in inherited.items()
         if name not in _SCRUBBED_ENV_NAMES
-        and not name.startswith(_SCRUBBED_IDENTITY_PREFIXES)
+        and not name.startswith(_SCRUBBED_ENV_PREFIXES)
     }
     local_env = source / ".env"
     try:
