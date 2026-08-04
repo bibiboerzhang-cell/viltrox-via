@@ -198,6 +198,7 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 paths = {
+    Path("scripts/ops/deploy_gate_runtime.py"): 0o400,
     Path("scripts/ops/freeze_worktree_candidate.py"): 0o500,
     Path("scripts/ops/freeze_git_bridge.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
@@ -240,6 +241,7 @@ seal_deploy_verifier_bundle() {
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops"
   for relative in \
+    scripts/ops/deploy_gate_runtime.py \
     scripts/ops/freeze_worktree_candidate.py \
     scripts/ops/freeze_git_bridge.py \
     scripts/ops/legacy_to_atomic_preflight.py \
@@ -256,7 +258,7 @@ seal_deploy_verifier_bundle() {
       return 1
     fi
     case "${relative}" in
-      scripts/ops/freeze_git_bridge.py|scripts/stdout_utils.py)
+      scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/stdout_utils.py)
         install -m 0400 "${source}" "${target}"
         ;;
       *)
@@ -278,6 +280,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
 for relative in (
+    Path("scripts/ops/deploy_gate_runtime.py"),
     Path("scripts/ops/freeze_git_bridge.py"),
     Path("scripts/ops/freeze_worktree_candidate.py"),
     Path("scripts/ops/legacy_to_atomic_preflight.py"),
@@ -301,6 +304,7 @@ cleanup_deploy_verifier_bundle() {
     return 0
   fi
   for path in \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_gate_runtime.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \

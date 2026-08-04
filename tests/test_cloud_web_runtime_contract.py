@@ -345,6 +345,7 @@ def test_deploy_seals_candidate_verifier_and_never_uses_mutable_gate_scripts() -
         'cmp -s "${source}" "${target}"',
         'DEPLOY_VERIFIER_BUNDLE_SHA256=',
         'verify_deploy_verifier_bundle',
+        'scripts/ops/deploy_gate_runtime.py',
         '"${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate',
     ):
         assert required in deploy

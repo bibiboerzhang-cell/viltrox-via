@@ -40,6 +40,7 @@ from scripts.ops.freeze_git_bridge import (  # noqa: E402
     GitBridgeError,
     readonly_snapshot_git_environment as _readonly_snapshot_git_environment,
 )
+from scripts.ops.deploy_gate_runtime import DeployGateRuntimeError, bound_deploy_gate_runtime  # noqa: E402
 
 
 SCHEMA = "vkpi.local-worktree-candidate/v1"
@@ -904,38 +905,45 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     recorded_repo = source_record.get("repo") if isinstance(source_record, dict) else None
     if not isinstance(recorded_repo, str) or Path(recorded_repo).resolve() != source:
         raise FreezeError("deploy gate source repository binding mismatch")
-    python_bin = Path(args.python).resolve()
-    if not python_bin.is_file() or not os.access(python_bin, os.X_OK):
-        raise FreezeError("deploy gate Python interpreter is unavailable")
-
-    environment = os.environ.copy()
-    for name in GIT_REPOSITORY_BINDING_ENV:
-        environment.pop(name, None)
-    environment.update(
-        {
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHON_BIN": str(python_bin),
-            "PYTHON_BIN_FALLBACK": str(python_bin),
-            "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE": "0",
-            "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
-            "VKPI_VERIFY_REQUIRE_RUNTIME": "1",
-            "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY": "0",
-        }
-    )
     completed: subprocess.CompletedProcess[bytes] | None = None
     try:
-        with _readonly_snapshot_git_environment(
-            snapshot, source
-        ) as git_environment:
-            environment.update(git_environment)
-            with _borrow_dependencies(snapshot, source):
-                completed = subprocess.run(
-                    ["bash", "scripts/verify.sh"],
-                    cwd=snapshot,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    check=False,
+        try:
+            with bound_deploy_gate_runtime(
+                os.environ, source=source, requested_python=args.python
+            ) as (python_bin, environment):
+                for name in GIT_REPOSITORY_BINDING_ENV:
+                    environment.pop(name, None)
+                build_time = str(manifest["build"]["identity"]["build_time"])
+                environment.update(
+                    {
+                        "APP_BUILD_TIME": build_time,
+                        "APP_GIT_BRANCH": str(args.expected_branch),
+                        "APP_GIT_SHA": str(args.expected_head),
+                        "PYTHON_BIN": str(python_bin),
+                        "PYTHON_BIN_FALLBACK": str(python_bin),
+                        "VITE_APP_BUILD_TIME": build_time,
+                        "VITE_APP_GIT_BRANCH": str(args.expected_branch),
+                        "VITE_APP_GIT_SHA": str(args.expected_head),
+                        "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE": "0",
+                        "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
+                        "VKPI_VERIFY_REQUIRE_RUNTIME": "1",
+                        "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY": "0",
+                    }
                 )
+                with _readonly_snapshot_git_environment(
+                    snapshot, source
+                ) as git_environment:
+                    environment.update(git_environment)
+                    with _borrow_dependencies(snapshot, source):
+                        completed = subprocess.run(
+                            ["bash", "scripts/verify.sh"],
+                            cwd=snapshot,
+                            env=environment,
+                            stdin=subprocess.DEVNULL,
+                            check=False,
+                        )
+        except (DeployGateRuntimeError, KeyError, TypeError) as exc:
+            raise FreezeError(str(exc)) from exc
     finally:
         after = verify_deploy_source(args)
     if completed is None or completed.returncode != 0:

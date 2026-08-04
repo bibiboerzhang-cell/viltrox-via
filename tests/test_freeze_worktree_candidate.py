@@ -119,6 +119,7 @@ exit 0
     )
     os.chmod(root / "scripts" / "verify.sh", 0o755)
     _write(root / ".env", "TOKEN=must-not-copy\n")
+    os.chmod(root / ".env", 0o600)
     _write(root / "runtime" / "state.json", "{}\n")
     _write(root / "frontend" / "node_modules" / "ignored", "ignored\n")
     subprocess.run(["git", "add", "."], cwd=root, check=True)
@@ -135,6 +136,15 @@ exit 0
     (root / ".venv").mkdir()
     _write(root / "backend" / "untracked.py", "VALUE = 2\n")
     return root
+
+
+def _create_test_venv(root: Path) -> Path:
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(root / ".venv")],
+        check=True,
+    )
+    _write(root / ".git" / "info" / "exclude", ".venv/\n")
+    return root / ".venv" / "bin" / "python"
 
 
 def _freeze_args(root: Path, output: Path) -> Namespace:
@@ -403,6 +413,7 @@ sleep 0.5
         env=commit_env,
         check=True,
     )
+    venv_python = _create_test_venv(root)
     output = tmp_path / "candidate"
     payload = freeze_candidate(_freeze_args(root, output))
     monkeypatch.setenv("VKPI_TEST_GATE_STARTED", str(started))
@@ -425,13 +436,192 @@ sleep 0.5
                     expected_head=str(payload["source"]["head"]),
                     expected_branch=str(payload["source"]["branch"]),
                     source=str(root),
-                    python=sys.executable,
+                    python=str(venv_python),
                 )
             )
     finally:
         mutator.join(timeout=5)
     assert not (output / ".venv").exists()
     assert not (output / "frontend" / "node_modules").exists()
+    assert not (output / "runtime").exists()
+
+
+def test_deploy_gate_preserves_venv_invocation_and_isolates_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    report = tmp_path / "deploy-gate-env.json"
+    _write(
+        root / "scripts" / "verify.sh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+"${PYTHON_BIN:?}" - <<'PY'
+import json
+import os
+from pathlib import Path
+runtime_root = Path(os.environ["RUNTIME_ROOT"])
+Path(os.environ["VKPI_TEST_GATE_REPORT"]).write_text(json.dumps({
+    "python_bin": os.environ.get("PYTHON_BIN"),
+    "python_fallback": os.environ.get("PYTHON_BIN_FALLBACK"),
+    "environment": os.environ.get("ENVIRONMENT"),
+    "env_file": os.environ.get("ENV_FILE"),
+    "local_env_file": os.environ.get("LOCAL_ENV_FILE"),
+    "runtime_root": os.environ.get("RUNTIME_ROOT"),
+    "runtime_mode": oct(runtime_root.stat().st_mode & 0o777),
+    "home": os.environ.get("HOME"),
+    "tmpdir": os.environ.get("TMPDIR"),
+    "xdg_cache_home": os.environ.get("XDG_CACHE_HOME"),
+    "database_url": os.environ.get("DATABASE_URL"),
+    "database_pool_url": os.environ.get("DATABASE_POOL_URL"),
+    "redis_url": os.environ.get("REDIS_URL"),
+    "jwt_secret": os.environ.get("JWT_SECRET"),
+    "ops_health_token": os.environ.get("OPS_HEALTH_TOKEN"),
+    "db_runtime_backend": os.environ.get("DB_RUNTIME_BACKEND"),
+    "db_use_pgbouncer": os.environ.get("DB_USE_PGBOUNCER"),
+    "local_runtime_force_stack": os.environ.get("LOCAL_RUNTIME_FORCE_STACK"),
+    "keep_db_url": os.environ.get("RUNTIME_ENV_KEEP_DB_URL"),
+    "keep_inherited_jwt": os.environ.get("RUNTIME_ENV_KEEP_INHERITED_JWT"),
+    "runtime_quiet": os.environ.get("RUNTIME_ENV_QUIET"),
+    "app_git_sha": os.environ.get("APP_GIT_SHA"),
+    "vite_app_git_sha": os.environ.get("VITE_APP_GIT_SHA"),
+}, sort_keys=True), encoding="utf-8")
+runtime_root.joinpath("probe").write_text("isolated\\n")
+PY
+""",
+    )
+    os.chmod(root / "scripts" / "verify.sh", 0o755)
+    commit_env = os.environ.copy()
+    commit_env.update(
+        {
+            "GIT_AUTHOR_EMAIL": "freeze@example.invalid",
+            "GIT_AUTHOR_NAME": "Freeze Test",
+            "GIT_COMMITTER_EMAIL": "freeze@example.invalid",
+            "GIT_COMMITTER_NAME": "Freeze Test",
+        }
+    )
+    subprocess.run(["git", "add", "scripts/verify.sh"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "deploy gate env fixture"],
+        cwd=root,
+        env=commit_env,
+        check=True,
+    )
+    venv_python = _create_test_venv(root)
+    runtime_sentinel = root / "runtime" / "source-sentinel"
+    _write(runtime_sentinel, "unchanged\n")
+
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+    monkeypatch.setenv("VKPI_TEST_GATE_REPORT", str(report))
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("ENV_FILE", "/tmp/untrusted.env")
+    monkeypatch.setenv("LOCAL_ENV_FILE", "/tmp/untrusted-local.env")
+    monkeypatch.setenv("RUNTIME_ROOT", "/tmp/untrusted-runtime")
+    monkeypatch.setenv("RUNTIME_ENV_KEEP_DB_URL", "1")
+    monkeypatch.setenv("RUNTIME_ENV_KEEP_INHERITED_JWT", "1")
+    monkeypatch.setenv("RUNTIME_ENV_QUIET", "0")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://hostile.invalid/wrong")
+    monkeypatch.setenv("DATABASE_POOL_URL", "postgresql://hostile.invalid/pool")
+    monkeypatch.setenv("REDIS_URL", "redis://hostile.invalid/0")
+    monkeypatch.setenv("JWT_SECRET", "hostile-secret")
+    monkeypatch.setenv("OPS_HEALTH_TOKEN", "hostile-health")
+    monkeypatch.setenv("DB_RUNTIME_BACKEND", "sqlite")
+    monkeypatch.setenv("DB_USE_PGBOUNCER", "1")
+    monkeypatch.setenv("LOCAL_RUNTIME_FORCE_STACK", "0")
+    monkeypatch.setenv("TMPDIR", str(output / "runtime"))
+    monkeypatch.setenv("APP_GIT_SHA", "f" * 40)
+    monkeypatch.setenv("VITE_APP_GIT_SHA", "e" * 40)
+
+    result = run_deploy_gate(
+        Namespace(
+            manifest=str(output.with_suffix(".manifest.json")),
+            snapshot=str(output),
+            expected_head=str(payload["source"]["head"]),
+            expected_branch=str(payload["source"]["branch"]),
+            source=str(root),
+            python=str(venv_python),
+        )
+    )
+
+    assert result["canonical_deploy_gate"] is True
+    observed = json.loads(report.read_text(encoding="utf-8"))
+    expected_head = str(payload["source"]["head"])
+    assert observed == {
+        "app_git_sha": expected_head,
+        "database_pool_url": None,
+        "database_url": None,
+        "db_runtime_backend": "postgres",
+        "db_use_pgbouncer": "0",
+        "env_file": "",
+        "environment": "local",
+        "home": str(Path(observed["runtime_root"]) / "home"),
+        "jwt_secret": None,
+        "keep_db_url": "0",
+        "keep_inherited_jwt": "0",
+        "local_runtime_force_stack": "1",
+        "local_env_file": str(root / ".env"),
+        "ops_health_token": None,
+        "python_bin": str(venv_python),
+        "python_fallback": str(venv_python),
+        "redis_url": None,
+        "runtime_quiet": "1",
+        "runtime_mode": "0o700",
+        "runtime_root": observed["runtime_root"],
+        "tmpdir": observed["runtime_root"],
+        "vite_app_git_sha": expected_head,
+        "xdg_cache_home": str(Path(observed["runtime_root"]) / "cache"),
+    }
+    isolated_runtime = Path(observed["runtime_root"])
+    assert not isolated_runtime.exists()
+    assert root not in isolated_runtime.parents
+    assert output not in isolated_runtime.parents
+    assert runtime_sentinel.read_text(encoding="utf-8") == "unchanged\n"
+    assert not (output / ".venv").exists()
+    assert not (output / "frontend" / "node_modules").exists()
+    assert not (output / "runtime").exists()
+
+
+def test_deploy_gate_rejects_relative_python_path(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    _create_test_venv(root)
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+
+    with pytest.raises(FreezeError, match="must be absolute"):
+        run_deploy_gate(
+            Namespace(
+                manifest=str(output.with_suffix(".manifest.json")),
+                snapshot=str(output),
+                expected_head=str(payload["source"]["head"]),
+                expected_branch=str(payload["source"]["branch"]),
+                source=str(root),
+                python="python3",
+            )
+        )
+
+
+def test_deploy_gate_rejects_absolute_non_source_venv_python(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    _create_test_venv(root)
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+
+    with pytest.raises(FreezeError, match="must equal source"):
+        run_deploy_gate(
+            Namespace(
+                manifest=str(output.with_suffix(".manifest.json")),
+                snapshot=str(output),
+                expected_head=str(payload["source"]["head"]),
+                expected_branch=str(payload["source"]["branch"]),
+                source=str(root),
+                python=str(Path(sys.executable).resolve()),
+            )
+        )
 
 
 def test_deploy_source_fails_closed_on_special_file_inside_excluded_cache(
