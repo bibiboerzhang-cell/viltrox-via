@@ -245,7 +245,19 @@ def bound_deploy_gate_runtime(
         prefix="vkpi-deploy-gate-runtime.", dir="/tmp"
     ) as raw_runtime:
         runtime_root = Path(raw_runtime)
-        runtime_root.chmod(0o700)
+        try:
+            # BSD/macOS inherits the parent directory group when creating a
+            # child below /tmp.  That can leave this private root owned by the
+            # caller but grouped as wheel, while security fixtures correctly
+            # bind immutable payloads to the caller's effective uid/gid.  Make
+            # the isolated root identity explicit before pytest creates any
+            # descendants so the gate behaves the same on macOS and Linux.
+            os.chown(runtime_root, os.geteuid(), os.getegid())
+            runtime_root.chmod(0o700)
+        except OSError as exc:
+            raise DeployGateRuntimeError(
+                "deploy gate private runtime identity is unsafe"
+            ) from exc
         (runtime_root / "home").mkdir(mode=0o700)
         (runtime_root / "cache").mkdir(mode=0o700)
         environment = build_deploy_gate_environment(
