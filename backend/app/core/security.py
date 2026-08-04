@@ -17,6 +17,7 @@ from fastapi import Request, Response
 
 from app.core.config import IS_PRODUCTION, JWT_EXPIRES_DAYS, JWT_SECRET, JWT_SECRET_PREVIOUS, USER_CACHE_TTL_SEC
 from app.core.logging import get_logger
+from app.core.staff_avatars import serialize_staff_avatar_url
 from app.db.connection import db_connection_sync_reusing_scope, get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 
@@ -187,7 +188,10 @@ def _load_user_for_auth(user_id: int, cache_key: str):
     cached = cache_get(cache_key)
     if cached is not None:
         if isinstance(cached, dict) and user_status_allows_auth(cached.get("status")):
-            return cached
+            truthful_cached = dict(cached)
+            truthful_cached["avatar_url"] = serialize_staff_avatar_url(cached.get("avatar_url"))
+            truthful_cached["avatar_required"] = not bool(truthful_cached["avatar_url"])
+            return truthful_cached
         logger.warning(
             "security.inactive_cached_user_rejected uid=%s status=%s",
             uid,
@@ -207,6 +211,7 @@ def _load_user_for_auth(user_id: int, cache_key: str):
         if not user:
             return None
         user_dict = dict(user)
+        user_dict["avatar_url"] = serialize_staff_avatar_url(user_dict.get("avatar_url"))
         if not user_status_allows_auth(user_dict.get("status")):
             logger.warning(
                 "security.inactive_user_rejected uid=%s status=%s",
@@ -247,7 +252,7 @@ def _load_user_for_auth(user_id: int, cache_key: str):
         user_dict["is_owner"] = bool(staff.get("is_owner"))
         user_dict["staff_id"] = staff.get("id") or staff.get("staff_id") or staff.get("user_id")
         user_dict["employee_code"] = staff.get("employee_code") or user_dict.get("creator_code") or str(user_dict.get("email") or "").split("@")[0]
-        user_dict["avatar_required"] = not bool(str(user_dict.get("avatar_url") or "").strip())
+        user_dict["avatar_required"] = not bool(user_dict.get("avatar_url"))
     cache_set(cache_key, user_dict, ttl=int(USER_CACHE_TTL_SEC))
     return user_dict
 

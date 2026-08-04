@@ -9,6 +9,7 @@ from pathlib import Path
 from app.core.security import make_token, user_status_allows_auth, verify_password
 from app.core.config import DB_PATH, IS_PRODUCTION, PROJECT_ROOT
 from app.core.permissions import staff_context_for_user, staff_context_is_inactive
+from app.core.staff_avatars import serialize_staff_avatar_url
 from app.db.connection import get_conn, is_postgres_runtime
 from app.db.repositories.users import creator_code_exists, generate_creator_code
 from app.services.auth.lockout import LOCKOUT_MINUTES, clear_failed, is_locked_out, record_failed_login
@@ -37,6 +38,7 @@ def build_login_payload(user) -> dict:
         return _inactive_account_response()
     auth_role = str(user["role"] or "")
     effective_role = str(staff.get("role") or auth_role or "readonly")
+    avatar_url = serialize_staff_avatar_url(user_dict.get("avatar_url"))
     return {
         "status": "success",
         "token": make_token(user["id"], auth_role),
@@ -51,7 +53,7 @@ def build_login_payload(user) -> dict:
             "points_balance": user["points_balance"],
             "points_pending": user["points_pending"],
             "points_total": user["points_total"],
-            "avatar_url": user["avatar_url"],
+            "avatar_url": avatar_url,
             "bio": user["bio"],
             "signature": user["signature"],
             "tier_status": _row_value(user, "tier_status", "pending"),
@@ -61,7 +63,7 @@ def build_login_payload(user) -> dict:
             "is_owner": bool(staff.get("is_owner")),
             "staff_id": staff.get("id") or staff.get("staff_id") or staff.get("user_id"),
             "employee_code": staff.get("employee_code") or user["creator_code"] or str(user["email"]).split("@")[0],
-            "avatar_required": not bool(str(user["avatar_url"] or "").strip()),
+            "avatar_required": not bool(avatar_url),
         },
     }
 

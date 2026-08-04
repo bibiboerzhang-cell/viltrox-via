@@ -18,6 +18,8 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.core.staff_avatars import serialize_staff_avatar_url
+
 
 def _json(value: Any, default: Any) -> Any:
     """psycopg may hand back jsonb as str OR already-parsed; parse defensively."""
@@ -84,6 +86,7 @@ def _staff_row(conn: Any, staff_id: int) -> dict[str, Any]:
         raise LookupError(f"staff {staff_id} not found")
     item = dict(row)
     item["active"] = bool(_int(item.get("active"), 1))
+    item["avatar_url"] = serialize_staff_avatar_url(item.get("avatar_url"))
     return item
 
 

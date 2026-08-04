@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.staff_avatars import serialize_staff_avatar_url
 from app.db.connection import get_conn
 from app.domains import business_truth
 from app.domains.access import scope
@@ -17,6 +18,7 @@ from app.shared.vkpi_decision_common import (
     _window_start,
 )
 from app.platform.db.schema import ensure_vkpi_schema
+
 
 def staff_directory() -> dict[str, Any]:
     ensure_vkpi_schema()
@@ -68,7 +70,13 @@ def staff_directory() -> dict[str, Any]:
         code = str(row.get("employee_code") or "").strip()
         if not code:
             code = (email.split("@")[0] if email else f"staff-{row.get('staff_id')}").strip()
-        normalized.append({**row, "employee_code": code})
+        normalized.append(
+            {
+                **row,
+                "employee_code": code,
+                "avatar_url": serialize_staff_avatar_url(row.get("avatar_url")),
+            }
+        )
     return {"staff": normalized}
 
 
@@ -123,7 +131,7 @@ def staff_kpi(window: str = "month", staff_id: int | None = None) -> dict[str, A
                 "staff_name": member.get("staff_name") or member.get("email") or f"Staff {sid}",
                 "email": member.get("email") or "",
                 "employee_code": member.get("employee_code") or "",
-                "avatar_url": member.get("avatar_url") or "",
+                "avatar_url": member.get("avatar_url"),
                 "role": member.get("role") or "readonly",
                 "active": int(member.get("active") or 0),
                 "kol_claims": 0,
