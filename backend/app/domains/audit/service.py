@@ -42,6 +42,15 @@ def _clean_staff_id(value: Any) -> int:
         return 0
 
 
+def _release_validation_fenced() -> bool:
+    """Keep audit writers inert while a candidate is proven read-only."""
+    # Imported lazily so the audit facade remains safe during application
+    # bootstrap and does not add a module-level dependency on runtime config.
+    from app.core.release_validation import release_validation_active
+
+    return bool(release_validation_active())
+
+
 def _last_id(
     table: str,
     uid_col: str = "id",
@@ -70,6 +79,8 @@ def log_sensitive_access(
 ) -> dict[str, Any]:
     if not staff_id:
         return {"skipped": True, "reason": "missing_staff"}
+    if _release_validation_fenced():
+        return {"skipped": True, "reason": "release_validation_fenced"}
     ensure_vkpi_audit_schema()
     conn = get_conn()
     conn.execute(
@@ -103,6 +114,8 @@ def log_export(
 ) -> dict[str, Any]:
     if not staff_id:
         return {"skipped": True, "reason": "missing_staff"}
+    if _release_validation_fenced():
+        return {"skipped": True, "reason": "release_validation_fenced"}
     ensure_vkpi_audit_schema()
     conn = get_conn()
     conn.execute(
@@ -149,6 +162,8 @@ def log_settings_change(
 ) -> dict[str, Any]:
     if not staff_id:
         return {"skipped": True, "reason": "missing_staff"}
+    if _release_validation_fenced():
+        return {"skipped": True, "reason": "release_validation_fenced"}
     ensure_vkpi_audit_schema()
     full_hash = hashlib.sha256(full_value.encode("utf-8")).hexdigest() if full_value else ""
     conn = get_conn()
@@ -179,6 +194,12 @@ def log_business_event(
 ) -> dict[str, Any]:
     if not staff_id:
         return {"skipped": True, "reason": "missing_staff"}
+    # A caller-supplied connection means the audit row participates in the
+    # same transaction as a business mutation.  Never silently omit that row:
+    # a fenced/read-only checkout must fail so the caller can roll back the
+    # whole unit.  Standalone read-side audit calls remain inert while fenced.
+    if conn is None and _release_validation_fenced():
+        return {"skipped": True, "reason": "release_validation_fenced"}
     if ensure_schema:
         ensure_vkpi_audit_schema()
     active_conn = conn if conn is not None else get_conn()

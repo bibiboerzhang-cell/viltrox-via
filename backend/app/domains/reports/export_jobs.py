@@ -678,8 +678,9 @@ def create_export(*, export_format: str, payload: dict[str, Any], staff: dict[st
         raise
 
     audit_status = "logged"
+    audit_reason = ""
     try:
-        audit.log_export(
+        audit_result = audit.log_export(
             staff_id=actor_id,
             export_kind="pdf_report" if fmt == "pdf" else fmt,
             export_target=export_type,
@@ -694,18 +695,22 @@ def create_export(*, export_format: str, payload: dict[str, Any], staff: dict[st
             user_agent=(request_meta or {}).get("user_agent", ""),
             metric_keys=["views", "sales", "cost", "kpi"],
         )
+        if str(audit_result.get("status") or "") != "logged":
+            audit_status = "skipped" if audit_result.get("skipped") else "pending_retry"
+            audit_reason = str(audit_result.get("reason") or "unexpected_audit_result")
     except Exception as audit_exc:
         # The ready transaction is already durable.  Audit transport failure is
         # a retry/ops signal, not evidence that generation failed; never
         # downgrade or delete a valid export here.
         _rollback_export_transaction(conn)
         audit_status = "pending_retry"
+        audit_reason = type(audit_exc).__name__
         logger.error(
             "vkpi export audit pending retry | export_id=%s error=%s",
             export_id,
             type(audit_exc).__name__,
         )
-    return {
+    response = {
         "export_id": export_id,
         "exportId": export_id,
         "export_uid": export_uid,
@@ -716,6 +721,9 @@ def create_export(*, export_format: str, payload: dict[str, Any], staff: dict[st
         "truncated": truncated,
         "audit_status": audit_status,
     }
+    if audit_reason:
+        response["audit_reason"] = audit_reason
+    return response
 
 
 def _assert_export_access(item: dict[str, Any], staff: dict[str, Any] | None) -> None:

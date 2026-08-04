@@ -78,70 +78,48 @@ def _ensure_cost_ledger_columns() -> None:
 
 
 def ensure_product_cost_schema() -> None:
-    conn = get_conn()
+    # PostgreSQL schema is migration-owned.  Runtime DDL here made ordinary
+    # reads and writes incompatible with the read-only release-validation
+    # checkout and could hide a missing migration in normal traffic.
     if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_product_cost_catalog (
-                id BIGSERIAL PRIMARY KEY,
-                product_sku TEXT NOT NULL UNIQUE,
-                product_name TEXT DEFAULT '',
-                unit_cost_cents BIGINT NOT NULL DEFAULT 0,
-                currency TEXT NOT NULL DEFAULT 'USD',
-                active BOOLEAN NOT NULL DEFAULT TRUE,
-                note TEXT DEFAULT '',
-                row_version BIGINT NOT NULL DEFAULT 1,
-                verification_status TEXT NOT NULL DEFAULT 'reference_unverified',
-                source_type TEXT NOT NULL DEFAULT '',
-                source_ref TEXT NOT NULL DEFAULT '',
-                source_observed_at TIMESTAMPTZ,
-                verified_by_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
-                verified_at TIMESTAMPTZ,
-                created_by_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
-                updated_by_staff_id BIGINT REFERENCES staff(id) ON DELETE SET NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
+        return
+    conn = get_conn()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_product_cost_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_sku TEXT NOT NULL UNIQUE,
+            product_name TEXT DEFAULT '',
+            unit_cost_cents INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'USD',
+            active INTEGER NOT NULL DEFAULT 1,
+            note TEXT DEFAULT '',
+            row_version INTEGER NOT NULL DEFAULT 1,
+            verification_status TEXT NOT NULL DEFAULT 'reference_unverified',
+            source_type TEXT NOT NULL DEFAULT '',
+            source_ref TEXT NOT NULL DEFAULT '',
+            source_observed_at TEXT,
+            verified_by_staff_id INTEGER,
+            verified_at TEXT,
+            created_by_staff_id INTEGER,
+            updated_by_staff_id INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_product_cost_catalog (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_sku TEXT NOT NULL UNIQUE,
-                product_name TEXT DEFAULT '',
-                unit_cost_cents INTEGER NOT NULL DEFAULT 0,
-                currency TEXT NOT NULL DEFAULT 'USD',
-                active INTEGER NOT NULL DEFAULT 1,
-                note TEXT DEFAULT '',
-                row_version INTEGER NOT NULL DEFAULT 1,
-                verification_status TEXT NOT NULL DEFAULT 'reference_unverified',
-                source_type TEXT NOT NULL DEFAULT '',
-                source_ref TEXT NOT NULL DEFAULT '',
-                source_observed_at TEXT,
-                verified_by_staff_id INTEGER,
-                verified_at TEXT,
-                created_by_staff_id INTEGER,
-                updated_by_staff_id INTEGER,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-    if not is_postgres_runtime():
-        existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(vkpi_product_cost_catalog)").fetchall()}
-        for column, ddl in {
-            "row_version": "INTEGER NOT NULL DEFAULT 1",
-            "verification_status": "TEXT NOT NULL DEFAULT 'reference_unverified'",
-            "source_type": "TEXT NOT NULL DEFAULT ''",
-            "source_ref": "TEXT NOT NULL DEFAULT ''",
-            "source_observed_at": "TEXT",
-            "verified_by_staff_id": "INTEGER",
-            "verified_at": "TEXT",
-        }.items():
-            if column not in existing:
-                conn.execute(f"ALTER TABLE vkpi_product_cost_catalog ADD COLUMN {column} {ddl}")
+        """
+    )
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(vkpi_product_cost_catalog)").fetchall()}
+    for column, ddl in {
+        "row_version": "INTEGER NOT NULL DEFAULT 1",
+        "verification_status": "TEXT NOT NULL DEFAULT 'reference_unverified'",
+        "source_type": "TEXT NOT NULL DEFAULT ''",
+        "source_ref": "TEXT NOT NULL DEFAULT ''",
+        "source_observed_at": "TEXT",
+        "verified_by_staff_id": "INTEGER",
+        "verified_at": "TEXT",
+    }.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE vkpi_product_cost_catalog ADD COLUMN {column} {ddl}")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_vkpi_product_cost_catalog_active
