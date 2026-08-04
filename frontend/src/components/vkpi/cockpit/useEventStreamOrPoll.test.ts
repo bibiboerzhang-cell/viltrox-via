@@ -19,6 +19,7 @@ describe("useEventStreamOrPoll", () => {
   const realES = globalThis.EventSource;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     // 还原真实 EventSource(jsdom 下通常为 undefined)。
     (globalThis as { EventSource?: unknown }).EventSource = realES;
@@ -43,6 +44,30 @@ describe("useEventStreamOrPoll", () => {
       const pollFn = vi.fn();
       renderHook(() => useEventStreamOrPoll({ pollFn, interval: 10000, streamUrl: null, enabled: false }));
       expect(pollFn).not.toHaveBeenCalled();
+    });
+
+    it("慢请求不重入，完成后才开始计算下一次间隔", async () => {
+      vi.useFakeTimers();
+      let finishFirst: (() => void) | undefined;
+      const pollFn = vi.fn(() => new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      }));
+      const { unmount } = renderHook(() =>
+        useEventStreamOrPoll({ pollFn, interval: 10000, streamUrl: null }),
+      );
+
+      expect(pollFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(pollFn).toHaveBeenCalledTimes(1);
+
+      finishFirst?.();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(pollFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(pollFn).toHaveBeenCalledTimes(2);
+
+      unmount();
     });
   });
 

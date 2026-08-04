@@ -32,6 +32,8 @@ const terminalStatusSet = new Set<string>(TERMINAL_STATUSES);
 const failedStatusSet = new Set<string>(['failed', 'cancelled', 'timeout', 'prefilter_rejected']);
 const callbackFailedStatusSet = new Set<string>(['failed', 'timeout', 'prefilter_rejected']);
 const completedStatusSet = new Set<string>(['done', 'partial_done']);
+const TASK_POLL_INTERVAL_MS = 3000;
+const TASK_REQUEST_TIMEOUT_MS = 5000;
 
 interface WatcherCallbacks {
   onDone?: (task: AsyncTask) => void;
@@ -48,6 +50,13 @@ interface TaskCenterAPI {
   cancelTask: (taskId: string) => Promise<void>;
   retryTask: (taskId: string) => Promise<string>;
   waitForTask: (taskId: string, callbacks: WatcherCallbacks) => () => void;
+}
+
+interface ActiveTaskRequest {
+  controller: AbortController;
+  generation: number;
+  token: string;
+  promise: Promise<void>;
 }
 
 const TaskCenterContext = createContext<TaskCenterAPI | null>(null);
@@ -90,9 +99,12 @@ function progressValue(task: AsyncTask) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function isDocumentHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
 export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; children: React.ReactNode }) {
   const [tasks, setTasks] = useState<AsyncTask[]>([]);
-  const [intervalMs, setIntervalMs] = useState(() => (typeof document !== 'undefined' && document.hidden ? 30000 : 3000));
   const [realtimeReady, setRealtimeReady] = useState(false);
   const watchersRef = useRef<Map<string, Set<WatcherCallbacks>>>(new Map());
   const previousTasksRef = useRef<Map<string, AsyncTask>>(new Map());
@@ -100,7 +112,8 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   const connectingTaskIdsRef = useRef<Set<string>>(new Set());
   const activeTaskIdsRef = useRef<Set<string>>(new Set());
   const apiTokenRef = useRef(apiToken);
-  const inFlightRef = useRef(false);
+  const requestGenerationRef = useRef(0);
+  const activeRequestRef = useRef<ActiveTaskRequest | null>(null);
   // 3s 轮询多数拍次数据毫无变化;记录上一拍指纹,内容相同就跳过 setTasks,
   // 避免 tasks 引用每 3s 换新 → context value 换新 → 全部 useTaskCenter 消费方空转重渲染。
   const lastTasksFingerprintRef = useRef('');
@@ -120,27 +133,75 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
     watchersRef.current.delete(task.task_id);
   }, []);
 
-  const refreshTasks = useCallback(async () => {
-    if (!apiToken || inFlightRef.current) return;
-    inFlightRef.current = true;
-    try {
-      const nextTasks = await listTasks(apiToken);
-      const previousTasks = previousTasksRef.current;
-      nextTasks.forEach((task) => {
-        const previous = previousTasks.get(task.task_id);
-        if (isTerminalTask(task) && previous?.status !== task.status) {
-          triggerWatchers(task);
-        }
-      });
-      previousTasksRef.current = new Map(nextTasks.map((task) => [task.task_id, task]));
-      const fingerprint = JSON.stringify(nextTasks);
-      if (fingerprint !== lastTasksFingerprintRef.current) {
-        lastTasksFingerprintRef.current = fingerprint;
-        setTasks(nextTasks);
-      }
-    } finally {
-      inFlightRef.current = false;
+  const abortActiveRequest = useCallback(() => {
+    requestGenerationRef.current += 1;
+    const activeRequest = activeRequestRef.current;
+    activeRequestRef.current = null;
+    activeRequest?.controller.abort();
+  }, []);
+
+  const refreshTasks = useCallback((): Promise<void> => {
+    const issuedToken = apiToken;
+    const issuedGeneration = requestGenerationRef.current;
+    if (!issuedToken || isDocumentHidden()) return Promise.resolve();
+
+    const existingRequest = activeRequestRef.current;
+    if (
+      existingRequest
+      && existingRequest.token === issuedToken
+      && existingRequest.generation === issuedGeneration
+      && !existingRequest.controller.signal.aborted
+    ) {
+      return existingRequest.promise;
     }
+    if (existingRequest) {
+      activeRequestRef.current = null;
+      existingRequest.controller.abort();
+    }
+
+    const controller = new AbortController();
+    const promise = (async () => {
+      try {
+        const nextTasks = await listTasks(
+          issuedToken,
+          {},
+          { signal: controller.signal, timeoutMs: TASK_REQUEST_TIMEOUT_MS },
+        );
+        if (
+          controller.signal.aborted
+          || requestGenerationRef.current !== issuedGeneration
+          || apiTokenRef.current !== issuedToken
+        ) return;
+
+        const previousTasks = previousTasksRef.current;
+        nextTasks.forEach((task) => {
+          const previous = previousTasks.get(task.task_id);
+          if (isTerminalTask(task) && previous?.status !== task.status) {
+            triggerWatchers(task);
+          }
+        });
+        previousTasksRef.current = new Map(nextTasks.map((task) => [task.task_id, task]));
+        const fingerprint = JSON.stringify(nextTasks);
+        if (fingerprint !== lastTasksFingerprintRef.current) {
+          lastTasksFingerprintRef.current = fingerprint;
+          setTasks(nextTasks);
+        }
+      } catch {
+        // Keep the last server-confirmed snapshot. Abort/timeout/network errors must
+        // never be converted into made-up progress or terminal task state.
+      } finally {
+        if (activeRequestRef.current?.controller === controller) {
+          activeRequestRef.current = null;
+        }
+      }
+    })();
+    activeRequestRef.current = {
+      controller,
+      generation: issuedGeneration,
+      token: issuedToken,
+      promise,
+    };
+    return promise;
   }, [apiToken, triggerWatchers]);
 
   const closeEventSource = useCallback((taskId: string) => {
@@ -151,23 +212,18 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   }, []);
 
   useEffect(() => {
-    const onVisibilityChange = () => {
-      setIntervalMs(document.hidden ? 30000 : 3000);
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    onVisibilityChange();
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, []);
-
-  useEffect(() => {
     if (!apiToken) {
       setRealtimeReady(false);
       return undefined;
     }
-    let cancelled = false;
-    getTaskRealtimeStatus(apiToken)
+    const controller = new AbortController();
+    const issuedToken = apiToken;
+    getTaskRealtimeStatus(
+      issuedToken,
+      { signal: controller.signal, timeoutMs: TASK_REQUEST_TIMEOUT_MS },
+    )
       .then((status) => {
-        if (cancelled) return;
+        if (controller.signal.aborted || apiTokenRef.current !== issuedToken) return;
         const pollingFallbackRequired = Boolean(status.polling_fallback_required);
         setRealtimeReady(Boolean(
           status.sse_available
@@ -177,15 +233,28 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
         ));
       })
       .catch(() => {
-        if (!cancelled) setRealtimeReady(false);
+        if (!controller.signal.aborted && apiTokenRef.current === issuedToken) {
+          setRealtimeReady(false);
+        }
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [apiToken]);
 
   useEffect(() => {
+    let disposed = false;
+    let timer: number | undefined;
+
+    const clearTimer = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+
     if (!apiToken) {
+      abortActiveRequest();
       setTasks([]);
       lastTasksFingerprintRef.current = '';
       previousTasksRef.current = new Map();
@@ -193,14 +262,63 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
       eventSourcesRef.current.clear();
       return undefined;
     }
-    void refreshTasks();
-    const timer = window.setInterval(() => {
-      void refreshTasks();
-    }, intervalMs);
-    return () => {
-      window.clearInterval(timer);
+
+    // A token owns one polling generation. Reset the visible snapshot before a
+    // different session can populate it, and invalidate every older response.
+    abortActiveRequest();
+    setTasks([]);
+    lastTasksFingerprintRef.current = '';
+    previousTasksRef.current = new Map();
+
+    const runPoll = async (generation: number) => {
+      if (
+        disposed
+        || isDocumentHidden()
+        || requestGenerationRef.current !== generation
+        || apiTokenRef.current !== apiToken
+      ) return;
+
+      await refreshTasks();
+      if (
+        disposed
+        || isDocumentHidden()
+        || requestGenerationRef.current !== generation
+        || apiTokenRef.current !== apiToken
+      ) return;
+
+      // Schedule only after the request settles. This guarantees a complete
+      // quiet window and prevents a slow request from stacking with the next tick.
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void runPoll(generation);
+      }, TASK_POLL_INTERVAL_MS);
     };
-  }, [apiToken, intervalMs, refreshTasks]);
+
+    const startVisibleCycle = () => {
+      clearTimer();
+      abortActiveRequest();
+      if (disposed || isDocumentHidden()) return;
+      void runPoll(requestGenerationRef.current);
+    };
+
+    const onVisibilityChange = () => {
+      clearTimer();
+      if (isDocumentHidden()) {
+        abortActiveRequest();
+        return;
+      }
+      startVisibleCycle();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    startVisibleCycle();
+    return () => {
+      disposed = true;
+      clearTimer();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      abortActiveRequest();
+    };
+  }, [abortActiveRequest, apiToken, refreshTasks]);
 
   useEffect(() => {
     if (!realtimeReady || typeof EventSource === 'undefined') {

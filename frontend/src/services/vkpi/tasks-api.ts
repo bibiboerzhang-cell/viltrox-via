@@ -85,6 +85,12 @@ const DEFAULT_TASK_STATUSES: AsyncTaskStatus[] = [
 ];
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_TASK_REQUEST_TIMEOUT_MS = 5000;
+
+export interface TaskRequestOptions {
+  signal?: AbortSignal | null;
+  timeoutMs?: number;
+}
 
 function normalizeAsyncTask(raw: Row): AsyncTask | null {
   const taskId = String(raw.task_id || "");
@@ -112,7 +118,11 @@ function isRecentTask(task: AsyncTask): boolean {
   return Number.isFinite(finishedAt) && Date.now() - finishedAt < ONE_HOUR_MS;
 }
 
-export async function listTasks(token: string, filters: { status?: AsyncTaskStatus[] } = {}) {
+export async function listTasks(
+  token: string,
+  filters: { status?: AsyncTaskStatus[] } = {},
+  request: TaskRequestOptions = {},
+) {
   const statuses = new Set(filters.status?.length ? filters.status : DEFAULT_TASK_STATUSES);
   // The backend already supports an unfiltered bounded list.  Fetch it once
   // and filter locally instead of polling one request per status (10 requests
@@ -120,7 +130,10 @@ export async function listTasks(token: string, filters: { status?: AsyncTaskStat
   // connection-pool starvation.
   const response = await apiFetch<{ tasks?: Row[]; items?: Row[] }>(
     "/api/marketing/tasks?limit=200",
-    {},
+    {
+      signal: request.signal,
+      timeoutMs: request.timeoutMs ?? DEFAULT_TASK_REQUEST_TIMEOUT_MS,
+    },
     token,
   );
   const tasksById = new Map<string, AsyncTask>();
@@ -138,8 +151,15 @@ export async function listTasks(token: string, filters: { status?: AsyncTaskStat
   });
 }
 
-export async function getTaskRealtimeStatus(token: string) {
-  return apiFetch<Row>("/api/admin/vkpi/tasks/realtime-status", {}, token);
+export async function getTaskRealtimeStatus(token: string, request: TaskRequestOptions = {}) {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/tasks/realtime-status",
+    {
+      signal: request.signal,
+      timeoutMs: request.timeoutMs ?? DEFAULT_TASK_REQUEST_TIMEOUT_MS,
+    },
+    token,
+  );
 }
 
 export async function getTaskQueue(

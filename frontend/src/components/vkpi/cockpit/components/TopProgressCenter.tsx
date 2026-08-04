@@ -243,7 +243,7 @@ export function TopProgressCenter() {
   }, []);
 
   const load = React.useCallback(() => {
-    fetchProgressCenter()
+    return fetchProgressCenter()
       .then((res) => {
         if (!aliveRef.current) return;
         setData(res);

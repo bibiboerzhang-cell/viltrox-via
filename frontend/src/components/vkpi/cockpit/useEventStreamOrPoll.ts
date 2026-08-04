@@ -73,21 +73,50 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
   useEffect(() => {
     if (!enabled) return undefined;
 
-    const runPoll = () => {
-      void pollRef.current();
+    // Keep at most one read in flight and start the next interval only after
+    // that read has settled.  A fixed setInterval can otherwise keep the app
+    // permanently network-busy when a cold request takes as long as the poll
+    // interval (and it needlessly multiplies pressure during recovery).
+    let pollPromise: Promise<void> | null = null;
+    const runPoll = (): Promise<void> => {
+      if (pollPromise) return pollPromise;
+      const active = (async () => {
+        try {
+          await pollRef.current();
+        } catch {
+          // Consumers own their visible error/degraded state.  This shared
+          // scheduler must keep SSE fallback alive without an unhandled
+          // rejection or an overlapping retry storm.
+        }
+      })();
+      const tracked = active.finally(() => {
+        if (pollPromise === tracked) pollPromise = null;
+      });
+      pollPromise = tracked;
+      return tracked;
     };
 
     // ── 轮询兜底(与 useWorkflowRunsStream 同款可见性暂停形态)────────────────
-    let intervalId: number | undefined;
+    let timeoutId: number | undefined;
+    let polling = false;
+    const scheduleNext = () => {
+      if (!polling || timeoutId !== undefined || isDocumentHidden()) return;
+      timeoutId = window.setTimeout(() => {
+        timeoutId = undefined;
+        if (!polling || isDocumentHidden()) return;
+        void runPoll().finally(scheduleNext);
+      }, intervalMs);
+    };
     const startPolling = () => {
-      if (intervalId || isDocumentHidden()) return;
-      runPoll();
-      intervalId = window.setInterval(runPoll, intervalMs);
+      if (polling || isDocumentHidden()) return;
+      polling = true;
+      void runPoll().finally(scheduleNext);
     };
     const stopPolling = () => {
-      if (intervalId) {
-        window.clearInterval(intervalId);
-        intervalId = undefined;
+      polling = false;
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+        timeoutId = undefined;
       }
     };
     const handleVisibility = () => {
@@ -111,9 +140,9 @@ export function useEventStreamOrPoll(options: EventStreamOrPollOptions): void {
       const onSseMessage = (ev: Event) => {
         const handler = onEventRef.current;
         if (handler) handler(ev as MessageEvent);
-        else runPoll();
+        else void runPoll();
       };
-      runPoll(); // 播种首屏,不等 ticket 或第一条事件
+      void runPoll(); // 播种首屏,不等 ticket 或第一条事件
       void prepareSseStream(streamUrl as string, streamToken || undefined)
         .then((authorizedUrl) => {
           if (cancelled) return;

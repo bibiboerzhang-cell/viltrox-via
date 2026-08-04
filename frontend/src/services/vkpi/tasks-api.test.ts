@@ -32,7 +32,18 @@ describe("listTasks(归一 / 去重 / 排序 / recent 过滤)", () => {
     await listTasks("tok");
     expect(apiFetch).toHaveBeenCalledTimes(1);
     expect(apiFetch.mock.calls[0][0]).toBe("/api/marketing/tasks?limit=200");
+    expect(apiFetch.mock.calls[0][1]).toMatchObject({ timeoutMs: 5000 });
     expect(apiFetch.mock.calls[0][2]).toBe("tok");
+  });
+
+  it("向底层请求透传 AbortSignal 与显式短超时", async () => {
+    const controller = new AbortController();
+    await listTasks("tok", {}, { signal: controller.signal, timeoutMs: 1200 });
+
+    expect(apiFetch.mock.calls[0][1]).toMatchObject({
+      signal: controller.signal,
+      timeoutMs: 1200,
+    });
   });
 
   it("显式 status 列表在单次响应中本地过滤", async () => {
@@ -138,6 +149,7 @@ describe("realtime / cancel / retry / stream URL", () => {
     apiFetch.mockResolvedValue({});
     await getTaskRealtimeStatus("tok");
     expect(apiFetch.mock.calls[0][0]).toBe("/api/admin/vkpi/tasks/realtime-status");
+    expect(apiFetch.mock.calls[0][1]).toMatchObject({ timeoutMs: 5000 });
   });
 
   it("cancelTask → POST + encode + 空 body", async () => {
