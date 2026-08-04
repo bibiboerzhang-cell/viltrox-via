@@ -148,6 +148,118 @@ if [ ! -x "${PYTHON_BIN}" ]; then
   exit 1
 fi
 
+# Application bytes live under the atomic ``current`` pointer while the
+# database environment, backups, uploads, and media cache intentionally remain
+# shared at REMOTE_ROOT.  Inspect release evidence independently so a broken
+# pointer cannot make runtime-state fall back to stale legacy root files, and so
+# release-observability failure never prevents the database/media backup.
+runtime_release_state="invalid"
+runtime_release_error="not_inspected"
+runtime_current_path=""
+runtime_release_id=""
+runtime_git_head=""
+runtime_frontend_asset=""
+
+inspect_atomic_current() {
+  local remote_root_path current_link releases_dir resolved_current resolved_parent
+  local release_id build_sha_path manifest_path index_path manifest_sha asset
+
+  remote_root_path="$(pwd -P)"
+  current_link="${remote_root_path}/current"
+  releases_dir="${remote_root_path}/releases"
+  if [ ! -L "${current_link}" ]; then
+    runtime_release_error="current_not_symlink"
+    return 0
+  fi
+  resolved_current="$(readlink -f -- "${current_link}" 2>/dev/null || true)"
+  if [ -z "${resolved_current}" ] || [ ! -d "${resolved_current}" ]; then
+    runtime_release_error="current_unresolved"
+    return 0
+  fi
+  resolved_parent="$(dirname -- "${resolved_current}")"
+  if [ "${resolved_parent}" != "${releases_dir}" ]; then
+    runtime_release_error="current_outside_releases"
+    return 0
+  fi
+  release_id="${resolved_current##*/}"
+  if ! [[ "${release_id}" =~ ^[A-Za-z0-9_.-]+$ ]] || [ "${release_id}" = "." ] || [ "${release_id}" = ".." ]; then
+    runtime_release_error="release_id_invalid"
+    return 0
+  fi
+
+  build_sha_path="${resolved_current}/BUILD_GIT_SHA"
+  manifest_path="${resolved_current}/.vkpi-release.json"
+  index_path="${resolved_current}/frontend/dist/index.html"
+  if [ ! -f "${build_sha_path}" ] || [ -L "${build_sha_path}" ]; then
+    runtime_release_error="build_sha_missing_or_unsafe"
+    return 0
+  fi
+  if [ ! -f "${manifest_path}" ] || [ -L "${manifest_path}" ]; then
+    runtime_release_error="release_manifest_missing_or_unsafe"
+    return 0
+  fi
+  if [ ! -f "${index_path}" ] || [ -L "${index_path}" ]; then
+    runtime_release_error="frontend_index_missing_or_unsafe"
+    return 0
+  fi
+
+  build_sha="$(tr -d '\r\n' < "${build_sha_path}")"
+  if ! [[ "${build_sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    runtime_release_error="build_sha_invalid"
+    return 0
+  fi
+  if ! manifest_sha="$(PYTHONDONTWRITEBYTECODE=1 "${PYTHON_BIN}" -B - "${manifest_path}" "${release_id}" <<'PY'
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import re
+import sys
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(1) from exc
+if not isinstance(payload, dict):
+    raise SystemExit(1)
+git_sha = payload.get("git_sha")
+if (
+    payload.get("schema") != 2
+    or payload.get("release_id") != sys.argv[2]
+    or not isinstance(git_sha, str)
+    or not re.fullmatch(r"[0-9a-fA-F]{40}", git_sha)
+):
+    raise SystemExit(1)
+print(git_sha)
+PY
+  )"; then
+    runtime_release_error="release_manifest_invalid"
+    return 0
+  fi
+  if [ "${manifest_sha}" != "${build_sha}" ]; then
+    runtime_release_error="release_build_evidence_mismatch"
+    return 0
+  fi
+
+  asset="$(grep -o 'app-[A-Za-z0-9_-]*\.js' "${index_path}" | head -1 || true)"
+  if [ -z "${asset}" ]; then
+    runtime_release_error="frontend_asset_not_declared"
+    return 0
+  fi
+  if [ ! -f "${resolved_current}/frontend/dist/assets/${asset}" ] \
+    || [ -L "${resolved_current}/frontend/dist/assets/${asset}" ]; then
+    runtime_release_error="frontend_asset_missing_or_unsafe"
+    return 0
+  fi
+
+  runtime_release_state="valid"
+  runtime_release_error=""
+  runtime_current_path="${resolved_current}"
+  runtime_release_id="${release_id}"
+  runtime_git_head="${build_sha}"
+  runtime_frontend_asset="${asset}"
+}
+
 for required_command in pg_dump pg_restore sha256sum; do
   if ! command -v "${required_command}" >/dev/null 2>&1; then
     echo "${required_command} not found on remote host" >&2
@@ -268,13 +380,23 @@ remote_pgservice=""
 remote_pgpass=""
 remote_command_err=""
 
+inspect_atomic_current
+service_status="$(systemctl is-active viltrox-2.0-test.service 2>/dev/null || true)"
+[ -n "${service_status}" ] || service_status="unknown"
 {
   echo "stamp=${REMOTE_BACKUP_DIR##*/}"
   echo "remote_root=${REMOTE_ROOT}"
   echo "service=viltrox-2.0-test.service"
-  systemctl is-active viltrox-2.0-test.service 2>/dev/null | sed 's/^/service_status=/'
-  git log --oneline -1 2>/dev/null | sed 's/^/git_head=/' || true
-  find frontend/dist/assets -maxdepth 1 -type f -name 'app-*.js' -printf 'frontend_asset=%f\n' 2>/dev/null | sort | tail -1 || true
+  echo "service_status=${service_status}"
+  echo "release_state=${runtime_release_state}"
+  if [ "${runtime_release_state}" = "valid" ]; then
+    echo "current_path=${runtime_current_path}"
+    echo "release_id=${runtime_release_id}"
+    echo "git_head=${runtime_git_head}"
+    echo "frontend_asset=${runtime_frontend_asset}"
+  else
+    echo "release_error=${runtime_release_error}"
+  fi
 } > "${REMOTE_BACKUP_DIR}/runtime-state.txt"
 
 if [ -d uploads/vkpi_media_cache ]; then

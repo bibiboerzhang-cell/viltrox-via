@@ -15,6 +15,10 @@ ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts" / "ops" / "backup_prod_vkpi.sh"
 STAMP = "20260715T140000Z"
 SECRET_PASSWORD = "do-not-print-prod-secret"
+CURRENT_RELEASE_ID = "20260804T085838Z-f4106053980b"
+CURRENT_GIT_SHA = "f4106053980b20a9e24335b369d845fb2fbefafa"
+CURRENT_ASSET = "app-UHZk0gU6.js"
+LEGACY_ASSET = "app-DswQN-ls.js"
 SECRET_URL = (
     f"postgresql://backup_user:{SECRET_PASSWORD}@127.0.0.1:54329/viltrox2"
     "?sslmode=prefer&application_name=vkpi%20prod%20backup"
@@ -31,6 +35,37 @@ def _fixture(tmp_path: Path, *, transfer_mode: str = "valid") -> tuple[dict[str,
     remote.mkdir()
     (remote / ".env").write_text(f'DATABASE_URL="{SECRET_URL}"\n', encoding="utf-8")
     (remote / "backups").mkdir()
+    legacy_assets = remote / "frontend" / "dist" / "assets"
+    legacy_assets.mkdir(parents=True)
+    (legacy_assets / LEGACY_ASSET).write_text("legacy", encoding="utf-8")
+    (remote / "frontend" / "dist" / "index.html").write_text(
+        f'<script type="module" src="/assets/{LEGACY_ASSET}"></script>\n',
+        encoding="utf-8",
+    )
+    release = remote / "releases" / CURRENT_RELEASE_ID
+    release_assets = release / "frontend" / "dist" / "assets"
+    release_assets.mkdir(parents=True)
+    (release / "BUILD_GIT_SHA").write_text(CURRENT_GIT_SHA + "\n", encoding="ascii")
+    (release / ".vkpi-release.json").write_text(
+        json.dumps(
+            {
+                "schema": 2,
+                "release_id": CURRENT_RELEASE_ID,
+                "git_sha": CURRENT_GIT_SHA,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (release / "frontend" / "dist" / "index.html").write_text(
+        f'<script type="module" src="/assets/{CURRENT_ASSET}"></script>\n',
+        encoding="utf-8",
+    )
+    (release_assets / CURRENT_ASSET).write_text("current", encoding="utf-8")
+    # An unreferenced but lexicographically later asset proves runtime-state is
+    # derived from index.html, not from directory sorting.
+    (release_assets / "app-zzzz-unused.js").write_text("unused", encoding="utf-8")
+    (remote / "current").symlink_to(release, target_is_directory=True)
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -300,6 +335,61 @@ def test_production_backup_hides_dsn_and_verifies_remote_and_downloaded_archive(
     assert "backup verification: sha256=passed pg_restore_list=passed" in result.stdout
 
 
+def test_production_backup_runtime_state_is_bound_to_atomic_current(
+    tmp_path: Path,
+) -> None:
+    env, local_parent, _command_log = _fixture(tmp_path)
+
+    result = _run(env)
+
+    assert result.returncode == 0, result.stderr
+    state = (local_parent / STAMP / "runtime-state.txt").read_text(encoding="utf-8")
+    assert "release_state=valid\n" in state
+    assert f"release_id={CURRENT_RELEASE_ID}\n" in state
+    assert f"git_head={CURRENT_GIT_SHA}\n" in state
+    assert f"frontend_asset={CURRENT_ASSET}\n" in state
+    assert "app-zzzz-unused.js" not in state
+    assert LEGACY_ASSET not in state
+
+
+@pytest.mark.parametrize(
+    ("pointer_mode", "expected_error"),
+    [
+        ("broken", "current_unresolved"),
+        ("escape", "current_outside_releases"),
+    ],
+)
+def test_production_backup_keeps_db_and_media_when_atomic_current_is_invalid(
+    tmp_path: Path,
+    pointer_mode: str,
+    expected_error: str,
+) -> None:
+    env, local_parent, _command_log = _fixture(tmp_path)
+    remote = tmp_path / "remote"
+    current = remote / "current"
+    current.unlink()
+    if pointer_mode == "broken":
+        current.symlink_to(remote / "releases" / "missing", target_is_directory=True)
+    else:
+        escaped = remote / "escaped-release"
+        escaped.mkdir()
+        current.symlink_to(escaped, target_is_directory=True)
+
+    result = _run(env)
+
+    assert result.returncode == 0, result.stderr
+    downloaded = local_parent / STAMP
+    assert (downloaded / "prod-db.dump").read_bytes() == b"PGDMP-valid-production-fixture"
+    assert (downloaded / "media-cache-size.txt").exists()
+    assert (local_parent / "latest").resolve() == downloaded.resolve()
+    state = (downloaded / "runtime-state.txt").read_text(encoding="utf-8")
+    assert "release_state=invalid\n" in state
+    assert f"release_error={expected_error}\n" in state
+    assert "frontend_asset=" not in state
+    assert "git_head=" not in state
+    assert LEGACY_ASSET not in state
+
+
 @pytest.mark.parametrize(
     ("transfer_mode", "message"),
     [
@@ -336,6 +426,15 @@ def test_production_backup_source_never_passes_database_url_to_pg_dump() -> None
     assert source.index("local pg_restore could not read") < source.index(
         'ln -sfn "${STAMP}"'
     )
+    assert 'current_link="${remote_root_path}/current"' in source
+    assert 'resolved_parent="$(dirname -- "${resolved_current}")"' in source
+    assert 'index_path="${resolved_current}/frontend/dist/index.html"' in source
+    assert "grep -o 'app-[A-Za-z0-9_-]*\\.js' \"${index_path}\"" in source
+    assert "git log --oneline" not in source
+    assert "find frontend/dist/assets" not in source
+    # Secrets and mutable data intentionally remain anchored at the shared root.
+    assert 'env_path = Path(".env")' in source
+    assert "if [ -d uploads/vkpi_media_cache ]; then" in source
 
 
 def test_encrypted_environment_is_verified_bound_and_returned_to_remote_backup_set(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import subprocess
 
@@ -10,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SHELL_CONTRACTS: dict[str, tuple[str, ...]] = {
     "scripts/ops/audit_prod_vkpi_state.sh": (
-        "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend '${PYTHON_BIN}' -B -",
+        'PYTHONDONTWRITEBYTECODE=1 \\',
+        '"${remote_python}" -B -',
     ),
     "scripts/ops/benchmark_vkpi_perf.sh": (
         'PYTHONDONTWRITEBYTECODE=1 RUNS="${RUNS}" PYTHONPATH=backend "${PYTHON_BIN}" -B -',
@@ -80,6 +82,39 @@ def test_ops_shell_scripts_remain_valid_bash(relative: str) -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_prod_state_audit_loads_current_backend_with_root_shared_state() -> None:
+    source = (ROOT / "scripts/ops/audit_prod_vkpi_state.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for required in (
+        'current_link="${remote_root_path}/current"',
+        'releases_dir="${remote_root_path}/releases"',
+        'current_path="$(readlink -f -- "${current_link}"',
+        '"$(dirname -- "${current_path}")" != "${releases_dir}"',
+        'cd "${current_path}"',
+        'LOCAL_ENV_FILE="${remote_root_path}/.env"',
+        'RUNTIME_ROOT="${remote_root_path}/runtime"',
+        'PYTHONPATH="${current_path}/backend"',
+        '"${remote_python}" -B -',
+        '"${current_path}/BUILD_GIT_SHA"',
+        '"${current_path}/.vkpi-release.json"',
+        'manifest.get("git_sha") != build_sha',
+    ):
+        assert required in source
+    assert "PYTHONPATH=backend '${PYTHON_BIN}'" not in source
+
+
+def test_prod_state_audit_embedded_python_is_valid() -> None:
+    source = (ROOT / "scripts/ops/audit_prod_vkpi_state.sh").read_text(
+        encoding="utf-8"
+    )
+    marker = '"${remote_python}" -B - <<\'PY\'\n'
+    embedded = source.split(marker, 1)[1].split("\nPY\n", 1)[0]
+
+    ast.parse(embedded)
 
 
 @pytest.mark.parametrize("relative", PYTHON_ENTRYPOINTS)
