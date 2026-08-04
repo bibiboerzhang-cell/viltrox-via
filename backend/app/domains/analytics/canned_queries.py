@@ -310,6 +310,8 @@ def _s_budget_remaining(rows: list[dict[str, Any]], ctx: dict[str, Any]) -> str:
 
 
 # 8) 官号表现:18 官号最新快照(补齐表)+ 账号档案,按粉丝降序。
+# 补齐表混合 synced / estimated_linear / carry_forward，故来源和置信度必须逐行返回，
+# 不能把估算行包装成实测数据。
 def _b_official_perf(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...]]:
     sql = (
         "SELECT f.channel_id AS channel_id, "
@@ -318,7 +320,13 @@ def _b_official_perf(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...]]:
         "f.snapshot_date AS snapshot_date, "
         "COALESCE(f.followers, 0) AS followers, "
         "COALESCE(f.total_views, 0) AS total_views, "
-        "f.engagement_rate AS engagement_rate "
+        "f.engagement_rate AS engagement_rate, "
+        "f.source AS source, "
+        "f.confidence AS confidence, "
+        "CASE WHEN f.source = 'synced' THEN 'observed' "
+        "WHEN f.source IN ('estimated_linear', 'carry_forward') THEN 'estimated' "
+        "ELSE 'unknown' END AS truth_status, "
+        "COALESCE(f.reason, '') AS source_reason "
         "FROM vkpi_channel_metrics_filled f "
         "LEFT JOIN vkpi_employee_channels c ON c.id = f.channel_id "
         "WHERE f.snapshot_date = ("
@@ -333,11 +341,17 @@ def _s_official_perf(rows: list[dict[str, Any]], ctx: dict[str, Any]) -> str:
     if not rows:
         return "暂无官号快照数据。"
     total_followers = sum(_i(r.get("followers")) for r in rows)
+    observed = sum(1 for r in rows if str(r.get("truth_status") or "") == "observed")
+    estimated = sum(1 for r in rows if str(r.get("truth_status") or "") == "estimated")
+    unknown = len(rows) - observed - estimated
     top = rows[0]
+    truth_note = f"实测 {observed}、估算 {estimated}"
+    if unknown:
+        truth_note += f"、来源未知 {unknown}"
     return (
         f"{len(rows)} 个官号最新快照:总粉丝 {total_followers:,},"
         f"粉丝最多为 {top.get('handle') or top.get('channel_id')}"
-        f"({top.get('platform') or '?'},{_i(top.get('followers')):,})。"
+        f"({top.get('platform') or '?'},{_i(top.get('followers')):,});{truth_note}。"
     )
 
 
@@ -503,7 +517,7 @@ QUESTIONS: tuple[CannedQuestion, ...] = (
     CannedQuestion(
         key="official_performance",
         title="官号表现",
-        description="公司官号最新快照(粉丝/总观看/互动率),按粉丝降序。",
+        description="公司官号最新快照；逐行标明同步实测或补齐估算及其置信度。",
         columns=(
             "channel_id",
             "platform",
@@ -512,6 +526,10 @@ QUESTIONS: tuple[CannedQuestion, ...] = (
             "followers",
             "total_views",
             "engagement_rate",
+            "source",
+            "confidence",
+            "truth_status",
+            "source_reason",
         ),
         source_tables=("vkpi_channel_metrics_filled", "vkpi_employee_channels"),
         build=_b_official_perf,

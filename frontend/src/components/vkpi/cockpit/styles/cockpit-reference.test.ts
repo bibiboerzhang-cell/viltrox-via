@@ -9,6 +9,7 @@ const SOURCE_FILES = [
   "cockpit-reference.shell.css",
   "cockpit-reference.chrome.css",
   "cockpit-reference.routes.css",
+  "cockpit-reference.ask-details.css",
   "cockpit-reference.modules.css",
 ] as const;
 

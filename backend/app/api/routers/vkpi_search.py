@@ -15,13 +15,48 @@ logger = get_logger(__name__)
 GLOBAL_SEARCH_QUERY_MAX_LENGTH = 80
 GLOBAL_SEARCH_LIMIT_DEFAULT = 5
 GLOBAL_SEARCH_LIMIT_MAX = 20
-_EVENT_SCOPE_FETCH_MULTIPLIER = 5
+# Event team membership is stored in a JSON array and is filtered after the
+# lightweight candidate query for cross-backend compatibility.  Fetch a wider
+# bounded window so ordinary staff searches do not lose valid rows behind a
+# handful of other teams' matches; if the cap is still exhausted, source_status
+# below reports degradation instead of claiming a complete zero result.
+_EVENT_SCOPE_FETCH_MULTIPLIER = 50
 _PG_TRGM_CAPABILITY: bool | None = None
 
 
 def _has_unrestricted_search_access(staff) -> bool:
     """Share the natural/global manager-role contract without changing retrieval."""
     return natural_search.has_unrestricted_search_access(staff)
+
+
+def _trusted_staff_actor_id(staff) -> int:
+    """Resolve only a real staff primary key, never a user-table identifier.
+
+    ``staff_context_for_user`` keeps ``user_id`` in its fail-closed base shape
+    when no staff row exists.  The generic legacy scope helper may use that as
+    a last fallback, which is unsafe here because users and staff use distinct
+    ID spaces.  A status-less explicit ``id``/``staff_id`` remains supported
+    for internal callers and tests; an explicitly unresolved organization
+    context is always blocked.
+    """
+    if not isinstance(staff, dict):
+        return 0
+    scope_status = str(staff.get("organization_scope_status") or "").strip().lower()
+    if scope_status and scope_status != "resolved":
+        return 0
+    try:
+        value = int(staff.get("id") or staff.get("staff_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _explicit_staff_context_unresolved(staff) -> bool:
+    """Return True only when authentication explicitly reports no valid staff scope."""
+    if not isinstance(staff, dict):
+        return True
+    status = str(staff.get("organization_scope_status") or "").strip().lower()
+    return bool(status and status != "resolved")
 
 
 def _escape_like(value: str) -> str:
@@ -125,6 +160,8 @@ def vkpi_search(
     limit: int = Query(default=20, ge=1, le=100),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
+    if _explicit_staff_context_unresolved(staff):
+        raise HTTPException(status_code=403, detail="staff scope is unresolved")
     if not _has_unrestricted_search_access(staff):
         raise HTTPException(
             status_code=403,
@@ -155,8 +192,26 @@ def vkpi_global_search(
     ——管理层全量;非管理层套 C3 轻隔离口径(X4-MEDIUM 修复 2026-07-03):
     KOL 限本人可见集(收藏∪项目合作∪共享∪认领)、项目限本人参与集、活动限本人在队。
     """
+    if _explicit_staff_context_unresolved(staff):
+        blocked_status = {
+            source: {
+                "status": "blocked",
+                "result_count": 0,
+                "reason": "staff_scope_unresolved",
+            }
+            for source in ("kols", "projects", "events")
+        }
+        return {
+            "q": str(q or "").strip().lower(),
+            "kols": [],
+            "projects": [],
+            "events": [],
+            "source_status": blocked_status,
+        }
     _is_manager = _has_unrestricted_search_access(staff)
-    _me = 0 if _is_manager else int(staff.get("staff_id") or 0)
+    # ``staff_context_for_user`` exposes the canonical staff primary key as
+    # ``id``.  Never let its fail-closed ``user_id`` fallback enter staff scope.
+    _me = 0 if _is_manager else _trusted_staff_actor_id(staff)
     keyword = str(q or "").strip().lower()
     if not keyword:
         raise HTTPException(status_code=400, detail="q 不能为空")
@@ -178,30 +233,77 @@ def vkpi_global_search(
     postgres_runtime = is_postgres_runtime()
     use_trigram = postgres_runtime and _pg_trgm_available(conn)
 
+    source_status: dict[str, dict] = {
+        "kols": {"status": "ready", "result_count": 0},
+        "projects": {"status": "ready", "result_count": 0},
+        "events": {"status": "ready", "result_count": 0},
+    }
+
+    def _set_source_status(
+        source_key: str,
+        *,
+        status: str,
+        result_count: int = 0,
+        reason: str = "",
+    ) -> None:
+        item: dict[str, object] = {
+            "status": status,
+            "result_count": max(0, int(result_count)),
+        }
+        if reason:
+            item["reason"] = reason
+        source_status[source_key] = item
+
     def _rows(
         sql: str,
         params: tuple,
         fallback: tuple[str, tuple] | None = None,
         fill_limit: int = 0,
+        *,
+        source_key: str,
     ) -> list[dict]:
-        # 单表查询挂了(迁移未跑/列缺失)不拖垮整个搜索,失败该组回空。
+        # 单表查询挂了(迁移未跑/列缺失)不拖垮整个搜索。额外返回 source_status，
+        # 使客户端能区分“查询成功但零命中”和“该数据源故障”，旧 kols/projects/events
+        # 数组保持不变，老前端仍可直接消费。
         try:
             rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
         except Exception:
             if fallback is None:
                 logger.warning("global_search 子查询失败", exc_info=True)
+                _set_source_status(
+                    source_key,
+                    status="error",
+                    reason="query_failed",
+                )
                 return []
             logger.warning("global_search 优化查询失败,回退 LIKE", exc_info=True)
             fallback_sql, fallback_params = fallback
             try:
-                return [
+                rows = [
                     dict(r)
                     for r in conn.execute(fallback_sql, fallback_params).fetchall()
                 ]
+                _set_source_status(
+                    source_key,
+                    status="degraded",
+                    result_count=len(rows),
+                    reason="optimized_query_failed_fallback_succeeded",
+                )
+                return rows
             except Exception:
                 logger.warning("global_search LIKE 回退失败", exc_info=True)
+                _set_source_status(
+                    source_key,
+                    status="error",
+                    reason="query_and_fallback_failed",
+                )
                 return []
         if fallback is None or fill_limit <= 0 or len(rows) >= fill_limit:
+            _set_source_status(
+                source_key,
+                status="ready",
+                result_count=len(rows),
+            )
             return rows
         fallback_sql, fallback_params = fallback
         try:
@@ -211,6 +313,12 @@ def vkpi_global_search(
             ]
         except Exception:
             logger.warning("global_search LIKE 补位失败", exc_info=True)
+            _set_source_status(
+                source_key,
+                status="degraded",
+                result_count=len(rows),
+                reason="supplement_query_failed",
+            )
             return rows
         seen_ids = {row.get("id") for row in rows}
         for row in fallback_rows:
@@ -220,6 +328,11 @@ def vkpi_global_search(
             seen_ids.add(row.get("id"))
             if len(rows) >= fill_limit:
                 break
+        _set_source_status(
+            source_key,
+            status="ready",
+            result_count=len(rows),
+        )
         return rows
 
     # 非管理层的可见集 SQL(服务端从鉴权 staff 推导,绝不信客户端;识别不出身份=只回空,诚实)。
@@ -227,7 +340,19 @@ def vkpi_global_search(
     _proj_scope_sql = ""
     if not _is_manager:
         if _me <= 0:
-            return {"q": keyword, "kols": [], "projects": [], "events": []}
+            for source_key in source_status:
+                _set_source_status(
+                    source_key,
+                    status="blocked",
+                    reason="staff_identity_missing",
+                )
+            return {
+                "q": keyword,
+                "kols": [],
+                "projects": [],
+                "events": [],
+                "source_status": source_status,
+            }
         try:
             from app.domains.dashboard.kol_distribution import _staff_visible_kols_sql
             from app.domains.dashboard.summary_scope import _actor_projects_sql
@@ -236,14 +361,27 @@ def vkpi_global_search(
             _proj_scope_sql = f" AND id IN ({_actor_projects_sql(_me)})"
         except Exception:
             # 旧布局缺可见集模块时宁可回空,不泄露全量(与 C3 隔离口径一致)。
-            return {"q": keyword, "kols": [], "projects": [], "events": []}
+            for source_key in source_status:
+                _set_source_status(
+                    source_key,
+                    status="blocked",
+                    reason="visibility_scope_unavailable",
+                )
+            return {
+                "q": keyword,
+                "kols": [],
+                "projects": [],
+                "events": [],
+                "source_status": source_status,
+            }
 
     # KOL:名字/handle 命中,粉丝多的排前(COALESCE 兜 NULL,跨库可移植)。
     kol_fallback_sql = f"""
         SELECT id, platform, handle, display_name, avatar_url, followers
         FROM vkpi_kol_pool
         WHERE (LOWER(COALESCE(display_name, '')) LIKE ? ESCAPE '\\'
-           OR LOWER(COALESCE(handle, '')) LIKE ? ESCAPE '\\'){_kol_scope_sql}
+           OR LOWER(COALESCE(handle, '')) LIKE ? ESCAPE '\\')
+          AND duplicate_of_id IS NULL{_kol_scope_sql}
         ORDER BY COALESCE(followers, 0) DESC, id DESC
         LIMIT ?
     """
@@ -260,7 +398,14 @@ def vkpi_global_search(
                 "LOWER(COALESCE(display_name, '') || ' ' || COALESCE(handle, ''))"
             ),
             stable_order="COALESCE(followers, 0) DESC, id DESC",
-            scope_predicate=_kol_scope_sql.removeprefix(" AND "),
+            scope_predicate=(
+                "duplicate_of_id IS NULL"
+                + (
+                    f" AND ({_kol_scope_sql.removeprefix(' AND ')})"
+                    if _kol_scope_sql
+                    else ""
+                )
+            ),
             use_trigram=use_trigram,
         )
         kols = _rows(
@@ -268,27 +413,34 @@ def vkpi_global_search(
             _postgres_search_params(keyword, result_limit),
             kol_fallback,
             fill_limit=0 if use_trigram else result_limit,
+            source_key="kols",
         )
     else:
-        kols = _rows(*kol_fallback)
+        kols = _rows(*kol_fallback, source_key="kols")
 
-    # 项目:按名字命中,新项目排前。
+    # 项目:按名字命中,新项目排前；软删除项目永不进入搜索结果。
     project_fallback_sql = f"""
         SELECT id, project_uid, project_name, stage, stage_status, platform
         FROM vkpi_projects
-        WHERE LOWER(COALESCE(project_name, '')) LIKE ? ESCAPE '\\'{_proj_scope_sql}
+        WHERE LOWER(COALESCE(project_name, '')) LIKE ? ESCAPE '\\'
+          AND COALESCE(stage_status, '') <> 'deleted'{_proj_scope_sql}
         ORDER BY id DESC
         LIMIT ?
     """
     project_fallback = (project_fallback_sql, (like, result_limit))
     if postgres_runtime:
+        project_scope_predicate = "COALESCE(stage_status, '') <> 'deleted'"
+        if _proj_scope_sql:
+            project_scope_predicate += (
+                f" AND ({_proj_scope_sql.removeprefix(' AND ')})"
+            )
         project_sql = _postgres_ranked_search_sql(
             table="vkpi_projects",
             select_columns="id, project_uid, project_name, stage, stage_status, platform",
             text_expressions=("LOWER(COALESCE(project_name, ''))",),
             document_expression="LOWER(COALESCE(project_name, ''))",
             stable_order="id DESC",
-            scope_predicate=_proj_scope_sql.removeprefix(" AND "),
+            scope_predicate=project_scope_predicate,
             use_trigram=use_trigram,
         )
         projects = _rows(
@@ -296,14 +448,15 @@ def vkpi_global_search(
             _postgres_search_params(keyword, result_limit),
             project_fallback,
             fill_limit=0 if use_trigram else result_limit,
+            source_key="projects",
         )
     else:
-        projects = _rows(*project_fallback)
+        projects = _rows(*project_fallback, source_key="projects")
 
     # 活动:按标题命中,近期活动排前;非管理层多取 5 倍后按 team_ids 在队成员过滤
     # (jsonb 语义在 compat 问号占位下不便直查,量小后过滤等价且稳)。
     event_query_limit = (
-        min(result_limit * _EVENT_SCOPE_FETCH_MULTIPLIER, GLOBAL_SEARCH_LIMIT_MAX * 5)
+        min(result_limit * _EVENT_SCOPE_FETCH_MULTIPLIER, GLOBAL_SEARCH_LIMIT_MAX * 50)
         if not _is_manager
         else result_limit
     )
@@ -335,11 +488,14 @@ def vkpi_global_search(
             _postgres_search_params(keyword, event_query_limit),
             event_fallback,
             fill_limit=0 if use_trigram else event_query_limit,
+            source_key="events",
         )
     else:
-        events = _rows(*event_fallback)
+        events = _rows(*event_fallback, source_key="events")
     if not _is_manager:
         import json as _json
+
+        event_candidates_count = len(events)
 
         def _in_team(row: dict) -> bool:
             raw = row.pop("team_ids", None)
@@ -350,9 +506,35 @@ def vkpi_global_search(
                 return False
 
         events = [r for r in events if _in_team(r)][:result_limit]
+        current_event_status = source_status.get("events", {})
+        scope_truncated = (
+            event_candidates_count >= event_query_limit
+            and len(events) < result_limit
+            and str(current_event_status.get("status") or "ready") == "ready"
+        )
+        _set_source_status(
+            "events",
+            status=(
+                "degraded"
+                if scope_truncated
+                else str(current_event_status.get("status") or "ready")
+            ),
+            result_count=len(events),
+            reason=(
+                "visibility_scope_candidate_cap_reached"
+                if scope_truncated
+                else str(current_event_status.get("reason") or "")
+            ),
+        )
     # DATE 列诚实转 ISO 串(不让序列化差异漏到前端)。
     for row in events:
         for key in ("start_date", "end_date"):
             if row.get(key) is not None:
                 row[key] = str(row[key])
-    return {"q": keyword, "kols": kols, "projects": projects, "events": events}
+    return {
+        "q": keyword,
+        "kols": kols,
+        "projects": projects,
+        "events": events,
+        "source_status": source_status,
+    }

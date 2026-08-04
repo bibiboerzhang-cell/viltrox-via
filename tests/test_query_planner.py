@@ -48,7 +48,13 @@ def _make_conn() -> sqlite3.Connection:
             followers_delta INTEGER, views_delta_24h INTEGER, captured_at TEXT
         );
         CREATE TABLE vkpi_kol_pool (
-            id INTEGER PRIMARY KEY, platform TEXT, followers INTEGER
+            id INTEGER PRIMARY KEY, platform TEXT, followers INTEGER,
+            duplicate_of_id INTEGER,
+            updated_at TEXT
+        );
+        CREATE TABLE vkpi_kol_video_evidence (
+            id INTEGER PRIMARY KEY, kol_pool_id INTEGER, title TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
         );
         """
     )
@@ -70,8 +76,29 @@ def _make_conn() -> sqlite3.Connection:
         "(id, channel_id, followers_delta, views_delta_24h, captured_at) "
         "VALUES (1, 1, 120, 3000, '2099-01-01T00:00:00+00:00')"
     )
-    cur.execute("INSERT INTO vkpi_kol_pool (id, platform, followers) VALUES (1, 'youtube', 1000)")
-    cur.execute("INSERT INTO vkpi_kol_pool (id, platform, followers) VALUES (2, 'instagram', 2500)")
+    cur.execute(
+        "INSERT INTO vkpi_kol_pool "
+        "(id, platform, followers, updated_at) "
+        "VALUES (1, 'youtube', 1000, '2026-08-01T00:00:00+00:00')"
+    )
+    cur.execute(
+        "INSERT INTO vkpi_kol_pool (id, platform, followers, updated_at) "
+        "VALUES (2, 'instagram', 2500, '2026-08-02T00:00:00+00:00')"
+    )
+    cur.execute(
+        "INSERT INTO vkpi_kol_pool "
+        "(id, platform, followers, duplicate_of_id, updated_at) "
+        "VALUES (3, 'tiktok', 9999, 1, '2026-08-03T00:00:00+00:00')"
+    )
+    cur.executemany(
+        "INSERT INTO vkpi_kol_video_evidence (id, kol_pool_id, title, is_active) VALUES (?, ?, ?, ?)",
+        [
+            (1, 1, "First", 1),
+            (2, 1, "Second", 1),
+            (3, 3, "Merged duplicate", 1),
+            (4, 2, "Inactive evidence", 0),
+        ],
+    )
     conn.commit()
     return conn
 
@@ -149,7 +176,7 @@ class WhitelistInjectionTest(unittest.TestCase):
 
 class StructuredResultTest(unittest.TestCase):
     def _assert_shape(self, result: dict):
-        for key in ("intent", "columns", "rows", "sql_explain"):
+        for key in ("intent", "columns", "rows", "sql_explain", "source_status"):
             self.assertIn(key, result)
         self.assertIsInstance(result["columns"], list)
         self.assertIsInstance(result["rows"], list)
@@ -178,7 +205,46 @@ class StructuredResultTest(unittest.TestCase):
         result = qp.run(conn, question="KOL 池现在共有多少账号？")
         self._assert_shape(result)
         self.assertEqual(result["intent"], "kol_pool_overview")
-        self.assertEqual(result["rows"], [{"total_kols": 2, "platforms": 2, "total_followers": 3500}])
+        metadata = next(item for item in qp.list_intents() if item["intent"] == "kol_pool_overview")
+        self.assertEqual(metadata["columns"], result["columns"])
+        self.assertEqual(
+            result["rows"],
+            [
+                {
+                    "total_kols": 2,
+                    "platforms": 2,
+                    "total_followers": 3500,
+                    "raw_records": 3,
+                    "duplicate_records": 1,
+                    "video_evidence_kols": 1,
+                    "video_coverage_pct": 50.0,
+                    "data_updated_at": "2026-08-02T00:00:00+00:00",
+                }
+            ],
+        )
+
+    def test_country_growth_fails_closed_without_verified_country_dimension(self):
+        conn = _make_conn()
+        result = qp.run(
+            conn,
+            question="美国市场涨粉",
+            range_days=30,
+            source="US",
+        )
+
+        self.assertEqual(result["intent"], "country_growth")
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["source_status"], "unavailable")
+        self.assertEqual(result["source_reason"], "verified_country_dimension_missing")
+        plan = qp.build_plan(qp._INTENT_BY_KEY["country_growth"], 30, "US")
+        self.assertNotIn("JOIN kols", plan.sql)
+        self.assertNotIn("m.channel_id = k.id", plan.sql)
+
+    def test_legacy_roi_key_is_truthfully_named_content_performance(self):
+        intent = qp._INTENT_BY_KEY["kol_content_roi"]
+
+        self.assertEqual(intent.title, "KOL内容表现排名")
+        self.assertIn("不代表 ROI", intent.description)
 
     def test_received_no_content_finds_pending(self):
         conn = _make_conn()

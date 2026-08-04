@@ -236,6 +236,15 @@ class AdminRbacMappingTests(unittest.TestCase):
         self.assertIsNone(_admin_permission_for_request("/api/admin/staff/accept-invite", "POST"))
         self.assertIsNone(_admin_permission_for_request("/api/admin/staff/invite/status", "GET"))
 
+    def test_intelligent_query_post_is_mapped_to_read_permission(self) -> None:
+        self.assertEqual(
+            _admin_permission_for_request(
+                "/api/admin/vkpi/intelligent/query",
+                "POST",
+            ),
+            ("vkpi", "read", False),
+        )
+
     def test_intel_nested_student_routes_use_student_tab(self) -> None:
         self.assertEqual(
             _admin_permission_for_request("/api/admin/intel/student/overview", "GET"),

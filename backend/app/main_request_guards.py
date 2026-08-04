@@ -23,6 +23,13 @@ DB_REQUEST_ADMISSION_LIMIT = max(1, int(POSTGRES_POOL_MAX_SIZE) - 1)
 DB_REQUEST_ADMISSION_TIMEOUT_SEC = max(1.0, float(POSTGRES_POOL_TIMEOUT_SEC))
 _DB_REQUEST_ADMISSION_BY_LOOP: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
+# These POST endpoints carry structured query bodies but perform no business
+# mutation.  Keep authentication/CSRF/admission intact while mapping their tab
+# permission to read, matching the route dependency and product contract.
+READ_ONLY_POST_PATHS = frozenset({
+    "/api/admin/vkpi/intelligent/query",
+})
+
 
 def db_request_admission_limiter() -> asyncio.BoundedSemaphore:
     """Return a limiter bound to the current process and asyncio loop."""
@@ -71,7 +78,10 @@ def admin_permission_for_request(path: str, method: str) -> tuple[str, str, bool
         return None
     if path in {"/api/admin/staff/accept-invite", "/api/admin/staff/invite/status"}:
         return None
-    mutating = method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    mutating = (
+        method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        and path not in READ_ONLY_POST_PATHS
+    )
     level = "write" if mutating else "read"
     if path.startswith(PRIVATE_INTERNAL_UPLOAD_PREFIXES):
         return ("vkpi", "read", False)

@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.api.routers import vkpi_intelligent, vkpi_marketing_advisor
 from app.domains.advisor import intelligent_bridge, repository, service
@@ -935,9 +936,11 @@ def test_unresolved_intelligent_scope_never_seeds_cache(monkeypatch: pytest.Monk
         "role": "admin",
         "organization_scope_status": "ambiguous",
     }
-    vkpi_intelligent.intelligent_ask({"question": "same", "thread_id": "t1"}, staff=unresolved)
-    vkpi_intelligent.intelligent_ask({"question": "same", "thread_id": "t1"}, staff=unresolved)
-    assert calls["count"] == 2
+    for _ in range(2):
+        with pytest.raises(HTTPException) as exc_info:
+            vkpi_intelligent.intelligent_ask({"question": "same", "thread_id": "t1"}, staff=unresolved)
+        assert exc_info.value.status_code == 403
+    assert calls["count"] == 0
     assert vkpi_intelligent._ASK_CACHE == {}
 
 

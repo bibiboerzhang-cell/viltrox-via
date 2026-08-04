@@ -283,14 +283,21 @@ export function CockpitTopbar({
       type: "button",
       className: "vkpi-ask-trigger mx-auto hidden w-full max-w-[440px] items-center md:flex",
       onClick: () => setAskOpen(true),
-      "aria-label": "打开 Intelligent 问答与全局搜索",
+      "aria-label": t("打开智能问答与全局搜索"),
     },
       e(Sparkles, { size: 14 }),
-      e("span", null, "问一问 · AI 或搜索 KOL / 项目…"),
+      e("span", null, t("问一问 · AI 或搜索 KOL / 项目…")),
       e("kbd", null, "⌘K")
     ),
     // 右:操作簇(真功能全保留)+ 外观弹层 + 账户
     e("div", { className: "vkpi-topbar-actions flex flex-none items-center gap-1.5 md:gap-2" },
+      e("button", {
+        type: "button",
+        className: `${iconBtn} md:hidden`,
+        onClick: () => setAskOpen(true),
+        "aria-label": t("打开智能问答与全局搜索"),
+        title: t("问一问 · AI 或搜索 KOL / 项目…"),
+      }, e(Sparkles, { size: 16 })),
       activeNav === "dashboard" && e("button", {
         type: "button",
         onClick: () => setDashboardEditing?.(!dashboardEditing),

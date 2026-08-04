@@ -36,6 +36,7 @@ ALLOWED_TABLES: frozenset[str] = frozenset(
         "vkpi_kol_claims",
         "vkpi_channel_metrics",
         "vkpi_kol_pool",
+        "vkpi_kol_video_evidence",
         "vkpi_projects",
     }
 )
@@ -95,6 +96,8 @@ class Intent:
     build: SqlBuilder
     uses_range: bool = True
     uses_source: bool = False
+    source_status: str = "ready"
+    source_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,8 @@ class IntentPlan:
     sql: str
     params: tuple[Any, ...]
     sql_explain: str = ""
+    source_status: str = "ready"
+    source_reason: str = ""
 
 
 # 每个 builder 返回 (sql, params, columns)。SQL 全部 SELECT、参数化、白名单表。
@@ -156,45 +161,56 @@ def _b_kol_content_roi(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...], list[
 
 
 def _b_kol_pool_overview(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...], list[str]]:
-    cols = ["total_kols", "platforms", "total_followers"]
+    # total_kols 保留为旧前端读取的主字段，但口径升级为“去重后的主档案数”。
+    # 其余字段为加性返回：调用方可以逐步展示原始行、重复行、视频证据覆盖和水位，
+    # 老客户端继续读取前三列不会失配。视频覆盖直接由证据表 EXISTS 得出，避免
+    # 依赖 Postgres 派生列而让正式 SQLite schema 在问数时崩溃。
+    cols = [
+        "total_kols",
+        "platforms",
+        "total_followers",
+        "raw_records",
+        "duplicate_records",
+        "video_evidence_kols",
+        "video_coverage_pct",
+        "data_updated_at",
+    ]
     sql = (
-        "SELECT COUNT(*) AS total_kols, "
-        "COUNT(DISTINCT NULLIF(TRIM(platform), '')) AS platforms, "
-        "COALESCE(SUM(followers), 0) AS total_followers "
+        "SELECT "
+        "COALESCE(SUM(CASE WHEN duplicate_of_id IS NULL THEN 1 ELSE 0 END), 0) AS total_kols, "
+        "COUNT(DISTINCT CASE WHEN duplicate_of_id IS NULL "
+        "THEN NULLIF(TRIM(platform), '') END) AS platforms, "
+        "COALESCE(SUM(CASE WHEN duplicate_of_id IS NULL THEN followers ELSE 0 END), 0) "
+        "AS total_followers, "
+        "COUNT(*) AS raw_records, "
+        "COALESCE(SUM(CASE WHEN duplicate_of_id IS NOT NULL THEN 1 ELSE 0 END), 0) "
+        "AS duplicate_records, "
+        "COALESCE(SUM(CASE WHEN duplicate_of_id IS NULL "
+        "AND EXISTS (SELECT 1 FROM vkpi_kol_video_evidence e "
+        "WHERE e.kol_pool_id = vkpi_kol_pool.id AND e.is_active IS NOT FALSE) "
+        "THEN 1 ELSE 0 END), 0) AS video_evidence_kols, "
+        "COALESCE(ROUND(100.0 * SUM(CASE WHEN duplicate_of_id IS NULL "
+        "AND EXISTS (SELECT 1 FROM vkpi_kol_video_evidence e "
+        "WHERE e.kol_pool_id = vkpi_kol_pool.id AND e.is_active IS NOT FALSE) "
+        "THEN 1 ELSE 0 END) / NULLIF(SUM(CASE WHEN duplicate_of_id IS NULL "
+        "THEN 1 ELSE 0 END), 0), 1), 0) AS video_coverage_pct, "
+        "MAX(CASE WHEN duplicate_of_id IS NULL THEN updated_at END) AS data_updated_at "
         "FROM vkpi_kol_pool"
     )
     return sql, (), cols
 
 
 def _b_country_growth(ctx: dict[str, Any]) -> tuple[str, tuple[Any, ...], list[str]]:
+    # vkpi_channel_metrics.channel_id 指向 vkpi_employee_channels.id，而不是 kols.id。
+    # 当前官号档案没有经过核验的 country 维度，故不能诚实地回答“国家增长”。
+    # 保留旧意图和列契约，但从正确的指标事实表 fail-closed 返回空集；调用方通过
+    # source_status/source_reason 可区分“暂不支持”与真实零增长。
     cutoff = ctx["cutoff_iso"]
-    country = ctx.get("country")
     cols = ["country", "kols", "followers_delta", "views_delta"]
-    if country:
-        sql = (
-            "SELECT COALESCE(k.country, '') AS country, "
-            "COUNT(DISTINCT k.id) AS kols, "
-            "COALESCE(SUM(m.followers_delta), 0) AS followers_delta, "
-            "COALESCE(SUM(m.views_delta_24h), 0) AS views_delta "
-            "FROM kols k "
-            "LEFT JOIN vkpi_channel_metrics m "
-            "ON m.channel_id = k.id AND m.captured_at >= ? "
-            "WHERE k.country = ? "
-            "GROUP BY COALESCE(k.country, '') "
-            "ORDER BY followers_delta DESC "
-            "LIMIT ?"
-        )
-        return sql, (cutoff, country, MAX_ROWS), cols
     sql = (
-        "SELECT COALESCE(k.country, '') AS country, "
-        "COUNT(DISTINCT k.id) AS kols, "
-        "COALESCE(SUM(m.followers_delta), 0) AS followers_delta, "
-        "COALESCE(SUM(m.views_delta_24h), 0) AS views_delta "
-        "FROM kols k "
-        "LEFT JOIN vkpi_channel_metrics m "
-        "ON m.channel_id = k.id AND m.captured_at >= ? "
-        "GROUP BY COALESCE(k.country, '') "
-        "ORDER BY followers_delta DESC "
+        "SELECT '' AS country, 0 AS kols, 0 AS followers_delta, 0 AS views_delta "
+        "FROM vkpi_channel_metrics m "
+        "WHERE m.captured_at >= ? AND 1 = 0 "
         "LIMIT ?"
     )
     return sql, (cutoff, MAX_ROWS), cols
@@ -254,7 +270,7 @@ INTENTS: tuple[Intent, ...] = (
     Intent(
         key="kol_pool_overview",
         title="KOL 池规模概览",
-        description="返回当前 KOL 池账号总数、平台数与粉丝总量。",
+        description="返回当前去重 KOL 数、平台/粉丝规模、原始与重复记录、视频证据覆盖及数据时间。",
         examples=(
             "KOL Pool 现在有多少人",
             "KOL池有多少账号",
@@ -272,14 +288,23 @@ INTENTS: tuple[Intent, ...] = (
             "kols in pool",
             "how many kols",
         ),
-        columns=("total_kols", "platforms", "total_followers"),
+        columns=(
+            "total_kols",
+            "platforms",
+            "total_followers",
+            "raw_records",
+            "duplicate_records",
+            "video_evidence_kols",
+            "video_coverage_pct",
+            "data_updated_at",
+        ),
         build=_b_kol_pool_overview,
         uses_range=False,
     ),
     Intent(
         key="kol_content_roi",
-        title="KOL内容ROI排名",
-        description="按 KOL 聚合区间内内容贴的曝光/互动,降序排名。",
+        title="KOL内容表现排名",
+        description="按 KOL 聚合区间内内容贴的曝光/互动；未关联成本或收入，不代表 ROI。",
         examples=("KOL内容ROI排名", "哪个达人内容效果最好", "kol content roi", "达人贴文表现排行"),
         keywords=("roi", "内容", "排名", "效果", "表现", "贴文", "曝光", "互动", "ranking"),
         columns=("kol_id", "channel_name", "posts", "total_views", "total_likes", "total_comments"),
@@ -288,14 +313,16 @@ INTENTS: tuple[Intent, ...] = (
     ),
     Intent(
         key="country_growth",
-        title="某国增长",
-        description="按地区聚合区间内涨粉/涨播,可选指定国家短码。",
+        title="国家增长（数据源未就绪）",
+        description="当前官号指标缺少经核验的国家维度；安全返回不可用状态，不生成伪增长。",
         examples=("某国增长", "美国市场涨粉", "country growth", "哪个国家增长快"),
         keywords=("增长", "涨粉", "国家", "地区", "市场", "growth", "country", "region", "涨播"),
         columns=("country", "kols", "followers_delta", "views_delta"),
         build=_b_country_growth,
         uses_range=True,
-        uses_source=True,
+        uses_source=False,
+        source_status="unavailable",
+        source_reason="verified_country_dimension_missing",
     ),
     Intent(
         key="received_no_content",
@@ -400,6 +427,8 @@ def build_plan(intent: Intent, range_days: int, source: Any) -> IntentPlan:
         sql=sql,
         params=params,
         sql_explain=explain,
+        source_status=intent.source_status,
+        source_reason=intent.source_reason,
     )
 
 
@@ -434,6 +463,8 @@ def run_plan(conn: Any, plan: IntentPlan) -> dict[str, Any]:
         "columns": plan.columns,
         "rows": rows,
         "sql_explain": plan.sql_explain,
+        "source_status": plan.source_status,
+        "source_reason": plan.source_reason,
     }
 
 
@@ -457,6 +488,8 @@ def run(
             "columns": [],
             "rows": [],
             "sql_explain": "",
+            "source_status": "not_matched",
+            "source_reason": "intent_not_matched",
             "available_intents": [i.key for i in INTENTS],
         }
     plan = build_plan(chosen, range_days, source)
@@ -474,6 +507,8 @@ def list_intents() -> list[dict[str, Any]]:
             "columns": list(i.columns),
             "uses_range": i.uses_range,
             "uses_source": i.uses_source,
+            "source_status": i.source_status,
+            "source_reason": i.source_reason,
         }
         for i in INTENTS
     ]

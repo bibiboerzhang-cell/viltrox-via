@@ -33,7 +33,8 @@ def _sqlite_search_conn() -> sqlite3.Connection:
             handle TEXT,
             display_name TEXT,
             avatar_url TEXT,
-            followers INTEGER
+            followers INTEGER,
+            duplicate_of_id INTEGER
         );
         CREATE TABLE vkpi_projects (
             id INTEGER PRIMARY KEY,
@@ -55,11 +56,12 @@ def _sqlite_search_conn() -> sqlite3.Connection:
         """
     )
     conn.executemany(
-        "INSERT INTO vkpi_kol_pool VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO vkpi_kol_pool VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
-            (1, "youtube", "literal100", "100% Camera", "a.jpg", 100),
-            (2, "youtube", "other", "Other Creator", "b.jpg", 999),
-            (3, "youtube", "scope-hidden", "100% Hidden", "c.jpg", 500),
+            (1, "youtube", "literal100", "100% Camera", "a.jpg", 100, None),
+            (2, "youtube", "other", "Other Creator", "b.jpg", 999, None),
+            (3, "youtube", "scope-hidden", "100% Hidden", "c.jpg", 500, None),
+            (4, "youtube", "duplicate100", "100% Duplicate", "d.jpg", 5000, 1),
         ],
     )
     conn.executemany(
@@ -67,6 +69,7 @@ def _sqlite_search_conn() -> sqlite3.Connection:
         [
             (10, "p-visible", "100% Launch", "discovery", "active", "youtube"),
             (11, "p-hidden", "100% Hidden", "discovery", "active", "youtube"),
+            (12, "p-deleted", "100% Deleted", "cancelled", "deleted", "youtube"),
         ],
     )
     conn.executemany(
@@ -104,6 +107,28 @@ def test_sqlite_like_fallback_treats_wildcards_as_literals_and_honors_limit(monk
     assert set(payload["events"][0]) == {
         "id", "title", "status", "start_date", "end_date"
     }
+    assert payload["source_status"] == {
+        "kols": {"status": "ready", "result_count": 1},
+        "projects": {"status": "ready", "result_count": 1},
+        "events": {"status": "ready", "result_count": 1},
+    }
+
+
+def test_deleted_projects_are_excluded_without_becoming_a_search_failure(monkeypatch):
+    conn = _sqlite_search_conn()
+    _use_sqlite(monkeypatch, conn)
+
+    payload = search_router.vkpi_global_search(
+        q="100% Deleted",
+        limit=5,
+        staff=_MANAGER,
+    )
+
+    assert payload["projects"] == []
+    assert payload["source_status"]["projects"] == {
+        "status": "ready",
+        "result_count": 0,
+    }
 
 
 def test_non_manager_scope_contract_is_preserved_on_sqlite(monkeypatch):
@@ -124,6 +149,173 @@ def test_non_manager_scope_contract_is_preserved_on_sqlite(monkeypatch):
     assert "team_ids" not in payload["events"][0]
 
 
+def test_event_scope_searches_beyond_legacy_five_x_candidate_window(monkeypatch):
+    conn = _sqlite_search_conn()
+    conn.executemany(
+        "INSERT INTO vkpi_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                f"hidden-{index:03d}",
+                "Camera Launch",
+                "planning",
+                "2099-01-01",
+                "2099-01-02",
+                "[8]",
+                "2099-01-01",
+            )
+            for index in range(120)
+        ]
+        + [
+            (
+                "visible-after-legacy-cap",
+                "Camera Launch",
+                "planning",
+                "2026-01-01",
+                "2026-01-02",
+                "[7]",
+                "2026-01-01",
+            )
+        ],
+    )
+    conn.commit()
+    _use_sqlite(monkeypatch, conn)
+    monkeypatch.setattr(kol_distribution, "_staff_visible_kols_sql", lambda staff_id: "SELECT 1")
+    monkeypatch.setattr(summary_scope, "_actor_projects_sql", lambda staff_id: "SELECT 10")
+
+    payload = search_router.vkpi_global_search(
+        q="Camera Launch",
+        limit=5,
+        staff={"id": 7, "role": "employee", "is_owner": 0},
+    )
+
+    assert [row["id"] for row in payload["events"]] == ["visible-after-legacy-cap"]
+    assert payload["source_status"]["events"]["status"] == "ready"
+
+
+def test_event_scope_candidate_cap_reports_degraded_not_true_zero(monkeypatch):
+    conn = _sqlite_search_conn()
+    conn.executemany(
+        "INSERT INTO vkpi_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                f"cap-hidden-{index:03d}",
+                "Capped Launch",
+                "planning",
+                "2099-01-01",
+                "2099-01-02",
+                "[8]",
+                "2099-01-01",
+            )
+            for index in range(80)
+        ],
+    )
+    conn.commit()
+    _use_sqlite(monkeypatch, conn)
+    monkeypatch.setattr(kol_distribution, "_staff_visible_kols_sql", lambda staff_id: "SELECT 1")
+    monkeypatch.setattr(summary_scope, "_actor_projects_sql", lambda staff_id: "SELECT 10")
+
+    payload = search_router.vkpi_global_search(
+        q="Capped Launch",
+        limit=1,
+        staff={"id": 7, "role": "employee", "is_owner": 0},
+    )
+
+    assert payload["events"] == []
+    assert payload["source_status"]["events"] == {
+        "status": "degraded",
+        "result_count": 0,
+        "reason": "visibility_scope_candidate_cap_reached",
+    }
+
+
+def test_real_staff_context_id_shape_is_scoped_instead_of_blocked(monkeypatch):
+    conn = _sqlite_search_conn()
+    _use_sqlite(monkeypatch, conn)
+    monkeypatch.setattr(kol_distribution, "_staff_visible_kols_sql", lambda staff_id: "SELECT 1")
+    monkeypatch.setattr(summary_scope, "_actor_projects_sql", lambda staff_id: "SELECT 10")
+
+    payload = search_router.vkpi_global_search(
+        q="100%",
+        limit=5,
+        staff={"id": 7, "role": "employee", "is_owner": 0},
+    )
+
+    assert [row["id"] for row in payload["kols"]] == [1]
+    assert [row["id"] for row in payload["projects"]] == [10]
+    assert [row["id"] for row in payload["events"]] == ["evt-visible"]
+    assert all(item["status"] != "blocked" for item in payload["source_status"].values())
+
+
+def test_staff_missing_user_id_collision_is_blocked_before_search(monkeypatch):
+    conn = _sqlite_search_conn()
+    _use_sqlite(monkeypatch, conn)
+    monkeypatch.setattr(
+        kol_distribution,
+        "_staff_visible_kols_sql",
+        lambda _staff_id: (_ for _ in ()).throw(AssertionError("must not build a staff scope")),
+    )
+
+    payload = search_router.vkpi_global_search(
+        q="100%",
+        limit=5,
+        staff={
+            "user_id": 7,
+            "role": "employee",
+            "organization_scope_status": "staff_missing",
+        },
+    )
+
+    assert payload["kols"] == []
+    assert payload["projects"] == []
+    assert payload["events"] == []
+    assert all(item["status"] == "blocked" for item in payload["source_status"].values())
+
+
+@pytest.mark.parametrize("role", ["manager", "admin"])
+def test_unresolved_privileged_role_cannot_bypass_global_scope(monkeypatch, role):
+    conn = _sqlite_search_conn()
+    _use_sqlite(monkeypatch, conn)
+
+    payload = search_router.vkpi_global_search(
+        q="100%",
+        limit=5,
+        staff={
+            "user_id": 7,
+            "role": role,
+            "organization_scope_status": "staff_missing",
+        },
+    )
+
+    assert payload["kols"] == []
+    assert payload["projects"] == []
+    assert payload["events"] == []
+    assert all(item["status"] == "blocked" for item in payload["source_status"].values())
+
+
+def test_unresolved_privileged_role_cannot_use_cross_database_search():
+    with pytest.raises(HTTPException) as exc_info:
+        search_router.vkpi_search(
+            q="camera",
+            limit=20,
+            staff={
+                "user_id": 7,
+                "role": "manager",
+                "organization_scope_status": "staff_missing",
+            },
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_kol_search_excludes_merged_duplicate_rows(monkeypatch):
+    conn = _sqlite_search_conn()
+    _use_sqlite(monkeypatch, conn)
+
+    payload = search_router.vkpi_global_search(q="100%", limit=20, staff=_MANAGER)
+
+    assert 4 not in [row["id"] for row in payload["kols"]]
+
+
 class _Rows:
     def __init__(self, rows):
         self._rows = rows
@@ -133,6 +325,44 @@ class _Rows:
 
     def fetchall(self):
         return self._rows
+
+
+class _ProjectFailConn:
+    def __init__(self, delegate: sqlite3.Connection):
+        self.delegate = delegate
+
+    def execute(self, sql, params=()):
+        if "FROM vkpi_projects" in sql:
+            raise RuntimeError("simulated project source failure")
+        return self.delegate.execute(sql, params)
+
+
+def test_source_status_distinguishes_zero_results_from_group_failure(monkeypatch):
+    conn = _ProjectFailConn(_sqlite_search_conn())
+    _use_sqlite(monkeypatch, conn)  # type: ignore[arg-type]
+
+    payload = search_router.vkpi_global_search(
+        q="does-not-exist",
+        limit=5,
+        staff=_MANAGER,
+    )
+
+    assert payload["kols"] == []
+    assert payload["projects"] == []
+    assert payload["events"] == []
+    assert payload["source_status"]["kols"] == {
+        "status": "ready",
+        "result_count": 0,
+    }
+    assert payload["source_status"]["projects"] == {
+        "status": "error",
+        "result_count": 0,
+        "reason": "query_failed",
+    }
+    assert payload["source_status"]["events"] == {
+        "status": "ready",
+        "result_count": 0,
+    }
 
 
 class _FailingOptimizedPgConn:
@@ -198,6 +428,10 @@ def test_postgres_trigram_query_failure_retries_legacy_like(monkeypatch):
     assert payload["kols"][0]["id"] == 1
     assert payload["projects"][0]["id"] == 2
     assert payload["events"][0]["id"] == "e3"
+    assert all(
+        payload["source_status"][key]["status"] == "degraded"
+        for key in ("kols", "projects", "events")
+    )
     optimized = [sql for sql, _ in conn.calls if "WITH search_input" in sql]
     fallbacks = [sql for sql, _ in conn.calls if "WITH search_input" not in sql]
     assert len(optimized) == 3
@@ -276,6 +510,9 @@ def test_postgres_without_trigram_uses_like_only_as_second_stage(monkeypatch):
     assert len(optimized) == 3
     assert all("LIKE input.like_q" not in sql for sql in optimized)
     assert all("%% input.exact_q" not in sql for sql in optimized)
+    project_sql = [sql for sql, _ in conn.calls if "FROM vkpi_projects" in sql]
+    assert project_sql
+    assert all("COALESCE(stage_status, '') <> 'deleted'" in sql for sql in project_sql)
 
 
 def test_postgres_explain_and_index_expression_contract_is_hermetic():

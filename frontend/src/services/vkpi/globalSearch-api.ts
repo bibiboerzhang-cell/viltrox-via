@@ -30,11 +30,41 @@ export interface GlobalSearchEvent {
   end_date: string | null;
 }
 
+export type GlobalSearchSourceState = "ready" | "degraded" | "error" | "blocked";
+
+export interface GlobalSearchSourceStatusItem {
+  status: GlobalSearchSourceState;
+  result_count: number;
+  reason?: string;
+}
+
+export interface GlobalSearchSourceStatus {
+  kols?: GlobalSearchSourceStatusItem;
+  projects?: GlobalSearchSourceStatusItem;
+  events?: GlobalSearchSourceStatusItem;
+}
+
 export interface GlobalSearchResult {
   q?: string;
   kols: GlobalSearchKol[];
   projects: GlobalSearchProject[];
   events: GlobalSearchEvent[];
+  /** Per-source truth status. A ready source with zero rows is a real empty
+   * result; degraded/error/blocked must never be presented as "no matches". */
+  source_status?: GlobalSearchSourceStatus;
+}
+
+function sourceStatus(value: unknown): GlobalSearchSourceStatusItem | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const status = String(row.status || "");
+  if (!["ready", "degraded", "error", "blocked"].includes(status)) return undefined;
+  const count = Number(row.result_count);
+  return {
+    status: status as GlobalSearchSourceState,
+    result_count: Number.isFinite(count) ? Math.max(0, count) : 0,
+    reason: typeof row.reason === "string" && row.reason.trim() ? row.reason : undefined,
+  };
 }
 
 // 与 hooks/useAuth.tsx 的 TOKEN_KEY 同源同值:CockpitTopbar 是纯展示组件不吃 apiToken prop
@@ -68,5 +98,12 @@ export async function globalSearch(
     kols: Array.isArray(res?.kols) ? res.kols : [],
     projects: Array.isArray(res?.projects) ? res.projects : [],
     events: Array.isArray(res?.events) ? res.events : [],
+    source_status: res?.source_status && typeof res.source_status === "object" && !Array.isArray(res.source_status)
+      ? {
+          kols: sourceStatus((res.source_status as Record<string, unknown>).kols),
+          projects: sourceStatus((res.source_status as Record<string, unknown>).projects),
+          events: sourceStatus((res.source_status as Record<string, unknown>).events),
+        }
+      : undefined,
   };
 }

@@ -1,0 +1,65 @@
+.vkpi-ask-dialog__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.vkpi-ask-dialog__facts article {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--ds-line);
+  border-radius: 9px;
+  background: var(--ds-card);
+}
+
+.vkpi-ask-dialog__facts article > span { color: var(--ds-muted); font-size: 9px; }
+.vkpi-ask-dialog__facts article > strong { overflow-wrap: anywhere; color: var(--ds-text); font-size: 17px; font-weight: 650; }
+.vkpi-ask-dialog__facts article > small { overflow: hidden; color: var(--ds-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-ask-dialog__facts article > em {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  color: var(--ds-muted);
+  font-size: 7px;
+  font-style: normal;
+}
+.vkpi-ask-dialog__facts article > em.is-high { color: var(--ds-good); }
+.vkpi-ask-dialog__facts article > em.is-medium { color: var(--ds-warn); }
+
+.vkpi-ask-dialog__quality {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.vkpi-ask-dialog__quality > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 7px;
+  padding: 9px;
+  border: 1px solid var(--ds-line);
+  border-radius: 9px;
+}
+.vkpi-ask-dialog__quality svg { grid-row: 1 / span 2; color: var(--ds-accent); }
+.vkpi-ask-dialog__quality span { color: var(--ds-muted); font-size: 8px; }
+.vkpi-ask-dialog__quality strong { grid-column: 2; overflow-wrap: anywhere; color: var(--ds-text-2); font-size: 10px; }
+.vkpi-ask-dialog__quality small { grid-column: 3; grid-row: 1 / span 2; color: var(--ds-muted); font-size: 8px; }
+
+.vkpi-ask-dialog__missing {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--ds-warn) 30%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ds-warn) 5%, transparent);
+}
+.vkpi-ask-dialog__missing h3 { display: flex; align-items: center; gap: 5px; margin: 0 0 7px; color: var(--ds-warn); font-size: 10px; }
+.vkpi-ask-dialog__missing > div { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr); gap: 2px 8px; padding: 5px 0; border-top: 1px solid var(--ds-line); }
+.vkpi-ask-dialog__missing strong { color: var(--ds-text-2); font-size: 9px; }
+.vkpi-ask-dialog__missing span { color: var(--ds-muted); font-size: 9px; }
+.vkpi-ask-dialog__missing small { grid-column: 2; color: var(--ds-warn); font-size: 8px; }

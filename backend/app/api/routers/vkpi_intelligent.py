@@ -38,6 +38,32 @@ _ASK_CACHE_LOCK = threading.Lock()
 _ASK_CACHE_MAX = 512  # 软上限,超出清空当日缓存,防内存无限涨(单进程串行足够)。
 INTELLIGENT_QUESTION_MAX_LENGTH = 256
 
+
+@router.post("/query")
+def intelligent_query(
+    payload: dict[str, Any] = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """Ask & Find v2 deterministic evidence query.
+
+    This endpoint is deliberately separate from ``/ask``: it performs only
+    parameterised, staff-scoped reads and never calls an LLM/provider/worker.
+    Unknown wording returns a clarification contract instead of broad search
+    or fabricated facts.
+    """
+    from app.domains.intelligent_query import (
+        QueryScopeDenied,
+        QueryValidationError,
+        execute_query,
+    )
+
+    try:
+        return execute_query(payload, staff=staff)
+    except QueryValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except QueryScopeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc) or "query scope denied") from exc
+
 # LLM 综合调用的预算键与超时(秒)。check_budget 失败即诚实降级,不烧钱。
 _SYNTH_BUDGET_SCOPE = "vkpi_intelligent_ask"
 _SYNTH_TIMEOUT_S = 30
@@ -150,7 +176,7 @@ def _answer(
 
 # ── 车道① intent:命中白名单意图 → query_planner.run() 秒回结构化 ────────────────
 def _try_intent(question: str) -> dict[str, Any] | None:
-    """命中返回统一答案;未命中返回 None;任何异常 → None(降级到车道②)。"""
+    """命中返回统一答案；未命中返回 None；查询故障返回显式 degraded。"""
     try:
         from app.domains.analytics import query_planner  # 懒 import 防缺模块炸
         from app.db.connection import get_conn
@@ -158,13 +184,50 @@ def _try_intent(question: str) -> dict[str, Any] | None:
         return None
     try:
         intent = query_planner.resolve_intent(question, None)
-        if intent is None:
-            return None
-        result = query_planner.run(get_conn(), question=question)
     except Exception:
         return None
+    if intent is None:
+        return None
+    try:
+        result = query_planner.run(get_conn(), question=question)
+    except Exception as exc:
+        return _answer(
+            answer="固定问数查询失败，本次没有把故障当作零结果。",
+            mode="intent",
+            status="degraded",
+            fallback_used=True,
+            degraded_reason="intent_query_failed",
+            evidence=[{
+                "kind": "intent_status",
+                "status": "degraded",
+                "reason": "intent_query_failed",
+                "error_type": type(exc).__name__,
+            }],
+            actions=[{"label": "打开问数页检查数据源", "route": "dataQuery"}],
+        )
     if not isinstance(result, dict) or result.get("intent") is None:
         return None
+
+    source_status = str(result.get("source_status") or "ready").strip().lower()
+    source_reason = str(result.get("source_reason") or "").strip()[:160]
+    if source_status not in {"ready", "ok"}:
+        reason = source_reason or f"source_{source_status or 'unavailable'}"
+        return _answer(
+            answer="该问数口径的数据源尚未就绪，本次未生成零值结论。",
+            mode="intent",
+            status="degraded",
+            fallback_used=True,
+            degraded_reason=reason,
+            evidence=[{
+                "kind": "intent_status",
+                "intent": result.get("intent"),
+                "title": result.get("title") or result.get("intent"),
+                "status": source_status or "unavailable",
+                "reason": reason,
+                "rows": [],
+            }],
+            actions=[{"label": "打开问数页查看数据口径", "route": "dataQuery"}],
+        )
 
     raw_rows = result.get("rows") or []
     raw_columns = result.get("columns") or []
@@ -428,6 +491,16 @@ def intelligent_ask(
 ) -> dict[str, Any]:
     """三车道分诊问答。请求体:{question}。返回 {answer, mode, evidence, actions, cached}。"""
     question = str(payload.get("question") or "").strip()
+    if not isinstance(staff, dict):
+        raise HTTPException(status_code=403, detail="staff scope is unresolved")
+    organization_scope_status = str(
+        staff.get("organization_scope_status") or ""
+    ).strip().lower()
+    if organization_scope_status and organization_scope_status != "resolved":
+        # This guard is deliberately before role checks, cache access, DB
+        # retrieval and provider lanes.  An admin-looking role cannot widen an
+        # explicitly unresolved organization context.
+        raise HTTPException(status_code=403, detail="staff scope is unresolved")
     # intent/search/synth currently aggregate across tables whose row-level
     # predicates are not yet uniform. Fail closed before cache, DB or provider
     # work; global search remains available to non-managers with its proven
@@ -456,7 +529,8 @@ def intelligent_ask(
     # 车道①:意图命中秒回。
     intent_ans = _try_intent(question)
     if intent_ans is not None:
-        _cache_put(question, intent_ans, staff=staff, thread_id=thread_id)
+        if intent_ans.get("status") == "ready" and intent_ans.get("mode") != "degraded":
+            _cache_put(question, intent_ans, staff=staff, thread_id=thread_id)
         return intent_ans
 
     # 车道②:检索(始终有结果,作为③的兜底底本)。
