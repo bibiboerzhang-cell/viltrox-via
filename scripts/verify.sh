@@ -561,7 +561,8 @@ browser_console_release_gate() {
     return 1
   fi
   if [ ! -f "$ROOT/scripts/capture_browser_console_cdp.mjs" ] \
-    || [ ! -f "$ROOT/scripts/verify_browser_console_capture.py" ]; then
+    || [ ! -f "$ROOT/scripts/verify_browser_console_capture.py" ] \
+    || [ ! -f "$ROOT/scripts/browser_console_release_identity.py" ]; then
     BROWSER_CONSOLE_VERIFICATION_STATE="failed"
     echo "[verify] browser console capture/verifier 脚本缺失。" >&2
     return 1
@@ -589,6 +590,66 @@ browser_console_release_gate() {
 
   local capture_path="$evidence_dir/capture.json"
   local report_path="$evidence_dir/gate-report.json"
+  local expected_git_sha=""
+  local expected_app_asset=""
+  local expected_app_asset_sha256=""
+  local browser_candidate_identity=""
+  expected_git_sha="$(release_head)" || {
+    BROWSER_CONSOLE_VERIFICATION_STATE="failed"
+    return 1
+  }
+  if ! browser_candidate_identity="$(
+    PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" -I -B - \
+      "$ROOT/frontend/dist" <<'PY'
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+import re
+import stat
+import sys
+
+dist = Path(sys.argv[1])
+index = dist / "index.html"
+try:
+    info = index.lstat()
+    source = index.read_text(encoding="utf-8")
+except (OSError, UnicodeError) as exc:
+    raise SystemExit("browser candidate index is unreadable") from exc
+if not stat.S_ISREG(info.st_mode) or index.is_symlink():
+    raise SystemExit("browser candidate index is unsafe")
+assets = sorted(set(re.findall(r"app-[A-Za-z0-9_-]+\.js", source)))
+if len(assets) != 1:
+    raise SystemExit("browser candidate index must name exactly one app asset")
+asset = dist / "assets" / assets[0]
+try:
+    asset_info = asset.lstat()
+    payload = asset.read_bytes()
+except OSError as exc:
+    raise SystemExit("browser candidate app asset is unreadable") from exc
+if (
+    not stat.S_ISREG(asset_info.st_mode)
+    or asset.is_symlink()
+    or len(payload) <= 0
+    or len(payload) > 50 * 1024 * 1024
+):
+    raise SystemExit("browser candidate app asset is unsafe")
+print(assets[0], hashlib.sha256(payload).hexdigest())
+PY
+  )"; then
+    BROWSER_CONSOLE_VERIFICATION_STATE="failed"
+    return 1
+  fi
+  read -r expected_app_asset expected_app_asset_sha256 \
+    <<<"$browser_candidate_identity"
+  browser_candidate_identity=""
+  if ! [[ "$expected_git_sha" =~ ^[0-9a-f]{40}$ ]] \
+    || ! [[ "$expected_app_asset" =~ ^app-[A-Za-z0-9_-]+\.js$ ]] \
+    || ! [[ "$expected_app_asset_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    BROWSER_CONSOLE_VERIFICATION_STATE="failed"
+    echo "[verify] browser candidate identity 无效。" >&2
+    return 1
+  fi
   # Never let a stale receipt survive as the verdict for a failed fresh run.
   rm -f -- "$capture_path" "$report_path"
 
@@ -609,6 +670,9 @@ browser_console_release_gate() {
     "$PYTHON_BIN" "$ROOT/scripts/verify_browser_console_capture.py" \
       --input "$capture_path" \
       --json-out "$report_path" \
+      --expected-git-sha "$expected_git_sha" \
+      --expected-app-asset "$expected_app_asset" \
+      --expected-app-asset-sha256 "$expected_app_asset_sha256" \
       >/dev/null || rc=$?
   fi
   if [ "$rc" -eq 0 ]; then

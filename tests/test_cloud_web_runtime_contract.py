@@ -314,10 +314,17 @@ def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> Non
     assert any(rsync < call < remote_stamp_check for call in calls)
     assert '-- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"' in deploy
     assert "printf '%s\\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA" not in deploy
+    assert 'BROWSER_EXPECTED_GIT_SHA="${LOCAL_GIT_SHA}"' in deploy
+    assert 'BROWSER_EXPECTED_APP_ASSET=""' in deploy
+    assert 'BROWSER_EXPECTED_APP_ASSET_SHA256=""' in deploy
+    assert 'LOCAL_ASSET="${BROWSER_EXPECTED_APP_ASSET}"' in deploy
+    assert deploy.count('--expected-git-sha "${BROWSER_EXPECTED_GIT_SHA}"') == 2
+    assert deploy.count('--expected-app-asset "${BROWSER_EXPECTED_APP_ASSET}"') == 2
     assert (
-        'LOCAL_ASSET="$(grep -o \'app-[A-Za-z0-9_-]*\\.js\' '
-        '"${DEPLOY_CANDIDATE_DIR}/frontend/dist/index.html" | head -1)"'
-        in deploy
+        deploy.count(
+            '--expected-app-asset-sha256 "${BROWSER_EXPECTED_APP_ASSET_SHA256}"'
+        )
+        == 2
     )
     assert (
         'LOCAL_ASSET="$(grep -o \'app-[A-Za-z0-9_-]*\\.js\' '

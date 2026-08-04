@@ -59,6 +59,9 @@ run_deploy_ssh_transport_wrapper() {
   local connect_timeout="${VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-}"
   local control_persist="${VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS:-}"
   local fail_closed_proxy="${VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY:-}"
+  local deploy_lock_required="${VKPI_DEPLOY_REMOTE_LOCK_REQUIRED:-0}"
+  local deploy_lock_holder_pid="${VKPI_DEPLOY_REMOTE_LOCK_HOLDER_PID:-}"
+  local deploy_lock_status_file="${VKPI_DEPLOY_REMOTE_LOCK_STATUS_FILE:-}"
 
   case "${tool}" in
     ssh) real_binary="${VKPI_DEPLOY_REAL_SSH:-}" ;;
@@ -79,6 +82,16 @@ run_deploy_ssh_transport_wrapper() {
     || ! [[ "${control_persist}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Deployment SSH transport wrapper configuration is invalid." >&2
     exit 64
+  fi
+  if [ "${deploy_lock_required}" != "0" ]; then
+    if [ "${deploy_lock_required}" != "1" ] \
+      || ! [[ "${deploy_lock_holder_pid}" =~ ^[1-9][0-9]*$ ]] \
+      || [ "${deploy_lock_status_file#/}" = "${deploy_lock_status_file}" ] \
+      || [ -s "${deploy_lock_status_file}" ] \
+      || ! kill -0 "${deploy_lock_holder_pid}" 2>/dev/null; then
+      echo "Deployment mutex holder is no longer alive; refusing remote operation." >&2
+      exit 75
+    fi
   fi
 
   exec "${real_binary}" \
@@ -357,6 +370,63 @@ verify_deploy_candidate
 trap cleanup_deploy_verifier_bundle EXIT
 seal_deploy_verifier_bundle
 verify_deploy_candidate
+
+# Resolve the immutable browser identity from the already-verified frozen
+# candidate.  The public browser gate must prove these exact bytes were served;
+# a healthy loopback process or a matching file on the host is insufficient.
+BROWSER_EXPECTED_GIT_SHA="${LOCAL_GIT_SHA}"
+BROWSER_EXPECTED_APP_ASSET=""
+BROWSER_EXPECTED_APP_ASSET_SHA256=""
+if ! BROWSER_CANDIDATE_IDENTITY="$(
+  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+    "${DEPLOY_CANDIDATE_DIR}/frontend/dist" <<'PY'
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+import re
+import stat
+import sys
+
+dist = Path(sys.argv[1])
+index = dist / "index.html"
+try:
+    index_info = index.lstat()
+    source = index.read_text(encoding="utf-8")
+except (OSError, UnicodeError) as exc:
+    raise SystemExit("frozen candidate frontend index is unreadable") from exc
+if not stat.S_ISREG(index_info.st_mode) or index.is_symlink():
+    raise SystemExit("frozen candidate frontend index is not a regular file")
+assets = sorted(set(re.findall(r"app-[A-Za-z0-9_-]+\.js", source)))
+if len(assets) != 1:
+    raise SystemExit("frozen candidate frontend index must name exactly one app asset")
+asset = dist / "assets" / assets[0]
+try:
+    asset_info = asset.lstat()
+    payload = asset.read_bytes()
+except OSError as exc:
+    raise SystemExit("frozen candidate app asset is unreadable") from exc
+if (
+    not stat.S_ISREG(asset_info.st_mode)
+    or asset.is_symlink()
+    or len(payload) <= 0
+    or len(payload) > 50 * 1024 * 1024
+):
+    raise SystemExit("frozen candidate app asset is unsafe")
+print(assets[0], hashlib.sha256(payload).hexdigest())
+PY
+)"; then
+  echo "Could not resolve the frozen candidate browser identity." >&2
+  exit 1
+fi
+read -r BROWSER_EXPECTED_APP_ASSET BROWSER_EXPECTED_APP_ASSET_SHA256 \
+  <<<"${BROWSER_CANDIDATE_IDENTITY}"
+BROWSER_CANDIDATE_IDENTITY=""
+if ! [[ "${BROWSER_EXPECTED_APP_ASSET}" =~ ^app-[A-Za-z0-9_-]+\.js$ ]] \
+  || ! [[ "${BROWSER_EXPECTED_APP_ASSET_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Frozen candidate browser identity is invalid." >&2
+  exit 1
+fi
 
 assert_deploy_source_unchanged() {
   local current_head
@@ -653,6 +723,152 @@ LANE_OVERRIDE_TEMPLATE_RELATIVE="scripts/ops/systemd/vkpi-lane-overrides.env"
 REMOTE_LANE_OVERRIDE_DIR="/etc/vkpi"
 REMOTE_LANE_OVERRIDE_FILE="${REMOTE_LANE_OVERRIDE_DIR}/vkpi-lane-overrides.env"
 MAX_WORKER_AGE_SECONDS="${VKPI_VERIFY_MAX_WORKER_AGE_SECONDS:-180}"
+REMOTE_DEPLOY_LOCK_DIR="/run/lock/vkpi-deploy"
+REMOTE_DEPLOY_LOCK_FILE="${REMOTE_DEPLOY_LOCK_DIR}/deploy.lock"
+REMOTE_DEPLOY_LOCK_ACK="vkpi-deploy-lock/v1 acquired"
+REMOTE_DEPLOY_LOCK_CONTROL_FIFO=""
+REMOTE_DEPLOY_LOCK_ACK_FILE=""
+REMOTE_DEPLOY_LOCK_STATUS_FILE=""
+REMOTE_DEPLOY_LOCK_HOLDER_PID=""
+REMOTE_DEPLOY_LOCK_CONTROL_FD_OPEN=0
+REMOTE_DEPLOY_LOCK_HELD=0
+
+acquire_remote_deploy_lock() {
+  local attempt=0
+  local holder_rc=""
+  local observed_ack=""
+  local observed_status=""
+
+  if [ "${SSH_TRANSPORT_READY}" != "1" ] || [ -z "${SSH_TRANSPORT_DIR}" ]; then
+    echo "Refusing deploy because the remote deployment mutex requires the verified SSH transport." >&2
+    return 1
+  fi
+  REMOTE_DEPLOY_LOCK_CONTROL_FIFO="${SSH_TRANSPORT_DIR}/deploy-lock.control"
+  REMOTE_DEPLOY_LOCK_ACK_FILE="${SSH_TRANSPORT_DIR}/deploy-lock.ack"
+  REMOTE_DEPLOY_LOCK_STATUS_FILE="${SSH_TRANSPORT_DIR}/deploy-lock.status"
+  mkfifo -- "${REMOTE_DEPLOY_LOCK_CONTROL_FIFO}"
+  chmod 600 "${REMOTE_DEPLOY_LOCK_CONTROL_FIFO}"
+  : > "${REMOTE_DEPLOY_LOCK_ACK_FILE}"
+  : > "${REMOTE_DEPLOY_LOCK_STATUS_FILE}"
+  chmod 600 "${REMOTE_DEPLOY_LOCK_ACK_FILE}" "${REMOTE_DEPLOY_LOCK_STATUS_FILE}"
+
+  # The remote root shell owns fd 9 for the lifetime of this SSH channel.  The
+  # kernel releases the flock when local fd 9 is closed on EXIT and the channel
+  # ends.  The persistent lock inode is never removed, so one deployment cannot
+  # unlink another deployment's live lock.
+  (
+    set +e
+    ssh "${SSH_TARGET}" \
+      "sudo -n /bin/bash -c '
+set -euo pipefail
+umask 077
+[ -x /usr/bin/flock ] || exit 69
+if ! /usr/bin/mkdir -m 0700 -- /run/lock/vkpi-deploy 2>/dev/null; then
+  [ -d /run/lock/vkpi-deploy ] && [ ! -L /run/lock/vkpi-deploy ] || exit 70
+fi
+[ \"\$(/usr/bin/stat -c \"%u:%g:%a\" -- /run/lock/vkpi-deploy)\" = \"0:0:700\" ] || exit 70
+if [ ! -e /run/lock/vkpi-deploy/deploy.lock ] && [ ! -L /run/lock/vkpi-deploy/deploy.lock ]; then
+  (set -o noclobber; : > /run/lock/vkpi-deploy/deploy.lock) 2>/dev/null || true
+fi
+[ -f /run/lock/vkpi-deploy/deploy.lock ] && [ ! -L /run/lock/vkpi-deploy/deploy.lock ] || exit 70
+[ \"\$(/usr/bin/stat -c \"%u:%g:%a:%h\" -- /run/lock/vkpi-deploy/deploy.lock)\" = \"0:0:600:1\" ] || exit 70
+exec 9>>/run/lock/vkpi-deploy/deploy.lock
+/usr/bin/flock -n 9 || exit 75
+printf \"%s\\n\" \"vkpi-deploy-lock/v1 acquired\"
+IFS= read -r _ || true
+'" < "${REMOTE_DEPLOY_LOCK_CONTROL_FIFO}" > "${REMOTE_DEPLOY_LOCK_ACK_FILE}"
+    holder_rc=$?
+    printf '%s\n' "${holder_rc}" > "${REMOTE_DEPLOY_LOCK_STATUS_FILE}"
+    exit "${holder_rc}"
+  ) &
+  REMOTE_DEPLOY_LOCK_HOLDER_PID=$!
+
+  # Opening the write side unblocks the background SSH stdin setup.  Keep this
+  # descriptor open until EXIT; closing it is the only normal unlock signal.
+  exec 9>"${REMOTE_DEPLOY_LOCK_CONTROL_FIFO}"
+  REMOTE_DEPLOY_LOCK_CONTROL_FD_OPEN=1
+
+  while [ "${attempt}" -lt 150 ]; do
+    if IFS= read -r observed_ack < "${REMOTE_DEPLOY_LOCK_ACK_FILE}"; then
+      if [ "${observed_ack}" = "${REMOTE_DEPLOY_LOCK_ACK}" ]; then
+        REMOTE_DEPLOY_LOCK_HELD=1
+        export VKPI_DEPLOY_REMOTE_LOCK_REQUIRED=1
+        export VKPI_DEPLOY_REMOTE_LOCK_HOLDER_PID="${REMOTE_DEPLOY_LOCK_HOLDER_PID}"
+        export VKPI_DEPLOY_REMOTE_LOCK_STATUS_FILE="${REMOTE_DEPLOY_LOCK_STATUS_FILE}"
+        echo "[deploy] remote deployment mutex acquired."
+        return 0
+      fi
+      break
+    fi
+    if [ -s "${REMOTE_DEPLOY_LOCK_STATUS_FILE}" ]; then
+      IFS= read -r observed_status < "${REMOTE_DEPLOY_LOCK_STATUS_FILE}" || true
+      break
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+
+  if [ "${REMOTE_DEPLOY_LOCK_CONTROL_FD_OPEN}" = "1" ]; then
+    exec 9>&-
+    REMOTE_DEPLOY_LOCK_CONTROL_FD_OPEN=0
+  fi
+  if [ -n "${REMOTE_DEPLOY_LOCK_HOLDER_PID}" ]; then
+    wait "${REMOTE_DEPLOY_LOCK_HOLDER_PID}" || holder_rc=$?
+  fi
+  if [ -z "${holder_rc}" ] && [[ "${observed_status}" =~ ^[0-9]+$ ]]; then
+    holder_rc="${observed_status}"
+  fi
+  REMOTE_DEPLOY_LOCK_HOLDER_PID=""
+  rm -f -- \
+    "${REMOTE_DEPLOY_LOCK_CONTROL_FIFO}" \
+    "${REMOTE_DEPLOY_LOCK_ACK_FILE}" \
+    "${REMOTE_DEPLOY_LOCK_STATUS_FILE}"
+  REMOTE_DEPLOY_LOCK_CONTROL_FIFO=""
+  REMOTE_DEPLOY_LOCK_ACK_FILE=""
+  REMOTE_DEPLOY_LOCK_STATUS_FILE=""
+  if [ "${holder_rc:-}" = "75" ]; then
+    echo "Refusing deploy because another deployment already holds the production mutex." >&2
+  else
+    echo "Refusing deploy because the production deployment mutex could not be acquired safely." >&2
+  fi
+  return 1
+}
+
+release_remote_deploy_lock() {
+  local holder_rc=0
+  local observed_status=""
+
+  if [ "${REMOTE_DEPLOY_LOCK_CONTROL_FD_OPEN}" = "1" ]; then
+    exec 9>&-
+    REMOTE_DEPLOY_LOCK_CONTROL_FD_OPEN=0
+  fi
+  if [ -n "${REMOTE_DEPLOY_LOCK_HOLDER_PID}" ]; then
+    wait "${REMOTE_DEPLOY_LOCK_HOLDER_PID}" || holder_rc=$?
+  fi
+  if [ -s "${REMOTE_DEPLOY_LOCK_STATUS_FILE}" ]; then
+    IFS= read -r observed_status < "${REMOTE_DEPLOY_LOCK_STATUS_FILE}" || true
+    if [[ "${observed_status}" =~ ^[0-9]+$ ]] && [ "${observed_status}" -ne 0 ]; then
+      holder_rc="${observed_status}"
+    fi
+  fi
+  unset VKPI_DEPLOY_REMOTE_LOCK_REQUIRED VKPI_DEPLOY_REMOTE_LOCK_HOLDER_PID
+  unset VKPI_DEPLOY_REMOTE_LOCK_STATUS_FILE
+  REMOTE_DEPLOY_LOCK_HOLDER_PID=""
+  REMOTE_DEPLOY_LOCK_HELD=0
+  rm -f -- \
+    "${REMOTE_DEPLOY_LOCK_CONTROL_FIFO}" \
+    "${REMOTE_DEPLOY_LOCK_ACK_FILE}" \
+    "${REMOTE_DEPLOY_LOCK_STATUS_FILE}"
+  REMOTE_DEPLOY_LOCK_CONTROL_FIFO=""
+  REMOTE_DEPLOY_LOCK_ACK_FILE=""
+  REMOTE_DEPLOY_LOCK_STATUS_FILE=""
+  if [ "${holder_rc}" -ne 0 ]; then
+    echo "[deploy] CRITICAL: remote deployment mutex channel ended unexpectedly (${holder_rc})." >&2
+    return 1
+  fi
+  return 0
+}
+
 EXPECTED_WORKER_COUNT=16
 WORKER_SYSTEMD_UNITS=(
   vkpi-worker-interactive.service
@@ -1220,7 +1436,10 @@ run_predeploy_embedded_browser_gate() {
   "${PROJECT_ROOT}/.venv/bin/python" -B \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
     --input "${capture_path}" \
-    --json-out "${report_path}" >/dev/null
+    --json-out "${report_path}" \
+    --expected-git-sha "${BROWSER_EXPECTED_GIT_SHA}" \
+    --expected-app-asset "${BROWSER_EXPECTED_APP_ASSET}" \
+    --expected-app-asset-sha256 "${BROWSER_EXPECTED_APP_ASSET_SHA256}" >/dev/null
   "${PROJECT_ROOT}/.venv/bin/python" -B - "${report_path}" <<'PY'
 import json
 import sys
@@ -2209,6 +2428,15 @@ attempt_automatic_rollback() {
     fi
     rollback_health="${rollback_candidate_health}"
   fi
+  local rollback_apify_binding=""
+  if ! rollback_apify_binding="$(
+    printf '%s' "${rollback_health}" | ssh "${SSH_TARGET}" \
+      "sudo -n env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/verify_apify_worker_process_binding.py' --health-json - --current-release '${REMOTE_CURRENT_DIR}' --expected-head '${PREDEPLOY_APP_SHA}'"
+  )" || [ -z "${rollback_apify_binding}" ]; then
+    echo "[deploy] CRITICAL: restored Apify worker fleet failed process binding validation." >&2
+    return 1
+  fi
+  rollback_apify_binding=""
   if ! restore_remote_sync_unit_state; then
     echo "[deploy] CRITICAL: rollback runtime is restored but sync unit state is not; units remain fail-closed." >&2
     return 1
@@ -2295,8 +2523,13 @@ cleanup_post_deploy_evidence() {
   if [ -n "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}" ]; then
     rm -rf -- "${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}"
   fi
-  # Keep the master available through rollback and remote evidence cleanup.
-  # Remove its private directory only after the master is confirmed gone.
+  # Keep the mutex and master available through rollback and remote evidence
+  # cleanup. Release the mutex before asking its ControlMaster to exit.
+  if ! release_remote_deploy_lock; then
+    if [ "${original_rc}" -eq 0 ]; then
+      original_rc=1
+    fi
+  fi
   cleanup_deploy_ssh_transport
   # Rollback validators also come from the frozen candidate, so retain the
   # digest-bound verifier bundle until every rollback/evidence action ends.
@@ -2884,6 +3117,7 @@ MIGRATION_MANIFEST_CSV="$(find "${DEPLOY_CANDIDATE_DIR}/migrations" -maxdepth 1 
 
 run_predeploy_embedded_browser_gate
 setup_deploy_ssh_transport
+acquire_remote_deploy_lock
 capture_remote_sync_unit_state
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   capture_remote_pgbouncer_unit_state
@@ -3907,6 +4141,18 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
   echo "Post-restart Redis worker trust validation failed; deployment is not accepted." >&2
   exit 1
 fi
+APIFY_WORKER_PROCESS_BINDING_JSON=""
+if ! APIFY_WORKER_PROCESS_BINDING_JSON="$(
+  printf '%s' "${REMOTE_HEALTH_JSON}" | ssh "${SSH_TARGET}" \
+    "sudo -n env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/verify_apify_worker_process_binding.py' --health-json - --current-release '${REMOTE_CURRENT_DIR}' --expected-head '${LOCAL_GIT_SHA}'"
+)"; then
+  echo "Post-restart Apify worker process binding failed; deployment is not accepted." >&2
+  exit 1
+fi
+if [ -z "${APIFY_WORKER_PROCESS_BINDING_JSON}" ]; then
+  echo "Post-restart Apify worker process binding produced no evidence." >&2
+  exit 1
+fi
 verify_deploy_candidate
 assert_deploy_source_unchanged
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
@@ -3960,8 +4206,13 @@ LOCAL_LOG_CANARY="${POST_DEPLOY_EVIDENCE_DIR}/runtime-log-canary.json"
 LOCAL_ACCEPTANCE_REPORT="${POST_DEPLOY_EVIDENCE_DIR}/release-acceptance.json"
 LOCAL_BROWSER_CAPTURE="${POST_DEPLOY_EVIDENCE_DIR}/browser-capture.json"
 LOCAL_BROWSER_REPORT="${POST_DEPLOY_EVIDENCE_DIR}/browser-gate-report.json"
+LOCAL_APIFY_WORKER_PROCESS_BINDING="${POST_DEPLOY_EVIDENCE_DIR}/apify-worker-process-binding.json"
 REMOTE_LOG_BASELINE="/tmp/vkpi-runtime-log-baseline-${WORKER_BOOT_NONCE_SHA256}.json"
 REMOTE_ACCEPTANCE_REPORT="/tmp/vkpi-release-acceptance-${WORKER_BOOT_NONCE_SHA256}.json"
+printf '%s\n' "${APIFY_WORKER_PROCESS_BINDING_JSON}" \
+  >"${LOCAL_APIFY_WORKER_PROCESS_BINDING}"
+APIFY_WORKER_PROCESS_BINDING_JSON=""
+chmod 600 "${LOCAL_APIFY_WORKER_PROCESS_BINDING}"
 
 # The reviewed systemd units write to journald, not the legacy runtime/logs
 # files.  Bind a cursor to the exact web + 16 Apify + Redis unit filter.
@@ -4051,7 +4302,10 @@ fi
 "${PROJECT_ROOT}/.venv/bin/python" \
   "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
   --input "${LOCAL_BROWSER_CAPTURE}" \
-  --json-out "${LOCAL_BROWSER_REPORT}"
+  --json-out "${LOCAL_BROWSER_REPORT}" \
+  --expected-git-sha "${BROWSER_EXPECTED_GIT_SHA}" \
+  --expected-app-asset "${BROWSER_EXPECTED_APP_ASSET}" \
+  --expected-app-asset-sha256 "${BROWSER_EXPECTED_APP_ASSET_SHA256}"
 verify_deploy_candidate
 assert_deploy_source_unchanged
 
@@ -4075,9 +4329,10 @@ fi
 verify_deploy_candidate
 assert_deploy_source_unchanged
 chmod 600 "${LOCAL_LOG_BASELINE}" "${LOCAL_LOG_CANARY}" \
-  "${LOCAL_ACCEPTANCE_REPORT}" "${LOCAL_BROWSER_CAPTURE}" "${LOCAL_BROWSER_REPORT}"
+  "${LOCAL_ACCEPTANCE_REPORT}" "${LOCAL_BROWSER_CAPTURE}" "${LOCAL_BROWSER_REPORT}" \
+  "${LOCAL_APIFY_WORKER_PROCESS_BINDING}"
 
-LOCAL_ASSET="$(grep -o 'app-[A-Za-z0-9_-]*\.js' "${DEPLOY_CANDIDATE_DIR}/frontend/dist/index.html" | head -1)"
+LOCAL_ASSET="${BROWSER_EXPECTED_APP_ASSET}"
 REMOTE_ASSET="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && grep -o 'app-[A-Za-z0-9_-]*\\.js' frontend/dist/index.html | head -1")"
 
 echo "local_asset=${LOCAL_ASSET}"

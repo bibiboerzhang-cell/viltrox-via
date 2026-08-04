@@ -444,8 +444,18 @@ def test_cloud_deploy_requires_clean_source_and_post_restart_strict_verification
     strict_validator = deploy.index(
         '"${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py"', remote_fetch
     )
-    asset_check = deploy.index('LOCAL_ASSET="$(grep')
-    assert service_restart < worker_restart < remote_fetch < strict_validator < asset_check
+    process_binding = deploy.index(
+        "scripts/ops/verify_apify_worker_process_binding.py", strict_validator
+    )
+    asset_check = deploy.index('LOCAL_ASSET="${BROWSER_EXPECTED_APP_ASSET}"')
+    assert (
+        service_restart
+        < worker_restart
+        < remote_fetch
+        < strict_validator
+        < process_binding
+        < asset_check
+    )
 
     strict_call = deploy[strict_validator:asset_check]
     for required in (

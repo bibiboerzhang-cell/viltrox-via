@@ -63,6 +63,8 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         '"--incognito"',
         '"--disable-crash-reporter"',
         'await session.send("Network.enable")',
+        'await session.send("Network.setCacheDisabled", { cacheDisabled: true })',
+        'await session.send("Network.setBypassServiceWorker", { bypass: true })',
         'await session.send("Network.setCookie", {',
         'name: "via_token"',
         "value: token",
@@ -136,6 +138,17 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         '"/api/admin/vkpi/intelligent/query"',
         '"/api/admin/vkpi/global-search"',
         "const requiredSources = ['kols', 'projects', 'events']",
+        "async function probeReleaseIdentity(session)",
+        "_vkpi_release_probe",
+        "cache: 'no-store'",
+        "'Cache-Control': 'no-cache, no-store, max-age=0'",
+        "new URL('/health', location.origin)",
+        "new URL('/', location.origin)",
+        "indexDocument.querySelectorAll('script[src]')",
+        "crypto.subtle.digest('SHA-256', assetBody)",
+        "loaded_matches_index",
+        "release_identity: releaseIdentity",
+        "release_identity_probe: releaseIdentityProbe",
     ):
         assert required in combined_source
     assert 'authenticated_surface: true' not in combined_source
@@ -178,9 +191,23 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
     assert origin_at < reject_at < token_at < storage_at
 
     network_enable = capture_source.index('await session.send("Network.enable")')
+    cache_disabled = capture_source.index('await session.send("Network.setCacheDisabled"', network_enable)
+    service_worker_bypassed = capture_source.index(
+        'await session.send("Network.setBypassServiceWorker"', cache_disabled
+    )
     cookie_injection = capture_source.index('await session.send("Network.setCookie", {')
     page_navigation = capture_source.index('await session.send("Page.navigate", { url: args.url })')
-    assert network_enable < cookie_injection < page_navigation
+    assert network_enable < cache_disabled < service_worker_bypassed < cookie_injection < page_navigation
+
+    bootstrap_auth = capture_source.index("const authProof = await requireAuthentication(session)")
+    identity_probe = capture_source.index(
+        "const releaseIdentity = await probeReleaseIdentity(session)", bootstrap_auth
+    )
+    page_loop_start = capture_source.index(
+        "for (const [pageIndex, page] of pageManifest.pages.entries())",
+        identity_probe,
+    )
+    assert bootstrap_auth < identity_probe < page_loop_start
 
     per_page_navigation = capture_source.split(
         "async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)",

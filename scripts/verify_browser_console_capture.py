@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     from browser_console_functional_proof import (
@@ -31,6 +31,25 @@ except ModuleNotFoundError:  # Imported by a test from the repository root.
     _proof_helpers = run_path(Path(__file__).with_name("browser_console_functional_proof.py"))
     evaluate_deadline_proof = _proof_helpers["evaluate_deadline_proof"]
     evaluate_functional_proof = _proof_helpers["evaluate_functional_proof"]
+try:
+    from browser_console_release_identity import (
+        RELEASE_IDENTITY_QUERY_KEY,
+        RELEASE_IDENTITY_SCHEMA_VERSION,
+        evaluate_pages,
+        evaluate_release_identity,
+    )
+except ModuleNotFoundError:  # Imported by a test from the repository root.
+    from runpy import run_path
+
+    _release_helpers = run_path(
+        Path(__file__).with_name("browser_console_release_identity.py")
+    )
+    RELEASE_IDENTITY_QUERY_KEY = _release_helpers["RELEASE_IDENTITY_QUERY_KEY"]
+    RELEASE_IDENTITY_SCHEMA_VERSION = _release_helpers[
+        "RELEASE_IDENTITY_SCHEMA_VERSION"
+    ]
+    evaluate_pages = _release_helpers["evaluate_pages"]
+    evaluate_release_identity = _release_helpers["evaluate_release_identity"]
 CAPTURE_SCHEMA_VERSION = "vkpi-browser-console-capture/v1"
 GATE_SCHEMA_VERSION = "vkpi-browser-console-gate/v1"
 MAX_CAPTURE_BYTES = 10 * 1024 * 1024
@@ -88,6 +107,7 @@ _QUERY_SECRET = re.compile(r"(?i)(access_token|api[_-]?key|token|authorization)=
 _KNOWN_PROVIDER_SECRET = re.compile(
     r"\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{20,}|apify_api_[A-Za-z0-9]{16,})\b"
 )
+_APP_ASSET = re.compile(r"app-[A-Za-z0-9_-]+\.js")
 
 
 def utc_now() -> str:
@@ -282,142 +302,6 @@ def _validate_exact_external_media_origins(
     return accepted
 
 
-def _evaluate_pages(
-    payload: Mapping[str, Any],
-    *,
-    application_origin: str,
-    failures: list[str],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    manifest = (
-        payload.get("page_manifest")
-        if isinstance(payload.get("page_manifest"), Mapping)
-        else {}
-    )
-    if manifest.get("schema_version") != "vkpi-browser-page-manifest/v1":
-        failures.append("page manifest schema is missing or unsupported")
-    manifest_rows = manifest.get("pages")
-    if not isinstance(manifest_rows, list):
-        failures.append("page_manifest.pages must be a list")
-        manifest_rows = []
-    manifest_map: dict[str, tuple[str, str]] = {}
-    for index, raw in enumerate(manifest_rows):
-        if not isinstance(raw, Mapping):
-            failures.append(f"page manifest entry[{index}] must be an object")
-            continue
-        family = str(raw.get("family") or "")
-        nav_key = str(raw.get("nav_key") or "")
-        heading = str(raw.get("heading") or "")
-        if not family or family in manifest_map:
-            failures.append(f"page manifest entry[{index}] family is empty or duplicated")
-            continue
-        manifest_map[family] = (nav_key, heading)
-    if manifest_map != REQUIRED_PAGE_FAMILIES:
-        missing = sorted(set(REQUIRED_PAGE_FAMILIES) - set(manifest_map))
-        extra = sorted(set(manifest_map) - set(REQUIRED_PAGE_FAMILIES))
-        changed = sorted(
-            family
-            for family in set(manifest_map) & set(REQUIRED_PAGE_FAMILIES)
-            if manifest_map[family] != REQUIRED_PAGE_FAMILIES[family]
-        )
-        failures.append(
-            "page manifest must exactly cover the reviewed 21 families"
-            f" (missing={missing}, extra={extra}, changed={changed})"
-        )
-
-    raw_pages = payload.get("pages")
-    if not isinstance(raw_pages, list):
-        failures.append("pages must be a list")
-        raw_pages = []
-    if len(raw_pages) != len(REQUIRED_PAGE_FAMILIES):
-        failures.append(
-            f"captured pages must contain exactly {len(REQUIRED_PAGE_FAMILIES)} entries"
-        )
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    passed = 0
-    for index, raw in enumerate(raw_pages[: len(REQUIRED_PAGE_FAMILIES) + 10]):
-        if not isinstance(raw, Mapping):
-            failures.append(f"page[{index}] must be an object")
-            continue
-        family = str(raw.get("family") or "")
-        expected = REQUIRED_PAGE_FAMILIES.get(family)
-        nav_key = str(raw.get("nav_key") or "")
-        expected_heading = str(raw.get("expected_heading") or "")
-        observed_heading = str(raw.get("observed_heading") or "")
-        final_url = str(raw.get("final_url") or "").strip()
-        try:
-            final_url_cockpit_values = parse_qs(
-                urlsplit(final_url).query,
-                keep_blank_values=True,
-            ).get("cockpit", [])
-        except ValueError:
-            final_url_cockpit_values = []
-        if not expected or family in seen:
-            failures.append(f"page[{index}] family is unknown or duplicated")
-        else:
-            seen.add(family)
-        proof = {
-            "known_family": expected is not None,
-            "nav_key_matches": expected is not None and nav_key == expected[0],
-            "expected_heading_matches": expected is not None and expected_heading == expected[1],
-            "observed_heading_matches": expected is not None and observed_heading == expected[1],
-            "navigation_completed": raw.get("navigation_completed") is True,
-            "page_settled": raw.get("page_settled") is True,
-            "stage_present": raw.get("stage_present") is True,
-            "heading_present": raw.get("heading_present") is True,
-            "heading_matches": raw.get("heading_matches") is True,
-            "cockpit_main_present": raw.get("cockpit_main_present") is True,
-            "password_form_absent": raw.get("password_form_present") is False,
-            "lazy_error_absent": raw.get("lazy_error_present") is False,
-            "same_origin_api_idle": raw.get("same_origin_api_idle") is True,
-            "same_origin_api_inflight_zero": (
-                isinstance(raw.get("same_origin_api_inflight"), int)
-                and not isinstance(raw.get("same_origin_api_inflight"), bool)
-                and raw.get("same_origin_api_inflight") == 0
-            ),
-            "ready_state_complete": str(raw.get("ready_state") or "") == "complete",
-            "same_origin_final_url": normalized_origin(raw.get("final_url"))
-            == application_origin,
-            "cockpit_query_matches_nav_key": (
-                expected is not None
-                and final_url_cockpit_values == [expected[0]]
-            ),
-        }
-        page_pass = all(proof.values())
-        if page_pass:
-            passed += 1
-        else:
-            failed_proofs = sorted(key for key, value in proof.items() if not value)
-            failures.append(
-                f"page family {family or index} failed browser proof: {', '.join(failed_proofs)}"
-            )
-        rows.append(
-            {
-                "family": family,
-                "nav_key": nav_key,
-                "expected_heading": expected_heading,
-                "observed_heading": redact_text(observed_heading, limit=120),
-                "final_url": sanitize_url(raw.get("final_url")),
-                "proof": proof,
-                "pass": page_pass,
-                "elapsed_ms": raw.get("elapsed_ms")
-                if isinstance(raw.get("elapsed_ms"), int)
-                and not isinstance(raw.get("elapsed_ms"), bool)
-                and raw.get("elapsed_ms") >= 0
-                else None,
-            }
-        )
-    missing_captures = sorted(set(REQUIRED_PAGE_FAMILIES) - seen)
-    if missing_captures:
-        failures.append("missing captured page families: " + ", ".join(missing_captures))
-    return rows, {
-        "required": len(REQUIRED_PAGE_FAMILIES),
-        "captured": len(rows),
-        "passed": passed,
-        "missing": missing_captures,
-    }
-
-
 def _evaluate_network(
     collection: Mapping[str, Any],
     *,
@@ -443,6 +327,10 @@ def _evaluate_network(
     tolerated_external_media_403 = 0
     auth_me_2xx = False
     retained_http_errors = 0
+    release_probe_health_uncached_2xx = 0
+    release_probe_index_uncached_2xx = 0
+    release_probe_app_asset_uncached_2xx = 0
+    release_probe_app_assets: set[str] = set()
     for index, raw in enumerate(raw_responses):
         if not isinstance(raw, Mapping):
             failures.append(f"network_response[{index}] must be an object")
@@ -473,13 +361,37 @@ def _evaluate_network(
             path = ""
         same_origin = origin == application_origin
         same_origin_api = same_origin and (path == "/health" or path.startswith("/api/"))
+        release_identity_probe = raw.get("release_identity_probe") is True
+        from_disk_cache = (
+            raw.get("from_disk_cache")
+            if isinstance(raw.get("from_disk_cache"), bool)
+            else None
+        )
+        from_service_worker = (
+            raw.get("from_service_worker")
+            if isinstance(raw.get("from_service_worker"), bool)
+            else None
+        )
+        app_asset_name = Path(path).name
+        reviewed_release_identity_resource = bool(
+            release_identity_probe
+            and same_origin
+            and (
+                path in {"/", "/health"}
+                or (
+                    path.startswith("/assets/")
+                    and _APP_ASSET.fullmatch(app_asset_name)
+                )
+            )
+        )
         is_error = status >= 400
         if is_error:
             retained_http_errors += 1
-        # Successful retained responses are allowed only as same-origin API
-        # collection proof. This prevents a producer from dropping an HTTP
-        # error while padding the artifact with arbitrary successful assets.
-        if not is_error and not same_origin_api:
+        # Successful retained responses are allowed only as same-origin API or
+        # one of the three reviewed cache-busted identity resources. This
+        # prevents a producer from dropping an HTTP error while padding the
+        # artifact with arbitrary successful assets.
+        if not is_error and not same_origin_api and not reviewed_release_identity_resource:
             failures.append(
                 f"network_response[{index}] retained an unreviewed successful resource"
             )
@@ -496,6 +408,19 @@ def _evaluate_network(
             blocking_responses += 1
         if same_origin_api and path == "/api/auth/me" and 200 <= status < 300:
             auth_me_2xx = True
+        uncached_release_probe = bool(
+            reviewed_release_identity_resource
+            and 200 <= status < 300
+            and from_disk_cache is False
+            and from_service_worker is False
+        )
+        if uncached_release_probe and path == "/health":
+            release_probe_health_uncached_2xx += 1
+        elif uncached_release_probe and path == "/":
+            release_probe_index_uncached_2xx += 1
+        elif uncached_release_probe and _APP_ASSET.fullmatch(app_asset_name):
+            release_probe_app_asset_uncached_2xx += 1
+            release_probe_app_assets.add(app_asset_name)
         responses.append(
             {
                 "index": index,
@@ -512,6 +437,9 @@ def _evaluate_network(
                     else "external"
                 ),
                 "tolerated_external_media_403": tolerated,
+                "release_identity_probe": release_identity_probe,
+                "from_disk_cache": from_disk_cache,
+                "from_service_worker": from_service_worker,
                 "blocking": blocking,
                 "url": sanitize_url(url),
             }
@@ -596,10 +524,24 @@ def _evaluate_network(
         "loading_failures": len(loading_rows),
         "blocking_loading_failures": blocking_loading_failures,
         "auth_me_2xx_observed": auth_me_2xx,
+        "release_identity_probe": {
+            "health_uncached_2xx": release_probe_health_uncached_2xx,
+            "index_uncached_2xx": release_probe_index_uncached_2xx,
+            "app_asset_uncached_2xx": release_probe_app_asset_uncached_2xx,
+            "app_assets": sorted(release_probe_app_assets),
+        },
     }
 
 
-def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -> dict[str, Any]:
+def evaluate_capture(
+    payload: Mapping[str, Any],
+    *,
+    require_live: bool = True,
+    expected_git_sha: str | None = None,
+    expected_app_asset: str | None = None,
+    expected_app_asset_sha256: str | None = None,
+    require_expected_identity: bool = False,
+) -> dict[str, Any]:
     failures: list[str] = []
     if payload.get("schema_version") != CAPTURE_SCHEMA_VERSION:
         failures.append(f"schema_version must be {CAPTURE_SCHEMA_VERSION}")
@@ -656,9 +598,13 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
     if final_origin != application_origin:
         failures.append("final_url origin does not match target_url origin")
 
-    page_rows, page_metrics = _evaluate_pages(
+    page_rows, page_metrics = evaluate_pages(
         payload,
         application_origin=application_origin,
+        required_page_families=REQUIRED_PAGE_FAMILIES,
+        normalized_origin=normalized_origin,
+        redact_text=redact_text,
+        sanitize_url=sanitize_url,
         failures=failures,
     )
     functional_proof, functional_metrics = evaluate_functional_proof(
@@ -740,6 +686,16 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
         collection,
         application_origin=application_origin,
         allowed_external_media_403_origins=allowed_external_media_403_origins,
+        failures=failures,
+    )
+    release_identity_proof = evaluate_release_identity(
+        payload,
+        network_metrics=network_metrics,
+        expected_git_sha=expected_git_sha,
+        expected_app_asset=expected_app_asset,
+        expected_app_asset_sha256=expected_app_asset_sha256,
+        require_expected_identity=require_expected_identity,
+        redact_text=redact_text,
         failures=failures,
     )
     functional_network_counts = {
@@ -869,6 +825,7 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
             "functional_proof_required": True,
             "overall_deadline_proof": deadline_proof,
             "authenticated_surface_proof": auth_proof,
+            "release_identity_proof": release_identity_proof,
             "page_manifest_families": sorted(REQUIRED_PAGE_FAMILIES),
             "external_media_403_allowed_origins": sorted(
                 allowed_external_media_403_origins
@@ -876,7 +833,11 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
         },
         "overall": {
             "pass": not failures,
-            "release_eligible": kind == "live" and not failures,
+            "release_eligible": (
+                kind == "live"
+                and not failures
+                and release_identity_proof["candidate_binding_pass"] is True
+            ),
             "failures": failures,
         },
         "metrics": {
@@ -911,6 +872,16 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
             "external_media_403_console_requires_network_match": True,
             "live_functional_journey_required": True,
             "single_overall_deadline_required": True,
+            "public_release_identity_required": True,
+            "browser_cache_disabled": release_identity_proof["internal_proof"].get(
+                "cdp_cache_disabled", False
+            ),
+            "service_worker_bypassed": release_identity_proof["internal_proof"].get(
+                "service_worker_bypassed", False
+            ),
+            "frozen_candidate_identity_bound": release_identity_proof[
+                "candidate_binding_pass"
+            ],
             "live_functional_journey_completed": (
                 kind == "live" and functional_metrics["pass"]
             ),
@@ -962,6 +933,18 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input", type=Path, required=True, help="CDP capture JSON")
     parser.add_argument("--json-out", type=Path, help="optional machine-readable gate report")
     parser.add_argument(
+        "--expected-git-sha",
+        help="frozen candidate full 40-character git SHA",
+    )
+    parser.add_argument(
+        "--expected-app-asset",
+        help="frozen candidate app-*.js basename from frontend/dist/index.html",
+    )
+    parser.add_argument(
+        "--expected-app-asset-sha256",
+        help="SHA-256 of the frozen candidate app asset bytes",
+    )
+    parser.add_argument(
         "--allow-fixture",
         action="store_true",
         help="contract-test mode only; release usage must omit this flag",
@@ -973,7 +956,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         capture = load_capture(args.input)
-        report = evaluate_capture(capture, require_live=not args.allow_fixture)
+        report = evaluate_capture(
+            capture,
+            require_live=not args.allow_fixture,
+            expected_git_sha=args.expected_git_sha,
+            expected_app_asset=args.expected_app_asset,
+            expected_app_asset_sha256=args.expected_app_asset_sha256,
+            require_expected_identity=not args.allow_fixture,
+        )
         exit_code = 0 if report["overall"]["pass"] else 1
     except ValueError as exc:
         report = {

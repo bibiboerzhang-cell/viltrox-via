@@ -40,6 +40,9 @@ const NETWORK_EVENT_CHANNELS = [
   "Network.loadingFailed",
 ];
 const AUTH_PROBE_TIMEOUT_MS = 5000;
+const RELEASE_IDENTITY_PROBE_TIMEOUT_MS = 10000;
+const RELEASE_IDENTITY_SCHEMA_VERSION = "vkpi-browser-release-identity/v1";
+const RELEASE_IDENTITY_QUERY_KEY = "_vkpi_release_probe";
 const API_IDLE_GRACE_MS = 1000;
 const DEFAULT_PAGE_MANIFEST = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -267,16 +270,20 @@ class CdpSession {
       const resourceType = String(params.type || "Other");
       this.networkRequestTotal += 1;
       let sameOriginApi = false;
+      let releaseIdentityProbe = false;
       try {
         const parsed = new URL(url);
         sameOriginApi = parsed.origin === this.applicationOrigin
           && (parsed.pathname === "/health" || parsed.pathname.startsWith("/api/"));
+        releaseIdentityProbe = parsed.origin === this.applicationOrigin
+          && parsed.searchParams.has(RELEASE_IDENTITY_QUERY_KEY);
       } catch {
         // Invalid request URL remains non-API and cannot satisfy idle proof.
       }
       this.networkRequests.set(requestId, {
         family: this.currentPageFamily,
         same_origin_api: sameOriginApi,
+        release_identity_probe: releaseIdentityProbe,
         long_lived: resourceType === "EventSource" || resourceType === "WebSocket",
         method: String(request.method || "GET").toUpperCase().slice(0, 16),
         resource_type: resourceType.slice(0, 32),
@@ -306,9 +313,11 @@ class CdpSession {
       } catch {
         // Malformed response URLs are retained only when they are errors below.
       }
+      const releaseIdentityProbe = request?.release_identity_probe === true;
       // Retain every same-origin API response as collection proof, plus every
-      // HTTP error from any origin. Successful third-party media is noise.
-      if (sameOriginApi || (Number.isFinite(status) && status >= 400)) {
+      // cache-busted release-identity response and every HTTP error from any
+      // origin. Successful third-party media is noise.
+      if (sameOriginApi || releaseIdentityProbe || (Number.isFinite(status) && status >= 400)) {
         this.networkResponses.push({
           channel: payload.method,
           page_family: pageFamily,
@@ -316,6 +325,7 @@ class CdpSession {
           status: Number.isFinite(status) ? status : null,
           resource_type: String(params.type || "Other"),
           mime_type: String(response.mimeType || "").slice(0, 160),
+          release_identity_probe: releaseIdentityProbe,
           from_disk_cache: response.fromDiskCache === true,
           from_service_worker: response.fromServiceWorker === true,
         });
@@ -492,6 +502,179 @@ async function requireAuthentication(session) {
   return proof;
 }
 
+async function probeReleaseIdentity(session) {
+  const fetchTimeoutMs = session.overallDeadline.boundedTimeoutMs(
+    RELEASE_IDENTITY_PROBE_TIMEOUT_MS,
+  );
+  const state = await session.send("Runtime.evaluate", {
+    expression: `(async () => {
+      const sha40 = (value) => {
+        const text = String(value || '').trim().toLowerCase();
+        return /^[0-9a-f]{40}$/.test(text) ? text : '';
+      };
+      const appAsset = (value) => {
+        const text = String(value || '').trim();
+        return /^app-[A-Za-z0-9_-]+\\.js$/.test(text) ? text : '';
+      };
+      const basename = (pathname) => String(pathname || '').split('/').filter(Boolean).at(-1) || '';
+      const nonce = () => {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+      };
+      const healthNonce = nonce();
+      const indexNonce = nonce();
+      const assetNonce = nonce();
+      const requestHeaders = {
+        Authorization: 'Bearer ' + (localStorage.getItem('viltrox_marketing_token_v1') || ''),
+        'Cache-Control': 'no-cache, no-store, max-age=0',
+        Pragma: 'no-cache',
+        'X-Requested-With': 'XMLHttpRequest',
+      };
+      const fetchOptions = {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: requestHeaders,
+      };
+      const proof = {
+        schema_version: ${JSON.stringify(RELEASE_IDENTITY_SCHEMA_VERSION)},
+        cache_bypass: {
+          cdp_cache_disabled: true,
+          service_worker_bypassed: true,
+          fetch_cache_mode: 'no-store',
+          request_cache_control: 'no-cache, no-store, max-age=0',
+          request_pragma: 'no-cache',
+          unique_query_parameter: ${JSON.stringify(RELEASE_IDENTITY_QUERY_KEY)},
+          unique_request_nonces: new Set([healthNonce, indexNonce, assetNonce]).size === 3,
+        },
+        health: {
+          request_completed: false,
+          same_origin: false,
+          http_status: null,
+          http_2xx: false,
+          status_ok: false,
+          build_git_sha: '',
+          build_client_sha: '',
+          build_client_source: '',
+          server_git_sha: '',
+          client_git_sha: '',
+          sha_aligned: false,
+          response_cache_control: '',
+        },
+        frontend: {
+          loaded_app_asset_count: 0,
+          loaded_app_asset: '',
+          index_request_completed: false,
+          index_same_origin: false,
+          index_http_status: null,
+          index_http_2xx: false,
+          index_content_type_html: false,
+          index_app_asset_count: 0,
+          index_app_asset: '',
+          loaded_matches_index: false,
+          index_response_cache_control: '',
+          asset_request_completed: false,
+          asset_same_origin: false,
+          asset_http_status: null,
+          asset_http_2xx: false,
+          asset_content_type_javascript: false,
+          asset_bytes: 0,
+          asset_sha256: '',
+          digest_algorithm: 'sha256',
+          asset_response_cache_control: '',
+        },
+      };
+      try {
+        const loaded = [...document.scripts]
+          .map((script) => {
+            try { return new URL(script.src, location.href); } catch { return null; }
+          })
+          .filter((url) => url && url.origin === location.origin)
+          .map((url) => appAsset(basename(url.pathname)))
+          .filter(Boolean);
+        proof.frontend.loaded_app_asset_count = loaded.length;
+        proof.frontend.loaded_app_asset = loaded.length === 1 ? loaded[0] : '';
+
+        const healthEndpoint = new URL('/health', location.origin);
+        healthEndpoint.searchParams.set(${JSON.stringify(RELEASE_IDENTITY_QUERY_KEY)}, healthNonce);
+        proof.health.same_origin = healthEndpoint.origin === location.origin;
+        const healthResponse = await fetch(healthEndpoint.href, {
+          ...fetchOptions,
+          signal: AbortSignal.timeout(${fetchTimeoutMs}),
+        });
+        proof.health.request_completed = true;
+        proof.health.http_status = healthResponse.status;
+        proof.health.http_2xx = healthResponse.status >= 200 && healthResponse.status < 300;
+        proof.health.response_cache_control = String(healthResponse.headers.get('cache-control') || '').slice(0, 160);
+        const healthBody = await healthResponse.json().catch(() => null);
+        const build = healthBody && typeof healthBody.build === 'object' ? healthBody.build : {};
+        const trust = healthBody && typeof healthBody.trust === 'object' ? healthBody.trust : {};
+        proof.health.status_ok = healthBody?.status === 'ok';
+        proof.health.build_git_sha = sha40(build.git_sha);
+        proof.health.build_client_sha = sha40(build.client_build);
+        proof.health.build_client_source = String(build.client_build_source || '').slice(0, 40);
+        proof.health.server_git_sha = sha40(trust.server_git_sha);
+        proof.health.client_git_sha = sha40(trust.client_git_sha);
+        proof.health.sha_aligned = trust.sha_aligned === true;
+
+        const indexEndpoint = new URL('/', location.origin);
+        indexEndpoint.searchParams.set(${JSON.stringify(RELEASE_IDENTITY_QUERY_KEY)}, indexNonce);
+        proof.frontend.index_same_origin = indexEndpoint.origin === location.origin;
+        const indexResponse = await fetch(indexEndpoint.href, {
+          ...fetchOptions,
+          signal: AbortSignal.timeout(${fetchTimeoutMs}),
+        });
+        proof.frontend.index_request_completed = true;
+        proof.frontend.index_http_status = indexResponse.status;
+        proof.frontend.index_http_2xx = indexResponse.status >= 200 && indexResponse.status < 300;
+        proof.frontend.index_content_type_html = String(indexResponse.headers.get('content-type') || '')
+          .toLowerCase().includes('text/html');
+        proof.frontend.index_response_cache_control = String(indexResponse.headers.get('cache-control') || '').slice(0, 160);
+        const indexHtml = await indexResponse.text();
+        const indexDocument = new DOMParser().parseFromString(indexHtml, 'text/html');
+        const indexAssets = [...indexDocument.querySelectorAll('script[src]')]
+          .map((script) => {
+            try { return new URL(script.getAttribute('src') || '', indexEndpoint); } catch { return null; }
+          })
+          .filter((url) => url && url.origin === location.origin)
+          .map((url) => ({ url, name: appAsset(basename(url.pathname)) }))
+          .filter((item) => item.name);
+        proof.frontend.index_app_asset_count = indexAssets.length;
+        proof.frontend.index_app_asset = indexAssets.length === 1 ? indexAssets[0].name : '';
+        proof.frontend.loaded_matches_index = loaded.length === 1
+          && indexAssets.length === 1
+          && loaded[0] === indexAssets[0].name;
+
+        if (indexAssets.length === 1) {
+          const assetEndpoint = new URL(indexAssets[0].url.href);
+          assetEndpoint.searchParams.set(${JSON.stringify(RELEASE_IDENTITY_QUERY_KEY)}, assetNonce);
+          proof.frontend.asset_same_origin = assetEndpoint.origin === location.origin;
+          const assetResponse = await fetch(assetEndpoint.href, {
+            ...fetchOptions,
+            signal: AbortSignal.timeout(${fetchTimeoutMs}),
+          });
+          proof.frontend.asset_request_completed = true;
+          proof.frontend.asset_http_status = assetResponse.status;
+          proof.frontend.asset_http_2xx = assetResponse.status >= 200 && assetResponse.status < 300;
+          proof.frontend.asset_content_type_javascript = String(assetResponse.headers.get('content-type') || '')
+            .toLowerCase().includes('javascript');
+          proof.frontend.asset_response_cache_control = String(assetResponse.headers.get('cache-control') || '').slice(0, 160);
+          const assetBody = await assetResponse.arrayBuffer();
+          proof.frontend.asset_bytes = assetBody.byteLength;
+          const digest = await crypto.subtle.digest('SHA-256', assetBody);
+          proof.frontend.asset_sha256 = [...new Uint8Array(digest)]
+            .map((value) => value.toString(16).padStart(2, '0')).join('');
+        }
+      } catch {}
+      return proof;
+    })()`,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  return state.result?.value || {};
+}
+
 async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs) {
   // Re-prove the bearer immediately before every navigation.  HTTP 200 alone
   // is insufficient because /api/auth/me may encode auth failure in its JSON
@@ -655,6 +838,8 @@ async function main() {
     session = new CdpSession(connection, target.sessionId, targetUrl.origin, overallDeadline);
     await session.send("Page.enable");
     await session.send("Network.enable");
+    await session.send("Network.setCacheDisabled", { cacheDisabled: true });
+    await session.send("Network.setBypassServiceWorker", { bypass: true });
     await session.send("Runtime.enable");
     await session.send("Log.enable");
     // Native media elements cannot attach the SPA's Authorization header.
@@ -723,6 +908,12 @@ async function main() {
       returnByValue: true,
     });
     const surfaceProof = surfaceState.result?.value || {};
+    // Bind the browser evidence to public bytes and runtime identity, not just
+    // to a successful UI journey. The probe compares the app script loaded by
+    // this document with a separately cache-busted index and hashes the exact
+    // cache-busted app bytes. The verifier supplies the frozen candidate's
+    // expected SHA, asset name and digest independently.
+    const releaseIdentity = await probeReleaseIdentity(session);
     // Keep CSP enforcement untouched. A sandboxed srcdoc frame with scripts
     // enabled but no same-origin privilege becomes an opaque `null` origin,
     // proving the renderer-only bearer cannot cross that origin boundary.
@@ -794,6 +985,7 @@ async function main() {
       page_manifest: pageManifest,
       pages,
       functional_proof: functionalProof,
+      release_identity: releaseIdentity,
       policy: {
         external_media_403_allowed_origins: allowedExternalMedia403Origins,
       },

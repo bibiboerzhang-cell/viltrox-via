@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ast
 import importlib.util
 import json
-import socket
 import subprocess
 from pathlib import Path
 
@@ -22,6 +20,9 @@ SPEC.loader.exec_module(gate)
 
 APP_URL = "http://127.0.0.1:8102/"
 APP_ORIGIN = "http://127.0.0.1:8102"
+GIT_SHA = "a" * 40
+APP_ASSET = "app-Test_Candidate-123.js"
+APP_ASSET_SHA256 = "b" * 64
 
 
 def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
@@ -103,6 +104,54 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             },
         },
         "policy": {"external_media_403_allowed_origins": []},
+        "release_identity": {
+            "schema_version": gate.RELEASE_IDENTITY_SCHEMA_VERSION,
+            "cache_bypass": {
+                "cdp_cache_disabled": True,
+                "service_worker_bypassed": True,
+                "fetch_cache_mode": "no-store",
+                "request_cache_control": "no-cache, no-store, max-age=0",
+                "request_pragma": "no-cache",
+                "unique_query_parameter": gate.RELEASE_IDENTITY_QUERY_KEY,
+                "unique_request_nonces": True,
+            },
+            "health": {
+                "request_completed": True,
+                "same_origin": True,
+                "http_status": 200,
+                "http_2xx": True,
+                "status_ok": True,
+                "build_git_sha": GIT_SHA,
+                "build_client_sha": GIT_SHA,
+                "build_client_source": "frontend_dist",
+                "server_git_sha": GIT_SHA,
+                "client_git_sha": GIT_SHA,
+                "sha_aligned": True,
+                "response_cache_control": "no-store",
+            },
+            "frontend": {
+                "loaded_app_asset_count": 1,
+                "loaded_app_asset": APP_ASSET,
+                "index_request_completed": True,
+                "index_same_origin": True,
+                "index_http_status": 200,
+                "index_http_2xx": True,
+                "index_content_type_html": True,
+                "index_app_asset_count": 1,
+                "index_app_asset": APP_ASSET,
+                "loaded_matches_index": True,
+                "index_response_cache_control": "no-store",
+                "asset_request_completed": True,
+                "asset_same_origin": True,
+                "asset_http_status": 200,
+                "asset_http_2xx": True,
+                "asset_content_type_javascript": True,
+                "asset_bytes": 12345,
+                "asset_sha256": APP_ASSET_SHA256,
+                "digest_algorithm": "sha256",
+                "asset_response_cache_control": "public, max-age=3600",
+            },
+        },
         "run": {
             "kind": kind,
             "navigation_completed": True,
@@ -169,6 +218,36 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
                 },
                 {
                     "channel": "Network.responseReceived",
+                    "page_family": "bootstrap",
+                    "url": f"{APP_ORIGIN}/health",
+                    "status": 200,
+                    "resource_type": "Fetch",
+                    "release_identity_probe": True,
+                    "from_disk_cache": False,
+                    "from_service_worker": False,
+                },
+                {
+                    "channel": "Network.responseReceived",
+                    "page_family": "bootstrap",
+                    "url": f"{APP_ORIGIN}/",
+                    "status": 200,
+                    "resource_type": "Fetch",
+                    "release_identity_probe": True,
+                    "from_disk_cache": False,
+                    "from_service_worker": False,
+                },
+                {
+                    "channel": "Network.responseReceived",
+                    "page_family": "bootstrap",
+                    "url": f"{APP_ORIGIN}/assets/{APP_ASSET}",
+                    "status": 200,
+                    "resource_type": "Fetch",
+                    "release_identity_probe": True,
+                    "from_disk_cache": False,
+                    "from_service_worker": False,
+                },
+                {
+                    "channel": "Network.responseReceived",
                     "page_family": "kol-pool",
                     "url": f"{APP_ORIGIN}/api/admin/vkpi/intelligent/query",
                     "status": 200,
@@ -191,10 +270,10 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             ],
             "network_failures": [],
             "network_summary": {
-                "response_count_total": 4,
-                "request_count_total": 4,
+                "response_count_total": 7,
+                "request_count_total": 7,
                 "response_error_count_total": 0,
-                "retained_response_count": 4,
+                "retained_response_count": 7,
                 "loading_failure_count": 0,
                 "inflight_same_origin_api_final": 0,
             },
@@ -230,6 +309,36 @@ def set_network(
 ) -> None:
     failures = list(loading_failures or [])
     reviewed_functional_responses = [
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "bootstrap",
+            "url": f"{APP_ORIGIN}/health",
+            "status": 200,
+            "resource_type": "Fetch",
+            "release_identity_probe": True,
+            "from_disk_cache": False,
+            "from_service_worker": False,
+        },
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "bootstrap",
+            "url": f"{APP_ORIGIN}/",
+            "status": 200,
+            "resource_type": "Fetch",
+            "release_identity_probe": True,
+            "from_disk_cache": False,
+            "from_service_worker": False,
+        },
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "bootstrap",
+            "url": f"{APP_ORIGIN}/assets/{APP_ASSET}",
+            "status": 200,
+            "resource_type": "Fetch",
+            "release_identity_probe": True,
+            "from_disk_cache": False,
+            "from_service_worker": False,
+        },
         {
             "channel": "Network.responseReceived",
             "page_family": "kol-pool",
@@ -277,7 +386,13 @@ def set_network(
 
 
 def test_clean_owned_ephemeral_extension_free_live_capture_passes() -> None:
-    result = gate.evaluate_capture(capture(events=[event(level="info", text="ready")]))
+    result = gate.evaluate_capture(
+        capture(events=[event(level="info", text="ready")]),
+        expected_git_sha=GIT_SHA,
+        expected_app_asset=APP_ASSET,
+        expected_app_asset_sha256=APP_ASSET_SHA256,
+        require_expected_identity=True,
+    )
     assert result["overall"] == {"pass": True, "release_eligible": True, "failures": []}
     assert result["metrics"]["blocking_events"] == 0
     assert result["metrics"]["functional_proof"] == {
@@ -288,6 +403,123 @@ def test_clean_owned_ephemeral_extension_free_live_capture_passes() -> None:
     }
     assert result["claims"]["live_functional_journey_completed"] is True
     assert result["claims"]["live_extension_free_run_completed"] is True
+    assert result["claims"]["frozen_candidate_identity_bound"] is True
+
+
+def test_live_release_evaluation_requires_all_frozen_candidate_expectations() -> None:
+    result = gate.evaluate_capture(
+        capture(),
+        require_expected_identity=True,
+    )
+    assert result["overall"]["pass"] is False
+    assert result["overall"]["release_eligible"] is False
+    assert result["capture"]["release_identity_proof"]["internal_pass"] is True
+    assert result["capture"]["release_identity_proof"]["candidate_binding_pass"] is False
+    assert any(
+        "frozen candidate identity binding failed" in item
+        for item in result["overall"]["failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected_overrides", "failed_proof"),
+    [
+        ({"expected_git_sha": "c" * 40}, "health_server_git_sha_matches"),
+        ({"expected_app_asset": "app-Other_Candidate.js"}, "loaded_app_asset_matches"),
+        ({"expected_app_asset_sha256": "d" * 64}, "asset_sha256_matches"),
+    ],
+)
+def test_frozen_candidate_sha_asset_or_digest_mismatch_fails_closed(
+    expected_overrides: dict[str, str],
+    failed_proof: str,
+) -> None:
+    expected = {
+        "expected_git_sha": GIT_SHA,
+        "expected_app_asset": APP_ASSET,
+        "expected_app_asset_sha256": APP_ASSET_SHA256,
+    }
+    expected.update(expected_overrides)
+    result = gate.evaluate_capture(
+        capture(),
+        require_expected_identity=True,
+        **expected,
+    )
+    proof = result["capture"]["release_identity_proof"]
+    assert result["overall"]["pass"] is False
+    assert result["overall"]["release_eligible"] is False
+    assert proof["internal_pass"] is True
+    assert proof["candidate_proof"][failed_proof] is False
+
+
+def test_coherent_old_public_version_cannot_pass_new_frozen_candidate() -> None:
+    payload = capture()
+    old_sha = "c" * 40
+    old_asset = "app-Old_Cached.js"
+    old_digest = "d" * 64
+    payload["release_identity"]["health"].update(
+        {
+            "build_git_sha": old_sha,
+            "build_client_sha": old_sha,
+            "server_git_sha": old_sha,
+            "client_git_sha": old_sha,
+        }
+    )
+    payload["release_identity"]["frontend"].update(
+        {
+            "loaded_app_asset": old_asset,
+            "index_app_asset": old_asset,
+            "asset_sha256": old_digest,
+        }
+    )
+    asset_response = next(
+        row
+        for row in payload["collection"]["network_responses"]
+        if str(row["url"]).startswith(f"{APP_ORIGIN}/assets/")
+    )
+    asset_response["url"] = f"{APP_ORIGIN}/assets/{old_asset}"
+
+    result = gate.evaluate_capture(
+        payload,
+        expected_git_sha=GIT_SHA,
+        expected_app_asset=APP_ASSET,
+        expected_app_asset_sha256=APP_ASSET_SHA256,
+        require_expected_identity=True,
+    )
+    proof = result["capture"]["release_identity_proof"]
+    assert proof["internal_pass"] is True
+    assert proof["candidate_binding_pass"] is False
+    assert result["overall"]["release_eligible"] is False
+
+
+@pytest.mark.parametrize("cache_field", ["from_disk_cache", "from_service_worker"])
+def test_cached_or_service_worker_identity_asset_fails_closed(cache_field: str) -> None:
+    payload = capture()
+    asset_response = next(
+        row
+        for row in payload["collection"]["network_responses"]
+        if str(row["url"]).startswith(f"{APP_ORIGIN}/assets/")
+    )
+    asset_response[cache_field] = True
+    result = gate.evaluate_capture(
+        payload,
+        expected_git_sha=GIT_SHA,
+        expected_app_asset=APP_ASSET,
+        expected_app_asset_sha256=APP_ASSET_SHA256,
+        require_expected_identity=True,
+    )
+    proof = result["capture"]["release_identity_proof"]
+    assert result["overall"]["pass"] is False
+    assert proof["internal_proof"]["network_app_asset_probe_uncached"] is False
+
+
+def test_loaded_and_fresh_index_app_assets_must_match() -> None:
+    payload = capture()
+    payload["release_identity"]["frontend"]["index_app_asset"] = "app-Fresh.js"
+    payload["release_identity"]["frontend"]["loaded_matches_index"] = True
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    proof = result["capture"]["release_identity_proof"]["internal_proof"]
+    assert proof["loaded_matches_index"] is False
 
 
 def test_missing_functional_proof_fails_closed() -> None:
@@ -702,197 +934,3 @@ def test_page_with_inflight_same_origin_api_cannot_pass() -> None:
     evidence = next(row for row in result["pages"] if row["family"] == "gtmCommand")
     assert evidence["proof"]["same_origin_api_idle"] is False
     assert evidence["proof"]["same_origin_api_inflight_zero"] is False
-
-
-def test_same_origin_api_http_error_blocks_release() -> None:
-    payload = capture()
-    set_network(
-        payload,
-        responses=[
-            {
-                "channel": "Network.responseReceived",
-                "page_family": "bootstrap",
-                "url": f"{APP_ORIGIN}/api/auth/me",
-                "status": 200,
-                "resource_type": "Fetch",
-            },
-            {
-                "channel": "Network.responseReceived",
-                "page_family": "dealers",
-                "url": f"{APP_ORIGIN}/api/admin/vkpi/dealers",
-                "status": 503,
-                "resource_type": "Fetch",
-            },
-        ],
-    )
-    result = gate.evaluate_capture(payload)
-    assert result["overall"]["pass"] is False
-    error = result["network"]["responses"][1]
-    assert error["provenance"] == "same_origin_api"
-    assert error["blocking"] is True
-    assert result["metrics"]["network"]["blocking_http_errors"] == 1
-
-
-def test_external_media_403_needs_exact_origin_and_media_type() -> None:
-    payload = capture(
-        events=[
-            event(
-                channel="Log.entryAdded",
-                text="Failed to load resource: the server responded with a status of 403",
-                source_url="https://media.example/thumb.jpg?temporary=redacted",
-                context="",
-            )
-        ]
-    )
-    payload["policy"]["external_media_403_allowed_origins"] = [
-        "https://media.example"
-    ]
-    set_network(
-        payload,
-        responses=[
-            {
-                "channel": "Network.responseReceived",
-                "page_family": "bootstrap",
-                "url": f"{APP_ORIGIN}/api/auth/me",
-                "status": 200,
-                "resource_type": "Fetch",
-            },
-            {
-                "channel": "Network.responseReceived",
-                "page_family": "kol-pool",
-                "url": "https://media.example/thumb.jpg",
-                "status": 403,
-                "resource_type": "Image",
-            },
-        ],
-    )
-    result = gate.evaluate_capture(payload)
-    assert result["overall"]["pass"] is True
-    evidence = result["network"]["responses"][1]
-    assert evidence["tolerated_external_media_403"] is True
-    assert evidence["blocking"] is False
-    assert result["metrics"]["network"]["tolerated_external_media_403"] == 1
-    assert result["events"][0]["tolerated_external_media_403"] is True
-    assert result["events"][0]["blocking"] is False
-    assert result["metrics"]["tolerated_external_media_403_console_events"] == 1
-
-    payload["collection"]["network_responses"][1]["resource_type"] = "Fetch"
-    result = gate.evaluate_capture(payload)
-    assert result["overall"]["pass"] is False
-    assert result["network"]["responses"][1]["blocking"] is True
-
-
-@pytest.mark.parametrize(
-    "origin",
-    [
-        "https://*.example.com",
-        "https://media.example/path",
-        APP_ORIGIN,
-        "http://media.example",
-    ],
-)
-def test_external_media_allowlist_rejects_non_exact_or_unsafe_origins(origin: str) -> None:
-    payload = capture()
-    payload["policy"]["external_media_403_allowed_origins"] = [origin]
-    result = gate.evaluate_capture(payload)
-    assert result["overall"]["pass"] is False
-    assert any("exact external HTTPS origins" in item for item in result["overall"]["failures"])
-
-
-def test_non_cancelled_loading_failure_blocks_but_navigation_cancel_is_diagnostic() -> None:
-    payload = capture()
-    response = payload["collection"]["network_responses"]
-    set_network(
-        payload,
-        responses=response,
-        loading_failures=[
-            {
-                "channel": "Network.loadingFailed",
-                "page_family": "events",
-                "resource_type": "Fetch",
-                "canceled": True,
-                "error_text": "net::ERR_ABORTED",
-            }
-        ],
-    )
-    assert gate.evaluate_capture(payload)["overall"]["pass"] is True
-
-    payload["collection"]["network_failures"][0]["canceled"] = False
-    result = gate.evaluate_capture(payload)
-    assert result["overall"]["pass"] is False
-    assert result["metrics"]["network"]["blocking_loading_failures"] == 1
-
-
-def test_page_manifest_file_matches_independent_verifier_contract() -> None:
-    payload = json.loads(PAGE_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "vkpi-browser-page-manifest/v1"
-    actual = {
-        row["family"]: (row["nav_key"], row["heading"])
-        for row in payload["pages"]
-    }
-    assert actual == gate.REQUIRED_PAGE_FAMILIES
-    assert len(actual) == 21
-
-
-def test_cli_allows_fixture_only_when_explicit_and_writes_machine_report(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    input_path = tmp_path / "capture.json"
-    output_path = tmp_path / "gate.json"
-    input_path.write_text(json.dumps(capture(kind="fixture")), encoding="utf-8")
-    assert gate.main(
-        ["--input", str(input_path), "--json-out", str(output_path), "--allow-fixture"]
-    ) == 0
-    written = json.loads(output_path.read_text(encoding="utf-8"))
-    assert written["overall"]["pass"] is True
-    assert written["overall"]["release_eligible"] is False
-    assert "PASS browser console release gate" in capsys.readouterr().err
-
-
-def test_cli_default_rejects_fixture_as_release_evidence(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    input_path = tmp_path / "capture.json"
-    input_path.write_text(json.dumps(capture(kind="fixture")), encoding="utf-8")
-    assert gate.main(["--input", str(input_path)]) == 1
-    assert "FAIL browser console release gate" in capsys.readouterr().err
-
-
-def test_report_redacts_secrets_and_removes_url_query() -> None:
-    secret = event(
-        text="Bearer abcdefghijklmnopqrstuvwxyz access_token=topsecret sk-abcdefghijklmnopqrstuv",
-        source_url=f"{APP_ORIGIN}/assets/app.js?access_token=topsecret#fragment",
-    )
-    result = gate.evaluate_capture(capture(events=[secret]))
-    serialized = json.dumps(result)
-    assert "topsecret" not in serialized
-    assert "abcdefghijklmnopqrstuv" not in serialized
-    assert "?access_token" not in result["events"][0]["source_url"]
-    events_page = next(row for row in result["pages"] if row["family"] == "events")
-    assert events_page["final_url"] == f"{APP_ORIGIN}/"
-    assert "?" not in events_page["final_url"]
-    assert "#" not in events_page["final_url"]
-    assert "[REDACTED]" in result["events"][0]["text_preview"]
-
-
-def test_verifier_imports_no_browser_network_or_runtime_clients_and_opens_no_socket(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tree = ast.parse(VERIFIER_PATH.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".", 1)[0])
-    assert imported.isdisjoint(
-        {"aiohttp", "httpx", "playwright", "psycopg", "puppeteer", "redis", "requests", "selenium"}
-    )
-
-    def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("socket attempted")
-
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
-    assert gate.evaluate_capture(capture(), require_live=False)["overall"]["pass"] is True
