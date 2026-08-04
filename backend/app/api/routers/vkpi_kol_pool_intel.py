@@ -368,8 +368,11 @@ def get_pool_item_llm_deep_analysis(
 
 def _enqueue_content_fit_on_demand(kol_pool_id: int, product_sku, *, force: bool, staff) -> dict:
     """L1:内容契合按需入队逻辑已迁 domains/kol/content_fit_enqueue;此处薄委托(端点调用不变,行为一致)。"""
+    from app.core.release_validation import release_validation_active
     from app.domains.kol import content_fit_enqueue
 
+    if release_validation_active():
+        raise RuntimeError("release validation fence blocks content-fit enqueue")
     return content_fit_enqueue.enqueue_content_fit_on_demand(kol_pool_id, product_sku, force=force, staff=staff)
 
 

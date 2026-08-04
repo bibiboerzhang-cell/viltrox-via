@@ -390,7 +390,8 @@ def test_progress_center_stream_snapshot_uses_short_lived_db_scope(monkeypatch):
     lifecycle: list[str] = []
 
     @contextmanager
-    def bounded_scope():
+    def bounded_scope(*, release_validation_guard: bool):
+        assert release_validation_guard is True
         lifecycle.append("enter")
         yield None
         lifecycle.append("exit")

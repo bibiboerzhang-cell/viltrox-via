@@ -15,6 +15,7 @@ else
 fi
 ROOT="$(cd "$(dirname "$SCRIPT_SOURCE")/.." && pwd)"
 INSECURE_LOCAL_JWT_SECRET="viltrox2-local-dev-secret-change-me"
+INSECURE_LOCAL_ADMIN_PASSWORD="AdminPass123!"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-$ROOT/.env}"
 ENVIRONMENT="${ENVIRONMENT:-local}"
 ENV_FILE="${ENV_FILE:-}"
@@ -49,8 +50,6 @@ LOCAL_NGINX_BIN="${LOCAL_NGINX_BIN:-$LOCAL_NGINX_PREFIX/sbin/nginx}"
 LOCAL_DATABASE_URL="${LOCAL_DATABASE_URL:-postgresql://$POSTGRES_USER@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB}"
 LOCAL_REDIS_URL="${LOCAL_REDIS_URL:-redis://$REDIS_HOST:$REDIS_PORT/0}"
 
-mkdir -p "$RUNTIME_ROOT" "$RUNTIME_DATA" "$RUNTIME_LOGS" "$REDIS_DATA_DIR"
-
 load_env_file() {
   local file_path="$1"
   local override_mode="${2:-0}"
@@ -71,7 +70,13 @@ load_env_file() {
       export "$key=$value"
     elif [[ "$key" == "JWT_SECRET" && "${ENVIRONMENT:-local}" == "local" && "${RUNTIME_ENV_KEEP_INHERITED_JWT:-0}" != "1" ]]; then
       export "$key=$value"
+    elif [[ "$key" == "JWT_SECRET" && -z "${JWT_SECRET:-}" && -n "$value" ]]; then
+      export "$key=$value"
     elif [[ "$key" == "JWT_SECRET" && "${JWT_SECRET:-}" == "$INSECURE_LOCAL_JWT_SECRET" && "$value" != "$INSECURE_LOCAL_JWT_SECRET" ]]; then
+      export "$key=$value"
+    elif [[ "$key" == "ADMIN_PASSWORD" && -z "${ADMIN_PASSWORD:-}" && -n "$value" ]]; then
+      export "$key=$value"
+    elif [[ "$key" == "ADMIN_PASSWORD" && "${ADMIN_PASSWORD:-}" == "$INSECURE_LOCAL_ADMIN_PASSWORD" && "$value" != "$INSECURE_LOCAL_ADMIN_PASSWORD" ]]; then
       export "$key=$value"
     elif eval "[[ -z \"\${$key+x}\" ]]"; then
       export "$key=$value"
@@ -92,6 +97,37 @@ if [[ -f "$ROOT/runtime/local_operator_env.sh" ]]; then
   # shellcheck disable=SC1091
   source "$ROOT/runtime/local_operator_env.sh"
 fi
+
+# Public development credentials are allowed only for the local stack.  A
+# production-like launcher must provide both values through its reviewed
+# environment; runtime_env must never turn a missing production secret into a
+# known credential.  Keep the error category-only so logs cannot disclose the
+# rejected value.
+RUNTIME_ENVIRONMENT_NORMALIZED="${ENVIRONMENT#"${ENVIRONMENT%%[![:space:]]*}"}"
+RUNTIME_ENVIRONMENT_NORMALIZED="${RUNTIME_ENVIRONMENT_NORMALIZED%"${RUNTIME_ENVIRONMENT_NORMALIZED##*[![:space:]]}"}"
+RUNTIME_ENVIRONMENT_NORMALIZED="$(printf '%s' "$RUNTIME_ENVIRONMENT_NORMALIZED" | tr '[:upper:]' '[:lower:]')"
+RUNTIME_ENV_PRODUCTION_LIKE=0
+case "$RUNTIME_ENVIRONMENT_NORMALIZED" in
+  prod|production|stage|staging)
+    RUNTIME_ENV_PRODUCTION_LIKE=1
+    if [[ "${JWT_SECRET:-}" == "$INSECURE_LOCAL_JWT_SECRET" ]]; then
+      unset JWT_SECRET
+    fi
+    if [[ "${ADMIN_PASSWORD:-}" == "$INSECURE_LOCAL_ADMIN_PASSWORD" ]]; then
+      unset ADMIN_PASSWORD
+    fi
+    if [[ -z "${JWT_SECRET:-}" ]]; then
+      printf '%s\n' 'runtime_env: production JWT_SECRET is missing or unsafe' >&2
+      return 1 2>/dev/null || exit 1
+    fi
+    if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+      printf '%s\n' 'runtime_env: production ADMIN_PASSWORD is missing or unsafe' >&2
+      return 1 2>/dev/null || exit 1
+    fi
+    ;;
+esac
+
+mkdir -p "$RUNTIME_ROOT" "$RUNTIME_DATA" "$RUNTIME_LOGS" "$REDIS_DATA_DIR"
 
 if [[ ! -x "$POSTGRES_BIN/initdb" && -x "/opt/homebrew/opt/postgresql@16/bin/initdb" ]]; then
   POSTGRES_BIN="/opt/homebrew/opt/postgresql@16/bin"
@@ -127,8 +163,10 @@ else
   export REDIS_URL="${REDIS_URL:-$LOCAL_REDIS_URL}"
 fi
 
-export JWT_SECRET="${JWT_SECRET:-$INSECURE_LOCAL_JWT_SECRET}"
-export ADMIN_PASSWORD="${ADMIN_PASSWORD:-AdminPass123!}"
+if [[ "$RUNTIME_ENV_PRODUCTION_LIKE" != "1" ]]; then
+  export JWT_SECRET="${JWT_SECRET:-$INSECURE_LOCAL_JWT_SECRET}"
+  export ADMIN_PASSWORD="${ADMIN_PASSWORD:-$INSECURE_LOCAL_ADMIN_PASSWORD}"
+fi
 export WORKER_CLUSTER_TIER="${WORKER_CLUSTER_TIER:-60}"
 
 redact_runtime_url() {

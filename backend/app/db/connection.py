@@ -219,14 +219,21 @@ async def _run_db_startup_stage(stage: str, fn: Callable[[], None]) -> None:
 class _ScopedConnectionHandle:
     """Mutable request-scope holder that survives sync endpoint thread hops."""
 
-    __slots__ = ("conn",)
+    __slots__ = ("conn", "release_validation_guard")
 
-    def __init__(self) -> None:
+    def __init__(self, *, release_validation_guard: bool = False) -> None:
         self.conn: Any | None = None
+        self.release_validation_guard = bool(release_validation_guard)
 
     def get(self) -> Any:
         if self.conn is None:
-            self.conn = _build_postgres_conn() if is_postgres_runtime() else _build_sqlite_conn()
+            self.conn = (
+                _build_postgres_conn(
+                    release_validation_guard=self.release_validation_guard,
+                )
+                if is_postgres_runtime()
+                else _build_sqlite_conn()
+            )
         return self.conn
 
     def close(self) -> None:
@@ -459,11 +466,27 @@ def _build_sqlite_conn() -> sqlite3.Connection:
     return conn
 
 
-def _build_postgres_conn() -> PostgresCompatConnection:
+def _build_postgres_conn(
+    *,
+    release_validation_guard: bool = False,
+) -> PostgresCompatConnection:
     pool = _get_pg_pool()
     if pool is None:
         raise RuntimeError("Postgres runtime requested but psycopg/psycopg_pool is unavailable")
-    return PostgresCompatConnection(pool.getconn(), pool=pool)
+    raw_conn = pool.getconn()
+    try:
+        read_only = False
+        if release_validation_guard:
+            from app.core.release_validation import release_validation_active
+
+            read_only = release_validation_active()
+        # Reset both states because a pooled connection can cross from fenced
+        # web traffic to an activated request or a non-web runtime.
+        raw_conn.read_only = bool(read_only)
+    except Exception:
+        pool.putconn(raw_conn)
+        raise
+    return PostgresCompatConnection(raw_conn, pool=pool)
 
 
 def open_standalone_conn() -> Any:
@@ -510,13 +533,23 @@ def _run_runtime_seeders() -> None:
             _db_local.conn = None
 
 
-async def init_db_runtime() -> None:
+async def init_db_runtime(*, skip_non_migration_writes: bool = False) -> None:
     mode = _resolve_db_startup_mode()
     backend = "postgres" if is_postgres_runtime() else "sqlite"
     _reset_db_startup_status(mode=mode, backend=backend)
     logger.info("db.startup.mode_selected | mode=%s | backend=%s", mode, backend)
 
     if not is_postgres_runtime():
+        if skip_non_migration_writes:
+            _update_db_startup_status(
+                state="failed",
+                failed_stage="mode_validation",
+                error_type="RuntimeError",
+            )
+            raise RuntimeError(
+                "Release-validation startup requires Postgres because the SQLite "
+                "schema bootstrap includes non-migration writes"
+            )
         if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY:
             _update_db_startup_status(
                 state="failed",
@@ -540,18 +573,24 @@ async def init_db_runtime() -> None:
     _get_pg_pool()
     await _run_db_startup_stage("schema_migrations", _run_postgres_migrations)
 
-    if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY:
+    if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY or skip_non_migration_writes:
+        skip_status = (
+            "skipped_release_validation"
+            if skip_non_migration_writes
+            else "skipped_explicitly"
+        )
         _update_db_startup_status(
             state="completed",
-            default_admin_bootstrap="skipped_explicitly",
-            runtime_seeders="skipped_explicitly",
-            non_migration_startup_writes="skipped_explicitly",
+            default_admin_bootstrap=skip_status,
+            runtime_seeders=skip_status,
+            non_migration_startup_writes=skip_status,
             completed_at=_utc_timestamp(),
         )
         logger.warning(
-            "db.startup.non_migration_writes_skipped | mode=%s | "
+            "db.startup.non_migration_writes_skipped | mode=%s | release_validation=%s | "
             "default_admin_bootstrap=skipped | runtime_seeders=skipped",
             mode,
+            bool(skip_non_migration_writes),
         )
         return
 
@@ -724,9 +763,14 @@ def _bootstrap_default_admin() -> None:
 
 
 @asynccontextmanager
-async def db_connection_scope() -> Iterator[Any]:
+async def db_connection_scope(
+    *,
+    release_validation_guard: bool = False,
+) -> Iterator[Any]:
     if is_postgres_runtime():
-        handle = _ScopedConnectionHandle()
+        handle = _ScopedConnectionHandle(
+            release_validation_guard=release_validation_guard,
+        )
         token = _scoped_conn.set(handle)
         try:
             yield None
@@ -744,9 +788,14 @@ async def db_connection_scope() -> Iterator[Any]:
 
 
 @contextmanager
-def db_connection_sync_scope() -> Iterator[Any]:
+def db_connection_sync_scope(
+    *,
+    release_validation_guard: bool = False,
+) -> Iterator[Any]:
     if is_postgres_runtime():
-        handle = _ScopedConnectionHandle()
+        handle = _ScopedConnectionHandle(
+            release_validation_guard=release_validation_guard,
+        )
         token = _scoped_conn.set(handle)
         try:
             yield None

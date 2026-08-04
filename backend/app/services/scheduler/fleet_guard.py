@@ -26,6 +26,7 @@ import psycopg
 
 from app.core.config import DATABASE_URL, DB_RUNTIME_URL
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import db_connection_sync_scope, get_conn, is_postgres_runtime
 
 
@@ -870,6 +871,16 @@ def guard_scheduled_callable(
             "scheduled_fire_at": claim.scheduled_fire_at,
         }
 
+    def _release_validation_result() -> dict[str, Any]:
+        logger.info(
+            "scheduler.release_validation_fenced",
+            extra={"task_key": task_key},
+        )
+        return {
+            "status": "release_validation_fenced",
+            "task_key": task_key,
+        }
+
     def _record_finish_without_masking(
         claim: ScheduledFireClaim,
         *,
@@ -904,6 +915,8 @@ def guard_scheduled_callable(
     if inspect.iscoroutinefunction(func):
         @functools.wraps(func)
         async def _async_guard(*args: Any, **kwargs: Any) -> Any:
+            if release_validation_active():
+                return _release_validation_result()
             claim = claim_scheduled_fire(task_key, owner_id)
             if not claim.claimed:
                 return _duplicate_result(claim)
@@ -928,6 +941,8 @@ def guard_scheduled_callable(
     else:
         @functools.wraps(func)
         def _sync_guard(*args: Any, **kwargs: Any) -> Any:
+            if release_validation_active():
+                return _release_validation_result()
             claim = claim_scheduled_fire(task_key, owner_id)
             if not claim.claimed:
                 return _duplicate_result(claim)

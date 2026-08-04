@@ -131,10 +131,12 @@ def test_local_pgbouncer_switch_cannot_override_systemd_production_pool(tmp_path
     env = _isolated_start_admin_env(tmp_path, fake_python)
     env.update(
         {
+            "ADMIN_PASSWORD": "synthetic-systemd-production-admin-password",
             "DATABASE_POOL_URL": "postgresql://pool_user:pool-secret@127.0.0.1:6432/vkpi",
             "DATABASE_URL": "postgresql://cloud_user:db-secret@db.internal:5432/vkpi",
             "DB_USE_PGBOUNCER": "1",
             "ENVIRONMENT": "production",
+            "JWT_SECRET": "synthetic-systemd-production-jwt-secret",
             "REDIS_URL": "redis://:redis-secret@redis.internal:6379/0",
             "VKPI_LOCAL_WEB_PGBOUNCER": "1",
             "VKPI_SYSTEMD_ADMIN_WEB_CONTRACT": "1",

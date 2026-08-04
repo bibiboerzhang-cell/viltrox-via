@@ -2,10 +2,10 @@
 """Non-destructive, manifest-driven acceptance for the running local V-KPI stack.
 
 Stdout is machine-readable JSON; stderr is one concise PASS/FAIL line. The
-runner permits loopback GET requests only and never emits its short-lived JWT.
+runner permits loopback GET requests plus explicitly declared read-only JSON
+POST probes and never emits its short-lived JWT or request bodies.
 """
 from __future__ import annotations
-from stdout_utils import out as stdout_out
 
 import argparse
 import copy
@@ -23,15 +23,43 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
-from urllib.request import Request, urlopen
+
+from local_release_acceptance_contracts import (
+    _nonempty_text,
+    _strict_utc_iso,
+    _validate_ask_evidence,
+    _validate_ask_fact,
+    _validate_ask_find_v2,
+)
+from local_release_acceptance_deadline import (
+    DEFAULT_OVERALL_TIMEOUT_SECONDS,
+    DEFAULT_TOKEN_TTL_SECONDS,
+    MAX_TOKEN_TTL_SECONDS,
+    OverallDeadline,
+    TOKEN_EXPIRY_SAFETY_SECONDS,
+    validate_acceptance_timing,
+    validate_token_ttl,
+)
+from local_release_acceptance_transport import (
+    IsolatedRequestFailure,
+    run_isolated_http_request,
+)
+from release_auth_contract import (
+    PG_READ_ONLY_OPTIONS,
+    select_acceptance_pg_admin as _select_pg_admin,
+    select_acceptance_sqlite_admin as _select_sqlite_admin,
+    validated_local_database as _validated_local_database,
+)
+from stdout_utils import out as stdout_out
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR, BACKEND_DIR = ROOT / "scripts", ROOT / "backend"
 DEFAULT_BASE_URL = "http://127.0.0.1:8102"
-DEFAULT_TOKEN_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS = 300, 15.0
-DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_MAX_WORKER_AGE_SECONDS = 5 * 1024 * 1024, 180
+DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_MAX_REQUEST_BYTES, DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024, 5 * 1024 * 1024
+DEFAULT_MAX_WORKER_AGE_SECONDS = 180
+REVIEWED_READ_ONLY_POST_PATHS = {"/api/admin/vkpi/intelligent/query"}
 DEFAULT_MAX_SCHEDULER_EVIDENCE_AGE_SECONDS = 8 * 24 * 60 * 60
 COCKPIT_BOARD_FAMILIES = [
     "dashboard", "kol-pool", "my-kol", "projects", "events", "shopify", "dealers", "triage",
@@ -55,8 +83,9 @@ def _ep(endpoint_id: str, family: str, path: str, **options: Any) -> dict[str, A
     }
     opts = {aliases.get(key, key): value for key, value in options.items()}
     bind = opts.get("bind")
+    method = str(opts.pop("method", "GET")).upper()
     item = {
-        "id": endpoint_id, "family": family, "method": "GET", "contract": opts.pop("contract", "object"),
+        "id": endpoint_id, "family": family, "method": method, "contract": opts.pop("contract", "object"),
         "data_paths": list(opts.pop("data_paths", ["$"])), "state_paths": list(opts.pop("state_paths", ["status", "data_status"])),
         "allowed_states": list(opts.pop("allowed_states", DEFAULT_ALLOWED_STATES)), "required": True,
         "auth": opts.pop("auth", True), "read_only_ack": True,
@@ -73,7 +102,7 @@ E = _ep
 SKU = {"sku": {"endpoint": "sku360.list", "paths": ["items.0.sku", "items.0.product_sku"]}}
 KOL = {"kol_id": {"endpoint": "kol-pool.list", "paths": ["items.0.id", "items.0.kol_pool_id"]}}
 DEFAULT_MANIFEST: dict[str, Any] = {
-    "name": "vkpi-local-release-acceptance", "version": 1, "board_families": list(COCKPIT_BOARD_FAMILIES),
+    "name": "vkpi-local-release-acceptance", "version": 2, "board_families": list(COCKPIT_BOARD_FAMILIES),
     "endpoints": [
         E("runtime.health", "runtime", "/health", c="health", d=["build", "trust"], allowed=["real"]),
         E("runtime.scheduler-registry", "runtime", "/api/admin/vkpi/settings/scheduler-tasks", c="scheduler_registry", d=["tasks"], req=["tasks", "status"], lists=["tasks"], allowed=["real"], scan=True),
@@ -125,6 +154,35 @@ DEFAULT_MANIFEST: dict[str, Any] = {
         E("intelligent.advisor-memory", "intelligent", "/api/admin/vkpi/marketing-advisor/memory?limit=25",
           d=["settings", "candidates", "facts"], req=["status", "settings", "candidates", "facts"],
           lists=["candidates", "facts"]),
+        E("intelligent.ask-kol-overview", "intelligent", "/api/admin/vkpi/intelligent/query",
+          method="POST", read_only_post=True, c="ask_find_v2", expected_intent="kol.pool.overview",
+          json_body={"query": "目前 KOL 数量是多少？", "locale": "zh-CN", "thread_id": "local-release-acceptance",
+                     "scope": "auto", "filters": {"intent": "kol.pool.overview", "limit": 20},
+                     "mode": "deterministic", "client_request_id": "acceptance-kol-overview"},
+          d=["facts", "evidence"], s=["status"], allowed=["real", "empty", "pending"], t=30, scan=True),
+        E("intelligent.ask-video-26mm-evo", "intelligent", "/api/admin/vkpi/intelligent/query",
+          method="POST", read_only_post=True, c="ask_find_v2", expected_intent="kol.video_topic.count",
+          json_body={"query": "多少 KOL 做过 26mm EVO 视频？", "locale": "zh-CN", "thread_id": "local-release-acceptance",
+                     "scope": "auto", "filters": {"intent": "kol.video_topic.count", "topic": "26mm EVO", "limit": 30},
+                     "mode": "deterministic", "client_request_id": "acceptance-video-26mm-evo"},
+          d=["facts", "evidence"], s=["status"], allowed=["real", "empty", "pending"], t=30, scan=True),
+        E("intelligent.ask-project-search", "intelligent", "/api/admin/vkpi/intelligent/query",
+          method="POST", read_only_post=True, c="ask_find_v2", expected_intent="project.search",
+          json_body={"query": "搜索 Viltrox 项目", "locale": "zh-CN", "thread_id": "local-release-acceptance",
+                     "scope": "auto", "filters": {"intent": "project.search", "keyword": "Viltrox", "limit": 20},
+                     "mode": "deterministic", "client_request_id": "acceptance-project-search"},
+          d=["facts", "evidence"], s=["status"], allowed=["real", "empty", "pending"], t=30, scan=True),
+        E("intelligent.ask-weekly-market", "intelligent", "/api/admin/vkpi/intelligent/query",
+          method="POST", read_only_post=True, c="ask_find_v2", expected_intent="market.viltrox.weekly_voice",
+          json_body={"query": "总结本周市场对 Viltrox 的评价", "locale": "zh-CN", "thread_id": "local-release-acceptance",
+                     "scope": "auto", "time_range": "7d",
+                     "filters": {"intent": "market.viltrox.weekly_voice", "limit": 20},
+                     "mode": "deterministic", "client_request_id": "acceptance-weekly-market"},
+          d=["facts", "evidence"], s=["status"], allowed=["real", "empty", "pending"], t=40, scan=True),
+        E("intelligent.global-search", "intelligent", "/api/admin/vkpi/global-search?q=Viltrox&limit=5",
+          c="global_search", d=["kols", "projects", "events"], s=[],
+          req=["q", "kols", "projects", "events", "source_status"],
+          lists=["kols", "projects", "events"], allowed=["real", "empty"], t=20, scan=True),
         E("replyQueue.list", "replyQueue", "/api/admin/vkpi/reply-queue?limit=25&offset=0", c="list_response", d=["items"], req=["items", "count", "total", "offset", "limit"], lists=["items"], ints=["count", "total", "offset", "limit"]),
         E("sku360.list", "sku360", "/api/admin/vkpi/sku/list?query=&limit=10", c="list_response", d=["items"], lists=["items"]),
         E("sku360.profile", "sku360", "/api/admin/vkpi/sku/{sku}/profile", d=["product", "content", "comments", "bh_reviews"], bind=SKU, t=30, allowed=["real"]),
@@ -177,6 +235,15 @@ class HttpResponse:
 class Transport(Protocol):
     def get(self, path: str, *, token: str | None, timeout_seconds: float) -> HttpResponse: ...
 
+    def post(
+        self,
+        path: str,
+        *,
+        json_body: Mapping[str, Any],
+        token: str | None,
+        timeout_seconds: float,
+    ) -> HttpResponse: ...
+
 
 class TransportFailure(RuntimeError):
     def __init__(self, kind: str, latency_ms: float) -> None:
@@ -190,25 +257,46 @@ class UrlLibTransport:
         self.max_response_bytes = max(1024, int(max_response_bytes))
 
     def get(self, path: str, *, token: str | None, timeout_seconds: float) -> HttpResponse:
-        headers = {"Accept": "application/json", "Cache-Control": "no-cache", "User-Agent": "vkpi-local-release-acceptance/1", "X-Requested-With": "XMLHttpRequest"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        request, started = Request(f"{self.base_url}{path}", headers=headers, method="GET"), time.perf_counter()
+        return self._request("GET", path, token=token, timeout_seconds=timeout_seconds)
+
+    def post(
+        self,
+        path: str,
+        *,
+        json_body: Mapping[str, Any],
+        token: str | None,
+        timeout_seconds: float,
+    ) -> HttpResponse:
+        return self._request(
+            "POST",
+            path,
+            json_body=json_body,
+            token=token,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None,
+        timeout_seconds: float,
+        json_body: Mapping[str, Any] | None = None,
+    ) -> HttpResponse:
         try:
-            with urlopen(request, timeout=float(timeout_seconds)) as response:
-                body = response.read(self.max_response_bytes + 1)
-                elapsed = (time.perf_counter() - started) * 1000
-                if len(body) > self.max_response_bytes:
-                    raise TransportFailure("response_too_large", elapsed)
-                return HttpResponse(int(response.status), body, {str(k).lower(): str(v) for k, v in response.headers.items()}, elapsed)
-        except HTTPError as exc:
-            body, elapsed = exc.read(self.max_response_bytes + 1), (time.perf_counter() - started) * 1000
-            if len(body) > self.max_response_bytes:
-                raise TransportFailure("error_response_too_large", elapsed) from None
-            return HttpResponse(int(exc.code), body, {str(k).lower(): str(v) for k, v in (exc.headers or {}).items()}, elapsed)
-        except (TimeoutError, URLError, OSError) as exc:
-            kind = "timeout" if isinstance(exc, TimeoutError) else "connection_error"
-            raise TransportFailure(kind, (time.perf_counter() - started) * 1000) from None
+            response = run_isolated_http_request(
+                base_url=self.base_url,
+                method=method,
+                path=path,
+                token=token,
+                timeout_seconds=timeout_seconds,
+                max_response_bytes=self.max_response_bytes,
+                json_body=json_body,
+            )
+        except IsolatedRequestFailure as exc:
+            raise TransportFailure(exc.kind, exc.latency_ms) from None
+        return HttpResponse(response.status, response.body, response.headers, response.latency_ms)
 
 
 @dataclass
@@ -242,47 +330,8 @@ def validate_loopback_base_url(base_url: str) -> str:
     return clean
 
 
-def _assert_local_database(database_url: str, db_path: Path) -> None:
-    parsed = urlparse(database_url) if database_url else None
-    if parsed and parsed.scheme.startswith("postgres"):
-        if parsed.hostname and not _is_loopback(parsed.hostname):
-            raise RuntimeError("configured database is not local")
-        return
-    try:
-        db_path.resolve().relative_to(ROOT.resolve())
-    except ValueError as exc:
-        raise RuntimeError("configured SQLite database is outside the repository") from exc
-
-
-_ADMIN_QUERY = """
- SELECT u.id, COALESCE(s.role,u.role,'admin') AS effective_role
- FROM users u LEFT JOIN staff s ON s.user_id=u.id
- WHERE COALESCE(u.status,'')='approved' AND
- ((COALESCE(s.active,0)=1 AND COALESCE(s.role,'')='admin') OR (s.id IS NULL AND COALESCE(u.role,'')='admin'))
-"""
-
-
-def _select_pg_admin(conn: Any) -> tuple[int, str]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('public.vkpi_kol_search_sessions')")
-        history = bool(cur.fetchone()[0])
-        order = "(SELECT COUNT(*) FROM vkpi_kol_search_sessions ks WHERE ks.created_by=u.id) DESC," if history else ""
-        cur.execute(_ADMIN_QUERY + f" ORDER BY {order} COALESCE(s.is_owner,0) DESC,u.id LIMIT 1")
-        row = cur.fetchone()
-    if not row:
-        raise RuntimeError("no approved local admin principal found")
-    return int(row[0]), str(row[1] or "admin")
-
-
-def _select_sqlite_admin(conn: sqlite3.Connection) -> tuple[int, str]:
-    row = conn.execute(_ADMIN_QUERY + " ORDER BY COALESCE(s.is_owner,0) DESC,u.id LIMIT 1").fetchone()
-    if not row:
-        raise RuntimeError("no approved local admin principal found")
-    return int(row[0]), str(row[1] or "admin")
-
-
 def create_local_auth_context(ttl_seconds: int = DEFAULT_TOKEN_TTL_SECONDS) -> AuthContext:
-    ttl = max(60, min(int(ttl_seconds), 900))
+    ttl = validate_token_ttl(ttl_seconds)
     os.environ.setdefault("LOG_LEVEL", "WARNING")
     for path in (SCRIPTS_DIR, BACKEND_DIR):
         if str(path) not in sys.path:
@@ -293,11 +342,16 @@ def create_local_auth_context(ttl_seconds: int = DEFAULT_TOKEN_TTL_SECONDS) -> A
     from app.core.security import JWT_AUDIENCE, JWT_ISSUER
     import jwt
     database_url = str(DB_RUNTIME_URL or "")
-    _assert_local_database(database_url, Path(DB_PATH))
+    expected_database = _validated_local_database(database_url, Path(DB_PATH), ROOT)
     if str(DB_RUNTIME_BACKEND).lower() == "postgres":
         import psycopg
-        with psycopg.connect(database_url, options="-c default_transaction_read_only=on") as conn:
-            user_id, role = _select_pg_admin(conn)
+        if not expected_database:
+            raise RuntimeError("configured PostgreSQL database identity is missing")
+        with psycopg.connect(database_url, options=PG_READ_ONLY_OPTIONS) as conn:
+            user_id, role = _select_pg_admin(
+                conn,
+                expected_database=expected_database,
+            )
             conn.rollback()
     else:
         with sqlite3.connect(f"file:{Path(DB_PATH).resolve()}?mode=ro", uri=True) as conn:
@@ -481,13 +535,50 @@ def _item_errors(payload: Mapping[str, Any], path: str, fields: list[str]) -> li
     return errors
 
 
+
+def _validate_global_search(payload: Mapping[str, Any], result: Validation) -> None:
+    degraded_sources: list[str] = []
+    source_status = payload.get("source_status")
+    if not isinstance(source_status, Mapping):
+        result.errors.append("global search source_status is not an object")
+        result.state_override = "degraded"
+        return
+    for source in ("kols", "projects", "events"):
+        items, status_item = payload.get(source), source_status.get(source)
+        if not isinstance(items, list):
+            result.errors.append(f"global search {source} is not a list")
+            degraded_sources.append(source)
+        if not isinstance(status_item, Mapping):
+            result.errors.append(f"global search source_status.{source} is missing or invalid")
+            degraded_sources.append(source)
+            continue
+        status = str(status_item.get("status") or "").strip().lower()
+        if status not in {"ready", "degraded", "error", "blocked"}:
+            result.errors.append(f"global search source_status.{source}.status is invalid")
+            degraded_sources.append(source)
+        elif status != "ready":
+            degraded_sources.append(source)
+        count = status_item.get("result_count")
+        if isinstance(count, bool) or not isinstance(count, int):
+            result.errors.append(f"global search source_status.{source}.result_count is not an integer")
+        elif isinstance(items, list) and count != len(items):
+            result.errors.append(f"global search source_status.{source}.result_count does not match results")
+    if degraded_sources:
+        result.state_override = "degraded"
+        result.warnings.append("global search has unavailable sources: " + ",".join(sorted(set(degraded_sources))))
+
+
 def _validate_contract(payload: Any, spec: Mapping[str, Any], runner: "AcceptanceRunner") -> Validation:
     name = str(spec.get("contract") or "object")
     if name == "health": return _validate_health(payload, spec, runner)
     if name == "scheduler_registry": return _validate_scheduler(payload, spec, runner)
     result = _validate_generic(payload, spec, "object_or_array" if name == "object_or_array" else "object")
     if result.errors or not isinstance(payload, Mapping): return result
-    if name == "report_history_list":
+    if name == "ask_find_v2":
+        _validate_ask_find_v2(payload, spec, result)
+    elif name == "global_search":
+        _validate_global_search(payload, result)
+    elif name == "report_history_list":
         result.errors += _item_errors(payload, "reports", ["id", "report_uid", "report_type", "period_start", "period_end", "status", "schema_version", "data_status"])
     elif name == "advisor_readiness":
         # External AI is an explicitly optional first-release scope.  It is
@@ -616,11 +707,29 @@ def validate_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
         endpoint_id, method = str(item.get("id") or "").strip(), str(item.get("method") or "GET").upper()
         if not endpoint_id or endpoint_id in seen: raise ValueError("manifest endpoint IDs must be unique and non-empty")
         seen.add(endpoint_id)
-        if method != "GET": raise ValueError(f"non-destructive manifest forbids method: {method}")
+        if method not in {"GET", "POST"}: raise ValueError(f"non-destructive manifest forbids method: {method}")
         if item.get("read_only_ack") is not True: raise ValueError(f"endpoint lacks read_only_ack: {endpoint_id}")
         path = str(item.get("path") or item.get("path_template") or "")
         if not path.startswith("/") or path.startswith("//") or urlparse(path).scheme: raise ValueError(f"endpoint path must be local and relative: {endpoint_id}")
-        item.update({"method": "GET", "required": item.get("required", True), "auth": item.get("auth", True)})
+        if method == "POST":
+            if item.get("read_only_post") is not True:
+                raise ValueError(f"POST endpoint lacks explicit read_only_post declaration: {endpoint_id}")
+            body = item.get("json_body")
+            if not isinstance(body, Mapping):
+                raise ValueError(f"read-only POST requires a JSON object body: {endpoint_id}")
+            try:
+                serialized = json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"read-only POST body is not valid JSON: {endpoint_id}") from exc
+            if len(serialized) > DEFAULT_MAX_REQUEST_BYTES:
+                raise ValueError(f"read-only POST body exceeds size limit: {endpoint_id}")
+            if path not in REVIEWED_READ_ONLY_POST_PATHS or item.get("contract") != "ask_find_v2":
+                raise ValueError(f"POST endpoint is not on the reviewed read-only allowlist: {endpoint_id}")
+            if item.get("auth", True) is not True:
+                raise ValueError(f"read-only POST must require authentication: {endpoint_id}")
+        elif "json_body" in item or item.get("read_only_post") is True:
+            raise ValueError(f"GET endpoint must not declare a request body: {endpoint_id}")
+        item.update({"method": method, "required": item.get("required", True), "auth": item.get("auth", True)})
         item.setdefault("expected_statuses", [200]); item.setdefault("allowed_states", list(DEFAULT_ALLOWED_STATES))
         item.setdefault("data_paths", ["$"]); item.setdefault("state_paths", ["status", "data_status"])
     families = normalized.get("board_families", [])
@@ -638,33 +747,65 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
 class AcceptanceRunner:
     def __init__(self, *, base_url: str, manifest: Mapping[str, Any], auth: AuthContext, transport: Transport,
                  local_head: str, latest_migration: str, default_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+                 overall_timeout_seconds: float = DEFAULT_OVERALL_TIMEOUT_SECONDS,
                  max_worker_age_seconds: int = DEFAULT_MAX_WORKER_AGE_SECONDS,
                  max_scheduler_evidence_age_seconds: int = DEFAULT_MAX_SCHEDULER_EVIDENCE_AGE_SECONDS,
-                 now_fn: Callable[[], datetime] | None = None) -> None:
+                 now_fn: Callable[[], datetime] | None = None,
+                 monotonic_fn: Callable[[], float] = time.perf_counter) -> None:
         self.base_url, self.manifest, self.auth, self.transport = validate_loopback_base_url(base_url), validate_manifest(manifest), auth, transport
         self.local_head, self.latest_migration = str(local_head or ""), str(latest_migration or "")
+        _, self.overall_timeout_seconds = validate_acceptance_timing(
+            self.auth.expires_in_seconds, overall_timeout_seconds
+        )
         self.default_timeout_seconds, self.max_worker_age_seconds = max(.1, float(default_timeout_seconds)), max(1, int(max_worker_age_seconds))
         self.max_scheduler_evidence_age_seconds = max(1, int(max_scheduler_evidence_age_seconds))
         self.now_fn, self.payloads, self.observed = now_fn or (lambda: datetime.now(timezone.utc)), {}, {}
+        self.deadline = OverallDeadline(self.overall_timeout_seconds, monotonic_fn=monotonic_fn)
+        self.deadline_exhausted = False
 
     def _run_endpoint(self, spec: Mapping[str, Any]) -> dict[str, Any]:
         endpoint_id, path_error = str(spec["id"]), None
         path, path_error = _render_path(spec, self.payloads)
-        base = {"id": endpoint_id, "family": str(spec.get("family") or "unclassified"), "method": "GET",
+        method = str(spec.get("method") or "GET").upper()
+        base = {"id": endpoint_id, "family": str(spec.get("family") or "unclassified"), "method": method,
                 "path": path or str(spec.get("path_template") or spec.get("path") or ""), "required": bool(spec.get("required", True)),
                 "contract": str(spec.get("contract") or "object")}
+        requested_timeout = float(spec.get("timeout_seconds") or self.default_timeout_seconds)
+        bounded_timeout = self.deadline.bounded_timeout(requested_timeout)
+        if bounded_timeout is None:
+            self.deadline_exhausted = True
+            return {**base, "pass": False, "http_status": None, "latency_ms": 0., "response_bytes": 0,
+                    "data_state": "degraded", "errors": ["acceptance overall deadline exhausted before request"],
+                    "warnings": [], "redaction_findings": []}
         if path_error:
             return {**base, "pass": False, "http_status": None, "latency_ms": 0., "response_bytes": 0, "data_state": "empty",
                     "errors": [path_error], "warnings": [], "redaction_findings": []}
         try:
-            response = self.transport.get(str(path), token=self.auth.token if spec.get("auth", True) else None,
-                                          timeout_seconds=float(spec.get("timeout_seconds") or self.default_timeout_seconds))
+            request_options = {
+                "token": self.auth.token if spec.get("auth", True) else None,
+                "timeout_seconds": bounded_timeout,
+            }
+            if method == "POST":
+                response = self.transport.post(str(path), json_body=spec["json_body"], **request_options)
+            else:
+                response = self.transport.get(str(path), **request_options)
         except TransportFailure as exc:
+            if self.deadline.exhausted():
+                self.deadline_exhausted = True
+                error = "acceptance overall deadline exhausted during request"
+            else:
+                error = f"HTTP transport failure: {exc.kind}"
             return {**base, "pass": False, "http_status": None, "latency_ms": round(exc.latency_ms, 1), "response_bytes": 0,
-                    "data_state": "degraded", "errors": [f"HTTP transport failure: {exc.kind}"], "warnings": [], "redaction_findings": []}
+                    "data_state": "degraded", "errors": [error], "warnings": [], "redaction_findings": []}
         payload, json_error = _safe_json(response.body)
         expected = [int(item) for item in spec.get("expected_statuses", [200])]
         errors = [] if response.status in expected else [f"unexpected HTTP status: {response.status}"]
+        if self.deadline.exhausted():
+            self.deadline_exhausted = True
+            errors.append("acceptance overall deadline exhausted during request")
+        content_type = next((str(value).lower() for key, value in response.headers.items() if str(key).lower() == "content-type"), "")
+        if method == "POST" and "application/json" not in content_type:
+            errors.append("read-only POST response content-type is not JSON")
         if json_error:
             errors.append(json_error); validation, state = Validation(), "degraded"
         else:
@@ -680,9 +821,11 @@ class AcceptanceRunner:
                 "redaction_findings": findings}
 
     def run(self) -> dict[str, Any]:
-        started, perf = self.now_fn(), time.perf_counter()
+        started, perf = self.now_fn(), self.deadline.start()
+        self.deadline_exhausted = False
         results = [self._run_endpoint(spec) for spec in self.manifest["endpoints"]]
-        finished, duration = self.now_fn(), (time.perf_counter() - perf) * 1000
+        finished = self.now_fn()
+        duration = (self.deadline.monotonic_fn() - perf) * 1000
         required = [item for item in results if item["required"]]; failed = [item for item in required if not item["pass"]]
         states = {state: sum(item["data_state"] == state for item in results) for state in ("real", "empty", "pending", "degraded")}
         wanted = [str(item) for item in self.manifest.get("board_families", [])]; represented = {str(item["family"]) for item in results}
@@ -692,15 +835,23 @@ class AcceptanceRunner:
             families[family] = {"pass": bool(rows) and all(item["pass"] for item in rows), "endpoints": len(rows), "failed": [item["id"] for item in rows if not item["pass"]]}
         latencies = sorted(float(item["latency_ms"]) for item in results if item["http_status"] is not None)
         p95 = latencies[max(0, math.ceil(len(latencies) * .95) - 1)] if latencies else 0.
+        http_methods = sorted({str(item.get("method") or "GET").upper() for item in self.manifest["endpoints"]})
         return {
             "schema_version": "vkpi.local-release-acceptance.v1", "run_id": str(uuid.uuid4()),
             "started_at": started.isoformat().replace("+00:00", "Z"), "finished_at": finished.isoformat().replace("+00:00", "Z"),
             "duration_ms": round(duration, 1), "base_url": self.base_url,
             "manifest": {"name": self.manifest.get("name"), "version": self.manifest.get("version"), "endpoint_count": len(results)},
             "repo": {"head": self.local_head, "latest_migration": self.latest_migration}, "auth": self.auth.public_dict(),
-            "safety": {"http_methods": ["GET"], "loopback_only": True, "paid_provider_calls": False, "business_record_mutations": False, "token_emitted": False},
+            "safety": {"http_methods": http_methods, "loopback_only": True, "json_only": True,
+                       "read_only_post_requests": sum(item["method"] == "POST" for item in self.manifest["endpoints"]),
+                       "paid_provider_calls": False, "business_record_mutations": False,
+                       "token_emitted": False, "request_bodies_emitted": False,
+                       "overall_deadline_seconds": round(self.overall_timeout_seconds, 3),
+                       "token_expiry_safety_seconds": TOKEN_EXPIRY_SAFETY_SECONDS,
+                       "deadline_exhausted": self.deadline_exhausted},
             "overall": {"pass": not failed and not missing, "required_passed": len(required) - len(failed), "required_total": len(required),
-                        "failed_endpoint_ids": [item["id"] for item in failed], "data_states": states, "latency_p95_ms": round(p95, 1)},
+                        "failed_endpoint_ids": [item["id"] for item in failed], "data_states": states, "latency_p95_ms": round(p95, 1),
+                        "deadline_exhausted": self.deadline_exhausted},
             "coverage": {"required_board_families": wanted, "represented_board_families": sorted(set(wanted) & represented), "missing_board_families": missing},
             "families": families, "trust_observed": self.observed, "endpoints": results,
         }
@@ -726,10 +877,11 @@ def concise_summary(report: Mapping[str, Any]) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run read-only real-HTTP acceptance against the local V-KPI stack.")
     parser.add_argument("--base-url", default=os.getenv("VKPI_LOCAL_BASE_URL", DEFAULT_BASE_URL))
-    parser.add_argument("--manifest", type=Path, help="Optional JSON manifest override (GET + read_only_ack only).")
+    parser.add_argument("--manifest", type=Path, help="Optional JSON manifest override (GET or declared read-only JSON POST only).")
     parser.add_argument("--json-out", type=Path, help="Also write the JSON report to this path.")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--token-ttl", type=int, default=DEFAULT_TOKEN_TTL_SECONDS)
+    parser.add_argument("--overall-timeout", type=float, default=DEFAULT_OVERALL_TIMEOUT_SECONDS)
     parser.add_argument("--max-worker-age", type=int, default=DEFAULT_MAX_WORKER_AGE_SECONDS)
     parser.add_argument("--max-scheduler-evidence-age", type=int, default=DEFAULT_MAX_SCHEDULER_EVIDENCE_AGE_SECONDS)
     return parser.parse_args(argv)
@@ -738,10 +890,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        token_ttl, overall_timeout = validate_acceptance_timing(args.token_ttl, args.overall_timeout)
         base = validate_loopback_base_url(args.base_url); manifest = load_manifest(args.manifest)
-        runner = AcceptanceRunner(base_url=base, manifest=manifest, auth=create_local_auth_context(args.token_ttl),
+        runner = AcceptanceRunner(base_url=base, manifest=manifest, auth=create_local_auth_context(token_ttl),
                                   transport=UrlLibTransport(base), local_head=_git_head(), latest_migration=_latest_migration(),
-                                  default_timeout_seconds=args.timeout, max_worker_age_seconds=args.max_worker_age,
+                                  default_timeout_seconds=args.timeout, overall_timeout_seconds=overall_timeout,
+                                  max_worker_age_seconds=args.max_worker_age,
                                   max_scheduler_evidence_age_seconds=args.max_scheduler_evidence_age)
         report, exit_code = runner.run(), None
     except Exception as exc:

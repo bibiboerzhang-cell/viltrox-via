@@ -1,6 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A release bearer must never be expanded into an operator/CI xtrace stream.
+# Disable an inherited ``bash -x`` before any child process or credential mint;
+# this safety setting is intentionally monotonic for the rest of the deploy.
+case "$-" in
+  *x*) set +x ;;
+esac
+
+# Production browser credentials are minted only after the restarted remote
+# runtime has passed API acceptance.  Reject and erase caller-supplied values
+# before this script runs even one child process; exported shell attributes
+# must never carry an admin bearer through git/build/SSH/preflight commands.
+if [ -n "${VKPI_BROWSER_GATE_TOKEN:-}" ] \
+  || [ -n "${POST_DEPLOY_BROWSER_TOKEN:-}" ]; then
+  unset VKPI_BROWSER_GATE_TOKEN POST_DEPLOY_BROWSER_TOKEN
+  echo "Caller-supplied browser gate tokens are forbidden; production mints a short-lived token remotely." >&2
+  exit 1
+fi
+unset VKPI_BROWSER_GATE_TOKEN POST_DEPLOY_BROWSER_TOKEN
+POST_DEPLOY_BROWSER_TOKEN=""
+
+# These loopback endpoints are interpolated into several reviewed remote shell
+# commands.  Validate caller input before the first child process (and therefore
+# before any possible SSH wrapper invocation), then bind the production values
+# to constants. Exact equality also rejects quotes, whitespace, path changes,
+# alternate hosts, and alternate ports without reflecting hostile input.
+PRODUCTION_HEALTH_URL="http://127.0.0.1:8001/health"
+PRODUCTION_REMOTE_ACCEPTANCE_BASE_URL="http://127.0.0.1:8001"
+PRODUCTION_SSH_TARGET="viltrox"
+PRODUCTION_SYNC_SERVICE="vkpi-sync-daily.service"
+PRODUCTION_SYNC_TIMER="vkpi-sync-daily.timer"
+PRODUCTION_SYNC_UNIT_RELATIVE="scripts/ops/systemd/vkpi-sync-daily.service"
+PRODUCTION_CHROME_APP="/Applications/Google Chrome.app"
+PRODUCTION_CHROME_PATH="${PRODUCTION_CHROME_APP}/Contents/MacOS/Google Chrome"
+BROWSER_GATE_CONTROLLER_PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+if { [ "${HEALTH_URL+x}" = x ] && [ "${HEALTH_URL}" != "${PRODUCTION_HEALTH_URL}" ]; } \
+  || { [ "${VKPI_REMOTE_ACCEPTANCE_BASE_URL+x}" = x ] \
+    && [ "${VKPI_REMOTE_ACCEPTANCE_BASE_URL}" != "${PRODUCTION_REMOTE_ACCEPTANCE_BASE_URL}" ]; } \
+  || { [ "${SSH_TARGET+x}" = x ] && [ "${SSH_TARGET}" != "${PRODUCTION_SSH_TARGET}" ]; } \
+  || { [ "${SYNC_SERVICE+x}" = x ] && [ "${SYNC_SERVICE}" != "${PRODUCTION_SYNC_SERVICE}" ]; } \
+  || { [ "${SYNC_TIMER+x}" = x ] && [ "${SYNC_TIMER}" != "${PRODUCTION_SYNC_TIMER}" ]; } \
+  || { [ "${REMOTE_SYNC_SERVICE_UNIT_RELATIVE+x}" = x ] \
+    && [ "${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" != "${PRODUCTION_SYNC_UNIT_RELATIVE}" ]; } \
+  || { [ "${VKPI_CHROME_PATH+x}" = x ] \
+    && [ "${VKPI_CHROME_PATH}" != "${PRODUCTION_CHROME_PATH}" ]; }; then
+  echo "Production host, health, sync, and browser identities must remain exact reviewed values." >&2
+  exit 1
+fi
+
 # The deploy process prepends private immutable ``ssh``/``scp`` wrapper links to
 # PATH so every direct call, child shell, Python subprocess, and rsync remote
 # shell shares one ControlMaster.  Wrapper mode exits before any deploy gate or
@@ -78,6 +126,10 @@ if [ -z "${DEPLOY_CANDIDATE_DIR}" ] || [ -z "${DEPLOY_CANDIDATE_MANIFEST}" ]; th
   echo "VKPI_DEPLOY_CANDIDATE_DIR and VKPI_DEPLOY_CANDIDATE_MANIFEST are mandatory." >&2
   exit 1
 fi
+DEPLOY_VERIFIER_BUNDLE_DIR=""
+DEPLOY_VERIFIER_BUNDLE_SHA256=""
+TRUSTED_CANDIDATE_VERIFIER=""
+DEPLOY_VERIFIER_BUNDLE_READY=0
 RESCUE_ROLLBACK_CANDIDATE_DIR="${VKPI_RESCUE_ROLLBACK_CANDIDATE_DIR:-}"
 RESCUE_ROLLBACK_CANDIDATE_MANIFEST="${VKPI_RESCUE_ROLLBACK_CANDIDATE_MANIFEST:-}"
 RESCUE_ROLLBACK_CONFIRM="${VKPI_RESCUE_ROLLBACK_CONFIRM:-}"
@@ -97,13 +149,166 @@ fi
 RESCUE_ROLLBACK_CANDIDATE_BRANCH=""
 
 verify_deploy_candidate() {
-  "${PROJECT_ROOT}/.venv/bin/python" -B \
-    "${PROJECT_ROOT}/scripts/ops/freeze_worktree_candidate.py" \
+  local verifier="${PROJECT_ROOT}/scripts/ops/freeze_worktree_candidate.py"
+  if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" = "1" ]; then
+    verify_deploy_verifier_bundle
+    verifier="${TRUSTED_CANDIDATE_VERIFIER}"
+  fi
+  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${verifier}" \
     verify-deploy-source \
     --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
     --snapshot "${DEPLOY_CANDIDATE_DIR}" \
     --expected-head "${LOCAL_GIT_SHA}" \
     --expected-branch "${LOCAL_GIT_BRANCH}" >/dev/null
+  if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" = "1" ]; then
+    verify_deploy_verifier_bundle
+  fi
+}
+
+verify_deploy_verifier_bundle() {
+  local observed
+  if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" != "1" ] \
+    || [ -z "${DEPLOY_VERIFIER_BUNDLE_DIR}" ] \
+    || [ -z "${DEPLOY_VERIFIER_BUNDLE_SHA256}" ] \
+    || [ -z "${TRUSTED_CANDIDATE_VERIFIER}" ]; then
+    echo "Trusted deploy candidate verifier bundle is not ready." >&2
+    return 1
+  fi
+  observed="$(PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+paths = {
+    Path("scripts/ops/freeze_worktree_candidate.py"): 0o500,
+    Path("scripts/ops/freeze_git_bridge.py"): 0o400,
+    Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
+    Path("scripts/ops/verify_legacy_bootstrap_anchor.py"): 0o500,
+    Path("scripts/stdout_utils.py"): 0o400,
+    Path("scripts/verify_redis_worker_health.py"): 0o500,
+    Path("scripts/verify_runtime_health.py"): 0o500,
+}
+for directory in (root, root / "scripts", root / "scripts" / "ops"):
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        raise SystemExit("trusted verifier directory mode/type mismatch")
+    if info.st_uid != os.geteuid():
+        raise SystemExit("trusted verifier directory owner mismatch")
+digest = hashlib.sha256()
+for relative, expected_mode in sorted(paths.items(), key=lambda item: item[0].as_posix()):
+    path = root / relative
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != expected_mode:
+        raise SystemExit("trusted verifier file mode/type mismatch")
+    if info.st_uid != os.geteuid():
+        raise SystemExit("trusted verifier file owner mismatch")
+    digest.update(relative.as_posix().encode("utf-8") + b"\0")
+    digest.update(path.read_bytes())
+print(digest.hexdigest())
+PY
+  )" || return 1
+  if [ "${observed}" != "${DEPLOY_VERIFIER_BUNDLE_SHA256}" ]; then
+    echo "Trusted deploy candidate verifier bundle digest changed." >&2
+    return 1
+  fi
+}
+
+seal_deploy_verifier_bundle() {
+  local relative source candidate target
+  local tmp_base="${TMPDIR:-/tmp}"
+  DEPLOY_VERIFIER_BUNDLE_DIR="$(mktemp -d "${tmp_base%/}/vkpi-deploy-verifier.XXXXXX")" || return 1
+  chmod 700 "${DEPLOY_VERIFIER_BUNDLE_DIR}"
+  install -d -m 0700 \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops"
+  for relative in \
+    scripts/ops/freeze_worktree_candidate.py \
+    scripts/ops/freeze_git_bridge.py \
+    scripts/ops/legacy_to_atomic_preflight.py \
+    scripts/ops/verify_legacy_bootstrap_anchor.py \
+    scripts/stdout_utils.py \
+    scripts/verify_redis_worker_health.py \
+    scripts/verify_runtime_health.py; do
+    source="${PROJECT_ROOT}/${relative}"
+    candidate="${DEPLOY_CANDIDATE_DIR}/${relative}"
+    target="${DEPLOY_VERIFIER_BUNDLE_DIR}/${relative}"
+    if [ ! -f "${source}" ] || [ -L "${source}" ] \
+      || [ ! -f "${candidate}" ] || [ -L "${candidate}" ]; then
+      echo "Trusted deploy verifier source is missing or unsafe: ${relative}" >&2
+      return 1
+    fi
+    case "${relative}" in
+      scripts/ops/freeze_git_bridge.py|scripts/stdout_utils.py)
+        install -m 0400 "${source}" "${target}"
+        ;;
+      *)
+        install -m 0500 "${source}" "${target}"
+        ;;
+    esac
+    if ! cmp -s "${source}" "${candidate}" || ! cmp -s "${source}" "${target}"; then
+      echo "Trusted deploy verifier bytes disagree with the verified candidate: ${relative}" >&2
+      return 1
+    fi
+  done
+  TRUSTED_CANDIDATE_VERIFIER="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py"
+  DEPLOY_VERIFIER_BUNDLE_SHA256="$(PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+digest = hashlib.sha256()
+for relative in (
+    Path("scripts/ops/freeze_git_bridge.py"),
+    Path("scripts/ops/freeze_worktree_candidate.py"),
+    Path("scripts/ops/legacy_to_atomic_preflight.py"),
+    Path("scripts/ops/verify_legacy_bootstrap_anchor.py"),
+    Path("scripts/stdout_utils.py"),
+    Path("scripts/verify_redis_worker_health.py"),
+    Path("scripts/verify_runtime_health.py"),
+):
+    digest.update(relative.as_posix().encode("utf-8") + b"\0")
+    digest.update((root / relative).read_bytes())
+print(digest.hexdigest())
+PY
+  )" || return 1
+  DEPLOY_VERIFIER_BUNDLE_READY=1
+  verify_deploy_verifier_bundle
+}
+
+cleanup_deploy_verifier_bundle() {
+  local path
+  if [ -z "${DEPLOY_VERIFIER_BUNDLE_DIR}" ]; then
+    return 0
+  fi
+  for path in \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/stdout_utils.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_runtime_health.py"; do
+    chmod u+w "${path}" >/dev/null 2>&1 || true
+    rm -f -- "${path}" >/dev/null 2>&1 || true
+  done
+  rmdir -- \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}" >/dev/null 2>&1 || {
+      echo "[deploy] WARNING: preserving non-empty verifier bundle: ${DEPLOY_VERIFIER_BUNDLE_DIR}" >&2
+      return 0
+    }
+  DEPLOY_VERIFIER_BUNDLE_DIR=""
+  DEPLOY_VERIFIER_BUNDLE_SHA256=""
+  TRUSTED_CANDIDATE_VERIFIER=""
+  DEPLOY_VERIFIER_BUNDLE_READY=0
 }
 
 bind_rescue_rollback_candidate() {
@@ -132,13 +337,15 @@ PY
 }
 
 verify_rescue_rollback_candidate() {
-  "${PROJECT_ROOT}/.venv/bin/python" -B \
-    "${PROJECT_ROOT}/scripts/ops/freeze_worktree_candidate.py" \
+  verify_deploy_verifier_bundle
+  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${TRUSTED_CANDIDATE_VERIFIER}" \
     verify-deploy-source \
     --manifest "${RESCUE_ROLLBACK_CANDIDATE_MANIFEST}" \
     --snapshot "${RESCUE_ROLLBACK_CANDIDATE_DIR}" \
     --expected-head "${PREDEPLOY_APP_SHA}" \
     --expected-branch "${RESCUE_ROLLBACK_CANDIDATE_BRANCH}" >/dev/null
+  verify_deploy_verifier_bundle
 }
 
 LOCAL_HEALTH_ENV_FILE="${VKPI_HEALTH_ENV_FILE:-}"
@@ -146,6 +353,9 @@ if [ -z "${LOCAL_HEALTH_ENV_FILE}" ]; then
   echo "VKPI_HEALTH_ENV_FILE must explicitly name the protected local health-token dotenv." >&2
   exit 1
 fi
+verify_deploy_candidate
+trap cleanup_deploy_verifier_bundle EXIT
+seal_deploy_verifier_bundle
 verify_deploy_candidate
 
 assert_deploy_source_unchanged() {
@@ -161,16 +371,27 @@ assert_deploy_source_unchanged() {
 # ---- F2 发布门:verify 全绿才允许出海(强制,非零即中止,无跳过开关)----
 # 覆盖:后端 pytest + 前端 tsc/build + dist 分包护栏 + 仓库硬化 + 红线 grep
 #       + 千行卫兵 + 运行态 sha 对齐。任何一步失败都不允许 rsync 上云。
-echo "[deploy] gate: strict code + runtime trust verification(全绿才继续)..."
+verify_deploy_candidate
+assert_deploy_source_unchanged
+echo "[deploy] gate: frozen candidate strict code + runtime trust verification(全绿才继续)..."
 if ! VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1 \
   OPS_HEALTH_TOKEN= VKPI_HEALTH_ENV_FILE="${LOCAL_HEALTH_ENV_FILE}" \
   VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE=0 VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY=0 \
-  bash "${PROJECT_ROOT}/scripts/verify.sh"; then
+  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  "${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate \
+  --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
+  --snapshot "${DEPLOY_CANDIDATE_DIR}" \
+  --expected-head "${LOCAL_GIT_SHA}" \
+  --expected-branch "${LOCAL_GIT_BRANCH}" \
+  --source "${PROJECT_ROOT}" \
+  --python "${PROJECT_ROOT}/.venv/bin/python"; then
   echo "[deploy] verify.sh 非零退出 —— 部署中止。先把 verify 修绿再出海。" >&2
   exit 1
 fi
+verify_deploy_candidate
+assert_deploy_source_unchanged
 
-SSH_TARGET="${SSH_TARGET:-viltrox}"
+SSH_TARGET="${PRODUCTION_SSH_TARGET}"
 SSH_CONNECT_TIMEOUT_SECONDS="${VKPI_DEPLOY_SSH_CONNECT_TIMEOUT_SECONDS:-10}"
 SSH_INITIAL_CONNECT_ATTEMPTS="${VKPI_DEPLOY_SSH_INITIAL_CONNECT_ATTEMPTS:-3}"
 SSH_CONTROL_PERSIST_SECONDS="${VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS:-3600}"
@@ -418,10 +639,12 @@ cleanup_deploy_ssh_transport() {
 REMOTE_ROOT="${REMOTE_ROOT:-/opt/viltrox-2.0}"
 SERVICE_NAME="${SERVICE_NAME:-viltrox-2.0-test.service}"
 REMOTE_SERVICE_UNIT_RELATIVE="${REMOTE_SERVICE_UNIT_RELATIVE:-scripts/ops/systemd/viltrox-2.0-test.service}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
-SYNC_SERVICE="${SYNC_SERVICE:-vkpi-sync-daily.service}"
-REMOTE_SYNC_SERVICE_UNIT_RELATIVE="${REMOTE_SYNC_SERVICE_UNIT_RELATIVE:-scripts/ops/systemd/vkpi-sync-daily.service}"
-SYNC_TIMER="${SYNC_TIMER:-vkpi-sync-daily.timer}"
+HEALTH_URL="${PRODUCTION_HEALTH_URL}"
+SYNC_SERVICE="${PRODUCTION_SYNC_SERVICE}"
+REMOTE_SYNC_SERVICE_UNIT_RELATIVE="${PRODUCTION_SYNC_UNIT_RELATIVE}"
+SYNC_TIMER="${PRODUCTION_SYNC_TIMER}"
+HEALTH_SENTINEL_SERVICE="vkpi-health-sentinel.service"
+HEALTH_SENTINEL_TIMER="vkpi-health-sentinel.timer"
 ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
 VKPI_EXPECT_ACCESS_GATED="${VKPI_EXPECT_ACCESS_GATED:-0}"
 REMOTE_APP_USER="${REMOTE_APP_USER:-viltrox}"
@@ -449,19 +672,25 @@ WORKER_SYSTEMD_UNITS=(
   vkpi-worker-bulk@14.service
   vkpi-worker-bulk@15.service
 )
+LEGACY_WRITER_UNITS=(
+  viltrox-2.0-scheduler.service
+  viltrox-2.0-worker.service
+  viltrox-2.0-admin.service
+  viltrox-2.0-public.service
+)
 POST_DEPLOY_BROWSER_URL="${VKPI_BROWSER_GATE_URL:-}"
-POST_DEPLOY_BROWSER_TOKEN="${VKPI_BROWSER_GATE_TOKEN:-}"
-# Keep an explicitly supplied bearer out of every subsequently spawned process.
-# It is passed only to the in-memory browser controller at the final gate.
-unset VKPI_BROWSER_GATE_TOKEN
-BROWSER_GATE_TOKEN_TTL_SECONDS="${VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS:-900}"
+# The production-only entrypoint always mints this bearer remotely after API
+# acceptance.  It remains a non-exported shell variable until the single Node
+# controller invocation at the final browser gate.
+BROWSER_GATE_OVERALL_TIMEOUT_MS="${VKPI_BROWSER_GATE_OVERALL_TIMEOUT_MS:-600000}"
+BROWSER_GATE_TOKEN_SAFETY_MARGIN_SECONDS=120
 BROWSER_GATE_SETTLE_MS="${VKPI_BROWSER_GATE_SETTLE_MS:-5000}"
 BROWSER_GATE_PAGE_SETTLE_MS="${VKPI_BROWSER_GATE_PAGE_SETTLE_MS:-1000}"
 BROWSER_GATE_PAGE_TIMEOUT_MS="${VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS:-30000}"
 BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS:-}"
-POST_DEPLOY_CHROME_PATH="${VKPI_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+POST_DEPLOY_CHROME_PATH="${PRODUCTION_CHROME_PATH}"
 PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/"
-REMOTE_ACCEPTANCE_BASE_URL="${VKPI_REMOTE_ACCEPTANCE_BASE_URL:-${HEALTH_URL%/health}}"
+REMOTE_ACCEPTANCE_BASE_URL="${PRODUCTION_REMOTE_ACCEPTANCE_BASE_URL}"
 LOCAL_ACCEPTANCE_REPORT_TMP=""
 RELEASE_ID="${VKPI_RELEASE_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${LOCAL_GIT_SHA:0:12}}"
 if ! [[ "${RELEASE_ID}" =~ ^[A-Za-z0-9_.-]+$ ]] || [ "${RELEASE_ID}" = "." ] || [ "${RELEASE_ID}" = ".." ]; then
@@ -481,6 +710,7 @@ ROLLBACK_ANCHOR_ENV_FINGERPRINT=""
 EXPECTED_PREVIOUS_RELEASE_DIR=""
 ROLLBACK_ARMED=0
 ROLLBACK_COMPLETED=0
+ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=0
 PREDEPLOY_APP_SHA=""
 PREDEPLOY_MIGRATION=""
 PENDING_MIGRATIONS=""
@@ -541,14 +771,28 @@ STAGING_CLONE_ENV_SHA256=""
 STAGING_DB_CLONE_ACTIVATED=0
 STAGING_BACKUP_VERIFIED=0
 RELEASE_CONSUMERS_QUIESCED=0
+LIVE_RELEASE_DRAIN_VERIFIED=0
+RELEASE_DRAIN_VERIFIED=0
+FENCED_RELEASE_DRAIN_VERIFIED=0
+RELEASE_VALIDATION_FENCE="/run/vkpi-release-validation.fence"
+RELEASE_VALIDATION_FENCE_INSTALLED=0
+RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED=0
+RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED=0
+RELEASE_VALIDATION_COMMIT_STARTED=0
 SYNC_UNITS_CAPTURED=0
 SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=0
 SYNC_UNITS_QUIESCED=0
 SYNC_UNITS_RESTORED=0
+SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED=0
+SYNC_UNITS_RESTORE_RECONCILE_STATE=""
 SYNC_SERVICE_ACTIVE_STATE=""
 SYNC_SERVICE_UNIT_FILE_STATE=""
 SYNC_TIMER_ACTIVE_STATE=""
 SYNC_TIMER_UNIT_FILE_STATE=""
+HEALTH_SENTINEL_SERVICE_ACTIVE_STATE=""
+HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE=""
+HEALTH_SENTINEL_TIMER_ACTIVE_STATE=""
+HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE=""
 
 if [ "${PGBOUNCER_SERVICE}" != "pgbouncer.service" ] \
   || [ "${PGBOUNCER_SOCKET}" != "pgbouncer.socket" ] \
@@ -592,8 +836,13 @@ if ! [[ "${REMOTE_SERVICE_UNIT_RELATIVE}" =~ ^scripts/ops/systemd/[A-Za-z0-9@_.-
   echo "REMOTE_SERVICE_UNIT_RELATIVE must name one direct reviewed unit under scripts/ops/systemd/." >&2
   exit 1
 fi
-if [ ! -f "${PROJECT_ROOT}/${REMOTE_SERVICE_UNIT_RELATIVE}" ]; then
-  echo "Reviewed web service unit is missing: ${REMOTE_SERVICE_UNIT_RELATIVE}" >&2
+if [ "${REMOTE_SERVICE_UNIT_RELATIVE##*/}" != "${SERVICE_NAME}" ]; then
+  echo "REMOTE_SERVICE_UNIT_RELATIVE basename must exactly match SERVICE_NAME." >&2
+  exit 1
+fi
+if [ ! -f "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}" ] \
+  || [ -L "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}" ]; then
+  echo "Reviewed web service unit must be an existing regular non-symlink file: ${REMOTE_SERVICE_UNIT_RELATIVE}" >&2
   exit 1
 fi
 if ! [[ "${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" =~ ^scripts/ops/systemd/[A-Za-z0-9@_.-]+\.service$ ]]; then
@@ -604,12 +853,13 @@ if [ "${REMOTE_SYNC_SERVICE_UNIT_RELATIVE##*/}" != "${SYNC_SERVICE}" ]; then
   echo "REMOTE_SYNC_SERVICE_UNIT_RELATIVE basename must exactly match SYNC_SERVICE." >&2
   exit 1
 fi
-if [ ! -f "${PROJECT_ROOT}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ] \
-  || [ -L "${PROJECT_ROOT}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ]; then
+if [ ! -f "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ] \
+  || [ -L "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ]; then
   echo "Reviewed sync service unit must be an existing regular non-symlink file: ${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" >&2
   exit 1
 fi
-if [ ! -f "${PROJECT_ROOT}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" ]; then
+if [ ! -f "${DEPLOY_CANDIDATE_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" ] \
+  || [ -L "${DEPLOY_CANDIDATE_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" ]; then
   echo "Reviewed worker lane override template is missing: ${LANE_OVERRIDE_TEMPLATE_RELATIVE}" >&2
   exit 1
 fi
@@ -627,10 +877,27 @@ if [ -z "${POST_DEPLOY_BROWSER_URL}" ]; then
   exit 1
 fi
 VILTROXTEST_RELEASE_SCOPE=0
-if [ "${REMOTE_ROOT}" = "/opt/viltrox-2.0" ] \
-  && [ "${SERVICE_NAME}" = "viltrox-2.0-test.service" ] \
-  && [ "${REMOTE_SERVICE_UNIT_RELATIVE}" = "scripts/ops/systemd/viltrox-2.0-test.service" ]; then
+VILTROXTEST_ROOT_MATCH=0
+VILTROXTEST_SERVICE_MATCH=0
+VILTROXTEST_UNIT_MATCH=0
+[ "${REMOTE_ROOT}" = "/opt/viltrox-2.0" ] && VILTROXTEST_ROOT_MATCH=1
+[ "${SERVICE_NAME}" = "viltrox-2.0-test.service" ] && VILTROXTEST_SERVICE_MATCH=1
+[ "${REMOTE_SERVICE_UNIT_RELATIVE}" = "scripts/ops/systemd/viltrox-2.0-test.service" ] \
+  && VILTROXTEST_UNIT_MATCH=1
+VILTROXTEST_SCOPE_MATCHES=$((
+  VILTROXTEST_ROOT_MATCH + VILTROXTEST_SERVICE_MATCH + VILTROXTEST_UNIT_MATCH
+))
+if [ "${VILTROXTEST_SCOPE_MATCHES}" -ne 0 ] \
+  && [ "${VILTROXTEST_SCOPE_MATCHES}" -ne 3 ]; then
+  echo "A partial viltroxtest production scope is forbidden; root, service name, and reviewed unit must match together." >&2
+  exit 1
+fi
+if [ "${VILTROXTEST_SCOPE_MATCHES}" -eq 3 ]; then
   VILTROXTEST_RELEASE_SCOPE=1
+fi
+if [ "${VILTROXTEST_RELEASE_SCOPE}" != "1" ]; then
+  echo "This deployment entrypoint is restricted to the exact reviewed viltroxtest production scope." >&2
+  exit 1
 fi
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   if [ "${VILTROXTEST_RELEASE_SCOPE}" != "1" ]; then
@@ -653,25 +920,17 @@ fi
 viltroxtest_browser_gate_is_exact() {
   "${PROJECT_ROOT}/.venv/bin/python" - "${POST_DEPLOY_BROWSER_URL}" <<'PY'
 import sys
-from urllib.parse import urlsplit
-
-try:
-    parsed = urlsplit(sys.argv[1])
-    valid = (
-        parsed.scheme == "https"
-        and parsed.hostname == "www.viltroxtest.com"
-        and parsed.username is None
-        and parsed.password is None
-        and parsed.port in (None, 443)
-    )
-except ValueError:
-    valid = False
+valid = sys.argv[1] == "https://www.viltroxtest.com/"
 raise SystemExit(0 if valid else 1)
 PY
 }
+if [ "${VILTROXTEST_RELEASE_SCOPE}" = "1" ] && ! viltroxtest_browser_gate_is_exact; then
+  echo "The reviewed viltroxtest release scope requires VKPI_BROWSER_GATE_URL=https://www.viltroxtest.com/." >&2
+  exit 1
+fi
 
 validate_lane_override_template() {
-  "${PROJECT_ROOT}/.venv/bin/python" - "${PROJECT_ROOT}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" <<'PY'
+  "${PROJECT_ROOT}/.venv/bin/python" - "${DEPLOY_CANDIDATE_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" <<'PY'
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
@@ -750,6 +1009,15 @@ if [ "${STAGING_DB_CLONE_MODE}" != "0" ] && [ "${STAGING_DB_CLONE_MODE}" != "1" 
   echo "VKPI_STAGING_DB_CLONE must be exactly 0 or 1." >&2
   exit 1
 fi
+# P0 data boundary: the current clone path starts writable web/Redis/worker
+# processes before final API/browser acceptance.  A later rollback restores the
+# old source database, so accepted writes disappear while provider side effects
+# cannot be reversed.  Keep new-clone activation unreachable until validation
+# runs in a proved read-only lane and a one-way commit precedes writable ingress.
+if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
+  echo "Refusing VKPI_STAGING_DB_CLONE=1 before remote mutation: writable staging-clone validation can lose accepted writes or external effects on rollback; a proven read-only validation and irreversible commit protocol is not implemented." >&2
+  exit 1
+fi
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   if [ "${VILTROXTEST_RELEASE_SCOPE}" != "1" ]; then
     echo "VKPI_STAGING_DB_CLONE=1 is restricted to the reviewed viltroxtest root and service." >&2
@@ -765,12 +1033,12 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   fi
   DATABASE_RELEASE_STRATEGY="staging-clone"
   STAGING_CLONE_DATABASE="$("${PROJECT_ROOT}/.venv/bin/python" \
-    "${PROJECT_ROOT}/scripts/ops/staging_db_clone.py" name --release-id "${RELEASE_ID}")"
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/staging_db_clone.py" name --release-id "${RELEASE_ID}")"
 fi
-if ! [[ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" =~ ^[0-9]+$ ]] \
-  || [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -lt 60 ] \
-  || [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -gt 900 ]; then
-  echo "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS must be an integer within [60, 900]." >&2
+if ! [[ "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" =~ ^[0-9]+$ ]] \
+  || [ "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" -lt 60000 ] \
+  || [ "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" -gt 1080000 ]; then
+  echo "VKPI_BROWSER_GATE_OVERALL_TIMEOUT_MS must be an integer within [60000, 1080000]." >&2
   exit 1
 fi
 if ! [[ "${BROWSER_GATE_SETTLE_MS}" =~ ^[0-9]+$ ]] \
@@ -791,42 +1059,14 @@ if ! [[ "${BROWSER_GATE_PAGE_TIMEOUT_MS}" =~ ^[0-9]+$ ]] \
   echo "VKPI_BROWSER_GATE_PAGE_TIMEOUT_MS must be an integer within [5000, 60000]." >&2
   exit 1
 fi
-BROWSER_GATE_PAGE_COUNT="$("${PROJECT_ROOT}/.venv/bin/python" - \
-  "${PROJECT_ROOT}/scripts/browser_gate_pages.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-pages = payload.get("pages")
-if payload.get("schema_version") != "vkpi-browser-page-manifest/v1" or not isinstance(pages, list):
-    raise SystemExit("browser page manifest contract is invalid")
-if not pages:
-    raise SystemExit("browser page manifest must contain at least one page")
-print(len(pages))
-PY
-)"
-# Budget the token against the capture's fail-closed upper bound: Chromium/CDP
-# startup, bootstrap navigation, initial settle, the initial and per-page auth
-# probes, every full page timeout plus its settle window, the final API-idle
-# wait, and a 30-second controller margin.
-# This is evaluated before any remote mutation, so an impossible capture cannot
-# consume a release slot or expire halfway through the page manifest.
-BROWSER_GATE_CAPTURE_BUDGET_MS=$((
-  15000
-+  30000
-+  BROWSER_GATE_SETTLE_MS
-+  5000 * (BROWSER_GATE_PAGE_COUNT + 1)
-+  BROWSER_GATE_PAGE_COUNT * (BROWSER_GATE_PAGE_TIMEOUT_MS + BROWSER_GATE_PAGE_SETTLE_MS)
-+  1000 * BROWSER_GATE_PAGE_COUNT
-  + BROWSER_GATE_PAGE_TIMEOUT_MS
-  + 30000
+# The controller enforces one wall-clock deadline across Chromium discovery,
+# every CDP command, all page/search waits, and the final idle proof. Derive the
+# short-lived bearer TTL from that real bound instead of summing mutually
+# exclusive per-step maxima. Round milliseconds up, then add exactly 120s.
+BROWSER_GATE_CAPTURE_BUDGET_SECONDS=$(((BROWSER_GATE_OVERALL_TIMEOUT_MS + 999) / 1000))
+BROWSER_GATE_TOKEN_TTL_SECONDS=$((
+  BROWSER_GATE_CAPTURE_BUDGET_SECONDS + BROWSER_GATE_TOKEN_SAFETY_MARGIN_SECONDS
 ))
-BROWSER_GATE_CAPTURE_BUDGET_SECONDS=$(((BROWSER_GATE_CAPTURE_BUDGET_MS + 999) / 1000))
-if [ "${BROWSER_GATE_TOKEN_TTL_SECONDS}" -lt "${BROWSER_GATE_CAPTURE_BUDGET_SECONDS}" ]; then
-  echo "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS=${BROWSER_GATE_TOKEN_TTL_SECONDS} is below the ${BROWSER_GATE_CAPTURE_BUDGET_SECONDS}s fail-closed browser capture budget." >&2
-  exit 1
-fi
 if ! "${PROJECT_ROOT}/.venv/bin/python" - \
   "${POST_DEPLOY_BROWSER_URL}" \
   "${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" <<'PY'
@@ -874,6 +1114,32 @@ if [ ! -x "${POST_DEPLOY_CHROME_PATH}" ]; then
   echo "Post-restart extension-free Chrome is not executable: ${POST_DEPLOY_CHROME_PATH}" >&2
   exit 1
 fi
+if ! /usr/bin/codesign --verify --deep "${PRODUCTION_CHROME_APP}" >/dev/null 2>&1; then
+  echo "Reviewed production Chrome failed deep code-signature verification." >&2
+  exit 1
+fi
+CHROME_GATEKEEPER_ASSESSMENT="$(
+  /usr/sbin/spctl --assess --type execute --verbose=4 "${PRODUCTION_CHROME_APP}" 2>&1
+)" || {
+  CHROME_GATEKEEPER_ASSESSMENT=""
+  echo "Reviewed production Chrome failed Gatekeeper execution assessment." >&2
+  exit 1
+}
+if ! grep -Fq "accepted" <<<"${CHROME_GATEKEEPER_ASSESSMENT}" \
+  || ! grep -Fq "source=Notarized Developer ID" <<<"${CHROME_GATEKEEPER_ASSESSMENT}"; then
+  CHROME_GATEKEEPER_ASSESSMENT=""
+  echo "Reviewed production Chrome is not an accepted notarized Developer ID application." >&2
+  exit 1
+fi
+CHROME_GATEKEEPER_ASSESSMENT=""
+CHROME_CODE_IDENTITY="$(/usr/bin/codesign -d --verbose=4 "${PRODUCTION_CHROME_APP}" 2>&1)"
+if ! grep -Fxq "Identifier=com.google.Chrome" <<<"${CHROME_CODE_IDENTITY}" \
+  || ! grep -Fxq "TeamIdentifier=EQHXZ8M8AV" <<<"${CHROME_CODE_IDENTITY}"; then
+  CHROME_CODE_IDENTITY=""
+  echo "Reviewed production Chrome identifier or signing team is invalid." >&2
+  exit 1
+fi
+CHROME_CODE_IDENTITY=""
 
 if [ -n "${VKPI_POST_DEPLOY_EVIDENCE_DIR:-}" ]; then
   POST_DEPLOY_EVIDENCE_DIR="${VKPI_POST_DEPLOY_EVIDENCE_DIR}"
@@ -893,15 +1159,31 @@ run_predeploy_embedded_browser_gate() {
   local capture_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/capture.json"
   local report_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/gate-report.json"
 
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
   mkdir -p -- "${PREDEPLOY_BROWSER_EVIDENCE_DIR}"
   chmod 700 "${PREDEPLOY_BROWSER_EVIDENCE_DIR}"
   rm -f -- "${capture_path}" "${report_path}"
 
   if ! token="$(
-    PYTHONPATH="${PROJECT_ROOT}/scripts:${PROJECT_ROOT}/backend" \
-    RUNTIME_ENV_QUIET=1 LOG_LEVEL=CRITICAL \
-      "${PROJECT_ROOT}/.venv/bin/python" -B -c \
-      'from local_release_acceptance import create_local_auth_context; print(create_local_auth_context(900).token, end="")'
+    env -i \
+      PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
+      HOME=/tmp \
+      XDG_CACHE_HOME=/tmp \
+      TMPDIR=/tmp \
+      LANG=C.UTF-8 \
+      PYTHONDONTWRITEBYTECODE=1 \
+      ENVIRONMENT=local \
+      LOCAL_ENV_FILE="${PROJECT_ROOT}/.env" \
+      RUNTIME_ENV_KEEP_DB_URL=1 \
+      RUNTIME_ROOT="${PROJECT_ROOT}/runtime" \
+      RUNTIME_ENV_QUIET=1 \
+      LOG_LEVEL=CRITICAL \
+      "${PROJECT_ROOT}/.venv/bin/python" -I -B -c \
+      'import sys; sys.path[:0]=sys.argv[2:4]; from local_release_acceptance import create_local_auth_context; print(create_local_auth_context(int(sys.argv[1])).token, end="")' \
+      "${BROWSER_GATE_TOKEN_TTL_SECONDS}" \
+      "${DEPLOY_CANDIDATE_DIR}/scripts" \
+      "${DEPLOY_CANDIDATE_DIR}/backend"
   )"; then
     echo "Local embedded-production browser token mint failed; no remote change was made." >&2
     return 1
@@ -912,14 +1194,22 @@ run_predeploy_embedded_browser_gate() {
     return 1
   fi
 
-  VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" \
-  VKPI_BROWSER_GATE_TOKEN="${token}" node \
-    "${PROJECT_ROOT}/scripts/capture_browser_console_cdp.mjs" \
+  env -i \
+    PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp \
+    TMPDIR=/tmp \
+    LANG=C.UTF-8 \
+    VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" \
+    VKPI_BROWSER_GATE_TOKEN="${token}" \
+    node \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/capture_browser_console_cdp.mjs" \
     --url "${PREDEPLOY_BROWSER_URL}" \
     --output "${capture_path}" \
     --settle-ms "${BROWSER_GATE_SETTLE_MS}" \
     --page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}" \
     --page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}" \
+    --overall-timeout-ms "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" \
     --chrome "${POST_DEPLOY_CHROME_PATH}" >/dev/null || capture_status=$?
   token=""
   if [ "${capture_status}" -ne 0 ]; then
@@ -928,7 +1218,7 @@ run_predeploy_embedded_browser_gate() {
   fi
 
   "${PROJECT_ROOT}/.venv/bin/python" -B \
-    "${PROJECT_ROOT}/scripts/verify_browser_console_capture.py" \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
     --input "${capture_path}" \
     --json-out "${report_path}" >/dev/null
   "${PROJECT_ROOT}/.venv/bin/python" -B - "${report_path}" <<'PY'
@@ -960,41 +1250,37 @@ PY
 }
 
 capture_remote_sync_unit_state() {
-  local captured
-  if ! captured="$(ssh "${SSH_TARGET}" "service_load=\$(systemctl show --property LoadState --value '${SYNC_SERVICE}'); timer_load=\$(systemctl show --property LoadState --value '${SYNC_TIMER}'); [ \"\${service_load}\" = loaded ] && [ \"\${timer_load}\" = loaded ] || { echo 'reviewed sync service/timer is not loaded' >&2; exit 1; }; printf '%s:%s:%s:%s\n' \"\$(systemctl show --property ActiveState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_TIMER}')\"")"; then
-    echo "Refusing deploy because the reviewed sync service/timer state is unreadable." >&2
+  local captured active_state unit_file_state
+  if ! captured="$(ssh "${SSH_TARGET}" "for unit in '${SYNC_SERVICE}' '${SYNC_TIMER}' '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_TIMER}'; do [ \"\$(systemctl show --property LoadState --value \"\${unit}\")\" = loaded ] || { echo \"reviewed timer/service is not loaded: \${unit}\" >&2; exit 1; }; done; printf '%s:%s:%s:%s:%s:%s:%s:%s\n' \"\$(systemctl show --property ActiveState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property ActiveState --value '${HEALTH_SENTINEL_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${HEALTH_SENTINEL_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${HEALTH_SENTINEL_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${HEALTH_SENTINEL_TIMER}')\"")"; then
+    echo "Refusing deploy because the reviewed sync/sentinel service and timer state is unreadable." >&2
     return 1
   fi
   IFS=: read -r SYNC_SERVICE_ACTIVE_STATE SYNC_SERVICE_UNIT_FILE_STATE \
-    SYNC_TIMER_ACTIVE_STATE SYNC_TIMER_UNIT_FILE_STATE <<<"${captured}"
-  case "${SYNC_SERVICE_ACTIVE_STATE}" in
+    SYNC_TIMER_ACTIVE_STATE SYNC_TIMER_UNIT_FILE_STATE \
+    HEALTH_SENTINEL_SERVICE_ACTIVE_STATE HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE \
+    HEALTH_SENTINEL_TIMER_ACTIVE_STATE HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE <<<"${captured}"
+  for active_state in \
+    "${SYNC_SERVICE_ACTIVE_STATE}" "${SYNC_TIMER_ACTIVE_STATE}" \
+    "${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}" "${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}"; do
+    case "${active_state}" in
     active|activating|inactive) ;;
     *)
-      echo "Refusing deploy because ${SYNC_SERVICE} has an unrestorable active state: ${SYNC_SERVICE_ACTIVE_STATE}." >&2
+      echo "Refusing deploy because a reviewed sync/sentinel unit has an unrestorable active state: ${active_state}." >&2
       return 1
       ;;
-  esac
-  case "${SYNC_TIMER_ACTIVE_STATE}" in
-    active|activating|inactive) ;;
-    *)
-      echo "Refusing deploy because ${SYNC_TIMER} has an unrestorable active state: ${SYNC_TIMER_ACTIVE_STATE}." >&2
-      return 1
-      ;;
-  esac
-  case "${SYNC_SERVICE_UNIT_FILE_STATE}" in
+    esac
+  done
+  for unit_file_state in \
+    "${SYNC_SERVICE_UNIT_FILE_STATE}" "${SYNC_TIMER_UNIT_FILE_STATE}" \
+    "${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}" "${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}"; do
+    case "${unit_file_state}" in
     enabled|enabled-runtime|linked|linked-runtime|alias|static|indirect|disabled|generated|transient|masked|masked-runtime) ;;
     *)
-      echo "Refusing deploy because ${SYNC_SERVICE} has an unrestorable unit-file state: ${SYNC_SERVICE_UNIT_FILE_STATE}." >&2
+      echo "Refusing deploy because a reviewed sync/sentinel unit has an unrestorable unit-file state: ${unit_file_state}." >&2
       return 1
       ;;
-  esac
-  case "${SYNC_TIMER_UNIT_FILE_STATE}" in
-    enabled|enabled-runtime|linked|linked-runtime|alias|static|indirect|disabled|generated|transient|masked|masked-runtime) ;;
-    *)
-      echo "Refusing deploy because ${SYNC_TIMER} has an unrestorable unit-file state: ${SYNC_TIMER_UNIT_FILE_STATE}." >&2
-      return 1
-      ;;
-  esac
+    esac
+  done
   SYNC_UNITS_CAPTURED=1
 }
 
@@ -1098,7 +1384,14 @@ def endpoint(name: str, expected_port: int) -> dict[str, object]:
         query = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
     except ValueError:
         raise SystemExit(f"{name} is invalid") from None
-    overrides = {"host", "hostaddr", "port", "dbname", "database", "service"}
+    safe_query_parameters = {
+        "application_name", "channel_binding", "connect_timeout",
+        "fallback_application_name", "gssencmode", "keepalives",
+        "keepalives_count", "keepalives_idle", "keepalives_interval",
+        "ssl_min_protocol_version", "ssl_max_protocol_version", "sslcrl",
+        "sslcrldir", "sslmode", "sslrootcert", "sslsni",
+        "tcp_user_timeout",
+    }
     database = unquote(parsed.path[1:]) if parsed.path.startswith("/") else ""
     if (
         parsed.scheme not in {"postgres", "postgresql"}
@@ -1107,7 +1400,7 @@ def endpoint(name: str, expected_port: int) -> dict[str, object]:
         or parsed.fragment
         or parsed.path.count("/") != 1
         or database != expected_database
-        or any(key.lower() in overrides for key, _value in query)
+        or any(key.lower() not in safe_query_parameters for key, _value in query)
     ):
         raise SystemExit(f"{name} does not match the reviewed database endpoint")
     return {"host": "127.0.0.1", "port": port, "database_name": database}
@@ -1172,7 +1465,7 @@ capture_remote_pgbouncer_database_map() {
   fi
   if ! inspect_json="$(ssh "${SSH_TARGET}" \
     "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 python3 -B - inspect --config '${PGBOUNCER_CONFIG_PATH}' --source-db '${STAGING_SOURCE_DATABASE}'" \
-    <"${PROJECT_ROOT}/scripts/ops/pgbouncer_release_map.py")"; then
+    <"${DEPLOY_CANDIDATE_DIR}/scripts/ops/pgbouncer_release_map.py")"; then
     echo "Refusing staging clone because the PgBouncer source mapping is unsafe." >&2
     return 1
   fi
@@ -1426,30 +1719,242 @@ REMOTE_PGBOUNCER_RESTORE
   PGBOUNCER_RESTORED=1
 }
 
+inspect_remote_sync_unit_restore_receipt() {
+  if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
+    echo "Cannot inspect sync-unit restore state without a captured pre-mutation state." >&2
+    return 1
+  fi
+  # Read-only, exact receipt used after an SSH acknowledgement is lost.  Its
+  # success vocabulary is fixed and contains no unit output or environment
+  # values, so diagnostics cannot accidentally disclose production settings.
+  ssh "${SSH_TARGET}" "bash -s -- \
+    '${SYNC_SERVICE}' '${SYNC_SERVICE_ACTIVE_STATE}' '${SYNC_SERVICE_UNIT_FILE_STATE}' service \
+    '${SYNC_TIMER}' '${SYNC_TIMER_ACTIVE_STATE}' '${SYNC_TIMER_UNIT_FILE_STATE}' sync-timer \
+    '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}' '${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}' service \
+    '${HEALTH_SENTINEL_TIMER}' '${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}' '${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}' timer" <<'REMOTE_INSPECT_REVIEWED_TIMERS'
+set -euo pipefail
+receipt=restored
+
+inspect_unit() {
+  local unit="$1" expected_active="$2" expected_file="$3" kind="$4"
+  local should_start=0 observed_load observed_active observed_file
+  case "${expected_active}" in active|activating) should_start=1 ;; esac
+  if [ "${kind}" = sync-timer ] && [ "${expected_file}" = enabled ]; then
+    should_start=1
+  fi
+  observed_load="$(systemctl show --property LoadState --value "${unit}")"
+  observed_file="$(systemctl show --property UnitFileState --value "${unit}")"
+  observed_active="$(systemctl show --property ActiveState --value "${unit}")"
+  if [ "${observed_load}" != loaded ] || [ "${observed_file}" != "${expected_file}" ]; then
+    receipt=not-restored
+    return 0
+  fi
+  if [ "${should_start}" = 1 ]; then
+    case "${observed_active}" in active|activating) ;; *) receipt=not-restored ;; esac
+  elif [ "${observed_active}" != inactive ]; then
+    receipt=not-restored
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  inspect_unit "$1" "$2" "$3" "$4"
+  shift 4
+done
+printf 'vkpi-sync-unit-restore/v1:%s\n' "${receipt}"
+REMOTE_INSPECT_REVIEWED_TIMERS
+}
+
+reconcile_remote_sync_unit_restore() {
+  local receipt=""
+  if [ "${SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED}" != "1" ]; then
+    return 0
+  fi
+  if ! receipt="$(inspect_remote_sync_unit_restore_receipt 2>/dev/null)"; then
+    SYNC_UNITS_RESTORE_RECONCILE_STATE="unknown"
+    echo "[deploy] CRITICAL: sync-unit restore state is unknown after SSH acknowledgement loss." >&2
+    return 1
+  fi
+  case "${receipt}" in
+    vkpi-sync-unit-restore/v1:restored)
+      SYNC_UNITS_RESTORE_RECONCILE_STATE="restored"
+      SYNC_UNITS_RESTORED=1
+      SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED=0
+      echo "[deploy] recovered exact sync-unit restore receipt after a lost SSH acknowledgement." >&2
+      return 0
+      ;;
+    vkpi-sync-unit-restore/v1:not-restored)
+      SYNC_UNITS_RESTORE_RECONCILE_STATE="not-restored"
+      echo "[deploy] CRITICAL: exact sync-unit receipt proves the final restore is incomplete." >&2
+      return 1
+      ;;
+    *)
+      SYNC_UNITS_RESTORE_RECONCILE_STATE="invalid"
+      echo "[deploy] CRITICAL: sync-unit restore receipt is invalid after SSH acknowledgement loss." >&2
+      return 1
+      ;;
+  esac
+}
+
 restore_remote_sync_unit_state() {
-  local service_unmask_runtime=1 timer_unmask_runtime=1
-  local service_should_start=0 timer_should_start=0
+  local retry_count="${1:-0}"
+  if [ "${retry_count}" != "0" ] && [ "${retry_count}" != "1" ]; then
+    echo "Sync-unit restore retry count is outside the reviewed bound." >&2
+    return 1
+  fi
   if [ "${SYNC_UNITS_MAY_HAVE_BEEN_MUTATED}" != "1" ]; then
+    return 0
+  fi
+  if [ "${SYNC_UNITS_RESTORED}" = "1" ]; then
     return 0
   fi
   if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
     echo "Cannot restore sync units without a captured pre-mutation state." >&2
     return 1
   fi
-  [ "${SYNC_SERVICE_UNIT_FILE_STATE}" = "masked-runtime" ] && service_unmask_runtime=0
-  [ "${SYNC_TIMER_UNIT_FILE_STATE}" = "masked-runtime" ] && timer_unmask_runtime=0
-  case "${SYNC_SERVICE_ACTIVE_STATE}" in active|activating) service_should_start=1 ;; esac
-  case "${SYNC_TIMER_ACTIVE_STATE}" in active|activating) timer_should_start=1 ;; esac
-  # 2026-07-17:enabled 的 timer 即使部署前已 inactive 也必须拉活。否则一次意外
-  # stop 会被“恢复捕获态”逻辑永久固化(当日事故:03:07 首次部署捕获到死 timer,
-  # 后续 6 次部署忠实还原 inactive,18 官号 daily sync 全天未跑)。service 不在此列:
-  # 它是 timer 触发的 oneshot,部署时拉起会立刻跑一轮全量同步。
-  [ "${SYNC_TIMER_UNIT_FILE_STATE}" = "enabled" ] && timer_should_start=1
-  if ! ssh "${SSH_TARGET}" "if [ '${service_unmask_runtime}' = 1 ]; then sudo systemctl unmask --runtime '${SYNC_SERVICE}' >/dev/null; fi; if [ '${timer_unmask_runtime}' = 1 ]; then sudo systemctl unmask --runtime '${SYNC_TIMER}' >/dev/null; fi; sudo systemctl daemon-reload; if [ '${timer_should_start}' = 1 ]; then sudo systemctl start --no-block '${SYNC_TIMER}'; else sudo systemctl stop '${SYNC_TIMER}'; fi; if [ '${service_should_start}' = 1 ]; then sudo systemctl start --no-block '${SYNC_SERVICE}'; else sudo systemctl stop '${SYNC_SERVICE}'; fi; service_file_state=\$(systemctl show --property UnitFileState --value '${SYNC_SERVICE}'); timer_file_state=\$(systemctl show --property UnitFileState --value '${SYNC_TIMER}'); [ \"\${service_file_state}\" = '${SYNC_SERVICE_UNIT_FILE_STATE}' ] || { echo 'sync service unit-file state was not restored' >&2; exit 1; }; [ \"\${timer_file_state}\" = '${SYNC_TIMER_UNIT_FILE_STATE}' ] || { echo 'sync timer unit-file state was not restored' >&2; exit 1; }; if [ '${service_should_start}' = 1 ]; then service_active=\$(systemctl show --property ActiveState --value '${SYNC_SERVICE}'); case \"\${service_active}\" in active|activating) ;; *) echo 'sync service active state was not restored' >&2; exit 1;; esac; elif systemctl is-active --quiet '${SYNC_SERVICE}'; then echo 'sync service unexpectedly active after restore' >&2; exit 1; fi; if [ '${timer_should_start}' = 1 ]; then timer_active=\$(systemctl show --property ActiveState --value '${SYNC_TIMER}'); case \"\${timer_active}\" in active|activating) ;; *) echo 'sync timer active state was not restored' >&2; exit 1;; esac; elif systemctl is-active --quiet '${SYNC_TIMER}'; then echo 'sync timer unexpectedly active after restore' >&2; exit 1; fi"; then
-    echo "CRITICAL: reviewed sync service/timer state could not be restored." >&2
+  # A prior call can have committed remotely even though its SSH channel died.
+  # Reconcile read-only first; if the exact receipt proves an incomplete state,
+  # the idempotent restore below safely resumes it.
+  if [ "${SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED}" = "1" ]; then
+    if reconcile_remote_sync_unit_restore; then
+      return 0
+    fi
+    if [ "${SYNC_UNITS_RESTORE_RECONCILE_STATE}" != "not-restored" ]; then
+      echo "CRITICAL: sync-unit restore state is not exact enough to resume safely; preserve release ${RELEASE_ID} and reconcile the read-only receipt before retrying. Do not roll back an activated release." >&2
+      return 1
+    fi
+  fi
+  SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED=1
+  SYNC_UNITS_RESTORED=0
+  if ! ssh "${SSH_TARGET}" "bash -s -- \
+    '${SYNC_SERVICE}' '${SYNC_SERVICE_ACTIVE_STATE}' '${SYNC_SERVICE_UNIT_FILE_STATE}' service \
+    '${SYNC_TIMER}' '${SYNC_TIMER_ACTIVE_STATE}' '${SYNC_TIMER_UNIT_FILE_STATE}' sync-timer \
+    '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}' '${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}' service \
+    '${HEALTH_SENTINEL_TIMER}' '${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}' '${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}' timer" <<'REMOTE_RESTORE_REVIEWED_TIMERS'
+set -euo pipefail
+
+restore_unit() {
+  local unit="$1" expected_active="$2" expected_file="$3" kind="$4"
+  local should_start=0 observed_active observed_file
+  if [ "${expected_file}" != masked-runtime ]; then
+    sudo systemctl unmask --runtime "${unit}" >/dev/null
+  fi
+  case "${expected_active}" in active|activating) should_start=1 ;; esac
+  # Preserve the reviewed sync-timer safety invariant: an enabled daily timer
+  # is made live even if an earlier incident left it transiently inactive.
+  if [ "${kind}" = sync-timer ] && [ "${expected_file}" = enabled ]; then
+    should_start=1
+  fi
+  if [ "${should_start}" = 1 ]; then
+    sudo systemctl start --no-block "${unit}"
+  else
+    sudo systemctl stop "${unit}"
+  fi
+  observed_file="$(systemctl show --property UnitFileState --value "${unit}")"
+  [ "${observed_file}" = "${expected_file}" ] \
+    || { echo "reviewed unit-file state was not restored: ${unit}" >&2; return 1; }
+  observed_active="$(systemctl show --property ActiveState --value "${unit}")"
+  if [ "${should_start}" = 1 ]; then
+    case "${observed_active}" in active|activating) ;;
+      *) echo "reviewed unit active state was not restored: ${unit}" >&2; return 1 ;;
+    esac
+  elif [ "${observed_active}" != inactive ]; then
+    echo "reviewed inactive unit was not restored: ${unit}" >&2
     return 1
   fi
-  SYNC_UNITS_RESTORED=1
+}
+
+sudo systemctl daemon-reload
+while [ "$#" -gt 0 ]; do
+  restore_unit "$1" "$2" "$3" "$4"
+  shift 4
+done
+REMOTE_RESTORE_REVIEWED_TIMERS
+  then
+    if reconcile_remote_sync_unit_restore; then
+      return 0
+    fi
+    if [ "${SYNC_UNITS_RESTORE_RECONCILE_STATE}" = "not-restored" ] \
+      && [ "${retry_count}" = "0" ]; then
+      echo "[deploy] exact receipt proves sync restore is incomplete; retrying the idempotent restore once." >&2
+      restore_remote_sync_unit_state 1
+      return $?
+    fi
+    echo "CRITICAL: reviewed sync/sentinel state is not confirmed restored; preserve release ${RELEASE_ID}, inspect the exact receipt, and resume this idempotent restore. Do not roll back an activated release." >&2
+    return 1
+  fi
+  if ! reconcile_remote_sync_unit_restore; then
+    if [ "${SYNC_UNITS_RESTORE_RECONCILE_STATE}" = "not-restored" ] \
+      && [ "${retry_count}" = "0" ]; then
+      echo "[deploy] exact receipt remains incomplete after sync restore acknowledgement; retrying once." >&2
+      restore_remote_sync_unit_state 1
+      return $?
+    fi
+    echo "CRITICAL: reviewed sync/sentinel mutation returned success but its independent read-only receipt is unconfirmed; preserve release ${RELEASE_ID} and resume reconciliation." >&2
+    return 1
+  fi
+}
+
+reconcile_remote_prepare_commit_state() {
+  local captured_state="" presence=""
+  if [ "${ROLLBACK_PREPARE_MAY_HAVE_COMMITTED}" != "1" ]; then
+    return 0
+  fi
+
+  # ``prepare`` writes a digest-bound rollback receipt before atomically
+  # changing ``previous``.  Re-read that receipt after a lost SSH acknowledgement
+  # instead of assuming either commit or non-commit from the transport status.
+  if captured_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${STAGING_REDIS_WORKER_SERVICE}'" 2>/dev/null)"; then
+    if [ "${captured_state}" != "${STAGING_REDIS_WORKER_CAPTURED_STATE}" ]; then
+      echo "[deploy] CRITICAL: recovered prepare receipt disagrees with the captured Redis unit state." >&2
+      return 1
+    fi
+    # A verified digest-bound capture is sufficient to make rollback safe even
+    # if the final ``previous`` link step did not commit.  Only continue forward
+    # when the separate pointer proof below also succeeds.
+    ROLLBACK_ARMED=1
+    ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=0
+    if ! ssh "${SSH_TARGET}" \
+      "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${REMOTE_ROOT}' '${RELEASE_ID}'" <<'REMOTE_VERIFY_PREPARE_COMMIT'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+release_id = sys.argv[2]
+rollback = root / ".release-controller" / "rollbacks" / release_id
+metadata_path = rollback / "metadata.json"
+digest_path = rollback / "metadata.sha256"
+metadata_bytes = metadata_path.read_bytes()
+digest = digest_path.read_text(encoding="ascii").strip()
+if hashlib.sha256(metadata_bytes).hexdigest() != digest:
+    raise SystemExit("prepare metadata digest mismatch")
+metadata = json.loads(metadata_bytes)
+if metadata.get("release_id") != release_id:
+    raise SystemExit("prepare receipt release id mismatch")
+expected_previous = Path(str(metadata.get("active_release") or "")).resolve(strict=True)
+observed_previous = (root / "previous").resolve(strict=True)
+releases = (root / "releases").resolve(strict=True)
+if releases not in expected_previous.parents:
+    raise SystemExit("prepare expected previous pointer escapes releases")
+if observed_previous != expected_previous:
+    raise SystemExit("prepare previous pointer was not committed")
+REMOTE_VERIFY_PREPARE_COMMIT
+    then
+      echo "[deploy] CRITICAL: recovered prepare receipt is rollback-capable but its previous-pointer commit is unproven." >&2
+      return 1
+    fi
+    echo "[deploy] recovered committed atomic prepare after a lost SSH acknowledgement." >&2
+    return 0
+  fi
+
+  if presence="$(ssh "${SSH_TARGET}" "if sudo test -e '${REMOTE_ROOT}/.release-controller/rollbacks/${RELEASE_ID}'; then echo present; else echo absent; fi" 2>/dev/null)" \
+    && [ "${presence}" = absent ]; then
+    ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=0
+    return 0
+  fi
+  echo "[deploy] CRITICAL: atomic prepare commit state is unknown after SSH acknowledgement loss." >&2
+  return 1
 }
 
 attempt_automatic_rollback() {
@@ -1457,6 +1962,17 @@ attempt_automatic_rollback() {
   local rollback_database rollback_env_sha256
   local rollback_candidate_health="" rollback_redis_not_before="" rollback_redis_main_pid=""
   local rollback_redis_ready=0
+  if [ "${ROLLBACK_PREPARE_MAY_HAVE_COMMITTED}" = "1" ] \
+    && ! reconcile_remote_prepare_commit_state; then
+    echo "[deploy] CRITICAL: rollback is blocked until the remote prepare receipt can be reconciled." >&2
+    return 1
+  fi
+  if [ "${RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED}" = "1" ] \
+    && ! reconcile_remote_release_validation_fence_install; then
+    echo "[deploy] CRITICAL: rollback is blocked until the remote validation-fence receipt can be reconciled." >&2
+    return 1
+  fi
+  verify_deploy_verifier_bundle || return 1
   echo "[deploy] acceptance failed; restoring previous application release, environment, database identity, and reviewed units..." >&2
   rollback_not_before="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")" || return 1
   # Restore shared env/current/unit state only after every process that can read
@@ -1516,6 +2032,15 @@ attempt_automatic_rollback() {
     && ! probe_remote_pgbouncer_database "${PREDEPLOY_DATABASE_NAME}"; then
     echo "[deploy] CRITICAL: rollback PgBouncer source route could not be proven; consumers remain stopped." >&2
     return 1
+  fi
+  if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" = "1" ]; then
+    # The restored release may predate the runtime fence implementation.  Open
+    # it only after filesystem/database/PgBouncer rollback is proven and before
+    # any restored worker or web process starts.
+    if ! remove_remote_release_validation_fence; then
+      echo "[deploy] CRITICAL: rollback validation fence could not be removed; consumers remain stopped." >&2
+      return 1
+    fi
   fi
   if [ "${STAGING_REDIS_WORKER_UNIT_WAS_MASKED}" = "1" ]; then
     if ! ssh "${SSH_TARGET}" "sudo systemctl mask '${STAGING_REDIS_WORKER_SERVICE}' >/dev/null && sudo systemctl daemon-reload"; then
@@ -1579,7 +2104,7 @@ attempt_automatic_rollback() {
     for attempt in $(seq 1 90); do
       if rollback_candidate_health="$(ssh "${SSH_TARGET}" "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null")" \
         && printf '%s' "${rollback_candidate_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
-          "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
+          "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
           --expected-head "${PREDEPLOY_APP_SHA}" \
           --expected-count 1 \
           --expected-main-pid "${rollback_redis_main_pid}" \
@@ -1611,7 +2136,7 @@ attempt_automatic_rollback() {
     printf '%s\n' "${rollback_health}" >"${rollback_health_file}"
     chmod 600 "${rollback_health_file}"
     if "${PROJECT_ROOT}/.venv/bin/python" \
-      "${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py" \
+      "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
       --ssh-target "${SSH_TARGET}" \
       --root "${REMOTE_ROOT}" \
       --app-user "${REMOTE_APP_USER}" \
@@ -1630,14 +2155,14 @@ attempt_automatic_rollback() {
     fi
     if ! ssh "${SSH_TARGET}" \
       "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - collect-anchor --root '${REMOTE_ROOT}' --backup-stamp '${FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP}' --success-marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}'" \
-      <"${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
+      <"${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
       >"${rollback_anchor}"; then
       echo "[deploy] CRITICAL: restored legacy filesystem anchor could not be collected." >&2
       return 1
     fi
     chmod 600 "${rollback_anchor}"
     if ! "${PROJECT_ROOT}/.venv/bin/python" \
-      "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-rollback \
+      "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-rollback \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
       --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
       --preflight "${rollback_preflight}" \
@@ -1655,7 +2180,7 @@ attempt_automatic_rollback() {
       return 1
     fi
   elif ! printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
-    "${PROJECT_ROOT}/scripts/verify_runtime_health.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_runtime_health.py" \
     --strict-deploy \
     --expected-head "${PREDEPLOY_APP_SHA}" \
     --expected-migration "${rollback_migration}" \
@@ -1672,7 +2197,7 @@ attempt_automatic_rollback() {
     # so the final gate must validate a newly fetched snapshot.
     if ! rollback_candidate_health="$(ssh "${SSH_TARGET}" "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null")" \
       || ! printf '%s' "${rollback_candidate_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
-        "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
+        "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
         --expected-head "${PREDEPLOY_APP_SHA}" \
         --expected-count 1 \
         --expected-main-pid "${rollback_redis_main_pid}" \
@@ -1688,15 +2213,46 @@ attempt_automatic_rollback() {
     echo "[deploy] CRITICAL: rollback runtime is restored but sync unit state is not; units remain fail-closed." >&2
     return 1
   fi
+  verify_deploy_verifier_bundle || return 1
   ROLLBACK_COMPLETED=1
   echo "[deploy] rollback accepted: app=${PREDEPLOY_APP_SHA} migration=${rollback_migration} database=${PREDEPLOY_DATABASE_NAME:-in-place}." >&2
   return 0
 }
 
+report_final_activation_recovery_path() {
+  echo "[deploy] RECOVERY: preserve release ${RELEASE_ID} and its digest-bound rollback receipt under ${REMOTE_ROOT}/.release-controller/rollbacks/${RELEASE_ID}; first prove ${RELEASE_VALIDATION_FENCE} exactly active or absent. If active, resume only the validated fence removal. If absent, resume the captured sync/sentinel restore until receipt vkpi-sync-unit-restore/v1:restored, then rerun final legacy-writer, seal, candidate, and source checks. Never activate the previous release after this boundary." >&2
+}
+
 cleanup_post_deploy_evidence() {
   local original_rc=$?
   set +e
-  if [ "${original_rc}" -ne 0 ] && [ "${DEPLOY_ACCEPTED}" != "1" ]; then
+  if [ "${original_rc}" -ne 0 ] \
+    && [ "${ROLLBACK_PREPARE_MAY_HAVE_COMMITTED}" = "1" ]; then
+    reconcile_remote_prepare_commit_state || true
+  fi
+  if [ "${original_rc}" -ne 0 ] \
+    && [ "${RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED}" = "1" ] \
+    && declare -F reconcile_remote_release_validation_fence_install >/dev/null; then
+    reconcile_remote_release_validation_fence_install || true
+  fi
+  if [ "${original_rc}" -ne 0 ] \
+    && [ "${RELEASE_VALIDATION_COMMIT_STARTED}" = "1" ] \
+    && [ "${DEPLOY_ACCEPTED}" != "1" ]; then
+    if [ "${RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED}" = "1" ]; then
+      reconcile_remote_release_validation_fence_remove || true
+    fi
+    # Once exact marker absence proves the irreversible boundary committed,
+    # finishing/reconciling the captured sync restore is roll-forward recovery,
+    # not rollback.  Never touch those units while marker state is unknown.
+    if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" = "0" ] \
+      && [ "${SYNC_UNITS_MAY_HAVE_BEEN_MUTATED}" = "1" ] \
+      && [ "${SYNC_UNITS_RESTORED}" != "1" ]; then
+      restore_remote_sync_unit_state || true
+    fi
+  fi
+  if [ "${original_rc}" -ne 0 ] \
+    && [ "${DEPLOY_ACCEPTED}" != "1" ] \
+    && [ "${RELEASE_VALIDATION_COMMIT_STARTED}" != "1" ]; then
     if [ "${ROLLBACK_ARMED}" = "1" ]; then
       # A failed rollback intentionally leaves sync fail-closed.  Resuming a
       # timer against an untrusted app/database state would compound failure.
@@ -1714,6 +2270,18 @@ cleanup_post_deploy_evidence() {
         restore_remote_sync_unit_state || true
       fi
     fi
+  elif [ "${original_rc}" -ne 0 ] \
+    && [ "${RELEASE_VALIDATION_COMMIT_STARTED}" = "1" ] \
+    && [ "${DEPLOY_ACCEPTED}" != "1" ]; then
+    echo "[deploy] CRITICAL: activation commit started; automatic rollback is forbidden because provider side effects may now exist." >&2
+    if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" = "0" ] \
+      && [ "${RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED}" = "0" ] \
+      && [ "${SYNC_UNITS_RESTORED}" = "1" ] \
+      && [ "${SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED}" = "0" ]; then
+      echo "[deploy] remote activation and sync-unit restore are reconciled complete; final acceptance checks remain unconfirmed." >&2
+    else
+      report_final_activation_recovery_path
+    fi
   fi
   if [ -n "${REMOTE_LOG_BASELINE}" ] || [ -n "${REMOTE_ACCEPTANCE_REPORT}" ]; then
     ssh "${SSH_TARGET}" "rm -f -- '${REMOTE_LOG_BASELINE}' '${REMOTE_ACCEPTANCE_REPORT}'" >/dev/null 2>&1
@@ -1730,6 +2298,9 @@ cleanup_post_deploy_evidence() {
   # Keep the master available through rollback and remote evidence cleanup.
   # Remove its private directory only after the master is confirmed gone.
   cleanup_deploy_ssh_transport
+  # Rollback validators also come from the frozen candidate, so retain the
+  # digest-bound verifier bundle until every rollback/evidence action ends.
+  cleanup_deploy_verifier_bundle
   return "${original_rc}"
 }
 trap cleanup_post_deploy_evidence EXIT
@@ -1758,6 +2329,273 @@ JOURNAL_SYSTEMD_UNIT_FLAGS=""
 for journal_unit in "${JOURNAL_SYSTEMD_UNITS[@]}"; do
   JOURNAL_SYSTEMD_UNIT_FLAGS+=" --unit ${journal_unit}"
 done
+
+verify_remote_legacy_writers_absent() {
+  if ! ssh "${SSH_TARGET}" "bash -s -- '${REMOTE_ROOT}' ${LEGACY_WRITER_UNITS[*]}" <<'REMOTE_VERIFY_LEGACY_WRITERS'
+set -euo pipefail
+root="$1"
+shift
+for unit in "$@"; do
+  state="$(systemctl show --property ActiveState --value "${unit}")" \
+    || { echo "legacy writer state is unreadable: ${unit}" >&2; exit 1; }
+  case "${state}" in
+    inactive|failed) ;;
+    *) echo "legacy writer is not inactive: ${unit}" >&2; exit 1 ;;
+  esac
+done
+
+pidfile="${root}/runtime/worker.pid"
+if [ -L "${pidfile}" ]; then
+  echo "legacy worker marker is a symlink" >&2
+  exit 1
+fi
+if [ -e "${pidfile}" ]; then
+  [ -f "${pidfile}" ] || { echo "legacy worker marker is not a regular file" >&2; exit 1; }
+  IFS= read -r pid <"${pidfile}" || true
+  [ "$(awk 'END {print NR}' "${pidfile}")" = 1 ] \
+    || { echo "legacy worker marker must contain one line" >&2; exit 1; }
+  case "${pid:-}" in ''|*[!0-9]*)
+    echo "legacy worker marker is not a PID" >&2
+    exit 1
+    ;;
+  esac
+  [ "${pid}" -gt 1 ] || { echo "legacy worker marker PID is unsafe" >&2; exit 1; }
+  if { [ -d /proc ] && [ -d "/proc/${pid}" ]; } \
+    || { [ ! -d /proc ] && kill -0 "${pid}" 2>/dev/null; }; then
+    echo "legacy runtime/worker.pid still represents a live process" >&2
+    exit 1
+  fi
+fi
+REMOTE_VERIFY_LEGACY_WRITERS
+  then
+    echo "Refusing complete fleet claim while a legacy writer or live worker.pid remains." >&2
+    return 1
+  fi
+}
+
+verify_remote_release_validation_fence() {
+  local expected="$1"
+  if [ "${expected}" != active ] && [ "${expected}" != absent ]; then
+    echo "Release validation fence expectation must be active or absent." >&2
+    return 1
+  fi
+  ssh "${SSH_TARGET}" \
+    "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${RELEASE_VALIDATION_FENCE}' '${expected}'" <<'REMOTE_VERIFY_RELEASE_VALIDATION_FENCE'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+expected = sys.argv[2]
+payload = b"vkpi-release-validation/v1\n"
+try:
+    metadata = path.lstat()
+except FileNotFoundError:
+    if expected == "absent":
+        raise SystemExit(0)
+    raise SystemExit("release validation fence is absent")
+if expected == "absent":
+    raise SystemExit("unexpected release validation fence is present")
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+descriptor = os.open(path, flags)
+try:
+    observed = os.fstat(descriptor)
+    content = os.read(descriptor, len(payload) + 1)
+finally:
+    os.close(descriptor)
+valid = (
+    stat.S_ISREG(metadata.st_mode)
+    and stat.S_ISREG(observed.st_mode)
+    and (metadata.st_dev, metadata.st_ino) == (observed.st_dev, observed.st_ino)
+    and observed.st_uid == 0
+    and observed.st_gid == 0
+    and stat.S_IMODE(observed.st_mode) == 0o444
+    and observed.st_nlink == 1
+    and content == payload
+)
+if not valid:
+    raise SystemExit("release validation fence metadata or payload is invalid")
+REMOTE_VERIFY_RELEASE_VALIDATION_FENCE
+}
+
+reconcile_remote_release_validation_fence_install() {
+  if [ "${RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED}" != "1" ]; then
+    return 0
+  fi
+  if verify_remote_release_validation_fence active >/dev/null 2>&1; then
+    RELEASE_VALIDATION_FENCE_INSTALLED=1
+    RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED=0
+    echo "[deploy] recovered installed release-validation fence after a lost SSH acknowledgement." >&2
+    return 0
+  fi
+  if verify_remote_release_validation_fence absent >/dev/null 2>&1; then
+    RELEASE_VALIDATION_FENCE_INSTALLED=0
+    RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED=0
+    return 0
+  fi
+  echo "[deploy] CRITICAL: release-validation fence install state is unknown after SSH acknowledgement loss." >&2
+  return 1
+}
+
+install_remote_release_validation_fence() {
+  if [ "${RELEASE_CONSUMERS_QUIESCED}" != "1" ] \
+    || [ "${RELEASE_DRAIN_VERIFIED}" != "1" ]; then
+    echo "Refusing validation-fence install before complete quiesce and drain." >&2
+    return 1
+  fi
+  RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED=1
+  if ! ssh "${SSH_TARGET}" \
+    "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${RELEASE_VALIDATION_FENCE}'" <<'REMOTE_INSTALL_RELEASE_VALIDATION_FENCE'
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+payload = b"vkpi-release-validation/v1\n"
+parent = path.parent
+parent_meta = parent.lstat()
+if not stat.S_ISDIR(parent_meta.st_mode) or parent.is_symlink() or parent_meta.st_uid != 0:
+    raise SystemExit("release validation fence parent is unsafe")
+try:
+    path.lstat()
+except FileNotFoundError:
+    pass
+else:
+    raise SystemExit("release validation fence already exists")
+descriptor, temporary_name = tempfile.mkstemp(prefix=".vkpi-release-validation.", dir=parent)
+temporary = Path(temporary_name)
+try:
+    os.fchown(descriptor, 0, 0)
+    os.fchmod(descriptor, 0o444)
+    os.write(descriptor, payload)
+    os.fsync(descriptor)
+    os.close(descriptor)
+    descriptor = -1
+    os.link(temporary, path, follow_symlinks=False)
+    temporary.unlink()
+    directory = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+    temporary.unlink(missing_ok=True)
+REMOTE_INSTALL_RELEASE_VALIDATION_FENCE
+  then
+    if ! reconcile_remote_release_validation_fence_install \
+      || [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" != "1" ]; then
+      echo "Release-validation fence install failed without a verified committed receipt." >&2
+      return 1
+    fi
+    return 0
+  fi
+  RELEASE_VALIDATION_FENCE_INSTALLED=1
+  RELEASE_VALIDATION_FENCE_INSTALL_MAY_HAVE_COMMITTED=0
+  verify_remote_release_validation_fence active
+}
+
+reconcile_remote_release_validation_fence_remove() {
+  if [ "${RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED}" != "1" ]; then
+    return 0
+  fi
+  # The marker itself is the durable commit receipt.  Probe both exact states
+  # read-only after a transport failure; never infer activation from SSH status.
+  if verify_remote_release_validation_fence absent >/dev/null 2>&1; then
+    RELEASE_VALIDATION_FENCE_INSTALLED=0
+    RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED=0
+    echo "[deploy] recovered committed release-validation fence removal after a lost SSH acknowledgement." >&2
+    return 0
+  fi
+  if verify_remote_release_validation_fence active >/dev/null 2>&1; then
+    RELEASE_VALIDATION_FENCE_INSTALLED=1
+    RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED=0
+    echo "[deploy] release-validation fence removal is confirmed uncommitted; activation remains fenced." >&2
+    return 0
+  fi
+  echo "[deploy] CRITICAL: release-validation fence removal state is unknown after SSH acknowledgement loss." >&2
+  return 1
+}
+
+remove_remote_release_validation_fence() {
+  local retry_count="${1:-0}"
+  if [ "${retry_count}" != "0" ] && [ "${retry_count}" != "1" ]; then
+    echo "Release-validation fence removal retry count is outside the reviewed bound." >&2
+    return 1
+  fi
+  if [ "${RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED}" = "1" ]; then
+    if ! reconcile_remote_release_validation_fence_remove; then
+      return 1
+    fi
+    if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" = "0" ]; then
+      return 0
+    fi
+  fi
+  if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" != "1" ]; then
+    echo "Refusing release activation without a controller-installed fence." >&2
+    return 1
+  fi
+  verify_remote_release_validation_fence active || return 1
+  RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED=1
+  if ! ssh "${SSH_TARGET}" \
+    "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - '${RELEASE_VALIDATION_FENCE}'" <<'REMOTE_REMOVE_RELEASE_VALIDATION_FENCE'
+import os
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.unlink()
+directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+try:
+    path.lstat()
+except FileNotFoundError:
+    raise SystemExit(0)
+raise SystemExit("release validation fence still exists after activation")
+REMOTE_REMOVE_RELEASE_VALIDATION_FENCE
+  then
+    if ! reconcile_remote_release_validation_fence_remove; then
+      echo "Release-validation fence removal failed without a verified committed receipt; activation remains blocked or unknown." >&2
+      return 1
+    fi
+    if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" = "0" ]; then
+      return 0
+    fi
+    if [ "${retry_count}" = "0" ]; then
+      echo "[deploy] exact marker receipt proves fence removal was uncommitted; retrying the idempotent removal once." >&2
+      remove_remote_release_validation_fence 1
+      return $?
+    fi
+    echo "Release-validation fence remains active after the bounded retry; activation is safely blocked." >&2
+    return 1
+  fi
+  if verify_remote_release_validation_fence absent; then
+    RELEASE_VALIDATION_FENCE_INSTALLED=0
+    RELEASE_VALIDATION_FENCE_REMOVE_MAY_HAVE_COMMITTED=0
+    return 0
+  fi
+  if ! reconcile_remote_release_validation_fence_remove; then
+    echo "Release-validation fence removal acknowledgement could not be reconciled; preserve release ${RELEASE_ID} and do not roll it back." >&2
+    return 1
+  fi
+  if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" = "0" ]; then
+    return 0
+  fi
+  if [ "${retry_count}" = "0" ]; then
+    echo "[deploy] marker remains active after a successful SSH return; retrying the idempotent removal once." >&2
+    remove_remote_release_validation_fence 1
+    return $?
+  fi
+  echo "Release-validation fence remains active after the bounded retry; activation is safely blocked." >&2
+  return 1
+}
 
 quiesce_remote_pgbouncer_for_clone() {
   if [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
@@ -1858,8 +2696,8 @@ quiesce_remote_sync_units() {
   # before the remote shell reports failure.  The EXIT trap then restores the captured
   # state while no release rollback is armed.
   SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
-  if ! ssh "${SSH_TARGET}" "sudo systemctl stop '${SYNC_TIMER}'; sudo systemctl mask --runtime '${SYNC_TIMER}' >/dev/null; sudo systemctl stop '${SYNC_SERVICE}'; sudo systemctl mask --runtime '${SYNC_SERVICE}' >/dev/null; for sync_unit in '${SYNC_TIMER}' '${SYNC_SERVICE}'; do if systemctl is-active --quiet \"\${sync_unit}\"; then echo \"sync unit failed to stop before deployment staging: \${sync_unit}\" >&2; exit 1; fi; sync_mask_path=\"/run/systemd/system/\${sync_unit}\"; if [ ! -L \"\${sync_mask_path}\" ] || [ \"\$(readlink -- \"\${sync_mask_path}\")\" != /dev/null ]; then echo \"sync unit failed to mask before deployment staging: \${sync_unit}\" >&2; exit 1; fi; done"; then
-    echo "[deploy] reviewed sync timer/service could not be quiesced before build, backup, or remote staging." >&2
+  if ! ssh "${SSH_TARGET}" "sudo systemctl stop '${SYNC_TIMER}'; sudo systemctl mask --runtime '${SYNC_TIMER}' >/dev/null; sudo systemctl stop '${HEALTH_SENTINEL_TIMER}'; sudo systemctl mask --runtime '${HEALTH_SENTINEL_TIMER}' >/dev/null; sudo systemctl stop '${SYNC_SERVICE}'; sudo systemctl mask --runtime '${SYNC_SERVICE}' >/dev/null; sudo systemctl stop '${HEALTH_SENTINEL_SERVICE}'; sudo systemctl mask --runtime '${HEALTH_SENTINEL_SERVICE}' >/dev/null; for sync_unit in '${SYNC_TIMER}' '${HEALTH_SENTINEL_TIMER}' '${SYNC_SERVICE}' '${HEALTH_SENTINEL_SERVICE}'; do if systemctl is-active --quiet \"\${sync_unit}\"; then echo \"reviewed timer/service failed to stop before deployment staging: \${sync_unit}\" >&2; exit 1; fi; sync_mask_path=\"/run/systemd/system/\${sync_unit}\"; if [ ! -L \"\${sync_mask_path}\" ] || [ \"\$(readlink -- \"\${sync_mask_path}\")\" != /dev/null ]; then echo \"reviewed timer/service failed to mask before deployment staging: \${sync_unit}\" >&2; exit 1; fi; done"; then
+    echo "[deploy] reviewed sync/sentinel timers and services could not be quiesced before build, backup, or remote staging." >&2
     return 1
   fi
   SYNC_UNITS_QUIESCED=1
@@ -1877,7 +2715,7 @@ quiesce_remote_release_consumers() {
   # Set this before the remote transaction: even a partially failed mask/stop
   # must be treated as a mutation and restored only by the rollback path.
   SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
-  if ! ssh "${SSH_TARGET}" "for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl is-active --quiet \"\${unit}\" || { echo \"required release consumer is not active before quiesce: \${unit}\" >&2; exit 1; }; done; if [ '${expected_redis_state}' = active ]; then systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}' || { echo 'captured active Redis worker changed state before quiesce' >&2; exit 1; }; redis_unit='${STAGING_REDIS_WORKER_SERVICE}'; else if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'captured inactive Redis worker changed state before quiesce' >&2; exit 1; fi; redis_unit=''; fi; sudo systemctl stop '${SYNC_TIMER}'; sudo systemctl mask --runtime '${SYNC_TIMER}' >/dev/null; sudo systemctl stop '${SYNC_SERVICE}'; sudo systemctl mask --runtime '${SYNC_SERVICE}' >/dev/null; for sync_unit in '${SYNC_TIMER}' '${SYNC_SERVICE}'; do if systemctl is-active --quiet \"\${sync_unit}\"; then echo \"sync unit failed to stop: \${sync_unit}\" >&2; exit 1; fi; sync_mask_path=\"/run/systemd/system/\${sync_unit}\"; if [ ! -L \"\${sync_mask_path}\" ] || [ \"\$(readlink -- \"\${sync_mask_path}\")\" != /dev/null ]; then echo \"sync unit failed to mask: \${sync_unit}\" >&2; exit 1; fi; done; sudo systemctl stop '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS} \${redis_unit}; for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do if systemctl is-active --quiet \"\${unit}\"; then echo \"release consumer failed to stop: \${unit}\" >&2; exit 1; fi; done; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'Redis worker failed to stop' >&2; exit 1; fi"; then
+  if ! ssh "${SSH_TARGET}" "for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do systemctl is-active --quiet \"\${unit}\" || { echo \"required release consumer is not active before quiesce: \${unit}\" >&2; exit 1; }; done; if [ '${expected_redis_state}' = active ]; then systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}' || { echo 'captured active Redis worker changed state before quiesce' >&2; exit 1; }; redis_unit='${STAGING_REDIS_WORKER_SERVICE}'; else if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'captured inactive Redis worker changed state before quiesce' >&2; exit 1; fi; redis_unit=''; fi; sudo systemctl stop '${SYNC_TIMER}'; sudo systemctl mask --runtime '${SYNC_TIMER}' >/dev/null; sudo systemctl stop '${HEALTH_SENTINEL_TIMER}'; sudo systemctl mask --runtime '${HEALTH_SENTINEL_TIMER}' >/dev/null; sudo systemctl stop '${SYNC_SERVICE}'; sudo systemctl mask --runtime '${SYNC_SERVICE}' >/dev/null; sudo systemctl stop '${HEALTH_SENTINEL_SERVICE}'; sudo systemctl mask --runtime '${HEALTH_SENTINEL_SERVICE}' >/dev/null; for sync_unit in '${SYNC_TIMER}' '${HEALTH_SENTINEL_TIMER}' '${SYNC_SERVICE}' '${HEALTH_SENTINEL_SERVICE}'; do if systemctl is-active --quiet \"\${sync_unit}\"; then echo \"reviewed timer/service failed to stop: \${sync_unit}\" >&2; exit 1; fi; sync_mask_path=\"/run/systemd/system/\${sync_unit}\"; if [ ! -L \"\${sync_mask_path}\" ] || [ \"\$(readlink -- \"\${sync_mask_path}\")\" != /dev/null ]; then echo \"reviewed timer/service failed to mask: \${sync_unit}\" >&2; exit 1; fi; done; sudo systemctl stop '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS} \${redis_unit}; for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do if systemctl is-active --quiet \"\${unit}\"; then echo \"release consumer failed to stop: \${unit}\" >&2; exit 1; fi; done; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'Redis worker failed to stop' >&2; exit 1; fi"; then
     echo "[deploy] complete web/worker fleet could not be quiesced before release mutation." >&2
     return 1
   fi
@@ -1888,6 +2726,84 @@ quiesce_remote_release_consumers() {
   SYNC_UNITS_QUIESCED=1
 }
 
+verify_remote_release_drain() {
+  local phase="${1:-}" report="" diagnostics=""
+  local expected_database="${PREDEPLOY_DATABASE_NAME}"
+  local expected_migration="${PREDEPLOY_MIGRATION}"
+  case "${phase}" in
+    live)
+      if [ "${SYNC_UNITS_MAY_HAVE_BEEN_MUTATED}" != "0" ] \
+        || [ "${RELEASE_CONSUMERS_QUIESCED}" != "0" ]; then
+        echo "Refusing live drain preflight after any reviewed service/timer mutation." >&2
+        return 1
+      fi
+      ;;
+    quiesced)
+      if [ "${RELEASE_CONSUMERS_QUIESCED}" != "1" ] \
+        || [ "${SYNC_UNITS_QUIESCED}" != "1" ]; then
+        echo "Refusing final release drain verification until every reviewed ingress and consumer is quiesced." >&2
+        return 1
+      fi
+      ;;
+    fenced)
+      if [ "${RELEASE_VALIDATION_FENCE_INSTALLED}" != "1" ]; then
+        echo "Refusing fenced drain verification without the active release fence." >&2
+        return 1
+      fi
+      # Candidate startup may have advanced an explicitly reviewed in-place
+      # migration or switched to a candidate clone.  Bind the post-validation
+      # drain to the identity the candidate health gate already proved, never to
+      # the pre-deploy rollback anchor.
+      expected_database="${STAGING_CLONE_DATABASE:-${PREDEPLOY_DATABASE_NAME}}"
+      expected_migration="${LATEST_MIGRATION}"
+      ;;
+    *)
+      echo "Release drain phase must be exactly live, quiesced, or fenced." >&2
+      return 1
+      ;;
+  esac
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+  if ! report="$(ssh "${SSH_TARGET}" "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp XDG_CACHE_HOME=/tmp TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B - --env-file '${REMOTE_ROOT}/.env' --expected-database '${expected_database}' --current-migration '${expected_migration}'" <"${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_release_drain.py")"; then
+    verify_deploy_candidate
+    assert_deploy_source_unchanged
+    echo "${phase} Redis/database/provider drain verification failed; no release pointer or database identity was changed." >&2
+    return 1
+  fi
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+  if ! diagnostics="$(printf '%s' "${report}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
+p=json.load(sys.stdin)
+assert p.get("schema_version")=="vkpi-release-drain/v1"
+assert p.get("read_only") is True and p.get("history_mutated") is False
+assert p.get("credentials_emitted") is False
+assert (p.get("overall") or {}).get("pass") is True
+r=p.get("redis") or {}; d=p.get("database") or {}
+assert r.get("passed") is True and r.get("pending_count")==0 and r.get("undelivered_count")==0
+assert d.get("passed") is True
+assert d.get("current_migration")==sys.argv[1]
+assert d.get("database_identity_verified") is True
+assert d.get("search_path_verified") is True
+counts=d.get("active_counts") or {}
+assert counts and all(isinstance(v,int) and not isinstance(v,bool) and v==0 for v in counts.values())
+diagnostic_counts=d.get("diagnostic_counts") or {}
+assert diagnostic_counts and all(isinstance(v,int) and not isinstance(v,bool) and v>=0 for v in diagnostic_counts.values())
+diag=r.get("diagnostics") or {}
+assert diag.get("lag_or_consumer_count_blocks_release") is False
+print("lag={} consumers={}".format(diag.get("raw_xinfo_lag"),diag.get("historical_consumer_count")))' "${expected_migration}")"; then
+    echo "${phase} release drain receipt is invalid; no release pointer or database identity was changed." >&2
+    return 1
+  fi
+  if [ "${phase}" = live ]; then
+    LIVE_RELEASE_DRAIN_VERIFIED=1
+  elif [ "${phase}" = fenced ]; then
+    FENCED_RELEASE_DRAIN_VERIFIED=1
+  else
+    RELEASE_DRAIN_VERIFIED=1
+  fi
+  echo "[deploy] ${phase} Redis/database/provider drain accepted: ${diagnostics} (diagnostic only)."
+}
+
 # The first atomic release may target a legacy tree that does not yet contain
 # scripts/ops/fetch_runtime_health.py.  Execute the reviewed local probe over
 # stdin for the pre-mutation identity read, so bootstrap does not depend on a
@@ -1896,7 +2812,7 @@ quiesce_remote_release_consumers() {
 fetch_predeploy_runtime_health() {
   ssh "${SSH_TARGET}" \
     "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B - --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'" \
-    < "${PROJECT_ROOT}/scripts/ops/fetch_runtime_health.py"
+    < "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py"
 }
 
 harden_first_atomic_root() {
@@ -1959,12 +2875,12 @@ sys.stdout.write("application_root_hardening=verified\n")
 PY
 }
 
-LATEST_MIGRATION="$(find "${PROJECT_ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
+LATEST_MIGRATION="$(find "${DEPLOY_CANDIDATE_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
 if [ -z "${LATEST_MIGRATION}" ]; then
   echo "Refusing deploy because the local migration manifest is empty." >&2
   exit 1
 fi
-MIGRATION_MANIFEST_CSV="$(find "${PROJECT_ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
+MIGRATION_MANIFEST_CSV="$(find "${DEPLOY_CANDIDATE_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
 
 run_predeploy_embedded_browser_gate
 setup_deploy_ssh_transport
@@ -1983,6 +2899,8 @@ fi
 # migrations may proceed only when the operator declares the exact ordered set
 # forward-compatible.  The explicit viltroxtest clone strategy instead restores
 # the captured environment to its untouched source database on application rollback.
+verify_deploy_candidate
+assert_deploy_source_unchanged
 if ! REMOTE_PREDEPLOY_HEALTH_JSON="$(fetch_predeploy_runtime_health)"; then
   echo "Refusing deploy because pre-deploy authenticated runtime identity could not be read." >&2
   exit 1
@@ -1998,7 +2916,7 @@ fi
 # separately hashed plan whose old server/client identities are bound exactly.
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" != "1" ]; then
   if ! printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
-    "${PROJECT_ROOT}/scripts/verify_runtime_health.py" \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
     --strict-deploy \
     --expected-head "${PREDEPLOY_APP_SHA}" \
     --expected-migration "${PREDEPLOY_MIGRATION}" \
@@ -2006,10 +2924,12 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" != "1" ]; then
     --expected-worker-count "${EXPECTED_WORKER_COUNT}" \
     --worker-not-before "1970-01-01T00:00:00Z" \
     --max-worker-age-seconds "${MAX_WORKER_AGE_SECONDS}" >/dev/null; then
-    echo "Refusing deploy because the pre-deploy rollback anchor is not a strict aligned web/client/seven-worker runtime." >&2
+    echo "Refusing deploy because the pre-deploy rollback anchor is not a strict aligned web/client/16-worker runtime." >&2
     exit 1
   fi
 fi
+verify_deploy_candidate
+assert_deploy_source_unchanged
 if [ "${RESCUE_ROLLBACK_MODE}" = "1" ]; then
   if [ "${RESCUE_ROLLBACK_CONFIRM}" != "RESCUE_ROLLBACK:${PREDEPLOY_APP_SHA}" ]; then
     echo "VKPI_RESCUE_ROLLBACK_CONFIRM must exactly bind the rescue to the pre-deploy runtime SHA." >&2
@@ -2031,7 +2951,7 @@ import re
 import stat
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 def secure_controller_directory(path, label):
     try:
@@ -2105,10 +3025,30 @@ if len(matches) != 1:
 def database_name_from_url(value, label):
     try:
         parsed = urlsplit(value)
+        query = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=64,
+        )
     except ValueError:
         raise SystemExit(f"{label} is invalid") from None
     name = unquote(parsed.path[1:]) if parsed.path.startswith("/") else ""
-    if parsed.scheme not in {"postgres", "postgresql"} or not name or "/" in name:
+    safe_query_parameters = {
+        "application_name", "channel_binding", "connect_timeout",
+        "fallback_application_name", "gssencmode", "keepalives",
+        "keepalives_count", "keepalives_idle", "keepalives_interval",
+        "ssl_min_protocol_version", "ssl_max_protocol_version", "sslcrl",
+        "sslcrldir", "sslmode", "sslrootcert", "sslsni",
+        "tcp_user_timeout",
+    }
+    if (
+        parsed.scheme not in {"postgres", "postgresql"}
+        or parsed.fragment
+        or not name
+        or "/" in name
+        or any(key.lower() not in safe_query_parameters for key, _value in query)
+    ):
         raise SystemExit(f"{label} database path is invalid")
     return name
 
@@ -2318,6 +3258,17 @@ if [ "${RESCUE_ROLLBACK_MODE}" = "1" ] \
   ROLLBACK_ANCHOR_ENV_FINGERPRINT="${PREDEPLOY_ENV_SHA256}"
 fi
 
+# Prove the live boundary is already idle before stopping even one service or
+# timer or applying first-bootstrap filesystem hardening. A non-empty
+# queue/provider/DB receipt exits in place with no partial quiesce to restore.
+verify_remote_legacy_writers_absent
+verify_remote_release_validation_fence absent
+verify_remote_release_drain live
+if [ "${LIVE_RELEASE_DRAIN_VERIFIED}" != "1" ]; then
+  echo "Refusing timer/service quiesce without a verified live idle boundary." >&2
+  exit 1
+fi
+
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   # Bind the real running Web process, not only the base dotenv.  Reviewed
   # systemd drop-ins may enable PgBouncer after the main file is loaded.
@@ -2332,6 +3283,8 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
 fi
 
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
   if [ "${STAGING_SOURCE_KIND}" != "legacy-base" ] \
     || [ "${PREDEPLOY_DATABASE_NAME}" != "viltrox2_test" ] \
     || [ -z "${PENDING_MIGRATIONS}" ]; then
@@ -2341,7 +3294,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
 
   FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP="$(
     "${PROJECT_ROOT}/.venv/bin/python" \
-      "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" plan-field \
+      "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" plan-field \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
       --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
       --field recovery.backup_stamp
@@ -2355,7 +3308,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   chmod 600 "${BOOTSTRAP_HEALTH_JSON}"
 
   if "${PROJECT_ROOT}/.venv/bin/python" \
-    "${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py" \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
     --ssh-target "${SSH_TARGET}" \
     --root "${REMOTE_ROOT}" \
     --app-user "${REMOTE_APP_USER}" \
@@ -2375,13 +3328,13 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
 
   ssh "${SSH_TARGET}" \
     "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B - collect-anchor --root '${REMOTE_ROOT}' --backup-stamp '${FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP}' --success-marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}'" \
-    <"${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
+    <"${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
     >"${BOOTSTRAP_ANCHOR_JSON}"
   chmod 600 "${BOOTSTRAP_ANCHOR_JSON}"
 
   FIRST_ATOMIC_BOOTSTRAP_SUMMARY="$(
     "${PROJECT_ROOT}/.venv/bin/python" \
-      "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-plan \
+      "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-plan \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
       --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
       --preflight "${BOOTSTRAP_PREFLIGHT_JSON}" \
@@ -2413,6 +3366,8 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   STAGING_BACKUP_VERIFIED=1
   echo "[deploy] first atomic bootstrap plan verified: ${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}"
   harden_first_atomic_root
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
 fi
 
 # Freeze timer-triggered writers before the potentially long build, backup and
@@ -2425,6 +3380,8 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
 fi
 
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
   # The signed-off plan already binds a verified, encrypted, off-host backup by
   # three independent SHA-256 values.  Re-running the backup here would create
   # an unplanned recovery anchor and is therefore forbidden rather than useful.
@@ -2556,11 +3513,13 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   ssh "${SSH_TARGET}" "sudo cat -- '${REMOTE_RELEASE_DIR}/.vkpi-release.json'" >"${BOOTSTRAP_CANDIDATE_MANIFEST}"
   chmod 600 "${BOOTSTRAP_CANDIDATE_MANIFEST}"
   "${PROJECT_ROOT}/.venv/bin/python" \
-    "${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-candidate \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-candidate \
     --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
     --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
     --manifest "${BOOTSTRAP_CANDIDATE_MANIFEST}" \
     --target-database "${STAGING_CLONE_DATABASE}" >/dev/null
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
 else
   ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
 fi
@@ -2634,8 +3593,17 @@ if ! STAGING_REDIS_WORKER_CAPTURED_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHON
   echo "Refusing deploy because the Redis worker systemd state is not exactly restorable." >&2
   exit 1
 fi
-ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name '${SYNC_SERVICE}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' ${ROLLBACK_ANCHOR_PREPARE_OPTION}"
-ROLLBACK_ARMED=1
+ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=1
+if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name '${SYNC_SERVICE}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --rollback-file '${REMOTE_LANE_OVERRIDE_FILE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' ${ROLLBACK_ANCHOR_PREPARE_OPTION}"; then
+  if ! reconcile_remote_prepare_commit_state \
+    || [ "${ROLLBACK_ARMED}" != "1" ]; then
+    echo "Atomic release prepare failed without a verified committed receipt." >&2
+    exit 1
+  fi
+else
+  ROLLBACK_ARMED=1
+  ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=0
+fi
 
 if ! STAGING_REDIS_WORKER_UNIT_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${STAGING_REDIS_WORKER_SERVICE}'")"; then
   echo "Refusing deploy because the captured Redis worker unit state is unreadable." >&2
@@ -2674,6 +3642,13 @@ esac
 # From this point until the new release has been fully restarted, no reviewed
 # web/Apify/Redis process may observe a current/.env/database pointer change.
 quiesce_remote_release_consumers
+verify_remote_release_drain quiesced
+
+if [ "${RELEASE_DRAIN_VERIFIED}" != "1" ]; then
+  echo "Refusing release mutation without a verified empty Redis/database/provider boundary." >&2
+  exit 1
+fi
+install_remote_release_validation_fence
 
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   if [ "${STAGING_BACKUP_VERIFIED}" != "1" ]; then
@@ -2857,7 +3832,7 @@ verify_remote_web_database_runtime \
 ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && for attempt in \$(seq 1 60); do if sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' | env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/verify_redis_worker_health.py --expected-head '${LOCAL_GIT_SHA}' --expected-count 1 --expected-main-pid '${REDIS_WORKER_MAIN_PID}' --min-ready-sequence 3 --worker-not-before '${REDIS_WORKER_RESTART_NOT_BEFORE}' --max-age-seconds '${MAX_WORKER_AGE_SECONDS}' >/dev/null; then exit 0; fi; sleep 2; done; echo 'dedicated Redis worker failed strict readiness after restart: ${HEALTH_URL}' >&2; exit 1"
 
 # Worker restart is mandatory for deployment acceptance.  Cloud capacity is a
-# reviewed seven-service systemd fleet (one interactive + six batch).  Never
+# reviewed 16-service systemd fleet (one interactive + fifteen batch). Never
 # fall back to the legacy singleton launcher: it would leave old systemd workers
 # executing the in-place rsync payload and let one fresh heartbeat mask them.
 WORKER_RESTART_NOT_BEFORE="$(ssh "${SSH_TARGET}" "date -u +%Y-%m-%dT%H:%M:%SZ")"
@@ -2890,11 +3865,17 @@ if (
     raise SystemExit(0)
 raise SystemExit(1)
 PY
-then exit 0; fi; sleep 2; done; echo 'exact seven-service worker fleet failed readiness after restart: ${HEALTH_URL}' >&2; exit 1"
+then exit 0; fi; sleep 2; done; echo 'exact 16-service worker fleet failed readiness after restart: ${HEALTH_URL}' >&2; exit 1"
+
+# A healthy 16-lane receipt is not a complete fleet proof if a legacy flat
+# scheduler/web/worker or its PID marker is still alive alongside systemd.
+verify_remote_legacy_writers_absent
 
 # Remote acceptance is deliberately separate from the pre-deploy local gate:
 # fetch the post-restart JSON remotely, then validate it with the local, reviewed
 # validator and explicit expected HEAD/migration/worker freshness parameters.
+verify_deploy_candidate
+assert_deploy_source_unchanged
 if ! REMOTE_HEALTH_JSON="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'")"; then
   echo "Failed to fetch post-restart remote health JSON: ${HEALTH_URL}" >&2
   exit 1
@@ -2904,7 +3885,7 @@ if [ -z "${REMOTE_HEALTH_JSON}" ]; then
   exit 1
 fi
 if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
-  "${PROJECT_ROOT}/scripts/verify_runtime_health.py" \
+  "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
   --strict-deploy \
   --expected-head "${LOCAL_GIT_SHA}" \
   --expected-migration "${LATEST_MIGRATION}" \
@@ -2916,7 +3897,7 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
   exit 1
 fi
 if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
-  "${PROJECT_ROOT}/scripts/verify_redis_worker_health.py" \
+  "${DEPLOY_CANDIDATE_DIR}/scripts/verify_redis_worker_health.py" \
   --expected-head "${LOCAL_GIT_SHA}" \
   --expected-count 1 \
   --expected-main-pid "${REDIS_WORKER_MAIN_PID}" \
@@ -2926,6 +3907,8 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
   echo "Post-restart Redis worker trust validation failed; deployment is not accepted." >&2
   exit 1
 fi
+verify_deploy_candidate
+assert_deploy_source_unchanged
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
   POST_RESTART_DB_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/staging_db_clone.py' prove-active-source --root '${REMOTE_ROOT}' --expected-db '${STAGING_CLONE_DATABASE}' ${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}")"
@@ -2945,7 +3928,7 @@ if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
 fi
 
 # Bind log-canary receipts to the complete fleet without storing any raw nonce.
-# The strict validator above has already proven seven unique, fresh nonce hashes;
+# The strict validator above has already proven 16 unique, fresh nonce hashes;
 # hash their sorted set into one stable deployment-scoped fleet identity.
 WORKER_BOOT_NONCE_SHA256="$(printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import hashlib,json,sys; data=json.load(sys.stdin); rows=(data.get("trust",{}).get("worker_fleet",{}).get("workers") or []); nonces=sorted(str(row.get("boot_nonce_sha256") or "") for row in rows if row.get("online") is True); print(hashlib.sha256(("\n".join(nonces)).encode()).hexdigest())')"
 if ! [[ "${WORKER_BOOT_NONCE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -2981,14 +3964,14 @@ REMOTE_LOG_BASELINE="/tmp/vkpi-runtime-log-baseline-${WORKER_BOOT_NONCE_SHA256}.
 REMOTE_ACCEPTANCE_REPORT="/tmp/vkpi-release-acceptance-${WORKER_BOOT_NONCE_SHA256}.json"
 
 # The reviewed systemd units write to journald, not the legacy runtime/logs
-# files.  Bind a cursor to the exact web + seven Apify + Redis unit filter.
+# files.  Bind a cursor to the exact web + 16 Apify + Redis unit filter.
 ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/audit_systemd_journal_media_log_leaks.py ${JOURNAL_SYSTEMD_UNIT_FLAGS} --worker-boot-nonce-sha256 '${WORKER_BOOT_NONCE_SHA256}' --worker-not-before '${WORKER_RESTART_NOT_BEFORE}' --compact > '${REMOTE_LOG_BASELINE}' && chmod 600 '${REMOTE_LOG_BASELINE}'"
 ssh "${SSH_TARGET}" "cat -- '${REMOTE_LOG_BASELINE}'" >"${LOCAL_LOG_BASELINE}"
 
 # Repeat the complete manifest-driven read-only API acceptance against the
 # restarted remote service; a local pre-deploy 41/41+ receipt is not transferable.
 REMOTE_ACCEPTANCE_RC=0
-ssh "${SSH_TARGET}" "rm -f -- '${REMOTE_ACCEPTANCE_REPORT}' && cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-acceptance-home TMPDIR=/tmp ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web DB_RUNTIME_BACKEND=postgres LOCAL_RUNTIME_FORCE_STACK=0 LOCAL_ENV_FILE='${REMOTE_ROOT}/.env' RUNTIME_ROOT='${REMOTE_ROOT}/runtime' PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' >/dev/null" || REMOTE_ACCEPTANCE_RC=$?
+ssh "${SSH_TARGET}" "rm -f -- '${REMOTE_ACCEPTANCE_REPORT}' && cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp/vkpi-acceptance-home TMPDIR=/tmp ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web DB_RUNTIME_BACKEND=postgres LOCAL_RUNTIME_FORCE_STACK=0 LOCAL_ENV_FILE='${REMOTE_ROOT}/.env' RUNTIME_ROOT='${REMOTE_ROOT}/runtime' PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/local_release_acceptance.py --base-url '${REMOTE_ACCEPTANCE_BASE_URL}' --json-out '${REMOTE_ACCEPTANCE_REPORT}' --token-ttl 1200 --overall-timeout 1170 >/dev/null" || REMOTE_ACCEPTANCE_RC=$?
 LOCAL_ACCEPTANCE_REPORT_TMP="$(mktemp "${POST_DEPLOY_EVIDENCE_DIR}/.release-acceptance.XXXXXX")"
 if ! ssh "${SSH_TARGET}" "cat -- '${REMOTE_ACCEPTANCE_REPORT}'" >"${LOCAL_ACCEPTANCE_REPORT_TMP}"; then
   rm -f -- "${LOCAL_ACCEPTANCE_REPORT_TMP}"
@@ -3022,17 +4005,14 @@ if (
 print(f"[deploy] post-restart remote acceptance passed: {required_total}/{required_total}")
 PY
 
-# A caller may supply an explicit reviewed token.  Otherwise, and only after
-# strict post-restart web + seven-worker identity and read-only acceptance have
-# passed, mint one 60-900s admin JWT inside the active remote release.  The
+# Only after strict post-restart web + worker identity and read-only acceptance
+# have passed, mint one 60-1200s admin JWT inside the active remote release. The
 # production JWT secret and DB identity never leave the host: SSH stdout carries
 # only the short-lived token directly into this shell variable, never argv,
 # evidence, logs, or a file.  Any lookup/signing failure blocks the deployment.
-if [ -z "${POST_DEPLOY_BROWSER_TOKEN}" ]; then
-  if ! POST_DEPLOY_BROWSER_TOKEN="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp XDG_CACHE_HOME=/tmp TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 LOG_LEVEL=CRITICAL ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/mint_browser_gate_token.py --ttl-seconds '${BROWSER_GATE_TOKEN_TTL_SECONDS}'")"; then
-    echo "Remote short-lived browser gate token mint failed; deployment is not accepted." >&2
-    exit 1
-  fi
+if ! POST_DEPLOY_BROWSER_TOKEN="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp XDG_CACHE_HOME=/tmp TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 LOG_LEVEL=CRITICAL ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/mint_browser_gate_token.py --ttl-seconds '${BROWSER_GATE_TOKEN_TTL_SECONDS}'")"; then
+  echo "Remote short-lived browser gate token mint failed; deployment is not accepted." >&2
+  exit 1
 fi
 if ! [[ "${POST_DEPLOY_BROWSER_TOKEN}" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
   echo "Browser gate token is not a single compact JWT; deployment is not accepted." >&2
@@ -3043,15 +4023,25 @@ fi
 # Use an owned, clean, extension-free Chrome process.  The controller consumes
 # the token from its environment, strips it from Chrome, and virtualizes the
 # frontend token lookup in renderer memory without persistent browser storage.
+verify_deploy_candidate
+assert_deploy_source_unchanged
 BROWSER_CAPTURE_STATUS=0
-VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" \
-VKPI_BROWSER_GATE_TOKEN="${POST_DEPLOY_BROWSER_TOKEN}" node \
-  "${PROJECT_ROOT}/scripts/capture_browser_console_cdp.mjs" \
+env -i \
+  PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
+  HOME=/tmp \
+  XDG_CACHE_HOME=/tmp \
+  TMPDIR=/tmp \
+  LANG=C.UTF-8 \
+  VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS="${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" \
+  VKPI_BROWSER_GATE_TOKEN="${POST_DEPLOY_BROWSER_TOKEN}" \
+  node \
+  "${DEPLOY_CANDIDATE_DIR}/scripts/capture_browser_console_cdp.mjs" \
   --url "${POST_DEPLOY_BROWSER_URL}" \
   --output "${LOCAL_BROWSER_CAPTURE}" \
   --settle-ms "${BROWSER_GATE_SETTLE_MS}" \
   --page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}" \
   --page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}" \
+  --overall-timeout-ms "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" \
   --chrome "${POST_DEPLOY_CHROME_PATH}" || BROWSER_CAPTURE_STATUS=$?
 POST_DEPLOY_BROWSER_TOKEN=""
 if [ "${BROWSER_CAPTURE_STATUS}" -ne 0 ]; then
@@ -3059,25 +4049,31 @@ if [ "${BROWSER_CAPTURE_STATUS}" -ne 0 ]; then
   exit "${BROWSER_CAPTURE_STATUS}"
 fi
 "${PROJECT_ROOT}/.venv/bin/python" \
-  "${PROJECT_ROOT}/scripts/verify_browser_console_capture.py" \
+  "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
   --input "${LOCAL_BROWSER_CAPTURE}" \
   --json-out "${LOCAL_BROWSER_REPORT}"
+verify_deploy_candidate
+assert_deploy_source_unchanged
 
 # Scan only bytes appended after the bound baseline.  Missing baseline coverage,
 # truncation, unread tails, or any new sensitive URL/credential finding fails the
 # deployment.  The standalone validator re-reads both receipts instead of
 # trusting the scanner exit code alone.
+verify_deploy_candidate
+assert_deploy_source_unchanged
 if ! ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/audit_systemd_journal_media_log_leaks.py ${JOURNAL_SYSTEMD_UNIT_FLAGS} --baseline-state '${REMOTE_LOG_BASELINE}' --worker-boot-nonce-sha256 '${WORKER_BOOT_NONCE_SHA256}' --worker-not-before '${WORKER_RESTART_NOT_BEFORE}' --require-complete-baseline --compact --fail-on-new" >"${LOCAL_LOG_CANARY}"; then
   echo "Post-restart remote runtime log canary failed." >&2
   exit 1
 fi
 "${PROJECT_ROOT}/.venv/bin/python" \
-  "${PROJECT_ROOT}/scripts/verify_runtime_journal_canary.py" \
+  "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_journal_canary.py" \
   --baseline-state "${LOCAL_LOG_BASELINE}" \
   --canary-report "${LOCAL_LOG_CANARY}" \
   --expected-worker-boot-nonce-sha256 "${WORKER_BOOT_NONCE_SHA256}" \
   --worker-not-before "${WORKER_RESTART_NOT_BEFORE}" \
   ${JOURNAL_SYSTEMD_UNIT_FLAGS}
+verify_deploy_candidate
+assert_deploy_source_unchanged
 chmod 600 "${LOCAL_LOG_BASELINE}" "${LOCAL_LOG_CANARY}" \
   "${LOCAL_ACCEPTANCE_REPORT}" "${LOCAL_BROWSER_CAPTURE}" "${LOCAL_BROWSER_REPORT}"
 
@@ -3092,15 +4088,18 @@ test "${LOCAL_ASSET}" = "${REMOTE_ASSET}"
 # Access mode instead requires anonymous interception at both HTML and asset paths.
 PRIVATE_SURFACE_URLS="${PRIVATE_SURFACE_URLS:-https://viltroxtest.com https://www.viltroxtest.com}"
 read -r -a PRIVATE_SURFACE_URL_LIST <<< "${PRIVATE_SURFACE_URLS}"
+verify_deploy_candidate
+assert_deploy_source_unchanged
 if [ "${VKPI_EXPECT_ACCESS_GATED}" = "1" ]; then
-  "${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/scripts/verify_private_surface_live.py" \
+  "${PROJECT_ROOT}/.venv/bin/python" "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py" \
     --expect-access-gated "${PRIVATE_SURFACE_URL_LIST[@]}"
 else
-  "${PROJECT_ROOT}/.venv/bin/python" "${PROJECT_ROOT}/scripts/verify_private_surface_live.py" \
+  "${PROJECT_ROOT}/.venv/bin/python" "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py" \
     "${PRIVATE_SURFACE_URL_LIST[@]}"
 fi
+verify_deploy_candidate
+assert_deploy_source_unchanged
 
-restore_remote_sync_unit_state
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   verify_remote_pgbouncer_database_map
   if [ "${PGBOUNCER_SERVICE_ACTIVE_STATE}" = "active" ]; then
@@ -3114,5 +4113,34 @@ ssh "${SSH_TARGET}" "set -eu; current_path=\$(readlink -f -- '${REMOTE_CURRENT_D
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py' write-success-marker --marker '${FIRST_ATOMIC_BOOTSTRAP_SUCCESS_MARKER}' --plan-sha256 '${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' >/dev/null"
 fi
+verify_remote_legacy_writers_absent
+verify_remote_release_validation_fence active
+if ! FENCED_REMOTE_HEALTH="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'")" \
+  || ! printf '%s' "${FENCED_REMOTE_HEALTH}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
+p=json.load(sys.stdin)
+f=(p.get("trust") or {}).get("release_validation") or {}
+assert f.get("active") is True
+assert f.get("valid") is True
+assert f.get("source")=="verified_marker"'; then
+  echo "The active runtime did not prove the release-validation fence." >&2
+  exit 1
+fi
+verify_remote_release_drain fenced
+if [ "${FENCED_RELEASE_DRAIN_VERIFIED}" != "1" ]; then
+  echo "Refusing activation without an empty post-validation provider boundary." >&2
+  exit 1
+fi
+verify_deploy_candidate
+assert_deploy_source_unchanged
+# From this point the release is an irreversible roll-forward commit: removing
+# the marker can let existing processes claim external/billed work immediately.
+# Any later failure must preserve the accepted app/database identity rather than
+# pretend those provider side effects can be rolled back.
+RELEASE_VALIDATION_COMMIT_STARTED=1
+remove_remote_release_validation_fence
+restore_remote_sync_unit_state
+verify_remote_legacy_writers_absent
+verify_deploy_candidate
+assert_deploy_source_unchanged
 DEPLOY_ACCEPTED=1
 echo "[deploy] retained post-restart evidence: ${POST_DEPLOY_EVIDENCE_DIR}"

@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+from staging_db_url_contract import query_preserves_database_identity
+
 
 SOURCE_DATABASE = "viltrox2_test"
 CLONE_PREFIX = "viltrox2_test_release_"
@@ -45,8 +47,6 @@ RELEASE_CONTROLLER_NAME = ".release-controller"
 CONTROLLER_DIRECTORY_MODE = 0o700
 CONTROLLER_FILE_MODE = 0o600
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
 class CloneError(RuntimeError):
     """A fail-closed staging clone contract violation."""
 
@@ -251,6 +251,7 @@ def assert_disk_headroom(*, source_size_bytes: int, free_bytes: int) -> None:
 def _split_database_url(value: str) -> Any:
     try:
         parsed = urlsplit(value)
+        safe_query = query_preserves_database_identity(parsed.query)
     except ValueError:
         raise CloneError("DATABASE_URL is invalid") from None
     if parsed.scheme not in {"postgres", "postgresql"}:
@@ -262,6 +263,10 @@ def _split_database_url(value: str) -> Any:
     database_name = unquote(parsed.path[1:])
     if not database_name or "/" in database_name or "\x00" in database_name:
         raise CloneError("DATABASE_URL must contain one database path")
+    if not safe_query:
+        raise CloneError(
+            "DATABASE_URL query parameters may alter connection identity"
+        )
     return parsed, database_name
 
 

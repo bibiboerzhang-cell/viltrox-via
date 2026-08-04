@@ -35,7 +35,8 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from app.db.connection import get_conn, is_postgres_runtime
+from app.core.release_validation import release_validation_active
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 # 【待 key 校准】公开资料口径,真 key 一到即按 Swagger 实测校准。
@@ -209,7 +210,11 @@ def ensure_goaffpro_links_schema() -> None:
 
 
 def _load_row() -> dict[str, Any]:
-    ensure_goaffpro_creds_schema()
+    if release_validation_active():
+        if not table_exists("vkpi_goaffpro_credentials"):
+            return {}
+    else:
+        ensure_goaffpro_creds_schema()
     row = get_conn().execute(
         """
         SELECT id, api_base, access_token_encrypted, public_token_encrypted,

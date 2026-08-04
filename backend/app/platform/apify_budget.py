@@ -47,6 +47,12 @@ _TERMINAL_APIFY_RUN_STATES = {"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"}
 _PROVIDER_WAIT_SLICE_SECONDS = 30
 
 
+def _reject_release_validation_provider_work() -> None:
+    from app.core.release_validation import release_validation_active
+    if release_validation_active():
+        raise ApifyExecutionClaimBlocked("release validation fence blocks provider work")
+
+
 def _ensure_reservation_schema() -> None:
     """Read-only schema proof; release migration 254 is the only DDL owner."""
 
@@ -104,6 +110,7 @@ def acquire_provider_execution_claim(
 ) -> int:
     """Acquire/renew one durable task fence without touching a provider."""
 
+    _reject_release_validation_provider_work()
     from app.db.connection import get_conn, is_postgres_runtime
 
     clean_task = str(task_id or "").strip()
@@ -912,6 +919,7 @@ def call_apify_actor(
 ) -> Any:
     """The only supported SDK Actor-start boundary in application code."""
 
+    _reject_release_validation_provider_work()
     decision = require_apify_budget(
         operation=operation,
         actor_id=actor_id,

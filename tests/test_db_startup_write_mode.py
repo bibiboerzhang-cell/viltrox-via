@@ -91,6 +91,50 @@ def test_migrations_only_mode_skips_only_non_migration_startup_writes(
     assert any("db.startup.non_migration_writes_skipped" in line for line in warnings)
 
 
+def test_release_validation_startup_skips_bootstrap_and_seed_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VKPI_DB_STARTUP_MODE", raising=False)
+    calls = _postgres_startup_spies(monkeypatch)
+
+    asyncio.run(connection.init_db_runtime(skip_non_migration_writes=True))
+
+    assert calls == ["pool", "migrations"]
+    status = connection.get_db_startup_status()
+    assert status["mode"] == "full"
+    assert status["state"] == "completed"
+    assert status["schema_migrations"] == "completed"
+    assert status["default_admin_bootstrap"] == "skipped_release_validation"
+    assert status["runtime_seeders"] == "skipped_release_validation"
+    assert status["non_migration_startup_writes"] == "skipped_release_validation"
+
+
+def test_release_validation_startup_rejects_mixed_sqlite_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VKPI_DB_STARTUP_MODE", raising=False)
+    monkeypatch.setattr(connection, "is_postgres_runtime", lambda: False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        connection,
+        "_bootstrap_sqlite_runtime",
+        lambda: calls.append("sqlite_bootstrap"),
+    )
+    monkeypatch.setattr(
+        connection,
+        "_run_runtime_seeders",
+        lambda: calls.append("runtime_seeders"),
+    )
+
+    with pytest.raises(RuntimeError, match="Release-validation startup requires Postgres"):
+        asyncio.run(connection.init_db_runtime(skip_non_migration_writes=True))
+
+    assert calls == []
+    status = connection.get_db_startup_status()
+    assert status["state"] == "failed"
+    assert status["failed_stage"] == "mode_validation"
+
+
 def test_unknown_mode_fails_before_pool_or_any_database_write(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VKPI_DB_STARTUP_MODE", "migration-only-typo")
     calls = _postgres_startup_spies(monkeypatch)

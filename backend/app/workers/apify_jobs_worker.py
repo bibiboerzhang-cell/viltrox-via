@@ -23,6 +23,7 @@ from psycopg.rows import dict_row
 
 from app.core.config import DB_RUNTIME_URL
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.domains.kol.account_dossier_extract import upsert_account_dossier_extract
@@ -561,10 +562,16 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
     _shape_gemini_result,
     _write_gemini_cache,
 )
+from app.workers.apify_jobs_worker_execution import execute_claimed_job_impl  # noqa: E402
 
 
 
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
+    # The release fence is checked at the last boundary before SELECT ... FOR
+    # UPDATE so a validation-started worker can prove liveness without taking
+    # ownership of queued or externally billed work.
+    if release_validation_active():
+        return None
     lease_owner = f"{WORKER_HEARTBEAT_NAME}:{os.getpid()}"
     with conn.transaction():
         with conn.cursor(row_factory=dict_row) as cur:
@@ -820,74 +827,7 @@ def _running_job_heartbeat(
 
 
 def _execute_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> str:
-    """Execute one job inside an explicit domain-DB scope.
-
-    The claim/lease connection is the dedicated autocommit worker connection.
-    Domain helpers that call ``get_conn()`` use the scoped pooled connection,
-    which is rolled back and returned on both success and exception.  This
-    prevents a worker thread-local read transaction from surviving into the
-    next job indefinitely.
-    """
-
-    job_id = int(job["id"])
-    lease_owner = str(job.get("lease_owner") or "").strip()
-    provider_task_id = f"apify-job:{job_id}"
-    fence = 0
-    with db_connection_sync_scope():
-        try:
-            fence = acquire_provider_execution_claim(
-                provider_task_id,
-                lease_owner,
-                job_type=str(job.get("job_type") or ""),
-                lease_seconds=STALE_RECLAIM_SECONDS,
-            )
-            with apify_execution_context(provider_task_id, fence):
-                with _running_job_heartbeat(
-                    job_id,
-                    lease_owner,
-                    provider_task_id,
-                    fence,
-                ):
-                    _process_claimed_job(conn, job)
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT status, last_error FROM apify_jobs WHERE id=%s", (job_id,))
-                status_row = cur.fetchone() or {}
-                status = str(status_row.get("status") or "").lower()
-            # One terminal reducer boundary for every handler.  Individual
-            # handlers may still publish a richer analysis payload earlier,
-            # but a handler that only persists ``done``/``blocked``/``failed``
-            # can no longer leave its Smart Search item (and therefore the
-            # whole session) permanently ``running``.
-            if status in {"done", "blocked", "failed", "triage"}:
-                _sync_search_session_job(
-                    conn,
-                    job_id,
-                    raw_status=status,
-                    reason=str(status_row.get("last_error") or ""),
-                )
-            finalize_provider_execution_claim(
-                provider_task_id,
-                fence,
-                "completed" if status == "done" else "failed",
-            )
-            return status
-        except ApifyBudgetBlocked:
-            if fence:
-                finalize_provider_execution_claim(provider_task_id, fence, "blocked")
-            raise
-        except ApifyProviderReplayBlocked:
-            if fence:
-                finalize_provider_execution_claim(provider_task_id, fence, "unknown")
-            raise
-        except ApifyExecutionClaimBlocked:
-            # A live owner is execution state, not a provider failure.  The
-            # claim SQL normally prevents this branch; keep it non-terminal if
-            # a race still occurs between row claim and fence acquisition.
-            raise
-        except Exception:
-            if fence:
-                finalize_provider_execution_claim(provider_task_id, fence, "failed")
-            raise
+    return execute_claimed_job_impl(conn, job, globals())
 
 
 # 失败领养 / 陈旧 running 回收运维簇整簇已抽到 apify_jobs_worker_maintenance.py
@@ -935,18 +875,34 @@ def run_worker() -> None:
         while not _stop_event.is_set():
             try:
                 with psycopg.connect(DB_RUNTIME_URL, autocommit=True) as conn:
-                    _reclaim_stale_running_jobs(conn)
-                    _adopt_recent_provider_pressure_failures(conn)
-                    # Repair sessions left running by older worker versions
-                    # whose downstream jobs are already terminal.  The query
-                    # is bounded and only targets currently-running sessions;
-                    # the reducer itself is idempotent.
-                    _reconcile_terminal_search_session_jobs(conn)
+                    was_release_fenced = release_validation_active()
+                    if not was_release_fenced:
+                        _reclaim_stale_running_jobs(conn)
+                        _adopt_recent_provider_pressure_failures(conn)
+                        # Repair sessions left running by older worker versions
+                        # whose downstream jobs are already terminal.  The query
+                        # is bounded and only targets currently-running sessions;
+                        # the reducer itself is idempotent.
+                        _reconcile_terminal_search_session_jobs(conn)
                     last_reclaim = time.monotonic()
                     _upsert_worker_heartbeat(conn)
                     while not _stop_event.is_set():
                         # T5:每轮 poll(含空闲)写心跳 → 空闲 worker 不再被判离线。
                         _upsert_worker_heartbeat(conn)
+                        release_fenced = release_validation_active()
+                        if release_fenced:
+                            was_release_fenced = True
+                            _stop_event.wait(POLL_SECONDS)
+                            continue
+                        if was_release_fenced:
+                            # Activation is one-way for a successful release.
+                            # Run deferred repair only after the controller has
+                            # removed the root-owned fence.
+                            _reclaim_stale_running_jobs(conn)
+                            _adopt_recent_provider_pressure_failures(conn)
+                            _reconcile_terminal_search_session_jobs(conn)
+                            last_reclaim = time.monotonic()
+                            was_release_fenced = False
                         if time.monotonic() - last_reclaim >= STALE_RECLAIM_POLL_SECONDS:
                             _reclaim_stale_running_jobs(conn)
                             _adopt_recent_provider_pressure_failures(conn)

@@ -41,7 +41,8 @@ def test_every_release_entrypoint_delegates_to_the_canonical_gate() -> None:
     assert "bash ./scripts/verify_repo.sh" in workflow
     assert makefile.split("verify:\n", 1)[1].strip() == "@bash scripts/verify.sh"
     assert "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1" in deploy
-    assert 'bash "${PROJECT_ROOT}/scripts/verify.sh"' in deploy
+    assert '"${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate' in deploy
+    assert '--snapshot "${DEPLOY_CANDIDATE_DIR}"' in deploy
     # BSD chmod (the local deployment controller runs on macOS) does not
     # accept GNU-style ``--`` after the mode and would abort before upload.
     assert "chmod 700 --" not in deploy
@@ -274,8 +275,15 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
     block = deploy[function_at:remote_state_at]
     for required in (
         'PREDEPLOY_BROWSER_URL="http://127.0.0.1:8102/"',
-        "create_local_auth_context(900)",
+        "env -i",
+        'ENVIRONMENT=local',
+        'LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"',
+        'RUNTIME_ENV_KEEP_DB_URL=1',
+        '"${PROJECT_ROOT}/.venv/bin/python" -I -B -c',
+        "create_local_auth_context(int(sys.argv[1]))",
+        '"${BROWSER_GATE_TOKEN_TTL_SECONDS}"',
         "scripts/capture_browser_console_cdp.mjs",
+        '--overall-timeout-ms "${BROWSER_GATE_OVERALL_TIMEOUT_MS}"',
         "scripts/verify_browser_console_capture.py",
         'pages.get("required") != 21',
         'pages.get("captured") != 21',
@@ -284,6 +292,24 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         "verify_deploy_candidate",
     ):
         assert required in deploy
+    mint = block.split('if ! token="$(' , 1)[1].split(')"; then', 1)[0]
+    assert "env -i" in mint
+    assert "PYTHONPATH=" not in mint
+    assert 'PATH="${BROWSER_GATE_CONTROLLER_PATH}"' in mint
+    assert "HOME=/tmp" in mint
+    assert "XDG_CACHE_HOME=/tmp" in mint
+    assert "TMPDIR=/tmp" in mint
+    assert 'PATH="${PATH}"' not in mint
+    assert 'HOME="${HOME:-/tmp}"' not in mint
+
+
+def test_deploy_disables_inherited_xtrace_before_any_credential_or_child() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    xtrace = deploy.index("*x*) set +x")
+    caller_token_guard = deploy.index("VKPI_BROWSER_GATE_TOKEN")
+    first_child = deploy.index('SCRIPT_DIR="$(cd')
+    assert xtrace < caller_token_guard < first_child
+    assert "monotonic for the rest of the deploy" in deploy[:caller_token_guard]
 
 
 def test_deploy_cannot_succeed_without_bound_post_restart_acceptance() -> None:
@@ -296,6 +322,7 @@ def test_deploy_cannot_succeed_without_bound_post_restart_acceptance() -> None:
     validator_at = deploy.index("scripts/verify_runtime_journal_canary.py", canary_at)
     accepted_at = deploy.index("DEPLOY_ACCEPTED=1", validator_at)
     assert restart_at < baseline_at < acceptance_at < browser_at < canary_at < validator_at < accepted_at
+    assert "--token-ttl 1200 --overall-timeout 1170" in deploy[acceptance_at:browser_at]
 
     for required in (
         "VKPI_BROWSER_GATE_URL",
@@ -317,7 +344,7 @@ def test_deploy_validates_aligned_predeploy_anchor_before_remote_mutation() -> N
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     health_fetch_at = deploy.index("REMOTE_PREDEPLOY_HEALTH_JSON=")
     strict_anchor_at = deploy.index(
-        '"${PROJECT_ROOT}/scripts/verify_runtime_health.py"',
+        '"${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py"',
         health_fetch_at,
     )
     backup_at = deploy.index('"${SCRIPT_DIR}/backup_prod_vkpi.sh"', strict_anchor_at)

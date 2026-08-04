@@ -313,7 +313,7 @@ def _build_center_payload_bounded(viewer: dict | None, limit: int, recent_minute
     transaction between snapshots and eventually pin pool capacity and vacuum
     horizons. Each snapshot therefore borrows and returns a dedicated scope.
     """
-    with db_connection_sync_scope():
+    with db_connection_sync_scope(release_validation_guard=True):
         return _build_center_payload(viewer, limit, recent_minutes)
 
 

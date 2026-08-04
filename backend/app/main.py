@@ -23,6 +23,7 @@ from app.api.routers import activities, auth, admin, audit, creator, jobs, leade
 # 其余 vkpi_* 模块统一由 ADMIN_ROUTER_MODULES 注册表(routers/__init__.py)循环挂载。
 from app.api.routers import vkpi_kol_portal
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
+from app import main_release_validation
 from app.core.config import (
     APP_ROLE,
     CORS_ORIGINS,
@@ -266,6 +267,7 @@ def _runtime_trust() -> dict[str, object]:
         trust["scheduler_status"] = _trust_scheduler()
     except Exception:
         trust["scheduler_status"] = "not_configured"
+    trust["release_validation"] = main_release_validation.safe_status()
     # Compatibility hook for isolated legacy tests only.  Production
     # _trust_worker always returns an explicit worker_sha key and therefore can
     # never fall back to the server build or a stale filesystem assumption.
@@ -415,7 +417,7 @@ def _admin_rbac_allowed_bounded(request) -> bool:
     threads wait for one.  Give authentication its own lazy, bounded scope so
     the lease is returned before routing continues.
     """
-    with db_connection_sync_scope():
+    with db_connection_sync_scope(release_validation_guard=True):
         return _admin_rbac_allowed(request)
 
 
@@ -566,7 +568,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             "APP_ROLE='migration-runner' is a one-shot database role and cannot serve web traffic"
         )
-    await init_db_runtime()
+    await init_db_runtime(skip_non_migration_writes=main_release_validation.release_validation_active())
     app.state.orchestrator = None
     app.state.job_queue = None
     app.state.via_event_bus = build_via_event_bus()
@@ -734,7 +736,7 @@ async def db_scope_middleware(request, call_next):
             return _db_admission_unavailable_response()
 
     try:
-        async with db_connection_scope():
+        async with db_connection_scope(release_validation_guard=True):
             response = await call_next(request)
             try:
                 # Staff projection is synchronous Postgres work.  Running it on the
@@ -799,12 +801,10 @@ async def security_headers_middleware(request, call_next):
 
 @app.middleware("http")
 async def marketing_api_alias_middleware(request, call_next):
-    path = str(request.scope.get("path") or "")
-    if path == "/api/marketing" or path.startswith("/api/marketing/"):
-        request.scope["path"] = "/api/admin/vkpi" + path.removeprefix("/api/marketing")
+    main_release_validation.normalize_marketing_api_path(request.scope)
     return await call_next(request)
 
-
+app.add_middleware(main_release_validation.ReleaseValidationFenceMiddleware)
 PUBLIC_REWARD_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PUBLIC_STUDENT_CARD_DIR.mkdir(parents=True, exist_ok=True)
 PUBLIC_STAFF_AVATAR_DIR.mkdir(parents=True, exist_ok=True)

@@ -420,7 +420,8 @@ def test_cloud_deploy_requires_clean_source_and_post_restart_strict_verification
     deploy = (SCRIPTS / "ops" / "deploy_local_to_cloud.sh").read_text(encoding="utf-8")
 
     assert "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1" in deploy
-    assert 'bash "${PROJECT_ROOT}/scripts/verify.sh"' in deploy
+    assert '"${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate' in deploy
+    assert '--snapshot "${DEPLOY_CANDIDATE_DIR}"' in deploy
     assert "ALLOW_DIRTY_DEPLOY" not in deploy
     assert "git status --porcelain=v1 --untracked-files=all" in deploy
     assert deploy.count("assert_deploy_source_unchanged") >= 3
@@ -429,7 +430,7 @@ def test_cloud_deploy_requires_clean_source_and_post_restart_strict_verification
     assert "--env-file '${REMOTE_ROOT}/.env'" in deploy
     assert "fetch_predeploy_runtime_health" in deploy
     assert "sudo -n -u viltrox -g viltrox" in deploy
-    assert '< "${PROJECT_ROOT}/scripts/ops/fetch_runtime_health.py"' in deploy
+    assert '< "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py"' in deploy
     predeploy_read = deploy.index('REMOTE_PREDEPLOY_HEALTH_JSON="$(fetch_predeploy_runtime_health)"')
     first_release_sync = deploy.index("rsync -az --delete")
     assert predeploy_read < first_release_sync
@@ -441,7 +442,7 @@ def test_cloud_deploy_requires_clean_source_and_post_restart_strict_verification
     )
     remote_fetch = deploy.index('REMOTE_HEALTH_JSON="$(ssh', worker_restart)
     strict_validator = deploy.index(
-        '"${PROJECT_ROOT}/scripts/verify_runtime_health.py"', remote_fetch
+        '"${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py"', remote_fetch
     )
     asset_check = deploy.index('LOCAL_ASSET="$(grep')
     assert service_restart < worker_restart < remote_fetch < strict_validator < asset_check

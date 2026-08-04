@@ -780,8 +780,8 @@ def test_deploy_clone_path_is_tightly_scoped_ordered_and_rollback_bound() -> Non
     for required in (
         'STAGING_DB_CLONE_MODE="${VKPI_STAGING_DB_CLONE:-0}"',
         'VILTROXTEST_RELEASE_SCOPE=1',
-        'parsed.hostname == "www.viltroxtest.com"',
-        'requires an HTTPS browser gate on host www.viltroxtest.com',
+        'valid = sys.argv[1] == "https://www.viltroxtest.com/"',
+        'requires VKPI_BROWSER_GATE_URL=https://www.viltroxtest.com/',
         'DATABASE_RELEASE_STRATEGY="reuse-active-clone"',
         "--database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}'",
         'STAGING_REDIS_WORKER_SERVICE="vkpi-redis-worker.service"',

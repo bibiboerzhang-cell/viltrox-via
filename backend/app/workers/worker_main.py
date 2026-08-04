@@ -16,6 +16,7 @@ from app.core.config import (
     WORKER_ASYNC_CONSUMERS,
 )
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import close_db_runtime
 from app.platform.apify_budget import (
     ApifyBudgetBlocked,
@@ -101,8 +102,19 @@ async def _consumer_loop(
 ) -> None:
     consumer_name = _consumer_name(slot, identity)
     while True:
+        # Keep the process/Redis heartbeat observable during release proof, but
+        # never issue XREADGROUP/XCLAIM until the root-owned activation fence
+        # has been removed.
+        if release_validation_active():
+            await asyncio.sleep(1)
+            continue
         raw_job = await queue.pop_job(consumer_name=consumer_name, timeout=5)
         if not raw_job:
+            continue
+        # The marker can appear while XREADGROUP is blocked. Leave the message
+        # pending and make no provider claim; it can be reclaimed only after
+        # activation removes the release fence.
+        if release_validation_active():
             continue
         task_id = str(raw_job.get("task_id") or "").strip()
         fence = 0

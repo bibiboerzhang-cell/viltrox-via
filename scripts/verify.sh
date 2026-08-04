@@ -8,6 +8,17 @@
 set -u
 set -o pipefail
 
+# A browser-gate bearer may arrive through the caller's environment.  Disable
+# xtrace before touching it, capture it without export, and scrub both public
+# token names before even the first command-substitution child is created.
+case "$-" in *x*) set +x ;; esac
+_VKPI_VERIFY_BROWSER_GATE_TOKEN="${VKPI_BROWSER_GATE_TOKEN:-}"
+unset VKPI_BROWSER_GATE_TOKEN POST_DEPLOY_BROWSER_TOKEN
+if ! export -n _VKPI_VERIFY_BROWSER_GATE_TOKEN 2>/dev/null; then
+  echo "[verify] 无法隔离 browser gate token，拒绝继续。" >&2
+  exit 1
+fi
+
 # ---- 定位仓库根(本脚本在 <root>/scripts/ 下)----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -488,6 +499,13 @@ run_step "$ACCEPTANCE_STEP_NAME" local_release_acceptance_gate
 # acceptance、提供目标 URL/短期 token/可执行 Chrome 时，才执行 capture -> verifier。
 # 任一输入、capture、report 或 live/release proof 缺失都失败；fixture 不可进入本路径。
 browser_console_release_gate() {
+  local token="${_VKPI_VERIFY_BROWSER_GATE_TOKEN:-}"
+  unset _VKPI_VERIFY_BROWSER_GATE_TOKEN
+  if ! export -n token 2>/dev/null; then
+    BROWSER_CONSOLE_VERIFICATION_STATE="failed"
+    echo "[verify] 无法隔离 browser gate token，拒绝启动浏览器。" >&2
+    return 1
+  fi
   if ! truthy_env "${VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE:-0}"; then
     BROWSER_CONSOLE_VERIFICATION_STATE="not_requested"
     echo "[verify] browser console gate 未显式请求；本步骤未启动 Chrome，也不是 console 发布验收。"
@@ -526,7 +544,6 @@ browser_console_release_gate() {
   fi
 
   local target_url="${VKPI_BROWSER_GATE_URL:-}"
-  local token="${VKPI_BROWSER_GATE_TOKEN:-}"
   local chrome_path="${VKPI_CHROME_PATH:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
   if [ -z "$target_url" ]; then
     BROWSER_CONSOLE_VERIFICATION_STATE="failed"
@@ -582,6 +599,7 @@ browser_console_release_gate() {
     --settle-ms "${VKPI_BROWSER_GATE_SETTLE_MS:-5000}" \
     --chrome "$chrome_path" \
     >/dev/null || rc=$?
+  token=""
 
   if [ "$rc" -eq 0 ] && [ ! -s "$capture_path" ]; then
     echo "[verify] browser capture 命令未产出非空证据。" >&2

@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response, Streamin
 
 from app.core.config import UPLOAD_DIR
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn
 from app.core.security import get_current_user
 from app.db.repositories.assets import get_submission_asset
@@ -262,9 +263,10 @@ def _stream_upstream_response(upstream):
         upstream.close()
 
 
-def _cached_external_image_path(url: str) -> tuple[Path, Path]:
+def _cached_external_image_path(url: str, *, create: bool = True) -> tuple[Path, Path]:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    VKPI_IMAGE_PROXY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if create:
+        VKPI_IMAGE_PROXY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return VKPI_IMAGE_PROXY_CACHE_DIR / digest, VKPI_IMAGE_PROXY_CACHE_DIR / f"{digest}.content-type"
 
 
@@ -350,7 +352,11 @@ def serve_vkpi_external_image(request: Request, url: str = Query(..., min_length
     if not get_current_user(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     normalized_url, host = _allowed_external_image_url(url)
-    cache_path, content_type_path = _cached_external_image_path(normalized_url)
+    release_fenced = release_validation_active()
+    cache_path, content_type_path = _cached_external_image_path(
+        normalized_url,
+        create=not release_fenced,
+    )
     if cache_path.exists() and content_type_path.exists():
         # 自愈:历史 bug 曾把"上游失败的透明 SVG"写进缓存(毒缓存),命中时删除并重抓,
         # 不再永久性地把失败假装成真图。
@@ -360,8 +366,20 @@ def serve_vkpi_external_image(request: Request, url: str = Query(..., min_length
                 media_type=content_type_path.read_text().strip() or "image/jpeg",
                 headers={"Cache-Control": "private, max-age=86400"},
             )
-        cache_path.unlink(missing_ok=True)
-        content_type_path.unlink(missing_ok=True)
+        if not release_fenced:
+            cache_path.unlink(missing_ok=True)
+            content_type_path.unlink(missing_ok=True)
+    if release_fenced:
+        # Candidate validation may serve an existing healthy cache hit, but it
+        # never repairs cache files, calls the CDN, or writes a new cache entry.
+        return Response(
+            content=_TRANSPARENT_IMAGE_SVG,
+            media_type="image/svg+xml",
+            headers={
+                "Cache-Control": "no-store",
+                "X-VKPI-Media-Fallback": "release_validation_fenced",
+            },
+        )
     data, content_type, ok = _fetch_external_image(normalized_url, host)
     if not ok:
         # 上游失败(签名过期/网络不可达):返回透明占位但绝不写缓存、不允许缓存,

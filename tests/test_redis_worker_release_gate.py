@@ -792,7 +792,7 @@ def test_deploy_enables_unit_and_binds_release_gate_to_systemd_main_pid() -> Non
         rollback_wait_pid_at,
     )
     rollback_runtime_gate_at = rollback.index(
-        '"${PROJECT_ROOT}/scripts/verify_runtime_health.py"',
+        '"${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_runtime_health.py"',
         rollback_promote_at,
     )
     rollback_final_refresh_at = rollback.index(

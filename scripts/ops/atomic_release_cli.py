@@ -73,6 +73,7 @@ def build_parser(actions: Mapping[str, Action]) -> argparse.ArgumentParser:
     prepare_parser.add_argument("--unit-name", action="append", default=[])
     prepare_parser.add_argument("--optional-unit-name", action="append", default=[])
     prepare_parser.add_argument("--optional-unit-state", action="append", default=[])
+    prepare_parser.add_argument("--rollback-file", action="append", default=[])
     prepare_parser.add_argument("--pending-migrations", default="")
     prepare_parser.add_argument("--compatibility-declaration", default="")
     prepare_parser.add_argument("--database-strategy", default="in-place")

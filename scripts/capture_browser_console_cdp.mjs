@@ -6,10 +6,25 @@
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  CdpPipeConnection,
+  attachFirstPageTarget,
+  chromeChildEnvironment,
+} from "./browser_console_cdp_pipe.mjs";
+import {
+  DEFAULT_OVERALL_TIMEOUT_MS,
+  MAX_OVERALL_TIMEOUT_MS,
+  MIN_OVERALL_TIMEOUT_MS,
+  OverallDeadline,
+  emptyFunctionalProof,
+  functionalProofPassed,
+  runKolPoolFunctionalJourney,
+} from "./browser_console_capture_runtime.mjs";
+import { proveOpaqueOriginTokenIsolation } from "./browser_console_token_isolation.mjs";
+import { assertBrowserCaptureCredentialFree } from "./browser_capture_secret_scan.mjs";
 
 const CAPTURE_SCHEMA_VERSION = "vkpi-browser-console-capture/v1";
 const PAGE_MANIFEST_SCHEMA_VERSION = "vkpi-browser-page-manifest/v1";
@@ -36,6 +51,7 @@ function parseArgs(argv) {
     settleMs: 5000,
     pageSettleMs: 1000,
     pageTimeoutMs: 30000,
+    overallTimeoutMs: DEFAULT_OVERALL_TIMEOUT_MS,
     manifest: DEFAULT_PAGE_MANIFEST,
     allowedExternalMedia403Origins: [],
   };
@@ -46,6 +62,7 @@ function parseArgs(argv) {
     else if (item === "--settle-ms") result.settleMs = Number(argv[++index]);
     else if (item === "--page-settle-ms") result.pageSettleMs = Number(argv[++index]);
     else if (item === "--page-timeout-ms") result.pageTimeoutMs = Number(argv[++index]);
+    else if (item === "--overall-timeout-ms") result.overallTimeoutMs = Number(argv[++index]);
     else if (item === "--manifest") result.manifest = argv[++index];
     else if (item === "--allow-external-media-403-origin") {
       result.allowedExternalMedia403Origins.push(argv[++index]);
@@ -54,7 +71,7 @@ function parseArgs(argv) {
     else throw new Error(`unknown argument: ${item}`);
   }
   if (!result.url || !result.output) {
-    throw new Error("usage: capture_browser_console_cdp.mjs --url <http(s)://...> --output <capture.json> [--manifest <pages.json>]");
+    throw new Error("usage: capture_browser_console_cdp.mjs --url <http(s)://...> --output <capture.json> [--manifest <pages.json>] [--overall-timeout-ms <ms>]");
   }
   const target = new URL(result.url);
   if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) {
@@ -68,6 +85,13 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(result.pageTimeoutMs) || result.pageTimeoutMs < 5000 || result.pageTimeoutMs > 60000) {
     throw new Error("--page-timeout-ms must be within [5000, 60000]");
+  }
+  if (
+    !Number.isInteger(result.overallTimeoutMs)
+    || result.overallTimeoutMs < MIN_OVERALL_TIMEOUT_MS
+    || result.overallTimeoutMs > MAX_OVERALL_TIMEOUT_MS
+  ) {
+    throw new Error(`--overall-timeout-ms must be an integer within [${MIN_OVERALL_TIMEOUT_MS}, ${MAX_OVERALL_TIMEOUT_MS}]`);
   }
   const envOrigins = String(process.env.VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS || "")
     .split(",")
@@ -137,46 +161,6 @@ function captureUrl(value) {
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function freeLoopbackPort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close((error) => (error ? reject(error) : resolve(port)));
-    });
-  });
-}
-
-async function fetchJson(url) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(1500) });
-  if (!response.ok) throw new Error(`${url} -> ${response.status}`);
-  return response.json();
-}
-
-async function waitForPageTarget(port) {
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const targets = await fetchJson(`http://127.0.0.1:${port}/json/list`);
-      const page = Array.isArray(targets)
-        ? targets.find((item) => item.type === "page" && item.webSocketDebuggerUrl)
-        : null;
-      if (page) return page;
-    } catch {
-      // Chrome has not opened its DevTools endpoint yet.
-    }
-    await sleep(100);
-  }
-  throw new Error("owned Chromium CDP target was not ready within 15s");
-}
-
 function callFrames(stackTrace) {
   const frames = [];
   let current = stackTrace;
@@ -196,11 +180,11 @@ function callFrames(stackTrace) {
 }
 
 class CdpSession {
-  constructor(webSocketUrl, applicationOrigin) {
-    this.socket = new WebSocket(webSocketUrl);
+  constructor(connection, sessionId, applicationOrigin, overallDeadline) {
+    this.connection = connection;
+    this.sessionId = sessionId;
     this.applicationOrigin = applicationOrigin;
-    this.nextId = 1;
-    this.pending = new Map();
+    this.overallDeadline = overallDeadline;
     this.events = [];
     this.networkResponses = [];
     this.networkFailures = [];
@@ -214,18 +198,12 @@ class CdpSession {
     this.currentPageFamily = "bootstrap";
     this.contexts = new Map();
     this.loadCompleted = false;
-    this.socket.onmessage = (message) => this.onMessage(message);
+    this.removeEventListener = connection.onEvent((payload) => {
+      if (payload.sessionId === this.sessionId) this.onMessage(payload);
+    });
   }
 
-  onMessage(message) {
-    const payload = JSON.parse(message.data);
-    if (payload.id && this.pending.has(payload.id)) {
-      const pending = this.pending.get(payload.id);
-      this.pending.delete(payload.id);
-      if (payload.error) pending.reject(new Error(JSON.stringify(payload.error)));
-      else pending.resolve(payload.result || {});
-      return;
-    }
+  onMessage(payload) {
     if (payload.method === "Page.loadEventFired") this.loadCompleted = true;
     if (payload.method === "Runtime.executionContextCreated") {
       const context = payload.params?.context || {};
@@ -370,44 +348,12 @@ class CdpSession {
     }
   }
 
-  async open() {
-    if (this.socket.readyState === WebSocket.OPEN) return;
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("CDP WebSocket open timeout")), 10000);
-      this.socket.onopen = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      this.socket.onerror = (event) => {
-        clearTimeout(timer);
-        reject(event.error || new Error("CDP WebSocket failed"));
-      };
-    });
-  }
-
   send(method, params = {}) {
-    const id = this.nextId++;
-    this.socket.send(JSON.stringify({ id, method, params }));
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.pending.has(id)) this.pending.delete(id);
-        reject(new Error(`${method} timed out`));
-      }, 15000);
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-    });
+    return this.connection.send(method, params, this.sessionId);
   }
 
   close() {
-    this.socket.close();
+    this.removeEventListener();
   }
 
   inflightApiForFamily(family) {
@@ -488,6 +434,7 @@ async function pageDomProof(session, page) {
 }
 
 async function probeAuthentication(session) {
+  const fetchTimeoutMs = session.overallDeadline.boundedTimeoutMs(AUTH_PROBE_TIMEOUT_MS);
   const authState = await session.send("Runtime.evaluate", {
     expression: `(async () => {
       const proof = {
@@ -509,7 +456,7 @@ async function probeAuthentication(session) {
           credentials: 'same-origin',
           cache: 'no-store',
           headers: { Authorization: 'Bearer ' + token },
-          signal: AbortSignal.timeout(${AUTH_PROBE_TIMEOUT_MS}),
+          signal: AbortSignal.timeout(${fetchTimeoutMs}),
         });
         proof.request_completed = true;
         proof.http_status = response.status;
@@ -567,7 +514,7 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
   const responseStart = session.networkResponses.length;
   const failureStart = session.networkFailures.length;
   await session.send("Page.navigate", { url: target });
-  const deadline = Date.now() + timeoutMs;
+  const deadline = session.overallDeadline.localDeadline(timeoutMs);
   let proof = {};
   while (Date.now() < deadline) {
     proof = await pageDomProof(session, page);
@@ -581,15 +528,19 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
     ) {
       break;
     }
-    await sleep(100);
+    await session.overallDeadline.wait(100);
   }
-  await sleep(settleMs);
+  session.overallDeadline.assertAvailable();
+  await session.overallDeadline.wait(settleMs);
   let apiIdle = false;
   // A request may begin immediately before the primary page deadline. Give
   // Chromium one short, explicitly budgeted terminal-event window; completion
   // still requires Network.loadingFinished/loadingFailed and is never inferred
   // from headers, response bytes, or a second probe.
-  const apiIdleDeadline = Math.max(deadline, Date.now() + API_IDLE_GRACE_MS);
+  const apiIdleDeadline = Math.min(
+    session.overallDeadline.expiresAt,
+    Math.max(deadline, Date.now() + API_IDLE_GRACE_MS),
+  );
   while (Date.now() < apiIdleDeadline) {
     const inflight = session.inflightApiForFamily(page.family);
     const lastActivity = session.networkLastActivityAt.get(page.family) || startedAt;
@@ -597,8 +548,9 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
       apiIdle = true;
       break;
     }
-    await sleep(100);
+    await session.overallDeadline.wait(100);
   }
+  session.overallDeadline.assertAvailable();
   proof = await pageDomProof(session, page);
   const passed = (
     session.loadCompleted
@@ -637,7 +589,7 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
 }
 
 async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = session.overallDeadline.localDeadline(timeoutMs);
   while (Date.now() < deadline) {
     const lastActivity = Math.max(0, ...session.networkLastActivityAt.values());
     if (
@@ -646,8 +598,9 @@ async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
     ) {
       return;
     }
-    await sleep(100);
+    await session.overallDeadline.wait(100);
   }
+  session.overallDeadline.assertAvailable();
   throw new Error(
     `final same-origin API requests did not become idle before timeout: ${JSON.stringify(session.inflightApiDiagnostics())}`,
   );
@@ -655,6 +608,7 @@ async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const overallDeadline = new OverallDeadline(args.overallTimeoutMs);
   const targetUrl = new URL(args.url);
   const pageManifest = loadPageManifest(args.manifest);
   const allowedExternalMedia403Origins = [...new Set(
@@ -666,10 +620,9 @@ async function main() {
   const token = process.env.VKPI_BROWSER_GATE_TOKEN || "";
   if (!token) throw new Error("VKPI_BROWSER_GATE_TOKEN is required for authenticated private-surface capture");
 
-  const port = await freeLoopbackPort();
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "vkpi-console-gate-"));
   const launchArgs = [
-    `--remote-debugging-port=${port}`,
+    "--remote-debugging-pipe",
     `--user-data-dir=${profileDir}`,
     "--headless=new",
     "--incognito",
@@ -684,19 +637,22 @@ async function main() {
     "--window-size=1440,1000",
     "about:blank",
   ];
-  // The short-lived bearer token is consumed by this controller and injected
-  // through CDP below.  Chrome itself must never inherit it in its process
-  // environment (or expose it to crash reporters / child-process inspection).
-  const chromeEnv = { ...process.env };
-  delete chromeEnv.VKPI_BROWSER_GATE_TOKEN;
-  const browser = spawn(chromePath, launchArgs, { stdio: "ignore", env: chromeEnv });
+  // The short-lived bearer and every unrelated parent secret stay in this
+  // controller. Chrome receives only the small non-secret OS environment it
+  // needs plus two private anonymous CDP pipes on child fd3/fd4.
+  const chromeEnv = chromeChildEnvironment(process.env);
+  const browser = spawn(chromePath, launchArgs, {
+    stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+    env: chromeEnv,
+  });
+  let connection;
   let session;
   let capture;
   let cleanup = { browser_exited: false, profile_removed: false };
   try {
-    const target = await waitForPageTarget(port);
-    session = new CdpSession(target.webSocketDebuggerUrl, targetUrl.origin);
-    await session.open();
+    connection = new CdpPipeConnection(browser, overallDeadline);
+    const target = await attachFirstPageTarget(connection, overallDeadline);
+    session = new CdpSession(connection, target.sessionId, targetUrl.origin, overallDeadline);
     await session.send("Page.enable");
     await session.send("Network.enable");
     await session.send("Runtime.enable");
@@ -722,6 +678,8 @@ async function main() {
     // calling Storage.setItem, so the bearer is never persisted in the profile.
     await session.send("Page.addScriptToEvaluateOnNewDocument", {
       source: `(() => {
+        const targetOrigin = ${JSON.stringify(targetUrl.origin)};
+        if (location.origin !== targetOrigin) return;
         const gateKey = 'viltrox_marketing_token_v1';
         const gateToken = ${JSON.stringify(token)};
         const originalGetItem = Storage.prototype.getItem;
@@ -742,9 +700,10 @@ async function main() {
       })();`,
     });
     await session.send("Page.navigate", { url: args.url });
-    const loadDeadline = Date.now() + 30000;
-    while (!session.loadCompleted && Date.now() < loadDeadline) await sleep(100);
-    await sleep(args.settleMs);
+    const loadDeadline = overallDeadline.localDeadline(30000);
+    while (!session.loadCompleted && Date.now() < loadDeadline) await overallDeadline.wait(100);
+    overallDeadline.assertAvailable();
+    await overallDeadline.wait(args.settleMs);
     const bootstrapNavigationCompleted = session.loadCompleted === true;
 
     // Prove authentication from inside the final same-origin page. Merely
@@ -764,12 +723,17 @@ async function main() {
       returnByValue: true,
     });
     const surfaceProof = surfaceState.result?.value || {};
+    // Keep CSP enforcement untouched. A sandboxed srcdoc frame with scripts
+    // enabled but no same-origin privilege becomes an opaque `null` origin,
+    // proving the renderer-only bearer cannot cross that origin boundary.
+    const credentialIsolationProof = await proveOpaqueOriginTokenIsolation(session);
 
     // Exercise every reviewed cockpit family in the same clean browser. Each
     // family receives an independent full navigation using the public
     // ?cockpit=<nav-key> contract, so production-hidden operational pages are
     // still release-tested without changing the deployed navigation menu.
     const pages = [];
+    let functionalProof = emptyFunctionalProof();
     for (const [pageIndex, page] of pageManifest.pages.entries()) {
       const pageResult = await navigateAndProbePage(
         session,
@@ -779,6 +743,9 @@ async function main() {
         args.pageSettleMs,
       );
       pages.push(pageResult);
+      if (page.family === "kol-pool") {
+        functionalProof = await runKolPoolFunctionalJourney(session, args.pageTimeoutMs);
+      }
       if (pageIndex === 0 && pageResult.page_settled !== true) {
         throw new Error(
           `browser_gate_first_page_failed:${page.family}:`
@@ -796,6 +763,7 @@ async function main() {
     // fleet-wide quiet window and then synchronously freeze the evidence. A
     // timeout aborts the capture instead of rewriting a non-zero final count.
     await waitForFinalSameOriginApiIdle(session, args.pageTimeoutMs);
+    overallDeadline.assertAvailable();
     const finalNetworkSnapshot = {
       events: [...session.events],
       responses: [...session.networkResponses],
@@ -825,6 +793,7 @@ async function main() {
       target_url: args.url,
       page_manifest: pageManifest,
       pages,
+      functional_proof: functionalProof,
       policy: {
         external_media_403_allowed_origins: allowedExternalMedia403Origins,
       },
@@ -852,13 +821,18 @@ async function main() {
         settle_ms: args.settleMs,
         page_settle_ms: args.pageSettleMs,
         page_timeout_ms: args.pageTimeoutMs,
+        overall_timeout_ms: args.overallTimeoutMs,
+        overall_elapsed_ms: overallDeadline.elapsedMs(),
+        overall_deadline_exhausted: false,
       },
       browser: {
         engine: "chromium",
+        debug_transport: "remote-debugging-pipe",
         process_owned: true,
         profile_mode: "ephemeral",
         off_the_record: true,
         credential_persistence: false,
+        credential_isolation: credentialIsolationProof,
         extensions_disabled: true,
         launch_args: launchArgs.map((item) => item.startsWith("--user-data-dir=") ? "--user-data-dir=<ephemeral>" : item),
       },
@@ -884,6 +858,7 @@ async function main() {
     };
   } finally {
     if (session) session.close();
+    if (connection) connection.close();
     browser.kill("SIGTERM");
     cleanup.browser_exited = await waitForExit(browser, 3000);
     if (!cleanup.browser_exited) {
@@ -894,11 +869,9 @@ async function main() {
     cleanup.profile_removed = true;
   }
   capture.cleanup = cleanup;
-  mkdirSync(path.dirname(path.resolve(args.output)), { recursive: true });
   const serializedCapture = `${JSON.stringify(capture, null, 2)}\n`;
-  if (serializedCapture.includes(token)) {
-    throw new Error("browser capture attempted to persist the gate credential");
-  }
+  assertBrowserCaptureCredentialFree(serializedCapture, [token]);
+  mkdirSync(path.dirname(path.resolve(args.output)), { recursive: true });
   writeFileSync(args.output, serializedCapture, { encoding: "utf8", mode: 0o600 });
   console.log(JSON.stringify({
     output: path.resolve(args.output),
@@ -906,6 +879,7 @@ async function main() {
     events: capture.collection.events.length,
     pages: capture.pages.length,
     network_errors: capture.collection.network_summary.response_error_count_total,
+    functional_proof_passed: functionalProofPassed(capture.functional_proof),
     extension_contexts: capture.collection.execution_context_origins.filter((origin) => /^(chrome|moz)-extension:\/\//.test(origin)).length,
     cleanup,
   }));

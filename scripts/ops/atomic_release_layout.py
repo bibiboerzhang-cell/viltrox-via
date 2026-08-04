@@ -29,6 +29,7 @@ if __package__:
     from .atomic_release_units import (
         LayoutError,
         inspect_unit_state,
+        is_exact_dev_null_symlink as _is_exact_dev_null_symlink,
         optional_unit_names as _optional_unit_names,
         parse_optional_unit_states as _parse_optional_unit_states,
         unit_names as _unit_names,
@@ -37,7 +38,6 @@ if __package__:
     )
     from .atomic_release_shared import (
         CONTROLLER_DIRECTORY_MODE,
-        CONTROLLER_FILE_MODE,
         ENV_FINGERPRINT_RE,
         RELEASE_ID_RE,
         RELEASE_CONTROLLER_NAME,
@@ -52,10 +52,24 @@ if __package__:
         STAGING_CLONE_RE,
         WORKER_READONLY_DIRECTORIES,
         WORKER_WRITABLE_DIRECTORIES,
+        _capture_metadata,
+        _capture_rollback_file_sources,
+        _create_secure_directory,
         _database_release_metadata,
+        _fsync_directory,
         _id,
         _inside_releases,
+        _read_regular_single_link,
+        _read_secure_controller_file,
         _release_clone_name,
+        _restore_file_atomically,
+        _restore_rollback_files,
+        _secure_directory,
+        _validate_rollback_file_targets,
+        _validated_capture_restore,
+        _validated_rollback_file_restores,
+        _write_new_capture,
+        _write_rollback_file_captures,
     )
     from .atomic_release_worker_preflight import (
         _account,
@@ -79,6 +93,7 @@ else:
     from atomic_release_units import (
         LayoutError,
         inspect_unit_state,
+        is_exact_dev_null_symlink as _is_exact_dev_null_symlink,
         optional_unit_names as _optional_unit_names,
         parse_optional_unit_states as _parse_optional_unit_states,
         unit_names as _unit_names,
@@ -87,7 +102,6 @@ else:
     )
     from atomic_release_shared import (
         CONTROLLER_DIRECTORY_MODE,
-        CONTROLLER_FILE_MODE,
         ENV_FINGERPRINT_RE,
         RELEASE_ID_RE,
         RELEASE_CONTROLLER_NAME,
@@ -102,10 +116,24 @@ else:
         STAGING_CLONE_RE,
         WORKER_READONLY_DIRECTORIES,
         WORKER_WRITABLE_DIRECTORIES,
+        _capture_metadata,
+        _capture_rollback_file_sources,
+        _create_secure_directory,
         _database_release_metadata,
+        _fsync_directory,
         _id,
         _inside_releases,
+        _read_regular_single_link,
+        _read_secure_controller_file,
         _release_clone_name,
+        _restore_file_atomically,
+        _restore_rollback_files,
+        _secure_directory,
+        _validate_rollback_file_targets,
+        _validated_capture_restore,
+        _validated_rollback_file_restores,
+        _write_new_capture,
+        _write_rollback_file_captures,
     )
     from atomic_release_worker_preflight import (
         _account,
@@ -151,59 +179,6 @@ def _remove_pointer(root: Path, name: str) -> None:
     link.unlink()
 
 
-def _read_regular_single_link(path: Path, *, label: str) -> tuple[bytes, os.stat_result]:
-    """Read a rollback input through a no-follow descriptor.
-
-    Rollback captures are security-sensitive inputs.  A symlink, device, or
-    hard-linked file could otherwise be swapped or modified outside the
-    capture directory between validation and restore.
-    """
-
-    try:
-        initial = path.lstat()
-    except FileNotFoundError as exc:
-        raise LayoutError(f"{label} is missing: {path}") from exc
-    if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
-        raise LayoutError(f"{label} must be a regular single-link file: {path}")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            raise LayoutError(f"{label} must be a regular single-link file: {path}")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    finally:
-        os.close(descriptor)
-    return b"".join(chunks), info
-
-
-def _secure_directory(path: Path, *, label: str) -> Path:
-    try:
-        info = path.lstat()
-    except FileNotFoundError as exc:
-        raise LayoutError(f"{label} is missing: {path}") from exc
-    if not stat.S_ISDIR(info.st_mode):
-        raise LayoutError(f"{label} must be a real directory: {path}")
-    if info.st_uid != os.geteuid():
-        raise LayoutError(f"{label} owner is not the release controller: {path}")
-    if stat.S_IMODE(info.st_mode) != CONTROLLER_DIRECTORY_MODE:
-        raise LayoutError(f"{label} mode must be 0700: {path}")
-    return path
-
-
-def _create_secure_directory(path: Path, *, label: str) -> Path:
-    if path.exists() or path.is_symlink():
-        raise LayoutError(f"{label} already exists: {path}")
-    path.mkdir(mode=CONTROLLER_DIRECTORY_MODE)
-    path.chmod(CONTROLLER_DIRECTORY_MODE)
-    return _secure_directory(path, label=label)
-
-
 def _controller_rollbacks_root(root: Path, *, create: bool) -> Path:
     root_info = root.lstat()
     if not stat.S_ISDIR(root_info.st_mode):
@@ -236,98 +211,6 @@ def _rollback_capture_dir(root: Path, release_id: str, *, create: bool) -> Path:
     )
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(
-        path,
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0),
-    )
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _write_new_capture(path: Path, payload: bytes) -> None:
-    flags = (
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    descriptor = os.open(path, flags, CONTROLLER_FILE_MODE)
-    try:
-        with os.fdopen(descriptor, "wb", closefd=False) as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fchmod(handle.fileno(), CONTROLLER_FILE_MODE)
-            os.fsync(handle.fileno())
-    finally:
-        os.close(descriptor)
-
-
-def _capture_metadata(payload: bytes, info: os.stat_result) -> dict[str, int | str]:
-    return {
-        "uid": info.st_uid,
-        "gid": info.st_gid,
-        "mode": stat.S_IMODE(info.st_mode),
-        "sha256": hashlib.sha256(payload).hexdigest(),
-    }
-
-
-def _validated_capture_metadata(
-    raw: object,
-    *,
-    label: str,
-) -> tuple[int, int, int, str]:
-    if not isinstance(raw, dict):
-        raise LayoutError(f"{label} metadata is missing or invalid")
-    uid = raw.get("uid")
-    gid = raw.get("gid")
-    mode = raw.get("mode")
-    digest = raw.get("sha256")
-    if (
-        isinstance(uid, bool)
-        or not isinstance(uid, int)
-        or uid < 0
-        or isinstance(gid, bool)
-        or not isinstance(gid, int)
-        or gid < 0
-        or isinstance(mode, bool)
-        or not isinstance(mode, int)
-        or not 0 <= mode <= 0o7777
-        or not isinstance(digest, str)
-        or not ENV_FINGERPRINT_RE.fullmatch(digest)
-    ):
-        raise LayoutError(f"{label} metadata is missing or invalid")
-    return uid, gid, mode, digest
-
-
-def _read_secure_controller_file(path: Path, *, label: str) -> bytes:
-    payload, info = _read_regular_single_link(path, label=label)
-    if info.st_uid != os.geteuid():
-        raise LayoutError(f"{label} owner is not the release controller: {path}")
-    if stat.S_IMODE(info.st_mode) != CONTROLLER_FILE_MODE:
-        raise LayoutError(f"{label} mode must be 0600: {path}")
-    return payload
-
-
-def _validated_capture_restore(
-    path: Path,
-    raw_metadata: object,
-    *,
-    label: str,
-) -> tuple[bytes, int, int, int]:
-    uid, gid, mode, expected_digest = _validated_capture_metadata(
-        raw_metadata,
-        label=label,
-    )
-    payload = _read_secure_controller_file(path, label=label)
-    if hashlib.sha256(payload).hexdigest() != expected_digest:
-        raise LayoutError(f"{label} hash mismatch")
-    return payload, uid, gid, mode
-
-
 def _load_rollback_metadata(root: Path, release_id: str) -> tuple[Path, dict[str, object]]:
     rollback_dir = _rollback_capture_dir(root, release_id, create=False)
     digest_payload = _read_secure_controller_file(
@@ -353,65 +236,6 @@ def _load_rollback_metadata(root: Path, release_id: str) -> tuple[Path, dict[str
     if not isinstance(metadata, dict):
         raise LayoutError("rollback metadata payload is invalid")
     return rollback_dir, metadata
-
-
-def _restore_file_atomically(
-    target: Path,
-    *,
-    payload: bytes,
-    uid: int,
-    gid: int,
-    mode: int,
-    label: str,
-) -> None:
-    if target.exists() or target.is_symlink():
-        current = target.lstat()
-        if stat.S_ISLNK(current.st_mode):
-            raise LayoutError(f"refusing symlink {label} target: {target}")
-        if not stat.S_ISREG(current.st_mode):
-            raise LayoutError(f"{label} target must be a regular file: {target}")
-
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{target.name}.restore-",
-        suffix=".tmp",
-        dir=target.parent,
-    )
-    temporary = Path(temporary_name)
-    replaced = False
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-            os.fchown(handle.fileno(), uid, gid)
-            os.fchmod(handle.fileno(), mode)
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-        replaced = True
-
-        # Re-apply and prove the captured metadata on the installed inode.  The
-        # pre-replace fchown/fchmod prevents a permission window; these calls
-        # make the postcondition explicit even on unusual filesystems.
-        os.chown(target, uid, gid, follow_symlinks=False)
-        os.chmod(target, mode, follow_symlinks=False)
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        installed_descriptor = os.open(target, flags)
-        try:
-            installed = os.fstat(installed_descriptor)
-            if (
-                not stat.S_ISREG(installed.st_mode)
-                or installed.st_uid != uid
-                or installed.st_gid != gid
-                or stat.S_IMODE(installed.st_mode) != mode
-            ):
-                raise LayoutError(f"restored {label} metadata mismatch")
-            os.fsync(installed_descriptor)
-        finally:
-            os.close(installed_descriptor)
-        _fsync_directory(target.parent)
-    finally:
-        if not replaced:
-            temporary.unlink(missing_ok=True)
 
 
 def _ensure_shared_root(root: Path) -> None:
@@ -716,6 +540,7 @@ def prepare(args: argparse.Namespace) -> None:
         env_file,
         label="shared environment file",
     )
+    rollback_file_sources = _capture_rollback_file_sources(args.rollback_file)
     optional_unit_states = _parse_optional_unit_states(
         optional_units,
         args.optional_unit_state,
@@ -759,6 +584,10 @@ def prepare(args: argparse.Namespace) -> None:
         label="release unit capture directory",
     )
     _write_new_capture(rollback_dir / ".env", env_payload)
+    rollback_files = _write_rollback_file_captures(
+        rollback_dir,
+        rollback_file_sources,
+    )
     unit_files: dict[str, dict[str, int | str]] = {}
     for name, (payload, info) in unit_source_captures.items():
         _write_new_capture(units_capture_dir / name, payload)
@@ -785,6 +614,8 @@ def prepare(args: argparse.Namespace) -> None:
         ),
         "legacy_snapshot_release": str(legacy_snapshot) if legacy_snapshot else None,
         "environment_file": _capture_metadata(env_payload, env_info),
+        "rollback_files_required": bool(rollback_file_sources),
+        "rollback_files": rollback_files,
         "unit_names": units,
         "unit_files": unit_files,
         "optional_unit_states": optional_unit_states,
@@ -903,6 +734,10 @@ def restore(args: argparse.Namespace) -> None:
         metadata.get("environment_file"),
         label="rollback environment capture",
     )
+    rollback_file_restores = _validated_rollback_file_restores(
+        rollback_dir,
+        metadata,
+    )
     env_target = root / ".env"
     if env_target.exists() or env_target.is_symlink():
         if not stat.S_ISREG(env_target.lstat().st_mode):
@@ -915,9 +750,13 @@ def restore(args: argparse.Namespace) -> None:
     for name in (*units, *optional_units):
         installed = unit_dir / name
         if installed.is_symlink():
+            state = optional_unit_states.get(name)
+            if state and state["masked"] and _is_exact_dev_null_symlink(installed):
+                continue
             raise LayoutError(f"refusing symlink installed unit target: {installed}")
         if installed.exists() and not stat.S_ISREG(installed.lstat().st_mode):
             raise LayoutError(f"installed unit target must be a regular file: {installed}")
+    _validate_rollback_file_targets(rollback_file_restores)
 
     if original_current is not None:
         _atomic_link(root, "current", original_current)
@@ -936,6 +775,7 @@ def restore(args: argparse.Namespace) -> None:
         mode=mode,
         label="shared environment",
     )
+    _restore_rollback_files(rollback_file_restores)
     for name in units:
         payload, uid, gid, mode = unit_restores[name]
         _restore_file_atomically(
@@ -958,7 +798,7 @@ def restore(args: argparse.Namespace) -> None:
                 mode=mode,
                 label=f"optional installed unit {name}",
             )
-        elif installed.exists():
+        elif installed.exists() or installed.is_symlink():
             installed.unlink()
     _fsync_directory(unit_dir)
 

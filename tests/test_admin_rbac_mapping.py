@@ -50,7 +50,8 @@ class AdminRbacMappingTests(unittest.TestCase):
         sentinel = object()
 
         @contextmanager
-        def scope():
+        def scope(*, release_validation_guard: bool):
+            self.assertTrue(release_validation_guard)
             events.append("scope-enter")
             try:
                 yield
@@ -128,7 +129,8 @@ class AdminRbacMappingTests(unittest.TestCase):
         response = SimpleNamespace(status_code=200)
 
         @asynccontextmanager
-        async def scope():
+        async def scope(*, release_validation_guard: bool):
+            self.assertTrue(release_validation_guard)
             yield
 
         async def call_next(_request):
@@ -177,7 +179,8 @@ class AdminRbacMappingTests(unittest.TestCase):
         limiter = asyncio.BoundedSemaphore(1)
 
         @asynccontextmanager
-        async def scope():
+        async def scope(*, release_validation_guard: bool):
+            self.assertTrue(release_validation_guard)
             yield
 
         async def call_next(_request):

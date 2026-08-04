@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import threading
+import time
 from argparse import Namespace
 from pathlib import Path
 
@@ -11,6 +14,7 @@ import pytest
 from scripts.ops.freeze_worktree_candidate import (
     FreezeError,
     freeze_candidate,
+    run_deploy_gate,
     verify_deploy_source,
     verify_manifest,
 )
@@ -366,6 +370,68 @@ def test_deploy_source_binds_snapshot_and_both_git_identities(tmp_path: Path) ->
                 expected_branch=expected_branch,
             )
         )
+
+
+def test_deploy_gate_detects_candidate_mutation_while_gate_is_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    started = tmp_path / "gate-started"
+    _write(
+        root / "scripts" / "verify.sh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'started\n' >"${VKPI_TEST_GATE_STARTED:?}"
+sleep 0.5
+""",
+    )
+    os.chmod(root / "scripts" / "verify.sh", 0o755)
+    commit_env = os.environ.copy()
+    commit_env.update(
+        {
+            "GIT_AUTHOR_EMAIL": "freeze@example.invalid",
+            "GIT_AUTHOR_NAME": "Freeze Test",
+            "GIT_COMMITTER_EMAIL": "freeze@example.invalid",
+            "GIT_COMMITTER_NAME": "Freeze Test",
+        }
+    )
+    subprocess.run(["git", "add", "scripts/verify.sh"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "gate fixture"],
+        cwd=root,
+        env=commit_env,
+        check=True,
+    )
+    output = tmp_path / "candidate"
+    payload = freeze_candidate(_freeze_args(root, output))
+    monkeypatch.setenv("VKPI_TEST_GATE_STARTED", str(started))
+
+    def mutate_candidate() -> None:
+        deadline = time.monotonic() + 5
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert started.exists()
+        _write(output / "backend" / "app.py", "VALUE = 999\n")
+
+    mutator = threading.Thread(target=mutate_candidate)
+    mutator.start()
+    try:
+        with pytest.raises(FreezeError, match="digest mismatch"):
+            run_deploy_gate(
+                Namespace(
+                    manifest=str(output.with_suffix(".manifest.json")),
+                    snapshot=str(output),
+                    expected_head=str(payload["source"]["head"]),
+                    expected_branch=str(payload["source"]["branch"]),
+                    source=str(root),
+                    python=sys.executable,
+                )
+            )
+    finally:
+        mutator.join(timeout=5)
+    assert not (output / ".venv").exists()
+    assert not (output / "frontend" / "node_modules").exists()
 
 
 def test_deploy_source_fails_closed_on_special_file_inside_excluded_cache(

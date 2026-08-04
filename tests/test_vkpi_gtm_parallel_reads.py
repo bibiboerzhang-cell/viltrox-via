@@ -28,10 +28,12 @@ def test_postgres_reads_overlap_and_each_gets_a_scoped_lease(monkeypatch) -> Non
     monkeypatch.setattr(parallel_reads, "_PARALLEL_DB_SLOTS", threading.BoundedSemaphore(4))
     entered: list[int] = []
     exited: list[int] = []
+    guards: list[bool] = []
     gate = threading.Barrier(4, timeout=2)
 
     @contextmanager
-    def fake_scope():
+    def fake_scope(*, release_validation_guard: bool):
+        guards.append(release_validation_guard)
         thread_id = threading.get_ident()
         entered.append(thread_id)
         try:
@@ -52,13 +54,15 @@ def test_postgres_reads_overlap_and_each_gets_a_scoped_lease(monkeypatch) -> Non
     assert result == {f"task_{index}": index for index in range(4)}
     assert len(set(entered)) == 4
     assert sorted(exited) == sorted(entered)
+    assert guards == [True, True, True, True]
 
 
 def test_parallel_read_exception_remains_caller_visible(monkeypatch) -> None:
     monkeypatch.setattr(parallel_reads, "is_postgres_runtime", lambda: True)
 
     @contextmanager
-    def fake_scope():
+    def fake_scope(*, release_validation_guard: bool):
+        assert release_validation_guard is True
         yield None
 
     monkeypatch.setattr(parallel_reads, "db_connection_sync_scope", fake_scope)

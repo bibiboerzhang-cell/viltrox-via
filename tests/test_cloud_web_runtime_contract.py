@@ -84,16 +84,46 @@ def test_deploy_installs_reviewed_unit_before_restart() -> None:
     assert "^scripts/ops/systemd/[A-Za-z0-9@_.-]+\\.service$" in deploy
     assert "one direct reviewed unit" in deploy
     assert "bound to /opt/viltrox-2.0 and user/group viltrox" in deploy
-    assert "Reviewed web service unit is missing" in deploy
+    assert "Reviewed web service unit must be an existing regular non-symlink file" in deploy
+
+
+def test_deploy_binds_web_unit_basename_and_rejects_partial_production_scope() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    assert (
+        '"${REMOTE_SERVICE_UNIT_RELATIVE##*/}" != "${SERVICE_NAME}"'
+    ) in deploy
+    assert (
+        '[ -L "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}" ]'
+    ) in deploy
+    assert "VILTROXTEST_ROOT_MATCH=0" in deploy
+    assert "VILTROXTEST_SERVICE_MATCH=0" in deploy
+    assert "VILTROXTEST_UNIT_MATCH=0" in deploy
+    assert 'VILTROXTEST_SCOPE_MATCHES=$((\n' in deploy
+    assert (
+        'if [ "${VILTROXTEST_SCOPE_MATCHES}" -ne 0 ] \\\n'
+        '  && [ "${VILTROXTEST_SCOPE_MATCHES}" -ne 3 ]; then'
+    ) in deploy
+    assert "A partial viltroxtest production scope is forbidden" in deploy
+    assert (
+        'if [ "${VILTROXTEST_RELEASE_SCOPE}" != "1" ]; then'
+    ) in deploy
+    assert (
+        "This deployment entrypoint is restricted to the exact reviewed "
+        "viltroxtest production scope."
+    ) in deploy
 
 
 def test_deploy_sync_unit_is_reviewed_verified_installed_and_rollback_captured() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
+    assert 'PRODUCTION_SYNC_SERVICE="vkpi-sync-daily.service"' in deploy
+    assert 'PRODUCTION_SYNC_TIMER="vkpi-sync-daily.timer"' in deploy
     assert (
-        'REMOTE_SYNC_SERVICE_UNIT_RELATIVE="${REMOTE_SYNC_SERVICE_UNIT_RELATIVE:-'
-        'scripts/ops/systemd/vkpi-sync-daily.service}"'
+        'PRODUCTION_SYNC_UNIT_RELATIVE="scripts/ops/systemd/'
+        'vkpi-sync-daily.service"'
     ) in deploy
+    assert 'REMOTE_SYNC_SERVICE_UNIT_RELATIVE="${PRODUCTION_SYNC_UNIT_RELATIVE}"' in deploy
     assert (
         '[[ "${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" =~ '
         "^scripts/ops/systemd/[A-Za-z0-9@_.-]+\\.service$ ]]"
@@ -102,7 +132,7 @@ def test_deploy_sync_unit_is_reviewed_verified_installed_and_rollback_captured()
         '"${REMOTE_SYNC_SERVICE_UNIT_RELATIVE##*/}" != "${SYNC_SERVICE}"'
     ) in deploy
     assert (
-        '[ -L "${PROJECT_ROOT}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ]'
+        '[ -L "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ]'
     ) in deploy
 
     verify_lines = [
@@ -273,12 +303,15 @@ def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> Non
         match.start()
         for match in re.finditer(r"^verify_deploy_candidate$", deploy, re.MULTILINE)
     ]
-    assert len(calls) == 3
-    gate = deploy.index("gate: strict code + runtime trust verification")
+    assert len(calls) >= 12
+    sealed_verifier = deploy.index("\nseal_deploy_verifier_bundle\n")
+    gate = deploy.index("gate: frozen candidate strict code + runtime trust verification")
     remote_create = deploy.index('ssh "${SSH_TARGET}" "sudo install -d')
     rsync = deploy.index("rsync -az --delete", remote_create)
     remote_stamp_check = deploy.index("Uploaded candidate build SHA mismatch", rsync)
-    assert calls[0] < gate < calls[1] < remote_create < rsync < calls[2] < remote_stamp_check
+    assert calls[0] < sealed_verifier < calls[1] < gate
+    assert any(gate < call < remote_create for call in calls)
+    assert any(rsync < call < remote_stamp_check for call in calls)
     assert '-- "${DEPLOY_CANDIDATE_DIR}/" "${SSH_TARGET}:${REMOTE_RELEASE_DIR}/"' in deploy
     assert "printf '%s\\n' '${LOCAL_GIT_SHA}' > BUILD_GIT_SHA" not in deploy
     assert (
@@ -291,6 +324,58 @@ def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> Non
         'frontend/dist/index.html | head -1)"'
         not in deploy
     )
+
+
+def test_deploy_seals_candidate_verifier_and_never_uses_mutable_gate_scripts() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    for required in (
+        'mktemp -d "${tmp_base%/}/vkpi-deploy-verifier.XXXXXX"',
+        'install -d -m 0700',
+        'install -m 0500 "${source}" "${target}"',
+        'install -m 0400 "${source}" "${target}"',
+        'cmp -s "${source}" "${candidate}"',
+        'cmp -s "${source}" "${target}"',
+        'DEPLOY_VERIFIER_BUNDLE_SHA256=',
+        'verify_deploy_verifier_bundle',
+        '"${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate',
+    ):
+        assert required in deploy
+
+    forbidden_mutable_gates = (
+        '"${PROJECT_ROOT}/scripts/capture_browser_console_cdp.mjs"',
+        '"${PROJECT_ROOT}/scripts/verify_browser_console_capture.py"',
+        '"${PROJECT_ROOT}/scripts/verify_runtime_health.py"',
+        '"${PROJECT_ROOT}/scripts/verify_redis_worker_health.py"',
+        '"${PROJECT_ROOT}/scripts/verify_runtime_journal_canary.py"',
+        '"${PROJECT_ROOT}/scripts/verify_private_surface_live.py"',
+        '"${PROJECT_ROOT}/scripts/ops/legacy_to_atomic_preflight.py"',
+        '"${PROJECT_ROOT}/scripts/ops/verify_legacy_bootstrap_anchor.py"',
+    )
+    for forbidden in forbidden_mutable_gates:
+        assert forbidden not in deploy
+
+    rollback = deploy.split("attempt_automatic_rollback()", 1)[1].split(
+        "cleanup_post_deploy_evidence()", 1
+    )[0]
+    assert "${DEPLOY_CANDIDATE_DIR}/scripts" not in rollback
+    for required in (
+        "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_runtime_health.py",
+        "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py",
+        "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py",
+        "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py",
+    ):
+        assert required in rollback
+
+    cleanup = deploy.split("cleanup_post_deploy_evidence()", 1)[1].split(
+        "trap cleanup_post_deploy_evidence EXIT", 1
+    )[0]
+    rollback_at = cleanup.index("attempt_automatic_rollback")
+    verifier_cleanup_at = cleanup.index("cleanup_deploy_verifier_bundle")
+    assert rollback_at < verifier_cleanup_at
+
+    accepted = "verify_deploy_candidate\nassert_deploy_source_unchanged\nDEPLOY_ACCEPTED=1"
+    assert accepted in deploy
 
 
 def test_deploy_rescue_requires_same_sha_frozen_anchor_and_explicit_confirmation() -> None:
@@ -315,7 +400,8 @@ def test_deploy_rescue_requires_same_sha_frozen_anchor_and_explicit_confirmation
         "}\n", 1
     )[0]
     for required in (
-        "freeze_worktree_candidate.py",
+        "TRUSTED_CANDIDATE_VERIFIER",
+        "verify_deploy_verifier_bundle",
         "verify-deploy-source",
         '--manifest "${RESCUE_ROLLBACK_CANDIDATE_MANIFEST}"',
         '--snapshot "${RESCUE_ROLLBACK_CANDIDATE_DIR}"',
@@ -357,13 +443,12 @@ def test_deploy_rescue_requires_same_sha_frozen_anchor_and_explicit_confirmation
 def test_deploy_acceptance_reverifies_current_and_previous_seals() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
-    restored = deploy.rindex("restore_remote_sync_unit_state\n")
-    seal_pair = deploy.index(
-        "post-deploy current pointer does not name the accepted release",
-        restored,
+    seal_pair = deploy.rindex(
+        "post-deploy current pointer does not name the accepted release"
     )
+    restored = deploy.index("restore_remote_sync_unit_state\n", seal_pair)
     accepted = deploy.rindex("DEPLOY_ACCEPTED=1")
-    assert restored < seal_pair < accepted
+    assert seal_pair < restored < accepted
     block = deploy[seal_pair:accepted]
     assert "post-deploy previous pointer escapes releases" in block
     assert "post-deploy previous pointer does not name the rescue rollback anchor" in block
@@ -470,7 +555,7 @@ def test_reviewed_worker_units_run_nonroot_with_minimal_mutable_surface() -> Non
         assert "--require-sandbox-readonly" in preflight
 
 
-def test_deploy_restarts_and_validates_exact_seven_service_worker_fleet() -> None:
+def test_deploy_restarts_and_validates_exact_sixteen_service_worker_fleet() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
     expected_units = [
@@ -571,17 +656,24 @@ def test_deploy_mints_browser_token_only_after_remote_identity_and_never_persist
     mint_at = deploy.index("scripts/ops/mint_browser_gate_token.py", acceptance_at)
     capture_at = deploy.index("scripts/capture_browser_console_cdp.mjs", mint_at)
     assert identity_at < acceptance_at < mint_at < capture_at
-    assert 'if [ -z "${POST_DEPLOY_BROWSER_TOKEN}" ]; then' in deploy[mint_at - 1200 : mint_at]
+    first_child_at = deploy.index('SCRIPT_DIR="$(cd')
+    token_guard_at = deploy.index("Caller-supplied browser gate tokens are forbidden")
+    token_unset_at = deploy.index(
+        "unset VKPI_BROWSER_GATE_TOKEN POST_DEPLOY_BROWSER_TOKEN"
+    )
+    assert token_unset_at < token_guard_at < first_child_at
+    assert 'if [ -z "${POST_DEPLOY_BROWSER_TOKEN}" ]; then' not in deploy
+    assert deploy.count("unset VKPI_BROWSER_GATE_TOKEN POST_DEPLOY_BROWSER_TOKEN") >= 2
     assert "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i" in deploy
     assert "ENVIRONMENT=production V2_PRODUCTION_MODE=1 APP_ROLE=admin-web" in deploy
-    assert "VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS must be an integer within [60, 900]" in deploy
+    assert "VKPI_BROWSER_GATE_OVERALL_TIMEOUT_MS must be an integer within [60000, 1080000]" in deploy
     assert "BROWSER_GATE_CAPTURE_BUDGET_SECONDS" in deploy
-    assert "is below the ${BROWSER_GATE_CAPTURE_BUDGET_SECONDS}s fail-closed browser capture budget" in deploy
+    assert "BROWSER_GATE_CAPTURE_BUDGET_SECONDS + BROWSER_GATE_TOKEN_SAFETY_MARGIN_SECONDS" in deploy
     assert 'POST_DEPLOY_BROWSER_TOKEN="$(ssh' in deploy
-    assert 'VKPI_BROWSER_GATE_TOKEN="${POST_DEPLOY_BROWSER_TOKEN}" node' in deploy
+    assert 'VKPI_BROWSER_GATE_TOKEN="${POST_DEPLOY_BROWSER_TOKEN}" \\' in deploy
     assert '--ttl-seconds \'${BROWSER_GATE_TOKEN_TTL_SECONDS}\'' in deploy
     assert 'POST_DEPLOY_BROWSER_TOKEN=""' in deploy[capture_at : capture_at + 800]
-    assert "VKPI_BROWSER_GATE_TOKEN and" not in deploy
+    assert "production mints a short-lived token remotely" in deploy
 
 
 def test_remote_release_acceptance_uses_the_production_nonroot_runtime_contract() -> None:
@@ -589,7 +681,7 @@ def test_remote_release_acceptance_uses_the_production_nonroot_runtime_contract(
     acceptance = deploy.split(
         "# Repeat the complete manifest-driven read-only API acceptance",
         1,
-    )[1].split("# A caller may supply an explicit reviewed token", 1)[0]
+    )[1].split("# Only after strict post-restart", 1)[0]
 
     assert "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i" in acceptance
     for required in (
@@ -676,32 +768,12 @@ def test_deploy_browser_gate_runs_reviewed_21_page_and_network_contract() -> Non
     assert '"Network.responseReceived"' in capture
     assert '"Network.loadingFailed"' in capture
     assert "navigateAndProbePage" in capture
-    assert 'BROWSER_GATE_TOKEN_TTL_SECONDS="${VKPI_BROWSER_GATE_TOKEN_TTL_SECONDS:-900}"' in deploy
+    assert 'BROWSER_GATE_OVERALL_TIMEOUT_MS="${VKPI_BROWSER_GATE_OVERALL_TIMEOUT_MS:-600000}"' in deploy
+    assert "BROWSER_GATE_TOKEN_SAFETY_MARGIN_SECONDS=120" in deploy
     assert '--page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}"' in deploy
     assert '--page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}"' in deploy
+    assert deploy.count('--overall-timeout-ms "${BROWSER_GATE_OVERALL_TIMEOUT_MS}"') == 2
     assert "VKPI_BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS must contain only exact external HTTPS origins" in deploy
-
-
-def test_default_browser_token_ttl_covers_the_complete_fail_closed_capture_budget() -> None:
-    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
-    manifest = json.loads(_read("scripts/browser_gate_pages.json"))
-    page_count = len(manifest["pages"])
-    budget_ms = (
-        15_000
-        + 30_000
-        + 5_000
-        + 5_000 * (page_count + 1)
-        + page_count * (30_000 + 1_000)
-        + 30_000
-        + 30_000
-    )
-
-    assert page_count == 21
-    assert budget_ms == 871_000
-    assert 900 >= (budget_ms + 999) // 1000
-    assert "+  5000 * (BROWSER_GATE_PAGE_COUNT + 1)" in deploy
-    assert "+  BROWSER_GATE_PAGE_COUNT * (BROWSER_GATE_PAGE_TIMEOUT_MS + BROWSER_GATE_PAGE_SETTLE_MS)" in deploy
-    assert "+  1000 * BROWSER_GATE_PAGE_COUNT" in deploy
 
 
 def test_backup_owns_its_separate_write_surface_and_never_chowns_history() -> None:

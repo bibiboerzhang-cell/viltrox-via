@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -30,6 +31,10 @@ def optional_unit_names(values: list[str]) -> list[str]:
     if len(values) != len(set(values)):
         raise LayoutError("optional systemd unit names must be unique")
     return values
+
+
+def is_exact_dev_null_symlink(path: Path) -> bool:
+    return path.is_symlink() and os.readlink(path) == "/dev/null"
 
 
 def unit_state_token(state: dict[str, bool]) -> str:
@@ -85,7 +90,7 @@ def parse_optional_unit_states(
             },
         )
         installed = unit_dir / name
-        path_masked = installed.is_symlink() and installed.resolve(strict=False) == Path("/dev/null")
+        path_masked = is_exact_dev_null_symlink(installed)
         path_regular = installed.is_file() and not installed.is_symlink()
         path_absent = not installed.exists() and not installed.is_symlink()
         if state["masked"] and not path_masked:
@@ -124,7 +129,7 @@ def inspect_unit_state(args: argparse.Namespace) -> None:
     name = optional_unit_names([args.unit_name])[0]
     unit_dir = Path(args.unit_dir).resolve()
     installed = unit_dir / name
-    path_masked = installed.is_symlink() and installed.resolve(strict=False) == Path("/dev/null")
+    path_masked = is_exact_dev_null_symlink(installed)
     path_regular = installed.is_file() and not installed.is_symlink()
     path_absent = not installed.exists() and not installed.is_symlink()
     if not (path_masked or path_regular or path_absent):
@@ -160,6 +165,7 @@ def inspect_unit_state(args: argparse.Namespace) -> None:
 __all__ = [
     "LayoutError",
     "inspect_unit_state",
+    "is_exact_dev_null_symlink",
     "optional_unit_names",
     "parse_optional_unit_states",
     "unit_names",

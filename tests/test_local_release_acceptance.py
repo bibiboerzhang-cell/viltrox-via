@@ -25,15 +25,15 @@ TOKEN = "fixture-token-must-never-be-emitted"
 
 
 class FixtureTransport:
-    def __init__(self, responses: dict[str, tuple[int, Any, dict[str, str] | None, float]]) -> None:
+    def __init__(self, responses: dict[Any, tuple[int, Any, dict[str, str] | None, float]]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, str | None, float]] = []
+        self.post_calls: list[tuple[str, dict[str, Any], str | None, float]] = []
 
-    def get(self, path: str, *, token: str | None, timeout_seconds: float) -> acceptance.HttpResponse:
-        self.calls.append((path, token, timeout_seconds))
-        if path not in self.responses:
-            raise AssertionError(f"unexpected offline HTTP request: {path}")
-        status, payload, headers, latency = self.responses[path]
+    def _response(self, key: Any) -> acceptance.HttpResponse:
+        if key not in self.responses:
+            raise AssertionError(f"unexpected offline HTTP request: {key}")
+        status, payload, headers, latency = self.responses[key]
         body = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
         return acceptance.HttpResponse(
             status=status,
@@ -41,6 +41,25 @@ class FixtureTransport:
             headers=headers or {"content-type": "application/json"},
             latency_ms=latency,
         )
+
+    def get(self, path: str, *, token: str | None, timeout_seconds: float) -> acceptance.HttpResponse:
+        self.calls.append((path, token, timeout_seconds))
+        return self._response(path)
+
+    def post(
+        self,
+        path: str,
+        *,
+        json_body: dict[str, Any],
+        token: str | None,
+        timeout_seconds: float,
+    ) -> acceptance.HttpResponse:
+        body = deepcopy(json_body)
+        self.post_calls.append((path, body, token, timeout_seconds))
+        filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+        intent_key = (path, filters.get("intent"))
+        key = intent_key if intent_key in self.responses else path
+        return self._response(key)
 
 
 @pytest.fixture
@@ -121,14 +140,18 @@ def test_git_head_uses_sealed_build_identity_without_a_git_directory(
     assert acceptance._git_head() == expected
 
 
-def test_default_manifest_covers_every_cockpit_family_and_only_safe_gets() -> None:
+def test_default_manifest_covers_every_cockpit_family_and_only_safe_reads() -> None:
     manifest = acceptance.load_manifest()
     families = {item["family"] for item in manifest["endpoints"]}
 
     assert set(acceptance.COCKPIT_BOARD_FAMILIES) <= families
     assert manifest["board_families"] == acceptance.COCKPIT_BOARD_FAMILIES
-    assert all(item["method"] == "GET" for item in manifest["endpoints"])
+    assert {item["method"] for item in manifest["endpoints"]} == {"GET", "POST"}
     assert all(item["read_only_ack"] is True for item in manifest["endpoints"])
+    post_specs = [item for item in manifest["endpoints"] if item["method"] == "POST"]
+    assert len(post_specs) == 4
+    assert all(item["read_only_post"] is True for item in post_specs)
+    assert all(isinstance(item["json_body"], dict) for item in post_specs)
 
     health = next(item for item in manifest["endpoints"] if item["id"] == "runtime.health")
     assert health["auth"] is True
@@ -145,8 +168,13 @@ def test_default_manifest_covers_every_cockpit_family_and_only_safe_gets() -> No
     assert {
         "intelligent.advisor-readiness",
         "intelligent.advisor-memory",
+        "intelligent.ask-kol-overview",
+        "intelligent.ask-video-26mm-evo",
+        "intelligent.ask-project-search",
+        "intelligent.ask-weekly-market",
+        "intelligent.global-search",
     } <= endpoint_ids
-    assert len(manifest["endpoints"]) >= 41
+    assert len(manifest["endpoints"]) >= 46
     assert all("access_token=" not in str(item.get("path") or item.get("path_template")) for item in manifest["endpoints"])
 
 
@@ -753,6 +781,69 @@ def test_weekly_typed_empty_contract_rejects_malformed_or_real_fields(payload: d
     assert report["endpoints"][0]["pass"] is False
 
 
+@pytest.mark.parametrize("source_mode", ["error", "missing"])
+def test_global_search_missing_source_is_degraded_not_true_empty(source_mode: str) -> None:
+    source_status = {
+        "kols": {"status": "ready", "result_count": 0},
+        "projects": {"status": "ready", "result_count": 0},
+        "events": {"status": "ready", "result_count": 0},
+    }
+    if source_mode == "error":
+        source_status["projects"] = {"status": "error", "result_count": 0, "reason": "query_failed"}
+    else:
+        source_status.pop("projects")
+    payload = {"q": "viltrox", "kols": [], "projects": [], "events": [], "source_status": source_status}
+    manifest = {
+        "name": "global-search",
+        "version": 2,
+        "board_families": [],
+        "endpoints": [
+            acceptance._ep(
+                "global-search",
+                "intelligent",
+                "/global-search?q=Viltrox&limit=5",
+                contract="global_search",
+                data_paths=["kols", "projects", "events"],
+                state_paths=[],
+                required_paths=["q", "kols", "projects", "events", "source_status"],
+                list_paths=["kols", "projects", "events"],
+                allowed_states=["real", "empty"],
+            )
+        ],
+    }
+
+    report = _runner(manifest, FixtureTransport({"/global-search?q=Viltrox&limit=5": (200, payload, None, 1.0)})).run()
+
+    assert report["overall"]["pass"] is False
+    assert report["endpoints"][0]["data_state"] == "degraded"
+
+
+def test_global_search_all_ready_zero_results_is_a_true_empty() -> None:
+    payload = {
+        "q": "viltrox",
+        "kols": [],
+        "projects": [],
+        "events": [],
+        "source_status": {
+            source: {"status": "ready", "result_count": 0}
+            for source in ("kols", "projects", "events")
+        },
+    }
+    spec = acceptance._ep(
+        "global-search",
+        "intelligent",
+        "/global-search?q=Viltrox&limit=5",
+        contract="global_search",
+        data_paths=["kols", "projects", "events"],
+        state_paths=[],
+    )
+
+    validation = acceptance._validate_contract(payload, spec, None)
+
+    assert validation.errors == []
+    assert acceptance.classify_data_state(payload, spec, validation) == "empty"
+
+
 def test_manifest_and_base_url_guards_reject_mutating_or_remote_targets() -> None:
     with pytest.raises(ValueError, match="loopback"):
         acceptance.validate_loopback_base_url("https://example.com")
@@ -771,7 +862,18 @@ def test_manifest_and_base_url_guards_reject_mutating_or_remote_targets() -> Non
             }
         ],
     }
-    with pytest.raises(ValueError, match="forbids method"):
+    with pytest.raises(ValueError, match="explicit read_only_post"):
+        acceptance.validate_manifest(bad_manifest)
+
+    bad_manifest["endpoints"][0]["read_only_post"] = True
+    with pytest.raises(ValueError, match="JSON object body"):
+        acceptance.validate_manifest(bad_manifest)
+
+    bad_manifest["endpoints"][0].update(
+        json_body={"query": "unsafe"},
+        contract="ask_find_v2",
+    )
+    with pytest.raises(ValueError, match="reviewed read-only allowlist"):
         acceptance.validate_manifest(bad_manifest)
 
     assert "token" not in acceptance.AuthContext(TOKEN, "admin", 300).public_dict()

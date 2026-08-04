@@ -22,6 +22,7 @@ from app.core.config import (
     VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES,
 )
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 
 try:
     from redis import Redis
@@ -52,6 +53,16 @@ _REDIS_FAILURE_COOLDOWN_SEC = 2.0
 # rebuild after the blocking timeout instead of hanging the endpoint.
 _BUILD_LOCK_LEASE_SEC = 30
 _BUILD_LOCK_BLOCKING_TIMEOUT_SEC = 8
+
+
+def _cache_mutations_fenced() -> bool:
+    """Fail closed when cache state is not allowed to change."""
+
+    try:
+        return bool(release_validation_active())
+    except Exception:
+        logger.error("cache.release_validation_status_failed", exc_info=True)
+        return True
 
 
 def _get_redis():
@@ -133,9 +144,15 @@ def _memory_get(key: str) -> tuple[bool, Any]:
         if entry is None:
             return False, None
         if entry["expires"] < time.time():
-            del _cache[key]
-            _stats["evictions"] += 1
+            # Expiry cleanup is a cache mutation.  A fenced read may observe
+            # the stale entry but must leave it untouched for normal runtime
+            # to clean up after validation ends.
+            if not _cache_mutations_fenced():
+                del _cache[key]
+                _stats["evictions"] += 1
             return False, None
+        if _cache_mutations_fenced():
+            return True, entry["value"]
         # Dict insertion order is used as a small, dependency-free LRU queue.
         # Refreshing the entry prevents a hot authorization-scoped result from
         # being discarded before a cold, one-off parameterized preview.
@@ -164,9 +181,14 @@ def _memory_set(key: str, value: Any, serialized: bytes, ttl: int) -> bool:
     unbounded sink for high-cardinality request parameters.
     """
 
+    if _cache_mutations_fenced():
+        return False
+
     incoming_bytes = len(serialized)
     if incoming_bytes > VKPI_MEMORY_CACHE_MAX_ENTRY_BYTES:
         with _lock:
+            if _cache_mutations_fenced():
+                return False
             if _cache.pop(key, None) is not None:
                 _stats["evictions"] += 1
         logger.warning(
@@ -177,6 +199,8 @@ def _memory_set(key: str, value: Any, serialized: bytes, ttl: int) -> bool:
 
     now = time.time()
     with _lock:
+        if _cache_mutations_fenced():
+            return False
         previous = _cache.pop(key, None)
         expired_keys = [
             existing_key
@@ -253,6 +277,8 @@ async def cache_get_async(key: str) -> Optional[Any]:
 
 
 def cache_set(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> None:
+    if _cache_mutations_fenced():
+        return
     # Guard: values must be JSON-serializable (see _serialize). A non-JSON-safe
     # value (datetime/Decimal/set/custom object) would break the Redis path and,
     # if cached in-memory, break later when Redis returns. Skip cache gracefully.
@@ -264,17 +290,20 @@ def cache_set(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> N
     client = _get_redis()
     if client is not None:
         try:
+            if _cache_mutations_fenced():
+                return
             client.setex(_full_key(key), int(ttl), serialized)
             # Do not retain an older fallback copy after Redis recovered. A
             # later healthy Redis miss must not resurrect stale process data.
             with _lock:
-                _cache.pop(key, None)
+                if not _cache_mutations_fenced():
+                    _cache.pop(key, None)
             _stats["sets"] += 1
             return
         except Exception:
             logger.warning("cache.redis_set_failed", extra={"key": key, "ttl": int(ttl)}, exc_info=True)
             _mark_redis_failure()
-    if not _memory_set(key, value, serialized, int(ttl)):
+    if _cache_mutations_fenced() or not _memory_set(key, value, serialized, int(ttl)):
         return
     with _lock:
         _stats["sets"] += 1
@@ -290,6 +319,9 @@ def _distributed_build_lock(key: str):
     the process-local lock still prevents a same-worker stampede.
     """
 
+    if _cache_mutations_fenced():
+        yield False
+        return
     client = _get_redis()
     if client is None:
         yield False
@@ -303,7 +335,8 @@ def _distributed_build_lock(key: str):
             timeout=_BUILD_LOCK_LEASE_SEC,
             blocking_timeout=_BUILD_LOCK_BLOCKING_TIMEOUT_SEC,
         )
-        acquired = bool(lock.acquire(blocking=True))
+        if not _cache_mutations_fenced():
+            acquired = bool(lock.acquire(blocking=True))
     except Exception:
         logger.warning("cache.redis_build_lock_failed", extra={"key": key}, exc_info=True)
         _mark_redis_failure()
@@ -311,7 +344,7 @@ def _distributed_build_lock(key: str):
     try:
         yield acquired
     finally:
-        if acquired and lock is not None:
+        if acquired and lock is not None and not _cache_mutations_fenced():
             try:
                 lock.release()
             except Exception:
@@ -320,6 +353,9 @@ def _distributed_build_lock(key: str):
                 # cache value when possible.
                 logger.warning("cache.redis_build_unlock_failed", extra={"key": key}, exc_info=True)
                 _mark_redis_failure()
+        # If the fence became active after acquisition, deliberately leave the
+        # Redis lease to expire instead of issuing DEL through lock.release().
+        # Validation stays write-free at the cost of at most one lease TTL.
 
 
 def cache_get_or_build(
@@ -340,6 +376,8 @@ def cache_get_or_build(
     cached_value = cache_get(key)
     if cached_value is not None:
         return cached_value
+    if _cache_mutations_fenced():
+        return builder()
 
     with _build_locks_guard:
         build_lock = _build_locks.get(key)
@@ -351,7 +389,11 @@ def cache_get_or_build(
         cached_value = cache_get(key)
         if cached_value is not None:
             return cached_value
+        if _cache_mutations_fenced():
+            return builder()
         with _distributed_build_lock(key):
+            if _cache_mutations_fenced():
+                return builder()
             # A different process may have populated Redis while this worker
             # waited for the distributed lock.
             cached_value = cache_get(key)
@@ -371,32 +413,45 @@ async def cache_set_async(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_T
 
 
 def cache_delete(key: str) -> bool:
+    if _cache_mutations_fenced():
+        return False
     redis_deleted = False
     client = _get_redis()
     if client is not None:
         try:
-            redis_deleted = bool(client.delete(_full_key(key)))
+            if not _cache_mutations_fenced():
+                redis_deleted = bool(client.delete(_full_key(key)))
         except Exception:
             logger.warning("cache.redis_delete_failed", extra={"key": key}, exc_info=True)
             _mark_redis_failure()
     with _lock:
-        memory_deleted = _cache.pop(key, None) is not None
+        memory_deleted = (
+            _cache.pop(key, None) is not None
+            if not _cache_mutations_fenced()
+            else False
+        )
     return redis_deleted or memory_deleted
 
 
 def cache_clear(prefix: str = "") -> int:
+    if _cache_mutations_fenced():
+        return 0
     redis_deleted = 0
     client = _get_redis()
     if client is not None:
         try:
             pattern = _full_key(prefix + "*") if prefix else _full_key("*")
             for key in client.scan_iter(match=pattern):
+                if _cache_mutations_fenced():
+                    break
                 redis_deleted += int(client.delete(key) or 0)
         except Exception:
             logger.warning("cache.redis_clear_failed", extra={"prefix": prefix}, exc_info=True)
             _mark_redis_failure()
     with _lock:
-        if not prefix:
+        if _cache_mutations_fenced():
+            memory_deleted = 0
+        elif not prefix:
             memory_deleted = len(_cache)
             _cache.clear()
         else:
@@ -479,11 +534,15 @@ def cache_invalidate_admin():
 
 
 def _cleanup_expired():
+    if _cache_mutations_fenced():
+        return 0
     client = _get_redis()
     if client is not None:
         return 0
     now = time.time()
     with _lock:
+        if _cache_mutations_fenced():
+            return 0
         expired_keys = [k for k, v in _cache.items() if v["expires"] < now]
         for k in expired_keys:
             del _cache[k]

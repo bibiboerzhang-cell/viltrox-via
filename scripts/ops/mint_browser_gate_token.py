@@ -17,19 +17,29 @@ import time
 from pathlib import Path
 from typing import Any
 
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from release_auth_contract import (  # noqa: E402
+    PG_READ_ONLY_OPTIONS,
+    validated_postgres_database_name,
+    verify_pg_readonly_identity,
+)
+
 
 MIN_TTL_SECONDS = 60
-MAX_TTL_SECONDS = 900
+MAX_TTL_SECONDS = 1200
 DEFAULT_TTL_SECONDS = 180
 INSECURE_LOCAL_JWT_SECRET = "viltrox2-local-dev-secret-change-me"
 ADMIN_QUERY = """
 SELECT u.id
-FROM users AS u
-JOIN staff AS s ON s.user_id = u.id
-WHERE lower(COALESCE(u.status, '')) = 'approved'
+FROM public.users AS u
+JOIN public.staff AS s ON s.user_id = u.id
+WHERE pg_catalog.lower(COALESCE(u.status, '')) = 'approved'
   AND COALESCE(u.email_verified, 0) = 1
   AND COALESCE(s.active, 0) = 1
-  AND lower(COALESCE(s.role, '')) = 'admin'
+  AND pg_catalog.lower(COALESCE(s.role, '')) = 'admin'
 ORDER BY COALESCE(s.is_owner, 0) DESC, u.id
 LIMIT 1
 """
@@ -79,16 +89,23 @@ def select_admin_user_id(database_url: str) -> int:
         raise MintError("PostgreSQL driver unavailable") from exc
 
     try:
+        expected_database = validated_postgres_database_name(
+            database_url,
+            require_loopback=True,
+        )
         with psycopg.connect(
             database_url,
             connect_timeout=10,
-            options="-c default_transaction_read_only=on",
+            options=PG_READ_ONLY_OPTIONS,
         ) as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SHOW transaction_read_only")
-                readonly = cursor.fetchone()
-                if not readonly or str(readonly[0]).lower() not in {"on", "true", "1"}:
-                    raise MintError("admin lookup did not enter a read-only transaction")
+                try:
+                    verify_pg_readonly_identity(
+                        cursor,
+                        expected_database=expected_database,
+                    )
+                except RuntimeError as exc:
+                    raise MintError(str(exc)) from exc
                 cursor.execute(ADMIN_QUERY)
                 row = cursor.fetchone()
             conn.rollback()

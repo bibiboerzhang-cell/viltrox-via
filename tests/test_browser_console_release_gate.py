@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import json
 import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,48 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             "pages": page_manifest,
         },
         "pages": pages,
+        "functional_proof": {
+            "ask_find": {
+                "attempted": True,
+                "trigger_present": True,
+                "dialog_present": True,
+                "suggestion_applied": True,
+                "query_present": True,
+                "ask_not_started_before_search": True,
+                "ask_clicked": True,
+                "completed": True,
+                "failure_absent": True,
+                "answer_present": True,
+                "answer_char_count": 42,
+                "fact_count": 1,
+                "evidence_count": 1,
+                "intelligent_api_2xx_count": 1,
+                "ui_global_search_api_2xx_count": 1,
+                "same_origin_api_idle": True,
+            },
+            "global_search": {
+                "ui_search_completed": True,
+                "ui_usable_state": True,
+                "ui_results_rendered": False,
+                "ui_trustworthy_empty": True,
+                "ui_partial_or_forbidden_absent": True,
+                "ui_error_absent": True,
+                "ui_result_count": 0,
+                "request_completed": True,
+                "same_origin": True,
+                "http_2xx": True,
+                "source_status_present": True,
+                "required_sources_present": True,
+                "source_status_values_valid": True,
+                "all_sources_ready": True,
+                "result_counts_valid": True,
+                "result_counts_match_arrays": True,
+                "required_source_count": 3,
+                "ready_source_count": 3,
+                "result_count_total": 0,
+                "result_item_total": 0,
+            },
+        },
         "policy": {"external_media_403_allowed_origins": []},
         "run": {
             "kind": kind,
@@ -81,6 +124,9 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             "final_url": APP_URL,
             "ready_state": "complete",
             "settle_ms": 5000,
+            "overall_timeout_ms": 600000,
+            "overall_elapsed_ms": 120000,
+            "overall_deadline_exhausted": False,
         },
         "browser": {
             "engine": "chromium",
@@ -88,6 +134,14 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
             "profile_mode": "ephemeral",
             "off_the_record": True,
             "credential_persistence": False,
+            "credential_isolation": {
+                "cross_origin_frame_probed": True,
+                "cross_origin_frame_token_absent": True,
+                "opaque_origin_observed": True,
+                "sandbox_allow_scripts_only": True,
+                "csp_bypass_used": False,
+                "csp_enforcement_unchanged": True,
+            },
             "extensions_disabled": True,
             "launch_args": [
                 "--user-data-dir=<ephemeral>",
@@ -112,14 +166,35 @@ def capture(*, kind: str = "live", events: list[dict] | None = None) -> dict:
                     "url": f"{APP_ORIGIN}/api/auth/me",
                     "status": 200,
                     "resource_type": "Fetch",
-                }
+                },
+                {
+                    "channel": "Network.responseReceived",
+                    "page_family": "kol-pool",
+                    "url": f"{APP_ORIGIN}/api/admin/vkpi/intelligent/query",
+                    "status": 200,
+                    "resource_type": "Fetch",
+                },
+                {
+                    "channel": "Network.responseReceived",
+                    "page_family": "kol-pool",
+                    "url": f"{APP_ORIGIN}/api/admin/vkpi/global-search",
+                    "status": 200,
+                    "resource_type": "Fetch",
+                },
+                {
+                    "channel": "Network.responseReceived",
+                    "page_family": "kol-pool",
+                    "url": f"{APP_ORIGIN}/api/admin/vkpi/global-search",
+                    "status": 200,
+                    "resource_type": "Fetch",
+                },
             ],
             "network_failures": [],
             "network_summary": {
-                "response_count_total": 1,
-                "request_count_total": 1,
+                "response_count_total": 4,
+                "request_count_total": 4,
                 "response_error_count_total": 0,
-                "retained_response_count": 1,
+                "retained_response_count": 4,
                 "loading_failure_count": 0,
                 "inflight_same_origin_api_final": 0,
             },
@@ -154,6 +229,39 @@ def set_network(
     loading_failures: list[dict] | None = None,
 ) -> None:
     failures = list(loading_failures or [])
+    reviewed_functional_responses = [
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "kol-pool",
+            "url": f"{APP_ORIGIN}/api/admin/vkpi/intelligent/query",
+            "status": 200,
+            "resource_type": "Fetch",
+        },
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "kol-pool",
+            "url": f"{APP_ORIGIN}/api/admin/vkpi/global-search",
+            "status": 200,
+            "resource_type": "Fetch",
+        },
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "kol-pool",
+            "url": f"{APP_ORIGIN}/api/admin/vkpi/global-search",
+            "status": 200,
+            "resource_type": "Fetch",
+        },
+    ]
+    response_paths: dict[tuple[str, str], int] = {}
+    for row in responses:
+        key = (str(row.get("page_family") or ""), str(row.get("url") or ""))
+        response_paths[key] = response_paths.get(key, 0) + 1
+    for row in reviewed_functional_responses:
+        key = (row["page_family"], row["url"])
+        if response_paths.get(key, 0) == 0:
+            responses.append(row)
+        else:
+            response_paths[key] -= 1
     payload["collection"]["network_responses"] = responses
     payload["collection"]["network_failures"] = failures
     payload["collection"]["network_summary"] = {
@@ -172,7 +280,177 @@ def test_clean_owned_ephemeral_extension_free_live_capture_passes() -> None:
     result = gate.evaluate_capture(capture(events=[event(level="info", text="ready")]))
     assert result["overall"] == {"pass": True, "release_eligible": True, "failures": []}
     assert result["metrics"]["blocking_events"] == 0
+    assert result["metrics"]["functional_proof"] == {
+        "ask_find_pass": True,
+        "global_search_pass": True,
+        "pass": True,
+        "network_evidence_pass": True,
+    }
+    assert result["claims"]["live_functional_journey_completed"] is True
     assert result["claims"]["live_extension_free_run_completed"] is True
+
+
+def test_missing_functional_proof_fails_closed() -> None:
+    payload = capture()
+    del payload["functional_proof"]
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert result["claims"]["live_functional_journey_completed"] is False
+    assert any("functional_proof" in item for item in result["overall"]["failures"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("completed", False),
+        ("ask_not_started_before_search", False),
+        ("ask_clicked", False),
+        ("fact_count", 0),
+        ("evidence_count", 0),
+        ("intelligent_api_2xx_count", 0),
+        ("ui_global_search_api_2xx_count", 0),
+    ],
+)
+def test_incomplete_ask_find_journey_fails_closed(field: str, value: object) -> None:
+    payload = capture()
+    payload["functional_proof"]["ask_find"][field] = value
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert result["metrics"]["functional_proof"]["ask_find_pass"] is False
+    assert any("functional Ask & Find proof failed" in item for item in result["overall"]["failures"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("all_sources_ready", False),
+        ("ready_source_count", 2),
+        ("result_counts_match_arrays", False),
+        ("required_sources_present", False),
+        ("ui_search_completed", False),
+        ("ui_usable_state", False),
+        ("ui_partial_or_forbidden_absent", False),
+        ("ui_error_absent", False),
+    ],
+)
+def test_untrustworthy_global_search_source_proof_fails_closed(
+    field: str,
+    value: object,
+) -> None:
+    payload = capture()
+    payload["functional_proof"]["global_search"][field] = value
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert result["metrics"]["functional_proof"]["global_search_pass"] is False
+    assert any(
+        "global search source-truth proof failed" in item
+        for item in result["overall"]["failures"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("results_rendered", "trustworthy_empty", "result_count"),
+    [
+        (True, True, 1),
+        (False, False, 0),
+        (True, False, 0),
+        (False, True, 1),
+    ],
+)
+def test_ui_search_requires_exactly_one_consistent_rendered_outcome(
+    results_rendered: bool,
+    trustworthy_empty: bool,
+    result_count: int,
+) -> None:
+    payload = capture()
+    search = payload["functional_proof"]["global_search"]
+    search["ui_results_rendered"] = results_rendered
+    search["ui_trustworthy_empty"] = trustworthy_empty
+    search["ui_result_count"] = result_count
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert result["metrics"]["functional_proof"]["global_search_pass"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure"),
+    [
+        ("overall_timeout_ms", 59_999, "overall timeout"),
+        ("overall_elapsed_ms", -1, "overall elapsed"),
+        ("overall_deadline_exhausted", True, "deadline was exhausted"),
+        ("overall_elapsed_ms", 600_001, "exceeds its overall deadline"),
+    ],
+)
+def test_single_overall_deadline_proof_is_mandatory(
+    field: str,
+    value: object,
+    failure: str,
+) -> None:
+    payload = capture()
+    payload["run"][field] = value
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert any(failure in item for item in result["overall"]["failures"])
+
+
+def test_capture_cli_rejects_an_unbounded_or_too_short_overall_deadline(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            "node",
+            str(CAPTURE_PATH),
+            "--url",
+            APP_URL,
+            "--output",
+            str(tmp_path / "capture.json"),
+            "--overall-timeout-ms",
+            "59999",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "--overall-timeout-ms must be an integer within" in completed.stderr
+    assert not (tmp_path / "capture.json").exists()
+
+
+def test_functional_proof_accepts_only_boolean_counts_and_never_emits_answer_text() -> None:
+    payload = capture()
+    payload["functional_proof"]["ask_find"]["answer_text"] = "private answer body"
+    payload["functional_proof"]["ask_find"]["fact_count"] = "1"
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert "private answer body" not in json.dumps(result)
+    assert "answer_text" not in result["functional_proof"]["ask_find"]
+    assert any(
+        "reviewed boolean/count fields" in item
+        for item in result["overall"]["failures"]
+    )
+
+
+def test_functional_counts_must_match_retained_live_network_evidence() -> None:
+    payload = capture()
+    payload["collection"]["network_responses"] = [
+        row
+        for row in payload["collection"]["network_responses"]
+        if not row["url"].endswith("/api/admin/vkpi/intelligent/query")
+    ]
+    payload["collection"]["network_summary"].update(
+        {
+            "response_count_total": 3,
+            "request_count_total": 3,
+            "retained_response_count": 3,
+        }
+    )
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert result["metrics"]["functional_proof"]["network_evidence_pass"] is False
+    assert any(
+        "functional journey network evidence" in item
+        for item in result["overall"]["failures"]
+    )
 
 
 def test_invalid_token_cannot_be_promoted_by_authenticated_surface_claim() -> None:
@@ -293,6 +571,37 @@ def test_extension_free_proof_is_mandatory(field: str, value: object, failure: s
     result = gate.evaluate_capture(payload)
     assert result["overall"]["pass"] is False
     assert any(failure in item for item in result["overall"]["failures"])
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "failure"),
+    [
+        ("cross_origin_frame_probed", False, "cross_origin_frame_probed"),
+        ("cross_origin_frame_token_absent", False, "cross_origin_frame_token_absent"),
+        ("opaque_origin_observed", False, "opaque_origin_observed"),
+        ("sandbox_allow_scripts_only", False, "sandbox_allow_scripts_only"),
+        ("csp_bypass_used", True, "csp_bypass_unused"),
+        ("csp_enforcement_unchanged", False, "csp_enforcement_unchanged"),
+    ],
+)
+def test_cross_origin_credential_isolation_proof_is_mandatory(
+    field: str, value: bool, failure: str
+) -> None:
+    payload = capture()
+    payload["browser"]["credential_isolation"][field] = value
+    result = gate.evaluate_capture(payload)
+    assert result["overall"]["pass"] is False
+    assert any(failure in item for item in result["overall"]["failures"])
+
+
+def test_cross_origin_isolation_and_same_origin_ask_are_jointly_required() -> None:
+    result = gate.evaluate_capture(capture())
+    assert result["capture"]["extension_free_proof"]["cross_origin_frame_token_absent"] is True
+    assert result["capture"]["extension_free_proof"]["opaque_origin_observed"] is True
+    assert result["capture"]["extension_free_proof"]["csp_bypass_unused"] is True
+    assert result["capture"]["authenticated_surface_proof"]["token_present"] is True
+    assert result["metrics"]["functional_proof"]["ask_find_pass"] is True
+    assert result["overall"]["pass"] is True
 
 
 def test_disable_extension_flags_are_mandatory() -> None:
@@ -587,114 +896,3 @@ def test_verifier_imports_no_browser_network_or_runtime_clients_and_opens_no_soc
 
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     assert gate.evaluate_capture(capture(), require_live=False)["overall"]["pass"] is True
-
-
-def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_channels() -> None:
-    source = CAPTURE_PATH.read_text(encoding="utf-8")
-    for required in (
-        "mkdtempSync",
-        '"--disable-extensions"',
-        '"--disable-component-extensions-with-background-pages"',
-        '"Runtime.consoleAPICalled"',
-        '"Runtime.exceptionThrown"',
-        '"Log.entryAdded"',
-        '"Runtime.executionContextCreated"',
-        'profile_mode: "ephemeral"',
-        "rmSync(profileDir",
-        "new URL('/api/auth/me', location.href)",
-        "body?.status === 'success'",
-        "body?.user && typeof body.user === 'object'",
-        "const AUTH_PROBE_TIMEOUT_MS = 5000",
-        "signal: AbortSignal.timeout(${AUTH_PROBE_TIMEOUT_MS})",
-        "async function requireAuthentication(session)",
-        'throw new Error("browser_gate_token_expired")',
-        "await requireAuthentication(session)",
-        "browser_gate_first_page_failed",
-        "document.querySelector('.cockpit-shell main')",
-        "document.querySelector('input[type=\"password\"]')",
-        "authenticated_surface: authenticatedSurface",
-        "delete chromeEnv.VKPI_BROWSER_GATE_TOKEN",
-        'spawn(chromePath, launchArgs, { stdio: "ignore", env: chromeEnv })',
-        '"--incognito"',
-        '"--disable-crash-reporter"',
-        'await session.send("Network.enable")',
-        'await session.send("Network.setCookie", {',
-        'name: "via_token"',
-        "value: token",
-        'url: new URL("/", targetUrl.origin).href',
-        'path: "/"',
-        'httpOnly: true',
-        'secure: targetUrl.protocol === "https:"',
-        'sameSite: "Lax"',
-        "if (authCookie.success !== true)",
-        "Storage.prototype.getItem = function(key)",
-        "Storage.prototype.setItem = function(key, value)",
-        "Storage.prototype.removeItem = function(key)",
-        "serializedCapture.includes(token)",
-        "off_the_record: true",
-        "credential_persistence: false",
-        'enabled_domains: ["Page", "Network", "Runtime", "Log"]',
-        '"Network.responseReceived"',
-        '"Network.requestWillBeSent"',
-        '"Network.loadingFinished"',
-        '"Network.loadingFailed"',
-        "browser_gate_pages.json",
-        "pageManifest.pages",
-        "navigateAndProbePage",
-        "beginFullDocumentNavigation",
-        "const API_IDLE_GRACE_MS = 1000",
-        "const apiIdleDeadline = Math.max(deadline, Date.now() + API_IDLE_GRACE_MS)",
-        "waitForFinalSameOriginApiIdle",
-        "final same-origin API requests did not become idle before timeout",
-        "navigation_discarded_prior_api: navigationDiscardedPriorApi",
-        "same_origin_api_inflight_diagnostics",
-        "navigation_discarded_same_origin_api_total",
-        "external_media_403_allowed_origins: allowedExternalMedia403Origins",
-        "response_error_count_total: session.networkResponseErrorTotal",
-        "inflight_same_origin_api_final: session.inflightSameOriginApi.size",
-    ):
-        assert required in source
-    assert 'authenticated_surface: true' not in source
-    assert "FrameDoesNotExistError" not in source
-    assert "background.js" not in source
-    assert "VKPI_BROWSER_GATE_TOKEN=" not in source
-    assert "localStorage.setItem('viltrox_marketing_token_v1'" not in source
-    assert "?token=" not in source
-    assert "?access_token=" not in source
-    assert "--token" not in source
-    assert "Network.getResponseBody" not in source
-
-    network_enable = source.index('await session.send("Network.enable")')
-    cookie_injection = source.index('await session.send("Network.setCookie", {')
-    page_navigation = source.index('await session.send("Page.navigate", { url: args.url })')
-    assert network_enable < cookie_injection < page_navigation
-
-    per_page_navigation = source.split(
-        "async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)",
-        1,
-    )[1].split("async function waitForFinalSameOriginApiIdle", 1)[0]
-    discard_at = per_page_navigation.index("session.beginFullDocumentNavigation()")
-    auth_at = per_page_navigation.index("await requireAuthentication(session)")
-    target_at = per_page_navigation.index("const target = pageUrl", auth_at)
-    navigate_at = per_page_navigation.index('await session.send("Page.navigate"', target_at)
-    assert auth_at < target_at < discard_at < navigate_at
-
-    page_loop = source.split(
-        "for (const [pageIndex, page] of pageManifest.pages.entries())",
-        1,
-    )[1].split('const pageState = await session.send("Runtime.evaluate"', 1)[0]
-    result_at = page_loop.index("const pageResult = await navigateAndProbePage")
-    retain_at = page_loop.index("pages.push(pageResult)", result_at)
-    fail_fast_at = page_loop.index("pageIndex === 0", retain_at)
-    explicit_error_at = page_loop.index("browser_gate_first_page_failed", fail_fast_at)
-    assert result_at < retain_at < fail_fast_at < explicit_error_at
-
-    final_state_read = source.index('const pageState = await session.send("Runtime.evaluate", {')
-    final_idle = source.index(
-        "await waitForFinalSameOriginApiIdle(session, args.pageTimeoutMs)",
-        final_state_read,
-    )
-    final_snapshot = source.index("const finalNetworkSnapshot = {", final_idle)
-    capture_assignment = source.index("capture = {", final_snapshot)
-    assert final_state_read < final_idle < final_snapshot < capture_assignment
-    assert "inflight_same_origin_api_final: finalNetworkSnapshot.inflight_same_origin_api_final" in source

@@ -112,7 +112,11 @@ def test_postgres_scope_closes_and_restores_context_on_exception(monkeypatch) ->
     fake = FakeConnection()
     before = db_connection._scoped_conn.get()
     monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
-    monkeypatch.setattr(db_connection, "_build_postgres_conn", lambda: fake)
+    def build(*, release_validation_guard: bool) -> FakeConnection:
+        assert release_validation_guard is False
+        return fake
+
+    monkeypatch.setattr(db_connection, "_build_postgres_conn", build)
 
     with pytest.raises(ValueError, match="scope failure"):
         with db_connection.db_connection_sync_scope():
@@ -133,7 +137,11 @@ def test_postgres_scope_closes_and_restores_context_on_success(monkeypatch) -> N
     fake = FakeConnection()
     before = db_connection._scoped_conn.get()
     monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
-    monkeypatch.setattr(db_connection, "_build_postgres_conn", lambda: fake)
+    def build(*, release_validation_guard: bool) -> FakeConnection:
+        assert release_validation_guard is False
+        return fake
+
+    monkeypatch.setattr(db_connection, "_build_postgres_conn", build)
 
     with db_connection.db_connection_sync_scope():
         assert db_connection.get_conn() is fake
@@ -153,7 +161,8 @@ def test_postgres_reusing_scope_does_not_lease_twice_inside_request_scope(monkey
     builds: list[FakeConnection] = []
     monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
 
-    def build() -> FakeConnection:
+    def build(*, release_validation_guard: bool) -> FakeConnection:
+        assert release_validation_guard is False
         builds.append(fake)
         return fake
 
@@ -179,7 +188,11 @@ def test_postgres_reusing_scope_still_bounds_standalone_call(monkeypatch) -> Non
     fake = FakeConnection()
     before = db_connection._scoped_conn.get()
     monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
-    monkeypatch.setattr(db_connection, "_build_postgres_conn", lambda: fake)
+    def build(*, release_validation_guard: bool) -> FakeConnection:
+        assert release_validation_guard is False
+        return fake
+
+    monkeypatch.setattr(db_connection, "_build_postgres_conn", build)
 
     with db_connection.db_connection_sync_reusing_scope():
         assert db_connection.get_conn() is fake

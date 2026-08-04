@@ -23,7 +23,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
-from app.db.connection import get_conn
+from app.core.release_validation import release_validation_active
+from app.db.connection import get_conn, table_exists
 from app.domains.integrations import goaffpro_connect
 
 
@@ -718,7 +719,21 @@ def goaffpro_summary(
     供数据追踪表 + 项目卡复用。?project_id= 限定项目;?search= 按 KOL名/handle/ref码/优惠码 过滤。
     单次 JOIN(links+kol_pool+metrics),按 GMV 降序(头部 KOL 在前),上千 KOL 不卡。
     """
-    goaffpro_connect.ensure_goaffpro_links_schema()
+    if release_validation_active():
+        required_tables = (
+            "vkpi_goaffpro_kol_links",
+            "vkpi_goaffpro_kol_metrics",
+        )
+        if not all(table_exists(name) for name in required_tables):
+            return {
+                "ok": True,
+                "items": [],
+                "count": 0,
+                "totals": _empty_totals(),
+                "note": "release validation: cached GOAFFPRO tables unavailable",
+            }
+    else:
+        goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
     project_kol_ids: set[int] | None = None
     if project_id is not None:

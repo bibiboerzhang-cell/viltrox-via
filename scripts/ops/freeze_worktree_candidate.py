@@ -889,6 +889,62 @@ def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
+    """Run the canonical gate from candidate bytes, then reverify the candidate."""
+
+    before = verify_deploy_source(args)
+    snapshot = Path(str(before["snapshot"])).resolve()
+    source = Path(args.source).resolve()
+    manifest_path = Path(args.manifest).resolve()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FreezeError("deploy gate manifest is invalid") from exc
+    source_record = manifest.get("source") if isinstance(manifest, dict) else None
+    recorded_repo = source_record.get("repo") if isinstance(source_record, dict) else None
+    if not isinstance(recorded_repo, str) or Path(recorded_repo).resolve() != source:
+        raise FreezeError("deploy gate source repository binding mismatch")
+    python_bin = Path(args.python).resolve()
+    if not python_bin.is_file() or not os.access(python_bin, os.X_OK):
+        raise FreezeError("deploy gate Python interpreter is unavailable")
+
+    environment = os.environ.copy()
+    for name in GIT_REPOSITORY_BINDING_ENV:
+        environment.pop(name, None)
+    environment.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHON_BIN": str(python_bin),
+            "PYTHON_BIN_FALLBACK": str(python_bin),
+            "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE": "0",
+            "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
+            "VKPI_VERIFY_REQUIRE_RUNTIME": "1",
+            "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY": "0",
+        }
+    )
+    completed: subprocess.CompletedProcess[bytes] | None = None
+    try:
+        with _readonly_snapshot_git_environment(
+            snapshot, source
+        ) as git_environment:
+            environment.update(git_environment)
+            with _borrow_dependencies(snapshot, source):
+                completed = subprocess.run(
+                    ["bash", "scripts/verify.sh"],
+                    cwd=snapshot,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+    finally:
+        after = verify_deploy_source(args)
+    if completed is None or completed.returncode != 0:
+        code = completed.returncode if completed is not None else "unavailable"
+        raise FreezeError(f"candidate canonical deploy gate failed: {code}")
+    after["canonical_deploy_gate"] = True
+    return after
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     subparsers = result.add_subparsers(dest="command", required=True)
@@ -909,6 +965,14 @@ def parser() -> argparse.ArgumentParser:
     deploy_source.add_argument("--expected-head", required=True)
     deploy_source.add_argument("--expected-branch", required=True)
     deploy_source.set_defaults(action=verify_deploy_source)
+    deploy_gate = subparsers.add_parser("run-deploy-gate")
+    deploy_gate.add_argument("--manifest", required=True)
+    deploy_gate.add_argument("--snapshot", required=True)
+    deploy_gate.add_argument("--expected-head", required=True)
+    deploy_gate.add_argument("--expected-branch", required=True)
+    deploy_gate.add_argument("--source", required=True)
+    deploy_gate.add_argument("--python", required=True)
+    deploy_gate.set_defaults(action=run_deploy_gate)
     return result
 
 

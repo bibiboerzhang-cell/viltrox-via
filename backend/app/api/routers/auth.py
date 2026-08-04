@@ -17,6 +17,7 @@ from app.core.config import UPLOAD_DIR
 from app.core.config import IS_PRODUCTION
 from app.db.connection import db_read, db_write, get_conn, is_postgres_runtime
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.core.security import (
     apply_auth_cookie,
     clear_auth_cookie,
@@ -324,7 +325,7 @@ def auth_me(request: Request):
     # 2026-06-16 在线状态:/me 是前端轮询点,节流更新 last_seen_at(>50s 才写,免每次轮询都写库)。
     try:
         uid = int(user.get("id") or 0)
-        if uid:
+        if uid and not release_validation_active():
             from app.db.connection import get_conn
             conn = get_conn()
             conn.execute(

@@ -30,7 +30,7 @@ def test_minted_token_is_admin_and_strictly_bounded() -> None:
         secret=SECRET,
         issuer=ISSUER,
         audience=AUDIENCE,
-        ttl_seconds=900,
+        ttl_seconds=1200,
         now=issued_at,
     )
     payload = jwt.decode(
@@ -42,11 +42,11 @@ def test_minted_token_is_admin_and_strictly_bounded() -> None:
     )
     assert payload["uid"] == 42
     assert payload["role"] == "admin"
-    assert payload["exp"] - payload["iat"] == 900
+    assert payload["exp"] - payload["iat"] == 1200
     assert payload["nbf"] == payload["iat"]
 
 
-@pytest.mark.parametrize("ttl", [0, 59, 901, 3600])
+@pytest.mark.parametrize("ttl", [0, 59, 1201, 3600])
 def test_minted_token_rejects_out_of_contract_ttl(ttl: int) -> None:
     with pytest.raises(mint.MintError):
         mint.mint_admin_token(
@@ -65,7 +65,7 @@ def test_admin_lookup_is_postgres_readonly_and_requires_reviewed_admin_query(
 
     class Cursor:
         def __init__(self) -> None:
-            self.rows = iter([("on",), (42,)])
+            self.rows = iter([("on",), ("pg_catalog, public",), ("vkpi",), (42,)])
 
         def __enter__(self):
             return self
@@ -98,11 +98,18 @@ def test_admin_lookup_is_postgres_readonly_and_requires_reviewed_admin_query(
         return Connection()
 
     monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=connect))
-    assert mint.select_admin_user_id("postgresql://controlled.invalid/vkpi") == 42
-    assert calls[1] == ("options", "-c default_transaction_read_only=on")
+    assert mint.select_admin_user_id("postgresql://127.0.0.1/vkpi") == 42
+    assert calls[1] == (
+        "options",
+        "-c default_transaction_read_only=on -c search_path=pg_catalog,public",
+    )
     query_text = " ".join(str(value) for key, value in calls if key == "query")
     for required in (
         "SHOW transaction_read_only",
+        "SHOW search_path",
+        "SELECT pg_catalog.current_database()",
+        "FROM public.users AS u",
+        "JOIN public.staff AS s",
         "u.status",
         "u.email_verified",
         "s.active",
@@ -110,7 +117,71 @@ def test_admin_lookup_is_postgres_readonly_and_requires_reviewed_admin_query(
         "'admin'",
     ):
         assert required in query_text
+    assert "COALESCE(" in query_text
+    assert "pg_catalog.COALESCE" not in query_text
     assert ("rollback", True) in calls
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected_message"),
+    [
+        ([('on',), ('\"$user\", public',), ('vkpi',)], "search_path"),
+        ([('on',), ('pg_catalog, public',), ('shadow_db',)], "database identity"),
+    ],
+)
+def test_admin_lookup_rejects_shadow_path_or_database_mismatch_before_admin_query(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[str]],
+    expected_message: str,
+) -> None:
+    queries: list[str] = []
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.rows = iter(rows)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, query: str) -> None:
+            queries.append(" ".join(query.split()))
+
+        def fetchone(self):
+            return next(self.rows)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def rollback(self) -> None:
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda *_args, **_kwargs: Connection()),
+    )
+    with pytest.raises(mint.MintError, match=expected_message):
+        mint.select_admin_user_id("postgresql://127.0.0.1/vkpi")
+
+    assert not any("FROM public.users" in query for query in queries)
+
+
+def test_admin_lookup_rejects_conninfo_database_override_without_secret() -> None:
+    unsafe = "postgresql://app:do-not-print@127.0.0.1/vkpi?dbname=shadow"
+    with pytest.raises(mint.MintError) as captured:
+        mint.select_admin_user_id(unsafe)
+
+    assert "do-not-print" not in str(captured.value)
 
 
 def test_cli_stdout_is_only_the_token_and_failures_never_echo_secrets(

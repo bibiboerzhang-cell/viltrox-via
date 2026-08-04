@@ -20,7 +20,17 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
+try:
+    from browser_console_functional_proof import (
+        evaluate_deadline_proof,
+        evaluate_functional_proof,
+    )
+except ModuleNotFoundError:  # Imported by a test from the repository root.
+    from runpy import run_path
 
+    _proof_helpers = run_path(Path(__file__).with_name("browser_console_functional_proof.py"))
+    evaluate_deadline_proof = _proof_helpers["evaluate_deadline_proof"]
+    evaluate_functional_proof = _proof_helpers["evaluate_functional_proof"]
 CAPTURE_SCHEMA_VERSION = "vkpi-browser-console-capture/v1"
 GATE_SCHEMA_VERSION = "vkpi-browser-console-gate/v1"
 MAX_CAPTURE_BYTES = 10 * 1024 * 1024
@@ -72,7 +82,6 @@ REQUIRED_PAGE_FAMILIES: dict[str, tuple[str, str]] = {
     "strategyBoard": ("strategyBoard", "战略台"),
     "gtmCommand": ("gtmCommand", "GTM Command"),
 }
-
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _QUERY_SECRET = re.compile(r"(?i)(access_token|api[_-]?key|token|authorization)=([^&\s]+)")
@@ -612,6 +621,8 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
     if run.get("page_settled") is not True:
         failures.append("page did not reach the configured settle point")
 
+    deadline_proof = evaluate_deadline_proof(run, failures=failures)
+
     # Do not trust a producer's authenticated_surface assertion on its own.
     # Release proof requires a same-origin /api/auth/me result and the final
     # cockpit DOM; an invalid token or a login/reset page must fail closed.
@@ -650,6 +661,10 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
         application_origin=application_origin,
         failures=failures,
     )
+    functional_proof, functional_metrics = evaluate_functional_proof(
+        payload,
+        failures=failures,
+    )
 
     policy = payload.get("policy") if isinstance(payload.get("policy"), Mapping) else {}
     allowed_external_media_403_origins = _validate_exact_external_media_origins(
@@ -659,6 +674,7 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
     )
 
     browser = payload.get("browser") if isinstance(payload.get("browser"), Mapping) else {}
+    isolation = browser.get("credential_isolation") if isinstance(browser.get("credential_isolation"), Mapping) else {}
     launch_args = _validate_string_list(browser.get("launch_args"), "browser.launch_args", failures)
     cleanup = payload.get("cleanup") if isinstance(payload.get("cleanup"), Mapping) else {}
     extension_free_proof = {
@@ -667,6 +683,12 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
         "profile_mode_ephemeral": browser.get("profile_mode") == "ephemeral",
         "off_the_record": browser.get("off_the_record") is True,
         "credential_persistence_disabled": browser.get("credential_persistence") is False,
+        "cross_origin_frame_probed": isolation.get("cross_origin_frame_probed") is True,
+        "cross_origin_frame_token_absent": isolation.get("cross_origin_frame_token_absent") is True,
+        "opaque_origin_observed": isolation.get("opaque_origin_observed") is True,
+        "sandbox_allow_scripts_only": isolation.get("sandbox_allow_scripts_only") is True,
+        "csp_bypass_unused": isolation.get("csp_bypass_used") is False,
+        "csp_enforcement_unchanged": isolation.get("csp_enforcement_unchanged") is True,
         "ephemeral_user_data_dir_flag": any(
             item.startswith("--user-data-dir=") for item in launch_args
         ),
@@ -720,6 +742,36 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
         allowed_external_media_403_origins=allowed_external_media_403_origins,
         failures=failures,
     )
+    functional_network_counts = {
+        "intelligent_api_2xx": sum(
+            1
+            for row in network_responses
+            if row.get("page_family") == "kol-pool"
+            and 200 <= int(row.get("status") or 0) < 300
+            and urlsplit(str(row.get("url") or "")).path
+            == "/api/admin/vkpi/intelligent/query"
+        ),
+        "global_search_api_2xx": sum(
+            1
+            for row in network_responses
+            if row.get("page_family") == "kol-pool"
+            and 200 <= int(row.get("status") or 0) < 300
+            and urlsplit(str(row.get("url") or "")).path
+            == "/api/admin/vkpi/global-search"
+        ),
+    }
+    functional_network_pass = (
+        functional_network_counts["intelligent_api_2xx"]
+        >= functional_proof["ask_find"]["intelligent_api_2xx_count"]
+        >= 1
+        and functional_network_counts["global_search_api_2xx"]
+        >= functional_proof["ask_find"]["ui_global_search_api_2xx_count"] + 1
+        >= 2
+    )
+    functional_metrics["network_evidence_pass"] = functional_network_pass
+    functional_metrics["pass"] = functional_metrics["pass"] and functional_network_pass
+    if not functional_network_pass:
+        failures.append("functional journey network evidence is missing or inconsistent")
     tolerated_media_response_urls = {
         str(row.get("url") or "")
         for row in network_responses
@@ -814,6 +866,8 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
             "final_origin": final_origin,
             "extension_free_proof": extension_free_proof,
             "required_live": bool(require_live),
+            "functional_proof_required": True,
+            "overall_deadline_proof": deadline_proof,
             "authenticated_surface_proof": auth_proof,
             "page_manifest_families": sorted(REQUIRED_PAGE_FAMILIES),
             "external_media_403_allowed_origins": sorted(
@@ -834,8 +888,10 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
             "provenance_counts": dict(sorted(provenance_counts.items())),
             "tolerated_external_media_403_console_events": tolerated_media_console_count,
             "pages": page_metrics,
+            "functional_proof": functional_metrics,
             "network": network_metrics,
         },
+        "functional_proof": functional_proof,
         "pages": page_rows,
         "events": sanitized_events,
         "network": {
@@ -853,6 +909,11 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
             "external_http_errors_fail_closed": True,
             "external_media_403_requires_exact_origin_allowlist": True,
             "external_media_403_console_requires_network_match": True,
+            "live_functional_journey_required": True,
+            "single_overall_deadline_required": True,
+            "live_functional_journey_completed": (
+                kind == "live" and functional_metrics["pass"]
+            ),
             "live_extension_free_run_completed": kind == "live" and not failures,
         },
     }
@@ -862,6 +923,7 @@ def evaluate_capture(payload: Mapping[str, Any], *, require_live: bool = True) -
             "capture",
             "overall",
             "metrics",
+            "functional_proof",
             "pages",
             "events",
             "network",

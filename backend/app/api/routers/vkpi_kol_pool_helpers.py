@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from fastapi import Request
 
+from app.core.release_validation import release_validation_active
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
@@ -134,6 +135,17 @@ async def _maybe_enqueue_refresh(
     force: bool = False,
     reason: str = "stale_while_revalidate",
 ) -> dict:
+    if release_validation_active():
+        # freshness_for_kol has a compatibility schema guard, so even that
+        # helper is intentionally skipped while the candidate must stay
+        # database-read-only. Keep a stable response shape for the UI.
+        return {
+            "triggered": False,
+            "reason": "release_validation_fenced",
+            "freshness": None,
+            "search_marker": None,
+            "provider_calls_enabled": False,
+        }
     search_marker = refresh_tier.record_kol_search(int(kol_pool_id))
     freshness = refresh_tier.freshness_for_kol(int(kol_pool_id))
     provider_calls_enabled = _on_demand_refresh_enabled()

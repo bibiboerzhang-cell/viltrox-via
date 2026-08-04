@@ -34,7 +34,7 @@ _PARALLEL_DB_SLOTS = threading.BoundedSemaphore(_PARALLEL_DB_SLOT_COUNT)
 
 def _run_scoped(fn: Callable[[], T]) -> T:
     with _PARALLEL_DB_SLOTS:
-        with db_connection_sync_scope():
+        with db_connection_sync_scope(release_validation_guard=True):
             return fn()
 
 
