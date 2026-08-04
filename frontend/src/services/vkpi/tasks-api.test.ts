@@ -141,6 +141,24 @@ describe("getTaskQueue / compact(query 默认值)", () => {
     expect(url.pathname).toBe("/api/admin/vkpi/task-queue/compact");
     expect(url.searchParams.get("limit")).toBe("30");
     expect(url.searchParams.get("recent_minutes")).toBe("5");
+    expect(apiFetch.mock.calls[0][1]).toMatchObject({ timeoutMs: 5000 });
+  });
+
+  it("compact 透传 AbortSignal 与显式短超时", async () => {
+    const controller = new AbortController();
+    apiFetch.mockResolvedValue({ status: "ready" });
+    await getTaskQueueCompact(
+      "tok",
+      { limit: 12, recentMinutes: 2 },
+      { signal: controller.signal, timeoutMs: 1200 },
+    );
+
+    const [path, init, token] = apiFetch.mock.calls[0];
+    const url = new URL(`http://x${path}`);
+    expect(url.searchParams.get("limit")).toBe("12");
+    expect(url.searchParams.get("recent_minutes")).toBe("2");
+    expect(init).toMatchObject({ signal: controller.signal, timeoutMs: 1200 });
+    expect(token).toBe("tok");
   });
 });
 

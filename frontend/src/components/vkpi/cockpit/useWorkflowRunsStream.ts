@@ -6,7 +6,7 @@ import {
 } from "../../../services/vkpi/tasks-api";
 
 // 10C 状态同源:后台任务事实源(workflow_runs → task_queue_view 投影,经 /task-queue/compact
-// 暴露为 active/recent/queued)轮询 hook。固定间隔拉取 + 页面隐藏时暂停 + 卸载清理,
+// 暴露为 active/recent/queued)轮询 hook。请求结算后再计时 + 页面隐藏时暂停 + 卸载清理,
 // 让 TaskProgressBoard 等消费方在后台任务推进/完成时自动反映,无需手动刷新。
 //
 // 时间机制(MEMORY: vkpi-time-mechanism):后端时间字段已是 UTC ISO 串,展示层各组件
@@ -46,10 +46,10 @@ export interface WorkflowRunsStream {
 }
 
 /**
- * 轻量轮询 hook:固定间隔拉取后台任务进度(workflow_runs 统一事实源的 compact 投影)。
+ * 轻量轮询 hook:顺序拉取后台任务进度(workflow_runs 统一事实源的 compact 投影)。
  *
  * - 可见性节流:页面切到后台(visibilitychange → hidden)即停轮询,切回前台立即补一拍再恢复。
- * - 卸载清理:清掉 interval + 移除 visibilitychange 监听,且用 mounted 闸防卸载后 setState。
+ * - 卸载清理:清掉 timeout、取消请求并移除 visibilitychange 监听。
  * - 无 apiToken 时不发请求(置空 payload),避免 401 噪音。
  */
 export function useWorkflowRunsStream(
@@ -64,62 +64,116 @@ export function useWorkflowRunsStream(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // mounted 闸:异步返回时若组件已卸载则丢弃结果,杜绝 "setState on unmounted" 警告。
-  const mountedRef = useRef(true);
-
-  const refresh = useCallback(async () => {
-    if (!apiToken || isDocumentHidden()) return;
-    setLoading(true);
-    try {
-      const response = await getTaskQueueCompact(apiToken, { limit, recentMinutes });
-      if (!mountedRef.current) return;
-      setPayload(response);
-      setError("");
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : "任务进度连接中");
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
-  }, [apiToken, limit, recentMinutes]);
+  const refreshRunnerRef = useRef<() => Promise<void>>(async () => {});
+  const previousTokenRef = useRef(apiToken);
+  const refresh = useCallback(() => refreshRunnerRef.current(), []);
 
   useEffect(() => {
-    mountedRef.current = true;
+    let stopped = false;
+    let timeoutId: number | undefined;
+    let inFlight: { controller: AbortController; promise: Promise<void> } | null = null;
+
+    const clearScheduledPoll = () => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    const abortActiveRequest = () => {
+      const activeRequest = inFlight;
+      inFlight = null;
+      activeRequest?.controller.abort(new DOMException("Request paused", "AbortError"));
+      if (!stopped) setLoading(false);
+    };
+
+    const requestOnce = (): Promise<void> => {
+      if (stopped || !apiToken || isDocumentHidden()) return Promise.resolve();
+      if (inFlight) return inFlight.promise;
+
+      const requestController = new AbortController();
+      const activeRequest = {
+        controller: requestController,
+        promise: Promise.resolve(),
+      };
+      setLoading(true);
+
+      const request = (async () => {
+        try {
+          const response = await getTaskQueueCompact(
+            apiToken,
+            { limit, recentMinutes },
+            { signal: requestController.signal },
+          );
+          if (stopped || requestController.signal.aborted) return;
+          setPayload(response);
+          setError("");
+        } catch (err) {
+          if (stopped || requestController.signal.aborted) return;
+          setError(err instanceof Error ? err.message : "任务进度连接中");
+        } finally {
+          if (inFlight === activeRequest) {
+            inFlight = null;
+            if (!stopped) setLoading(false);
+          }
+        }
+      })();
+      activeRequest.promise = request;
+      inFlight = activeRequest;
+      return request;
+    };
+
+    const scheduleNextPoll = () => {
+      clearScheduledPoll();
+      if (stopped || !apiToken || isDocumentHidden()) return;
+      timeoutId = window.setTimeout(() => {
+        timeoutId = undefined;
+        void pollCycle();
+      }, intervalMs);
+    };
+
+    const pollCycle = async () => {
+      await requestOnce();
+      scheduleNextPoll();
+    };
+
+    refreshRunnerRef.current = requestOnce;
+
+    if (previousTokenRef.current !== apiToken) {
+      previousTokenRef.current = apiToken;
+      setPayload(null);
+      setError("");
+    }
+
     if (!apiToken) {
       setPayload(null);
+      setLoading(false);
       setError("缺少 API token");
       return () => {
-        mountedRef.current = false;
+        stopped = true;
+        refreshRunnerRef.current = async () => {};
       };
     }
 
-    let intervalId: number | undefined;
-    const startPolling = () => {
-      if (intervalId || isDocumentHidden()) return;
-      void refresh();
-      intervalId = window.setInterval(() => {
-        void refresh();
-      }, intervalMs);
-    };
-    const stopPolling = () => {
-      if (intervalId) {
-        window.clearInterval(intervalId);
-        intervalId = undefined;
-      }
-    };
     const handleVisibility = () => {
-      if (isDocumentHidden()) stopPolling();
-      else startPolling();
+      clearScheduledPoll();
+      if (isDocumentHidden()) {
+        abortActiveRequest();
+        return;
+      }
+      void pollCycle();
     };
 
-    startPolling();
+    void pollCycle();
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
-      mountedRef.current = false;
-      stopPolling();
+      stopped = true;
+      clearScheduledPoll();
+      abortActiveRequest();
+      refreshRunnerRef.current = async () => {};
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [apiToken, intervalMs, refresh]);
+  }, [apiToken, intervalMs, limit, recentMinutes]);
 
   const active = useMemo(() => asItems(payload?.active), [payload]);
   const recent = useMemo(() => asItems(payload?.recent), [payload]);

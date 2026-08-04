@@ -117,6 +117,7 @@ export async function apiFetch<T>(
   }
 
   let response: Response;
+  let raw: string;
   try {
     response = await fetch(buildApiUrl(path), {
       ...requestInit,
@@ -124,6 +125,10 @@ export async function apiFetch<T>(
       headers,
       signal: controller.signal,
     });
+    // Keep the same timeout/abort lifecycle until the response body is fully
+    // consumed.  fetch() can resolve as soon as headers arrive while a stalled
+    // body remains unread indefinitely.
+    raw = await response.text();
   } catch (error) {
     if (controller.signal.aborted) {
       const reason = controller.signal.reason;
@@ -139,7 +144,6 @@ export async function apiFetch<T>(
     externalSignal?.removeEventListener("abort", abortFromExternal);
   }
 
-  const raw = await response.text();
   let parsed: unknown = {};
   if (raw) {
     try {
