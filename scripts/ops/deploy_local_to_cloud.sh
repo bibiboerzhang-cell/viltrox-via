@@ -200,6 +200,7 @@ root = Path(sys.argv[1])
 paths = {
     Path("scripts/ops/deploy_gate_runtime.py"): 0o400,
     Path("scripts/ops/freeze_worktree_candidate.py"): 0o500,
+    Path("scripts/ops/freeze_worktree_contract.py"): 0o400,
     Path("scripts/ops/freeze_git_bridge.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"): 0o500,
@@ -243,6 +244,7 @@ seal_deploy_verifier_bundle() {
   for relative in \
     scripts/ops/deploy_gate_runtime.py \
     scripts/ops/freeze_worktree_candidate.py \
+    scripts/ops/freeze_worktree_contract.py \
     scripts/ops/freeze_git_bridge.py \
     scripts/ops/legacy_to_atomic_preflight.py \
     scripts/ops/verify_legacy_bootstrap_anchor.py \
@@ -258,7 +260,7 @@ seal_deploy_verifier_bundle() {
       return 1
     fi
     case "${relative}" in
-      scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/stdout_utils.py)
+      scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_worktree_contract.py|scripts/stdout_utils.py)
         install -m 0400 "${source}" "${target}"
         ;;
       *)
@@ -283,6 +285,7 @@ for relative in (
     Path("scripts/ops/deploy_gate_runtime.py"),
     Path("scripts/ops/freeze_git_bridge.py"),
     Path("scripts/ops/freeze_worktree_candidate.py"),
+    Path("scripts/ops/freeze_worktree_contract.py"),
     Path("scripts/ops/legacy_to_atomic_preflight.py"),
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"),
     Path("scripts/stdout_utils.py"),
@@ -306,6 +309,7 @@ cleanup_deploy_verifier_bundle() {
   for path in \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_gate_runtime.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_contract.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -14,11 +15,52 @@ import pytest
 from scripts.ops.freeze_worktree_candidate import (
     FreezeError,
     _assert_frontend_dist_reproducible,
+    _regular_tree_inventory,
     freeze_candidate,
     run_deploy_gate,
     verify_deploy_source,
     verify_manifest,
 )
+
+
+def test_frozen_verifier_support_modules_import_under_isolated_python(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "verifier"
+    for relative in (
+        "scripts/ops/deploy_gate_runtime.py",
+        "scripts/ops/freeze_git_bridge.py",
+        "scripts/ops/freeze_worktree_candidate.py",
+        "scripts/ops/freeze_worktree_contract.py",
+    ):
+        target = bundle / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(Path(relative), target)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            str(bundle / "scripts/ops/freeze_worktree_candidate.py"),
+            "--help",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "verify-deploy-source" in result.stdout
+    assert [row[1] for row in _regular_tree_inventory(bundle)] == [
+        "scripts",
+        "scripts/ops",
+        "scripts/ops/deploy_gate_runtime.py",
+        "scripts/ops/freeze_git_bridge.py",
+        "scripts/ops/freeze_worktree_candidate.py",
+        "scripts/ops/freeze_worktree_contract.py",
+    ]
 
 
 def _write(path: Path, text: str) -> None:
