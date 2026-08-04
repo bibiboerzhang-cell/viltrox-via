@@ -74,11 +74,15 @@ def _ledger_for_session(session: dict[str, Any]) -> dict[str, Any]:
 def recover_session(session_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the durable lookup state for one session.
 
-    Raises ``LookupError`` if the session does not exist. ``staff`` is accepted
-    for parity with the route guard; visibility is already enforced by the tab
-    permission and the session is the actor's own lookup record.
+    Raises ``LookupError`` if the session does not exist or belongs to another
+    employee.  The tab permission only grants access to the feature; the row is
+    additionally owner-scoped here before its result or ledger id is exposed.
     """
-    session = search_sessions.get_session(int(session_id))
+    session = search_sessions.get_session(
+        int(session_id),
+        staff=staff,
+        scope_to_staff=True,
+    )
     result_summary = session.get("result_summary") if isinstance(session.get("result_summary"), dict) else {}
     payload = {
         "status": "ready",

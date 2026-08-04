@@ -35,6 +35,10 @@ from app.api.routers.vkpi_kol_pool_search_responses import (
     _text_response_status,
     _url_response_status,
 )
+from app.api.routers.vkpi_kol_pool_search_scope import (
+    _approved_session_kol_ids,
+    _owned_search_session_or_http,
+)
 
 router = APIRouter(tags=["vkpi-kol-pool"])
 logger = get_logger(__name__)
@@ -231,9 +235,13 @@ def list_kol_search_sessions(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """List recent unified KOL search sessions."""
-    del staff
     try:
-        return kol_search_sessions.list_sessions(limit=limit, status=status)
+        return kol_search_sessions.list_sessions(
+            limit=limit,
+            status=status,
+            staff=staff,
+            scope_to_staff=True,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -349,6 +357,8 @@ def approve_kol_search_session(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -388,15 +398,11 @@ def estimate_kol_search_session_cost(
 
     只读估算:费率档 × 平台 → 预算区间;风险只读展示信号,零触 viltrox_fit_score。
     """
-    try:
-        session = kol_search_sessions.get_session(int(session_id), staff=staff, scope_to_staff=True)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    raw_ids = body.get("kol_pool_ids") if isinstance(body, dict) else None
-    if not isinstance(raw_ids, list) or not raw_ids:
-        raw_ids = session.get("approved_kol_ids") or []
+    session = _owned_search_session_or_http(int(session_id), staff)
+    raw_ids = _approved_session_kol_ids(
+        session,
+        body.get("kol_pool_ids") if isinstance(body, dict) else None,
+    )
     posts = body.get("posts_per_creator") if isinstance(body, dict) else None
     try:
         ppc = int(posts) if posts is not None else 1
@@ -415,15 +421,11 @@ def generate_kol_search_session_outreach(
 
     走 llm_gateway(预算闸 + 代理);仅草案——绝不外发、不承诺价格、零触 viltrox_fit_score。
     """
-    try:
-        session = kol_search_sessions.get_session(int(session_id), staff=staff, scope_to_staff=True)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise _service_unavailable("outreach_session_unavailable", "generate_outreach") from exc
-    raw_ids = body.get("kol_pool_ids") if isinstance(body, dict) else None
-    if not isinstance(raw_ids, list) or not raw_ids:
-        raw_ids = session.get("approved_kol_ids") or []
+    session = _owned_search_session_or_http(int(session_id), staff)
+    raw_ids = _approved_session_kol_ids(
+        session,
+        body.get("kol_pool_ids") if isinstance(body, dict) else None,
+    )
     # brief:body 优先 → 会话内可得 plan → query_text 兜底(与 R2 草案同口径)。
     brief_in = body.get("brief") if isinstance(body.get("brief"), dict) else {}
     input_payload = session.get("input_payload") if isinstance(session.get("input_payload"), dict) else {}
@@ -461,6 +463,7 @@ def execute_kol_search_session_item_profile_crawl(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Plan or execute safe profile crawl for a discovery session item."""
+    _owned_search_session_or_http(int(session_id), staff)
     try:
         if _body_bool(body, "execute"):
             queued = kol_profile_discovery.enqueue_search_session_advance(
@@ -505,6 +508,7 @@ def advance_kol_search_session_items(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Plan or execute ordered profile crawl for discovery items in one session."""
+    _owned_search_session_or_http(int(session_id), staff)
     try:
         if _body_bool(body, "execute"):
             queued = kol_profile_discovery.enqueue_search_session_advance(
@@ -538,6 +542,7 @@ def enqueue_kol_search_session_advance(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Queue ordered profile crawl for session items; worker executes it."""
+    _owned_search_session_or_http(int(session_id), staff)
     try:
         return kol_profile_discovery.enqueue_search_session_advance(
             session_id=int(session_id),
@@ -559,6 +564,7 @@ def cancel_kol_search_session_advance(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Block queued session-advance jobs; running provider work is left alone."""
+    _owned_search_session_or_http(int(session_id), staff)
     try:
         return kol_profile_discovery.cancel_search_session_advance(
             session_id=int(session_id),

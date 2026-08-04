@@ -40,7 +40,6 @@ export const FULL_BOARD_MODULE_CATALOG: FullBoardModuleSource[] = [
       { moduleKey: "followerTrend", label: "粉丝趋势", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 20 },
       { moduleKey: "claims", label: "我的认领", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16 },
       { moduleKey: "shares", label: "共享池", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16 },
-      { moduleKey: "cover", label: "数据覆盖", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20 },
     ],
   },
   {

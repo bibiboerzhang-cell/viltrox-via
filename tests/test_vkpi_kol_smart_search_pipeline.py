@@ -273,6 +273,17 @@ def test_worker_runs_full_planner_after_request_preview(
 
 
 def test_profile_crawl_execute_defaults_to_queue_with_pending_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
+    owner_checks: list[tuple[int, int, bool]] = []
+
+    def current_staff_session(session_id: int, *, staff: dict[str, Any], scope_to_staff: bool) -> dict[str, Any]:
+        owner_checks.append((int(session_id), int(staff["id"]), bool(scope_to_staff)))
+        return {"id": int(session_id), "created_by": int(staff["id"]), "items": []}
+
+    monkeypatch.setattr(
+        vkpi_kol_pool_search.kol_search_sessions,
+        "get_session",
+        current_staff_session,
+    )
     monkeypatch.setattr(
         vkpi_kol_pool_search.kol_profile_discovery,
         "enqueue_search_session_advance",
@@ -296,6 +307,7 @@ def test_profile_crawl_execute_defaults_to_queue_with_pending_enrichment(monkeyp
     assert result["provider_calls_performed"] is False
     assert result["enrichment"]["contacts"]["status"] == "pending"
     assert result["enrichment"]["audience"]["status"] == "pending"
+    assert owner_checks == [(12, 42, True)]
 
 
 def test_smart_text_search_with_no_candidates_is_empty_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:

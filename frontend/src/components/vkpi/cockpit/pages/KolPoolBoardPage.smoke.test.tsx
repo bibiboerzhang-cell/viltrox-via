@@ -91,10 +91,14 @@ const BUNDLE_OK = {
   video_analysis: { items: [], summary: { evidence_count: 5, ready_count: 3 } },
 };
 
-function routeApi(overrides: { summary?: unknown; history?: unknown } = {}) {
-  apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
+function routeApi(overrides: { summary?: unknown; history?: unknown; favorites?: unknown; projects?: unknown; addProject?: unknown } = {}) {
+  apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: RequestInit) => {
     const p = String(path);
-    if (p.includes("/kol-pool/favorites")) return { items: [] };
+    if (p.includes("/kol-pool/favorites")) return overrides.favorites ?? { items: [] };
+    if (p.includes("/vkpi/projects?limit=200")) return overrides.projects ?? { projects: [] };
+    if (p.includes("/projects/") && p.endsWith("/kols") && init?.method === "POST") {
+      return overrides.addProject ?? { project_id: 1, requested: 1, inserted: 1, skipped_existing: 0, missing_kol_pool_ids: [] };
+    }
     if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
     if (p.includes("/kol-pool/summary")) return overrides.summary ?? SUMMARY_OK;
     if (p.includes("/detail-bundle")) return BUNDLE_OK;
@@ -340,6 +344,185 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     expect(calledPaths.some((p) => p.includes("/vkpi/projects?limit=200"))).toBe(true);
   });
 
+  it("快捷入项目读取真实回执:inserted=0/skipped=1 显示已存在,不冒充新增成功", async () => {
+    routeApi({
+      projects: { projects: [{ id: 900, project_name: "Z1 Launch" }] },
+      addProject: { project_id: 900, requested: 1, inserted: 0, skipped_existing: 1, missing_kol_pool_ids: [] },
+    });
+    renderBoard();
+
+    fireEvent.click(screen.getAllByLabelText("入项目")[0]);
+    fireEvent.change(await screen.findByLabelText("目标项目"), { target: { value: "900" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认入项目" }));
+
+    expect(await screen.findByText(/已在目标项目中/)).toBeTruthy();
+    expect(screen.queryByText(/已新增 1 人到项目/)).toBeNull();
+    const call = apiFetchMock.mock.calls.find((args) => String(args[0]).endsWith("/projects/900/kols"));
+    expect(call?.[1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse(String(call?.[1]?.body || "{}"))).toMatchObject({ kol_pool_ids: [101] });
+    await waitFor(() => {
+      const favoriteReads = apiFetchMock.mock.calls.filter((args) => String(args[0]).includes("/kol-pool/favorites"));
+      expect(favoriteReads.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("身份 token 变化立即清旧收藏,空收藏响应不会遗留上一身份星标", async () => {
+    routeApi({ favorites: { items: [{ kol_pool_id: 101 }] } });
+    const view = renderBoard();
+    expect((await screen.findAllByLabelText("取消收藏")).length).toBeGreaterThan(0);
+
+    apiFetchMock.mockImplementation(async (path: unknown) => {
+      const p = String(path);
+      if (p.includes("/kol-pool/favorites")) return { items: [] };
+      if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
+      if (p.includes("/kol-pool/summary")) return SUMMARY_OK;
+      if (p.includes("/task-queue")) return { active: [], recent: [], counts: { active_total: 0, queued: 0 } };
+      return {};
+    });
+    view.rerender(<KolPoolBoardPage items={ITEMS as any} loading={false} error="" apiToken="another-user" staff={[]} />);
+
+    await waitFor(() => expect(screen.queryAllByLabelText("取消收藏")).toHaveLength(0));
+    expect(screen.getAllByLabelText("收藏").length).toBeGreaterThan(0);
+  });
+
+  it("旧身份收藏成功回调不会触发新身份回读,finally 也不会释放新身份同 KOL 的写锁", async () => {
+    let resolveOld!: (value: unknown) => void;
+    let resolveCurrent!: (value: unknown) => void;
+    const oldMutation = new Promise((resolve) => { resolveOld = resolve; });
+    const currentMutation = new Promise((resolve) => { resolveCurrent = resolve; });
+    let favoriteReads = 0;
+    let mutationCalls = 0;
+    apiFetchMock.mockImplementation(async (path: unknown, init?: RequestInit) => {
+      const p = String(path);
+      if (p.includes("/kol-pool/favorites")) {
+        favoriteReads += 1;
+        return { items: [] };
+      }
+      if (p.endsWith("/favorite") && (init?.method === "POST" || init?.method === "DELETE")) {
+        mutationCalls += 1;
+        if (mutationCalls === 1) return oldMutation;
+        if (mutationCalls === 2) return currentMutation;
+        return {};
+      }
+      if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
+      if (p.includes("/kol-pool/summary")) return SUMMARY_OK;
+      if (p.includes("/kol-search-history")) return { items: [] };
+      if (p.includes("/task-queue")) return { active: [], recent: [], counts: { active_total: 0, queued: 0 } };
+      return {};
+    });
+    const favoritesChanged = vi.fn();
+    window.addEventListener("vkpi:favorites-changed", favoritesChanged);
+    const view = renderBoard({ apiToken: "old-token" });
+    await waitFor(() => expect(favoriteReads).toBe(1));
+
+    fireEvent.click(screen.getAllByLabelText("收藏")[0]);
+    await waitFor(() => expect(mutationCalls).toBe(1));
+
+    view.rerender(<KolPoolBoardPage items={ITEMS as any} loading={false} error="" apiToken="new-token" staff={[]} />);
+    await waitFor(() => expect(favoriteReads).toBe(2));
+    await waitFor(() => expect(screen.queryAllByLabelText("取消收藏")).toHaveLength(0));
+    fireEvent.click(screen.getAllByLabelText("收藏")[0]);
+    await waitFor(() => expect(mutationCalls).toBe(2));
+
+    await act(async () => {
+      resolveOld({ status: "ok" });
+      await oldMutation;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(favoritesChanged).not.toHaveBeenCalled();
+    expect(favoriteReads).toBe(2);
+
+    // 新身份写仍在途；旧身份 finally 不得把它的锁删掉并放行重复 DELETE。
+    fireEvent.click(screen.getAllByLabelText("取消收藏")[0]);
+    expect(mutationCalls).toBe(2);
+
+    window.removeEventListener("vkpi:favorites-changed", favoritesChanged);
+    await act(async () => {
+      resolveCurrent({ status: "ok" });
+      await currentMutation;
+    });
+  });
+
+  it("旧身份收藏失败回调不会回滚新身份已收藏星标或注入错误态", async () => {
+    let rejectOld!: (reason?: unknown) => void;
+    const oldMutation = new Promise((_resolve, reject) => { rejectOld = reject; });
+    let mutationCalls = 0;
+    apiFetchMock.mockImplementation(async (path: unknown, init?: RequestInit, token?: string) => {
+      const p = String(path);
+      if (p.includes("/kol-pool/favorites")) {
+        return token === "new-token" ? { items: [{ kol_pool_id: 101 }] } : { items: [] };
+      }
+      if (p.endsWith("/favorite") && init?.method === "POST") {
+        mutationCalls += 1;
+        return oldMutation;
+      }
+      if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
+      if (p.includes("/kol-pool/summary")) return SUMMARY_OK;
+      if (p.includes("/kol-search-history")) return { items: [] };
+      if (p.includes("/task-queue")) return { active: [], recent: [], counts: { active_total: 0, queued: 0 } };
+      return {};
+    });
+    const view = renderBoard({ apiToken: "old-token" });
+    await waitFor(() => expect(screen.queryAllByLabelText("取消收藏")).toHaveLength(0));
+    fireEvent.click(screen.getAllByLabelText("收藏")[0]);
+    await waitFor(() => expect(mutationCalls).toBe(1));
+
+    view.rerender(<KolPoolBoardPage items={ITEMS as any} loading={false} error="" apiToken="new-token" staff={[]} />);
+    expect((await screen.findAllByLabelText("取消收藏")).length).toBeGreaterThan(0);
+
+    await act(async () => {
+      rejectOld(new Error("old account write failed"));
+      try { await oldMutation; } catch { /* expected */ }
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByLabelText("取消收藏").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText("已同步")).toBeTruthy();
+  });
+
+  it("同页收藏变更事件会回读服务端并刷新星标,不保留旧快照", async () => {
+    let favoriteReads = 0;
+    apiFetchMock.mockImplementation(async (path: unknown) => {
+      const p = String(path);
+      if (p.includes("/kol-pool/favorites")) {
+        favoriteReads += 1;
+        return favoriteReads === 1 ? { items: [] } : { items: [{ kol_pool_id: 101 }] };
+      }
+      if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
+      if (p.includes("/kol-pool/summary")) return SUMMARY_OK;
+      if (p.includes("/kol-search-history")) return { items: [] };
+      if (p.includes("/task-queue")) return { active: [], recent: [], counts: { active_total: 0, queued: 0 } };
+      return {};
+    });
+    renderBoard();
+    await waitFor(() => expect(favoriteReads).toBe(1));
+
+    act(() => window.dispatchEvent(new CustomEvent("vkpi:favorites-changed")));
+
+    await waitFor(() => expect(favoriteReads).toBe(2));
+    expect((await screen.findAllByLabelText("取消收藏")).length).toBeGreaterThan(0);
+  });
+
+  it("收藏读取失败显式标未知,不把空星标冒充服务端零收藏", async () => {
+    apiFetchMock.mockImplementation(async (path: unknown) => {
+      const p = String(path);
+      if (p.includes("/kol-pool/favorites")) throw new Error("favorites unavailable");
+      if (p.includes("/kol-pool/needs-analysis")) return NEEDS_OK;
+      if (p.includes("/kol-pool/summary")) return SUMMARY_OK;
+      if (p.includes("/kol-search-history")) return { items: [] };
+      if (p.includes("/task-queue")) return { active: [], recent: [], counts: { active_total: 0, queued: 0 } };
+      return {};
+    });
+    renderBoard();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("收藏状态暂无法确认");
+    expect(alert.textContent).toContain("当前空星标不代表服务端没有收藏");
+    expect(screen.getByText("部分未同步")).toBeTruthy();
+  });
+
   it("跨页事件:vkpi:open-kol-pool-search 消费 pending 关键词 → 填筛选并展开;-item 消费 id → 开抽屉", async () => {
     window.localStorage.setItem("vkpi:pending-kolpool-search", "alpha");
     renderBoard();
@@ -370,6 +553,7 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
   it("无 token → 诚实 pending 卡,零读端点请求;空池 → 诚实空态文案", () => {
     render(<KolPoolBoardPage items={[]} loading={false} error="" apiToken="" staff={[]} />);
     expect(screen.getAllByText(/未登录 \/ 无 token/).length).toBeGreaterThan(0);
+    expect(screen.getByText("未连接")).toBeTruthy();
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 });

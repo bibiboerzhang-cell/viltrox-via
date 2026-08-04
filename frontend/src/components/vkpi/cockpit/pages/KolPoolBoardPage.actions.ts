@@ -292,19 +292,78 @@ export function usePoolFavorites(
   avatarForItem: (item: any) => string,
 ) {
   const [myList, setMyList] = React.useState<Set<unknown>>(() => new Set());
+  const myListRef = React.useRef<Set<unknown>>(new Set());
+  const inFlightRef = React.useRef<Set<string>>(new Set());
+  const syncGenerationRef = React.useRef(0);
+  // 收藏写请求也必须绑定发起时身份。仅保护 GET 回读不够：旧 token 的
+  // then/catch/finally 若在切换身份后落地，会覆盖新身份星标、错误态，甚至
+  // 删除新身份同一 KOL 的 in-flight 锁。generation 处理 A→B→A，token
+  // snapshot 让身份在 render 当刻即失效，不等 effect cleanup。
+  const mutationIdentityRef = React.useRef({ token: apiToken, generation: 0 });
+  if (mutationIdentityRef.current.token !== apiToken) {
+    mutationIdentityRef.current = {
+      token: apiToken,
+      generation: mutationIdentityRef.current.generation + 1,
+    };
+  }
+  React.useEffect(() => () => {
+    const current = mutationIdentityRef.current;
+    mutationIdentityRef.current = { token: current.token, generation: current.generation + 1 };
+  }, []);
+  const [syncState, setSyncState] = React.useState<"idle" | "loading" | "synced" | "error">("idle");
+  const [syncError, setSyncError] = React.useState("");
 
-  // 挂载拉取本人收藏集(端点未活时静默回退纯内存 Set,行为同旧)。
+  const updateMyList = React.useCallback((updater: (current: Set<unknown>) => Set<unknown>) => {
+    setMyList((current) => {
+      const next = updater(current);
+      myListRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const publishFavoritesChanged = React.useCallback(() => {
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
+  }, []);
+
+  // token/身份变化先清空旧身份星标；空数组也必须覆盖旧集合。读取失败显式标错，
+  // 不再把陈旧内存态伪装成服务端收藏。
   React.useEffect(() => {
-    if (!apiToken) return;
+    myListRef.current = new Set();
+    setMyList(new Set());
+    inFlightRef.current.clear();
+    setSyncError("");
+    if (!apiToken) {
+      setSyncState("idle");
+      return;
+    }
     let cancelled = false;
-    listKolPoolFavorites(apiToken)
-      .then((resp) => {
-        if (cancelled) return;
-        const ids = (resp.items || []).map((it: any) => it.kol_pool_id).filter(Boolean);
-        if (ids.length) setMyList(new Set(ids));
-      })
-      .catch(() => { /* 端点未激活 → 保持本地 Set,星标仍可用 */ });
-    return () => { cancelled = true; };
+    const syncFavorites = () => {
+      const generation = ++syncGenerationRef.current;
+      setSyncState("loading");
+      setSyncError("");
+      void listKolPoolFavorites(apiToken)
+        .then((resp) => {
+          if (cancelled || generation !== syncGenerationRef.current) return;
+          const ids = (resp.items || []).map((it: any) => it.kol_pool_id).filter(Boolean);
+          const next = new Set<unknown>(ids);
+          myListRef.current = next;
+          setMyList(next);
+          setSyncState("synced");
+        })
+        .catch((err: any) => {
+          if (cancelled || generation !== syncGenerationRef.current) return;
+          setSyncState("error");
+          setSyncError(String(err?.message || err?.detail || "收藏状态读取失败"));
+        });
+    };
+    syncFavorites();
+    // 找达人批量收藏、入项目自动收藏及其他同页动作都通过这一事件回读服务端，
+    // 页面星标不再停留在动作前的旧快照。
+    window.addEventListener("vkpi:favorites-changed", syncFavorites);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("vkpi:favorites-changed", syncFavorites);
+    };
   }, [apiToken]);
 
   // 候选(new_discovered / 未入库,无真 kol_pool_id)先建档拿真 id 再收藏,
@@ -333,50 +392,83 @@ export function usePoolFavorites(
   }, [apiToken, selectedItem, avatarForItem]);
 
   const toggleMyList = React.useCallback((id: any) => {
-    const wasIn = myList.has(id);
-    setMyList((prev) => {
+    if (!apiToken) {
+      setSyncState("error");
+      setSyncError("未登录，收藏未写入");
+      return;
+    }
+    const mutationIdentity = mutationIdentityRef.current;
+    const isCurrentMutation = () => mutationIdentityRef.current === mutationIdentity;
+    const opKey = `${mutationIdentity.generation}:${String(id)}`;
+    if (inFlightRef.current.has(opKey)) return;
+    inFlightRef.current.add(opKey);
+    const wasIn = myListRef.current.has(id);
+    updateMyList((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
-    // 乐观更新 + 真持久化;失败(端点未活/网络)回滚本地态,不留假象。
-    if (!apiToken) return;
-    const rollback = () => setMyList((prev) => {
-      const next = new Set(prev);
-      if (wasIn) next.add(id); else next.delete(id);
-      return next;
-    });
+    setSyncState("loading");
+    setSyncError("");
+    const rollback = (err?: any) => {
+      if (!isCurrentMutation()) return;
+      updateMyList((prev) => {
+        const next = new Set(prev);
+        if (wasIn) next.add(id); else next.delete(id);
+        setSyncState("error");
+        setSyncError(String(err?.message || err?.detail || "收藏写入失败"));
+        return next;
+      });
+    };
+    const finish = () => {
+      if (!isCurrentMutation()) return;
+      inFlightRef.current.delete(opKey);
+    };
+    const confirm = () => {
+      if (!isCurrentMutation()) return;
+      setSyncState("synced");
+      publishFavoritesChanged();
+    };
     const poolId = realPoolId(id);
     if (wasIn) {
       // 取消收藏:必须有真 id 才有可取消的持久行(候选本就没持久化)。
-      if (!poolId) return;
-      unfavoriteKolPool(apiToken, poolId).catch(rollback);
+      if (!poolId) {
+        rollback(new Error("缺少真实 KOL ID，未取消收藏"));
+        finish();
+        return;
+      }
+      unfavoriteKolPool(apiToken, poolId).then(confirm).catch(rollback).finally(finish);
       return;
     }
     if (poolId) {
-      favoriteKolPool(apiToken, poolId).catch(rollback);
+      favoriteKolPool(apiToken, poolId).then(confirm).catch(rollback).finally(finish);
       return;
     }
     void (async () => {
       try {
         const newId = await materializeCandidate();
+        if (!isCurrentMutation()) return;
         if (!newId) throw new Error("materialize-failed");
         await favoriteKolPool(apiToken, newId);
+        if (!isCurrentMutation()) return;
         // 用真 id 替换乐观 Set 里的占位;并把 selectedItem.id 升级为真 id。
-        setMyList((prev) => {
+        updateMyList((prev) => {
           const next = new Set(prev);
           next.delete(id);
           next.add(newId);
           return next;
         });
         setSelectedItem((prev: any) => (prev ? { ...prev, id: newId, kol_pool_id: newId } : prev));
-      } catch {
-        rollback();
+        confirm();
+      } catch (err) {
+        rollback(err);
+      } finally {
+        finish();
       }
     })();
-  }, [apiToken, myList, materializeCandidate, setSelectedItem]);
+  }, [apiToken, materializeCandidate, publishFavoritesChanged, setSelectedItem, updateMyList]);
 
-  return { myList, toggleMyList };
+  return { myList, toggleMyList, syncState, syncError };
 }
 
 /* ============ 召回/账号结果 → 抽屉(openRecallItem / openProfileItem,旧页逻辑原样) ============ */
@@ -582,13 +674,12 @@ export function useQuickAddToProject(apiToken: string) {
   const [projectsError, setProjectsError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<QuickProjectMsg | null>(null);
-  const loadedRef = React.useRef(false);
 
   const openFor = React.useCallback((item: Row) => {
     setTarget(item);
     setMsg(null);
-    if (!apiToken || loadedRef.current) return;
-    loadedRef.current = true;
+    if (!apiToken) return;
+    setProjects(null);
     setProjectsError("");
     apiFetch<{ projects?: Row[]; items?: Row[] }>("/api/admin/vkpi/projects?limit=200", { timeoutMs: 6000 }, apiToken)
       .then((resp) => {
@@ -596,7 +687,6 @@ export function useQuickAddToProject(apiToken: string) {
         setProjects(rows);
       })
       .catch(() => {
-        loadedRef.current = false; // 下次打开重试
         setProjects([]);
         setProjectsError("项目列表读取失败——关闭重开可重试");
       });
@@ -613,8 +703,22 @@ export function useQuickAddToProject(apiToken: string) {
     setBusy(true);
     setMsg({ text: "入项目请求中…", tone: "info" });
     try {
-      await addKolsToProject(apiToken, projectId, [String(poolId)]);
-      setMsg({ text: "已入项目(端点确认)——推进状态看「项目」板块。", tone: "ok" });
+      const result = await addKolsToProject(apiToken, projectId, [String(poolId)]);
+      const inserted = Number(result.inserted || 0);
+      const skipped = Number(result.skipped_existing || 0);
+      const missing = Array.isArray(result.missing_kol_pool_ids) ? result.missing_kol_pool_ids.length : 0;
+      if (inserted > 0) {
+        setMsg({ text: `已新增 ${inserted} 人到项目——推进状态看「项目」板块。`, tone: "ok" });
+        window.dispatchEvent(new CustomEvent("vkpi:projects-changed"));
+        window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
+      } else if (skipped > 0 && missing === 0) {
+        // assignment 已存在时后端仍会幂等执行“自动收藏”；回读收藏真值，
+        // 避免 shared-only / 他人先加项目的 KOL 继续显示空星标。
+        window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
+        setMsg({ text: "该 KOL 已在目标项目中，本次没有重复写入。", tone: "info" });
+      } else {
+        setMsg({ text: `未写入项目${missing ? `：${missing} 个 KOL 已不存在` : "，请刷新后重试"}`, tone: "error" });
+      }
     } catch (err: any) {
       setMsg({ text: `入项目失败:${String(err?.message || err?.detail || err || "请重试").slice(0, 100)}`, tone: "error" });
     } finally {

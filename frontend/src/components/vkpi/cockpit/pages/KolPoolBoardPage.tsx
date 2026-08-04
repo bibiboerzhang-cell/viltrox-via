@@ -55,7 +55,7 @@ const KOLDetailDrawer = React.lazy(() =>
 //   合作方案草案 Skill 全在抽屉内,零改动)/ ContactModal → 页级 overlay 原样;
 //   收藏管线(候选先建档再收藏)/ 跨页事件(vkpi:open-kol-pool-item / -search)/
 //   召回·账号结果开抽屉 → KolPoolBoardPage.actions.ts hooks 平移。
-//   新增(板块页范式要素):KPI 带四卡真值(在池总数 1,237 / 本周新发现 / 已深析 /
+//   新增(板块页范式要素):KPI 带四卡真值(在池总数 / 本周新发现 / 已深析 /
 //   低触达暂不推荐 —— 2026-07-12 本地实测口径见 MODULE_SOURCES)+ 任务泳道模块
 //   (TaskProgressBoard 内嵌,批量深析/找达人任务的真实执行序)。
 //   新增(2026-07-12 图形密度波,金样板 = MarketVoicePage.charts / MyKolBoardPage.charts
@@ -142,7 +142,12 @@ export function KolPoolBoardPage({
     reloadDetail,
     closeDrawer,
   } = usePoolDrawer(apiToken, avatarForItem, mergeAvatarSeed);
-  const { myList, toggleMyList } = usePoolFavorites(apiToken, selectedItem, setSelectedItem, avatarForItem);
+  const { myList, toggleMyList, syncState: favoriteSyncState, syncError: favoriteSyncError } = usePoolFavorites(
+    apiToken,
+    selectedItem,
+    setSelectedItem,
+    avatarForItem,
+  );
   const { openRecallItem, openProfileItem } = useSmartOpeners(apiToken, poolItems, openItem, mergeAvatarSeed);
   const needs = useNeedsAnalysis(apiToken);
   const { lowReachHidden, funnel30d, summaryLoading } = usePoolSummary(apiToken);
@@ -381,13 +386,20 @@ export function KolPoolBoardPage({
               数据截至 {dataAsOf}
             </span>
           )}
-          {loading && <span className={PH_BADGE}>读取中…</span>}
+          {loading && <span className={PH_BADGE}>KOL 池读取中…</span>}
+          {favoriteSyncState === "loading" && <span className={PH_BADGE}>收藏同步中…</span>}
+          {favoriteSyncState === "error" && (
+            <span className={PH_BADGE} title={favoriteSyncError || "收藏状态暂无法确认"}>收藏未同步</span>
+          )}
           <span className={PH_BADGE}>可编辑看板</span>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
-            <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" }} />
-            实时
+            <span
+              className={`h-[5px] w-[5px] rounded-full ${!apiToken || error || favoriteSyncState === "error" ? "bg-warn" : "bg-good"}`}
+              style={{ boxShadow: `0 0 var(--ds-glow-radius, 0px) ${!apiToken || error || favoriteSyncState === "error" ? "var(--ds-warn)" : "var(--ds-good)"}` }}
+            />
+            {!apiToken ? "未连接" : error || favoriteSyncState === "error" ? "部分未同步" : loading || favoriteSyncState === "loading" ? "同步中" : "已同步"}
           </span>
           <button
             type="button"
@@ -404,6 +416,11 @@ export function KolPoolBoardPage({
       {error && poolItems.length === 0 && (
         <div className="mb-3">
           <ErrorCard title="KOL 池读取失败" text={String(error)} />
+        </div>
+      )}
+      {favoriteSyncState === "error" && (
+        <div role="alert" className="mb-3 rounded-lg border border-warn bg-warn-soft px-3 py-2 text-[10.5px] text-warn">
+          收藏状态暂无法确认：{favoriteSyncError || "请稍后重试或刷新页面"}。当前空星标不代表服务端没有收藏。
         </div>
       )}
 

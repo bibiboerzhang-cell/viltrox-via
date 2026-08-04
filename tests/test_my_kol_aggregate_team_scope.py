@@ -14,6 +14,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -67,13 +69,13 @@ _TEAM_ROW = {
     "avatar_url": "",
     "country": "US",
     "projects_json": '[{"project_id": 7, "stage": "shipped"}]',
-    "contacts_json": None,
+    "contacts_json": '[{"contact_type":"email","contact_value":"secret@example.com","contact_source":"bio","consent_basis":"public"}]',
 }
 
 
 def test_pool_favorites_team_shape_and_bool_coercion():
     conn = _FakeConn(team_rows=[dict(_TEAM_ROW)])
-    rows = agg._pool_favorites_team(conn)
+    rows = agg._pool_favorites_team(conn, actor={"id": 84, "role": "owner"})
     assert len(rows) == 1
     row = rows[0]
     # 形状与 _pool_favorites 对齐(前端 mapLibraryRows 零改映射)
@@ -81,11 +83,52 @@ def test_pool_favorites_team_shape_and_bool_coercion():
         assert key in row
     assert row["is_shared"] is False  # int 0 → bool False(读回陷阱防线)
     assert row["projects"] == [{"project_id": 7, "stage": "shipped"}]  # 字符串 jsonb 防御性解析
-    assert row["contacts"] == []
+    assert row["contacts"] == [{
+        "contact_type": "email",
+        "contact_value": "s***@e***",
+        "contact_source": "bio",
+        "consent_basis": "public",
+        "contact_masked": True,
+    }]
+    assert row["contact_masked"] is True
+    assert "secret@example.com" not in str(row)
     # SQL 红线:团队查询零参数(无 ? 占位)、SQL 字符串内零注释
     team_sql = next(sql for sql in conn.calls if "GROUP BY kp.id" in sql)
     assert "?" not in team_sql
     assert "--" not in team_sql
+
+
+def test_staff_favorite_projection_uses_project_scope_and_masks_contacts():
+    class _ProjectionConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            return _FakeResult([{
+                **_TEAM_ROW,
+                "is_shared": 0,
+                "projects_json": '[{"project_id":11,"project_name":"Mine","stage":"discovered"}]',
+            }])
+
+    conn = _ProjectionConn()
+    rows = agg._pool_favorites(conn, 84, actor={"id": 84, "role": "staff"})
+
+    sql, params = conn.calls[0]
+    assert "p.assigned_staff_id = ?" in sql
+    assert "p.created_by_staff_id = ?" in sql
+    assert "vkpi_project_members" in sql
+    assert "p.is_public" in sql
+    assert params == (84, 84, 84, 84, 84)
+    assert rows[0]["projects"] == [{"project_id": 11, "project_name": "Mine", "stage": "discovered"}]
+    assert rows[0]["contacts"][0]["contact_value"] == "s***@e***"
+    assert "secret@example.com" not in str(rows[0])
+
+
+def test_team_scope_is_denied_in_domain_for_non_manager(monkeypatch):
+    monkeypatch.setattr(agg, "_staff_row", lambda *_: {"id": 84, "role": "staff"})
+    with pytest.raises(agg.scope.ScopeDenied, match="team MY KOL scope denied"):
+        agg.build_my_kol_aggregate(object(), 84, actor={"id": 84, "role": "staff"}, team_scope=True)
 
 
 def test_build_aggregate_team_scope_marks_and_routes(monkeypatch):
@@ -95,7 +138,7 @@ def test_build_aggregate_team_scope_marks_and_routes(monkeypatch):
     )
     monkeypatch.setattr(agg, "_projects", lambda *a, **k: [])
     monkeypatch.setattr(agg, "_official_matrix", lambda *a, **k: {"platforms": [], "account_count": 0})
-    body = agg.build_my_kol_aggregate(conn, 84, actor={"id": 84}, team_scope=True)
+    body = agg.build_my_kol_aggregate(conn, 84, actor={"id": 84, "role": "owner"}, team_scope=True)
     assert body["scope_mode"] == "team"
     assert body["kpi_summary"]["favorites_count"] == 1
     assert body["pool_favorites"][0]["kol_pool_id"] == 6224

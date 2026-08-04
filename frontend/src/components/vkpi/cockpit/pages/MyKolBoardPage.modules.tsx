@@ -56,17 +56,17 @@ import "../../pages/myKol/myKolTeamMatrix.css";
 // 红线:本文件零直连网络(取数住 page 层/内嵌组件自带);纯展示绝不写 fit 分/rule_v0;
 //   颜色全 token 类零写死色;诚实空态(无历史快照 → spempty,降级/截断如实标注)。
 
-/* ============ 溯源注册表(金样板 MODULE_SOURCES 同构;label=真实端点/表名,rows=真实
-   行数与口径,2026-07-11 实测,禁编造) ============ */
+/* ============ 溯源注册表(金样板 MODULE_SOURCES 同构;label=真实端点/表名,
+   只保留动态口径,不把历史快照冒充当前进度) ============ */
 export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string, string]> }> = {
   kpiM: {
     label: "my-kol/aggregate · board-ext kpi_series",
     rows: [
-      ["在库 KOL", "vkpi_kol_pool_favorites(779 行 · staff×kol 收藏对)+ 共享行 vkpi_kol_pool_members"],
-      ["合作推进中", "vkpi_project_kol_assignments(2,189 行)在役 stage 去重 KOL"],
+      ["在库 KOL", "vkpi_kol_pool_favorites + vkpi_kol_pool_members · 当前值由 my-kol/aggregate 返回"],
+      ["合作推进中", "vkpi_project_kol_assignments 在役 stage 去重 KOL · 当前值由聚合接口返回"],
       ["内容播放", "vkpi_kol_video_evidence.view_count(board-ext kol_views 自取 · 主控注入兜底)"],
       ["播放口径", "点时实测 · 非时序 —— SUM(view_count) 当前快照,无历史序列 → K3 诚实虚线零药丸"],
-      ["官号粉丝", "vkpi_channel_metrics(961 行 · 100% 填充)每账号最新快照 Σ followers"],
+      ["官号粉丝", "vkpi_channel_metrics 每账号最新快照 Σ followers · 缺数据即显示不可确认"],
       ["K1 趋势线", "vkpi_kol_fit_snapshot 收藏集粉丝按日 SUM · 快照缺日 null 断点如实(关联时序,非在库数)"],
       ["K2 趋势线", "vkpi_kol_video_evidence 新视频/日(计数型 0 填齐;关联时序,非推进中数)"],
       ["K4 趋势线", "vkpi_channel_metrics 官号粉丝按日 SUM(日快照全量)"],
@@ -94,7 +94,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
   team: {
     label: "staff · official-matrix staff_managed",
     rows: [
-      ["负责人", "staff 表(20 行 · 2026-07-11 实测)+ users 目录(员工视角 staff-directory 为管理层端点 → 卡列自然收敛)"],
+      ["负责人", "staff + users 目录 · 当前负责人卡数由实时目录合并去重"],
       ["卡头计数", "负责人卡数 = 已知展示元数据 ∪ 真 staff 目录合并去重(与旧头「负责人」chip 同源)"],
       ["归属账号", "vkpi_employee_channels 按 staff_id 归属"],
       ["分管 KOL", "official-matrix.staff_managed(数量/粉丝合计/名单 cap 20)"],
@@ -146,10 +146,10 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
   official: {
     label: "vkpi_employee_channels · vkpi_channel_metrics",
     rows: [
-      ["账号", "18 官号 · /api/marketing/channels/official-matrix(卡头计数=account_count 真值)"],
-      ["指标", "vkpi_channel_metrics(961 行 · 100% 填充 · 2026-07-11 实测)每账号最新快照(followers/posts/views + delta)"],
+      ["账号", "/api/marketing/channels/official-matrix · 当前账号数由 account_count 返回"],
+      ["指标", "vkpi_channel_metrics 每账号最新快照(followers/posts/views + delta)· 缺字段不显示"],
       ["内容层", "channels/{id}/posts 按需分页(内嵌组件自取)"],
-      ["个人矩阵", "official-matrix.personal 增量分组=官号名单之外的成员个人账号(持有人 staff→users)· 现状 0 行=诚实空态;帖子/播放复用同一条 channels/{id}/posts 链"],
+      ["个人矩阵", "official-matrix.personal 增量分组=官号名单之外的成员个人账号(持有人 staff→users)· 空结果显示空态;帖子/播放复用同一条 channels/{id}/posts 链"],
     ],
   },
   platdist: {
@@ -164,7 +164,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/risk-index",
     rows: [
       ["信号", "Gemini final_v1 深析结构化信号聚合(内容无深度/素材复用/竞品露出)"],
-      ["深析表", "llm_deep_analysis_results(481 行 · 2026-07-11 实测)· 已析/总覆盖读数见卡内右上"],
+      ["深析表", "llm_deep_analysis_results · 已析/总覆盖读数由当前接口返回"],
       ["诚实", "只覆盖已深析 KOL · 未深析显「未分析」灰态,绝不当 0 风险"],
       ["可见", "管理层专属(裁决②A)· 员工注册表直接不出现"],
     ],
@@ -173,7 +173,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/contribution-rollup",
     rows: [
       ["口径", "每负责人一行:在管 KOL / 已发布 / 归因销售(has_attribution 诚实降级)"],
-      ["数据表", "vkpi_kol_claims 在管 / vkpi_content_posts 已发布(0 行 · 盲区)/ vkpi_goaffpro_sales 归因(0 行 · 盲区,2026-07-11 实测)"],
+      ["数据表", "vkpi_kol_claims 在管 / vkpi_content_posts 已发布 / vkpi_goaffpro_sales 归因 · 无数据则接口标 empty"],
       ["门禁", "后端 scope.can_view_all 二次 gate · 管理层专属(裁决②A)"],
     ],
   },
@@ -224,19 +224,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "my-kol/aggregate · vkpi_kol_pool_members",
     rows: [
       ["口径", "共享给我的库行(is_shared)+ 共享人展示名 · 只读可见性授予"],
-      ["诚实", "0 行=已建未用如实空,不装 live"],
-    ],
-  },
-  cover: {
-    label: "静态盘点 2026-07-11 · 六源",
-    rows: [
-      ["性质", "board-ext 无此组 → 盘点日硬编码读数,非实时、会过期(卡面同款标注)"],
-      ["外联记录", "kol_outreach(0 行)"],
-      ["合作事件", "vkpi_kol_cooperation_events(0 行)"],
-      ["生命周期", "vkpi_kol_lifecycle_events(0 行)"],
-      ["联盟销售", "vkpi_goaffpro_sales / _kol_links(0 行)"],
-      ["内容手录", "vkpi_content_posts(0 行)"],
-      ["触点", "vkpi_kol_pool_touches(2 行)"],
+      ["诚实", "当前行数由 aggregate 返回;空集显示空态,不装 live"],
     ],
   },
 };
@@ -258,7 +246,6 @@ export const PROV_TITLES: Record<string, string> = {
   followerTrend: "粉丝趋势",
   claims: "我的认领",
   shares: "共享池",
-  cover: "数据覆盖",
   activity: "分析动态",
   libclassic: "经典视图 · KOL 库",
 };

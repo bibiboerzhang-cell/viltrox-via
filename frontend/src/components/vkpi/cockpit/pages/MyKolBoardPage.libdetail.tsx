@@ -25,7 +25,7 @@ import { proxiedImageUrl } from "../../shared/mediaProxy";
 //   ① useKolEvidenceStats:库行「采集数据列」(视频 N · 实测播放合计 · 深析 n/N)。
 //      同源 = GET /kol-pool/{id}/videos(旧右栏与详情弹窗同一端点同一算法
 //      summarizeKolVideos),只取当前渲染行 + 模块级缓存 + 并发 4 封顶,
-//      绝不整库扫(779 行团队库只拉屏上那几行)。
+//      绝不整库扫(团队库只拉屏上可见行,不依赖历史行数)。
 //   ② GoaffproTrackSection:追踪链分区 —— 共享件 GoaffproLinkSection 原样内嵌
 //      (生成/复制/优惠码/佣金调整,功能零改动,与 KOL Pool 抽屉同一组件)。
 //   ③ CoopResultsSection:合作项目结果 —— assignments 真阶段 × Projects 板块

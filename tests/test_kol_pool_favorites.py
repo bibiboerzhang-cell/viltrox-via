@@ -1,6 +1,7 @@
 """C2 收藏域单测(战役第一段备稿;migration 107 表结构以 sqlite 等价建表模拟)。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -32,8 +33,9 @@ def favorites_conn(monkeypatch):
     conn.execute("INSERT INTO vkpi_kol_pool (id, platform, handle, display_name, followers) VALUES (1,'youtube','@a','A',1000)")
     conn.execute("INSERT INTO vkpi_kol_pool (id, platform, handle, display_name, followers) VALUES (2,'instagram','@b','B',2000)")
     # projects_json 子查询依赖(PG json_agg/json_build_object 的 sqlite 等价物 + 两张表)
-    conn.execute("CREATE TABLE vkpi_projects (id INTEGER PRIMARY KEY, project_name TEXT, restricted INTEGER DEFAULT 0)")
+    conn.execute("CREATE TABLE vkpi_projects (id INTEGER PRIMARY KEY, project_name TEXT, restricted INTEGER DEFAULT 0, assigned_staff_id INTEGER, created_by_staff_id INTEGER, is_public INTEGER DEFAULT 0)")
     conn.execute("CREATE TABLE vkpi_project_kol_assignments (id INTEGER PRIMARY KEY, project_id INTEGER, kol_pool_id INTEGER, stage TEXT, stage_status TEXT)")
+    conn.execute("CREATE TABLE vkpi_project_members (id INTEGER PRIMARY KEY, project_id INTEGER, staff_id INTEGER, role TEXT)")
     import json as _json
 
     class _JsonAgg:
@@ -91,3 +93,27 @@ def test_requires_staff_identity_and_existing_kol(favorites_conn):
         pool_favorites.add_favorite(1, staff=None)
     with pytest.raises(LookupError):
         pool_favorites.add_favorite(999, staff={"id": 84})
+
+
+def test_list_hides_another_staff_private_project_but_keeps_own_and_public(favorites_conn):
+    from app.domains.kol import pool_favorites
+
+    favorites_conn.executemany(
+        "INSERT INTO vkpi_projects (id, project_name, assigned_staff_id, created_by_staff_id, is_public) VALUES (?, ?, ?, ?, ?)",
+        [
+            (11, "Mine", 84, 84, 0),
+            (12, "Another staff private", 7676, 7676, 0),
+            (13, "Company public", 7676, 7676, 1),
+        ],
+    )
+    favorites_conn.executemany(
+        "INSERT INTO vkpi_project_kol_assignments (id, project_id, kol_pool_id, stage, stage_status) VALUES (?, ?, 1, 'discovered', 'active')",
+        [(101, 11), (102, 12), (103, 13)],
+    )
+    favorites_conn.commit()
+    pool_favorites.add_favorite(1, staff={"id": 84, "role": "staff"})
+
+    item = pool_favorites.list_favorites(staff={"id": 84, "role": "staff"})["items"][0]
+    projects = json.loads(item["projects_json"])
+    assert {project["project_id"] for project in projects} == {11, 13}
+    assert "Another staff private" not in item["projects_json"]

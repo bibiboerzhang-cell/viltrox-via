@@ -5,7 +5,7 @@ import secrets
 import logging
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import PostgresCompatConnection, get_conn
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import (
@@ -43,13 +43,43 @@ from app.domains.projects.workflow_projects_occupancy import (  # noqa: E402
 )
 
 
+def _lock_owned_search_session_for_draft(
+    conn: Any,
+    *,
+    session_id: int,
+    owner_id: int,
+) -> None:
+    """Serialize one owner's draft creation without breaking SQLite tooling.
+
+    Production connections are PostgreSQL compatibility wrappers, so the row
+    lock is held until ``create_project`` commits on the same request-scoped
+    connection.  SQLite and lightweight test connections use the same
+    owner-scoped existence check without unsupported ``FOR UPDATE`` syntax.
+    """
+    sql = """
+        SELECT id
+        FROM vkpi_kol_search_sessions
+        WHERE id=? AND created_by=?
+    """
+    if isinstance(conn, PostgresCompatConnection):
+        sql += " FOR UPDATE"
+    locked = conn.execute(sql, (int(session_id), int(owner_id))).fetchone()
+    if not locked:
+        # Preserve the public cross-employee contract: another employee's id
+        # is indistinguishable from a missing session.
+        raise LookupError(f"search session not found: {session_id}")
+
+
 def list_projects(limit: int = 50, stage: str = "", *, staff: dict[str, Any] | None = None, staff_id_filter: int | None = None, starred_only: bool = False) -> dict[str, Any]:
     ensure_vkpi_schema()
     limit_i = max(1, min(200, int(limit or 50)))
     conn = get_conn()
     params: list[Any] = []
     current_user_id = _current_user_id(staff)
-    where = "WHERE p.stage_status <> 'deleted' AND COALESCE(p.source_type, '') = 'excel_promo_plan'"
+    # 项目看板必须是项目事实的统一入口。来源只用于溯源,不能把 cockpit UI、Launch、
+    # manual 或 smart-search 已成功写入的项目从列表中静默隐藏。可见范围仍由下方
+    # project_filter 统一收口,因此去掉来源白名单不会扩大员工的项目权限。
+    where = "WHERE p.stage_status <> 'deleted'"
     if starred_only:
         where += " AND EXISTS (SELECT 1 FROM vkpi_project_stars ps_filter WHERE ps_filter.project_id = p.id AND ps_filter.user_id = ?)"
         params.append(current_user_id)
@@ -334,12 +364,24 @@ def create_project_draft_from_session(
     # 懒导入:避免 projects ←→ kol 模块装载期相互牵连。
     from app.domains.kol import search_sessions as kol_search_sessions
 
-    session = kol_search_sessions.get_session(int(session_id))  # 缺失 → LookupError
+    session = kol_search_sessions.get_session(
+        int(session_id),
+        staff=staff,
+        scope_to_staff=True,
+    )  # 缺失/越权统一 → LookupError
 
-    # 选人:body 覆盖 → 会话 approved_kol_ids。
+    approved_ids: list[int] = []
+    approved_seen: set[int] = set()
+    for value in session.get("approved_kol_ids") or []:
+        kid = _int(value)
+        if kid and kid not in approved_seen:
+            approved_seen.add(kid)
+            approved_ids.append(kid)
+
+    # 选人:body 可收窄批准集合,但不可绕过 R1 添加未批准 ID。
     raw_ids = body.get("kol_pool_ids")
     if not isinstance(raw_ids, list) or not raw_ids:
-        raw_ids = session.get("approved_kol_ids") or []
+        raw_ids = approved_ids
     kol_pool_ids: list[int] = []
     seen: set[int] = set()
     for value in raw_ids:
@@ -349,6 +391,12 @@ def create_project_draft_from_session(
             kol_pool_ids.append(kid)
     if not kol_pool_ids:
         raise ValueError("no approved KOLs on this session; approve candidates first")
+    unapproved_ids = [kid for kid in kol_pool_ids if kid not in approved_seen]
+    if unapproved_ids:
+        raise ValueError(
+            "kol_pool_ids must be a subset of approved session candidates: "
+            + ",".join(str(kid) for kid in unapproved_ids)
+        )
 
     # planner 定位/人设:body 优先 → 会话内可得 → query_text 兜底。
     # 不在此同步跑 LLM(沿用搜索流「planner 推迟到 worker」的决策;前端建草案时已带上 plan)。
@@ -379,6 +427,104 @@ def create_project_draft_from_session(
         "approved_kol_count": len(kol_pool_ids),
     }
 
+    # 幂等恢复:优先复用会话已记录的草案;若上次在“项目已提交、会话未回写”间失败,
+    # 再按不可伪造的 metadata.search_session_id + 当前项目 owner 找回。无 schema 迁移。
+    conn = get_conn()
+    actor_staff_id = staff_id(staff)
+    session_owner_id = _int(session.get("created_by"))
+    if not actor_staff_id or not session_owner_id:
+        raise LookupError(f"search session not found: {session_id}")
+    # PostgreSQL:同一 owner/session 的并发请求在这里排队。首请求随后通过
+    # create_project 在同一 request-scoped connection 上提交项目并释放行锁;
+    # 第二请求醒来后才执行下方复用查询,因此会找到并复用首个项目。
+    _lock_owned_search_session_for_draft(
+        conn,
+        session_id=int(session_id),
+        owner_id=session_owner_id,
+    )
+    draft_summary = result_summary.get("draft_project") if isinstance(result_summary.get("draft_project"), dict) else {}
+    recorded_project_id = _int(draft_summary.get("project_id"))
+    reusable_row = None
+    if recorded_project_id and actor_staff_id:
+        reusable_row = conn.execute(
+            """
+            SELECT * FROM vkpi_projects
+            WHERE id=? AND stage_status <> 'deleted' AND source_type='smart_search'
+              AND (created_by_staff_id=? OR assigned_staff_id=?)
+            """,
+            (recorded_project_id, actor_staff_id, actor_staff_id),
+        ).fetchone()
+    if not reusable_row and actor_staff_id:
+        reusable_row = conn.execute(
+            """
+            SELECT * FROM vkpi_projects
+            WHERE stage_status <> 'deleted' AND source_type='smart_search'
+              AND metadata_json->>'search_session_id'=?
+              AND (created_by_staff_id=? OR assigned_staff_id=?)
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (str(int(session_id)), actor_staff_id, actor_staff_id),
+        ).fetchone()
+    if reusable_row:
+        reusable = dict(reusable_row)
+        project_id = _int(reusable.get("id"))
+        metadata = _loads(reusable.get("metadata_json"))
+        if not isinstance(metadata, dict) or _int(metadata.get("search_session_id")) != int(session_id):
+            reusable = {}
+        else:
+            attached = 0
+            kol_attach_warning = ""
+            missing_kol_pool_ids: list[int] = []
+            try:
+                attach_result = add_project_kols(
+                    project_id,
+                    {"kol_pool_ids": kol_pool_ids},
+                    staff=staff,
+                )
+                attached = _int(attach_result.get("inserted")) + _int(attach_result.get("skipped_existing"))
+                missing_kol_pool_ids = [
+                    _int(value)
+                    for value in attach_result.get("missing_kol_pool_ids") or []
+                    if _int(value)
+                ]
+                if missing_kol_pool_ids:
+                    kol_attach_warning = (
+                        "KOL pool items no longer exist: "
+                        + ",".join(str(value) for value in missing_kol_pool_ids)
+                    )
+            except ValueError as exc:
+                kol_attach_warning = str(exc)
+            kol_search_sessions.update_session_result_summary(
+                int(session_id),
+                status=str(session.get("status") or "ready"),
+                summary_patch={
+                    "draft_project": {
+                        "project_id": project_id,
+                        "project_uid": reusable.get("project_uid"),
+                        "attached_kol_count": attached,
+                        "requested_kol_count": len(kol_pool_ids),
+                        "missing_kol_pool_ids": missing_kol_pool_ids,
+                        "kol_attach_warning": kol_attach_warning,
+                        "reused": True,
+                    }
+                },
+            )
+            return {
+                "ok": True,
+                "reused": True,
+                "project_id": project_id,
+                "project_uid": reusable.get("project_uid"),
+                "project_name": reusable.get("project_name"),
+                "stage": reusable.get("stage"),
+                "attached_kol_count": attached,
+                "requested_kol_count": len(kol_pool_ids),
+                "missing_kol_pool_ids": missing_kol_pool_ids,
+                "kol_attach_warning": kol_attach_warning,
+                "brief": metadata.get("brief") if isinstance(metadata.get("brief"), dict) else brief,
+                "cost_estimate": metadata.get("cost_estimate") if isinstance(metadata.get("cost_estimate"), dict) else {},
+            }
+
     # R3:成本估算 + 风险合成(确定性,零 LLM,零触 fit_score)→ 写进草案 metadata,草案即带预算。
     cost_estimate: dict[str, Any] = {}
     try:
@@ -392,7 +538,8 @@ def create_project_draft_from_session(
     create_body = {
         "project_name": project_name,
         "stage": "discovery",
-        "source_type": str(body.get("source_type") or "smart_search"),
+        # 来源是系统事实,不可由请求 body 改写成 manual/excel 后躲过来源追溯。
+        "source_type": "smart_search",
         "product_sku": body.get("product_sku") or session_plan.get("product_sku") or "",
         "product_name": product_name,
         "platform": str(body.get("platform") or ""),
@@ -400,6 +547,14 @@ def create_project_draft_from_session(
             "brief": brief,
             "search_session_id": int(session_id),
             "cost_estimate": cost_estimate,
+            "source": {
+                "type": "smart_search_session",
+                "search_session_id": int(session_id),
+                "session_owner_id": session.get("created_by"),
+                "query_type": session.get("query_type"),
+                "query_text": query_text,
+                "approved_kol_pool_ids": kol_pool_ids,
+            },
         },
         "note": "draft from smart-search session",
     }
@@ -408,10 +563,25 @@ def create_project_draft_from_session(
 
     attached = 0
     kol_attach_warning = ""
+    missing_kol_pool_ids: list[int] = []
     if project_id:
         try:
             res = add_project_kols(project_id, {"kol_pool_ids": kol_pool_ids}, staff=staff)
-            attached = _int(res.get("inserted")) if isinstance(res, dict) else 0
+            if isinstance(res, dict):
+                # A concurrent retry may have attached the same KOLs after
+                # create_project committed and released the session row lock.
+                # Existing assignments still count as truthfully attached.
+                attached = _int(res.get("inserted")) + _int(res.get("skipped_existing"))
+                missing_kol_pool_ids = [
+                    _int(value)
+                    for value in res.get("missing_kol_pool_ids") or []
+                    if _int(value)
+                ]
+                if missing_kol_pool_ids:
+                    kol_attach_warning = (
+                        "KOL pool items no longer exist: "
+                        + ",".join(str(value) for value in missing_kol_pool_ids)
+                    )
         except ValueError as exc:
             # 占用冲突等 → 诚实降级:草案已建,KOL 未挂,带回原因供前端提示。
             kol_attach_warning = str(exc)
@@ -427,6 +597,8 @@ def create_project_draft_from_session(
                     "project_uid": created.get("project_uid"),
                     "attached_kol_count": attached,
                     "requested_kol_count": len(kol_pool_ids),
+                    "missing_kol_pool_ids": missing_kol_pool_ids,
+                    "kol_attach_warning": kol_attach_warning,
                 }
             },
         )
@@ -436,12 +608,14 @@ def create_project_draft_from_session(
 
     return {
         "ok": bool(project_id),
+        "reused": False,
         "project_id": project_id,
         "project_uid": created.get("project_uid"),
         "project_name": project_name,
         "stage": created.get("stage"),
         "attached_kol_count": attached,
         "requested_kol_count": len(kol_pool_ids),
+        "missing_kol_pool_ids": missing_kol_pool_ids,
         "kol_attach_warning": kol_attach_warning,
         "brief": brief,
         "cost_estimate": cost_estimate,

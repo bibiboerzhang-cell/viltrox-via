@@ -71,6 +71,7 @@ def test_route_mapping_exclusive_prefixes():
     assert board_requirement_for_request("/api/admin/vkpi/dealers/locations") == frozenset({"dealers"})
     assert board_requirement_for_request("/api/admin/vkpi/event-radar/opp_1") == frozenset({"events"})
     assert board_requirement_for_request("/api/admin/vkpi/dashboard") == frozenset({"dashboard"})
+    assert board_requirement_for_request("/api/admin/vkpi/kol-search-sessions/12/approve") == frozenset({"kol-pool"})
 
 
 def test_route_mapping_shared_prefixes_or():

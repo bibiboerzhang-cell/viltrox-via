@@ -191,9 +191,11 @@ export function SmartKolInputPanel({
     setFavNote("");
     const ids = [...pickedIds];
     const results = await Promise.allSettled(ids.map((id) => favoriteKolPool(apiToken, id)));
-    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failedIds = ids.filter((_, index) => results[index]?.status === "rejected");
+    const ok = ids.length - failedIds.length;
     setFavNote(ok === ids.length ? `已加入我的 MY KOL · ${ok} 人` : `加入 ${ok}/${ids.length}(其余失败,可重试)`);
-    setPickedIds(new Set());
+    setPickedIds(new Set(failedIds));
+    if (ok > 0) window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
     setAddingFav(false);
   }
 

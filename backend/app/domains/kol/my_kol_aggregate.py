@@ -19,6 +19,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.core.staff_avatars import serialize_staff_avatar_url
+from app.domains.access import scope
+from app.domains.kol.contact_access import mask_contact_payload
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -31,6 +33,33 @@ def _json(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _masked_contact_rows(value: Any) -> list[dict[str, Any]]:
+    """Return bulk-safe contact rows; plaintext remains reveal-endpoint only."""
+    rows = _json(value, [])
+    if not isinstance(rows, list):
+        return []
+    masked = mask_contact_payload(rows)
+    if not isinstance(masked, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in masked:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        item["contact_masked"] = True
+        result.append(item)
+    return result
+
+
+def _project_scope_for_favorite_projection(
+    actor: dict[str, Any] | None,
+    requested_staff_id: int | None,
+) -> tuple[str, list[Any]]:
+    """Build the same project visibility predicate used by project list/detail reads."""
+    where, params = scope.project_filter("p", actor, requested_staff_id)
+    return (f"AND {where}" if where else "", list(params))
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -179,11 +208,12 @@ def _pool_favorites(
     conn: Any,
     staff_id: int,
     *,
+    actor: dict[str, Any] | None = None,
     after: tuple[Decimal, int] | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """This staff's pool favorites OR pool KOLs shared to them (P-GROUP-7) +
-    active project links + public contacts.
+    active project links + bulk-safe masked contacts.
 
     Drives off vkpi_kol_pool kp (LEFT JOIN the favorite row) so a pool KOL that
     was *shared* to this staff via vkpi_kol_pool_members (migration 159) — but
@@ -198,10 +228,17 @@ def _pool_favorites(
     UNIQUE(kol_pool_id, staff_id) 至多一条,新增两个 LEFT JOIN 不会放大行数;
     纯读,零触归属/收藏/认领。
     """
+    scope_actor = actor if isinstance(actor, dict) and actor else {"id": int(staff_id)}
+    project_scope_clause, project_scope_params = _project_scope_for_favorite_projection(
+        scope_actor,
+        int(staff_id),
+    )
     created_sql = "COALESCE(f.created_at, sm.created_at)"
     sort_epoch_sql = f"EXTRACT(EPOCH FROM ({created_sql}))"
     cursor_sql = ""
-    params: list[Any] = [staff_id, staff_id]
+    # Project-scope placeholders occur in the SELECT subquery before the two
+    # collection-scope placeholders in the outer JOINs.
+    params: list[Any] = [*project_scope_params, staff_id, staff_id]
     if after is not None:
         cursor_sql = f"""
           AND (({sort_epoch_sql}) < ? OR (({sort_epoch_sql}) = ? AND kp.id < ?))
@@ -230,7 +267,7 @@ def _pool_favorites(
                  JOIN vkpi_projects p ON p.id = a.project_id
                  WHERE a.kol_pool_id = kp.id
                    AND COALESCE(a.stage,'') NOT IN ('churned','cancelled','lost')
-                   AND COALESCE(p.restricted, FALSE) = FALSE
+                   {project_scope_clause}
                ) AS projects_json,
                (
                  SELECT json_agg(json_build_object(
@@ -258,7 +295,8 @@ def _pool_favorites(
     for raw in rows:
         item = dict(raw)
         item["projects"] = _json(item.pop("projects_json", None), [])
-        item["contacts"] = _json(item.pop("contacts_json", None), [])
+        item["contacts"] = _masked_contact_rows(item.pop("contacts_json", None))
+        item["contact_masked"] = True
         if limit is None:
             item.pop("favorites_sort_epoch", None)
         items.append(item)
@@ -268,6 +306,7 @@ def _pool_favorites(
 def _pool_favorites_team(
     conn: Any,
     *,
+    actor: dict[str, Any],
     after: tuple[Decimal, int] | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -281,10 +320,13 @@ def _pool_favorites_team(
     纯读零写;viltrox_fit_score 只读透传。SQL 无参数、无注释(compat 把注释里的
     ASCII 问号当占位符,此处口径注全部住 Python docstring)。
     """
+    if not scope.can_view_all(actor):
+        raise scope.ScopeDenied("team MY KOL scope denied")
+    project_scope_clause, project_scope_params = _project_scope_for_favorite_projection(actor, None)
     created_sql = "COALESCE(MIN(f.created_at), MIN(sm.created_at))"
     sort_epoch_sql = f"EXTRACT(EPOCH FROM ({created_sql}))"
     having_sql = ""
-    params: list[Any] = []
+    params: list[Any] = list(project_scope_params)
     if after is not None:
         having_sql = f"""
         HAVING ({sort_epoch_sql}) < ? OR (({sort_epoch_sql}) = ? AND kp.id < ?)
@@ -313,7 +355,7 @@ def _pool_favorites_team(
                  JOIN vkpi_projects p ON p.id = a.project_id
                  WHERE a.kol_pool_id = kp.id
                    AND COALESCE(a.stage,'') NOT IN ('churned','cancelled','lost')
-                   AND COALESCE(p.restricted, FALSE) = FALSE
+                   {project_scope_clause}
                ) AS projects_json,
                (
                  SELECT json_agg(json_build_object(
@@ -339,7 +381,8 @@ def _pool_favorites_team(
     for raw in rows:
         item = dict(raw)
         item["projects"] = _json(item.pop("projects_json", None), [])
-        item["contacts"] = _json(item.pop("contacts_json", None), [])
+        item["contacts"] = _masked_contact_rows(item.pop("contacts_json", None))
+        item["contact_masked"] = True
         item["is_shared"] = bool(item.get("is_shared"))
         if limit is None:
             item.pop("favorites_sort_epoch", None)
@@ -347,14 +390,27 @@ def _pool_favorites_team(
     return items
 
 
-def _favorite_metrics(conn: Any, staff_id: int, *, team_scope: bool) -> dict[str, int]:
+def _favorite_metrics(
+    conn: Any,
+    staff_id: int,
+    *,
+    team_scope: bool,
+    actor: dict[str, Any],
+) -> dict[str, int]:
     """Exact full-collection KPI counts without materializing every favorite row."""
+    if team_scope and not scope.can_view_all(actor):
+        raise scope.ScopeDenied("team MY KOL scope denied")
+    requested_staff_id = None if team_scope else int(staff_id)
+    project_scope_clause, project_scope_params = _project_scope_for_favorite_projection(
+        actor,
+        requested_staff_id,
+    )
     if team_scope:
         collection_scope_sql = """
             (EXISTS (SELECT 1 FROM vkpi_kol_pool_favorites f WHERE f.kol_pool_id = kp.id)
              OR EXISTS (SELECT 1 FROM vkpi_kol_pool_members sm WHERE sm.kol_pool_id = kp.id))
         """
-        params: tuple[Any, ...] = ()
+        collection_params: list[Any] = []
     else:
         collection_scope_sql = """
             (EXISTS (
@@ -365,7 +421,12 @@ def _favorite_metrics(conn: Any, staff_id: int, *, team_scope: bool) -> dict[str
                 WHERE sm.kol_pool_id = kp.id AND sm.staff_id = ?
              ))
         """
-        params = (int(staff_id), int(staff_id))
+        collection_params = [int(staff_id), int(staff_id)]
+    params = [
+        *collection_params,
+        *project_scope_params,
+        *project_scope_params,
+    ]
     row = conn.execute(
         f"""
         WITH collection AS (
@@ -381,7 +442,7 @@ def _favorite_metrics(conn: Any, staff_id: int, *, team_scope: bool) -> dict[str
                 JOIN vkpi_projects p ON p.id = a.project_id
                 WHERE a.kol_pool_id = collection.kol_pool_id
                   AND COALESCE(a.stage, '') NOT IN ('churned', 'cancelled', 'lost')
-                  AND COALESCE(p.restricted, FALSE) = FALSE
+                  {project_scope_clause}
             ) THEN 1 ELSE 0 END), 0) AS in_project_count,
             COALESCE(SUM((
                 SELECT COUNT(*)
@@ -389,7 +450,7 @@ def _favorite_metrics(conn: Any, staff_id: int, *, team_scope: bool) -> dict[str
                 JOIN vkpi_projects p ON p.id = a.project_id
                 WHERE a.kol_pool_id = collection.kol_pool_id
                   AND COALESCE(a.stage, '') IN ('content_posted', 'reviewed', 'published')
-                  AND COALESCE(p.restricted, FALSE) = FALSE
+                  {project_scope_clause}
             )), 0) AS published_count
         FROM collection
         """,
@@ -405,8 +466,6 @@ def _favorite_metrics(conn: Any, staff_id: int, *, team_scope: bool) -> dict[str
 
 def _projects(conn: Any, staff: dict[str, Any], requested_staff_id: int | None) -> list[dict[str, Any]]:
     """This staff's projects via the shared project_filter scope (own-only for employees)."""
-    from app.domains.access import scope
-
     where, params = scope.project_filter("p", staff, requested_staff_id)
     clause = f"WHERE {where}" if where else ""
     rows = conn.execute(
@@ -504,19 +563,32 @@ def build_my_kol_aggregate(
     """
     staff_id = _int(staff_id)
     staff = _staff_row(conn, staff_id)
+    scope_actor = actor or staff
+    if team_scope and not scope.can_view_all(scope_actor):
+        raise scope.ScopeDenied("team MY KOL scope denied")
     favorite_metrics: dict[str, int] | None = None
     favorites_has_more = False
     favorites_next_cursor: str | None = None
     scope_key = "team" if team_scope else f"staff:{staff_id}"
     if favorites_limit is None:
-        favorites = _pool_favorites_team(conn) if team_scope else _pool_favorites(conn, staff_id)
+        favorites = (
+            _pool_favorites_team(conn, actor=scope_actor)
+            if team_scope
+            else _pool_favorites(conn, staff_id, actor=scope_actor)
+        )
     else:
         favorites_limit = max(1, min(int(favorites_limit), 100))
         after = _decode_favorites_cursor(scope_key, favorites_cursor) if favorites_cursor else None
         rows = (
-            _pool_favorites_team(conn, after=after, limit=favorites_limit + 1)
+            _pool_favorites_team(conn, actor=scope_actor, after=after, limit=favorites_limit + 1)
             if team_scope
-            else _pool_favorites(conn, staff_id, after=after, limit=favorites_limit + 1)
+            else _pool_favorites(
+                conn,
+                staff_id,
+                actor=scope_actor,
+                after=after,
+                limit=favorites_limit + 1,
+            )
         )
         favorites_has_more = len(rows) > favorites_limit
         favorites = rows[:favorites_limit]
@@ -527,8 +599,13 @@ def build_my_kol_aggregate(
         )
         for favorite in favorites:
             favorite.pop("favorites_sort_epoch", None)
-        favorite_metrics = _favorite_metrics(conn, staff_id, team_scope=team_scope)
-    projects = _projects(conn, actor or staff, None if team_scope else staff_id)
+        favorite_metrics = _favorite_metrics(
+            conn,
+            staff_id,
+            team_scope=team_scope,
+            actor=scope_actor,
+        )
+    projects = _projects(conn, scope_actor, None if team_scope else staff_id)
     claims = _claims(conn, staff_id)
     result = {
         "staff": staff,

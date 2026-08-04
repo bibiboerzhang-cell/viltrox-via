@@ -11,6 +11,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.access import scope
 
 logger = get_logger("viltrox.domains.kol.pool_favorites")
 
@@ -39,22 +40,33 @@ def add_favorite(kol_pool_id: int, *, staff: dict[str, Any] | None = None, note:
     ).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
+    # 单条 UPSERT 消除“先查再插”的并发窗口。同一员工快速双击、多个页面同时收藏
+    # 或重试同一请求时只会生成一行，冲突请求得到 already_favorited，而不是 500。
+    created = conn.execute(
+        """
+        INSERT INTO vkpi_kol_pool_favorites (kol_pool_id, staff_id, note)
+        VALUES (?, ?, ?)
+        ON CONFLICT (kol_pool_id, staff_id) DO NOTHING
+        RETURNING id
+        """,
+        (int(kol_pool_id), sid, str(note or "")[:500] or None),
+    ).fetchone()
+    conn.commit()
+    if created:
+        return {
+            "status": "favorited",
+            "kol_pool_id": int(kol_pool_id),
+            "favorite_id": int(dict(created)["id"]),
+        }
     existing = conn.execute(
         "SELECT id FROM vkpi_kol_pool_favorites WHERE kol_pool_id=? AND staff_id=?",
         (int(kol_pool_id), sid),
     ).fetchone()
-    if existing:
-        return {"status": "already_favorited", "kol_pool_id": int(kol_pool_id), "favorite_id": int(dict(existing)["id"])}
-    conn.execute(
-        "INSERT INTO vkpi_kol_pool_favorites (kol_pool_id, staff_id, note) VALUES (?, ?, ?)",
-        (int(kol_pool_id), sid, str(note or "")[:500] or None),
-    )
-    conn.commit()
-    created = conn.execute(
-        "SELECT id FROM vkpi_kol_pool_favorites WHERE kol_pool_id=? AND staff_id=?",
-        (int(kol_pool_id), sid),
-    ).fetchone()
-    return {"status": "favorited", "kol_pool_id": int(kol_pool_id), "favorite_id": int(dict(created)["id"]) if created else None}
+    return {
+        "status": "already_favorited",
+        "kol_pool_id": int(kol_pool_id),
+        "favorite_id": int(dict(existing)["id"]) if existing else None,
+    }
 
 
 def remove_favorite(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -82,13 +94,15 @@ def remove_favorite(kol_pool_id: int, *, staff: dict[str, Any] | None = None) ->
 
 
 def list_favorites(*, staff: dict[str, Any] | None = None, limit: int = 2000) -> dict[str, Any]:
-    """本人收藏清单(staff 隔离),附 pool 行摘要供 My KOL/Pool 星标渲染。"""
+    """本人收藏清单,仅附当前 actor 有权查看的关联项目摘要。"""
     sid = _staff_id(staff)
     if not sid:
         raise PermissionError("list favorites requires a staff identity")
     safe_limit = max(1, min(5000, int(limit or 2000)))
+    project_scope_sql, project_scope_params = scope.project_filter("p", staff)
+    project_scope_clause = f"AND {project_scope_sql}" if project_scope_sql else ""
     rows = get_conn().execute(
-        """
+        f"""
         SELECT f.id AS favorite_id, f.kol_pool_id, f.note, f.created_at,
                kp.platform, kp.handle, kp.display_name, kp.followers,
                kp.viltrox_fit_score, kp.profile_url, kp.avatar_url,
@@ -100,7 +114,7 @@ def list_favorites(*, staff: dict[str, Any] | None = None, limit: int = 2000) ->
                  JOIN vkpi_projects p ON p.id = a.project_id
                  WHERE a.kol_pool_id = f.kol_pool_id
                    AND COALESCE(a.stage,'') NOT IN ('churned','cancelled','lost')
-                   AND COALESCE(p.restricted, FALSE) = FALSE
+                   {project_scope_clause}
                ) AS projects_json
         FROM vkpi_kol_pool_favorites f
         JOIN vkpi_kol_pool kp ON kp.id = f.kol_pool_id
@@ -109,7 +123,7 @@ def list_favorites(*, staff: dict[str, Any] | None = None, limit: int = 2000) ->
         ORDER BY f.created_at DESC, f.id DESC
         LIMIT ?
         """,
-        (sid, safe_limit),
+        (*project_scope_params, sid, safe_limit),
     ).fetchall()
     items = [dict(row) for row in rows]
     return {"items": items, "total": len(items), "staff_id": sid}

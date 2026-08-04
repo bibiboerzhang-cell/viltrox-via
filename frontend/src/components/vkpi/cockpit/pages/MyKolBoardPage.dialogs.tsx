@@ -278,14 +278,22 @@ export function KolLibraryListModal({
     if (!apiToken || busy || !selectedRows.length) return;
     if (!projId) return setNote({ text: "请先在下拉里选择目标项目", tone: "error" });
     setBusy(true);
-    let ok = 0, fail = 0, firstError = "";
+    let inserted = 0, existing = 0, fail = 0, firstError = "";
     try {
       const { addKolsToProject } = await import("../../../../services/vkpi/projects-api");
       for (let i = 0; i < selectedRows.length; i += 1) {
         setNote({ text: `批量入项目中… ${i + 1}/${selectedRows.length}`, tone: "info" });
         try {
-          await addKolsToProject(apiToken, projId, [String(selectedRows[i].poolId)]);
-          ok += 1;
+          const result = await addKolsToProject(apiToken, projId, [String(selectedRows[i].poolId)]);
+          const added = Number(result.inserted || 0);
+          const skipped = Number(result.skipped_existing || 0);
+          const missing = Array.isArray(result.missing_kol_pool_ids) ? result.missing_kol_pool_ids.length : 0;
+          if (added > 0) inserted += added;
+          else if (skipped > 0 && missing === 0) existing += skipped;
+          else {
+            fail += 1;
+            if (!firstError) firstError = missing ? "KOL 已不存在" : "服务端未确认写入";
+          }
         } catch (err) {
           fail += 1;
           if (!firstError) firstError = errText(err, "").slice(0, 60);
@@ -296,8 +304,15 @@ export function KolLibraryListModal({
       return setNote({ text: `批量入项目失败:${errText(err, "请重试")}`, tone: "error" });
     }
     setBusy(false);
-    setNote({ text: `批量入项目完成:成功 ${ok} 个${fail ? ` · 失败 ${fail} 个${firstError ? `(首个原因:${firstError})` : ""}` : ""}`, tone: fail ? "error" : "ok" });
-    if (ok) onActionDone?.();
+    setNote({
+      text: `批量入项目完成:新增 ${inserted} 个${existing ? ` · 已存在 ${existing} 个` : ""}${fail ? ` · 未写入 ${fail} 个${firstError ? `(首个原因:${firstError})` : ""}` : ""}`,
+      tone: fail ? "error" : inserted ? "ok" : "info",
+    });
+    if (inserted || existing) window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
+    if (inserted) {
+      window.dispatchEvent(new CustomEvent("vkpi:projects-changed"));
+      onActionDone?.();
+    }
   };
 
   // 【导出 CSV】纯前端拼装下载(myKolBatch 现成 helper),邮箱按读端口径脱敏。
@@ -560,9 +575,21 @@ export function KolDetailModal({
     setBusy("project", true);
     try {
       const { addKolsToProject } = await import("../../../../services/vkpi/projects-api");
-      await addKolsToProject(apiToken, projId, [String(item.poolId)]);
-      setMsg("project", { text: "已入项目(端点确认)——「进行中」状态随下次聚合刷新落位。", tone: "ok" });
-      onActionDone?.();
+      const result = await addKolsToProject(apiToken, projId, [String(item.poolId)]);
+      const inserted = Number(result.inserted || 0);
+      const skipped = Number(result.skipped_existing || 0);
+      const missing = Array.isArray(result.missing_kol_pool_ids) ? result.missing_kol_pool_ids.length : 0;
+      if (inserted > 0) {
+        setMsg("project", { text: "已新增到项目——「进行中」状态随聚合刷新落位。", tone: "ok" });
+        window.dispatchEvent(new CustomEvent("vkpi:projects-changed"));
+        window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
+        onActionDone?.();
+      } else if (skipped > 0 && missing === 0) {
+        window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
+        setMsg("project", { text: "该 KOL 已在目标项目中，本次没有重复写入。", tone: "info" });
+      } else {
+        setMsg("project", { text: missing ? "入项目失败：该 KOL 已不存在，请刷新列表。" : "入项目失败：服务端未确认写入。", tone: "error" });
+      }
     } catch (err) {
       setMsg("project", { text: `入项目失败:${errText(err, "请重试")}`, tone: "error" });
     } finally {

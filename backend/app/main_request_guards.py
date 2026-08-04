@@ -186,6 +186,7 @@ _BOARD_NAV_KEYS = frozenset({
 _BOARD_ROUTE_RULES: tuple[tuple[str, frozenset[str]], ...] = (
     # 顺序敏感:更长/更具体的前缀在前。
     ("kol-smart-search", frozenset({"kol-pool"})),
+    ("kol-search-sessions", frozenset({"kol-pool"})),
     ("kol-search-history", frozenset({"kol-pool", "kolProfile"})),
     ("kol-pool", frozenset({"kol-pool", "kolProfile"})),
     ("event-radar", frozenset({"events"})),

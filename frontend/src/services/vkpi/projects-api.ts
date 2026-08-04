@@ -323,8 +323,17 @@ export async function getAvailableProjectKols(token: string, projectId: string, 
   return apiFetch<{ kols?: Row[]; project_id?: number; scope?: string; total_available?: number; returned?: number; has_more?: boolean }>(`/api/marketing/kol-pool/available?${params.toString()}`, {}, token);
 }
 
+export interface VkpiAddKolsToProjectResponse {
+  project_id: number;
+  requested: number;
+  inserted: number;
+  skipped_existing: number;
+  missing_kol_pool_ids: number[];
+  forced_claim_conflicts?: Row[];
+}
+
 export async function addKolsToProject(token: string, projectId: string, kolPoolIds: string[], assignedStaffId?: string) {
-  return apiFetch<Row>(
+  return apiFetch<VkpiAddKolsToProjectResponse>(
     `/api/marketing/projects/${encodeURIComponent(projectId)}/kols`,
     {
       method: "POST",

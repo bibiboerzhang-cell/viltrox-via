@@ -9,8 +9,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 //   K3 保持点时实测口径(board-ext kol_views 自取,主控注入兜底,无 series 诚实虚线);
 // - 【M4】funnel 合作漏斗 8 段条形(点段=过滤 library,筛选状态 page 层共享)/
 //   fitdist 直方(10 桶 + 未评分诚实桶)/ platdist 条形(点行=库平台过滤)全真身;
-// - 【M4】palette 六备选真身:viewsTop/contacts/followerTrend/claims/shares/cover
-//   (cover=board-ext 无此组 → 静态盘点标日期);
+// - 【M4】palette 五备选真身:viewsTop/contacts/followerTrend/claims/shares;
+//   无实时接口的旧 cover 静态盘点已下线,避免历史快照冒充当前进度;
 // - 【M3→M4】库「有 V 视频」= board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
 //   truncated / 名单缺席均如实降级标注,绝不悄悄装精确);
 // - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v2 +
@@ -337,14 +337,13 @@ const renderBoard = (props: Record<string, unknown> = {}) =>
     />,
   );
 
-// palette 六备选一次全上布局(storageKey 预置;kpiM 等默认模块刻意不含)
+// palette 五备选一次全上布局(storageKey 预置;kpiM 等默认模块刻意不含)
 const PALETTE_LAYOUT = [
   { moduleKey: "viewsTop", span: 8 },
   { moduleKey: "contacts", span: 4 },
   { moduleKey: "followerTrend", span: 8 },
   { moduleKey: "claims", span: 4 },
   { moduleKey: "shares", span: 4 },
-  { moduleKey: "cover", span: 4 },
 ];
 
 beforeEach(() => {
@@ -468,7 +467,7 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(palette.getByText("粉丝趋势")).toBeTruthy();
     expect(palette.getByText("我的认领")).toBeTruthy();
     expect(palette.getByText("共享池")).toBeTruthy();
-    expect(palette.getByText("数据覆盖")).toBeTruthy();
+    expect(palette.queryByText("数据覆盖")).toBeNull();
   });
 
   it("布局键 vkpi-my-kol-layout-v2 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
@@ -565,7 +564,7 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
     expect(screen.getByText("80-89 分")).toBeTruthy();
   });
 
-  it("palette 六模块真身(预置布局):播放榜/覆盖/双线/认领/共享/静态盘点全真渲染", async () => {
+  it("palette 五模块真身(预置布局):播放榜/覆盖/双线/认领/共享全真渲染,静态盘点退役", async () => {
     window.localStorage.setItem("vkpi-my-kol-layout-v2", JSON.stringify(PALETTE_LAYOUT));
     renderBoard();
     // viewsTop:实测播放条形榜(NULL 剔除口径注在 SrcChip/ProvNote)
@@ -587,11 +586,8 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
     expect(screen.getAllByText("共享池").length).toBeGreaterThan(0);
     expect(screen.getByText("Beta Vlog")).toBeTruthy();
     expect(screen.getByText("来自 Alice")).toBeTruthy();
-    // cover:board-ext 无此组 → 静态盘点标日期 + 触点 2 条真读数 + 盲区如实标
-    expect(screen.getAllByText(/静态盘点 2026-07-11/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("触点").length).toBeGreaterThan(0);
-    expect(screen.getByText("2 条")).toBeTruthy();
-    expect(screen.getAllByText("0 条 · 盲区").length).toBe(5);
+    expect(screen.queryByText(/静态盘点 2026-07-11/)).toBeNull();
+    expect(screen.queryByText("0 条 · 盲区")).toBeNull();
   });
 });
 

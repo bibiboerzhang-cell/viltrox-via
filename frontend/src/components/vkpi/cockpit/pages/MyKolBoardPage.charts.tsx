@@ -20,7 +20,7 @@ import {
 //   GapSparkline→demo .kpi sp 同构 + null 断点(缺日如实断线,KpiCard 滤 null 会把缺口连起来故自绘);KpiSeriesCard→demo .kpi 卡
 //   (ds-kpi 全套类)+ 断点 sparkline + delta 药丸(口径挂 title:趋势线是关联指标
 //   时序,不冒充卡面大数环比);FollowerTrendBody→senti tchart 双线同构;
-//   Claims/Shares/CoverBody→coverrow 行语言同构。数据:board-ext 七组聚合
+//   Claims/Shares→coverrow 行语言同构。数据:board-ext 七组聚合
 //   (page 层注入,本文件零直连网络)+ aggregate 现成行。
 // 红线:纯展示零网络;绝不写 viltrox_fit_score / 不碰 rule_v0(fit 直方只读分桶);
 //   颜色全 token var(--ds-*) 零写死色;发光只走 --ds-glow-radius(浅色 0px 自动无光);
@@ -656,45 +656,6 @@ export function SharesBody({ rows }: { rows: KolLibraryRow[] }) {
         </div>
       ))}
       <ProvNote>只读可见性授予(谁共享给谁)· 行动权仍在原属人</ProvNote>
-    </div>
-  );
-}
-
-/* ============ cover · 数据覆盖盲区(金样板 CoverRow 同构;board-ext 无此组 →
-   静态盘点 2026-07-11 硬编码读数,如实标注非实时、会过期) ============ */
-const COVER_STATIC_DATE = "2026-07-11";
-const COVER_ROWS: Array<{ name: string; table: string; count: number; note: string }> = [
-  { name: "外联记录", table: "kol_outreach", count: 0, note: "履约闭环外联主表 · 0 行 = 尚无真实外联落库" },
-  { name: "合作事件", table: "vkpi_kol_cooperation_events", count: 0, note: "合作事件流水 · 0 行" },
-  { name: "生命周期", table: "vkpi_kol_lifecycle_events", count: 0, note: "KOL 生命周期事件 · 0 行" },
-  { name: "联盟销售", table: "vkpi_goaffpro_sales / _kol_links", count: 0, note: "GoAffPro 归因销售 · 0 行" },
-  { name: "内容手录", table: "vkpi_content_posts", count: 0, note: "手录内容端点落库 · 0 行" },
-  { name: "触点", table: "vkpi_kol_pool_touches", count: 2, note: "KOL 池触点流水" },
-];
-
-export function CoverBody() {
-  return (
-    <div>
-      <div className="mb-2 rounded-[9px] border border-warn bg-warn-soft px-2.5 py-1.5 text-[10px] leading-[1.6] text-ink-2">
-        <b className="font-semibold text-warn">静态盘点 {COVER_STATIC_DATE}</b> —— board-ext 无此组,以下为盘点日硬编码读数,非实时、会过期。
-      </div>
-      {COVER_ROWS.map((row) => (
-        <div
-          key={row.table}
-          className="flex items-center gap-2 border-b border-line py-1.5 text-[11.5px] last:border-0"
-          title={`${row.table} · ${row.note}`}
-        >
-          <span
-            className={`h-[7px] w-[7px] flex-none rounded-full ${row.count > 0 ? "bg-good" : "bg-muted"}`}
-            style={row.count > 0 ? { boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" } : undefined}
-          />
-          <span className={`min-w-0 flex-1 truncate ${row.count > 0 ? "text-ink-2" : "text-muted"}`}>{row.name}</span>
-          <span className={`flex-none font-mono text-[9.5px] ${row.count > 0 ? "text-muted" : "text-warn"}`}>
-            {row.count > 0 ? `${row.count} 条` : "0 条 · 盲区"}
-          </span>
-        </div>
-      ))}
-      <ProvNote>逐源如实标注 · 空源 = 盲区不装 live · 读数以盘点日期为准</ProvNote>
     </div>
   );
 }

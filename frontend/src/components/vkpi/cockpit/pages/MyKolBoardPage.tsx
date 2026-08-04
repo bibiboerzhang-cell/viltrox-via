@@ -11,7 +11,6 @@ import { DigestEmbed, LibClassicEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, Te
 import {
   ClaimsBody,
   ContactsBody,
-  CoverBody,
   FitDistBody,
   FollowerTrendBody,
   FunnelBody,
@@ -38,7 +37,7 @@ import {
 //     KPI 带 series+delta 接线(K1←pool_followers 缺快照日 null 断点如实 / K2←new_videos /
 //     K4←official_followers;K3 保持 kol_views 点时实测口径,无 series 诚实虚线)/
 //     palette 六备选真身:viewsTop 播放榜 / contacts 联系方式覆盖 / followerTrend 双线 /
-//     claims 我的认领 / shares 共享池 / cover 数据覆盖(board-ext 无此组 → 静态盘点标日期)。
+//     claims 我的认领 / shares 共享池。无实时来源的旧「数据覆盖」静态盘点已下线。
 //   【M3→M4】library:V 筛选升级 board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
 //   truncated / 名单缺席均如实降级标注);弹窗族住 MyKolBoardPage.dialogs.tsx 不动;
 //   旧 KOL Pool 抽屉(vkpi:open-kol-pool-item 事件)保留不动,两入口并存。
@@ -131,6 +130,16 @@ export function MyKolBoardPage({
   const isManager = viewMode === "manager";
   const [editing, setEditing] = React.useState(false);
   const [reloadTick, setReloadTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const refresh = () => setReloadTick((tick) => tick + 1);
+    window.addEventListener("vkpi:favorites-changed", refresh);
+    window.addEventListener("vkpi:projects-changed", refresh);
+    return () => {
+      window.removeEventListener("vkpi:favorites-changed", refresh);
+      window.removeEventListener("vkpi:projects-changed", refresh);
+    };
+  }, []);
 
   // K1/K2 + 徽章 KOL 数:统一只读聚合端点(员工 own-only 由后端 scope 强制)
   const [agg, setAgg] = React.useState<VkpiMyKolAggregateResponse | null>(null);
@@ -539,13 +548,6 @@ export function MyKolBoardPage({
     );
   };
 
-  // cover:board-ext 无此组 → 静态盘点(卡体 + SrcChip 双处如实标注日期与非实时性)
-  const renderCover = () => (
-    <ModuleCard {...cardProps("cover", "数据覆盖", "6 源")}>
-      <CoverBody />
-    </ModuleCard>
-  );
-
   /* ---------- 模块注册表(palette 全量可选;risk/rollup 管理层专属 = 员工注册表直接不含,
      默认布局经 moduleMap 过滤自动少两块 —— 不渲染 403 卡,裁决②A) ---------- */
   const modules: DashboardModuleDefinition[] = [
@@ -557,7 +559,7 @@ export function MyKolBoardPage({
     { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
     { key: "contentWall", label: "内容墙", description: "收藏集最近采集视频网格 · KOL/仅V/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30, render: renderContentWall },
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
-    { key: "official", label: "官方账号矩阵", description: "18 官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
+    { key: "official", label: "官方账号矩阵", description: "当前官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },
     ...(isManager
       ? ([
@@ -570,8 +572,7 @@ export function MyKolBoardPage({
     { key: "contacts", label: "联系方式覆盖", description: "覆盖率大数 + 类型条形(永远零明文)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderContacts },
     { key: "followerTrend", label: "粉丝趋势", description: "收藏集 vs 官号双线 · 缺快照日断线", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderFollowerTrend },
     { key: "claims", label: "我的认领", description: "本人认领行 · active/到期如实列出", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderClaims },
-    { key: "shares", label: "共享池", description: "共享给我的库行 · 0 行=已建未用诚实空", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderShares },
-    { key: "cover", label: "数据覆盖", description: "六源盲区盘点 · 静态标日期非实时", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 20, render: renderCover },
+    { key: "shares", label: "共享池", description: "共享给我的真实库行 · 空集显示空态", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 8, minHeight: 4, maxHeight: 16, render: renderShares },
     // 经典视图(libclassic)已退役出 palette(2026-07-12 用户裁决:旧两栏皮肤拉低质感,
     // 功能已被新版行式库+详情弹窗零丢失覆盖)。想临时找回:恢复下一行 + embeds 的 renderLibClassic。
     // { key: "libclassic", label: "经典视图 · KOL 库", description: "升级前两栏库整体内嵌", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 16, minHeight: 8, maxHeight: 36, render: renderLibClassic },

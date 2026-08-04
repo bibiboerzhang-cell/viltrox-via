@@ -141,15 +141,22 @@ def materialize_plan_to_inbox(plan_id: int, *, staff: dict[str, Any] | None = No
 
 
 def get_plan(plan_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """读单条计划(留痕)。缺表/不存在 → None。"""
-    del staff
+    """读单条计划留痕；成员仅可读本人计划，管理层可审计全部。"""
     if not table_exists("vkpi_agent_orchestration_plan"):
         return None
-    row = get_conn().execute(
-        "SELECT id, goal, input_context_json, plan_json, status, estimated_cost_cents, created_by_staff_id, created_at, updated_at "
-        "FROM vkpi_agent_orchestration_plan WHERE id = ?",
-        (int(plan_id),),
-    ).fetchone()
+    actor_staff_id = int(scope.actor_staff_id(staff))
+    if not actor_staff_id:
+        return None
+    sql = (
+        "SELECT id, goal, input_context_json, plan_json, status, estimated_cost_cents, "
+        "created_by_staff_id, created_at, updated_at "
+        "FROM vkpi_agent_orchestration_plan WHERE id = ?"
+    )
+    params: tuple[Any, ...] = (int(plan_id),)
+    if not scope.can_view_all(staff):
+        sql += " AND created_by_staff_id = ?"
+        params = (int(plan_id), actor_staff_id)
+    row = get_conn().execute(sql, params).fetchone()
     if row is None:
         return None
     item = dict(row)

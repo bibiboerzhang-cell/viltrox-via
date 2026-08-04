@@ -10,7 +10,7 @@ module remains the compatibility facade for existing imports and monkeypatches.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -346,31 +346,43 @@ def create_session(
     )
 
 
-def list_sessions(*, limit: int = 20, status: str = "") -> dict[str, Any]:
+def list_sessions(
+    *,
+    limit: int = 20,
+    status: str = "",
+    staff: dict[str, Any] | None = None,
+    scope_to_staff: bool = True,
+) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 20), 100))
     normalized_status = _normalize_status(status) if status else ""
+    actor_id = _staff_user_id(staff) if scope_to_staff else None
+    if scope_to_staff and not actor_id:
+        return {
+            "status": "ready",
+            "count": 0,
+            "items": [],
+            "worker_health": {"status": "unobserved", "reason": "current_staff_unresolved"},
+        }
     conn = get_conn()
+    where: list[str] = []
+    params: list[Any] = []
     if normalized_status:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM vkpi_kol_search_sessions
-            WHERE status=?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?
-            """,
-            (normalized_status, safe_limit),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM vkpi_kol_search_sessions
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?
-            """,
-            (safe_limit,),
-        ).fetchall()
+        where.append("status=?")
+        params.append(normalized_status)
+    if actor_id:
+        where.append("created_by=?")
+        params.append(actor_id)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vkpi_kol_search_sessions
+        {where_sql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (*params, safe_limit),
+    ).fetchall()
     sessions = [_row_to_session(row) for row in rows]
     grouped = _session_items_by_id(
         conn,
@@ -595,18 +607,21 @@ def approve_session(
     kol_pool_ids: list[Any],
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """R1:人审锁定该会话里要推进合作的候选 KOL → 写 approved_kol_ids(R2 据此建项目草案)。
+    """R1:人审锁定当前员工会话里的候选 KOL → 写 approved_kol_ids。
 
-    只接受真实存在的 kol_pool_id(校验 vkpi_kol_pool 存在性,绝不写任意 id);去重保序;replace
-    语义(本次选择即最终锁定集)。校验口径用「池中存在」而非「会话项含该 id」——因全网新发现
-    new_creator 入池后会话项 kol_pool_id 仍为 NULL,若按会话项交集会把这些真候选全误杀。
+    只接受属于本会话候选集合且真实存在的 kol_pool_id;去重保序;replace 语义。全网新发现
+    会话项虽然按设计保持 kol_pool_id=NULL,但可按 payload 的 platform/handle 反查本次自动入池行,
+    因而无需放宽到整个 KOL Pool。
     审计落 result_summary_json.approval(谁/何时/接受几个/跳过几个)。绝不写 vkpi_kol_pool /
     viltrox_fit_score / rule_v0,只读池做存在性校验 + 写本会话 approved_kol_ids + summary 两处。
     """
     conn = get_conn()
+    actor_id = _staff_user_id(staff)
+    if not actor_id:
+        raise LookupError(f"search session not found: {session_id}")
     row = conn.execute(
-        "SELECT * FROM vkpi_kol_search_sessions WHERE id=?",
-        (int(session_id),),
+        "SELECT * FROM vkpi_kol_search_sessions WHERE id=? AND created_by=?",
+        (int(session_id), actor_id),
     ).fetchone()
     if not row:
         raise LookupError(f"search session not found: {session_id}")
@@ -619,28 +634,76 @@ def approve_session(
             seen.add(parsed)
             requested.append(parsed)
 
-    # 存在性校验:只接受真实在池的 kol_pool_id(只读 vkpi_kol_pool,绝不写)。
+    candidate_rows = conn.execute(
+        """
+        SELECT kol_pool_id, payload_json
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+        """,
+        (int(session_id),),
+    ).fetchall()
+    direct_ids: set[int] = set()
+    candidate_pairs: set[tuple[str, str]] = set()
+    for candidate_row in candidate_rows:
+        data = dict(candidate_row)
+        direct = _int_or_none(data.get("kol_pool_id"))
+        if direct:
+            direct_ids.add(direct)
+        payload = _loads(data.get("payload_json"), {})
+        if not isinstance(payload, dict):
+            continue
+        profile_execute = _dict(payload.get("profile_execute"))
+        for value in (
+            payload.get("kol_pool_id"),
+            payload.get("matched_kol_pool_id"),
+            profile_execute.get("kol_pool_id"),
+        ):
+            parsed = _int_or_none(value)
+            if parsed:
+                direct_ids.add(parsed)
+        platform = _text(payload.get("platform")).lower()
+        handle = _text(payload.get("handle") or payload.get("channel_name")).lstrip("@").lower()
+        if platform and handle:
+            candidate_pairs.add((platform, handle))
+
     valid_ids: set[int] = set()
-    if requested:
-        placeholders = ",".join("?" for _ in requested)
+    if direct_ids:
+        placeholders = ",".join("?" for _ in direct_ids)
         pool_rows = conn.execute(
             f"SELECT id FROM vkpi_kol_pool WHERE id IN ({placeholders})",
-            requested,
+            tuple(sorted(direct_ids)),
         ).fetchall()
-        valid_ids = {int(dict(r)["id"]) for r in pool_rows if dict(r).get("id")}
+        valid_ids.update(int(dict(item)["id"]) for item in pool_rows if dict(item).get("id"))
+    if candidate_pairs:
+        pair_clauses = " OR ".join(
+            ["(LOWER(platform)=? AND LOWER(LTRIM(handle, '@'))=?)"] * len(candidate_pairs)
+        )
+        pair_params: list[Any] = []
+        for platform, handle in sorted(candidate_pairs):
+            pair_params.extend([platform, handle])
+        pair_rows = conn.execute(
+            f"SELECT id FROM vkpi_kol_pool WHERE {pair_clauses}",
+            tuple(pair_params),
+        ).fetchall()
+        valid_ids.update(int(dict(item)["id"]) for item in pair_rows if dict(item).get("id"))
 
-    accepted = [kid for kid in requested if kid in valid_ids]
-    skipped = [kid for kid in requested if kid not in valid_ids]
+    rejected = [kid for kid in requested if kid not in valid_ids]
+    if rejected:
+        raise ValueError(
+            "kol_pool_ids must belong to this search session's candidates: "
+            + ",".join(str(kid) for kid in rejected)
+        )
+    accepted = list(requested)
 
     # 审计合并进 result_summary_json.approval(沿用既有 jsonb 合并;不另加列)。
     summary = _loads(dict(row).get("result_summary_json"), {})
     if not isinstance(summary, dict):
         summary = {}
-    approved_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    approved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     summary["approval"] = {
         "approved_kol_ids": accepted,
         "approved_count": len(accepted),
-        "skipped_not_in_pool": skipped,
+        "skipped_not_in_session": [],
         "approved_by": _staff_user_id(staff),
         "approved_at": approved_at,
         "viltrox_fit_score_untouched": True,
@@ -652,15 +715,17 @@ def approve_session(
         SET approved_kol_ids=?::jsonb,
             result_summary_json=?::jsonb,
             updated_at=NOW()
-        WHERE id=?
+        WHERE id=? AND created_by=?
         RETURNING *
         """,
-        (_json_dumps(accepted), _json_dumps(summary), int(session_id)),
+        (_json_dumps(accepted), _json_dumps(summary), int(session_id), actor_id),
     ).fetchone()
+    if not updated:
+        raise LookupError(f"search session not found: {session_id}")
     conn.commit()
     session = _row_to_session(updated)
     session["approved_count"] = len(accepted)
-    session["skipped_not_in_pool"] = skipped
+    session["skipped_not_in_session"] = []
     return session
 
 
@@ -910,7 +975,14 @@ def ensure_session_for_result(
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if session_id:
-        return get_session(int(session_id))
+        # A client-supplied session id may only resume the current employee's
+        # session.  URL and text-search helpers both attach results after this
+        # lookup, so an unscoped read here would also become a cross-user write.
+        return get_session(
+            int(session_id),
+            staff=staff,
+            scope_to_staff=True,
+        )
     if create:
         return create_session(
             query_text=query_text,

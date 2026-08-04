@@ -15,15 +15,15 @@ import { ModalShell } from "./MarketVoicePage.dialogs";
 
 export type Row = Record<string, any>;
 
-/* ============ 溯源注册表(金样板 MODULE_SOURCES 同构;计数=2026-07-12 本地实测) ============ */
+/* ============ 溯源注册表(金样板 MODULE_SOURCES 同构;只写动态口径,不固化历史快照) ============ */
 export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string, string]> }> = {
   kpiK: {
     label: "vkpi_kol_pool · kol-pool/summary",
     rows: [
-      ["在池总数", "vkpi_kol_pool 非重复行(1,237 · duplicate_of_id IS NULL · 分页取尽)"],
-      ["本周新发现", "created_at ≥ 近 7 天(UTC 存)· 2026-07-12 实测 15"],
-      ["已深析", "vkpi_kol_llm_deep_analysis_results(830 行 · 覆盖 334 KOL · 2026-07-12 实测)"],
-      ["暂不推荐", "raw_platform_data.low_reach 标(补全回填后重过闸,81 · kol-pool/summary 计数)· 已入库仅不推荐,行保留不删"],
+      ["在池总数", "vkpi_kol_pool 非重复行(duplicate_of_id IS NULL)· 当前值由列表实时取尽"],
+      ["本周新发现", "created_at ≥ 近 7 天(UTC 存)· 当前值由页面实时计算"],
+      ["已深析", "vkpi_kol_llm_deep_analysis_results · 当前覆盖与结果数由列表 payload 实时聚合"],
+      ["暂不推荐", "raw_platform_data.low_reach 标 · 当前值由 kol-pool/summary 返回;接口缺失则显示不可确认"],
       ["趋势线", "四指标全点时快照,无历史时序端点 → 诚实虚线零环比,绝不编 series"],
       ["红线", "fit 分只读展示 · 本页零写库零打分"],
     ],
@@ -31,7 +31,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
   smart: {
     label: "smart-search · vkpi_kol_search_sessions",
     rows: [
-      ["会话", "vkpi_kol_search_sessions(813)+ _items(1,807)· 2026-07-12 实测"],
+      ["会话", "vkpi_kol_search_sessions + items · 当前数量以实时搜索历史接口为准"],
       ["一个框", "URL 看资料 / 建档 / 视频分析 / 语义召回 · 模式三档改真实请求参数"],
       ["展示闸", "低触达/分析中折叠计数由后端按池现值实时重判(分析后再推荐)· 行为原样"],
       ["入库", "全网新发现即时轻量入库(仅基础资料,不触评分)· 搜到≠归我,勾选才收藏"],
@@ -49,7 +49,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "vkpi_kol_pool · 前端推导",
     rows: [
       ["新/已有", "按 linked_main_kol_id 推导(candidate_kind 列待后端)· 卡内如实标注"],
-      ["播放量汇总", "Σ avg_views(611/1,237 有值)· 非去重触达,如实标注"],
+      ["播放量汇总", "Σ avg_views(仅统计真实有值行)· 非去重触达,如实标注"],
       ["待补全", "分类列缺失 → 诚实灰卡不可点,接真后恢复"],
       ["总数卡", "点开 = 全量池表大窗(搜索 + 平台分组)"],
       ["去向", "2026-07-12 默认布局撤出 → palette 备选;分类点击筛选在「推荐 · 卡片流」筛选条保留,总数大窗入口移至卡片流工具行,均 Fit 由「Fit 分布」直方替代"],
@@ -85,7 +85,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
     label: "kol-pool/needs-analysis",
     rows: [
       ["口径", "库内有视频证据但无 ready 深析产物的 KOL(上限 50 一批)"],
-      ["证据表", "vkpi_kol_video_evidence(2,868 活跃行 · 2026-07-12 实测)"],
+      ["证据表", "vkpi_kol_video_evidence · 当前值由 needs-analysis 端点实时返回"],
       ["入队", "批量进后台分析队列 · 单进程串行处理,预算闸在后端"],
     ],
   },

@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import PostgresCompatConnection, get_conn
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import _int, _json, staff_id, utcnow
@@ -18,6 +18,58 @@ from app.domains.projects.workflow_projects_occupancy import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _require_project_for_kol_write(conn: Any, project_id: int) -> dict[str, Any]:
+    """Lock one live project before attaching KOLs.
+
+    A project picker can be stale while another request soft-deletes the project.
+    PostgreSQL therefore locks the project row in the same business transaction
+    used for assignments.  A delete that won first is observed as deleted; a
+    delete that arrives later waits until this attachment commits.  SQLite and
+    lightweight test doubles retain the same state check without ``FOR UPDATE``.
+    """
+    sql = "SELECT id, stage_status FROM vkpi_projects WHERE id=?"
+    if isinstance(conn, PostgresCompatConnection):
+        sql += " FOR UPDATE"
+    row = conn.execute(sql, (int(project_id),)).fetchone()
+    item = dict(row) if row else {}
+    if not item or str(item.get("stage_status") or "").strip().lower() == "deleted":
+        # A soft-deleted row is deliberately indistinguishable from a missing
+        # project so stale clients cannot write to an invisible project.
+        raise LookupError("project not found")
+    return item
+
+
+def _locked_pool_claim_occupancy(
+    conn: Any,
+    kol_pool_ids: list[int] | set[int],
+) -> dict[int, dict[str, Any]]:
+    """Serialize assignment decisions for the same pool rows on PostgreSQL.
+
+    ``vkpi_project_kol_assignments`` is unique per project, not globally per
+    KOL.  Without a stable parent-row lock two requests can both observe an
+    empty occupancy set and assign the same creator to different staff.  Lock
+    all requested parent rows in id order, then read occupancy while that lock
+    is held by the caller's business transaction.  SQLite and lightweight test
+    connections retain the same ordered read without unsupported lock syntax.
+    """
+    ids = sorted({_int(value) for value in kol_pool_ids if _int(value)})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    sql = f"""
+        SELECT id
+        FROM vkpi_kol_pool
+        WHERE id IN ({placeholders})
+        ORDER BY id
+    """
+    if isinstance(conn, PostgresCompatConnection):
+        sql += " FOR UPDATE"
+    # Fetch the complete result so PostgreSQL has acquired every selected row
+    # lock before the occupancy snapshot is evaluated.
+    conn.execute(sql, ids).fetchall()
+    return _pool_claim_occupancy(conn, ids)
 
 
 def list_available_project_kols(
@@ -36,8 +88,13 @@ def list_available_project_kols(
     """
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff)
-    limit_i = max(1, min(500, int(limit or 200)))
     conn = get_conn()
+    if not conn.execute(
+        "SELECT id FROM vkpi_projects WHERE id=? AND COALESCE(stage_status, '') <> 'deleted'",
+        (int(project_id),),
+    ).fetchone():
+        raise LookupError("project not found")
+    limit_i = max(1, min(500, int(limit or 200)))
     actor_staff_id = staff_id(staff)
     want_all = str(scope_mode or "").strip().lower() in {"all", "pool", "global", "全池"}
     favorites_scoped = bool(not want_all and actor_staff_id)
@@ -142,6 +199,8 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
     """Attach existing kol_pool rows to a project as discovered assignments."""
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
+    conn = get_conn()
+    _require_project_for_kol_write(conn, int(project_id))
     ids = body.get("kol_pool_ids") or body.get("kolPoolIds") or body.get("kol_ids") or body.get("kolIds") or []
     if not isinstance(ids, list):
         raise ValueError("kol_pool_ids must be a list")
@@ -154,7 +213,6 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
             kol_pool_ids.append(kol_pool_id)
     if not kol_pool_ids:
         raise ValueError("kol_pool_ids required")
-    conn = get_conn()
     existing_pool_ids = {
         int(row["id"])
         for row in conn.execute(
@@ -191,7 +249,7 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
                 claim_owner_by_pool[_pool_id] = _owner
     # 乙案②(写入侧防绕过):与选择器同口径校验——被他人认领/在役跟进的 KOL 拒绝写入,
     # ValueError 带占用人姓名(路由已映 400);admin 可 body.force=true 强制,audit 留痕。
-    occupancy = _pool_claim_occupancy(conn, sorted(existing_pool_ids))
+    occupancy = _locked_pool_claim_occupancy(conn, existing_pool_ids)
     blocked = {
         pool_id: occ
         for pool_id, occ in occupancy.items()
@@ -233,6 +291,7 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
     now = utcnow()
     inserted = 0
     skipped_existing = 0
+    inserted_pool_ids: list[int] = []
     for kol_pool_id in kol_pool_ids:
         if kol_pool_id not in existing_pool_ids:
             continue
@@ -259,18 +318,10 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
         ).fetchone()
         if row:
             inserted += 1
-            # S3 学习闭环:加项目 = 强信号,沉淀进 vkpi_agent_actions(best-effort,不阻断)。
-            try:
-                from app.domains.memory import agent_memory_writer
-
-                agent_memory_writer.record_kol_signal(
-                    kol_pool_id, "add_to_project", staff=staff,
-                    reason="added_to_project", detail={"project_id": int(project_id)},
-                )
-            except Exception:
-                logger.debug("add_project_kols.agent_signal_skipped", exc_info=True)
+            inserted_pool_ids.append(int(kol_pool_id))
             # P0-4 触达历史回流:加入项目=一次明确触达(谁/何时/经哪个项目)。最薄记录,
             # ON CONFLICT 幂等(同人同项目同 channel 不重复堆);失败旁路不阻断 assignment 主写。
+            conn.execute("SAVEPOINT vkpi_project_touch")
             try:
                 conn.execute(
                     """
@@ -290,7 +341,16 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
                         now,
                     ),
                 )
+                conn.execute("RELEASE SAVEPOINT vkpi_project_touch")
             except Exception:
+                # PostgreSQL 中任意 SQL 错误都会令当前事务进入 aborted；仅 catch 不足以
+                # “旁路”。回滚到 savepoint 后主 assignment 才能继续安全提交。
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT vkpi_project_touch")
+                    conn.execute("RELEASE SAVEPOINT vkpi_project_touch")
+                except Exception:
+                    logger.exception("kol_pool touch savepoint recovery failed")
+                    raise
                 logger.warning("kol_pool touch log skipped for pool_id=%s project_id=%s", kol_pool_id, project_id, exc_info=True)
         else:
             skipped_existing += 1
@@ -299,21 +359,33 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
     # 裁决「查到的人先入收藏再可选」:加入项目=本人跟进=应在本人收藏内(幂等;含全池逃生门添加)。
     attached_ids = [kid for kid in kol_pool_ids if kid in existing_pool_ids]
     if actor_staff_id and attached_ids:
-        ph = ",".join("?" for _ in attached_ids)
-        already_fav = {
-            int(dict(r)["kol_pool_id"])
-            for r in conn.execute(
-                f"SELECT kol_pool_id FROM vkpi_kol_pool_favorites WHERE staff_id=? AND kol_pool_id IN ({ph})",
-                (int(actor_staff_id), *attached_ids),
-            ).fetchall()
-        }
         for kid in attached_ids:
-            if kid not in already_fav:
-                conn.execute(
-                    "INSERT INTO vkpi_kol_pool_favorites (kol_pool_id, staff_id, note) VALUES (?, ?, ?)",
-                    (int(kid), int(actor_staff_id), "项目添加自动收藏"),
-                )
+            conn.execute(
+                """
+                INSERT INTO vkpi_kol_pool_favorites (kol_pool_id, staff_id, note)
+                VALUES (?, ?, ?)
+                ON CONFLICT (kol_pool_id, staff_id) DO NOTHING
+                """,
+                (int(kid), int(actor_staff_id), "项目添加自动收藏"),
+            )
     conn.commit()
+    # 学习信号刻意放在业务事务提交之后。record_kol_signal 使用请求作用域连接并会
+    # 自行 commit；若在循环中调用，会把 assignment 提前提交，破坏 assignment +
+    # touch + auto-favorite 的原子性。学习账本仍是 best-effort，绝不反向阻断业务写入。
+    if inserted_pool_ids:
+        try:
+            from app.domains.memory import agent_memory_writer
+
+            for kol_pool_id in inserted_pool_ids:
+                agent_memory_writer.record_kol_signal(
+                    kol_pool_id,
+                    "add_to_project",
+                    staff=staff,
+                    reason="added_to_project",
+                    detail={"project_id": int(project_id)},
+                )
+        except Exception:
+            logger.debug("add_project_kols.agent_signal_skipped", exc_info=True)
     if inserted:
         _log_project_audit(
             staff=staff,

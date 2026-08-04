@@ -45,6 +45,13 @@ def _request(queue: FakeQueue | None = None):
 
 
 def test_profile_item_execute_ignores_sync_flag_and_enqueues(monkeypatch):
+    owner_checks: list[tuple[int, int, bool]] = []
+
+    def current_staff_session(session_id, *, staff, scope_to_staff):
+        owner_checks.append((int(session_id), int(staff["id"]), bool(scope_to_staff)))
+        return {"id": int(session_id), "created_by": int(staff["id"]), "items": []}
+
+    monkeypatch.setattr(search_routes.kol_search_sessions, "get_session", current_staff_session)
     monkeypatch.setattr(
         search_routes.kol_profile_discovery,
         "enqueue_search_session_advance",
@@ -66,9 +73,17 @@ def test_profile_item_execute_ignores_sync_flag_and_enqueues(monkeypatch):
     assert result["status"] == "queued"
     assert result["deferred_to_queue"] is True
     assert result["provider_calls_performed"] is False
+    assert owner_checks == [(11, 1, True)]
 
 
 def test_profile_advance_execute_ignores_sync_flag_and_enqueues(monkeypatch):
+    owner_checks: list[tuple[int, int, bool]] = []
+
+    def current_staff_session(session_id, *, staff, scope_to_staff):
+        owner_checks.append((int(session_id), int(staff["id"]), bool(scope_to_staff)))
+        return {"id": int(session_id), "created_by": int(staff["id"]), "items": []}
+
+    monkeypatch.setattr(search_routes.kol_search_sessions, "get_session", current_staff_session)
     monkeypatch.setattr(
         search_routes.kol_profile_discovery,
         "enqueue_search_session_advance",
@@ -88,6 +103,7 @@ def test_profile_advance_execute_ignores_sync_flag_and_enqueues(monkeypatch):
 
     assert result["status"] == "queued"
     assert result["deferred_to_queue"] is True
+    assert owner_checks == [(11, 1, True)]
 
 
 def test_profile_advance_job_ignores_queue_pipeline_false(monkeypatch):
