@@ -55,6 +55,22 @@ function TaskSnapshot() {
   );
 }
 
+function WatcherProbe() {
+  const { waitForTask } = useTaskCenter();
+  const [status, setStatus] = React.useState('等待');
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => waitForTask('watched-task', { onDone: () => setStatus('完成') })}
+      >
+        监听任务
+      </button>
+      <output data-testid="watcher-status">{status}</output>
+    </>
+  );
+}
+
 function renderProvider(apiToken: string) {
   return render(
     <TaskCenterProvider apiToken={apiToken}>
@@ -94,7 +110,7 @@ describe('TaskCenterProvider polling lifecycle', () => {
     setVisibility('visible');
   });
 
-  it('waits for the current request to settle before starting the three-second delay', async () => {
+  it('waits for the current request to settle before starting the idle delay', async () => {
     const first = deferred<unknown[]>();
     taskMocks.listTasks
       .mockReturnValueOnce(first.promise)
@@ -114,6 +130,38 @@ describe('TaskCenterProvider polling lifecycle', () => {
       await first.promise;
     });
     await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_999);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps three-second progress while active then backs off after terminal state', async () => {
+    taskMocks.listTasks
+      .mockResolvedValueOnce([{
+        task_id: 'active-task',
+        task_type: 'vkpi_ai_analysis',
+        status: 'running',
+        created_at: '2026-08-04T00:00:00Z',
+      }])
+      .mockResolvedValueOnce([{
+        task_id: 'active-task',
+        task_type: 'vkpi_ai_analysis',
+        status: 'done',
+        created_at: '2026-08-04T00:00:00Z',
+        finished_at: '2026-08-04T00:00:03Z',
+      }])
+      .mockResolvedValue([]);
+
+    renderProvider('token-a');
+    await flushMicrotasks();
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
       await vi.advanceTimersByTimeAsync(2_999);
     });
     expect(taskMocks.listTasks).toHaveBeenCalledTimes(1);
@@ -122,6 +170,103 @@ describe('TaskCenterProvider polling lifecycle', () => {
       await vi.advanceTimersByTimeAsync(1);
     });
     expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(59_999);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a failed idle refresh after five seconds instead of waiting a minute', async () => {
+    taskMocks.listTasks
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([]);
+
+    renderProvider('token-a');
+    await flushMicrotasks();
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_999);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it('wakes an idle cycle immediately when a task watcher is registered', async () => {
+    render(
+      <TaskCenterProvider apiToken="token-a">
+        <WatcherProbe />
+      </TaskCenterProvider>,
+    );
+    await flushMicrotasks();
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      screen.getByRole('button', { name: '监听任务' }).click();
+      await Promise.resolve();
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_999);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not carry a task watcher into a different login token', async () => {
+    taskMocks.listTasks
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        task_id: 'watched-task',
+        task_type: 'vkpi_ai_analysis',
+        status: 'done',
+        created_at: '2026-08-04T00:00:00Z',
+        finished_at: '2026-08-04T00:00:01Z',
+      }]);
+
+    const view = render(
+      <TaskCenterProvider apiToken="token-a">
+        <WatcherProbe />
+      </TaskCenterProvider>,
+    );
+    await flushMicrotasks();
+
+    await act(async () => {
+      screen.getByRole('button', { name: '监听任务' }).click();
+      await Promise.resolve();
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(2);
+
+    view.rerender(
+      <TaskCenterProvider apiToken="token-b">
+        <WatcherProbe />
+      </TaskCenterProvider>,
+    );
+    await flushMicrotasks();
+
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId('watcher-status')).toHaveTextContent('等待');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(taskMocks.listTasks).toHaveBeenCalledTimes(3);
   });
 
   it('pauses and aborts while hidden, then performs exactly one immediate refresh when visible', async () => {

@@ -31,7 +31,7 @@ describe("listTasks(归一 / 去重 / 排序 / recent 过滤)", () => {
   it("无 status 过滤时只发一次有界全状态请求", async () => {
     await listTasks("tok");
     expect(apiFetch).toHaveBeenCalledTimes(1);
-    expect(apiFetch.mock.calls[0][0]).toBe("/api/marketing/tasks?limit=200");
+    expect(apiFetch.mock.calls[0][0]).toBe("/api/marketing/tasks?limit=200&compact=true");
     expect(apiFetch.mock.calls[0][1]).toMatchObject({ timeoutMs: 5000 });
     expect(apiFetch.mock.calls[0][2]).toBe("tok");
   });

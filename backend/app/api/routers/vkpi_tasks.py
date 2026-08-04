@@ -44,9 +44,17 @@ def list_vkpi_tasks(
     task_type: str = "",
     user_id: int | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    compact: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return task_enqueue.list_tasks(status=status, task_type=task_type, user_id=user_id, limit=limit, staff=staff)
+    return task_enqueue.list_tasks(
+        status=status,
+        task_type=task_type,
+        user_id=user_id,
+        limit=limit,
+        compact=compact,
+        staff=staff,
+    )
 
 
 @router.get("/realtime-status")

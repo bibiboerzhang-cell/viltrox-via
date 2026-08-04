@@ -78,16 +78,21 @@ def _add_column_if_missing(table_name: str, column_name: str, column_def: str) -
 
 
 def ensure_vkpi_task_schema() -> None:
-    """Create local runtime guards for SQLite and old Postgres deployments.
+    """Create local runtime guards for SQLite development databases.
 
-    The canonical Postgres path is migration 056. This guard keeps local SQLite
-    and partially migrated dev databases usable for API smoke tests.
+    PostgreSQL is migration-owned (009 + 056) and the application startup gate
+    completes migrations before serving requests.  Running DDL from a GET/POST
+    handler makes every fresh web process contend on schema locks, so production
+    requests must never attempt to repair the schema themselves.
     """
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
+    if is_postgres_runtime():
+        _SCHEMA_READY = True
+        return
     conn = get_conn()
-    timestamp_type = "TIMESTAMPTZ" if is_postgres_runtime() else "TEXT"
+    timestamp_type = "TEXT"
     _add_column_if_missing("job_execution_ledger", "priority", "INTEGER NOT NULL DEFAULT 5")
     _add_column_if_missing("job_execution_ledger", "lock_key", "TEXT DEFAULT ''")
     _add_column_if_missing("job_execution_ledger", "timeout_seconds", "INTEGER NOT NULL DEFAULT 300")
@@ -108,38 +113,21 @@ def ensure_vkpi_task_schema() -> None:
         # Some SQLite builds can be stricter about partial indexes in old local
         # DBs. Locking still works through the pre-insert lookup in queue.py.
         logger.warning("vkpi async task active-lock index creation skipped: %s", exc)
-    if is_postgres_runtime():
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_async_task_items (
-              id BIGSERIAL PRIMARY KEY,
-              task_id TEXT NOT NULL REFERENCES job_execution_ledger(task_id) ON DELETE CASCADE,
-              item_key TEXT NOT NULL,
-              status TEXT NOT NULL DEFAULT 'pending',
-              attempt INTEGER NOT NULL DEFAULT 0,
-              result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-              error TEXT DEFAULT '',
-              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              UNIQUE(task_id, item_key)
-            )
-            """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_async_task_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT NOT NULL,
+          item_key TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          attempt INTEGER NOT NULL DEFAULT 0,
+          result_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT DEFAULT '',
+          updated_at TEXT NOT NULL,
+          UNIQUE(task_id, item_key)
         )
-    else:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS vkpi_async_task_items (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              task_id TEXT NOT NULL,
-              item_key TEXT NOT NULL,
-              status TEXT NOT NULL DEFAULT 'pending',
-              attempt INTEGER NOT NULL DEFAULT 0,
-              result_json TEXT NOT NULL DEFAULT '{}',
-              error TEXT DEFAULT '',
-              updated_at TEXT NOT NULL,
-              UNIQUE(task_id, item_key)
-            )
-            """
-        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vkpi_task_items_task ON vkpi_async_task_items(task_id, status)")
     conn.commit()
     _SCHEMA_READY = True
@@ -391,16 +379,38 @@ def _progress_from_items(items: list[dict[str, Any]]) -> int:
     return int(round((terminal / max(1, len(items))) * 100))
 
 
-def serialize_task(row: Any, *, include_items: bool = False) -> dict[str, Any]:
+_COMPACT_RESULT_KEYS = (
+    "summary",
+    "message",
+    "cached_url",
+    "skip_reason",
+    "reason",
+    "count",
+    "total",
+)
+
+
+def serialize_task(
+    row: Any,
+    *,
+    include_items: bool = False,
+    include_payload: bool = True,
+    compact_result: bool = False,
+) -> dict[str, Any]:
     data = dict(row)
-    payload = _loads(data.get("payload_json"), {})
     extra = _loads(data.get("extra_json"), {})
     result = _loads(data.get("result_json"), {})
+    if compact_result:
+        result = (
+            {key: result[key] for key in _COMPACT_RESULT_KEYS if key in result}
+            if isinstance(result, dict)
+            else {}
+        )
     items = _items(str(data.get("task_id"))) if include_items else []
     progress_pct = _int(extra.get("progress_pct"))
     if not progress_pct and items:
         progress_pct = _progress_from_items(items)
-    return {
+    serialized: dict[str, Any] = {
         "task_id": data.get("task_id"),
         "task_type": data.get("job_type"),
         "status": data.get("status"),
@@ -408,15 +418,22 @@ def serialize_task(row: Any, *, include_items: bool = False) -> dict[str, Any]:
         "progress_text": extra.get("progress_text") or data.get("summary") or data.get("stage") or "",
         "result": result,
         "error": data.get("error_message") or "",
-        "items": items,
-        "estimated_cost": data.get("estimated_cost"),
-        "actual_cost": data.get("actual_cost"),
         "created_at": data.get("created_at"),
         "started_at": data.get("started_at"),
         "finished_at": data.get("finished_at"),
-        "cancel_requested_at": data.get("cancel_requested_at"),
-        "payload": payload,
     }
+    if not compact_result:
+        serialized.update(
+            {
+                "items": items,
+                "estimated_cost": data.get("estimated_cost"),
+                "actual_cost": data.get("actual_cost"),
+                "cancel_requested_at": data.get("cancel_requested_at"),
+            }
+        )
+    if include_payload:
+        serialized["payload"] = _loads(data.get("payload_json"), {})
+    return serialized
 
 
 def get_task(task_id: str, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -432,6 +449,7 @@ def list_tasks(
     task_type: str = "",
     user_id: int | None = None,
     limit: int = 50,
+    compact: bool = False,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_vkpi_task_schema()
@@ -450,11 +468,27 @@ def list_tasks(
     else:
         where.append("user_id=?")
         params.append(_created_user_id(staff))
+    select_fields = "*"
+    if compact:
+        select_fields = """
+            task_id, job_type, status, summary, stage, error_message,
+            extra_json, result_json, created_at, started_at, finished_at
+        """
     rows = get_conn().execute(
-        f"SELECT * FROM job_execution_ledger WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?",
+        f"SELECT {select_fields} FROM job_execution_ledger WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?",
         (*params, max(1, min(200, int(limit or 50)))),
     ).fetchall()
-    return {"tasks": [serialize_task(row, include_items=False) for row in rows]}
+    return {
+        "tasks": [
+            serialize_task(
+                row,
+                include_items=False,
+                include_payload=not compact,
+                compact_result=compact,
+            )
+            for row in rows
+        ]
+    }
 
 
 def cancel_task(task_id: str, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

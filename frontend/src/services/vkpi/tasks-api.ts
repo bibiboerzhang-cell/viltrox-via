@@ -129,7 +129,7 @@ export async function listTasks(
   // every three seconds), which amplified cold-login and Dealers page load into
   // connection-pool starvation.
   const response = await apiFetch<{ tasks?: Row[]; items?: Row[] }>(
-    "/api/marketing/tasks?limit=200",
+    "/api/marketing/tasks?limit=200&compact=true",
     {
       signal: request.signal,
       timeoutMs: request.timeoutMs ?? DEFAULT_TASK_REQUEST_TIMEOUT_MS,
