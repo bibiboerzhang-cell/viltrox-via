@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any
@@ -42,6 +43,89 @@ _POSITIVE_CUES = (
     "推荐",
 )
 
+# The weekly signal path intentionally stays dependency-free.  These bounded
+# windows suppress a positive cue only when a nearby negator applies to that
+# cue; another affirmed cue in the same comment can still make the comment a
+# genuine mixed-sentiment positive signal.  This remains a conservative rule,
+# not a replacement for a gold-label sentiment model.
+_ENGLISH_NEGATION_WINDOW_TOKENS = 5
+_ENGLISH_NEGATORS = frozenset(
+    {
+        "ain't",
+        "aren't",
+        "barely",
+        "can't",
+        "cannot",
+        "couldn't",
+        "didn't",
+        "doesn't",
+        "don't",
+        "hardly",
+        "isn't",
+        "never",
+        "no",
+        "not",
+        "wasn't",
+        "weren't",
+        "without",
+        "won't",
+        "wouldn't",
+    }
+)
+_ENGLISH_TOKEN_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+_ENGLISH_SCOPE_BOUNDARY_RE = re.compile(
+    r"[.!?;:\n]|\b(?:but|however|nevertheless|though|yet)\b"
+)
+_ENGLISH_NEGATED_NEGATIVE_COMPLEMENTS = frozenset(
+    {
+        "bad",
+        "complaint",
+        "complaints",
+        "doubt",
+        "issue",
+        "issues",
+        "poor",
+        "problem",
+        "problems",
+        "terrible",
+    }
+)
+_CHINESE_SCOPE_BOUNDARY_RE = re.compile(r"[。！？；：，,\n]|(?:但是|不过|然而|可是|但)")
+_CHINESE_NEGATORS = (
+    "并不是",
+    "并没有",
+    "并不",
+    "尚未",
+    "从未",
+    "未能",
+    "不是",
+    "没有",
+    "不怎么",
+    "不太",
+    "不能",
+    "不会",
+    "无法",
+    "不要",
+    "别再",
+    "别去",
+    "毫无",
+    "并无",
+    "没",
+    "不",
+)
+_CHINESE_POST_NEGATION_RE = re.compile(
+    r"^(?:度|感|表现)?(?:并)?(?:不够|不高|不好|不行|不明显|不稳定|不起来|不了)"
+)
+_POSITIVE_CUE_PATTERNS = tuple(
+    (
+        cue,
+        re.compile(rf"(?<![a-z0-9]){re.escape(cue)}")
+        if cue.isascii()
+        else re.compile(re.escape(cue)),
+    )
+    for cue in _POSITIVE_CUES
+)
+
 _WEEKLY_COMPLAINT_RULES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     ("autofocus", "对焦", "Autofocus", ("autofocus", "auto focus", "focus", "hunting", "对焦", "跑焦", "追焦")),
     ("image_quality", "画质", "Image quality", ("sharp", "soft", "blurry", "image quality", "fringing", "flare", "画质", "锐度", "紫边", "眩光")),
@@ -70,6 +154,95 @@ _COMPLAINT_LABEL_EN = {
     "兼容性/固件": "Compatibility / firmware",
     "体积/重量": "Size / weight",
 }
+
+
+def _after_last_scope_boundary(value: str, pattern: re.Pattern[str]) -> str:
+    matches = list(pattern.finditer(value))
+    return value[matches[-1].end() :] if matches else value
+
+
+def _english_negator_applies(value: str, cue_start: int, cue_end: int, cue: str) -> bool:
+    prefix = _after_last_scope_boundary(value[max(0, cue_start - 120) : cue_start], _ENGLISH_SCOPE_BOUNDARY_RE)
+    tokens = _ENGLISH_TOKEN_RE.findall(prefix)
+    window = tokens[-_ENGLISH_NEGATION_WINDOW_TOKENS:]
+    negated_positions = [
+        index for index, token in enumerate(window) if token in _ENGLISH_NEGATORS
+    ]
+    if not negated_positions:
+        return False
+
+    # "not only sharp" is additive, while a second negator in the same window
+    # still wins (for example, "not only not sharp").
+    meaningful_negators = [
+        index
+        for index in negated_positions
+        if not (
+            window[index] in {"no", "not", "without"}
+            and index + 1 < len(window)
+            and window[index + 1]
+            in {
+                "just",
+                "merely",
+                "only",
+                *_ENGLISH_NEGATED_NEGATIVE_COMPLEMENTS,
+            }
+        )
+    ]
+    if not meaningful_negators:
+        return False
+
+    if cue == "recommend":
+        suffix_tokens = _ENGLISH_TOKEN_RE.findall(value[cue_end : cue_end + 50])[:5]
+        # Common positive idioms contain a grammatical negator but express a
+        # strong recommendation: "can't recommend ... highly enough/more".
+        if (
+            any(window[index] in {"can't", "cannot", "couldn't"} for index in meaningful_negators)
+            and any(token in {"enough", "more"} for token in suffix_tokens)
+        ):
+            return False
+        if re.search(r"\b(?:do|would)\s+not\s+hesitate\s+to\s*$", prefix):
+            return False
+    return True
+
+
+def _chinese_negator_applies(value: str, cue_start: int, cue_end: int) -> bool:
+    prefix = _after_last_scope_boundary(value[max(0, cue_start - 32) : cue_start], _CHINESE_SCOPE_BOUNDARY_RE)
+    compact_prefix = re.sub(r"\s+", "", prefix)
+    window = compact_prefix[-10:]
+    # Additive and recommendation idioms are affirmative despite containing
+    # the character 不: "不但很锐利" and "不得不推荐".
+    if re.search(
+        r"(?:不但|不仅|不只|不光)(?:是|也|还|很|非常|十分|特别|相当|更|强烈|真心)*$",
+        window,
+    ):
+        return False
+    if re.search(r"不得不(?:很|非常|十分|特别|强烈|真心)*$", window):
+        return False
+    if re.search(r"(?:不愧(?:是|为|有)?|不失为)(?:很|非常|十分|特别|相当)*$", window):
+        return False
+    if any(marker in window for marker in _CHINESE_NEGATORS):
+        return True
+
+    compact_suffix = re.sub(r"\s+", "", value[cue_end : cue_end + 12])
+    return bool(_CHINESE_POST_NEGATION_RE.match(compact_suffix))
+
+
+def _has_affirmed_positive_cue(value: str) -> bool:
+    """Return true when at least one positive cue is not locally negated."""
+    lower = value.lower()
+    # Avoid matching English cues inside an unrelated word (for example,
+    # ``love`` inside ``glove``), while retaining useful suffixes such as
+    # ``recommended`` and ``sharpness``.
+    for cue, pattern in _POSITIVE_CUE_PATTERNS:
+        for match in pattern.finditer(lower):
+            negated = (
+                _english_negator_applies(lower, match.start(), match.end(), cue)
+                if cue.isascii()
+                else _chinese_negator_applies(lower, match.start(), match.end())
+            )
+            if not negated:
+                return True
+    return False
 
 
 def _weekly_rule_signals(docs: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -455,7 +628,7 @@ def market_weekly_voice(
     complaints, wishlist = _weekly_rule_signals(docs)
     negative_count = int0(complaints.get("total_matched"))
     wishlist_count = int0(wishlist.get("total"))
-    positive_docs = [doc for doc in docs if any(token in doc["lower"] for token in _POSITIVE_CUES)]
+    positive_docs = [doc for doc in docs if _has_affirmed_positive_cue(doc["lower"])]
     category_counts = Counter()
     for category in complaints.get("categories") or []:
         count = int0(category.get("count"))
@@ -484,8 +657,8 @@ def market_weekly_voice(
                     len(positive_docs),
                     request=request,
                     basis=(
-                        "对周内内部评论样本执行中英文正面线索词表匹配",
-                        "bilingual positive cue lexicon over weekly internal comment samples",
+                        "对周内内部评论执行中英文正面词匹配，并用局部否定窗口排除被否定词",
+                        "bilingual positive cues with local negation windows over weekly internal comments",
                     ),
                     confidence="low",
                 ),

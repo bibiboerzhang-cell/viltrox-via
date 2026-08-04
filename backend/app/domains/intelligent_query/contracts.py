@@ -23,7 +23,13 @@ SUPPORTED_INTENTS = frozenset(
         "market.viltrox.weekly_voice",
     }
 )
-VALID_MODES = frozenset({"auto", "deterministic", "search"})
+# ``search`` is a reserved client-visible request mode, but the v2 backend
+# does not yet have a permission-safe retrieval lane behind this endpoint.
+# Keeping executable and reserved modes separate prevents callers from
+# assuming that accepting the token means a search was actually performed.
+EXECUTABLE_MODES = frozenset({"auto", "deterministic"})
+RESERVED_MODES = frozenset({"search"})
+VALID_MODES = EXECUTABLE_MODES | RESERVED_MODES
 VALID_SCOPE_MODES = frozenset({"auto", "all", "own", "team"})
 
 
@@ -225,7 +231,10 @@ def empty_response(request: NormalizedRequest, *, intent: str, scope: dict[str, 
             "thread_id": request.thread_id,
             "scope": scope,
             "mode": request.mode,
-            "deterministic": True,
+            "requested_mode": request.mode,
+            "execution_mode": "pending",
+            "deterministic": request.mode != "search",
+            "search_executed": False,
             "query_version": QUERY_VERSION,
             "took_ms": 0,
         },

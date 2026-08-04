@@ -15,10 +15,74 @@ from app.domains.intelligent_query.contracts import (
 )
 from app.domains.intelligent_query.handlers import HANDLERS
 from app.domains.intelligent_query.intent import resolve_intent
-from app.domains.intelligent_query.repository import actual_scope_context
+from app.domains.intelligent_query.repository import actual_scope_context, schema_cache_scope
 
 
 logger = get_logger(__name__)
+
+
+def _search_mode_unavailable(
+    request: Any,
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Fail closed until a scoped search executor exists for this endpoint."""
+    scope_context = actual_scope_context(request, staff)
+    response = empty_response(request, intent="unknown", scope=scope_context)
+    is_en = request.locale == "en-US"
+    response.update(
+        {
+            "status": "needs_clarification",
+            "answer": (
+                "Search mode is not connected to this endpoint yet. No deterministic query, broad retrieval, database read or model call was executed. Use auto/deterministic mode for supported questions."
+                if is_en
+                else "此端点尚未接入检索模式。本次未执行确定性查询、宽范围检索、数据库读取或模型调用；如需当前已支持的问题，请改用 auto 或 deterministic。"
+            ),
+            "degraded_reason": "search_mode_not_implemented",
+            "missing_fields": [
+                {
+                    "field": "mode.search",
+                    "reason": (
+                        "a permission-scoped search executor is not implemented for Ask & Find v2"
+                        if is_en
+                        else "Ask & Find v2 尚未实现带权限范围的检索执行器"
+                    ),
+                    "impact": (
+                        "the request was intentionally not reinterpreted as a deterministic query"
+                        if is_en
+                        else "本次请求不会被静默改成确定性查询"
+                    ),
+                }
+            ],
+            "actions": [
+                {
+                    "type": "suggest_mode",
+                    "label": "Use automatic mode" if is_en else "改用自动模式",
+                    "params": {"mode": "auto", "query": request.query},
+                    "requires_approval": False,
+                }
+            ],
+        }
+    )
+    response["coverage"].update(
+        {
+            "status": "unknown",
+            "matched_entities": 0,
+            "evidence_count": 0,
+            "notes": [
+                "Search mode failed closed; no fallback lane was executed."
+                if is_en
+                else "检索模式按安全策略关闭，未执行任何替代车道。"
+            ],
+        }
+    )
+    response["trace"].update(
+        {
+            "execution_mode": "search_unavailable",
+            "deterministic": False,
+            "search_executed": False,
+        }
+    )
+    return response
 
 
 def _clarification(
@@ -80,6 +144,13 @@ def _clarification(
             ],
         }
     )
+    response["trace"].update(
+        {
+            "execution_mode": "clarification",
+            "deterministic": True,
+            "search_executed": False,
+        }
+    )
     return response
 
 
@@ -104,65 +175,82 @@ def execute_query(
     # Resolve requested scope before deciding whether a broad data handler may
     # run.  This is deliberately ahead of get_conn() and all SQL.
     actual_scope_context(request, staff)
-    intent = resolve_intent(request.query, request.filters)
-    if intent == "unknown":
-        response = _clarification(request, staff)
+    if request.mode == "search":
+        # ``search`` is reserved in the request schema for frontend
+        # compatibility.  It must never silently execute a deterministic
+        # handler while its permission-safe retrieval lane is still absent.
+        response = _search_mode_unavailable(request, staff)
     else:
-        if conn is None:
-            from app.db.connection import get_conn
+        intent = resolve_intent(request.query, request.filters)
+        if intent == "unknown":
+            response = _clarification(request, staff)
+        else:
+            if conn is None:
+                from app.db.connection import get_conn
 
-            conn = get_conn()
-        handler = HANDLERS[intent]
-        try:
-            response = handler(conn, request, staff, now=now_utc)
-        except (QueryValidationError, QueryScopeDenied):
-            raise
-        except Exception as exc:  # noqa: BLE001 - stable error contract, no internal detail leak
-            logger.exception(
-                "intelligent_query.failed intent=%s request_id=%s error_type=%s",
-                intent,
-                request.request_id,
-                type(exc).__name__,
-            )
-            response = empty_response(
-                request,
-                intent=intent,
-                scope=actual_scope_context(request, staff),
-            )
-            response.update(
-                {
-                    "status": "error",
-                    "answer": (
-                        "The evidence query is temporarily unavailable; no result was inferred."
+                conn = get_conn()
+            handler = HANDLERS[intent]
+            try:
+                with schema_cache_scope():
+                    response = handler(conn, request, staff, now=now_utc)
+            except (QueryValidationError, QueryScopeDenied):
+                raise
+            except Exception as exc:  # noqa: BLE001 - stable error contract, no internal detail leak
+                logger.exception(
+                    "intelligent_query.failed intent=%s request_id=%s error_type=%s",
+                    intent,
+                    request.request_id,
+                    type(exc).__name__,
+                )
+                response = empty_response(
+                    request,
+                    intent=intent,
+                    scope=actual_scope_context(request, staff),
+                )
+                response.update(
+                    {
+                        "status": "error",
+                        "answer": (
+                            "The evidence query is temporarily unavailable; no result was inferred."
+                            if request.locale == "en-US"
+                            else "证据查询暂时不可用，本次没有把故障推断成零结果。"
+                        ),
+                        "degraded_reason": "query_execution_failed",
+                    }
+                )
+                response["coverage"].update(
+                    status="unknown",
+                    notes=[
+                        "Query failed; zero was not substituted for an unavailable source."
                         if request.locale == "en-US"
-                        else "证据查询暂时不可用，本次没有把故障推断成零结果。"
+                        else "查询失败；未将不可用数据源错误替换成零结果。"
+                    ],
+                )
+                response["missing_fields"] = [
+                    {
+                        "field": "query_result",
+                        "reason": (
+                            "the deterministic evidence query failed"
+                            if request.locale == "en-US"
+                            else "确定性证据查询执行失败"
+                        ),
+                        "impact": (
+                            "facts are unavailable and must not be treated as zero"
+                            if request.locale == "en-US"
+                            else "事实数据不可用，不能按零结果理解"
+                        ),
+                    }
+                ]
+            response["trace"].update(
+                {
+                    "execution_mode": "deterministic",
+                    "deterministic": True,
+                    "search_executed": False,
+                    "mode_selected_by": (
+                        "intent_router" if request.mode == "auto" else "caller"
                     ),
-                    "degraded_reason": "query_execution_failed",
                 }
             )
-            response["coverage"].update(
-                status="unknown",
-                notes=[
-                    "Query failed; zero was not substituted for an unavailable source."
-                    if request.locale == "en-US"
-                    else "查询失败；未将不可用数据源错误替换成零结果。"
-                ],
-            )
-            response["missing_fields"] = [
-                {
-                    "field": "query_result",
-                    "reason": (
-                        "the deterministic evidence query failed"
-                        if request.locale == "en-US"
-                        else "确定性证据查询执行失败"
-                    ),
-                    "impact": (
-                        "facts are unavailable and must not be treated as zero"
-                        if request.locale == "en-US"
-                        else "事实数据不可用，不能按零结果理解"
-                    ),
-                }
-            ]
     elapsed_ms = max(0, int((time.perf_counter() - started) * 1000))
     response["trace"]["took_ms"] = elapsed_ms
     # Top-level and trace IDs intentionally match for frontend evidence cards

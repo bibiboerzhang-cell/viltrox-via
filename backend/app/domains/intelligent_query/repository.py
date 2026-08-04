@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from app.db.connection import is_postgres_runtime
 from app.domains.access import scope as access_scope
@@ -29,10 +31,31 @@ _KNOWN_TABLES = frozenset(
     }
 )
 
+# Schema discovery is stable for one query execution, but may change between
+# tests, migrations or process reloads.  Keep the cache request-local so a
+# long-lived process never turns deployment-time schema into a global truth.
+_REQUEST_TABLE_COLUMNS: ContextVar[dict[str, frozenset[str]] | None] = ContextVar(
+    "ask_find_request_table_columns",
+    default=None,
+)
+
+
+@contextmanager
+def schema_cache_scope() -> Iterator[None]:
+    """Cache allowlisted schema probes only for the current query execution."""
+    token = _REQUEST_TABLE_COLUMNS.set({})
+    try:
+        yield
+    finally:
+        _REQUEST_TABLE_COLUMNS.reset(token)
+
 
 def table_columns(conn: Any, table: str) -> set[str]:
     if table not in _KNOWN_TABLES:
         raise ValueError("table is not allowlisted")
+    request_cache = _REQUEST_TABLE_COLUMNS.get()
+    if request_cache is not None and table in request_cache:
+        return set(request_cache[table])
     try:
         if is_postgres_runtime():
             rows = conn.execute(
@@ -40,14 +63,18 @@ def table_columns(conn: Any, table: str) -> set[str]:
                 "WHERE table_schema=current_schema() AND table_name=?",
                 (table,),
             ).fetchall()
-            return {str(dict(row).get("column_name") or "") for row in rows}
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-        return {
-            str(dict(row).get("name") or (row[1] if len(row) > 1 else ""))
-            for row in rows
-        }
+            columns = {str(dict(row).get("column_name") or "") for row in rows}
+        else:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            columns = {
+                str(dict(row).get("name") or (row[1] if len(row) > 1 else ""))
+                for row in rows
+            }
     except Exception:
-        return set()
+        columns = set()
+    if request_cache is not None:
+        request_cache[table] = frozenset(columns)
+    return columns
 
 
 def table_present(conn: Any, table: str) -> bool:
