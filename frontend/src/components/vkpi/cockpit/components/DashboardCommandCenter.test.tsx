@@ -60,7 +60,7 @@ const baseProps = {
 };
 
 describe("DashboardCommandCenter map source states", () => {
-  it("renders a selected real map without the chooser", () => {
+  it("renders a selected real map without the chooser", async () => {
     render(<DashboardCommandCenter
       {...baseProps}
       viewMode="kols"
@@ -68,7 +68,7 @@ describe("DashboardCommandCenter map source states", () => {
       isAvailable={true}
     />);
 
-    expect(screen.getByTestId("real-map")).toBeInTheDocument();
+    expect(await screen.findByTestId("real-map")).toBeInTheDocument();
     expect(screen.getByText("KOLs")).toBeInTheDocument();
     expect(screen.queryByText("Choose what to map")).not.toBeInTheDocument();
     expect(screen.queryByText("Loading map data")).not.toBeInTheDocument();

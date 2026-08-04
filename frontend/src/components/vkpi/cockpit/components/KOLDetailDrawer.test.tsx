@@ -139,6 +139,36 @@ function renderDrawer(props: Record<string, unknown> = {}) {
 }
 
 describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
+  it("深度分析页先展示可信度、证据覆盖和阻断声明", async () => {
+    renderDrawer({
+      item: { ...baseItem, posts_count: 4, avg_views: 1000 },
+      detailBundle: {
+        status: "ready",
+        analysis_readiness: {
+          level: "insufficient",
+          status: "blocked",
+          claim_status: "descriptive_only",
+          abstain: true,
+          key_sample_count: 1,
+          evidence_coverage: { video_total: 4, deep_ready: 1, deep_ratio: 0.25, full_video_proven: 0 },
+          blocking_gaps: [{ code: "key_sample_shortfall", severity: "high", message: "关键样本不足" }],
+        },
+        video_analysis: { items: [], summary: { evidence_count: 4, ready_count: 1 } },
+      },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("深度分析"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("kol-analysis-trust-panel")).toBeInTheDocument();
+    expect(screen.getByText("1/4 · 25%")).toBeInTheDocument();
+    expect(screen.getByText("暂不建议下结论")).toBeInTheDocument();
+    expect(screen.getByText(/关键样本不足/)).toBeInTheDocument();
+    expect(screen.getByText(/不是预测准确率/)).toBeInTheDocument();
+  });
+
   it("按智能搜索解析的精确 SKU 读取和入队内容契合", async () => {
     renderDrawer({ item: { ...baseItem, product_sku: "AF-35MM-F18-PRO-FE" } });
 

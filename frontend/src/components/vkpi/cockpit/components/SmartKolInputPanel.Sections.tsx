@@ -3,7 +3,7 @@
 // 仅吃 props 的展示组件(各自局部 useState 不破坏容器 hooks 顺序)。容器 import 回去,调用点不变。
 // 红线:纯展示/派生,只读 final_v1/QA 缓存,绝不写任何 viltrox_fit_score。
 import { useRef, useState } from "react";
-import { AlertTriangle, Clock3, Mail, RotateCcw, Search, Trash2, TrendingUp, UserPlus, Users } from "lucide-react";
+import { AlertTriangle, Clock3, Info, Mail, RotateCcw, Search, Trash2, UserPlus, Users } from "lucide-react";
 
 import {
   type VkpiKolRecallItem,
@@ -18,6 +18,7 @@ import {
   numberLabel,
   type Row,
 } from "./SmartKolInputPanel.helpers";
+import { candidateEvidenceSummary, candidateRankSummary } from "./SmartKolInputPanel.CandidateEvidence";
 
 // 纯派生器 / 常量 / 类型已再抽到 SmartKolInputPanel.derivers.ts(行为不变;展示子组件留此文件)。
 // 容器仍从本文件 import 这些名字,故此处 re-export 维持调用面不变。
@@ -28,7 +29,6 @@ import {
   discoveryAutoEnrolledFromSession,
   discoveryBrandExcludedFromSession,
   discoveryItemsFromSession,
-  exposureLabel,
   freshnessMarks,
   historyKindMeta,
   historyLabel,
@@ -44,7 +44,6 @@ import {
   recallResultFromSession,
   recallTopItems,
   relativeTime,
-  relevanceTier,
   sessionAdvanceCounts,
   sessionItems,
   sessionStatusBanner,
@@ -83,6 +82,40 @@ export type { PersistedSearchDisplay };
 export { UrlSummary } from "./SmartKolInputPanel.UrlSummary";
 
 type State = "idle" | "loading" | "ready" | "executing" | "error";
+
+const EMPTY_CANDIDATE_TEXT = new Set(["", "-", "--", "unknown", "n/a", "na", "null", "none", "未知", "未提供"]);
+
+function candidateText(value: unknown): string {
+  const normalized = cleanText(value);
+  return EMPTY_CANDIDATE_TEXT.has(normalized.toLowerCase()) ? "" : normalized;
+}
+
+function positiveMetric(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function rateLabel(value: unknown): string {
+  const parsed = positiveMetric(value);
+  if (parsed == null) return "";
+  const percent = parsed <= 1 ? parsed * 100 : parsed;
+  if (percent > 100) return "";
+  return `${percent.toFixed(percent < 10 ? 1 : 0).replace(/\.0$/, "")}%`;
+}
+
+function compactDate(value: unknown): string {
+  const raw = candidateText(value);
+  if (!raw) return "";
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return "";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(parsed));
+}
+
+function candidateHttpUrl(value: unknown): string {
+  const raw = candidateText(value);
+  return /^https?:\/\//i.test(raw) ? raw : "";
+}
 
 // 【K2】契合命中 chip 点击 → 写入 KOL Pool 本地筛选词。复用顶栏全局搜索同款 localStorage+event
 // 管道(KOLPoolPage.consumeSearch 监听 vkpi:open-kol-pool-search → setSearch + 展开表格视图)。
@@ -307,14 +340,11 @@ export function RecallMiniItem({
 }) {
   const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(item.avatar_url);
-  const name = display(readableCreatorName(item) || `KOL #${item.kol_pool_id}`);
-  const followers = numberLabel(item.followers);
-  const score = Number(item.recall_rank_score ?? item.vector_score ?? 0);
+  const name = candidateText(readableCreatorName(item)) || (item.kol_pool_id ? `KOL #${item.kol_pool_id}` : "候选达人");
+  const rank = candidateRankSummary(item);
   const relevanceFlags = Array.isArray(item.relevance_flags) ? item.relevance_flags.map(cleanText).filter(Boolean) : [];
-  const tierDemoted = cleanText(item.relevance_tier_hint) === "demote";
-  const tier = relevanceTier(score, tierDemoted);
   const showImg = Boolean(avatar) && !imgError;
-  const whyFit = cleanText(item.why_fit);
+  const evidence = candidateEvidenceSummary(item);
   // 三引擎产出·候选卡展示信号(全部纯只读透传,绝不触评分):
   const itemRow = item as unknown as Row;
   const fitSrc = (item.source_fields && typeof item.source_fields === "object" ? item.source_fields : {}) as Row;
@@ -327,147 +357,209 @@ export function RecallMiniItem({
   const audiencePreview = (fitSrc.audience_preview && typeof fitSrc.audience_preview === "object" ? fitSrc.audience_preview : {}) as Row;
   const contactEmail = cleanText(contactPreview.email);
   const contactReady = cleanText(contactPreview.status) === "ready" || Boolean(contactEmail) || Number(contactPreview.found) > 0;
-  const audienceReady = cleanText(audiencePreview.status) === "ready";
+  const audienceMethod = candidateText(audiencePreview.method);
+  const audienceReady = cleanText(audiencePreview.status) === "ready" && Boolean(audienceMethod);
   const fitBadge = contentFitBadge(itemRow.fit_verdict ?? fitSrc.fit_verdict);
   const creatorType = cleanText(itemRow.creator_type ?? fitSrc.creator_type);
-  const exposure = exposureLabel(item);
   const marks = freshnessMarks(item);
+  const platform = candidateText(item.platform);
+  const country = candidateText(itemRow.country ?? fitSrc.country);
+  const language = candidateText(itemRow.language ?? fitSrc.language);
+  const profileType = candidateText(item.type_label || item.profile_type);
+  const identityMeta = [platform, country, language, profileType].filter(Boolean);
+  const observedMetrics = [
+    { key: "followers", label: "粉丝", value: numberLabel(item.followers) },
+    { key: "views", label: "均播", value: numberLabel(itemRow.avg_views ?? fitSrc.avg_views) },
+    { key: "likes", label: "均赞", value: numberLabel(itemRow.avg_likes ?? fitSrc.avg_likes) },
+    { key: "comments", label: "均评", value: numberLabel(itemRow.avg_comments ?? fitSrc.avg_comments) },
+    { key: "engagement", label: "互动", value: rateLabel(itemRow.engagement_rate ?? fitSrc.engagement_rate) },
+  ].filter((metric) => metric.value);
+  const representativeEvidence = (Array.isArray(item.representative_evidence) ? item.representative_evidence : [])
+    .map((entry, evidenceIndex) => {
+      const url = candidateHttpUrl(entry?.content_url);
+      const views = positiveMetric(entry?.view_count);
+      const likes = positiveMetric(entry?.like_count);
+      if (!url || (views == null && likes == null)) return null;
+      return {
+        key: `${url}-${evidenceIndex}`,
+        url,
+        title: candidateText(entry?.title) || `代表内容 ${evidenceIndex + 1}`,
+        metricLabel: [
+          views != null ? `${numberLabel(views)}播` : "",
+          likes != null ? `${numberLabel(likes)}赞` : "",
+        ].filter(Boolean).join(" · "),
+      };
+    })
+    .filter((entry): entry is { key: string; url: string; title: string; metricLabel: string } => Boolean(entry))
+    .slice(0, 3);
+  const sourceLabel = candidateText(
+    itemRow.source_label
+      ?? itemRow.source_type
+      ?? fitSrc.source_label
+      ?? fitSrc.source_type
+      ?? fitSrc.source,
+  );
+  const updatedLabel = compactDate(
+    itemRow.updated_at
+      ?? itemRow.last_seen_at
+      ?? fitSrc.updated_at
+      ?? fitSrc.last_seen_at
+      ?? fitSrc.published_at,
+  );
+  const candidateBucket = cleanText(item.candidate_bucket ?? item.business_lane ?? item.candidate_lane);
+  const candidateBucketReason = cleanText(item.candidate_bucket_reason);
+  const laneLabel = candidateBucket === "core_vertical"
+    ? "核心垂直"
+    : candidateBucket === "expansion"
+      ? "拓展型"
+      : "";
+  const matchTier = cleanText(item.match_tier);
+  const missingLabels = evidence.missingLabels;
+  const relaxedFilters = (Array.isArray(item.relaxed_filters) ? item.relaxed_filters : [])
+    .map(cleanText)
+    .filter(Boolean);
+  const relevanceHits = Array.isArray(fitSrc.relevance_hits)
+    ? (fitSrc.relevance_hits as unknown[]).map(cleanText).filter(Boolean).slice(0, 4)
+    : [];
+  const hasOptionalDetails = evidence.grade !== "missing"
+    || rank.score != null
+    || Boolean(sourceLabel)
+    || Boolean(updatedLabel)
+    || representativeEvidence.length > 0
+    || Boolean(fitBadge)
+    || relevanceHits.length > 0
+    || relevanceFlags.length > 0;
   return (
-    <button
-      type="button"
-      onClick={() => onOpen?.(item)}
-      className={`group flex h-full min-w-0 items-start gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.015] px-2.5 py-2 text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] focus:outline-none focus:ring-1 focus:ring-cyan-300/30 ${className}`}
-      title={whyFit ? `${whyFit} · 相关度 ${score.toFixed(3)}` : `打开 KOL 详情 · 相关度 ${score.toFixed(3)}`}
+    <div
+      data-testid="kol-recall-card"
+      data-kol-pool-id={item.kol_pool_id || undefined}
+      data-candidate-bucket={candidateBucket || "legacy"}
+      data-match-tier={matchTier || "unknown"}
+      className={`group h-full min-w-0 overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.015] text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] ${className}`}
     >
-      <span className="mt-1 w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>
-      <span
-        className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-bold text-white"
-        style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
+      <button
+        type="button"
+        onClick={() => onOpen?.(item)}
+        className="flex w-full min-w-0 items-start gap-2.5 px-2.5 py-2 text-left focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-300/30"
+        title={`${evidence.reasonLabel}：${evidence.reason}`}
       >
-        {showImg ? (
-          <img
-            src={avatar}
-            alt=""
-            className="h-full w-full rounded-full object-cover"
-            referrerPolicy="no-referrer"
-            onError={() => setImgError(true)}
-            // 头像修(2026-07-21):上游失败时 image-proxy 回 200 的 1×1 透明占位,onError 不触发,
-            // 卡面变成一片空渐变假头像。按自然尺寸识破占位 → 诚实退回首字母占位(刷新可重试真图)。
-            onLoad={(event) => {
-              const img = event.currentTarget;
-              if (img.naturalWidth <= 2 && img.naturalHeight <= 2) setImgError(true);
-            }}
-          />
-        ) : (
-          name.slice(0, 1).toUpperCase()
-        )}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-[11.5px] font-medium text-slate-100 group-hover:text-white">{name}</span>
-          {followers ? (
-            <span className="shrink-0 rounded bg-amber-400/[0.10] px-1 text-[9px] font-semibold text-amber-200/90">{followers}</span>
-          ) : null}
+        <span className="mt-1 w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>
+        <span
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[12px] font-bold text-white"
+          style={{ background: "linear-gradient(135deg,#7c3aed,#06b6d4)" }}
+        >
+          {showImg ? (
+            <img
+              src={avatar}
+              alt=""
+              className="h-full w-full rounded-full object-cover"
+              referrerPolicy="no-referrer"
+              onError={() => setImgError(true)}
+              onLoad={(event) => {
+                const img = event.currentTarget;
+                if (img.naturalWidth <= 2 && img.naturalHeight <= 2) setImgError(true);
+              }}
+            />
+          ) : (
+            name.slice(0, 1).toUpperCase()
+          )}
         </span>
-        <span className="mt-0.5 block truncate text-[9.5px] text-slate-500">
-          {display(item.platform, "unknown")} · {item.type_label || item.profile_type || "profile"}{followers ? ` · ${followers} 粉/播` : ""}
-        </span>
-        {(contactReady || audienceReady) ? (
-          <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-            {contactReady ? (
-              <span
-                className="inline-flex max-w-full items-center gap-1 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1 text-[8.5px] font-medium text-emerald-100/90"
-                title={contactEmail ? `公开联系方式: ${contactEmail}` : "已找到公开联系方式"}
-              >
-                <Mail size={8} /> <span className="max-w-[150px] truncate">{contactEmail || "联系方式已找到"}</span>
-              </span>
-            ) : null}
-            {audienceReady ? (
-              <span
-                className="inline-flex items-center gap-1 rounded border border-violet-300/25 bg-violet-400/[0.08] px-1 text-[8.5px] font-medium text-violet-100/90"
-                title={`受众估算 · ${cleanText(audiencePreview.method) || "来源待标注"}${audiencePreview.confidence != null ? ` · 置信度 ${audiencePreview.confidence}` : ""}`}
-              >
-                <Users size={8} /> 受众可看
-              </span>
-            ) : null}
-          </span>
-        ) : null}
-        {/* 三引擎徽章行:内容契合判定(已深析)+ 预估曝光 + 新人/新鲜/低合作 */}
-        {(fitBadge || exposure || marks.newcomer || marks.fresh || marks.lowCollab) ? (
-          <span className="mt-1 flex flex-wrap items-center gap-1">
-            {fitBadge ? (
-              <span className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-medium ${fitBadge.cls}`} title={creatorType ? `内容契合:${fitBadge.label} · ${creatorType}` : `内容契合判定:${fitBadge.label}`}>
-                契合·{fitBadge.label}
-              </span>
-            ) : null}
-            {exposure ? (
-              <span className="inline-flex items-center gap-0.5 rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90" title="预估曝光/触达潜力(均播放量,纯展示)">
-                <TrendingUp size={8} /> {exposure} 曝光
-              </span>
-            ) : null}
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[11.5px] font-medium text-slate-100 group-hover:text-white">{name}</span>
             {marks.newcomer ? (
-              <span className="inline-flex items-center gap-0.5 rounded border border-emerald-300/30 bg-emerald-400/[0.10] px-1 text-[8.5px] font-medium text-emerald-100" title="全网新发现、库内尚无 · 优先新人">
-                <UserPlus size={8} /> 新人
-              </span>
+              <span className="shrink-0 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1 text-[8px] font-medium text-emerald-100">新人</span>
             ) : null}
             {marks.fresh ? (
-              <span className="rounded border border-cyan-300/25 bg-cyan-400/[0.08] px-1 text-[8.5px] font-medium text-cyan-100/90" title="近 90 天有新作">新鲜</span>
-            ) : null}
-            {marks.lowCollab && !marks.newcomer ? (
-              <span className="rounded border border-violet-300/25 bg-violet-400/[0.08] px-1 text-[8.5px] font-medium text-violet-100/90" title="低合作 = 历史合作少(库内无合作记录),越新鲜越好 · 成长空间大">低合作</span>
+              <span className="shrink-0 rounded border border-cyan-300/20 bg-cyan-400/[0.06] px-1 text-[8px] text-cyan-100/85">近期活跃</span>
             ) : null}
           </span>
-        ) : null}
-        {whyFit ? (
-          <span className="mt-1 line-clamp-2 block text-[10px] leading-snug text-cyan-200/85">{whyFit}</span>
-        ) : null}
-        {Array.isArray(fitSrc.relevance_hits) && (fitSrc.relevance_hits as unknown[]).length ? (
-          <span className="mt-1 inline-flex flex-wrap items-center gap-1" title="persona 相关度命中词(为何契合)">
-            <span className="text-[8.5px] text-slate-500">契合命中</span>
-            {/* 【K2】chip 可点:点击把命中词写入 KOL Pool 本地筛选(卡片本体是 button,故用 span+role 阻断冒泡) */}
-            {(fitSrc.relevance_hits as unknown[]).slice(0, 4).map((h, i) => (
-              <span
-                key={`${cleanText(h)}-${i}`}
-                role="button"
-                tabIndex={0}
-                onClick={(ev) => applyPoolLocalFilter(cleanText(h), ev)}
-                onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); applyPoolLocalFilter(cleanText(h), ev); } }}
-                title={`点击 → 以「${cleanText(h)}」筛选本地 KOL Pool 列表`}
-                className="cursor-pointer rounded border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8.5px] font-medium text-sky-100/90 transition-colors hover:border-sky-300/50 hover:bg-sky-400/[0.18]"
-              >
-                {zhTag(cleanText(h))}
-              </span>
+          {identityMeta.length ? (
+            <span data-testid="candidate-identity-meta" className="mt-0.5 block truncate text-[9.5px] text-slate-500">
+              {identityMeta.join(" · ")}
+            </span>
+          ) : null}
+          {observedMetrics.length ? (
+            <span data-testid="candidate-observed-metrics" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-slate-300" title="仅展示后端已返回的正值；缺失指标不占位">
+              {observedMetrics.map((metric) => (
+                <span key={metric.key}><span className="text-slate-600">{metric.label}</span> {metric.value}</span>
+              ))}
+            </span>
+          ) : null}
+          {representativeEvidence.length ? (
+            <span data-testid="candidate-representative-evidence-summary" className="mt-1 block truncate text-[9px] text-cyan-100/75" title="点击下方数据依据可展开原内容证据">
+              代表内容：{representativeEvidence[0].metricLabel}
+            </span>
+          ) : null}
+          {(laneLabel || matchTier === "backfill" || relaxedFilters.length || contactReady || audienceReady || missingLabels.length) ? (
+            <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+              {laneLabel ? (
+                <span title={candidateBucketReason || undefined} className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-medium ${candidateBucket === "core_vertical"
+                  ? "border-violet-300/30 bg-violet-400/[0.10] text-violet-100"
+                  : "border-cyan-300/30 bg-cyan-400/[0.10] text-cyan-100"}`}>{laneLabel}</span>
+              ) : null}
+              {matchTier === "backfill" || relaxedFilters.length ? (
+                <span className="rounded border border-amber-300/30 bg-amber-400/[0.09] px-1 text-[8.5px] font-medium text-amber-100" title={relaxedFilters.length ? `仅放宽相关性补位：${relaxedFilters.join("、")}` : "严格相关结果不足后的补位；显式硬筛选仍须满足"}>补位</span>
+              ) : null}
+              {contactReady ? (
+                <span className="inline-flex max-w-full items-center gap-1 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1 text-[8.5px] font-medium text-emerald-100/90" title={contactEmail ? `公开联系方式：${contactEmail}` : "已找到公开联系方式"}>
+                  <Mail size={8} /> <span className="max-w-[120px] truncate">{contactEmail || "联系方式"}</span>
+                </span>
+              ) : null}
+              {audienceReady ? (
+                <span className="inline-flex items-center gap-1 rounded border border-violet-300/25 bg-violet-400/[0.08] px-1 text-[8.5px] font-medium text-violet-100/90" title={`受众估算已返回 · 方法 ${audienceMethod}${audiencePreview.confidence != null ? ` · 置信值 ${audiencePreview.confidence}` : ""}`}>
+                  <Users size={8} /> 受众估算
+                </span>
+              ) : null}
+              {missingLabels.length ? (
+                <span data-testid="candidate-completion-action" className="rounded border border-slate-300/15 bg-white/[0.025] px-1 text-[8.5px] text-slate-400" title={`建议补全：${missingLabels.join("、")}`}>
+                  补全关键资料 · {missingLabels.length} 项
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+          <span data-testid="candidate-recommendation-reason" className={`mt-1 line-clamp-2 block text-[10px] leading-snug ${evidence.onlyCandidate ? "text-amber-100/85" : "text-cyan-200/85"}`}>
+            <span className="font-semibold">{evidence.reasonLabel}：</span>{evidence.reason}
+          </span>
+        </span>
+      </button>
+      {hasOptionalDetails ? (
+        <details data-testid="candidate-secondary-details" className="border-t border-white/[0.045] px-2.5 py-1.5 text-[8.5px] text-slate-500">
+          <summary className="flex cursor-pointer list-none items-center gap-1 select-none hover:text-slate-300">
+            <Info size={9} /> 数据依据
+            {sourceLabel ? <span>· {sourceLabel}</span> : null}
+            {updatedLabel ? <span>· 更新 {updatedLabel}</span> : null}
+          </summary>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {evidence.grade !== "missing" ? (
+              <span data-testid="candidate-evidence-grade" title={`${evidence.gradeDetail}；这是证据覆盖说明，不代表业务结果`} className="rounded border border-sky-300/20 bg-sky-400/[0.06] px-1 py-0.5 text-sky-100/85">{evidence.gradeLabel}</span>
+            ) : null}
+            {rank.score != null ? (
+              <span data-testid="candidate-rank-signal" title={rank.detail} className="rounded border border-white/[0.07] bg-white/[0.02] px-1 py-0.5 text-slate-400">{rank.scoreLabel} {rank.score.toFixed(2)}</span>
+            ) : null}
+            {fitBadge ? (
+              <span className={`rounded-full border px-1.5 py-0.5 font-medium ${fitBadge.cls}`} title={creatorType ? `内容契合：${fitBadge.label} · ${creatorType}` : `内容契合判定：${fitBadge.label}`}>契合·{fitBadge.label}</span>
+            ) : null}
+            {relevanceHits.map((hit, hitIndex) => (
+              <button key={`${hit}-${hitIndex}`} type="button" onClick={(event) => applyPoolLocalFilter(hit, event)} title={`以“${hit}”筛选 KOL Pool`} className="rounded border border-sky-300/20 bg-sky-400/[0.05] px-1 py-0.5 text-sky-100/80 hover:border-sky-300/45">{zhTag(hit)}</button>
             ))}
-          </span>
-        ) : null}
-        {relevanceFlags.length ? (
-          <span className="mt-1 flex flex-wrap gap-1">
             {relevanceFlags.map((flag) => (
-              <span key={flag} className="rounded border border-amber-300/25 bg-amber-400/[0.08] px-1 text-[8.5px] font-medium text-amber-200/85">
-                {zhTag(flag)}
-              </span>
+              <span key={flag} className="rounded border border-amber-300/20 bg-amber-400/[0.05] px-1 py-0.5 text-amber-200/80">{zhTag(flag)}</span>
             ))}
-          </span>
-        ) : null}
-      </span>
-      {/* 【K2】徽章解释:title 说明分档口径(高相关=向量相似度头部),附本条裸相似度供细看;
-          demote 降档时(相似度达高档但后端标记降位)如实说明,不套用「中段 0.3–0.6」口径。 */}
-      <span
-        className={`mt-1 flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tier.cls}`}
-        title={
-          tier.label === "高相关"
-            ? `高相关 = 向量相似度头部(≥0.6)· 本条相似度 ${score.toFixed(3)}`
-            : tier.label === "中相关"
-              ? (tierDemoted && score >= 0.6
-                  ? `中相关(降档):相似度 ${score.toFixed(3)} 达高档,但后端按内容形态错配标记降位,封顶中相关`
-                  : `中相关 = 向量相似度中段(0.3–0.6)· 本条相似度 ${score.toFixed(3)}`)
-              : `相关 = 向量相似度 <0.3 · 本条相似度 ${score.toFixed(3)}`
-        }
-      >
-        <span className="h-1 w-1 rounded-full" style={{ background: tier.dot }} />
-        {tier.label}
-      </span>
-    </button>
+          </div>
+          {representativeEvidence.length ? (
+            <div data-testid="candidate-representative-evidence-links" className="mt-1.5 space-y-1 border-t border-white/[0.04] pt-1.5">
+              {representativeEvidence.map((entry) => (
+                <a key={entry.key} href={entry.url} target="_blank" rel="noreferrer noopener" className="flex min-w-0 items-center justify-between gap-2 rounded px-1 py-0.5 text-slate-400 hover:bg-white/[0.03] hover:text-cyan-100">
+                  <span className="truncate">{entry.title}</span>
+                  <span className="shrink-0 tabular-nums">{entry.metricLabel}</span>
+                </a>
+              ))}
+            </div>
+          ) : null}
+        </details>
+      ) : null}
+    </div>
   );
 }
 

@@ -22,6 +22,10 @@ if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then
 fi
 source "$ROOT/scripts/runtime_env.sh"
 
+# 与审定发布拓扑保持同一容量口径：1 interactive + 15 batch。允许环境显式覆盖，
+# 但缺省必须可观测为 16，避免健康页和 KOL 进度长期显示 expected_count=null。
+export APIFY_WORKER_EXPECTED_INSTANCES="${APIFY_WORKER_EXPECTED_INSTANCES:-16}"
+
 if [[ "$SYSTEMD_ADMIN_WEB_CONTRACT" == "1" ]]; then
   # Restore the database endpoints supplied by systemd's reviewed EnvironmentFile
   # and force only process-model/safety values.  Provider and business settings
@@ -128,6 +132,35 @@ if [[ "$ENVIRONMENT" == "local" && "$LOCAL_RUNTIME_FORCE_STACK" == "1" ]]; then
 else
   export DATABASE_URL="${DATABASE_URL:-$LOCAL_DATABASE_URL}"
   export REDIS_URL="${REDIS_URL:-$LOCAL_REDIS_URL}"
+fi
+
+# Local Web may explicitly use the already-running loopback PgBouncer.  The
+# helper reads URLs only on stdin, preserves the direct URL's database identity,
+# and emits no URL on failure.  Production/systemd never inherits this local
+# operator switch; its reviewed DATABASE_POOL_URL/DB_USE_PGBOUNCER contract is
+# left untouched.
+if [[ "$ENVIRONMENT" == "local" && "$SYSTEMD_ADMIN_WEB_CONTRACT" != "1" ]]; then
+  case "${VKPI_LOCAL_WEB_PGBOUNCER:-0}" in
+    0) ;;
+    1)
+      if ! LOCAL_WEB_DATABASE_POOL_URL="$({
+        printf '%s\n' "$DATABASE_URL"
+        printf '%s\n' "${DATABASE_POOL_URL:-}"
+      } | "$PYTHON_BIN" -B "$ROOT/scripts/ops/derive_local_pgbouncer_url.py")"; then
+        echo "start_admin.sh: local PgBouncer configuration is invalid; refusing startup." >&2
+        exit 1
+      fi
+      export DATABASE_POOL_URL="$LOCAL_WEB_DATABASE_POOL_URL"
+      export DB_USE_PGBOUNCER=1
+      unset LOCAL_WEB_DATABASE_POOL_URL
+      ;;
+    *)
+      echo "start_admin.sh: VKPI_LOCAL_WEB_PGBOUNCER must be exactly 0 or 1." >&2
+      exit 1
+      ;;
+  esac
+else
+  unset VKPI_LOCAL_WEB_PGBOUNCER
 fi
 
 export WORKERS="$WEB_CONCURRENCY"

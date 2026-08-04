@@ -38,6 +38,56 @@ export interface VkpiKolPoolItem {
   updated_at?: string;
   last_seen_at?: string;
   video_evidence?: Array<Record<string, unknown>>;
+  /** 新旧服务滚动升级期间均为可选；UI 不会从字段缺失推断“已就绪”。 */
+  analysis_readiness?: VkpiKolAnalysisReadiness | null;
+  evidence_quality?: VkpiKolEvidenceQuality | null;
+  claim_status?: string | null;
+}
+
+export interface VkpiKolAnalysisReadiness extends Row {
+  version?: string;
+  level?: string;
+  status?: string;
+  readiness?: string;
+  recommendation_status?: string;
+  decision_mode?: string;
+  abstain?: boolean;
+  conclusion_recommended?: boolean;
+  can_conclude?: boolean;
+  key_sample_count?: number;
+  evidence_coverage?: Row;
+  scopes?: {
+    overall?: VkpiKolAnalysisReadiness | null;
+    content_fit?: VkpiKolAnalysisReadiness | null;
+    brand_history?: VkpiKolAnalysisReadiness | null;
+  };
+  blocking_gaps?: unknown[];
+  blockers?: unknown[];
+  gaps?: unknown[];
+  claim_status?: string | null;
+}
+
+export interface VkpiKolEvidenceQuality extends Row {
+  version?: string;
+  level?: string;
+  status?: string;
+  recommendation_status?: string;
+  decision_mode?: string;
+  abstain?: boolean;
+  evidence_count?: number;
+  total_count?: number;
+  ready_count?: number;
+  analyzed_count?: number;
+  coverage_ratio?: number;
+  coverage_pct?: number;
+  key_sample_count?: number;
+  critical_sample_count?: number;
+  evidence_coverage?: Row;
+  scopes?: VkpiKolAnalysisReadiness["scopes"];
+  blocking_gaps?: unknown[];
+  blockers?: unknown[];
+  gaps?: unknown[];
+  claim_status?: string | null;
 }
 
 export interface VkpiKolVideoAnalysisCacheEntry {
@@ -178,6 +228,9 @@ export interface VkpiKolPoolDetailBundleResponse {
   item?: VkpiKolPoolItem;
   dimensions11?: Row | null;
   llm_deep_analysis?: VkpiKolLlmDeepAnalysisResponse | null;
+  analysis_readiness?: VkpiKolAnalysisReadiness | null;
+  evidence_quality?: VkpiKolEvidenceQuality | null;
+  claim_status?: string | null;
   video_analysis?: {
     items?: Array<{
       video?: Row;
@@ -297,22 +350,38 @@ export interface VkpiKolRecallItem {
   avatar_url?: string;
   followers?: number | null;
   bio?: string;
-  vector_score: number;
-  type_rank_score?: number;
-  recall_rank_score?: number;
+  vector_score?: number | null;
+  type_rank_score?: number | null;
+  recall_rank_score?: number | null;
   recall_rank_score_method?: string;
+  robust_rank_score?: number | null;
+  precision_rank_score?: number | null;
+  retrieval_score?: number | null;
+  robust_rank_method?: string;
+  precision_rank_method?: string;
+  retrieval_method?: string;
   // 独立展示信号(后端 profile_recall 产出,绝不并入 viltrox_fit_score)
-  display_rank_score?: number;
-  display_relevance_adjust?: number;
+  display_rank_score?: number | null;
+  display_relevance_adjust?: number | null;
   relevance_flags?: string[];
   relevance_tier_hint?: string;
   profile_type: "creator" | "reviewer" | "mixed" | string;
   bucket: "creator" | "reviewer" | string;
   type_label: string;
-  creator_type_score: number;
-  reviewer_type_score: number;
+  creator_type_score: number | null;
+  reviewer_type_score: number | null;
   type_reason?: string;
   type_method?: string;
+  /** 业务分层；旧服务可能仅返回 bucket，前端会明确标记兼容映射。 */
+  candidate_bucket?: "core_vertical" | "expansion" | "exploration" | string;
+  business_lane?: "core_vertical" | "expansion" | "exploration" | string;
+  candidate_lane?: "core_vertical" | "expansion" | "exploration" | string;
+  candidate_bucket_reason?: string;
+  candidate_bucket_target?: number;
+  /** strict=全部显式筛选满足；backfill=仅相关性补位，不能放松显式硬筛选。 */
+  match_tier?: "strict" | "backfill" | string;
+  relaxed_filters?: string[];
+  unknown_fields?: string[];
   recall_reason?: string;
   why_fit?: string;
   used_lenses?: string[];
@@ -324,6 +393,14 @@ export interface VkpiKolRecallItem {
     view_count?: number | null;
     like_count?: number | null;
   }>;
+  evidence_confidence?: number | string | null;
+  evidence_quality?: VkpiKolEvidenceQuality | (Row & { coverage?: unknown }) | null;
+  ranking_confidence?: Row | null;
+  platform_calibration?: Row | null;
+  data_truth?: Row | null;
+  session_replay_contract?: string;
+  session_replay_complete?: boolean;
+  session_replay_missing_fields?: string[];
   source_fields?: Record<string, unknown>;
 }
 
@@ -341,6 +418,8 @@ export interface VkpiKolRecallResponse {
   buckets: {
     creator: VkpiKolRecallItem[];
     reviewer: VkpiKolRecallItem[];
+    unknown?: VkpiKolRecallItem[];
+    [bucket: string]: VkpiKolRecallItem[] | undefined;
   };
   diagnostics: Row & {
     candidate_count?: number;
@@ -349,6 +428,34 @@ export interface VkpiKolRecallResponse {
     creator_returned?: number;
     reviewer_returned?: number;
     returned_count?: number;
+    requested_count?: number;
+    strict_count?: number;
+    backfill_count?: number;
+    strict_available_count?: number;
+    backfill_available_count?: number;
+    final_count?: number;
+    shortfall?: number;
+    result_contract_satisfied?: boolean;
+    hard_filter_rejected_count?: number;
+    hard_filter_rejected_by?: Record<string, number>;
+    hard_filters_relaxed?: boolean;
+    applied_filters?: Record<string, unknown>;
+    backfill_policy?: string;
+    unsupported_filters?: string[];
+    business_bucket_counts?: Record<string, number>;
+  };
+  evaluation_status?: Row & {
+    state?: "not_evaluated" | "labeling" | "shareable" | "stale" | string;
+    gold_set_id?: string | null;
+    dataset_version?: string | null;
+    algorithm_version?: string | null;
+    target_count?: number;
+    labeled_count?: number;
+    dual_review_target?: number;
+    dual_reviewed_count?: number;
+    disagreement_count?: number;
+    claim_status?: string;
+    metrics?: Row | null;
   };
 }
 
@@ -370,7 +477,7 @@ export interface VkpiKolSearchSessionItem {
   status?: string;
   stage?: string;
   rank?: number;
-  score?: number;
+  score?: number | null;
   kol_pool_id?: number;
   evidence_id?: number;
   job_id?: number;
@@ -389,6 +496,10 @@ export interface VkpiKolSearchHistoryItem {
   /** 可选渐进阶段；旧后端缺失时前端从 result_summary/counts 诚实派生。 */
   phase?: string;
   progress?: Row;
+  /** 统一、只读的真实进度合同。排队/运行/失败不计入 successful/progress_pct。 */
+  progress_contract?: Row;
+  /** 与 progress_contract.worker 同源的 Apify Worker 心跳快照。 */
+  worker_health?: Row;
   /** 会话创建者；历史端点按当前员工隔离，缺失时前端必须显示未知。 */
   created_by?: number | null;
   input_payload?: Row;

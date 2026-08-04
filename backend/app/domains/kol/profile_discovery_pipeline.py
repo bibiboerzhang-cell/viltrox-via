@@ -24,6 +24,7 @@ async def execute_smart_search_profile_advance_pipeline(
     query = _text(payload.get("query_text") or payload.get("input") or payload.get("query"))
     if not query:
         raise ValueError("smart profile advance payload missing query_text")
+    operator_query = query
     # P0-1:LLM planner 改在 worker 跑(请求侧已去同步 LLM,见 vkpi_kol_pool smart-search 端点)。
     # payload 未带 plan 时,worker 侧补 planner:拿英文 search_query(治中文 query 捞中文圈)+ persona。
     # 失效则退原 query(管线既有 rule_v0 英文兜底)。本管线本就同步阻塞跑 recall,planner 同步调用一致。
@@ -90,11 +91,28 @@ async def execute_smart_search_profile_advance_pipeline(
         except Exception:
             # 诚实标注:planner 抛错 → 退 rule_v0 英文兜底(行为不变),仅记录走了哪条路。
             payload["query_plan_source"] = "rule_v0_fallback"
+    recall_filters = dict(payload.get("filters") or {}) if isinstance(payload.get("filters"), dict) else {}
+    explicit_platforms = (
+        payload.get("platforms")
+        or payload.get("platform")
+        or payload.get("new_discovery_platforms")
+        or payload.get("discovery_platforms")
+    )
+    if not explicit_platforms:
+        explicit_platforms = profile_recall.explicit_platforms_from_query(operator_query)
+    if explicit_platforms and not recall_filters.get("platforms"):
+        recall_filters["platforms"] = explicit_platforms
     recall_result = profile_recall.recall_kol_profiles(
         query_text=query,
         product_sku=_text(payload.get("product_sku")),
         candidate_limit=max(1, min(_int(payload.get("candidate_limit"), 100), 500)),
-        limit=max(1, min(_int(payload.get("limit"), 30), 50)),
+        limit=max(
+            1,
+            min(
+                _int(payload.get("result_limit") or payload.get("candidate_count") or payload.get("limit"), 30),
+                50,
+            ),
+        ),
         creator_quota=max(0, min(_int(payload.get("creator_quota"), 15), 50)),
         reviewer_quota=max(0, min(_int(payload.get("reviewer_quota"), 15), 50)),
         ratio_policy=_text(payload.get("ratio_policy") or "soft"),
@@ -106,13 +124,15 @@ async def execute_smart_search_profile_advance_pipeline(
         exclude_chinese=bool(payload.get("exclude_chinese", True)),
         product_focus=payload.get("product_focus"),
         target_persona=_text(payload.get("target_persona")),
+        filters=recall_filters,
+        search_strategy=_text(payload.get("search_strategy") or "balanced"),
+        bucket_policy=payload.get("bucket_policy") if isinstance(payload.get("bucket_policy"), dict) else None,
+        allow_backfill=bool(payload.get("allow_backfill", True)),
+        operator_query_text=operator_query,
     )
     recall_result = filter_recall_result_platforms(
         recall_result,
-        payload.get("new_discovery_platforms")
-        or payload.get("discovery_platforms")
-        or payload.get("platforms")
-        or payload.get("platform"),
+        recall_filters.get("platforms"),
     )
     recall_items = recall_result.get("items") if isinstance(recall_result.get("items"), list) else []
     recall_buckets = recall_result.get("buckets") if isinstance(recall_result.get("buckets"), dict) else {}

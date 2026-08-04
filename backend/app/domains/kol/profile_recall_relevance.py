@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domains.kol.profile_recall import _clean_text
+from app.domains.kol.profile_recall_contract import _clean_text
 
 
 # why-fit 规则桥(零成本、纯展示):每条 = (人群侧关键词, 该面向的 KOL 画像信号词, 命中后人话短语)。
@@ -167,20 +167,18 @@ def _relevance_signals(
         flags.append(f"合作{collab_count}+")
         notes.append(f"已合作品牌较多({collab_count}),议价/独占性弱")
 
-    # ③ 新人优先(用户令):库内反复用的「饱和大号」(高粉)展示降权,新鲜/上升期小号上浮;
-    #    粉丝数据缺(0)→ 不动。仅调整独立展示分,绝不并入任何评分。
+    # ③ 粉丝量只用于触达硬闸和最终同分 tie-break，不再进入相关度加减。
+    #    保留可读标签帮助运营识别账号规模，但避免不同平台体量差异污染检索排序。
     followers = _followers_int(row)
     if followers > 0:
-        for threshold, penalty in SATURATED_FOLLOWER_TIERS:
+        for threshold, _penalty in SATURATED_FOLLOWER_TIERS:
             if followers >= threshold:
-                adjust += penalty
                 flags.append("大号·饱和")
-                notes.append(f"库内高粉大号({followers:,}),优先让新鲜/上升期创作者")
+                notes.append(f"库内高粉账号({followers:,}),粉丝量未计入检索相关度")
                 break
         else:
             if followers <= FRESH_FOLLOWER_CEILING and signal_blob:
-                adjust += FRESH_PRIORITY_BOOST
                 flags.append("新鲜上升期")
-                notes.append("上升期小号,新人优先加权")
+                notes.append("上升期小号,粉丝量仅作同分参考")
 
     return adjust, flags, notes, tier_hint

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.domains.kol import search_sessions
+from app.domains.kol import profile_recall, search_sessions
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
 from app.domains.kol.search_progress_contract import completion_contract
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
@@ -333,6 +333,27 @@ def enqueue_smart_search_profile_advance(
         raise RuntimeError("smart search session was not created")
     session_id = int(session["id"])
     triggered_by_user_id = _staff_user_id(staff)
+    if body.get("filters") not in (None, "") and not isinstance(body.get("filters"), dict):
+        raise ValueError("filters must be an object")
+    recall_filters = dict(body.get("filters") or {})
+    if body.get("platforms") and not recall_filters.get("platforms"):
+        recall_filters["platforms"] = body.get("platforms")
+    for filter_key in (
+        "countries", "languages", "followers_min", "followers_max",
+        "follower_min", "follower_max", "verticals", "gear_content",
+    ):
+        if body.get(filter_key) not in (None, "") and filter_key not in recall_filters:
+            recall_filters[filter_key] = body.get(filter_key)
+    result_limit = max(
+        1,
+        min(
+            _int(
+                body.get("result_limit") or body.get("candidate_count") or body.get("limit"),
+                profile_recall.DEFAULT_RESULT_LIMIT,
+            ),
+            50,
+        ),
+    )
     payload = {
         "queue_lane": "interactive",
         "target_type": "search_session",
@@ -345,7 +366,8 @@ def enqueue_smart_search_profile_advance(
         "product_focus": (body.get("llm_query_plan") or {}).get("product_focus") if isinstance(body.get("llm_query_plan"), dict) else None,
         "target_persona": (body.get("llm_query_plan") or {}).get("target_persona") if isinstance(body.get("llm_query_plan"), dict) else "",
         "candidate_limit": max(1, min(_int(body.get("candidate_limit"), 100), 500)),
-        "limit": max(1, min(_int(body.get("limit"), 30), 50)),
+        "limit": result_limit,
+        "result_limit": result_limit,
         "creator_quota": max(0, min(_int(body.get("creator_quota"), 15), 50)),
         "reviewer_quota": max(0, min(_int(body.get("reviewer_quota"), 15), 50)),
         "ratio_policy": _text(body.get("ratio_policy") or "soft"),
@@ -358,6 +380,16 @@ def enqueue_smart_search_profile_advance(
         # payload 漏透传 → worker 的 execute_smart_search_profile_advance_pipeline 只能吃默认 True,
         # 用户取消勾选形同虚设。补上后与同步(非队列)路径的 recall exclude_chinese 语义一致。
         "exclude_chinese": bool(body.get("exclude_chinese", True)),
+        "filters": recall_filters,
+        "search_strategy": _text(body.get("search_strategy") or "balanced"),
+        "bucket_policy": (
+            body.get("bucket_policy")
+            if isinstance(body.get("bucket_policy"), dict)
+            else body.get("bucketPolicy")
+            if isinstance(body.get("bucketPolicy"), dict)
+            else None
+        ),
+        "allow_backfill": bool(body.get("allow_backfill", True)),
         "include_new_discovery": bool(body.get("include_new_discovery", True)),
         # 收口路①-2:内容契合入队控量旋钮(默认开,top N=6);worker→pipeline 透传。
         "include_content_fit": bool(body.get("include_content_fit", True)),

@@ -43,3 +43,67 @@ describe("toCockpitKolPoolRows fit score transport types", () => {
     expect(malformed.v6_fit).toBeNull();
   });
 });
+
+describe("toCockpitKolPoolRows engagement truth labels", () => {
+  it("never promotes a generic engagement rate to Real ER", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 20,
+      handle: "generic-er",
+      engagement_rate: 0.043,
+    } as any]);
+
+    expect(row.real_er_pct).toBeNull();
+    expect(row.real_er_verified).toBe(false);
+    expect(row.engagement_rate).toBe(4.3);
+    expect(row.engagement_rate_displayable).toBe(false);
+  });
+
+  it("allows a generic engagement rate only when source and update time are present", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 21,
+      handle: "sourced-er",
+      engagement_rate: 4.3,
+      source_type: "youtube_api",
+      updated_at: "2026-08-01T12:00:00Z",
+    } as any]);
+
+    expect(row.real_er_pct).toBeNull();
+    expect(row.engagement_rate).toBe(4.3);
+    expect(row.engagement_rate_source).toBe("youtube_api");
+    expect(row.engagement_rate_updated_at).toBe("2026-08-01T12:00:00Z");
+    expect(row.engagement_rate_displayable).toBe(true);
+  });
+
+  it("accepts explicit Real ER only with a positive sample", () => {
+    const [sampled, unsampled] = toCockpitKolPoolRows([{
+      id: 22,
+      handle: "sampled-real-er",
+      real_er: 0.021,
+      real_er_sample_n: 40,
+      engagement_rate: 3.8,
+    }, {
+      id: 23,
+      handle: "unsampled-real-er",
+      real_er_pct: 2.6,
+    }] as any);
+
+    expect(sampled.real_er_pct).toBe(2.1);
+    expect(sampled.real_er_sample_n).toBe(40);
+    expect(sampled.real_er_verified).toBe(true);
+    expect(sampled.engagement_rate).toBe(3.8);
+    expect(unsampled.real_er_pct).toBeNull();
+  });
+
+  it("accepts an explicit backend verified truth without a sample count", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 24,
+      handle: "verified-real-er",
+      real_er_pct: 2.6,
+      real_er_verified: true,
+    }] as any);
+
+    expect(row.real_er_pct).toBe(2.6);
+    expect(row.real_er_sample_n).toBeNull();
+    expect(row.real_er_verified).toBe(true);
+  });
+});

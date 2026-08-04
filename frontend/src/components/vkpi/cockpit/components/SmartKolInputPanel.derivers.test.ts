@@ -9,9 +9,34 @@ import {
   mergeKolSearchSessionSnapshots,
   mergeSearchSnapshotItems,
   readableCreatorName,
+  recallTopItems,
   searchSessionProgress,
   urlResultFromSession,
 } from "./SmartKolInputPanel.derivers";
+
+describe("SmartKolInputPanel filtered result visibility", () => {
+  it("keeps all 30 server-ranked candidates visible instead of truncating to a five-card preview", () => {
+    const items = Array.from({ length: 30 }, (_, index) => ({
+      kol_pool_id: index + 1,
+      bucket: index < 18 ? "creator" : "reviewer",
+    })) as VkpiKolRecallItem[];
+
+    expect(recallTopItems({
+      items,
+      buckets: {
+        creator: items.slice(0, 18),
+        reviewer: items.slice(18),
+      },
+    } as any)).toEqual(items);
+  });
+
+  it("shows complete legacy buckets when the canonical items list is absent", () => {
+    const creator = Array.from({ length: 6 }, (_, index) => ({ kol_pool_id: index + 1 })) as VkpiKolRecallItem[];
+    const reviewer = Array.from({ length: 4 }, (_, index) => ({ kol_pool_id: index + 7 })) as VkpiKolRecallItem[];
+
+    expect(recallTopItems({ buckets: { creator, reviewer } } as any)).toHaveLength(10);
+  });
+});
 
 describe("SmartKolInputPanel history status labels", () => {
   it("does not present a partial terminal session as fully complete", () => {
@@ -390,6 +415,93 @@ describe("SmartKolInputPanel progressive search snapshots", () => {
   });
 });
 
+describe("SmartKolInputPanel versioned real-progress contract", () => {
+  it("uses durable success for completion, exposes 30 returned candidates, and keeps an offline queue non-terminal", () => {
+    const session = {
+      id: 701,
+      status: "partial",
+      progress_contract: {
+        schema: "kol_search_progress_v1",
+        claim_status: "observed_execution_only",
+        state: "blocked_by_worker",
+        requested_units: 70,
+        successful_units: 40,
+        terminal_units: 42,
+        queued_units: 8,
+        running_units: 0,
+        active_units: 5,
+        failed_units: 2,
+        progress_pct: 57.1,
+        terminal_pct: 60,
+        blocked_by_worker: true,
+        full_analysis_complete: false,
+        full_analysis_execution_complete: false,
+        full_analysis_observable: false,
+        observed_at: "2026-08-04T01:00:00Z",
+        worker: {
+          observed: true,
+          state: "offline",
+          online: false,
+          online_count: 0,
+          expected_count: 16,
+          capacity_ready: false,
+          latest_heartbeat_at: "2026-08-04T00:55:00Z",
+          sha_aligned: null,
+        },
+        stages: {
+          search: { population: 30, requested: 30, successful: 30, terminal: 30, remaining: 0, state: "ready", data_ready: 30, counts: { ready: 30, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 0 } },
+          profile: { population: 30, requested: 30, successful: 10, terminal: 12, remaining: 18, state: "active", data_ready: 10, counts: { ready: 10, queued: 8, running: 0, active: 0, partial: 2, failed: 0, skipped: 0, not_requested: 0 } },
+          video: { population: 30, requested: 0, successful: 0, terminal: 0, remaining: 0, state: "not_requested", data_ready: 0, counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 30 } },
+          comments: { population: 30, requested: 5, successful: 0, terminal: 0, remaining: 5, state: "active", data_ready: null, counts: { ready: 0, queued: 0, running: 0, active: 5, partial: 0, failed: 0, skipped: 0, not_requested: 25 } },
+          audience: { population: 30, requested: 5, successful: 0, terminal: 0, remaining: 5, state: "queued", data_ready: 0, counts: { ready: 0, queued: 5, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 25 } },
+        },
+      },
+    } as unknown as VkpiKolSearchHistoryItem;
+
+    const progress = searchSessionProgress(session);
+    expect(progress).toMatchObject({
+      phase: "blocked",
+      phaseLabel: "Worker 阻塞",
+      target: 30,
+      basicVisible: 30,
+      profileSucceeded: 10,
+      requestedTasksTerminal: false,
+      requiredTasksComplete: false,
+      fullAnalysisComplete: false,
+      contract: {
+        schema: "kol_search_progress_v1",
+        progressPct: 57.1,
+        blockedByWorker: true,
+        worker: { observed: true, onlineCount: 0, expectedCount: 16 },
+        stages: { search: { dataReady: 30 }, comments: { counts: { active: 5 } } },
+      },
+    });
+    expect(isSearchSessionTerminal(session)).toBe(false);
+  });
+
+  it("does not manufacture percentages when the backend denominator is absent", () => {
+    const progress = searchSessionProgress({
+      id: 702,
+      status: "planned",
+      result_summary: {
+        progress_contract: {
+          schema: "kol_search_progress_v1",
+          state: "planned",
+          requested_units: null,
+          successful_units: null,
+          progress_pct: 99,
+          terminal_pct: 99,
+          stages: {},
+          worker: { observed: false, state: "unknown" },
+        },
+      },
+    });
+
+    expect(progress.contract).toMatchObject({ progressPct: null, terminalPct: null });
+    expect(progress.requiredTasksComplete).toBe(false);
+  });
+});
+
 describe("SmartKolInputPanel discovery wall dedupe and identity", () => {
   it("renders one card per platform+handle even if duplicate session items slip through", () => {
     const session = {
@@ -409,6 +521,30 @@ describe("SmartKolInputPanel discovery wall dedupe and identity", () => {
     // 后到重复项带 pool id → 并给首张卡(勾选可直连),不另出一张卡。
     expect(Number(items[0].kol_pool_id)).toBe(4758);
     expect(items[1].handle).toBe("other_creator");
+  });
+
+  it("never substitutes avg views for missing followers", () => {
+    const session = {
+      id: 412,
+      status: "ready",
+      items: [
+        {
+          id: 1701,
+          item_type: "new_creator",
+          payload: {
+            platform: "youtube",
+            handle: "views_are_not_followers",
+            avg_views: 17515,
+            views: 92000,
+          },
+        },
+      ],
+    } as unknown as VkpiKolSearchHistoryItem;
+
+    const [item] = discoveryItemsFromSession(session);
+
+    expect(item.followers).toBeNull();
+    expect((item.source_fields as Record<string, unknown>).avg_views).toBe(17515);
   });
 
   it("never shows a bare UC channel id as the creator display name", () => {

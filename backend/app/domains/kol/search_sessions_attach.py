@@ -37,6 +37,171 @@ logger = get_logger(__name__)
 _TERMINAL_LINKED_JOB_STATUSES = frozenset({"done", "failed", "blocked", "triage"})
 
 
+_RECALL_SESSION_PAYLOAD_SCHEMA = "kol_recall_candidate_v2"
+
+# Search-session history is a durable replay surface, not a compact card cache.
+# Keep this allow-list explicit so the replay preserves search/audit semantics
+# without accidentally persisting unrelated future provider payloads.
+_RECALL_SESSION_PAYLOAD_FIELDS = (
+    "handle",
+    "display_name",
+    "platform",
+    "profile_url",
+    "avatar_url",
+    "followers",
+    "avg_views",
+    "avg_likes",
+    "avg_comments",
+    "engagement_rate",
+    "real_er",
+    "real_er_sample_n",
+    "real_er_computed_at",
+    "real_er_method",
+    "data_truth",
+    "country",
+    "language",
+    "primary_topic",
+    "bio",
+    "vector_score",
+    "lexical_score",
+    "hybrid_rrf_score",
+    "retrieval_score",
+    "retrieval_method",
+    "type_rank_score",
+    "type_score",
+    "recall_rank_score",
+    "recall_rank_score_method",
+    "robust_rank_score",
+    "robust_rank_method",
+    "precision_rank_score",
+    "precision_rank_method",
+    "ranking_claim_status",
+    "ranking_confidence",
+    "platform_calibration",
+    "display_rank_score",
+    "display_relevance_adjust",
+    "relevance_flags",
+    "relevance_tier_hint",
+    "profile_type",
+    "provisional_profile_lane",
+    "provisional_profile_lane_source",
+    "profile_type_confidence",
+    "type_label",
+    "creator_type_score",
+    "reviewer_type_score",
+    "type_reason",
+    "type_method",
+    "match_tier",
+    "filter_status",
+    "relaxed_filters",
+    "unknown_fields",
+    "candidate_bucket",
+    "candidate_bucket_reason",
+    "candidate_bucket_target",
+    "business_lane",
+    "candidate_lane",
+    "recall_reason",
+    "why_fit",
+    "evidence",
+    "sample_title",
+    "used_lenses",
+    "used_lenses_note",
+    "representative_evidence",
+    "evidence_confidence",
+    "evidence_quality",
+)
+
+_RECALL_SESSION_SOURCE_FIELDS = (
+    "vector_method",
+    "type_method",
+    "retrieval_method",
+    "retrieval_tier",
+    "sufficiency",
+    "ranking_method",
+)
+
+
+def _recall_source_items(result: dict[str, Any]) -> tuple[list[dict[str, Any]], str, int]:
+    """Return replay rows in the server's canonical order.
+
+    New responses carry ``items`` in the exact selected/ranked order.  Older
+    callers only supplied buckets; keep those readable, include every bucket,
+    and mark the resulting replay as legacy/incomplete because the original
+    cross-bucket order cannot be recovered.
+    """
+
+    buckets = _dict(result.get("buckets"))
+    if isinstance(result.get("items"), list):
+        raw_items = result.get("items") or []
+        # Rolling-upgrade responses may expose an empty compatibility ``items``
+        # list while the real legacy rows still live in buckets.  Only accept an
+        # empty list as canonical when the buckets are empty as well.
+        has_bucket_rows = any(bool(_list(value)) for value in buckets.values())
+        if raw_items or not has_bucket_rows:
+            return [dict(raw) for raw in raw_items if isinstance(raw, dict)], "canonical_items", len(raw_items)
+
+    names = [name for name in ("creator", "reviewer", "unknown") if name in buckets]
+    names.extend(name for name in buckets if name not in names)
+    rows: list[dict[str, Any]] = []
+    source_count = 0
+    for bucket_name in names:
+        bucket_rows = _list(buckets.get(bucket_name))
+        source_count += len(bucket_rows)
+        for raw in bucket_rows:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            row.setdefault("bucket", bucket_name)
+            rows.append(row)
+    return rows, "legacy_buckets", source_count
+
+
+def _first_recall_score(raw: dict[str, Any]) -> float | None:
+    """Choose the persisted summary score without converting missing to zero."""
+
+    for key in (
+        "robust_rank_score",
+        "display_rank_score",
+        "recall_rank_score",
+        "retrieval_score",
+        "vector_score",
+    ):
+        value = raw.get(key)
+        if value in (None, ""):
+            continue
+        parsed = _float_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _recall_session_payload(
+    raw: dict[str, Any],
+    *,
+    bucket: str,
+    replay_complete: bool,
+    replay_source: str,
+) -> dict[str, Any]:
+    payload = {key: raw.get(key) for key in _RECALL_SESSION_PAYLOAD_FIELDS if key in raw}
+    source_fields = _dict(raw.get("source_fields"))
+    safe_source_fields = {
+        key: source_fields.get(key)
+        for key in _RECALL_SESSION_SOURCE_FIELDS
+        if key in source_fields
+    }
+    if safe_source_fields:
+        payload["source_fields"] = safe_source_fields
+    payload.update(
+        {
+            "bucket": bucket,
+            "session_payload_schema": _RECALL_SESSION_PAYLOAD_SCHEMA,
+            "session_replay_complete": bool(replay_complete),
+            "session_replay_source": replay_source,
+        }
+    )
+    return payload
+
+
 def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
     from app.domains.kol.search_sessions import record_items
 
@@ -77,50 +242,51 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     from app.domains.kol.search_sessions import record_items
 
     items: list[dict[str, Any]] = []
-    rank = 1
-    buckets = _dict(result.get("buckets"))
-    for bucket_name in ("creator", "reviewer"):
-        for raw in _list(buckets.get(bucket_name)):
-            if not isinstance(raw, dict):
-                continue
-            kol_pool_id = _int_or_none(raw.get("kol_pool_id") or raw.get("id"))
-            source_url = _text(raw.get("profile_url") or raw.get("url"))
-            score = _float_or_none(raw.get("recall_rank_score") or raw.get("vector_score"))
-            items.append(
-                {
-                    "dedupe_key": f"recall:{kol_pool_id or source_url or rank}",
-                    "item_type": "recall_candidate",
-                    "status": "matched",
-                    "stage": "identified",
-                    "rank": rank,
-                    "score": score,
-                    "kol_pool_id": kol_pool_id,
-                    "source_url": source_url,
-                    "payload": {
-                        "bucket": bucket_name,
-                        "handle": raw.get("handle"),
-                        "display_name": raw.get("display_name"),
-                        "platform": raw.get("platform"),
-                        "profile_type": raw.get("profile_type"),
-                        "followers": raw.get("followers"),
-                        # 问题1 头像修:recall_candidate 会话项此前漏写 avatar_url(new_creator/existing_kol 都写了),
-                        # 致历史回填掉头像。透传 _build_item 已填的 avatar_url。
-                        "avatar_url": raw.get("avatar_url"),
-                        "recall_rank_score": raw.get("recall_rank_score"),
-                        "vector_score": raw.get("vector_score"),
-                        "type_score": raw.get("type_score"),
-                        "evidence": raw.get("evidence"),
-                    },
-                }
-            )
-            rank += 1
+    source_items, replay_source, source_count = _recall_source_items(result)
+    replay_complete = replay_source == "canonical_items" and len(source_items) == source_count
+    for rank, raw in enumerate(source_items, start=1):
+        bucket_name = _text(raw.get("bucket")) or "unknown"
+        kol_pool_id = _int_or_none(raw.get("kol_pool_id") if raw.get("kol_pool_id") is not None else raw.get("id"))
+        source_url = _text(raw.get("profile_url") or raw.get("url"))
+        items.append(
+            {
+                "dedupe_key": f"recall:{kol_pool_id or source_url or rank}",
+                "item_type": "recall_candidate",
+                "status": "matched",
+                "stage": "identified",
+                "rank": rank,
+                "score": _first_recall_score(raw),
+                "kol_pool_id": kol_pool_id,
+                "source_url": source_url,
+                "payload": _recall_session_payload(
+                    raw,
+                    bucket=bucket_name,
+                    replay_complete=replay_complete,
+                    replay_source=replay_source,
+                ),
+            }
+        )
     pipeline_running = bool(result.get("_session_pipeline_running"))
     pipeline_progress = _dict(result.get("_session_progress"))
     summary = {
         "kind": "kol_recall",
+        "method": result.get("method"),
         "items_written": len(items),
         "diagnostics": result.get("diagnostics"),
         "query": result.get("query"),
+        "ratio": result.get("ratio"),
+        "filters": result.get("filters"),
+        "bucket_policy": result.get("bucket_policy"),
+        "ranking": result.get("ranking"),
+        "evaluation_status": result.get("evaluation_status"),
+        "replay_contract": {
+            "schema": _RECALL_SESSION_PAYLOAD_SCHEMA,
+            "source": replay_source,
+            "complete": replay_complete,
+            "source_count": source_count,
+            "persisted_count": len(items),
+            "missing_count": max(0, source_count - len(items)),
+        },
     }
     if pipeline_running:
         summary.update({"phase": "base", "progress": pipeline_progress})

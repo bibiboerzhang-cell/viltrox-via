@@ -129,6 +129,15 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
             for key, items in original_buckets.items()
             if isinstance(items, list)
         }
+    original_business_buckets = (
+        result.get("business_buckets") if isinstance(result.get("business_buckets"), dict) else None
+    )
+    if original_business_buckets is not None:
+        filtered["business_buckets"] = {
+            key: [item for item in items if _keep(item)]
+            for key, items in original_business_buckets.items()
+            if isinstance(items, list)
+        }
     before_item_count = len(original_items or [])
     before_bucket_count = sum(
         len(items) for items in (original_buckets or {}).values() if isinstance(items, list)
@@ -138,16 +147,97 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
         len(items) for items in (filtered.get("buckets") or {}).values() if isinstance(items, list)
     )
     filtered_buckets = filtered.get("buckets") if isinstance(filtered.get("buckets"), dict) else {}
+    filtered_business_buckets = (
+        filtered.get("business_buckets")
+        if isinstance(filtered.get("business_buckets"), dict)
+        else {}
+    )
     before_count = before_item_count or before_bucket_count
     after_count = after_item_count or after_bucket_count
     diagnostics = dict(result.get("diagnostics")) if isinstance(result.get("diagnostics"), dict) else {}
+    requested_count = int(diagnostics.get("requested_count") or after_count)
+    final_count = after_count
+    shortfall = max(0, requested_count - final_count)
+    filtered_items = filtered.get("items") if isinstance(filtered.get("items"), list) else []
+    lane_order = ("core_vertical", "expansion", "exploration")
+    lane_selected = {
+        lane: len(filtered_business_buckets.get(lane) or [])
+        for lane in lane_order
+    }
+    # Older callers may not return business_buckets. In that case the final
+    # item list remains authoritative for selected-lane counts.
+    if not any(lane_selected.values()) and filtered_items:
+        lane_selected = {
+            lane: sum(1 for item in filtered_items if item.get("candidate_bucket") == lane)
+            for lane in lane_order
+        }
+    original_lane_selection = (
+        diagnostics.get("lane_selection")
+        if isinstance(diagnostics.get("lane_selection"), dict)
+        else {}
+    )
+    original_targets = (
+        original_lane_selection.get("lane_targets")
+        if isinstance(original_lane_selection.get("lane_targets"), dict)
+        else {}
+    )
+    lane_targets = {lane: max(0, int(original_targets.get(lane) or 0)) for lane in lane_order}
+    lane_shortfalls = {
+        lane: max(0, lane_targets[lane] - min(lane_selected[lane], lane_targets[lane]))
+        for lane in lane_order
+    }
+    lane_refills = {
+        lane: max(0, lane_selected[lane] - lane_targets[lane])
+        for lane in lane_order
+    }
+    profile_counts = {
+        "creator": len(filtered_buckets.get("creator") or []),
+        "reviewer": len(filtered_buckets.get("reviewer") or []),
+        "unknown": len(filtered_buckets.get("unknown") or []),
+    }
+    filter_changed_result = before_count != after_count
+    if not filter_changed_result and original_lane_selection:
+        # Normal route: platform was already a hard retrieval filter. Keep the
+        # richer pre-selection availability diagnostics when this guard is a
+        # no-op instead of downgrading them to returned-set counts.
+        reconciled_lane_selection = original_lane_selection
+    else:
+        reconciled_lane_selection = {
+            **original_lane_selection,
+            "lane_targets": lane_targets,
+            # The compatibility post-filter can only observe the returned set,
+            # so do not retain a stale pre-filter availability claim.
+            "lane_available": dict(lane_selected),
+            "lane_available_scope": "post_filter_returned_set",
+            "lane_selected": lane_selected,
+            "lane_shortfalls": lane_shortfalls,
+            "lane_refills": lane_refills,
+            "lane_contract_satisfied": all(value == 0 for value in lane_shortfalls.values()),
+            "profile_counts": profile_counts,
+        }
+    original_business_counts = diagnostics.get("business_bucket_counts")
+    reconciled_business_counts = (
+        original_business_counts
+        if not filter_changed_result and isinstance(original_business_counts, dict)
+        else lane_selected
+    )
     diagnostics.update(
         {
             "returned_count": after_count,
+            "final_count": final_count,
+            "shortfall": shortfall,
+            "result_contract_satisfied": shortfall == 0,
             "creator_returned": len(filtered_buckets.get("creator") or []),
             "reviewer_returned": len(filtered_buckets.get("reviewer") or []),
+            "unknown_type_returned": len(filtered_buckets.get("unknown") or []),
+            "strict_count": sum(1 for item in filtered_items if item.get("match_tier") == "strict"),
+            "relaxed_count": sum(1 for item in filtered_items if item.get("match_tier") == "relaxed"),
+            "backfill_count": sum(1 for item in filtered_items if item.get("match_tier") == "backfill"),
+            "business_bucket_counts": reconciled_business_counts,
+            "lane_selection": reconciled_lane_selection,
             "platform_filtered_out": max(0, before_count - after_count),
             "platform_filter": sorted(requested),
+            "post_filter_counts_reconciled": True,
         }
     )
     filtered["diagnostics"] = diagnostics

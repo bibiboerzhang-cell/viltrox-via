@@ -65,12 +65,14 @@ const TABLE_TRIM = [
 export function SmartEmbed({
   apiToken,
   searchMode,
+  onSearchModeChange,
   onRecallItems,
   onOpenRecallItem,
   onOpenProfile,
 }: {
   apiToken: string;
   searchMode: string;
+  onSearchModeChange?: (mode: "balanced" | "precision" | "discovery") => void;
   onRecallItems: (items: any[]) => void;
   onOpenRecallItem: (item: any) => void;
   onOpenProfile: (result: any) => void;
@@ -80,6 +82,7 @@ export function SmartEmbed({
       <SmartKolInputPanel
         apiToken={apiToken}
         searchMode={searchMode}
+        onSearchModeChange={onSearchModeChange}
         onRecallItems={onRecallItems}
         onOpenRecallItem={onOpenRecallItem}
         onOpenProfile={onOpenProfile}
@@ -235,12 +238,12 @@ export function RecsSection({
               <span>全部 {poolTotal.toLocaleString()}</span>
             </button>
           ) : null}
-          {/* K1:与真实映射表对齐(库内召回 创作者+测评 · 全网发现条数)。 */}
+          {/* 与找达人工作台同一状态：目标固定 30 人，显示业务分桶配额。 */}
           <span
             className="rounded-[6px] border border-line px-1.5 py-0.5 text-[9.5px] text-muted"
-            title="当前搜索模式的真实配额:库内召回(创作者+测评)· 全网发现条数"
+            title="当前搜索策略的目标配额:核心垂直 / 拓展 / 探索；严格筛选不足会明确标注短缺"
           >
-            {filters.searchMode === "balanced" ? "平衡 8+7·发现30" : filters.searchMode === "precision" ? "精准 10+5·发现20" : "探索 5+5·发现40"}
+            {filters.searchMode === "balanced" ? "平衡 18/9/3 · 目标30" : filters.searchMode === "precision" ? "垂直优先 24/5/1 · 目标30" : "拓展 15/12/3 · 目标30"}
           </span>
           {filters.kindFilter ? (
             <span className="inline-flex items-center gap-1 rounded-[6px] border border-accent bg-accent-soft px-1.5 py-0.5 text-[9.5px] text-accent">

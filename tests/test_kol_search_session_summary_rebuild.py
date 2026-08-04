@@ -117,6 +117,8 @@ class KolSearchSessionSummaryRebuildTests(unittest.TestCase):
                 "complete_partial": 0,
                 "base_complete": True,
                 "requested_tasks_terminal": True,
+                "full_analysis_execution_complete": False,
+                "full_analysis_observable": False,
                 "full_analysis_complete": False,
                 "decision_eligible": False,
                 "required_tasks_complete": True,

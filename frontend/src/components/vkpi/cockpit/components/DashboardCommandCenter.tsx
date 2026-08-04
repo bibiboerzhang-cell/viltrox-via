@@ -4,10 +4,10 @@ import { DollarSign, Globe2, Loader2, TrendingUp } from "lucide-react";
 import { Breadcrumb } from "./Breadcrumb";
 import { FloatingCard } from "./FloatingCard";
 import { HierarchyDropdown } from "./HierarchyDropdown";
-import { RealMap } from "./RealMap";
 import { UpcomingEventsCard } from "./UpcomingEventsCard";
 
 const e = React.createElement;
+const RealMap = React.lazy(() => import("./RealMap").then((module) => ({ default: module.RealMap })));
 
 export function DashboardCommandCenter(props: any) {
   const {
@@ -29,23 +29,25 @@ export function DashboardCommandCenter(props: any) {
     className: "vkpi-command-map relative overflow-hidden border border-line bg-[var(--ds-bg-2)]",
     style: { minHeight: "560px" },
   },
-    isAvailable && e(RealMap, {
-      pins,
-      accentColor: currentMode.color,
-      defaultZoom: venue ? 17 : item ? 15 : city ? 12 : country ? 5 : 2,
-      onPinClick: (pin: any) => {
-        if (pin.isEvent && pin.eventData) {
-          setPreviewEvent(pin.eventData);
-          return;
-        }
-        if (!country) handleCountryChange(pin.name);
-        else if (!city && pin.name) handleCityChange(pin.key || pin.name);
-        else if (!item && (pin.handle || pin.name)) handleItemChange(pin.handle || pin.name);
-        else if (!venue && pin.name && pin.parentItem !== undefined) setVenue(pin.name);
-        else setSelectedPin(pin);
-      },
-      focusTarget,
-    }),
+    isAvailable && e(React.Suspense, { fallback: null },
+      e(RealMap, {
+        pins,
+        accentColor: currentMode.color,
+        defaultZoom: venue ? 17 : item ? 15 : city ? 12 : country ? 5 : 2,
+        onPinClick: (pin: any) => {
+          if (pin.isEvent && pin.eventData) {
+            setPreviewEvent(pin.eventData);
+            return;
+          }
+          if (!country) handleCountryChange(pin.name);
+          else if (!city && pin.name) handleCityChange(pin.key || pin.name);
+          else if (!item && (pin.handle || pin.name)) handleItemChange(pin.handle || pin.name);
+          else if (!venue && pin.name && pin.parentItem !== undefined) setVenue(pin.name);
+          else setSelectedPin(pin);
+        },
+        focusTarget,
+      }),
+    ),
 
     !showSettingsModal && e("div", { className: "vkpi-command-map__title pointer-events-none absolute left-6 top-6 z-overlay-high max-w-md px-3 py-2" },
       e("h2", { className: "text-xl font-semibold text-ink md:text-2xl" }, "Marketing Command Center"),

@@ -7,7 +7,6 @@ import {
   listKolSearchHistory,
   smartKolSearchProfileAdvanceJob,
   smartKolSearch,
-  type VkpiKolRecallItem,
   type VkpiKolRecallResponse,
   type VkpiKolSearchHistoryItem,
   type VkpiKolSmartSearchProfileAdvanceResponse,
@@ -61,41 +60,33 @@ import {
 
 // 文字搜索结果区(框1/框2/框3)展示 JSX 已抽到 SmartKolInputPanel.TextResult.tsx(行为不变;容器透传 props)。
 import { TextResultSection } from "./SmartKolInputPanel.TextResult";
+import {
+  canExecuteUrlResult,
+  extractUrls,
+  URL_BATCH_MAX,
+  type SmartKolInputPanelProps,
+} from "./SmartKolInputPanel.runtime";
+import {
+  EMPTY_KOL_SEARCH_FILTERS,
+  KOL_SEARCH_RESULT_LIMIT,
+  KOL_SEARCH_STRATEGIES,
+  KolSearchPolicyPanel,
+  strategyFromLegacyMode,
+  toKolSearchApiFilters,
+  type KolSearchFilterState,
+  type KolSearchStrategy,
+} from "./SmartKolInputPanel.SearchPolicy";
 
 type State = "idle" | "loading" | "ready" | "executing" | "error";
-
-// 【K1 搜索模式映射表】FilterBar 三档→全网查找参数;只改映射不动召回算法,数字与 FilterBar hint 一致:
-//   balanced  平衡: 库内召回 创作者8+测评7 / 全网候选 45 / 每平台 20
-//   precision 精准: 库内召回 创作者10+测评5 / 全网候选 30 / 每平台 12
-//   discovery 探索: 库内召回 创作者5+测评5  / 全网候选 50 / 每平台 20
-// 候选量高于最终展示量:后端仍按相关性/地区/账号类型/触达门槛过滤,不以降质换数量。
-const SEARCH_MODE_QUOTAS: Record<string, { creatorQuota: number; reviewerQuota: number; newDiscoveryLimit: number; perPlatformLimit: number }> = {
-  balanced:  { creatorQuota: 8,  reviewerQuota: 7, newDiscoveryLimit: 45, perPlatformLimit: 20 },
-  precision: { creatorQuota: 10, reviewerQuota: 5, newDiscoveryLimit: 30, perPlatformLimit: 12 },
-  discovery: { creatorQuota: 5,  reviewerQuota: 5, newDiscoveryLimit: 50, perPlatformLimit: 20 },
-};
-
-// 【K7】URL 多行批量:抠出全部 http(s) URL,上限 10;剥尾缀标点+去重(社媒链接不含括号,剥离安全)。
-const URL_BATCH_MAX = 10;
-function extractUrls(raw: string): string[] {
-  const matched = String(raw || "").match(/https?:\/\/[^\s]+/g) || [];
-  const cleaned = matched.map((u) => u.replace(/[),;'"\]]+$/, "")).filter(Boolean);
-  return Array.from(new Set(cleaned));
-}
 
 export function SmartKolInputPanel({
   apiToken = "",
   searchMode = "balanced",
+  onSearchModeChange,
   onRecallItems,
   onOpenRecallItem,
   onOpenProfile,
-}: {
-  apiToken?: string;
-  searchMode?: string;
-  onRecallItems?: (items: VkpiKolRecallItem[]) => void;
-  onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
-  onOpenProfile?: (result: VkpiKolUrlDeepCrawlResponse) => void;
-}) {
+}: SmartKolInputPanelProps) {
   // 挂载时回填上次激活搜索的展示态(sessionStorage),让 90s/10min 父刷新若偶发重挂本面板时
   // ①②③ 结果与轮询不凭空消失;无持久化则回到正常初始态。
   const persistedDisplay = useMemo(() => readPersistedSearchDisplay(), []);
@@ -114,10 +105,18 @@ export function SmartKolInputPanel({
   const [historyActionBusy, setHistoryActionBusy] = useState("");
   const [historyNotice, setHistoryNotice] = useState("");
   const [error, setError] = useState("");
+  // 新搜索工作台仍兼容旧页 balanced/precision/discovery 状态；UI 用业务语言展示为
+  // 平衡/垂直优先/拓展，并把选择同步回旧 FilterBar，避免同页出现两套互相冲突的模式。
+  const [localSearchMode, setLocalSearchMode] = useState(searchMode);
+  const searchStrategy = strategyFromLegacyMode(localSearchMode);
+  const searchPolicy = KOL_SEARCH_STRATEGIES[searchStrategy];
+  const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
+  const [searchFilters, setSearchFilters] = useState<KolSearchFilterState>(EMPTY_KOL_SEARCH_FILTERS);
   // 问题2 平台选择器:默认全选已落地的 YT/IG/TikTok(FB 待 provider 落地,UI 置灰)。
   const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
-  // 区域语言本地化:目标市场码(空=全球英文;JP/KR/DE/… 按该区语言搜平台捞本地达人)。
-  const [discoveryRegion, setDiscoveryRegion] = useState<string>("");
+  // 国家/地区只有一个真状态：搜索前筛选与结果区「重新查找」共用，避免 UI 看见 A、请求却发 B。
+  const discoveryRegion = searchFilters.country;
+  const setDiscoveryRegion = (value: string) => setSearchFilters((current) => ({ ...current, country: value }));
   // 刀1·流3 恒开(2026-06-16):全网发现不再挂开关,任何文字搜索都自动触发(见 run() 的 queueTextAdvance)。
   // P0-6 地区口径:默认开,排除 CN/HK/TW 三地区(country/market 判据),海外中文博主放行;后端参数名保留 exclude_chinese。
   const [excludeChinese, setExcludeChinese] = useState(true);
@@ -138,6 +137,16 @@ export function SmartKolInputPanel({
   const [outreachBusy, setOutreachBusy] = useState(false);
   const [outreachNote, setOutreachNote] = useState("");
   const [outreachResult, setOutreachResult] = useState<Record<string, any> | null>(null);
+
+  useEffect(() => {
+    setLocalSearchMode(searchMode);
+  }, [searchMode]);
+
+  const setSearchStrategy = (strategy: KolSearchStrategy) => {
+    const nextMode = KOL_SEARCH_STRATEGIES[strategy].legacyMode;
+    setLocalSearchMode(nextMode);
+    onSearchModeChange?.(nextMode);
+  };
 
   function togglePick(id: number) {
     setPickedIds((cur) => {
@@ -237,44 +246,7 @@ export function SmartKolInputPanel({
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
   const isBusy = state === "loading" || state === "executing" || batchBusy;
-  const profileFlow = asRecord(urlResult?.profile_flow);
-  const videoFlow = asRecord(urlResult?.video_flow);
-  const videoCreator = asRecord(urlResult?.creator_identity || videoFlow.creator_identity);
-  const videoStatus = cleanText(profileFlow.status || videoFlow.status);
-  const videoJobStatus = cleanText(videoFlow.job_status || videoStatus);
-  const videoJobLastError = cleanText(videoFlow.job_last_error);
-  const profileOperation = cleanText(profileFlow.operation);
-  const rawVideoOperation = cleanText(videoFlow.operation);
-  const videoOperation = ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(profileOperation)
-    ? profileOperation
-    : rawVideoOperation || profileOperation;
-  const videoCreatorResolved = Boolean(
-    cleanText(videoFlow.creator_resolution_status) === "resolved" ||
-    cleanText(videoCreator.handle || videoCreator.channel_id || videoCreator.profile_url || urlResult?.handle || urlResult?.channel_id),
-  );
-  const urlCanExecute = Boolean(
-    apiToken &&
-    urlResult &&
-    (!urlResult.execute || Boolean(videoJobLastError)) &&
-    !isBusy &&
-    (
-      (urlResult.url_type === "profile" && cleanText(profileFlow.status) === "dry_run_ready") ||
-      (urlResult.url_type === "video" && Boolean(videoJobLastError) && ["failed", "blocked"].includes(videoJobStatus)) ||
-      // 创作者留待后台解析(provider_refresh_pending)或历史空壳回放(identified/无状态):
-      // 后端专用解析队列会在 worker 里识别创作者,execute 不再要求前端先看到创作者。
-      (
-        urlResult.url_type === "video" &&
-        !urlResult.execute &&
-        ["provider_refresh_pending", "identified", ""].includes(cleanText(videoFlow.status))
-      ) ||
-      (
-        urlResult.url_type === "video" &&
-        ["dry_run_ready", "ready_to_execute"].includes(videoStatus) &&
-        videoCreatorResolved &&
-        ["existing_creator_video_analysis", "new_creator_video_analysis"].includes(videoOperation)
-      )
-    )
-  );
+  const urlCanExecute = canExecuteUrlResult(apiToken, urlResult, isBusy);
   const recallItems = useMemo(() => recallTopItems(recallResult), [recallResult]);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
   // 三框·框3:全网发现项(new_creator)从在役 advance 会话抽取,与框2 库内召回分开展示。
@@ -603,13 +575,20 @@ export function SmartKolInputPanel({
     setActiveSearchSession(null);
     setSessionPollNotice("");
     try {
+      const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms);
       const response = await smartKolSearch(apiToken, query, {
         mode: "auto",
         maxPosts: 3,
-        candidateLimit: 50,
-        limit: 10,
-        creatorQuota: 7,
-        reviewerQuota: 3,
+        // 30 是「筛选后目标」而非抓取前上限：先过采样，再由后端执行硬筛选、业务分桶与诚实补位。
+        // 同时保留 limit/creator/reviewer 兼容旧服务；新服务以 result_limit/filters/bucket_policy 为准。
+        candidateLimit: 150,
+        limit: KOL_SEARCH_RESULT_LIMIT,
+        resultLimit: KOL_SEARCH_RESULT_LIMIT,
+        creatorQuota: searchPolicy.creatorQuota,
+        reviewerQuota: searchPolicy.reviewerQuota,
+        searchStrategy,
+        filters: apiFilters,
+        bucketPolicy: searchPolicy.bucketPolicy,
         // createSession:true 回滚——false 会让前端 activeSearchSession 拿不到 advance 会话的全网发现项,
         // 整组「全网新发现」消失(550pro2 监视器搜出 15 个却 0 显示的真因)。宁可历史多一条空会话,也要保显示。
         createSession: true,
@@ -785,21 +764,23 @@ export function SmartKolInputPanel({
     try {
       // 库内推荐与全网候选分开控量。全网先放宽候选,后端再按相关性/触达/账号类型过滤,
       // 避免原始 25 个里补全后只剩 4 个可展示。地区由 discoveryRegion 控制。
-      // 【K1 接真】平衡/精准/探索按 SEARCH_MODE_QUOTAS 映射表收窄/放宽,
-      // 只改参数不改算法。limit/advanceLimit = 创作者+测评之和,保持召回总量与配额一致。
-      const quotas = SEARCH_MODE_QUOTAS[searchMode] || SEARCH_MODE_QUOTAS.balanced;
-      const recallLimit = quotas.creatorQuota + quotas.reviewerQuota;
+      // 新合同把「筛选后 30 人」与底层 creator/reviewer 兼容配额分开；显式硬筛选不得为凑数放松。
+      const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms);
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
-        candidateLimit: 100,
-        limit: recallLimit,
-        creatorQuota: quotas.creatorQuota,
-        reviewerQuota: quotas.reviewerQuota,
-        advanceLimit: recallLimit,
+        candidateLimit: 150,
+        limit: KOL_SEARCH_RESULT_LIMIT,
+        resultLimit: KOL_SEARCH_RESULT_LIMIT,
+        creatorQuota: searchPolicy.creatorQuota,
+        reviewerQuota: searchPolicy.reviewerQuota,
+        advanceLimit: KOL_SEARCH_RESULT_LIMIT,
+        searchStrategy,
+        filters: apiFilters,
+        bucketPolicy: searchPolicy.bucketPolicy,
         maxPosts: 12,
         representativeVideoLimit: 1,
         includeNewDiscovery: true,
-        newDiscoveryLimit: quotas.newDiscoveryLimit,
-        newDiscoveryPerPlatformLimit: quotas.perPlatformLimit,
+        newDiscoveryLimit: searchPolicy.newDiscoveryLimit,
+        newDiscoveryPerPlatformLimit: searchPolicy.perPlatformLimit,
         newDiscoveryPlatforms: discoveryPlatforms,
         excludeChinese,
         market: discoveryRegion,
@@ -893,6 +874,17 @@ export function SmartKolInputPanel({
           {inferredMode === "url" ? "查看" : "查找"}
         </button>
       </div>
+
+      <KolSearchPolicyPanel
+        open={searchFiltersOpen}
+        onToggleOpen={() => setSearchFiltersOpen((open) => !open)}
+        strategy={searchStrategy}
+        onStrategyChange={setSearchStrategy}
+        platforms={discoveryPlatforms}
+        onPlatformsChange={setDiscoveryPlatforms}
+        filters={searchFilters}
+        onFiltersChange={setSearchFilters}
+      />
 
       {batchNote ? (
         <div className="mt-1.5 flex items-center gap-1.5 rounded-md border border-cyan-300/20 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[10px] text-cyan-100">

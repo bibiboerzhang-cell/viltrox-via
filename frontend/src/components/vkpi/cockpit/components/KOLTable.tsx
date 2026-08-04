@@ -65,18 +65,19 @@ const KOLRow = React.memo(function KOLRow({ item, isSelected, onRowClick, myList
         style: { color: item.real_followers_pct >= 80 ? "#86efac" : item.real_followers_pct >= 50 ? "#fde68a" : "#fca5a5" }
       }, item.real_followers_pct ? item.real_followers_pct + "% 真实" : "—")
     ),
-    // Real ER
+    // 互动率：Real ER 只展示后端样本/验证真值；普通互动率保留原名并要求来源时间完整。
     e("td", null,
       item.real_er_pct != null
         ? e(React.Fragment, null,
             e("div", { className: "text-[12px] text-white tabular-nums font-medium" }, formatPercent(item.real_er_pct, 2)),
-            e("div", { className: "text-[10px] text-slate-500 tabular-nums" },
-              e("span", { className: "text-slate-400 line-through" }, formatPercent(item.engagement_rate, 1)),
-              " ",
-              e("span", { style: { color: "#fca5a5" } }, item.er_calibration + "%")
-            )
+            e("div", { className: "text-[10px] text-slate-500 tabular-nums" }, item.real_er_sample_n ? `Real ER · 样本 ${item.real_er_sample_n}` : "Real ER · 已验证")
           )
-        : e("span", { className: "text-slate-600 text-[11px]" }, "—")
+        : item.engagement_rate_displayable && item.engagement_rate != null
+          ? e("div", { title: `互动率来源 ${item.engagement_rate_source || "已记录来源"}${item.engagement_rate_updated_at ? ` · 更新 ${item.engagement_rate_updated_at}` : ""}` },
+              e("div", { className: "text-[12px] text-white tabular-nums font-medium" }, formatPercent(item.engagement_rate, 2)),
+              e("div", { className: "text-[10px] text-slate-500 tabular-nums" }, "互动率")
+            )
+          : null
     ),
     // Type · Geo
     e("td", null,
@@ -154,7 +155,7 @@ export function KOLTable({ items, onRowClick, selectedItemId, myList }: any) {
           e("tr", null,
             e("th", null, "KOL · 平台"),
             e("th", { style: { width: 100 } }, "粉丝 / 真实%"),
-            e("th", { style: { width: 90 } }, "Real ER"),
+            e("th", { style: { width: 90 } }, "互动率"),
             e("th", { style: { width: 110 } }, "类型 · Geo"),
             e("th", { style: { width: 90 } }, "Trend"),
             e("th", { style: { width: 140 } }, "设备"),

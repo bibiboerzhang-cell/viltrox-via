@@ -22,6 +22,27 @@ function numberOrNull(value?: unknown) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function textOrNull(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  return normalized && !["-", "--", "unknown", "null", "none", "n/a", "na", "未知"].includes(normalized.toLowerCase())
+    ? normalized
+    : null;
+}
+
+function verifiedRealEr(raw: Record<string, unknown>) {
+  const sampleN = numberOrNull(raw.real_er_sample_n);
+  const status = String(raw.real_er_status ?? raw.real_er_claim_status ?? "").trim().toLowerCase();
+  const verified = raw.real_er_verified === true
+    || ["verified", "measured", "observed", "verified_truth", "ready"].includes(status);
+  if (!(sampleN != null && sampleN > 0) && !verified) return { value: null, sampleN: null, verified: false };
+  const explicitValue = numberOrNull(raw.real_er_pct) ?? numberOrNull(raw.real_er);
+  return {
+    value: normalizePercent(explicitValue),
+    sampleN: sampleN != null && sampleN > 0 ? sampleN : null,
+    verified: explicitValue != null,
+  };
+}
+
 function valueFrom(item: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = item[key];
@@ -148,7 +169,20 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
     const rawEvidence = nestedObject(rawPlatformData, "evidence_summary");
     const country = normalizeCountry(String(firstValue(item.country, rawPlatformData.country, nestedObject(rawPlatformData, "raw").country) || ""));
     const followers = numberOrNull(item.followers);
-    const realEr = normalizePercent(numberOrNull(raw.real_engagement_rate as number) ?? numberOrNull(item.engagement_rate));
+    // “Real ER”只接受后端明确的 real_er/real_er_pct，且必须有样本或 verified truth。
+    // 普通 engagement_rate 是另一条观测信号，绝不能被换名成 Real ER。
+    const realErTruth = verifiedRealEr(raw);
+    const realEr = realErTruth.value;
+    const engagementRate = normalizePercent(numberOrNull(item.engagement_rate));
+    const engagementRateSource = textOrNull(
+      raw.engagement_rate_source ?? rawPlatformData.engagement_rate_source ?? item.source_type ?? item.source_ref,
+    );
+    const engagementRateUpdatedAt = textOrNull(
+      raw.engagement_rate_updated_at ?? rawPlatformData.engagement_rate_updated_at ?? item.updated_at ?? item.last_seen_at,
+    );
+    const engagementRateDisplayable = engagementRate != null
+      && Boolean(engagementRateSource)
+      && Boolean(engagementRateUpdatedAt);
     const realFollowers = normalizePercent(numberOrNull(raw.real_followers_pct as number) ?? numberOrNull(raw.real_followers_percent as number));
     // 四a 修复:workspace/list 投影实际把契合分序列化在 v6_fit / fit_score 槽,
     // viltrox_fit_score 在该投影里可能缺省/为 null(DB 列名 ≠ 端点序列化键)——
@@ -239,8 +273,13 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       followers,
       real_followers_pct: realFollowers,
       real_er_pct: realEr,
-      engagement_rate: realEr,
-      er_calibration: realEr == null ? null : 0,
+      real_er_sample_n: realErTruth.sampleN,
+      real_er_verified: realErTruth.verified,
+      engagement_rate: engagementRate,
+      engagement_rate_source: engagementRateSource,
+      engagement_rate_updated_at: engagementRateUpdatedAt,
+      engagement_rate_displayable: engagementRateDisplayable,
+      er_calibration: realEr == null ? null : numberOrNull(raw.er_calibration),
       candidate_kind: candidateKind,
       linked_main_kol_id: item.linked_main_kol_id,
       audience_type: valueFrom(raw, ["audience_type"]) || null,

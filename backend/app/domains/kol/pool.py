@@ -567,6 +567,11 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
     """Return the read-only detail drawer bundle without provider or worker side effects."""
 
     from app.domains.analysis.cache_repo import get_analysis_cache_entries_for_targets
+    from app.domains.kol.analysis_readiness import (
+        build_analysis_readiness,
+        evidence_quality_projection,
+        load_readiness_video_evidence,
+    )
     from app.domains.kol.eleven_dimensions import load_persisted_dimensions_11
     from app.domains.kol.llm_deep_analysis import get_kol_llm_deep_analysis
 
@@ -689,24 +694,59 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
         item["audience_estimated"] = _aud if isinstance(_aud, dict) and _aud else None
     except Exception:
         item["audience_estimated"] = None
+    # Readiness ratios use their own active-evidence denominator (up to 200),
+    # never the drawer's display page (commonly 24).  The loader fetches one
+    # extra row and marks truncation, so 200 is not misreported as full scope.
+    readiness_sample = load_readiness_video_evidence(
+        int(kol_pool_id), limit=200, conn=get_conn()
+    )
+    analysis_readiness = build_analysis_readiness(
+        item=item,
+        videos=list(readiness_sample.get("items") or []),
+        analysis_items=analysis_items,
+        llm_deep=llm_deep,
+        sample_scope=str(readiness_sample.get("sample_scope") or "active_video_evidence_up_to_200"),
+        sample_limit=_int_or_none(readiness_sample.get("limit")),
+        sample_truncated=bool(readiness_sample.get("truncated")),
+    )
+    evidence_quality = evidence_quality_projection(analysis_readiness)
+    video_analysis_summary = {
+        "evidence_count": len(analysis_evidence),
+        "ready_count": ready_count,
+        "pending_count": len(analysis_evidence) - ready_count,
+        "qa_ready_count": qa_ready_count,
+        "source": "vkpi_analysis_cache",
+        # Compatibility projection for clients that read readiness beside the
+        # existing video-analysis counters.  The full contract remains top-level.
+        "analysis_readiness": {
+            key: analysis_readiness.get(key)
+            for key in (
+                "level",
+                "status",
+                "claim_status",
+                "decision_mode",
+                "recommendation_status",
+                "key_sample_count",
+                "evidence_coverage",
+                "blocking_gaps",
+            )
+        },
+    }
     return {
         "status": "ready",
         "method": "kol_pool_detail_bundle_v1",
+        "claim_status": "descriptive_only",
         "kol_pool_id": int(kol_pool_id),
         "item": item,
         "dimensions11": dimensions,
         # 独立角标:置信度 + 数据完整度(从 dimensions_11_json 透出,绝不并入 viltrox_fit_score)
         "confidence_badge": _confidence_badge_from_dims(dimensions),
         "llm_deep_analysis": llm_deep,
+        "analysis_readiness": analysis_readiness,
+        "evidence_quality": evidence_quality,
         "video_analysis": {
             "items": analysis_items,
-            "summary": {
-                "evidence_count": len(analysis_evidence),
-                "ready_count": ready_count,
-                "pending_count": len(analysis_evidence) - ready_count,
-                "qa_ready_count": qa_ready_count,
-                "source": "vkpi_analysis_cache",
-            },
+            "summary": video_analysis_summary,
         },
         "diagnostics": {
             "source": "vkpi_kol_pool + vkpi_kol_profile_deep + vkpi_kol_llm_deep_analysis_results + vkpi_analysis_cache",

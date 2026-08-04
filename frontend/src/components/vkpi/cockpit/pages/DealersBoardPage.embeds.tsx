@@ -1,7 +1,6 @@
 import React from "react";
 import { ModuleCard } from "./MarketVoicePage.modules";
 import { dealerBrandCodes, MODULE_SOURCES } from "./DealersBoardPage.modules";
-import { RealMap } from "../components/RealMap";
 import { useTheme } from "../../../../app/providers/ThemeProvider";
 import { getDealerActivities } from "../../../../services/vkpi/dealers-api";
 import type {
@@ -10,6 +9,10 @@ import type {
   VkpiDealerPin,
   VkpiUsDealerSourceRegistry,
 } from "../../../../services/vkpi/dealers-api";
+
+const RealMap = React.lazy(() =>
+  import("../components/RealMap").then((module) => ({ default: module.RealMap })),
+);
 
 // Dealers · 地图收编包装(MyKolBoardPage.embeds / ShopifyBoardPage.embeds 同一手法)。
 //   手法 = 非侵入收编:**绝不改 RealMap(地图渲染原件,隔离皮肤对象,换肤在后续
@@ -367,12 +370,14 @@ export function DealerMapEmbed({
         </label>
       </div>
       <div data-embed="dealer-map" className="relative h-full min-h-[300px] overflow-hidden rounded-xl border border-line">
-        <RealMap
-          pins={mapped}
-          accentColor={accent}
-          defaultZoom={4}
-          onPinClick={(pin: DealerMapPinShape) => setSelectedDealer(pin.dealer || null)}
-        />
+        <React.Suspense fallback={<div className="absolute inset-0 flex items-center justify-center text-[11px] text-muted">地图组件加载中…</div>}>
+          <RealMap
+            pins={mapped}
+            accentColor={accent}
+            defaultZoom={4}
+            onPinClick={(pin: DealerMapPinShape) => setSelectedDealer(pin.dealer || null)}
+          />
+        </React.Suspense>
         {loading ? (
           <div className="pointer-events-none absolute inset-0 z-[1001] flex items-center justify-center text-[11px] text-muted">
             定位加载中…

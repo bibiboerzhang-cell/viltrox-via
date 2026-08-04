@@ -11,6 +11,10 @@ cd "$ROOT"
 LOG="$ROOT/runtime/logs/supervisor.log"
 mkdir -p "$ROOT/runtime/logs"
 
+# 本地与云端统一采用「1 条 interactive + 15 条 batch」的审定拓扑。把容量目标
+# 显式传给 web/worker 健康与 KOL 进度合同；只负责报告期望值，不会因此放宽费用闸。
+export APIFY_WORKER_EXPECTED_INSTANCES="${APIFY_WORKER_EXPECTED_INSTANCES:-16}"
+
 # 日志自限长:超 5MB 截断,防再造一个 452MB 事故
 if [[ -f "$LOG" && $(stat -f%z "$LOG" 2>/dev/null || echo 0) -gt 5242880 ]]; then
   : > "$LOG"
@@ -31,17 +35,17 @@ ensure_admin_web() {
 
 ensure_apify_pool() {
   local alive
-  # 2026-07-19 用户令迸发:bulk 3→6(共 7 道)+ BURST_TIER=2(profile/comments 双宽,
-  # Gemini 保持单宽);账户实测 SCALE $250/月、256GB、128 并发,内部 provider:apify 帽已提 $150。
+  # 审定拓扑:interactive 1 + bulk 15 = 16 个进程。进程数不是付费并发数；
+  # Provider 实际并发仍由 BURST_TIER 与 family budget/circuit breaker 约束。
   alive=$(pgrep -f "app.workers.apify_jobs_worker" | wc -l | tr -d ' ')
-  if [[ "$alive" -lt 7 ]]; then
-    log "apify 车道存活 $alive/7,补齐"
+  if [[ "$alive" -lt 16 ]]; then
+    log "apify 车道存活 $alive/16,补齐"
     # 清掉死 pidfile 防 pool 脚本误判已在跑
-    for l in interactive bulk1 bulk2 bulk3 bulk4 bulk5 bulk6; do
+    for l in interactive bulk{1..15}; do
       local pf="$ROOT/runtime/worker-$l.pid"
       if [[ -f "$pf" ]] && ! kill -0 "$(cat "$pf" 2>/dev/null)" 2>/dev/null; then rm -f "$pf"; fi
     done
-    APIFY_WORKER_POOL_BULK_COUNT=6 APIFY_WORKER_BURST_TIER=2 bash "$ROOT/scripts/start_apify_worker_pool.sh" >> "$LOG" 2>&1 \
+    APIFY_WORKER_POOL_BULK_COUNT=15 APIFY_WORKER_BURST_TIER=2 bash "$ROOT/scripts/start_apify_worker_pool.sh" >> "$LOG" 2>&1 \
       || log "apify pool 拉起失败(可能部分车道已在跑)"
   fi
 }

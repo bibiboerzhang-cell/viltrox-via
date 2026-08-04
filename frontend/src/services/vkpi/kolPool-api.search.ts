@@ -55,6 +55,19 @@ export async function smartKolSearch(
     limit?: number;
     creatorQuota?: number;
     reviewerQuota?: number;
+    /** 筛选完成后期望返回的候选数；与旧 limit 并行发送，兼容滚动升级期间的服务端。 */
+    resultLimit?: number;
+    searchStrategy?: "vertical" | "balanced" | "expansion";
+    filters?: {
+      platforms?: string[];
+      countries?: string[];
+      languages?: string[];
+      followers_min?: number;
+      followers_max?: number;
+      verticals?: string[];
+      gear_content?: "any" | "yes" | "no";
+    };
+    bucketPolicy?: { core_vertical: number; expansion: number; exploration: number };
     productSku?: string;
     sessionId?: number;
     createSession?: boolean;
@@ -73,6 +86,14 @@ export async function smartKolSearch(
   if (typeof params.limit === "number") body.limit = params.limit;
   if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
   if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
+  if (typeof params.resultLimit === "number") body.result_limit = params.resultLimit;
+  if (params.searchStrategy) body.search_strategy = params.searchStrategy;
+  if (params.filters && Object.keys(params.filters).length) {
+    body.filters = params.filters;
+    // 旧服务只读顶层 platforms；滚动升级时保留兼容字段，筛选真值仍以后端 diagnostics 为准。
+    if (params.filters.platforms?.length) body.platforms = params.filters.platforms;
+  }
+  if (params.bucketPolicy) body.bucket_policy = params.bucketPolicy;
   if (params.productSku) body.product_sku = params.productSku;
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
@@ -95,6 +116,19 @@ export async function smartKolSearchProfileAdvanceJob(
     limit?: number;
     creatorQuota?: number;
     reviewerQuota?: number;
+    /** 筛选完成后期望返回的候选数；与旧 limit/advance_limit 并行发送。 */
+    resultLimit?: number;
+    searchStrategy?: "vertical" | "balanced" | "expansion";
+    filters?: {
+      platforms?: string[];
+      countries?: string[];
+      languages?: string[];
+      followers_min?: number;
+      followers_max?: number;
+      verticals?: string[];
+      gear_content?: "any" | "yes" | "no";
+    };
+    bucketPolicy?: { core_vertical: number; expansion: number; exploration: number };
     advanceLimit?: number;
     maxPosts?: number;
     representativeVideoLimit?: number;
@@ -120,6 +154,13 @@ export async function smartKolSearchProfileAdvanceJob(
   if (typeof params.limit === "number") body.limit = params.limit;
   if (typeof params.creatorQuota === "number") body.creator_quota = params.creatorQuota;
   if (typeof params.reviewerQuota === "number") body.reviewer_quota = params.reviewerQuota;
+  if (typeof params.resultLimit === "number") body.result_limit = params.resultLimit;
+  if (params.searchStrategy) body.search_strategy = params.searchStrategy;
+  if (params.filters && Object.keys(params.filters).length) {
+    body.filters = params.filters;
+    if (params.filters.platforms?.length) body.platforms = params.filters.platforms;
+  }
+  if (params.bucketPolicy) body.bucket_policy = params.bucketPolicy;
   if (typeof params.advanceLimit === "number") body.advance_limit = params.advanceLimit;
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;

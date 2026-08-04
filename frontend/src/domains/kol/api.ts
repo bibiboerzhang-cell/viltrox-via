@@ -40,6 +40,8 @@ import {
   type VkpiKolPoolDetailBundleResponse,
   type VkpiKolPoolIntelligenceCard,
   type VkpiKolPoolItem,
+  type VkpiKolAnalysisReadiness,
+  type VkpiKolEvidenceQuality,
   type VkpiKolPoolRefreshState,
   type VkpiKolPoolWorkspaceResponse,
 } from '../../services/vkpi/kolPool-api';
@@ -115,6 +117,8 @@ export {
   type VkpiKolPoolDetailBundleResponse,
   type VkpiKolPoolIntelligenceCard,
   type VkpiKolPoolItem,
+  type VkpiKolAnalysisReadiness,
+  type VkpiKolEvidenceQuality,
   type VkpiKolPoolRefreshState,
   type VkpiKolPoolWorkspaceResponse,
   type VkpiKolUrlDeepCrawlResponse,

@@ -11,6 +11,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 START = ROOT / "scripts" / "start_apify_worker_pool.sh"
 STOP = ROOT / "scripts" / "stop_apify_worker_pool.sh"
+SUPERVISOR = ROOT / "scripts" / "ops" / "local_stack_supervisor.sh"
+START_ADMIN = ROOT / "scripts" / "start_admin.sh"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -50,6 +52,17 @@ def test_pool_scripts_default_to_fifteen_bulk_lanes_and_reject_sixteen() -> None
     assert "1..15" in start
     assert "^([1-9]|1[0-5])$" in start
     assert "^([1-9]|1[0-5])$" in stop
+
+
+def test_local_supervisor_and_admin_health_use_the_reviewed_sixteen_worker_topology() -> None:
+    supervisor = SUPERVISOR.read_text(encoding="utf-8")
+    start_admin = START_ADMIN.read_text(encoding="utf-8")
+
+    assert 'APIFY_WORKER_EXPECTED_INSTANCES="${APIFY_WORKER_EXPECTED_INSTANCES:-16}"' in supervisor
+    assert 'APIFY_WORKER_POOL_BULK_COUNT=15' in supervisor
+    assert '"$alive" -lt 16' in supervisor
+    assert 'bulk{1..15}' in supervisor
+    assert 'APIFY_WORKER_EXPECTED_INSTANCES="${APIFY_WORKER_EXPECTED_INSTANCES:-16}"' in start_admin
 
 
 def test_start_pool_default_launches_one_interactive_then_fifteen_bulk(

@@ -3,8 +3,22 @@ from __future__ import annotations
 import pytest
 
 from app.domains.analysis import cache_repo
-from app.domains.kol import audience_language, eleven_dimensions, llm_deep_analysis
+from app.domains.kol import analysis_readiness, audience_language, eleven_dimensions, llm_deep_analysis
 from app.domains.kol import pool as kol_pool
+
+
+@pytest.fixture(autouse=True)
+def _stub_readiness_denominator(monkeypatch):
+    monkeypatch.setattr(
+        analysis_readiness,
+        "load_readiness_video_evidence",
+        lambda *_args, **_kwargs: {
+            "items": [],
+            "limit": 200,
+            "truncated": False,
+            "sample_scope": "active_video_evidence_up_to_200",
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -98,3 +112,108 @@ def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
         "video_analysis_final_v1_keyframe_qa",
     )
     assert result["video_analysis"]["summary"]["ready_count"] == 50
+
+
+def test_detail_bundle_exposes_readiness_without_mutating_fit(monkeypatch):
+    monkeypatch.setattr(
+        kol_pool,
+        "get_item",
+        lambda _kol_pool_id: {
+            "item": {
+                "id": _kol_pool_id,
+                "viltrox_fit_score": 88,
+                "updated_at": "2026-07-20T00:00:00Z",
+            }
+        },
+    )
+    monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(eleven_dimensions, "load_persisted_dimensions_11", lambda _kol_pool_id: None)
+    monkeypatch.setattr(
+        llm_deep_analysis,
+        "get_kol_llm_deep_analysis",
+        lambda _kol_pool_id, *, limit: {"status": "missing", "count": 0, "items": [], "limit": limit},
+    )
+    monkeypatch.setattr(cache_repo, "get_analysis_cache_entries_for_targets", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        audience_language,
+        "audience_language_for_kol",
+        lambda _kol_pool_id: {"sample_size": 0, "languages": []},
+    )
+
+    result = kol_pool.detail_bundle(13053, video_limit=24, llm_limit=20)
+
+    assert result["claim_status"] == "descriptive_only"
+    assert result["analysis_readiness"]["level"] == "insufficient"
+    assert result["analysis_readiness"]["decision_mode"] == "abstain"
+    assert result["evidence_quality"]["gaps"]
+    assert result["video_analysis"]["summary"]["analysis_readiness"]["status"] == "insufficient"
+    assert result["item"]["viltrox_fit_score"] == 88
+    assert result["diagnostics"]["viltrox_fit_score_write"] is False
+    assert result["analysis_readiness"]["diagnostics"]["viltrox_fit_score_write"] is False
+
+
+def test_detail_bundle_readiness_uses_30_active_rows_not_24_display_rows(monkeypatch):
+    display_rows = [
+        {
+            "id": index,
+            "evidence_id": index,
+            "media_kind": "video",
+            "view_count": 1000,
+            "updated_at": "2026-07-20T00:00:00Z",
+        }
+        for index in range(1, 25)
+    ]
+    readiness_rows = [
+        {
+            "id": index,
+            "evidence_id": index,
+            "media_kind": "video",
+            "view_count": 1000,
+            "updated_at": "2026-07-20T00:00:00Z",
+        }
+        for index in range(1, 31)
+    ]
+
+    monkeypatch.setattr(
+        kol_pool,
+        "get_item",
+        lambda _kol_pool_id: {"item": {"id": _kol_pool_id, "updated_at": "2026-07-20T00:00:00Z"}},
+    )
+    monkeypatch.setattr(
+        kol_pool,
+        "_video_evidence_for_kol",
+        lambda *_args, **kwargs: [] if kwargs.get("only_with_cache") else display_rows,
+    )
+    monkeypatch.setattr(
+        analysis_readiness,
+        "load_readiness_video_evidence",
+        lambda *_args, **_kwargs: {
+            "items": readiness_rows,
+            "limit": 200,
+            "truncated": False,
+            "sample_scope": "active_video_evidence_up_to_200",
+        },
+    )
+    monkeypatch.setattr(eleven_dimensions, "load_persisted_dimensions_11", lambda _kol_pool_id: None)
+    monkeypatch.setattr(
+        llm_deep_analysis,
+        "get_kol_llm_deep_analysis",
+        lambda _kol_pool_id, *, limit: {"status": "empty", "count": 0, "items": [], "limit": limit},
+    )
+    monkeypatch.setattr(cache_repo, "get_analysis_cache_entries_for_targets", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        audience_language,
+        "audience_language_for_kol",
+        lambda _kol_pool_id: {"sample_size": 0, "languages": []},
+    )
+
+    result = kol_pool.detail_bundle(13053, video_limit=24, llm_limit=20)
+
+    assert len(result["item"]["video_evidence"]) == 24
+    assert result["analysis_readiness"]["key_sample_count"] == 30
+    assert result["analysis_readiness"]["evidence_coverage"]["sample_scope"] == (
+        "active_video_evidence_up_to_200"
+    )
+    assert result["analysis_readiness"]["evidence_coverage"]["denominator_status"] == (
+        "complete_for_scope"
+    )

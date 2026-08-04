@@ -114,6 +114,13 @@ function realKolId(item: any): number | null {
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
+function compactDate(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  const parsed = Date.parse(raw);
+  if (!raw || !Number.isFinite(parsed)) return "";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(parsed));
+}
+
 // 招牌一行(懒加载):undefined=加载中骨架,null=诚实空态,string=真数据。
 function SignatureLine({ apiToken, kolPoolId }: { apiToken?: string; kolPoolId: number | null }) {
   const [line, setLine] = React.useState<string | null | undefined>(() =>
@@ -170,8 +177,14 @@ function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl, onTog
   const flag = item.country ? (getCountryInfo(item.country)?.flag || "") : "";
   // 【D2 数据密度 2026-07-12】粉丝/均播提到显眼位:mono 数字 chip(值缺席=chip 不摆,绝不编 0)。
   const statChips: Array<[string, string, string]> = [];
-  if (item.followers != null && Number.isFinite(Number(item.followers))) statChips.push(["粉丝", formatNumber(item.followers), "全平台粉丝数(池行读数)"]);
-  if (item.avg_views != null && Number.isFinite(Number(item.avg_views))) statChips.push(["均播", formatNumber(item.avg_views), "平均播放量(池行读数,非去重触达)"]);
+  if (Number(item.followers) > 0 && Number.isFinite(Number(item.followers))) statChips.push(["粉丝", formatNumber(item.followers), "全平台粉丝数(池行读数)"]);
+  if (Number(item.avg_views) > 0 && Number.isFinite(Number(item.avg_views))) statChips.push(["均播", formatNumber(item.avg_views), "平均播放量(池行读数,非去重触达)"]);
+  if (Number(item.avg_likes) > 0 && Number.isFinite(Number(item.avg_likes))) statChips.push(["均赞", formatNumber(item.avg_likes), "平均点赞数(池行读数)"]);
+  if (Number(item.avg_comments) > 0 && Number.isFinite(Number(item.avg_comments))) statChips.push(["均评", formatNumber(item.avg_comments), "平均评论数(池行读数)"]);
+  const engagementDate = compactDate(item.engagement_rate_updated_at);
+  const genericEngagementVisible = item.real_er_pct == null
+    && item.engagement_rate_displayable === true
+    && item.engagement_rate != null;
   return e("div", {
     role: "button",
     tabIndex: 0,
@@ -213,9 +226,12 @@ function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl, onTog
     ),
     // ── 招牌拍法一行(既有 signature 聚合端点,失败安静缺席)──
     e("div", { className: "mt-2" }, e(SignatureLine, { apiToken, kolPoolId })),
-    // ── 底行:Real ER / 国家(粉丝已上移显眼位)+ 快捷动作(收藏/入项目,不用开抽屉)──
+    // ── 底行:经样本验证的 Real ER；普通互动率必须带来源和更新时间，且不能冒名──
     e("div", { className: "mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-white/[0.045] pt-1.5 text-[10px] tabular-nums text-slate-500" },
-      item.real_er_pct != null && e("span", null, "Real ER ", e("span", { className: "font-medium text-slate-300" }, formatPercent(item.real_er_pct, 2))),
+      item.real_er_pct != null && e("span", { title: item.real_er_sample_n ? `真实互动率 · 样本 ${item.real_er_sample_n}` : "后端已验证真实互动率" }, "Real ER ", e("span", { className: "font-medium text-slate-300" }, formatPercent(item.real_er_pct, 2))),
+      genericEngagementVisible && e("span", {
+        title: `互动率来源 ${item.engagement_rate_source}${engagementDate ? ` · 更新 ${engagementDate}` : ""}`,
+      }, "互动率 ", e("span", { className: "font-medium text-slate-300" }, formatPercent(item.engagement_rate, 2))),
       (flag || item.country) && e("span", null, `${flag ? flag + " " : ""}${item.country}`),
       e("span", { className: "ml-auto flex items-center gap-1" },
         e("span", { className: "text-slate-600 opacity-0 transition-opacity group-hover:opacity-100" }, "点开详情 →"),

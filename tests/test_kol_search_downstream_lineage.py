@@ -442,7 +442,7 @@ def test_summary_treats_terminal_partial_as_finished_but_not_ready() -> None:
     assert summary["required_tasks_complete"] is True
 
 
-def test_summary_requires_every_full_analysis_stage_before_decision_eligibility() -> None:
+def test_summary_separates_finished_jobs_from_observable_full_analysis() -> None:
     from app.workers import apify_jobs_worker_session as worker
 
     cursor = _FullAnalysisSummaryCursor()
@@ -458,5 +458,7 @@ def test_summary_requires_every_full_analysis_stage_before_decision_eligibility(
     assert summary["base_complete"] is True
     assert summary["requested_tasks_terminal"] is True
     assert summary["complete"] is True
-    assert summary["full_analysis_complete"] is True
-    assert summary["decision_eligible"] is True
+    assert summary["full_analysis_execution_complete"] is True
+    assert summary["full_analysis_observable"] is False
+    assert summary["full_analysis_complete"] is False
+    assert summary["decision_eligible"] is False

@@ -10,6 +10,7 @@ import urllib.parse
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.domains.kol.metric_truth import project_evidence_item_truth
 from app.domains.kol.pool_common import (
     _bio,  # noqa: F401  (kept available for sibling read-side parity)
     _float_or_none,
@@ -221,6 +222,11 @@ def _video_evidence_for_kol(
             e.like_count,
             e.comment_count,
             e.share_count,
+            e.source,
+            e.metrics_source,
+            e.metrics_scraped_at,
+            e.scrape_source,
+            e.scrape_status,
             e.duration_seconds,
             e.publish_date,
             e.posted_at,
@@ -326,6 +332,11 @@ def _video_evidence_for_kol(
             e.like_count,
             e.comment_count,
             e.share_count,
+            e.source,
+            NULL AS metrics_source,
+            NULL AS metrics_scraped_at,
+            NULL AS scrape_source,
+            NULL AS scrape_status,
             e.duration_seconds,
             e.publish_date,
             e.posted_at,
@@ -428,7 +439,7 @@ def _video_evidence_for_kol(
             if youtube_id
             else str(item.get("cached_video_url") or "").strip() or str(item.get("content_url") or "").strip()
         )
-        items.append(item)
+        items.append(project_evidence_item_truth(item))
     return items
 
 

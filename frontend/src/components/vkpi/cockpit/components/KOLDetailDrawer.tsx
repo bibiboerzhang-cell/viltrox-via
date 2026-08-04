@@ -36,6 +36,8 @@ import { RateCardPanel } from "./RateCardPanel";
 import { AudienceGeoPanel } from "./AudienceGeoPanel";
 import { OutreachCriticSignalCard } from "./OutreachCriticSignalCard";
 import { SafetyAuthenticityPanel } from "./SafetyAuthenticityPanel";
+import { KOLAnalysisTrustPanel } from "./KOLAnalysisTrustPanel";
+import { videoAnalysisGateMessage } from "./KOLDetailDrawer.gates";
 import { DRAWER_TABS, KOLDrawerBriefSkill, KOLDrawerCoopActions, KOLDrawerViewerContextBar, readStoredDrawerTab, storeDrawerTab } from "./KOLDetailDrawer.Subsections";
 import { useKOLDrawerViewerContext } from "./useKOLDrawerViewerContext";
 import {
@@ -57,23 +59,9 @@ import {
 // 行为不变重构:CopyEmailButton / KOLDetailAvatar / RepresentativeVideoCard 已搬到 ./KOLDetailDrawer.Panels,
 // 这里 re-export 以保留 KOLDetailDrawerSections.tsx 既有 `import { ... } from "./KOLDetailDrawer"` 的对外契约。
 export { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOLDetailDrawer.Panels";
+export { videoAnalysisGateMessage } from "./KOLDetailDrawer.gates";
 
 const e = React.createElement;
-
-export function videoAnalysisGateMessage(payload: any): string {
-  const gate = String(payload?.provider_gate_reason || payload?.reason || payload?.status || "").trim();
-  const readiness = String(payload?.model_readiness_status || "").trim();
-  if (/model_binding_blocked|readiness_not_production_ready|probe_evidence_missing|evaluation_evidence_missing/i.test(gate)) {
-    return `精确视频模型尚未通过生产就绪，本次未入队${readiness ? `（${readiness}）` : ""}。`;
-  }
-  if (/budget_guard_blocked|budget_denied|budget/i.test(gate)) {
-    return "预算授权尚未放行，本次未入队且未产生模型费用。";
-  }
-  if (/operator_disabled|provider_disabled|ai_disabled/i.test(gate)) {
-    return "AI 视频分析当前未启用，本次未入队；基础视频证据仍保留。";
-  }
-  return `视频深析未入队${gate ? `（${gate}）` : ""}。`;
-}
 
 // 【C1 Tab 化】抽屉内容区四 tab:按「用户看数据的心智」把既有 section 分组渲染(零改各 section 内部)。
 // 概览=这人是谁/分数为何/内容速览;深度分析=LLM/视频深析产物;受众=粉丝画像;合作=推进合作的动作面。
@@ -887,6 +875,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
 
       // ══ Tab「深度分析」:视频深析产物 + LLM 判断 + 档案 + 内容契合 ══
       activeTab === "deep" && e(React.Fragment, null,
+        // 先给出证据就绪、覆盖、关键样本与声明边界；覆盖度不是预测准确率。
+        e(KOLAnalysisTrustPanel, {
+          detailBundle,
+          item,
+          videoAnalysisSummary,
+        }),
         // 【A3】抓取中把轮询态透传给深析结果区标题旁的小徽标(复用组件内已有轮询态,零全局依赖)。
         e(KOLVideoAnalysisPanel, {
           apiToken,

@@ -18,15 +18,12 @@ export function FilterBar({ search, setSearch, country, setCountry, audienceType
     "命中本周 #side-by-side 的全域 KOL",
   ];
 
-  // 【K1 接真 2026-07-02】三档不再是展示占位:切换会真实改变「找达人」smart 搜索请求参数
-  // (SmartKolInputPanel.queueTextAdvance 的映射表,数字与此处 hint/title 一致):
-  //   balanced  平衡: 库内召回 创作者8+测评7 / 全网发现 30(每平台 12)
-  //   precision 精准: 库内召回 创作者10+测评5 / 全网发现 20(每平台 8,收窄)
-  //   discovery 探索: 库内召回 创作者5+测评5  / 全网发现 40(每平台 15,放宽)
+  // 同一份旧页 searchMode 状态由找达人工作台映射到业务策略；三档最终都以筛选后 30 人为目标，
+  // 差异是核心垂直/拓展/探索分桶配额，不再显示与真实请求漂移的旧发现数量。
   const modeChips = [
-    { key: "balanced",  label: "平衡",  hint: "库内 8+7 · 发现 30",  color: "rgba(168,85,247,0.30)", tip: "平衡:库内召回 创作者8+测评7 · 全网发现 30(每平台 12)。下次「找达人」文字搜索生效。" },
-    { key: "precision", label: "精准",  hint: "库内 10+5 · 发现 20", color: "rgba(34,197,94,0.30)",  tip: "精准:库内召回 创作者10+测评5 · 全网发现 20(每平台 8,收窄)。下次「找达人」文字搜索生效。" },
-    { key: "discovery", label: "探索",  hint: "库内 5+5 · 发现 40",  color: "rgba(6,182,212,0.30)",  tip: "探索:库内召回 创作者5+测评5 · 全网发现 40(每平台 15,放宽)。下次「找达人」文字搜索生效。" },
+    { key: "balanced",  label: "平衡",     hint: "18/9/3", color: "rgba(168,85,247,0.30)", tip: "筛选后目标 30 人:核心垂直 18 · 拓展 9 · 探索 3。下次「找达人」搜索生效。" },
+    { key: "precision", label: "垂直优先", hint: "24/5/1", color: "rgba(34,197,94,0.30)",  tip: "筛选后目标 30 人:核心垂直 24 · 拓展 5 · 探索 1。下次「找达人」搜索生效。" },
+    { key: "discovery", label: "拓展",     hint: "15/12/3", color: "rgba(6,182,212,0.30)", tip: "筛选后目标 30 人:核心垂直 15 · 拓展 12 · 探索 3。下次「找达人」搜索生效。" },
   ];
   
   const kindChips = [

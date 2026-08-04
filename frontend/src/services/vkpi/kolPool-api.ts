@@ -13,6 +13,8 @@ import type {
 export type {
   Row,
   VkpiKolPoolItem,
+  VkpiKolAnalysisReadiness,
+  VkpiKolEvidenceQuality,
   VkpiKolVideoAnalysisCacheEntry,
   VkpiKolVideoAnalysisCacheResponse,
   VkpiKolVideoAnalysisBatchResponse,

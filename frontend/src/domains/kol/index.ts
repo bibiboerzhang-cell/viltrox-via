@@ -48,6 +48,8 @@ export {
   type VkpiKolPoolDetailBundleResponse,
   type VkpiKolPoolIntelligenceCard,
   type VkpiKolPoolItem,
+  type VkpiKolAnalysisReadiness,
+  type VkpiKolEvidenceQuality,
   type VkpiKolPoolRefreshState,
   type VkpiKolPoolWorkspaceResponse,
   type VkpiKolUrlDeepCrawlResponse,

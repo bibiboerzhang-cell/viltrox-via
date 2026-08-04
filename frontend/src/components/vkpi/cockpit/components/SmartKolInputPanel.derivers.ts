@@ -1,7 +1,4 @@
-// SmartKolInputPanel 纯派生器 / 常量 / 类型(从 SmartKolInputPanel.Sections.tsx 再抽出,行为不变)。
-// 这里只放无 JSX 的纯函数、常量、类型——会话/召回派生、URL 结果归一、历史标签、相关度分档、
-// 徽章映射、曝光/新鲜度推导、分镜行归一等。展示型子组件仍留 .Sections.tsx(那里 import 回去)。
-// 红线:纯派生,只读会话/payload 字段,绝不写任何 viltrox_fit_score。
+// SmartKolInputPanel 纯派生器：只读会话/payload，绝不写 viltrox_fit_score。
 import {
   type VkpiKolRecallItem,
   type VkpiKolRecallResponse,
@@ -17,6 +14,9 @@ import {
   type Mode,
   type Row,
 } from "./SmartKolInputPanel.helpers";
+import { searchProgressContractFromSession } from "./SmartKolInputPanel.progress-derivers";
+
+export * from "./SmartKolInputPanel.progress-derivers";
 
 export const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
 // 刀2·流2 路A:贴账号 URL 自动分析的代表视频条数(dossier 据此出 LLM 账号分)。2 = 信号与成本/排队的折中;
@@ -42,7 +42,14 @@ export function readPersistedSearchDisplay(): PersistedSearchDisplay | null {
     const raw = window.sessionStorage.getItem(ACTIVE_SEARCH_DISPLAY_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedSearchDisplay;
-    return parsed && typeof parsed === "object" ? parsed : null;
+    if (!parsed || typeof parsed !== "object") return null;
+    // A terminal historical search may never poll again after page reload. Sanitize the cached
+    // card payload at the read boundary so an old pre-truth-contract snapshot cannot live forever
+    // in sessionStorage and keep rendering unreceipted metrics.
+    return {
+      ...parsed,
+      recallResult: parsed.recallResult ? sanitizeKolRecallSnapshot(parsed.recallResult) : null,
+    };
   } catch {
     return null;
   }
@@ -63,9 +70,13 @@ export function writePersistedSearchDisplay(value: PersistedSearchDisplay | null
 
 export function recallTopItems(response: VkpiKolRecallResponse | null): VkpiKolRecallItem[] {
   if (!response) return [];
-  const creator = Array.isArray(response.buckets?.creator) ? response.buckets.creator : [];
-  const reviewer = Array.isArray(response.buckets?.reviewer) ? response.buckets.reviewer : [];
-  return [...creator.slice(0, 3), ...reviewer.slice(0, 2)];
+  // 30 人是筛选后的可见结果合同，不只是后端诊断数字。优先使用服务端已经
+  // 排序好的 canonical items；旧响应没有 items 时才完整拼接两个兼容桶。
+  const items = Array.isArray(response.items) ? response.items : [];
+  if (items.length) return items;
+  const buckets = asRecord(response.buckets);
+  const names = ["creator", "reviewer", "unknown", ...Object.keys(buckets).filter((name) => !["creator", "reviewer", "unknown"].includes(name))];
+  return names.flatMap((name) => Array.isArray(buckets[name]) ? buckets[name] as VkpiKolRecallItem[] : []);
 }
 
 export function historySessionId(value: unknown): number | undefined {
@@ -84,6 +95,99 @@ export function sessionItems(session: VkpiKolSearchHistoryItem): Row[] {
       ? session.items_preview
       : [];
   return items.map((item) => asRecord(item));
+}
+
+function optionalSessionNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function recallBucket(value: unknown): string {
+  return cleanText(value) || "unknown";
+}
+
+function replayMetricValue(payload: Row, field: string, replayComplete: boolean): number | null {
+  const value = optionalSessionNumber(payload[field]);
+  if (value == null || !replayComplete) return null;
+  const truthFields = asRecord(asRecord(payload.data_truth).fields);
+  const receipt = asRecord(truthFields[field]);
+  return receipt.displayable === true ? value : null;
+}
+
+function bucketRecallItems(items: VkpiKolRecallItem[]): VkpiKolRecallResponse["buckets"] {
+  const buckets: Record<string, VkpiKolRecallItem[]> = { creator: [], reviewer: [], unknown: [] };
+  items.forEach((item) => {
+    const bucket = recallBucket(item.bucket);
+    (buckets[bucket] ||= []).push(item);
+  });
+  return buckets as VkpiKolRecallResponse["buckets"];
+}
+
+const RECALL_NUMERIC_TRUTH_FIELDS = [
+  "followers",
+  "avg_views",
+  "avg_likes",
+  "avg_comments",
+  "engagement_rate",
+  "real_er",
+] as const;
+
+function truthDisplayable(dataTruth: unknown, field: string): boolean {
+  const fields = asRecord(asRecord(dataTruth).fields);
+  return asRecord(fields[field]).displayable === true;
+}
+
+function sanitizeRepresentativeEvidence(value: unknown): Row[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const raw = asRecord(entry);
+    const next: Row = { ...raw };
+    for (const field of ["view_count", "like_count", "comment_count", "share_count"] as const) {
+      if (!truthDisplayable(raw.data_truth, field)) next[field] = null;
+    }
+    const url = cleanText(raw.content_url || raw.url);
+    const hasVisibleMetric = ["view_count", "like_count", "comment_count", "share_count"]
+      .some((field) => {
+        const numeric = Number(next[field]);
+        return Number.isFinite(numeric) && numeric >= 0 && truthDisplayable(raw.data_truth, field);
+      });
+    return url && hasVisibleMetric ? [next] : [];
+  });
+}
+
+/**
+ * Re-apply the backend truth contract to any client-side snapshot before it reaches the UI.
+ * This is a defense-in-depth boundary for older sessionStorage payloads; it never upgrades a
+ * missing receipt into a fact and it does not mutate the durable history row.
+ */
+export function sanitizeKolRecallSnapshot(response: VkpiKolRecallResponse): VkpiKolRecallResponse {
+  const items = recallTopItems(response).map((item) => {
+    const row = item as unknown as Row;
+    const next: Row = { ...row };
+    const sourceFields: Row = { ...asRecord(row.source_fields) };
+    RECALL_NUMERIC_TRUTH_FIELDS.forEach((field) => {
+      if (!truthDisplayable(row.data_truth, field)) next[field] = null;
+      sourceFields[field] = next[field] ?? null;
+    });
+    if (!truthDisplayable(row.data_truth, "real_er")) {
+      next.real_er_sample_n = null;
+      next.real_er_computed_at = null;
+      next.real_er_method = null;
+    }
+    next.exposure_potential = next.avg_views ?? null;
+    next.representative_evidence = sanitizeRepresentativeEvidence(row.representative_evidence);
+
+    const audienceReceipt = asRecord(asRecord(row.data_truth).fields).audience_estimated;
+    if (asRecord(audienceReceipt).displayable !== true) sourceFields.audience_preview = null;
+    next.source_fields = sourceFields;
+    return next as unknown as VkpiKolRecallItem;
+  });
+  return {
+    ...response,
+    items,
+    buckets: bucketRecallItems(items),
+  };
 }
 
 function meaningfulSnapshotValue(value: unknown): boolean {
@@ -223,8 +327,63 @@ export function mergeKolSearchSessionSnapshots(
   return merged;
 }
 
+const TRUTH_AUTHORITATIVE_RECALL_FIELDS = [
+  "followers",
+  "avg_views",
+  "avg_likes",
+  "avg_comments",
+  "engagement_rate",
+  "real_er",
+  "real_er_sample_n",
+  "real_er_computed_at",
+  "real_er_method",
+  "audience_estimated",
+  "audience_estimated_json",
+  "brand_collaborations_json",
+  "brand_collaborations_factual_json",
+  "representative_evidence",
+  "data_truth",
+] as const;
+
 function mergeRecallItemLists(previous: VkpiKolRecallItem[], incoming: VkpiKolRecallItem[]): VkpiKolRecallItem[] {
-  return mergeSearchSnapshotItems(previous as unknown as Row[], incoming as unknown as Row[]) as unknown as VkpiKolRecallItem[];
+  const incomingRows = incoming as unknown as Row[];
+  const mergedRows = mergeSearchSnapshotItems(previous as unknown as Row[], incomingRows);
+  const latestByIdentity = new Map<string, Row>();
+  incomingRows.forEach((item) => searchSnapshotItemKeys(item).forEach((key) => latestByIdentity.set(key, item)));
+
+  return mergedRows.map((item) => {
+    const latest = searchSnapshotItemKeys(item)
+      .map((key) => latestByIdentity.get(key))
+      .find(Boolean);
+    if (!latest) return item;
+
+    // The generic polling merge deliberately ignores nulls so sparse provider snapshots cannot
+    // erase useful fields. Truth-gated KOL metrics are the exception: a newer receipt may revoke
+    // a legacy/default value, and that null must delete the stale browser/session copy.
+    const replayIsIncomplete = latest.session_replay_complete === false;
+    const hasTruthContract = replayIsIncomplete || Object.prototype.hasOwnProperty.call(latest, "data_truth");
+    if (!hasTruthContract) return item;
+
+    const next: Row = { ...item };
+    TRUTH_AUTHORITATIVE_RECALL_FIELDS.forEach((field) => {
+      if (replayIsIncomplete || Object.prototype.hasOwnProperty.call(latest, field)) {
+        next[field] = latest[field] ?? null;
+      }
+    });
+
+    // Candidate cards historically fell back to source_fields for average metrics. Keep those
+    // aliases synchronized with the authoritative top-level projection so they cannot resurrect
+    // a value that the latest truth contract suppressed.
+    const nextSourceFields = { ...asRecord(next.source_fields) };
+    for (const field of ["followers", "avg_views", "avg_likes", "avg_comments", "engagement_rate", "real_er"] as const) {
+      if (replayIsIncomplete || Object.prototype.hasOwnProperty.call(latest, field)) {
+        nextSourceFields[field] = latest[field] ?? null;
+      }
+    }
+    if (replayIsIncomplete) nextSourceFields.audience_preview = null;
+    next.source_fields = nextSourceFields;
+    return next;
+  }) as unknown as VkpiKolRecallItem[];
 }
 
 export function mergeKolRecallSnapshots(
@@ -232,257 +391,21 @@ export function mergeKolRecallSnapshots(
   incoming: VkpiKolRecallResponse,
 ): VkpiKolRecallResponse {
   if (!previous) return incoming;
-  const creator = mergeRecallItemLists(previous.buckets?.creator || [], incoming.buckets?.creator || []);
-  const reviewer = mergeRecallItemLists(previous.buckets?.reviewer || [], incoming.buckets?.reviewer || []);
+  // Canonical ``items`` owns cross-bucket rank order.  Bucket-by-bucket merge
+  // used to regroup creator/reviewer rows and silently discard ``unknown``.
+  const items = mergeRecallItemLists(recallTopItems(previous), recallTopItems(incoming));
   return {
     ...previous,
     ...incoming,
     query: mergeSearchSnapshotRecord(asRecord(previous.query), asRecord(incoming.query)),
     ratio: mergeSearchSnapshotRecord(asRecord(previous.ratio), asRecord(incoming.ratio)) as unknown as VkpiKolRecallResponse["ratio"],
     diagnostics: mergeSearchSnapshotRecord(asRecord(previous.diagnostics), asRecord(incoming.diagnostics)),
-    buckets: { creator, reviewer },
-    items: [...creator, ...reviewer],
+    buckets: bucketRecallItems(items),
+    items,
     ...((previous as unknown as Row).llm_query_plan && !(incoming as unknown as Row).llm_query_plan
       ? { llm_query_plan: (previous as unknown as Row).llm_query_plan }
       : {}),
   } as VkpiKolRecallResponse;
-}
-
-export type SearchStageProgress = {
-  ready: number;
-  active: number;
-  failed: number;
-  notRequested: number;
-};
-
-export type SearchCurrentItem = {
-  itemId: number | null;
-  rank: number | null;
-  handle: string;
-  profileUrl: string;
-  status: string;
-  profileStatus: string;
-};
-
-export type SearchSessionProgress = {
-  phase: "queued" | "discovering" | "profiling" | "enriching" | "complete" | "partial" | "failed";
-  phaseLabel: string;
-  target: number;
-  basicVisible: number;
-  profileReady: number;
-  profileCompleted: number;
-  profileSucceeded: number;
-  profileFailed: number;
-  profileRemaining: number;
-  currentItem: SearchCurrentItem | null;
-  deepReady: number;
-  deepPartial: number;
-  failed: number;
-  accounted: number;
-  downstreamTracked: boolean;
-  video: SearchStageProgress;
-  comments: SearchStageProgress;
-  audience: SearchStageProgress;
-  /** True only when the backend emitted at least one strict completion-contract field. */
-  completionContractExplicit: boolean;
-  baseComplete: boolean;
-  /** Every requested stage is terminal. This is not the same as full analysis. */
-  requestedTasksTerminal: boolean;
-  /** Strict backend truth: video + comments + audience all succeeded for every target. */
-  fullAnalysisComplete: boolean;
-  /** Strict backend truth: the result has enough complete evidence for a decision. */
-  decisionEligible: boolean;
-  /** Backward-compatible alias used by the polling loop. */
-  requiredTasksComplete: boolean;
-};
-
-function terminalSearchTaskStatus(value: unknown): boolean {
-  const status = cleanText(value).toLowerCase();
-  return terminalSessionStatus(status) || ["nothing_to_queue", "skipped", "not_requested", "ai_disabled"].includes(status);
-}
-
-function downstreamStageProgress(value: unknown): SearchStageProgress {
-  const stage = asRecord(value);
-  return {
-    ready: Math.max(0, Number(stage.ready) || 0),
-    active: Math.max(0, Number(stage.active) || 0),
-    failed: Math.max(0, Number(stage.failed) || 0),
-    notRequested: Math.max(0, Number(stage.not_requested ?? stage.notRequested) || 0),
-  };
-}
-
-/** Derive a truthful staged view from existing backend summary/count fields; never invent totals. */
-export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null): SearchSessionProgress {
-  const summary = asRecord(session?.result_summary);
-  const batch = asRecord(summary.profile_batch_advance);
-  const smartJob = asRecord(summary.smart_search_profile_advance_job);
-  const discovery = asRecord(summary.new_discovery);
-  const explicitProgress = asRecord(summary.progress || smartJob.progress || batch.progress);
-  const explicitContractBoolean = (key: string): boolean | undefined => {
-    const value = explicitProgress[key] ?? summary[key];
-    return typeof value === "boolean" ? value : undefined;
-  };
-  const completionContractExplicit = [
-    "base_complete",
-    "requested_tasks_terminal",
-    "full_analysis_complete",
-    "decision_eligible",
-  ].some((key) => explicitContractBoolean(key) !== undefined);
-  const downstreamTracked = ["video", "comments", "audience"].some((key) => Object.keys(asRecord(explicitProgress[key])).length > 0);
-  const video = downstreamStageProgress(explicitProgress.video);
-  const comments = downstreamStageProgress(explicitProgress.comments);
-  const audience = downstreamStageProgress(explicitProgress.audience);
-  const downstreamStages = [video, comments, audience];
-  const downstreamActive = downstreamStages.reduce((sum, stage) => sum + stage.active, 0);
-  // `not_requested` is a terminal, intentional state (for example external AI is disabled by the
-  // production-readiness gate).  It must not turn an otherwise complete base/profile/comments/
-  // audience flow into a false failure.  The backend owns which tasks are required through
-  // `required_tasks_complete`; only a real failed downstream task makes this view partial.
-  const downstreamIncomplete = downstreamTracked && downstreamStages.some((stage) => stage.failed > 0);
-  const downstreamNotRequested = downstreamTracked && downstreamStages.some((stage) => stage.notRequested > 0);
-  const counts = asRecord(batch.counts || smartJob.advance_counts || explicitProgress.counts);
-  // 新契约严格区分「档案补全」profile_* 与「完整分析」complete_*。完整分析只能读
-  // complete_ready/complete_partial；仅旧后端缺 complete_* 时才回退旧 advance_counts。
-  const profileReady = Math.max(0, Number(explicitProgress.profile_ready ?? counts.ready) || 0);
-  const ready = Math.max(0, Number(explicitProgress.complete_ready ?? counts.ready) || 0);
-  const partial = Math.max(0, Number(explicitProgress.complete_partial ?? counts.partial) || 0);
-  const failed = Math.max(0, Number(counts.failed ?? explicitProgress.profile_failed) || 0)
-    + Math.max(0, Number(counts.errors) || 0);
-  const skipped = Math.max(0, Number(counts.skipped ?? explicitProgress.profile_skipped) || 0);
-  const accounted = ready + partial + failed + skipped;
-  const query = asRecord(summary.query);
-  const recallItemCount = session
-    ? sessionItems(session).filter((item) => cleanText(item.item_type) !== "new_creator").length
-    : 0;
-  const target = Math.max(
-    0,
-    Number(explicitProgress.total) || 0,
-    Number(batch.selected) || 0,
-    Number(smartJob.recall_returned) || 0,
-    Number(query.limit) || 0,
-    accounted,
-    recallItemCount,
-  );
-  const explicitBase = Math.max(0, Number(explicitProgress.base) || 0);
-  const basicVisible = Math.min(
-    target || explicitBase || Number(summary.items_written) || recallItemCount,
-    Math.max(explicitBase, recallItemCount, Number(summary.items_written) || 0),
-  );
-  const profileFailed = Math.max(0, Number(explicitProgress.profile_failed ?? counts.failed) || 0);
-  const hasProfileCompleted = Object.prototype.hasOwnProperty.call(explicitProgress, "profile_completed");
-  const rawProfileCompleted = hasProfileCompleted
-    ? Math.max(0, Number(explicitProgress.profile_completed) || 0)
-    : Math.max(0, profileReady + profileFailed);
-  const profileCompleted = target > 0 ? Math.min(target, rawProfileCompleted) : rawProfileCompleted;
-  const hasProfileSucceeded = Object.prototype.hasOwnProperty.call(explicitProgress, "profile_succeeded");
-  const rawProfileSucceeded = hasProfileSucceeded
-    ? Math.max(0, Number(explicitProgress.profile_succeeded) || 0)
-    : Math.max(0, profileCompleted - profileFailed);
-  const profileSucceeded = target > 0 ? Math.min(target, rawProfileSucceeded) : rawProfileSucceeded;
-  const profileRemaining = Object.prototype.hasOwnProperty.call(explicitProgress, "profile_remaining")
-    ? Math.max(0, Number(explicitProgress.profile_remaining) || 0)
-    : Math.max(0, target - profileCompleted);
-  const currentItemRow = asRecord(explicitProgress.current_item || batch.current_item);
-  const currentItem = Object.keys(currentItemRow).length > 0
-    ? {
-        itemId: Number(currentItemRow.item_id) > 0 ? Number(currentItemRow.item_id) : null,
-        rank: Number(currentItemRow.rank) > 0 ? Number(currentItemRow.rank) : null,
-        handle: cleanText(currentItemRow.handle),
-        profileUrl: cleanText(currentItemRow.profile_url),
-        status: cleanText(currentItemRow.status),
-        profileStatus: cleanText(currentItemRow.profile_status),
-      }
-    : null;
-  const taskStatuses = [
-    Object.keys(smartJob).length ? cleanText(smartJob.advance_status || smartJob.status) : "",
-    Object.keys(batch).length ? cleanText(batch.status) : "",
-    Object.keys(discovery).length ? cleanText(discovery.status) : "",
-  ].filter(Boolean);
-  const explicitPhase = cleanText(explicitProgress.phase || summary.phase || smartJob.phase || batch.phase).toLowerCase();
-  const explicitPhaseTerminal = ["failed", "blocked", "complete", "completed", "ready", "done", "partial"].includes(explicitPhase);
-  const explicitPhaseActive = ["queued", "discovering", "discovery", "profiling", "profile", "enriching", "materializing", "analysis", "running"].includes(explicitPhase);
-  const backendRequestedTasksTerminal = explicitContractBoolean("requested_tasks_terminal")
-    ?? explicitContractBoolean("required_tasks_complete");
-  const requiredTasksComplete = typeof backendRequestedTasksTerminal === "boolean"
-    ? backendRequestedTasksTerminal && downstreamActive === 0
-    : downstreamActive > 0 || explicitPhaseActive
-      ? false
-      : explicitPhaseTerminal
-        ? true
-        : taskStatuses.length
-          ? taskStatuses.every(terminalSearchTaskStatus)
-          : (target > 0 && accounted >= target) || Boolean(session && terminalSessionStatus(session.status));
-  const baseComplete = explicitContractBoolean("base_complete") ?? (target > 0 && basicVisible >= target);
-  const requestedTasksTerminal = requiredTasksComplete;
-  // Do not infer these strict states from legacy `complete`/`required_tasks_complete`: those fields
-  // only mean that requested work stopped, and may include `not_requested` downstream stages.
-  const strictStagesReady = downstreamTracked && target > 0 && downstreamStages.every(
-    (stage) => stage.ready >= target && stage.active === 0 && stage.failed === 0 && stage.notRequested === 0,
-  );
-  const fullAnalysisComplete = explicitContractBoolean("full_analysis_complete") === true && strictStagesReady;
-  const decisionEligible = explicitContractBoolean("decision_eligible") === true
-    && fullAnalysisComplete
-    && profileFailed === 0
-    && profileSucceeded >= target;
-  const discoveryStatus = cleanText(discovery.status).toLowerCase();
-  let phase: SearchSessionProgress["phase"] = "queued";
-  if (downstreamActive > 0) phase = "enriching";
-  else if (fullAnalysisComplete) phase = "complete";
-  else if (["failed", "blocked"].includes(explicitPhase)) phase = "failed";
-  else if (["complete", "completed", "ready", "done"].includes(explicitPhase)) phase = downstreamIncomplete ? "partial" : "complete";
-  else if (explicitPhase === "partial") phase = "partial";
-  else if (["discovering", "discovery"].includes(explicitPhase)) phase = "discovering";
-  else if (["enriching", "materializing", "analysis"].includes(explicitPhase)) phase = "enriching";
-  else if (["profiling", "profile"].includes(explicitPhase)) phase = "profiling";
-  else if (failed > 0 && ready + partial === 0 && requiredTasksComplete) phase = "failed";
-  else if (requiredTasksComplete && target > 0 && ready >= target) phase = "complete";
-  else if (requiredTasksComplete && (partial > 0 || failed > 0)) phase = "partial";
-  else if (Object.keys(discovery).length > 0 && !terminalSearchTaskStatus(discoveryStatus)) phase = "discovering";
-  else if (accounted > 0 && accounted >= target && !requiredTasksComplete) phase = "enriching";
-  else if (accounted > 0 || recallItemCount > 0) phase = "profiling";
-  const phaseLabel: Record<SearchSessionProgress["phase"], string> = {
-    queued: "等待开始",
-    discovering: "全网发现中",
-    profiling: "基础资料补全中",
-    enriching: "后台深析中",
-    complete: fullAnalysisComplete
-      ? "完整分析已完成"
-      : completionContractExplicit && requestedTasksTerminal
-        ? "已请求阶段已结束"
-        : downstreamNotRequested
-          ? "基础数据已完成"
-          : requestedTasksTerminal
-            ? "已请求阶段已结束"
-            : "分析已结束",
-    partial: "阶段结果可查看",
-    failed: "分析未完成",
-  };
-  return {
-    phase,
-    phaseLabel: phaseLabel[phase],
-    target,
-    basicVisible,
-    profileReady,
-    profileCompleted,
-    profileSucceeded,
-    profileFailed,
-    profileRemaining,
-    currentItem,
-    deepReady: ready,
-    deepPartial: partial,
-    failed,
-    accounted,
-    downstreamTracked,
-    video,
-    comments,
-    audience,
-    completionContractExplicit,
-    baseComplete,
-    requestedTasksTerminal,
-    fullAnalysisComplete,
-    decisionEligible,
-    requiredTasksComplete,
-  };
 }
 
 export function sessionAdvanceCounts(session: VkpiKolSearchHistoryItem | null): Row {
@@ -512,6 +435,15 @@ export function discoveryBrandExcludedFromSession(session: VkpiKolSearchHistoryI
 }
 
 export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
+  const contract = searchProgressContractFromSession(session);
+  if (contract) {
+    const active = (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0);
+    if (active > 0 || contract.blockedByWorker) return false;
+    if (contract.requestedUnits != null && contract.requestedUnits > 0) {
+      return contract.terminalUnits != null && contract.terminalUnits >= contract.requestedUnits;
+    }
+    return ["ready", "partial", "failed", "cancelled", "canceled"].includes(contract.state);
+  }
   const summary = asRecord(session.result_summary);
   const progress = asRecord(summary.progress);
   const requestedTasksTerminal = progress.requested_tasks_terminal
@@ -557,65 +489,128 @@ export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem |
 }
 
 export function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolRecallResponse {
-  const creator: VkpiKolRecallItem[] = [];
-  const reviewer: VkpiKolRecallItem[] = [];
+  const items: VkpiKolRecallItem[] = [];
+  const legacyMissingFields = [
+    "match_tier",
+    "candidate_bucket",
+    "why_fit",
+    "evidence_quality",
+    "representative_evidence",
+    "robust_rank_score",
+    "unknown_fields",
+    "data_truth",
+  ];
   sessionItems(session).forEach((item) => {
-    // 三框:框2 只放库内召回(recall_candidate);new_creator(全网发现)归框3,见 discoveryItemsFromSession。
-    if (cleanText(item.item_type) === "new_creator") return;
     const payload = asRecord(item.payload);
-    const bucket: "creator" | "reviewer" = cleanText(payload.bucket) === "reviewer" ? "reviewer" : "creator";
+    // 三框:框2 只放库内召回。旧实现仅排除 new_creator，会把 URL/unknown
+    // 编排项误画成 KOL；滚动升级时只额外兼容带明确 v2 recall schema 的行。
+    const itemType = cleanText(item.item_type);
+    if (itemType !== "recall_candidate" && cleanText(payload.session_payload_schema) !== "kol_recall_candidate_v2") return;
+    const bucket = recallBucket(payload.bucket);
+    const replayContract = cleanText(payload.session_payload_schema) || "legacy_incomplete";
+    const replayComplete = replayContract === "kol_recall_candidate_v2" && payload.session_replay_complete === true;
+    const missingReplayFields = replayComplete
+      ? []
+      : legacyMissingFields.filter((field) => !(field in payload));
+    const persistedScore = optionalSessionNumber(item.score);
+    const payloadSource = asRecord(payload.source_fields);
+    const replayMetrics = {
+      followers: replayMetricValue(payload, "followers", replayComplete),
+      avg_views: replayMetricValue(payload, "avg_views", replayComplete),
+      avg_likes: replayMetricValue(payload, "avg_likes", replayComplete),
+      avg_comments: replayMetricValue(payload, "avg_comments", replayComplete),
+      engagement_rate: replayMetricValue(payload, "engagement_rate", replayComplete),
+      real_er: replayMetricValue(payload, "real_er", replayComplete),
+    };
+    const replaySourceFields: Row = {
+      ...payload,
+      ...payloadSource,
+      ...replayMetrics,
+      session_replay_contract: replayContract,
+      session_replay_complete: replayComplete,
+      session_replay_missing_fields: missingReplayFields,
+    };
+    if (!replayComplete) replaySourceFields.audience_preview = null;
     const row = {
+      ...payload,
       bucket,
       kol_pool_id: Number(item.kol_pool_id || payload.kol_pool_id || 0),
-      handle: display(payload.handle || payload.display_name || payload.channel_name, "unknown"),
+      handle: cleanText(payload.handle || payload.display_name || payload.channel_name),
       display_name: cleanText(payload.display_name || payload.channel_name || payload.handle),
       platform: cleanText(payload.platform),
-      profile_type: display(payload.profile_type || item.item_type, "creator"),
-      followers: Number(payload.followers || 0) || null,
+      profile_type: display(payload.profile_type, "unknown"),
+      // 历史指标也必须通过与实时搜索相同的字段级 truth receipt。旧 v1 会话
+      // 没有来源合同，只保留身份/排序，不继续展示当年的无来源数字。
+      ...replayMetrics,
+      data_truth: replayComplete ? payload.data_truth : null,
+      representative_evidence: replayComplete && Array.isArray(payload.representative_evidence)
+        ? payload.representative_evidence
+        : [],
       avatar_url: cleanText(payload.avatar_url),
       profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
-      recall_rank_score: Number(item.score ?? payload.recall_rank_score ?? payload.vector_score ?? 0),
-      vector_score: Number(payload.vector_score ?? item.score ?? 0),
-      display_rank_score: Number(payload.display_rank_score ?? item.score ?? payload.recall_rank_score ?? 0),
+      robust_rank_score: optionalSessionNumber(payload.robust_rank_score),
+      retrieval_score: optionalSessionNumber(payload.retrieval_score),
+      recall_rank_score: optionalSessionNumber(payload.recall_rank_score) ?? persistedScore,
+      vector_score: optionalSessionNumber(payload.vector_score),
+      display_rank_score: optionalSessionNumber(payload.display_rank_score),
+      type_rank_score: optionalSessionNumber(payload.type_rank_score ?? payload.type_score),
       relevance_flags: Array.isArray(payload.relevance_flags) ? (payload.relevance_flags as unknown[]).map(cleanText).filter(Boolean) : [],
       relevance_tier_hint: cleanText(payload.relevance_tier_hint),
-      type_label: bucket === "reviewer" ? "测评号" : "创作者",
-      creator_type_score: bucket === "creator" ? 1 : 0,
-      reviewer_type_score: bucket === "reviewer" ? 1 : 0,
-      recall_reason: cleanText(payload.evidence || payload.sample_title),
-      // why_fit:实时/历史会话项透传(payload.why_fit 由后端 attach_recall_result 写入;缺则回退召回理由)。
+      type_label: cleanText(payload.type_label) || (bucket === "reviewer" ? "测评号" : bucket === "creator" ? "创作者" : "未分类"),
+      creator_type_score: optionalSessionNumber(payload.creator_type_score),
+      reviewer_type_score: optionalSessionNumber(payload.reviewer_type_score),
+      recall_reason: cleanText(payload.recall_reason || payload.evidence || payload.sample_title),
       why_fit: cleanText(payload.why_fit || payload.evidence),
       // 三引擎展示信号透传(纯只读;后端在会话项 payload 写入则亮起,否则静默不渲染)。
       fit_verdict: cleanText(payload.fit_verdict),
       creator_type: cleanText(payload.creator_type),
-      exposure_potential: Number(payload.exposure_potential ?? payload.avg_views ?? 0) || null,
-      source_fields: payload,
+      exposure_potential: Number(payload.exposure_potential ?? replayMetrics.avg_views ?? 0) || null,
+      session_replay_contract: replayContract,
+      session_replay_complete: replayComplete,
+      session_replay_missing_fields: missingReplayFields,
+      source_fields: replaySourceFields,
     } as VkpiKolRecallItem;
-    if (bucket === "reviewer") reviewer.push(row);
-    else creator.push(row);
+    items.push(row);
   });
   const summary = asRecord(session.result_summary);
   const querySummary = asRecord(summary.query);
   const diagnostics = asRecord(summary.diagnostics);
+  const replayContract = asRecord(summary.replay_contract);
+  const buckets = bucketRecallItems(items);
+  const creator = buckets.creator || [];
+  const reviewer = buckets.reviewer || [];
+  const unknown = buckets.unknown || [];
+  const incompleteCount = items.filter((item) => item.session_replay_complete !== true).length;
+  const replaySchema = cleanText(replayContract.schema);
+  const replayComplete = replayContract.complete === true && incompleteCount === 0;
+  // 空的旧会话没有 item 可供 incompleteCount 识别，不能因此伪装成 v2 完整回放。
+  const resolvedReplayContract = replaySchema || (replayComplete ? "kol_recall_candidate_v2" : "legacy_incomplete");
   return {
-    method: "search_session_history",
+    method: cleanText(summary.method) || "search_session_history",
     query: { query_text: display(querySummary.query_text || summary.query || session.query_text, "") },
     ratio: {
-      creator_quota: creator.length,
-      reviewer_quota: reviewer.length,
-      policy: "history",
-      mixed_policy: "history",
-      dedupe: true,
+      creator_quota: Number(asRecord(summary.ratio).creator_quota ?? creator.length),
+      reviewer_quota: Number(asRecord(summary.ratio).reviewer_quota ?? reviewer.length),
+      policy: cleanText(asRecord(summary.ratio).policy) || "history",
+      mixed_policy: cleanText(asRecord(summary.ratio).mixed_policy) || "history",
+      dedupe: asRecord(summary.ratio).dedupe !== false,
     },
-    items: [...creator, ...reviewer],
-    buckets: { creator, reviewer },
+    items,
+    buckets,
     diagnostics: {
       ...diagnostics,
-      candidate_count: Number(diagnostics.candidate_count ?? session.item_count ?? creator.length + reviewer.length),
+      candidate_count: Number(diagnostics.candidate_count ?? items.length),
       creator_returned: Number(diagnostics.creator_returned ?? creator.length),
       reviewer_returned: Number(diagnostics.reviewer_returned ?? reviewer.length),
-      returned_count: creator.length + reviewer.length,
+      unknown_returned: Number(diagnostics.unknown_returned ?? unknown.length),
+      returned_count: items.length,
+      session_replay_contract: resolvedReplayContract,
+      session_replay_complete: replayComplete,
+      session_replay_incomplete_count: incompleteCount,
+      session_replay_source_count: Number(replayContract.source_count ?? items.length),
+      session_replay_persisted_count: Number(replayContract.persisted_count ?? items.length),
     },
+    evaluation_status: asRecord(summary.evaluation_status),
   } satisfies VkpiKolRecallResponse;
 }
 
@@ -666,7 +661,9 @@ function discoveryItemsFromSessionRaw(session: VkpiKolSearchHistoryItem | null):
       display_name: cleanText(payload.display_name || payload.channel_name || payload.handle),
       platform: cleanText(payload.platform),
       profile_type: display(payload.profile_type || "creator", "creator"),
-      followers: Number(payload.followers || payload.follower_count || payload.subscriber_count || payload.subscribers || payload.avg_views || payload.views || 0) || null,
+      // 粉丝身份只接受明确的 follower/subscriber 字段。avg_views/views 是内容表现，
+      // 绝不能在缺粉丝时冒充粉丝数，否则会同时污染卡片身份和触达筛选。
+      followers: Number(payload.followers || payload.follower_count || payload.subscriber_count || payload.subscribers || 0) || null,
       avatar_url: cleanText(payload.avatar_url),
       profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
       recall_rank_score: Number(item.score ?? payload.score ?? 0),

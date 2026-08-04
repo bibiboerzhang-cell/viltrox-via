@@ -131,6 +131,7 @@ export function AccountUrlInlineOverview({
   const updatedAt = dateTimeLabel(item.last_seen_at || item.updated_at || freshness.last_refresh_at);
   type MetricAggregate = { sum: number; count: number };
   const sumMetric = (key: string): MetricAggregate => dossierVideos.reduce<MetricAggregate>((acc, video) => {
+    if (video[key] === null || video[key] === undefined || video[key] === "") return acc;
     const value = Number(video[key]);
     return Number.isFinite(value) && value >= 0
       ? { sum: acc.sum + value, count: acc.count + 1 }
@@ -149,20 +150,40 @@ export function AccountUrlInlineOverview({
     ? metric.sum / metric.count
     : fallback;
   const hasVideoMetricSample = sampledViews.count > 0 || sampledLikes.count > 0 || sampledComments.count > 0;
+  const finiteNonNegative = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const metricNumberLabel = (value: unknown): string => {
+    const parsed = finiteNonNegative(value);
+    if (parsed == null) return "";
+    return parsed === 0 ? "0" : numberLabel(parsed);
+  };
+  const sampledOrAccount = (metric: MetricAggregate, fallback: unknown) => finiteNonNegative(avgFromSample(metric, fallback));
+  const accountEngagement = finiteNonNegative(item.engagement_rate);
   const metricRows = [
-    { label: "样本总播放", value: sampledViews.count ? numberLabel(sampledViews.sum) : "—", icon: Video, color: "text-cyan-300" },
-    { label: hasVideoMetricSample ? "样本均播放" : "账号均播放", value: numberLabel(avgFromSample(sampledViews, item.avg_views)), icon: Eye, color: "text-sky-300" },
-    { label: hasVideoMetricSample ? "样本均点赞" : "账号均点赞", value: numberLabel(avgFromSample(sampledLikes, item.avg_likes)), icon: Heart, color: "text-rose-300" },
-    { label: hasVideoMetricSample ? "样本均评论" : "账号均评论", value: numberLabel(avgFromSample(sampledComments, item.avg_comments)), icon: MessageCircle, color: "text-violet-300" },
-    {
-      label: sampleEngagement != null ? "样本互动率" : "账号互动率",
-      value: sampleEngagement != null
-        ? `${sampleEngagement.toFixed(2)}%`
-        : item.engagement_rate == null ? "—" : percentLabel(item.engagement_rate),
-      icon: Activity,
-      color: "text-emerald-300",
-    },
-  ];
+    sampledViews.count > 0
+      ? { label: "样本总播放", value: metricNumberLabel(sampledViews.sum), icon: Video, color: "text-cyan-300" }
+      : null,
+    sampledOrAccount(sampledViews, item.avg_views) != null
+      ? { label: sampledViews.count > 0 ? "样本均播放" : "账号均播放", value: metricNumberLabel(sampledOrAccount(sampledViews, item.avg_views)), icon: Eye, color: "text-sky-300" }
+      : null,
+    sampledOrAccount(sampledLikes, item.avg_likes) != null
+      ? { label: sampledLikes.count > 0 ? "样本均点赞" : "账号均点赞", value: metricNumberLabel(sampledOrAccount(sampledLikes, item.avg_likes)), icon: Heart, color: "text-rose-300" }
+      : null,
+    sampledOrAccount(sampledComments, item.avg_comments) != null
+      ? { label: sampledComments.count > 0 ? "样本均评论" : "账号均评论", value: metricNumberLabel(sampledOrAccount(sampledComments, item.avg_comments)), icon: MessageCircle, color: "text-violet-300" }
+      : null,
+    sampleEngagement != null || accountEngagement != null
+      ? {
+          label: sampleEngagement != null ? "样本互动率" : "账号互动率",
+          value: sampleEngagement != null ? `${sampleEngagement.toFixed(2)}%` : percentLabel(accountEngagement),
+          icon: Activity,
+          color: "text-emerald-300",
+        }
+      : null,
+  ].filter((metric): metric is { label: string; value: string; icon: typeof Video; color: string } => Boolean(metric?.value));
 
   return (
     <section className="mt-2 overflow-hidden rounded-lg border border-white/[0.07] bg-black/15" data-testid="account-url-inline-overview">
@@ -177,17 +198,23 @@ export function AccountUrlInlineOverview({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-px bg-white/[0.04] sm:grid-cols-5">
-        {metricRows.map((metric) => {
-          const Icon = metric.icon;
-          return (
-            <div key={metric.label} className="bg-slate-950/55 px-3 py-2.5">
-              <div className="flex items-center gap-1 text-[9px] text-slate-500"><Icon size={10} className={metric.color} /> {metric.label}</div>
-              <div className="mt-1 text-[15px] font-semibold tabular-nums text-slate-100">{metric.value || "—"}</div>
-            </div>
-          );
-        })}
-      </div>
+      {metricRows.length ? (
+        <div data-testid="account-observed-metrics" className="grid grid-cols-2 gap-px bg-white/[0.04] sm:grid-cols-5">
+          {metricRows.map((metric) => {
+            const Icon = metric.icon;
+            return (
+              <div key={metric.label} className="bg-slate-950/55 px-3 py-2.5">
+                <div className="flex items-center gap-1 text-[9px] text-slate-500"><Icon size={10} className={metric.color} /> {metric.label}</div>
+                <div className="mt-1 text-[15px] font-semibold tabular-nums text-slate-100">{metric.value}</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div data-testid="account-metrics-completion-action" className="border-b border-white/[0.04] bg-slate-950/35 px-3 py-2 text-[9px] text-slate-500">
+          补全表现数据 · 需要入库播放、点赞、评论或互动率证据
+        </div>
+      )}
       {hasVideoMetricSample ? (
         <div className="border-t border-white/[0.04] bg-slate-950/35 px-3 py-1.5 text-[8.5px] text-slate-500">
           KPI 口径：已入库 {dossierVideos.length} 条视频样本聚合 · 非平台全量实时值

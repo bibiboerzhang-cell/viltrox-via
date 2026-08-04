@@ -6,7 +6,7 @@ import { FolderPlus, Info, Loader2, MessageSquare, RefreshCw, Sparkles, UserPlus
 
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
-import { cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
+import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 import type { SearchSessionProgress } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
@@ -16,6 +16,253 @@ type SessionBanner = {
   label: string;
   note: string;
 } | null;
+
+export type CandidateBusinessLane = "core" | "expansion" | "exploration";
+
+export function candidateBusinessLane(item: VkpiKolRecallItem): CandidateBusinessLane {
+  if (cleanText(item.match_tier) === "backfill") return "exploration";
+  const explicit = cleanText(item.candidate_bucket ?? item.business_lane ?? item.candidate_lane);
+  if (explicit === "core_vertical") return "core";
+  if (explicit === "expansion") return "expansion";
+  // 滚动升级兼容：旧服务只有 reviewer/creator。这个映射只负责摆放，不声称已执行新业务算法。
+  return cleanText(item.bucket) === "reviewer" ? "core" : "expansion";
+}
+
+export function hasExplicitBusinessLanes(items: VkpiKolRecallItem[]): boolean {
+  return items.some((item) => Boolean(cleanText(item.candidate_bucket ?? item.business_lane ?? item.candidate_lane ?? item.match_tier)));
+}
+
+function CandidateLaneGroups({
+  items,
+  renderItem,
+}: {
+  items: VkpiKolRecallItem[];
+  renderItem: (item: VkpiKolRecallItem, sourceIndex: number) => JSX.Element;
+}) {
+  const groups: Array<{
+    key: CandidateBusinessLane;
+    title: string;
+    note: string;
+    cls: string;
+  }> = [
+    { key: "core", title: "核心垂直", note: "产品和垂类证据优先", cls: "border-violet-300/18 bg-violet-400/[0.025] text-violet-100" },
+    { key: "expansion", title: "拓展型", note: "相邻内容与跨圈层机会", cls: "border-cyan-300/18 bg-cyan-400/[0.025] text-cyan-100" },
+    { key: "exploration", title: "探索 / 补位", note: "严格相关候选不足时单独列出", cls: "border-amber-300/18 bg-amber-400/[0.025] text-amber-100" },
+  ];
+  const explicit = hasExplicitBusinessLanes(items);
+  return (
+    <div className="space-y-2">
+      {!explicit && items.length ? (
+        <div className="rounded-md border border-amber-300/18 bg-amber-400/[0.055] px-2.5 py-1.5 text-[9.5px] leading-relaxed text-amber-100/85">
+          旧服务兼容：本批尚未返回业务分桶，暂按原有“测评号 / 创作者”映射摆放；不代表新筛选和30人配额已由服务端验证。
+        </div>
+      ) : null}
+      {groups.map((group) => {
+        const groupItems = items.filter((item) => candidateBusinessLane(item) === group.key);
+        if (!groupItems.length) return null;
+        return (
+          <div key={group.key} className={`rounded-lg border p-2 ${group.cls}`} data-candidate-lane={group.key}>
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-1.5">
+              <span className="text-[10.5px] font-semibold">{group.title} · {groupItems.length}</span>
+              <span className="text-[8.5px] text-slate-500">{group.note}</span>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {groupItems.map((item) => renderItem(item, items.indexOf(item)))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const SEARCH_FILTER_LABELS: Record<string, string> = {
+  platform: "主要平台",
+  platforms: "主要平台",
+  country: "国家/地区",
+  countries: "国家/地区",
+  region: "国家/地区",
+  regions: "国家/地区",
+  language: "内容语言",
+  languages: "内容语言",
+  followers: "粉丝数",
+  followers_min: "最低粉丝数",
+  followers_max: "最高粉丝数",
+  creator_type: "创作者类型",
+  creator_types: "创作者类型",
+  vertical: "垂直标签",
+  verticals: "垂直标签",
+  gear_content: "摄影器材内容",
+  lens_content: "镜头内容",
+};
+
+function optionalCount(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function searchFilterLabel(value: unknown): string {
+  const key = cleanText(value);
+  return SEARCH_FILTER_LABELS[key.toLowerCase()] || key;
+}
+
+export function SearchFilterDiagnostics({ diagnostics }: { diagnostics: Row }) {
+  const requested = optionalCount(diagnostics.requested_count);
+  const strict = optionalCount(diagnostics.strict_count);
+  const backfill = optionalCount(diagnostics.backfill_count);
+  const strictAvailable = optionalCount(diagnostics.strict_available_count);
+  const backfillAvailable = optionalCount(diagnostics.backfill_available_count);
+  const finalCount = optionalCount(diagnostics.final_count);
+  const shortfall = optionalCount(diagnostics.shortfall);
+  const hardRejected = optionalCount(diagnostics.hard_filter_rejected_count);
+  const contractSatisfied = typeof diagnostics.result_contract_satisfied === "boolean"
+    ? diagnostics.result_contract_satisfied
+    : null;
+  const backfillPolicy = cleanText(diagnostics.backfill_policy);
+  const hardFiltersNotRelaxed = diagnostics.hard_filters_relaxed === false
+    || backfillPolicy === "query_relevance_only_hard_filters_never_relaxed";
+  const unsupported = (Array.isArray(diagnostics.unsupported_filters) ? diagnostics.unsupported_filters : [])
+    .map(cleanText)
+    .filter(Boolean);
+  const bucketCounts = asRecord(diagnostics.business_bucket_counts);
+  const businessBuckets = [
+    ["核心垂直", optionalCount(bucketCounts.core_vertical)],
+    ["拓展", optionalCount(bucketCounts.expansion)],
+    ["探索/补位", optionalCount(bucketCounts.exploration)],
+  ] as const;
+  const visibleBusinessBuckets = businessBuckets.flatMap(([label, value]) => value == null ? [] : [`${label} ${value}`]);
+  const rejectedBy = Object.entries(asRecord(diagnostics.hard_filter_rejected_by))
+    .map(([key, value]) => [searchFilterLabel(key), optionalCount(value)] as const)
+    .filter((entry): entry is readonly [string, number] => entry[1] != null && entry[1] > 0);
+  const hasShortfall = shortfall != null && shortfall > 0;
+  const isWarning = contractSatisfied === false || hasShortfall || unsupported.length > 0;
+  const hasDiagnostics = [requested, strict, backfill, strictAvailable, backfillAvailable, finalCount, shortfall, hardRejected]
+    .some((value) => value != null)
+    || contractSatisfied != null
+    || rejectedBy.length > 0
+    || unsupported.length > 0
+    || visibleBusinessBuckets.length > 0;
+  if (!hasDiagnostics) return null;
+  return (
+    <div
+      data-testid="search-filter-diagnostics"
+      className={`mb-2 rounded-md border px-2.5 py-1.5 text-[9.5px] leading-relaxed ${isWarning
+      ? "border-amber-300/20 bg-amber-400/[0.065] text-amber-100"
+      : "border-emerald-300/20 bg-emerald-400/[0.055] text-emerald-100"}`}
+    >
+      {hasShortfall || contractSatisfied === false ? (
+        <div data-testid="search-hard-filter-shortfall" className="font-medium">
+          {finalCount != null && requested != null
+            ? `硬筛选后仅有 ${finalCount}/${requested}`
+            : requested != null
+              ? `硬筛选后的返回量未完整确认，目标 ${requested}`
+              : "筛选结果合同未满足"}
+          {hasShortfall ? `；短缺 ${shortfall}` : ""}
+          {hardFiltersNotRelaxed ? "；显式硬筛选未放宽" : "；硬筛选是否放宽待服务端确认"}
+        </div>
+      ) : contractSatisfied === true && requested != null ? (
+        <div data-testid="search-result-contract-satisfied" className="font-medium">已满足筛选后 {requested} 人结果合同</div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {requested != null ? <span>筛选后目标 {requested}</span> : null}
+        {strict != null || backfill != null ? (
+          <span>· {strict != null ? `严格 ${strict}` : "严格数量待返回"} + {backfill != null ? `补位 ${backfill}` : "补位数量待返回"}</span>
+        ) : null}
+        {finalCount != null ? <span>· 最终 {finalCount}</span> : null}
+        {hasShortfall ? <span>· 不以不满足硬筛选的账号凑数</span> : null}
+      </div>
+      {strictAvailable != null || backfillAvailable != null ? (
+        <div className="mt-0.5">
+          可用候选：{strictAvailable != null ? `严格 ${strictAvailable}` : "严格数量待返回"}
+          {backfillAvailable != null ? ` · 相关性补位 ${backfillAvailable}` : ""}
+        </div>
+      ) : null}
+      {hardRejected != null && hardRejected > 0 ? (
+        <div className="mt-0.5">
+          硬筛选排除 {hardRejected} 人{rejectedBy.length ? `：${rejectedBy.map(([label, count]) => `${label} ${count}`).join(" · ")}` : "；分项原因待返回"}
+        </div>
+      ) : rejectedBy.length ? (
+        <div className="mt-0.5">硬筛选排除明细：{rejectedBy.map(([label, count]) => `${label} ${count}`).join(" · ")}</div>
+      ) : null}
+      {visibleBusinessBuckets.length ? (
+        <div className="mt-0.5">业务分层：{visibleBusinessBuckets.join(" · ")}</div>
+      ) : null}
+      {unsupported.length ? (
+        <div className="mt-0.5">未应用筛选：{unsupported.map(searchFilterLabel).join("、")} · 对应数据或服务能力待补全</div>
+      ) : null}
+    </div>
+  );
+}
+
+type SearchEvaluationState = "not_evaluated" | "labeling" | "shareable" | "stale";
+
+function evaluationState(value: unknown): SearchEvaluationState {
+  const state = cleanText(value);
+  return state === "labeling" || state === "shareable" || state === "stale"
+    ? state
+    : "not_evaluated";
+}
+
+function evaluationPercent(value: unknown): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "待返回";
+  const percent = Math.abs(parsed) <= 1 ? parsed * 100 : parsed;
+  return `${percent.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+export function SearchEvaluationStatus({ evaluation }: { evaluation: Row }) {
+  const state = evaluationState(evaluation.state);
+  const target = optionalCount(evaluation.target_count) ?? 180;
+  const labeled = optionalCount(evaluation.labeled_count) ?? 0;
+  const dualTarget = optionalCount(evaluation.dual_review_target);
+  const dualReviewed = optionalCount(evaluation.dual_reviewed_count);
+  const metrics = state === "shareable" ? asRecord(evaluation.metrics) : {};
+  const version = cleanText(evaluation.gold_set_id ?? evaluation.dataset_version);
+  const copy = state === "labeling"
+    ? `人工标注 ${labeled}/${target}${dualTarget != null && dualReviewed != null ? ` · 双人复核 ${dualReviewed}/${dualTarget}` : ""}；完成前不发布准确率`
+    : state === "shareable"
+      ? `${version ? `${version} · ` : ""}真人 Gold Set 已冻结，评测结果可分享`
+      : state === "stale"
+        ? "算法或数据版本已变化；历史评测需重跑，当前不发布准确率"
+        : "尚无真人标注；当前只显示检索相关度，不发布准确率";
+  const tone = state === "shareable"
+    ? "border-emerald-300/20 bg-emerald-400/[0.055] text-emerald-100"
+    : state === "stale"
+      ? "border-rose-300/20 bg-rose-400/[0.055] text-rose-100"
+      : "border-sky-300/18 bg-sky-400/[0.045] text-sky-100";
+  return (
+    <div data-testid="search-evaluation-status" data-evaluation-state={state} className={`mb-2 rounded-md border px-2.5 py-1.5 text-[10px] leading-relaxed ${tone}`}>
+      <div className="font-medium">搜索质量：{state === "shareable" ? "可分享" : state === "labeling" ? "标注中" : state === "stale" ? "需重评" : "未评测"}</div>
+      <div className="opacity-80">{copy}</div>
+      {state === "shareable" && Object.keys(metrics).length ? (
+        <div data-testid="search-evaluation-metrics" className="mt-0.5 flex flex-wrap gap-x-2 text-[9.5px]">
+          {metrics.precision_at_30 != null ? <span>Precision@30 {evaluationPercent(metrics.precision_at_30)}</span> : null}
+          {metrics.hard_filter_violation_rate != null ? <span>硬筛违规 {evaluationPercent(metrics.hard_filter_violation_rate)}</span> : null}
+          {metrics.evidence_support_rate != null ? <span>证据支持 {evaluationPercent(metrics.evidence_support_rate)}</span> : null}
+          {metrics.cohen_kappa != null ? <span>双审一致性 κ {Number(metrics.cohen_kappa).toFixed(2)}</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function recallDisplayCounts(items: VkpiKolRecallItem[], diagnostics: Row) {
+  const creatorVisible = items.filter((item) => cleanText(item.bucket) === "creator").length;
+  const reviewerVisible = items.length - creatorVisible;
+  const contractAware = ["requested_count", "final_count", "returned_count"]
+    .some((key) => Number(diagnostics[key]) > 0);
+  return {
+    total: Math.max(
+      items.length,
+      Number(diagnostics.final_count) || 0,
+      Number(diagnostics.returned_count) || 0,
+      contractAware ? 0 : Number(diagnostics.candidate_count) || 0,
+    ),
+    creator: Math.max(creatorVisible, Number(diagnostics.creator_returned) || 0),
+    reviewer: Math.max(reviewerVisible, Number(diagnostics.reviewer_returned) || 0),
+  };
+}
 
 export function resolvedProductSkuFromPlan(plan: Row): string {
   const resolved = plan?.resolved_product && typeof plan.resolved_product === "object"
@@ -143,6 +390,7 @@ export function TextResultSection({
     : 0;
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
   const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
+  const recallCounts = recallDisplayCounts(recallItems, (recallResult.diagnostics || {}) as Row);
   const openProductScopedItem = (item: VkpiKolRecallItem) => {
     onOpenRecallItem?.(withResolvedProductSku(item, resolvedProductSku));
   };
@@ -197,18 +445,21 @@ export function TextResultSection({
       {/* 框2 · 库内账号匹配 */}
       <div className="rounded-lg border border-violet-300/15 bg-violet-950/[0.10] p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-medium text-violet-100">② 库内已有的人 · {display(recallResult.diagnostics?.candidate_count)} 个</div>
+          <div className="text-[11px] font-medium text-violet-100">② 库内已有的人 · {recallCounts.total} 个</div>
           <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500">
-            <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {display(recallResult.diagnostics?.creator_returned)}</span>
-            <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {display(recallResult.diagnostics?.reviewer_returned)}</span>
+            <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {recallCounts.creator}</span>
+            <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {recallCounts.reviewer}</span>
           </div>
         </div>
+        <SearchFilterDiagnostics diagnostics={(recallResult.diagnostics || {}) as Row} />
+        <SearchEvaluationStatus evaluation={asRecord(recallResult.evaluation_status)} />
         {recallItems.length ? (
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {recallItems.map((item, index) => (
+          <CandidateLaneGroups
+            items={recallItems}
+            renderItem={(item, index) => (
               <RecallMiniItem key={`r-${item.bucket}-${item.kol_pool_id || item.handle || index}`} item={item} index={index + 1} onOpen={openProductScopedItem} />
-            ))}
-          </div>
+            )}
+          />
         ) : (
           <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">暂无库内匹配</div>
         )}
@@ -406,8 +657,9 @@ export function TextResultSection({
           </div>
         ) : null}
         {discoveryItems.length ? (
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {discoveryItems.map((item, index) => {
+          <CandidateLaneGroups
+            items={discoveryItems as VkpiKolRecallItem[]}
+            renderItem={(item, index) => {
               const key = discoveryKey(item);
               const effPid = Number(item.kol_pool_id) || resolvedPids.get(key) || 0;
               const picked = effPid > 0 && pickedIds.has(effPid);
@@ -425,8 +677,8 @@ export function TextResultSection({
                   >{resolving ? <Loader2 size={11} className="animate-spin text-emerald-200" /> : "✓"}</button>
                 </div>
               );
-            })}
-          </div>
+            }}
+          />
         ) : activeSearchSessionId ? (
           <div className="flex items-center gap-1.5 rounded-md border border-emerald-300/15 bg-black/15 px-2.5 py-2 text-[10.5px] text-emerald-100/80">
             <Loader2 size={12} className="animate-spin" /> 正在从所选平台找新号，完成后自动显示

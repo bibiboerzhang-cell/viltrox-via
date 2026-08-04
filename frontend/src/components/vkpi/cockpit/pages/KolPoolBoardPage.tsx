@@ -3,7 +3,6 @@ import { PencilLine } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
-import { KOLDetailDrawer } from "../components/KOLDetailDrawer";
 import { ContactModal } from "../components/modals/ContactModal";
 import { KolPoolAllModal } from "../components/modals/KolPoolAllModal";
 import { ErrorCard, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
@@ -33,6 +32,10 @@ import {
   weekNewCount,
   type Row,
 } from "./KolPoolBoardPage.actions";
+
+const KOLDetailDrawer = React.lazy(() =>
+  import("../components/KOLDetailDrawer").then((module) => ({ default: module.KOLDetailDrawer })),
+);
 
 // KOL 池 → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 五件套 +
 //   KolProfileBoardPage / LaunchPadBoardPage / GtmCommandBoardPage 1:1 同构)。
@@ -222,6 +225,7 @@ export function KolPoolBoardPage({
         <SmartEmbed
           apiToken={apiToken}
           searchMode={searchMode}
+          onSearchModeChange={setSearchMode}
           onRecallItems={rememberRecallItems}
           onOpenRecallItem={openRecallItem}
           onOpenProfile={openProfileItem}
@@ -422,20 +426,22 @@ export function KolPoolBoardPage({
           />
         )}
         {selectedItem && (
-          <KOLDetailDrawer
-            key={`kol-detail-${selectedItem.id || selectedItem.handle || "selected"}`}
-            item={selectedItem}
-            detailBundle={selectedDetailBundle}
-            apiToken={apiToken}
-            detailLoading={detailLoading}
-            detailError={detailError}
-            onClose={closeDrawer}
-            inMyList={myList.has(selectedItem.id)}
-            onToggleMyList={toggleMyList}
-            onContact={(it: Row) => setContactItem(it)}
-            staff={staff}
-            onReloadDetail={reloadDetail}
-          />
+          <React.Suspense fallback={null}>
+            <KOLDetailDrawer
+              key={`kol-detail-${selectedItem.id || selectedItem.handle || "selected"}`}
+              item={selectedItem}
+              detailBundle={selectedDetailBundle}
+              apiToken={apiToken}
+              detailLoading={detailLoading}
+              detailError={detailError}
+              onClose={closeDrawer}
+              inMyList={myList.has(selectedItem.id)}
+              onToggleMyList={toggleMyList}
+              onContact={(it: Row) => setContactItem(it)}
+              staff={staff}
+              onReloadDetail={reloadDetail}
+            />
+          </React.Suspense>
         )}
         {contactItem && (
           <ContactModal

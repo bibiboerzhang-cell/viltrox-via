@@ -681,12 +681,49 @@ async def smart_kol_search(
                 "new_discovery_status": "not_requested",
             }
         effective_query = str(llm_query_plan.get("search_query") or recall_query).strip()
+        if body.get("filters") not in (None, "") and not isinstance(body.get("filters"), dict):
+            raise ValueError("filters must be an object")
+        recall_filters = dict(body.get("filters") or {})
+        # Compatibility with the existing top-level platform control while
+        # the UI migrates all pre-filters under ``filters``.
+        explicit_body_platforms = (
+            body.get("platforms")
+            or body.get("platform")
+            or body.get("new_discovery_platforms")
+            or body.get("discovery_platforms")
+        )
+        explicit_query_platforms = kol_profile_recall.explicit_platforms_from_query(recall_query)
+        if not recall_filters.get("platforms"):
+            if explicit_body_platforms:
+                recall_filters["platforms"] = explicit_body_platforms
+            elif explicit_query_platforms:
+                # Only literal operator text becomes a hard filter.  The
+                # planner's default all-platform list is intentionally ignored.
+                recall_filters["platforms"] = explicit_query_platforms
+        for filter_key in (
+            "countries",
+            "languages",
+            "followers_min",
+            "followers_max",
+            "follower_min",
+            "follower_max",
+            "verticals",
+            "gear_content",
+        ):
+            if body.get(filter_key) not in (None, "") and filter_key not in recall_filters:
+                recall_filters[filter_key] = body.get(filter_key)
+        result_limit = int(
+            body.get("result_limit")
+            or body.get("candidate_count")
+            or body.get("limit")
+            or kol_profile_recall.DEFAULT_RESULT_LIMIT
+        )
         result = await run_in_threadpool(
             kol_profile_recall.recall_kol_profiles,
             query_text=effective_query,
             product_sku=str(body.get("product_sku") or ""),
             candidate_limit=int(body.get("candidate_limit") or 100),
-            limit=int(body.get("limit") or 30),
+            limit=result_limit,
             creator_quota=int(body.get("creator_quota") or llm_query_plan.get("creator_quota") or 15),
             reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
             ratio_policy=str(body.get("ratio_policy") or "soft"),
@@ -699,14 +736,23 @@ async def smart_kol_search(
             product_focus=llm_query_plan.get("product_focus"),
             target_persona=str(llm_query_plan.get("target_persona") or ""),
             provider_free=True,
+            filters=recall_filters,
+            search_strategy=str(body.get("search_strategy") or "balanced"),
+            bucket_policy=(
+                body.get("bucket_policy")
+                if isinstance(body.get("bucket_policy"), dict)
+                else body.get("bucketPolicy")
+                if isinstance(body.get("bucketPolicy"), dict)
+                else None
+            ),
+            allow_backfill=bool(body.get("allow_backfill", True)),
+            operator_query_text=recall_query,
         )
         result = kol_profile_discovery.filter_recall_result_platforms(
             result,
-            body.get("platforms")
-            or body.get("new_discovery_platforms")
-            or body.get("discovery_platforms")
-            or body.get("platform"),
+            recall_filters.get("platforms"),
         )
+        result.setdefault("query", {})["explicit_operator_platforms"] = explicit_query_platforms
         result["llm_query_plan"] = llm_query_plan
         result["original_query_text"] = recall_query
         result["effective_query_text"] = effective_query
@@ -889,6 +935,7 @@ def recall_kol_profiles(
             type_boost_enabled=type_boost_enabled,
             exclude_chinese=exclude_chinese,
             provider_free=True,
+            operator_query_text=query_text,
         )
         result["provider_calls"] = False
         result["write_db"] = False

@@ -96,6 +96,10 @@ export default defineConfig(({ command }) => {
           chunkFileNames: "assets/chunk-[hash].js",
           assetFileNames: "assets/asset-[hash][extname]",
           manualChunks(id) {
+            // Vite 的动态 import 预加载 helper 必须留在首屏共享层；若 Rollup 将它
+            // 吸入某个异步业务块，入口会反向静态 import 该业务块并把其重依赖一并
+            // 预加载，等于悄悄击穿懒加载边界。
+            if (id.includes("vite/preload-helper")) return "vendor";
             if (id.includes("node_modules")) {
               // Keep the React runtime in one cohesive chunk (react + react-dom + scheduler)
               // so it cannot be split across chunks in a way that breaks the runtime.
@@ -155,9 +159,20 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/KOLVideoAnalysisPanel.tsx") ||
               id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer.helpers.ts") ||
               id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.helpers.ts") ||
-              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.derivers.ts")
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.derivers.ts") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.progress-derivers.ts")
             ) {
               return "vkpi-kol-analysis-core";
+            }
+            // 详情抽屉只在用户点开某个 KOL 后需要。它与找达人首屏共用少量
+            // analysis-core 纯函数，但自身面板很多；单独保留为异步块，避免空闲时
+            // 把整套抽屉代码计入 KOL Pool 首屏。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer") ||
+              id.includes("/src/components/vkpi/cockpit/components/KOLDrawer") ||
+              id.includes("/src/components/vkpi/cockpit/components/useKOLDrawerViewerContext")
+            ) {
+              return "vkpi-kol-detail";
             }
             // 评论正文只在已解析的视频 evidence 上读取，账号分析总览只在 profile
             // URL 命中入库 KOL 后出现。两者都通过 React.lazy 按需加载；让 Rollup
@@ -173,8 +188,6 @@ export default defineConfig(({ command }) => {
             // 所有 cockpit 页面共享的 widgets chunk；KolSearchHistoryPanel 一并归组，
             // 防止其对 SmartKolInputPanel.Sections 的复用产生 widgets -> workbench 回边。
             if (
-              id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer") ||
-              id.includes("/src/components/vkpi/cockpit/components/KOLDrawer") ||
               id.includes("/src/components/vkpi/cockpit/components/KOLVideoAnalysisPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/KolSearchHistoryPanel") ||
@@ -210,6 +223,11 @@ export default defineConfig(({ command }) => {
             }
             // ③ cockpit 部件层(原主 chunk 近半体量):components/ 全目录 + 它运行时 import 的
             //    4 个 vkpi/shared 叶子件(不带走它们会形成 主chunk↔widgets 双向边 = 成环)。
+            // Leaflet 只在地图真正出现时需要；RealMap 自身也必须和它一起延后，
+            // 否则任一首屏可视化会把整套地图运行时拉进初始依赖闭包。
+            if (id.includes("/src/components/vkpi/cockpit/components/RealMap.tsx")) {
+              return "vkpi-map";
+            }
             // 纯叶子可视化层:仅依赖 React/vendor/services/core,不回引其他 cockpit 组件。
             // 先于 components/ 总规则归组,为 600KB 红线保留稳定增长余量。
             if (
@@ -218,7 +236,6 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/provenance/") ||
               id.includes("/src/components/vkpi/cockpit/components/AnimatedNumber.tsx") ||
               id.includes("/src/components/vkpi/cockpit/components/Globe.tsx") ||
-              id.includes("/src/components/vkpi/cockpit/components/RealMap.tsx") ||
               id.includes("/src/components/vkpi/cockpit/components/NorthStarGauges.tsx") ||
               id.includes("/src/components/vkpi/cockpit/components/StrategySimPanel.tsx") ||
               id.includes("/src/components/vkpi/cockpit/components/VerdictPanel.tsx") ||

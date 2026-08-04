@@ -247,6 +247,15 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     await waitFor(() => {
       expect(apiFetchMock.mock.calls.some((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search")).toBe(true);
     });
+    const searchCall = apiFetchMock.mock.calls.find((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search");
+    const searchBody = JSON.parse(String((searchCall?.[1] as RequestInit | undefined)?.body || "{}"));
+    expect(searchBody).toMatchObject({
+      result_limit: 30,
+      limit: 30,
+      search_strategy: "balanced",
+      filters: { platforms: ["youtube", "instagram", "tiktok"] },
+      bucket_policy: { core_vertical: 18, expansion: 9, exploration: 3 },
+    });
 
     await waitFor(() => {
       expect(apiFetchMock.mock.calls.some((call) => String(call[0]).includes("/kol-search-history?limit=50"))).toBe(true);
@@ -254,6 +263,44 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     fireEvent.click(await screen.findByText("历史记录"));
     expect(await screen.findByText("35mm 低光人像 YouTube 摄影师")).toBeTruthy();
     expect(screen.getByText(/会话 #778 · 12 个结果/)).toBeTruthy();
+  });
+
+  it("找达人搜索前筛选会进入真实请求合同，并与旧页搜索模式保持同步", async () => {
+    routeApi();
+    renderBoard();
+
+    fireEvent.click(screen.getByRole("button", { name: /搜索前筛选/ }));
+    fireEvent.click(screen.getByRole("button", { name: /垂直优先/ }));
+    fireEvent.change(screen.getByLabelText("国家或地区"), { target: { value: "JP" } });
+    fireEvent.change(screen.getByLabelText("内容语言"), { target: { value: "ja" } });
+    fireEvent.change(screen.getByLabelText("内容垂类"), { target: { value: "lens_review" } });
+    fireEvent.change(screen.getByLabelText("最低粉丝数"), { target: { value: "10000" } });
+    fireEvent.change(screen.getByLabelText("最高粉丝数"), { target: { value: "500000" } });
+    fireEvent.click(screen.getByRole("button", { name: "发布过镜头/器材" }));
+    fireEvent.change(screen.getByTestId("smart-kol-input"), { target: { value: "26mm EVO 街拍创作者" } });
+    fireEvent.click(screen.getByTestId("smart-kol-run"));
+
+    await waitFor(() => {
+      expect(apiFetchMock.mock.calls.some((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search")).toBe(true);
+    });
+    const searchCall = apiFetchMock.mock.calls.find((call) => String(call[0]) === "/api/admin/vkpi/kol-smart-search");
+    const body = JSON.parse(String((searchCall?.[1] as RequestInit | undefined)?.body || "{}"));
+    expect(body).toMatchObject({
+      result_limit: 30,
+      search_strategy: "vertical",
+      filters: {
+        platforms: ["youtube", "instagram", "tiktok"],
+        countries: ["JP"],
+        languages: ["ja"],
+        followers_min: 10000,
+        followers_max: 500000,
+        verticals: ["lens_review"],
+        gear_content: "yes",
+      },
+      bucket_policy: { core_vertical: 24, expansion: 5, exploration: 1 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "筛选 · 排序" }));
+    expect(screen.getAllByRole("button", { name: /垂直优先/ }).some((node) => node.getAttribute("aria-pressed") === "true" || node.getAttribute("style")?.includes("background"))).toBe(true);
   });
 
   it("卡片流工具行「全部 N」钮 → 全量大窗(kinds 撤默认后的接棒入口);点卡片 → 详情抽屉", async () => {

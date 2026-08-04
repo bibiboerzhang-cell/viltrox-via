@@ -47,6 +47,10 @@ from app.domains.kol.search_sessions_schema import (
     REACH_GATED_ITEM_TYPES as _REACH_GATED_ITEM_TYPES,
     TERMINAL_SESSION_STATUSES as _TERMINAL_SESSION_STATUSES,
 )
+from app.domains.kol.search_progress_contract import (
+    observe_worker_health,
+    project_search_progress,
+)
 from app.domains.kol.search_sessions_history import (
     archive_history_session as _archive_history_session,
     archive_history_sessions as _archive_history_sessions,
@@ -270,6 +274,43 @@ def _apply_reach_display_gate(
     return visible, counts
 
 
+def _attach_progress_contract(
+    session: dict[str, Any],
+    items: list[dict[str, Any]],
+    *,
+    worker_health: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach the same live, read-only progress projection on every session API."""
+
+    contract = project_search_progress(session, items, worker_health=worker_health)
+    session["progress_contract"] = contract
+    session["worker_health"] = dict(worker_health)
+    summary = _dict(session.get("result_summary")).copy()
+    summary["progress_contract"] = contract
+    session["result_summary"] = summary
+    return session
+
+
+def _session_items_by_id(conn: Any, session_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {int(session_id): [] for session_id in session_ids}
+    if not session_ids:
+        return grouped
+    placeholders = ",".join(["?"] * len(session_ids))
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id IN ({placeholders})
+        ORDER BY session_id, rank NULLS LAST, id
+        """,
+        tuple(session_ids),
+    ).fetchall()
+    for row in rows:
+        item = _row_to_item(row)
+        grouped.setdefault(int(item.get("session_id") or 0), []).append(item)
+    return grouped
+
+
 def create_session(
     *,
     query_text: str,
@@ -297,7 +338,12 @@ def create_session(
         ),
     ).fetchone()
     conn.commit()
-    return _row_to_session(row)
+    session = _row_to_session(row)
+    return _attach_progress_contract(
+        session,
+        [],
+        worker_health=observe_worker_health(conn),
+    )
 
 
 def list_sessions(*, limit: int = 20, status: str = "") -> dict[str, Any]:
@@ -325,10 +371,23 @@ def list_sessions(*, limit: int = 20, status: str = "") -> dict[str, Any]:
             """,
             (safe_limit,),
         ).fetchall()
+    sessions = [_row_to_session(row) for row in rows]
+    grouped = _session_items_by_id(
+        conn,
+        [int(session["id"]) for session in sessions if _int_or_none(session.get("id"))],
+    )
+    worker_health = observe_worker_health(conn)
+    for session in sessions:
+        _attach_progress_contract(
+            session,
+            grouped.get(int(session.get("id") or 0), []),
+            worker_health=worker_health,
+        )
     return {
         "status": "ready",
-        "count": len(rows),
-        "items": [_row_to_session(row) for row in rows],
+        "count": len(sessions),
+        "items": sessions,
+        "worker_health": worker_health,
     }
 
 
@@ -474,6 +533,11 @@ def get_session(
                 "sample_size": None,
                 "async": True,
             }
+    _attach_progress_contract(
+        session,
+        items,
+        worker_health=observe_worker_health(conn),
+    )
     # 触达展示闸(第二道闸落点①):会话项按 pool 现值实时重判——补全回填 followers 后,
     # 低触达行(如 kol_pool 12297,2 粉)从「全网新发现/库内已有」消失;followers 未知折叠为
     # 「分析中 ×N」。counts/count 按可见项重算,隐藏计数走 reach_floor_display 诚实透出。
@@ -811,7 +875,7 @@ def record_items(
     status: str = "ready",
     summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _record_items(
+    recorded = _record_items(
         session_id,
         items,
         status=status,
@@ -820,6 +884,19 @@ def record_items(
         upsert_item_fn=_upsert_item,
         update_session_fn=_update_session,
     )
+    session_view = {
+        "id": int(session_id),
+        "status": _normalize_status(status),
+        "result_summary": _dict(summary),
+    }
+    worker_health = observe_worker_health(get_conn())
+    recorded["progress_contract"] = project_search_progress(
+        session_view,
+        recorded.get("items") or [],
+        worker_health=worker_health,
+    )
+    recorded["worker_health"] = worker_health
+    return recorded
 
 
 def ensure_session_for_result(

@@ -1,18 +1,36 @@
-"""Truthful completion semantics for progressive KOL search sessions.
+"""Truthful progress semantics for progressive KOL search sessions.
 
 ``complete`` and ``required_tasks_complete`` are retained as compatibility
 aliases for "every requested task has reached a terminal state".  They are not
 evidence that the optional full-analysis pipeline ran.  The strict
-``full_analysis_complete`` flag requires every item to have durable, successful
-video, comments, and audience stages; ``not_requested`` can therefore never be
-reported as a full analysis.
+``full_analysis_complete`` flag additionally requires observable, durable data
+for every profile/video/comments/audience stage; a finished job alone is not a
+completed analysis.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 
 FULL_ANALYSIS_ROLES = ("video", "comments", "audience")
+PROGRESS_CONTRACT_SCHEMA = "kol_search_progress_v1"
+PROGRESS_STAGE_KEYS = ("search", "profile", *FULL_ANALYSIS_ROLES)
+
+_SUCCESS_STATES = frozenset({"ready", "done", "ok", "already_analyzed", "recently_done"})
+_QUEUED_STATES = frozenset({"queued", "pending", "already_queued", "waiting_for_evidence", "waiting_for_profile"})
+_RUNNING_STATES = frozenset({"running", "processing", "retrying", "already_running"})
+_ACTIVE_STATES = frozenset({"active"})
+_FAILED_STATES = frozenset({"failed", "error", "blocked", "triage", "crawl_failed", "unsupported"})
+_PARTIAL_STATES = frozenset({"partial", "empty", "no_data", "no_posts", "no_comments", "not_found"})
+_SKIPPED_STATES = frozenset({"skipped", "cancelled", "canceled"})
+_TERMINAL_BUCKETS = ("ready", "partial", "failed", "skipped")
+_HEARTBEAT_WINDOW_SECONDS = 120
+_EXACT_RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _count(stage: Mapping[str, Any], key: str) -> int:
@@ -55,12 +73,18 @@ def completion_contract(
     )
 
     stages = stage_progress if isinstance(stage_progress, Mapping) else None
-    full_analysis_complete = bool(terminal and stages is not None and safe_total > 0)
-    if full_analysis_complete:
+    full_analysis_execution_complete = bool(
+        terminal
+        and stages is not None
+        and safe_total > 0
+        and safe_ready >= safe_total
+        and safe_profile_failed == 0
+    )
+    if full_analysis_execution_complete:
         for role in FULL_ANALYSIS_ROLES:
             raw_stage = stages.get(role)
             if not isinstance(raw_stage, Mapping):
-                full_analysis_complete = False
+                full_analysis_execution_complete = False
                 break
             if (
                 _count(raw_stage, "ready") < safe_total
@@ -68,8 +92,26 @@ def completion_contract(
                 or _count(raw_stage, "failed") > 0
                 or _count(raw_stage, "not_requested") > 0
             ):
-                full_analysis_complete = False
+                full_analysis_execution_complete = False
                 break
+
+    full_analysis_observable = bool(
+        stages is not None
+        and safe_total > 0
+        and all(
+            isinstance(stages.get(role), Mapping)
+            and stages[role].get("data_ready") is not None
+            for role in ("profile", *FULL_ANALYSIS_ROLES)
+        )
+    )
+    full_analysis_complete = bool(
+        full_analysis_execution_complete
+        and full_analysis_observable
+        and all(
+            _count(stages[role], "data_ready") >= safe_total
+            for role in ("profile", *FULL_ANALYSIS_ROLES)
+        )
+    )
 
     decision_eligible = bool(
         full_analysis_complete
@@ -79,6 +121,8 @@ def completion_contract(
     return {
         "base_complete": base_complete,
         "requested_tasks_terminal": terminal,
+        "full_analysis_execution_complete": full_analysis_execution_complete,
+        "full_analysis_observable": full_analysis_observable,
         "full_analysis_complete": full_analysis_complete,
         "decision_eligible": decision_eligible,
         # Compatibility aliases.  They intentionally retain terminal—not full
@@ -88,4 +132,502 @@ def completion_contract(
     }
 
 
-__all__ = ["FULL_ANALYSIS_ROLES", "completion_contract"]
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _positive_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _utc(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _expected_worker_count() -> int | None:
+    raw = str(os.getenv("APIFY_WORKER_EXPECTED_INSTANCES", "") or "").strip()
+    return int(raw) if raw.isdigit() and int(raw) > 0 else None
+
+
+def _exact_release_sha(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized if _EXACT_RELEASE_SHA.fullmatch(normalized) else None
+
+
+def _observed_app_release_sha() -> tuple[str | None, str]:
+    """Read only explicit, sealed release identity; never infer it from git."""
+
+    env_sha = _exact_release_sha(os.getenv("APP_GIT_SHA"))
+    if env_sha:
+        return env_sha, "env:APP_GIT_SHA"
+    try:
+        build_sha = _exact_release_sha((_PROJECT_ROOT / "BUILD_GIT_SHA").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        build_sha = None
+    if build_sha:
+        return build_sha, "build_file:BUILD_GIT_SHA"
+    return None, "unavailable"
+
+
+def unobserved_worker_health(
+    *,
+    reason: str = "heartbeat_not_read",
+    observed_at: datetime | None = None,
+) -> dict[str, Any]:
+    now = (observed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    release_sha, release_sha_source = _observed_app_release_sha()
+    return {
+        "observed": False,
+        "source": "vkpi_worker_heartbeat",
+        "state": "unknown",
+        "online": None,
+        "online_count": None,
+        "expected_count": _expected_worker_count(),
+        "capacity_ready": None,
+        "release_sha": release_sha,
+        "release_sha_source": release_sha_source,
+        "worker_sha": None,
+        "worker_shas": [],
+        "sha_aligned": None,
+        "latest_heartbeat_at": None,
+        "observed_at": _iso(now),
+        "reason": reason,
+    }
+
+
+def observe_worker_health(
+    conn: Any,
+    *,
+    now: datetime | None = None,
+    expected_count: int | None = None,
+) -> dict[str, Any]:
+    """Read the durable Apify-worker heartbeat table without guessing liveness.
+
+    A missing table/read failure is ``unknown`` rather than ``offline``.  Redis
+    workers are excluded because they do not consume the ``apify_jobs`` lanes
+    used by KOL profile/video/comment/audience work.
+    """
+
+    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    expected = expected_count if expected_count is not None else _expected_worker_count()
+    release_sha, release_sha_source = _observed_app_release_sha()
+    try:
+        rows = conn.execute(
+            """
+            SELECT worker_name, last_heartbeat_at, worker_git_sha
+            FROM vkpi_worker_heartbeat
+            WHERE last_heartbeat_at IS NOT NULL
+              AND worker_name NOT LIKE ?
+            ORDER BY last_heartbeat_at DESC
+            LIMIT 64
+            """,
+            ("redis-worker-%",),
+        ).fetchall()
+    except Exception:
+        return {
+            "observed": False,
+            "source": "vkpi_worker_heartbeat",
+            "state": "unknown",
+            "online": None,
+            "online_count": None,
+            "expected_count": expected,
+            "capacity_ready": None,
+            "release_sha": release_sha,
+            "release_sha_source": release_sha_source,
+            "worker_sha": None,
+            "worker_shas": [],
+            "sha_aligned": None,
+            "latest_heartbeat_at": None,
+            "observed_at": _iso(observed_at),
+            "reason": "heartbeat_unavailable",
+        }
+
+    parsed_rows: list[dict[str, Any]] = []
+    for raw in rows or []:
+        row = dict(raw)
+        heartbeat = _utc(row.get("last_heartbeat_at"))
+        age = (observed_at - heartbeat).total_seconds() if heartbeat else None
+        parsed_rows.append(
+            {
+                "heartbeat": heartbeat,
+                "online": bool(age is not None and -30 <= age <= _HEARTBEAT_WINDOW_SECONDS),
+                "worker_sha": _exact_release_sha(row.get("worker_git_sha")),
+            }
+        )
+    online_rows = [row for row in parsed_rows if row["online"]]
+    online_count = len(online_rows)
+    worker_shas = sorted(
+        {str(row["worker_sha"]) for row in online_rows if row.get("worker_sha")}
+    )
+    worker_sha = worker_shas[0] if len(worker_shas) == 1 else None
+    sha_aligned: bool | None = None
+    if release_sha and online_rows:
+        sha_aligned = bool(
+            len(worker_shas) == 1
+            and worker_sha == release_sha
+            and all(row.get("worker_sha") == release_sha for row in online_rows)
+        )
+    latest = max((row["heartbeat"] for row in parsed_rows if row["heartbeat"]), default=None)
+    count_ready = bool(online_count > 0 and (expected is None or online_count >= expected))
+    capacity_ready = bool(count_ready and sha_aligned is not False)
+    if online_count <= 0:
+        state = "offline"
+    elif expected is not None and online_count < expected:
+        state = "under_capacity"
+    elif sha_aligned is False:
+        state = "release_mismatch"
+    else:
+        state = "online"
+    reason = {
+        "offline": "no_fresh_apify_worker_heartbeat",
+        "under_capacity": "worker_count_below_expected",
+        "release_mismatch": "worker_release_sha_mismatch",
+        "online": "fresh_heartbeat",
+    }[state]
+    return {
+        "observed": True,
+        "source": "vkpi_worker_heartbeat",
+        "state": state,
+        "online": bool(online_count > 0),
+        "online_count": online_count,
+        "expected_count": expected,
+        "capacity_ready": capacity_ready,
+        "release_sha": release_sha,
+        "release_sha_source": release_sha_source,
+        "worker_sha": worker_sha,
+        "worker_shas": worker_shas,
+        "sha_aligned": sha_aligned,
+        "latest_heartbeat_at": _iso(latest),
+        "observed_at": _iso(observed_at),
+        "reason": reason,
+    }
+
+
+def _state_bucket(value: Any) -> str:
+    state = _text(value)
+    if state in _SUCCESS_STATES:
+        return "ready"
+    if state in _QUEUED_STATES:
+        return "queued"
+    if state in _RUNNING_STATES:
+        return "running"
+    if state in _ACTIVE_STATES:
+        # Lineage reducers intentionally collapse queued/running/retrying into
+        # ``active``.  Keep that ambiguity instead of inventing a worker claim.
+        return "active"
+    if state in _FAILED_STATES or "failed" in state:
+        return "failed"
+    if state in _PARTIAL_STATES:
+        return "partial"
+    if state in _SKIPPED_STATES:
+        return "skipped"
+    return "not_requested"
+
+
+def _profile_bucket(item: Mapping[str, Any]) -> str:
+    payload = _mapping(item.get("payload"))
+    profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
+    explicit = _state_bucket(profile.get("status"))
+    if explicit != "not_requested":
+        return explicit
+    advance_job = _mapping(payload.get("profile_advance_job"))
+    queued = _state_bucket(advance_job.get("status"))
+    if queued != "not_requested":
+        return queued
+    stage = _text(item.get("stage"))
+    if stage in {"profile", "evidence", "analysis", "summary"}:
+        return _state_bucket(item.get("status"))
+    return "not_requested"
+
+
+def _downstream_bucket(item: Mapping[str, Any], role: str) -> str:
+    payload = _mapping(item.get("payload"))
+    downstream = _mapping(_mapping(payload.get("downstream_jobs")).get(role))
+    explicit = _state_bucket(downstream.get("state"))
+    if explicit != "not_requested":
+        return explicit
+
+    if role == "audience":
+        profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
+        enrichment = _mapping(profile.get("audience_enrichment"))
+        explicit = _state_bucket(enrichment.get("queue_status") or enrichment.get("status"))
+        if explicit != "not_requested":
+            return explicit
+        preview = _mapping(payload.get("audience_preview"))
+        explicit = _state_bucket(preview.get("status"))
+        if explicit != "not_requested":
+            return explicit
+    if role == "video" and _mapping(payload.get("analysis")):
+        return "ready"
+    return "not_requested"
+
+
+def _stage_projection(
+    key: str,
+    buckets: Sequence[str],
+    *,
+    population: int,
+    data_ready: int | None = None,
+) -> dict[str, Any]:
+    counts = {
+        bucket: sum(1 for value in buckets if value == bucket)
+        for bucket in (
+            "ready",
+            "queued",
+            "running",
+            "active",
+            "partial",
+            "failed",
+            "skipped",
+            "not_requested",
+            "unknown",
+        )
+    }
+    requested = max(0, len(buckets) - counts["not_requested"])
+    terminal = sum(counts[bucket] for bucket in _TERMINAL_BUCKETS)
+    successful = counts["ready"]
+    if requested <= 0:
+        state = "not_requested"
+    elif counts["running"]:
+        state = "running"
+    elif counts["active"]:
+        state = "active"
+    elif counts["queued"]:
+        state = "queued"
+    elif counts["failed"] or counts["partial"]:
+        state = "partial"
+    elif terminal >= requested and successful >= requested:
+        state = "ready"
+    elif terminal >= requested:
+        state = "partial"
+    else:
+        state = "pending"
+    return {
+        "key": key,
+        "population": max(0, int(population or 0)),
+        "requested": requested,
+        "successful": successful,
+        "terminal": terminal,
+        "remaining": max(0, requested - terminal),
+        "success_pct": round(successful * 100 / requested, 1) if requested else None,
+        "terminal_pct": round(terminal * 100 / requested, 1) if requested else None,
+        "state": state,
+        "counts": counts,
+        "data_ready": data_ready,
+        "data_ready_basis": "durable_field_evidence" if data_ready is not None else "not_observable_from_session",
+    }
+
+
+def _profile_data_ready(item: Mapping[str, Any], bucket: str) -> bool:
+    if bucket != "ready":
+        return False
+    payload = _mapping(item.get("payload"))
+    profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
+    return bool(item.get("kol_pool_id") or profile.get("kol_pool_id") or profile.get("profile_data"))
+
+
+def _video_data_ready(item: Mapping[str, Any], bucket: str) -> bool:
+    if bucket != "ready":
+        return False
+    payload = _mapping(item.get("payload"))
+    video_flow = _mapping(payload.get("video_flow"))
+    return bool(item.get("evidence_id") or _mapping(payload.get("analysis")) or video_flow.get("evidence_id"))
+
+
+def _audience_data_ready(item: Mapping[str, Any], bucket: str) -> bool:
+    if bucket != "ready":
+        return False
+    payload = _mapping(item.get("payload"))
+    return _text(_mapping(payload.get("audience_preview")).get("status")) == "ready"
+
+
+def project_search_progress(
+    session: Mapping[str, Any],
+    items: Sequence[Mapping[str, Any]],
+    *,
+    worker_health: Mapping[str, Any] | None = None,
+    observed_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Project one read-only, evidence-based progress contract.
+
+    Queue creation is visible as ``queued`` but contributes zero to
+    ``successful`` and ``progress_pct``.  Failed/partial work contributes to
+    terminal progress only, never to successful progress.
+    """
+
+    summary = _mapping(session.get("result_summary"))
+    stored_progress = _mapping(summary.get("progress"))
+    safe_items = [item for item in items if isinstance(item, Mapping)]
+    intended_total = max(
+        len(safe_items),
+        _positive_int(stored_progress.get("total")),
+        _positive_int(stored_progress.get("base")),
+    )
+    base_buckets = ["ready"] * min(len(safe_items), intended_total)
+    base_buckets.extend(["unknown"] * max(0, intended_total - len(base_buckets)))
+
+    profile_buckets = [_profile_bucket(item) for item in safe_items]
+    downstream_buckets = {
+        role: [_downstream_bucket(item, role) for item in safe_items]
+        for role in FULL_ANALYSIS_ROLES
+    }
+    stages = {
+        "search": _stage_projection("search", base_buckets, population=intended_total, data_ready=len(safe_items)),
+        "profile": _stage_projection(
+            "profile",
+            profile_buckets,
+            population=len(safe_items),
+            data_ready=sum(_profile_data_ready(item, bucket) for item, bucket in zip(safe_items, profile_buckets)),
+        ),
+        "video": _stage_projection(
+            "video",
+            downstream_buckets["video"],
+            population=len(safe_items),
+            data_ready=sum(
+                _video_data_ready(item, bucket)
+                for item, bucket in zip(safe_items, downstream_buckets["video"])
+            ),
+        ),
+        # The session lineage proves the comments job finished, but the compact
+        # session payload does not prove how many usable comments materialized.
+        "comments": _stage_projection(
+            "comments",
+            downstream_buckets["comments"],
+            population=len(safe_items),
+            data_ready=None,
+        ),
+        "audience": _stage_projection(
+            "audience",
+            downstream_buckets["audience"],
+            population=len(safe_items),
+            data_ready=sum(
+                _audience_data_ready(item, bucket)
+                for item, bucket in zip(safe_items, downstream_buckets["audience"])
+            ),
+        ),
+    }
+    requested_units = sum(int(stage["requested"] or 0) for stage in stages.values())
+    successful_units = sum(int(stage["successful"] or 0) for stage in stages.values())
+    terminal_units = sum(int(stage["terminal"] or 0) for stage in stages.values())
+    queued_units = sum(int(stage["counts"]["queued"] or 0) for stage in stages.values())
+    running_units = sum(int(stage["counts"]["running"] or 0) for stage in stages.values())
+    active_units = sum(int(stage["counts"]["active"] or 0) for stage in stages.values())
+    failed_units = sum(
+        int(stage["counts"]["failed"] or 0) + int(stage["counts"]["partial"] or 0)
+        for stage in stages.values()
+    )
+    worker = (
+        dict(worker_health)
+        if isinstance(worker_health, Mapping)
+        else unobserved_worker_health(observed_at=observed_at)
+    )
+    blocked_by_worker = bool(
+        worker.get("observed") is True
+        and worker.get("online") is False
+        and (queued_units > 0 or running_units > 0 or active_units > 0)
+    )
+    if blocked_by_worker:
+        state = "blocked_by_worker"
+    elif running_units:
+        state = "running"
+    elif active_units:
+        state = "active"
+    elif queued_units:
+        state = "queued"
+    elif failed_units:
+        state = "partial"
+    elif requested_units and successful_units >= requested_units:
+        state = "ready"
+    elif _text(session.get("status")) in {"failed", "cancelled"}:
+        state = _text(session.get("status"))
+    else:
+        state = "planned"
+
+    full_analysis_execution_complete = bool(
+        safe_items
+        and all(
+            stages[role]["requested"] == len(safe_items)
+            and stages[role]["successful"] == len(safe_items)
+            for role in ("profile", *FULL_ANALYSIS_ROLES)
+        )
+    )
+    full_analysis_observable = bool(
+        safe_items
+        and all(
+            stages[role]["data_ready"] is not None
+            for role in ("profile", *FULL_ANALYSIS_ROLES)
+        )
+    )
+    full_analysis_complete = bool(
+        full_analysis_execution_complete
+        and full_analysis_observable
+        and all(
+            int(stages[role]["data_ready"] or 0) == len(safe_items)
+            for role in ("profile", *FULL_ANALYSIS_ROLES)
+        )
+    )
+
+    return {
+        "schema": PROGRESS_CONTRACT_SCHEMA,
+        "claim_status": "observed_execution_only",
+        "state": state,
+        "session_status": _text(session.get("status")) or "planned",
+        "phase": _text(summary.get("phase")) or None,
+        "requested_units": requested_units,
+        "successful_units": successful_units,
+        "terminal_units": terminal_units,
+        "queued_units": queued_units,
+        "running_units": running_units,
+        "active_units": active_units,
+        "failed_units": failed_units,
+        "progress_pct": round(successful_units * 100 / requested_units, 1) if requested_units else 0.0,
+        "terminal_pct": round(terminal_units * 100 / requested_units, 1) if requested_units else 0.0,
+        "progress_pct_basis": "durable_success_only; queued_running_active_failed_not_counted_as_success",
+        "stages": stages,
+        "worker": worker,
+        "blocked_by_worker": blocked_by_worker,
+        "full_analysis_execution_complete": full_analysis_execution_complete,
+        "full_analysis_observable": full_analysis_observable,
+        "full_analysis_complete": full_analysis_complete,
+        "observed_at": _iso((observed_at or datetime.now(timezone.utc)).astimezone(timezone.utc)),
+        "sources": [
+            "vkpi_kol_search_sessions.result_summary_json",
+            "vkpi_kol_search_session_items.payload_json",
+            "vkpi_worker_heartbeat",
+        ],
+    }
+
+
+__all__ = [
+    "FULL_ANALYSIS_ROLES",
+    "PROGRESS_CONTRACT_SCHEMA",
+    "PROGRESS_STAGE_KEYS",
+    "completion_contract",
+    "observe_worker_health",
+    "project_search_progress",
+    "unobserved_worker_health",
+]

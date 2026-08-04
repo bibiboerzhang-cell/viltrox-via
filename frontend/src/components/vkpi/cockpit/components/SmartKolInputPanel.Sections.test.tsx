@@ -41,7 +41,38 @@ describe("SmartKolInputPanel search quality surfaces", () => {
     );
 
     expect(screen.getByText("public@example.com")).toBeTruthy();
-    expect(screen.getByText("受众可看")).toBeTruthy();
+    expect(screen.getByText("受众估算")).toBeTruthy();
+    expect(screen.getByText("受众估算").getAttribute("title")).toContain("ensemble_v1");
+  });
+
+  it("shows the business lane, honest backfill, and missing-data state on a candidate card", () => {
+    render(
+      <RecallMiniItem
+        index={1}
+        item={{
+          kol_pool_id: 88,
+          bucket: "creator",
+          handle: "expansion_creator",
+          display_name: "Expansion Creator",
+          platform: "instagram",
+          vector_score: 0.64,
+          profile_type: "creator",
+          type_label: "创作者",
+          creator_type_score: 80,
+          reviewer_type_score: 20,
+          candidate_bucket: "expansion",
+          match_tier: "backfill",
+          relaxed_filters: ["query_relevance"],
+          unknown_fields: ["language", "gear_content"],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("拓展型")).toBeTruthy();
+    expect(screen.getByText("补位")).toBeTruthy();
+    expect(screen.getByText("补全关键资料 · 2 项")).toBeTruthy();
+    expect(screen.queryByText("缺失：内容语言、摄影器材内容")).toBeNull();
+    expect(screen.getByText(/为何仅候选/)).toBeTruthy();
   });
 
   it("keeps history compact and exposes archive, restore, filter, and guarded clear actions", () => {

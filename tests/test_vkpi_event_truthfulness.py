@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.domains.events import radar
 from app.domains.events import service as events_service
+
+
+def _future_event_day() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
 
 
 class _Result:
@@ -43,8 +47,8 @@ class _RadarPromotionConnection:
                     "event_status": "scheduled",
                     "lane": "dealer_event",
                     "title": "Dealer Demo Day",
-                    "start_date": "2026-08-01",
-                    "end_date": "2026-08-01",
+                    "start_date": _future_event_day(),
+                    "end_date": _future_event_day(),
                     "last_verified_at": datetime.now(timezone.utc).isoformat(),
                     "official_url": "https://dealer.example/events/demo",
                 }
@@ -116,7 +120,7 @@ def test_manual_event_without_health_does_not_become_perfect_by_default(monkeypa
     monkeypatch.setattr(events_service, "get_conn", lambda: conn)
 
     events_service.create_event(
-        {"id": "evt_truth", "title": "Truth", "start_date": "2026-08-01", "end_date": "2026-08-01"},
+        {"id": "evt_truth", "title": "Truth", "start_date": _future_event_day(), "end_date": _future_event_day()},
         staff={"id": 1},
     )
 
@@ -132,8 +136,8 @@ def test_explicit_zero_health_is_preserved_instead_of_replaced_with_100(monkeypa
             "id": "evt_truth",
             "title": "Truth",
             "health_score": 0,
-            "start_date": "2026-08-01",
-            "end_date": "2026-08-01",
+            "start_date": _future_event_day(),
+            "end_date": _future_event_day(),
         },
         staff={"id": 1},
     )

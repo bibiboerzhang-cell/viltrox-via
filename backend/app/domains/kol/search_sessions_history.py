@@ -7,6 +7,11 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.kol.contact_access import mask_contact_payload
 from app.domains.kol.search_sessions_schema import TERMINAL_SESSION_STATUSES
+from app.domains.kol.search_progress_contract import (
+    observe_worker_health,
+    project_search_progress,
+    unobserved_worker_health,
+)
 from app.domains.kol.search_sessions_serde import (
     _dict,
     _int_or_none,
@@ -93,6 +98,7 @@ def list_history(
             "status": "ready",
             "count": 0,
             "items": [],
+            "worker_health": unobserved_worker_health(reason="no_sessions_worker_probe_skipped"),
             "filters": {
                 "status": normalized_status,
                 "query_type": normalized_query_type,
@@ -127,10 +133,21 @@ def list_history(
 
         apply_reach_display_gate_fn = _apply_reach_display_gate
 
+    worker_health = observe_worker_health(conn)
     history_items: list[dict[str, Any]] = []
     for session in sessions:
         session_id = int(session["id"])
         all_items = grouped.get(session_id, [])
+        progress_contract = project_search_progress(
+            session,
+            all_items,
+            worker_health=worker_health,
+        )
+        session["progress_contract"] = progress_contract
+        session["worker_health"] = dict(worker_health)
+        result_summary = _dict(session.get("result_summary")).copy()
+        result_summary["progress_contract"] = progress_contract
+        session["result_summary"] = result_summary
         all_items, reach_counts = apply_reach_display_gate_fn(conn, all_items)
         counts = _item_counts(all_items)
         preview_items = all_items[:safe_item_limit] if safe_item_limit else []
@@ -139,7 +156,6 @@ def list_history(
             for item in all_items
             if _text(item.get("status")) in {"queued", "running", "already_queued"}
         ]
-        result_summary = _dict(session.get("result_summary"))
         history_items.append(
             {
                 **session,
@@ -164,6 +180,7 @@ def list_history(
         "status": "ready",
         "count": len(history_items),
         "items": history_items,
+        "worker_health": worker_health,
         "filters": {
             "status": normalized_status,
             "query_type": normalized_query_type,

@@ -9,6 +9,7 @@ from typing import Any
 from app.core.permissions import check_tab_permission, is_owner
 from app.core.logging import get_logger
 from app.db.connection import is_postgres_runtime
+from app.domains.kol.metric_truth import project_pool_item_truth
 from app.services.cache import cache_clear, cache_set
 from app.services.system import staff as staff_service
 
@@ -46,7 +47,9 @@ logger = get_logger(__name__)
 # 早已按 llm_deep_analysis_count 等键设计,此前后端从未供给——饿死字段)。
 KOL_POOL_LIST_EXTRA_SELECT = (
     "(SELECT COUNT(*) FROM vkpi_kol_video_evidence ve WHERE ve.kol_pool_id = vkpi_kol_pool.id) AS video_evidence_count, "
-    "(SELECT COUNT(*) FROM vkpi_kol_llm_deep_analysis_results ld WHERE ld.kol_pool_id = vkpi_kol_pool.id) AS llm_deep_analysis_count"
+    "(SELECT COUNT(*) FROM vkpi_kol_llm_deep_analysis_results ld WHERE ld.kol_pool_id = vkpi_kol_pool.id) AS llm_deep_analysis_count, "
+    "CASE WHEN followers = 0 OR avg_views = 0 OR avg_likes = 0 OR avg_comments = 0 OR engagement_rate = 0 "
+    "THEN raw_platform_data ELSE NULL END AS metric_truth_raw_platform_data"
 )
 KOL_POOL_LIST_COLUMNS = (
     "id",
@@ -69,6 +72,10 @@ KOL_POOL_LIST_COLUMNS = (
     "avg_comments",
     "avg_shares",
     "engagement_rate",
+    "real_er",
+    "real_er_sample_n",
+    "real_er_computed_at",
+    "real_er_method",
     "primary_topic",
     "secondary_topics_json",
     "content_style",
@@ -286,13 +293,13 @@ def mask_pool_item(
     *,
     contact_visibility: str = CONTACT_VISIBILITY_MASKED,
 ) -> dict[str, Any]:
-    """Apply the permission-aware contact projection at every pool DTO boundary.
+    """Apply metric-truth and permission-aware contact projections at every pool DTO boundary.
 
-    红线:只改联系方式展示值;不触任何 fit/质量/产品线列。
+    红线:仅收紧事实展示并脱敏联系方式;不触任何 fit/质量/产品线列。
     """
     if not isinstance(item, dict):
         return item
-    masked = dict(item)
+    masked = project_pool_item_truth(item)
     contact_keys = {
         "email",
         "contact_email",

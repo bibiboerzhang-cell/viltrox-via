@@ -273,6 +273,7 @@ class _IdempotentPromotionConnection(_TruthGateConnection):
 
 
 def _opportunity(**overrides) -> dict[str, Any]:
+    event_day = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
     item = {
         "id": "opp_gate",
         "organization_id": 1,
@@ -282,8 +283,8 @@ def _opportunity(**overrides) -> dict[str, Any]:
         "decision_status": "new",
         "verification_status": "verified",
         "event_status": "scheduled",
-        "start_date": "2026-08-01",
-        "end_date": "2026-08-01",
+        "start_date": event_day,
+        "end_date": event_day,
         "last_verified_at": datetime.now(timezone.utc).isoformat(),
         "content_hash": "hash-v1",
         "title": "Reviewed Dealer Event",

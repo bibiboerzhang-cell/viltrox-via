@@ -245,8 +245,7 @@ run_step "redline grep (viltrox_fit_score write)" redline_fit_score
 # ---- STEP 5.5: 千行卫兵 —— 源码文件 >1000 行即 fail(F2 发布门)----
 # 复用 scripts/check_line_guard.py 的扫描口径(backend/app frontend/src scripts tests,
 # 含 .py/.ts/.tsx/.css,剔除 node_modules/dist/.venv 等)。
-# 白名单 = 2026-07-07 立门时既有的 5 个巨文件,加 2026-07-08 临时豁免的
-# profile_recall.py,当前共 6 个,只出不进。
+# 白名单 = 2026-07-07 立门时既有的 5 个巨文件,当前共 5 个,只出不进。
 # 另一个历史违规 backend/app/main.py 已在 F2 路由注册收敛中降到 1000 行内,不再豁免。
 # 【还债计划】白名单只出不进,新文件零豁免;按体量从大到小逐个拆(与 god-object
 # 瘦身同套路:AST 对照保行为不变),拆完一个就从名单删一行:
@@ -255,7 +254,6 @@ run_step "redline grep (viltrox_fit_score write)" redline_fit_score
 #   1186 backend/app/domains/projects/observation_windows.py (开窗/匹配/复盘三段拆)
 #   1116 frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx (按 Section 组件拆)
 #   1110 scripts/etl_excel_to_vkpi.py                        (历史一次性 ETL,择机归档或拆 reader/writer)
-#   1206 backend/app/domains/kol/profile_recall.py           (2026-07-08 上线前临时豁免;拆 clients/candidates/evidence/rerank,部分已起 profile_recall_relevance.py,下一阶段还债)
 line_guard_1000() {
   if ! python_available; then
     echo "[verify] Python 解释器缺失:$PYTHON_BIN"
@@ -273,8 +271,6 @@ allow = {
     "backend/app/domains/projects/observation_windows.py",
     "frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx",
     "scripts/etl_excel_to_vkpi.py",
-    # 2026-07-08 上线前临时豁免:1038 行,只超 38 行。下一阶段按职责拆分后从名单删除。
-    "backend/app/domains/kol/profile_recall.py",
 }
 proc = subprocess.run(
     [sys.executable, f"{root}/scripts/check_line_guard.py", "--limit", "1000", "--json"],
@@ -300,7 +296,7 @@ if violations:
 print(f"[verify] 千行卫兵 OK:无新增 >1000 行文件(白名单剩余 {len(exempted)} 个待还)。")
 PY
 }
-run_step "line guard >1000 (whitelist=legacy 6)" line_guard_1000
+run_step "line guard >1000 (whitelist=legacy 5)" line_guard_1000
 
 # ---- STEP 6: 运行态 trust ----
 # 默认模式允许无服务的静态 CI 跳过,但明确输出 STATIC GREEN,不得当作发布验收。
