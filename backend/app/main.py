@@ -23,7 +23,7 @@ from app.api.routers import activities, auth, admin, audit, creator, jobs, leade
 # 其余 vkpi_* 模块统一由 ADMIN_ROUTER_MODULES 注册表(routers/__init__.py)循环挂载。
 from app.api.routers import vkpi_kol_portal
 from app.api.routers import commerce, deepsight, insights, intelligence, intelligence_admin, system_admin
-from app import main_release_validation
+from app import frontend_static, main_release_validation
 from app.core.config import (
     APP_ROLE,
     CORS_ORIGINS,
@@ -816,6 +816,7 @@ app.mount("/uploads/vkpi_evidence", StaticFiles(directory=PUBLIC_VKPI_EVIDENCE_D
 if FRONTEND_ASSETS_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="frontend-assets")
 
+app.include_router(frontend_static.router)
 app.include_router(auth.router)
 app.include_router(activities.public_router)
 app.include_router(vkpi.public_router)
