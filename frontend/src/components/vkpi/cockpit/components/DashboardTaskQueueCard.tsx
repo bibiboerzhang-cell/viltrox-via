@@ -27,6 +27,21 @@ interface CostOverview {
   };
 }
 
+const ACTIVE_POLL_INTERVAL_MS = 10_000;
+const IDLE_POLL_INTERVAL_MS = 30_000;
+
+function hasActiveTasks(payload: ProgressCenterData): boolean {
+  return Number(payload.counts?.active_total || 0) > 0
+    || Number(payload.counts?.running || 0) > 0
+    || Number(payload.counts?.queued || 0) > 0
+    || payload.running.length > 0
+    || payload.queued.length > 0;
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 function taskTitle(task: ProgressTask | undefined) {
   if (!task) return "空闲 · 等待入队";
   const kind = String(task.kind || task.job_type || "").trim();
@@ -52,16 +67,85 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
 
   React.useEffect(() => {
     if (!apiToken) return;
-    let cancelled = false;
-    let timer = 0;
-    const load = () => {
-      void fetchProgressCenter({ token: apiToken })
-        .then((payload) => { if (!cancelled) setData(payload); })
-        .catch(() => { if (!cancelled) setData(null); });
+    let stopped = false;
+    let wasHidden = isDocumentHidden();
+    let timer: number | undefined;
+    let inFlight: { controller: AbortController; promise: Promise<void> } | null = null;
+
+    const clearScheduledPoll = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
     };
-    load();
-    timer = window.setInterval(load, 10000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+
+    const abortActiveRequest = () => {
+      const activeRequest = inFlight;
+      inFlight = null;
+      activeRequest?.controller.abort();
+    };
+
+    const scheduleNextPoll = (delayMs: number) => {
+      clearScheduledPoll();
+      if (stopped || isDocumentHidden()) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void pollOnce();
+      }, delayMs);
+    };
+
+    const pollOnce = (): Promise<void> => {
+      if (stopped || isDocumentHidden()) return Promise.resolve();
+      if (inFlight) return inFlight.promise;
+
+      clearScheduledPoll();
+      const controller = new AbortController();
+      const activeRequest = { controller, promise: Promise.resolve() };
+      inFlight = activeRequest;
+      let nextDelayMs = IDLE_POLL_INTERVAL_MS;
+
+      const request = (async () => {
+        try {
+          const payload = await fetchProgressCenter({ token: apiToken, signal: controller.signal });
+          if (stopped || controller.signal.aborted) return;
+          setData(payload);
+          nextDelayMs = hasActiveTasks(payload) ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
+        } catch {
+          if (stopped || controller.signal.aborted) return;
+          setData(null);
+        } finally {
+          // hidden/unmount 会先解除当前请求所有权；被中止的旧请求即使延迟结算，
+          // 也不能替新一轮再挂一个计时器。
+          if (inFlight === activeRequest) {
+            inFlight = null;
+            scheduleNextPoll(nextDelayMs);
+          }
+        }
+      })();
+      activeRequest.promise = request;
+      return request;
+    };
+
+    const handleVisibility = () => {
+      clearScheduledPoll();
+      if (isDocumentHidden()) {
+        wasHidden = true;
+        abortActiveRequest();
+        return;
+      }
+      if (!wasHidden) return;
+      wasHidden = false;
+      void pollOnce();
+    };
+
+    void pollOnce();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      stopped = true;
+      clearScheduledPoll();
+      abortActiveRequest();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [apiToken]);
 
   React.useEffect(() => {

@@ -394,7 +394,7 @@ export function OfficialMatrixModule({ apiToken, matrix }: { apiToken?: string; 
 
 /* ============ 分析动态模块(span4 小模组):进行中的分析任务 ============
    数据 = useWorkflowRunsStream(泳道/顶栏同一只读端点 task-queue/compact 的共享轮询 hook,
-   20s 间隔 + 后台标签页自动暂停,零新端点)。只挑三类与 MY KOL 采集闭环直接相关的任务:
+   30s 间隔 + 后台标签页自动暂停,零新端点)。只挑三类与 MY KOL 采集闭环直接相关的任务:
    账号分析(在分析)/ video深析(在思考)/ 评论采集(采集中)——kind 判据与后端
    queue_view._infer_kind 产出字面一致。点行 = 有 KOL 主体的任务直达 KOL Pool 该 KOL
    详情(vkpi:pending-kolpool-open-id + vkpi:open-kol-pool-item 既有事件管道,
@@ -431,7 +431,7 @@ function activityPoolId(task: TaskQueueItem): number | undefined {
 }
 
 export function AnalysisActivityModule({ apiToken, onJumpPool }: { apiToken: string; onJumpPool: () => void }) {
-  const stream = useWorkflowRunsStream(apiToken, { intervalMs: 20000, limit: 30, recentMinutes: 5 });
+  const stream = useWorkflowRunsStream(apiToken, { intervalMs: 30000, limit: 30, recentMinutes: 5 });
   const items = React.useMemo(() => {
     const active = Array.isArray(stream.payload?.active) ? stream.payload!.active! : [];
     return active.filter((task) => ACTIVITY_TASK_META[String(task.kind || "")]).slice(0, ACTIVITY_MAX_ROWS);

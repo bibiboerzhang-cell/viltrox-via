@@ -94,7 +94,7 @@ export interface ProgressCenterData {
   };
 }
 
-/** 顶栏进度中心快照(10s 轮询)。后端字段缺失/非数组一律兜底,渲染永不炸。 */
+/** 进度中心快照。轮询节奏由消费方按活跃/空闲状态控制；后端字段缺失/非数组一律兜底。 */
 export async function fetchProgressCenter(
   opts: { token?: string; signal?: AbortSignal } = {},
 ): Promise<ProgressCenterData> {
