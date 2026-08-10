@@ -15,6 +15,15 @@ from app.core.release_validation import (
 )
 
 
+_PRIVATE_SCHEMA_PATHS = frozenset({"/docs", "/redoc", "/openapi.json"})
+_ROBOTS_DENY_POLICY = "noindex, nofollow, noarchive, nosnippet, noimageindex"
+_PRIVATE_SCHEMA_DENIAL_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": _ROBOTS_DENY_POLICY,
+}
+
+
 def safe_status() -> dict[str, Any]:
     try:
         return release_validation_status()
@@ -37,9 +46,26 @@ class ReleaseValidationFenceMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        if release_validation_active() and not release_validation_request_allowed(
+        if not release_validation_active():
+            return await call_next(request)
+
+        request_path = str(request.scope.get("path") or "")
+        if request.method.upper() in {"GET", "HEAD"} and request_path in _PRIVATE_SCHEMA_PATHS:
+            if request.method.upper() == "HEAD":
+                return Response(
+                    status_code=404,
+                    media_type="application/json",
+                    headers=_PRIVATE_SCHEMA_DENIAL_HEADERS,
+                )
+            return JSONResponse(
+                {"detail": "Not Found"},
+                status_code=404,
+                headers=_PRIVATE_SCHEMA_DENIAL_HEADERS,
+            )
+
+        if not release_validation_request_allowed(
             request.method,
-            request.scope.get("path"),
+            request_path,
             request.query_params,
         ):
             return JSONResponse(
