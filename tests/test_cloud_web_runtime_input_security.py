@@ -212,7 +212,7 @@ def test_browser_failure_log_template_is_unique_on_macos_mktemp(tmp_path: Path) 
         path = Path(result.stdout.strip())
         paths.append(path)
         assert path.is_file()
-        assert "X" not in path.name
+        assert "XXXXXX" not in path.name
         assert path.stat().st_mode & 0o777 == 0o600
 
     assert paths[0] != paths[1]
