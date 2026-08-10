@@ -8,6 +8,7 @@ from app.db.connection import get_conn
 from app.domains.costs import budget_guard
 from app.platform.apify_budget_reconciliation import (
     reconcile_legacy_apify_reservation_from_ledger,
+    repair_legacy_apify_double_counted_caps,
 )
 
 
@@ -101,6 +102,31 @@ def _caps() -> tuple[float, float]:
         float(budget_guard.get_budget_status("provider:apify")["current_spend"]),
         float(budget_guard.get_budget_status("monthly_total")["current_spend"]),
     )
+
+
+def _seed_double_counted(run_id: str, *, cost: float = 0.125) -> tuple[str, int, str]:
+    key, ledger_id = _seed(run_id, cost=cost)
+    conn = get_conn()
+    settled_at = "2026-07-18T00:00:00Z"
+    conn.execute(
+        "UPDATE vkpi_ai_cost_ledger SET occurred_at='2026-07-17T00:00:00Z' WHERE id=?",
+        (ledger_id,),
+    )
+    for scope in ("provider:apify", "monthly_total"):
+        conn.execute(
+            "UPDATE vkpi_provider_budget_caps SET current_spend=current_spend+? WHERE scope=?",
+            (cost, scope),
+        )
+    conn.execute(
+        """
+        UPDATE vkpi_apify_budget_reservations
+        SET state='settled',actual_cost_usd=?,settled_at=?,metadata_json='{}'
+        WHERE reservation_key=?
+        """,
+        (cost, settled_at, key),
+    )
+    conn.commit()
+    return key, ledger_id, settled_at
 
 
 def test_legacy_ledger_reconciliation_only_repairs_reservation_and_is_idempotent() -> None:
@@ -295,3 +321,182 @@ def test_legacy_ledger_reconciliation_rejects_inconsistent_reservation(
         expected_actual_cost_usd=0.125,
     )
     assert result == {"settled": False, "reason": reason}
+
+
+def test_double_counted_cap_repair_is_atomic_audited_and_idempotent() -> None:
+    run_id = "legacy-double-counted-success"
+    key, ledger_id, settled_at = _seed_double_counted(run_id)
+    conn = get_conn()
+    ledger_count = int(conn.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"])
+    ledger_before = dict(conn.execute("SELECT * FROM vkpi_ai_cost_ledger WHERE id=?", (ledger_id,)).fetchone())
+    all_ledgers_before = [
+        dict(row) for row in conn.execute("SELECT * FROM vkpi_ai_cost_ledger ORDER BY id").fetchall()
+    ]
+    other_caps_before = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT * FROM vkpi_provider_budget_caps
+            WHERE scope NOT IN ('provider:apify','monthly_total') ORDER BY scope
+            """
+        ).fetchall()
+    ]
+    reservation_before = dict(
+        conn.execute(
+            """
+            SELECT state,actual_cost_usd,settled_at,provider_started_at,apify_run_id
+            FROM vkpi_apify_budget_reservations WHERE reservation_key=?
+            """,
+            (key,),
+        ).fetchone()
+    )
+    assert _caps() == (0.25, 0.25)
+
+    first = repair_legacy_apify_double_counted_caps(
+        key,
+        expected_ledger_id=ledger_id,
+        expected_run_id=run_id,
+        expected_terminal_status="SUCCEEDED",
+        expected_actual_cost_usd="0.125000",
+        expected_settled_at=settled_at,
+        expected_provider_current_spend="0.250000",
+        expected_monthly_current_spend="0.250000",
+    )
+    assert first["repaired"] is True
+    assert first["ledger_modified"] is False
+    assert first["reservation_state_or_actual_modified"] is False
+    assert _caps() == (0.125, 0.125)
+    assert int(conn.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"]) == ledger_count
+    assert dict(conn.execute("SELECT * FROM vkpi_ai_cost_ledger WHERE id=?", (ledger_id,)).fetchone()) == ledger_before
+    assert [
+        dict(row) for row in conn.execute("SELECT * FROM vkpi_ai_cost_ledger ORDER BY id").fetchall()
+    ] == all_ledgers_before
+    assert [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT * FROM vkpi_provider_budget_caps
+            WHERE scope NOT IN ('provider:apify','monthly_total') ORDER BY scope
+            """
+        ).fetchall()
+    ] == other_caps_before
+    reservation_after = dict(
+        conn.execute(
+            """
+            SELECT state,actual_cost_usd,settled_at,provider_started_at,apify_run_id
+            FROM vkpi_apify_budget_reservations WHERE reservation_key=?
+            """,
+            (key,),
+        ).fetchone()
+    )
+    assert reservation_after == reservation_before
+    metadata = json.loads(
+        conn.execute(
+            "SELECT metadata_json FROM vkpi_apify_budget_reservations WHERE reservation_key=?",
+            (key,),
+        ).fetchone()["metadata_json"]
+    )
+    audit = metadata["legacy_ledger_double_budget_repair"]
+    assert audit["ledger_id"] == ledger_id
+    assert audit["cap_spend_before"] == {
+        "monthly_total": "0.250000",
+        "provider:apify": "0.250000",
+    }
+    assert audit["cap_spend_after"] == {
+        "monthly_total": "0.125000",
+        "provider:apify": "0.125000",
+    }
+
+    second = repair_legacy_apify_double_counted_caps(
+        key,
+        expected_ledger_id=ledger_id,
+        expected_run_id=run_id,
+        expected_terminal_status="SUCCEEDED",
+        expected_actual_cost_usd="0.125000",
+        expected_settled_at=settled_at,
+        expected_provider_current_spend="0.250000",
+        expected_monthly_current_spend="0.250000",
+    )
+    assert second == {"repaired": False, "reason": "already_repaired", "ledger_id": ledger_id}
+    assert _caps() == (0.125, 0.125)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("late_ledger", "ledger_not_before_reservation_settlement"),
+        ("nonempty_metadata", "reservation_metadata_not_empty"),
+        ("active_claim", "provider_claim_not_terminal"),
+        ("duplicate_ledger", "ledger_run_not_unique"),
+    ],
+)
+def test_double_counted_cap_repair_rejects_ambiguous_evidence(
+    mutation: str, reason: str
+) -> None:
+    run_id = "legacy-double-reject-" + mutation.replace("_", "-")
+    key, ledger_id, settled_at = _seed_double_counted(run_id)
+    conn = get_conn()
+    if mutation == "late_ledger":
+        conn.execute(
+            "UPDATE vkpi_ai_cost_ledger SET occurred_at=? WHERE id=?",
+            (settled_at, ledger_id),
+        )
+    elif mutation == "nonempty_metadata":
+        conn.execute(
+            "UPDATE vkpi_apify_budget_reservations SET metadata_json=? WHERE reservation_key=?",
+            (json.dumps({"unexpected": True}), key),
+        )
+    elif mutation == "active_claim":
+        conn.execute("UPDATE vkpi_provider_execution_claims SET state='active'")
+    else:
+        source = dict(conn.execute("SELECT * FROM vkpi_ai_cost_ledger WHERE id=?", (ledger_id,)).fetchone())
+        conn.execute(
+            """
+            INSERT INTO vkpi_ai_cost_ledger
+              (cron_task,ai_provider,model_name,cost_usd,tokens_in,tokens_out,
+               metadata_json,occurred_at)
+            VALUES (?,?,?,?,0,0,?,?)
+            """,
+            (
+                source["cron_task"], source["ai_provider"], source["model_name"],
+                source["cost_usd"], source["metadata_json"], source["occurred_at"],
+            ),
+        )
+    conn.commit()
+    caps_before = _caps()
+    result = repair_legacy_apify_double_counted_caps(
+        key,
+        expected_ledger_id=ledger_id,
+        expected_run_id=run_id,
+        expected_terminal_status="SUCCEEDED",
+        expected_actual_cost_usd=0.125,
+        expected_settled_at=settled_at,
+        expected_provider_current_spend=0.25,
+        expected_monthly_current_spend=0.25,
+    )
+    assert result == {"repaired": False, "reason": reason}
+    assert _caps() == caps_before
+    assert conn.execute(
+        "SELECT metadata_json FROM vkpi_apify_budget_reservations WHERE reservation_key=?",
+        (key,),
+    ).fetchone()["metadata_json"] == (
+        json.dumps({"unexpected": True}) if mutation == "nonempty_metadata" else "{}"
+    )
+
+
+def test_double_counted_cap_repair_requires_exact_locked_pre_spend() -> None:
+    run_id = "legacy-double-cap-drift"
+    key, ledger_id, settled_at = _seed_double_counted(run_id)
+    caps_before = _caps()
+    result = repair_legacy_apify_double_counted_caps(
+        key,
+        expected_ledger_id=ledger_id,
+        expected_run_id=run_id,
+        expected_terminal_status="SUCCEEDED",
+        expected_actual_cost_usd=0.125,
+        expected_settled_at=settled_at,
+        expected_provider_current_spend=0.249999,
+        expected_monthly_current_spend=0.25,
+    )
+    assert result == {"repaired": False, "reason": "budget_caps_current_spend_mismatch"}
+    assert _caps() == caps_before
