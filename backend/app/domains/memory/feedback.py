@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn
 from app.domains.legacy_import.legacy_import_audit import _text
 from app.domains.legacy_import.legacy_import_staging import json_dumps
@@ -22,7 +23,12 @@ from app.domains.memory.common import (
 def readiness() -> dict[str, Any]:
     """Return a deterministic P4 dry-run readiness check for Memory."""
 
-    ensure_memory_schema()
+    # The release gate runs this existing read surface in a database-enforced
+    # read-only transaction.  Migrations already ran before the fence was
+    # installed; attempting the compatibility bootstrap here would turn an
+    # otherwise bounded SELECT into CREATE TABLE and abort the request.
+    if not release_validation_active():
+        ensure_memory_schema()
     conn = get_conn()
     entity_counts = {
         row["entity_type"]: int(row["n"])

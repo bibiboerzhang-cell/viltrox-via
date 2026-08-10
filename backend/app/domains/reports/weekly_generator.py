@@ -16,6 +16,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 
+from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.access import scope
 from app.domains.reports.report_helpers import (
@@ -99,6 +100,12 @@ def ensure_vkpi_weekly_reports_schema() -> None:
                     f"ALTER TABLE vkpi_weekly_reports ADD COLUMN {column} {declaration}"
                 )
     conn.commit()
+
+
+def _ensure_weekly_reports_read_schema() -> None:
+    """Avoid compatibility DDL inside the release-fenced read transaction."""
+    if not release_validation_active():
+        ensure_vkpi_weekly_reports_schema()
 
 
 def _safe_section(label: str, fn) -> str:
@@ -743,7 +750,7 @@ def _public_report(report: dict[str, Any], *, include_body: bool) -> dict[str, A
 
 def get_report(report_id: int, *, staff: dict[str, Any] | None = None) -> dict:
     """Get full report by ID, enforcing the weekly-report read ruling."""
-    ensure_vkpi_weekly_reports_schema()
+    _ensure_weekly_reports_read_schema()
     conn = get_conn()
     row = conn.execute(
         """
@@ -777,7 +784,7 @@ def list_reports(
     staff: dict[str, Any] | None = None,
 ) -> dict:
     """List weekly reports, scoped to the caller's read permissions."""
-    ensure_vkpi_weekly_reports_schema()
+    _ensure_weekly_reports_read_schema()
     conn = get_conn()
 
     where = ["1=1"]

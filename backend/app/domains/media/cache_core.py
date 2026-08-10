@@ -16,6 +16,7 @@ from typing import Any
 
 from app.core.config import UPLOAD_DIR, VKPI_VIDEO_CACHE_MAX_FILE_MB, VKPI_VIDEO_CACHE_MAX_TOTAL_GB
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime
 
 logger = get_logger(__name__)
@@ -258,6 +259,12 @@ def ensure_vkpi_media_cache_schema() -> None:
     _MEDIA_CACHE_SCHEMA_READY = True
 
 
+def _ensure_vkpi_media_cache_read_schema() -> None:
+    """Keep fenced cache lookups read-only; migrations own the deployed schema."""
+    if not release_validation_active():
+        ensure_vkpi_media_cache_schema()
+
+
 def _record_media_cache_asset(payload: dict[str, Any]) -> None:
     try:
         ensure_vkpi_media_cache_schema()
@@ -371,7 +378,7 @@ def _cached_asset_url_by_digest(media_kind: str, digest: str) -> str:
     if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
         return ""
     try:
-        ensure_vkpi_media_cache_schema()
+        _ensure_vkpi_media_cache_read_schema()
         row = get_conn().execute(
             """
             SELECT cache_url, r2_key
@@ -471,7 +478,7 @@ def _cached_asset_url_for_item(platform: Any, external_id: Any) -> str:
     if platform_key not in ITEM_VIDEO_CACHE_PLATFORMS or not external_key:
         return ""
     try:
-        ensure_vkpi_media_cache_schema()
+        _ensure_vkpi_media_cache_read_schema()
         row = get_conn().execute(
             """
             SELECT digest, cache_url, storage_backend, r2_key

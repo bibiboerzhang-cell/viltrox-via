@@ -759,8 +759,14 @@ def _forecast_block(members: list[dict[str, Any]], sku: str) -> dict[str, Any]:
     for member in members:
         kid = member.get("kol_pool_id")
         try:
-            # context=launchpad:预测流水(vkpi_forecast_log)按语境分桶,发射台调用如实标注。
-            fc = performance_forecast.forecast_for_kol(int(kid), sku=sku, context="launchpad")
+            # Launch assembly is a GET/read surface.  Keep the forecast fully
+            # reproducible while suppressing its optional learning-ledger write.
+            fc = performance_forecast.forecast_for_kol(
+                int(kid),
+                sku=sku,
+                context="launchpad",
+                dry_run=True,
+            )
         except Exception as exc:  # noqa: BLE001
             fc = {"status": "error", "reason": _text(str(exc), 200)}
         items.append(
