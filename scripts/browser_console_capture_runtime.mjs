@@ -286,7 +286,7 @@ async function waitForFamilySameOriginApiIdle(session, family, timeoutMs) {
   const deadline = session.overallDeadline.localDeadline(timeoutMs);
   while (Date.now() < deadline) {
     const inflight = session.inflightApiForFamily(family);
-    const lastActivity = session.networkLastActivityAt.get(family) || 0;
+    const lastActivity = session.sameOriginApiLastActivityAt.get(family) || 0;
     if (inflight === 0 && Date.now() - lastActivity >= 500) return true;
     await session.overallDeadline.wait(100);
   }

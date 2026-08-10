@@ -110,10 +110,13 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         "pageManifest.pages",
         "navigateAndProbePage",
         "beginFullDocumentNavigation",
-        "const API_IDLE_GRACE_MS = 1000",
-        "const apiIdleDeadline = Math.min(",
+        "const API_IDLE_GRACE_MS = 12000",
+        "this.sameOriginApiLastActivityAt = new Map()",
+        "request?.tracked_same_origin_api === true",
+        "const apiIdleDeadline = terminalApiIdleDeadline(",
         "session.overallDeadline.expiresAt",
-        "Math.max(deadline, Date.now() + API_IDLE_GRACE_MS)",
+        "domDeadline + API_IDLE_GRACE_MS",
+        "waitForSameOriginApiIdleUntil",
         "waitForFinalSameOriginApiIdle",
         "final same-origin API requests did not become idle before timeout",
         "navigation_discarded_prior_api: navigationDiscardedPriorApi",
@@ -206,7 +209,6 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         'await session.send("Page.navigate", { url: args.url }, args.pageTimeoutMs)'
     )
     assert network_enable < cache_disabled < service_worker_bypassed < cookie_injection < page_navigation
-
     bootstrap_auth = capture_source.index("const authProof = await requireAuthentication(session)")
     identity_probe = capture_source.index(
         "const releaseIdentity = await probeReleaseIdentity(session)", bootstrap_auth
@@ -274,6 +276,19 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
     )
     output_write_at = capture_source.index("writeFileSync(args.output", output_directory_at)
     assert serialized_at < secret_scan_at < output_directory_at < output_write_at
+
+
+def test_same_origin_api_idle_tracker_behavior() -> None:
+    node = shutil.which("node")
+    assert node, "node is required for the reviewed browser capture gate"
+    completed = subprocess.run(
+        [node, "--test", "tests/browser_console_api_idle.test.mjs"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}"
 
 
 def test_raw_capture_secret_scan_is_generic_and_never_echoes_matches() -> None:

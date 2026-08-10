@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CdpPipeConnection,
   attachFirstPageTarget,
@@ -43,7 +43,12 @@ const AUTH_PROBE_TIMEOUT_MS = 5000;
 const RELEASE_IDENTITY_PROBE_TIMEOUT_MS = 10000;
 const RELEASE_IDENTITY_SCHEMA_VERSION = "vkpi-browser-release-identity/v1";
 const RELEASE_IDENTITY_QUERY_KEY = "_vkpi_release_probe";
-const API_IDLE_GRACE_MS = 1000;
+// The product fetches use a 10s AbortSignal timeout.  After the independent DOM
+// readiness deadline, retain a real bounded window for Chromium to emit the
+// terminal loadingFinished/loadingFailed event and then prove 500ms API quiet.
+const API_IDLE_GRACE_MS = 12000;
+const API_IDLE_QUIET_MS = 500;
+const API_IDLE_POLL_MS = 100;
 const DEFAULT_PAGE_MANIFEST = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "browser_gate_pages.json",
@@ -199,7 +204,7 @@ function callFrames(stackTrace) {
   return frames;
 }
 
-class CdpSession {
+export class CdpSession {
   constructor(connection, sessionId, applicationOrigin, overallDeadline) {
     this.connection = connection;
     this.sessionId = sessionId;
@@ -210,7 +215,7 @@ class CdpSession {
     this.networkFailures = [];
     this.networkRequests = new Map();
     this.inflightSameOriginApi = new Map();
-    this.networkLastActivityAt = new Map();
+    this.sameOriginApiLastActivityAt = new Map();
     this.networkRequestTotal = 0;
     this.networkResponseTotal = 0;
     this.networkResponseErrorTotal = 0;
@@ -283,6 +288,9 @@ class CdpSession {
       const params = payload.params || {};
       const request = params.request || {};
       const requestId = String(params.requestId || "");
+      const priorRequest = this.networkRequests.get(requestId);
+      const continuesRedirectedApi = Boolean(params.redirectResponse)
+        && priorRequest?.tracked_same_origin_api === true;
       const url = String(request.url || "");
       const resourceType = String(params.type || "Other");
       this.networkRequestTotal += 1;
@@ -297,30 +305,42 @@ class CdpSession {
       } catch {
         // Invalid request URL remains non-API and cannot satisfy idle proof.
       }
+      const trackedSameOriginApi = continuesRedirectedApi || (
+        sameOriginApi
+        && resourceType !== "EventSource"
+        && resourceType !== "WebSocket"
+      );
+      const requestFamily = continuesRedirectedApi
+        ? priorRequest.family
+        : this.currentPageFamily;
       this.networkRequests.set(requestId, {
-        family: this.currentPageFamily,
+        family: requestFamily,
         same_origin_api: sameOriginApi,
         release_identity_probe: releaseIdentityProbe,
         long_lived: resourceType === "EventSource" || resourceType === "WebSocket",
+        tracked_same_origin_api: trackedSameOriginApi,
         method: String(request.method || "GET").toUpperCase().slice(0, 16),
         resource_type: resourceType.slice(0, 32),
         url: captureUrl(url),
       });
-      if (sameOriginApi && resourceType !== "EventSource" && resourceType !== "WebSocket") {
-        this.inflightSameOriginApi.set(requestId, this.currentPageFamily);
+      if (trackedSameOriginApi) {
+        this.inflightSameOriginApi.set(requestId, requestFamily);
+        this.sameOriginApiLastActivityAt.set(requestFamily, Date.now());
       }
-      this.networkLastActivityAt.set(this.currentPageFamily, Date.now());
       return;
     }
     if (payload.method === "Network.responseReceived") {
       const params = payload.params || {};
       const response = params.response || {};
       const request = this.networkRequests.get(String(params.requestId || ""));
-      const pageFamily = request?.family || this.currentPageFamily;
+      const unattributed = !request;
+      const pageFamily = request?.family || "unattributed";
       const url = captureUrl(response.url);
       const status = Number(response.status);
       this.networkResponseTotal += 1;
-      this.networkLastActivityAt.set(pageFamily, Date.now());
+      if (request?.tracked_same_origin_api === true) {
+        this.sameOriginApiLastActivityAt.set(pageFamily, Date.now());
+      }
       if (Number.isFinite(status) && status >= 400) this.networkResponseErrorTotal += 1;
       let sameOriginApi = false;
       try {
@@ -331,13 +351,19 @@ class CdpSession {
         // Malformed response URLs are retained only when they are errors below.
       }
       const releaseIdentityProbe = request?.release_identity_probe === true;
-      // Retain every same-origin API response as collection proof, plus every
-      // cache-busted release-identity response and every HTTP error from any
-      // origin. Successful third-party media is noise.
-      if (sameOriginApi || releaseIdentityProbe || (Number.isFinite(status) && status >= 400)) {
+      // Retain every same-origin API response, every final response from a
+      // tracked API redirect, every cache-busted release-identity response,
+      // and every HTTP error. Successful unrelated third-party media is noise.
+      if (
+        sameOriginApi
+        || request?.tracked_same_origin_api === true
+        || releaseIdentityProbe
+        || (Number.isFinite(status) && status >= 400)
+      ) {
         this.networkResponses.push({
           channel: payload.method,
           page_family: pageFamily,
+          unattributed,
           url,
           status: Number.isFinite(status) ? status : null,
           resource_type: String(params.type || "Other"),
@@ -354,7 +380,9 @@ class CdpSession {
       const request = this.networkRequests.get(requestId);
       this.inflightSameOriginApi.delete(requestId);
       this.networkRequests.delete(requestId);
-      this.networkLastActivityAt.set(request?.family || this.currentPageFamily, Date.now());
+      if (request?.tracked_same_origin_api === true) {
+        this.sameOriginApiLastActivityAt.set(request.family, Date.now());
+      }
       return;
     }
     if (payload.method === "Network.loadingFailed") {
@@ -363,7 +391,9 @@ class CdpSession {
       const request = this.networkRequests.get(requestId);
       this.inflightSameOriginApi.delete(requestId);
       this.networkRequests.delete(requestId);
-      this.networkLastActivityAt.set(request?.family || this.currentPageFamily, Date.now());
+      if (request?.tracked_same_origin_api === true) {
+        this.sameOriginApiLastActivityAt.set(request.family, Date.now());
+      }
       this.networkFailures.push({
         channel: payload.method,
         page_family: request?.family || this.currentPageFamily,
@@ -735,23 +765,21 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
   session.overallDeadline.assertAvailable();
   await session.overallDeadline.wait(settleMs);
   let apiIdle = false;
-  // A request may begin immediately before the primary page deadline. Give
-  // Chromium one short, explicitly budgeted terminal-event window; completion
-  // still requires Network.loadingFinished/loadingFailed and is never inferred
-  // from headers, response bytes, or a second probe.
-  const apiIdleDeadline = Math.min(
+  // A request may begin immediately before the independent DOM deadline. Give
+  // Chromium a real 12s terminal-event window *after that deadline*: this
+  // covers the frontend's 10s fetch timeout plus the 500ms API-quiet proof.
+  // Completion still requires loadingFinished/loadingFailed; we never remove
+  // an in-flight request merely because this local terminal window expires.
+  const apiIdleDeadline = terminalApiIdleDeadline(
+    deadline,
     session.overallDeadline.expiresAt,
-    Math.max(deadline, Date.now() + API_IDLE_GRACE_MS),
   );
-  while (Date.now() < apiIdleDeadline) {
-    const inflight = session.inflightApiForFamily(page.family);
-    const lastActivity = session.networkLastActivityAt.get(page.family) || startedAt;
-    if (inflight === 0 && Date.now() - lastActivity >= 500) {
-      apiIdle = true;
-      break;
-    }
-    await session.overallDeadline.wait(100);
-  }
+  apiIdle = await waitForSameOriginApiIdleUntil(
+    session,
+    page.family,
+    apiIdleDeadline,
+    { fallbackActivityAt: startedAt },
+  );
   session.overallDeadline.assertAvailable();
   proof = await pageDomProof(session, page);
   const passed = (
@@ -792,20 +820,52 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
 
 async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
   const deadline = session.overallDeadline.localDeadline(timeoutMs);
-  while (Date.now() < deadline) {
-    const lastActivity = Math.max(0, ...session.networkLastActivityAt.values());
-    if (
-      session.inflightSameOriginApi.size === 0
-      && Date.now() - lastActivity >= 500
-    ) {
-      return;
-    }
-    await session.overallDeadline.wait(100);
-  }
+  const idle = await waitForSameOriginApiIdleUntil(session, "", deadline);
   session.overallDeadline.assertAvailable();
+  if (idle) return;
   throw new Error(
     `final same-origin API requests did not become idle before timeout: ${JSON.stringify(session.inflightApiDiagnostics())}`,
   );
+}
+
+export function terminalApiIdleDeadline(domDeadline, overallExpiresAt) {
+  return Math.min(overallExpiresAt, domDeadline + API_IDLE_GRACE_MS);
+}
+
+export async function waitForSameOriginApiIdleUntil(
+  session,
+  family,
+  deadline,
+  {
+    fallbackActivityAt = 0,
+    quietMs = API_IDLE_QUIET_MS,
+    pollMs = API_IDLE_POLL_MS,
+    now = () => Date.now(),
+    wait = (milliseconds) => session.overallDeadline.wait(milliseconds),
+  } = {},
+) {
+  const isIdle = () => {
+    const inflight = family
+      ? session.inflightApiForFamily(family)
+      : session.inflightSameOriginApi.size;
+    const activityValues = family
+      ? [session.sameOriginApiLastActivityAt.get(family) || fallbackActivityAt]
+      : [...session.sameOriginApiLastActivityAt.values()];
+    const lastActivity = Math.max(fallbackActivityAt, 0, ...activityValues);
+    // Timer scheduling can resume the final bounded poll after the local
+    // deadline. Accept only when the complete quiet window itself ended no
+    // later than that deadline; post-deadline overshoot is not proof.
+    return inflight === 0
+      && lastActivity + quietMs <= Math.min(now(), deadline);
+  };
+
+  while (now() < deadline) {
+    if (isIdle()) return true;
+    await wait(Math.min(pollMs, Math.max(1, deadline - now())));
+  }
+  // Do not lose a terminal event/quiet proof delivered by the final bounded
+  // poll exactly at the local deadline. In-flight work still fails closed.
+  return isIdle();
 }
 
 async function main() {
@@ -1107,9 +1167,14 @@ async function main() {
   }));
 }
 
-main().catch((error) => {
-  console.error(
-    `browser console capture failed stage=${captureFailureStage} code=${captureFailureCode(error)}`,
-  );
-  process.exitCode = 2;
-});
+if (
+  process.argv[1]
+  && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+) {
+  main().catch((error) => {
+    console.error(
+      `browser console capture failed stage=${captureFailureStage} code=${captureFailureCode(error)}`,
+    );
+    process.exitCode = 2;
+  });
+}

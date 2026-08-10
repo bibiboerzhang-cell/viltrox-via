@@ -341,6 +341,10 @@ def _evaluate_network(
         status = raw.get("status")
         resource_type = str(raw.get("resource_type") or "Other")
         page_family = str(raw.get("page_family") or "")
+        raw_unattributed = raw.get("unattributed")
+        if raw_unattributed is not None and not isinstance(raw_unattributed, bool):
+            failures.append(f"network_response[{index}] unattributed must be boolean")
+        unattributed = raw_unattributed is True
         if channel != "Network.responseReceived":
             failures.append(f"network_response[{index}] has unsupported channel")
         if (
@@ -353,7 +357,8 @@ def _evaluate_network(
             continue
         if origin is None or not origin.startswith(("http://", "https://")):
             failures.append(f"network_response[{index}] has invalid URL")
-        if page_family not in set(REQUIRED_PAGE_FAMILIES) | {"bootstrap"}:
+        valid_families = {"unattributed"} if unattributed else {*REQUIRED_PAGE_FAMILIES, "bootstrap"}
+        if page_family not in valid_families:
             failures.append(f"network_response[{index}] has unknown page family")
         try:
             path = urlsplit(url).path
@@ -374,7 +379,8 @@ def _evaluate_network(
         )
         app_asset_name = Path(path).name
         reviewed_release_identity_resource = bool(
-            release_identity_probe
+            not unattributed
+            and release_identity_probe
             and same_origin
             and (
                 path in {"/", "/health"}
@@ -396,7 +402,8 @@ def _evaluate_network(
                 f"network_response[{index}] retained an unreviewed successful resource"
             )
         tolerated = (
-            status == 403
+            not unattributed
+            and status == 403
             and not same_origin
             and origin in allowed_external_media_403_origins
             and resource_type.lower() in {"image", "media"}
@@ -406,7 +413,7 @@ def _evaluate_network(
             tolerated_external_media_403 += 1
         if blocking:
             blocking_responses += 1
-        if same_origin_api and path == "/api/auth/me" and 200 <= status < 300:
+        if not unattributed and same_origin_api and path == "/api/auth/me" and 200 <= status < 300:
             auth_me_2xx = True
         uncached_release_probe = bool(
             reviewed_release_identity_resource
@@ -425,10 +432,13 @@ def _evaluate_network(
             {
                 "index": index,
                 "page_family": page_family,
+                "unattributed": unattributed,
                 "status": status,
                 "resource_type": resource_type[:80],
                 "provenance": (
-                    "same_origin_api"
+                    "unattributed"
+                    if unattributed
+                    else "same_origin_api"
                     if same_origin_api
                     else "same_origin_asset"
                     if same_origin
