@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import re
 import subprocess
 from pathlib import Path
@@ -89,7 +90,9 @@ def test_both_browser_controllers_start_with_an_empty_minimal_environment() -> N
     controller = re.compile(
         r'env -i \\\n'
         r'\s+PATH="\$\{BROWSER_GATE_CONTROLLER_PATH\}" \\\n'
-        r'\s+HOME=/tmp \\\n'
+        r'\s+HOME="\$\{BROWSER_GATE_OS_HOME\}" \\\n'
+        r'\s+USER="\$\{BROWSER_GATE_OS_USER\}" \\\n'
+        r'\s+LOGNAME="\$\{BROWSER_GATE_OS_USER\}" \\\n'
         r'\s+XDG_CACHE_HOME=/tmp \\\n'
         r'\s+TMPDIR=/tmp \\\n'
         r'\s+LANG=C\.UTF-8 \\\n'
@@ -109,6 +112,110 @@ def test_both_browser_controllers_start_with_an_empty_minimal_environment() -> N
             "VKPI_DEPLOY_",
         ):
             assert forbidden not in invocation
+
+
+def test_browser_controller_identity_comes_from_effective_uid_not_caller_home() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    identity_start = deploy.index('BROWSER_GATE_OS_IDENTITY="$(')
+    identity_end = deploy.index(
+        'if ! /usr/bin/codesign --verify --deep "${PRODUCTION_CHROME_APP}"',
+        identity_start,
+    )
+    identity = deploy[identity_start:identity_end]
+
+    assert "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -I -" in identity
+    assert "pwd.getpwuid(os.geteuid())" in identity
+    assert "str(entry.pw_name)" in identity
+    assert "str(entry.pw_dir)" in identity
+    assert "os.path.normpath(entry.pw_dir) != entry.pw_dir" in identity
+    assert "os.path.realpath(entry.pw_dir) != entry.pw_dir" in identity
+    assert 'BROWSER_GATE_OS_HOME="${HOME' not in deploy
+    assert '[ ! -d "${BROWSER_GATE_OS_HOME}" ]' in identity
+    assert '[ -L "${BROWSER_GATE_OS_HOME}" ]' in identity
+    assert "/usr/bin/stat -f '%u'" in identity
+    assert "/usr/bin/stat -f '%Lp'" in identity
+    assert 'BROWSER_GATE_OS_HOME_UID}" != "${BROWSER_GATE_OS_UID}' in identity
+    assert "8#${BROWSER_GATE_OS_HOME_MODE} & 8#022" in identity
+
+    for forbidden_flag in (
+        "--ignore-certificate-errors",
+        "--allow-insecure-localhost",
+        "--disable-web-security",
+    ):
+        assert forbidden_flag not in deploy
+
+
+def test_browser_identity_probe_ignores_hostile_caller_identity_environment() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    marker = "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -I - <<'PY'\n"
+    probe = deploy.split(marker, 1)[1].split("\nPY\n", 1)[0]
+    result = subprocess.run(
+        ["/usr/bin/python3", "-B", "-I", "-"],
+        input=probe,
+        env={
+            "HOME": "/tmp/hostile-home",
+            "USER": "attacker",
+            "LOGNAME": "attacker",
+            "PATH": "/usr/bin:/bin",
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    entry = pwd.getpwuid(os.geteuid())
+
+    assert result.stdout.strip() == f"{os.geteuid()}:{entry.pw_name}:{entry.pw_dir}"
+    assert "attacker" not in result.stdout
+    assert "/tmp/hostile-home" not in result.stdout
+
+
+def test_browser_capture_failure_stage_is_retained_without_changing_the_verdict() -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+
+    assert deploy.count("browser-capture-failure.log.XXXXXX") == 2
+    assert deploy.count('mktemp "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/browser-capture-failure.') == 1
+    assert deploy.count('mktemp "${POST_DEPLOY_EVIDENCE_DIR}/browser-capture-failure.') == 1
+    assert 'chmod 600 "${failure_log}"' in deploy
+    assert '2>"${failure_log}" || capture_status=$?' in deploy
+    assert 'chmod 600 "${LOCAL_BROWSER_FAILURE_LOG}"' in deploy
+    assert (
+        '2>"${LOCAL_BROWSER_FAILURE_LOG}" || BROWSER_CAPTURE_STATUS=$?'
+        in deploy
+    )
+    assert 'if [ "${capture_status}" -ne 0 ]; then' in deploy
+    assert 'if [ "${BROWSER_CAPTURE_STATUS}" -ne 0 ]; then' in deploy
+    assert 'return "${capture_status}"' in deploy
+    assert 'exit "${BROWSER_CAPTURE_STATUS}"' in deploy
+    assert 'rm -f -- "${failure_log}"' in deploy
+    assert 'rm -f -- "${LOCAL_BROWSER_FAILURE_LOG}"' in deploy
+
+
+def test_browser_failure_log_template_is_unique_on_macos_mktemp(tmp_path: Path) -> None:
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    templates = re.findall(
+        r'mktemp "\$\{(?:PREDEPLOY_BROWSER_EVIDENCE_DIR|POST_DEPLOY_EVIDENCE_DIR)\}/(browser-capture-failure[^"\n]+)"',
+        deploy,
+    )
+    assert templates == [
+        "browser-capture-failure.log.XXXXXX",
+        "browser-capture-failure.log.XXXXXX",
+    ]
+
+    paths = []
+    for template in templates:
+        result = subprocess.run(
+            ["/usr/bin/mktemp", str(tmp_path / template)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        path = Path(result.stdout.strip())
+        paths.append(path)
+        assert path.is_file()
+        assert "X" not in path.name
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    assert paths[0] != paths[1]
 
 
 def test_default_browser_token_ttl_is_derived_from_the_enforced_overall_deadline() -> None:

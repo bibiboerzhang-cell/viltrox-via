@@ -50,6 +50,11 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         '"--remote-debugging-pipe"',
         "new CdpPipeConnection(browser, overallDeadline)",
         "attachFirstPageTarget(connection, overallDeadline)",
+        "this.connection.send(method, params, this.sessionId, timeoutCapMs)",
+        'await session.send("Page.navigate", { url: args.url }, args.pageTimeoutMs)',
+        'await session.send("Page.navigate", { url: target }, timeoutMs)',
+        'let captureFailureStage = "argument_validation"',
+        "browser console capture failed stage=${captureFailureStage} code=${captureFailureCode(error)}",
         'connection.send("Target.setDiscoverTargets", { discover: true })',
         'connection.send("Target.getTargets",',
         'connection.send("Target.attachToTarget", {',
@@ -152,6 +157,7 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
     ):
         assert required in combined_source
     assert 'authenticated_surface: true' not in combined_source
+    assert "${error.message}" not in capture_source
     assert "FrameDoesNotExistError" not in combined_source
     assert "background.js" not in combined_source
     assert "VKPI_BROWSER_GATE_TOKEN=" not in combined_source
@@ -196,7 +202,9 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
         'await session.send("Network.setBypassServiceWorker"', cache_disabled
     )
     cookie_injection = capture_source.index('await session.send("Network.setCookie", {')
-    page_navigation = capture_source.index('await session.send("Page.navigate", { url: args.url })')
+    page_navigation = capture_source.index(
+        'await session.send("Page.navigate", { url: args.url }, args.pageTimeoutMs)'
+    )
     assert network_enable < cache_disabled < service_worker_bypassed < cookie_injection < page_navigation
 
     bootstrap_auth = capture_source.index("const authProof = await requireAuthentication(session)")
@@ -217,6 +225,8 @@ def test_capture_script_owns_an_ephemeral_extension_disabled_chromium_and_all_ch
     auth_at = per_page_navigation.index("await requireAuthentication(session)")
     target_at = per_page_navigation.index("const target = pageUrl", auth_at)
     navigate_at = per_page_navigation.index('await session.send("Page.navigate"', target_at)
+    assert 'await session.send("Page.navigate", { url: target }, timeoutMs)' in per_page_navigation
+    assert 'captureFailureStage = `page_readiness:${page.family}`' in per_page_navigation
     assert auth_at < target_at < discard_at < navigate_at
 
     page_loop = capture_source.split(
@@ -435,4 +445,81 @@ process.stdout.write(JSON.stringify({{
         "method": "Runtime.enable",
         "session_id": "flattened-session",
         "accepted": True,
+    }
+
+
+def test_cdp_pipe_honors_explicit_command_and_overall_timeout_bounds() -> None:
+    node = shutil.which("node")
+    assert node is not None
+    program = f"""
+import {{ EventEmitter }} from "node:events";
+import {{ PassThrough }} from "node:stream";
+import {{ CdpPipeConnection }} from {json.dumps(PIPE_PATH.as_uri())};
+
+function childWithReply(delayMs) {{
+  const child = new EventEmitter();
+  child.stdio = [null, null, null, new PassThrough(), new PassThrough()];
+  if (delayMs !== null) {{
+    child.stdio[3].once("data", (frame) => {{
+      const command = JSON.parse(frame.subarray(0, -1).toString("utf8"));
+      setTimeout(() => child.stdio[4].write(Buffer.from(JSON.stringify({{
+        id: command.id,
+        result: {{ frameId: "main" }},
+      }}) + "\\0", "utf8")), delayMs);
+    }});
+  }}
+  return child;
+}}
+
+const normalDeadline = {{
+  assertAvailable() {{}},
+  boundedTimeoutMs(value) {{ return value; }},
+}};
+const delayedChild = childWithReply(20);
+const delayedConnection = new CdpPipeConnection(delayedChild, normalDeadline);
+const delayed = await delayedConnection.send("Page.navigate", {{}}, "session", 60);
+delayedConnection.close();
+
+const commandTimeoutChild = childWithReply(null);
+const commandTimeoutConnection = new CdpPipeConnection(commandTimeoutChild, normalDeadline);
+let commandTimeout = "";
+try {{
+  await commandTimeoutConnection.send("Page.navigate", {{}}, "session", 5);
+}} catch (error) {{
+  commandTimeout = error.message;
+}}
+commandTimeoutConnection.close();
+
+const overallDeadline = {{
+  assertAvailable() {{}},
+  boundedTimeoutMs(value) {{ return Math.min(value, 3); }},
+}};
+const overallChild = childWithReply(null);
+const overallConnection = new CdpPipeConnection(overallChild, overallDeadline);
+let overallTimeout = "";
+try {{
+  await overallConnection.send("Page.navigate", {{}}, "session", 60);
+}} catch (error) {{
+  overallTimeout = error.message;
+}}
+overallConnection.close();
+
+process.stdout.write(JSON.stringify({{
+  delayed_frame: delayed.frameId,
+  command_timeout: commandTimeout,
+  overall_timeout: overallTimeout,
+}}));
+"""
+    result = subprocess.run(
+        [node, "--input-type=module", "--eval", program],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(result.stdout) == {
+        "delayed_frame": "main",
+        "command_timeout": "Page.navigate timed out",
+        "overall_timeout": "browser_gate_overall_timeout",
     }

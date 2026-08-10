@@ -644,7 +644,11 @@ def test_capture_cli_rejects_an_unbounded_or_too_short_overall_deadline(
         text=True,
     )
     assert completed.returncode == 2
-    assert "--overall-timeout-ms must be an integer within" in completed.stderr
+    assert (
+        "browser console capture failed stage=argument_validation "
+        "code=invalid_overall_timeout"
+    ) in completed.stderr
+    assert "--overall-timeout-ms must be an integer within" not in completed.stderr
     assert not (tmp_path / "capture.json").exists()
 
 

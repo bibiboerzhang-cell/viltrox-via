@@ -1488,6 +1488,63 @@ if [ ! -x "${POST_DEPLOY_CHROME_PATH}" ]; then
   echo "Post-restart extension-free Chrome is not executable: ${POST_DEPLOY_CHROME_PATH}" >&2
   exit 1
 fi
+# Chromium on macOS delegates HTTPS trust evaluation to the signed-in account's
+# Security framework context.  A synthetic HOME such as /tmp makes Chrome 151
+# stall in SecTrustSettingsXPCRead before Page.navigate can acknowledge, even
+# though the owned browser still starts and the page may partially execute.
+# Derive the minimum non-secret account identity from the effective uid rather
+# than trusting caller-controlled HOME/USER/LOGNAME.  The browser continues to
+# use a fresh --user-data-dir, incognito mode, disabled extensions, and the
+# controller's strict child-environment allowlist.
+BROWSER_GATE_OS_IDENTITY="$(
+  PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -I - <<'PY'
+import os
+import pwd
+
+entry = pwd.getpwuid(os.geteuid())
+values = (str(os.geteuid()), str(entry.pw_name), str(entry.pw_dir))
+if any(not value or ":" in value or "\n" in value or "\r" in value for value in values):
+    raise SystemExit(1)
+if (
+    not os.path.isabs(entry.pw_dir)
+    or os.path.normpath(entry.pw_dir) != entry.pw_dir
+    or os.path.realpath(entry.pw_dir) != entry.pw_dir
+):
+    raise SystemExit(1)
+print(":".join(values))
+PY
+)" || {
+  BROWSER_GATE_OS_IDENTITY=""
+  echo "Reviewed browser gate could not resolve the effective macOS account identity." >&2
+  exit 1
+}
+IFS=: read -r BROWSER_GATE_OS_UID BROWSER_GATE_OS_USER BROWSER_GATE_OS_HOME BROWSER_GATE_OS_EXTRA \
+  <<<"${BROWSER_GATE_OS_IDENTITY}"
+BROWSER_GATE_OS_IDENTITY=""
+if ! [[ "${BROWSER_GATE_OS_UID}" =~ ^[1-9][0-9]*$ ]] \
+  || ! [[ "${BROWSER_GATE_OS_USER}" =~ ^[A-Za-z0-9._-]+$ ]] \
+  || [ "${BROWSER_GATE_OS_USER}" = "." ] \
+  || [ "${BROWSER_GATE_OS_USER}" = ".." ] \
+  || [ -n "${BROWSER_GATE_OS_EXTRA}" ] \
+  || [ "${BROWSER_GATE_OS_HOME#/}" = "${BROWSER_GATE_OS_HOME}" ] \
+  || [ ! -d "${BROWSER_GATE_OS_HOME}" ] \
+  || [ -L "${BROWSER_GATE_OS_HOME}" ]; then
+  echo "Reviewed browser gate macOS account identity is unsafe." >&2
+  exit 1
+fi
+if ! BROWSER_GATE_OS_HOME_UID="$(/usr/bin/stat -f '%u' "${BROWSER_GATE_OS_HOME}")" \
+  || ! BROWSER_GATE_OS_HOME_MODE="$(/usr/bin/stat -f '%Lp' "${BROWSER_GATE_OS_HOME}")"; then
+  echo "Reviewed browser gate macOS home metadata is unavailable." >&2
+  exit 1
+fi
+if [ "${BROWSER_GATE_OS_HOME_UID}" != "${BROWSER_GATE_OS_UID}" ] \
+  || ! [[ "${BROWSER_GATE_OS_HOME_MODE}" =~ ^[0-7]{3,4}$ ]] \
+  || (( (8#${BROWSER_GATE_OS_HOME_MODE} & 8#022) != 0 )); then
+  echo "Reviewed browser gate macOS home ownership or mode is unsafe." >&2
+  exit 1
+fi
+BROWSER_GATE_OS_HOME_UID=""
+BROWSER_GATE_OS_HOME_MODE=""
 if ! /usr/bin/codesign --verify --deep "${PRODUCTION_CHROME_APP}" >/dev/null 2>&1; then
   echo "Reviewed production Chrome failed deep code-signature verification." >&2
   exit 1
@@ -1653,6 +1710,7 @@ run_predeploy_embedded_browser_gate() {
   local capture_status=0
   local capture_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/capture.json"
   local report_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/gate-report.json"
+  local failure_log=""
 
   verify_deploy_candidate
   assert_deploy_source_unchanged
@@ -1691,9 +1749,15 @@ run_predeploy_embedded_browser_gate() {
     return 1
   fi
 
+  failure_log="$(
+    mktemp "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/browser-capture-failure.log.XXXXXX"
+  )"
+  chmod 600 "${failure_log}"
   env -i \
     PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
-    HOME=/tmp \
+    HOME="${BROWSER_GATE_OS_HOME}" \
+    USER="${BROWSER_GATE_OS_USER}" \
+    LOGNAME="${BROWSER_GATE_OS_USER}" \
     XDG_CACHE_HOME=/tmp \
     TMPDIR=/tmp \
     LANG=C.UTF-8 \
@@ -1707,12 +1771,13 @@ run_predeploy_embedded_browser_gate() {
     --page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}" \
     --page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}" \
     --overall-timeout-ms "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" \
-    --chrome "${POST_DEPLOY_CHROME_PATH}" >/dev/null || capture_status=$?
+    --chrome "${POST_DEPLOY_CHROME_PATH}" >/dev/null 2>"${failure_log}" || capture_status=$?
   token=""
   if [ "${capture_status}" -ne 0 ]; then
-    echo "Local embedded-production browser capture failed; no remote change was made." >&2
+    echo "Local embedded-production browser capture failed; stage evidence retained at ${failure_log}; no remote change was made." >&2
     return "${capture_status}"
   fi
+  rm -f -- "${failure_log}"
 
   "${PROJECT_ROOT}/.venv/bin/python" -B \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
@@ -4530,6 +4595,9 @@ LOCAL_LOG_CANARY="${POST_DEPLOY_EVIDENCE_DIR}/runtime-log-canary.json"
 LOCAL_ACCEPTANCE_REPORT="${POST_DEPLOY_EVIDENCE_DIR}/release-acceptance.json"
 LOCAL_BROWSER_CAPTURE="${POST_DEPLOY_EVIDENCE_DIR}/browser-capture.json"
 LOCAL_BROWSER_REPORT="${POST_DEPLOY_EVIDENCE_DIR}/browser-gate-report.json"
+LOCAL_BROWSER_FAILURE_LOG="$(
+  mktemp "${POST_DEPLOY_EVIDENCE_DIR}/browser-capture-failure.log.XXXXXX"
+)"
 LOCAL_APIFY_WORKER_PROCESS_BINDING="${POST_DEPLOY_EVIDENCE_DIR}/apify-worker-process-binding.json"
 REMOTE_LOG_BASELINE="/tmp/vkpi-runtime-log-baseline-${WORKER_BOOT_NONCE_SHA256}.json"
 REMOTE_ACCEPTANCE_REPORT="/tmp/vkpi-release-acceptance-${WORKER_BOOT_NONCE_SHA256}.json"
@@ -4601,9 +4669,12 @@ fi
 verify_deploy_candidate
 assert_deploy_source_unchanged
 BROWSER_CAPTURE_STATUS=0
+chmod 600 "${LOCAL_BROWSER_FAILURE_LOG}"
 env -i \
   PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
-  HOME=/tmp \
+  HOME="${BROWSER_GATE_OS_HOME}" \
+  USER="${BROWSER_GATE_OS_USER}" \
+  LOGNAME="${BROWSER_GATE_OS_USER}" \
   XDG_CACHE_HOME=/tmp \
   TMPDIR=/tmp \
   LANG=C.UTF-8 \
@@ -4617,12 +4688,13 @@ env -i \
   --page-settle-ms "${BROWSER_GATE_PAGE_SETTLE_MS}" \
   --page-timeout-ms "${BROWSER_GATE_PAGE_TIMEOUT_MS}" \
   --overall-timeout-ms "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" \
-  --chrome "${POST_DEPLOY_CHROME_PATH}" || BROWSER_CAPTURE_STATUS=$?
+  --chrome "${POST_DEPLOY_CHROME_PATH}" 2>"${LOCAL_BROWSER_FAILURE_LOG}" || BROWSER_CAPTURE_STATUS=$?
 POST_DEPLOY_BROWSER_TOKEN=""
 if [ "${BROWSER_CAPTURE_STATUS}" -ne 0 ]; then
-  echo "Post-restart authenticated browser capture failed." >&2
+  echo "Post-restart authenticated browser capture failed; stage evidence retained at ${LOCAL_BROWSER_FAILURE_LOG}." >&2
   exit "${BROWSER_CAPTURE_STATUS}"
 fi
+rm -f -- "${LOCAL_BROWSER_FAILURE_LOG}"
 "${PROJECT_ROOT}/.venv/bin/python" \
   "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
   --input "${LOCAL_BROWSER_CAPTURE}" \

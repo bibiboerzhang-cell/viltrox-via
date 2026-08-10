@@ -48,6 +48,23 @@ const DEFAULT_PAGE_MANIFEST = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "browser_gate_pages.json",
 );
+let captureFailureStage = "argument_validation";
+
+function captureFailureCode(error) {
+  const message = String(error?.message || "");
+  if (message === "Page.navigate timed out") return "cdp_page_navigate_timeout";
+  if (message === "browser_gate_overall_timeout") return "overall_timeout";
+  if (message.startsWith("--overall-timeout-ms must be an integer within")) {
+    return "invalid_overall_timeout";
+  }
+  if (message === "browser_gate_bootstrap_load_incomplete") return "bootstrap_load_incomplete";
+  if (message === "browser_gate_token_expired") return "authentication_failed";
+  if (message === "browser_capture_secret_scan_failed") return "secret_scan_failed";
+  if (message.startsWith("browser_gate_first_page_failed:")) return "page_readiness_failed";
+  if (message.startsWith("final same-origin API requests did not become idle")) return "api_idle_timeout";
+  if (message.startsWith("owned Chromium CDP pipe failed:")) return "cdp_transport_failed";
+  return "capture_failed";
+}
 
 function parseArgs(argv) {
   const result = {
@@ -358,8 +375,8 @@ class CdpSession {
     }
   }
 
-  send(method, params = {}) {
-    return this.connection.send(method, params, this.sessionId);
+  send(method, params = {}, timeoutCapMs = 15000) {
+    return this.connection.send(method, params, this.sessionId, timeoutCapMs);
   }
 
   close() {
@@ -696,7 +713,9 @@ async function navigateAndProbePage(session, baseUrl, page, timeoutMs, settleMs)
   const startedAt = Date.now();
   const responseStart = session.networkResponses.length;
   const failureStart = session.networkFailures.length;
-  await session.send("Page.navigate", { url: target });
+  captureFailureStage = `page_navigation:${page.family}`;
+  await session.send("Page.navigate", { url: target }, timeoutMs);
+  captureFailureStage = `page_readiness:${page.family}`;
   const deadline = session.overallDeadline.localDeadline(timeoutMs);
   let proof = {};
   while (Date.now() < deadline) {
@@ -791,6 +810,7 @@ async function waitForFinalSameOriginApiIdle(session, timeoutMs) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  captureFailureStage = "configuration";
   const overallDeadline = new OverallDeadline(args.overallTimeoutMs);
   const targetUrl = new URL(args.url);
   const pageManifest = loadPageManifest(args.manifest);
@@ -833,6 +853,7 @@ async function main() {
   let capture;
   let cleanup = { browser_exited: false, profile_removed: false };
   try {
+    captureFailureStage = "browser_attach";
     connection = new CdpPipeConnection(browser, overallDeadline);
     const target = await attachFirstPageTarget(connection, overallDeadline);
     session = new CdpSession(connection, target.sessionId, targetUrl.origin, overallDeadline);
@@ -884,10 +905,13 @@ async function main() {
         };
       })();`,
     });
-    await session.send("Page.navigate", { url: args.url });
+    captureFailureStage = "bootstrap_navigation";
+    await session.send("Page.navigate", { url: args.url }, args.pageTimeoutMs);
+    captureFailureStage = "bootstrap_load";
     const loadDeadline = overallDeadline.localDeadline(30000);
     while (!session.loadCompleted && Date.now() < loadDeadline) await overallDeadline.wait(100);
     overallDeadline.assertAvailable();
+    if (!session.loadCompleted) throw new Error("browser_gate_bootstrap_load_incomplete");
     await overallDeadline.wait(args.settleMs);
     const bootstrapNavigationCompleted = session.loadCompleted === true;
 
@@ -895,6 +919,7 @@ async function main() {
     // writing a token to localStorage is not evidence that the token is valid:
     // /api/auth/me must return 2xx + status=success + a user object. Keep only
     // booleans/status in the capture; never persist the token or user payload.
+    captureFailureStage = "authentication";
     const authProof = await requireAuthentication(session);
 
     // A successful auth API probe is still insufficient if the browser ended
@@ -913,10 +938,12 @@ async function main() {
     // this document with a separately cache-busted index and hashes the exact
     // cache-busted app bytes. The verifier supplies the frozen candidate's
     // expected SHA, asset name and digest independently.
+    captureFailureStage = "release_identity";
     const releaseIdentity = await probeReleaseIdentity(session);
     // Keep CSP enforcement untouched. A sandboxed srcdoc frame with scripts
     // enabled but no same-origin privilege becomes an opaque `null` origin,
     // proving the renderer-only bearer cannot cross that origin boundary.
+    captureFailureStage = "credential_isolation";
     const credentialIsolationProof = await proveOpaqueOriginTokenIsolation(session);
 
     // Exercise every reviewed cockpit family in the same clean browser. Each
@@ -935,6 +962,7 @@ async function main() {
       );
       pages.push(pageResult);
       if (page.family === "kol-pool") {
+        captureFailureStage = "functional_proof:kol-pool";
         functionalProof = await runKolPoolFunctionalJourney(session, args.pageTimeoutMs);
       }
       if (pageIndex === 0 && pageResult.page_settled !== true) {
@@ -953,6 +981,7 @@ async function main() {
     // requests that start after the last per-page idle proof. Require one
     // fleet-wide quiet window and then synchronously freeze the evidence. A
     // timeout aborts the capture instead of rewriting a non-zero final count.
+    captureFailureStage = "final_api_idle";
     await waitForFinalSameOriginApiIdle(session, args.pageTimeoutMs);
     overallDeadline.assertAvailable();
     const finalNetworkSnapshot = {
@@ -1061,6 +1090,7 @@ async function main() {
     cleanup.profile_removed = true;
   }
   capture.cleanup = cleanup;
+  captureFailureStage = "evidence_serialization";
   const serializedCapture = `${JSON.stringify(capture, null, 2)}\n`;
   assertBrowserCaptureCredentialFree(serializedCapture, [token]);
   mkdirSync(path.dirname(path.resolve(args.output)), { recursive: true });
@@ -1078,6 +1108,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`browser console capture failed: ${error.message}`);
+  console.error(
+    `browser console capture failed stage=${captureFailureStage} code=${captureFailureCode(error)}`,
+  );
   process.exitCode = 2;
 });
