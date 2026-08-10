@@ -182,6 +182,12 @@ _READ_ONLY_GET_PATTERNS = (
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/(?:signature|videos)$"),
     re.compile(r"^/api/admin/vkpi/kol-search-sessions/[1-9][0-9]*$"),
     re.compile(r"^/api/(?:admin/vkpi/media|vkpi-media)/image-cache/[0-9a-f]{64}$"),
+    # Persisted Advisor history is a bounded owner-scoped SELECT.  Keep the
+    # pattern exact so the neighbouring provider-backed ``/messages/stream``
+    # route remains fenced during release validation.
+    re.compile(
+        r"^/api/admin/vkpi/marketing-advisor/threads/[A-Za-z0-9_-]{1,80}/messages$"
+    ),
     re.compile(r"^/api/admin/vkpi/sku/[^/]+/profile$"),
     re.compile(r"^/api/admin/vkpi/weekly-reports/[0-9]+$"),
 )

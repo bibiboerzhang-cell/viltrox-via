@@ -201,9 +201,24 @@ def test_browser_capture_read_paths_are_explicitly_available() -> None:
         "/api/marketing/channels/111/posts",
         "/api/admin/vkpi/kol-pool/4234/signature",
         "/api/admin/vkpi/kol-pool/4234/videos",
+        "/api/admin/vkpi/marketing-advisor/threads/advthr_0123456789abcdef/messages",
+        "/api/marketing/marketing-advisor/threads/advthr_0123456789abcdef/messages",
         "/api/vkpi-media/image-cache/" + "a" * 64,
     ):
         assert release_validation.release_validation_request_allowed("GET", path), path
+
+
+def test_advisor_history_read_does_not_open_stream_or_mutation_while_fenced() -> None:
+    messages = (
+        "/api/admin/vkpi/marketing-advisor/threads/"
+        "advthr_0123456789abcdef/messages"
+    )
+    assert release_validation.release_validation_request_allowed("GET", messages)
+    assert release_validation.release_validation_request_allowed("HEAD", messages)
+    assert not release_validation.release_validation_request_allowed(
+        "GET", f"{messages}/stream"
+    )
+    assert not release_validation.release_validation_request_allowed("POST", messages)
 
 
 def test_event_refresh_preview_is_post_only_while_fenced() -> None:

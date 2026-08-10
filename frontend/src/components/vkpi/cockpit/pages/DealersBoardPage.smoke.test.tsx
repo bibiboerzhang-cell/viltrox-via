@@ -444,7 +444,9 @@ describe("DealersBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () 
   it("地图只绘制已显式发布且坐标齐全的业务行，来源候选队列不上图", async () => {
     renderBoard();
     expect(await screen.findByTestId("dealer-trust-pipeline")).toBeTruthy();
-    expect(screen.getByTestId("real-map-stub").getAttribute("data-pins")).toBe("2");
+    await waitFor(() => {
+      expect(screen.getByTestId("real-map-stub").getAttribute("data-pins")).toBe("2");
+    });
     expect(screen.getByText("来源候选待审 12 · 不上图")).toBeTruthy();
     expect(screen.getByText("地图层：已显式发布 + 坐标齐全")).toBeTruthy();
     expect(screen.getByRole("option", { name: "全部美国已发布定位记录" })).toBeTruthy();

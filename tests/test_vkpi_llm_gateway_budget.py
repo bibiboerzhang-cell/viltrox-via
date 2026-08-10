@@ -338,3 +338,39 @@ def test_report_analysis_scope_is_a_daily_window() -> None:
         assert str(row["reset_at"]) == _tomorrow_midnight_utc()  # 日窗,不是月窗
     finally:
         _restore_scope(scope, snapshot)
+
+
+def test_expired_window_stays_fail_closed_without_write_while_release_fenced(monkeypatch) -> None:
+    scope = "cron:release_validation_window_probe"
+    snapshot = _snapshot_scope(scope)
+    expired = _yesterday_utc()
+    try:
+        budget_guard.update_budget(
+            scope,
+            {
+                "cap_usd": 4.0,
+                "current_spend": 4.0,
+                "reset_at": _tomorrow_midnight_utc(),
+                "fallback_action": "fallback_to_rule_v0",
+            },
+        )
+        conn = get_conn()
+        conn.execute(
+            "UPDATE vkpi_provider_budget_caps "
+            "SET current_spend=?, reset_at=? WHERE scope=?",
+            (4.0, expired, scope),
+        )
+        conn.commit()
+        monkeypatch.setattr(budget_guard, "release_validation_active", lambda: True)
+
+        status = budget_guard.get_budget_status(scope)
+
+        assert float(status["current_spend"]) == 4.0
+        assert status["hard_stopped"] is True
+        assert str(status["reset_at"]) == expired
+        persisted = _snapshot_scope(scope)
+        assert persisted is not None
+        assert float(persisted["current_spend"]) == 4.0
+        assert str(persisted["reset_at"]) == expired
+    finally:
+        _restore_scope(scope, snapshot)

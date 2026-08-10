@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.costs.budget_guard_persistence import (
     clean_value as _persistence_clean_value,
@@ -159,14 +160,11 @@ def _is_monthly_window_scope(scope_key: str) -> bool:
 def _maybe_roll_budget_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
     """窗口池惰性滚动(不依赖调度器;非窗口 scope 原样返回)。
 
-    日窗(cron:*、dashboard:report_analysis):reset_at 过期(或从未设置)即清零并
-    推进到下一个 UTC 零点。根因修复:官号日报『$4/日』被实现成『$4/终身』——39 笔后
-    永久 hard stop(06-19 停摆悬案);全库原本无任何重置写方。
+    日窗(cron:*、dashboard:report_analysis):reset_at 过期(或从未设置)即清零并推进到
+    下一个 UTC 零点。修复官号日报『$4/日』被实现成『$4/终身』后的永久 hard stop。
 
-    月窗(monthly_total、provider:*):同样此前无任何重置写方=『$X/月』实为『$X/终身』。
-    reset_at 过期即清零并推进到下月 1 日(UTC);reset_at 从未设置时只补窗口锚点、
-    不清零 —— 既有累计发生在锚点之前,凭空清零等于部署瞬间放开一整月预算,也会
-    回归既有台账断言(record→读回 current_spend 累计口径)。"""
+    月窗(monthly_total、provider:*):reset_at 过期即清零并推进到下月 1 日(UTC);
+    从未设置时只补窗口锚点、不清零，保留既有累计与台账读回口径。"""
     scope_key = str(row.get("scope") or "")
     daily = _is_daily_window_scope(scope_key)
     monthly = _is_monthly_window_scope(scope_key)
@@ -189,6 +187,8 @@ def _maybe_roll_budget_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
     else:
         next_reset = f"{now.year:04d}-{now.month + 1:02d}-01T00:00:00Z"
     zero_spend = daily or bool(reset_raw)
+    if release_validation_active():  # Preserve persisted hard-stop; live traffic rolls after activation.
+        return row
     try:
         if zero_spend:
             conn.execute(

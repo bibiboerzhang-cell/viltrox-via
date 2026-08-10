@@ -37,21 +37,27 @@ describe("lazy 三板块(KolPool/Shopify/Dealers)Suspense 挂载", () => {
   it("KOL Pool:fallback 先出 → chunk 到货真渲染(具名别名→default 映射不落空)", async () => {
     mountLazy(<KOLPoolPage items={[]} loading={false} error="" apiToken="" staff={[]} />, "KolPool");
     expect(screen.getByText("KolPool 加载中...")).toBeTruthy();
-    expect((await screen.findAllByText(/未登录 \/ 无 token/)).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByText(/未登录 \/ 无 token/, {}, { timeout: 5_000 })).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText("KolPool 加载中...")).toBeNull();
   });
 
   it("Shopify:fallback 先出 → 无 token 诚实卡", async () => {
     mountLazy(<ShopifyBoardPage apiToken="" />, "Shopify");
     expect(screen.getByText("Shopify 加载中...")).toBeTruthy();
-    expect((await screen.findAllByText(/未登录 \/ 无 token/)).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByText(/未登录 \/ 无 token/, {}, { timeout: 5_000 })).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText("Shopify 加载中...")).toBeNull();
   });
 
   it("Dealers:fallback 先出 → 无 token 诚实卡", async () => {
     mountLazy(<DealerMapPage apiToken="" />, "Dealers");
     expect(screen.getByText("Dealers 加载中...")).toBeTruthy();
-    expect((await screen.findAllByText(/未登录 \/ 无 token/)).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByText(/未登录 \/ 无 token/, {}, { timeout: 5_000 })).length,
+    ).toBeGreaterThan(0);
     expect(screen.queryByText("Dealers 加载中...")).toBeNull();
   });
 });
