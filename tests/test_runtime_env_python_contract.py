@@ -10,6 +10,11 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import runtime_env as runtime_env_contract  # noqa: E402
+
+
 PROBE_KEYS = (
     "ENVIRONMENT",
     "DATABASE_URL",
@@ -338,3 +343,92 @@ def test_production_like_runtime_fails_closed_without_reviewed_auth_secrets(
     assert "viltrox2-local-dev-secret-change-me" not in completed.stderr
     assert "AdminPass123!" not in completed.stderr
     assert "reviewed-production" not in completed.stderr
+
+
+def _production_auth_category(env_path: Path) -> str:
+    return runtime_env_contract._production_auth_file_contract_category(
+        env_path,
+        expected_owner_uid=os.getuid(),
+        expected_group_gid=os.getgid(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("env_text", "expected"),
+    [
+        (
+            "JWT_SECRET=reviewed-production-jwt-secret\n"
+            "ADMIN_PASSWORD=reviewed-production-admin-password\n",
+            "verified",
+        ),
+        ("ADMIN_PASSWORD=reviewed-production-admin-password\n", "jwt_secret_missing"),
+        (
+            "JWT_SECRET=viltrox2-local-dev-secret-change-me\n"
+            "ADMIN_PASSWORD=reviewed-production-admin-password\n",
+            "jwt_secret_public_default",
+        ),
+        ("JWT_SECRET=reviewed-production-jwt-secret\n", "admin_password_missing"),
+        (
+            "JWT_SECRET=reviewed-production-jwt-secret\n"
+            "ADMIN_PASSWORD=AdminPass123!\n",
+            "admin_password_public_default",
+        ),
+    ],
+)
+def test_production_auth_preflight_returns_only_fixed_secret_categories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_text: str,
+    expected: str,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(env_text, encoding="utf-8")
+    env_path.chmod(0o640)
+    monkeypatch.setenv("JWT_SECRET", "caller-jwt-sentinel")
+    monkeypatch.setenv("ADMIN_PASSWORD", "caller-admin-sentinel")
+
+    category = _production_auth_category(env_path)
+
+    assert category == expected
+    assert os.environ["JWT_SECRET"] == "caller-jwt-sentinel"
+    assert os.environ["ADMIN_PASSWORD"] == "caller-admin-sentinel"
+    assert "reviewed-production" not in category
+    assert "AdminPass123!" not in category
+    assert "viltrox2-local-dev-secret-change-me" not in category
+
+
+def test_production_auth_preflight_enforces_regular_single_link_0640_identity(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing.env"
+    assert _production_auth_category(missing) == "env_missing"
+
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "JWT_SECRET=reviewed-production-jwt-secret\n"
+        "ADMIN_PASSWORD=reviewed-production-admin-password\n",
+        encoding="utf-8",
+    )
+    env_path.chmod(0o600)
+    assert _production_auth_category(env_path) == "env_mode_invalid"
+
+    env_path.chmod(0o640)
+    assert runtime_env_contract._production_auth_file_contract_category(
+        env_path,
+        expected_owner_uid=os.getuid() + 1,
+        expected_group_gid=os.getgid(),
+    ) == "env_owner_invalid"
+    assert runtime_env_contract._production_auth_file_contract_category(
+        env_path,
+        expected_owner_uid=os.getuid(),
+        expected_group_gid=os.getgid() + 1,
+    ) == "env_group_invalid"
+
+    alias = tmp_path / "env-hardlink"
+    os.link(env_path, alias)
+    assert _production_auth_category(env_path) == "env_link_count_invalid"
+    alias.unlink()
+
+    symlink = tmp_path / "env-symlink"
+    symlink.symlink_to(env_path)
+    assert _production_auth_category(symlink) == "env_not_regular"

@@ -1,10 +1,35 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { feature } from "topojson-client";
 import { useTheme } from "../../../../app/providers/ThemeProvider";
+
+export type RealMapBasemapMode = "local" | "online";
+
+export const DEFAULT_REAL_MAP_BASEMAP_MODE: RealMapBasemapMode = "local";
+export const LOCAL_WORLD_TOPOLOGY_URL = "/data/world-110m.json";
+
+export function shouldRequestExternalBasemap(mode: RealMapBasemapMode) {
+  return mode === "online";
+}
+
+export function cartoTileUrl(theme: unknown) {
+  const style = theme === "dark" ? "dark" : "light";
+  return `https://{s}.basemaps.cartocdn.com/${style}_all/{z}/{x}/{y}{r}.png`;
+}
+
+export function basemapModeAfterTileError(mode: RealMapBasemapMode): RealMapBasemapMode {
+  return mode === "online" ? "local" : mode;
+}
+
+export function worldTopologyToGeoJson(topology: any) {
+  const countryObject = topology?.objects?.countries;
+  if (!countryObject) throw new Error("world topology is missing countries");
+  return feature(topology, countryObject);
+}
 
 function finitePin(pin: any) {
   return Number.isFinite(Number(pin?.lat)) && Number.isFinite(Number(pin?.lng));
@@ -223,11 +248,16 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
   const { theme } = useTheme();
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
+  const localLayerRef = useRef<any>(null);
   const tileLayerRef = useRef<any>(null);
+  const tileErrorHandlerRef = useRef<(() => void) | null>(null);
   const tileStyleRef = useRef<"light" | "dark" | null>(null);
   const markersRef = useRef<any[]>([]);
   const networkRef = useRef<any[]>([]);
   const onPinClickRef = useRef(onPinClick);
+  const [basemapMode, setBasemapMode] = useState<RealMapBasemapMode>(DEFAULT_REAL_MAP_BASEMAP_MODE);
+  const [basemapNotice, setBasemapNotice] = useState("");
+  const [worldGeoJson, setWorldGeoJson] = useState<any>(null);
   onPinClickRef.current = onPinClick;
   
   // Leaflet init - 只跑一次,跟 minimal_map 一样的代码
@@ -243,45 +273,141 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
     
     const map = L.map(container, { preferCanvas: true }).setView([initialLat, initialLng], initialZoom);
     
-    const initialTheme = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
-    const layer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${initialTheme}_all/{z}/{x}/{y}{r}.png`, {
-      attribution: '© CARTO',
-      subdomains: 'abcd',
-      maxZoom: 19,
-    });
-    layer.addTo(map);
-    tileLayerRef.current = layer;
-    tileStyleRef.current = initialTheme;
-    
     mapRef.current = map;
     
     // 一次 invalidateSize 确保尺寸
     const resizeTimer = window.setTimeout(() => map.invalidateSize(), 100);
     return () => {
       window.clearTimeout(resizeTimer);
-        markersRef.current = [];
-        networkRef.current = [];
+      markersRef.current = [];
+      networkRef.current = [];
+      if (tileLayerRef.current && tileErrorHandlerRef.current) {
+        tileLayerRef.current.off("tileerror", tileErrorHandlerRef.current);
+      }
+      localLayerRef.current = null;
       tileLayerRef.current = null;
+      tileErrorHandlerRef.current = null;
       tileStyleRef.current = null;
       map.remove();
       mapRef.current = null;
     };
   }, []);
 
-  // 深浅主题使用 CARTO 对应的黑白底图，不再在浅色模式里混入暗色瓦片。
+  // 默认只读同源的世界 TopoJSON，避免 Dealers 首屏把第三方瓦片可用性
+  // 变成整页的隐性前置条件。转换后由 Leaflet geoJSON 绘制，pin/zoom/cluster 层不变。
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    fetch(LOCAL_WORLD_TOPOLOGY_URL, { cache: "force-cache", signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`world topology HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((topology) => {
+        if (!cancelled) setWorldGeoJson(worldTopologyToGeoJson(topology));
+      })
+      .catch((error) => {
+        if (cancelled || error?.name === "AbortError") return;
+        setBasemapNotice("本地世界底图暂时不可用；真实点位与筛选仍可正常使用。");
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
+
+  // 在线街道底图只有用户显式开启后才创建瓦片层。任一 CARTO tileerror
+  // 立即移除在线层并回到已缓存的本地世界底图，不吞掉故障。
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || tileStyleRef.current === theme) return;
-    if (tileLayerRef.current) map.removeLayer(tileLayerRef.current);
-    const layer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${theme}_all/{z}/{x}/{y}{r}.png`, {
-      attribution: '© CARTO',
-      subdomains: 'abcd',
+    if (!map) return;
+
+    const localStyle = theme === "dark"
+      ? {
+          color: readMapCssToken("--ds-line", "#334155"),
+          weight: 0.7,
+          opacity: 0.8,
+          fillColor: readMapCssToken("--ds-bg-2", "#172033"),
+          fillOpacity: 0.78,
+        }
+      : {
+          color: readMapCssToken("--ds-line", "#cbd5e1"),
+          weight: 0.7,
+          opacity: 0.85,
+          fillColor: readMapCssToken("--ds-bg-2", "#e8eef6"),
+          fillOpacity: 0.9,
+        };
+
+    if (!shouldRequestExternalBasemap(basemapMode)) {
+      if (tileLayerRef.current) {
+        if (tileErrorHandlerRef.current) {
+          tileLayerRef.current.off("tileerror", tileErrorHandlerRef.current);
+        }
+        map.removeLayer(tileLayerRef.current);
+        tileLayerRef.current = null;
+        tileErrorHandlerRef.current = null;
+        tileStyleRef.current = null;
+      }
+
+      if (worldGeoJson) {
+        if (!localLayerRef.current) {
+          localLayerRef.current = L.geoJSON(worldGeoJson, {
+            interactive: false,
+            // Keep the country geometry below both DOM markers and the
+            // high-volume canvas marker renderer, regardless of fetch timing.
+            pane: "tilePane",
+            style: localStyle,
+          });
+        } else {
+          localLayerRef.current.setStyle(localStyle);
+        }
+        if (typeof map.hasLayer !== "function" || !map.hasLayer(localLayerRef.current)) {
+          localLayerRef.current.addTo(map);
+        }
+      }
+      return;
+    }
+
+    if (localLayerRef.current) {
+      // Keep the hidden fallback in the current theme so tileerror can reveal
+      // it synchronously without a light/dark flash before React rerenders.
+      localLayerRef.current.setStyle(localStyle);
+      if (typeof map.hasLayer !== "function" || map.hasLayer(localLayerRef.current)) {
+        map.removeLayer(localLayerRef.current);
+      }
+    }
+
+    const normalizedTheme = theme === "dark" ? "dark" : "light";
+    if (tileLayerRef.current && tileStyleRef.current === normalizedTheme) return;
+    if (tileLayerRef.current) {
+      if (tileErrorHandlerRef.current) tileLayerRef.current.off("tileerror", tileErrorHandlerRef.current);
+      map.removeLayer(tileLayerRef.current);
+    }
+
+    const layer = L.tileLayer(cartoTileUrl(normalizedTheme), {
+      attribution: "© CARTO",
+      subdomains: "abcd",
       maxZoom: 19,
     });
+    const handleTileError = () => {
+      if (tileLayerRef.current !== layer) return;
+      layer.off("tileerror", handleTileError);
+      map.removeLayer(layer);
+      tileLayerRef.current = null;
+      tileErrorHandlerRef.current = null;
+      tileStyleRef.current = null;
+      if (localLayerRef.current) localLayerRef.current.addTo(map);
+      setBasemapNotice("在线街道底图加载失败，已回退到本地世界底图；真实点位与筛选不受影响。");
+      setBasemapMode(basemapModeAfterTileError("online"));
+    };
+    layer.on("tileerror", handleTileError);
     layer.addTo(map);
     tileLayerRef.current = layer;
-    tileStyleRef.current = theme;
-  }, [theme]);
+    tileErrorHandlerRef.current = handleTileError;
+    tileStyleRef.current = normalizedTheme;
+  }, [basemapMode, theme, worldGeoJson]);
   
   // focusTarget 变化 → flyTo
   useEffect(() => {
@@ -515,10 +641,32 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
   }, [pins, accentColor]);
   
   return (
-    <div
-      ref={containerRef}
-      className="absolute inset-0 vkpi-map-wrapper"
-      style={{ background: "var(--ds-bg-2)" }}
-    />
+    <div className="absolute inset-0 vkpi-map-wrapper" style={{ background: "var(--ds-bg-2)" }}>
+      <div ref={containerRef} className="absolute inset-0" />
+      <div className="absolute bottom-3 right-3 z-[1000] flex max-w-[min(24rem,calc(100%-1.5rem))] flex-col items-end gap-1.5">
+        <button
+          type="button"
+          aria-pressed={basemapMode === "online"}
+          className="rounded-md border border-[var(--ds-line)] bg-[var(--ds-panel)] px-2.5 py-1.5 text-xs font-medium text-[var(--ds-text)] shadow-sm backdrop-blur hover:bg-[var(--ds-bg-2)]"
+          onClick={() => {
+            const nextMode = basemapMode === "online" ? "local" : "online";
+            setBasemapMode(nextMode);
+            setBasemapNotice(nextMode === "online"
+              ? "已开启在线街道底图；网络异常时会自动回退本地底图。"
+              : "已切换到本地世界底图。");
+          }}
+        >
+          {basemapMode === "online" ? "本地世界底图" : "在线街道底图"}
+        </button>
+        {basemapNotice ? (
+          <div
+            role="status"
+            className="rounded-md border border-[var(--ds-line)] bg-[var(--ds-panel)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--ds-text-2)] shadow-sm backdrop-blur"
+          >
+            {basemapNotice}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }

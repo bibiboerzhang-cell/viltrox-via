@@ -37,6 +37,7 @@ _READ_ONLY_GET_EXACT_PATHS = frozenset(
         "/account",
         "/activate",
         "/admin",
+        "/data/world-110m.json",
         "/api/admin/vkpi/analytics/intents",
         "/api/admin/vkpi/autonomy/licenses",
         "/api/admin/vkpi/board-series",

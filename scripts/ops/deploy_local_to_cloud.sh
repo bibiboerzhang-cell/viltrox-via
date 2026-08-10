@@ -3335,6 +3335,40 @@ fetch_predeploy_runtime_health() {
     < "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py"
 }
 
+verify_remote_candidate_production_auth_contract() {
+  local phase="${1:-}" category="" preflight_rc=0
+  case "${phase}" in
+    prelock|locked) ;;
+    *)
+      echo "Remote production auth preflight failed (category=invalid_phase)." >&2
+      return 1
+      ;;
+  esac
+
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+  category="$(
+    ssh "${SSH_TARGET}" \
+      "sudo -n -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env -i HOME=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ENVIRONMENT=production PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -I - --production-auth-preflight '${REMOTE_ROOT}/.env' '${REMOTE_APP_GROUP}'" \
+      2>/dev/null < "${DEPLOY_CANDIDATE_DIR}/scripts/runtime_env.py"
+  )" || preflight_rc=$?
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+
+  # Never reflect arbitrary candidate/transport output.  Only reviewed fixed
+  # categories may cross this boundary; credential values, lengths, and
+  # fingerprints are neither computed nor emitted.
+  case "${category}" in
+    verified|env_missing|env_stat_unavailable|env_not_regular|env_link_count_invalid|env_owner_invalid|env_group_invalid|env_mode_invalid|env_open_failed|env_identity_changed|env_descriptor_unavailable|env_read_invalid|jwt_secret_missing|jwt_secret_public_default|admin_password_missing|admin_password_public_default|candidate_auth_rejected|candidate_runtime_invalid|expected_group_unavailable|invalid_invocation) ;;
+    *) category="candidate_or_transport_invalid" ;;
+  esac
+  if [ "${preflight_rc}" -ne 0 ] || [ "${category}" != "verified" ]; then
+    echo "Remote production auth preflight failed (category=${category})." >&2
+    return 1
+  fi
+  echo "[deploy] remote production auth contract accepted: ${phase}."
+}
+
 harden_first_atomic_root() {
   # The legacy host historically let the application user own REMOTE_ROOT.
   # A root-owned 0700 release controller is not a security boundary while its
@@ -3404,7 +3438,13 @@ MIGRATION_MANIFEST_CSV="$(find "${DEPLOY_CANDIDATE_DIR}/migrations" -maxdepth 1 
 
 run_predeploy_embedded_browser_gate
 setup_deploy_ssh_transport
+# The first read-only auth check is deliberately before the deployment mutex:
+# even lock acquisition is a remote controller mutation.  Recheck immediately
+# after acquiring the mutex to close the inter-deploy race, still before any
+# timer/service mask, stop, quiesce, upload, or current-pointer activation.
+verify_remote_candidate_production_auth_contract prelock
 acquire_remote_deploy_lock
+verify_remote_candidate_production_auth_contract locked
 capture_remote_sync_unit_state
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   capture_remote_pgbouncer_unit_state

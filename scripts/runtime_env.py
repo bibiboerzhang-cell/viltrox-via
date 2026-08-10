@@ -170,3 +170,127 @@ def apply_runtime_env() -> None:
         _set_default_if_blank("REDIS_URL", local_redis_url)
     _set_default_if_blank("APP_STACK_NAME", "viltrox-2.0")
     _set_default_if_blank("REDIS_NAMESPACE", "viltrox-2.0:runtime")
+
+
+def _production_auth_file_contract_category(
+    env_path: Path,
+    *,
+    expected_owner_uid: int,
+    expected_group_gid: int,
+) -> str:
+    """Return one fixed category without disclosing credential material."""
+    import stat
+
+    try:
+        initial = env_path.lstat()
+    except FileNotFoundError:
+        return "env_missing"
+    except OSError:
+        return "env_stat_unavailable"
+    if not stat.S_ISREG(initial.st_mode):
+        return "env_not_regular"
+    if initial.st_nlink != 1:
+        return "env_link_count_invalid"
+    if initial.st_uid != expected_owner_uid:
+        return "env_owner_invalid"
+    if initial.st_gid != expected_group_gid:
+        return "env_group_invalid"
+    if stat.S_IMODE(initial.st_mode) != 0o640:
+        return "env_mode_invalid"
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(env_path, flags)
+    except OSError:
+        return "env_open_failed"
+
+    previous_environment = dict(os.environ)
+    try:
+        observed = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or observed.st_nlink != 1
+            or (observed.st_dev, observed.st_ino) != (initial.st_dev, initial.st_ino)
+            or observed.st_uid != expected_owner_uid
+            or observed.st_gid != expected_group_gid
+            or stat.S_IMODE(observed.st_mode) != 0o640
+        ):
+            return "env_identity_changed"
+
+        # Parse the already-open inode through the candidate's own dotenv
+        # implementation.  This keeps the check read-only and closes the path
+        # replacement window between metadata verification and parsing.
+        descriptor_path = next(
+            (
+                candidate
+                for candidate in (
+                    Path(f"/proc/self/fd/{descriptor}"),
+                    Path(f"/dev/fd/{descriptor}"),
+                )
+                if candidate.exists()
+            ),
+            None,
+        )
+        if descriptor_path is None:
+            return "env_descriptor_unavailable"
+        os.environ.clear()
+        os.environ["ENVIRONMENT"] = "production"
+        try:
+            _load_env_file(descriptor_path)
+        except (OSError, UnicodeError):
+            return "env_read_invalid"
+        except BaseException:
+            return "candidate_runtime_invalid"
+
+        jwt_secret = os.environ.get("JWT_SECRET", "")
+        admin_password = os.environ.get("ADMIN_PASSWORD", "")
+        if not jwt_secret:
+            return "jwt_secret_missing"
+        if jwt_secret == INSECURE_LOCAL_JWT_SECRET:
+            return "jwt_secret_public_default"
+        if not admin_password:
+            return "admin_password_missing"
+        if admin_password == INSECURE_LOCAL_ADMIN_PASSWORD:
+            return "admin_password_public_default"
+        try:
+            _apply_auth_contract()
+        except BaseException:
+            return "candidate_auth_rejected"
+        return "verified"
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_environment)
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _production_auth_preflight_cli(arguments: list[str]) -> int:
+    """Machine-only CLI used by the remote deployment preflight."""
+    import grp
+    import sys
+
+    category = "invalid_invocation"
+    try:
+        if len(arguments) == 3 and arguments[0] == "--production-auth-preflight":
+            try:
+                expected_gid = grp.getgrnam(arguments[2]).gr_gid
+            except (KeyError, OSError):
+                category = "expected_group_unavailable"
+            else:
+                category = _production_auth_file_contract_category(
+                    Path(arguments[1]),
+                    expected_owner_uid=0,
+                    expected_group_gid=expected_gid,
+                )
+    except BaseException:
+        category = "candidate_runtime_invalid"
+    sys.stdout.write(category + "\n")
+    return 0 if category == "verified" else 2
+
+
+if __name__ == "__main__":
+    import sys
+
+    raise SystemExit(_production_auth_preflight_cli(sys.argv[1:]))
