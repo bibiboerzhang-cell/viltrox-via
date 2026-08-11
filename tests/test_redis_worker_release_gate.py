@@ -4,6 +4,8 @@ import asyncio
 import inspect
 import sqlite3
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -173,6 +175,134 @@ def test_local_stale_backlog_blocks_before_any_redis_claim(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="18 active jobs"):
         runtime.stale_backlog_preflight()
+
+
+def test_to_thread_preflight_and_heartbeats_release_every_postgres_lease(monkeypatch) -> None:
+    """Executor thread reuse must not retain one pool lease per thread."""
+
+    from app.db import connection as db_connection
+
+    identity = runtime.RedisWorkerIdentity(
+        worker_name="redis-worker-main",
+        pid=4321,
+        worker_git_sha="a" * 40,
+        boot_nonce_sha256="b" * 64,
+        started_at="2026-07-14T22:00:00Z",
+    )
+    build_barrier = threading.Barrier(4)
+    built: list[FakeConn] = []
+
+    class Cursor:
+        def __init__(self, row=None) -> None:
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.closed = False
+            self.commits = 0
+
+        def execute(self, sql, params=None):
+            statement = " ".join(str(sql).split())
+            if "to_regclass" in statement:
+                return Cursor({"regclass": "public.test_table"})
+            if "COUNT(*) AS n" in statement:
+                return Cursor({"n": 0, "oldest": None})
+            if "INSERT INTO vkpi_worker_heartbeat" in statement:
+                return Cursor()
+            raise AssertionError(statement)
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    def build(*, release_validation_guard: bool):
+        assert release_validation_guard is False
+        conn = FakeConn()
+        built.append(conn)
+        build_barrier.wait(timeout=5)
+        return conn
+
+    monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
+    monkeypatch.setattr(db_connection, "_build_postgres_conn", build)
+
+    def invoke(index: int):
+        if index % 2:
+            runtime.upsert_redis_worker_heartbeat(
+                identity,
+                {
+                    "redis_ready": True,
+                    "redis_stream_key": "vkpi:jobs",
+                    "redis_group_name": "vkpi-workers",
+                    "redis_consumer_count": 2,
+                },
+                interval_seconds=15,
+            )
+        else:
+            assert runtime.stale_backlog_preflight()["pass"] is True
+        return getattr(db_connection._db_local, "conn", None)
+
+    async def exercise() -> list[object | None]:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=4))
+        return await asyncio.gather(*(asyncio.to_thread(invoke, index) for index in range(24)))
+
+    thread_locals = asyncio.run(exercise())
+
+    assert len(built) == 24
+    assert all(conn.closed for conn in built)
+    assert sum(conn.commits for conn in built) == 12
+    assert thread_locals == [None] * 24
+
+
+def test_to_thread_heartbeat_releases_postgres_lease_on_write_failure(monkeypatch) -> None:
+    from app.db import connection as db_connection
+
+    class Cursor:
+        def fetchone(self):
+            return {"regclass": "public.vkpi_worker_heartbeat"}
+
+    class BrokenConn:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def execute(self, sql, params=None):
+            if "to_regclass" in str(sql):
+                return Cursor()
+            raise RuntimeError("heartbeat write failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    conn = BrokenConn()
+    monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
+    monkeypatch.setattr(
+        db_connection,
+        "_build_postgres_conn",
+        lambda *, release_validation_guard: conn,
+    )
+    identity = runtime.RedisWorkerIdentity(
+        worker_name="redis-worker-main",
+        pid=4321,
+        worker_git_sha="a" * 40,
+        boot_nonce_sha256="b" * 64,
+        started_at="2026-07-14T22:00:00Z",
+    )
+
+    async def exercise() -> None:
+        await asyncio.to_thread(
+            runtime.upsert_redis_worker_heartbeat,
+            identity,
+            {"redis_ready": True},
+            interval_seconds=15,
+        )
+
+    with pytest.raises(RuntimeError, match="heartbeat write failed"):
+        asyncio.run(exercise())
+    assert conn.closed is True
 
 
 def test_redis_worker_concurrency_fails_closed_above_reviewed_limit(monkeypatch) -> None:

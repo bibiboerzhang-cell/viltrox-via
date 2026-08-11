@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from app.core.logging import get_logger
 from app.db.connection import (
+    db_connection_sync_reusing_scope,
     db_connection_sync_scope,
     get_conn,
     is_postgres_runtime,
@@ -178,8 +179,6 @@ def redis_worker_db_preflight() -> dict[str, Any]:
 def stale_backlog_preflight() -> dict[str, Any]:
     """Read-only refusal gate; never claims or acknowledges a Stream message."""
 
-    if not table_exists("job_execution_ledger"):
-        raise RuntimeError("job_execution_ledger is required before redis worker startup")
     try:
         max_age_hours = max(
             1,
@@ -191,15 +190,23 @@ def stale_backlog_preflight() -> dict[str, Any]:
         "1", "true", "yes", "on",
     }
     cutoff = _utcnow() - timedelta(hours=max_age_hours)
-    row = get_conn().execute(
-        """
-        SELECT COUNT(*) AS n, MIN(created_at) AS oldest
-        FROM job_execution_ledger
-        WHERE status IN ('queued', 'retrying', 'processing', 'running')
-          AND created_at < ?
-        """,
-        (cutoff,),
-    ).fetchone()
+    # This function runs through ``asyncio.to_thread`` during worker startup.
+    # Without an explicit scope, ``get_conn()`` falls back to an executor
+    # thread-local connection which is never reachable from the event-loop
+    # thread's shutdown cleanup.  Bound the complete proof (including the
+    # schema lookup) so every pool lease is returned on success or failure.
+    with db_connection_sync_reusing_scope():
+        if not table_exists("job_execution_ledger"):
+            raise RuntimeError("job_execution_ledger is required before redis worker startup")
+        row = get_conn().execute(
+            """
+            SELECT COUNT(*) AS n, MIN(created_at) AS oldest
+            FROM job_execution_ledger
+            WHERE status IN ('queued', 'retrying', 'processing', 'running')
+              AND created_at < ?
+            """,
+            (cutoff,),
+        ).fetchone()
     stale_count = int((row["n"] if row else 0) or 0)
     oldest = str((row["oldest"] if row else "") or "") or None
     result = {
@@ -231,62 +238,66 @@ def upsert_redis_worker_heartbeat(
     interval_seconds: int | None = None,
     error_code: str = "",
 ) -> None:
-    if not table_exists("vkpi_worker_heartbeat"):
-        raise RuntimeError("vkpi_worker_heartbeat is required for redis worker release identity")
-    conn = get_conn()
-    conn.execute(
-        """
-        INSERT INTO vkpi_worker_heartbeat (
-            worker_name, last_heartbeat_at, pid, updated_at,
-            worker_git_sha, boot_nonce_sha256, started_at,
-            redis_ready, redis_readiness_at, redis_stream_key,
-            redis_group_name, redis_consumer_count, redis_ready_sequence,
-            redis_heartbeat_interval_seconds, redis_readiness_error_code
+    # Periodic writes also run in ``asyncio.to_thread`` and may land on a
+    # different executor thread each cycle.  Own and release one bounded lease
+    # per heartbeat instead of accumulating unreachable thread-local leases.
+    with db_connection_sync_reusing_scope():
+        if not table_exists("vkpi_worker_heartbeat"):
+            raise RuntimeError("vkpi_worker_heartbeat is required for redis worker release identity")
+        conn = get_conn()
+        conn.execute(
+            """
+            INSERT INTO vkpi_worker_heartbeat (
+                worker_name, last_heartbeat_at, pid, updated_at,
+                worker_git_sha, boot_nonce_sha256, started_at,
+                redis_ready, redis_readiness_at, redis_stream_key,
+                redis_group_name, redis_consumer_count, redis_ready_sequence,
+                redis_heartbeat_interval_seconds, redis_readiness_error_code
+            )
+            VALUES (?, NOW(), ?, NOW(), ?, ?, ?, ?,
+                    CASE WHEN ? THEN NOW() ELSE NULL END, ?, ?, ?,
+                    CASE WHEN ? THEN 1 ELSE 0 END, ?, ?)
+            ON CONFLICT (worker_name) DO UPDATE
+            SET last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                pid = EXCLUDED.pid,
+                updated_at = EXCLUDED.updated_at,
+                worker_git_sha = EXCLUDED.worker_git_sha,
+                boot_nonce_sha256 = EXCLUDED.boot_nonce_sha256,
+                started_at = EXCLUDED.started_at,
+                redis_ready = EXCLUDED.redis_ready,
+                redis_readiness_at = EXCLUDED.redis_readiness_at,
+                redis_stream_key = EXCLUDED.redis_stream_key,
+                redis_group_name = EXCLUDED.redis_group_name,
+                redis_consumer_count = EXCLUDED.redis_consumer_count,
+                redis_ready_sequence = CASE
+                    WHEN EXCLUDED.redis_ready
+                     AND vkpi_worker_heartbeat.redis_ready
+                     AND vkpi_worker_heartbeat.pid = EXCLUDED.pid
+                     AND vkpi_worker_heartbeat.boot_nonce_sha256 = EXCLUDED.boot_nonce_sha256
+                    THEN vkpi_worker_heartbeat.redis_ready_sequence + 1
+                    WHEN EXCLUDED.redis_ready THEN 1
+                    ELSE 0
+                END,
+                redis_heartbeat_interval_seconds = EXCLUDED.redis_heartbeat_interval_seconds,
+                redis_readiness_error_code = EXCLUDED.redis_readiness_error_code
+            """,
+            (
+                identity.worker_name,
+                identity.pid,
+                identity.worker_git_sha,
+                identity.boot_nonce_sha256,
+                identity.started_at,
+                bool(readiness.get("redis_ready")),
+                bool(readiness.get("redis_ready")),
+                str(readiness.get("redis_stream_key") or ""),
+                str(readiness.get("redis_group_name") or ""),
+                max(0, int(readiness.get("redis_consumer_count") or 0)),
+                bool(readiness.get("redis_ready")),
+                int(interval_seconds or redis_worker_heartbeat_interval()),
+                str(error_code or "")[:80] or None,
+            ),
         )
-        VALUES (?, NOW(), ?, NOW(), ?, ?, ?, ?,
-                CASE WHEN ? THEN NOW() ELSE NULL END, ?, ?, ?,
-                CASE WHEN ? THEN 1 ELSE 0 END, ?, ?)
-        ON CONFLICT (worker_name) DO UPDATE
-        SET last_heartbeat_at = EXCLUDED.last_heartbeat_at,
-            pid = EXCLUDED.pid,
-            updated_at = EXCLUDED.updated_at,
-            worker_git_sha = EXCLUDED.worker_git_sha,
-            boot_nonce_sha256 = EXCLUDED.boot_nonce_sha256,
-            started_at = EXCLUDED.started_at,
-            redis_ready = EXCLUDED.redis_ready,
-            redis_readiness_at = EXCLUDED.redis_readiness_at,
-            redis_stream_key = EXCLUDED.redis_stream_key,
-            redis_group_name = EXCLUDED.redis_group_name,
-            redis_consumer_count = EXCLUDED.redis_consumer_count,
-            redis_ready_sequence = CASE
-                WHEN EXCLUDED.redis_ready
-                 AND vkpi_worker_heartbeat.redis_ready
-                 AND vkpi_worker_heartbeat.pid = EXCLUDED.pid
-                 AND vkpi_worker_heartbeat.boot_nonce_sha256 = EXCLUDED.boot_nonce_sha256
-                THEN vkpi_worker_heartbeat.redis_ready_sequence + 1
-                WHEN EXCLUDED.redis_ready THEN 1
-                ELSE 0
-            END,
-            redis_heartbeat_interval_seconds = EXCLUDED.redis_heartbeat_interval_seconds,
-            redis_readiness_error_code = EXCLUDED.redis_readiness_error_code
-        """,
-        (
-            identity.worker_name,
-            identity.pid,
-            identity.worker_git_sha,
-            identity.boot_nonce_sha256,
-            identity.started_at,
-            bool(readiness.get("redis_ready")),
-            bool(readiness.get("redis_ready")),
-            str(readiness.get("redis_stream_key") or ""),
-            str(readiness.get("redis_group_name") or ""),
-            max(0, int(readiness.get("redis_consumer_count") or 0)),
-            bool(readiness.get("redis_ready")),
-            int(interval_seconds or redis_worker_heartbeat_interval()),
-            str(error_code or "")[:80] or None,
-        ),
-    )
-    conn.commit()
+        conn.commit()
 
 
 async def redis_worker_heartbeat_loop(
