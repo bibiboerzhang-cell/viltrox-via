@@ -59,9 +59,7 @@ def _loads(value: Any) -> dict[str, Any]:
 
 
 def _dumps(value: Any) -> str:
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
-    )
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _sha256(value: Any) -> str:
@@ -196,9 +194,7 @@ def _event_matches(conn: Any, binding: dict[str, Any]) -> bool:
 def _binding_proof_valid(conn: Any, binding: dict[str, Any]) -> bool:
     try:
         expected = _sha256(_binding_snapshot(binding))
-        return expected == str(binding.get("binding_fingerprint") or "") and _event_matches(
-            conn, binding,
-        )
+        return expected == str(binding.get("binding_fingerprint") or "") and _event_matches(conn, binding)
     except Exception:
         return False
 
@@ -211,9 +207,7 @@ def _load_binding(conn: Any, where: str, params: tuple[Any, ...]) -> dict[str, A
     return dict(row) if row is not None else None
 
 
-def _idempotent_result(
-    conn: Any, binding: dict[str, Any], *, request_fingerprint: str,
-) -> dict[str, Any]:
+def _idempotent_result(conn: Any, binding: dict[str, Any], *, request_fingerprint: str) -> dict[str, Any]:
     if str(binding.get("request_fingerprint") or "") != request_fingerprint:
         return {"ok": False, "reason": "outreach_binding_correlation_conflict"}
     if not _binding_proof_valid(conn, binding):
@@ -712,7 +706,13 @@ def get_outreach_binding_status(
     try:
         binding = _load_binding(conn, "action_inbox_id=?", (action_id,))
         if binding is None:
-            return {"ok": False, "reason": "outreach_binding_not_found"}
+            action = _action_row(conn, action_id, lock_for_update=False)
+            if action is None: return {"ok": False, "reason": "outreach_action_not_found"}
+            _eligible, approved_at, eligibility_error = _verified_action(conn, action_id, lock_for_update=False)
+            if eligibility_error == "outreach_action_not_found": return {"ok": False, "reason": eligibility_error}
+            bindable = approved_at is not None and eligibility_error is None
+            return {"ok": True, "status": "unbound", "bound": False, "bindable": bindable,
+                    "action_inbox_id": action_id, "eligibility_reason": "eligible" if bindable else eligibility_error, "binding": None, "reply_verification": None}
         if not _binding_proof_valid(conn, binding):
             return {"ok": False, "reason": "outreach_binding_event_conflict"}
         receipt_summary = None

@@ -13,11 +13,11 @@ import {
   createOutreachBinding,
   getOutreachBindingStatus,
   getOutreachReplyReviewCandidate,
-  isOutreachBindingMissing,
   listPendingGtmVerdicts,
   outreachApiError,
   verifyOutreachReply,
-  type OutreachBindingStatusResponse,
+  type OutreachBoundStatusResponse,
+  type OutreachUnboundStatusResponse,
   type OutreachReplyOutcome,
   type PendingGtmVerdictItem,
 } from "../../../../services/vkpi/outreach-truth-api";
@@ -32,9 +32,9 @@ type OutreachActionRef = {
 
 type RowStatus =
   | { kind: "loading" }
-  | { kind: "unbound" }
-  | { kind: "bound"; value: OutreachBindingStatusResponse }
-  | { kind: "verified"; value: OutreachBindingStatusResponse; snapshot: OutreachReplyReviewSnapshot }
+  | { kind: "unbound"; value: OutreachUnboundStatusResponse }
+  | { kind: "bound"; value: OutreachBoundStatusResponse }
+  | { kind: "verified"; value: OutreachBoundStatusResponse; snapshot: OutreachReplyReviewSnapshot }
   | { kind: "error"; reason: string };
 
 type CandidateState =
@@ -47,6 +47,8 @@ type CandidateState =
       expiresAt: number;
       correlationId: string;
     };
+
+type StatusRefreshResult = "unbound" | "bound" | "verified" | "error";
 
 const ACTION_STATUSES = ["approved", "executing", "executed"] as const;
 const BINDABLE_STATUSES = new Set<string>(ACTION_STATUSES);
@@ -205,47 +207,47 @@ function OutreachTruthRow({ apiToken, action }: { apiToken: string; action: Outr
     setBusy((current) => current === "candidate" ? "" : current);
   }, []);
 
-  const refreshStatus = React.useCallback(async (): Promise<boolean> => {
+  const refreshStatus = React.useCallback(async (): Promise<StatusRefreshResult> => {
     const requestId = ++statusSequence.current;
     discardCandidate();
     setStatus({ kind: "loading" });
     setError("");
     try {
       const response = await getOutreachBindingStatus(apiToken, action.id);
-      if (requestId !== statusSequence.current) return false;
+      if (requestId !== statusSequence.current) return "error";
       const checked = validateOutreachBindingStatus(response, action.id);
       if (!checked.ok) {
         setStatus({ kind: "error", reason: checked.reason });
-        return false;
+        return "error";
+      }
+      if (checked.value.status === "unbound") {
+        setStatus({ kind: "unbound", value: checked.value });
+        return "unbound";
       }
       if (checked.value.status === "reply_verified") {
         const receipt = checked.value.reply_verification;
         if (!receipt) {
           setStatus({ kind: "error", reason: "已核验状态缺少不可变回执" });
-          return false;
+          return "error";
         }
         const stored = await validateStoredOutreachReply(receipt, {
           actionId: action.id,
           binding: checked.value.binding,
         });
-        if (requestId !== statusSequence.current) return false;
+        if (requestId !== statusSequence.current) return "error";
         if (!stored.ok) {
           setStatus({ kind: "error", reason: `已存回执完整性校验失败：${stored.reason}` });
-          return false;
+          return "error";
         }
         setStatus({ kind: "verified", value: checked.value, snapshot: stored.snapshot });
-      } else {
-        setStatus({ kind: "bound", value: checked.value });
+        return "verified";
       }
-      return true;
+      setStatus({ kind: "bound", value: checked.value });
+      return "bound";
     } catch (cause) {
-      if (requestId !== statusSequence.current) return false;
-      if (isOutreachBindingMissing(cause)) {
-        setStatus({ kind: "unbound" });
-        return true;
-      }
+      if (requestId !== statusSequence.current) return "error";
       setStatus({ kind: "error", reason: safeReason(cause, "外联真值状态读取失败") });
-      return false;
+      return "error";
     }
   }, [action.id, apiToken, discardCandidate]);
 
@@ -267,21 +269,32 @@ function OutreachTruthRow({ apiToken, action }: { apiToken: string; action: Outr
   }, [candidate]);
 
   const bind = async () => {
-    if (busy || status.kind !== "unbound" || !BINDABLE_STATUSES.has(action.status)) return;
+    if (
+      busy
+      || status.kind !== "unbound"
+      || !status.value.bindable
+      || !BINDABLE_STATUSES.has(action.status)
+    ) return;
     setBusy("bind");
     setError("");
     setNote("");
     try {
       const receipt = await createOutreachBinding(apiToken, action.id, bindCorrelation.current);
       const recovered = await refreshStatus();
-      if (recovered) {
+      if (recovered === "bound" || recovered === "verified") {
         setNote(`绑定回执 #${receipt.id}${receipt.idempotent ? "（幂等复用）" : ""} 已由状态端点复核`);
+      } else {
+        setError(`写入返回绑定回执 #${receipt.id}，但状态仍未绑定；不得视为已完成，请刷新重查`);
       }
     } catch (cause) {
       const { status: httpStatus, reason } = outreachApiError(cause);
       if (httpStatus === 409 && reason === "outreach_action_already_bound") {
         const recovered = await refreshStatus();
-        if (recovered) setNote("检测到既有绑定，已从状态端点恢复");
+        if (recovered === "bound" || recovered === "verified") {
+          setNote("检测到既有绑定，已从状态端点恢复");
+        } else {
+          setError("服务端报告既有绑定，但状态端点未返回绑定证据；不得视为已恢复");
+        }
       } else {
         setError(safeReason(cause, "外联真值绑定失败；可用同一请求重试"));
       }
@@ -350,7 +363,7 @@ function OutreachTruthRow({ apiToken, action }: { apiToken: string; action: Outr
         candidate_observed_at: candidate.validation.candidateObservedAt,
       });
       const recovered = await refreshStatus();
-      if (recovered) {
+      if (recovered === "verified") {
         setNote(`回复核验回执 #${receipt.id}${receipt.idempotent ? "（幂等复用）" : ""} 已回读确认`);
       } else {
         setError(`写入返回回执 #${receipt.id}，但状态回读未通过；不得视为已核验，请刷新重查`);
@@ -359,7 +372,11 @@ function OutreachTruthRow({ apiToken, action }: { apiToken: string; action: Outr
       const { status: httpStatus, reason } = outreachApiError(cause);
       if (httpStatus === 409) {
         discardCandidate(`服务端拒绝旧候选（${reason}）；必须重新获取并人工复核`);
-        if (reason === "outreach_reply_already_verified") void refreshStatus();
+        if (reason === "outreach_reply_already_verified") {
+          const recovered = await refreshStatus();
+          if (recovered === "verified") setNote("检测到既有回复核验，已从状态端点恢复");
+          else setError("服务端报告已核验，但状态端点未返回核验回执；不得视为已恢复");
+        }
       } else {
         setError(safeReason(cause, "回复核验失败；候选与 correlation 已保留，可原样重试"));
       }
@@ -369,7 +386,12 @@ function OutreachTruthRow({ apiToken, action }: { apiToken: string; action: Outr
   };
 
   const current = candidate.kind === "ready" ? candidate.validation : null;
-  const bindable = BINDABLE_STATUSES.has(action.status);
+  const bindable = status.kind === "unbound"
+    && status.value.bindable
+    && BINDABLE_STATUSES.has(action.status);
+  const unboundReason = status.kind === "unbound" && !status.value.bindable
+    ? status.value.eligibility_reason
+    : `action_status_not_bindable:${action.status}`;
   const receipt = status.kind === "verified" ? status.value.reply_verification : null;
 
   return (
@@ -389,7 +411,11 @@ function OutreachTruthRow({ apiToken, action }: { apiToken: string; action: Outr
       {status.kind === "unbound" ? (
         <div className="mt-2">
           <div className="text-[9px] text-amber-300">尚未绑定服务端解析的 Project / 首条外联。</div>
-          {!bindable ? <div className="mt-1 text-[9px] text-slate-500">需先在 Action Inbox 完成经理批准，当前状态不可绑定。</div> : null}
+          {!bindable ? (
+            <div className="mt-1 text-[9px] text-slate-500">
+              当前不可绑定：{unboundReason}
+            </div>
+          ) : null}
           <button
             type="button"
             disabled={!bindable || Boolean(busy)}

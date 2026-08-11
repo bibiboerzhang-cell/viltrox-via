@@ -214,4 +214,28 @@ describe("outreach candidate integrity", () => {
     const tampered = await validateStoredOutreachReply(status.reply_verification!, { actionId: 42, binding });
     expect(tampered.ok).toBe(false);
   });
+
+  it("只接受与 Action identity 对齐的显式 unbound 状态", () => {
+    const status: OutreachBindingStatusResponse = {
+      ok: true,
+      status: "unbound",
+      bound: false,
+      bindable: true,
+      eligibility_reason: "eligible",
+      action_inbox_id: 42,
+      binding: null,
+      reply_verification: null,
+    };
+    expect(validateOutreachBindingStatus(status, 42)).toEqual({ ok: true, value: status });
+    expect(validateOutreachBindingStatus(status, 43).ok).toBe(false);
+    expect(validateOutreachBindingStatus({ ...status, binding: {} } as never, 42).ok).toBe(false);
+    const { bound: _bound, ...missingBound } = status;
+    expect(validateOutreachBindingStatus(missingBound as never, 42).ok).toBe(false);
+    expect(validateOutreachBindingStatus({ ...status, bound: true } as never, 42).ok).toBe(false);
+    expect(validateOutreachBindingStatus({
+      ...status,
+      bindable: false,
+      eligibility_reason: "eligible",
+    } as never, 42).ok).toBe(false);
+  });
 });

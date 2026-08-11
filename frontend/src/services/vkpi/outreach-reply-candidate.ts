@@ -153,8 +153,29 @@ export function validateOutreachBindingStatus(
   actionId: number,
 ): OutreachBindingStatusValidation {
   const root = record(value);
+  if (!root) return { ok: false, reason: "绑定状态形状无效" };
+  if (root.status === "unbound") {
+    const problems: string[] = [];
+    if (root.ok !== true) problems.push("ok 不为 true");
+    if (root.bound !== false) problems.push("bound 不为 false");
+    if (typeof root.bindable !== "boolean") problems.push("bindable 缺失");
+    const eligibilityReason = String(root.eligibility_reason || "");
+    if (!["eligible", "outreach_action_not_approved_gtm_bet", "outreach_action_approval_proof_invalid"].includes(eligibilityReason)) {
+      problems.push("eligibility_reason 无效");
+    }
+    if ((root.bindable === true) !== (eligibilityReason === "eligible")) {
+      problems.push("bindable 与 eligibility_reason 不一致");
+    }
+    if (positiveInt(root.action_inbox_id) !== actionId) problems.push("action_inbox_id 不一致");
+    if (root.binding !== null) problems.push("unbound 状态包含 binding");
+    if (root.reply_verification !== null) problems.push("unbound 状态包含 reply_verification");
+    if (problems.length > 0) {
+      return { ok: false, reason: `未绑定状态不可用：${problems.join("；")}` };
+    }
+    return { ok: true, value };
+  }
   const binding = record(root?.binding);
-  if (!root || !binding) return { ok: false, reason: "绑定状态形状无效" };
+  if (!binding) return { ok: false, reason: "绑定状态形状无效" };
   const problems: string[] = [];
   if (root.ok !== true) problems.push("ok 不为 true");
   if (!["bound_pending_reply_verification", "reply_verified"].includes(String(root.status || ""))) {

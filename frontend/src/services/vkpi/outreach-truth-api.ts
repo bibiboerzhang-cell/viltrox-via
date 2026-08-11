@@ -25,12 +25,30 @@ export interface OutreachStoredReplyVerification {
   review_candidate_canonical_json: string;
 }
 
-export interface OutreachBindingStatusResponse {
+export interface OutreachBoundStatusResponse {
   ok: true;
-  status: "bound_pending_reply_verification" | "reply_verified" | string;
+  status: "bound_pending_reply_verification" | "reply_verified";
   binding: OutreachBindingSummary;
   reply_verification: OutreachStoredReplyVerification | null;
 }
+
+export interface OutreachUnboundStatusResponse {
+  ok: true;
+  status: "unbound";
+  bound: false;
+  bindable: boolean;
+  eligibility_reason:
+    | "eligible"
+    | "outreach_action_not_approved_gtm_bet"
+    | "outreach_action_approval_proof_invalid";
+  action_inbox_id: number;
+  binding: null;
+  reply_verification: null;
+}
+
+export type OutreachBindingStatusResponse =
+  | OutreachBoundStatusResponse
+  | OutreachUnboundStatusResponse;
 
 export interface OutreachBindingCreateResponse {
   ok: true;
@@ -164,11 +182,6 @@ export function outreachApiError(error: unknown): { status: number | null; reaso
     status: Number.isInteger(status) && status > 0 ? status : null,
     reason: String(row.message || row.detail || "outreach_truth_unavailable"),
   };
-}
-
-export function isOutreachBindingMissing(error: unknown): boolean {
-  const { status, reason } = outreachApiError(error);
-  return status === 404 && reason === "outreach_binding_not_found";
 }
 
 export function isOutreachCandidateConflict(error: unknown): boolean {

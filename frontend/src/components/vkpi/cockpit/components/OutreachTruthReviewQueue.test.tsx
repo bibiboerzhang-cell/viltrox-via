@@ -137,14 +137,25 @@ const snapshot = {
 
 const boundStatus = {
   ok: true as const,
-  status: "bound_pending_reply_verification",
+  status: "bound_pending_reply_verification" as const,
   binding,
+  reply_verification: null,
+};
+
+const unboundStatus = {
+  ok: true as const,
+  status: "unbound" as const,
+  bound: false as const,
+  bindable: true,
+  eligibility_reason: "eligible" as const,
+  action_inbox_id: 42,
+  binding: null,
   reply_verification: null,
 };
 
 const verifiedStatus = {
   ok: true as const,
-  status: "reply_verified",
+  status: "reply_verified" as const,
   binding,
   reply_verification: {
     id: 81,
@@ -221,9 +232,9 @@ describe("OutreachTruthReviewQueue", () => {
     expect(screen.queryByText(/暂无外联动作/)).not.toBeInTheDocument();
   });
 
-  it("未绑定 Action 的网络失败重试复用同一 correlation；body 不含 project/message", async () => {
+  it("显式 200 unbound Action 的网络失败重试复用同一 correlation；body 不含 project/message", async () => {
     getOutreachBindingStatus
-      .mockRejectedValueOnce({ status: 404, message: "outreach_binding_not_found" })
+      .mockResolvedValueOnce(unboundStatus)
       .mockResolvedValue(boundStatus);
     createOutreachBinding
       .mockRejectedValueOnce(new Error("network_failed"))
@@ -240,6 +251,53 @@ describe("OutreachTruthReviewQueue", () => {
     expect(createOutreachBinding.mock.calls[0][2]).toMatch(/^outreach-bind-42-/);
     expect(JSON.stringify(createOutreachBinding.mock.calls[0])).not.toMatch(/project_id|message_id/);
     expect(await screen.findByText(/绑定回执 #9.*状态端点复核/)).toBeInTheDocument();
+  });
+
+  it("绑定写返回回执但状态仍 unbound 时不宣称闭环", async () => {
+    getOutreachBindingStatus.mockResolvedValue(unboundStatus);
+    createOutreachBinding.mockResolvedValue({ ok: true, id: 9, idempotent: false });
+    render(<OutreachTruthReviewQueue apiToken="tok" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定服务端首条外联" }));
+    expect(await screen.findByText(/写入返回绑定回执 #9.*状态仍未绑定/)).toBeInTheDocument();
+    expect(screen.queryByText(/绑定回执 #9.*状态端点复核/)).not.toBeInTheDocument();
+  });
+
+  it("不存在 Action 的 404 是错误而不是未绑定正常态", async () => {
+    getOutreachBindingStatus.mockRejectedValue({
+      status: 404,
+      message: "outreach_action_not_found",
+    });
+    render(<OutreachTruthReviewQueue apiToken="tok" />);
+
+    expect(await screen.findByText("outreach_action_not_found")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "绑定服务端首条外联" })).not.toBeInTheDocument();
+  });
+
+  it("服务端判定不可绑定时展示原因并保持按钮禁用", async () => {
+    getOutreachBindingStatus.mockResolvedValue({
+      ...unboundStatus,
+      bindable: false,
+      eligibility_reason: "outreach_action_approval_proof_invalid",
+    });
+    render(<OutreachTruthReviewQueue apiToken="tok" />);
+
+    expect(await screen.findByText(/outreach_action_approval_proof_invalid/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "绑定服务端首条外联" })).toBeDisabled();
+    expect(createOutreachBinding).not.toHaveBeenCalled();
+  });
+
+  it("服务端 bindable 也不能绕过本地 Action 状态闸", async () => {
+    const suggested = { ...action, status: "suggested" };
+    listActionInbox.mockResolvedValue({ available: true, items: [suggested] });
+    getOutreachBindingStatus.mockResolvedValue(unboundStatus);
+    render(<OutreachTruthReviewQueue apiToken="tok" />);
+
+    expect(await screen.findByText(/action_status_not_bindable:suggested/)).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "绑定服务端首条外联" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(createOutreachBinding).not.toHaveBeenCalled();
   });
 
   it("两步审阅后只提交 exact hash/observedAt，并在网络失败时原样重试 correlation", async () => {
@@ -276,6 +334,20 @@ describe("OutreachTruthReviewQueue", () => {
     expect(JSON.stringify(firstPayload)).not.toMatch(/project_id|message_id|body_excerpt/);
     expect(await screen.findByText(/已核验 replied · 不可变回执 #81/)).toBeInTheDocument();
     expect(await screen.findByText(/回复核验回执 #81.*已回读确认/)).toBeInTheDocument();
+  });
+
+  it("核验写返回回执但状态仍 bound_pending 时不宣称已核验", async () => {
+    getOutreachBindingStatus.mockResolvedValue(boundStatus);
+    verifyOutreachReply.mockResolvedValue({ ok: true, id: 81, idempotent: false });
+    render(<OutreachTruthReviewQueue apiToken="tok" />);
+
+    await screen.findByText(/绑定 #9/);
+    fireEvent.click(screen.getByRole("button", { name: "获取服务端候选" }));
+    await screen.findByText("Thanks, I am interested.");
+    fireEvent.click(screen.getByRole("button", { name: "确认并签署 replied" }));
+
+    expect(await screen.findByText(/写入返回回执 #81.*状态回读未通过/)).toBeInTheDocument();
+    expect(screen.queryByText(/回复核验回执 #81.*已回读确认/)).not.toBeInTheDocument();
   });
 
   it("409/TOCTOU 丢弃旧候选，不静默重试或自动签", async () => {

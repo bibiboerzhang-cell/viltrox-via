@@ -12,7 +12,6 @@ import {
   createOutreachBinding,
   getOutreachBindingStatus,
   getOutreachReplyReviewCandidate,
-  isOutreachBindingMissing,
   isOutreachCandidateConflict,
   listPendingGtmVerdicts,
   verifyOutreachReply,
@@ -77,9 +76,7 @@ describe("outreach truth API contract", () => {
     );
   });
 
-  it("严格区分 legitimate unbound 与其他 404/409", () => {
-    expect(isOutreachBindingMissing({ status: 404, message: "outreach_binding_not_found" })).toBe(true);
-    expect(isOutreachBindingMissing({ status: 404, message: "outreach_action_not_found" })).toBe(false);
+  it("候选冲突只接受明确的可重审状态", () => {
     expect(isOutreachCandidateConflict({ status: 409, message: "outreach_reply_candidate_changed" })).toBe(true);
     expect(isOutreachCandidateConflict({ status: 409, message: "outreach_reply_correlation_conflict" })).toBe(false);
   });
