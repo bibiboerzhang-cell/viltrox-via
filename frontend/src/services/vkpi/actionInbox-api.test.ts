@@ -15,7 +15,9 @@ import {
   dismissAction,
   snoozeAction,
   executeAction,
+  getActionReviewCandidate,
   reconcileAction,
+  verifyActionResult,
 } from "./actionInbox-api";
 
 beforeEach(() => {
@@ -117,5 +119,45 @@ describe("reconcile(POST /{id}/reconcile)", () => {
     expect(init.cache).toBe("no-store");
     expect(JSON.parse(init.body)).toEqual(payload);
     expect(token).toBe("tok");
+  });
+});
+
+describe("verifyActionResult(POST /{id}/verify-result)", () => {
+  it("透传经理验收结论、结构化证据和 correlation id", async () => {
+    const payload = {
+      decision: "accepted" as const,
+      reason: "业务结果已由项目回执确认",
+      evidence: [{ source: "receipt", type: "reference", reference: "project:VILTROX-42" }],
+      correlation_id: "action-review-42-correlation",
+      expected_candidate_sha256: "c".repeat(64),
+      expected_execution_ledger_id: 91,
+      expected_detail_sha256: "a".repeat(64),
+    };
+    await verifyActionResult("tok", 42, payload);
+    const [path, init, token] = apiFetch.mock.calls[0];
+    expect(path).toBe("/api/admin/vkpi/actions/42/verify-result");
+    expect(init).toMatchObject({ method: "POST", cache: "no-store" });
+    expect(JSON.parse(init.body)).toEqual(payload);
+    expect(token).toBe("tok");
+  });
+});
+
+describe("getActionReviewCandidate", () => {
+  it("只读获取服务端锁定的候选执行回执", async () => {
+    apiFetch.mockResolvedValue({
+      action_id: 42,
+      execution_ledger_id: 91,
+      candidate_canonical_json: '{"execution_ledger_id":91}',
+      candidate_sha256: "c".repeat(64),
+      detail_json_canonical: '{"outcome":"success"}',
+      detail_sha256: "a".repeat(64),
+    });
+    const result = await getActionReviewCandidate("tok", 42);
+    expect(result.detail_json_canonical).toBe('{"outcome":"success"}');
+    expect(apiFetch).toHaveBeenCalledWith(
+      "/api/admin/vkpi/actions/42/review-candidate",
+      { cache: "no-store" },
+      "tok",
+    );
   });
 });

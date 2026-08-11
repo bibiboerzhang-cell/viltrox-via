@@ -18,13 +18,13 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
-from app.api.dependencies.manager_guard import require_manager_staff
+from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -43,6 +43,23 @@ class DecideBody(BaseModel):
     id_type: str = Field(default="inbox", description="路径 id 的口径:inbox=bet 的 action_inbox id(缺省)/ outcome=vkpi_gtm_outcomes.id")
 
 
+class OutreachTruthBindingBody(BaseModel):
+    correlation_id: str = Field(min_length=8, max_length=160)
+
+    class Config:
+        extra = "forbid"
+
+
+class OutreachReplyVerificationBody(BaseModel):
+    outcome: Literal["replied", "no_reply"]
+    correlation_id: str = Field(min_length=8, max_length=160)
+    expected_candidate_sha256: str = Field(min_length=64, max_length=64)
+    candidate_observed_at: str = Field(min_length=20, max_length=80)
+
+    class Config:
+        extra = "forbid"
+
+
 _FAIL_STATUS = {
     "invalid_decision": 422,
     "invalid_id_type": 422,
@@ -55,7 +72,175 @@ _FAIL_STATUS = {
     "staff_required": 403,
     "migration_141_not_applied": 503,
     "migration_217_not_applied": 503,
+    "prediction_observation_window_not_ready": 409,
 }
+
+
+_OUTREACH_BINDING_STATUS = {
+    "outreach_binding_scope_unavailable": 403,
+    "outreach_action_not_found": 404,
+    "outreach_binding_not_found": 404,
+    "outreach_prediction_not_found": 404,
+    "outreach_kol_pool_not_found": 404,
+    "outreach_project_not_found": 404,
+    "outreach_action_already_bound": 409,
+    "outreach_binding_correlation_conflict": 409,
+    "outreach_binding_event_conflict": 409,
+    "outreach_project_ambiguous": 409,
+    "outreach_binding_correlation_required": 422,
+    "outreach_binding_ids_required": 422,
+    "outreach_action_not_approved_gtm_bet": 422,
+    "outreach_action_approval_proof_invalid": 422,
+    "outreach_prediction_contract_invalid": 422,
+    "outreach_kol_link_missing": 422,
+    "outreach_kol_channel_mismatch": 422,
+    "outreach_project_scope_not_found": 422,
+    "outreach_first_outbound_not_observed": 422,
+    "outreach_outbound_precedes_approval": 422,
+    "outreach_outbound_evidence_unverified": 422,
+    "outreach_server_clock_unavailable": 503,
+    "outreach_binding_schema_unavailable": 503,
+    "outreach_binding_write_failed": 503,
+    "outreach_binding_status_unavailable": 503,
+}
+
+
+_OUTREACH_REPLY_STATUS = {
+    "outreach_reply_scope_unavailable": 403,
+    "outreach_reply_binding_not_found": 404,
+    "outreach_reply_already_verified": 409,
+    "outreach_reply_correlation_conflict": 409,
+    "outreach_reply_event_conflict": 409,
+    "outreach_reply_exists": 409,
+    "outreach_reply_candidate_changed": 409,
+    "outreach_no_reply_window_open": 409,
+    "outreach_reply_binding_required": 422,
+    "outreach_reply_outcome_invalid": 422,
+    "outreach_reply_correlation_required": 422,
+    "outreach_reply_candidate_required": 422,
+    "outreach_reply_binding_proof_invalid": 422,
+    "outreach_verified_inbound_not_observed": 422,
+    "outreach_inbound_content_unreviewable": 422,
+    "outreach_outbound_content_unreviewable": 422,
+    "outreach_reply_schema_unavailable": 503,
+    "outreach_reply_server_clock_unavailable": 503,
+    "outreach_reply_write_failed": 503,
+}
+
+
+@router.post("/gtm/actions/{action_inbox_id}/outreach-binding")
+def bind_action_outreach_truth(
+    action_inbox_id: int,
+    body: OutreachTruthBindingBody,
+    staff=Depends(require_manager_tab("vkpi", "write")),
+) -> dict:
+    """Bind an approved Action to the only server-resolved project/outbound."""
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM outreach truth binding")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+    # Keep an explicit domain-adjacent guard as defense in depth for direct
+    # handler calls in internal tooling; ordinary employees may never bind truth.
+    require_manager_staff(staff)
+    from app.domains.market_brain import outreach_truth_bridge
+
+    result = outreach_truth_bridge.create_outreach_binding(
+        int(action_inbox_id),
+        correlation_id=body.correlation_id,
+        staff=staff,
+    )
+    if result.get("ok"):
+        return result
+    reason = str(result.get("reason") or "outreach_binding_write_failed")
+    raise HTTPException(
+        status_code=_OUTREACH_BINDING_STATUS.get(reason, 400),
+        detail=reason,
+    )
+
+
+@router.get("/gtm/actions/{action_inbox_id}/outreach-binding-status")
+def get_action_outreach_binding_status(
+    action_inbox_id: int,
+    staff=Depends(require_manager_tab("vkpi", "read")),
+) -> dict:
+    """Recover the proof-valid binding/reply status after refresh or handoff."""
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM outreach truth status")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+    require_manager_staff(staff)
+    from app.domains.market_brain import outreach_truth_bridge
+
+    result = outreach_truth_bridge.get_outreach_binding_status(
+        int(action_inbox_id), staff=staff,
+    )
+    if result.get("ok"):
+        return result
+    reason = str(result.get("reason") or "outreach_binding_status_unavailable")
+    raise HTTPException(
+        status_code=_OUTREACH_BINDING_STATUS.get(reason, 400),
+        detail=reason,
+    )
+
+
+@router.get("/gtm/outreach-bindings/{binding_id}/reply-review-candidate")
+def get_action_outreach_reply_candidate(
+    binding_id: int,
+    outcome: Literal["replied", "no_reply"] = Query(...),
+    staff=Depends(require_manager_tab("vkpi", "read")),
+) -> dict:
+    """Return the exact redacted/hash-bound reply snapshot a manager may sign."""
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM outreach reply review")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+    require_manager_staff(staff)
+    from app.domains.market_brain import outreach_reply_truth
+
+    result = outreach_reply_truth.get_reply_review_candidate(
+        int(binding_id), outcome=outcome, staff=staff,
+    )
+    if result.get("ok"):
+        return result
+    reason = str(result.get("reason") or "outreach_reply_candidate_unavailable")
+    raise HTTPException(status_code=_OUTREACH_REPLY_STATUS.get(reason, 503), detail=reason)
+
+
+@router.post("/gtm/outreach-bindings/{binding_id}/reply-verification")
+def verify_action_outreach_reply(
+    binding_id: int,
+    body: OutreachReplyVerificationBody,
+    staff=Depends(require_manager_tab("vkpi", "write")),
+) -> dict:
+    """Append a manager-bound replied/no-reply receipt; never sends outreach."""
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM outreach reply truth")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+    require_manager_staff(staff)
+    from app.domains.market_brain import outreach_reply_truth
+
+    result = outreach_reply_truth.verify_reply(
+        int(binding_id),
+        outcome=body.outcome,
+        correlation_id=body.correlation_id,
+        expected_candidate_sha256=body.expected_candidate_sha256,
+        candidate_observed_at=body.candidate_observed_at,
+        staff=staff,
+    )
+    if result.get("ok"):
+        return result
+    reason = str(result.get("reason") or "outreach_reply_write_failed")
+    raise HTTPException(status_code=_OUTREACH_REPLY_STATUS.get(reason, 400), detail=reason)
+
+
+@router.get("/gtm/outreach-truth/coverage")
+def get_outreach_truth_coverage(
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Expose due/bound/actual coverage; unverified censors never raise claims."""
+    scope_unavailable = legacy_gtm_scope_guard(staff, surface="GTM outreach truth coverage")
+    if scope_unavailable is not None:
+        return scope_unavailable
+    from app.domains.market_brain import outreach_truth_bridge
+
+    return outreach_truth_bridge.outreach_prediction_coverage()
 
 
 @router.get("/gtm/verdicts/pending")

@@ -28,10 +28,12 @@ class _FakeCursor:
 class _RouterConn:
     """按 SQL 命中的表名路由 fetch 结果;forecast_log 查询回空,evals 查询回联表行。"""
 
-    def __init__(self, *, eval_rows: list[dict]):
+    def __init__(self, *, eval_rows: list[dict], captured: dict[str, Any]):
         self._eval_rows = eval_rows
+        self._captured = captured
 
     def execute(self, sql: str, params: tuple = ()) -> _FakeCursor:
+        self._captured.setdefault("sql", []).append(sql)
         if "vkpi_forecast_log" in sql:
             return _FakeCursor([])  # ① 无已裁决流水 → record_eval 循环不触发
         if "vkpi_prediction_evals" in sql:
@@ -46,10 +48,13 @@ def _wire(monkeypatch, eval_rows: list[dict]) -> dict[str, Any]:
     import app.db.connection as connection
     from app.domains.market_brain import signal_ledger
 
-    monkeypatch.setattr(connection, "table_exists", lambda name: True)
-    monkeypatch.setattr(connection, "get_conn", lambda: _RouterConn(eval_rows=eval_rows))
-
     captured: dict[str, Any] = {}
+    monkeypatch.setattr(connection, "table_exists", lambda name: True)
+    monkeypatch.setattr(
+        connection,
+        "get_conn",
+        lambda: _RouterConn(eval_rows=eval_rows, captured=captured),
+    )
 
     def _fake_record_signal(*args: Any, **kw: Any) -> dict[str, Any]:
         captured["normalized"] = kw.get("normalized")
@@ -98,6 +103,12 @@ def test_weekly_rollup_sync_fva_wired_and_directional(monkeypatch):
     norm = captured["normalized"]
     assert norm["week"]
     assert norm["fva"] == {"n_groups": 1, "mean_delta": -0.1, "model_better_share": 1.0}
+    eval_sql = next(sql for sql in captured["sql"] if "vkpi_prediction_evals" in sql)
+    assert "e.outcome_id" in eval_sql
+    assert "LEFT JOIN vkpi_gtm_outcomes o" in eval_sql
+    assert "prediction_actual_verified" in eval_sql
+    assert "gtm_window_observed" in eval_sql
+    assert "THEN TRUE ELSE FALSE END AS verified_actual" in eval_sql
 
 
 def test_weekly_rollup_sync_fva_empty_when_runs_unjoined(monkeypatch):

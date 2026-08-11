@@ -226,15 +226,28 @@ def record_skill_run(*, skill_name: str, skill_version: str = "v1",
     return {"status": "ok", "run_id": run_id}
 
 
-def list_skill_runs(skill_name: str = "", limit: int = 50) -> dict[str, Any]:
+def list_skill_runs(
+    skill_name: str = "",
+    limit: int = 50,
+    review_status: str = "all",
+) -> dict[str, Any]:
     """读回运行明细(可按 skill_name 过滤),JSONB 回解为 dict,accepted 经 _truthy 归一。"""
     if not table_exists(_TABLE):
         return {"status": "unavailable", "runs": []}
-    where, params = "", []
+    predicates: list[str] = []
+    params: list[Any] = []
     name = str(skill_name or "").strip()
     if name:
-        where = "WHERE skill_name = ?"
+        predicates.append("skill_name = ?")
         params.append(name)
+    normalized_review = str(review_status or "all").strip().lower()
+    if normalized_review == "pending":
+        predicates.append("accepted IS NULL AND human_score IS NULL AND business_result IS NULL")
+    elif normalized_review == "reviewed":
+        predicates.append("accepted IS NOT NULL AND human_score IS NOT NULL")
+    elif normalized_review != "all":
+        return {"status": "error", "reason": "invalid_review_status", "runs": []}
+    where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
     rows = get_conn().execute(
         f"SELECT id, skill_name, skill_version, input_schema, model_used, prompt_version, "
         f"retrieved_context, output, cost_cents, latency_ms, human_score, business_result, "

@@ -793,7 +793,7 @@ export function CockpitApp(props: any = {}) {
               e(React.Suspense, {
                 fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Skill Studio 加载中...")
               },
-                e(SkillStudioPage as React.ComponentType<any>, { apiToken })
+                e(SkillStudioPage as React.ComponentType<any>, { apiToken, viewMode: appViewMode })
               )
             ),
             // P1 智能可见周:Intelligent 问答(三车道)+ 回复队列(评论区销售员 v0 半自动)

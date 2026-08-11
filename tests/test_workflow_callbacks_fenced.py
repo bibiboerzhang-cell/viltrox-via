@@ -163,15 +163,23 @@ def test_agent_cycle_has_explicit_resume(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_agent_cycle_resume_route_reuses_same_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    manager = {
+        "id": 9,
+        "staff_id": 9,
+        "role": "manager",
+        "permissions": {"vkpi": "write"},
+        "organization_id": 1,
+        "organization_scope_status": "resolved",
+    }
     monkeypatch.setattr(
         agent_cycle_workflow,
         "resume_agent_cycle",
         lambda run_id, staff: {"status": "completed", "run_id": run_id, "staff": staff},
     )
 
-    result = vkpi_agents.agent_cycle_resume(52, staff={"id": 9})
+    result = vkpi_agents.agent_cycle_resume(52, staff=manager)
 
-    assert result == {"status": "completed", "run_id": 52, "staff": {"id": 9}}
+    assert result == {"status": "completed", "run_id": 52, "staff": manager}
 
 
 def test_scheduler_uses_recovery_path_instead_of_direct_start(

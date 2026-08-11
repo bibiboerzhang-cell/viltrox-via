@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from app.api.dependencies.legacy_scope import legacy_system_admin_scope_guard
 from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.domains.agents import orchestrator, tool_registry
@@ -29,12 +30,19 @@ def _truthy(value: Any) -> bool:
     return bool(value)
 
 
+def _require_legacy_agent_scope(staff: dict[str, Any], *, surface: str) -> None:
+    unavailable = legacy_system_admin_scope_guard(staff, surface=surface)
+    if unavailable is not None:
+        raise HTTPException(status_code=403, detail=unavailable)
+
+
 @router.post("/plan")
 def plan(
     body: dict = Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     """一句话目标 → 分步计划(PLAN-ONLY,不执行)。body: {goal, context?}。"""
+    _require_legacy_agent_scope(staff, surface="Agent plan")
     goal = str((body or {}).get("goal") or "").strip()
     if not goal:
         raise HTTPException(status_code=400, detail="goal required")
@@ -51,9 +59,10 @@ def tools(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
 @router.get("/plan/{plan_id}")
 def read_plan(
     plan_id: int,
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_manager_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """读单条计划留痕。"""
+    _require_legacy_agent_scope(staff, surface="Agent plan")
     item = orchestrator.get_plan(int(plan_id), staff=staff)
     if item is None:
         raise HTTPException(status_code=404, detail="plan not found")
@@ -94,8 +103,9 @@ def organizations_list(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, 
 
 
 @router.post("/evals/run")
-def evals_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+def evals_run(staff=Depends(require_manager_tab("vkpi", "write"))) -> dict[str, Any]:
     """P4 · 跑业务评测套件(推荐不碰fit/召回/权重有界/事件总线/预测诚实),持久化结果。"""
+    _require_legacy_agent_scope(staff, surface="Agent evaluation suite")
     from app.domains.platform import evals
 
     return evals.run_builtin_suite()
@@ -104,6 +114,13 @@ def evals_run(staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
 @router.get("/marketing-brain/scorecard")
 def marketing_brain_scorecard(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """问题1 · AI Marketing Brain 90+ 评分卡:证据/流程/推荐/学习/市场/evals 六维只读评估。"""
+    scope_unavailable = legacy_system_admin_scope_guard(
+        staff,
+        surface="Marketing Brain scorecard",
+    )
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+
     from app.domains.intelligence import marketing_brain_scorecard as scorecard
 
     return scorecard.build_marketing_brain_scorecard(staff)
@@ -235,6 +252,7 @@ def agent_cycle_run(staff=Depends(require_manager_tab("vkpi", "write"))) -> dict
 
     点火烧真实 LLM 预算,收口为管理层专属(2026-07 审计:全员恒真开放属预算越权面)。
     """
+    _require_legacy_agent_scope(staff, surface="Agent cycle")
     from app.domains.actions import agent_cycle_workflow
 
     return agent_cycle_workflow.start_agent_cycle(staff)
@@ -247,14 +265,16 @@ def agent_cycle_resume(
 ) -> dict[str, Any]:
     """Resume the same failed, paused, or lease-expired Agent cycle run."""
 
+    _require_legacy_agent_scope(staff, surface="Agent cycle")
     from app.domains.actions import agent_cycle_workflow
 
     return agent_cycle_workflow.resume_agent_cycle(int(run_id), staff)
 
 
 @router.get("/workflow/{run_id}")
-def workflow_run(run_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
+def workflow_run(run_id: int, staff=Depends(require_manager_tab("vkpi", "read"))) -> dict[str, Any]:
     """P2 · Durable Workflow:读一个 run 的状态 + 各 step(可观测每步为什么/到哪了)。"""
+    _require_legacy_agent_scope(staff, surface="Agent workflow")
     from app.domains.platform import workflow_engine
 
     return workflow_engine.get_run(int(run_id))
@@ -266,14 +286,20 @@ def event_ledger_recent(
     entity_type: str = "",
     entity_id: str = "",
     limit: int = 50,
-    staff=Depends(require_tab("vkpi", "read")),
+    staff=Depends(require_manager_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """P1 · 统一事件总线:近期事件流 / 某实体事件流(可追溯每一步)。"""
+    _require_legacy_agent_scope(staff, surface="Agent event ledger")
     from app.domains.platform import event_ledger
 
     if entity_type and entity_id:
-        return {"available": True, "items": event_ledger.by_entity(entity_type, entity_id, limit=int(limit))}
-    return event_ledger.recent(limit=int(limit), event_type=str(event_type))
+        return {
+            "available": True,
+            "items": event_ledger.by_entity(
+                entity_type, entity_id, limit=int(limit), organization_id=1,
+            ),
+        }
+    return event_ledger.recent(limit=int(limit), event_type=str(event_type), organization_id=1)
 
 
 @router.get("/token-broker/status")
@@ -301,8 +327,9 @@ def classify_input(q: str, staff=Depends(require_tab("vkpi", "read"))) -> dict[s
 
 
 @router.post("/plan/{plan_id}/materialize")
-def materialize_plan(plan_id: int, staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+def materialize_plan(plan_id: int, staff=Depends(require_manager_tab("vkpi", "write"))) -> dict[str, Any]:
     """H5 · plan→action:把计划步骤物化成 Action Inbox 可审批项(零自动执行,人审后才跑)。"""
+    _require_legacy_agent_scope(staff, surface="Agent plan materialization")
     return orchestrator.materialize_plan_to_inbox(int(plan_id), staff=staff)
 
 
@@ -317,6 +344,13 @@ def capabilities(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
 @router.get("/learning-status")
 def learning_status(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
     """学习闭环状态:动作沉淀 + 反馈 + 推荐漏斗 + 成熟度(只读,看"系统在学什么")。"""
+    scope_unavailable = legacy_system_admin_scope_guard(
+        staff,
+        surface="Agent learning status",
+    )
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+
     from app.domains.access import scope
     from app.domains.memory import learning_signals
 
@@ -351,9 +385,10 @@ def kol_provenance(
 
 
 @router.post("/skills/orchestrate")
-def skills_orchestrate(body: dict = Body(default_factory=dict), staff=Depends(require_tab("vkpi", "write"))) -> dict[str, Any]:
+def skills_orchestrate(body: dict = Body(default_factory=dict), staff=Depends(require_manager_tab("vkpi", "write"))) -> dict[str, Any]:
     """编排器侧接线:据 goal+context 选 skill 并经 registry 真调用(非仅人工 HTTP)。
     body: {goal(必填), context?, dry_run?(默认 true)}。dry_run=true 走规则不烧 LLM;预算闸+gate 守门;零触 fit。"""
+    _require_legacy_agent_scope(staff, surface="Agent skill orchestration")
     from app.domains.marketing_brain import skill_orchestrator
     goal = str((body or {}).get("goal") or "").strip()
     if not goal:

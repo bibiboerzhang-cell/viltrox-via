@@ -1,11 +1,8 @@
-"""检测体系③ · Action 验收守卫:codify「execute 成功且实体齐 → 必写一行 outcome_evaluations」。
+"""Action 执行与业务结果真值必须分离。
 
-学习闭环的真路径(executors.execute_action 第 508-513 行):
-    outcome == "success" → inbox.set_status(executed)
-                         → _record_execution_feedback(...)   (memory_feedback 影子)
-                         → _record_outcome_eval(action, outcome="success")
-                              → agent_memory_writer.record_outcome(...)
-                                   → INSERT vkpi_agent_outcome_evaluations
+handler success 只证明工具调用完成，不能自动制造正向业务 outcome；人工附证据的
+``/verify-result`` 才能产生可学习事件。旧 helper 的直测保留为兼容回归，但主执行
+路径必须不调用它。
 
 这道守卫锁三件事:
   1) 跑「双闸 approved + validator ok → handler success」的真链路,断言 record_outcome 被调一次,
@@ -36,9 +33,9 @@ def _silence_event_bus(monkeypatch) -> None:
     monkeypatch.setattr(event_ledger, "new_trace_id", lambda *a, **k: "trace-test")
 
 
-# ── 1) 真链路:execute 成功且实体齐 → 必写一行 outcome_evaluations ──────────────
-def test_execute_action_success_with_entity_writes_outcome(monkeypatch):
-    """端到端 execute_action(双闸 + handler success)→ record_outcome 恰被调一次,实体透传。
+# ── 1) 真链路:execute 成功仍不得自动写正向 outcome ──────────────────────
+def test_execute_action_success_does_not_auto_write_business_outcome(monkeypatch):
+    """端到端 execute_action 成功后等待人工验收，不把工具完成冒充业务成功。
 
     用 event_followup 类目:其 handler 仅凭 entity_id 即返回 success(不烧 LLM / 不写业务表),
     是「success 且实体齐」最干净的真路径载体。只 monkeypatch DB 边界,业务判定走真代码。
@@ -104,15 +101,7 @@ def test_execute_action_success_with_entity_writes_outcome(monkeypatch):
     assert res["outcome"] == "success"
     assert res["category"] == "event_followup"
 
-    # 守卫核心:success + 实体齐 → record_outcome 恰被调一次。
-    assert len(calls) == 1, "execute 成功且实体齐时必写一行 outcome_evaluations"
-    kw = calls[0]
-    assert kw["outcome"] == "success"
-    assert kw["entity_type"] == "event"
-    assert kw["entity_id"] == "evt-777"
-    # 红线:inbox 行号只进 evidence,agent_action_id 恒 None(不触 mig182 FK)。
-    assert kw["agent_action_id"] is None
-    assert kw["evidence"]["action_id"] == inbox_action_id
+    assert calls == [], "工具完成不能自动制造正向业务 outcome"
 
 
 # ── 2) 早退闸:无 entity_type/entity_id → 绝不写 outcome 行 ──────────────────────

@@ -151,7 +151,7 @@ def materialize_plan(
     """
     from app.db.connection import get_conn, table_exists
     from app.domains.actions import inbox
-    from app.domains.market_brain import gtm_bets, gtm_plan_preview
+    from app.domains.market_brain import gtm_bets, gtm_plan_preview, gtm_prediction_producer
 
     preview = gtm_plan_preview.build_preview(
         sku=sku, country=country, budget_usd=budget_usd, goal=goal, window_days=window_days,
@@ -221,6 +221,13 @@ def materialize_plan(
     upserts = inbox.persist_suggestions(suggestions)
     existing_after = _existing_dedupe_keys(get_conn(), keys)
     inserted_new = len([k for k in new_keys if k in existing_after])
+    # Provider-free prediction mirror.  Scan all deterministic keys (not only
+    # newly inserted ones) so a previous table outage is repairable on rerun.
+    # The producer never calls a model/provider; it consumes only the frozen
+    # server-generated seed in the persisted bet payload.
+    prediction_runs = gtm_prediction_producer.record_materialized_bet_predictions(
+        keys, conn=get_conn(),
+    )
 
     # 人审红线 SQL 侧复核:本 plan 落库行 requires_approval 必须全 TRUE(SQL 判真,避 BOOLEAN 读回 int 陷阱)。
     approval_ok = True
@@ -236,6 +243,7 @@ def materialize_plan(
     result.update({
         "persisted": upserts,
         "inserted_new": inserted_new,
+        "prediction_runs": prediction_runs,
         "requires_approval_persisted_all": approval_ok,
         "note": (
             "已落 vkpi_action_inbox(status=suggested),逐条 requires_approval=True 待人审;"

@@ -17,14 +17,16 @@ if str(BACKEND_ROOT) not in sys.path:
 
 
 _ACTOR_STAFF_ID = 990779
-_ACTOR_USER = {"id": _ACTOR_STAFF_ID, "email": "reconcile@test", "role": "employee"}
+_ACTOR_USER = {"id": _ACTOR_STAFF_ID, "email": "reconcile@test", "role": "manager"}
 _ACTOR_STAFF = {
     "id": _ACTOR_STAFF_ID,
     "staff_id": _ACTOR_STAFF_ID,
     "user_id": _ACTOR_STAFF_ID,
-    "role": "employee",
+    "role": "manager",
     "is_owner": 0,
     "permissions": {"vkpi": "write"},
+    "organization_id": 1,
+    "organization_scope_status": "resolved",
     "email": "reconcile@test",
 }
 _BEARER = {"Authorization": "Bearer reconcile-token"}
@@ -174,7 +176,7 @@ def test_unknown_stays_executing_then_success_is_terminal_and_idempotent(actor_c
             f"/api/admin/vkpi/actions/{action_id}/reconcile",
             json={
                 "decision": "succeeded",
-                "reason": "same operator retry",
+                "reason": "provider receipt and order match",
                 "evidence": evidence,
                 "correlation_id": success_correlation,
             },
@@ -193,7 +195,9 @@ def test_unknown_stays_executing_then_success_is_terminal_and_idempotent(actor_c
         assert detail["kind"] == "manual_reconciliation"
         assert detail["decision"] == "succeeded"
         assert detail["reason"] == "provider receipt and order match"
-        assert detail["evidence"] == evidence
+        assert detail["evidence"] == [
+            {"source": "manual", "reference": "order:VKPI-42", "type": "reference"}
+        ]
         assert detail["correlation_id"] == success_correlation
         assert detail["actor"]["staff_id"] == _ACTOR_STAFF_ID
 

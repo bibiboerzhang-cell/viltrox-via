@@ -8,6 +8,10 @@
 import React from "react";
 import { Crosshair } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import {
+  recordPredictionActual,
+  type PredictionEvidenceField,
+} from "../../../../services/vkpi/prediction-ledger-api";
 import { SectionFold } from "./SectionFold";
 
 const e = React.createElement;
@@ -121,19 +125,152 @@ function GroupRow(group: LedgerGroup, i: number) {
   );
 }
 
+function actualCorrelation(runId: string): string {
+  const suffix = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const safeRun = runId.trim().replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 80) || "run";
+  return `prediction-actual-${safeRun}-${suffix}`;
+}
+
+function actualIdentityKey(
+  runId: string,
+  outcomeId: string,
+  field: PredictionEvidenceField,
+  metricPath: string,
+  notes: string,
+): string {
+  const numericOutcome = Number(outcomeId);
+  return JSON.stringify([
+    runId.trim(),
+    Number.isInteger(numericOutcome) ? numericOutcome : outcomeId.trim(),
+    field,
+    metricPath.trim(),
+    notes.trim(),
+  ]);
+}
+
+function PredictionActualReviewForm({ apiToken, onRecorded }: {
+  apiToken: string;
+  onRecorded: () => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [runId, setRunId] = React.useState("");
+  const [outcomeId, setOutcomeId] = React.useState("");
+  const [field, setField] = React.useState<PredictionEvidenceField>("window_28d");
+  const [metricPath, setMetricPath] = React.useState("");
+  const [notes, setNotes] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+  const identityKey = React.useMemo(
+    () => actualIdentityKey(runId, outcomeId, field, metricPath, notes),
+    [field, metricPath, notes, outcomeId, runId],
+  );
+  const [correlation, setCorrelation] = React.useState(() => ({
+    identityKey: actualIdentityKey("", "", "window_28d", "", ""),
+    value: actualCorrelation(""),
+  }));
+
+  React.useEffect(() => {
+    setCorrelation((current) => current.identityKey === identityKey
+      ? current
+      : { identityKey, value: actualCorrelation(runId) });
+  }, [identityKey, runId]);
+
+  const submit = React.useCallback(async () => {
+    const oid = Number(outcomeId);
+    const normalizedMetricPath = metricPath.trim();
+    if (
+      !runId.trim()
+      || runId.trim().length > 200
+      || !Number.isInteger(oid)
+      || oid <= 0
+      || !/^[A-Za-z0-9_.-]{1,200}$/.test(normalizedMetricPath)
+    ) {
+      setMessage("请填写预测 run、已终结 outcome 编号和服务端指标路径");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    const activeCorrelation = correlation.identityKey === identityKey
+      ? correlation.value
+      : actualCorrelation(runId);
+    if (correlation.identityKey !== identityKey) {
+      setCorrelation({ identityKey, value: activeCorrelation });
+    }
+    try {
+      const receipt = await recordPredictionActual(apiToken, runId.trim(), {
+        outcome_id: oid,
+        evidence_field: field,
+        metric_path: normalizedMetricPath,
+        correlation_id: activeCorrelation,
+        notes: notes.trim() || undefined,
+      });
+      setMessage(`已记录真实结果 · eval #${receipt.id ?? "—"}${receipt.deduped ? "（幂等复用）" : ""}`);
+      // 服务端已确认成功后才换新键；网络错误/响应丢失保留原键，重试可安全去重。
+      setCorrelation({ identityKey, value: actualCorrelation(runId) });
+      onRecorded();
+    } catch (cause: any) {
+      setMessage(String(cause?.message || "预测对答案失败"));
+    } finally {
+      setBusy(false);
+    }
+  }, [apiToken, correlation, field, identityKey, metricPath, notes, onRecorded, outcomeId, runId]);
+
+  return (
+    <div className="mt-2 rounded border border-white/[0.06] bg-black/15 p-2">
+      <button type="button" onClick={() => setOpen((value) => !value)} className="text-[9px] text-cyan-300">
+        {open ? "收起人工对答案" : "人工对答案（经理）"}
+      </button>
+      {open ? (
+        <div className="mt-2 grid grid-cols-1 gap-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
+            <input aria-label="预测 run ID" maxLength={200} value={runId} onChange={(event) => setRunId(event.target.value)} placeholder="prediction run_id" className="h-7 rounded border border-white/10 bg-black/20 px-2 text-[9px] text-slate-100" />
+            <input aria-label="Outcome ID" inputMode="numeric" value={outcomeId} onChange={(event) => setOutcomeId(event.target.value)} placeholder="finalized outcome_id" className="h-7 rounded border border-white/10 bg-black/20 px-2 text-[9px] text-slate-100" />
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <select aria-label="证据窗口" value={field} onChange={(event) => setField(event.target.value as PredictionEvidenceField)} className="h-7 rounded border border-white/10 bg-black/20 px-2 text-[9px] text-slate-100">
+              <option value="actual_result">最终结果</option>
+              <option value="window_7d">7 天观察窗</option>
+              <option value="window_14d">14 天观察窗</option>
+              <option value="window_28d">28 天观察窗</option>
+            </select>
+            <input aria-label="指标路径" maxLength={200} value={metricPath} onChange={(event) => setMetricPath(event.target.value)} placeholder="metrics.views_median" className="h-7 rounded border border-white/10 bg-black/20 px-2 text-[9px] text-slate-100" />
+          </div>
+          <input aria-label="对答案备注" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选：本次对答案说明" maxLength={1000} className="h-7 rounded border border-white/10 bg-black/20 px-2 text-[9px] text-slate-100" />
+          <div className="flex items-center gap-2">
+            <button type="button" disabled={busy} onClick={() => void submit()} className="rounded bg-cyan-500/80 px-2 py-1 text-[9px] text-white disabled:opacity-40">
+              {busy ? "校验中…" : "从结果证据写入 actual"}
+            </button>
+            {message ? <span className="text-[9px] text-slate-400">{message}</span> : null}
+          </div>
+          <div className="text-[8.5px] text-slate-600">客户端不能填写 actual 数字；后端会核对产品、市场、渠道、周期和结果证据。</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function PredictionLedgerPanel({ apiToken }: { apiToken: string }) {
   const [data, setData] = React.useState<LedgerSummaryResp | null>(null);
+  const [reloadTick, setReloadTick] = React.useState(0);
+  const activeToken = React.useRef("");
 
   // 只读拉取摘要(后端纯聚合已有数据,读得起);失败静默不渲染(非阻塞增益块)。
   React.useEffect(() => {
-    setData(null);
-    if (!apiToken) return;
+    const tokenChanged = activeToken.current !== apiToken;
+    activeToken.current = apiToken;
+    if (!apiToken) {
+      setData(null);
+      return;
+    }
+    if (tokenChanged) setData(null);
     let cancelled = false;
     void apiFetch<LedgerSummaryResp>("/api/admin/vkpi/prediction-ledger/summary", {}, apiToken)
       .then((payload) => { if (!cancelled) setData(payload && typeof payload === "object" ? payload : null); })
-      .catch(() => { if (!cancelled) setData(null); });
+      .catch(() => { if (!cancelled && tokenChanged) setData(null); });
     return () => { cancelled = true; };
-  }, [apiToken]);
+  }, [apiToken, reloadTick]);
 
   if (!apiToken || !data) return null;
   if (String(data.status || "") !== "ok") return null; // 聚合失败:安静缺席,不甩后端报错
@@ -157,6 +294,10 @@ export function PredictionLedgerPanel({ apiToken }: { apiToken: string }) {
         : e("div", { className: "space-y-1.5" }, groups.map((g, i) => GroupRow(g, i))),
       e("div", { className: "mt-1.5 text-[9px] text-slate-600" },
         "口径:预测→结果对齐真实表(推荐 outcome+反馈 / 押注复盘 / 告警闭环 / 执行台账);样本<5 = 样本不足,驾照不得据此升级;台账永不影响任何评分。"),
+      e(PredictionActualReviewForm, {
+        apiToken,
+        onRecorded: () => setReloadTick((value) => value + 1),
+      }),
       data.generated_at && e("div", { className: "mt-0.5 text-[8.5px] text-slate-700 tabular-nums" },
         "生成于 " + String(data.generated_at).slice(0, 19).replace("T", " ") + " UTC"),
     ),

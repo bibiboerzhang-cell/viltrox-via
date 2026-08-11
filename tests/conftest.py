@@ -305,6 +305,9 @@ CREATE TABLE vkpi_action_inbox (
     evidence_refs_json TEXT NOT NULL DEFAULT '[]',
     result_checklist_json TEXT NOT NULL DEFAULT '{}',
     approval_reason TEXT,
+    approved_by_staff_id INTEGER,
+    approved_at TEXT,
+    approval_snapshot_sha256 TEXT,
     verification_plan_json TEXT NOT NULL DEFAULT '[]',
     affected_tables_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'suggested',
@@ -328,6 +331,25 @@ CREATE TABLE vkpi_action_execution_ledger (
     created_at TEXT NOT NULL,
     FOREIGN KEY(action_id) REFERENCES vkpi_action_inbox(id) ON DELETE CASCADE
 );
+
+CREATE TABLE vkpi_event_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id INTEGER NOT NULL DEFAULT 1,
+    event_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL DEFAULT '',
+    entity_id TEXT NOT NULL DEFAULT '',
+    actor_type TEXT NOT NULL DEFAULT 'system',
+    actor_id TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    trace_id TEXT NOT NULL DEFAULT '',
+    confidence REAL,
+    provenance_json TEXT NOT NULL DEFAULT '{}',
+    occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX uq_test_action_required_approval_event
+ON vkpi_event_ledger(organization_id,entity_type,entity_id,source)
+WHERE event_type='action_approved' AND source='action_inbox.required_approval';
 """
 
 

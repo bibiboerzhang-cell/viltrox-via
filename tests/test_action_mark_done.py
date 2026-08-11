@@ -32,6 +32,7 @@ _ACTOR_USER = {"id": _ACTOR_STAFF_ID, "email": "markdone@test", "role": "employe
 _ACTOR_STAFF = {
     "id": _ACTOR_STAFF_ID, "staff_id": _ACTOR_STAFF_ID, "user_id": _ACTOR_STAFF_ID,
     "role": "employee", "is_owner": 0, "permissions": {"vkpi": "write"},
+    "organization_id": 1, "organization_scope_status": "resolved",
     "email": "markdone@test",
 }
 
@@ -117,8 +118,16 @@ def test_mark_done_approved_to_executed_with_manual_ledger(actor_client):
     """approved → executed;落 manual_execution 台账(kind 在 detail_json)。"""
     from app.db.connection import get_conn
 
-    action_id = _seed_action("approved")
+    action_id = _seed_action("suggested")
     try:
+        from app.domains.actions import approval_evidence
+
+        manager = {
+            "id": 990779, "role": "manager", "organization_id": 1,
+            "organization_scope_status": "resolved",
+        }
+        approved = approval_evidence.approve_action(action_id, manager, reason="checked")
+        assert approved.get("ok") is True
         resp = actor_client.post(
             f"/api/admin/vkpi/actions/{action_id}/mark-done",
             json={"note": "在系统外人工执行完毕"},

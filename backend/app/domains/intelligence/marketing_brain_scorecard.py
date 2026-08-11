@@ -11,11 +11,18 @@ import json
 from typing import Any
 
 from app.db.connection import get_conn, table_exists
+from app.domains.intelligence.marketing_brain_activity_evidence import (
+    activity_evidence_contracts as _activity_evidence_contracts,
+    server_bound_event_sql as _server_bound_event_sql,
+)
 from app.domains.intelligence.raw_market_source import latest_raw_market_source_observation
 from app.domains.market_brain.data_readiness import (
     DataRequirement,
     build_learning_readiness,
     evaluate_requirements,
+    outcome_evidence_sql,
+    verified_prediction_binding_sql,
+    verified_prediction_event_sql,
 )
 
 SCORECARD_VERSION = "marketing_brain_scorecard_v3_observed_evidence"
@@ -98,6 +105,25 @@ def _recent_count(table: str, ts_col: str = "created_at", *, days: int = _WINDOW
     if where:
         clause = f"({where}) AND {clause}"
     n = _count(table, clause, params)
+    return int(n or 0)
+
+
+def _recent_distinct_count(
+    table: str,
+    field: str,
+    ts_col: str = "created_at",
+    *,
+    days: int = _WINDOW_DAYS,
+    where: str = "",
+    params: tuple[Any, ...] = (),
+) -> int:
+    """Count recent stable evidence units rather than repeat invocations."""
+    if not table_exists(table):
+        return 0
+    clause = f"{ts_col} >= NOW() - INTERVAL '{int(days)} days'"
+    if where:
+        clause = f"({where}) AND {clause}"
+    n = _distinct_count(table, field, clause, params)
     return int(n or 0)
 
 
@@ -276,40 +302,98 @@ def build_marketing_brain_scorecard(
 ) -> dict[str, Any]:
     """Return a read-only 90+ scorecard for the AI Marketing Brain target."""
     del staff
+    activity_contracts = _activity_evidence_contracts()
     # 1. Evidence graph: installed ledger capability vs recent traced evidence.
-    event_count = _count("vkpi_event_ledger") or 0
-    recent_events = _recent_count("vkpi_event_ledger", "occurred_at")
-    traced_events = _count("vkpi_event_ledger", "trace_id IS NOT NULL AND trace_id <> ''") or 0
-    provenance_events = _count("vkpi_event_ledger", "provenance_json IS NOT NULL AND provenance_json <> '{}'::jsonb") or 0
+    event_scope = "organization_id = 1"
+    event_count = _count("vkpi_event_ledger", event_scope) or 0
+    recent_events = _recent_count(
+        "vkpi_event_ledger", "occurred_at", where=event_scope,
+    )
+    traced_events = _count(
+        "vkpi_event_ledger",
+        f"{event_scope} AND trace_id IS NOT NULL AND trace_id <> ''",
+    ) or 0
+    provenance_events = _count(
+        "vkpi_event_ledger",
+        f"{event_scope} AND provenance_json IS NOT NULL "
+        "AND provenance_json <> '{}'::jsonb",
+    ) or 0
     recent_traced = _recent_count(
-        "vkpi_event_ledger", "occurred_at", where="trace_id IS NOT NULL AND trace_id <> ''"
+        "vkpi_event_ledger", "occurred_at",
+        where=f"{event_scope} AND trace_id IS NOT NULL AND trace_id <> ''",
     )
     recent_provenance = _recent_count(
         "vkpi_event_ledger",
         "occurred_at",
-        where="provenance_json IS NOT NULL AND provenance_json <> '{}'::jsonb",
+        where=f"{event_scope} AND provenance_json IS NOT NULL "
+        "AND provenance_json <> '{}'::jsonb",
     )
     trace_cov = _coverage(traced_events, event_count)
     prov_cov = _coverage(provenance_events, event_count)
     recent_trace_cov = _coverage(recent_traced, recent_events)
     recent_prov_cov = _coverage(recent_provenance, recent_events)
+    event_contract = activity_contracts["event"]
+    event_base_contract = activity_contracts["event_base"]
+    recent_event_units = _recent_distinct_count(
+        event_base_contract.table,
+        event_base_contract.unit_sql,
+        event_base_contract.timestamp_column,
+        where=event_base_contract.where_sql,
+    )
+    recent_traced_event_units = _recent_distinct_count(
+        event_base_contract.table,
+        event_base_contract.unit_sql,
+        event_base_contract.timestamp_column,
+        where=(
+            f"({event_base_contract.where_sql}) AND "
+            "trace_id IS NOT NULL AND trace_id <> ''"
+        ),
+    )
+    recent_provenance_event_units = _recent_distinct_count(
+        event_base_contract.table,
+        event_base_contract.unit_sql,
+        event_base_contract.timestamp_column,
+        where=(
+            f"({event_base_contract.where_sql}) "
+            "AND provenance_json IS NOT NULL AND provenance_json <> '{}'::jsonb "
+            f"AND {_server_bound_event_sql()}"
+        ),
+    )
+    recent_verified_event_units = _recent_distinct_count(
+        event_contract.table,
+        event_contract.unit_sql,
+        event_contract.timestamp_column,
+        where=event_contract.where_sql,
+    )
+    distinct_trace_cov = _coverage(recent_traced_event_units, recent_event_units)
+    distinct_prov_cov = _coverage(recent_provenance_event_units, recent_event_units)
     evidence_capability = 1.0 if table_exists("vkpi_event_ledger") else 0.0
     evidence_score = (
-        0.50 * _ramp(recent_events, 80)
-        + 0.25 * recent_trace_cov
-        + 0.25 * recent_prov_cov
+        0.50 * _ramp(recent_verified_event_units, 80)
+        + 0.25 * distinct_trace_cov
+        + 0.25 * distinct_prov_cov
     )
 
     # 2. Durable workflow: tables/checkpoint contract vs recent completed runs.
     workflow_runs = _count("vkpi_workflow_runs") or 0
     workflow_steps = _count("vkpi_workflow_steps") or 0
     workflow_checkpoints = _count("vkpi_workflow_checkpoints") or 0
-    completed_runs = _count("vkpi_workflow_runs", "status = 'completed'") or 0
-    recent_runs = _recent_count("vkpi_workflow_runs", "created_at")
-    recent_completed_runs = _recent_count(
-        "vkpi_workflow_runs", "created_at", where="status = 'completed'"
+    workflow_contract = activity_contracts["workflow"]
+    observed_workflow_units = _distinct_count(
+        workflow_contract.table,
+        workflow_contract.unit_sql,
+        workflow_contract.where_sql,
+    ) or 0
+    # The observed contract already requires a completed, fence-bound run.
+    completed_runs = observed_workflow_units
+    recent_runs = _recent_distinct_count(
+        workflow_contract.table,
+        workflow_contract.unit_sql,
+        workflow_contract.timestamp_column,
+        where=workflow_contract.where_sql,
     )
-    completed_cov = _coverage(completed_runs, workflow_runs)
+    recent_completed_runs = recent_runs
+    completed_cov = _coverage(completed_runs, observed_workflow_units)
     recent_completed_cov = _coverage(recent_completed_runs, recent_runs)
     workflow_capability = sum(
         1.0
@@ -325,7 +409,22 @@ def build_marketing_brain_scorecard(
     executed_verified = _count(
         "vkpi_action_inbox",
         "status IN ('executed', 'done') AND result_checklist_json IS NOT NULL "
-        "AND result_checklist_json::text NOT IN ('', '{}', 'null')",
+        "AND result_checklist_json::text NOT IN ('', '{}', 'null') "
+        "AND EXISTS ("
+        "SELECT 1 FROM vkpi_event_ledger ev "
+        "WHERE ev.event_type = 'action_result_accepted' "
+        "AND ev.entity_type = 'action' "
+        "AND ev.entity_id = CAST(vkpi_action_inbox.id AS TEXT) "
+        "AND ev.organization_id = 1 "
+        "AND ev.actor_type = 'staff' AND ev.actor_id <> '' "
+        "AND ev.source = 'action_inbox.human_verification' "
+        "AND ev.trace_id <> '' "
+        "AND ev.provenance_json IS NOT NULL "
+        "AND ev.provenance_json <> '{}'::jsonb "
+        "AND COALESCE(ev.provenance_json->>'evidence_verification','') "
+        "= 'staff_attestation_bound_to_execution_ledger' "
+        "AND COALESCE(ev.provenance_json->>'execution_effect','') "
+        "IN ('state_changed','external_confirmed'))",
     ) or 0
     exec_cov = _ramp(executed_verified, 10)
     action_capability = contract_cov
@@ -335,21 +434,44 @@ def build_marketing_brain_scorecard(
     feedback_rows = _count("vkpi_memory_feedback") or 0
     recommendation_feedback = _count("vkpi_recommendation_feedback") or 0
     recommendation_outcomes = _count("vkpi_recommendation_outcomes") or 0
-    real_outcomes = _count(
-        "vkpi_recommendation_outcomes",
-        "COALESCE(content_published, FALSE) = TRUE "
-        "OR COALESCE(order_attributed, FALSE) = TRUE "
-        "OR COALESCE(attributed_orders, 0) > 0 "
-        "OR COALESCE(attributed_cost_cents, 0) > 0",
-    ) or 0
     learning_readiness = build_learning_readiness()
     learning_facts = learning_readiness.get("facts") or {}
     real_feedback = int(learning_facts.get("real_human_feedback") or 0)
     finalized_outcomes = int(learning_facts.get("evidence_backed_finalized_outcomes") or 0)
+    # Raw recommendation flags/cost fields are descriptive operational state,
+    # not a verified business outcome.  Only evidence-backed, human-finalized
+    # GTM outcomes may contribute to this observed leg.
+    real_outcomes = finalized_outcomes
     prediction_evals = int(learning_facts.get("prediction_evals_with_actual") or 0)
-    recent_prediction_evals = _count(
+    outreach_coverage = learning_facts.get("outreach_prediction_coverage") or {}
+    outreach_claimable = bool(outreach_coverage.get("claimable"))
+    outreach_recent_guard = (
+        "" if outreach_claimable else
+        "AND NOT EXISTS (SELECT 1 FROM vkpi_prediction_runs pr "
+        "WHERE pr.organization_id=vkpi_prediction_evals.organization_id "
+        "AND pr.run_id=vkpi_prediction_evals.run_id "
+        "AND pr.task_type='kol_outreach_reply_probability') "
+    )
+    binding_sql = verified_prediction_binding_sql("vkpi_prediction_evals")
+    verification_event_sql = verified_prediction_event_sql("vkpi_prediction_evals")
+    outcome_sql = outcome_evidence_sql("o")
+    # One finalized business outcome is one learning unit even when several
+    # forecast runs are evaluated against it.  Counting eval rows here would
+    # let duplicate runs inflate both the learning and eval-governance legs.
+    recent_prediction_evals = _distinct_count(
         "vkpi_prediction_evals",
-        "actual_value IS NOT NULL AND evaluated_at >= NOW() - INTERVAL '30 days'",
+        "outcome_id",
+        "actual_value IS NOT NULL AND outcome_id IS NOT NULL "
+        f"AND {binding_sql} "
+        f"AND {verification_event_sql} "
+        f"{outreach_recent_guard}"
+        "AND error_abs IS NOT NULL "
+        "AND LOWER(error_abs::text) NOT IN ('nan', 'infinity', '-infinity') "
+        "AND EXISTS (SELECT 1 FROM vkpi_gtm_outcomes o "
+        "WHERE o.id=vkpi_prediction_evals.outcome_id AND o.decision <> 'open' "
+        "AND o.decided_at IS NOT NULL AND o.decided_by IS NOT NULL "
+        f"AND ({outcome_sql}) "
+        "AND o.decided_at >= NOW() - INTERVAL '30 days')",
     ) or 0
     learning_capability = sum(
         1.0
@@ -362,10 +484,9 @@ def build_marketing_brain_scorecard(
         if table_exists(table)
     ) / 4.0
     learning_score = (
-        0.25 * _ramp(real_feedback, 20)
-        + 0.25 * _ramp(real_outcomes, 20)
-        + 0.25 * _ramp(finalized_outcomes, 10)
-        + 0.25 * _ramp(recent_prediction_evals, 10)
+        0.30 * _ramp(real_feedback, 20)
+        + 0.35 * _ramp(finalized_outcomes, 20)
+        + 0.35 * _ramp(recent_prediction_evals, 10)
     )
 
     # 5. Market intelligence: raw observations stay separate from promoted DB evidence.
@@ -424,8 +545,18 @@ def build_marketing_brain_scorecard(
     # 6. Eval governance: installed suites vs recent suites and real prediction evaluations.
     eval_runs = _count("vkpi_eval_runs") or 0
     eval_results = _count("vkpi_eval_results") or 0
-    recent_evals = _recent_count("vkpi_eval_runs", "finished_at")
-    latest_passed = _count("vkpi_eval_runs", "status = 'done' AND total = passed") or 0
+    eval_contract = activity_contracts["eval"]
+    recent_evals = _recent_distinct_count(
+        eval_contract.table,
+        eval_contract.unit_sql,
+        eval_contract.timestamp_column,
+        where=eval_contract.where_sql,
+    )
+    latest_passed = _distinct_count(
+        eval_contract.table,
+        eval_contract.unit_sql,
+        eval_contract.where_sql,
+    ) or 0
     eval_table_capability = sum(
         1.0
         for table in (
@@ -436,7 +567,8 @@ def build_marketing_brain_scorecard(
         )
         if table_exists(table)
     ) / 4.0
-    eval_capability = 0.70 * eval_table_capability + 0.30 * (1.0 if latest_passed > 0 else 0.0)
+    # Passing data is observed evidence, never installed capability.
+    eval_capability = eval_table_capability
     eval_score = (
         0.50 * _ramp(recent_evals, 3)
         + 0.50 * _ramp(recent_prediction_evals, 10)
@@ -448,10 +580,19 @@ def build_marketing_brain_scorecard(
             facts={
                 "event_count": event_count,
                 "recent_7d": recent_events,
+                "recent_distinct_business_units_7d": recent_event_units,
+                "recent_distinct_traced_units_7d": recent_traced_event_units,
+                "recent_distinct_server_bound_units_7d": recent_provenance_event_units,
+                "recent_verified_units_7d": recent_verified_event_units,
+                # Raw row coverages remain descriptive diagnostics only.  The
+                # score uses the distinct coverages below so duplicate emits
+                # cannot lift it.
                 "trace_coverage": round(trace_cov, 3),
                 "provenance_coverage": round(prov_cov, 3),
                 "recent_trace_coverage": round(recent_trace_cov, 3),
                 "recent_provenance_coverage": round(recent_prov_cov, 3),
+                "distinct_trace_coverage": round(distinct_trace_cov, 3),
+                "distinct_server_bound_coverage": round(distinct_prov_cov, 3),
             },
             target="近7天>=80条带trace/provenance的事件,所有推荐可追溯。",
             next_step="把 market/KOL/project/action 关键判断统一 emit 到 event_ledger,并带 trace_id/provenance。",
@@ -460,6 +601,8 @@ def build_marketing_brain_scorecard(
             "durable_workflow", "Durable Workflow", 18, workflow_capability, workflow_score,
             facts={"runs": workflow_runs, "recent_7d": recent_runs, "steps": workflow_steps,
                    "checkpoints": workflow_checkpoints, "completed_runs": completed_runs,
+                   "distinct_business_units": observed_workflow_units,
+                   "server_bound_distinct_units": observed_workflow_units,
                    "recent_completed_7d": recent_completed_runs,
                    "historical_completion_coverage": round(completed_cov, 3)},
             target="近7天>=20条真自动 run(搜索/建档/深析/履约/复盘都走 workflow),非手动 demo。",
@@ -482,6 +625,7 @@ def build_marketing_brain_scorecard(
                 "evidence_backed_finalized_gtm_outcomes": finalized_outcomes,
                 "prediction_evals_with_actual": prediction_evals,
                 "recent_prediction_evals_30d": recent_prediction_evals,
+                "outreach_prediction_coverage": outreach_coverage,
                 "data_readiness": learning_readiness,
             },
             target="真反馈>=20 + 真业务outcome>=20 + 有实际值的预测评估>=10 + 有证据人工finalized>=10。",
@@ -512,6 +656,7 @@ def build_marketing_brain_scorecard(
             "eval_governance", "Evals 治理", 10, eval_capability, eval_score,
             facts={"eval_runs": eval_runs, "eval_results": eval_results, "recent_runs_7d": recent_evals,
                    "fully_passed_runs": latest_passed,
+                   "fully_passed_distinct_server_bound_suites": latest_passed,
                    "prediction_evals_with_actual": prediction_evals,
                    "recent_prediction_evals_30d": recent_prediction_evals},
             target="近7天有评测套件运行,近30天有>=10条带真实 actual 的 prediction eval。",

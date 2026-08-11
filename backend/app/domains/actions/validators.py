@@ -51,20 +51,26 @@ def validate_action(action: dict[str, Any]) -> dict[str, Any]:
     if touches:
         return _fail("touches_v6_fit_violation", checks)
 
-    # 3. 成本未超 budget(仅当 est>0 且 uses_llm 才查 single_call per-request ceiling)
+    # 3. LLM 动作必须有正数服务端估价，且预算配置/查询均 fail-closed。
     try:
         est = int((action or {}).get("estimated_cost_cents") or 0)
     except (TypeError, ValueError):
         est = 0
     uses_llm = bool((action or {}).get("uses_llm"))
     checks["estimated_cost_cents"] = est
-    if est > 0 and uses_llm:
+    if uses_llm:
+        if est <= 0:
+            checks["budget_ok"] = False
+            return _fail("budget_estimate_required", checks)
         try:
-            within = budget_guard.check_budget("single_call", est / 100.0, require_configured=False)
+            within = budget_guard.check_budget(
+                "single_call", est / 100.0, require_configured=True,
+            )
         except Exception:
-            # 预算系统坏 → require_configured=False 语义即「未配置则放行」,这里也放行(不误杀)。
+            # 预算系统坏或未配置时绝不继续真实执行。
             logger.warning("validators.budget_check_failed", exc_info=True)
-            within = True
+            checks["budget_ok"] = False
+            return _fail("budget_guard_unavailable", checks)
         checks["budget_ok"] = bool(within)
         if not within:
             return _fail("budget_hard_stop", checks)

@@ -77,11 +77,21 @@ def _action(action_id: int = 901) -> dict[str, Any]:
 
 
 def test_claim_action_execution_compare_and_set_allows_one_winner(monkeypatch):
-    from app.domains.actions import inbox
+    from app.domains.actions import approval_evidence, inbox
 
     conn = _ClaimConnection()
-    monkeypatch.setattr(inbox, "get_conn", lambda: conn)
-    monkeypatch.setattr(inbox, "table_exists", lambda name: True)
+    def secure_claim(action_id, staff=None):
+        del staff
+        with conn._lock:
+            if conn.status != "approved":
+                return {
+                    "ok": False, "reason": "execution_already_claimed",
+                    "status": conn.status, "action_id": action_id,
+                }
+            conn.status = "executing"
+            return {"ok": True, "status": "executing", "action_id": action_id}
+
+    monkeypatch.setattr(approval_evidence, "claim_action_execution", secure_claim)
 
     staff = {"id": 11, "role": "manager"}
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -218,9 +228,16 @@ class _FinalizeConnection:
         self.rollbacks = 0
 
     def execute(self, sql: str, params=()):
-        self.calls.append("ledger" if "INSERT INTO vkpi_action_execution_ledger" in sql else "status")
+        if "INSERT INTO vkpi_action_execution_ledger" in sql:
+            self.calls.append("ledger")
+        elif "INSERT INTO vkpi_agent_tool_run" in sql:
+            self.calls.append("tool")
+        else:
+            self.calls.append("status")
         if "INSERT INTO vkpi_action_execution_ledger" in sql:
             return _Cursor({"id": 321}, 1)
+        if "INSERT INTO vkpi_agent_tool_run" in sql:
+            return _Cursor({"id": 654}, 1)
         return _Cursor(None, self.update_rowcount)
 
     def commit(self):
@@ -236,6 +253,7 @@ def test_finalize_commits_ledger_checklist_and_status_as_one_transaction(monkeyp
     conn = _FinalizeConnection()
     monkeypatch.setattr(executors, "get_conn", lambda: conn)
     monkeypatch.setattr(executors, "table_exists", lambda name: True)
+    monkeypatch.setattr(executors.tool_runs, "table_exists", lambda name: True)
     result = executors._finalize_claimed_execution(
         action=_action(903),
         action_id=903,
@@ -246,7 +264,7 @@ def test_finalize_commits_ledger_checklist_and_status_as_one_transaction(monkeyp
     )
 
     assert result == {"ok": True, "status": "executed", "ledger_id": 321}
-    assert conn.calls == ["ledger", "status"]
+    assert conn.calls == ["ledger", "status", "tool"]
     assert conn.commits == 1
     assert conn.rollbacks == 0
 

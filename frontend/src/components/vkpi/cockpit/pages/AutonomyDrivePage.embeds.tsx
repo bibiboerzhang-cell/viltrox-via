@@ -2,11 +2,67 @@ import React from "react";
 import { ModuleCard } from "./MarketVoicePage.modules";
 import { MODULE_SOURCES } from "./AutonomyDrivePage.modules";
 import { ActionInboxPanel } from "../components/ActionInboxPanel";
-import { PredictionLedgerPanel } from "../components/PredictionLedgerPanel";
 import { WeeklyScorecardPanel } from "../components/WeeklyScorecardPanel";
 import { MissReviewPanel } from "../components/MissReviewPanel";
 import { ShadowEvalPanel } from "../components/ShadowEvalPanel";
 import { AgentLoopPanel } from "../components/AgentLoopPanel";
+
+// These evidence/review panels are non-blocking enhancements on an already-lazy
+// board. Keep them behind their own runtime boundaries so
+// their validation/API stacks are not pulled back into the application shell.
+const ActionResultReviewQueue = React.lazy(() => import("../components/ActionResultReviewQueue").then((module) => ({
+  default: module.ActionResultReviewQueue,
+})));
+const PredictionLedgerPanel = React.lazy(() => import("../components/PredictionLedgerPanel").then((module) => ({
+  default: module.PredictionLedgerPanel,
+})));
+const OutreachTruthReviewQueue = React.lazy(() => import("../components/OutreachTruthReviewQueue").then((module) => ({
+  default: module.OutreachTruthReviewQueue,
+})));
+
+class ReviewPanelErrorBoundary extends React.Component<
+  { children: React.ReactNode; name: string },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div
+        role="alert"
+        aria-label={`${this.props.name} 暂不可用`}
+        className="my-2 rounded border border-amber-500/20 bg-amber-500/[0.06] p-2 text-[9px] text-amber-200"
+      >
+        <div>{this.props.name} 暂时加载失败；其他自治模块仍可继续使用。</div>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-1 text-sky-300 underline underline-offset-2"
+        >
+          刷新后重试
+        </button>
+      </div>
+    );
+  }
+}
+
+export function ReviewPanelBoundary({ children, name }: {
+  children: React.ReactNode;
+  name: string;
+}) {
+  return (
+    <ReviewPanelErrorBoundary name={name}>
+      <React.Suspense fallback={<div className="py-2 text-[9px] text-muted">复核证据组件加载中…</div>}>
+        {children}
+      </React.Suspense>
+    </ReviewPanelErrorBoundary>
+  );
+}
 
 // 自治驾照 · 复杂区块 embeds 包装族(MyKolBoardPage.embeds 同款手法)。
 //   六件自取数区块零改动收编:审批流(ActionInboxPanel,Dashboard 同款真身)+
@@ -61,6 +117,9 @@ export function ApprovalsEmbed({ apiToken, noToken }: { apiToken: string; noToke
       {apiToken ? (
         <div data-embed="approvals" className={`${EMBED} ${INBOX_TRIM}`}>
           <ActionInboxPanel apiToken={apiToken} limit={8} />
+          <ReviewPanelBoundary name="执行结果复核">
+            <ActionResultReviewQueue apiToken={apiToken} />
+          </ReviewPanelBoundary>
         </div>
       ) : (
         noToken
@@ -75,7 +134,12 @@ export function LedgerEmbed({ apiToken, noToken }: { apiToken: string; noToken: 
     <ModuleCard title="预测台账" srcLabel={src("ledger").label} srcRows={src("ledger").rows}>
       {apiToken ? (
         <div data-embed="ledger" className={`${EMBED} ${FOLD_TRIM}`}>
-          <PredictionLedgerPanel apiToken={apiToken} />
+          <ReviewPanelBoundary name="预测台账">
+            <PredictionLedgerPanel apiToken={apiToken} />
+          </ReviewPanelBoundary>
+          <ReviewPanelBoundary name="外联真值复核">
+            <OutreachTruthReviewQueue apiToken={apiToken} />
+          </ReviewPanelBoundary>
         </div>
       ) : (
         noToken

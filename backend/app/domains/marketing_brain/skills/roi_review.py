@@ -235,11 +235,17 @@ def _maybe_record(out: dict[str, Any], input_data: dict[str, Any],
     try:
         from app.domains.marketing_brain import skill_registry
 
+        recorded_model = model_used or "rule_v0"
         skill_registry.record_skill_run(
             skill_name=SKILL_NAME,
             skill_version=SKILL_VERSION,
             input_schema=dict(input_data or {}),
-            model_used=model_used if model_used is not None else ("rule_v0" if model_fn is None else "injected_model_fn"),
+            model_used=recorded_model,
+            prompt_version=(
+                "injected_model_fn:caller_owned"
+                if recorded_model != "rule_v0"
+                else f"{SKILL_NAME}:{SKILL_VERSION}:rule_v0"
+            ),
             output=out,
             cost_cents=0,           # 规则路径零成本;真烧由调用方注入并自行记账
             latency_ms=latency_ms,

@@ -7,11 +7,21 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.dependencies.legacy_scope import legacy_system_admin_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.domains.kol import pool as kol_pool
 from app.domains.recommendations import product_analysis
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-product-analysis"])
+
+
+def _require_legacy_recommendation_scope(staff: dict) -> None:
+    unavailable = legacy_system_admin_scope_guard(
+        staff,
+        surface="Product recommendation action",
+    )
+    if unavailable is not None:
+        raise HTTPException(status_code=403, detail=unavailable)
 
 
 @router.get("/product-analysis/launches")
@@ -137,6 +147,7 @@ def product_analysis_recommendation_action(
     body: dict | None = None,
     staff=Depends(require_tab("vkpi", "write")),
 ):
+    _require_legacy_recommendation_scope(staff)
     try:
         return product_analysis.action_recommendation(recommendation_id, action, body or {}, staff=staff)
     except LookupError as exc:

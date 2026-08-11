@@ -2,7 +2,7 @@
 
 策略:
   - 用 importlib 直接加载 backend/app/api/routers/vkpi_skills.py,直接调端点函数(绕过 FastAPI
-    Depends —— 显式传 _staff=None),hermetic 测分发/校验/投影,不起 ASGI、不要真 auth。
+    Depends —— 显式传 resolved org1 staff),hermetic 测分发/校验/投影,不起 ASGI、不要真 auth。
   - skills 的 run 默认 model_fn=None → 不真烧 LLM;但底层 content_score/creator_match 等会读 DB,
     缺数据时返回 unavailable/error,这都是合法 status,不让测试依赖真数据。
   - list / runs 端口在缺表(vkpi_skill_runs 未 apply)时应退化为安全空/零,不抛。
@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
+import asyncio
 import importlib
+import inspect
 import sys
 from pathlib import Path
 
@@ -22,6 +24,20 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 vkpi_skills = importlib.import_module("app.api.routers.vkpi_skills")
+
+_STAFF = {
+    "id": 1,
+    "role": "manager",
+    "is_owner": 0,
+    "organization_id": 1,
+    "organization_scope_status": "resolved",
+}
+
+_EMPLOYEE = {
+    **_STAFF,
+    "id": 2,
+    "role": "employee",
+}
 
 
 def test_router_prefix_and_dispatch_table():
@@ -39,7 +55,7 @@ def test_run_unknown_skill_404():
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc:
-        vkpi_skills.run_skill("no_such_skill_xyz", {"input": {}}, _staff=None)
+        vkpi_skills.run_skill("no_such_skill_xyz", {"input": {}}, _staff=_STAFF)
     assert exc.value.status_code == 404
 
 
@@ -55,7 +71,7 @@ def test_run_dispatches_and_shapes_response(monkeypatch):
 
     monkeypatch.setitem(vkpi_skills._DISPATCH, "creator_match", fake_run)
 
-    resp = vkpi_skills.run_skill("creator_match", {"input": {"product": "X"}}, _staff=None)
+    resp = vkpi_skills.run_skill("creator_match", {"input": {"product": "X"}}, _staff=_STAFF)
     assert resp["status"] == "ok"
     assert resp["output"]["scores"]["quality"] == 80
     assert captured["input"] == {"product": "X"}
@@ -73,7 +89,7 @@ def test_run_tolerates_flat_body(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setitem(vkpi_skills._DISPATCH, "roi_review", fake_run)
-    resp = vkpi_skills.run_skill("roi_review", {"campaign_id": 7}, _staff=None)
+    resp = vkpi_skills.run_skill("roi_review", {"campaign_id": 7}, _staff=_STAFF)
     # ok:True 无显式 status → 归一为 ok。
     assert resp["status"] == "ok"
     assert captured["input"] == {"campaign_id": 7}
@@ -88,7 +104,7 @@ def test_run_skill_failure_500(monkeypatch):
 
     monkeypatch.setitem(vkpi_skills._DISPATCH, "content_score", boom)
     with pytest.raises(HTTPException) as exc:
-        vkpi_skills.run_skill("content_score", {"input": {}}, _staff=None)
+        vkpi_skills.run_skill("content_score", {"input": {}}, _staff=_STAFF)
     assert exc.value.status_code == 500
 
 
@@ -103,7 +119,7 @@ def test_status_of_helper():
 
 def test_list_skills_shape():
     """list 端口:每行带契约字段;缺表时 runs 退化为 0,acceptance_rate 可为 None。"""
-    rows = vkpi_skills.list_skills(_staff=None)
+    rows = vkpi_skills.list_skills(_staff=_STAFF)
     assert isinstance(rows, list)
     names = {r["skill_name"] for r in rows}
     assert {"creator_match", "brief_generate", "content_score", "roi_review", "campaign_plan"} <= names
@@ -112,6 +128,7 @@ def test_list_skills_shape():
             "skill_name",
             "version",
             "runs",
+            "reviewed_runs",
             "acceptance_rate",
             "avg_cost_cents",
             "avg_latency_ms",
@@ -126,13 +143,13 @@ def test_list_skills_handles_stats_error(monkeypatch):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(vkpi_skills.skill_registry, "skill_acceptance_stats", boom)
-    rows = vkpi_skills.list_skills(_staff=None)
+    rows = vkpi_skills.list_skills(_staff=_STAFF)
     assert all(r["runs"] == 0 for r in rows)
 
 
 def test_runs_endpoint_projection(monkeypatch):
     """runs 端口:把 list_skill_runs 的明细投影成契约字段子集。"""
-    def fake_list(skill_name="", limit=50):
+    def fake_list(skill_name="", limit=50, review_status="all"):
         return {
             "status": "ok",
             "runs": [
@@ -143,6 +160,8 @@ def test_runs_endpoint_projection(monkeypatch):
                     "cost_cents": 0,
                     "latency_ms": 12,
                     "accepted": True,
+                    "human_score": 4.5,
+                    "business_result": "usable",
                     "created_at": "2026-06-28T00:00:00Z",
                     "output": {"extra": "should_be_dropped"},
                 }
@@ -150,7 +169,7 @@ def test_runs_endpoint_projection(monkeypatch):
         }
 
     monkeypatch.setattr(vkpi_skills.skill_registry, "list_skill_runs", fake_list)
-    rows = vkpi_skills.list_skill_runs(skill_name="creator_match", limit=10, _staff=None)
+    rows = vkpi_skills.list_skill_runs(skill_name="creator_match", limit=10, _staff=_STAFF)
     assert len(rows) == 1
     assert set(rows[0].keys()) == {
         "id",
@@ -159,10 +178,22 @@ def test_runs_endpoint_projection(monkeypatch):
         "cost_cents",
         "latency_ms",
         "accepted",
+        "human_score",
+        "business_result",
         "created_at",
     }
     assert rows[0]["id"] == 42
     assert rows[0]["accepted"] is True
+
+
+def test_runs_endpoint_is_manager_only():
+    dependency = inspect.signature(vkpi_skills.list_skill_runs).parameters["_staff"].default.dependency
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(dependency(staff=_EMPLOYEE))
+    assert caught.value.status_code == 403
+    assert asyncio.run(dependency(staff=_STAFF)) == _STAFF
 
 
 def test_runs_endpoint_unavailable(monkeypatch):
@@ -170,6 +201,6 @@ def test_runs_endpoint_unavailable(monkeypatch):
     monkeypatch.setattr(
         vkpi_skills.skill_registry,
         "list_skill_runs",
-        lambda skill_name="", limit=50: {"status": "unavailable", "runs": []},
+        lambda skill_name="", limit=50, review_status="all": {"status": "unavailable", "runs": []},
     )
-    assert vkpi_skills.list_skill_runs(_staff=None) == []
+    assert vkpi_skills.list_skill_runs(_staff=_STAFF) == []

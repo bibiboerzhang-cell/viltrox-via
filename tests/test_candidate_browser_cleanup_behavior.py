@@ -10,7 +10,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "ops" / "deploy_local_to_cloud.sh"
-VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+# The frozen release candidate intentionally excludes the workspace virtualenv.
+# Reuse the virtualenv that is already running pytest, while preserving its
+# non-resolved path because the extracted production function derives Python
+# from PROJECT_ROOT/.venv/bin/python.
+VENV_PYTHON = Path(sys.executable)
+RUNTIME_PROJECT_ROOT = VENV_PYTHON.parents[2]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -63,7 +68,7 @@ def test_candidate_cleanup_escalates_from_term_to_kill_for_entire_setsid_group()
     )
     script = (
         "set -euo pipefail\n"
-        f"PROJECT_ROOT={shlex.quote(str(REPO_ROOT))}\n"
+        f"PROJECT_ROOT={shlex.quote(str(RUNTIME_PROJECT_ROOT))}\n"
         f"PROBE_PY={shlex.quote(str(VENV_PYTHON))}\n"
         + cleanup_function
         + "\n"
@@ -155,7 +160,7 @@ def test_candidate_cleanup_accepts_refused_connect_during_time_wait() -> None:
     )
     script = (
         "set -euo pipefail\n"
-        f"PROJECT_ROOT={shlex.quote(str(REPO_ROOT))}\n"
+        f"PROJECT_ROOT={shlex.quote(str(RUNTIME_PROJECT_ROOT))}\n"
         f"PROBE_PY={shlex.quote(str(VENV_PYTHON))}\n"
         + cleanup_function
         + "\n"

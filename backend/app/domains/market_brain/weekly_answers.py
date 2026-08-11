@@ -239,7 +239,7 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
                    action_type, content_angle, decision, lesson,
                    next_weight_change, actual_result,
                    window_7d, window_14d, window_28d,
-                   created_at, decided_at, decided_by
+                   action_inbox_id, created_at, decided_at, decided_by
             FROM {TABLE}
             WHERE decision IN ({decided_placeholders})
               AND decided_at IS NOT NULL
@@ -276,11 +276,11 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
 
     from app.domains.market_brain.data_readiness import (
         build_learning_readiness,
-        has_observed_outcome_evidence,
+        has_verified_outcome_evidence,
     )
 
     for row in decided:
-        row["evidence_backed"] = has_observed_outcome_evidence(row)
+        row["evidence_backed"] = has_verified_outcome_evidence(conn, row)
     evidence_decided = [row for row in decided if row["evidence_backed"]]
     evidence_period_rows = [row for row in period_rows if row.get("evidence_backed")]
     groups = {dim: _group_stats(evidence_decided, dim) for dim in GROUP_DIMS}

@@ -264,6 +264,11 @@ def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None,
                     "limit": limit,
                 },
                 model_used=("injected_model_fn" if model_fn is not None else "rule_v0"),
+                prompt_version=(
+                    "injected_model_fn:caller_owned"
+                    if model_fn is not None
+                    else f"{SKILL_NAME}:{SKILL_VERSION}:rule_v0"
+                ),
                 retrieved_context={
                     "target_family": family,
                     "eligible_after_hard_filters": _safe_int(summary.get("eligible_after_hard_filters")) or 0,

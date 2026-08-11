@@ -18,6 +18,7 @@ from app.domains.actions.inbox_live_recheck import (
 )
 from app.domains.access import scope
 from app.domains.actions.producers import PRODUCERS
+from app.domains.platform import review_contract
 
 logger = get_logger(__name__)
 
@@ -411,21 +412,22 @@ def reconcile_executing_action(
     repeated requests cannot create conflicting terminal decisions.
     """
     normalized_decision = str(decision or "").strip().lower()
-    normalized_reason = str(reason or "").strip()
-    normalized_correlation = str(correlation_id or "").strip()
-    normalized_evidence = [item for item in evidence if isinstance(item, dict) and item]
-    actor_id = int(scope.actor_staff_id(staff))
+    normalized_reason = review_contract.normalize_review_text(reason, max_length=500)
+    normalized_correlation = review_contract.normalize_correlation(correlation_id)
+    normalized_evidence = review_contract.normalize_evidence(evidence)
+    reviewer = review_contract.reviewer_context(staff)
 
     if normalized_decision not in {"succeeded", "failed", "unknown"}:
         return {"ok": False, "reason": "invalid_reconciliation_decision"}
-    if not normalized_reason:
+    if normalized_reason is None:
         return {"ok": False, "reason": "reconciliation_reason_required"}
-    if not normalized_evidence:
+    if normalized_evidence is None:
         return {"ok": False, "reason": "reconciliation_evidence_required"}
-    if not normalized_correlation:
+    if normalized_correlation is None:
         return {"ok": False, "reason": "reconciliation_correlation_required"}
-    if actor_id <= 0:
+    if reviewer is None:
         return {"ok": False, "reason": "reconciliation_actor_required"}
+    actor_id, _organization_id = reviewer
     if not table_exists(_TABLE) or not table_exists(_LEDGER):
         return {"ok": False, "reason": "reconciliation_ledger_unavailable"}
 
@@ -495,7 +497,13 @@ def reconcile_executing_action(
                 existing_detail.get("decision") if isinstance(existing_detail, dict) else ""
             )
             conn.rollback()
-            if existing_decision != normalized_decision:
+            existing_actor = int(_loads(existing_detail.get("actor")).get("staff_id") or 0)
+            if not (
+                existing_decision == normalized_decision
+                and str(existing_detail.get("reason") or "") == normalized_reason
+                and existing_detail.get("evidence") == normalized_evidence
+                and existing_actor == actor_id
+            ):
                 return {"ok": False, "reason": "reconciliation_correlation_conflict"}
             return {
                 "ok": True,
@@ -722,67 +730,10 @@ def get_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str,
 def claim_action_execution(
     action_id: int, staff: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Atomically claim one approved action for execution.
+    """Hash-check the required manager approval before the execution CAS."""
+    from app.domains.actions import approval_evidence
 
-    The scope predicate is part of the compare-and-set UPDATE, so a stale read
-    cannot widen access.  Only the request that changes approved -> executing
-    may run the handler; every concurrent or repeated request fails closed.
-    """
-    if not table_exists(_TABLE):
-        return {"ok": False, "reason": "migration_141_not_applied", "action_id": int(action_id)}
-
-    actor = int(scope.actor_staff_id(staff))
-    can_all = scope.can_view_all(staff)
-    if not can_all and actor <= 0:
-        return {"ok": False, "reason": "not_found_or_out_of_scope", "action_id": int(action_id)}
-
-    conn = get_conn()
-    params: list[Any] = [int(action_id)]
-    owner_clause = ""
-    if not can_all:
-        owner_clause = " AND owner_staff_id = ?"
-        params.append(actor)
-
-    try:
-        cursor = conn.execute(
-            f"""
-            UPDATE {_TABLE}
-            SET status = 'executing', updated_at = {_sql_now()}
-            WHERE id = ? AND status = 'approved'{owner_clause}
-            RETURNING id, status
-            """,
-            tuple(params),
-        )
-        row = cursor.fetchone()
-        conn.commit()
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            logger.debug("action_inbox.claim_rollback_failed", exc_info=True)
-        logger.warning("action_inbox.claim_failed", extra={"action_id": action_id}, exc_info=True)
-        return {
-            "ok": False,
-            "reason": "execution_claim_failed",
-            "action_id": int(action_id),
-        }
-
-    if row is not None:
-        return {"ok": True, "status": "executing", "action_id": int(action_id)}
-
-    current = get_action(action_id, staff)
-    if current is None:
-        reason = "not_found_or_out_of_scope"
-        current_status = ""
-    else:
-        reason = "execution_already_claimed"
-        current_status = str(current.get("status") or "")
-    return {
-        "ok": False,
-        "reason": reason,
-        "action_id": int(action_id),
-        "status": current_status,
-    }
+    return approval_evidence.claim_action_execution(action_id, staff)
 
 
 def _transition(
@@ -862,21 +813,10 @@ def _transition(
 
 
 def approve_action(action_id: int, staff: dict[str, Any] | None = None, reason: str = "") -> dict[str, Any]:
-    """人审通过 → status=approved(execute 仍需后端 validators 双闸)。reason 落 approval_reason。"""
-    res = _transition(action_id, "approved", staff, approval_reason=(str(reason).strip() or None))
-    if isinstance(res, dict) and res.get("ok"):  # P1 事件总线:行动获批入流(best-effort)
-        try:
-            from app.domains.platform import event_ledger
+    """Persist the manager, time, contract hash, and event in one transaction."""
+    from app.domains.actions import approval_evidence
 
-            event_ledger.emit(
-                "action_approved", entity_type="action", entity_id=int(action_id),
-                actor_type="staff", actor_id=str((staff or {}).get("id") or ""), source="action_inbox",
-                trace_id=event_ledger.new_trace_id("action", action_id),
-            )
-        except Exception:
-            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-            pass
-    return res
+    return approval_evidence.approve_action(action_id, staff, reason=str(reason or ""))
 
 
 def dismiss_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -898,64 +838,12 @@ def snooze_action(
 def mark_done_action(
     action_id: int, staff: dict[str, Any] | None = None, note: str | None = None
 ) -> dict[str, Any]:
-    """人工已执行 → status=executed(仅 approved 可转)。
+    """Verify the immutable manager approval before recording manual completion."""
+    from app.domains.actions import approval_evidence
 
-    场景:suggested_endpoint 为空的动作(如 gtm_bet)走 /execute 只会 skipped,
-    行永远停在 approved —— 本函数给「人在系统外做完了」一个诚实终态。
-    落一条 manual_execution 台账:ledger CHECK 限 mode IN ('dry_run','executed'),
-    人工语义放 detail_json.kind='manual_execution' + endpoint='manual:mark-done'。
-    红线:只动 vkpi_action_inbox 自己这一行 + 追加自身台账,绝不碰 viltrox_fit_score / rule_v0。
-    """
-    current = get_action(action_id, staff)
-    if current is None:
-        return {"ok": False, "reason": "not_found_or_out_of_scope", "action_id": int(action_id)}
-    if str(current.get("status") or "") != "approved":
-        return {
-            "ok": False,
-            "reason": "illegal_state_transition",
-            "action_id": int(action_id),
-            "from_status": current.get("status"),
-            "to_status": "executed",
-        }
-
-    conn = get_conn()
-    cursor = conn.execute(
-        f"UPDATE {_TABLE} SET status = 'executed', updated_at = {_sql_now()} "
-        f"WHERE id = ? AND status = 'approved'",
-        (int(action_id),),
+    return approval_evidence.mark_done_action(
+        action_id, staff, note=str(note or ""),
     )
-    if int(getattr(cursor, "rowcount", 0) or 0) <= 0:
-        # 并发竞态:行已被别处改走 approved → 诚实回 illegal(不落台账)。
-        conn.commit()
-        return {"ok": False, "reason": "illegal_state_transition", "action_id": int(action_id)}
-
-    ledger_id: int | None = None
-    if table_exists(_LEDGER):
-        try:
-            row = conn.execute(
-                f"""
-                INSERT INTO {_LEDGER}
-                  (action_id, category, dedupe_key, actor_staff_id, mode, outcome, endpoint, cost_cents, error, detail_json, created_at)
-                VALUES (?,?,?,?,'executed','success','manual:mark-done',0,'',{_sql_json_param()},{_sql_now()})
-                RETURNING id
-                """,
-                (
-                    int(action_id),
-                    str(current.get("category") or ""),
-                    str(current.get("dedupe_key") or ""),
-                    int(scope.actor_staff_id(staff)) or None,
-                    _dumps({"kind": "manual_execution", "note": str(note or "")[:2000]}),
-                ),
-            ).fetchone()
-            ledger_id = int(dict(row)["id"]) if row else None
-        except Exception:
-            logger.warning("action_inbox.mark_done_ledger_failed", extra={"action_id": action_id}, exc_info=True)
-    conn.commit()
-
-    result: dict[str, Any] = {"ok": True, "status": "executed", "action_id": int(action_id)}
-    if ledger_id is not None:
-        result["ledger_id"] = ledger_id
-    return result
 
 
 def set_status(action_id: int, status: str) -> None:

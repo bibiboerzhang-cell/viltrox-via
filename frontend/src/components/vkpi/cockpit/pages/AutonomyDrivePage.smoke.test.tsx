@@ -20,6 +20,12 @@ vi.mock("../../../../services/http", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../services/http")>();
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
+vi.mock("../../../../hooks/usePermissions", () => ({
+  usePermissions: () => ({
+    isManager: () => true,
+    hasPermission: (tab: string, level: string) => tab === "vkpi" && level === "write",
+  }),
+}));
 
 import { AutonomyDrivePage } from "./AutonomyDrivePage";
 
@@ -171,6 +177,9 @@ function routeApi(overrides: { licenses?: unknown; boardSeries?: unknown } = {})
     if (p.startsWith("/api/admin/vkpi/autonomy/evaluate")) return p.includes("dry_run=false") ? EVAL_WRITE : EVAL_DRY;
     if (p.startsWith("/api/admin/vkpi/prediction-ledger/summary")) return LEDGER_OK;
     if (p.startsWith("/api/admin/vkpi/actions/inbox")) return INBOX_OK;
+    if (p.startsWith("/api/admin/vkpi/gtm/verdicts/pending")) {
+      return { status: "ready", count: 0, due_total: 0, items: [] };
+    }
     if (p.startsWith("/api/admin/vkpi/learning/weekly-scorecard")) return SCORECARD_OK;
     if (p.startsWith("/api/admin/vkpi/agents/loop/trace")) return TRACE_EMPTY;
     throw new Error(`unexpected apiFetch: ${p}`);

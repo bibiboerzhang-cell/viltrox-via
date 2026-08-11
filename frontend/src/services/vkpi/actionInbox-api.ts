@@ -171,6 +171,77 @@ export async function reconcileAction(
   );
 }
 
+export type ActionResultVerificationDecision = "accepted" | "rejected";
+
+export interface ActionResultVerificationRequest {
+  decision: ActionResultVerificationDecision;
+  reason: string;
+  evidence: Array<Record<string, unknown>>;
+  correlation_id: string;
+  expected_candidate_sha256: string;
+  expected_execution_ledger_id: number;
+  expected_detail_sha256: string;
+}
+
+export interface ActionResultVerificationResponse {
+  ok: boolean;
+  action_id: number;
+  decision: ActionResultVerificationDecision;
+  ledger_id: number;
+  tool_run_ids: number[];
+  correlation_id: string;
+  idempotent: boolean;
+}
+
+export interface ActionReviewCandidate {
+  action_id: number;
+  execution_ledger_id: number;
+  execution_created_at: string;
+  endpoint: string;
+  outcome: string;
+  candidate_canonical_json: string;
+  candidate_sha256: string;
+  detail_json_canonical: string;
+  detail_sha256: string;
+  tool_run_ids: number[];
+  verification_plan: string[];
+}
+
+export interface ActionReviewCandidateSnapshot {
+  action_id?: number;
+  execution_ledger_id: number;
+  execution_created_at?: string;
+  endpoint: string;
+  outcome: string;
+  detail_json: unknown;
+  detail_sha256?: string;
+  tool_run_ids?: number[];
+  verification_plan: string[];
+}
+
+export async function getActionReviewCandidate(
+  token: string,
+  id: number,
+): Promise<ActionReviewCandidate> {
+  return apiFetch<ActionReviewCandidate>(
+    `/api/admin/vkpi/actions/${id}/review-candidate`,
+    { cache: "no-store" },
+    token,
+  );
+}
+
+export async function verifyActionResult(
+  token: string,
+  id: number,
+  payload: ActionResultVerificationRequest,
+): Promise<ActionResultVerificationResponse> {
+  return apiFetch<ActionResultVerificationResponse>(
+    `/api/admin/vkpi/actions/${id}/verify-result`,
+    { method: "POST", body: jsonBody(payload), cache: "no-store" },
+    token,
+  );
+}
+
 // ── R7 执行台账回读(只读 vkpi_action_execution_ledger;before/after 验收) ──────
 export interface ActionLedgerItem {
   id: number;

@@ -12,6 +12,12 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains.market_brain.data_readiness import (
+    outcome_evidence_sql,
+    real_recommendation_feedback_sql,
+    verified_prediction_binding_sql,
+    verified_prediction_event_sql,
+)
 
 logger = get_logger(__name__)
 
@@ -20,8 +26,14 @@ _REAL_LEARNING_TARGETS = {
     "human_feedback": 20,
     "prediction_actual_evals": 50,
     "human_reviewed_skill_runs": 100,
+    "reviewed_skill_types": 4,
     "executed_agent_tool_runs": 20,
+    "executed_tool_types": 3,
+    "verified_action_tool_cases": 20,
 }
+_NONPRODUCTION_SKILL_MARKERS = (
+    "%test%", "%demo%", "%synthetic%", "%fixture%", "%smoke%", "%dry_run%",
+)
 
 
 def _count_by(table: str, col: str) -> dict[str, int]:
@@ -55,7 +67,10 @@ def _maturity_from_truth(truth: dict[str, int]) -> str:
         "human_feedback": 5,
         "prediction_actual_evals": 5,
         "human_reviewed_skill_runs": 5,
+        "reviewed_skill_types": 2,
         "executed_agent_tool_runs": 1,
+        "executed_tool_types": 1,
+        "verified_action_tool_cases": 1,
     }
     if all(int(truth.get(key) or 0) >= target for key, target in warming_targets.items()):
         return "warming"
@@ -64,42 +79,295 @@ def _maturity_from_truth(truth: dict[str, int]) -> str:
 
 def _verified_learning_evidence() -> dict[str, int]:
     """Count only human/actual/finalized evidence and explicitly reject test markers."""
+    outreach_claimable = False
+    if table_exists("vkpi_prediction_runs"):
+        try:
+            from app.domains.market_brain import outreach_truth_bridge
+
+            outreach_claimable = bool(
+                outreach_truth_bridge.outreach_prediction_coverage(get_conn()).get("claimable")
+            )
+        except Exception:
+            logger.debug("learning_signals.outreach_coverage_failed", exc_info=True)
+    finalized_evidence_sql = outcome_evidence_sql("o")
     finalized = _scalar(
-        "vkpi_recommendation_outcomes",
-        "SELECT COUNT(*) AS n FROM vkpi_recommendation_outcomes WHERE outcome_finalized_at IS NOT NULL",
+        "vkpi_gtm_outcomes",
+        f"""
+        SELECT COUNT(DISTINCT o.action_inbox_id) AS n
+        FROM vkpi_gtm_outcomes o
+        WHERE o.decision <> 'open'
+          AND o.decided_at IS NOT NULL
+          AND o.decided_by IS NOT NULL
+          AND o.action_inbox_id IS NOT NULL
+          AND ({finalized_evidence_sql})
+        """,
     )
+    real_feedback_sql, real_feedback_params = real_recommendation_feedback_sql()
     feedback = _scalar(
         "vkpi_recommendation_feedback",
-        """
-        SELECT COUNT(*) AS n
+        f"""
+        SELECT COUNT(DISTINCT recommendation_id) AS n
         FROM vkpi_recommendation_feedback
-        WHERE created_by_staff_id IS NOT NULL
-          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
-          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
-          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
-          AND LOWER(COALESCE(CAST(metadata_json AS TEXT),'')) NOT LIKE ?
+        WHERE {real_feedback_sql}
         """,
-        ("%test%", "%demo%", "%smoke%", "%dry_run%"),
+        real_feedback_params,
     )
+    binding_sql = verified_prediction_binding_sql("e")
+    verification_event_sql = verified_prediction_event_sql("e")
+    evidence_sql = outcome_evidence_sql("o")
     actual_evals = _scalar(
         "vkpi_prediction_evals",
-        "SELECT COUNT(*) AS n FROM vkpi_prediction_evals WHERE actual_value IS NOT NULL",
+        f"""
+        SELECT COUNT(DISTINCT e.outcome_id) AS n
+        FROM vkpi_prediction_evals e
+        JOIN vkpi_gtm_outcomes o ON o.id = e.outcome_id
+        LEFT JOIN vkpi_prediction_runs pr
+          ON pr.organization_id=e.organization_id AND pr.run_id=e.run_id
+        WHERE e.actual_value IS NOT NULL
+          AND LOWER(e.actual_value::text) NOT IN ('nan', 'infinity', '-infinity')
+          AND {binding_sql}
+          AND {verification_event_sql}
+          AND e.error_abs IS NOT NULL
+          AND LOWER(e.error_abs::text) NOT IN ('nan', 'infinity', '-infinity')
+          AND o.decision <> 'open'
+          AND o.decided_at IS NOT NULL
+          AND o.decided_by IS NOT NULL
+          AND ({evidence_sql})
+          AND (
+            COALESCE(pr.task_type, '') <> 'kol_outreach_reply_probability'
+            OR {'TRUE' if outreach_claimable else 'FALSE'}
+          )
+        """,
     )
     reviewed_skills = _scalar(
         "vkpi_skill_runs",
         """
-        SELECT COUNT(*) AS n
-        FROM vkpi_skill_runs
-        WHERE (human_score IS NOT NULL OR accepted IS NOT NULL)
-          AND LOWER(COALESCE(skill_name,'')) NOT LIKE ?
-          AND LOWER(COALESCE(skill_name,'')) NOT LIKE ?
-          AND LOWER(COALESCE(business_result,'')) NOT IN (?,?,?,?,?)
+        SELECT COUNT(DISTINCT (
+            sr.skill_name,
+            ev.provenance_json->>'server_bound_input_sha256',
+            ev.provenance_json->>'server_bound_output_sha256'
+        )) AS n
+        FROM vkpi_skill_runs sr
+        JOIN vkpi_event_ledger ev
+          ON ev.event_type = CASE
+                WHEN sr.accepted = TRUE THEN 'skill_run_accepted'
+                ELSE 'skill_run_rejected'
+             END
+         AND ev.entity_type = 'skill_run'
+         AND ev.entity_id = CAST(sr.id AS TEXT)
+         AND ev.actor_type = 'staff'
+         AND ev.organization_id = 1
+         AND ev.actor_id <> ''
+         AND ev.source = 'skill_studio.human_review'
+         AND ev.trace_id <> ''
+         AND ev.provenance_json IS NOT NULL
+         AND CAST(ev.provenance_json AS TEXT) NOT IN ('', '{}', 'null')
+         AND COALESCE(ev.provenance_json->>'evidence_verification', '')
+             = 'staff_attestation_bound_to_skill_run'
+         AND COALESCE(ev.provenance_json->>'review_eligibility', '')
+             = 'usable_production_output'
+         AND COALESCE(ev.provenance_json->>'server_bound_input_sha256', '')
+             ~ '^[0-9a-f]{64}$'
+         AND COALESCE(ev.provenance_json->>'server_bound_output_sha256', '')
+             ~ '^[0-9a-f]{64}$'
+        WHERE sr.human_score IS NOT NULL
+          AND sr.accepted IS NOT NULL
+          AND LOWER(COALESCE(sr.skill_name,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.skill_name,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
         """,
-        ("test%", "%smoke%", "pytest", "test", "demo", "dry_run", "smoke"),
+        ("test%", "%smoke%", *_NONPRODUCTION_SKILL_MARKERS),
     )
     tool_runs = _scalar(
         "vkpi_agent_tool_run",
-        "SELECT COUNT(*) AS n FROM vkpi_agent_tool_run WHERE status='executed' AND executed_at IS NOT NULL",
+        """
+        SELECT COUNT(DISTINCT tr.id) AS n
+        FROM vkpi_agent_tool_run tr
+        JOIN vkpi_agent_orchestration_plan plan ON plan.id=tr.plan_id
+        JOIN vkpi_action_inbox action
+          ON action.id=CAST(tr.inputs_json->>'action_id' AS BIGINT)
+         AND action.category='orchestrated_step'
+         AND action.dedupe_key=(
+              'plan:' || CAST(tr.plan_id AS TEXT) || ':step:' || CAST(tr.step_index AS TEXT)
+         )
+        JOIN vkpi_event_ledger ev
+          ON ev.event_type = 'agent_tool_run_accepted'
+         AND ev.entity_type = 'agent_tool_run'
+         AND ev.entity_id = CAST(tr.id AS TEXT)
+         AND ev.actor_type = 'staff'
+         AND ev.organization_id = 1
+         AND ev.actor_id <> ''
+         AND ev.source = 'action_inbox.human_verification'
+         AND ev.trace_id <> ''
+         AND ev.provenance_json IS NOT NULL
+         AND CAST(ev.provenance_json AS TEXT) NOT IN ('', '{}', 'null')
+         AND COALESCE(ev.provenance_json->>'evidence_verification', '')
+             = 'staff_attestation_bound_to_execution_ledger'
+         AND COALESCE(ev.provenance_json->>'execution_effect', '')
+             IN ('state_changed', 'external_confirmed')
+        WHERE tr.status='executed' AND tr.executed_at IS NOT NULL
+          AND tr.plan_id IS NOT NULL
+          AND COALESCE(plan.plan_json->tr.step_index->>'tool_id','')=tr.tool_id
+          AND COALESCE(tr.inputs_json->'step_inputs','{}'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'inputs','{}'::jsonb)
+          AND COALESCE(tr.inputs_json->>'contract_sha256','')
+              = COALESCE(action.payload_json->>'contract_sha256','')
+          AND COALESCE(tr.inputs_json->>'entity_type','')=action.entity_type
+          AND COALESCE(tr.inputs_json->>'entity_id','')=action.entity_id
+          AND COALESCE(tr.inputs_json->'affected_tables','[]'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'affected_tables','[]'::jsonb)
+          AND COALESCE(action.affected_tables_json,'[]'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'affected_tables','[]'::jsonb)
+          AND COALESCE(tr.inputs_json->>'execution_effect', '')
+              = COALESCE(ev.provenance_json->>'execution_effect', '')
+          AND COALESCE(tr.inputs_json->>'execution_ledger_id', '')
+              = COALESCE(ev.provenance_json->>'execution_ledger_id', '')
+        """,
+    )
+    skill_types = _scalar(
+        "vkpi_skill_runs",
+        """
+        SELECT COUNT(DISTINCT sr.skill_name) AS n
+        FROM vkpi_skill_runs sr
+        JOIN vkpi_event_ledger ev
+          ON ev.entity_type='skill_run' AND ev.entity_id=CAST(sr.id AS TEXT)
+         AND ev.event_type = CASE
+               WHEN sr.accepted = TRUE THEN 'skill_run_accepted'
+               ELSE 'skill_run_rejected'
+             END
+         AND ev.actor_type='staff' AND ev.actor_id <> ''
+         AND ev.organization_id=1
+         AND ev.source='skill_studio.human_review' AND ev.trace_id <> ''
+         AND ev.provenance_json IS NOT NULL
+         AND CAST(ev.provenance_json AS TEXT) NOT IN ('', '{}', 'null')
+         AND COALESCE(ev.provenance_json->>'evidence_verification', '')
+             = 'staff_attestation_bound_to_skill_run'
+         AND COALESCE(ev.provenance_json->>'review_eligibility', '')
+             = 'usable_production_output'
+         AND COALESCE(ev.provenance_json->>'server_bound_input_sha256', '')
+             ~ '^[0-9a-f]{64}$'
+         AND COALESCE(ev.provenance_json->>'server_bound_output_sha256', '')
+             ~ '^[0-9a-f]{64}$'
+        WHERE sr.accepted IS NOT NULL AND sr.human_score IS NOT NULL
+          AND LOWER(COALESCE(sr.skill_name,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.skill_name,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+          AND LOWER(COALESCE(sr.business_result,'')) NOT LIKE ?
+        """,
+        ("test%", "%smoke%", *_NONPRODUCTION_SKILL_MARKERS),
+    )
+    tool_types = _scalar(
+        "vkpi_agent_tool_run",
+        """
+        SELECT COUNT(DISTINCT tr.tool_id) AS n
+        FROM vkpi_agent_tool_run tr
+        JOIN vkpi_agent_orchestration_plan plan ON plan.id=tr.plan_id
+        JOIN vkpi_action_inbox action
+          ON action.id=CAST(tr.inputs_json->>'action_id' AS BIGINT)
+         AND action.category='orchestrated_step'
+         AND action.dedupe_key=(
+              'plan:' || CAST(tr.plan_id AS TEXT) || ':step:' || CAST(tr.step_index AS TEXT)
+         )
+        JOIN vkpi_event_ledger ev
+          ON ev.entity_type='agent_tool_run' AND ev.entity_id=CAST(tr.id AS TEXT)
+         AND ev.event_type='agent_tool_run_accepted'
+         AND ev.actor_type='staff' AND ev.actor_id <> ''
+         AND ev.organization_id=1
+         AND ev.source='action_inbox.human_verification' AND ev.trace_id <> ''
+         AND ev.provenance_json IS NOT NULL
+         AND CAST(ev.provenance_json AS TEXT) NOT IN ('', '{}', 'null')
+         AND COALESCE(ev.provenance_json->>'evidence_verification', '')
+             = 'staff_attestation_bound_to_execution_ledger'
+         AND COALESCE(ev.provenance_json->>'execution_effect', '')
+             IN ('state_changed', 'external_confirmed')
+        WHERE tr.status='executed' AND tr.executed_at IS NOT NULL
+          AND tr.plan_id IS NOT NULL
+          AND COALESCE(plan.plan_json->tr.step_index->>'tool_id','')=tr.tool_id
+          AND COALESCE(tr.inputs_json->'step_inputs','{}'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'inputs','{}'::jsonb)
+          AND COALESCE(tr.inputs_json->>'contract_sha256','')
+              = COALESCE(action.payload_json->>'contract_sha256','')
+          AND COALESCE(tr.inputs_json->>'entity_type','')=action.entity_type
+          AND COALESCE(tr.inputs_json->>'entity_id','')=action.entity_id
+          AND COALESCE(tr.inputs_json->'affected_tables','[]'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'affected_tables','[]'::jsonb)
+          AND COALESCE(action.affected_tables_json,'[]'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'affected_tables','[]'::jsonb)
+          AND COALESCE(tr.inputs_json->>'execution_effect', '')
+              = COALESCE(ev.provenance_json->>'execution_effect', '')
+          AND COALESCE(tr.inputs_json->>'execution_ledger_id', '')
+              = COALESCE(ev.provenance_json->>'execution_ledger_id', '')
+        """,
+    )
+    verified_cases = _scalar(
+        "vkpi_event_ledger",
+        """
+        SELECT COUNT(DISTINCT action_ev.entity_id) AS n
+        FROM vkpi_event_ledger action_ev
+        JOIN vkpi_event_ledger tool_ev
+         ON tool_ev.trace_id=action_ev.trace_id
+         AND tool_ev.event_type='agent_tool_run_accepted'
+         AND tool_ev.source='action_inbox.human_verification'
+         AND tool_ev.actor_type='staff' AND tool_ev.actor_id <> ''
+         AND tool_ev.provenance_json IS NOT NULL
+         AND CAST(tool_ev.provenance_json AS TEXT) NOT IN ('', '{}', 'null')
+         AND COALESCE(tool_ev.provenance_json->>'evidence_verification', '')
+             = 'staff_attestation_bound_to_execution_ledger'
+         AND COALESCE(tool_ev.provenance_json->>'execution_effect', '')
+             IN ('state_changed', 'external_confirmed')
+        JOIN vkpi_agent_tool_run tr
+          ON CAST(tr.id AS TEXT)=tool_ev.entity_id
+         AND tr.status='executed'
+         AND COALESCE(tr.inputs_json->>'action_id','')=action_ev.entity_id
+         AND COALESCE(tr.inputs_json->>'execution_ledger_id','')
+             = COALESCE(tool_ev.provenance_json->>'execution_ledger_id','')
+         AND COALESCE(tr.inputs_json->>'execution_effect','')
+             = COALESCE(tool_ev.provenance_json->>'execution_effect','')
+        JOIN vkpi_agent_orchestration_plan plan ON plan.id=tr.plan_id
+        JOIN vkpi_action_inbox action
+          ON action.id=CAST(tr.inputs_json->>'action_id' AS BIGINT)
+         AND action.category='orchestrated_step'
+         AND action.dedupe_key=(
+              'plan:' || CAST(tr.plan_id AS TEXT) || ':step:' || CAST(tr.step_index AS TEXT)
+         )
+        WHERE action_ev.event_type='action_result_accepted'
+          AND action_ev.entity_type='action'
+          AND action_ev.actor_type='staff'
+          AND action_ev.organization_id=1
+          AND tool_ev.organization_id=1
+          AND action_ev.actor_id <> ''
+          AND action_ev.source='action_inbox.human_verification'
+          AND action_ev.trace_id <> ''
+          AND action_ev.provenance_json IS NOT NULL
+          AND CAST(action_ev.provenance_json AS TEXT) NOT IN ('', '{}', 'null')
+          AND COALESCE(action_ev.provenance_json->>'evidence_verification', '')
+              = 'staff_attestation_bound_to_execution_ledger'
+          AND COALESCE(action_ev.provenance_json->>'execution_ledger_id','')
+              = COALESCE(tool_ev.provenance_json->>'execution_ledger_id','')
+          AND COALESCE(action_ev.provenance_json->>'execution_effect','')
+              = COALESCE(tool_ev.provenance_json->>'execution_effect','')
+          AND tr.plan_id IS NOT NULL
+          AND COALESCE(plan.plan_json->tr.step_index->>'tool_id','')=tr.tool_id
+          AND COALESCE(tr.inputs_json->'step_inputs','{}'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'inputs','{}'::jsonb)
+          AND COALESCE(tr.inputs_json->>'contract_sha256','')
+              = COALESCE(action.payload_json->>'contract_sha256','')
+          AND COALESCE(tr.inputs_json->>'entity_type','')=action.entity_type
+          AND COALESCE(tr.inputs_json->>'entity_id','')=action.entity_id
+          AND COALESCE(tr.inputs_json->'affected_tables','[]'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'affected_tables','[]'::jsonb)
+          AND COALESCE(action.affected_tables_json,'[]'::jsonb)
+              = COALESCE(plan.plan_json->tr.step_index->'affected_tables','[]'::jsonb)
+        """,
     )
     linked_outcomes = _scalar(
         "vkpi_agent_outcome_evaluations",
@@ -110,8 +378,12 @@ def _verified_learning_evidence() -> dict[str, int]:
         "human_feedback": feedback,
         "prediction_actual_evals": actual_evals,
         "human_reviewed_skill_runs": reviewed_skills,
+        "reviewed_skill_types": skill_types,
         "executed_agent_tool_runs": tool_runs,
+        "executed_tool_types": tool_types,
+        "verified_action_tool_cases": verified_cases,
         "linked_agent_outcomes": linked_outcomes,
+        "outreach_prediction_claimable": int(outreach_claimable),
     }
 
 

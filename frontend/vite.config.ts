@@ -136,6 +136,18 @@ export default defineConfig(({ command }) => {
             //    含少量 import() 数据预取目标(kolPool-api / domains/kol 等)—— 不是 React.lazy 路由模块,安全。
             //    countryInfo 是零依赖纯数据叶子,但被 domains/dashboard/geo.ts 运行时引用 ——
             //    留在 cockpit-core 会形成 core↔app-data 双向边(check_chunk_graph 实测抓到),归位到这层。
+            // These review-integrity leaves are consumed only by lazy review
+            // surfaces. Let Rollup keep them with those dynamic paths instead
+            // of charging the always-loaded app-data chunk.
+            if (
+              id.includes("/src/services/vkpi/action-review-candidate.ts") ||
+              id.includes("/src/services/vkpi/outreach-reply-candidate.ts") ||
+              id.includes("/src/services/vkpi/outreach-truth-api.ts") ||
+              id.includes("/src/services/vkpi/prediction-ledger-api.ts") ||
+              id.includes("/src/services/vkpi/review-integrity.ts")
+            ) {
+              return undefined;
+            }
             if (
               id.includes("/src/services/") ||
               id.includes("/src/domains/") ||
@@ -269,6 +281,8 @@ export default defineConfig(({ command }) => {
               // out of the always-shared widgets chunk lets Rollup attach them to
               // the owning route rather than charging every initial navigation.
               id.includes("/src/components/vkpi/cockpit/components/ProjectTimeline") ||
+              id.includes("/src/components/vkpi/cockpit/components/ActionResultReviewQueue") ||
+              id.includes("/src/components/vkpi/cockpit/components/OutreachTruthReviewQueue") ||
               id.includes("/src/components/vkpi/cockpit/components/PredictionLedgerPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/WeeklyScorecardPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/AgentLoopPanel") ||

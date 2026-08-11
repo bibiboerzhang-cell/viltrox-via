@@ -23,12 +23,26 @@ from app.db.connection import get_conn, is_postgres_runtime, table_exists
 _RUNS = "vkpi_workflow_runs"
 _STEPS = "vkpi_workflow_steps"
 _CHECKPOINTS = "vkpi_workflow_checkpoints"
+_EVENTS = "vkpi_event_ledger"
+_COMPLETION_EVENT = "workflow_completed"
+_COMPLETION_SOURCE = "workflow_engine"
+_COMPLETION_INDEX = "uq_vkpi_workflow_completed_event"
+_COMPLETION_TRIGGER = "trg_vkpi_workflow_completed_event_immutable"
+_COMPLETED_RUN_TRIGGER = "trg_vkpi_completed_workflow_run_immutable"
 _MIN_LEASE_SECONDS = 30
 _MAX_LEASE_SECONDS = 3600
 
 
 class WorkflowSchemaUnavailable(RuntimeError):
-    """Migration 265 is not present or is incomplete."""
+    """Workflow fencing or completion-evidence schema is incomplete."""
+
+
+class WorkflowCompletionEvidenceError(RuntimeError):
+    """A completed run lacks one exact, immutable terminal event."""
+
+    def __init__(self, reason: str = "workflow_completion_evidence_required") -> None:
+        self.reason = str(reason or "workflow_completion_evidence_required")
+        super().__init__(self.reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +116,7 @@ def lease_is_expired(value: Any, *, now: datetime | None = None) -> bool:
 
 
 def schema_ready() -> bool:
-    if not all(table_exists(name) for name in (_RUNS, _STEPS, _CHECKPOINTS)):
+    if not all(table_exists(name) for name in (_RUNS, _STEPS, _CHECKPOINTS, _EVENTS)):
         return False
     conn = get_conn()
     try:
@@ -112,6 +126,11 @@ def schema_ready() -> bool:
         )
         conn.execute(f"SELECT fence_token FROM {_STEPS} WHERE 1=0")
         conn.execute(f"SELECT fence_token FROM {_CHECKPOINTS} WHERE 1=0")
+        conn.execute(
+            f"SELECT organization_id, event_type, entity_type, entity_id, actor_type, "
+            f"actor_id, source, payload_json, trace_id, confidence, provenance_json "
+            f"FROM {_EVENTS} WHERE 1=0"
+        )
         if is_postgres_runtime():
             expected_constraints = {
                 "ck_vkpi_workflow_run_fence_nonnegative",
@@ -139,15 +158,28 @@ def schema_ready() -> bool:
             index_rows = conn.execute(
                 "SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() "
                 "AND indexname IN ('uq_vkpi_workflow_step_once',"
-                "'uq_vkpi_workflow_checkpoint_once')"
+                "'uq_vkpi_workflow_checkpoint_once','uq_vkpi_workflow_completed_event')"
             ).fetchall()
             present_indexes = {
                 str(dict(row).get("indexname") or "") for row in index_rows
             }
-            return present_constraints == expected_constraints and present_indexes == {
-                "uq_vkpi_workflow_step_once",
-                "uq_vkpi_workflow_checkpoint_once",
+            trigger_rows = conn.execute(
+                "SELECT trigger_name FROM information_schema.triggers "
+                "WHERE event_object_schema=current_schema() AND trigger_name IN (?,?)",
+                (_COMPLETION_TRIGGER, _COMPLETED_RUN_TRIGGER),
+            ).fetchall()
+            present_triggers = {
+                str(dict(row).get("trigger_name") or "") for row in trigger_rows
             }
+            return (
+                present_constraints == expected_constraints
+                and present_indexes == {
+                    "uq_vkpi_workflow_step_once",
+                    "uq_vkpi_workflow_checkpoint_once",
+                    _COMPLETION_INDEX,
+                }
+                and present_triggers == {_COMPLETION_TRIGGER, _COMPLETED_RUN_TRIGGER}
+            )
         for table in (_STEPS, _CHECKPOINTS):
             unique_pair = False
             for index_row in conn.execute(f"PRAGMA index_list({table})").fetchall():
@@ -171,6 +203,13 @@ def schema_ready() -> bool:
             )
             if not unique_pair or not has_run_fk:
                 return False
+        completion_indexes = {
+            str(dict(row).get("name") or "")
+            for row in conn.execute(f"PRAGMA index_list({_EVENTS})").fetchall()
+            if bool(dict(row).get("unique"))
+        }
+        if _COMPLETION_INDEX not in completion_indexes:
+            return False
         return True
     except Exception:
         conn.rollback()
@@ -180,7 +219,7 @@ def schema_ready() -> bool:
 def ensure_schema() -> None:
     if not schema_ready():
         raise WorkflowSchemaUnavailable(
-            "migration 265_vkpi_workflow_execution_fencing.sql is not applied"
+            "workflow migrations 265 and 281 are not fully applied"
         )
 
 
@@ -650,6 +689,197 @@ def fail_step(claim: WorkflowClaim, step_index: int, error: str) -> bool:
         raise
 
 
+def _completion_contract(row: dict[str, Any]) -> dict[str, Any]:
+    run_id = int(row.get("id") or 0)
+    organization_id = int(row.get("organization_id") or 0)
+    workflow_name = str(row.get("workflow_name") or "").strip()
+    entity_type = str(row.get("entity_type") or "").strip()
+    entity_id = str(row.get("entity_id") or "").strip()
+    trace_id = str(row.get("trace_id") or "").strip()
+    fence_token = int(row.get("fence_token") or 0)
+    steps = int(row.get("current_step") or 0)
+    if (
+        run_id <= 0
+        or organization_id <= 0
+        or not workflow_name
+        or not trace_id
+        or fence_token <= 0
+        or steps < 0
+        or str(row.get("status") or "") != "completed"
+    ):
+        raise WorkflowCompletionEvidenceError("workflow_completion_run_contract_invalid")
+    payload = {
+        "workflow": workflow_name,
+        "steps": steps,
+        "current_step": steps,
+        "fence_token": fence_token,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+    }
+    provenance = {
+        "evidence_verification": "server_bound_fenced_workflow_completion",
+        "server_bound_run_id": run_id,
+        "server_bound_entity_type": entity_type,
+        "server_bound_entity_id": entity_id,
+        "server_bound_current_step": steps,
+        "fence_token": fence_token,
+    }
+    return {
+        "run_id": run_id,
+        "organization_id": organization_id,
+        "trace_id": trace_id,
+        "payload": payload,
+        "provenance": provenance,
+    }
+
+
+def _completion_events(conn: Any, contract: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"SELECT id, organization_id, event_type, entity_type, entity_id, actor_type, "
+        f"actor_id, source, payload_json, trace_id, confidence, provenance_json "
+        f"FROM {_EVENTS} WHERE organization_id=? AND event_type=? "
+        f"AND entity_type='workflow' AND entity_id=? AND source=? ORDER BY id",
+        (
+            int(contract["organization_id"]),
+            _COMPLETION_EVENT,
+            str(contract["run_id"]),
+            _COMPLETION_SOURCE,
+        ),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _completion_event_matches(event: dict[str, Any], contract: dict[str, Any]) -> bool:
+    payload = _decode_json(event.get("payload_json"))
+    provenance = _decode_json(event.get("provenance_json"))
+    return bool(
+        int(event.get("organization_id") or 0) == int(contract["organization_id"])
+        and str(event.get("event_type") or "") == _COMPLETION_EVENT
+        and str(event.get("entity_type") or "") == "workflow"
+        and str(event.get("entity_id") or "") == str(contract["run_id"])
+        and str(event.get("actor_type") or "") == "system"
+        and str(event.get("actor_id") or "") == ""
+        and str(event.get("source") or "") == _COMPLETION_SOURCE
+        and str(event.get("trace_id") or "") == str(contract["trace_id"])
+        and event.get("confidence") is None
+        and payload == contract["payload"]
+        and provenance == contract["provenance"]
+    )
+
+
+def _insert_completion_event(conn: Any, contract: dict[str, Any]) -> int:
+    from app.domains.platform import event_ledger
+
+    return event_ledger.insert_required(
+        conn,
+        _COMPLETION_EVENT,
+        entity_type="workflow",
+        entity_id=int(contract["run_id"]),
+        actor_type="system",
+        actor_id="",
+        source=_COMPLETION_SOURCE,
+        payload=dict(contract["payload"]),
+        trace_id=str(contract["trace_id"]),
+        provenance=dict(contract["provenance"]),
+        organization_id=int(contract["organization_id"]),
+    )
+
+
+def _mark_completion_failed(
+    conn: Any,
+    claim: WorkflowClaim,
+    *,
+    expected_steps: int,
+) -> None:
+    """Release a still-live claim after terminal evidence failed to commit."""
+
+    now = _utcnow()
+    try:
+        failed = conn.execute(
+            f"""
+            UPDATE {_RUNS}
+            SET status='failed', last_error='workflow_completion_evidence_required',
+                lease_owner=NULL, lease_token_hash=NULL, lease_expires_at=NULL,
+                heartbeat_at=NULL, row_version=row_version+1, updated_at=?
+            WHERE id=? AND lease_owner=? AND lease_token_hash=? AND fence_token=?
+              AND status='running' AND lease_expires_at>? AND current_step>=?
+            RETURNING id
+            """,
+            (
+                _time_param(now),
+                *_claim_params(claim, now),
+                max(0, int(expected_steps)),
+            ),
+        ).fetchone()
+        if failed is None:
+            conn.rollback()
+        else:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+
+
+def ensure_completed_event(run_id: int) -> dict[str, Any]:
+    """Verify or repair one completed run's exact terminal event.
+
+    This path never changes workflow business state.  It exists only for rows
+    completed by the old post-commit best-effort emitter or for an ambiguous
+    commit response.  A conflicting or duplicate event blocks replay instead
+    of being overwritten or silently accepted.
+    """
+
+    ensure_schema()
+    conn = get_conn()
+    try:
+        if not is_postgres_runtime() and not bool(getattr(conn, "in_transaction", False)):
+            conn.execute("BEGIN IMMEDIATE")
+        lock = " FOR UPDATE" if is_postgres_runtime() else ""
+        raw = conn.execute(
+            f"SELECT id, organization_id, workflow_name, status, current_step, "
+            f"entity_type, entity_id, trace_id, fence_token FROM {_RUNS} WHERE id=?{lock}",
+            (int(run_id),),
+        ).fetchone()
+        if raw is None or str(dict(raw).get("status") or "") != "completed":
+            raise WorkflowCompletionEvidenceError("workflow_completed_run_required")
+        contract = _completion_contract(dict(raw))
+        events = _completion_events(conn, contract)
+        if len(events) > 1:
+            raise WorkflowCompletionEvidenceError("workflow_completion_event_duplicate")
+        if events:
+            if not _completion_event_matches(events[0], contract):
+                raise WorkflowCompletionEvidenceError("workflow_completion_event_conflict")
+            conn.commit()
+            return {"event_id": int(events[0]["id"]), "repaired": False}
+        event_id = _insert_completion_event(conn, contract)
+        conn.commit()
+        return {"event_id": event_id, "repaired": True}
+    except WorkflowCompletionEvidenceError:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        # A commit response can be lost after both rows became durable.  One
+        # exact readback is safe; anything else remains blocked and retryable.
+        try:
+            raw = conn.execute(
+                f"SELECT id, organization_id, workflow_name, status, current_step, "
+                f"entity_type, entity_id, trace_id, fence_token FROM {_RUNS} WHERE id=?",
+                (int(run_id),),
+            ).fetchone()
+            if raw is not None:
+                contract = _completion_contract(dict(raw))
+                events = _completion_events(conn, contract)
+                if len(events) == 1 and _completion_event_matches(events[0], contract):
+                    conn.commit()
+                    return {"event_id": int(events[0]["id"]), "repaired": False}
+            conn.rollback()
+        except Exception:
+            conn.rollback()
+        raise WorkflowCompletionEvidenceError(
+            "workflow_completion_evidence_required"
+        ) from exc
+
+
 def complete_run(claim: WorkflowClaim, *, expected_steps: int) -> bool:
     ensure_schema()
     now = _utcnow()
@@ -663,7 +893,8 @@ def complete_run(claim: WorkflowClaim, *, expected_steps: int) -> bool:
                 row_version=row_version+1, updated_at=?
             WHERE id=? AND lease_owner=? AND lease_token_hash=? AND fence_token=?
               AND status='running' AND lease_expires_at>? AND current_step>=?
-            RETURNING id
+            RETURNING id, organization_id, workflow_name, status, current_step,
+                      entity_type, entity_id, trace_id, fence_token
             """,
             (
                 _time_param(now),
@@ -671,11 +902,21 @@ def complete_run(claim: WorkflowClaim, *, expected_steps: int) -> bool:
                 max(0, int(expected_steps)),
             ),
         ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        contract = _completion_contract(dict(row))
+        _insert_completion_event(conn, contract)
         conn.commit()
-        return row is not None
-    except Exception:
+        return True
+    except Exception as exc:
         conn.rollback()
-        raise
+        _mark_completion_failed(conn, claim, expected_steps=expected_steps)
+        if isinstance(exc, WorkflowCompletionEvidenceError):
+            raise
+        raise WorkflowCompletionEvidenceError(
+            "workflow_completion_evidence_required"
+        ) from exc
 
 
 def list_steps(run_id: int) -> list[dict[str, Any]]:

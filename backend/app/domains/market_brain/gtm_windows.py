@@ -32,6 +32,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains import business_truth
+from app.domains.market_brain.data_readiness import seal_outcome_window_evidence
+from app.domains.platform import event_ledger
 
 logger = get_logger(__name__)
 
@@ -134,8 +136,36 @@ def _project_ids_for_kol(conn: Any, kol_id: int) -> list[int]:
 # ── 三窗指标构建(全只读;时间过滤在 Python) ─────────────────────────
 
 
+def _action_bound_reply_actual(
+    conn: Any,
+    *,
+    action_inbox_id: int,
+    kol_pool_id: int,
+    kol_id: int,
+    product_sku: str,
+    channel: str,
+    start: datetime,
+    end: datetime,
+) -> dict[str, Any]:
+    """Resolve the binary reply only through the immutable server-owned bridge."""
+    from app.domains.market_brain import outreach_truth_bridge
+
+    return outreach_truth_bridge.resolve_reply_actual(
+        conn,
+        action_inbox_id=action_inbox_id,
+        kol_pool_id=kol_pool_id,
+        kol_id=kol_id,
+        product_sku=product_sku,
+        channel=channel,
+        start=start,
+        end=end,
+    )
+
+
 def _window_7d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
-                       project_ids: list[int], start: datetime, end: datetime) -> dict[str, Any]:
+                       project_ids: list[int], start: datetime, end: datetime,
+                       action_inbox_id: int = 0, product_sku: str = "",
+                       channel: str = "") -> dict[str, Any]:
     """执行效率:联系/回复/寄样/发布(读外联+履约+送样漏斗既有表)。"""
     # 外联双向:kol 桥 ∪ 该 KOL 项目。
     msg_where: list[str] = []
@@ -198,11 +228,30 @@ def _window_7d_metrics(conn: Any, *, kol_pool_id: int, kol_id: int,
         stage_counts[key] = stage_counts.get(key, 0) + 1
 
     published_n = len(posts_in) + len(evidence_in)
+    action_reply = _action_bound_reply_actual(
+        conn,
+        action_inbox_id=action_inbox_id,
+        kol_pool_id=kol_pool_id,
+        kol_id=kol_id,
+        product_sku=product_sku,
+        channel=channel,
+        start=start,
+        end=end,
+    )
     return {
         "contacted": len(outbound) > 0,
         "outreach_sent_n": len(outbound),
         "replied": len(inbound) > 0,
         "reply_n": len(inbound),
+        # Registered per-action actual stays None until the immutable bridge can
+        # prove which project/outbound belongs to the action.  Message metadata
+        # never participates in that proof.
+        # Generic KOL/project message counts below remain descriptive only.
+        **action_reply,
+        # Stable event-window ratio: both numerator and denominator are filtered
+        # by captured_at <= window_end, so a late refresh cannot substitute a
+        # mutable present-day counter for the contracted 7-day actual.
+        "reply_rate": round(len(inbound) / len(outbound), 6) if outbound else None,
         "sample_shipped_n": len(shipped),
         "sample_delivered_n": len(delivered),
         "published": published_n > 0,
@@ -298,26 +347,37 @@ def _build_window_payload(conn: Any, row: dict[str, Any], *, horizon_days: int,
                           label: str, now: datetime) -> dict[str, Any]:
     """单窗 payload:filled_at + source + honesty 注 + 窗口边界 + 指标(自动填的只是素材)。"""
     created = _parse_dt(row.get("created_at")) or now
-    start = created
-    end = created + timedelta(days=horizon_days)
+    start = _parse_dt(row.get("observation_start_at")) or created
+    # The immutable prediction anchor, when present, owns both boundaries.
+    # Using outcome.created_at for ``end`` would silently shorten the window by
+    # the action→prediction delay and make exact-horizon verification fail.
+    end = start + timedelta(days=horizon_days)
     kol_pool_id = _int0(row.get("kol_pool_id"))
     kol_id = _linked_kol_id(conn, kol_pool_id)
     project_ids = _project_ids_for_kol(conn, kol_id)
 
     base = {
+        "schema": "vkpi_gtm_observation_window/v1",
         "window": label,
         "window_start": start.isoformat(),
+        "observation_start_at": start.isoformat(),
         "window_end": end.isoformat(),
         "filled_at": now.isoformat(),
         "kol_pool_id": kol_pool_id or None,
         "linked_kol_id": kol_id or None,
         "project_ids": project_ids,
     }
+    if row.get("prediction_run_id"):
+        base["prediction_run_id"] = _text(row.get("prediction_run_id"), 200)
 
     if label == "7d":
         no_kol = kol_pool_id <= 0
         metrics = {} if no_kol else _window_7d_metrics(
-            conn, kol_pool_id=kol_pool_id, kol_id=kol_id, project_ids=project_ids, start=start, end=end)
+            conn, kol_pool_id=kol_pool_id, kol_id=kol_id, project_ids=project_ids,
+            start=start, end=end,
+            action_inbox_id=_int0(row.get("action_inbox_id")),
+            product_sku=_text(row.get("product_sku"), 120),
+            channel=_text(row.get("channel"), 60))
         base.update({
             "status": "no_kol_linked" if no_kol else "filled",
             "source": _SOURCE_7D,
@@ -389,7 +449,7 @@ def refresh_gtm_windows(dry_run: bool = False, limit: int = DEFAULT_LIMIT) -> di
     rows = _rows(
         conn,
         f"""
-        SELECT id, kol_pool_id, created_at, decision
+        SELECT id, action_inbox_id, kol_pool_id, product_sku, channel, created_at, decision
         FROM {TABLE}
         WHERE decision IS NULL OR decision IN ({open_placeholders})
         ORDER BY id ASC
@@ -405,30 +465,92 @@ def refresh_gtm_windows(dry_run: bool = False, limit: int = DEFAULT_LIMIT) -> di
     not_due = 0
     for row in rows:
         try:
+            from app.domains.market_brain import gtm_prediction_producer
+
             created = _parse_dt(row.get("created_at"))
-            age_days = (now - created).days if created else None
-            due = [(h, col, label) for h, col, label in WINDOW_SPECS
-                   if age_days is not None and age_days >= h]
+            anchors = gtm_prediction_producer.registered_observation_anchors(
+                conn, _int0(row.get("action_inbox_id")),
+            )
+            due: list[tuple[int, str, str, datetime, str | None]] = []
+            age_days_by_window: dict[str, int | None] = {}
+            for horizon_days, evidence_field, label in WINDOW_SPECS:
+                anchor = anchors.get(evidence_field) or {}
+                start = _parse_dt(anchor.get("observation_start_at")) or created
+                age_days = (now - start).days if start else None
+                age_days_by_window[evidence_field] = age_days
+                if age_days is not None and age_days >= horizon_days:
+                    due.append((
+                        horizon_days, evidence_field, label, start,
+                        _text(anchor.get("prediction_run_id"), 200) or None,
+                    ))
             if not due:
                 not_due += 1
                 continue
             payloads = {
-                col: _build_window_payload(conn, row, horizon_days=h, label=label, now=now)
-                for h, col, label in due
+                col: seal_outcome_window_evidence(
+                    _build_window_payload(
+                        conn,
+                        {
+                            **row,
+                            "observation_start_at": start.isoformat(),
+                            "prediction_run_id": prediction_run_id,
+                        },
+                        horizon_days=h,
+                        label=label,
+                        now=now,
+                    )
+                )
+                for h, col, label, start, prediction_run_id in due
             }
             if not dry_run:
+                if not table_exists("vkpi_event_ledger"):
+                    raise RuntimeError("event ledger required for durable GTM window evidence")
                 set_sql = ", ".join(f"{col} = ?::jsonb" for col in payloads)
                 params: list[Any] = [_dumps(p) for p in payloads.values()]
                 params.append(_int0(row.get("id")))
                 params.extend(OPEN_DECISIONS)
                 # 双保险:UPDATE 再带未裁决守卫,与人工裁决竞态时绝不覆盖已裁决行。
-                conn.execute(
+                cursor = conn.execute(
                     f"""
                     UPDATE {TABLE} SET {set_sql}
                     WHERE id = ? AND (decision IS NULL OR decision IN ({open_placeholders}))
                     """,
                     tuple(params),
                 )
+                if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                    conn.rollback()
+                    continue
+                outcome_id = _int0(row.get("id"))
+                action_inbox_id = _int0(row.get("action_inbox_id"))
+                for evidence_field, payload in payloads.items():
+                    event_ledger.insert_required(
+                        conn,
+                        "gtm_window_observed",
+                        entity_type="gtm_outcome",
+                        entity_id=outcome_id,
+                        actor_type="system",
+                        actor_id="gtm_windows",
+                        source="gtm_windows.refresh",
+                        payload={
+                            "outcome_id": outcome_id,
+                            "action_inbox_id": action_inbox_id,
+                            "evidence_field": evidence_field,
+                            "schema": payload.get("schema"),
+                            "window": payload.get("window"),
+                            "evidence_sha256": payload.get("evidence_sha256"),
+                            "observation_start_at": payload.get("observation_start_at"),
+                            "prediction_run_id": payload.get("prediction_run_id"),
+                        },
+                        trace_id=event_ledger.new_trace_id(
+                            "gtm-window", outcome_id, evidence_field,
+                            payload.get("evidence_sha256"),
+                        ),
+                        provenance={
+                            "evidence_verification": "server_produced_observation_window",
+                            "producer": "gtm_windows.refresh_gtm_windows",
+                        },
+                        organization_id=1,
+                    )
                 conn.commit()
             updated_rows += 1
             for col in payloads:
@@ -436,11 +558,20 @@ def refresh_gtm_windows(dry_run: bool = False, limit: int = DEFAULT_LIMIT) -> di
             if len(details) < 20:
                 details.append({
                     "outcome_id": _int0(row.get("id")),
-                    "age_days": age_days,
+                    "age_days": age_days_by_window,
                     "windows_filled": list(payloads.keys()),
                     "kol_pool_id": _int0(row.get("kol_pool_id")) or None,
                 })
         except Exception:
+            if not dry_run:
+                try:
+                    conn.rollback()
+                except Exception:
+                    logger.warning(
+                        "gtm_windows.rollback_failed outcome_id=%s",
+                        row.get("id"),
+                        exc_info=True,
+                    )
             failed += 1
             logger.warning("gtm_windows.refresh_one_failed outcome_id=%s", row.get("id"), exc_info=True)
 

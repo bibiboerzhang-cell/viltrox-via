@@ -20,7 +20,8 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.access import scope
-from app.domains.actions import inbox, validators
+from app.domains.actions import inbox, orchestrated_steps, tool_runs, validators
+from app.domains.agents import step_execution
 from app.domains.projects import automation_audit
 
 logger = get_logger(__name__)
@@ -105,6 +106,7 @@ def _finalize_claimed_execution(
     error: str = "",
     detail: dict[str, Any] | None = None,
     checklist: dict[str, Any] | None = None,
+    orchestration_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Atomically persist ledger, checklist, and the claimed action's next state.
 
@@ -126,7 +128,7 @@ def _finalize_claimed_execution(
     conn = None
     ledger_id: int | None = None
     try:
-        conn = get_conn()
+        conn = action.get("_transaction_conn") or get_conn()
         if not table_exists(_LEDGER):
             raise RuntimeError("action execution ledger is unavailable")
         row = conn.execute(
@@ -169,6 +171,23 @@ def _finalize_claimed_execution(
                 "status": "executing",
                 "ledger_id": None,
             }
+        tool_runs.insert_action_tool_run(
+            conn,
+            action=action,
+            action_id=action_id,
+            outcome=outcome,
+            ledger_id=ledger_id,
+            error=error,
+            detail=detail,
+            orchestration_contract=orchestration_contract,
+        )
+        if orchestration_contract is not None:
+            receipt_status = {
+                "success": "executed",
+                "failed": "failed",
+                "skipped": "skipped",
+            }.get(str(outcome), "failed")
+            step_execution.finalize_plan_status(conn, orchestration_contract, receipt_status)
         conn.commit()
         return {
             "ok": True,
@@ -192,7 +211,6 @@ def _finalize_claimed_execution(
             "status": "executing",
             "ledger_id": None,
         }
-
 
 def _result(
     *,
@@ -403,6 +421,11 @@ def _exec_kol_profile(action: dict[str, Any], staff: dict[str, Any] | None) -> d
 
 def _exec_project_observation(action: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     """项目签收待观察 → scan_delivered_into_windows;每个新开窗口落 window_open 审计。"""
+    transaction_conn = action.get("_transaction_conn")
+    if transaction_conn is not None:
+        from app.domains.agents import project_observation_step
+
+        return project_observation_step.execute(transaction_conn, action, staff)
     from app.domains.projects import observation_windows
 
     res = observation_windows.scan_delivered_into_windows(staff=staff, days_overdue=7)
@@ -698,17 +721,32 @@ def _maybe_run_skill(action: dict[str, Any], detail: dict[str, Any] | None) -> d
 def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """执行一条已审批动作。原子抢占后才运行 handler;任何异常明确落 failed。"""
     # 1. scope 收口取 action(取不到/越权 → not_found)。
-    action = inbox.get_action(action_id, staff)
-    if action is None:
+    source_action = inbox.get_action(action_id, staff)
+    if source_action is None:
         return {"ok": False, "outcome": "skipped", "category": "", "reason": "not_found_or_out_of_scope", "detail": {}}
-    category = str(action.get("category") or "")
+    category = str(source_action.get("category") or "")
 
     # 闸1:仅 approved 才执行。
-    if str(action.get("status") or "") != "approved":
+    if str(source_action.get("status") or "") != "approved":
         lid = _write_ledger(
-            action=action, action_id=action_id, staff=staff, outcome="skipped", error="not_approved"
+            action=source_action, action_id=action_id, staff=staff, outcome="skipped", error="not_approved"
         )
         return _result(ok=False, outcome="skipped", category=category, reason="not_approved", ledger_id=lid)
+
+    orchestration_contract: dict[str, Any] | None = None
+    action = source_action
+    if category.strip().lower() == "orchestrated_step":
+        prepared = orchestrated_steps.prepare(source_action, action_id, staff)
+        if not prepared.get("ok"):
+            return _result(
+                ok=False,
+                outcome="skipped",
+                category=category,
+                reason=str(prepared.get("reason") or "plan_contract_unavailable"),
+                ledger_id=prepared.get("ledger_id"),
+            )
+        orchestration_contract = prepared["contract"]
+        action = prepared["action"]
 
     # 闸2:validators 双闸(approved + touches_v6_fit=False + budget + entity 存在)。
     v = validators.validate_action(action)
@@ -721,7 +759,12 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         return _result(ok=False, outcome="skipped", category=category, reason=reason, ledger_id=lid)
 
     # 3. 派发执行(任何 exception → failed,不抛)。
-    handler = _DISPATCH.get(category)
+    handler_category = (
+        str(orchestration_contract["handler_category"])
+        if orchestration_contract is not None
+        else category
+    )
+    handler = _DISPATCH.get(handler_category)
     if handler is None:
         lid = _write_ledger(
             action=action, action_id=action_id, staff=staff, outcome="skipped", error="unknown_category"
@@ -739,16 +782,46 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
             detail={"status": claim.get("status")},
         )
 
+    # For a plan-linked Action, reacquire and lock the authoritative plan after
+    # the Action CAS claim.  The lock is held through the local handler and the
+    # atomic Action/receipt/plan finalization below.
+    if orchestration_contract is not None:
+        locked = orchestrated_steps.lock_claimed(
+            source_action, action_id, staff, orchestration_contract,
+        )
+        if not locked.get("ok"):
+            return _result(
+                ok=False,
+                outcome=str(locked.get("outcome") or "failed"),
+                category=category,
+                reason=str(locked.get("reason") or "execution_finalize_failed"),
+                ledger_id=locked.get("ledger_id"),
+                detail={
+                    "handler_started": False,
+                    "plan_contract_rejected": True,
+                    "manual_reconciliation_required": bool(
+                        locked.get("manual_reconciliation_required")
+                    ),
+                },
+            )
+        orchestration_contract = locked["contract"]
+        action = locked["action"]
+
     # S1:执行前对 affected_tables 取真 COUNT(执行后再取一次做 before/after delta)。
     affected_tables = action.get("affected_tables_json")
-    before_counts = _snapshot_table_counts(affected_tables)
+    snapshot_counts = _snapshot_table_counts
+    if action.get("_transaction_conn") is not None:
+        snapshot_counts = lambda tables: _snapshot_table_counts(tables, conn=action["_transaction_conn"])
+    before_counts = snapshot_counts(affected_tables)
 
     try:
         outcome_obj = handler(action, staff)
     except Exception as exc:
         logger.warning("action_executor.handler_failed", extra={"action_id": action_id, "category": category}, exc_info=True)
+        if orchestration_contract is not None:
+            orchestrated_steps.rollback_handler_transaction(action)
         reason = str(exc)[:240]
-        after_counts = _snapshot_table_counts(affected_tables)
+        after_counts = snapshot_counts(affected_tables)
         detail = {"error": reason}
         checklist = _build_result_checklist(
             action,
@@ -767,6 +840,7 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
             error=reason,
             detail=detail,
             checklist=checklist,
+            orchestration_contract=orchestration_contract,
         )
         final_reason = "exception" if finalized.get("ok") else str(finalized.get("reason"))
         if not finalized.get("ok"):
@@ -795,7 +869,7 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         reason = "invalid_handler_outcome"
 
     # S1:执行后再取一次 COUNT → before/after delta(真验收,确认这条 action 真写了)。
-    after_counts = _snapshot_table_counts(affected_tables)
+    after_counts = snapshot_counts(affected_tables)
     # 路线0+S1:标准化验收回执(谁/几个 job / 写几行 / 是否花钱 / 真 before-after delta / 失败原因)。
     checklist = _build_result_checklist(
         action, outcome=outcome, reason=reason, detail=detail,
@@ -812,6 +886,7 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         error=reason if outcome != "success" else "",
         detail=detail,
         checklist=checklist,
+        orchestration_contract=orchestration_contract,
     )
     if not finalized.get("ok"):
         detail = {
@@ -828,9 +903,9 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
         )
     lid = finalized.get("ledger_id")
     if outcome == "success":
-        # R8:成功执行 → 写回 vkpi_memory_feedback 埋种(②学习闭环);best-effort,不阻断返回。
-        _record_execution_feedback(action, staff, outcome="success", detail=detail)
-        _record_outcome_eval(action, outcome="success")  # B5/H4 结果回写 → 推荐权重回流
+        # Handler success only proves the tool invocation completed.  It is not
+        # a verified business outcome and must not auto-create positive memory
+        # or learning labels.  /verify-result is the evidence-backed human gate.
         # skills-wire(opt-in,默认 OFF 见 _SKILLS_AUTORUN):成功后顺带跑对应 Skill + record_skill_run
         # (best-effort,不烧真 LLM)。默认关 → execute 返回/ledger 零变,不污染既有测试与调用方;
         # 开启后回执进 detail.skill_run,运行另经 /skills/runs 端点可见。
@@ -840,7 +915,6 @@ def execute_action(action_id: int, staff: dict[str, Any] | None = None) -> dict[
                 detail = {**detail, "skill_run": skill_summary}
         return _result(ok=True, outcome="success", category=category, ledger_id=lid, detail=detail)
     if outcome == "failed":
-        _record_outcome_eval(action, outcome="fail")  # B5/H4 失败也回写(下次降权)
         return _result(ok=False, outcome="failed", category=category, reason=reason, ledger_id=lid, detail=detail)
     # skipped:不改 action 状态(仍 approved,人可再处理或 dismiss)。
     return _result(ok=False, outcome="skipped", category=category, reason=reason, ledger_id=lid, detail=detail)
@@ -852,12 +926,13 @@ _SNAPSHOT_ALLOWED_TABLES = {
 }
 
 
-def _snapshot_table_counts(tables: Any) -> dict[str, int]:
+def _snapshot_table_counts(tables: Any, *, conn: Any | None = None) -> dict[str, int]:
     """S1:对 affected_tables 取真 COUNT(*)(只白名单表,只读,容错)。
 
     用于执行前后对比 → before/after delta = 这条 action 真写了几行。只 COUNT 不改任何数据。
     """
     out: dict[str, int] = {}
+    db = conn or get_conn()
     if not isinstance(tables, list):
         return out
     for t in tables:
@@ -865,7 +940,7 @@ def _snapshot_table_counts(tables: Any) -> dict[str, int]:
         if name not in _SNAPSHOT_ALLOWED_TABLES or not table_exists(name):
             continue
         try:
-            row = get_conn().execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()
+            row = db.execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()
             out[name] = int(dict(row).get("n") or 0) if row else 0
         except Exception:
             logger.debug("action_executor.snapshot_failed", extra={"table": name}, exc_info=True)
@@ -898,11 +973,12 @@ def _build_result_checklist(
         if isinstance(val, list):
             rows += len(val)
     success = outcome == "success"
+    wrote_data = bool(action.get("writes_business_data")) and success and d.get("idempotent") is not True
     uses_llm = bool(action.get("uses_llm"))
     cost = int(action.get("estimated_cost_cents") or 0) if (success and uses_llm) else 0
     return {
         "outcome": outcome,
-        "wrote_business_data": bool(action.get("writes_business_data")) and success,
+        "wrote_business_data": wrote_data,
         "jobs_created": jobs,
         "rows_written": rows,
         "cost_spent_cents": cost,

@@ -36,10 +36,11 @@ if str(BACKEND_ROOT) not in sys.path:
 # 用一个固定的成员身份(is_owner=0、vkpi:write)owns 自播的动作 —— 成员对自己 owner 的
 # 动作有完整 list/approve/execute 权(require_tab read/write 都过,scope 也放行)。
 _ACTOR_STAFF_ID = 990777
-_ACTOR_USER = {"id": _ACTOR_STAFF_ID, "email": "w5flow@test", "role": "employee"}
+_ACTOR_USER = {"id": _ACTOR_STAFF_ID, "email": "w5flow@test", "role": "manager"}
 _ACTOR_STAFF = {
     "id": _ACTOR_STAFF_ID, "staff_id": _ACTOR_STAFF_ID, "user_id": _ACTOR_STAFF_ID,
-    "role": "employee", "is_owner": 0, "permissions": {"vkpi": "write"},
+    "role": "manager", "is_owner": 0, "permissions": {"vkpi": "write"},
+    "organization_id": 1, "organization_scope_status": "resolved",
     "email": "w5flow@test",
 }
 
@@ -64,6 +65,22 @@ def action_flow_db(hermetic_action_db):
         CREATE TABLE IF NOT EXISTS vkpi_kol_pool (
             id INTEGER PRIMARY KEY,
             viltrox_fit_score REAL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vkpi_agent_tool_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER,
+            tool_id TEXT NOT NULL DEFAULT '',
+            step_index INTEGER NOT NULL DEFAULT 0,
+            inputs_json TEXT NOT NULL DEFAULT '{}',
+            output_ref TEXT NOT NULL DEFAULT '',
+            cost_cents INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'planned',
+            error TEXT NOT NULL DEFAULT '',
+            executed_at TEXT
         )
         """
     )
@@ -129,6 +146,9 @@ def seeded_action(action_flow_db):
     try:
         yield action_id
     finally:
+        conn.execute(
+            "DELETE FROM vkpi_agent_tool_run WHERE output_ref = ?", (f"action:{action_id}",)
+        )
         conn.execute(
             "DELETE FROM vkpi_action_execution_ledger WHERE action_id = ?", (action_id,)
         )

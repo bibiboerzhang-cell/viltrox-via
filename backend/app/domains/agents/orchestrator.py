@@ -12,34 +12,68 @@ import json
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.access import scope
-from app.domains.agents import tool_registry
+from app.domains.agents import step_execution, tool_registry
 
 logger = get_logger(__name__)
 
-_TIER_COST = {"high": 300, "medium": 80, "low": 10}
+_TIER_COST = {"high": 300, "medium": 80, "low": 10, "none": 0}
 
 
 def _dumps(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False, default=str)
 
 
-def _plan_steps(goal: str) -> list[dict[str, Any]]:
+def _bound_inputs(tool_id: str, context: dict[str, Any]) -> dict[str, Any]:
+    """Bind only registry-declared fields into the immutable server plan row."""
+    tool = tool_registry.get_tool(tool_id) or {}
+    nested = context.get("tool_inputs") if isinstance(context.get("tool_inputs"), dict) else {}
+    candidate = nested.get(tool_id) if isinstance(nested.get(tool_id), dict) else context
+    allowed = list(tool.get("inputs", [])) + list(tool.get("optional_inputs", []))
+    return {key: candidate[key] for key in allowed if key in candidate}
+
+
+def _plan_steps(goal: str, context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """确定性规则:据目标关键词选一条合理工具链(找人→抓档→[话术]→建草案)。
 
     绝不臆造执行;只排"该走哪几步"。写库/烧LLM步骤继承注册表的 requires_approval。
     """
     g = str(goal or "")
     gl = g.lower()
-    seq: list[str] = ["search_kol", "scan_profile"]
-    if any(k in g for k in ("话术", "合作", "邀约")) or any(k in gl for k in ("outreach", "collab", "invite")):
-        seq.append("generate_outreach")
-    seq.append("create_project_draft")
+    ctx = context if isinstance(context, dict) else {}
+    # Only these explicit entity-bound intents become locally executable plans.
+    # Everything else retains the original PLAN-ONLY marketing tool chain.
+    seq: list[str] = []
+    if ctx.get("event_id") not in (None, "") and (
+        any(k in g for k in ("活动", "收尾", "跟进"))
+        or any(k in gl for k in ("event", "followup", "follow-up"))
+    ):
+        seq.append("ack_event_followup")
+    if ctx.get("inventory_id") not in (None, "") and (
+        any(k in g for k in ("库存", "补货", "预警"))
+        or any(k in gl for k in ("inventory", "stock"))
+    ):
+        seq.append("ack_inventory_low")
+    if ctx.get("project_id") not in (None, "") and ctx.get("assignment_id") not in (None, "") and (
+        any(k in g for k in ("观察窗", "签收", "履约观察"))
+        or any(k in gl for k in ("project observation", "observation window"))
+    ):
+        seq.append("check_project_observation")
+    if not seq:
+        seq = ["search_kol", "scan_profile"]
+        if any(k in g for k in ("话术", "合作", "邀约")) or any(k in gl for k in ("outreach", "collab", "invite")):
+            seq.append("generate_outreach")
+        seq.append("create_project_draft")
 
     steps: list[dict[str, Any]] = []
     for i, tid in enumerate(seq):
         t = tool_registry.get_tool(tid) or {}
+        estimated_cost_cents = int(
+            t.get("estimated_cost_cents")
+            if t.get("estimated_cost_cents") is not None
+            else _TIER_COST.get(str(t.get("cost_tier") or "low"), 10)
+        )
         steps.append({
             "step_index": i,
             "tool_id": tid,
@@ -47,17 +81,22 @@ def _plan_steps(goal: str) -> list[dict[str, Any]]:
             "writes_db": bool(t.get("writes_db")),
             "uses_llm": bool(t.get("uses_llm")),
             "cost_tier": t.get("cost_tier", "low"),
+            "estimated_cost_cents": estimated_cost_cents,
             # 红线:写库/烧LLM 一律需人审
             "requires_approval": bool(t.get("requires_approval") or t.get("writes_db") or t.get("uses_llm")),
             "endpoint": t.get("endpoint", ""),
+            "execution_policy": t.get("execution_policy", "plan_only"),
+            "inputs": _bound_inputs(tid, ctx),
+            "affected_tables": list(t.get("affected_tables") or []),
         })
     return steps
 
 
 def plan_goal(goal: str, *, context: dict[str, Any] | None = None, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """一句话目标 → 分步计划(PLAN-ONLY)。留痕进 vkpi_agent_orchestration_plan,绝不执行。"""
-    steps = _plan_steps(goal or "")
-    est = sum(_TIER_COST.get(s["cost_tier"], 10) for s in steps)
+    bound_context = context if isinstance(context, dict) else {}
+    steps = _plan_steps(goal or "", bound_context)
+    est = sum(int(s.get("estimated_cost_cents") or 0) for s in steps)
 
     plan_id: int | None = None
     if table_exists("vkpi_agent_orchestration_plan"):
@@ -72,7 +111,7 @@ def plan_goal(goal: str, *, context: dict[str, Any] | None = None, staff: dict[s
                 """,
                 (
                     str(goal or "")[:2000],
-                    _dumps(context or {}),
+                    _dumps(bound_context),
                     _dumps(steps),
                     int(est),
                     int(scope.actor_staff_id(staff)) or None,
@@ -103,6 +142,8 @@ def materialize_plan_to_inbox(plan_id: int, *, staff: dict[str, Any] | None = No
     plan = get_plan(plan_id, staff=staff)
     if not plan:
         return {"status": "not_found", "plan_id": plan_id}
+    if str(plan.get("status") or "") not in {"planned", "ready"}:
+        return {"status": "plan_not_materializable", "plan_id": plan_id}
     steps = plan.get("plan_json") or []
     if not isinstance(steps, list) or not steps:
         return {"status": "no_steps", "plan_id": plan_id}
@@ -113,10 +154,70 @@ def materialize_plan_to_inbox(plan_id: int, *, staff: dict[str, Any] | None = No
         actor = int(scope.actor_staff_id(staff)) or None
     except Exception:
         actor = None
+    try:
+        plan_owner = int(plan.get("created_by_staff_id") or 0)
+    except (TypeError, ValueError):
+        plan_owner = 0
+    if not actor or plan_owner != actor:
+        return {"status": "plan_owner_mismatch", "plan_id": plan_id}
     suggestions = []
-    for s in steps:
-        idx = int(s.get("step_index", 0))
+    for position, s in enumerate(steps):
+        if not isinstance(s, dict):
+            return {"status": "invalid_plan_step", "plan_id": plan_id, "step_index": position}
+        try:
+            idx = int(s.get("step_index"))
+        except (TypeError, ValueError):
+            return {"status": "invalid_plan_step", "plan_id": plan_id, "step_index": position}
+        if idx != position:
+            return {"status": "invalid_plan_step", "plan_id": plan_id, "step_index": position}
         tid = str(s.get("tool_id") or "")
+        tool = tool_registry.get_tool(tid)
+        if not tool:
+            return {"status": "unknown_plan_tool", "plan_id": plan_id, "step_index": idx}
+        # The persisted plan must still match the current server registry.  A
+        # stale/tampered endpoint or policy is never copied into an Action.
+        if (
+            str(s.get("endpoint") or "") != str(tool.get("endpoint") or "")
+            or bool(s.get("writes_db")) != bool(tool.get("writes_db"))
+            or bool(s.get("uses_llm")) != bool(tool.get("uses_llm"))
+            or bool(s.get("requires_approval"))
+            != bool(tool.get("requires_approval") or tool.get("writes_db") or tool.get("uses_llm"))
+            or list(s.get("affected_tables") or []) != list(tool.get("affected_tables") or [])
+        ):
+            return {"status": "plan_registry_mismatch", "plan_id": plan_id, "step_index": idx}
+        inputs = s.get("inputs") if isinstance(s.get("inputs"), dict) else {}
+        input_check = tool_registry.validate_inputs(tid, inputs)
+        if tool_registry.is_locally_executable(tid) and not input_check.get("ok"):
+            return {
+                "status": "plan_inputs_invalid",
+                "plan_id": plan_id,
+                "step_index": idx,
+                "reason": input_check.get("reason"),
+            }
+        estimated_cost = int(
+            tool.get("estimated_cost_cents")
+            if tool.get("estimated_cost_cents") is not None
+            else _TIER_COST.get(str(tool.get("cost_tier") or "low"), 10)
+        )
+        if int(s.get("estimated_cost_cents") or 0) != estimated_cost:
+            return {"status": "plan_cost_mismatch", "plan_id": plan_id, "step_index": idx}
+        entity_type = ""
+        entity_id = ""
+        contract_sha256 = ""
+        if tool_registry.is_locally_executable(tid):
+            entity_type = str(tool.get("entity_type") or "")
+            entity_id = str(inputs.get(str(tool.get("entity_id_input") or "")) or "")
+            try:
+                contract_sha256 = str(
+                    step_execution.contract_for_plan_step(
+                        int(plan_id), plan_owner, steps, idx,
+                    )["fingerprint"]
+                )
+            except step_execution.StepExecutionRejected as exc:
+                return {
+                    "status": "plan_contract_invalid", "plan_id": plan_id,
+                    "step_index": idx, "reason": exc.reason,
+                }
         suggestions.append(producers.make_suggestion(
             category="orchestrated_step",
             dedupe_key=f"plan:{plan_id}:step:{idx}",
@@ -124,14 +225,48 @@ def materialize_plan_to_inbox(plan_id: int, *, staff: dict[str, Any] | None = No
             detail=f"目标「{plan.get('goal') or ''}」的第 {idx + 1} 步(工具 {tid})",
             reason=f"编排计划 #{plan_id} 的步骤;经此审批后由对应能力执行",
             priority="medium",
-            suggested_endpoint=str(s.get("endpoint") or ""),
-            writes_business_data=bool(s.get("writes_db")),
-            uses_llm=bool(s.get("uses_llm")),
-            requires_approval=bool(s.get("requires_approval", True)),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            suggested_endpoint=str(tool.get("endpoint") or ""),
+            estimated_cost_cents=estimated_cost,
+            writes_business_data=bool(tool.get("writes_db")),
+            uses_llm=bool(tool.get("uses_llm")),
+            requires_approval=bool(tool.get("requires_approval") or tool.get("writes_db") or tool.get("uses_llm")),
             owner_staff_id=actor,
-            payload={"plan_id": plan_id, "step_index": idx, "tool_id": tid},
+            payload={
+                "plan_id": plan_id, "step_index": idx, "tool_id": tid,
+                **({"contract_sha256": contract_sha256} if contract_sha256 else {}),
+            },
+            verification_plan=list(tool.get("verification_plan") or []),
+            affected_tables=list(tool.get("affected_tables") or []),
         ))
     persisted = inbox.persist_suggestions(suggestions)
+    if persisted != len(suggestions):
+        return {
+            "status": "materialization_incomplete",
+            "plan_id": plan_id,
+            "steps_materialized": persisted,
+            "expected_steps": len(suggestions),
+        }
+    try:
+        conn = get_conn()
+        cursor = conn.execute(
+            "UPDATE vkpi_agent_orchestration_plan SET status='ready', updated_at="
+            + ("NOW()" if is_postgres_runtime() else "CURRENT_TIMESTAMP")
+            + " WHERE id=? AND status IN ('planned','ready') AND created_by_staff_id=?",
+            (int(plan_id), int(actor or 0)),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            conn.rollback()
+            return {"status": "plan_ready_transition_failed", "plan_id": plan_id}
+        conn.commit()
+    except Exception:
+        try:
+            get_conn().rollback()
+        except Exception:
+            logger.debug("orchestrator.materialize_rollback_failed", exc_info=True)
+        logger.warning("orchestrator.materialize_ready_failed", extra={"plan_id": plan_id}, exc_info=True)
+        return {"status": "plan_ready_transition_failed", "plan_id": plan_id}
     return {
         "status": "ok",
         "plan_id": plan_id,

@@ -127,7 +127,16 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
     from datetime import datetime, timedelta, timezone
 
     from app.db.connection import get_conn, table_exists
-    from app.domains.market_brain import prediction_ledger, signal_ledger
+    from app.domains.market_brain import (
+        outreach_truth_bridge,
+        prediction_ledger,
+        signal_ledger,
+    )
+    from app.domains.market_brain.data_readiness import (
+        outcome_evidence_sql,
+        verified_prediction_binding_sql,
+        verified_prediction_event_sql,
+    )
 
     result: dict = {
         "status": "ok", "scanned": 0, "evals_recorded": 0, "evals_deduped": 0,
@@ -172,20 +181,35 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
     #    算 model vs baseline 误差增量。LEFT JOIN 保 run 缺席(理论不该有)也不掉 eval 行,
     #    wape/interval_coverage/direction_hit_rate 口径原样不变。
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    verified_binding = verified_prediction_binding_sql("e")
+    verified_event = verified_prediction_event_sql("e")
+    verified_outcome = outcome_evidence_sql("o")
     eval_rows = conn.execute(
         f"""
-        SELECT e.actual_value, e.error_abs, e.interval_hit, e.direction_hit,
-               r.source_step, r.product_sku, r.market, r.channel, r.baseline_value
+        SELECT e.run_id, e.outcome_id, e.actual_value, e.error_abs,
+               e.interval_hit, e.direction_hit,
+               r.task_type, r.p50, r.source_step, r.product_sku, r.market, r.channel,
+               r.baseline_value,
+               CASE WHEN e.outcome_id IS NOT NULL
+                     AND {verified_binding} AND {verified_event}
+                     AND o.id IS NOT NULL AND o.decision <> 'open'
+                     AND o.decided_at IS NOT NULL AND o.decided_by IS NOT NULL
+                     AND ({verified_outcome})
+                    THEN TRUE ELSE FALSE END AS verified_actual
         FROM {prediction_ledger.EVALS_TABLE} e
         LEFT JOIN {prediction_ledger.RUNS_TABLE} r
             ON r.organization_id = e.organization_id AND r.run_id = e.run_id
+        LEFT JOIN vkpi_gtm_outcomes o ON o.id = e.outcome_id
         WHERE e.evaluated_at >= ?
         ORDER BY e.id DESC
         LIMIT ?
         """,
         (cutoff, 2000),
     ).fetchall()
-    rollup = prediction_ledger.weekly_rollup([dict(r) for r in eval_rows])
+    coverage = outreach_truth_bridge.outreach_prediction_coverage(conn)
+    rollup = prediction_ledger.weekly_rollup(
+        [dict(r) for r in eval_rows], outreach_coverage=coverage,
+    )
     result["rollup"] = rollup
 
     # ③ 周汇总信号落账(dedupe_key 带 ISO 周号,同周重跑幂等覆盖)。
@@ -199,11 +223,15 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
         "weekly_eval",
         (
             f"预测周评估 {week_key}:样本 {rollup.get('n')},wape={rollup.get('wape')},"
+            f"brier={rollup.get('brier_score')},"
             f"interval_coverage={rollup.get('interval_coverage')},"
             f"direction_hit_rate={rollup.get('direction_hit_rate')}。"
         ),
         f"prediction_weekly_rollup_{week_key}",
-        signal_value=rollup.get("wape"),
+        signal_value=(
+            rollup.get("wape")
+            if rollup.get("wape") is not None else rollup.get("brier_score")
+        ),
         sample_size=rollup.get("n"),
         normalized={
             "rollup": rollup,

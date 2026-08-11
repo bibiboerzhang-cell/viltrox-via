@@ -38,6 +38,7 @@ _ADMIN_USER = {"id": 1, "email": "admin@w5.test", "role": "admin"}
 _ADMIN_STAFF = {
     "id": 1, "staff_id": 1, "user_id": 1, "role": "admin",
     "is_owner": 1, "permissions": {"vkpi": "admin"}, "email": "admin@w5.test",
+    "organization_id": 1, "organization_scope_status": "resolved",
 }
 
 # 普通成员:vkpi:write(过得了 require_tab read/write),但 is_owner=0 且非 admin level
@@ -47,6 +48,7 @@ _MEMBER_USER = {"id": _MEMBER_STAFF_ID, "email": "member@w5.test", "role": "empl
 _MEMBER_STAFF = {
     "id": _MEMBER_STAFF_ID, "staff_id": _MEMBER_STAFF_ID, "user_id": _MEMBER_STAFF_ID,
     "role": "employee", "is_owner": 0, "permissions": {"vkpi": "write"},
+    "organization_id": 1, "organization_scope_status": "resolved",
     "email": "member@w5.test",
 }
 

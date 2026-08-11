@@ -21,12 +21,15 @@ run 端点把请求按 skill_name 分发到 app.domains.marketing_brain.skills.*
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
+from app.api.dependencies.legacy_scope import legacy_system_admin_scope_guard
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
-from app.domains.marketing_brain import skill_registry
+from app.domains.marketing_brain import skill_registry, skill_reviews
 from app.domains.marketing_brain.skills import (
     brief_generate_v1,
     campaign_plan,
@@ -36,6 +39,19 @@ from app.domains.marketing_brain.skills import (
 )
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-skills"])
+
+
+class SkillReviewBody(BaseModel):
+    accepted: bool
+    human_score: float = Field(ge=0.0, le=5.0)
+    business_result: str = Field(min_length=1, max_length=1000)
+    evidence: list[dict[str, Any]] = Field(min_length=1, max_length=20)
+    correlation_id: str = Field(min_length=8, max_length=160)
+    expected_input_sha256: str = Field(min_length=64, max_length=64)
+    expected_output_sha256: str = Field(min_length=64, max_length=64)
+
+    class Config:
+        extra = "forbid"
 
 
 # canonical skill_name(对齐各 skill 模块的 SKILL_NAME 常量)→ run 函数。
@@ -95,38 +111,21 @@ def _status_of(output: Any) -> str:
     return "ok"
 
 
-def _latest_run_id(skill_name: str) -> int | None:
-    """run 端点落账后回查最近一条 run id(best-effort;缺表/异常返回 None)。
-
-    skills 内部 record_skill_run 不向上回传 run_id,这里读侧补一次最近 id,口径与 runs 端口一致。
-    """
-    try:
-        res = skill_registry.list_skill_runs(skill_name=skill_name, limit=1)
-    except Exception:
-        return None
-    if not isinstance(res, dict) or res.get("status") != "ok":
-        return None
-    runs = res.get("runs") or []
-    if runs and isinstance(runs[0], dict):
-        rid = runs[0].get("id")
-        try:
-            return int(rid) if rid is not None else None
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
 @router.post("/skills/{skill_name}/run")
 def run_skill(
     skill_name: str,
     body: dict[str, Any] | None = None,
-    _staff=Depends(require_tab("vkpi", "write")),
+    _staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     """按 skill_name 分发到对应 skill 的 run(input, record=True)。
 
     body: {"input": {...}};默认 model_fn=None → 不真烧 LLM。
     返回 {status, output, skill_run_id?}。
     """
+    scope_unavailable = legacy_system_admin_scope_guard(_staff, surface="Skill run")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+
     name = str(skill_name or "").strip()
     run_fn = _DISPATCH.get(name)
     if run_fn is None:
@@ -146,16 +145,86 @@ def run_skill(
     except Exception as exc:  # skill 内部异常不应 500 裸抛
         raise HTTPException(status_code=500, detail=f"skill '{name}' failed: {exc}") from exc
 
-    resp: dict[str, Any] = {"status": _status_of(output), "output": output}
-    run_id = _latest_run_id(name)
-    if run_id is not None:
-        resp["skill_run_id"] = run_id
-    return resp
+    # ``skill_run_id`` used to be inferred by querying the latest row for this
+    # skill.  Under concurrent runs that can point at another staff member's
+    # receipt (or an old row when persistence failed), so the API intentionally
+    # omits it until the exact INSERT id is propagated by every skill producer.
+    return {"status": _status_of(output), "output": output}
+
+
+@router.post("/skills/runs/{run_id}/review")
+def review_skill_run(
+    run_id: int,
+    body: SkillReviewBody,
+    staff=Depends(require_manager_tab("vkpi", "write")),
+) -> dict[str, Any]:
+    """Manager-only, evidence-backed human review; no LLM or external action."""
+    scope_unavailable = legacy_system_admin_scope_guard(staff, surface="Skill human review")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+
+    result = skill_reviews.review_skill_run(
+        run_id,
+        staff=staff,
+        accepted=body.accepted,
+        human_score=body.human_score,
+        business_result=body.business_result,
+        evidence=body.evidence,
+        correlation_id=body.correlation_id,
+        expected_input_sha256=body.expected_input_sha256,
+        expected_output_sha256=body.expected_output_sha256,
+    )
+    if result.get("ok"):
+        return result
+    reason = str(result.get("reason") or "skill_review_failed")
+    if reason == "skill_run_not_found":
+        raise HTTPException(status_code=404, detail=reason)
+    if reason in {
+        "invalid_review_identity_or_score", "human_score_out_of_range",
+        "business_result_required", "review_evidence_required", "review_correlation_required",
+        "nonproduction_skill_run", "skill_run_output_not_reviewable", "review_candidate_required",
+    }:
+        raise HTTPException(status_code=422, detail=reason)
+    if reason == "review_scope_unavailable":
+        raise HTTPException(status_code=403, detail=reason)
+    if reason in {
+        "review_correlation_conflict", "skill_run_already_reviewed", "skill_review_state_changed",
+        "skill_review_candidate_changed",
+    }:
+        raise HTTPException(status_code=409, detail=reason)
+    raise HTTPException(status_code=503, detail=reason)
+
+
+@router.get("/skills/runs/{run_id}/review-candidate")
+def skill_review_candidate(
+    run_id: int,
+    staff=Depends(require_manager_tab("vkpi", "read")),
+) -> dict[str, Any]:
+    """Return redacted, hash-bound input/output before a manager reviews it."""
+    scope_unavailable = legacy_system_admin_scope_guard(
+        staff, surface="Skill human review candidate",
+    )
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+    result = skill_reviews.get_skill_review_candidate(run_id)
+    if result.get("ok"):
+        result.pop("ok", None)
+        return result
+    reason = str(result.get("reason") or "skill_review_candidate_unavailable")
+    if reason == "skill_run_not_found":
+        raise HTTPException(status_code=404, detail=reason)
+    if reason in {"skill_run_already_reviewed", "skill_run_output_not_reviewable"}:
+        raise HTTPException(status_code=409, detail=reason)
+    raise HTTPException(status_code=503, detail=reason)
 
 
 @router.get("/skills")
 def list_skills(_staff=Depends(require_tab("vkpi", "read"))) -> list[dict[str, Any]]:
     """列出所有 skill + 聚合统计(runs / acceptance_rate / avg_cost_cents / avg_latency_ms)。"""
+    scope_unavailable = legacy_system_admin_scope_guard(_staff, surface="Skill catalog")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+
     out: list[dict[str, Any]] = []
     for name in _DISPATCH:
         meta = _meta_for(name)
@@ -166,12 +235,19 @@ def list_skills(_staff=Depends(require_tab("vkpi", "read"))) -> list[dict[str, A
             stats = {}
         if not isinstance(stats, dict) or stats.get("status") != "ok":
             stats = {}
+        try:
+            verified = skill_reviews.verified_acceptance_stats(skill_name=name)
+        except Exception:
+            verified = {}
+        if not isinstance(verified, dict) or verified.get("status") != "ok":
+            verified = {}
         out.append(
             {
                 "skill_name": name,
                 "version": version,
                 "runs": int(stats.get("total") or 0),
-                "acceptance_rate": stats.get("acceptance_rate"),
+                "reviewed_runs": int(verified.get("judged") or 0),
+                "acceptance_rate": verified.get("acceptance_rate"),
                 "avg_cost_cents": stats.get("avg_cost_cents"),
                 "avg_latency_ms": stats.get("avg_latency_ms"),
             }
@@ -183,11 +259,20 @@ def list_skills(_staff=Depends(require_tab("vkpi", "read"))) -> list[dict[str, A
 def list_skill_runs(
     skill_name: str = Query(default=""),
     limit: int = Query(default=50, ge=1, le=500),
-    _staff=Depends(require_tab("vkpi", "read")),
+    review_status: Literal["all", "pending", "reviewed"] = Query(default="all"),
+    _staff=Depends(require_manager_tab("vkpi", "read")),
 ) -> list[dict[str, Any]]:
-    """读回运行明细(可按 skill_name 过滤)。投影成契约字段子集。"""
+    """管理员读回评审运行摘要，避免泄露人工业务复盘。"""
+    scope_unavailable = legacy_system_admin_scope_guard(_staff, surface="Skill runs")
+    if scope_unavailable is not None:
+        raise HTTPException(status_code=403, detail=scope_unavailable)
+
     try:
-        res = skill_registry.list_skill_runs(skill_name=skill_name, limit=limit)
+        res = skill_registry.list_skill_runs(
+            skill_name=skill_name,
+            limit=limit,
+            review_status=review_status,
+        )
     except Exception:
         res = {}
     if not isinstance(res, dict) or res.get("status") != "ok":
@@ -205,6 +290,8 @@ def list_skill_runs(
                 "cost_cents": r.get("cost_cents"),
                 "latency_ms": r.get("latency_ms"),
                 "accepted": r.get("accepted"),
+                "human_score": r.get("human_score"),
+                "business_result": r.get("business_result"),
                 "created_at": r.get("created_at"),
             }
         )

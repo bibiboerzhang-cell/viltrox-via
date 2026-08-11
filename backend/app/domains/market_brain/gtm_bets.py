@@ -249,6 +249,27 @@ def _kol_outreach_items(*, sku: str, goal: str, plan_id: str, kol_section: dict[
             entity_id=kid,
             now=now,
         )
+        # Frozen provider-free rule forecast seed.  materialize owns the later
+        # action-id binding and builds the evaluation contract exclusively from
+        # the server registry; no client field can select the actual metric.
+        if platform and _int0(kid) > 0:
+            from app.domains.market_brain import gtm_prediction_producer
+
+            bet["channel"] = platform
+            bet["prediction_seed"] = {
+                "schema": gtm_prediction_producer.PRODUCER_SCHEMA,
+                "registry_key": gtm_prediction_producer.REGISTRY_KEY,
+                "method": "gtm_outreach_reply_probability_rule",
+                "p10": 0.05,
+                "p50": 0.10,
+                "p90": 0.20,
+                "confidence": "low",
+                "channel": platform,
+                "kol_pool_id": _int0(kid),
+                "basis": [
+                    "GTM outreach_reply_floor provider-free Bernoulli probability baseline"
+                ],
+            }
         items.append(_item(
             action=bet["what"],
             reason="new_launch_match 候选池排名靠前且可估价,进入首批外联窗口。",

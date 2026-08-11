@@ -25,6 +25,7 @@ from typing import Any
 
 from app.db.connection import get_conn, table_exists
 from app.domains.access import scope
+from app.domains.projects import observation_window_open
 
 from app.core.logging import get_logger
 
@@ -271,6 +272,28 @@ def _link_post_to_observation_window(
     return window_id
 
 
+def open_window_for_delivered_in_transaction(
+    conn: Any,
+    project_id: int,
+    assignment_id: int | None,
+    kol_pool_id: int | None,
+    delivered_at: Any,
+    staff: dict[str, Any] | None = None,
+    *,
+    source_shipment_id: int | None = None,
+) -> dict[str, Any]:
+    """Compatibility export for the no-commit exact-write primitive."""
+    return observation_window_open.open_window_for_delivered_in_transaction(
+        conn,
+        project_id,
+        assignment_id,
+        kol_pool_id,
+        delivered_at,
+        staff,
+        source_shipment_id=source_shipment_id,
+    )
+
+
 def open_window_for_delivered(
     project_id: int,
     assignment_id: int | None,
@@ -278,80 +301,21 @@ def open_window_for_delivered(
     delivered_at: Any,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """为一笔已签收派单开观察窗口(starts = delivered + 7d、ends = delivered + 45d,status=pending)。
-
-    去重:同 (project_id, assignment_id, kol_pool_id) 已有活动窗口(pending/scanning/matched)则跳过。
-    红线:只写 vkpi_project_content_observation_windows。绝不改 project/assignment/cost 状态。
-    """
-    pid = int(project_id or 0)
-    if pid <= 0:
-        return {"status": "error", "error": "project_id required"}
-
-    delivered = delivered_at
-    if isinstance(delivered, str):
-        try:
-            delivered = datetime.fromisoformat(delivered.replace("Z", "+00:00"))
-        except ValueError:
-            delivered = None
-    if not isinstance(delivered, datetime):
-        return {"status": "error", "error": "valid delivered_at required"}
-
-    aid = _nullable_int(assignment_id)
-    kpid = _nullable_int(kol_pool_id)
-    starts_at = delivered + timedelta(days=_WINDOW_START_OFFSET_DAYS)
-    ends_at = delivered + timedelta(days=_WINDOW_END_OFFSET_DAYS)
-
+    """Compatibility wrapper that commits the existing ordinary write path."""
     conn = get_conn()
-    # 先查后插兜底:NULL 维度用 IS NULL 比较(SQL 里 NULL = NULL 不成立)。
-    status_placeholders = ",".join(["?"] * len(_WINDOW_ACTIVE_STATUSES))
-    where_parts = ["project_id = ?"]
-    params: list[Any] = [pid]
-    if aid is None:
-        where_parts.append("assignment_id IS NULL")
-    else:
-        where_parts.append("assignment_id = ?")
-        params.append(aid)
-    if kpid is None:
-        where_parts.append("kol_pool_id IS NULL")
-    else:
-        where_parts.append("kol_pool_id = ?")
-        params.append(kpid)
-    where_parts.append(f"status IN ({status_placeholders})")
-    params.extend(_WINDOW_ACTIVE_STATUSES)
-
-    existing = conn.execute(
-        f"""
-        SELECT id FROM vkpi_project_content_observation_windows
-        WHERE {' AND '.join(where_parts)}
-        LIMIT 1
-        """,
-        tuple(params),
-    ).fetchone()
-    if existing is not None:
-        return {"status": "skipped", "reason": "duplicate_active_window", "window_id": int(dict(existing)["id"])}
-
-    metadata = _dump_json(
-        {
-            "delivered_at": str(delivered),
-            "opened_by_staff_id": scope.actor_staff_id(staff) or None,
-            "window_offset_days": [_WINDOW_START_OFFSET_DAYS, _WINDOW_END_OFFSET_DAYS],
-        }
+    result = open_window_for_delivered_in_transaction(
+        conn, project_id, assignment_id, kol_pool_id, delivered_at, staff,
     )
-    cursor = conn.execute(
-        """
-        INSERT INTO vkpi_project_content_observation_windows
-            (project_id, assignment_id, kol_pool_id, starts_at, ends_at, status, metadata_json)
-        VALUES (?, ?, ?, ?, ?, 'pending', ?)
-        RETURNING *
-        """,
-        (pid, aid, kpid, starts_at, ends_at, metadata),
-    )
-    row = cursor.fetchone()
     conn.commit()
-    window = _row_to_window(row)
-    _emit_event("observation.window_created", entity_type="observation_window",
-                entity_id=window.get("id"), payload={"project_id": pid, "kol_pool_id": kpid})
-    return {"status": "created", "window": window}
+    if result.get("status") == "created":
+        window = result.get("window") or {}
+        _emit_event(
+            "observation.window_created",
+            entity_type="observation_window",
+            entity_id=window.get("id"),
+            payload={"project_id": int(project_id), "kol_pool_id": _nullable_int(kol_pool_id)},
+        )
+    return result
 
 
 def list_windows(
@@ -667,7 +631,7 @@ def review_content_post(
     scope_clause = f"AND {scope_sql}" if scope_sql else ""
     target = conn.execute(
         f"""
-        SELECT c.id, c.project_id, c.assignment_id, c.kol_pool_id
+        SELECT c.id, c.project_id, c.assignment_id, c.kol_pool_id, c.status AS prior_status
         FROM vkpi_project_content_posts c
         JOIN vkpi_projects p ON p.id = c.project_id
         WHERE c.id = ? {scope_clause}
@@ -711,7 +675,14 @@ def review_content_post(
         _emit_event("content.matched", entity_type="content_post", entity_id=cid,
                     payload={"project_id": target_row.get("project_id"),
                              "observation_window_id": linked_window_id})
-    return {"status": "ok", "action": act, "post": _row_to_post(row), "observation_window_id": linked_window_id}
+    return {
+        "status": "ok",
+        "action": act,
+        "post": _row_to_post(row),
+        "observation_window_id": linked_window_id,
+        "previous_status": str(target_row.get("prior_status") or ""),
+        "state_changed": str(target_row.get("prior_status") or "") != act,
+    }
 
 
 def advance_matched_posts_to_retrospective_ready(

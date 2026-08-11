@@ -318,6 +318,11 @@ def run(
                 input_schema={"product": product, "market": market,
                               "budget_cents": budget_cents, "goal": goal},
                 model_used=model_used,
+                prompt_version=(
+                    "injected_model_fn:caller_owned"
+                    if model_used != "rule_v0"
+                    else f"{SKILL_NAME}:{SKILL_VERSION}:rule_v0"
+                ),
                 retrieved_context={"pool_status": ctx.get("pool_status"),
                                    "signal_coverage": signal_coverage},
                 output=result,

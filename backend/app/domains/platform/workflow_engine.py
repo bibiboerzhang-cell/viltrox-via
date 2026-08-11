@@ -233,6 +233,17 @@ def run(
     if claim_result.get("status") == "not_found":
         return {"status": "not_found", "run_id": int(run_id)}
     if claim_result.get("status") == "completed":
+        try:
+            completion = workflow_repository.ensure_completed_event(int(run_id))
+        except workflow_repository.WorkflowCompletionEvidenceError as exc:
+            return {
+                "status": "blocked",
+                "run_id": int(run_id),
+                "reason": exc.reason,
+                "run_status": "completed",
+                "retryable": True,
+                "external_exactly_once": EXTERNAL_EXACTLY_ONCE,
+            }
         row = workflow_repository.get_run(int(run_id)) or {}
         state = workflow_repository.latest_state(int(run_id), row.get("input_json"))
         return {
@@ -241,6 +252,8 @@ def run(
             "steps": len(steps),
             "state": state,
             "already_completed": True,
+            "completion_event_id": int(completion["event_id"]),
+            "completion_evidence_repaired": bool(completion["repaired"]),
             "external_exactly_once": EXTERNAL_EXACTLY_ONCE,
         }
     if claim_result.get("status") != "acquired":
@@ -337,19 +350,24 @@ def run(
             fence_token=claim.fence_token,
         )
 
-    if not workflow_repository.complete_run(claim, expected_steps=len(steps)):
+    try:
+        completed = workflow_repository.complete_run(claim, expected_steps=len(steps))
+    except workflow_repository.WorkflowCompletionEvidenceError as exc:
+        return {
+            "status": "blocked",
+            "run_id": int(run_id),
+            "reason": exc.reason,
+            "run_status": "completion_unverified",
+            "retryable": True,
+            "external_exactly_once": EXTERNAL_EXACTLY_ONCE,
+        }
+    if not completed:
         return {
             "status": "fenced",
             "run_id": int(run_id),
             "reason": "workflow_execution_fence_lost_before_completion",
             "retryable": True,
         }
-    _emit(
-        "workflow_completed",
-        row,
-        steps=len(steps),
-        fence_token=claim.fence_token,
-    )
     return {
         "status": "completed",
         "run_id": int(run_id),
@@ -357,6 +375,7 @@ def run(
         "state": state,
         "fence_token": claim.fence_token,
         "recovered": claim.recovered,
+        "completion_evidence": "atomic",
         "external_exactly_once": EXTERNAL_EXACTLY_ONCE,
     }
 

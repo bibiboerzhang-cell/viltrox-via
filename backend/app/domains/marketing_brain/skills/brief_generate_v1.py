@@ -250,6 +250,11 @@ def run(
                     "angle": angle,
                 },
                 model_used=model_used,
+                prompt_version=(
+                    "injected_model_fn:caller_owned"
+                    if "rule" not in str(model_used).lower()
+                    else f"{SKILL_NAME}:{SKILL_VERSION}:rule_v0"
+                ),
                 retrieved_context={"kol_resolved": bool(kol)},
                 output=result,
                 cost_cents=0,  # 默认走模板/可注入函数,不真烧 LLM

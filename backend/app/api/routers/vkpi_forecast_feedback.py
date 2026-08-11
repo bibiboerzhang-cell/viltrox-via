@@ -13,8 +13,12 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.api.dependencies.legacy_scope import legacy_system_admin_scope_guard
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 
@@ -23,14 +27,20 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-forecast-feedback"])
 
 
+def _require_legacy_forecast_scope(staff: dict[str, Any], *, surface: str) -> None:
+    unavailable = legacy_system_admin_scope_guard(staff, surface=surface)
+    if unavailable is not None:
+        raise HTTPException(status_code=403, detail=unavailable)
+
+
 @router.post("/learning/forecast-outcomes/refresh")
 def refresh_forecast_outcomes(
     min_age_days: int = Query(default=30, ge=0, le=365, description="满多少天才对答案(冒烟/回补可传 0)"),
     limit: int = Query(default=200, ge=1, le=1000, description="单次最多处理的 pending 行数"),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict:
     """手动触发预测流水对答案(只写 vkpi_forecast_log 的 actual/outcome 列)。"""
-    del staff
+    _require_legacy_forecast_scope(staff, surface="Forecast outcome refresh")
     from app.domains.learning import forecast_feedback
 
     return forecast_feedback.refresh_forecast_outcomes(min_age_days=min_age_days, limit=limit)
@@ -42,7 +52,7 @@ def get_forecast_log_summary(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """预测流水总览(带内率统计;全只读)。"""
-    del staff
+    _require_legacy_forecast_scope(staff, surface="Forecast log summary")
     from app.domains.learning import forecast_feedback
 
     return forecast_feedback.forecast_log_summary(recent_limit=recent_limit)

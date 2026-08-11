@@ -555,6 +555,28 @@ def record_verdict(
     else:
         return {"ok": False, "reason": "missing_id", "note": "outcome_id 与 inbox_id 至少给一个。"}
 
+    # A registered prediction owns a future observation window.  Finalizing
+    # before that exact server-clock window is durably filled would freeze an
+    # empty outcome forever, so linked bets fail closed until gtm_windows has
+    # written the sealed evidence.  Historical/unregistered bets are unchanged.
+    if bet_inbox_id:
+        from app.domains.market_brain import gtm_prediction_producer
+
+        prediction_gate = gtm_prediction_producer.registered_prediction_verdict_gate(
+            conn,
+            bet_inbox_id,
+            outcome_id=target_outcome_id,
+        )
+        if prediction_gate.get("required") and not prediction_gate.get("ready"):
+            return {
+                "ok": False,
+                "reason": "prediction_observation_window_not_ready",
+                "bet_inbox_id": bet_inbox_id,
+                "outcome_id": target_outcome_id,
+                "prediction_run_id": prediction_gate.get("prediction_run_id"),
+                "observation_start_at": prediction_gate.get("observation_start_at"),
+            }
+
     # ── 落账(UPDATE 既有 open 行,或从 bet 上下文 INSERT 新行) ──
     if target_outcome_id is not None:
         cur = conn.execute(
@@ -617,7 +639,7 @@ def record_verdict(
     task_closed = _close_verdict_task(conn, bet_inbox_id) if bet_inbox_id else False
     evidence_row = conn.execute(
         f"""
-        SELECT actual_result, window_7d, window_14d, window_28d
+        SELECT id, action_inbox_id, actual_result, window_7d, window_14d, window_28d
         FROM {_OUTCOMES}
         WHERE id = ?
         """,
@@ -625,10 +647,10 @@ def record_verdict(
     ).fetchone()
     from app.domains.market_brain.data_readiness import (
         build_learning_readiness,
-        has_observed_outcome_evidence,
+        has_verified_outcome_evidence,
     )
 
-    evidence_backed = has_observed_outcome_evidence(dict(evidence_row or {}))
+    evidence_backed = has_verified_outcome_evidence(conn, dict(evidence_row or {}))
 
     readiness = build_learning_readiness(conn=conn)
     claimable = evidence_backed and bool(readiness.get("claimable"))
@@ -714,7 +736,7 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
     conn = get_conn()
     from app.domains.market_brain.data_readiness import (
         build_learning_readiness,
-        has_observed_outcome_evidence,
+        has_verified_outcome_evidence,
         outcome_evidence_sql,
     )
 
@@ -753,7 +775,7 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
                     "window_28d", "next_weight_change"):
             if row.get(key) is not None:
                 row[key] = _loads(row.get(key))
-        evidence_backed = has_observed_outcome_evidence(row)
+        evidence_backed = has_verified_outcome_evidence(conn, row)
         finalized = (
             _text(row.get("decision"), 20) in DECISIONS
             and bool(row.get("decided_at"))
@@ -769,7 +791,7 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
     ).fetchall()
     by_decision = {str(dict(r)["decision"]): int(dict(r)["n"]) for r in stats_rows}
     decision_labeled = sum(n for k, n in by_decision.items() if k != "open")
-    observed_outcome_sql = outcome_evidence_sql()
+    observed_outcome_sql = outcome_evidence_sql("o")
     final_stats_row = conn.execute(
         f"""
         SELECT
@@ -784,7 +806,7 @@ def list_outcomes(decision: str | None = None, limit: int = 50) -> dict[str, Any
                   AND decided_by IS NOT NULL
                   AND ({observed_outcome_sql})
             ) AS evidence_backed
-        FROM {_OUTCOMES}
+            FROM {_OUTCOMES} o
         """
     ).fetchone()
     final_stats = dict(final_stats_row or {})

@@ -5,15 +5,68 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Callable
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 
 logger = get_logger(__name__)
 
 Case = tuple[str, Callable[[], tuple[bool, float, str]]]
+
+_EVAL_RUNS = "vkpi_eval_runs"
+_EVAL_RESULTS = "vkpi_eval_results"
+_EVENTS = "vkpi_event_ledger"
+_EVAL_EVENT = "eval_suite_completed"
+_EVAL_EVENT_SOURCE = "platform.evals"
+_EVAL_EVIDENCE_VERIFICATION = "server_bound_eval_suite"
+
+
+def _json_param() -> str:
+    return "?::jsonb" if is_postgres_runtime() else "?"
+
+
+def _result_set_sha256(suite: str, results: list[dict[str, Any]]) -> str:
+    """Hash the server-produced case set without run ids or wall-clock data."""
+
+    rows = sorted(
+        (
+            {
+                "case_name": str(row.get("case_name") or ""),
+                "passed": bool(row.get("passed")),
+                "score": float(row.get("score") or 0.0),
+                "detail": str(row.get("detail") or ""),
+            }
+            for row in results
+        ),
+        key=lambda row: row["case_name"],
+    )
+    payload = json.dumps(
+        {"suite": str(suite or ""), "results": rows},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _eval_summary(
+    *,
+    run_id: int,
+    organization_id: int,
+    result_set_sha256: str,
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "organization_id": int(organization_id),
+        "evidence_verification": _EVAL_EVIDENCE_VERIFICATION,
+        "server_bound_run_id": int(run_id),
+        "result_set_sha256": str(result_set_sha256),
+        "producer": "platform.evals.run_builtin_suite",
+        "results": results,
+    }
 
 
 def _first_kol_id() -> int:
@@ -110,8 +163,11 @@ _BUILTIN: list[Case] = [
 ]
 
 
-def run_builtin_suite(suite: str = "core_v1") -> dict[str, Any]:
+def run_builtin_suite(suite: str = "core_v1", *, organization_id: int = 1) -> dict[str, Any]:
     """跑内置评测套件 + 持久化(vkpi_eval_runs/results)。"""
+    org_id = int(organization_id)
+    if org_id != 1:
+        raise ValueError("eval_suite_organization_scope_must_be_legacy_org1")
     results = []
     for name, fn in _BUILTIN:
         try:
@@ -123,23 +179,81 @@ def run_builtin_suite(suite: str = "core_v1") -> dict[str, Any]:
     total = len(results)
     passed_n = sum(1 for r in results if r["passed"])
     run_id = None
-    if table_exists("vkpi_eval_runs"):
+    result_set_sha256 = _result_set_sha256(suite, results)
+    evidence_status = "not_persisted"
+    required_tables = (_EVAL_RUNS, _EVAL_RESULTS, _EVENTS)
+    if all(table_exists(table) for table in required_tables):
+        conn = get_conn()
         try:
-            conn = get_conn()
             row = conn.execute(
-                "INSERT INTO vkpi_eval_runs (suite, status, total, passed, summary_json, finished_at) "
-                "VALUES (?,?,?,?,?::jsonb,NOW()) RETURNING id",
-                (suite, "done", total, passed_n, json.dumps({"results": results}, ensure_ascii=False)),
+                f"INSERT INTO {_EVAL_RUNS} "
+                "(suite, status, total, passed, summary_json, finished_at) "
+                f"VALUES (?,'running',0,0,{_json_param()},NULL) RETURNING id",
+                (suite, json.dumps({}, separators=(",", ":"))),
             ).fetchone()
             run_id = int(dict(row)["id"]) if row else None
+            if run_id is None:
+                raise RuntimeError("eval run insert returned no id")
             for r in results:
                 conn.execute(
-                    "INSERT INTO vkpi_eval_results (run_id, case_name, passed, score, detail) VALUES (?,?,?,?,?)",
+                    f"INSERT INTO {_EVAL_RESULTS} "
+                    "(run_id, case_name, passed, score, detail) VALUES (?,?,?,?,?)",
                     (run_id, r["case_name"], r["passed"], r["score"], r["detail"]),
                 )
+            summary = _eval_summary(
+                run_id=run_id,
+                organization_id=org_id,
+                result_set_sha256=result_set_sha256,
+                results=results,
+            )
+            from app.domains.platform import event_ledger
+
+            event_ledger.insert_required(
+                conn,
+                _EVAL_EVENT,
+                entity_type="eval_run",
+                entity_id=run_id,
+                actor_type="system",
+                actor_id="run_builtin_suite",
+                source=_EVAL_EVENT_SOURCE,
+                payload={
+                    "suite": str(suite),
+                    "total": total,
+                    "passed": passed_n,
+                    "result_set_sha256": result_set_sha256,
+                },
+                trace_id=event_ledger.new_trace_id(
+                    "eval_suite", org_id, suite, run_id, result_set_sha256,
+                ),
+                provenance={
+                    "evidence_verification": _EVAL_EVIDENCE_VERIFICATION,
+                    "server_bound_run_id": run_id,
+                    "result_set_sha256": result_set_sha256,
+                    "producer": "platform.evals.run_builtin_suite",
+                },
+                organization_id=org_id,
+            )
+            terminal = conn.execute(
+                f"UPDATE {_EVAL_RUNS} SET status='done', total=?, passed=?, "
+                f"summary_json={_json_param()}, finished_at=CURRENT_TIMESTAMP "
+                "WHERE id=? AND status='running' RETURNING id",
+                (
+                    total,
+                    passed_n,
+                    json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                    run_id,
+                ),
+            ).fetchone()
+            if terminal is None:
+                raise RuntimeError("eval run terminal transition lost")
             conn.commit()
+            evidence_status = "server_bound"
         except Exception:
+            conn.rollback()
+            run_id = None
             logger.warning("evals.persist_failed", exc_info=True)
     return {"status": "ok", "suite": suite, "run_id": run_id, "total": total, "passed": passed_n,
             "pass_rate": round(passed_n / total, 3) if total else 0.0, "results": results,
+            "evidence_status": evidence_status,
+            "result_set_sha256": result_set_sha256 if run_id is not None else None,
             "note": "业务评测套件;升级后跑一遍,pass_rate 掉了即退化。零触 viltrox_fit_score。"}

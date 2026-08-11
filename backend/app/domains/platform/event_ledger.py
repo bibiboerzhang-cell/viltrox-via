@@ -10,7 +10,7 @@ import json
 from typing import Any
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 
 logger = get_logger(__name__)
 
@@ -21,6 +21,53 @@ def new_trace_id(*parts: Any) -> str:
     """据输入生成确定 trace_id(同输入同 trace,便于一条流程串联;不用随机)。"""
     raw = "|".join(str(p) for p in parts if p is not None) or "trace"
     return "tr_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def insert_required(
+    conn: Any,
+    event_type: str,
+    *,
+    entity_type: str = "",
+    entity_id: Any = "",
+    actor_type: str = "system",
+    actor_id: Any = "",
+    source: str = "",
+    payload: dict[str, Any] | None = None,
+    trace_id: str = "",
+    confidence: float | None = None,
+    provenance: dict[str, Any] | None = None,
+    organization_id: int = 1,
+) -> int:
+    """Insert one audit event on the caller's transaction.
+
+    Unlike :func:`emit`, this helper is deliberately fail-closed: it neither
+    catches errors nor commits.  Human review flows use it so the business
+    review and its reviewer/provenance evidence either commit together or both
+    roll back.
+    """
+    et = str(event_type or "").strip()
+    if not et:
+        raise ValueError("event_type required")
+    json_param = "?::jsonb" if is_postgres_runtime() else "?"
+    row = conn.execute(
+        f"""
+        INSERT INTO {_TABLE}
+          (organization_id, event_type, entity_type, entity_id, actor_type, actor_id,
+           source, payload_json, trace_id, confidence, provenance_json)
+        VALUES (?,?,?,?,?,?,?,{json_param},?,?,{json_param})
+        RETURNING id
+        """,
+        (
+            int(organization_id or 1), et, str(entity_type or ""), str(entity_id or ""),
+            str(actor_type or "system"), str(actor_id or ""), str(source or ""),
+            json.dumps(payload or {}, ensure_ascii=False, default=str), str(trace_id or ""),
+            float(confidence) if confidence is not None else None,
+            json.dumps(provenance or {}, ensure_ascii=False, default=str),
+        ),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("event ledger insert returned no id")
+    return int(dict(row)["id"])
 
 
 def emit(
@@ -41,28 +88,31 @@ def emit(
     et = str(event_type or "").strip()
     if not et or not table_exists(_TABLE):
         return None
+    conn = None
     try:
         conn = get_conn()
-        row = conn.execute(
-            f"""
-            INSERT INTO {_TABLE}
-              (organization_id, event_type, entity_type, entity_id, actor_type, actor_id,
-               source, payload_json, trace_id, confidence, provenance_json)
-            VALUES (?,?,?,?,?,?,?,?::jsonb,?,?,?::jsonb)
-            RETURNING id
-            """,
-            (
-                int(organization_id or 1), et, str(entity_type or ""), str(entity_id or ""),
-                str(actor_type or "system"), str(actor_id or ""), str(source or ""),
-                json.dumps(payload or {}, ensure_ascii=False, default=str),
-                str(trace_id or ""),
-                float(confidence) if confidence is not None else None,
-                json.dumps(provenance or {}, ensure_ascii=False, default=str),
-            ),
-        ).fetchone()
+        event_id = insert_required(
+            conn,
+            et,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            source=source,
+            payload=payload,
+            trace_id=trace_id,
+            confidence=confidence,
+            provenance=provenance,
+            organization_id=organization_id,
+        )
         conn.commit()
-        return int(dict(row)["id"]) if row else None
+        return event_id
     except Exception:
+        try:
+            if conn is not None:
+                conn.rollback()
+        except Exception:
+            logger.debug("event_ledger.emit_rollback_failed", exc_info=True)
         logger.warning("event_ledger.emit_failed", extra={"event_type": et}, exc_info=True)
         return None
 

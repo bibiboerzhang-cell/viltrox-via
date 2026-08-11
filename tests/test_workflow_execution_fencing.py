@@ -1,6 +1,7 @@
 """Hermetic SQLite contracts for migration-265 workflow fencing."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from pathlib import Path
@@ -9,7 +10,7 @@ import pytest
 
 from app.db import connection as db_connection
 from app.db.connection import get_conn
-from app.domains.platform import workflow_engine, workflow_recovery, workflow_repository
+from app.domains.platform import event_ledger, workflow_engine, workflow_recovery, workflow_repository
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +69,60 @@ def _workflow_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
           fence_token INTEGER NOT NULL DEFAULT 0,
           UNIQUE (run_id, step_index)
         );
+        CREATE TABLE vkpi_event_ledger (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          organization_id INTEGER NOT NULL DEFAULT 1,
+          event_type TEXT NOT NULL,
+          entity_type TEXT NOT NULL DEFAULT '',
+          entity_id TEXT NOT NULL DEFAULT '',
+          actor_type TEXT NOT NULL DEFAULT 'system',
+          actor_id TEXT NOT NULL DEFAULT '',
+          source TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          trace_id TEXT NOT NULL DEFAULT '',
+          confidence REAL,
+          provenance_json TEXT NOT NULL DEFAULT '{}',
+          occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX uq_vkpi_workflow_completed_event
+          ON vkpi_event_ledger(organization_id, entity_type, entity_id, source)
+          WHERE event_type='workflow_completed' AND source='workflow_engine';
+        CREATE TRIGGER trg_test_workflow_completed_event_update
+          BEFORE UPDATE ON vkpi_event_ledger
+          WHEN (OLD.event_type='workflow_completed' AND OLD.source='workflow_engine')
+            OR (NEW.event_type='workflow_completed' AND NEW.source='workflow_engine')
+        BEGIN
+          SELECT RAISE(ABORT, 'workflow completion evidence is append-only');
+        END;
+        CREATE TRIGGER trg_test_workflow_completed_event_delete
+          BEFORE DELETE ON vkpi_event_ledger
+          WHEN OLD.event_type='workflow_completed' AND OLD.source='workflow_engine'
+        BEGIN
+          SELECT RAISE(ABORT, 'workflow completion evidence is append-only');
+        END;
+        CREATE TRIGGER trg_test_completed_workflow_run_update
+          BEFORE UPDATE ON vkpi_workflow_runs
+          WHEN OLD.status='completed'
+            OR (NEW.status='completed' AND (
+              NEW.organization_id IS NOT OLD.organization_id
+              OR NEW.workflow_name IS NOT OLD.workflow_name
+              OR NEW.input_json IS NOT OLD.input_json
+              OR NEW.current_step IS NOT OLD.current_step
+              OR NEW.entity_type IS NOT OLD.entity_type
+              OR NEW.entity_id IS NOT OLD.entity_id
+              OR NEW.trace_id IS NOT OLD.trace_id
+              OR NEW.fence_token IS NOT OLD.fence_token
+            ))
+        BEGIN
+          SELECT RAISE(ABORT, 'completed workflow run is immutable');
+        END;
+        CREATE TRIGGER trg_test_completed_workflow_run_delete
+          BEFORE DELETE ON vkpi_workflow_runs
+          WHEN OLD.status='completed'
+        BEGIN
+          SELECT RAISE(ABORT, 'completed workflow run is immutable');
+        END;
         """
     )
     conn.commit()
@@ -88,6 +143,32 @@ def _start() -> int:
     )
     assert started["status"] == "ok"
     return int(started["run_id"])
+
+
+def _legacy_completed_without_event() -> int:
+    """Create the durable shape left by the old post-commit emitter."""
+
+    run_id = _start()
+    conn = get_conn()
+    conn.execute(
+        "UPDATE vkpi_workflow_runs SET fence_token=1 WHERE id=? AND status='running'",
+        (run_id,),
+    )
+    conn.execute(
+        "UPDATE vkpi_workflow_runs SET status='completed' WHERE id=? AND status='running'",
+        (run_id,),
+    )
+    conn.commit()
+    return run_id
+
+
+def _completion_rows(run_id: int) -> list[dict[str, object]]:
+    rows = get_conn().execute(
+        "SELECT * FROM vkpi_event_ledger WHERE event_type='workflow_completed' "
+        "AND entity_type='workflow' AND entity_id=? ORDER BY id",
+        (str(run_id),),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def test_legacy_run_api_carries_fence_and_is_idempotent() -> None:
@@ -121,6 +202,24 @@ def test_legacy_run_api_carries_fence_and_is_idempotent() -> None:
     assert get_conn().execute(
         "SELECT fence_token FROM vkpi_workflow_checkpoints WHERE run_id=?", (run_id,)
     ).fetchone()[0] == 1
+    events = _completion_rows(run_id)
+    assert len(events) == 1
+    assert json.loads(str(events[0]["payload_json"])) == {
+        "workflow": "fence_test",
+        "steps": 1,
+        "current_step": 1,
+        "fence_token": 1,
+        "entity_type": "test",
+        "entity_id": "one",
+    }
+    assert json.loads(str(events[0]["provenance_json"])) == {
+        "evidence_verification": "server_bound_fenced_workflow_completion",
+        "server_bound_run_id": run_id,
+        "server_bound_entity_type": "test",
+        "server_bound_entity_id": "one",
+        "server_bound_current_step": 1,
+        "fence_token": 1,
+    }
 
     replay = workflow_engine.run(
         run_id,
@@ -129,6 +228,238 @@ def test_legacy_run_api_carries_fence_and_is_idempotent() -> None:
     )
     assert replay["status"] == "completed"
     assert replay["already_completed"] is True
+    assert replay["completion_event_id"] == events[0]["id"]
+    assert replay["completion_evidence_repaired"] is False
+    assert len(_completion_rows(run_id)) == 1
+
+
+def test_required_completion_event_failure_rolls_back_terminal_state_and_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = _start()
+    original_insert = event_ledger.insert_required
+    attempts = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("injected completion receipt failure")
+        return original_insert(*args, **kwargs)
+
+    monkeypatch.setattr(event_ledger, "insert_required", fail_once)
+    first = workflow_engine.run(
+        run_id,
+        [("only", lambda _state: {"side_effect": "already durable"})],
+        owner_id="worker-first",
+    )
+
+    assert first["status"] == "blocked"
+    assert first["reason"] == "workflow_completion_evidence_required"
+    row = get_conn().execute(
+        "SELECT status,current_step,last_error,fence_token FROM vkpi_workflow_runs WHERE id=?",
+        (run_id,),
+    ).fetchone()
+    assert tuple(row) == (
+        "failed",
+        1,
+        "workflow_completion_evidence_required",
+        1,
+    )
+    assert _completion_rows(run_id) == []
+
+    replay = workflow_engine.run(
+        run_id,
+        [("only", lambda _state: pytest.fail("durable step callback was repeated"))],
+        owner_id="worker-repair",
+    )
+    assert replay["status"] == "completed"
+    assert replay["recovered"] is True
+    assert replay["fence_token"] == 2
+    assert replay["completion_evidence"] == "atomic"
+    assert len(_completion_rows(run_id)) == 1
+
+
+def test_completed_replay_repairs_missing_exact_event_without_changing_run() -> None:
+    run_id = _legacy_completed_without_event()
+    before = dict(get_conn().execute(
+        "SELECT * FROM vkpi_workflow_runs WHERE id=?", (run_id,)
+    ).fetchone())
+
+    repaired = workflow_engine.run(
+        run_id,
+        [("unused", lambda _state: pytest.fail("completed callback was replayed"))],
+        owner_id="repair-worker",
+    )
+
+    after = dict(get_conn().execute(
+        "SELECT * FROM vkpi_workflow_runs WHERE id=?", (run_id,)
+    ).fetchone())
+    assert repaired["status"] == "completed"
+    assert repaired["already_completed"] is True
+    assert repaired["completion_evidence_repaired"] is True
+    assert after == before
+    assert len(_completion_rows(run_id)) == 1
+
+
+def test_completed_replay_conflict_is_fail_closed_and_does_not_mutate_run() -> None:
+    run_id = _legacy_completed_without_event()
+    before = dict(get_conn().execute(
+        "SELECT * FROM vkpi_workflow_runs WHERE id=?", (run_id,)
+    ).fetchone())
+    get_conn().execute(
+        "INSERT INTO vkpi_event_ledger "
+        "(organization_id,event_type,entity_type,entity_id,actor_type,actor_id,source,"
+        "payload_json,trace_id,confidence,provenance_json) "
+        "VALUES (1,'workflow_completed','workflow',?,'system','','workflow_engine',"
+        "'{}',?,NULL,'{}')",
+        (str(run_id), str(before["trace_id"])),
+    )
+    get_conn().commit()
+
+    result = workflow_engine.run(
+        run_id,
+        [("unused", lambda _state: pytest.fail("conflicted callback was replayed"))],
+        owner_id="conflict-worker",
+    )
+
+    after = dict(get_conn().execute(
+        "SELECT * FROM vkpi_workflow_runs WHERE id=?", (run_id,)
+    ).fetchone())
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workflow_completion_event_conflict"
+    assert result["run_status"] == "completed"
+    assert after == before
+    assert len(_completion_rows(run_id)) == 1
+
+
+def test_completed_replay_rejects_multiple_receipts_without_mutating_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = _legacy_completed_without_event()
+    before = dict(get_conn().execute(
+        "SELECT * FROM vkpi_workflow_runs WHERE id=?", (run_id,)
+    ).fetchone())
+    get_conn().execute("DROP INDEX uq_vkpi_workflow_completed_event")
+    for marker in ("one", "two"):
+        get_conn().execute(
+            "INSERT INTO vkpi_event_ledger "
+            "(organization_id,event_type,entity_type,entity_id,actor_type,actor_id,source,"
+            "payload_json,trace_id,confidence,provenance_json) "
+            "VALUES (1,'workflow_completed','workflow',?,'system','','workflow_engine',"
+            "?, ?,NULL,'{}')",
+            (str(run_id), json.dumps({"marker": marker}), str(before["trace_id"])),
+        )
+    get_conn().commit()
+    monkeypatch.setattr(workflow_repository, "schema_ready", lambda: True)
+
+    result = workflow_engine.run(run_id, [], owner_id="duplicate-worker")
+
+    after = dict(get_conn().execute(
+        "SELECT * FROM vkpi_workflow_runs WHERE id=?", (run_id,)
+    ).fetchone())
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workflow_completion_event_duplicate"
+    assert after == before
+    assert len(_completion_rows(run_id)) == 2
+
+
+def test_concurrent_completed_repair_is_one_event_and_deterministic() -> None:
+    run_id = _legacy_completed_without_event()
+    barrier = threading.Barrier(2)
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def replay() -> None:
+        try:
+            barrier.wait(timeout=5)
+            results.append(workflow_engine.run(run_id, [], owner_id=threading.current_thread().name))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=replay, name="repair-one"),
+        threading.Thread(target=replay, name="repair-two"),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert errors == []
+    assert [str(item["status"]) for item in results] == ["completed", "completed"]
+    assert sorted(bool(item["completion_evidence_repaired"]) for item in results) == [False, True]
+    assert len(_completion_rows(run_id)) == 1
+
+
+def test_completion_event_and_completed_run_are_immutable() -> None:
+    run_id = _start()
+    result = workflow_engine.run(run_id, [], owner_id="immutable-worker")
+    assert result["status"] == "completed"
+    event_id = int(_completion_rows(run_id)[0]["id"])
+
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        get_conn().execute(
+            "UPDATE vkpi_event_ledger SET payload_json='{}' WHERE id=?", (event_id,)
+        )
+    get_conn().rollback()
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        get_conn().execute("DELETE FROM vkpi_event_ledger WHERE id=?", (event_id,))
+    get_conn().rollback()
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        get_conn().execute(
+            "UPDATE vkpi_workflow_runs SET entity_id='rewritten' WHERE id=?", (run_id,)
+        )
+    get_conn().rollback()
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        get_conn().execute("DELETE FROM vkpi_workflow_runs WHERE id=?", (run_id,))
+    get_conn().rollback()
+
+    get_conn().execute(
+        "INSERT INTO vkpi_event_ledger(event_type,entity_type,entity_id,source) "
+        "VALUES ('ordinary','workflow','other','other')"
+    )
+    ordinary_id = int(get_conn().execute("SELECT last_insert_rowid()").fetchone()[0])
+    get_conn().commit()
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        get_conn().execute(
+            "UPDATE vkpi_event_ledger SET event_type='workflow_completed', "
+            "source='workflow_engine' WHERE id=?",
+            (ordinary_id,),
+        )
+    get_conn().rollback()
+
+
+def test_migration_281_is_runner_transactional_and_reverses_dependencies() -> None:
+    root = Path(__file__).resolve().parents[1]
+    up = (root / "migrations/281_vkpi_workflow_completion_evidence.sql").read_text(
+        encoding="utf-8"
+    )
+    down = (
+        root / "migrations/281_vkpi_workflow_completion_evidence_down.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "BEGIN;" not in up and "COMMIT;" not in up
+    assert "BEGIN;" not in down and "COMMIT;" not in down
+    assert "'current_step', run.current_step" in up
+    assert "'entity_type', run.entity_type" in up
+    assert "'entity_id', run.entity_id" in up
+    assert "OLD.status = 'completed'" in up
+    assert "NEW.status = 'completed'" in up
+    assert "OLD.event_type = 'workflow_completed'" in up
+    assert "NEW.event_type = 'workflow_completed'" in up
+    assert "BEFORE UPDATE OR DELETE ON vkpi_workflow_runs" in up
+    assert "BEFORE UPDATE OR DELETE ON vkpi_event_ledger" in up
+    assert down.index("DROP TRIGGER IF EXISTS trg_vkpi_workflow_completed_event_immutable") < down.index(
+        "DROP FUNCTION IF EXISTS vkpi_workflow_completed_event_reject_mutation"
+    ) < down.index("DROP INDEX IF EXISTS uq_vkpi_workflow_completed_event") < down.index(
+        "DROP TRIGGER IF EXISTS trg_vkpi_completed_workflow_run_immutable"
+    ) < down.index(
+        "DROP FUNCTION IF EXISTS vkpi_completed_workflow_run_reject_mutation"
+    ) < down.index(
+        "DELETE FROM schema_migrations"
+    )
 
 
 def test_live_claim_allows_only_one_callback_executor() -> None:
