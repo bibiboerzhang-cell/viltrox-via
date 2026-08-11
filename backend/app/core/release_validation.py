@@ -114,7 +114,9 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
     {
         "/api/admin/runtime/metrics",
         "/api/admin/vkpi/actions/inbox",
+        "/api/admin/vkpi/agents/learning-status",
         "/api/admin/vkpi/agents/loop/trace",
+        "/api/admin/vkpi/agents/marketing-brain/scorecard",
         "/api/admin/vkpi/alerts",
         "/api/admin/vkpi/attribution",
         "/api/admin/vkpi/attribution/unmatched",
@@ -137,6 +139,8 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/goaffpro/creds",
         "/api/admin/vkpi/goaffpro/summary",
         "/api/admin/vkpi/gtm/northstar",
+        "/api/admin/vkpi/gtm/outreach-truth/coverage",
+        "/api/admin/vkpi/gtm/verdicts/pending",
         "/api/admin/vkpi/industry-data/hashtag-trends/v0",
         "/api/admin/vkpi/industry-data/market-intelligence/cards/v0",
         "/api/admin/vkpi/kol-pool/needs-analysis",
@@ -176,7 +180,14 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
     }
 )
 _READ_ONLY_GET_PATTERNS = (
+    re.compile(r"^/api/admin/vkpi/actions/[1-9][0-9]*/review-candidate$"),
     re.compile(r"^/api/admin/vkpi/channels/[1-9][0-9]*/posts$"),
+    re.compile(
+        r"^/api/admin/vkpi/gtm/actions/[1-9][0-9]*/outreach-binding-status$"
+    ),
+    re.compile(
+        r"^/api/admin/vkpi/gtm/outreach-bindings/[1-9][0-9]*/reply-review-candidate$"
+    ),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*$"),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/content-fit$"),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/detail-bundle$"),
@@ -190,6 +201,7 @@ _READ_ONLY_GET_PATTERNS = (
         r"^/api/admin/vkpi/marketing-advisor/threads/[A-Za-z0-9_-]{1,80}/messages$"
     ),
     re.compile(r"^/api/admin/vkpi/sku/[^/]+/profile$"),
+    re.compile(r"^/api/admin/vkpi/skills/runs/[1-9][0-9]*/review-candidate$"),
     re.compile(r"^/api/admin/vkpi/weekly-reports/[0-9]+$"),
 )
 
