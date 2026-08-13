@@ -21,6 +21,32 @@ describe("toCockpitKolPoolRows geo tier truth", () => {
   });
 });
 
+describe("toCockpitKolPoolRows employee contact projection", () => {
+  it("keeps a full list projection intact for the authorized employee UI", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 2,
+      handle: "creator",
+      email: "manager@example.com",
+      contact_masked: false,
+    } as any]);
+
+    expect(row.email).toBe("manager@example.com");
+    expect(row.contact_masked).toBe(false);
+  });
+
+  it("keeps an older masked projection marked for modal compatibility reveal", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 3,
+      handle: "creator",
+      email: "m***@e***",
+      contact_masked: true,
+    } as any]);
+
+    expect(row.email).toBe("m***@e***");
+    expect(row.contact_masked).toBe(true);
+  });
+});
+
 describe("toCockpitKolPoolRows fit score transport types", () => {
   it("keeps PostgreSQL numeric strings as real fit scores", () => {
     const [row] = toCockpitKolPoolRows([{

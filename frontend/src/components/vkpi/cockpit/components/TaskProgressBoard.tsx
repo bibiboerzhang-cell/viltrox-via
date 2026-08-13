@@ -4,6 +4,7 @@ import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
 import { buildApiUrl } from "../../../../services/http";
 import { retryTask } from "../../../../services/vkpi/tasks-api";
 import { useWorkflowRunsStream, type WorkflowRunsStream } from "../useWorkflowRunsStream";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
@@ -49,15 +50,10 @@ function asArray(value: any) {
 
 function taskTargetText(task: any) {
   const target = task?.target && typeof task.target === "object" ? task.target : {};
-  return String(
-    target.label ||
-    target.handle ||
-    target.display_name ||
-    target.target_id ||
-    target.source_url ||
-    task?.target_label ||
-    ""
-  ).trim();
+  return kolHumanDisplayName({
+    ...target,
+    display_name: target.label || target.display_name || task?.target_label,
+  }, target.source_url ? "KOL 分析任务" : "");
 }
 
 function taskLabel(task: any) {

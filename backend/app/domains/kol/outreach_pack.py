@@ -608,19 +608,13 @@ def get_outreach_pack(
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """读端:最新外联包(cache)+ 实时邮箱状态;无则 state=missing。零 LLM/零外调。"""
-    from app.domains.kol.contact_access import authorize_plaintext_contacts
-
     conn = get_conn()
     if not conn.execute("SELECT 1 FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone():
         raise LookupError("kol pool item not found")
-    reveal = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol_pool",
-        resource_id=int(kol_pool_id),
-        page_path=f"/kol-pool/{int(kol_pool_id)}/outreach-pack",
-        metadata={"surface": "outreach_pack"},
-    )
-    email = _email_status(conn, int(kol_pool_id), reveal=reveal)
+    del staff
+    # Legacy outreach responses remain masked.  Plaintext is available only
+    # through the fenced, rate-limited single-item projection/reveal boundary.
+    email = _email_status(conn, int(kol_pool_id), reveal=False)
     cached = _read_pack_cache(conn, int(kol_pool_id))
     if not cached:
         return {"state": "missing", "kol_pool_id": int(kol_pool_id), "email": email}
@@ -646,15 +640,6 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
     kol = _kol_row(conn, kid)
     if not kol:
         raise LookupError("kol pool item not found")
-    from app.domains.kol.contact_access import authorize_plaintext_contacts
-
-    reveal = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol_pool",
-        resource_id=kid,
-        page_path=f"/kol-pool/{kid}/outreach-pack",
-        metadata={"surface": "outreach_pack", "operation": "generate"},
-    )
 
     # 当日幂等:缓存里 generated_date 是今天且非 force → 直接复用(邮箱状态仍实时读)。
     if not force:
@@ -668,7 +653,7 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
                     "pack": cached["pack"],
                     "model": cached.get("model"),
                     "updated_at": cached.get("updated_at"),
-                    "email": _email_status(conn, kid, reveal=reveal),
+                    "email": _email_status(conn, kid, reveal=False),
                     "cached": True,
                 }
 
@@ -730,6 +715,6 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
         "model": _text(llm_provenance.get("model")) or "rule_template",
         "updated_at": _utcnow(),
         # 富化可能刚写回 email,这里重读给前端最新状态。
-        "email": {**_email_status(conn, kid, reveal=reveal), "enrich": enrich},
+        "email": {**_email_status(conn, kid, reveal=False), "enrich": enrich},
         "cached": False,
     }

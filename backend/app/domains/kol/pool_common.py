@@ -6,7 +6,6 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from app.core.permissions import check_tab_permission, is_owner
 from app.core.logging import get_logger
 from app.db.connection import is_postgres_runtime
 from app.domains.kol.metric_truth import project_pool_item_truth
@@ -19,6 +18,8 @@ OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", 
 KOL_POOL_READ_CACHE_TTL_SEC = 300
 CONTACT_VISIBILITY_MASKED = "masked"
 CONTACT_VISIBILITY_FULL = "full"
+_INLINE_EMAIL_RE = re.compile(r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_INLINE_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
 CONTACT_METADATA_KEYS = {
     "id",
     "kol_pool_id",
@@ -199,8 +200,8 @@ def _utcnow() -> str:
 def _mask_email(value: Any) -> str:
     """读端邮箱脱敏:e***@d***。空值原样返回，非空脏值也不得明文回显。
 
-    合规:列表与详情默认掩码；list/workspace 仅 owner/vkpi:admin 可用 full 投影，
-    普通成员的逐条真值仍走 view_kol_contact 二次确认 + 审计。
+    合规:bulk list/workspace 永远脱敏；合格员工仅在有审计与限速的单条详情
+    投影中自动读取真值，旧客户端可走兼容 reveal 端点。
     """
     text = str(value or "").strip()
     if not text:
@@ -226,6 +227,23 @@ def _mask_contact_value(contact_type: Any, value: Any) -> str:
     return f"{text[0]}***{text[-1]}"
 
 
+def _mask_inline_contacts(value: Any) -> str:
+    """Redact contact tokens embedded in biography/about prose."""
+    text = str(value or "")
+    if not text:
+        return text
+    text = _INLINE_EMAIL_RE.sub(lambda match: _mask_email(match.group(0)), text)
+    return _INLINE_PHONE_RE.sub(lambda match: _mask_contact_value("phone", match.group(0)), text)
+
+
+def _mask_contact_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _mask_contact_metadata(nested) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_mask_contact_metadata(nested) for nested in value]
+    return _mask_inline_contacts(value) if isinstance(value, str) else value
+
+
 def _mask_contact_record(value: Any, *, contact_type: Any = "") -> Any:
     """Mask contact values while preserving channel/source metadata."""
     if isinstance(value, list):
@@ -236,7 +254,10 @@ def _mask_contact_record(value: Any, *, contact_type: Any = "") -> Any:
     masked: dict[str, Any] = dict(value)
     record_type = masked.get("contact_type") or masked.get("type") or contact_type
     for key, raw_value in tuple(masked.items()):
-        if key in CONTACT_METADATA_KEYS or raw_value in (None, ""):
+        if raw_value in (None, ""):
+            continue
+        if key in CONTACT_METADATA_KEYS:
+            masked[key] = _mask_contact_metadata(raw_value)
             continue
         if isinstance(raw_value, (dict, list)):
             masked[key] = _mask_contact_record(raw_value, contact_type=record_type)
@@ -281,10 +302,13 @@ def normalize_contact_visibility(value: Any) -> str:
 
 
 def contact_visibility_for_staff(staff: dict[str, Any] | None) -> str:
-    """Return the list/workspace contact projection allowed for a trusted staff context."""
-    context = staff if isinstance(staff, dict) else {}
-    if is_owner(context) or check_tab_permission(context, "vkpi", "admin"):
-        return CONTACT_VISIBILITY_FULL
+    """Bulk pool projections are always masked, regardless of staff role.
+
+    Plaintext is deliberately limited to audited single-item detail reads.
+    Keeping this compatibility helper masked closes the former owner/admin
+    seam that could place a bulk plaintext projection in shared cache.
+    """
+    del staff
     return CONTACT_VISIBILITY_MASKED
 
 
@@ -300,6 +324,10 @@ def mask_pool_item(
     if not isinstance(item, dict):
         return item
     masked = project_pool_item_truth(item)
+    # Raw provider/import blobs can contain nested email/phone copies.  They
+    # are not part of the public DTO and are removed for both masked and full
+    # single-item projections after metric-truth extraction.
+    masked.pop("raw_platform_data", None)
     contact_keys = {
         "email",
         "contact_email",
@@ -318,9 +346,15 @@ def mask_pool_item(
     has_contact_projection = any(key in masked for key in contact_keys)
     visibility = normalize_contact_visibility(contact_visibility)
     if visibility == CONTACT_VISIBILITY_FULL:
+        # contact_channels is a precomputed masked availability snapshot
+        # (migration 214), not contact truth.  Returning it beside audited
+        # canonical values makes clients render duplicate e***/1*** rows.
+        masked.pop("contact_channels", None)
         if has_contact_projection:
             masked["contact_masked"] = False
         return masked
+    if masked.get("bio"):
+        masked["bio"] = _mask_inline_contacts(masked.get("bio"))
     for key in ("email", "contact_email", "business_email", "public_email"):
         if key in masked and masked.get(key):
             masked[key] = _mask_email(masked.get(key))

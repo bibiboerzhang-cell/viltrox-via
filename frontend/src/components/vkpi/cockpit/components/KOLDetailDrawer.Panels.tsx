@@ -29,15 +29,17 @@ import {
   youtubeEmbedUrl,
   youtubeIdForVideo,
 } from "./KOLDetailDrawer.helpers";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
 // d1:真复制按钮(原按钮有 title 无 onClick,点击无声失败——B2 全页唯一假按钮)
-export function CopyEmailButton({ email }: any) {
+export function CopyEmailButton({ email, label = "联系方式" }: any) {
   const [copied, setCopied] = React.useState(false);
   return e("button", {
     className: "ml-auto p-1 rounded hover:bg-white/[0.04] " + (copied ? "text-emerald-300" : "text-slate-400 hover:text-white"),
-    title: copied ? "已复制" : "复制邮箱",
+    "aria-label": copied ? `已复制${label}` : `复制${label}`,
+    title: copied ? "已复制" : `复制${label}`,
     onClick: () => {
       void navigator.clipboard?.writeText(String(email || "")).then(() => {
         setCopied(true);
@@ -51,7 +53,7 @@ export function KOLDetailAvatar({ item, size = 44 }: any) {
   const [failed, setFailed] = React.useState(false);
   const avatar = failed ? "" : detailAvatarUrl(item);
   if (!avatar) {
-    return e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size });
+    return e(KPAvatar, { name: kolHumanDisplayName(item), color: item.avatar_color, size });
   }
   return e("span", {
     className: "shrink-0 overflow-hidden rounded-full border border-white/[0.08] bg-white/[0.04]",

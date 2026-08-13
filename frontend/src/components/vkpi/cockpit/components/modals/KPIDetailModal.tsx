@@ -4,6 +4,7 @@ import { BarChart3, Database, Download, ExternalLink, Loader2, X } from "lucide-
 import { useT } from "../../lib/i18n";
 import { saveKpiScopeForStaff } from "../../lib/kpiScopeStorage";
 import { saveStoredState } from "../../lib/storage";
+import { kolHumanDisplayName } from "../../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -219,7 +220,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
           const row = record(raw);
           return [
             isCompany ? "movers:company" : `movers:${moverTab}`,
-            row.kol_name || (row.handle ? `@${String(row.handle).replace(/^@/, "")}` : ""),
+            kolHumanDisplayName({ display_name: row.kol_name, handle: row.handle }, ""),
             row.platform || "",
             number(row.value) || 0,
             "",
@@ -416,7 +417,7 @@ export function KPIDetailModal({ kpiId, initialScope, staffId = 0, metrics = [],
               const row = record(raw);
               return e("div", { key: `${isCompany ? "company" : moverTab}-${row.kol_id || row.handle || index}-${index}`, className: "flex items-center justify-between gap-3 rounded-lg border border-line bg-black/20 px-3 py-2" },
                 e("div", { className: "min-w-0" },
-                  e("div", { className: "truncate text-[12px] font-medium text-ink-2" }, index + 1, ". ", row.kol_name || (row.handle ? `@${String(row.handle).replace(/^@/, "")}` : (isCompany ? "官方账号" : "Unknown KOL"))),
+                  e("div", { className: "truncate text-[12px] font-medium text-ink-2" }, index + 1, ". ", kolHumanDisplayName({ display_name: row.kol_name, handle: row.handle }, isCompany ? "官方账号" : "Creator")),
                   e("div", { className: "truncate text-[10px] text-muted" }, row.platform || "unknown", row.title ? ` · ${shortText(row.title, 54)}` : "")
                 ),
                 e("div", { className: "shrink-0 text-right" },

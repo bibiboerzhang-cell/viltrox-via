@@ -1,5 +1,6 @@
 import type { VkpiKolPoolItem } from "../../../domains/kol";
 import { normalizeCountryCode } from "./data/countryInfo";
+import { kolHumanDisplayName } from "./lib/kolIdentity";
 
 const GEO_A = new Set(["US", "CA", "UK", "DE", "JP", "AU", "SE", "NL", "KR", "SG"]);
 const GEO_B = new Set(["FR", "IT", "ES", "AT", "CH", "BE", "TW", "HK", "MY", "AE", "IE", "RU", "ZA", "NZ"]);
@@ -242,7 +243,10 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
     const evidenceVideos = representativeVideosFromEvidence(raw.video_evidence);
     const representativeVideos = evidenceVideos.length ? evidenceVideos : representativeVideosFrom(rawPlatformData);
     const profileUrl = String(firstValue(item.profile_url, rawIdentity.profile_url, rawPlatformData.profile_url, "") || "");
-    const displayName = String(firstValue(item.display_name, rawIdentity.display_name, item.handle, "待补全"));
+    const displayName = kolHumanDisplayName({
+      ...item,
+      display_name: firstValue(item.display_name, rawIdentity.display_name),
+    });
     const evidenceCount = numberFromRecord(rawEvidence, ["evidence_count"]);
     // 受众画像 ensemble_v1(P0):detail_bundle 透传的解析对象优先,行内 audience_estimated_json 兜底;无数据=null。
     const audienceEstimatedRaw = (raw.audience_estimated && typeof raw.audience_estimated === "object" && !Array.isArray(raw.audience_estimated))
@@ -258,6 +262,10 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       display_name: displayName,
       profile_url: profileUrl,
       email: item.email,
+      // Bulk list/workspace remains masked; a single detail projection is full
+      // for an active employee. Keep the server flag so the invite modal can
+      // distinguish a full detail item from a rolling-upgrade masked item.
+      contact_masked: item.contact_masked,
       bio: item.bio || item.viltrox_fit_reason || (evidenceCount ? `本地证据 ${evidenceCount} 条，画像待补全` : "待接入真实画像"),
       country,
       // C-fix:账户信息此前被本固定键白名单滤掉,抽屉拿不到 → 透传(后端 detail item 走 SELECT *,

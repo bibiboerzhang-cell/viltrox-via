@@ -13,6 +13,7 @@ import type {
 export type {
   Row,
   VkpiKolPoolItem,
+  VkpiKolPoolContactRevealResponse,
   VkpiKolAnalysisReadiness,
   VkpiKolEvidenceQuality,
   VkpiKolVideoAnalysisCacheEntry,
@@ -58,7 +59,7 @@ export async function listKolPool(
   if (typeof params.refreshIfStale === "boolean") query.set("refresh_if_stale", String(params.refreshIfStale));
   return apiFetch<{ items?: VkpiKolPoolItem[]; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool?${query.toString()}`,
-    {},
+    { cache: "no-store" },
     token,
   );
 }
@@ -67,7 +68,7 @@ export async function getKolPoolWorkspace(
   token: string,
   params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean } = {},
 ): Promise<VkpiKolPoolWorkspaceResponse> {
-  const query = new URLSearchParams({ limit: String(params.limit || 1200) });
+  const query = new URLSearchParams({ limit: String(params.limit || 500) });
   if (typeof params.offset === "number") query.set("offset", String(params.offset));
   if (params.search) query.set("query", params.search);
   if (params.platform) query.set("platform", params.platform);
@@ -77,7 +78,7 @@ export async function getKolPoolWorkspace(
   if (typeof params.enrichable === "boolean") query.set("enrichable", String(params.enrichable));
   return apiFetch<VkpiKolPoolWorkspaceResponse>(
     `/api/admin/vkpi/kol-pool/workspace?${query.toString()}`,
-    {},
+    { cache: "no-store" },
     token,
   );
 }
@@ -231,6 +232,7 @@ export async function enqueueAllKolVideos(
 export {
   getKolPoolItem,
   getKolPoolDetailBundle,
+  revealKolPoolContact,
   getKolPoolCompetitors,
   getKolPoolDimensions11,
   getKolPoolLlmDeepAnalysis,

@@ -1,6 +1,7 @@
 import React from "react";
 import { EmptyLine, KpiCard } from "./MarketVoicePage.modules";
 import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // SKU 360° · 图表模块族(Sku360BoardPage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage.charts / KolProfileBoardPage.charts 图形语言逐件同构
@@ -178,7 +179,7 @@ export function CreatorsBody({ creators, onOpenKol }: { creators: Row[]; onOpenK
     <div>
       {rows.map((c, i) => {
         const kid = num(c.kol_pool_id);
-        const name = str(c.display_name) || str(c.handle) || (kid !== null ? `#${kid}` : "—");
+        const name = kolHumanDisplayName(c);
         const views = num(c.total_views) ?? 0;
         return (
           <div key={i} className="flex items-center gap-1.5">
@@ -323,7 +324,7 @@ export function CandidatesBody({ card, onOpenKol }: { card: Row; onOpenKol?: (ko
         <div>
           {candidates.slice(0, 8).map((c, i) => {
             const kid = num(c.kol_pool_id);
-            const name = str(c.display_name) || str(c.handle) || (kid !== null ? `#${kid}` : "—");
+            const name = kolHumanDisplayName(c);
             const score = num(c.score) ?? 0;
             const conf = num(c.confidence);
             const risks = asArray(c.risk_flags).length;

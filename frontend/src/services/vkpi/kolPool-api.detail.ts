@@ -11,13 +11,14 @@ import type {
   VkpiKolPoolAiBrief,
   VkpiKolPoolGeminiPreflight,
   VkpiKolPoolGeminiGoNoGo,
+  VkpiKolPoolContactRevealResponse,
 } from "./kolPool-api.helpers";
 
 export async function getKolPoolItem(token: string, kolPoolId: number, refreshIfStale = true) {
   const query = new URLSearchParams({ refresh_if_stale: String(refreshIfStale) });
   return apiFetch<{ item: VkpiKolPoolItem; freshness?: VkpiKolPoolFreshness; refresh?: VkpiKolPoolRefreshState }>(
     `/api/admin/vkpi/kol-pool/${kolPoolId}?${query.toString()}`,
-    {},
+    { cache: "no-store" },
     token,
   );
 }
@@ -35,6 +36,28 @@ export async function getKolPoolDetailBundle(
   return apiFetch<VkpiKolPoolDetailBundleResponse>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/detail-bundle?${params.toString()}`,
     { cache: "no-store" },
+    token,
+  );
+}
+
+/**
+ * Rolling-upgrade compatibility for an older masked list/detail projection.
+ * Current employee projections already contain the full contact and must not
+ * call this endpoint again.
+ */
+export async function revealKolPoolContact(
+  token: string,
+  kolPoolId: string | number,
+  options: { signal?: AbortSignal } = {},
+) {
+  return apiFetch<VkpiKolPoolContactRevealResponse>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/contacts/reveal`,
+    {
+      method: "POST",
+      body: jsonBody({ confirm: true, purpose: "compose_outreach" }),
+      cache: "no-store",
+      signal: options.signal,
+    },
     token,
   );
 }

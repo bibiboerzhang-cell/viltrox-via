@@ -549,6 +549,37 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     expect(await screen.findByText("暂无聚合数据")).toBeInTheDocument();
   });
 
+  it("详情投影为 full 时直接展示完整邮箱", async () => {
+    renderDrawer({
+      item: {
+        ...baseItem,
+        email: "manager@example.com",
+        contact_masked: false,
+        other_contacts_json: JSON.stringify([
+          { contact_type: "link", platform: "ig_dm", contact_value: "@futurestudio", contact_source: "manual", confidence: 0.9 },
+        ]),
+      },
+    });
+
+    expect(await screen.findByText("manager@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Instagram")).toBeInTheDocument();
+    expect(screen.getByText("@futurestudio")).toBeInTheDocument();
+    expect(screen.queryByText("manual")).toBeNull();
+    expect(screen.queryByText("0.9")).toBeNull();
+    expect(screen.queryByText("m***@e***")).toBeNull();
+  });
+
+  it("masked seed 在单条详情读取期间不显示或复制星号地址", async () => {
+    renderDrawer({
+      item: { ...baseItem, email: "m***@e***", contact_masked: true },
+      detailLoading: true,
+    });
+
+    expect(await screen.findByText("正在读取完整联系方式…")).toBeInTheDocument();
+    expect(screen.queryByText("m***@e***")).toBeNull();
+    expect(screen.queryByRole("button", { name: /复制邮箱/ })).toBeNull();
+  });
+
   it("item=null → 组件返回 null(container 空)", () => {
     const { container } = render(
       <KOLDetailDrawer item={null} apiToken="tok" onClose={() => {}} />,

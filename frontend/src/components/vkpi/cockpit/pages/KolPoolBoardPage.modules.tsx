@@ -1,4 +1,5 @@
 import React from "react";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 import { KpiCard } from "./MarketVoicePage.modules";
 import { ModalShell } from "./MarketVoicePage.dialogs";
 
@@ -223,7 +224,7 @@ export function NeedsBody({
       <div className="space-y-0.5">
         {items.slice(0, 50).map((it: any) => (
           <div key={it.kol_pool_id} className="flex items-center gap-2 rounded-[7px] px-1.5 py-1 text-[10.5px] text-ink-2 hover:bg-card">
-            <span className="min-w-0 flex-1 truncate font-medium">{it.handle || `#${it.kol_pool_id}`}</span>
+            <span className="min-w-0 flex-1 truncate font-medium">{kolHumanDisplayName(it)}</span>
             <span className="flex-none text-muted">{it.platform}</span>
             <span className="w-12 flex-none text-right font-mono text-muted">{it.evidence_count || 0} 视频</span>
           </div>
@@ -265,7 +266,7 @@ export function QuickProjectModal({
   return (
     <ModalShell
       title="入项目"
-      sub={`${String(item.handle || item.display_name || "该 KOL")} · 加入现有项目(动作幂等,可重复确认)`}
+      sub={`${kolHumanDisplayName(item)} · 加入现有项目(动作幂等,可重复确认)`}
       onClose={onClose}
       maxWidth="max-w-[420px]"
     >

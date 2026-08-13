@@ -2,6 +2,7 @@ import pytest
 
 from app.domains.kol import lookup as lookup_domain
 from app.domains.access import scope
+from app.domains.audit import service as audit_service
 
 
 @pytest.fixture(autouse=True)
@@ -79,3 +80,61 @@ async def test_lookup_with_context_can_scan_analyze_and_attach_dossier(monkeypat
     assert payload["dossier"] == {"kol_id": 9, "ready": True}
     assert payload["scan_result"] == {"kol_id": 9, "max_posts": 80, "content_count": 2}
     assert payload["analysis_result"] == {"kol_id": 9, "product_sku": "AF35", "snapshot_id": None}
+
+
+@pytest.mark.anyio
+async def test_lookup_employee_never_returns_or_persists_plaintext_contacts(monkeypatch):
+    secret = "private@example.com"
+    finished: list[dict] = []
+    audit_calls: list[dict] = []
+
+    class RecordingTracker:
+        session_id = 41
+        task_id = "lookup-contact-boundary"
+
+        def __init__(self, *, body, staff):
+            del body, staff
+
+        def open(self):
+            return self.session_id
+
+        def set_query_text(self, result):
+            del result
+
+        def stage(self, stage):
+            del stage
+
+        def finish(self, **kwargs):
+            finished.append(kwargs)
+
+    monkeypatch.setattr(lookup_domain, "LookupTracker", RecordingTracker)
+    monkeypatch.setattr(
+        lookup_domain.claims_domain,
+        "lookup",
+        lambda body, *, staff: {"kol": {"id": 9, "contact_email": secret}},
+    )
+    monkeypatch.setattr(lookup_domain.claims_domain, "assert_kol_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        lookup_domain.account_domain,
+        "get_dossier",
+        lambda kol_id: {"kol_id": kol_id, "contact_emails": [secret]},
+    )
+    monkeypatch.setattr(
+        audit_service,
+        "log_sensitive_access",
+        lambda **kwargs: audit_calls.append(kwargs) or {"id": 1, "status": "logged"},
+    )
+    staff = {
+        "id": 17,
+        "active": 1,
+        "role": "employee",
+        "permissions": {"vkpi": "read"},
+        "organization_id": 1,
+        "organization_scope_status": "resolved",
+    }
+
+    payload = await lookup_domain.lookup_with_context({"handle": "creator"}, staff=staff)
+
+    assert secret not in str(payload)
+    assert finished and secret not in str(finished)
+    assert audit_calls == []

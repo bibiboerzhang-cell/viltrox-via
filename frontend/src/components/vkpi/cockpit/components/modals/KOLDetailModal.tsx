@@ -7,6 +7,7 @@ import { m } from "framer-motion";
 import { ExternalLink, ImageIcon, X } from "lucide-react";
 import { useT } from "../../lib/i18n";
 import { formatNumber } from "../../lib/format";
+import { kolHumanDisplayName } from "../../lib/kolIdentity";
 import { resolveKolPool, recordKolCooperation } from "../../../../../services/vkpi/kolPool-api";
 
 const e = React.createElement;
@@ -18,6 +19,7 @@ export function KOLDetailModal({ mover, onClose, onOpenKolPool, apiToken = "" }:
   const [coopBusy, setCoopBusy] = React.useState("");
   const [coopMsg, setCoopMsg] = React.useState<{ ok: boolean; text: string } | null>(null);
   const handle = mover && mover.handle ? String(mover.handle) : "";
+  const displayName = kolHumanDisplayName({ ...mover, display_name: mover?.display_name || mover?.name || mover?.handle });
   React.useEffect(() => {
     let alive = true;
     setResolved(null); setCoopMsg(null);
@@ -90,10 +92,10 @@ export function KOLDetailModal({ mover, onClose, onOpenKolPool, apiToken = "" }:
         e("div", {
           className: "shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-[16px] font-bold text-white",
           style: { background: `linear-gradient(135deg, ${mover.badgeColor}cc, ${mover.badgeColor}88)` }
-        }, (mover.handle || "K").replace("@", "").charAt(0).toUpperCase()),
+        }, displayName.charAt(0).toUpperCase()),
         e("div", { className: "flex-1 min-w-0" },
           e("div", { className: "flex items-center gap-2 mb-0.5" },
-            e("h2", { className: "text-sm font-semibold text-ink" }, mover.handle),
+            e("h2", { className: "text-sm font-semibold text-ink" }, displayName),
             mover.type === "matrix" && e("span", { className: "text-[9px] uppercase tracking-wider bg-accent-soft text-accent px-1.5 py-0.5 rounded" }, "矩阵"),
             matched && e("span", { className: "text-[9px] uppercase tracking-wider bg-good-soft text-good px-1.5 py-0.5 rounded" }, `主池 #${poolId}`)
           ),

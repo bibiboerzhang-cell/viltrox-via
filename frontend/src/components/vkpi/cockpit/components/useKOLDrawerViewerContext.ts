@@ -1,4 +1,5 @@
 import React from "react";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 type ViewerContextArgs = {
   apiToken: string;
@@ -37,7 +38,7 @@ export function useKOLDrawerViewerContext({ apiToken, item }: ViewerContextArgs)
   const handleReleaseClaim = React.useCallback(() => {
     const claimId = viewerCtx?.claim?.id;
     if (!apiToken || !claimId || releaseBusy) return;
-    const kolLabel = String(item?.display_name || item?.handle || "该 KOL");
+    const kolLabel = kolHumanDisplayName(item, "该 KOL");
     if (!window.confirm(`确认释放对「${kolLabel}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
 
     setReleaseBusy(true);

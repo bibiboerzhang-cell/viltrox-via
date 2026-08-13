@@ -58,4 +58,20 @@ describe("KolRecommendationCards metric truth labels", () => {
     expect(screen.getByText("2.10%")).toBeTruthy();
     expect(screen.queryByText("互动率")).toBeNull();
   });
+
+  it("shows a human display name and never renders an opaque YouTube channel id", () => {
+    const machineId = "UC0123456789abcdefghij";
+    renderCards({ handle: machineId, display_name: "Future Shock Studios" });
+
+    expect(screen.getByText("Future Shock Studios")).toBeTruthy();
+    expect(screen.queryByText(machineId)).toBeNull();
+  });
+
+  it("uses a neutral Creator fallback when only an opaque id is available", () => {
+    const machineId = "UC0123456789abcdefghij";
+    renderCards({ handle: machineId, display_name: "" });
+
+    expect(screen.getByText("Creator")).toBeTruthy();
+    expect(screen.queryByText(machineId)).toBeNull();
+  });
 });

@@ -6,6 +6,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { feature } from "topojson-client";
 import { useTheme } from "../../../../app/providers/ThemeProvider";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 export type RealMapBasemapMode = "local" | "online";
 
@@ -432,9 +433,9 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
       networkRef.current = [];
     };
 
-    const pinLabel = (pin: any, index: number) => String(
-      pin?.handle || pin?.name || pin?.city || pin?.country || `Point ${index + 1}`,
-    );
+    const pinLabel = (pin: any, index: number) => pin?.handle
+      ? kolHumanDisplayName(pin, `Creator ${index + 1}`)
+      : String(pin?.name || pin?.city || pin?.country || `Point ${index + 1}`);
 
     const buildMembersPopup = (cluster: MapPinCluster) => {
       const root = document.createElement("div");
@@ -578,7 +579,7 @@ export function RealMap({ pins, accentColor, onPinClick, focusTarget, defaultZoo
       
       // Hover 信息卡(DOM 覆盖层,隔离皮肤刀:头像渐变吃 token 随主题;
       // pin/连线本体的取色与渲染逻辑不动 —— 颜色由调用方传运行时 token 计算值)
-      const handle = p.handle || p.name || "";
+      const handle = p.handle ? kolHumanDisplayName(p) : p.name || "";
       const initials = handle.replace(/^@/, "").slice(0, 2).toUpperCase();
       const avatarBg = p.handle
         ? `linear-gradient(135deg, var(--ds-accent-2), var(--ds-accent))`

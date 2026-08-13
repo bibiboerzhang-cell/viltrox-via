@@ -9,22 +9,51 @@ AI Brief / Gemini preflight / bio 翻译」端点簇。本模块自带无 prefix
 from __future__ import annotations
 
 import uuid
+from functools import wraps
+from typing import Callable
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 
+from app.api.dependencies.legacy_scope import legacy_system_admin_scope_guard
 from app.api.dependencies.perms import require_tab
+from app.api.routers.vkpi_kol_contact_projection import (
+    PRIVATE_CONTACT_HEADERS as _CONTACT_REVEAL_HEADERS,
+    enforce_contact_read_rate_limit,
+)
 from app.core.logging import get_logger
+from app.core.permissions import check_kol_pool_employee_contact_permission, check_tab_permission
+from app.core.release_validation import release_validation_active
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
 from app.domains.intelligence import gemini_single_kol_preflight
+from app.services.security.rate_limiter import get_client_ip
 
 router = APIRouter(tags=["vkpi-kol-pool"])
 
 logger = get_logger(__name__)
+
+
+def _private_contact_response(fn: Callable) -> Callable:
+    """Attach no-cache headers even when the sensitive boundary raises."""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        response = kwargs.get("response")
+        if response is None:
+            response = next((item for item in args if isinstance(item, Response)), None)
+        if isinstance(response, Response):
+            response.headers.update(_CONTACT_REVEAL_HEADERS)
+        try:
+            return fn(*args, **kwargs)
+        except HTTPException as exc:
+            exc.headers = {**dict(exc.headers or {}), **_CONTACT_REVEAL_HEADERS}
+            raise
+
+    return wrapper
 
 
 def _write_service_error(
@@ -84,8 +113,18 @@ def add_kol_manual_contact(
     """人工保存 KOL 联系方式(ContactModal「保存联系方式」)。合规留痕:source='manual'、
     consent='manual_entry'、is_public_declared=FALSE、记操作人;写 vkpi_kol_pool_contacts 审计表 +
     other_contacts_json 展示快照(并集去重)。纯人工录入零外调。零触 viltrox_fit_score。"""
+    context = staff if isinstance(staff, dict) else {}
+    if not (
+        check_kol_pool_employee_contact_permission(context)
+        and check_tab_permission(context, "vkpi", "write")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "kol_contact_write_not_authorized"},
+        )
+
     from app.domains.kol import business_contact_extract
-    from app.domains.kol.contact_access import authorize_plaintext_contacts, project_pool_contact_write
+    from app.domains.kol.contact_access import project_pool_contact_write
 
     try:
         result = business_contact_extract.add_manual_contact(
@@ -95,14 +134,9 @@ def add_kol_manual_contact(
             handle=str(body.get("handle") or ""),
             staff=staff or {},
         )
-        reveal = authorize_plaintext_contacts(
-            staff,
-            resource_type="kol_pool",
-            resource_id=int(kol_pool_id),
-            page_path=f"/kol-pool/{int(kol_pool_id)}/contacts",
-            metadata={"operation": "write_response"},
-        )
-        return project_pool_contact_write(result, reveal=reveal)
+        # Write responses never disclose stored contact truth.  The client can
+        # refresh the audited single-item detail after a successful save.
+        return project_pool_contact_write(result, reveal=False)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -121,6 +155,107 @@ def add_kol_manual_contact(
                 "correlation_id": correlation_id,
             },
         ) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/contacts/reveal")
+@_private_contact_response
+def reveal_kol_contact(
+    request: Request,
+    response: Response,
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Reveal one KOL contact through the explicit audited PII boundary.
+
+    Bulk pool payloads remain masked; eligible employee detail reads disclose
+    through the same audit boundary automatically.  This endpoint is retained
+    as a rolling-client fallback for an invite flow that still has masked data.
+    """
+    response.headers.update(_CONTACT_REVEAL_HEADERS)
+    if not (
+        isinstance(body, dict)
+        and set(body) == {"confirm", "purpose"}
+        and body.get("confirm") is True
+        and body.get("purpose") == "compose_outreach"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "contact_reveal_confirmation_and_purpose_required"},
+            headers=_CONTACT_REVEAL_HEADERS,
+        )
+
+    scope_unavailable = legacy_system_admin_scope_guard(
+        staff if isinstance(staff, dict) else None,
+        surface="KOL contact reveal",
+    )
+    if scope_unavailable is not None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "contact_reveal_scope_unavailable"},
+            headers=_CONTACT_REVEAL_HEADERS,
+        )
+
+    # Authorize before touching the KOL row so an unauthorized caller cannot
+    # use 403/404 differences to enumerate which pool ids exist.
+    if not check_kol_pool_employee_contact_permission(staff if isinstance(staff, dict) else None):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "contact_reveal_not_authorized"},
+            headers=_CONTACT_REVEAL_HEADERS,
+        )
+
+    # Keep this compatibility route aligned with the GET detail boundary even
+    # when called directly (outside ReleaseValidationFenceMiddleware).  The
+    # fenced response performs no DB read, audit write, or limiter mutation.
+    if release_validation_active():
+        return {
+            "status": "masked",
+            "kol_pool_id": int(kol_pool_id),
+            "email": "",
+            "other_contacts": [],
+            "contact_masked": True,
+            "reason": "release_validation_fenced",
+        }
+
+    enforce_contact_read_rate_limit(
+        request,
+        staff if isinstance(staff, dict) else {},
+    )
+
+    from app.domains.kol import contact_reveal
+
+    try:
+        result = contact_reveal.view_kol_contact(
+            int(kol_pool_id),
+            confirm=True,
+            staff=staff if isinstance(staff, dict) else None,
+            page_path=f"/kol-pool/{int(kol_pool_id)}/contacts/reveal",
+            ip=get_client_ip(request),
+            user_agent=str(request.headers.get("user-agent") or "")[:500],
+            purpose="compose_outreach",
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="kol pool item not found",
+            headers=_CONTACT_REVEAL_HEADERS,
+        ) from exc
+
+    if (
+        isinstance(result, dict)
+        and result.get("status") == "revealed"
+        and result.get("contact_masked") is False
+    ):
+        return result
+
+    # An audit-write failure is an authorization failure.  Return no contact
+    # values at all, even masked ones, and keep the reason generic.
+    raise HTTPException(
+        status_code=403,
+        detail={"code": "contact_reveal_not_authorized"},
+        headers=_CONTACT_REVEAL_HEADERS,
+    )
 
 
 @router.post("/kol-pool/{kol_pool_id}/audience-stats/refresh")

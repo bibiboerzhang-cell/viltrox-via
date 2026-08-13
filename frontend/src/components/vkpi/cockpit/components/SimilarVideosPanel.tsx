@@ -9,6 +9,7 @@ import React from "react";
 import { Radar } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
 import { SectionFold } from "./SectionFold";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -50,7 +51,7 @@ function fmtSim(s: number | null | undefined): string {
 function SimilarRow(v: SimilarItem, i: number) {
   const sim = typeof v.similarity === "number" ? Math.max(0, Math.min(1, v.similarity)) : 0;
   const kol = v.kol || {};
-  const kolName = kol.display_name || kol.handle || (kol.id != null ? "KOL #" + kol.id : "");
+  const kolName = kolHumanDisplayName(kol as unknown as Record<string, unknown>);
   const tags = Array.isArray(v.shared_tags) ? v.shared_tags : [];
   return e("div", { key: v.evidence_id ?? i, className: "rounded border border-white/[0.05] bg-black/20 px-2 py-1.5" },
     e("div", { className: "flex items-center gap-1.5" },

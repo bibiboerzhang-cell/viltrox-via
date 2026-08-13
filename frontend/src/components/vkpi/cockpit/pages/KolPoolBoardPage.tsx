@@ -103,6 +103,7 @@ export function KolPoolBoardPage({
   error = "",
   apiToken = "",
   staff = [],
+  currentUser,
   embeddedModuleKey,
 }: {
   items?: Row[];
@@ -110,6 +111,7 @@ export function KolPoolBoardPage({
   error?: string;
   apiToken?: string;
   staff?: Row[];
+  currentUser?: { id?: string | number; name?: string; email?: string };
   embeddedModuleKey?: string;
 }) {
   const poolItems = React.useMemo(() => (Array.isArray(sourceItems) ? sourceItems : []), [sourceItems]);
@@ -128,7 +130,24 @@ export function KolPoolBoardPage({
   const [myListFilter, setMyListFilter] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [poolModalOpen, setPoolModalOpen] = React.useState(false);
-  const [contactItem, setContactItem] = React.useState<Row | null>(null);
+  const contactSessionRef = React.useRef({ token: apiToken, userId: String(currentUser?.id ?? "anonymous"), generation: 0 });
+  const currentContactUserId = String(currentUser?.id ?? "anonymous");
+  if (contactSessionRef.current.token !== apiToken || contactSessionRef.current.userId !== currentContactUserId) {
+    contactSessionRef.current = {
+      token: apiToken,
+      userId: currentContactUserId,
+      generation: contactSessionRef.current.generation + 1,
+    };
+  }
+  const contactSessionGeneration = contactSessionRef.current.generation;
+  const [contactState, setContactState] = React.useState<{ generation: number; item: Row } | null>(null);
+  const contactItem = contactState?.generation === contactSessionGeneration ? contactState.item : null;
+  const contactGenerationRef = React.useRef(contactSessionGeneration);
+  React.useEffect(() => {
+    if (contactGenerationRef.current === contactSessionGeneration) return;
+    contactGenerationRef.current = contactSessionGeneration;
+    setContactState(null);
+  }, [contactSessionGeneration]);
 
   /* ---------- 动作 hooks(actions.ts,旧页逻辑 1:1) ---------- */
   const { rememberRecallItems, avatarForItem, mergeAvatarSeed } = useRecallAvatars();
@@ -454,7 +473,7 @@ export function KolPoolBoardPage({
               onClose={closeDrawer}
               inMyList={myList.has(selectedItem.id)}
               onToggleMyList={toggleMyList}
-              onContact={(it: Row) => setContactItem(it)}
+              onContact={(it: Row) => setContactState({ generation: contactSessionGeneration, item: it })}
               staff={staff}
               onReloadDetail={reloadDetail}
             />
@@ -462,10 +481,12 @@ export function KolPoolBoardPage({
         )}
         {contactItem && (
           <ContactModal
-            key={`kol-contact-${contactItem.id || contactItem.handle || "selected"}`}
+            key={`kol-contact-${contactSessionGeneration}-${contactItem.id || contactItem.handle || "selected"}`}
             item={contactItem}
             apiToken={apiToken}
-            onClose={() => setContactItem(null)}
+            currentUser={currentUser}
+            sessionGeneration={contactSessionGeneration}
+            onClose={() => setContactState(null)}
           />
         )}
         {quickProject.target && (

@@ -15,6 +15,7 @@ import { OfficialContentLayer } from "../../pages/myKol/OfficialContentLayer";
 import { EmployeeKolLibrary } from "../../pages/myKol/MyKolPage.Sections";
 import { PendingCard } from "./MarketVoicePage.modules";
 import type { OfficialChannelAccount } from "../../pages/channels/channelTypes";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 import type { VkpiDashboardData } from "../../vkpiTypes";
 
 // MY KOL · 【M6】内嵌模块卡头收编包装族(digest/team/official/risk/rollup 五件)。
@@ -167,6 +168,9 @@ export function PersonalMatrixGroup({ accounts, apiToken }: { accounts: Official
       </div>
       {accounts.map((account) => {
         const active = openId === account.id;
+        const identity = { display_name: account.displayName, handle: account.handle, platform: account.platform };
+        const accountName = kolHumanDisplayName(identity, "个人账号");
+        const publicHandle = kolHumanPublicHandle(identity);
         return (
           <button
             key={account.id}
@@ -178,8 +182,8 @@ export function PersonalMatrixGroup({ accounts, apiToken }: { accounts: Official
             }`}
           >
             <span className={`min-w-0 flex-1 truncate ${active ? "text-accent" : "text-ink-2"}`}>
-              {account.displayName || account.handle || "个人账号"}
-              <span className="ml-1.5 text-[9.5px] text-muted">{account.platformLabel || account.platform}{account.handle ? ` · ${account.handle}` : ""}</span>
+              {accountName}
+              <span className="ml-1.5 text-[9.5px] text-muted">{account.platformLabel || account.platform}{publicHandle ? ` · ${publicHandle}` : ""}</span>
             </span>
             <span className="flex-none rounded-[6px] border border-line px-1.5 py-px text-[9px] text-muted" title="持有人(账号授权归属)">
               {account.staffName || "未分配"}

@@ -2,6 +2,7 @@ import React from "react";
 import { Drow, ModalShell, SectionLabel, platformBadge } from "./MarketVoicePage.dialogs";
 import { ContentRowLine, MATCH_FIELD_LABEL } from "./Sku360BoardPage.modules";
 import { asRow, fmtZhCompact, num, str, type Row } from "./Sku360BoardPage.charts";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // SKU 360° · 弹窗族(Sku360BoardPage 专用;骨架 ModalShell/Drow/SectionLabel 复用金样板)。
 //   ContentListModal:提及内容全量列表(范式要素⑤「全量 + 连续翻」;数据端点单次
@@ -74,7 +75,7 @@ export function ContentDetailModal({
   const match = asRow(item.match);
   const kol = asRow(item.kol);
   const kolId = num(kol?.kol_pool_id);
-  const kolName = str(kol?.display_name) || str(kol?.handle) || (kolId !== null ? `#${kolId}` : "—");
+  const kolName = kolHumanDisplayName(kol, "—");
   const url = str(item.content_url);
   const deep = item.has_deep_analysis === true;
   const fieldLabel = MATCH_FIELD_LABEL[str(match?.field)] || str(match?.field) || "—";

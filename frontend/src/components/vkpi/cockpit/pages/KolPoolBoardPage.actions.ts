@@ -211,11 +211,32 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState("");
   const selectedItemIdRef = React.useRef<any>(null);
+  const drawerTokenRef = React.useRef(apiToken);
+  const previousDrawerTokenRef = React.useRef(apiToken);
+  const drawerRequestGenerationRef = React.useRef(0);
+  const selectedItemTokenRef = React.useRef(apiToken);
+  drawerTokenRef.current = apiToken;
   selectedItemIdRef.current = selectedItem?.id ?? null;
 
+  React.useEffect(() => {
+    if (previousDrawerTokenRef.current === apiToken) return;
+    previousDrawerTokenRef.current = apiToken;
+    drawerRequestGenerationRef.current += 1;
+    selectedItemIdRef.current = null;
+    setSelectedItem(null);
+    setSelectedDetailBundle(null);
+    setDetailLoading(false);
+    setDetailError("");
+  }, [apiToken]);
+
   const openItem = React.useCallback(async (item: any) => {
+    const requestToken = apiToken;
+    const requestGeneration = ++drawerRequestGenerationRef.current;
+    const isCurrentRequest = () => drawerTokenRef.current === requestToken
+      && drawerRequestGenerationRef.current === requestGeneration;
     const seedAvatar = avatarForItem(item);
     const seedItem = mergeAvatarSeed(item, seedAvatar);
+    selectedItemTokenRef.current = requestToken;
     setSelectedItem(seedItem);
     setSelectedDetailBundle(null);
     setDetailError("");
@@ -223,21 +244,27 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
     if (!apiToken || !seedItem?.id) return;
     try {
       const bundle = await getKolPoolDetailBundle(apiToken, seedItem.id);
+      if (!isCurrentRequest()) return;
       const normalized = toCockpitKolPoolRows([bundle.item || seedItem])[0];
       setSelectedDetailBundle(bundle);
-      setSelectedItem(mergeAvatarSeed({ ...seedItem, ...normalized }, seedAvatar));
+      // Full contact fields live only on this selected detail item. Do not add
+      // them to the bulk normalizer/global KOL pool rows.
+      setSelectedItem(mergeAvatarSeed({ ...seedItem, ...(bundle.item || {}), ...normalized }, seedAvatar));
     } catch (err) {
+      if (!isCurrentRequest()) return;
       try {
         const detail = await getKolPoolItem(apiToken, seedItem.id, false);
+        if (!isCurrentRequest()) return;
         const normalized = toCockpitKolPoolRows([detail.item || seedItem])[0];
-        setSelectedItem(mergeAvatarSeed({ ...seedItem, ...normalized, freshness: detail.freshness, refresh: detail.refresh }, seedAvatar));
+        setSelectedItem(mergeAvatarSeed({ ...seedItem, ...(detail.item || {}), ...normalized, freshness: detail.freshness, refresh: detail.refresh }, seedAvatar));
       } catch (fallbackErr) {
+        if (!isCurrentRequest()) return;
         const msg = (fallbackErr as any)?.message || (fallbackErr as any)?.detail || (err as any)?.message || (err as any)?.detail || "详情接口读取失败";
         setDetailError(String(msg).slice(0, 120));
         setSelectedItem(seedItem);
       }
     } finally {
-      setDetailLoading(false);
+      if (isCurrentRequest()) setDetailLoading(false);
     }
   }, [apiToken, avatarForItem, mergeAvatarSeed]);
 
@@ -245,17 +272,22 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
   const reloadDetail = React.useCallback(async () => {
     const id = selectedItem?.id;
     if (!apiToken || !id) return;
+    const requestToken = apiToken;
+    const requestGeneration = ++drawerRequestGenerationRef.current;
     try {
       const bundle = await getKolPoolDetailBundle(apiToken, id);
       if (!bundle || !bundle.item) return;
-      if (selectedItemIdRef.current !== id) return;
+      if (drawerTokenRef.current !== requestToken
+        || drawerRequestGenerationRef.current !== requestGeneration
+        || selectedItemIdRef.current !== id) return;
       const normalized = toCockpitKolPoolRows([bundle.item])[0];
       setSelectedDetailBundle(bundle);
-      setSelectedItem((prev: any) => (prev && prev.id === id ? { ...prev, ...normalized, id } : prev));
+      setSelectedItem((prev: any) => (prev && prev.id === id ? { ...prev, ...bundle.item, ...normalized, id } : prev));
     } catch { /* 静默:重拉失败保留旧详情 */ }
   }, [apiToken, selectedItem?.id]);
 
   const closeDrawer = React.useCallback(() => {
+    drawerRequestGenerationRef.current += 1;
     setSelectedItem(null);
     setSelectedDetailBundle(null);
     setDetailLoading(false);
@@ -280,7 +312,9 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiToken]);
 
-  return { selectedItem, setSelectedItem, selectedDetailBundle, detailLoading, detailError, openItem, reloadDetail, closeDrawer };
+  const visibleSelectedItem = selectedItemTokenRef.current === apiToken ? selectedItem : null;
+  const visibleDetailBundle = selectedItemTokenRef.current === apiToken ? selectedDetailBundle : null;
+  return { selectedItem: visibleSelectedItem, setSelectedItem, selectedDetailBundle: visibleDetailBundle, detailLoading: visibleSelectedItem ? detailLoading : false, detailError: visibleSelectedItem ? detailError : "", openItem, reloadDetail, closeDrawer };
 }
 
 /* ============ 收藏管线(C3 接线 + 候选 materialize 先建档拿真 id,旧页逻辑原样) ============ */

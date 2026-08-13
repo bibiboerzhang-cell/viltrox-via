@@ -606,7 +606,12 @@ def _evidence_index(sections: dict[str, dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def build_kol_pool_intelligence_card(kol_pool_id: int, *, include_product_fit: bool = True) -> dict[str, Any]:
-    item = kol_pool.get_item(kol_pool_id)["item"]
+    item_payload = kol_pool.get_item(kol_pool_id, include_raw_for_derivation=True)
+    item = dict(item_payload.get("item") or {})
+    # Cached post/comment matching and memory derivation still need the stored
+    # provider snapshot.  Keep it only in this local derivation object; the
+    # public card emits the strict item summary and never the raw blob itself.
+    item["raw_platform_data"] = item_payload.pop("_raw_platform_data_for_derivation", None)
     competitors = _competitors(kol_pool_id)
     sections = {
         "freshness": _freshness(kol_pool_id),

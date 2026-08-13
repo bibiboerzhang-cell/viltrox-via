@@ -3,6 +3,7 @@ import { formatLocal } from "../../lib/timeLocal";
 import { EmptyLine } from "./MarketVoicePage.modules";
 import { platformBadge } from "./MarketVoicePage.dialogs";
 import { asArray, asRow, fmtZhCompact, num, str, type Row } from "./Sku360BoardPage.charts";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // SKU 360° · 板块页范式辅助件(Sku360BoardPage 专用,页内拆件不入公共桶)。
 //   通用骨架件(ModuleCard/PendingCard/EmptyLine/ErrorCard/LoadingLine/KpiCard)直接
@@ -319,7 +320,7 @@ export function FitBody({ matches }: { matches: Row[] }) {
           <div key={i} className="rounded-lg border border-line px-3 py-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className={`flex-none rounded-md border px-2 py-0.5 text-[10px] ${verdict.cls}`}>{verdict.label}</span>
-              <span className="min-w-0 truncate text-[12px] text-ink">{str(f.display_name) || str(f.handle) || `#${num(f.kol_pool_id) ?? "—"}`}</span>
+              <span className="min-w-0 truncate text-[12px] text-ink">{kolHumanDisplayName(f)}</span>
               {str(f.platform) ? (
                 <span className="flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[8.5px] font-semibold text-ink-2">{platformBadge(str(f.platform))}</span>
               ) : null}
@@ -383,7 +384,7 @@ export function ContentRowLine({ item, index, onOpen }: { item: Row; index: numb
         {str(item.title) || "—"}
       </span>
       <span className="hidden max-w-[110px] flex-none truncate text-[10px] text-muted sm:block">
-        {str(kol?.display_name) || str(kol?.handle) || "—"}
+        {kolHumanDisplayName(kol, "—")}
       </span>
       <span className="flex-none font-mono text-[9.5px] text-muted" title="曝光(实测播放)">
         {fmtZhCompact(num(item.view_count))}

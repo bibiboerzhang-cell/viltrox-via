@@ -17,7 +17,7 @@ import { normalizeAlerts, normalizeCurrentUser, normalizeCockpitDashboard } from
 // Bump this key whenever the normalized KOL row shape changes. Reusing the
 // previous key can briefly render stale rows (for example, missing fit scores)
 // after a release even though the database and API already contain the data.
-const KOL_POOL_CACHE_KEY = "cockpit.kol_pool.rows.v3";
+const KOL_POOL_CACHE_KEY = "cockpit.kol_pool.rows.v4";
 const DASHBOARD_CACHE_KEY = "cockpit.dashboard.bundle.v1";
 const KOL_POOL_REFRESH_MS = 10 * 60 * 1000;
 const DASHBOARD_REFRESH_MS = 90 * 1000;
@@ -33,6 +33,62 @@ const IDLE_AI_TODAY_REGENERATION: AiTodayRegenerationState = {
   phase: "idle",
   message: "",
 };
+
+const KOL_CONTACT_CACHE_KEYS = new Set([
+  "email",
+  "business_email",
+  "public_email",
+  "contact_email",
+  "phone",
+  "contact_phone",
+  "phone_number",
+  "mobile",
+  "whatsapp",
+  "other_contacts",
+  "other_contacts_json",
+  "contact_channels",
+  "contact_links",
+  "contact_links_json",
+  "contact_raw",
+  "contact_raw_json",
+  "raw_platform_data",
+  "contact_masked",
+]);
+
+function isKolContactCacheKey(key: string) {
+  const normalized = key.trim().toLowerCase();
+  return KOL_CONTACT_CACHE_KEYS.has(normalized)
+    || normalized.startsWith("contact_")
+    || normalized.endsWith("_email")
+    || normalized.endsWith("_phone");
+}
+
+/**
+ * Persistent runtime caches are only a display skeleton. Employee contact
+ * projections remain in live React state and are recursively removed before
+ * IndexedDB/localStorage writes (and defensively again on cache reads).
+ */
+export function sanitizeKolPoolRowsForCache<T>(value: T): T {
+  const seen = new WeakMap<object, unknown>();
+  const sanitize = (input: unknown): unknown => {
+    if (Array.isArray(input)) {
+      if (seen.has(input)) return seen.get(input);
+      const output: unknown[] = [];
+      seen.set(input, output);
+      input.forEach((entry) => output.push(sanitize(entry)));
+      return output;
+    }
+    if (!input || typeof input !== "object") return input;
+    if (seen.has(input as object)) return seen.get(input as object);
+    const output: Record<string, unknown> = {};
+    seen.set(input as object, output);
+    Object.entries(input as Record<string, unknown>).forEach(([key, entry]) => {
+      if (!isKolContactCacheKey(key)) output[key] = sanitize(entry);
+    });
+    return output;
+  };
+  return sanitize(value) as T;
+}
 
 function scopedCacheKey(base: string, token: string) {
   // Persistent cache must never cross account/session boundaries. Keep the token
@@ -129,7 +185,7 @@ async function listAllKolPoolPages(apiToken: any) {
 async function loadKolPoolWorkspaceRows(apiToken: any) {
   // 分页拉全量:此前固定 limit=1200 < 池实际行数(1353)→ 尾部约 150 条历史 KOL 永不显示
   // (用户「过往搜索的人没加进来」的真因之一)。逐页拉到取尽为止,硬上限 8000 防跑飞。
-  const pageSize = 1000;
+  const pageSize = 500;
   const hardCap = 8000;
   const rows: any[] = [];
   for (let offset = 0; offset < hardCap; offset += pageSize) {
@@ -144,9 +200,11 @@ async function loadKolPoolWorkspaceRows(apiToken: any) {
 
 export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, userEmail = "", userAuthRole = "", starredProjects }: any) {
   const [currentUser, setCurrentUser] = useState(() => normalizeCurrentUser(null, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
+  const currentUserTokenRef = useRef(apiToken);
   const [runtimeNotifications, setRuntimeNotifications] = useState<any[]>([]);
   const [runtimeReminders, setRuntimeReminders] = useState<any[]>([]);
   const [kolPoolRows, setKolPoolRows] = useState<any[]>([]);
+  const kolPoolRowsTokenRef = useRef(apiToken);
   const [kolPoolLoading, setKolPoolLoading] = useState(false);
   const [kolPoolError, setKolPoolError] = useState("");
   const [dashboardRaw, setDashboardRaw] = useState<any>({});
@@ -175,6 +233,12 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
   }, [apiToken]);
 
   useEffect(() => {
+    if (currentUserTokenRef.current !== apiToken) {
+      setCurrentUser(normalizeCurrentUser(null, { userName: "", userRole: userAuthRole || userRole, userAvatar: "", userEmail: "" }));
+    }
+  }, [apiToken, userRole, userAuthRole]);
+
+  useEffect(() => {
     setCurrentUser(normalizeCurrentUser(null, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
   }, [userName, userRole, userAvatar, userEmail, userAuthRole]);
 
@@ -188,7 +252,10 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     fetchCockpitShellBundle(apiToken)
       .then((bundle) => {
         if (cancelled) return;
-        if (bundle.user) setCurrentUser(normalizeCurrentUser(bundle.user, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
+        if (bundle.user) {
+          currentUserTokenRef.current = apiToken;
+          setCurrentUser(normalizeCurrentUser(bundle.user, { userName, userRole: userAuthRole || userRole, userAvatar, userEmail }));
+        }
         const normalized = normalizeAlerts((bundle.alerts || []) as any);
         setRuntimeNotifications(normalized.notifications);
         setRuntimeReminders(normalized.reminders);
@@ -206,6 +273,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
 
   useEffect(() => {
     if (!apiToken) {
+      kolPoolRowsTokenRef.current = apiToken;
       setKolPoolRows([]);
       setKolPoolError("未登录 / 无 token");
       return;
@@ -214,6 +282,10 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     let hasCachedValue = false;
     let cancelRefresh = () => {};
     const cacheKey = scopedCacheKey(KOL_POOL_CACHE_KEY, apiToken);
+    // Account boundary: never leave the previous user's live plaintext rows
+    // mounted while the next account's safe cache/network request is pending.
+    kolPoolRowsTokenRef.current = apiToken;
+    setKolPoolRows([]);
     setKolPoolLoading(true);
     setKolPoolError("");
 
@@ -223,7 +295,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
         if (!cancelled) {
           const rows = toCockpitKolPoolRows(response || []);
           setKolPoolRows(rows);
-          void writeCachedResource(cacheKey, rows);
+          void writeCachedResource(cacheKey, sanitizeKolPoolRowsForCache(rows));
         }
       })
       .catch((error) => {
@@ -241,7 +313,7 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
         if (cancelled) return;
         hasCachedValue = Array.isArray(cached?.value);
         if (hasCachedValue) {
-          setKolPoolRows(cached.value || []);
+          setKolPoolRows(sanitizeKolPoolRowsForCache(cached.value || []));
           setKolPoolLoading(false);
         }
         if (!hasCachedValue) setKolPoolLoading(true);
@@ -458,17 +530,22 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     }
   }, [apiToken]);
 
+  const visibleKolPoolRows = kolPoolRowsTokenRef.current === apiToken ? kolPoolRows : [];
   const dashboardRuntime = useMemo(() => normalizeCockpitDashboard({
     ...dashboardRaw,
     starredProjects: Array.isArray(starredProjects) ? starredProjects : dashboardRaw.starredProjects,
-  }, kolPoolRows), [dashboardRaw, kolPoolRows, starredProjects]);
+  }, visibleKolPoolRows), [dashboardRaw, visibleKolPoolRows, starredProjects]);
+
+  const visibleCurrentUser = currentUserTokenRef.current === apiToken
+    ? currentUser
+    : normalizeCurrentUser(null, { userName: "", userRole: userAuthRole || userRole, userAvatar: "", userEmail: "" });
 
   return {
-    currentUser,
+    currentUser: visibleCurrentUser,
     runtimeNotifications,
     setRuntimeNotifications,
     runtimeReminders,
-    kolPoolRows,
+    kolPoolRows: visibleKolPoolRows,
     kolPoolLoading,
     kolPoolError,
     dashboardRuntime,

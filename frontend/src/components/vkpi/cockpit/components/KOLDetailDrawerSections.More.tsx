@@ -10,8 +10,16 @@ import { formatNumber } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
 import { getCountryInfo } from "../data/countryInfo";
 import { fixedOrDash, pctOrZero, scoreText } from "./KOLDetailDrawer.helpers";
+import { isOpaqueKolChannelId, kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
+
+export const audienceMemberDisplayName = (entry: any) => kolHumanDisplayName({
+  display_name: entry?.display_name || entry?.name,
+  handle: entry?.handle || entry?.author_handle || entry?.author,
+  channel_id: entry?.channel_id,
+  platform: "youtube",
+}, "评论者");
 
 // ── 当前设备 & 升级机会 ──
 export function KOLDrawerDevices({ item, devices }: any) {
@@ -176,7 +184,7 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const evidenceRow = (s: any, i: number, prefix?: string) =>
     e("div", { key: i, className: "text-[9.5px] leading-snug" },
       prefix && e("span", { className: "text-slate-500" }, prefix + " "),
-      e("span", { className: "text-slate-500" }, "@" + String(s.author_handle || s.author || "—") + " "),
+      e("span", { className: "text-slate-500" }, audienceMemberDisplayName(s) + " "),
       e("span", { className: "text-white" }, String(s.text || s || "")),
       s.created_at && e("span", { className: "text-slate-600" }, " · " + String(s.created_at).slice(0, 10))
     );
@@ -347,14 +355,16 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
       fans.length > 0 && e("div", { className: "mb-2.5" },
         e("div", { className: "text-[10px] text-slate-500 mb-1" }, "铁粉 Top" + fans.length),
         e("div", { className: "space-y-1" },
-          fans.map((f: any, i: number) => e("div", { key: i, className: "flex items-center gap-2 text-[10.5px]" },
+          fans.map((f: any, i: number) => {
+            const fanName = audienceMemberDisplayName(f);
+            return e("div", { key: i, className: "flex items-center gap-2 text-[10.5px]" },
             e("span", {
               className: "w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-semibold shrink-0",
               style: { background: "rgba(6,182,212,0.15)", color: "#67e8f9" },
-            }, String(f.handle || "?").charAt(0).toUpperCase()),
-            e("span", { className: "text-white truncate max-w-[180px]" }, "@" + String(f.handle || "—")),
+            }, fanName.charAt(0).toUpperCase()),
+            e("span", { className: "text-white truncate max-w-[180px]" }, fanName),
             e("span", { className: "text-slate-500 tabular-nums" }, "×" + (Number(f.count) || 0))
-          ))
+          );})
         ),
         fans.some((f: any) => f.sample) && expandLink("fans", "查看代表评论"),
         audienceExpand === "fans" && e("div", { className: "mt-1.5 space-y-1" },
@@ -370,7 +380,7 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
           ? e("div", { className: "space-y-1" },
               overlapItems.map((o: any, i: number) => e("div", { key: i, className: "flex items-center gap-1.5 text-[10.5px]" },
                 e("span", { className: "text-slate-300" }, "与"),
-                e("span", { className: "text-white font-medium truncate max-w-[160px]" }, "@" + String(o.handle || o.display_name || ("#" + o.peer_id))),
+                e("span", { className: "text-white font-medium truncate max-w-[160px]" }, kolHumanDisplayName(o)),
                 e("span", { className: "text-slate-300" }, `共享 ${Number(o.shared_count) || 0} 位评论者`),
                 e("span", { className: "text-slate-600 text-[9px] tabular-nums ml-auto" }, "jaccard " + (Number(o.jaccard) || 0).toFixed(3))
               ))
@@ -390,7 +400,7 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
                 target: "_blank", rel: "noreferrer",
                 className: "px-1.5 py-0.5 rounded bg-white/[0.04] border border-white/[0.06] text-[10px] text-slate-200 hover:bg-white/[0.08]",
                 title: `${Number(a.shared) || 0} 位受众共同关注`,
-              }, `${String(a.title || a.channel_id)} ×${Number(a.shared) || 0}`))
+              }, `${String(a.title || (isOpaqueKolChannelId(a.channel_id, a) ? "YouTube 创作者" : a.channel_id) || "YouTube 创作者")} ×${Number(a.shared) || 0}`))
             )
           : e("div", { className: "text-[9.5px] text-slate-500" },
               `公开订阅样本不足(探 ${Number(affinity.sampled) || 0} 人,公开 ${Number(affinity.public_subs_found) || 0} 人)—— 属常态,多数用户订阅私密`

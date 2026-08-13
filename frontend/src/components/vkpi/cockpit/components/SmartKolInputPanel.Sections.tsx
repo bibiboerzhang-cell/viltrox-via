@@ -19,6 +19,7 @@ import {
   type Row,
 } from "./SmartKolInputPanel.helpers";
 import { candidateEvidenceSummary, candidateRankSummary } from "./SmartKolInputPanel.CandidateEvidence";
+import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // 纯派生器 / 常量 / 类型已再抽到 SmartKolInputPanel.derivers.ts(行为不变;展示子组件留此文件)。
 // 容器仍从本文件 import 这些名字,故此处 re-export 维持调用面不变。
@@ -679,13 +680,14 @@ function BioLine({ bio, apiToken }: { bio: string; apiToken?: string }) {
 export function ProfileInfoCard({ data, onOpen, apiToken }: { data: Row; onOpen?: () => void; apiToken?: string }) {
   const [failedAvatar, setFailedAvatar] = useState("");
   const avatar = proxiedImageUrl(cleanText(data.avatar_url));
-  const handle = cleanText(data.handle);
+  const handle = kolHumanPublicHandle(data);
   const platform = cleanText(data.platform);
-  const name = display(handle || platform || "账户");
+  const name = kolHumanDisplayName(data, platform || "创作者");
   const followers = numberLabel(data.followers);
   const posts = numberLabel(data.posts_count);
   const bio = cleanText(data.bio);
   const profileUrl = cleanText(data.profile_url);
+  const profileLinkLabel = kolHumanProfileLinkLabel(data);
   const showImg = Boolean(avatar) && failedAvatar !== avatar;
   const clickable = Boolean(onOpen);
   // P7:可点卡片打开右侧 KOL 详情抽屉。用 div+role 而非 <button>,避免把内部的真链接 <a> 嵌进按钮(非法嵌套)。
@@ -739,9 +741,10 @@ export function ProfileInfoCard({ data, onOpen, apiToken }: { data: Row; onOpen?
             target="_blank"
             rel="noreferrer noopener"
             onClick={(event) => event.stopPropagation()}
+            title={profileLinkLabel}
             className="mt-1 inline-block truncate text-[10px] text-cyan-300/80 hover:text-cyan-200 hover:underline"
           >
-            {profileUrl}
+            {profileLinkLabel}
           </a>
         ) : null}
       </div>

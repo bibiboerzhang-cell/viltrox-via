@@ -5,6 +5,7 @@
 import type { ComponentType } from "react";
 import { Calendar, Camera, PartyPopper, Ticket, Users, Video } from "lucide-react";
 import { eventCoords } from "./normalizers";
+import { kolHumanDisplayName } from "./lib/kolIdentity";
 
 // 这些 build* 入参来自后端 events / normalizeMapHierarchy(geo.ts)的产物——
 // 无类型 JSON,故用「可选字段对象 + 运行时回退」表达,而非 any。
@@ -287,7 +288,7 @@ export function buildPins({ currentMode, isAvailable, country, city, item, venue
       return [
         { ...sel, country, city, color: currentMode.pinColor, scale: 1.0, isParent: true },
         ...sel.venues.map((v) => ({
-          ...v, country, city, parentItem: sel.handle || sel.name,
+          ...v, country, city, parentItem: kolHumanDisplayName(sel),
           color: currentMode.pinColor, scale: 0.5,
         }))
       ];
@@ -296,7 +297,7 @@ export function buildPins({ currentMode, isAvailable, country, city, item, venue
     // Level 4:Venue 选中 — 单个高亮
     if (venue && sel.venues) {
       const v = sel.venues.find((x) => x.name === venue);
-      if (v) return [{ ...v, country, city, parentItem: sel.handle || sel.name, color: currentMode.pinColor, scale: 1.4 }];
+      if (v) return [{ ...v, country, city, parentItem: kolHumanDisplayName(sel), color: currentMode.pinColor, scale: 1.4 }];
     }
 
     // 没 venues,就显示 item 自己
@@ -406,7 +407,7 @@ export function buildTopListData({ currentMode, country, city, item, hierarchy, 
       title: viewMode === "kols" ? `KOLs in ${displayCityLabel(city)}` : `Dealers in ${displayCityLabel(city)}`,
       // 2026-06-14 诚实化:此层无 per-KOL 真实排序量级,改用统一占位条宽(不再 Math.random 伪造排名)。
       items: items.map((d) => ({
-        label: d.handle || d.name,
+        label: viewMode === "kols" ? kolHumanDisplayName(d) : d.name || "未命名地点",
         value: d.engagement || d.revenue,
         barWidth: 60,
       }))
@@ -418,7 +419,7 @@ export function buildTopListData({ currentMode, country, city, item, hierarchy, 
     const sel = items.find((d) => (d.handle || d.name) === item);
     if (sel && sel.venues && sel.venues.length > 0) {
       return {
-        title: `${sel.handle || sel.name} · Locations`,
+        title: `${kolHumanDisplayName(sel)} · Locations`,
         items: sel.venues.map((v) => ({
           label: v.name,
           value: v.type,
@@ -471,7 +472,7 @@ export function buildItemOptions({ city, country, hierarchy }: { city: string; c
     { key: "", label: `All in ${displayCityLabel(city)}`, sub: "City view" },
     ...items.map((d) => ({
       key: d.handle || d.name,
-      label: d.handle || d.name,
+      label: d.handle ? kolHumanDisplayName(d) : d.name || "未命名地点",
       sub: d.niche || d.type,
       badge: d.engagement || d.revenue,
     }))
@@ -486,7 +487,7 @@ export function buildVenueOptions({ item, city, country, hierarchy }: { item: st
   const sel = items.find((d) => (d.handle || d.name) === item);
   if (!sel || !sel.venues || sel.venues.length === 0) return [];
   return [
-    { key: "", label: `All venues`, sub: `${sel.handle || sel.name} all locations` },
+    { key: "", label: `All venues`, sub: `${kolHumanDisplayName(sel)} all locations` },
     ...sel.venues.map((v) => ({
       key: v.name,
       label: v.name,

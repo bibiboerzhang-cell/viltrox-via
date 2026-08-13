@@ -10,8 +10,14 @@ import { PLATFORM_ICONS_MAP } from "../../data/platformIconsMap";
 import { addKolsToProject, updateProject } from "../../../../../services/vkpi/projects-api";
 import { resolveKolPool } from "../../../../../services/vkpi/kolPool-api";
 import { ShareModal } from "../../../shared/ShareModal";
+import { kolHumanDisplayName } from "../../lib/kolIdentity";
 
 const e = React.createElement;
+
+export const projectKolDisplayName = (row: any, fallback = "Creator") => kolHumanDisplayName({
+  ...row,
+  display_name: row?.display_name || row?.name || row?.kol,
+}, fallback);
 
 export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [], apiToken, onAssigned, canManage = false }: any) {
   const { t } = useT();
@@ -40,7 +46,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
     setInviteBusy(true); setInviteMsg(null);
     try {
       await addKolsToProject(apiToken, pid, [String(kid)]);
-      setInviteMsg({ ok: true, text: `已邀请 ${inviteFound.handle || kid} 进项目` });
+      setInviteMsg({ ok: true, text: `已邀请 ${projectKolDisplayName(inviteFound)} 进项目` });
       setInviteFound(null); setInviteHandle("");
       onAssigned && onAssigned();
     } catch (err: any) { setInviteMsg({ ok: false, text: String(err && err.message ? err.message : err) }); }
@@ -198,7 +204,9 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
                   e("span", null, "KOL"), e("span", null, "平台"), e("span", null, "当前阶段"), e("span", null, t("已发")), e("span", null, "曝光"), e("span", { className: "text-right" }, t("操作"))
                 ),
                 // rows
-                project.kolList.map((k: any, i: number) => e("div", {
+                project.kolList.map((k: any, i: number) => {
+                  const displayName = projectKolDisplayName(k);
+                  return e("div", {
                   key: i,
                   className: "grid gap-2 px-3 py-2 items-center border-b border-white/[0.03] last:border-b-0 hover:bg-white/[0.02]",
                   style: { gridTemplateColumns: "2fr 1fr 1fr 0.6fr 0.8fr 0.7fr" }
@@ -207,8 +215,8 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
                     e("div", {
                       className: "shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white",
                       style: { background: k.color }
-                    }, k.avatar),
-                    e("span", { className: "text-[11px] text-white truncate" }, k.handle)
+                    }, displayName.slice(0, 1).toUpperCase()),
+                    e("span", { className: "text-[11px] text-white truncate" }, displayName)
                   ),
                   e("span", { className: "text-[10px] text-slate-400" }, k.platform),
                   e("span", { className: "text-[10px] font-medium", style: { color: k.stageColor } }, t(k.stage)),
@@ -216,7 +224,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
                   e("span", { className: "text-[10px] tabular-nums", style: { color: k.reach !== "—" ? "#fff" : "rgba(255,255,255,0.4)" } }, k.reach),
                   // 原「跟进 →」是无 onClick 的装饰链接 → 降级为纯文本状态标签,不再伪装可点。
                   e("span", { className: "text-[10px] text-slate-500 text-right" }, t(k.action))
-                ))
+                );})
               )
         ),
         // 待发布内容
@@ -233,7 +241,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
                     }, p.avatar),
                     e("div", { className: "flex-1 min-w-0" },
                       e("div", { className: "flex items-center gap-2 mb-1" },
-                        e("span", { className: "text-[11px] font-medium text-white" }, p.kol),
+                        e("span", { className: "text-[11px] font-medium text-white" }, projectKolDisplayName(p)),
                         e("span", { className: "flex items-center gap-1 text-[9px] text-slate-500" },
                           e(platCfg.Icon, { size: 10, style: { color: platCfg.color } }),
                           p.platform
@@ -287,7 +295,7 @@ export function ProjectDetailModal({ project, onClose, onOpenFullPage, staff = [
           inviteMsg && e("div", { className: `text-[10px] ${inviteMsg.ok ? "text-emerald-300" : "text-rose-300"}` }, inviteMsg.text),
           inviteFound && inviteFound.matched && e("div", { className: "rounded-md border border-emerald-500/20 bg-emerald-500/[0.04] p-3" },
             e("div", { className: "flex items-center gap-2 mb-1" },
-              e("span", { className: "text-[11px] font-medium text-white" }, inviteFound.handle || `#${inviteFound.kol_pool_id}`),
+              e("span", { className: "text-[11px] font-medium text-white" }, projectKolDisplayName(inviteFound)),
               inviteFound.platform ? e("span", { className: "text-[9px] text-slate-500" }, "· " + inviteFound.platform) : null,
               inviteFound.followers ? e("span", { className: "text-[9px] text-amber-300/90" }, "· " + inviteFound.followers + " 粉") : null,
               e("span", { className: "ml-auto text-[9px] text-emerald-300" }, "主池 #" + inviteFound.kol_pool_id)

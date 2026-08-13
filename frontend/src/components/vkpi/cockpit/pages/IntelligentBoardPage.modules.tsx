@@ -5,6 +5,7 @@ import type {
   IntelligentAnswer,
   IntelligentEvidence,
 } from "../../../../services/vkpi/intelligent-api";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // Intelligent 问答 · 板块页范式辅助件(IntelligentBoardPage 专用,页内拆件不入公共桶)。
 //   本文件住:车道徽 META / SrcChip 口径注册表 / 本机留痕仓(localStorage)/
@@ -305,7 +306,7 @@ function EvidenceBlock({ ev, onOpenKol }: { ev: IntelligentEvidence; onOpenKol?:
         ) : (
           <ul className="space-y-1">
             {results.slice(0, 20).map((r, i) => {
-              const name = String(r.name ?? r.handle ?? r.username ?? r.kol_pool_id ?? `候选 ${i + 1}`);
+              const name = kolHumanDisplayName(r, `候选 ${i + 1}`);
               const platform = r.platform ? String(r.platform) : "";
               const kolId = r.kol_pool_id != null && Number.isFinite(Number(r.kol_pool_id)) ? Number(r.kol_pool_id) : null;
               return (

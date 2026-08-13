@@ -319,24 +319,21 @@ def check_system_permission(staff: dict[str, Any], permission_key: str, level: s
 
 
 def check_contact_reveal_permission(staff: dict[str, Any] | None) -> bool:
-    """Return whether a staff context may request plaintext KOL contacts.
-
-    This permission is deliberately independent from ``vkpi:read/write``.  Old
-    permission rows that do not contain ``contacts.reveal`` therefore fail
-    closed.  Owner, the explicit ``admin``/``staff`` roles, and a caller with
-    either ``vkpi:admin`` or an explicit reveal grant are trusted to request a
-    reveal; the contact boundary still requires a successful audit write before
-    returning plaintext.
-    """
+    """Retain legacy role/grant rules behind the shared employee tenant gate."""
     context = staff if isinstance(staff, dict) else {}
-    if _staff_access_disabled(context):
+    if "active" not in context or _staff_access_disabled(context):
+        return False
+    try:
+        organization_id = int(context.get("organization_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if organization_id != 1 or str(context.get("organization_scope_status") or "") != "resolved":
         return False
     if is_owner(context):
         return True
     role = str(context.get("role") or "").strip().lower()
     if role in _CONTACT_REVEAL_ROLES or check_tab_permission(context, "vkpi", "admin"):
         return True
-
     explicit: dict[str, Any] = {}
     for raw in (context.get("permissions_json"), context.get("permissions")):
         if isinstance(raw, dict):
@@ -347,15 +344,27 @@ def check_contact_reveal_permission(staff: dict[str, Any] | None) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {
-        "1",
-        "allow",
-        "allowed",
-        "read",
-        "reveal",
-        "true",
-        "write",
-        "admin",
+        "1", "allow", "allowed", "read", "reveal", "true", "write", "admin",
     }
+
+
+def check_kol_pool_employee_contact_permission(staff: dict[str, Any] | None) -> bool:
+    """Hard tenant/RBAC gate for audited pool item/detail contact truth."""
+    context = staff if isinstance(staff, dict) else {}
+    if "active" not in context or _staff_access_disabled(context):
+        return False
+    try:
+        organization_id = int(context.get("organization_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if organization_id != 1 or str(context.get("organization_scope_status") or "") != "resolved":
+        return False
+    explicit: dict[str, str] = {}
+    for raw in (context.get("permissions_json"), context.get("permissions")):
+        explicit.update(_parse_permissions(raw))
+    if str(explicit.get("board.kol-pool") or "").strip().lower() == "none":
+        return False
+    return check_tab_permission(context, "vkpi", "read") and check_board_permission(context, {"kol-pool"})
 
 
 def staff_context_for_user(user: dict[str, Any] | None) -> dict[str, Any]:

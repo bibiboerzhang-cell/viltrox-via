@@ -15,6 +15,7 @@ import { CHIP, CHIP_OFF, CHIP_ON, MINI_BADGE, useKolEvidenceStats, V_TIER_META }
 import { useWorkflowRunsStream } from "../useWorkflowRunsStream";
 import { formatLocal } from "../../lib/timeLocal";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 import type { TaskQueueItem } from "../../../../services/vkpi/tasks-api";
 import {
   classifyVideoRow,
@@ -413,9 +414,7 @@ const ACTIVITY_MAX_ROWS = 8;
 
 function activityTargetText(task: TaskQueueItem): string {
   const target = (task.target && typeof task.target === "object" ? task.target : {}) as Row;
-  return (
-    String(target.label || target.handle || target.display_name || target.target_id || "").trim() || "未命名任务"
-  );
+  return kolHumanDisplayName({ ...target, display_name: target.label || target.display_name }, "KOL 任务");
 }
 
 // KOL 主体定位(TaskProgressBoard 同口径):video/评论任务在 target.kol_pool_id;
@@ -789,7 +788,7 @@ function WallThumb({ video }: { video: VkpiRecentVideoItem }) {
 function WallVideoCard({ video, tier, fallbackKolName }: { video: VkpiRecentVideoItem; tier: VContentTier; fallbackKolName?: string }) {
   const eid = Number(video.evidence_id ?? video.id) || 0;
   const title = String(video.title || video.video_title || "未命名视频");
-  const kolName = String(video.kol_name || fallbackKolName || video.kol_handle || "—");
+  const kolName = kolHumanDisplayName({ display_name: video.kol_name || fallbackKolName, handle: video.kol_handle }, "Creator");
   const day = String(video.publish_date || video.posted_at || "").slice(0, 10);
   const meta = V_TIER_META[tier];
   const href = String(video.content_url || "");

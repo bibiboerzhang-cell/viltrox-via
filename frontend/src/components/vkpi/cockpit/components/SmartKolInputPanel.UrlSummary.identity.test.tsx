@@ -28,6 +28,7 @@ vi.mock("../../../../services/vkpi/kolPool-api", () => ({
 }));
 
 import { UrlSummary } from "./SmartKolInputPanel.UrlSummary";
+import { VideoCreatorCard } from "./SmartKolInputPanel.UrlSummary.CreatorCard";
 import { ProfileInfoCard } from "./SmartKolInputPanel.Sections";
 
 function deferred<T>() {
@@ -154,6 +155,43 @@ describe("SmartKolInputPanel URL result identity isolation", () => {
       <ProfileInfoCard data={{ handle: "account-b", avatar_url: "https://images.example/good-account-avatar.jpg" }} apiToken="token" />,
     );
     expect(document.querySelector('img[src="https://images.example/good-account-avatar.jpg"]')).toBeTruthy();
+  });
+
+  it("never exposes a YouTube UC channel id as a creator name or raw field", () => {
+    const machineId = "UC0123456789abcdefghij";
+    const profileUrl = `https://www.youtube.com/channel/${machineId}`;
+    render(
+      <VideoCreatorCard
+        creator={{ handle: machineId, channel_id: machineId, platform: "youtube", profile_url: profileUrl }}
+        metadata={{ title: "Lens review", channel_id: machineId, platform: "youtube" }}
+      />,
+    );
+
+    expect(screen.getByText("创作者")).toBeTruthy();
+    expect(screen.queryByText(machineId)).toBeNull();
+    expect(screen.getByRole("link", { name: "打开 YouTube 主页" })).toHaveAttribute("href", profileUrl);
+    const rawFields = screen.queryByRole("button", { name: /原始字段/ });
+    if (rawFields) fireEvent.click(rawFields);
+    expect(document.body.textContent).not.toContain(machineId);
+  });
+
+  it("keeps an opaque account URL usable without rendering its channel id", () => {
+    const machineId = "UC0123456789abcdefghij";
+    const profileUrl = `https://www.youtube.com/channel/${machineId}`;
+    render(
+      <ProfileInfoCard
+        data={{
+          display_name: "Future Shock Studios",
+          handle: machineId,
+          channel_id: machineId,
+          platform: "youtube",
+          profile_url: profileUrl,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "打开 YouTube 主页" })).toHaveAttribute("href", profileUrl);
+    expect(document.body.textContent).not.toContain(machineId);
   });
 
   it("ignores an old bio translation promise after switching profiles", async () => {

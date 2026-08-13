@@ -23,11 +23,12 @@ import uuid
 from urllib.parse import urlparse
 
 from app.core.logging import get_logger
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 
 from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
+from app.api.routers.vkpi_kol_contact_projection import PRIVATE_CONTACT_HEADERS, single_contact_projection
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import account_dossier as kol_account_dossier
 from app.domains.kol import account_dossier_extract as kol_account_dossier_extract
@@ -545,13 +546,25 @@ def resolve_kol_pool(
 @router.get("/kol-pool/{kol_pool_id}")
 async def get_item(
     request: Request,
+    response: Response,
     kol_pool_id: int,
     refresh_if_stale: bool = Query(default=True),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """获取单个 KOL Pool 项"""
+    response.headers.update(PRIVATE_CONTACT_HEADERS)
+    contact_visibility, projection_reason = single_contact_projection(
+        request,
+        staff if isinstance(staff, dict) else {},
+        kol_pool_id=int(kol_pool_id),
+        page_path=f"/kol-pool/{int(kol_pool_id)}",
+        surface="kol_pool_item",
+    )
     try:
-        result = kol_pool.get_item(int(kol_pool_id))
+        result = kol_pool.get_item(
+            int(kol_pool_id),
+            contact_visibility=contact_visibility,
+        )
         refresh_state = await _maybe_enqueue_refresh(
             request,
             int(kol_pool_id),
@@ -561,13 +574,16 @@ async def get_item(
         )
         result["freshness"] = refresh_state.get("freshness")
         result["refresh"] = refresh_state
+        result["contact_projection_reason"] = projection_reason
         return result
     except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="kol pool item not found", headers=PRIVATE_CONTACT_HEADERS) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/detail-bundle")
 def get_item_detail_bundle(
+    request: Request,
+    response: Response,
     kol_pool_id: int,
     # P9:此前 default=3/max=10 把账号详情抽屉钉死在"前 4 条";底层 evidence 早已物化全量,
     # 抬到 default=24/max=200,让单账号详情默认展示该账号(基本)全部视频,前端可按需再加载。
@@ -577,11 +593,25 @@ def get_item_detail_bundle(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """Read-only detail drawer bundle; does not refresh providers or touch V6 Fit."""
-    del staff
+    response.headers.update(PRIVATE_CONTACT_HEADERS)
+    contact_visibility, projection_reason = single_contact_projection(
+        request,
+        staff if isinstance(staff, dict) else {},
+        kol_pool_id=int(kol_pool_id),
+        page_path=f"/kol-pool/{int(kol_pool_id)}/detail-bundle",
+        surface="kol_pool_detail_bundle",
+    )
     try:
-        return kol_pool.detail_bundle(int(kol_pool_id), video_limit=video_limit, llm_limit=llm_limit)
+        result = kol_pool.detail_bundle(
+            int(kol_pool_id),
+            video_limit=video_limit,
+            llm_limit=llm_limit,
+            contact_visibility=contact_visibility,
+        )
+        result["contact_projection_reason"] = projection_reason
+        return result
     except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="kol pool item not found", headers=PRIVATE_CONTACT_HEADERS) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/account-dossier")

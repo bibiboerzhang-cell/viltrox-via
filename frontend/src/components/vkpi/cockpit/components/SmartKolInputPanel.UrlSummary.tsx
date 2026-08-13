@@ -29,6 +29,7 @@ import {
   getKolRecommendationCard,
   type VkpiKolPoolDetailBundleResponse,
 } from "../../../../services/vkpi/kolPool-api";
+import { containsOpaqueKolChannelId, isOpaqueKolChannelId, kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 import {
   actionDescription,
@@ -548,14 +549,17 @@ export function UrlSummary({
   // 缺值诚实留空,绝不编造粉丝数。点卡片打开右侧 KOL 详情抽屉(onOpenProfile)。
   const profileBasics: Row = {
     avatar_url: safeHttpUrl(creator.avatar_url),
-    handle: creator.display_name || creator.handle || result.handle,
+    display_name: kolHumanDisplayName({ ...creator, channel_id: creator.channel_id || result.channel_id }, "创作者"),
+    handle: kolHumanPublicHandle({ ...creator, channel_id: creator.channel_id || result.channel_id }),
     platform: creator.platform || result.platform,
     followers: creator.followers ?? creator.subscriber_count,
     posts_count: creator.posts_count ?? creator.video_count,
     bio: creator.bio || creator.description,
     profile_url: firstSafeHttpUrl(creator.profile_url, creator.channel_url, result.url?.normalized, result.url?.input),
   };
-  const profileRawFields = publicFieldRows(creator);
+  const profileRawFields = publicFieldRows(creator).filter(([key, value]) => (
+    key !== "channel_id" && !isOpaqueKolChannelId(value, creator) && !containsOpaqueKolChannelId(value, creator)
+  ));
   const hasProfileBasics = !isVideo && [
     profileBasics.avatar_url,
     profileBasics.followers,
@@ -648,8 +652,8 @@ export function UrlSummary({
             />
           ) : (
             <div className="mt-2 grid gap-1 text-[11px] text-slate-400 sm:grid-cols-2">
-              <div className="truncate">对象: <span className="text-slate-200">{display(metadata.title || creator.display_name || creator.handle || result.handle || result.video_id)}</span></div>
-              <div className="truncate">身份: <span className="text-slate-200">{display(creator.channel_id || creator.handle || result.channel_id || result.handle)}</span></div>
+              <div className="truncate">对象: <span className="text-slate-200">{display(metadata.title || kolHumanDisplayName({ ...creator, channel_id: creator.channel_id || result.channel_id }, "YouTube 创作者"))}</span></div>
+              <div className="truncate">身份: <span className="text-slate-200">{display(kolHumanPublicHandle({ ...creator, channel_id: creator.channel_id || result.channel_id }) || kolHumanDisplayName({ ...creator, channel_id: creator.channel_id || result.channel_id }, "YouTube 创作者"))}</span></div>
             </div>
           )}
           {/* P7·账号 URL 结果卡:头像 + 粉丝(+帖数/简介,有则显)+ 点开右侧详情抽屉;缺值诚实留空,不编造。 */}

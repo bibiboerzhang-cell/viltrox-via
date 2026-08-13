@@ -8,6 +8,7 @@
 import React from "react";
 import { AlertTriangle, ChevronDown, Target, Trophy } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -57,10 +58,12 @@ function StatLine(label: string, value: string, sub?: string) {
 
 // 每方案可展开名单的成员行。
 function MemberRow(m: Row, i: number) {
+  const displayName = kolHumanDisplayName(m);
+  const publicHandle = kolHumanPublicHandle(m);
   return e("div", { key: m.kol_pool_id ?? i, className: "flex items-center gap-1.5 rounded border border-white/[0.04] bg-black/20 px-1.5 py-1 text-[9.5px]" },
     e("span", { className: "shrink-0 text-[9px] tabular-nums text-slate-500" }, "#" + (i + 1)),
-    e("span", { className: "min-w-0 flex-1 truncate text-slate-200", title: `${m.display_name || ""} @${m.handle || ""}` },
-      m.display_name || m.handle || `KOL ${m.kol_pool_id}`),
+    e("span", { className: "min-w-0 flex-1 truncate text-slate-200", title: publicHandle ? `${displayName} ${publicHandle}` : displayName },
+      displayName),
     m.tier && e("span", { className: "shrink-0 rounded bg-white/[0.05] px-1 py-0.5 text-[8.5px] text-slate-400" }, String(m.tier)),
     e("span", { className: "shrink-0 tabular-nums text-amber-200/90", title: "报价 p50(区间见后端 basis)" }, fmtUsd(m.cost_usd_p50)),
     e("span", { className: "shrink-0 tabular-nums text-slate-400", title: "预计播放 p50" },

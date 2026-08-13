@@ -4,6 +4,7 @@ import { formatLocal } from "../../lib/timeLocal";
 import { ModalShell, SectionLabel, Drow, platformBadge } from "./MarketVoicePage.dialogs";
 import { SegmentThumb, Tag, TAG_TONE, fmtNum, segmentTypeMeta } from "./CreativeLibraryBoardPage.modules";
 import type { CreativeSegmentItem } from "../../../../services/vkpi/creativeLibrary-api";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // 创意资产库 · 弹窗族(金样板 = MarketVoicePage.dialogs 同构;弹窗骨架/分区件直接
 // 复用金样板 ModalShell/SectionLabel/Drow,零自造样式)。
@@ -126,7 +127,7 @@ export function SegmentDetailModal({
   }, [index, onNav]);
 
   const meta = segmentTypeMeta(item.segment_type);
-  const kolName = item.kol.display_name || item.kol.handle || (item.kol.kol_pool_id != null ? `KOL #${item.kol.kol_pool_id}` : "—");
+  const kolName = kolHumanDisplayName(item.kol as unknown as Record<string, unknown>, item.kol.kol_pool_id != null ? `KOL #${item.kol.kol_pool_id}` : "Creator");
   const uniqueVideoStyles = item.video_styles.filter((t) => !item.styles.some((s) => s.key === t.key));
 
   const steps: ProvStep[] = [];

@@ -1,5 +1,6 @@
 import { METRICS } from "./data/metrics";
 import { CURRENT_USER } from "./data/currentUser";
+import { kolHumanDisplayName } from "./lib/kolIdentity";
 // 地理/地图层级归一化纯逻辑已下沉到 domains/dashboard/geo.ts;此处再导出保持调用方 import 路径不变。
 import {
   normalizeMapHierarchy,
@@ -875,8 +876,8 @@ export function normalizeTopMovers(kolRows: RawValue = [], fitMovers: RawValue =
       const delta = number(mr.delta) ?? 0;
       return {
         id: mr.kol_pool_id,
-        handle: mr.handle || mr.name || `KOL ${index + 1}`,
-        badge: String(mr.handle || mr.name || "K").replace(/^@/, "")[0]?.toUpperCase() || "K",
+        handle: kolHumanDisplayName(mr, `KOL ${index + 1}`),
+        badge: kolHumanDisplayName(mr, "K").replace(/^@/, "")[0]?.toUpperCase() || "K",
         badgeColor: COLORS[index % COLORS.length],
         type: "pool",
         note: mr.platform || "真实 KOL Pool",
@@ -908,8 +909,8 @@ export function normalizeTopMovers(kolRows: RawValue = [], fitMovers: RawValue =
     .slice(0, 5)
     .map((item, index) => ({
       id: item.id,
-      handle: item.handle || item.display_name || `KOL ${index + 1}`,
-      badge: String(item.handle || item.display_name || "K").replace(/^@/, "")[0]?.toUpperCase() || "K",
+      handle: kolHumanDisplayName(item, `KOL ${index + 1}`),
+      badge: kolHumanDisplayName(item, "K").replace(/^@/, "")[0]?.toUpperCase() || "K",
       badgeColor: item.avatar_color || COLORS[index % COLORS.length],
       type: item.linked_main_kol_id ? "matrix" : "pool",
       note: item.industry_label || item.country || "真实 KOL Pool",
@@ -966,7 +967,6 @@ export function normalizeDashboardSourceHealth(bundle: RawValue = {}) {
     ].join("；"),
   };
 }
-
 export function normalizeCockpitDashboard(bundle: RawRecord, kolRows: RawList) {
   const dashboard = record(bundle.dashboard);
   const summary = record(dashboard.summary);

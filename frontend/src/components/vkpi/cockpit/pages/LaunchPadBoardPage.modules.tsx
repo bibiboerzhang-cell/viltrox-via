@@ -4,6 +4,7 @@ import { BarRow } from "./MarketVoicePage.charts";
 import { Drow } from "./MarketVoicePage.dialogs";
 import { CONFIDENCE_META, fmtNum, fmtUsd, type LaunchMember } from "../../../../services/vkpi/launchBoard-api";
 import { boardSeriesVals, type VkpiBoardSeriesResponse } from "../../../../services/vkpi/boardSeries-api";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // 发射台 · 板块页范式辅助件(LaunchPadBoardPage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage.modules / MyKolBoardPage.charts 同构:模块卡骨架、KPI 卡、
@@ -174,6 +175,9 @@ export function ProvNote({ children }: { children: React.ReactNode }) {
   return <div className="mt-[7px] font-mono text-[9px] text-muted">{children}</div>;
 }
 
+export const launchMemberDisplayName = (member: LaunchMember) => kolHumanDisplayName({ display_name: member.displayName, handle: member.handle, platform: member.platform });
+export const launchMemberPublicHandle = (member: LaunchMember) => kolHumanPublicHandle({ display_name: member.displayName, handle: member.handle, platform: member.platform });
+
 const keyActivate = (fn: () => void) => (ev: React.KeyboardEvent) => {
   if (ev.key === "Enter" || ev.key === " ") {
     ev.preventDefault();
@@ -193,6 +197,8 @@ export function MemberRow({
   children: React.ReactNode;
   title?: string;
 }) {
+  const displayName = launchMemberDisplayName(member);
+  const publicHandle = launchMemberPublicHandle(member);
   return (
     <div
       className={`flex min-w-0 items-center gap-2 border-b border-line py-[7px] text-[11.5px] last:border-0${
@@ -205,8 +211,8 @@ export function MemberRow({
       onKeyDown={onOpen ? keyActivate(onOpen) : undefined}
     >
       <span className="min-w-0 flex-1 truncate text-ink-2 transition-colors group-hover:text-accent">
-        {member.displayName}
-        {member.handle ? <span className="ml-1 text-[9.5px] text-muted">@{member.handle.replace(/^@/, "")}</span> : null}
+        {displayName}
+        {publicHandle ? <span className="ml-1 text-[9.5px] text-muted">@{publicHandle.replace(/^@/, "")}</span> : null}
       </span>
       {children}
     </div>
@@ -293,7 +299,7 @@ export function BudgetsBody({
         return (
           <BarRow
             key={member.kolPoolId}
-            name={member.displayName}
+            name={launchMemberDisplayName(member)}
             widthPct={ok && max > 0 && Number.isFinite(p50) ? (p50 / max) * 100 : 0}
             dashed={!ok}
             value={
@@ -426,7 +432,7 @@ export function SynergyBody({ synergy, onOpenFull }: { synergy: Row; onOpenFull:
 /* ============ ⑦ 覆盖最大化(选中/淘汰/方法 + 淘汰名单) ============ */
 export function CoverageBody({ coverage }: { coverage: Row }) {
   const dropped: any[] = Array.isArray(coverage.dropped_overlap) ? coverage.dropped_overlap : [];
-  const droppedNames = dropped.slice(0, 8).map((d) => (typeof d === "object" && d ? d.handle || d.kol_pool_id : d)).join("、");
+  const droppedNames = dropped.slice(0, 8).map((d) => kolHumanDisplayName(typeof d === "object" && d ? d : { handle: d })).join("、");
   return (
     <div>
       <Drow k="选中人数" v={String((coverage.selected || []).length || 0)} />
@@ -459,7 +465,7 @@ export function ForecastBody({ members, onOpenMember }: { members: LaunchMember[
         return (
           <BarRow
             key={member.kolPoolId}
-            name={member.displayName}
+            name={launchMemberDisplayName(member)}
             widthPct={ok && max > 0 && Number.isFinite(p50) ? (p50 / max) * 100 : 0}
             dashed={!ok}
             color="linear-gradient(90deg, var(--ds-accent-2), var(--ds-accent))"

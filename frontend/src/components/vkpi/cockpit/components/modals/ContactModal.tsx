@@ -5,20 +5,65 @@ import React, { useState } from "react";
 import { AlertTriangle, Check, Copy, ExternalLink, Loader2, Sparkles, Wand2, X } from "lucide-react";
 import { KPAvatar } from "../KPAvatar";
 import { genEmailBody, genEmailSubject } from "../../lib/email";
+import { kolHumanDisplayName, kolHumanIdentitySubtitle, kolHumanProfileLinkLabel } from "../../lib/kolIdentity";
+import { kolContactChannels, type KolContactChannel } from "../../lib/kolContacts";
 import { apiFetch } from "../../../../../services/http";
+import { revealKolPoolContact } from "../../../../../services/vkpi/kolPool-api";
 
 const e = React.createElement;
 
 // d6:关窗丢稿修复——模块级内存草稿(按 KOL id),重开同一 KOL 自动恢复;
 // 刷新页面即清(内存级,后端联系人写端点落地前的最低保障)。
-const CONTACT_DRAFTS = new Map();
+const CONTACT_DRAFT_TTL_MS = 30 * 60 * 1000;
+const CONTACT_DRAFT_MAX_ENTRIES = 20;
+const CONTACT_DRAFTS = new Map<string, { savedAt: number; value: Record<string, unknown> }>();
 
-export function ContactModal({ item, onClose, apiToken }: any) {
+function readContactDraft(key: string) {
+  const entry = CONTACT_DRAFTS.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.savedAt > CONTACT_DRAFT_TTL_MS) {
+    CONTACT_DRAFTS.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function writeContactDraft(key: string, value: Record<string, unknown>) {
+  CONTACT_DRAFTS.delete(key);
+  CONTACT_DRAFTS.set(key, { savedAt: Date.now(), value });
+  while (CONTACT_DRAFTS.size > CONTACT_DRAFT_MAX_ENTRIES) {
+    const oldestKey = CONTACT_DRAFTS.keys().next().value;
+    if (oldestKey === undefined) break;
+    CONTACT_DRAFTS.delete(oldestKey);
+  }
+}
+
+export function ContactModal({ item, onClose, apiToken, currentUser, sessionGeneration = 0 }: any) {
   if (!item) return null;
-  const hasEmail = !!item.email;
+  const sourceEmail = String(item.email || "").trim();
+  const hasEmail = Boolean(sourceEmail);
+  // A single detail projection returns plaintext to active employees that can
+  // access KOL/VKPI. Only legacy/rolling-upgrade masked rows need the audited
+  // compatibility endpoint; never re-request a contact that is already full.
+  const sourceContactIsMasked = item.contact_masked === true || sourceEmail.includes("*");
+  const sourcePlainEmail = hasEmail && !sourceContactIsMasked ? sourceEmail : "";
+  const maskedSourceEmail = sourceContactIsMasked ? sourceEmail : "联系方式已收集";
+  const needsContactReveal = Boolean(item.id && sourceContactIsMasked && (hasEmail || item.contact_masked === true));
+  const sourceContactChannels = item.contact_masked === false ? kolContactChannels(item) : [];
+  const outreachName = kolHumanDisplayName(item);
+  const outreachSubtitle = kolHumanIdentitySubtitle(item);
+  const profileLinkLabel = kolHumanProfileLinkLabel(item);
+  const currentUserEmail = String(currentUser?.email || "").trim();
+  const currentUserName = String(currentUser?.name || "").trim();
+  const hasResolvedSender = Boolean(Number(currentUser?.id) > 0 || currentUserEmail);
+  const sender = {
+    name: hasResolvedSender ? currentUserName : "",
+    email: hasResolvedSender ? currentUserEmail : "",
+  };
   const recommended = item.recommended_product_lines || [];
   const defaultProduct = recommended[0] || "Viltrox 镜头";
-  const draft = CONTACT_DRAFTS.get(item.id) || null;
+  const draftKey = `${sessionGeneration}:${currentUser?.id || sender.email || "anonymous"}:${item.id}`;
+  const draft: any = readContactDraft(draftKey);
   const [tab, setTab] = useState(draft?.tab ?? (hasEmail ? "email" : "add"));
   const [selectedProduct, setSelectedProduct] = useState(draft?.selectedProduct ?? defaultProduct);
   const [customProduct, setCustomProduct] = useState(draft?.customProduct ?? "");
@@ -30,13 +75,112 @@ export function ContactModal({ item, onClose, apiToken }: any) {
   const [saved, setSaved] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   const [subject, setSubject] = useState(draft?.subject ?? (hasEmail ? genEmailSubject(defaultProduct, item) : ""));
-  const [body, setBody] = useState(draft?.body ?? (hasEmail ? genEmailBody(defaultProduct, item) : ""));
+  const [body, setBody] = useState(draft?.body ?? (hasEmail ? genEmailBody(defaultProduct, item, sender) : ""));
   const [newEmail, setNewEmail] = useState(draft?.newEmail ?? "");
   const [newPlatform, setNewPlatform] = useState(draft?.newPlatform ?? "ig_dm");
   const [newHandle, setNewHandle] = useState(draft?.newHandle ?? "");
+  // PII boundary: revealed plaintext lives only in this mounted modal. It is
+  // deliberately excluded from CONTACT_DRAFTS, item merging and every cache.
+  const [contactEmail, setContactEmail] = useState(sourcePlainEmail);
+  const [contactChannels, setContactChannels] = useState<KolContactChannel[]>(sourceContactChannels);
+  const [contactRevealState, setContactRevealState] = useState<"idle" | "loading" | "revealed" | "masked" | "error">(
+    needsContactReveal ? "loading" : sourcePlainEmail ? "revealed" : "idle",
+  );
+  const [contactRevealError, setContactRevealError] = useState("");
+  const [revealAttempt, setRevealAttempt] = useState(0);
   React.useEffect(() => {
-    CONTACT_DRAFTS.set(item.id, { tab, selectedProduct, customProduct, showCustom, subject, body, newEmail, newPlatform, newHandle });
-  }, [item.id, tab, selectedProduct, customProduct, showCustom, subject, body, newEmail, newPlatform, newHandle]);
+    // Contact entry fields (newEmail/newHandle) are never retained. Composition
+    // text gets a short, bounded in-memory recovery window only.
+    writeContactDraft(draftKey, { tab, selectedProduct, customProduct, showCustom, subject, body, newPlatform });
+  }, [draftKey, tab, selectedProduct, customProduct, showCustom, subject, body, newPlatform]);
+
+  React.useEffect(() => {
+    let current = true;
+    const controller = new AbortController();
+    if (!needsContactReveal) {
+      setContactEmail(sourcePlainEmail);
+      setContactChannels(sourceContactChannels);
+      setContactRevealState(sourcePlainEmail ? "revealed" : "idle");
+      setContactRevealError("");
+      return () => {
+        current = false;
+        controller.abort();
+      };
+    }
+    setContactEmail("");
+    if (!apiToken) {
+      setContactRevealState("error");
+      setContactRevealError("登录状态无效，无法读取完整联系方式");
+      return () => {
+        current = false;
+        controller.abort();
+      };
+    }
+    setContactRevealState("loading");
+    setContactRevealError("");
+    void revealKolPoolContact(apiToken, item.id, { signal: controller.signal })
+      .then((result) => {
+        if (!current) return;
+        const revealedEmail = String(result?.email || "").trim();
+        const revealedChannels = kolContactChannels({ email: revealedEmail, other_contacts: result?.other_contacts });
+        if (
+          result?.status === "revealed"
+          && result?.contact_masked === false
+          && !revealedEmail.includes("*")
+        ) {
+          setContactEmail(revealedEmail);
+          setContactChannels(revealedChannels);
+          setContactRevealState("revealed");
+          setContactRevealError("");
+          return;
+        }
+        setContactEmail("");
+        setContactChannels([]);
+        setContactRevealState("masked");
+        setContactRevealError("当前账号没有查看完整联系方式的权限，或访问审计未成功");
+      })
+      .catch((error: any) => {
+        if (!current || controller.signal.aborted) return;
+        setContactEmail("");
+        setContactChannels([]);
+        setContactRevealState("error");
+        setContactRevealError(
+          Number(error?.status) === 403
+            ? "当前账号没有查看完整联系方式的权限"
+            : Number(error?.status) === 429
+              ? "完整联系方式读取过于频繁，请稍后再试"
+              : "完整联系方式读取失败，请稍后重试",
+        );
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [apiToken, item.id, needsContactReveal, revealAttempt, sourcePlainEmail]);
+
+  const closeModal = React.useCallback(() => {
+    // Explicitly drop plaintext before asking the parent to unmount the modal.
+    setContactEmail("");
+    setContactChannels([]);
+    setContactRevealError("");
+    onClose && onClose();
+  }, [onClose]);
+
+  const otherContactChannels = contactChannels.filter((contact) => contact.value !== contactEmail);
+  const renderOtherContacts = () => otherContactChannels.length > 0 && e("div", {
+    className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-2",
+  },
+    e("div", { className: "mb-1 text-[10px] text-slate-500" }, "其他已收集联系方式"),
+    otherContactChannels.map((contact) => e("div", {
+      key: `${contact.type}:${contact.value}`,
+      className: "flex items-center gap-2 py-0.5 text-[10.5px]",
+    },
+      e("span", { className: "w-[58px] shrink-0 text-slate-500" }, contact.label),
+      contact.href
+        ? e("a", { href: contact.href, target: contact.href.startsWith("http") ? "_blank" : undefined, rel: "noreferrer", className: "min-w-0 flex-1 truncate text-cyan-300" }, contact.value)
+        : e("span", { className: "min-w-0 flex-1 truncate text-slate-300" }, contact.value),
+    )),
+  );
   
   // 切换产品时,主题立即同步;正文需要用户主动点本地模板重写才覆盖。
   const onPickProduct = (p: any) => {
@@ -49,7 +193,7 @@ export function ContactModal({ item, onClose, apiToken }: any) {
     setTimeout(() => {
       const p = showCustom && customProduct ? customProduct : selectedProduct;
       setSubject(genEmailSubject(p, item));
-      setBody(genEmailBody(p, item));
+      setBody(genEmailBody(p, item, sender));
       setTemplateApplying(false);
     }, 700);
   };
@@ -61,7 +205,7 @@ export function ContactModal({ item, onClose, apiToken }: any) {
       const prod = showCustom && customProduct ? customProduct : selectedProduct;
       const res: any = await apiFetch(
         "/api/admin/vkpi/kol-pool/outreach-optimize",
-        { method: "POST", body: JSON.stringify({ kol_pool_id: item.id, kol_name: item.display_name || item.handle, product: prod, subject, body }) },
+        { method: "POST", body: JSON.stringify({ kol_pool_id: item.id, kol_name: outreachName, product: prod, subject, body }) },
         apiToken,
       );
       if (res && res.subject) setSubject(String(res.subject));
@@ -93,8 +237,8 @@ export function ContactModal({ item, onClose, apiToken }: any) {
       );
       if (res && res.status === "saved") {
         setSaved(true);
-        try { CONTACT_DRAFTS.delete(item.id); } catch (_e) { /* ignore */ }
-        setTimeout(() => { onClose && onClose(); }, 800);
+        try { CONTACT_DRAFTS.delete(draftKey); } catch (_e) { /* ignore */ }
+        setTimeout(closeModal, 800);
       } else {
         setSaveErr(res && res.reason ? String(res.reason) : "保存失败,请重试");
       }
@@ -106,7 +250,7 @@ export function ContactModal({ item, onClose, apiToken }: any) {
   return e("div", {
     className: "cockpit-modal fixed inset-0 z-[60] flex items-center justify-center p-4",
     style: { background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" },
-    onClick: onClose
+    onClick: closeModal
   },
     e("div", {
       className: "w-full max-w-[520px] rounded-xl border border-white/[0.08] bg-[#0a1020] shadow-2xl overflow-hidden",
@@ -114,12 +258,12 @@ export function ContactModal({ item, onClose, apiToken }: any) {
     },
       // Header
       e("div", { className: "px-5 py-3 border-b border-white/[0.06] flex items-center gap-3" },
-        e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size: 36 }),
+        e(KPAvatar, { name: outreachName, color: item.avatar_color, size: 36 }),
         e("div", { className: "flex-1 min-w-0" },
           e("h3", { className: "text-[13px] font-semibold text-white" }, hasEmail ? "发起合作邀请" : "添加联系方式"),
-          e("p", { className: "text-[10px] text-slate-500" }, item.handle, " · ", item.display_name)
+          e("p", { className: "text-[10px] text-slate-500" }, outreachSubtitle)
         ),
-        e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white" },
+        e("button", { onClick: closeModal, "aria-label": "关闭合作邀请", className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white" },
           e(X, { size: 13 })
         )
       ),
@@ -138,11 +282,29 @@ export function ContactModal({ item, onClose, apiToken }: any) {
       tab === "email" && hasEmail && e("div", { className: "px-5 py-4 space-y-3" },
         e("div", { className: "flex items-center gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[40px]" }, "To"),
-          e("span", { className: "text-cyan-300 flex-1 px-2 py-1 rounded bg-cyan-500/[0.05] border border-cyan-500/20" }, item.email),
+          e("span", { className: "text-cyan-300 flex-1 px-2 py-1 rounded bg-cyan-500/[0.05] border border-cyan-500/20" },
+            contactRevealState === "loading"
+              ? e("span", { className: "inline-flex items-center gap-1.5" }, e(Loader2, { size: 10, className: "animate-spin" }), "正在授权读取联系方式…")
+              : contactEmail || maskedSourceEmail,
+          ),
         ),
+        contactRevealError && e("div", {
+          role: "alert",
+          className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[10.5px] text-amber-200",
+        },
+          e("span", null, contactRevealError),
+          contactRevealState === "error" && e("button", {
+            type: "button",
+            onClick: () => setRevealAttempt((attempt) => attempt + 1),
+            className: "ml-2 underline underline-offset-2 hover:text-amber-100",
+          }, "重试"),
+        ),
+        renderOtherContacts(),
         e("div", { className: "flex items-center gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[40px]" }, "From"),
-          e("span", { className: "text-slate-300 flex-1 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06]" }, "jianbo@viltrox.com"),
+          e("span", { className: "text-slate-300 flex-1 px-2 py-1 rounded bg-white/[0.02] border border-white/[0.06]" },
+            sender.email || "未配置发件邮箱 · 复制后在邮箱客户端选择发件人",
+          ),
         ),
         // ── 产品选择器(chip + 自定义) ──
         e("div", { className: "flex items-start gap-2 text-[11px]" },
@@ -226,13 +388,14 @@ export function ContactModal({ item, onClose, apiToken }: any) {
             className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600/80 px-3 py-2 text-[11px] font-medium text-white hover:bg-purple-600"
           }, copied ? e(Check, { size: 11 }) : e(Copy, { size: 11 }), copied ? "已复制" : "复制文案"),
           e("button", {
-            onClick: onClose,
+            onClick: closeModal,
             className: "rounded-md border border-white/[0.1] px-3 py-2 text-[11px] text-slate-400 hover:bg-white/[0.04]"
           }, "取消")
         )
       ),
       // Add contact tab(没邮箱时默认显示)
       (tab === "add" || !hasEmail) && e("div", { className: "px-5 py-4 space-y-3" },
+        renderOtherContacts(),
         !hasEmail && e("div", { className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] p-2.5 text-[11px] text-amber-200 flex items-start gap-2" },
           e(AlertTriangle, { size: 12, className: "shrink-0 mt-0.5" }),
           e("div", null,
@@ -271,8 +434,9 @@ export function ContactModal({ item, onClose, apiToken }: any) {
           e("span", { className: "text-[10px] text-slate-500" }, "或直接前往:"),
           e("a", {
             href: item.profile_url, target: "_blank", rel: "noreferrer",
+            title: profileLinkLabel,
             className: "flex items-center gap-1 text-[11px] text-cyan-300 hover:text-cyan-200"
-          }, e(ExternalLink, { size: 10 }), item.profile_url.replace("https://", ""))
+          }, e(ExternalLink, { size: 10 }), profileLinkLabel)
         ),
         saveErr && e("div", { className: "rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-[10.5px] text-rose-200" }, saveErr),
         e("div", { className: "flex items-center gap-2 pt-2" },
@@ -283,7 +447,7 @@ export function ContactModal({ item, onClose, apiToken }: any) {
             className: `flex-1 flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[11px] font-medium ${saving || saved || (!newEmail.trim() && !newHandle.trim()) ? "cursor-not-allowed bg-purple-600/40 text-purple-100/70" : "bg-purple-600 text-white hover:bg-purple-500"}`
           }, e(Check, { size: 11 }), saved ? "已保存 ✓" : saving ? "保存中…" : "保存联系方式"),
           e("button", {
-            onClick: onClose,
+            onClick: closeModal,
             className: "rounded-md border border-white/[0.1] px-3 py-2 text-[11px] text-slate-400 hover:bg-white/[0.04]"
           }, "取消")
         )
