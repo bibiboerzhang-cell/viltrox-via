@@ -10,6 +10,7 @@ from app.services.cache import cache_get
 from app.platform.industry_crawlers import get_crawler
 from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
+    CONTACT_VISIBILITY_FULL,
     CONTACT_VISIBILITY_MASKED,
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
@@ -209,7 +210,10 @@ def list_pool(
     ensure_vkpi_product_industry_schema()
     safe_limit = max(1, min(500, int(limit or 100)))
     safe_offset = max(0, int(offset or 0))
-    normalized_contact_visibility = normalize_contact_visibility(contact_visibility)
+    # Bulk results are shared-cacheable and therefore always contact-safe.
+    # Plaintext is available only through audited single-item detail routes.
+    del contact_visibility
+    normalized_contact_visibility = CONTACT_VISIBILITY_MASKED
     cache_key = _kol_pool_cache_key(
         "list",
         limit=safe_limit,
@@ -333,7 +337,9 @@ def workspace(
     normalized_query = str(query or "").strip()
     normalized_data_status = str(data_status or "").strip().lower()
     normalized_sort = str(sort_by or "fit").strip().lower()
-    normalized_contact_visibility = normalize_contact_visibility(contact_visibility)
+    # Workspace pages are bulk and shared-cacheable: never cache contact truth.
+    del contact_visibility
+    normalized_contact_visibility = CONTACT_VISIBILITY_MASKED
     cache_key = _kol_pool_cache_key(
         "workspace",
         limit=safe_limit,
@@ -552,18 +558,43 @@ def summary() -> dict[str, Any]:
     return _kol_pool_cache_store(cache_key, payload)
 
 
-def get_item(kol_pool_id: int) -> dict[str, Any]:
+def get_item(
+    kol_pool_id: int,
+    *,
+    contact_visibility: str = CONTACT_VISIBILITY_MASKED,
+    include_raw_for_derivation: bool = False,
+) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     row = get_conn().execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
-    item = mask_pool_item(dict(row))
+    raw_item = dict(row)
+    visibility = normalize_contact_visibility(contact_visibility)
+    item = mask_pool_item(
+        raw_item,
+        contact_visibility=visibility,
+    )
+    if visibility == CONTACT_VISIBILITY_FULL:
+        from app.domains.kol.pool_contacts import merge_canonical_contacts
+
+        item = merge_canonical_contacts(item, conn=get_conn(), kol_pool_id=int(kol_pool_id))
     item["v6_breakdown"] = _v6_breakdown_for_item(item)
     item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
-    return {"item": item}
+    payload: dict[str, Any] = {"item": item}
+    if include_raw_for_derivation:
+        # Internal-only handoff for detail computations.  The detail bundle
+        # removes this value before constructing any API DTO.
+        payload["_raw_platform_data_for_derivation"] = raw_item.get("raw_platform_data")
+    return payload
 
 
-def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20) -> dict[str, Any]:
+def detail_bundle(
+    kol_pool_id: int,
+    *,
+    video_limit: int = 3,
+    llm_limit: int = 20,
+    contact_visibility: str = CONTACT_VISIBILITY_MASKED,
+) -> dict[str, Any]:
     """Return the read-only detail drawer bundle without provider or worker side effects."""
 
     from app.domains.analysis.cache_repo import get_analysis_cache_entries_for_targets
@@ -580,7 +611,12 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
     # when callers explicitly requested the route default of 24 videos.
     safe_video_limit = max(1, min(200, int(video_limit or 3)))
     safe_llm_limit = max(1, min(50, int(llm_limit or 20)))
-    item_payload = get_item(int(kol_pool_id))
+    item_payload = get_item(
+        int(kol_pool_id),
+        contact_visibility=contact_visibility,
+        include_raw_for_derivation=True,
+    )
+    raw_platform_data_for_derivation = item_payload.pop("_raw_platform_data_for_derivation", None)
     item = dict(item_payload.get("item") or {})
     videos = _video_evidence_for_kol(int(kol_pool_id), limit=safe_video_limit)
     item["video_evidence"] = videos
@@ -663,7 +699,9 @@ def detail_bundle(kol_pool_id: int, *, video_limit: int = 3, llm_limit: int = 20
             # 兜底:没视频深析(或分析没提到设备)时扫 bio/raw —— 很多创作者简介里写机身。
             from app.domains.kol.creator_gear import gear_from_text
 
-            _bg = gear_from_text(str(item.get("bio") or "") + " " + str(item.get("raw_platform_data") or ""))
+            _bg = gear_from_text(
+                str(item.get("bio") or "") + " " + str(raw_platform_data_for_derivation or "")
+            )
             if _bg.get("camera_body"):
                 _bg["uses_viltrox"] = any("viltrox" in ln.lower() for ln in (_bg.get("lens_brands") or []))
                 _gear = _bg

@@ -12,6 +12,7 @@ import { PlatformPill } from "./PlatformPill";
 import { V6FitBar } from "./V6FitBar";
 import { formatNumber, formatPercent } from "../lib/format";
 import { getCountryInfo } from "../data/countryInfo";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -159,13 +160,13 @@ function CardAvatar({ item, avatarUrl }: { item: any; avatarUrl?: string }) {
   if (url && !broken) {
     return e("img", {
       src: url,
-      alt: item.handle || item.display_name || "KOL",
+      alt: kolHumanDisplayName(item),
       referrerPolicy: "no-referrer",
       className: "h-9 w-9 shrink-0 rounded-full border border-white/10 object-cover",
       onError: () => setBroken(true),
     });
   }
-  return e(KPAvatar, { name: item.display_name || item.handle, color: item.avatar_color, size: 36 });
+  return e(KPAvatar, { name: kolHumanDisplayName(item), color: item.avatar_color, size: 36 });
 }
 
 // 【D3 快捷动作 2026-07-12】行内一键收藏/入项目(不用先开抽屉):可选回调,缺省=按钮
@@ -174,6 +175,8 @@ const QUICK_BTN = "flex h-6 w-6 items-center justify-center rounded-[6px] border
 
 function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl, onToggleFavorite, onAddToProject }: any) {
   const kolPoolId = realKolId(item);
+  const displayName = kolHumanDisplayName(item);
+  const publicHandle = kolHumanPublicHandle(item);
   const flag = item.country ? (getCountryInfo(item.country)?.flag || "") : "";
   // 【D2 数据密度 2026-07-12】粉丝/均播提到显眼位:mono 数字 chip(值缺席=chip 不摆,绝不编 0)。
   const statChips: Array<[string, string, string]> = [];
@@ -195,7 +198,7 @@ function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl, onTog
         onOpen(item);
       }
     },
-    title: "查看 " + (item.handle || item.display_name || "KOL") + " 详情",
+    title: "查看 " + displayName + " 详情",
     className: "group cursor-pointer rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 transition-colors hover:border-purple-400/30 hover:bg-purple-500/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400/50",
   },
     // ── 头行:头像 + handle/平台 + Fit 徽章 ──
@@ -203,12 +206,13 @@ function RecommendationCard({ item, apiToken, inMyList, onOpen, avatarUrl, onTog
       e(CardAvatar, { item, avatarUrl }),
       e("div", { className: "min-w-0 flex-1" },
         e("div", { className: "flex items-center gap-1.5" },
-          e("span", { className: "truncate text-[12px] font-medium text-white" }, item.handle || item.display_name || "—"),
+          e("span", { className: "truncate text-[12px] font-medium text-white" }, displayName),
           inMyList && e(Star, { size: 10, className: "shrink-0 text-amber-400", style: { fill: "#fbbf24" } } as any),
         ),
         e("div", { className: "mt-0.5 flex flex-wrap items-center gap-1.5" },
           e(PlatformPill, { platform: item.platform }),
           e(CandidateKindChip, { kind: item.candidate_kind, size: "xs" }),
+          publicHandle && e("span", { className: "max-w-[120px] truncate text-[9px] text-slate-500" }, publicHandle),
         ),
       ),
       e("div", { className: "shrink-0" }, e(V6FitBar, { score: item.v6_fit, kind: item.candidate_kind })),

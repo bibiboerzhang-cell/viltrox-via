@@ -9,6 +9,8 @@ import { CandidateKindChip } from "./CandidateKindChip";
 import { GeoTierChip } from "./GeoTierChip";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatPercent } from "../lib/format";
+import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
+import { kolContactChannels } from "../lib/kolContacts";
 import { COUNTRY_INFO } from "../data/countryInfo";
 import { PlatformPill } from "./PlatformPill";
 import { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOLDetailDrawer";
@@ -19,6 +21,8 @@ const e = React.createElement;
 
 // ─── Header ───
 export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onClose }: any) {
+  const displayName = kolHumanDisplayName(item);
+  const publicHandle = kolHumanPublicHandle(item);
   return e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
     e("div", { className: "flex items-start gap-3 mb-2" },
       e(KOLDetailAvatar, { item, size: 44 }),
@@ -26,10 +30,10 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
         // 标题优先人话显示名(2026-07-02:YT 频道 handle 是 UCxxxx 乱码串,顶成大标题很难看);
         // handle 与显示名不同才降为副行,相同不重复渲染。
         e("div", { className: "flex items-center gap-1.5" },
-          e("h2", { className: "text-[14px] font-semibold text-white truncate" }, item.display_name || item.handle),
+          e("h2", { className: "text-[14px] font-semibold text-white truncate" }, displayName),
           item.linked_main_kol_id && e(BadgeCheck, { size: 12, className: "text-emerald-400 shrink-0" }),
         ),
-        item.handle && item.handle !== (item.display_name || item.handle) && e("div", { className: "text-[11px] text-slate-400 truncate" }, item.handle),
+        publicHandle && e("div", { className: "text-[11px] text-slate-400 truncate" }, publicHandle),
       ),
       // V6 Fit · 紧凑右上
       item.v6_fit != null && e("div", { className: "text-right shrink-0 px-2.5 py-1 rounded-md border border-white/[0.06] bg-white/[0.02]" },
@@ -431,28 +435,39 @@ export function KOLDrawerMemorySection({ kolMemory }: any) {
 }
 
 // ── 联系方式 & 代表视频 ──
-export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVideo }: any) {
+export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVideo, detailLoading = false, detailError = "" }: any) {
+  const contacts = item.contact_masked === false ? kolContactChannels(item) : [];
+  const contactsPending = item.contact_masked !== false && detailLoading;
+  const contactsRestricted = item.contact_masked !== false && !detailLoading && Boolean(item.email || detailError);
+  const profileLinkLabel = kolHumanProfileLinkLabel(item);
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
     e("div", { className: "flex items-center gap-1.5 mb-2" },
       e(Send, { size: 11, className: "text-cyan-400" }),
       e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "联系方式 & 代表作")
     ),
-    // 联系方式
+    // 单条 detail 投影为 full 后才展示/复制。Bulk masked seed 不当真值。
     e("div", { className: "space-y-1 mb-3" },
-      e("div", { className: "flex items-center gap-2 text-[11px]" },
-        e("span", { className: "text-slate-500 w-[40px]" }, "邮箱"),
-        item.email
-          ? e("span", { className: "text-cyan-300" }, item.email)
-          : e("span", { className: "text-slate-500 italic" }, "未收集 · 邀请时需先添加"),
-        item.email && e(CopyEmailButton, { email: item.email })
-      ),
+      contactsPending
+        ? e("div", { className: "text-[11px] text-slate-400" }, "正在读取完整联系方式…")
+        : contactsRestricted
+          ? e("div", { className: "text-[11px] text-amber-300" }, detailError ? "联系方式读取受限 · 请重试" : "当前仅有脱敏摘要 · 打开邀请可重试")
+          : contacts.length > 0
+            ? contacts.map((contact) => e("div", { key: `${contact.type}:${contact.value}`, className: "flex items-center gap-2 text-[11px]" },
+                e("span", { className: "text-slate-500 w-[58px] shrink-0" }, contact.label),
+                contact.href
+                  ? e("a", { href: contact.href, target: contact.href.startsWith("http") ? "_blank" : undefined, rel: "noreferrer", className: "min-w-0 flex-1 truncate text-cyan-300 hover:text-cyan-200" }, contact.value)
+                  : e("span", { className: "min-w-0 flex-1 truncate text-cyan-300" }, contact.value),
+                !contact.masked && e(CopyEmailButton, { email: contact.value, label: contact.label })
+              ))
+            : e("div", { className: "text-[11px] text-slate-500 italic" }, "未收集 · 邀请时需先添加"),
       e("div", { className: "flex items-center gap-2 text-[11px]" },
         e("span", { className: "text-slate-500 w-[40px]" }, "主页"),
         item.profile_url
           ? e("a", {
               href: item.profile_url, target: "_blank", rel: "noreferrer",
+              title: profileLinkLabel,
               className: "text-cyan-300 hover:text-cyan-200 truncate flex-1"
-            }, item.profile_url.replace("https://", ""))
+            }, profileLinkLabel)
           : e("span", { className: "text-slate-500" }, "—")
       )
     ),
@@ -637,6 +652,7 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
 // + z 提层做双保险 —— 未来若有人把 footer 挪进滚动区,主操作行也不会被内容顶走。
 // 次级行(AI深度分析/打开主页)仍在本组件内原位跟随,不单独提层。
 export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis, buildFullState = "idle", onBuildFullProfile }: any) {
+  const profileLinkLabel = kolHumanProfileLinkLabel(item);
   return e("div", { className: "sticky bottom-0 z-20 bg-[#0a1020] px-5 py-3 border-t border-white/[0.06]" },
     // 主操作 3 按钮
     e("div", { className: "flex items-center gap-2 mb-2" },
@@ -688,8 +704,9 @@ export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onP
         buildFullState === "done" ? "已点火·陆续点亮" : buildFullState === "loading" ? "点火中" : buildFullState === "error" ? "失败·重试" : "补全档案"),
       item.profile_url && e("a", {
         href: item.profile_url, target: "_blank", rel: "noreferrer",
+        title: profileLinkLabel,
         className: "flex items-center gap-1 rounded-md border border-white/[0.06] px-2 py-1 text-[10px] text-slate-400 hover:bg-white/[0.04] hover:text-white"
-      }, e(ExternalLink, { size: 10 }), "打开主页"),
+      }, e(ExternalLink, { size: 10 }), profileLinkLabel),
     ),
     videoEnqueueState.message && e("div", {
       className: "mt-1 text-center text-[10px] leading-snug " + (

@@ -8,6 +8,7 @@
 import React from "react";
 import { FlaskConical, Loader2, Play } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -79,8 +80,8 @@ function PerKolTable(rows: PerKolRow[]) {
       e("span", { className: "w-[84px] text-right" }, "误差 挑/基"),
     ),
     shown.map((row, i) => e("div", { key: row.kol_pool_id ?? i, className: "flex items-center gap-2 text-[9.5px] tabular-nums text-slate-400" },
-      e("span", { className: "w-[128px] shrink-0 truncate text-slate-300", title: row.handle || String(row.kol_pool_id ?? "") },
-        row.handle || `#${row.kol_pool_id ?? "—"}`),
+      e("span", { className: "w-[128px] shrink-0 truncate text-slate-300", title: kolHumanDisplayName(row as unknown as Record<string, unknown>, `#${row.kol_pool_id ?? "—"}`) },
+        kolHumanDisplayName(row as unknown as Record<string, unknown>, `#${row.kol_pool_id ?? "—"}`)),
       e("span", { className: "w-[30px] text-right" }, String(row.sample_count ?? 0)),
       e("span", { className: "w-[74px] text-right" }, fmtPct(row.challenger_band_hit_rate) + " / " + fmtPct(row.baseline_band_hit_rate)),
       e("span", { className: "w-[84px] text-right" }, fmtPct(row.challenger_median_rel_error) + " / " + fmtPct(row.baseline_median_rel_error)),

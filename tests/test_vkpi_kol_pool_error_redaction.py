@@ -18,7 +18,14 @@ def test_contact_save_does_not_expose_internal_exception(monkeypatch: pytest.Mon
         vkpi_kol_pool_intel.add_kol_manual_contact(
             12,
             {"email": "creator@example.com"},
-            staff={"id": 7},
+            staff={
+                "id": 7,
+                "active": 1,
+                "role": "employee",
+                "permissions": {"vkpi": "write"},
+                "organization_id": 1,
+                "organization_scope_status": "resolved",
+            },
         )
 
     assert exc_info.value.status_code == 500

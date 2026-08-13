@@ -7,6 +7,7 @@ import type {
   SearchSessionProgress,
   SearchStageProgress,
 } from "./SmartKolInputPanel.derivers";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 function targetLabel(value: number, target: number): string {
   return target > 0 ? `${value}/${target}` : String(value);
@@ -283,7 +284,7 @@ export function ProgressiveSearchStageCard({ progress }: { progress: SearchSessi
   const currentLabel = progress.requestedTasksTerminal ? "最近处理" : "当前处理";
   const currentName = [
     progress.currentItem?.rank ? `#${progress.currentItem.rank}` : "",
-    progress.currentItem?.handle || "",
+    progress.currentItem ? kolHumanDisplayName(progress.currentItem, "创作者") : "",
   ].filter(Boolean).join(" · ");
   const currentStatus = progress.currentItem?.profileStatus || progress.currentItem?.status;
 

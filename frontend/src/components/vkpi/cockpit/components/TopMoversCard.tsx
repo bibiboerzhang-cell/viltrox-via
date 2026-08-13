@@ -5,6 +5,7 @@ import React from "react";
 import { m } from "framer-motion";
 import { TrendingUp } from "lucide-react";
 import { useT } from "../lib/i18n";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -31,7 +32,9 @@ export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
             "fit 快照累积中(每日快照;movers 需≥2天)",
             e("div", { className: "mt-1 text-[9px] text-muted" }, "暂无已评分 KOL 可显示")
           )
-        : movers.map((m: any, i: any) => e("div", {
+        : movers.map((m: any, i: any) => {
+          const displayName = kolHumanDisplayName({ ...m, display_name: m.display_name || m.name || m.handle });
+          return e("div", {
         key: m.handle,
         onClick: () => onMoverClick && onMoverClick(m),
         className: "flex items-center gap-2.5 rounded-md py-1.5 px-2 hover:bg-accent-soft cursor-pointer transition-colors"
@@ -44,7 +47,7 @@ export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
         // Name + note
         e("div", { className: "min-w-0 flex-1" },
           e("div", { className: "flex items-center gap-1.5" },
-            e("span", { className: "text-[12px] font-medium text-ink truncate" }, m.handle),
+            e("span", { className: "text-[12px] font-medium text-ink truncate" }, displayName),
             m.type === "matrix" && e("span", { className: "shrink-0 rounded px-1 py-0.5 text-[8px] uppercase tracking-wider bg-accent-soft text-accent" }, "矩阵")
           ),
           e("div", { className: "text-[9px] text-muted truncate" }, m.note)
@@ -57,7 +60,7 @@ export function TopMoversCard({ movers, onMoverClick, onViewAll }: any) {
           }, m.deltaFollower),
           e("div", { className: "text-[9px] text-muted tabular-nums" }, m.deltaReach)
         )
-      ))
+      );})
     ),
     e("div", { className: "mt-3 border-t border-line pt-2 flex items-center justify-between" },
       e("div", { className: "text-[9px] text-muted" }, "按 Fit 分排序 · 真实 KOL Pool(fit 变动时显 ±Δ)"),

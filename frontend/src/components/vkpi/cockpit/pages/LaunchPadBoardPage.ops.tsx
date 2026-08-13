@@ -10,6 +10,7 @@ import {
   STAGE_LABELS,
 } from "../../../../services/vkpi/launchBoard-api";
 import type { useContentReview, usePublishActions } from "./LaunchPadBoardPage.actions";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // 发射台 · 运营侧模块 body(内容排期 / 发布审批 / 发布计划 / 履约阶段 / 物料覆盖)。
 //   行语言 = 金样板 FeedRowLine 同构:平台徽 + 标题 + 状态徽 + mono 绝对时间 + ↗ 原帖;
@@ -171,6 +172,9 @@ export function ApprovalRowLine({
   const state = publish.states[key] || {};
   const status = state.approved ? "approved" : state.scheduledAt ? "scheduled" : String(item.status || "pending");
   const busy = publish.busyKey === key;
+  const accountName = item.account_handle
+    ? kolHumanDisplayName({ display_name: item.account_name, handle: item.account_handle, platform: item.platform })
+    : "";
   return (
     <div
       className="group flex min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0"
@@ -183,8 +187,8 @@ export function ApprovalRowLine({
         {platformBadge(String(item.platform || ""))}
       </span>
       {statusPill(APPROVAL_STATUS, status)}
-      <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent" title={String(item.account_handle || "")}>
-        {String(item.title || item.account_handle || `${item.source_table} #${item.source_id}`)}
+      <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent" title={accountName}>
+        {String(item.title || accountName || `${item.source_table} #${item.source_id}`)}
       </span>
       {status === "pending" && (
         <button

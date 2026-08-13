@@ -29,6 +29,7 @@ import {
 } from "../../pages/myKol/PoolEvidenceContent.helpers";
 import type { VkpiProjectRow } from "../../vkpiTypes";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // MY KOL · 弹窗族(M3:库弹窗化 + V 视频筛选;金样板 = MarketVoicePage.dialogs 的
 //   FeedListModal/FeedDetailModal 连续翻体验,ModalShell/SectionLabel 复用零重写)。
@@ -68,7 +69,15 @@ export function ReceiptLine({ msg }: { msg: FlowReceipt | null }) {
 const errText = (err: unknown, fallback: string) =>
   String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || fallback).slice(0, 100);
 
+const humanLibraryName = (row: KolLibraryRow | null | undefined) => (
+  kolHumanDisplayName(row as unknown as Record<string, unknown> | undefined)
+);
+const humanLibraryHandle = (row: KolLibraryRow | null | undefined) => (
+  kolHumanPublicHandle(row as unknown as Record<string, unknown> | undefined)
+);
+
 function KolAvatar({ row, size = "row" }: { row: KolLibraryRow; size?: "row" | "detail" }) {
+  const humanName = humanLibraryName(row);
   const resolvedSrc = proxiedImageUrl(row.avatarUrl);
   const [failed, setFailed] = React.useState(!resolvedSrc);
   React.useEffect(() => setFailed(!resolvedSrc), [resolvedSrc]);
@@ -82,10 +91,10 @@ function KolAvatar({ row, size = "row" }: { row: KolLibraryRow; size?: "row" | "
   if (failed || !resolvedSrc) {
     return (
       <span
-        aria-label={`${row.name || "KOL"} 头像暂不可用`}
+        aria-label={`${humanName} 头像暂不可用`}
         className={fallbackClass}
       >
-        {(row.name || "?").slice(0, 1).toUpperCase()}
+        {humanName.slice(0, 1).toUpperCase()}
       </span>
     );
   }
@@ -125,6 +134,8 @@ export function KolRowLine({
   /** 采集数据列(与详情弹窗同源同口径);undefined=读取中显 … */
   stats?: KolEvidenceStats;
 }) {
+  const humanName = humanLibraryName(row);
+  const publicHandle = humanLibraryHandle(row);
   const onKey = (ev: React.KeyboardEvent) => {
     if (ev.key === "Enter" || ev.key === " ") {
       ev.preventDefault();
@@ -134,13 +145,13 @@ export function KolRowLine({
   return (
     <div className="group flex min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0" role="button" tabIndex={0} onClick={() => onOpen(index)} onKeyDown={onKey}>
       {selectable ? (
-        <input type="checkbox" aria-label={`勾选 ${row.name}`} checked={selected} onChange={() => onToggleSelect?.(row.poolId)} onClick={(ev) => ev.stopPropagation()} className="h-3.5 w-3.5 flex-none accent-[var(--ds-accent)]" />
+        <input type="checkbox" aria-label={`勾选 ${humanName}`} checked={selected} onChange={() => onToggleSelect?.(row.poolId)} onClick={(ev) => ev.stopPropagation()} className="h-3.5 w-3.5 flex-none accent-[var(--ds-accent)]" />
       ) : null}
       <KolAvatar row={row} />
       <span className="min-w-[42px] flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-center text-[8.5px] font-semibold text-ink-2">{platformBadge(row.platform)}</span>
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">
-        {row.name}
-        {row.handle && row.handle !== row.name ? <span className="ml-1.5 text-[10px] text-muted">{row.handle}</span> : null}
+        {humanName}
+        {publicHandle ? <span className="ml-1.5 text-[10px] text-muted">{publicHandle}</span> : null}
       </span>
       {row.isShared ? (
         <span className={`${MINI_BADGE} border-accent-2 text-accent-2`} title={row.sharedByName ? `来自 ${row.sharedByName} 的共享` : "共享给我(只读可见)"}>共享</span>
@@ -423,6 +434,8 @@ export function KolDetailModal({
   onActionDone?: () => void;
 }) {
   const item = rows[index];
+  const humanName = humanLibraryName(item);
+  const publicHandle = humanLibraryHandle(item);
   const total = rows.length;
   const cancelledRef = React.useRef(false);
   React.useEffect(() => {
@@ -617,12 +630,12 @@ export function KolDetailModal({
   // 释放认领:viewer-context 真值(can_release)+ /claims/{id}/release;成功后重取上下文。
   const runReleaseClaim = async () => {
     if (!apiToken || !viewer?.canRelease || busyKeys.has("claim")) return;
-    if (!window.confirm(`确认释放对「${item.name}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
+    if (!window.confirm(`确认释放对「${humanName}」的认领?释放后该 KOL 可被其他成员认领。`)) return;
     setBusy("claim", true);
     try {
       const { releaseKolClaim } = await import("../../../../services/vkpi/kol-api");
       await releaseKolClaim(apiToken, viewer.claimId);
-      setMsg("claim", { text: `已释放「${item.name}」的认领(端点确认)。`, tone: "ok" });
+      setMsg("claim", { text: `已释放「${humanName}」的认领(端点确认)。`, tone: "ok" });
       setViewerTick((t) => t + 1);
       onActionDone?.();
     } catch (err) {
@@ -681,8 +694,8 @@ export function KolDetailModal({
           <KolAvatar row={item} size="detail" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="truncate text-[14px] font-semibold text-ink">{item.name}</span>
-              {item.handle && item.handle !== item.name ? <span className="text-[11px] text-muted">{item.handle}</span> : null}
+              <span className="truncate text-[14px] font-semibold text-ink">{humanName}</span>
+              {publicHandle ? <span className="text-[11px] text-muted">{publicHandle}</span> : null}
               <span className="rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[8.5px] font-semibold text-ink-2">{platformBadge(item.platform)}</span>
               {item.isShared ? <span className={`${MINI_BADGE} border-accent-2 text-accent-2`}>共享</span> : <span className={`${MINI_BADGE} border-line text-muted`}>收藏</span>}
               {viewer ? (

@@ -181,7 +181,7 @@ def test_normalize_item_preserves_zero_metric_values():
     assert item["engagement_rate"] == 0
 
 
-def test_list_pool_omits_heavy_raw_platform_data_but_detail_keeps_it(seeded_staff):
+def test_pool_api_dtos_omit_heavy_raw_platform_data(seeded_staff):
     conn = get_conn()
     now = "2026-05-01T10:00:00Z"
     handle = f"{MARKER}-raw-list"
@@ -238,7 +238,7 @@ def test_list_pool_omits_heavy_raw_platform_data_but_detail_keeps_it(seeded_staf
     )
     conn.commit()
     detail = kol_pool.get_item(row_id)["item"]
-    assert detail["raw_platform_data"] == raw_json
+    assert "raw_platform_data" not in detail
     assert detail["video_evidence"][0]["content_url"] == "https://youtube.com/watch?v=abcdefghijk"
     assert detail["video_evidence"][0]["view_count"] == 42
 

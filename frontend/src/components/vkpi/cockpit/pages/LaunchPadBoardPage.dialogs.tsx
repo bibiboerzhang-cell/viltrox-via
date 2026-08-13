@@ -2,7 +2,7 @@ import React from "react";
 import { formatLocal } from "../../lib/timeLocal";
 import { Drow, ModalShell, SectionLabel, platformBadge } from "./MarketVoicePage.dialogs";
 import { statusPill } from "./LaunchPadBoardPage.ops";
-import { ConfidenceChip } from "./LaunchPadBoardPage.modules";
+import { ConfidenceChip, launchMemberDisplayName, launchMemberPublicHandle } from "./LaunchPadBoardPage.modules";
 import {
   APPROVAL_STATUS,
   CONTENT_POST_STATUS,
@@ -12,6 +12,7 @@ import {
   type Row,
 } from "../../../../services/vkpi/launchBoard-api";
 import type { useContentReview, usePublishActions } from "./LaunchPadBoardPage.actions";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // 发射台 · 弹窗族(金样板 = MarketVoicePage.dialogs 的 FeedDetailModal 连续翻体验,
 //   ModalShell/SectionLabel/Drow 复用零重写;依赖单向:page/modules/ops → 本文件禁反向)。
@@ -91,6 +92,8 @@ export function MemberDetailModal({
   const pb: Row = member.playbook || {};
   const fcast: Row = member.forecast?.forecast || {};
   const fcOk = fcast.status === "ok" || fcast.status === "ready";
+  const memberName = launchMemberDisplayName(member);
+  const memberHandle = launchMemberPublicHandle(member);
   const openProfile = () => {
     try {
       window.sessionStorage.setItem("vkpi:kol-profile-id", String(member.kolPoolId));
@@ -104,7 +107,7 @@ export function MemberDetailModal({
     <ModalShell
       title={
         <span className="flex items-center gap-2">
-          <span className="min-w-0 truncate">{member.displayName}</span>
+          <span className="min-w-0 truncate">{memberName}</span>
           <span className="flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[9px] font-semibold text-ink-2">
             {platformBadge(member.platform)}
           </span>
@@ -113,7 +116,7 @@ export function MemberDetailModal({
       sub={
         <span className="flex flex-wrap items-center gap-2">
           <span>
-            @{member.handle.replace(/^@/, "") || "—"}
+            {memberHandle ? `@${memberHandle.replace(/^@/, "")}` : "创作者"}
             {member.country ? ` · ${member.country}` : ""}
             {member.score != null ? ` · 匹配分 ${member.score}` : ""}
           </span>
@@ -401,11 +404,15 @@ export function ApprovalDetailModal({
   const key = `${item.source_table}:${item.source_id}`;
   const state = publish.states[key] || {};
   const status = state.approved ? "approved" : state.scheduledAt ? "scheduled" : String(item.status || "pending");
+  const accountIdentity = { display_name: item.account_name, handle: item.account_handle, platform: item.platform };
+  const accountName = item.account_handle ? kolHumanDisplayName(accountIdentity) : "";
+  const accountHandle = kolHumanPublicHandle(accountIdentity);
+  const accountLabel = accountHandle ? `@${accountHandle.replace(/^@/, "")}` : accountName;
   return (
     <ModalShell
       title={
         <span className="flex items-center gap-2">
-          <span className="min-w-0 truncate">{String(item.title || item.account_handle || `审批 #${item.id}`)}</span>
+          <span className="min-w-0 truncate">{String(item.title || accountName || `审批 #${item.id}`)}</span>
           {statusPill(APPROVAL_STATUS, status)}
         </span>
       }
@@ -413,7 +420,7 @@ export function ApprovalDetailModal({
         <span className="flex flex-wrap items-center gap-2">
           <span>
             {String(item.platform || "—")}
-            {item.account_handle ? ` · ${item.account_handle}` : ""}
+            {item.account_handle ? ` · ${accountLabel}` : ""}
           </span>
           <NavBar index={index} total={total} onNav={onNav} />
         </span>

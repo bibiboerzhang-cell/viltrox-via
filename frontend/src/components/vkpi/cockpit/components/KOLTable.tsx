@@ -14,6 +14,7 @@ import { TrendDot } from "./TrendDot";
 import { V6FitBar } from "./V6FitBar";
 import { formatNumber, formatPercent } from "../lib/format";
 import { getCountryInfo } from "../data/countryInfo";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 const e = React.createElement;
 const ROW_HEIGHT = 60;
@@ -24,6 +25,8 @@ const OVERSCAN_ROWS = 8;
 // (item 引用稳定、onRowClick/myList 引用稳定、isSelected 仅选中行改动)→ 跳过重渲,
 // 只有进出视口 / 选中态变化的行才重画。稳定 key 由调用方在 map 处按 id 组合传入。
 const KOLRow = React.memo(function KOLRow({ item, isSelected, onRowClick, myList }: any) {
+  const displayName = kolHumanDisplayName(item);
+  const publicHandle = kolHumanPublicHandle(item);
   return e("tr", {
     className: isSelected ? "is-selected" : "",
     onClick: () => onRowClick(item)
@@ -33,15 +36,15 @@ const KOLRow = React.memo(function KOLRow({ item, isSelected, onRowClick, myList
       e(RefreshStateStripe, { state: item.refresh_state }),
       e("div", { className: "flex items-center gap-2.5 min-w-0", style: { paddingLeft: 4 } },
         e(KPAvatar, {
-        name: item.display_name || item.handle,
+        name: displayName,
         color: item.avatar_color,
         size: 28,
-        title: "查看 " + (item.handle || item.display_name || "KOL") + " 详情",
+        title: "查看 " + displayName + " 详情",
         onAvatarClick: () => onRowClick(item)
       }),
         e("div", { className: "min-w-0" },
           e("div", { className: "flex items-center gap-1.5" },
-            e("span", { className: "text-[12px] text-white font-medium truncate max-w-[160px]" }, item.handle),
+            e("span", { className: "text-[12px] text-white font-medium truncate max-w-[160px]" }, displayName),
             myList?.has(item.id) && e(Star, { size: 10, className: "text-amber-400 shrink-0", style: { fill: "#fbbf24" }, title: "在我的列表" } as any),
             item.linked_main_kol_id && e(BadgeCheck, { size: 11, className: "text-emerald-400 shrink-0", title: "已链接主表" } as any),
             item.devices?.has_viltrox && e("span", {
@@ -53,6 +56,7 @@ const KOLRow = React.memo(function KOLRow({ item, isSelected, onRowClick, myList
           e("div", { className: "flex items-center gap-1.5 mt-0.5 flex-wrap" },
             e(PlatformPill, { platform: item.platform }),
             e(CandidateKindChip, { kind: item.candidate_kind, size: "xs" }),
+            publicHandle && e("span", { className: "text-[10px] text-slate-500 truncate max-w-[120px]" }, publicHandle),
             e("span", { className: "text-[10px] text-slate-500 truncate max-w-[120px]" }, item.industry_label)
           )
         )
@@ -124,7 +128,7 @@ const KOLRow = React.memo(function KOLRow({ item, isSelected, onRowClick, myList
           onRowClick(item);
         },
         title: "查看详情",
-        "aria-label": "查看 " + (item.handle || item.display_name || "KOL") + " 详情",
+        "aria-label": "查看 " + displayName + " 详情",
         className: "p-1 rounded hover:bg-white/[0.06] text-slate-400 hover:text-white"
       },
         e(MoreHorizontal, { size: 13 })

@@ -1,18 +1,21 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
+import { kolHumanDisplayName } from "./kolIdentity";
 
 export function genEmailSubject(product: any, item: any) {
-  const handle = (item.handle || "").replace("@", "");
-  if (!product) return `Viltrox × ${handle} · Collaboration`;
-  if (/Cine|Cinema/i.test(product))     return `Viltrox Cine Series · ${handle} Invitation`;
-  if (/LAB$/i.test(product))            return `Viltrox × ${handle} · ${product} Partnership`;
+  const recipientName = kolHumanDisplayName(item).replace(/^@/, "");
+  if (!product) return `Viltrox × ${recipientName} · Collaboration`;
+  if (/Cine|Cinema/i.test(product))     return `Viltrox Cine Series · ${recipientName} Invitation`;
+  if (/LAB$/i.test(product))            return `Viltrox × ${recipientName} · ${product} Partnership`;
   if (/Pro$/i.test(product))            return `${product} · Partnership with Viltrox`;
   if (Array.isArray(product))           return `Viltrox Lens Collaboration · ${product.length} Product Lines`;
-  return `Viltrox × ${handle} · ${product} Collaboration`;
+  return `Viltrox × ${recipientName} · ${product} Collaboration`;
 }
 
-export function genEmailBody(product: any, item: any) {
-  const firstName = item.display_name?.split(" ")[0] || "there";
+export function genEmailBody(product: any, item: any, sender: { name?: string; email?: string } = {}) {
+  const displayName = kolHumanDisplayName(item);
+  const firstName = displayName === "Creator" ? "there" : displayName.split(" ")[0];
+  const senderName = String(sender.name || "").trim();
   const recentWork = item.representative_videos?.[0]?.title || "your recent work";
   const platform = item.platform === "youtube" ? "YouTube channel"
                  : item.platform === "instagram" ? "Instagram"
@@ -27,7 +30,7 @@ export function genEmailBody(product: any, item: any) {
   // ── Opener ──
   const opener = usedViltroxBefore
     ? `Hi ${firstName},\n\nGreat to reconnect. We loved seeing "${recentWork}" — your way of working with our glass keeps raising the bar for us.`
-    : `Hi ${firstName},\n\nI'm Jianbo from Viltrox. I've been following your ${platform} for a while — "${recentWork}" especially stuck with me.`;
+    : `Hi ${firstName},\n\n${senderName ? `I'm ${senderName} from Viltrox.` : "I'm with Viltrox Partnerships."} I've been following your ${platform} for a while — "${recentWork}" especially stuck with me.`;
   // ── Why you ──
   const reasons: string[] = [];
   if (isHighLoyalty) reasons.push("your audience's depth and consistency");
@@ -45,6 +48,8 @@ export function genEmailBody(product: any, item: any) {
   } else {
     productLine = `We'd like to explore a partnership around ${productName} — sending you a unit to play with, no strings attached, and seeing where it goes from there.`;
   }
-  const closer = `Open to a 20-min call this week to see if there's something here?\n\nBest,\nJianbo\nViltrox`;
+  const closer = senderName
+    ? `Open to a 20-min call this week to see if there's something here?\n\nBest,\n${senderName}\nViltrox`
+    : `Open to a 20-min call this week to see if there's something here?\n\nBest,\nViltrox Partnerships`;
   return `${opener}\n\n${middle}\n\n${productLine}\n\n${closer}`;
 }

@@ -3,6 +3,7 @@ import { Search, X } from "lucide-react";
 
 import { KPAvatar } from "../KPAvatar";
 import { CenterModal } from "./CenterModal";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../../lib/kolIdentity";
 
 type Row = Record<string, any>;
 
@@ -139,11 +140,12 @@ export function KolPoolAllModal({
         <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-white/[0.08] bg-white/[0.025]">
           {visibleItems.map((item) => {
             const selected = selectedItemId === item.id;
-            const handle = item.handle || item.display_name || `KOL #${item.id || "--"}`;
+            const displayName = kolHumanDisplayName(item);
+            const publicHandle = kolHumanPublicHandle(item);
             const platform = item.platform || item.platform_code || "unknown";
             return (
               <div
-                key={`${item.id || handle}-${platform}`}
+                key={`${item.id || item.handle || displayName}-${platform}`}
                 role="button"
                 tabIndex={0}
                 onClick={(event) => {
@@ -162,11 +164,11 @@ export function KolPoolAllModal({
                 }`}
               >
                 <span className="flex min-w-0 items-center gap-2.5">
-                  <KPAvatar name={item.display_name || item.handle} color={item.avatar_color} size={30} />
+                  <KPAvatar name={displayName} color={item.avatar_color} size={30} />
                   <span className="min-w-0">
-                    <span className="block truncate text-[12px] font-medium text-white">{handle}</span>
+                    <span className="block truncate text-[12px] font-medium text-white">{displayName}</span>
                     <span className="mt-0.5 block truncate text-[10px] text-slate-500">
-                      {platform} · {item.candidate_kind || item.profile_type || "真实 KOL Pool"}
+                      {platform}{publicHandle ? ` · ${publicHandle}` : ""} · {item.candidate_kind || item.profile_type || "真实 KOL Pool"}
                     </span>
                   </span>
                 </span>

@@ -32,6 +32,7 @@ import {
 } from "./KolProfileBoardPage.charts";
 import { AudienceEmbed, CoopEmbed, SignatureEmbed, VideoAnalysisEmbed } from "./KolProfileBoardPage.embeds";
 import { KolProfileHistoryModule } from "./KolProfileHistoryModule";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // KOL 档案 → 板块页范式改版(金样板 = MarketVoicePage 四件套 + MyKolBoardPage 五件套 1:1 同构)。
 //   旧 KolProfilePage.tsx 保留不删(回滚垫);功能块零丢失映射:
@@ -348,7 +349,7 @@ export function KolProfileBoardPage({
   );
 
   const item: Row | null = bundle.data?.item ? (bundle.data.item as unknown as Row) : null;
-  const displayName = str(item?.display_name) || str(item?.handle) || (kolId > 0 ? `#${kolId}` : "");
+  const displayName = kolHumanDisplayName(item, kolId > 0 ? "Creator" : "");
   const analysisSummary = asRow(asRow((bundle.data as unknown as Row)?.video_analysis)?.summary);
   const coopLabel = str(asRow(cooperation.data)?.status_label);
   const signatureLine =

@@ -5,6 +5,7 @@ import React, { useState } from "react";
 import { X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
 import { useT } from "../../lib/i18n";
+import { kolHumanDisplayName } from "../../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -37,7 +38,9 @@ export function AllMoversModal({ movers, onClose, onMoverClick }: any) {
       }, x.label))
     ),
     e("div", { className: "p-3 max-h-[60vh] overflow-y-auto space-y-1.5" },
-      sorted.map((m, i) => e("button", {
+      sorted.map((m, i) => {
+        const displayName = kolHumanDisplayName({ ...m, display_name: m.display_name || m.name || m.handle });
+        return e("button", {
         key: m.handle,
         onClick: () => { onClose(); onMoverClick && onMoverClick(m); },
         className: "w-full text-left flex items-center gap-3 rounded-md hover:bg-white/[0.04] px-2 py-2 transition-colors"
@@ -46,9 +49,9 @@ export function AllMoversModal({ movers, onClose, onMoverClick }: any) {
         e("div", {
           className: "shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white",
           style: { background: m.color || "#a855f7" }
-        }, m.avatar || m.handle.slice(1, 2).toUpperCase()),
+        }, m.avatar || displayName.slice(0, 1).toUpperCase()),
         e("div", { className: "flex-1 min-w-0" },
-          e("div", { className: "text-[12px] font-medium text-white" }, m.handle),
+          e("div", { className: "text-[12px] font-medium text-white" }, displayName),
           e("div", { className: "text-[10px] text-slate-500 truncate" }, m.reason || m.platform || "")
         ),
         e("div", { className: "text-right" },
@@ -56,7 +59,7 @@ export function AllMoversModal({ movers, onClose, onMoverClick }: any) {
             (m.deltaReach > 0 ? "+" : "") + (m.deltaReach > 1000 ? (m.deltaReach/1000).toFixed(1) + "k" : m.deltaReach)),
           m.er != null && e("div", { className: "text-[9px] text-slate-500" }, `ER ${m.er}%`)
         )
-      ))
+      );})
     )
   );
 }

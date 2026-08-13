@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.domains.analysis import cache_repo
 from app.domains.kol import analysis_readiness, audience_language, eleven_dimensions, llm_deep_analysis
+from app.domains.kol import creator_gear
 from app.domains.kol import pool as kol_pool
 
 
@@ -48,7 +51,7 @@ def test_detail_bundle_honors_route_video_limit_contract(
             for index in range(limit)
         ]
 
-    monkeypatch.setattr(kol_pool, "get_item", lambda _kol_pool_id: {"item": {"id": _kol_pool_id}})
+    monkeypatch.setattr(kol_pool, "get_item", lambda _kol_pool_id, **_kwargs: {"item": {"id": _kol_pool_id}})
     monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", fake_video_evidence)
     monkeypatch.setattr(eleven_dimensions, "load_persisted_dimensions_11", lambda _kol_pool_id: None)
     monkeypatch.setattr(
@@ -88,7 +91,7 @@ def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
             for evidence_id in target_ids
         }
 
-    monkeypatch.setattr(kol_pool, "get_item", lambda _kol_pool_id: {"item": {"id": _kol_pool_id}})
+    monkeypatch.setattr(kol_pool, "get_item", lambda _kol_pool_id, **_kwargs: {"item": {"id": _kol_pool_id}})
     monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", fake_video_evidence)
     monkeypatch.setattr(eleven_dimensions, "load_persisted_dimensions_11", lambda _kol_pool_id: None)
     monkeypatch.setattr(
@@ -114,11 +117,52 @@ def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
     assert result["video_analysis"]["summary"]["ready_count"] == 50
 
 
+def test_detail_bundle_derives_gear_from_raw_without_exposing_raw(monkeypatch):
+    secret_raw = {"profile": {"description": "Sony FX3", "email": "private@example.com"}}
+    observed_text: list[str] = []
+
+    def item_stub(_kol_pool_id: int, **kwargs):
+        assert kwargs["include_raw_for_derivation"] is True
+        return {
+            "item": {"id": _kol_pool_id, "bio": ""},
+            "_raw_platform_data_for_derivation": secret_raw,
+        }
+
+    def gear_from_text(text: str):
+        observed_text.append(text)
+        return {"camera_body": "Sony FX3", "lens_brands": []}
+
+    monkeypatch.setattr(kol_pool, "get_item", item_stub)
+    monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(eleven_dimensions, "load_persisted_dimensions_11", lambda _kol_pool_id: None)
+    monkeypatch.setattr(
+        llm_deep_analysis,
+        "get_kol_llm_deep_analysis",
+        lambda _kol_pool_id, *, limit: {"status": "empty", "count": 0, "limit": limit},
+    )
+    monkeypatch.setattr(cache_repo, "get_analysis_cache_entries_for_targets", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(creator_gear, "aggregate_creator_gear", lambda _results: {})
+    monkeypatch.setattr(creator_gear, "gear_from_text", gear_from_text)
+    monkeypatch.setattr(
+        audience_language,
+        "audience_language_for_kol",
+        lambda _kol_pool_id: {"sample_size": 0, "languages": []},
+    )
+
+    result = kol_pool.detail_bundle(13053, video_limit=24, llm_limit=20)
+
+    assert observed_text and "Sony FX3" in observed_text[0]
+    assert result["item"]["device_primary"] == "Sony FX3"
+    assert "raw_platform_data" not in result["item"]
+    assert "_raw_platform_data_for_derivation" not in result
+    assert "private@example.com" not in json.dumps(result)
+
+
 def test_detail_bundle_exposes_readiness_without_mutating_fit(monkeypatch):
     monkeypatch.setattr(
         kol_pool,
         "get_item",
-        lambda _kol_pool_id: {
+        lambda _kol_pool_id, **_kwargs: {
             "item": {
                 "id": _kol_pool_id,
                 "viltrox_fit_score": 88,
@@ -177,7 +221,9 @@ def test_detail_bundle_readiness_uses_30_active_rows_not_24_display_rows(monkeyp
     monkeypatch.setattr(
         kol_pool,
         "get_item",
-        lambda _kol_pool_id: {"item": {"id": _kol_pool_id, "updated_at": "2026-07-20T00:00:00Z"}},
+        lambda _kol_pool_id, **_kwargs: {
+            "item": {"id": _kol_pool_id, "updated_at": "2026-07-20T00:00:00Z"}
+        },
     )
     monkeypatch.setattr(
         kol_pool,

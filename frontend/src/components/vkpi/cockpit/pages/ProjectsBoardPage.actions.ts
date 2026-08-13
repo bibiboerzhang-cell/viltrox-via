@@ -18,6 +18,7 @@ import {
   type ImportKolRow,
 } from "../../pages/ProjectsPage.helpers";
 import type { ProjectsPageProps } from "../../pages/ProjectsPage.types";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 // Projects 板块页 · 动作层(金样板 LaunchPadBoardPage.actions 同构;行数纪律 ≤700/文件)。
 //   useRetroAdvance        履约闭环末棒「推进复盘」:POST /projects/{id}/content-posts/
@@ -266,11 +267,11 @@ export function useProjectsCrudActions({ apiToken, data, onLookupKol, onDeletePr
         matchedKols.push(match);
       }
       if (!matchedKols.length) {
-        throw new Error(`没有在 KOL Pool 里匹配到可追加的 KOL。未匹配：${unmatchedRows.slice(0, 5).map((row) => row.handle).join("、") || "全部"}`);
+        throw new Error(`没有在 KOL Pool 里匹配到可追加的 KOL。未匹配：${unmatchedRows.slice(0, 5).map((row) => kolHumanDisplayName({ ...row })).join("、") || "全部"}`);
       }
       await addKolsToCampaign(targetProject, matchedKols);
       const unmatchedLabel = unmatchedRows.length
-        ? `；未匹配 ${unmatchedRows.length} 行：${unmatchedRows.slice(0, 5).map((row) => row.handle).join("、")}${unmatchedRows.length > 5 ? "…" : ""}`
+        ? `；未匹配 ${unmatchedRows.length} 行：${unmatchedRows.slice(0, 5).map((row) => kolHumanDisplayName({ ...row })).join("、")}${unmatchedRows.length > 5 ? "…" : ""}`
         : "";
       setMessage(`已向「${targetProject.campaign}」追加 ${matchedKols.length} 个 KOL${unmatchedLabel}。`);
       return true;

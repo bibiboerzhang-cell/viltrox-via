@@ -330,6 +330,10 @@ def test_kol_intelligence_card_aggregates_existing_evidence_without_provider_cal
         assert card["provider_calls"] is False
         assert card["llm_calls"] is False
         assert card["write_db"] is False
+        serialized_card = json.dumps(card, ensure_ascii=False)
+        assert "_raw_platform_data_for_derivation" not in serialized_card
+        assert '"raw_platform_data":' not in serialized_card
+        assert '"videos": [' not in serialized_card
         assert card["item"]["handle"] == MARKER
         assert card["freshness"]["tier"] == "hot"
         assert card["dimensions11"]["status"] == "ready"

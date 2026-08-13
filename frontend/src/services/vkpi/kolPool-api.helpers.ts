@@ -14,6 +14,16 @@ export interface VkpiKolPoolItem {
   bio?: string;
   country?: string;
   email?: string;
+  other_contacts_json?: string | Array<Record<string, unknown>> | Record<string, unknown>;
+  contact_phone?: string;
+  phone?: string;
+  phone_number?: string;
+  mobile?: string;
+  whatsapp?: string;
+  contact_channels?: string | Array<Record<string, unknown>> | Record<string, unknown>;
+  contact_links_json?: string | Array<Record<string, unknown>> | Record<string, unknown>;
+  /** True when contact fields are a server-side redacted projection. */
+  contact_masked?: boolean;
   followers?: number;
   following?: number;
   posts_count?: number;
@@ -42,6 +52,14 @@ export interface VkpiKolPoolItem {
   analysis_readiness?: VkpiKolAnalysisReadiness | null;
   evidence_quality?: VkpiKolEvidenceQuality | null;
   claim_status?: string | null;
+}
+
+export interface VkpiKolPoolContactRevealResponse {
+  status: "revealed";
+  kol_pool_id: number;
+  email?: string;
+  other_contacts?: Array<Record<string, unknown>> | Record<string, unknown>;
+  contact_masked: false;
 }
 
 export interface VkpiKolAnalysisReadiness extends Row {

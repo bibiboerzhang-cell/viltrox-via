@@ -12,6 +12,7 @@ import React from "react";
 import { AlertTriangle, ExternalLink, Search, Sparkles } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
 import { SkeletonBlock } from "./ui/SkeletonBlock";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -84,7 +85,7 @@ function StageChips(stages: Stages) {
 
 // 单候选行:名字/平台/粉丝 + 「为何合适」一句话(无 LLM 时如实显示召回依据)。
 function CandidateRow(it: RecallItem, i: number) {
-  const name = it.display_name || it.handle || `KOL #${it.kol_pool_id || "?"}`;
+  const name = kolHumanDisplayName(it as unknown as Record<string, unknown>);
   const why = it.why_fit
     || (it.coarse_basis === "recall+dims_cosine"
         ? `召回 ${((Number(it.recall_score) || 0)).toFixed(3)} + 十一维余弦 ${it.dims_cosine != null ? Number(it.dims_cosine).toFixed(3) : "—"}`

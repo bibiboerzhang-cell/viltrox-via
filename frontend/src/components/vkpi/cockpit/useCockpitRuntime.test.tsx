@@ -13,10 +13,12 @@ const cacheMocks = vi.hoisted(() => ({
   writeCachedResource: vi.fn(),
 }));
 
-vi.mock("../../../domains/kol", () => ({
-  getKolPoolWorkspace: vi.fn(async () => ({ list: { items: [] } })),
-  listKolPool: vi.fn(async () => ({ items: [] })),
+const kolMocks = vi.hoisted(() => ({
+  getKolPoolWorkspace: vi.fn(),
+  listKolPool: vi.fn(),
 }));
+
+vi.mock("../../../domains/kol", () => kolMocks);
 
 vi.mock("./api", async () => {
   const actual = await vi.importActual<typeof import("./api")>("./api");
@@ -35,7 +37,7 @@ vi.mock("./normalizers", () => ({
   normalizeCockpitDashboard: (value: unknown) => value,
 }));
 
-import { useCockpitRuntime } from "./useCockpitRuntime";
+import { sanitizeKolPoolRowsForCache, useCockpitRuntime } from "./useCockpitRuntime";
 
 const baselineSnapshot = {
   available: true,
@@ -70,11 +72,72 @@ function renderRuntime() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  kolMocks.getKolPoolWorkspace.mockResolvedValue({ list: { items: [] } });
+  kolMocks.listKolPool.mockResolvedValue({ items: [] });
   cacheMocks.readCachedResource.mockResolvedValue(null);
   cacheMocks.writeCachedResource.mockResolvedValue(undefined);
   apiMocks.fetchCockpitShellBundle.mockResolvedValue({ user: null, alerts: [] });
   apiMocks.fetchCockpitDashboardBundle.mockResolvedValue(dashboardBundle(baselineSnapshot));
   apiMocks.runAiTodaySchedulerNow.mockResolvedValue({ triggered: true });
+});
+
+describe("KOL Pool persistent cache privacy", () => {
+  it("recursively strips every contact projection before serialization", () => {
+    const secretEmail = "creator-secret@example.com";
+    const secretPhone = "+12025550199";
+    const sanitized = sanitizeKolPoolRowsForCache([{
+      id: 7,
+      display_name: "Creator",
+      email: secretEmail,
+      contact_phone: secretPhone,
+      other_contacts_json: [{ contact_type: "email", contact_value: secretEmail }],
+      nested: {
+        business_email: secretEmail,
+        contact_channels: { whatsapp: secretPhone },
+        raw_platform_data: { biography: `Business: ${secretEmail}` },
+        safe_value: "keep-me",
+      },
+    }]);
+    const serialized = JSON.stringify(sanitized);
+
+    expect(serialized).not.toContain(secretEmail);
+    expect(serialized).not.toContain(secretPhone);
+    expect(serialized).not.toContain("other_contacts_json");
+    expect(serialized).not.toContain("contact_channels");
+    expect(sanitized).toEqual([{ id: 7, display_name: "Creator", nested: { safe_value: "keep-me" } }]);
+  });
+
+  it("hides account A rows synchronously on an A to B token switch", async () => {
+    const secretEmail = "account-a-secret@example.com";
+    let resolveB: ((value: unknown) => void) | undefined;
+    kolMocks.getKolPoolWorkspace.mockImplementation((token: string) => {
+      if (token === "token-a") {
+        return Promise.resolve({ list: { items: [{ id: 1, email: secretEmail, contact_masked: false }] } });
+      }
+      return new Promise((resolve) => { resolveB = resolve; });
+    });
+    const runtime = renderHook(
+      ({ apiToken }) => useCockpitRuntime({
+        apiToken,
+        userName: "Staff",
+        userRole: "employee",
+        userAvatar: "",
+        userEmail: "staff@example.com",
+        userAuthRole: "employee",
+        starredProjects: [],
+      }),
+      { initialProps: { apiToken: "token-a" } },
+    );
+    await waitFor(() => expect(JSON.stringify(runtime.result.current.kolPoolRows)).toContain(secretEmail));
+
+    runtime.rerender({ apiToken: "token-b" });
+    expect(JSON.stringify(runtime.result.current.kolPoolRows)).not.toContain(secretEmail);
+    expect(runtime.result.current.kolPoolRows).toEqual([]);
+
+    await act(async () => { resolveB?.({ list: { items: [] } }); });
+    runtime.unmount();
+  });
+
 });
 
 describe("useCockpitRuntime AI Today regeneration", () => {

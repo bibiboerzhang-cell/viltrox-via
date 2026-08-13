@@ -24,6 +24,7 @@ import {
   type IntelligentFact,
   type IntelligentQueryAnswer,
 } from "../../../../services/vkpi/intelligent-api";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 import {
   globalSearch,
   type GlobalSearchEvent,
@@ -412,8 +413,8 @@ export function AskCommandOverlay({ open, onClose, apiToken = "", onNavigate }: 
     let detail = "";
     let Icon = Search;
     if (entry.kind === "kol") {
-      label = entry.item.display_name || entry.item.handle || `KOL #${entry.item.id}`;
-      detail = [entry.item.platform, entry.item.handle].filter(Boolean).join(" · ");
+      label = kolHumanDisplayName(entry.item as unknown as Record<string, unknown>);
+      detail = [entry.item.platform, kolHumanPublicHandle(entry.item as unknown as Record<string, unknown>)].filter(Boolean).join(" · ");
       Icon = Users;
     } else if (entry.kind === "project") {
       label = entry.item.project_name || entry.item.project_uid || `${t("项目")} #${entry.item.id}`;

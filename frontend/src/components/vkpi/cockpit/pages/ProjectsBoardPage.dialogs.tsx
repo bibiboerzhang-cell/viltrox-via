@@ -3,6 +3,7 @@ import type { VkpiDashboardData } from "../../vkpiTypes";
 import type { ProjectsPageProps } from "../../pages/ProjectsPage.types";
 import { listProductCatalog } from "../../../../domains/products";
 import { Drow, ModalShell } from "./MarketVoicePage.dialogs";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // Projects 板块页 · 弹窗族。
 //   ProjectCreateModal  旧 ProjectsPage 新建推广表单原样搬家(字段/launch 分支/SKU 目录
@@ -299,7 +300,11 @@ export function ProjectCreateModal({
               <select value={kolId} onChange={(event) => setKolId(event.target.value)}>
                 <option value="">稍后从项目详情或 KOL 库添加</option>
                 {data.kolOptions.map((kol) => (
-                  <option key={kol.id} value={kol.id}>{kol.name} · {kol.handle} · {kol.platform}</option>
+                  <option key={kol.id} value={kol.id}>{[
+                    kolHumanDisplayName(kol as unknown as Record<string, unknown>),
+                    kolHumanPublicHandle(kol as unknown as Record<string, unknown>),
+                    kol.platform,
+                  ].filter(Boolean).join(" · ")}</option>
                 ))}
               </select>
             </label>

@@ -4,8 +4,9 @@
 import { useState } from "react";
 
 import { proxiedImageUrl } from "../../shared/mediaProxy";
-import { cleanText, display, numberLabel, type Row } from "./SmartKolInputPanel.helpers";
+import { cleanText, numberLabel, type Row } from "./SmartKolInputPanel.helpers";
 import { firstSafeHttpUrl, publicFieldRows, safeHttpUrl } from "./SmartKolInputPanel.UrlSummary.shared";
+import { containsOpaqueKolChannelId, isOpaqueKolChannelId, kolHumanDisplayName, kolHumanProfileLinkLabel } from "../lib/kolIdentity";
 
 export function VideoCreatorCard({
   creator,
@@ -19,17 +20,23 @@ export function VideoCreatorCard({
   const [failedAvatar, setFailedAvatar] = useState("");
   const [expanded, setExpanded] = useState(false);
   const avatar = proxiedImageUrl(safeHttpUrl(creator.avatar_url));
-  const handle = cleanText(creator.handle || creator.channel_name || metadata.channel_name);
+  const identity = {
+    ...creator,
+    channel_id: creator.channel_id || metadata.channel_id,
+    channel_name: creator.channel_name || metadata.channel_name,
+  };
   const platform = cleanText(creator.platform || metadata.platform);
-  const channelId = cleanText(creator.channel_id || metadata.channel_id);
-  const name = display(creator.display_name || handle || channelId || "创作者");
+  const name = kolHumanDisplayName(identity, "创作者");
   const followers = numberLabel(creator.followers ?? creator.subscriber_count);
   const posts = numberLabel(creator.posts_count ?? creator.video_count);
   const bio = cleanText(creator.bio || creator.description);
   const profileUrl = firstSafeHttpUrl(creator.profile_url, creator.channel_url);
+  const profileLinkLabel = kolHumanProfileLinkLabel(identity);
   const showImg = Boolean(avatar) && failedAvatar !== avatar;
   // 全部字段(creator_identity 优先,video_metadata 兜底),空值过滤。
-  const allFields = publicFieldRows(metadata, creator);
+  const allFields = publicFieldRows(metadata, creator).filter(([key, value]) => (
+    key !== "channel_id" && !isOpaqueKolChannelId(value, identity) && !containsOpaqueKolChannelId(value, identity)
+  ));
   return (
     <div className="mt-2 rounded-md border border-white/[0.07] bg-black/20 px-2.5 py-2">
       <div className="flex items-start gap-3">
@@ -79,9 +86,10 @@ export function VideoCreatorCard({
               href={profileUrl}
               target="_blank"
               rel="noreferrer noopener"
+              title={profileLinkLabel}
               className="mt-1 inline-block truncate text-[10px] text-cyan-300/80 hover:text-cyan-200 hover:underline"
             >
-              {profileUrl}
+              {profileLinkLabel}
             </a>
           ) : null}
         </div>

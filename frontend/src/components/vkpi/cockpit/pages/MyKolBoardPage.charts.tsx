@@ -13,6 +13,7 @@ import {
   type VkpiSeriesPoint,
   type VkpiViewsTopGroup,
 } from "../../../../services/vkpi/myKolBoard-api";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // MY KOL · 图表模块族(M4 真身;MyKolBoardPage 专用,页内拆件不入公共桶)。
 //   金样板 = MarketVoicePage.charts.tsx 图形语言逐件同构(不跨页引它的私有件,防纠缠):
@@ -464,10 +465,10 @@ export function ViewsTopBody({ viewsTop }: { viewsTop: VkpiViewsTopGroup }) {
         return (
           <BarRow
             key={`${it.kol_pool_id}-${i}`}
-            name={String(it.display_name || it.handle || "—")}
+            name={kolHumanDisplayName(it as unknown as Record<string, unknown>)}
             widthPct={(views / max) * 100}
             value={`${fmtZhCompact(views)} · ${Number(it.video_count) || 0}条`}
-            title={`${String(it.platform || "?")} ${String(it.handle || "")} · 实测播放合计(点时读数)`}
+            title={`${String(it.platform || "?")} ${kolHumanPublicHandle(it as unknown as Record<string, unknown>)} · 实测播放合计(点时读数)`}
           />
         );
       })}

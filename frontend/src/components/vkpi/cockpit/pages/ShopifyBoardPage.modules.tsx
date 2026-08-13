@@ -6,6 +6,7 @@ import { fmtUsd2 } from "../../../../services/vkpi/projectsBoard-api";
 import { GOAFF_SOURCE_LABEL, GOAFF_STATUS_META, asUsd } from "../../../../services/vkpi/shopifyBoard-api";
 import type { GoaffproStatus, GoaffproSummaryRow, GoaffproSummaryTotals } from "../../../../services/vkpi/goaffpro-api";
 import { Avatar } from "../../shared/Avatar";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // Shopify 板块页 · 图形件(金样板 MarketVoicePage.modules / ProjectsBoardPage.charts 同构)。
 //   ShopifyKpiBand   四卡:归因收入(对账净额)/ 归因明细(行数)/ 联盟推广(GOAFFPRO
@@ -21,6 +22,9 @@ import { Avatar } from "../../shared/Avatar";
 //   唯一换算点、*_usd 走 asUsd 直读,双向守卫单测。
 
 export const FACE_ROWS = 6; // demo FULL.slice(0,6):卡面收敛条数,全量走弹窗
+
+export const goaffproKolDisplayName = (item: GoaffproSummaryRow) => kolHumanDisplayName({ display_name: item.kol_name, handle: item.kol_handle, platform: item.kol_platform });
+export const goaffproKolPublicHandle = (item: GoaffproSummaryRow) => kolHumanPublicHandle({ display_name: item.kol_name, handle: item.kol_handle, platform: item.kol_platform });
 
 const keyActivate = (fn: () => void) => (ev: React.KeyboardEvent) => {
   if (ev.key === "Enter" || ev.key === " ") {
@@ -221,7 +225,8 @@ export function TrackSearchBar({
 }
 
 export function TrackRowLine({ item, index, onOpen }: { item: GoaffproSummaryRow; index: number; onOpen: (i: number) => void }) {
-  const name = String(item.kol_name || "—");
+  const name = goaffproKolDisplayName(item);
+  const publicHandle = goaffproKolPublicHandle(item);
   const gmv = asUsd(item.gmv_usd);
   return (
     <div
@@ -242,7 +247,7 @@ export function TrackRowLine({ item, index, onOpen }: { item: GoaffproSummaryRow
             ⚠
           </span>
         ) : null}
-        {item.kol_handle ? <span className="ml-1.5 text-[9.5px] text-muted">{String(item.kol_handle)}</span> : null}
+        {publicHandle ? <span className="ml-1.5 text-[9.5px] text-muted">{publicHandle}</span> : null}
       </span>
       {item.coupon ? <span className="flex-none font-mono text-[9.5px] text-good">{String(item.coupon)}</span> : null}
       <span className="flex-none font-mono text-[9.5px] text-muted" title="ref 码">
@@ -356,8 +361,10 @@ export function GoaffStatusBody({ status, error }: { status: GoaffproStatus | nu
 /* ============ 联盟归因详情行组(MiniDetailModal rows;时间绝对时间戳) ============ */
 export function trackDetailRows(item: GoaffproSummaryRow): Array<[string, React.ReactNode]> {
   const rate = String(item.commission_rate || "—");
+  const name = goaffproKolDisplayName(item);
+  const publicHandle = goaffproKolPublicHandle(item);
   return [
-    ["KOL", `${String(item.kol_name || "—")}${item.kol_handle ? ` · ${String(item.kol_handle)}` : ""}`],
+    ["KOL", `${name}${publicHandle ? ` · ${publicHandle}` : ""}`],
     ["平台", String(item.kol_platform || "—")],
     ["档案", item.kol_pool_id != null ? `kol_pool #${item.kol_pool_id}` : "—"],
     ["ref 码", <span className="font-mono">{String(item.ref_code || "—")}</span>],

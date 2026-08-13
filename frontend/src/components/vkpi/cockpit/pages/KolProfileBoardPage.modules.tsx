@@ -3,6 +3,7 @@ import { formatLocal } from "../../lib/timeLocal";
 import { EmptyLine } from "./MarketVoicePage.modules";
 import { platformBadge } from "./MarketVoicePage.dialogs";
 import { DistBars, asArray, asRow, fmtZhCompact, num, str, type Row } from "./KolProfileBoardPage.charts";
+import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // KOL 档案 · 板块页范式辅助件(KolProfileBoardPage 专用,页内拆件不入公共桶)。
 //   通用骨架件(ModuleCard/PendingCard/EmptyLine/ErrorCard/LoadingLine/KpiCard)直接
@@ -159,12 +160,13 @@ export function IdentityBody({
   onOpenDrawer: () => void;
 }) {
   const [copied, setCopied] = React.useState(false);
-  const displayName = str(item.display_name) || str(item.handle) || "—";
-  const handle = str(item.handle);
+  const displayName = kolHumanDisplayName(item);
+  const handle = kolHumanPublicHandle(item);
   const platform = str(item.platform);
   const country = str(item.country);
   const avatarUrl = str(item.avatar_url);
   const profileUrl = str(item.profile_url);
+  const profileLinkLabel = kolHumanProfileLinkLabel(item);
   const email = str(item.email);
   const bio = str(item.bio);
   const followers = num(item.followers);
@@ -233,8 +235,8 @@ export function IdentityBody({
           <KV
             label="主页"
             value={
-              <a className="text-accent transition-colors hover:text-accent-hover" href={profileUrl} target="_blank" rel="noopener noreferrer">
-                {profileUrl.length > 44 ? `${profileUrl.slice(0, 44)}…` : profileUrl} ↗
+              <a className="text-accent transition-colors hover:text-accent-hover" href={profileUrl} target="_blank" rel="noopener noreferrer" title={profileLinkLabel}>
+                {profileLinkLabel} ↗
               </a>
             }
           />
@@ -252,8 +254,8 @@ export function IdentityBody({
           收藏 / 联系 / 补全 →
         </button>
         {profileUrl ? (
-          <a href={profileUrl} target="_blank" rel="noopener noreferrer" className={ACT_BTN}>
-            主页 ↗
+          <a href={profileUrl} target="_blank" rel="noopener noreferrer" className={ACT_BTN} title={profileLinkLabel}>
+            {profileLinkLabel} ↗
           </a>
         ) : null}
         {email ? (

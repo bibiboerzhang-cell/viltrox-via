@@ -1,7 +1,7 @@
 """Permission-aware projection and audit boundary for KOL contacts."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.core.permissions import check_contact_reveal_permission
@@ -33,7 +33,10 @@ def authorize_plaintext_contacts(
     resource_type: str,
     resource_id: str | int,
     page_path: str,
+    ip: str = "",
+    user_agent: str = "",
     metadata: dict[str, Any] | None = None,
+    permission_check: Callable[[dict[str, Any] | None], bool] | None = None,
 ) -> bool:
     """Authorize and audit a plaintext contact read.
 
@@ -41,7 +44,8 @@ def authorize_plaintext_contacts(
     fail closed.  Callers must use the returned boolean to choose their DTO
     projection; permission alone is not enough to disclose plaintext.
     """
-    if not check_contact_reveal_permission(staff):
+    predicate = permission_check or check_contact_reveal_permission
+    if not predicate(staff):
         return False
     actor = _staff_id(staff)
     if not actor:
@@ -55,6 +59,8 @@ def authorize_plaintext_contacts(
             resource_type=str(resource_type or "kol"),
             resource_id=str(resource_id),
             page_path=str(page_path or ""),
+            ip=str(ip or ""),
+            user_agent=str(user_agent or "")[:500],
             metadata={"contact_plaintext": True, **(metadata or {})},
         )
     except Exception:

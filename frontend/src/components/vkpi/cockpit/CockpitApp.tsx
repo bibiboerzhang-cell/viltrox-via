@@ -675,6 +675,7 @@ export function CockpitApp(props: any = {}) {
                   error: kolPoolError,
                   apiToken,
                   staff: uiStaff,
+                  currentUser,
                 })
               )
             ),
@@ -906,6 +907,7 @@ export function CockpitApp(props: any = {}) {
                   loading: kolPoolLoading,
                   error: kolPoolError,
                   staff: uiStaff,
+                  currentUser,
                 },
                 "my-kol": {
                   viewMode: appViewMode,

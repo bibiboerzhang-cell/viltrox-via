@@ -8,6 +8,7 @@ import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
 import { candidateKindGroup } from "../lib/candidateKind";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import {
   asArray,
@@ -868,7 +869,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         // ── Trend hits(真实命中列表,非 B6 摘除的恒空评分卡)──
         trendHits.length > 0 && e(KOLDrawerTrendHits, { trendHits }),
         // ── 联系方式 & 代表视频(身份速览的一部分:是谁 + 内容长啥样)──
-        e(KOLDrawerContactAndVideos, { item, representativeVideos, onOpenVideo: setActiveRepresentativeVideo }),
+        e(KOLDrawerContactAndVideos, { item, representativeVideos, onOpenVideo: setActiveRepresentativeVideo, detailLoading, detailError }),
         // ── 推荐动作/文本区块: Viltrox 适配判断 / 推荐产品线 / 风险点 / 品牌合作历史 ──
         e(KOLDrawerTextSections, { item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs, foldDefaultOpen }),
       ),
@@ -983,7 +984,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     }),
     shareOpen && e(ShareKolModal, {
       kolPoolId: String(item?.id ?? ""),
-      kolName: item?.name || item?.handle || String(item?.id ?? ""),
+      kolName: kolHumanDisplayName(item),
       staff,
       apiToken,
       onClose: () => setShareOpen(false),

@@ -4,11 +4,13 @@
 import React from "react";
 import { m } from "framer-motion";
 import { X } from "lucide-react";
+import { kolHumanDisplayName } from "../../lib/kolIdentity";
 
 const e = React.createElement;
 
 export function PinDetailModal({ pin, mode, onClose }: any) {
   if (!pin) return null;
+  const pinName = pin.handle ? kolHumanDisplayName(pin) : pin.name || pin.label;
   // 2026-06-12 死按钮诚实化:无后端/路由的 CTA 一律 disabled+待接入;Open in maps 接真 Google Maps 查询
   const pendingBtnFull = "w-full rounded-lg border border-white/[0.1] bg-white/[0.03] py-2 text-sm text-slate-500 opacity-60 cursor-not-allowed";
   return e(m.div, {
@@ -32,7 +34,7 @@ export function PinDetailModal({ pin, mode, onClose }: any) {
           e(mode.icon, { size: 20 })
         ),
         e("div", { className: "min-w-0 flex-1" },
-          e("h3", { className: "text-xl font-semibold text-white truncate" }, pin.handle || pin.name || pin.label),
+          e("h3", { className: "text-xl font-semibold text-white truncate" }, pinName),
           pin.niche && e("p", { className: "text-xs text-slate-400" }, pin.niche),
           pin.type && !pin.parentItem && e("p", { className: "text-xs text-slate-400" }, pin.type),
           // Venue 上下文(显示 parent)

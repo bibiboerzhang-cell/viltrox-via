@@ -10,6 +10,7 @@ import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.hel
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 import type { SearchSessionProgress } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
+import { kolHumanDisplayName } from "../lib/kolIdentity";
 
 type SessionBanner = {
   tone: string;
@@ -634,7 +635,7 @@ export function TextResultSection({
                   {outreachResult.messages.map((m: any, i: number) => (
                     <div key={`om-${m.kol_pool_id || i}`} className="rounded border border-white/[0.06] bg-white/[0.02] px-2 py-1">
                       <div className="text-[10px] font-medium text-violet-50">
-                        {m.display_name || m.handle || `KOL #${m.kol_pool_id || i + 1}`}
+                        {kolHumanDisplayName(m)}
                         {m.personalized === false ? <span className="ml-1 text-[8px] text-slate-400">· 模板</span> : null}
                       </div>
                       {m.subject ? <div className="text-[9.5px] text-slate-300">主题:{m.subject}</div> : null}

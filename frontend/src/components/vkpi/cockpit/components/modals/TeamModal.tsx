@@ -17,6 +17,7 @@ import {
   type VkpiTeamKolShare,
 } from "../../../../../services/vkpi/team-share-api";
 import { formatLocal } from "../../../lib/timeLocal";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -54,7 +55,7 @@ function ShareAdminSection({ apiToken, t }: any) {
   const revoke = async (row: any) => {
     if (!apiToken || revokingId) return;
     const viaGroup = row.shared_via_group_id != null;
-    const msg = `确认撤销「${row.from_name || t("未知")} → ${row.to_name}」对 KOL「${row.kol_name || row.handle || row.kol_pool_id}」的共享?`
+    const msg = `确认撤销「${row.from_name || t("未知")} → ${row.to_name}」对 KOL「${kolHumanDisplayName({ display_name: row.kol_name, handle: row.handle }, `#${row.kol_pool_id}`)}」的共享?`
       + (viaGroup ? "\n注意:该行由分组共享产生,分组重算后可能恢复;永久移除请编辑分组共享配置。" : "");
     if (!window.confirm(msg)) return;
     setRevokingId(row.id);
@@ -97,9 +98,9 @@ function ShareAdminSection({ apiToken, t }: any) {
                     }, t("分组共享"))
                   ),
                   e("div", { className: "text-[10px] text-slate-500 truncate" },
-                    `${row.kol_name || row.handle || `#${row.kol_pool_id}`}`
+                    `${kolHumanDisplayName({ display_name: row.kol_name, handle: row.handle }, `#${row.kol_pool_id}`)}`
                     + (row.platform ? ` · ${row.platform}` : "")
-                    + (row.handle ? ` @${row.handle}` : "")
+                    + (kolHumanPublicHandle({ display_name: row.kol_name, handle: row.handle }) ? ` · ${kolHumanPublicHandle({ display_name: row.kol_name, handle: row.handle })}` : "")
                     + ` · ${formatLocal(row.created_at)}`
                   ),
                   // 协作设置(kind='kol' 的 collab-settings):没设过诚实不显示。

@@ -12,6 +12,7 @@ import { Bell, Target, TrendingUp, Users, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
 import { useT } from "../../lib/i18n";
 import { apiFetch } from "../../../../../services/http";
+import { kolHumanDisplayName, kolHumanPublicHandle } from "../../lib/kolIdentity";
 
 const e = React.createElement;
 
@@ -29,16 +30,16 @@ function normalizeProjectOption(row: any): ProjectOption | null {
 }
 
 // 把后端 KOL Pool 行(/api/admin/vkpi/kol-pool 的 items 形态)归一成 {id, name, sub}:
-//   id=kol_pool_id;name 优先 display_name → handle;sub 展示 平台/@handle 辅助识别。
-function normalizeKolOption(row: any): KolOption | null {
+// UC 频道 id 仅保留作内部 id/URL，不进入员工可见选项文案。
+export function normalizeKolOption(row: any): KolOption | null {
   if (!row || typeof row !== "object") return null;
   const rawId = row.id ?? row.kol_pool_id ?? row.pool_uid;
   if (rawId === undefined || rawId === null || rawId === "") return null;
   const id = String(rawId);
-  const handle = String(row.handle || "").trim();
-  const name = String(row.display_name || handle || `KOL ${id}`);
+  const handle = kolHumanPublicHandle(row);
+  const name = kolHumanDisplayName(row);
   const platform = String(row.platform || "").trim();
-  const sub = [platform, handle ? `@${handle}` : ""].filter(Boolean).join(" · ");
+  const sub = [platform, handle].filter(Boolean).join(" · ");
   return { id, name, sub };
 }
 

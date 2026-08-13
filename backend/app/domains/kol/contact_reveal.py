@@ -64,6 +64,7 @@ def view_kol_contact(
     page_path: str = "",
     ip: str = "",
     user_agent: str = "",
+    purpose: str = "",
 ) -> dict[str, Any]:
     """展开单个 KOL 池条目的真值联系方式。
 
@@ -92,18 +93,23 @@ def view_kol_contact(
         }
 
     from app.domains.kol.contact_access import authorize_plaintext_contacts
+    from app.core.permissions import check_kol_pool_employee_contact_permission
 
     authorized = authorize_plaintext_contacts(
         staff,
         resource_type="kol_pool",
         resource_id=int(kol_pool_id),
         page_path=page_path or f"/kol-pool/{int(kol_pool_id)}/contacts/reveal",
+        ip=ip,
+        user_agent=user_agent,
         metadata={
             "revealed": ["email", "other_contacts_json"],
+            "purpose": str(purpose or ""),
             "has_email": bool(real_email),
             "ip_present": bool(ip),
             "user_agent_present": bool(user_agent),
         },
+        permission_check=check_kol_pool_employee_contact_permission,
     )
     if not authorized:
         return {
@@ -114,6 +120,16 @@ def view_kol_contact(
             "other_contacts": _loads(_mask_contacts_json(row["other_contacts_json"])),
             "contact_masked": True,
         }
+
+    from app.domains.kol.pool_contacts import merge_canonical_contacts
+
+    merged = merge_canonical_contacts(
+        {"email": real_email, "other_contacts_json": real_contacts},
+        conn=conn,
+        kol_pool_id=int(kol_pool_id),
+    )
+    real_email = str(merged.get("email") or "")
+    real_contacts = _loads(merged.get("other_contacts_json"))
 
     staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("id") or 0)
 
