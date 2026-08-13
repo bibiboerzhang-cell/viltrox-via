@@ -42,9 +42,12 @@ umask 077
 mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${TMPDIR}" "${CANDIDATE_RUNTIME}"
 chmod 700 "${HOME}" "${XDG_CACHE_HOME}" "${TMPDIR}" "${CANDIDATE_RUNTIME}"
 PRIVATE_LOCAL_ENV_FILE="${CANDIDATE_RUNTIME}/local.env"
+PRIVATE_LOCAL_IDENTITY_FILE="${CANDIDATE_RUNTIME}/local-identity.env"
 cleanup_private_local_env() {
   chmod u+w "${PRIVATE_LOCAL_ENV_FILE}" >/dev/null 2>&1 || true
+  chmod u+w "${PRIVATE_LOCAL_IDENTITY_FILE}" >/dev/null 2>&1 || true
   rm -f -- "${PRIVATE_LOCAL_ENV_FILE}" >/dev/null 2>&1 || true
+  rm -f -- "${PRIVATE_LOCAL_IDENTITY_FILE}" >/dev/null 2>&1 || true
 }
 trap cleanup_private_local_env EXIT
 trap 'exit 129' HUP
@@ -118,10 +121,221 @@ export RUNTIME_ROOT="${CANDIDATE_RUNTIME}"
 export LOCAL_RUNTIME_FORCE_STACK=1
 export RUNTIME_ENV_KEEP_DB_URL=0
 export RUNTIME_ENV_KEEP_INHERITED_JWT=0
+
+# runtime_env.sh computes its local connection defaults before loading
+# LOCAL_ENV_FILE.  In an env -i candidate process that would make an explicit
+# LOCAL_DATABASE_URL in the reviewed file impossible to apply, silently
+# reconnecting the browser gate to the developer's default database instead.
+# Read only the two local connection identities here, require loopback, and
+# seed them before runtime_env.sh computes any defaults.  Values stay off argv
+# and logs; the protected file remains the source of every other setting.
+"${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+  "${PRIVATE_LOCAL_ENV_FILE}" "${PRIVATE_LOCAL_IDENTITY_FILE}" <<'PY'
+from pathlib import Path
+from urllib.parse import parse_qsl, unquote, urlsplit
+import os
+import re
+import shlex
+import sys
+
+from psycopg.pq import Conninfo
+
+
+safe_database_query_parameters = {
+    "application_name",
+    "channel_binding",
+    "connect_timeout",
+    "fallback_application_name",
+    "gssencmode",
+    "keepalives",
+    "keepalives_count",
+    "keepalives_idle",
+    "keepalives_interval",
+    "ssl_min_protocol_version",
+    "ssl_max_protocol_version",
+    "sslcrl",
+    "sslcrldir",
+    "sslmode",
+    "sslrootcert",
+    "sslsni",
+    "tcp_user_timeout",
+}
+values: dict[str, str] = {}
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    key = key.strip()
+    if key == "ENV_FILE" or re.fullmatch(r"PG[A-Z0-9_]+", key):
+        raise SystemExit("candidate local environment contains forbidden connection controls")
+    if key not in {"LOCAL_DATABASE_URL", "LOCAL_REDIS_URL", "REDIS_URL"}:
+        continue
+    if key in values:
+        raise SystemExit("candidate local environment has duplicate connection identity")
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    if not value or any(
+        ord(character) < 0x20 or ord(character) == 0x7F
+        for character in value
+    ):
+        raise SystemExit("candidate local environment has invalid connection identity")
+    values[key] = value
+
+database_url = values.get("LOCAL_DATABASE_URL", "")
+redis_url = values.get("LOCAL_REDIS_URL") or values.get("REDIS_URL", "")
+if (
+    values.get("LOCAL_REDIS_URL")
+    and values.get("REDIS_URL")
+    and values["LOCAL_REDIS_URL"] != values["REDIS_URL"]
+):
+    raise SystemExit("candidate local redis identities are ambiguous")
+try:
+    database = urlsplit(database_url)
+    database_port = database.port
+    database_query = parse_qsl(
+        database.query,
+        keep_blank_values=True,
+        strict_parsing=True,
+        max_num_fields=64,
+    )
+    redis = urlsplit(redis_url)
+    redis_port = redis.port
+except ValueError as exc:
+    raise SystemExit("candidate local connection identity is invalid") from exc
+
+database_name = unquote(database.path[1:]) if database.path.startswith("/") else ""
+if (
+    database.scheme.lower() not in {"postgres", "postgresql"}
+    or database.hostname not in {"127.0.0.1", "localhost", "::1"}
+    or database_port is None
+    or database_port < 1
+    or database.fragment
+    or database.path.count("/") != 1
+    or not database_name
+    or "/" in database_name
+    or "\x00" in database_name
+    or any(
+        key.lower() not in safe_database_query_parameters
+        for key, _value in database_query
+    )
+):
+    raise SystemExit("candidate local database identity is unsafe")
+try:
+    libpq_database = {
+        option.keyword.decode("ascii"): (
+            option.val.decode("utf-8") if option.val is not None else None
+        )
+        for option in Conninfo.parse(database_url.encode("utf-8"))
+    }
+except Exception as exc:
+    raise SystemExit("candidate local database identity is invalid") from exc
+expected_user = unquote(database.username) if database.username is not None else None
+expected_password = (
+    unquote(database.password) if database.password is not None else None
+)
+if (
+    libpq_database.get("host") != database.hostname
+    or libpq_database.get("hostaddr") not in {None, database.hostname}
+    or libpq_database.get("port") != str(database_port)
+    or libpq_database.get("dbname") != database_name
+    or libpq_database.get("user") != expected_user
+    or libpq_database.get("password") != expected_password
+    or libpq_database.get("service") is not None
+    or libpq_database.get("options") is not None
+    or libpq_database.get("load_balance_hosts") is not None
+):
+    raise SystemExit("candidate local database identity disagrees with libpq")
+if (
+    redis.scheme.lower() not in {"redis", "rediss"}
+    or redis.hostname not in {"127.0.0.1", "localhost", "::1"}
+    or redis_port is None
+    or redis_port < 1
+    or redis.fragment
+    or redis.query
+    or not re.fullmatch(r"/[0-9]+", redis.path)
+):
+    raise SystemExit("candidate local redis identity is unsafe")
+
+destination = Path(sys.argv[2])
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_CLOEXEC"):
+    flags |= os.O_CLOEXEC
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+fd = os.open(destination, flags, 0o600)
+try:
+    payload = (
+        f"LOCAL_DATABASE_URL={shlex.quote(database_url)}\n"
+        f"LOCAL_REDIS_URL={shlex.quote(redis_url)}\n"
+    ).encode("utf-8")
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise SystemExit("candidate local identity write failed")
+        view = view[written:]
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+# shellcheck disable=SC1090 -- generated from the reviewed protected env above.
+source "${PRIVATE_LOCAL_IDENTITY_FILE}"
+export LOCAL_DATABASE_URL LOCAL_REDIS_URL
+chmod u+w "${PRIVATE_LOCAL_IDENTITY_FILE}"
+rm -f -- "${PRIVATE_LOCAL_IDENTITY_FILE}"
+if [ -e "${CANDIDATE_ROOT}/.env.local" ] \
+  || [ -L "${CANDIDATE_ROOT}/.env.local" ] \
+  || [ -e "${CANDIDATE_ROOT}/runtime/local_operator_env.sh" ] \
+  || [ -L "${CANDIDATE_ROOT}/runtime/local_operator_env.sh" ]; then
+  echo "candidate contains an unreviewed runtime environment override" >&2
+  exit 64
+fi
+export ENV_FILE=""
 source "${CANDIDATE_ROOT}/scripts/runtime_env.sh"
 cleanup_private_local_env
 trap - EXIT HUP INT TERM
-unset CANDIDATE_LOCAL_ENV_FILE LOCAL_ENV_FILE PRIVATE_LOCAL_ENV_FILE
+unset \
+  CANDIDATE_LOCAL_ENV_FILE \
+  LOCAL_ENV_FILE \
+  PRIVATE_LOCAL_ENV_FILE \
+  PRIVATE_LOCAL_IDENTITY_FILE
+
+# Do not let libpq's ambient environment override the reviewed URL identity.
+# The launcher began with env -i; these unsets also cover values loaded from
+# the private local environment by runtime_env.sh.
+unset \
+  PGAPPNAME \
+  PGCHANNELBINDING \
+  PGCLIENTENCODING \
+  PGCONNECT_TIMEOUT \
+  PGDATABASE \
+  PGGSSENCMODE \
+  PGHOST \
+  PGHOSTADDR \
+  PGKEEPALIVES \
+  PGKEEPALIVESCOUNT \
+  PGKEEPALIVESIDLE \
+  PGKEEPALIVESINTERVAL \
+  PGOPTIONS \
+  PGPASSFILE \
+  PGPASSWORD \
+  PGPORT \
+  PGSERVICE \
+  PGSERVICEFILE \
+  PGSSLCERT \
+  PGSSLCRL \
+  PGSSLCRLDIR \
+  PGSSLKEY \
+  PGSSLMAXPROTOCOLVERSION \
+  PGSSLMINPROTOCOLVERSION \
+  PGSSLMODE \
+  PGSSLNEGOTIATION \
+  PGSSLROOTCERT \
+  PGTARGETSESSIONATTRS \
+  PGTCPUSER_TIMEOUT \
+  PGUSER
 
 # The candidate browser gate is a read-only release-validation runtime.  It
 # may use the reviewed local database and Redis health state, but it must not
