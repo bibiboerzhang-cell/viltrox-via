@@ -15,14 +15,27 @@ from app.platform.apify_budget import current_apify_execution_context
 logger = get_logger(__name__)
 
 
-def _history_match(query: str) -> dict[str, Any]:
-    """历史搜索匹配:这个 query 之前搜过没(search_sessions)。"""
+def _history_match(
+    query: str,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """当前员工历史搜索匹配；绝不从其他员工会话推断查询历史。"""
     if not table_exists("vkpi_kol_search_sessions"):
         return {"available": False, "prior_sessions": 0, "searched_before": False}
     try:
+        from app.domains.kol.search_sessions_serde import _staff_user_id
+
+        actor_id = _staff_user_id(staff)
+        if not actor_id:
+            return {"available": False, "prior_sessions": 0, "searched_before": False}
         row = get_conn().execute(
-            "SELECT COUNT(*) AS n FROM vkpi_kol_search_sessions WHERE query_text ILIKE ?",
-            (f"%{str(query).strip()}%",),
+            """
+            SELECT COUNT(*) AS n
+            FROM vkpi_kol_search_sessions
+            WHERE query_text ILIKE ? AND created_by=?
+            """,
+            (f"%{str(query).strip()}%", int(actor_id)),
         ).fetchone()
         n = int(dict(row).get("n") or 0) if row else 0
         return {"available": True, "prior_sessions": n, "searched_before": n > 0}
@@ -78,7 +91,7 @@ def unified_search(query: str, *, include_external: bool = False, limit: int = 2
         "provider_status": provider_status,
         "results": results,
         "candidate_ids": candidate_ids,
-        "history_match": _history_match(q),
+        "history_match": _history_match(q, staff=staff),
         "cost_gate": cost_gate,
         "note": "统一搜索响应模型(段2):联邦/平台/历史池召回收口为一个形;前端单一体验;零触 viltrox_fit_score。",
     }

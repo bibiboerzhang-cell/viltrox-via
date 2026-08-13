@@ -53,6 +53,11 @@ def test_profile_item_execute_ignores_sync_flag_and_enqueues(monkeypatch):
 
     monkeypatch.setattr(search_routes.kol_search_sessions, "get_session", current_staff_session)
     monkeypatch.setattr(
+        search_routes.kol_search_sessions,
+        "require_session_owner",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         search_routes.kol_profile_discovery,
         "enqueue_search_session_advance",
         lambda **_kwargs: {"status": "queued", "job_id": 71},
@@ -84,6 +89,11 @@ def test_profile_advance_execute_ignores_sync_flag_and_enqueues(monkeypatch):
         return {"id": int(session_id), "created_by": int(staff["id"]), "items": []}
 
     monkeypatch.setattr(search_routes.kol_search_sessions, "get_session", current_staff_session)
+    monkeypatch.setattr(
+        search_routes.kol_search_sessions,
+        "require_session_owner",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         search_routes.kol_profile_discovery,
         "enqueue_search_session_advance",

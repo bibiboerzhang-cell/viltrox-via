@@ -403,6 +403,8 @@ export interface VkpiKolRecallItem {
   display_relevance_adjust?: number | null;
   relevance_flags?: string[];
   relevance_tier_hint?: string;
+  match_evidence?: Array<{ field: string; term: string; source: string }>;
+  candidate_facets?: Record<string, string>;
   profile_type: "creator" | "reviewer" | "mixed" | string;
   bucket: "creator" | "reviewer" | string;
   type_label: string;
@@ -495,6 +497,11 @@ export interface VkpiKolRecallResponse {
     claim_status?: string;
     metrics?: Row | null;
   };
+  match_status?: "matched" | "empty" | string;
+  candidate_set_distribution?: Row;
+  /** True only when buckets/items are a complete, authoritative visible snapshot. */
+  snapshot_complete?: boolean;
+  llm_query_plan?: Row;
 }
 
 export interface VkpiKolSearchSessionRef {
@@ -553,6 +560,8 @@ export interface VkpiKolSearchHistoryItem {
   /** 触达展示闸折叠计数(后端 get_session/list_history 按 pool 现值实时重判):
    *  hidden_low_reach=低触达不展示;hidden_analyzing=档案补全中(分析后再放出)。 */
   reach_floor_display?: Row;
+  /** Full get-session response; absent on legacy and compact/delta snapshots. */
+  items_snapshot_complete?: boolean;
   archived_at?: string | null;
   archived_by?: number | null;
   archive_reason?: string;

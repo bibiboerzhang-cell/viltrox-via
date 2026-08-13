@@ -10,6 +10,7 @@ import {
   mergeSearchSnapshotItems,
   readableCreatorName,
   recallTopItems,
+  recallResultFromSession,
   searchSessionProgress,
   urlResultFromSession,
 } from "./SmartKolInputPanel.derivers";
@@ -42,6 +43,55 @@ describe("SmartKolInputPanel history status labels", () => {
   it("does not present a partial terminal session as fully complete", () => {
     expect(advanceStatusLabel("partial")).toBe("部分完成");
     expect(historyStatusMeta("partial")).toMatchObject({ label: "部分完成", dot: "#fbbf24" });
+  });
+});
+
+describe("SmartKolInputPanel explainable recall history", () => {
+  it("restores field evidence and descriptive distribution without inventing proof", () => {
+    const result = recallResultFromSession({
+      id: 31,
+      query_text: "35mm portrait",
+      result_summary: {
+        match_status: "matched",
+        candidate_set_distribution: {
+          claim_status: "descriptive_only",
+          denominator: 1,
+          denominator_definition: "returned_canonical_candidates",
+          facets: {
+            platform: { youtube: 1 }, country: { us: 1 }, language: { en: 1 },
+            profile_type: { creator: 1 }, contact_available: { yes: 1 }, video_evidence: { yes: 1 },
+          },
+        },
+      },
+      items: [{
+        item_type: "recall_candidate",
+        kol_pool_id: 42,
+        score: 0.83,
+        payload: {
+          bucket: "creator", handle: "grounded", platform: "youtube", profile_type: "creator",
+          why_fit: "bio 命中 35mm；bio 命中 portrait",
+          match_evidence: [
+            { field: "bio", term: "35mm", source: "server_profile_evidence" },
+            { field: "bio", term: "portrait", source: "server_profile_evidence" },
+            { field: "bio", term: "private@example.test", source: "server_profile_evidence" },
+          ],
+          candidate_facets: {
+            platform: "youtube", country: "us", language: "en", profile_type: "creator",
+            contact_available: "yes", video_evidence: "yes",
+          },
+        },
+      }],
+    });
+
+    expect(result.match_status).toBe("matched");
+    expect(result.items[0].match_evidence).toEqual([
+      { field: "bio", term: "35mm", source: "server_profile_evidence" },
+      { field: "bio", term: "portrait", source: "server_profile_evidence" },
+    ]);
+    expect(result.items[0].why_fit).toBe("bio 命中 35mm；bio 命中 portrait");
+    expect(result.candidate_set_distribution).toMatchObject({
+      claim_status: "descriptive_only", denominator: 1,
+    });
   });
 });
 

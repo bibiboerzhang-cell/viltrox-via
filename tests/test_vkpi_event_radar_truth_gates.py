@@ -21,6 +21,8 @@ IMPORT_REQUIRED_TABLES = {
     "vkpi_dealer_identity_aliases",
 }
 
+FUTURE_EVENT_DATE = "2099-08-01"
+
 
 @pytest.fixture(autouse=True)
 def _migration_244_capability_is_ready_for_truth_gate_units(monkeypatch):

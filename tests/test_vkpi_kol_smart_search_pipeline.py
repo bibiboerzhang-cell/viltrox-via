@@ -285,6 +285,11 @@ def test_profile_crawl_execute_defaults_to_queue_with_pending_enrichment(monkeyp
         current_staff_session,
     )
     monkeypatch.setattr(
+        vkpi_kol_pool_search.kol_search_sessions,
+        "require_session_owner",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         vkpi_kol_pool_search.kol_profile_discovery,
         "enqueue_search_session_advance",
         lambda **_kwargs: {"status": "queued", "job": {"id": 88}, "writes": ["apify_jobs"]},
@@ -490,6 +495,7 @@ def test_split_profile_advance_pipeline_uses_public_monkeypatch_points(
             session_id=71,
             payload={
                 "query_text": "camera reviewer",
+                "_worker_planned": True,
                 "product_focus": {"sku": "test"},
                 "new_discovery_platforms": ["instagram"],
                 "include_content_fit": False,

@@ -223,8 +223,8 @@ describe("SmartKolInputPanel URL result mapping", () => {
     });
     expect(screen.getByText("AI 深析与时间戳正在后台生成")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("平台评论指标 427")).toBeTruthy());
-    expect(screen.getByText("已读取评论样本 0")).toBeTruthy();
-    expect(screen.getByText(/平台显示 427 条评论，但本地尚无该视频的评论正文样本/)).toBeTruthy();
+    expect(await screen.findByText("已读取评论样本 0")).toBeTruthy();
+    expect(await screen.findByText(/平台显示 427 条评论，但本地尚无该视频的评论正文样本/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText("B")).toBeTruthy());
     expect(screen.getByText("12 条视频证据、深析 2 次。")).toBeTruthy();
   });

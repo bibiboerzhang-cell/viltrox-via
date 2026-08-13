@@ -362,9 +362,12 @@ def enqueue_smart_search_profile_advance(
         "search_session_id": session_id,
         "query_text": query,
         "product_sku": _text(body.get("product_sku")),
-        # why-fit 人群侧上下文(纯展示透传):planner 计划里的产品人群,worker 跑 recall 时拼"适合理由"。
-        "product_focus": (body.get("llm_query_plan") or {}).get("product_focus") if isinstance(body.get("llm_query_plan"), dict) else None,
-        "target_persona": (body.get("llm_query_plan") or {}).get("target_persona") if isinstance(body.get("llm_query_plan"), dict) else "",
+        # The browser may submit a previous preview plan, but a durable worker
+        # must derive product/persona identity again from the operator query
+        # and explicit SKU.  Never promote client-supplied plan fields into a
+        # trusted queued payload.
+        "product_focus": None,
+        "target_persona": "",
         "candidate_limit": max(1, min(_int(body.get("candidate_limit"), 100), 500)),
         "limit": result_limit,
         "result_limit": result_limit,

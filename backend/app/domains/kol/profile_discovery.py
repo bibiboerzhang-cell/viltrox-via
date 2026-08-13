@@ -57,7 +57,12 @@ from app.domains.kol.profile_discovery_candidates import (  # noqa: F401
     _is_own_brand_account,
     _normalize_discovery_platform,
     _strict_discovery_platforms,
+    explicit_platforms_from_query,
     filter_recall_result_platforms,
+    explicit_market_constraint,
+    filter_recall_result_market,
+    normalize_market_constraint,
+    resolve_market_constraint,
 )
 from app.domains.kol.profile_discovery_localize import (  # noqa: F401
     MARKET_LANGUAGE,
@@ -316,7 +321,10 @@ _PIPELINE_SHARED_NAMES = (
     "_text",
     "advance_search_session_items",
     "discover_new_creators",
+    "explicit_platforms_from_query",
+    "filter_recall_result_market",
     "filter_recall_result_platforms",
+    "resolve_market_constraint",
     "profile_recall",
     "search_sessions",
 )

@@ -1,9 +1,6 @@
 // SmartKolInputPanel 纯派生器：只读会话/payload，绝不写 viltrox_fit_score。
 import {
-  type VkpiKolRecallItem,
-  type VkpiKolRecallResponse,
-  type VkpiKolSearchHistoryItem,
-  type VkpiKolUrlDeepCrawlResponse,
+  type VkpiKolRecallItem, type VkpiKolRecallResponse, type VkpiKolSearchHistoryItem, type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import {
   asRecord,
@@ -306,6 +303,21 @@ export function mergeSearchSnapshotItems(previous: Row[], incoming: Row[]): Row[
   return merged;
 }
 
+function mergeAuthoritativeSearchSnapshotItems(previous: Row[], incoming: Row[]): Row[] {
+  // Preserve richer fields only for identities that remain in the authoritative list. Rows absent
+  // from the incoming snapshot were deliberately hidden/removed and must not be unioned back in.
+  const previousByKey = new Map<string, Row>();
+  previous.forEach((item) => searchSnapshotItemKeys(item).forEach((key) => {
+    if (!previousByKey.has(key)) previousByKey.set(key, item);
+  }));
+  return incoming.map((item) => {
+    const previousItem = searchSnapshotItemKeys(item)
+      .map((key) => previousByKey.get(key))
+      .find((value): value is Row => Boolean(value));
+    return previousItem ? mergeSearchSnapshotRecord(previousItem, item) : { ...item };
+  });
+}
+
 /** Keep the richest version of every KOL while still accepting fresh phase/count metadata. */
 export function mergeKolSearchSessionSnapshots(
   previous: VkpiKolSearchHistoryItem | null,
@@ -313,17 +325,24 @@ export function mergeKolSearchSessionSnapshots(
 ): VkpiKolSearchHistoryItem {
   if (!previous) return incoming;
   const merged = mergeSearchSnapshotRecord(previous as Row, incoming as Row) as VkpiKolSearchHistoryItem;
+  const authoritative = incoming.items_snapshot_complete === true;
   const mergeCollection = (key: "items" | "active_items" | "items_preview") => {
     const previousItems = Array.isArray(previous[key]) ? previous[key]!.map(asRecord) : [];
     const incomingItems = Array.isArray(incoming[key]) ? incoming[key]!.map(asRecord) : [];
     if (!previousItems.length && !incomingItems.length) return;
-    merged[key] = mergeSearchSnapshotItems(previousItems, incomingItems) as VkpiKolSearchHistoryItem[typeof key];
+    merged[key] = (
+      authoritative
+        ? mergeAuthoritativeSearchSnapshotItems(previousItems, incomingItems)
+        : mergeSearchSnapshotItems(previousItems, incomingItems)
+    ) as VkpiKolSearchHistoryItem[typeof key];
   };
   mergeCollection("items");
   mergeCollection("active_items");
   mergeCollection("items_preview");
   const mergedVisible = sessionItems(merged).length;
-  merged.item_count = Math.max(Number(previous.item_count) || 0, Number(incoming.item_count) || 0, mergedVisible);
+  merged.item_count = authoritative
+    ? mergedVisible
+    : Math.max(Number(previous.item_count) || 0, Number(incoming.item_count) || 0, mergedVisible);
   return merged;
 }
 
@@ -386,14 +405,36 @@ function mergeRecallItemLists(previous: VkpiKolRecallItem[], incoming: VkpiKolRe
   }) as unknown as VkpiKolRecallItem[];
 }
 
+function mergeAuthoritativeRecallItemLists(
+  previous: VkpiKolRecallItem[],
+  incoming: VkpiKolRecallItem[],
+): VkpiKolRecallItem[] {
+  const mergedByKey = new Map<string, VkpiKolRecallItem>();
+  mergeRecallItemLists(previous, incoming).forEach((item) => {
+    searchSnapshotItemKeys(item as unknown as Row).forEach((key) => mergedByKey.set(key, item));
+  });
+  return incoming.map((item) => {
+    const merged = searchSnapshotItemKeys(item as unknown as Row)
+      .map((key) => mergedByKey.get(key))
+      .find(Boolean);
+    return merged || item;
+  });
+}
+
 export function mergeKolRecallSnapshots(
   previous: VkpiKolRecallResponse | null,
   incoming: VkpiKolRecallResponse,
 ): VkpiKolRecallResponse {
   if (!previous) return incoming;
   // Canonical ``items`` owns cross-bucket rank order.  Bucket-by-bucket merge
-  // used to regroup creator/reviewer rows and silently discard ``unknown``.
-  const items = mergeRecallItemLists(recallTopItems(previous), recallTopItems(incoming));
+  // used to regroup creator/reviewer rows and silently discard ``unknown``. A complete
+  // server snapshot is authoritative for membership and rank, while still retaining richer
+  // fields for identities that remain present.
+  const previousItems = recallTopItems(previous);
+  const incomingItems = recallTopItems(incoming);
+  const items = incoming.snapshot_complete === true
+    ? mergeAuthoritativeRecallItemLists(previousItems, incomingItems)
+    : mergeRecallItemLists(previousItems, incomingItems);
   return {
     ...previous,
     ...incoming,
@@ -460,7 +501,8 @@ export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): bool
 // 触达展示闸折叠计数(2026-07-12 第二道闸):后端 get_session/list_history 按 pool 现值实时
 // 重判,被隐藏的项不再下发,只给诚实计数——hidden_low_reach=低触达不展示(已入库仅不推荐)、
 // hidden_analyzing=档案补全中(「分析后再 po」,补全回填达标后自动放出)。旧后端无该键 → null,
-// 前端静默不渲染(graceful absence,不编数字)。by_type 拆框:new_creator 归框3,其余归框2。
+// 前端静默不渲染(graceful absence,不编数字)。by_type 与卡片框位一致:
+// new_creator/existing_kol 归框3,recall_candidate 归框2。
 export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem | null): {
   discovery: { lowReach: number; analyzing: number };
   recall: { lowReach: number; analyzing: number };
@@ -480,10 +522,13 @@ export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem |
   const existing = bucket("existing_kol");
   const recall = bucket("recall_candidate");
   return {
-    discovery: newCreator,
+    discovery: {
+      lowReach: newCreator.lowReach + existing.lowReach,
+      analyzing: newCreator.analyzing + existing.analyzing,
+    },
     recall: {
-      lowReach: existing.lowReach + recall.lowReach,
-      analyzing: existing.analyzing + recall.analyzing,
+      lowReach: recall.lowReach,
+      analyzing: recall.analyzing,
     },
   };
 }

@@ -17,6 +17,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.pool_common import _mask_email
 from app.domains.kol.contact_access import mask_contact_payload
+from app.domains.kol.profile_recall_match_evidence import candidate_set_distribution_from_items
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,8 @@ from app.domains.kol.search_sessions_items import (
 
 # Re-export attach-result builders (behavior-preserving move).
 from app.domains.kol.search_sessions_attach import (
+    _safe_candidate_facets,
+    _safe_llm_query_plan,
     _link_job_payloads,
     _session_status_from_url_result,
     _url_result_item,
@@ -311,6 +314,65 @@ def _session_items_by_id(conn: Any, session_ids: list[int]) -> dict[int, list[di
     return grouped
 
 
+def _canonical_visible_recall(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project unique visible recall rows for read-time counts and facets."""
+    canonical: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if _text(item.get("item_type")) != "recall_candidate":
+            continue
+        payload = _dict(item.get("payload"))
+        pool_id = _int_or_none(item.get("kol_pool_id") or payload.get("kol_pool_id"))
+        platform = _text(payload.get("platform")).lower()
+        handle = _text(payload.get("handle") or payload.get("channel_name")).lstrip("@").lower()
+        source_url = _text(item.get("source_url") or payload.get("profile_url")).lower()
+        identity = (
+            f"pool:{pool_id}" if pool_id
+            else f"profile:{platform}:{handle}" if platform and handle
+            else f"url:{source_url}" if source_url
+            else f"item:{_int_or_none(item.get('id')) or len(canonical) + 1}"
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        canonical.append(
+            {
+                "kol_pool_id": pool_id,
+                "bucket": "reviewer" if _text(payload.get("bucket")) == "reviewer" else "creator",
+                "candidate_facets": _safe_candidate_facets(payload.get("candidate_facets")),
+            }
+        )
+    return canonical
+
+
+def _refresh_visible_recall_summary(session: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    """Make a full session snapshot describe only recall cards still visible."""
+    summary = _dict(session.get("result_summary"))
+    is_recall = (
+        _text(session.get("query_type")) == "text_recall"
+        or _text(summary.get("kind")) == "kol_recall"
+        or any(_text(item.get("item_type")) == "recall_candidate" for item in items)
+    )
+    summary["items_snapshot_complete"] = True
+    if is_recall:
+        canonical = _canonical_visible_recall(items)
+        creator_count = sum(1 for item in canonical if item["bucket"] == "creator")
+        reviewer_count = len(canonical) - creator_count
+        diagnostics = _dict(summary.get("diagnostics"))
+        diagnostics.update(
+            {
+                "returned_count": len(canonical),
+                "creator_returned": creator_count,
+                "reviewer_returned": reviewer_count,
+            }
+        )
+        summary["diagnostics"] = diagnostics
+        summary["match_status"] = "matched" if canonical else "empty"
+        summary["candidate_set_distribution"] = candidate_set_distribution_from_items(canonical)
+    session["result_summary"] = summary
+    session["items_snapshot_complete"] = True
+
+
 def create_session(
     *,
     query_text: str,
@@ -357,12 +419,7 @@ def list_sessions(
     normalized_status = _normalize_status(status) if status else ""
     actor_id = _staff_user_id(staff) if scope_to_staff else None
     if scope_to_staff and not actor_id:
-        return {
-            "status": "ready",
-            "count": 0,
-            "items": [],
-            "worker_health": {"status": "unobserved", "reason": "current_staff_unresolved"},
-        }
+        return {"status": "ready", "count": 0, "items": []}
     conn = get_conn()
     where: list[str] = []
     params: list[Any] = []
@@ -395,12 +452,33 @@ def list_sessions(
             grouped.get(int(session.get("id") or 0), []),
             worker_health=worker_health,
         )
+        summary = _dict(session.get("result_summary"))
+        if "llm_query_plan" in summary:
+            safe_plan = _safe_llm_query_plan(summary.get("llm_query_plan"))
+            if safe_plan:
+                summary["llm_query_plan"] = safe_plan
+            else:
+                summary.pop("llm_query_plan", None)
+            session["result_summary"] = summary
     return {
         "status": "ready",
         "count": len(sessions),
         "items": sessions,
         "worker_health": worker_health,
     }
+
+
+def require_session_owner(session_id: int, *, staff: dict[str, Any] | None) -> None:
+    """Fail closed unless the session belongs to the current staff actor."""
+    actor_id = _staff_user_id(staff)
+    if not actor_id:
+        raise LookupError(f"search session not found: {session_id}")
+    row = get_conn().execute(
+        "SELECT id FROM vkpi_kol_search_sessions WHERE id=? AND created_by=?",
+        (int(session_id), int(actor_id)),
+    ).fetchone()
+    if not row:
+        raise LookupError(f"search session not found: {session_id}")
 
 
 def list_history(
@@ -418,7 +496,7 @@ def list_history(
     每个人的记录不能串:默认按 created_by=当前登录人作用域过滤(scope_to_staff),
     不同员工互不串记录。actor 取不到时返回空,绝不回退成全员记录。
     """
-    return _list_history(
+    response = _list_history(
         limit=limit,
         status=status,
         query_type=query_type,
@@ -430,6 +508,18 @@ def list_history(
         apply_reach_display_gate_fn=_apply_reach_display_gate,
         mask_contact_payload_fn=mask_contact_payload,
     )
+    for session in _list(response.get("items")):
+        if not isinstance(session, dict):
+            continue
+        summary = _dict(session.get("result_summary"))
+        if "llm_query_plan" in summary:
+            safe_plan = _safe_llm_query_plan(summary.get("llm_query_plan"))
+            if safe_plan:
+                summary["llm_query_plan"] = safe_plan
+            else:
+                summary.pop("llm_query_plan", None)
+            session["result_summary"] = summary
+    return response
 
 
 def get_session(
@@ -554,11 +644,21 @@ def get_session(
     # 低触达行(如 kol_pool 12297,2 粉)从「全网新发现/库内已有」消失;followers 未知折叠为
     # 「分析中 ×N」。counts/count 按可见项重算,隐藏计数走 reach_floor_display 诚实透出。
     items, reach_counts = _apply_reach_display_gate(conn, items)
+    _refresh_visible_recall_summary(session, items)
+    summary = _dict(session.get("result_summary"))
+    if "llm_query_plan" in summary:
+        safe_plan = _safe_llm_query_plan(summary.get("llm_query_plan"))
+        if safe_plan:
+            summary["llm_query_plan"] = safe_plan
+        else:
+            summary.pop("llm_query_plan", None)
+        session["result_summary"] = summary
     for item in items:
         if isinstance(item.get("payload"), dict):
             item["payload"] = mask_contact_payload(item["payload"])
     session["items"] = items
     session["count"] = len(items)
+    session["item_count"] = len(items)
     session["counts"] = _item_counts(items)
     session["reach_floor_display"] = reach_counts
     return session
@@ -747,7 +847,21 @@ def update_session_result_summary(
     summary = _loads(dict(row).get("result_summary_json"), {})
     if not isinstance(summary, dict):
         summary = {}
-    summary.update(_dict(summary_patch))
+    patch = dict(_dict(summary_patch))
+    if "llm_query_plan" in patch:
+        safe_plan = _safe_llm_query_plan(patch.get("llm_query_plan"))
+        if safe_plan:
+            patch["llm_query_plan"] = safe_plan
+        else:
+            patch.pop("llm_query_plan", None)
+            summary.pop("llm_query_plan", None)
+    summary.update(patch)
+    if "llm_query_plan" in summary:
+        safe_plan = _safe_llm_query_plan(summary.get("llm_query_plan"))
+        if safe_plan:
+            summary["llm_query_plan"] = safe_plan
+        else:
+            summary.pop("llm_query_plan", None)
     updated = conn.execute(
         """
         UPDATE vkpi_kol_search_sessions

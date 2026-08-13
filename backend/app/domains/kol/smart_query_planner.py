@@ -151,13 +151,51 @@ def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, 
         "reviewer_quota": 0,
         "include_new_discovery": False,
         "new_discovery_limit": 0,
-        "reason": "explicit_product_not_in_catalog",
+        "reason": _text(clarification.get("reason")) or "explicit_product_not_in_catalog",
         "provider": "product_catalog_guard",
         "model": "product_catalog_guard",
         "fallback_used": False,
         "provider_calls_performed": False,
         "clarification": clarification,
     }
+
+
+def _resolve_requested_product(
+    query_text: str,
+    body: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve explicit SKU and free text to one catalog identity, or explain why not."""
+    try:
+        inferred = product_resolver.resolve_product(query_text)
+    except Exception:
+        inferred = None
+    explicit_sku = _text(body.get("product_sku") or body.get("productSku"))
+    if explicit_sku:
+        try:
+            explicit = product_resolver.resolve_product_sku(explicit_sku)
+        except Exception:
+            explicit = None
+        if not explicit:
+            return None, {
+                "reason": "explicit_product_sku_not_in_catalog",
+                "message": "所选产品不在当前产品目录中，请重新选择后再找达人。",
+                "suggestions": [],
+            }
+        inferred_sku = _text((inferred or {}).get("sku")).lower()
+        explicit_resolved_sku = _text(explicit.get("sku")).lower()
+        if inferred_sku and inferred_sku != explicit_resolved_sku:
+            return None, {
+                "reason": "conflicting_product_constraints",
+                "message": "输入内容与所选产品不一致，请确认一个产品后再找达人。",
+                "suggestions": [],
+            }
+        return explicit, None
+    if inferred:
+        return inferred, None
+    try:
+        return None, product_resolver.unresolved_product_request(query_text)
+    except Exception:
+        return None, None
 
 
 def _avoid_types_for_product(product: dict[str, Any] | None) -> list[str]:
@@ -359,18 +397,10 @@ def plan_text_query_provider_free(
     if not query_text:
         return _fallback_plan(query_text, reason="empty_query")
 
-    try:
-        resolved_product = product_resolver.resolve_product(query_text)
-    except Exception:
-        resolved_product = None
-
+    resolved_product, clarification = _resolve_requested_product(query_text, body)
+    if clarification:
+        return _clarification_plan(query_text, clarification)
     if not resolved_product:
-        try:
-            clarification = product_resolver.unresolved_product_request(query_text)
-        except Exception:
-            clarification = None
-        if clarification:
-            return _clarification_plan(query_text, clarification)
         return _fallback_plan(query_text, reason="provider_free_initial")
 
     persona_plan = _plan_from_product_persona(query_text, resolved_product, body)
@@ -419,18 +449,9 @@ def _plan_text_query_impl(
     # 第一轮:把 query 里提到的产品(epic 65macro / 550pro / Z1pro / SKU…)模糊匹配到
     # 真实 vkpi_products,取真 SKU + 营销名 + 类别 + 价格 + 描述。匹配到就注入 LLM prompt,
     # 让第一轮 LLM 据真实 specs 深度分析产品定位与人群,而非对着裸 query 产泛词。读取失败不崩。
-    try:
-        resolved_product = product_resolver.resolve_product(query_text)
-    except Exception:
-        resolved_product = None
-
-    if not resolved_product:
-        try:
-            clarification = product_resolver.unresolved_product_request(query_text)
-        except Exception:
-            clarification = None
-        if clarification:
-            return _clarification_plan(query_text, clarification)
+    resolved_product, clarification = _resolve_requested_product(query_text, body)
+    if clarification:
+        return _clarification_plan(query_text, clarification)
 
     # 收口路①-1:解析到 SKU 后,优先读已填充的产品知识库 persona(地基A)。命中即直接拿
     # ideal_persona / avoid_types / ideal_creator_types / verticals,跳过 on-the-fly LLM(更稳更快、
@@ -520,7 +541,11 @@ def plan_text_query(
     import json as _pj
     from datetime import datetime as _dt, timezone as _tz
 
-    _qkey = _hl.md5(_text(query).strip().lower().encode("utf-8")).hexdigest()
+    body = body or {}
+    cache_identity = "|".join(
+        (_text(query).strip().lower(), _text(body.get("product_sku") or body.get("productSku")).lower())
+    )
+    _qkey = _hl.md5(cache_identity.encode("utf-8")).hexdigest()
     try:
         from app.domains.analysis.cache_repo import get_analysis_cache_entry as _gc
 

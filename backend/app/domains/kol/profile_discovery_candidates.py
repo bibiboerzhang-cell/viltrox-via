@@ -5,6 +5,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from app.domains.kol.profile_recall_match_evidence import candidate_set_distribution_from_items
+
 from app.domains.kol.discovery_filters import (
     SUPPORTED_DISCOVERY_PLATFORMS,
     _platforms,
@@ -74,6 +76,20 @@ def _strict_discovery_platforms(value: Any, *, fallback: str = "") -> list[str]:
     if fallback_text and fallback_text not in {"all", "*"}:
         return [fallback_text] if fallback_text in SUPPORTED_DISCOVERY_PLATFORMS else []
     return _platforms(None)
+
+
+def explicit_platforms_from_query(query: Any) -> list[str]:
+    """Extract only platform names the operator actually typed."""
+    text = str(query or "").strip().lower()
+    patterns = (
+        ("youtube", r"(?<![a-z])(?:youtube|yt)(?![a-z])|油管"),
+        # ``ins`` is a common unit abbreviation ("5.5 ins monitor"), not a
+        # safe Instagram alias.  Keep the unambiguous product/UI spellings.
+        ("instagram", r"(?<![a-z])(?:instagram|insta|ig)(?![a-z])"),
+        ("tiktok", r"(?<![a-z])(?:tiktok|tt)(?![a-z])|抖音"),
+        ("facebook", r"(?<![a-z])(?:facebook|fb)(?![a-z])"),
+    )
+    return [platform for platform, pattern in patterns if re.search(pattern, text)]
 
 
 def _candidate_platform_signals(item: dict[str, Any]) -> set[str]:
@@ -241,9 +257,180 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
         }
     )
     filtered["diagnostics"] = diagnostics
+    if diagnostics.get("evidence_gate_enabled"):
+        filtered["match_status"] = "matched" if after_count else "empty"
+        if after_count:
+            diagnostics["empty_reason"] = ""
+        elif before_count > 0:
+            diagnostics["empty_reason"] = "no_platform_evidence_match"
+        filtered["candidate_set_distribution"] = candidate_set_distribution_from_items(
+            list(filtered.get("items") or [])
+        )
     filtered["platform_filter"] = {
         "applied": True,
         "requested": sorted(requested),
         "filtered_out": max(0, before_count - after_count),
     }
+    return filtered
+
+
+_MARKET_ALIASES = {
+    "us": "us", "usa": "us", "united states": "us", "united states of america": "us", "美国": "us",
+    "uk": "gb", "gb": "gb", "united kingdom": "gb", "great britain": "gb", "英国": "gb",
+    "ca": "ca", "canada": "ca", "加拿大": "ca",
+    "de": "de", "germany": "de", "德国": "de",
+    "fr": "fr", "france": "fr", "法国": "fr",
+    "jp": "jp", "japan": "jp", "日本": "jp",
+    "kr": "kr", "korea": "kr", "south korea": "kr", "韩国": "kr",
+    "au": "au", "australia": "au", "澳大利亚": "au",
+    "es": "es", "spain": "es", "españa": "es", "西班牙": "es",
+    "mx": "mx", "mexico": "mx", "méxico": "mx", "墨西哥": "mx",
+    "it": "it", "italy": "it", "italia": "it", "意大利": "it",
+    "br": "br", "brazil": "br", "brasil": "br", "巴西": "br",
+    "pt": "pt", "portugal": "pt", "葡萄牙": "pt",
+    "ru": "ru", "russia": "ru", "russian federation": "ru", "俄罗斯": "ru",
+    "th": "th", "thailand": "th", "泰国": "th",
+    "vn": "vn", "vietnam": "vn", "viet nam": "vn", "越南": "vn",
+    "id": "id", "indonesia": "id", "印尼": "id", "印度尼西亚": "id",
+    "tr": "tr", "turkey": "tr", "türkiye": "tr", "土耳其": "tr",
+    "pl": "pl", "poland": "pl", "波兰": "pl",
+    "nl": "nl", "netherlands": "nl", "holland": "nl", "荷兰": "nl",
+    "sa": "sa", "saudi arabia": "sa", "沙特": "sa",
+    "ae": "ae", "united arab emirates": "ae", "uae": "ae", "阿联酋": "ae",
+    "in": "in", "india": "in", "印度": "in",
+    "sg": "sg", "singapore": "sg", "新加坡": "sg",
+    "nz": "nz", "new zealand": "nz", "新西兰": "nz",
+}
+AMBIGUOUS_MARKET_CONSTRAINT = "__ambiguous_market__"
+_CONTEXT_REQUIRED_MARKET_CODES = frozenset({"ae", "au", "ca", "de", "id", "in", "it", "pl", "pt", "sa"})
+_LOWERCASE_SAFE_MARKET_CODES = frozenset({
+    "br", "fr", "gb", "jp", "kr", "mx", "nl", "nz", "ru", "sg", "th", "tr", "uk", "vn",
+})
+
+
+def explicit_market_constraint(query: Any, planned_market: Any) -> str:
+    """Return the one market the operator actually stated.
+
+    ``planned_market`` is retained for API compatibility but is never trusted
+    as a hard constraint; provider/fallback defaults are not operator choices.
+    """
+    raw_text = str(query or "").strip()
+    text = f" {raw_text.lower()} "
+    del planned_market
+    matches: set[str] = set()
+    for alias, code in _MARKET_ALIASES.items():
+        if any("\u4e00" <= char <= "\u9fff" for char in alias):
+            if alias in text:
+                matches.add(code)
+        elif len(alias) == 2:
+            upper = re.escape(alias.upper())
+            if alias == "pl" and re.search(r"(?i)(?<![A-Za-z])PL\s*(?:-\s*)?(?:mount|卡口)", raw_text):
+                # PL is also a cinema-lens mount.  Even phrases such as
+                # "in PL mount" describe product compatibility, not Poland.
+                continue
+            # Ambiguous codes collide with ordinary language, US states, or
+            # product syntax (notably ``PL mount``). Other uppercase country
+            # codes remain useful shorthand in KOL operator queries.
+            if alias in _CONTEXT_REQUIRED_MARKET_CODES:
+                pattern = rf"(?i)(?:\b(?:in|from|country|market)\s*[:=]?\s*){upper}(?![A-Za-z])"
+            elif alias in _LOWERCASE_SAFE_MARKET_CODES:
+                pattern = rf"(?i)(?<![A-Za-z]){upper}(?![A-Za-z])"
+            else:
+                # Keep ambiguous lowercase words such as the English pronoun
+                # ``us`` and Spanish ``es`` from silently becoming countries.
+                pattern = rf"(?<![A-Za-z]){upper}(?![A-Za-z])"
+            if re.search(pattern, raw_text):
+                matches.add(code)
+        elif re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", text):
+            matches.add(code)
+    if len(matches) > 1:
+        return AMBIGUOUS_MARKET_CONSTRAINT
+    return next(iter(matches)) if matches else ""
+
+
+def normalize_market_constraint(value: Any) -> str:
+    """Normalize an explicit structured market; unknown values fail closed."""
+    return _MARKET_ALIASES.get(str(value or "").strip().lower(), "")
+
+
+def resolve_market_constraint(query: Any, structured: Any = None) -> str:
+    """Resolve one operator market, rejecting unsupported, ambiguous or conflicting input."""
+    query_market = explicit_market_constraint(query, None)
+    if query_market == AMBIGUOUS_MARKET_CONSTRAINT:
+        raise ValueError("multiple market constraints are not supported")
+    raw_structured = str(structured or "").strip()
+    structured_market = normalize_market_constraint(raw_structured) if raw_structured else ""
+    if raw_structured and not structured_market:
+        raise ValueError("unsupported market constraint")
+    if query_market and structured_market and query_market != structured_market:
+        raise ValueError("conflicting market constraints")
+    return query_market or structured_market
+
+
+def filter_recall_result_market(result: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Apply an explicit country market as a hard filter to evidence results."""
+    raw_value = str(value or "").strip()
+    requested = _MARKET_ALIASES.get(raw_value.lower(), "")
+    if not raw_value:
+        return result
+    if not requested:
+        filtered = dict(result)
+        filtered["items"] = []
+        original_buckets = result.get("buckets") if isinstance(result.get("buckets"), dict) else {}
+        filtered["buckets"] = {
+            key: [] for key, values in original_buckets.items() if isinstance(values, list)
+        }
+        diagnostics = dict(result.get("diagnostics")) if isinstance(result.get("diagnostics"), dict) else {}
+        diagnostics.update({
+            "returned_count": 0,
+            "creator_returned": 0,
+            "reviewer_returned": 0,
+            "market_filtered_out": len(result.get("items") or []),
+            "market_filter": "invalid",
+            "empty_reason": "invalid_market_constraint",
+        })
+        filtered["diagnostics"] = diagnostics
+        filtered["match_status"] = "empty"
+        filtered["candidate_set_distribution"] = candidate_set_distribution_from_items([])
+        filtered["market_filter"] = {"applied": True, "requested": "invalid", "invalid": True}
+        return filtered
+    items = result.get("items") if isinstance(result.get("items"), list) else []
+
+    def keep(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        facets = item.get("candidate_facets") if isinstance(item.get("candidate_facets"), dict) else {}
+        raw_country = str(facets.get("country") or "").strip().lower()
+        country = _MARKET_ALIASES.get(raw_country, raw_country if re.fullmatch(r"[a-z]{2}", raw_country) else "")
+        return country == requested
+
+    filtered = dict(result)
+    filtered["items"] = [item for item in items if keep(item)]
+    original_buckets = result.get("buckets") if isinstance(result.get("buckets"), dict) else {}
+    filtered["buckets"] = {
+        key: [item for item in values if keep(item)]
+        for key, values in original_buckets.items()
+        if isinstance(values, list)
+    }
+    diagnostics = dict(result.get("diagnostics")) if isinstance(result.get("diagnostics"), dict) else {}
+    after_count = len(filtered["items"])
+    diagnostics.update(
+        {
+            "returned_count": after_count,
+            "creator_returned": len(filtered["buckets"].get("creator") or []),
+            "reviewer_returned": len(filtered["buckets"].get("reviewer") or []),
+            "market_filtered_out": max(0, len(items) - after_count),
+            "market_filter": requested,
+        }
+    )
+    before_count = len(items)
+    if diagnostics.get("evidence_gate_enabled"):
+        filtered["match_status"] = "matched" if after_count else "empty"
+        if after_count:
+            diagnostics["empty_reason"] = ""
+        elif before_count > 0:
+            diagnostics["empty_reason"] = "no_market_evidence_match"
+        filtered["candidate_set_distribution"] = candidate_set_distribution_from_items(filtered["items"])
+    filtered["diagnostics"] = diagnostics
+    filtered["market_filter"] = {"applied": True, "requested": requested}
     return filtered

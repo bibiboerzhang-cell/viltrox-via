@@ -183,22 +183,30 @@ def _source_alerts(limit: int) -> list[dict[str, Any]]:
     return items
 
 
-def _source_search_sessions(limit: int) -> list[dict[str, Any]]:
-    """近期智能搜索会话推进(vkpi_kol_search_sessions)。"""
+def _source_search_sessions(
+    limit: int,
+    staff: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """当前员工近期智能搜索会话推进(vkpi_kol_search_sessions)。"""
     try:
         from app.db.connection import get_conn, table_exists
+        from app.domains.kol.search_sessions_serde import _staff_user_id
 
         if not table_exists("vkpi_kol_search_sessions"):
+            return []
+        actor_id = _staff_user_id(staff)
+        if not actor_id:
             return []
         conn = get_conn()
         rows = conn.execute(
             """
             SELECT id, query_text, query_type, status, updated_at
             FROM vkpi_kol_search_sessions
+            WHERE created_by=?
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (int(actor_id), limit),
         ).fetchall()
     except Exception:
         return []
@@ -270,12 +278,14 @@ def _source_outreach_digests(limit: int) -> list[dict[str, Any]]:
 _SOURCES = (
     _source_apify_jobs,
     _source_alerts,
-    _source_search_sessions,
     _source_outreach_digests,
 )
 
 
-def _build_activity_payload(limit: int) -> dict[str, Any]:
+def _build_activity_payload(
+    limit: int,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """聚合多源真实事件成统一「思考流」,按 ts 倒序合并截 limit。
 
     每源多取一些(limit 条),合并后统一排序再截断,保证跨源的时间顺序正确。
@@ -283,6 +293,7 @@ def _build_activity_payload(limit: int) -> dict[str, Any]:
     轮询端点与聚合流端点同源复用此投影。
     """
     merged: list[dict[str, Any]] = []
+    merged.extend(_source_search_sessions(limit, staff=staff))
     for source in _SOURCES:
         try:
             merged.extend(source(limit))
@@ -301,8 +312,7 @@ def recent_activity(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """聚合多源真实事件成统一「思考流」(纯读)。10s 轮询友好。"""
-    del staff  # 权限已由 require_tab 校验;本端点无 scope 二次过滤需求。
-    return _build_activity_payload(int(limit))
+    return _build_activity_payload(int(limit), staff=staff)
 
 
 @router.get("/stream")
@@ -319,8 +329,8 @@ async def stream_activity(
     """
     if not _SSE_AVAILABLE:
         return JSONResponse(status_code=503, content={"error": "SSE not available. Install sse-starlette."})
-    del staff  # 权限已由 require_tab 校验。
     lim = int(limit)
+    activity_staff = dict(staff) if isinstance(staff, dict) else None
 
     async def event_generator():
         last_signature: str | None = None
@@ -328,7 +338,7 @@ async def stream_activity(
             if await request.is_disconnected():
                 break
             try:
-                payload = await asyncio.to_thread(_build_activity_payload, lim)
+                payload = await asyncio.to_thread(_build_activity_payload, lim, activity_staff)
             except Exception:
                 logger.warning("activity/stream 聚合失败,优雅收尾断流(前端回退轮询)", exc_info=True)
                 break

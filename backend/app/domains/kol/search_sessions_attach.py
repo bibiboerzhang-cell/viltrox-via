@@ -11,11 +11,13 @@ only mirrors the upstream ``viltrox_fit_score_untouched`` flags into summaries.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol.contact_system import project_public_profile_url
+from app.domains.kol.profile_recall_match_evidence import query_evidence_terms, why_fit_from_match_evidence
 from app.domains.tasks.search_session_lineage import with_search_session_lineage
 
 from app.domains.kol.search_sessions_serde import (
@@ -36,6 +38,198 @@ logger = get_logger(__name__)
 # Confirmed from the real apify_jobs table.  Keep this contract narrow so an
 # unknown future state cannot accidentally terminalize a live search session.
 _TERMINAL_LINKED_JOB_STATUSES = frozenset({"done", "failed", "blocked", "triage"})
+_MATCH_EVIDENCE_FIELDS = frozenset({
+    "handle", "display_name", "bio", "primary_topic", "content_style",
+    "secondary_topics_json", "profile_text", "type_reason", "representative_evidence.title",
+})
+_FACET_NAMES = ("platform", "country", "language", "profile_type", "contact_available", "video_evidence")
+_PLAN_STATUS_VALUES = frozenset({"ready", "fallback", "needs_clarification"})
+_PLAN_CODE_RE = re.compile(r"^[a-zA-Z0-9_.:/-]{1,120}$")
+
+
+def _looks_like_contact_value(value: str) -> bool:
+    text = str(value or "").strip()
+    phone_like = re.search(r"(?<!\w)(?:\+?\d[\d().\s-]{5,}\d)(?!\w)", text)
+    return bool(
+        re.search(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}", text, flags=re.IGNORECASE)
+        or re.search(r"(?:https?://|www\.)", text, flags=re.IGNORECASE)
+        or (phone_like and len(re.sub(r"\D", "", phone_like.group(0))) >= 7)
+    )
+
+
+def _safe_match_evidence(value: Any, *, allowed_terms: set[str]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    for raw in _list(value)[:12]:
+        if not isinstance(raw, dict):
+            continue
+        field = _text(raw.get("field"))[:48]
+        term = _text(raw.get("term")).lower()[:80]
+        source = _text(raw.get("source"))
+        if (
+            field in _MATCH_EVIDENCE_FIELDS
+            and term in allowed_terms
+            and not _looks_like_contact_value(term)
+            and source == "server_profile_evidence"
+        ):
+            output.append({"field": field, "term": term, "source": source})
+    return output
+
+
+def _safe_candidate_facets(value: Any) -> dict[str, str]:
+    raw = _dict(value)
+    output: dict[str, str] = {}
+    for name in _FACET_NAMES:
+        text = _text(raw.get(name)).lower()[:40]
+        if name in {"contact_available", "video_evidence"}:
+            if text in {"yes", "no", "unknown"}:
+                output[name] = text
+        elif text and re.fullmatch(r"[a-z][a-z0-9 _-]{0,39}|unknown", text):
+            output[name] = text
+    return output
+
+
+def _safe_candidate_distribution(value: Any) -> dict[str, Any]:
+    raw = _dict(value)
+    if raw.get("claim_status") != "descriptive_only":
+        return {}
+    denominator = _int_or_none(raw.get("denominator")) if raw.get("denominator") else 0
+    if denominator is None or denominator > 30:
+        return {}
+    facets: dict[str, dict[str, int]] = {}
+    raw_facets = _dict(raw.get("facets"))
+    for name in _FACET_NAMES:
+        counts: dict[str, int] = {}
+        for label, count in list(_dict(raw_facets.get(name)).items())[:32]:
+            safe = _safe_candidate_facets({name: label}).get(name)
+            try:
+                number = int(count)
+            except (TypeError, ValueError):
+                continue
+            if safe and 0 <= number <= denominator:
+                counts[safe] = number
+        if sum(counts.values()) != denominator:
+            return {}
+        facets[name] = counts
+    return {
+        "claim_status": "descriptive_only",
+        "denominator": denominator,
+        "denominator_definition": "returned_canonical_candidates",
+        "facets": facets,
+    }
+
+
+def _safe_plan_text(value: Any, *, limit: int) -> str:
+    """Return bounded UI copy, rejecting contact-like or control-bearing values."""
+    text = _text(value).strip()
+    if not text or _looks_like_contact_value(text) or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", text):
+        return ""
+    return text[:limit]
+
+
+def _safe_plan_list(value: Any, *, limit: int = 10, item_limit: int = 120) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in _list(value)[:limit]:
+        text = _safe_plan_text(raw, limit=item_limit)
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            output.append(text)
+    return output
+
+
+def _safe_plan_code(value: Any) -> str:
+    text = _text(value).strip()
+    return text if _PLAN_CODE_RE.fullmatch(text) else ""
+
+
+def _safe_llm_query_plan(value: Any) -> dict[str, Any]:
+    """Persist only the bounded, public plan projection needed for history replay."""
+    raw = _dict(value)
+    if not raw:
+        return {}
+    output: dict[str, Any] = {}
+    status = _text(raw.get("status")).lower()
+    if status in _PLAN_STATUS_VALUES:
+        output["status"] = status
+
+    for name, limit in (
+        ("search_query", 500),
+        ("target_persona", 1000),
+        ("product_positioning", 1000),
+        ("market", 80),
+    ):
+        text = _safe_plan_text(raw.get(name), limit=limit)
+        if text:
+            output[name] = text
+    for name, count in (("product_focus", 10), ("avoid_types", 8), ("platforms", 8)):
+        values = _safe_plan_list(raw.get(name), limit=count)
+        if values:
+            output[name] = values
+    for name, lower, upper in (
+        ("creator_quota", 0, 50),
+        ("reviewer_quota", 0, 50),
+        ("new_discovery_limit", 0, 50),
+    ):
+        try:
+            number = int(raw.get(name))
+        except (TypeError, ValueError):
+            number = None
+        if number is not None and lower <= number <= upper:
+            output[name] = number
+    for name in ("include_new_discovery", "fallback_used", "provider_calls_performed"):
+        if isinstance(raw.get(name), bool):
+            output[name] = raw[name]
+    for name in ("reason", "provider", "model", "persona_source"):
+        code = _safe_plan_code(raw.get(name))
+        if code:
+            output[name] = code
+
+    product = _dict(raw.get("resolved_product"))
+    safe_product: dict[str, Any] = {}
+    for name in ("sku", "model_name", "marketing_name", "category_main", "series"):
+        text = _safe_plan_text(product.get(name), limit=240)
+        if text:
+            safe_product[name] = text
+    price = _float_or_none(product.get("price_usd"))
+    if price is not None and 0 <= price <= 1_000_000:
+        safe_product["price_usd"] = price
+    if safe_product:
+        output["resolved_product"] = safe_product
+
+    clarification = _dict(raw.get("clarification"))
+    safe_clarification: dict[str, Any] = {}
+    for name, limit in (
+        ("reason", 120),
+        ("requested_series", 80),
+        ("requested_model_code", 120),
+        ("requested_mount", 80),
+        ("message", 500),
+    ):
+        text = _safe_plan_text(clarification.get(name), limit=limit)
+        if text:
+            safe_clarification[name] = text
+    focals = [
+        number for raw_number in _list(clarification.get("requested_focals"))[:8]
+        if (number := _int_or_none(raw_number)) is not None and 1 <= number <= 1000
+    ]
+    if focals:
+        safe_clarification["requested_focals"] = focals
+    suggestions: list[dict[str, str]] = []
+    for suggestion in _list(clarification.get("suggestions"))[:6]:
+        row = _dict(suggestion)
+        safe_row = {
+            name: text
+            for name in ("sku", "name", "mount", "series")
+            if (text := _safe_plan_text(row.get(name), limit=240))
+        }
+        if safe_row:
+            suggestions.append(safe_row)
+    if suggestions:
+        safe_clarification["suggestions"] = suggestions
+    if safe_clarification:
+        output["clarification"] = safe_clarification
+    return output
 
 
 _RECALL_SESSION_PAYLOAD_SCHEMA = "kol_recall_candidate_v2"
@@ -245,12 +439,36 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     from app.domains.kol.search_sessions import record_items
 
     items: list[dict[str, Any]] = []
+    query = _dict(result.get("query"))
+    query_text = _text(query.get("query_text") or result.get("query"))
+    allowed_terms = set(query_evidence_terms(query_text))
+    required_product_terms = _list(query.get("required_product_evidence_terms"))
+    allowed_terms.update(query_evidence_terms(" ".join(_text(term) for term in required_product_terms)))
     source_items, replay_source, source_count = _recall_source_items(result)
     replay_complete = replay_source == "canonical_items" and len(source_items) == source_count
     for rank, raw in enumerate(source_items, start=1):
         bucket_name = _text(raw.get("bucket")) or "unknown"
         kol_pool_id = _int_or_none(raw.get("kol_pool_id") if raw.get("kol_pool_id") is not None else raw.get("id"))
         source_url = project_public_profile_url(raw.get("profile_url") or raw.get("url"))
+        payload = _recall_session_payload(
+            raw,
+            bucket=bucket_name,
+            replay_complete=replay_complete,
+            replay_source=replay_source,
+        )
+        # A stored explanation must be reproducible from the exact bounded
+        # evidence stored beside it; never persist a free-form upstream reason.
+        legacy_why_fit = payload.pop("why_fit", None)
+        payload.pop("evidence", None)
+        match_evidence = _safe_match_evidence(raw.get("match_evidence"), allowed_terms=allowed_terms)
+        candidate_facets = _safe_candidate_facets(raw.get("candidate_facets"))
+        if match_evidence:
+            payload["match_evidence"] = match_evidence
+            payload["why_fit"] = why_fit_from_match_evidence(match_evidence)
+        elif safe_why_fit := _safe_plan_text(legacy_why_fit, limit=1000):
+            payload["why_fit"] = safe_why_fit
+        if len(candidate_facets) == len(_FACET_NAMES):
+            payload["candidate_facets"] = candidate_facets
         items.append(
             {
                 "dedupe_key": f"recall:{kol_pool_id or source_url or rank}",
@@ -261,12 +479,7 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
                 "score": _first_recall_score(raw),
                 "kol_pool_id": kol_pool_id,
                 "source_url": source_url,
-                "payload": _recall_session_payload(
-                    raw,
-                    bucket=bucket_name,
-                    replay_complete=replay_complete,
-                    replay_source=replay_source,
-                ),
+                "payload": payload,
             }
         )
     pipeline_running = bool(result.get("_session_pipeline_running"))
@@ -291,6 +504,15 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
             "missing_count": max(0, source_count - len(items)),
         },
     }
+    match_status = _text(result.get("match_status")).lower()
+    distribution = _safe_candidate_distribution(result.get("candidate_set_distribution"))
+    llm_query_plan = _safe_llm_query_plan(result.get("llm_query_plan"))
+    if match_status in {"matched", "empty"}:
+        summary["match_status"] = match_status
+    if distribution:
+        summary["candidate_set_distribution"] = distribution
+    if llm_query_plan:
+        summary["llm_query_plan"] = llm_query_plan
     if pipeline_running:
         summary.update({"phase": "base", "progress": pipeline_progress})
     return record_items(

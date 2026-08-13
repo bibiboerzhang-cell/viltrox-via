@@ -7,6 +7,7 @@ import { FolderPlus, Info, Loader2, MessageSquare, RefreshCw, Sparkles, UserPlus
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
 import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
+import { recallDistributionView } from "./SmartKolInputPanel.evidence";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 import type { SearchSessionProgress } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
@@ -277,6 +278,11 @@ export function withResolvedProductSku<T extends object>(item: T, productSku: st
   return normalized ? { ...item, product_sku: normalized } : item;
 }
 
+export function recallReturnedCount(result: VkpiKolRecallResponse, items: VkpiKolRecallItem[]): number {
+  const returned = Number(result.diagnostics?.returned_count);
+  return Number.isInteger(returned) && returned >= 0 ? returned : items.length;
+}
+
 export function TextResultSection({
   recallResult,
   llmPlan,
@@ -390,6 +396,7 @@ export function TextResultSection({
     ? (reachFloorDisplay.discovery.analyzing || 0) + (reachFloorDisplay.discovery.lowReach || 0)
     : 0;
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
+  const distribution = recallDistributionView(recallResult.candidate_set_distribution);
   const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
   const recallCounts = recallDisplayCounts(recallItems, (recallResult.diagnostics || {}) as Row);
   const openProductScopedItem = (item: VkpiKolRecallItem) => {
@@ -446,7 +453,7 @@ export function TextResultSection({
       {/* 框2 · 库内账号匹配 */}
       <div className="rounded-lg border border-violet-300/15 bg-violet-950/[0.10] p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-medium text-violet-100">② 库内已有的人 · {recallCounts.total} 个</div>
+          <div className="text-[11px] font-medium text-violet-100">② 库内有证据匹配 · {recallReturnedCount(recallResult, recallItems)} 个</div>
           <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500">
             <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {recallCounts.creator}</span>
             <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {recallCounts.reviewer}</span>
@@ -464,6 +471,21 @@ export function TextResultSection({
         ) : (
           <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">暂无库内匹配</div>
         )}
+        {distribution ? (
+          <div className="mt-2 rounded-md border border-cyan-300/15 bg-cyan-400/[0.04] px-2.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-1.5 text-[9.5px] text-slate-400">
+              <span className="font-medium text-cyan-100/90">本次有证据候选分布 · {distribution.denominator} 人</span>
+              <span title="仅描述本次返回的去重候选，不代表市场份额或整体市场覆盖">描述性统计 · 非市场份额</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {distribution.chips.map((chip) => (
+                <span key={`${chip.dimension}-${chip.label}`} className="rounded-full border border-white/[0.08] bg-black/20 px-2 py-0.5 text-[9px] text-slate-300">
+                  {chip.label} {chip.count}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {/* 触达展示闸折叠行(诚实信息,别删):被隐藏的候选不摆行,只报计数。 */}
         {reachFloorDisplay && (reachFloorDisplay.recall.analyzing > 0 || reachFloorDisplay.recall.lowReach > 0) ? (
           <div
@@ -558,17 +580,31 @@ export function TextResultSection({
           >
             {[
               { v: "", t: "全球·英文" },
+              { v: "US", t: "美国·英语" },
+              { v: "UK", t: "英国·英语" },
+              { v: "CA", t: "加拿大·英语" },
+              { v: "AU", t: "澳大利亚·英语" },
               { v: "JP", t: "日本·日语" },
               { v: "KR", t: "韩国·韩语" },
               { v: "DE", t: "德国·德语" },
               { v: "FR", t: "法国·法语" },
               { v: "ES", t: "西班牙·西语" },
+              { v: "MX", t: "墨西哥·西语" },
               { v: "IT", t: "意大利·意语" },
               { v: "BR", t: "巴西·葡语" },
+              { v: "PT", t: "葡萄牙·葡语" },
               { v: "RU", t: "俄罗斯·俄语" },
               { v: "TH", t: "泰国·泰语" },
               { v: "VN", t: "越南·越语" },
               { v: "ID", t: "印尼·印尼语" },
+              { v: "TR", t: "土耳其·土语" },
+              { v: "PL", t: "波兰·波语" },
+              { v: "NL", t: "荷兰·荷语" },
+              { v: "SA", t: "沙特·阿语" },
+              { v: "AE", t: "阿联酋·阿语" },
+              { v: "IN", t: "印度·英语" },
+              { v: "SG", t: "新加坡·英语" },
+              { v: "NZ", t: "新西兰·英语" },
             ].map((o) => (
               <option key={o.v} value={o.v} className="bg-slate-900 text-slate-100">{o.t}</option>
             ))}

@@ -541,8 +541,8 @@ describe("EventRadarModule", () => {
         city: "Los Angeles",
         region: "CA",
         country_code: "US",
-        // Keep the fixture in the default "upcoming" window regardless of
-        // the wall clock running this release gate.
+        // Keep this preview in the default "upcoming" window regardless of
+        // when the suite runs; the test is about preview-only gating.
         start_date: "2099-07-19",
         end_date: "2099-07-23",
         decision_status: "needs_review",

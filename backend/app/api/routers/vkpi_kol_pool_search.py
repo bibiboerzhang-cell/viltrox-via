@@ -375,6 +375,7 @@ def create_project_draft_from_kol_search_session(
     project_name/product_sku/product_name/platform/kol_pool_ids 覆盖。占用冲突降级为 warning。
     """
     try:
+        kol_search_sessions.require_session_owner(int(session_id), staff=staff)
         return project_workflow.create_project_draft_from_session(
             int(session_id),
             body or {},
@@ -463,8 +464,9 @@ def execute_kol_search_session_item_profile_crawl(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Plan or execute safe profile crawl for a discovery session item."""
-    _owned_search_session_or_http(int(session_id), staff)
     try:
+        kol_search_sessions.require_session_owner(int(session_id), staff=staff)
+        _owned_search_session_or_http(int(session_id), staff)
         if _body_bool(body, "execute"):
             queued = kol_profile_discovery.enqueue_search_session_advance(
                 session_id=int(session_id),
@@ -508,8 +510,9 @@ def advance_kol_search_session_items(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Plan or execute ordered profile crawl for discovery items in one session."""
-    _owned_search_session_or_http(int(session_id), staff)
     try:
+        kol_search_sessions.require_session_owner(int(session_id), staff=staff)
+        _owned_search_session_or_http(int(session_id), staff)
         if _body_bool(body, "execute"):
             queued = kol_profile_discovery.enqueue_search_session_advance(
                 session_id=int(session_id),
@@ -542,8 +545,9 @@ def enqueue_kol_search_session_advance(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Queue ordered profile crawl for session items; worker executes it."""
-    _owned_search_session_or_http(int(session_id), staff)
     try:
+        kol_search_sessions.require_session_owner(int(session_id), staff=staff)
+        _owned_search_session_or_http(int(session_id), staff)
         return kol_profile_discovery.enqueue_search_session_advance(
             session_id=int(session_id),
             body=body or {},
@@ -564,8 +568,9 @@ def cancel_kol_search_session_advance(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Block queued session-advance jobs; running provider work is left alone."""
-    _owned_search_session_or_http(int(session_id), staff)
     try:
+        kol_search_sessions.require_session_owner(int(session_id), staff=staff)
+        _owned_search_session_or_http(int(session_id), staff)
         return kol_profile_discovery.cancel_search_session_advance(
             session_id=int(session_id),
             body=body or {},
@@ -626,6 +631,20 @@ async def smart_kol_search(
             }
 
         recall_query = str(body.get("query_text") or query_text).strip()
+        # Reject malformed/conflicting operator filters before creating a
+        # durable session or performing any recall work.
+        explicit_market = kol_profile_discovery.resolve_market_constraint(
+            recall_query,
+            body.get("market") or body.get("country"),
+        )
+        query_platforms = kol_profile_discovery.explicit_platforms_from_query(recall_query)
+        explicit_platforms = (
+            query_platforms
+            or body.get("platforms")
+            or body.get("new_discovery_platforms")
+            or body.get("discovery_platforms")
+            or body.get("platform")
+        )
         # 先持久化可见会话,再做任何基础召回。前端紧接着调用
         # profile-advance-job 创建后台任务;worker 中才跑完整 plan_text_query。
         # 这里只用产品知识库/规则初始计划 + 本地 pool 文本召回,请求侧
@@ -724,6 +743,11 @@ async def smart_kol_search(
             or body.get("limit")
             or kol_profile_recall.DEFAULT_RESULT_LIMIT
         )
+        resolved_product = (
+            llm_query_plan.get("resolved_product")
+            if isinstance(llm_query_plan.get("resolved_product"), dict)
+            else {}
+        )
         result = await run_in_threadpool(
             kol_profile_recall.recall_kol_profiles,
             query_text=effective_query,
@@ -734,7 +758,9 @@ async def smart_kol_search(
             reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
             ratio_policy=str(body.get("ratio_policy") or "soft"),
             mixed_policy=str(body.get("mixed_policy") or "dominant"),
-            dedupe=bool(body.get("dedupe", True)),
+            # User-visible evidence results are canonical units. A request
+            # flag must not duplicate one KOL or corrupt the distribution.
+            dedupe=True,
             vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
             type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
@@ -751,12 +777,19 @@ async def smart_kol_search(
                 if isinstance(body.get("bucketPolicy"), dict)
                 else None
             ),
-            allow_backfill=bool(body.get("allow_backfill", True)),
+            # Explainable search is evidence-gated: broad popularity backfill
+            # cannot satisfy a user-visible match without field evidence.
+            allow_backfill=False,
             operator_query_text=recall_query,
+            required_product_evidence_terms=resolved_product,
         )
         result = kol_profile_discovery.filter_recall_result_platforms(
             result,
             recall_filters.get("platforms"),
+        )
+        result = kol_profile_discovery.filter_recall_result_market(
+            result,
+            explicit_market,
         )
         result.setdefault("query", {})["explicit_operator_platforms"] = explicit_query_platforms
         result["llm_query_plan"] = llm_query_plan
@@ -773,7 +806,12 @@ async def smart_kol_search(
         execute_new_discovery = bool(body.get("execute_new_discovery"))
         if include_new_discovery:
             discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
-            discovery_platforms = body.get("new_discovery_platforms") or body.get("discovery_platforms")
+            discovery_platforms = (
+                body.get("new_discovery_platforms")
+                or body.get("discovery_platforms")
+                or body.get("platforms")
+                or explicit_platforms
+            )
             platform_hint = str(body.get("platform") or "")
             if execute_new_discovery:
                 queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
@@ -859,11 +897,19 @@ async def smart_kol_search_profile_advance_job(
 
     try:
         if queue_pipeline:
+            normalized_market = kol_profile_discovery.resolve_market_constraint(
+                query_text,
+                body.get("market") or body.get("country"),
+            )
             # P0-1 命门(100 人并发):请求侧不再同步跑 LLM planner(冷启~15s,会打爆 threadpool/provider)。
             # raw query 入队 → worker 的 execute_smart_search_profile_advance_pipeline 跑 planner+recall+advance。
             queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
                 query_text=query_text,
-                body={**body, "original_query_text": query_text},
+                body={
+                    **body,
+                    **({"market": normalized_market} if normalized_market else {}),
+                    "original_query_text": query_text,
+                },
                 staff=staff,
             )
             return {

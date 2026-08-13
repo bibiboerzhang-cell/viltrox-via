@@ -278,7 +278,7 @@ def _pool_text_fallback_hits(
                     },
                 )
             )
-    if hits and not include_relevance_backfill:
+    if not include_relevance_backfill:
         return hits
     # A requested result count is a contract, not a reason to disguise broad
     # pool rows as query matches.  When enabled, append deterministic pool

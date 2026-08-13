@@ -4,9 +4,11 @@ import {
   candidateBusinessLane,
   hasExplicitBusinessLanes,
   recallDisplayCounts,
+  recallReturnedCount,
   resolvedProductSkuFromPlan,
   withResolvedProductSku,
 } from "./SmartKolInputPanel.TextResult";
+import { recallDistributionView } from "./SmartKolInputPanel.evidence";
 
 describe("SmartKolInputPanel product scope propagation", () => {
   it("reads the exact resolved catalog SKU and attaches it without mutating the candidate", () => {
@@ -56,5 +58,51 @@ describe("SmartKolInputPanel candidate business lanes", () => {
       returned_count: 30,
       requested_count: 30,
     })).toEqual({ total: 30, creator: 6, reviewer: 24 });
+  });
+});
+
+describe("SmartKolInputPanel truthful recall counts", () => {
+  const result = (candidateCount: number, returnedCount?: number) => ({
+    diagnostics: { candidate_count: candidateCount, returned_count: returnedCount },
+  }) as any;
+
+  it("uses the post-evidence returned count instead of the raw candidate pool", () => {
+    expect(recallReturnedCount(result(100, 3), [{}, {}, {}] as any)).toBe(3);
+    expect(recallReturnedCount(result(100, 0), [] as any)).toBe(0);
+  });
+
+  it("falls back to the rendered rows for older session payloads", () => {
+    expect(recallReturnedCount(result(100), [{}, {}, {}] as any)).toBe(3);
+  });
+});
+
+describe("SmartKolInputPanel descriptive candidate distribution", () => {
+  it("renders only a denominator-bound descriptive candidate set", () => {
+    expect(recallDistributionView({
+      claim_status: "descriptive_only",
+      denominator: 3,
+      facets: {
+        platform: { youtube: 2, instagram: 1 },
+        country: { us: 2, unknown: 1 },
+        language: { en: 3 },
+        profile_type: { creator: 2, reviewer: 1 },
+        contact_available: { yes: 1, no: 2 },
+        video_evidence: { yes: 3 },
+      },
+    })).toMatchObject({
+      denominator: 3,
+      chips: expect.arrayContaining([
+        { dimension: "country", label: "市场 US", count: 2 },
+        { dimension: "contact_available", label: "联系方式 有", count: 1 },
+      ]),
+    });
+  });
+
+  it("rejects a distribution whose facet counts do not equal its denominator", () => {
+    expect(recallDistributionView({
+      claim_status: "descriptive_only",
+      denominator: 3,
+      facets: { platform: { youtube: 2 } },
+    })).toBeNull();
   });
 });

@@ -65,15 +65,35 @@ def _query_tokens(query: str) -> list[str]:
 # 现在:query 明示卡口/焦段时,候选池先按硬约束过滤;滤空 = 诚实返回 None
 # (planner 退回按 query 字面推人群,不再张冠李戴)。
 _MOUNT_RULES: list[tuple[str, str]] = [
-    # 顺序敏感:EF 要在 FE/E 前(避免 "ef mount" 被吃成 e-mount);XF 最特异放最前。
+    # 顺序敏感:PL/RF/EF 要在 L/FE/E 前;品牌名 Canon 不能在 RF/EF 间代替用户选择。
+    ("PL-mount", r"\bpl[- ]?mount\b|pl\s*卡口"),
+    ("RF-mount", r"\brf[- ]?mount\b|rf\s*卡口"),
     ("X-mount", r"\bxf\b|x[- ]?mount|xf\s*卡口|x\s*卡口|富士|fuji"),
-    ("EF-mount", r"\bef[- ]?mount\b|ef\s*卡口|佳能|canon"),
+    ("EF-mount", r"\bef[- ]?mount\b|ef\s*卡口"),
     ("FE-mount", r"\bfe[- ]?mount\b|fe\s*卡口|\be[- ]mount\b|e\s*卡口|索尼|sony"),
     ("Z-mount", r"\bz[- ]?mount\b|z\s*卡口|尼康|nikon"),
     ("L-mount", r"\bl[- ]?mount\b|l\s*卡口"),
     ("M43", r"m4/?3|松下|panasonic|olympus"),
 ]
-_LENS_CONTEXT_RE = re.compile(r"evo|lab|epic|air|raze|prime|macro|卡口|镜头|定焦|mm", re.I)
+_LENS_CONTEXT_RE = re.compile(r"\b(?:evo|lab|epic|air|raze|prime|macro)\b|卡口|镜头|定焦|mm", re.I)
+_EXPLICIT_PRODUCT_SERIES = ("evo", "lab", "epic", "vintage")
+_PRODUCT_CATEGORY_CONTEXT_RE = re.compile(
+    r"\b(?:lens|macro|anamorphic|cine|flash|monitor|prime)\b|镜头|微距|变形宽银幕|闪光|监视器|定焦",
+    re.I,
+)
+
+
+def _explicit_product_series(text: str) -> str:
+    """Return an operator-typed product series, never a word substring."""
+    low = str(text or "").lower()
+    tokens = set(_query_tokens(low))
+    for series in _EXPLICIT_PRODUCT_SERIES:
+        if series in tokens:
+            return series.upper()
+        split_pattern = r"(?<![a-z0-9])" + r"\s*".join(map(re.escape, series)) + r"(?![a-z0-9])"
+        if re.search(split_pattern, low):
+            return series.upper()
+    return ""
 
 
 def _pro_is_product_series(text: str) -> bool:
@@ -113,13 +133,11 @@ def _query_focals(text: str) -> set[int]:
     focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", low)}
     # 裸数字("90 evo")只在镜头语境下当焦段;排除功率/尺寸类单位粘连。
     # 注意不能用 \b:中文是 \w,「我们90」里 们/9 之间没有 word boundary,得用显式环视。
-    # Operators often type split product families ("e vo", "l ab"). The compact
-    # form is only used to recognise context; the focal still comes from the raw
-    # text so unrelated numbers are not promoted into lens focal lengths.
-    compact = _normkey(low)
+    # Operators often type split product families ("e vo", "l ab"); the focal
+    # itself still comes from raw text so unrelated numbers are not promoted.
     if (
         _LENS_CONTEXT_RE.search(low)
-        or any(series in compact for series in ("evo", "lab", "epic"))
+        or bool(_explicit_product_series(low))
         or _pro_is_product_series(low)
     ):
         for m in re.findall(r"(?<![0-9a-z.])(\d{2,3})(?![0-9])(?!\s*(?:ws|w\b|nit|寸|inch|mah|fps))", low):
@@ -127,7 +145,25 @@ def _query_focals(text: str) -> set[int]:
     return {f for f in focals if 8 <= f <= 800}
 
 
-_EXPLICIT_PRODUCT_SERIES = ("evo", "lab", "epic", "vintage")
+def _has_product_identity_anchor(query: str, probe_tokens: list[str]) -> bool:
+    """Require model evidence before binding a generic category to one SKU."""
+    text = str(query or "").strip().lower()
+    if probe_tokens:
+        return True
+    series_present = bool(_explicit_product_series(text))
+    # A family plus a category/persona ("LAB macro", "EVO Sony") is not a
+    # unique SKU. Require a focal/model anchor; ambiguous candidates are
+    # rejected again after scoring below.
+    if series_present and _query_focals(text):
+        return True
+    if _pro_is_product_series(text):
+        return True
+    if re.search(r"\b(?:dc[- ]?[a-z0-9-]{2,}|af[- ]?\d{2,3}[a-z0-9./-]*)\b", text):
+        return True
+    has_lens_identity = bool(
+        re.search(r"\b(?:viltrox|lens|prime|anamorphic|cine|t\d(?:\.\d)?|f/?\d(?:\.\d)?)\b|维卓|镜头|定焦", text)
+    )
+    return has_lens_identity and bool(_query_focals(text))
 
 
 def unresolved_product_request(query: str) -> dict[str, Any] | None:
@@ -141,8 +177,12 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
     text = str(query or "").strip()
     if not text:
         return None
-    compact = _normkey(text)
-    series = next((name.upper() for name in _EXPLICIT_PRODUCT_SERIES if name in compact), "")
+    series = _explicit_product_series(text)
+    if series and not (
+        _has_product_identity_anchor(text, [])
+        or _PRODUCT_CATEGORY_CONTEXT_RE.search(text)
+    ):
+        series = ""
     if not series and _pro_is_product_series(text):
         series = "PRO"
     model_code = ""
@@ -165,7 +205,15 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
             sku = str(product.get("sku") or "")
             if not sku or sku.upper().startswith("IMAGE-AWARDS"):
                 continue
-            blob = f"{sku} {product.get('model_name') or ''} {product.get('marketing_name') or ''} {product.get('series') or ''}".lower()
+            blob = " ".join(
+                str(value or "")
+                for value in (
+                    sku,
+                    product.get("model_name"),
+                    product.get("marketing_name"),
+                    product.get("series"),
+                )
+            ).lower()
             if series and series.lower() not in _normkey(blob):
                 continue
             suggestions[sku] = product
@@ -201,11 +249,20 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
 def _apply_hard_constraints(text: str, pool: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     mount_req = _query_mount(text)
     focals_req = _query_focals(text)
-    if not mount_req and not focals_req:
+    series_req = _explicit_product_series(text).lower()
+    if not mount_req and not focals_req and not series_req:
         return pool
     filtered: dict[str, dict[str, Any]] = {}
     for key, prod in pool.items():
-        blob = f"{prod.get('sku') or ''} {prod.get('model_name') or ''}".lower()
+        blob = " ".join(
+            str(prod.get(field) or "")
+            for field in ("sku", "model_name", "marketing_name", "series")
+        ).lower()
+        if series_req:
+            product_tokens = set(_query_tokens(blob))
+            normalized_series = _normkey(prod.get("series"))
+            if series_req not in product_tokens and normalized_series != series_req:
+                continue
         # 焦段两种写法都认:「90mm」和「90/2.2」(AF 90/2.2 XF 这类目录行没有 mm)。
         prod_focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", blob)}
         prod_focals |= {int(m) for m in re.findall(r"(?<![0-9])(\d{2,3})\s*/(?=[0-9])", blob)}
@@ -225,6 +282,10 @@ def _nickname_probe_tokens(query: str) -> list[str]:
     keys = [_normkey(raw)] + [_normkey(tok) for tok in re.split(r"[^a-z0-9]+", raw) if tok]
     for key in keys:
         if key in _NICKNAME_PROBES:
+            # A bare number embedded in a persona/count request is not a model
+            # nickname (for example "find creators with 550 followers").
+            if key == "550" and _normkey(raw) != "550" and not re.search(r"\b(?:dc|pro|monitor)\b|监视器", raw):
+                continue
             return list(_NICKNAME_PROBES[key])
     return []
 
@@ -300,6 +361,89 @@ def _specs_line(prod: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _public_product_projection(
+    product: dict[str, Any],
+    *,
+    match_score: tuple[int, int, int],
+) -> dict[str, Any]:
+    """Return the bounded catalog fields shared by text and exact-SKU resolution."""
+    return {
+        "sku": str(product.get("sku") or ""),
+        "model_name": str(product.get("model_name") or ""),
+        "marketing_name": str(product.get("marketing_name") or ""),
+        "category_main": str(product.get("category_main") or ""),
+        "category_detail": str(product.get("category_detail") or ""),
+        "series": str(product.get("series") or ""),
+        "price_usd": product.get("price_usd"),
+        "description": str(product.get("description") or ""),
+        "specs_line": _specs_line(product),
+        "match_score": list(match_score),
+    }
+
+
+def _unique_exact_sku_product(
+    products: Any,
+    value: Any,
+) -> dict[str, Any] | None:
+    """Return one exact normalized SKU row without accepting fuzzy matches."""
+    normalized = _normkey(value)
+    if not normalized:
+        return None
+    matches = [
+        product
+        for product in (products or [])
+        if isinstance(product, dict)
+        and not str(product.get("sku") or "").upper().startswith("IMAGE-AWARDS")
+        and _normkey(product.get("sku")) == normalized
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _catalog_exact_sku_products(value: Any) -> list[dict[str, Any]]:
+    """Read all bounded catalog rows sharing one exact normalized SKU key."""
+    products = list_product_catalog(limit=500).get("products") or []
+    normalized = _normkey(value)
+    return [
+        product
+        for product in products
+        if isinstance(product, dict)
+        and not str(product.get("sku") or "").upper().startswith("IMAGE-AWARDS")
+        and _normkey(product.get("sku")) == normalized
+    ]
+
+
+def _looks_like_bare_sku(value: Any) -> bool:
+    """Limit the full-catalog exact check to short operator-typed model codes."""
+    text = str(value or "").strip()
+    return bool(
+        len(text.split()) <= 2
+        and re.fullmatch(r"[a-z][a-z0-9._/+ -]*", text, re.IGNORECASE)
+        and any(char.isdigit() for char in text)
+    )
+
+
+def resolve_product_sku(value: Any) -> dict[str, Any] | None:
+    """Resolve only one exact normalized catalog SKU; unknown/ambiguous values fail closed."""
+    text = str(value or "").strip()
+    normalized = _normkey(text)
+    if not normalized or len(text) > 240:
+        return None
+    try:
+        # A filtered SQL LIKE can hide punctuation variants (``DC-550`` versus
+        # ``DC_550``) and make an ambiguous normalized key look unique. Check
+        # the bounded catalog snapshot so uniqueness is evaluated consistently.
+        matches = _catalog_exact_sku_products(normalized)
+    except Exception:
+        return None
+    if len(matches) != 1:
+        return None
+    product = matches[0]
+    return _public_product_projection(
+        product,
+        match_score=(1, 1, len(str(product.get("series") or ""))),
+    )
+
+
 def resolve_product(query: str) -> dict[str, Any] | None:
     """Resolve operator free text to a real catalog product, or None.
 
@@ -311,10 +455,31 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     if not text:
         return None
     probe_tokens = _nickname_probe_tokens(text)
+    if not _has_product_identity_anchor(text, probe_tokens):
+        return None
+    if _looks_like_bare_sku(text):
+        try:
+            exact_products = _catalog_exact_sku_products(text)
+        except Exception:
+            exact_products = []
+        if len(exact_products) > 1:
+            return None
+        if exact_products:
+            exact_product = exact_products[0]
+            return _public_product_projection(
+                exact_product,
+                match_score=(1, 1, len(str(exact_product.get("series") or ""))),
+            )
     pool = _candidate_pool(text, probe_tokens)
     pool = _apply_hard_constraints(text, pool)
     if not pool:
         return None
+    exact_product = _unique_exact_sku_product(pool.values(), text)
+    if exact_product is not None:
+        return _public_product_projection(
+            exact_product,
+            match_score=(1, 1, len(str(exact_product.get("series") or ""))),
+        )
     base = _query_tokens(text)
     product_pro = _pro_is_product_series(text)
     score_tokens = [
@@ -326,26 +491,18 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     ]
     if not score_tokens:
         return None
-    best: dict[str, Any] | None = None
-    best_score = (0, 0, 0)
+    scored: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
     for prod in pool.values():
-        score = _score(prod, score_tokens)
-        if score > best_score:
-            best_score = score
-            best = prod
-    # Require a real match: ≥1 distinctive (len≥3) hit, or ≥2 total hits.
-    # 注:tuple 现为 (strong, matched, series),阈值随之换序(strong=[0], matched=[1])。
-    if not best or (best_score[0] < 1 and best_score[1] < 2):
+        scored.append((_score(prod, score_tokens), prod))
+    if not scored:
         return None
-    return {
-        "sku": str(best.get("sku") or ""),
-        "model_name": str(best.get("model_name") or ""),
-        "marketing_name": str(best.get("marketing_name") or ""),
-        "category_main": str(best.get("category_main") or ""),
-        "category_detail": str(best.get("category_detail") or ""),
-        "series": str(best.get("series") or ""),
-        "price_usd": best.get("price_usd"),
-        "description": str(best.get("description") or ""),
-        "specs_line": _specs_line(best),
-        "match_score": list(best_score),
-    }
+    best_primary = max((score[0], score[1]) for score, _prod in scored)
+    # One family/category hit cannot identify a SKU, and equally-scored catalog
+    # variants must ask for more detail instead of relying on row order.
+    if best_primary[1] < 2:
+        return None
+    winners = [(score, prod) for score, prod in scored if (score[0], score[1]) == best_primary]
+    if len(winners) != 1:
+        return None
+    best_score, best = winners[0]
+    return _public_product_projection(best, match_score=best_score)

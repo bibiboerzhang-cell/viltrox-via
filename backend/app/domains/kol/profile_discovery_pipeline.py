@@ -5,7 +5,12 @@ from typing import Any
 
 from app.domains.kol import profile_recall, search_sessions
 from app.domains.kol.discovery_filters import _annotate_new_priority, _int, _text
-from app.domains.kol.profile_discovery_candidates import filter_recall_result_platforms
+from app.domains.kol.profile_discovery_candidates import (
+    explicit_platforms_from_query,
+    filter_recall_result_market,
+    filter_recall_result_platforms,
+    resolve_market_constraint,
+)
 from app.domains.kol.profile_discovery_provider import discover_new_creators
 from app.domains.kol.profile_discovery_session import (
     _profile_advance_pipeline_status,
@@ -25,83 +30,122 @@ async def execute_smart_search_profile_advance_pipeline(
     if not query:
         raise ValueError("smart profile advance payload missing query_text")
     operator_query = query
+    operator_platforms = explicit_platforms_from_query(operator_query)
+    operator_market = resolve_market_constraint(
+        operator_query,
+        payload.get("market") or payload.get("country"),
+    )
+    if operator_platforms:
+        payload["platforms"] = operator_platforms
+        payload["new_discovery_platforms"] = operator_platforms
+    if operator_market:
+        payload["market"] = operator_market
     # P0-1:LLM planner 改在 worker 跑(请求侧已去同步 LLM,见 vkpi_kol_pool smart-search 端点)。
     # payload 未带 plan 时,worker 侧补 planner:拿英文 search_query(治中文 query 捞中文圈)+ persona。
     # 失效则退原 query(管线既有 rule_v0 英文兜底)。本管线本就同步阻塞跑 recall,planner 同步调用一致。
-    if not payload.get("product_focus") and not _text(payload.get("target_persona")) and not payload.get("_worker_planned"):
+    if payload.get("_worker_planned") is not True:
+        # Queue input ultimately originates in an HTTP body.  Product/persona
+        # plan fields are therefore hints at most, never an authorization or
+        # catalog-validation boundary.  Clear them before planning so an
+        # injected preview plan cannot bypass unknown/conflicting SKU guards.
+        for untrusted_plan_key in (
+            "product_focus",
+            "target_persona",
+            "resolved_product",
+            "llm_query_plan",
+            "query_plan_source",
+        ):
+            payload.pop(untrusted_plan_key, None)
+        from app.domains.kol import smart_query_planner as _sqp
+
+        # The provider-free catalog pass is the mandatory identity guard.  If
+        # it cannot run, the job fails closed; if the richer planner fails, we
+        # retain this validated plan instead of reverting to unanchored input.
+        _guard_plan = _sqp.plan_text_query_provider_free(query, body=payload)
         try:
-            from app.domains.kol import smart_query_planner as _sqp
             _plan = _sqp.plan_text_query(query, body=payload, staff=None)
-            if _text(_plan.get("status")) == "needs_clarification":
-                clarification_contract = completion_contract(
-                    base_count=0,
-                    total=0,
-                    terminal_count=0,
-                    ready_count=0,
-                )
-                search_sessions.update_session_result_summary(
-                    int(session_id),
-                    status="partial",
-                    summary_patch={
-                        "phase": "partial",
-                        "progress": {
-                            "base": 0,
-                            "total": 0,
-                            "profile_ready": 0,
-                            "profile_failed": 0,
-                            "complete_ready": 0,
-                            "complete_partial": 0,
-                            **clarification_contract,
-                        },
-                        **clarification_contract,
-                        "llm_query_plan": _plan,
-                        "smart_search_profile_advance_job": {
-                            "status": "needs_clarification",
-                            "query_text": query,
-                            "advance_status": "not_started",
-                            "viltrox_fit_score_untouched": True,
-                        },
-                    },
-                )
-                return {
-                    "status": "needs_clarification",
-                    "session_id": int(session_id),
-                    "query": query,
-                    "query_plan_source": "product_catalog_guard",
-                    "llm_query_plan": _plan,
-                    "recall": {"method": "product_catalog_guard", "returned_count": 0, "diagnostics": {}},
-                    "new_discovery": None,
-                    "advance": {"status": "not_started", "selected": 0, "counts": {}},
-                    "provider_calls_performed": False,
-                    "write_db": True,
-                    "writes": ["vkpi_kol_search_sessions"],
-                    "viltrox_fit_score_changed_ids": [],
-                    "viltrox_fit_score_untouched": True,
-                }
-            _eff = _text(_plan.get("search_query"))
-            if _eff:
-                query = _eff
-            payload["product_focus"] = _plan.get("product_focus")
-            payload["target_persona"] = _text(_plan.get("target_persona"))
-            for _k in ("creator_quota", "reviewer_quota", "new_discovery_limit"):
-                if payload.get(_k) is None and _plan.get(_k) is not None:
-                    payload[_k] = _plan.get(_k)
-            payload["_worker_planned"] = True
-            payload["query_plan_source"] = "llm_plan"
+            _plan_source = "llm_plan"
         except Exception:
-            # 诚实标注:planner 抛错 → 退 rule_v0 英文兜底(行为不变),仅记录走了哪条路。
-            payload["query_plan_source"] = "rule_v0_fallback"
+            _plan = _guard_plan
+            _plan_source = "provider_free_guard_fallback"
+        if _text(_guard_plan.get("status")) == "needs_clarification":
+            _plan = _guard_plan
+        if _text(_plan.get("status")) == "needs_clarification":
+            clarification_contract = completion_contract(
+                base_count=0,
+                total=0,
+                terminal_count=0,
+                ready_count=0,
+            )
+            search_sessions.update_session_result_summary(
+                int(session_id),
+                status="partial",
+                summary_patch={
+                    "phase": "partial",
+                    "progress": {
+                        "base": 0,
+                        "total": 0,
+                        "profile_ready": 0,
+                        "profile_failed": 0,
+                        "complete_ready": 0,
+                        "complete_partial": 0,
+                        **clarification_contract,
+                    },
+                    **clarification_contract,
+                    "llm_query_plan": _plan,
+                    "smart_search_profile_advance_job": {
+                        "status": "needs_clarification",
+                        "query_text": query,
+                        "advance_status": "not_started",
+                        "viltrox_fit_score_untouched": True,
+                    },
+                },
+            )
+            return {
+                "status": "needs_clarification",
+                "session_id": int(session_id),
+                "query": query,
+                "query_plan_source": "product_catalog_guard",
+                "llm_query_plan": _plan,
+                "recall": {"method": "product_catalog_guard", "returned_count": 0, "diagnostics": {}},
+                "new_discovery": None,
+                "advance": {"status": "not_started", "selected": 0, "counts": {}},
+                "provider_calls_performed": False,
+                "write_db": True,
+                "writes": ["vkpi_kol_search_sessions"],
+                "viltrox_fit_score_changed_ids": [],
+                "viltrox_fit_score_untouched": True,
+            }
+        _eff = _text(_plan.get("search_query"))
+        if _eff:
+            query = _eff
+        payload["product_focus"] = _plan.get("product_focus")
+        payload["target_persona"] = _text(_plan.get("target_persona"))
+        payload["resolved_product"] = _plan.get("resolved_product")
+        payload["llm_query_plan"] = _plan
+        if not payload.get("product_sku") and isinstance(_plan.get("resolved_product"), dict):
+            payload["product_sku"] = _text(_plan["resolved_product"].get("sku"))
+        if not operator_platforms and not any(
+            payload.get(key)
+            for key in ("platforms", "platform", "discovery_platforms", "new_discovery_platforms")
+        ):
+            payload["platforms"] = []
+        for _k in ("creator_quota", "reviewer_quota", "new_discovery_limit"):
+            if payload.get(_k) is None and _plan.get(_k) is not None:
+                payload[_k] = _plan.get(_k)
+        payload["_worker_planned"] = True
+        payload["query_plan_source"] = _plan_source
     recall_filters = dict(payload.get("filters") or {}) if isinstance(payload.get("filters"), dict) else {}
-    explicit_platforms = (
-        payload.get("platforms")
-        or payload.get("platform")
+    resolved_platforms = (
+        operator_platforms
+        or payload.get("platforms")
         or payload.get("new_discovery_platforms")
         or payload.get("discovery_platforms")
+        or payload.get("platform")
     )
-    if not explicit_platforms:
-        explicit_platforms = profile_recall.explicit_platforms_from_query(operator_query)
-    if explicit_platforms and not recall_filters.get("platforms"):
-        recall_filters["platforms"] = explicit_platforms
+    if resolved_platforms and not recall_filters.get("platforms"):
+        recall_filters["platforms"] = resolved_platforms
+    normalized_market = operator_market
     recall_result = profile_recall.recall_kol_profiles(
         query_text=query,
         product_sku=_text(payload.get("product_sku")),
@@ -117,7 +161,7 @@ async def execute_smart_search_profile_advance_pipeline(
         reviewer_quota=max(0, min(_int(payload.get("reviewer_quota"), 15), 50)),
         ratio_policy=_text(payload.get("ratio_policy") or "soft"),
         mixed_policy=_text(payload.get("mixed_policy") or "dominant"),
-        dedupe=bool(payload.get("dedupe", True)),
+        dedupe=True,
         vector_weight=float(payload.get("vector_weight") if payload.get("vector_weight") is not None else 0.7),
         type_weight=float(payload.get("type_weight") if payload.get("type_weight") is not None else 0.3),
         type_boost_enabled=bool(payload.get("type_boost_enabled", True)),
@@ -127,13 +171,22 @@ async def execute_smart_search_profile_advance_pipeline(
         filters=recall_filters,
         search_strategy=_text(payload.get("search_strategy") or "balanced"),
         bucket_policy=payload.get("bucket_policy") if isinstance(payload.get("bucket_policy"), dict) else None,
-        allow_backfill=bool(payload.get("allow_backfill", True)),
+        # Search-session results must have field evidence; follower-based
+        # popularity refill is not evidence for the operator's query.
+        allow_backfill=False,
         operator_query_text=operator_query,
+        required_product_evidence_terms=payload.get("resolved_product"),
     )
     recall_result = filter_recall_result_platforms(
         recall_result,
         recall_filters.get("platforms"),
     )
+    recall_result = filter_recall_result_market(
+        recall_result,
+        normalized_market,
+    )
+    if isinstance(payload.get("llm_query_plan"), dict):
+        recall_result["llm_query_plan"] = payload["llm_query_plan"]
     recall_items = recall_result.get("items") if isinstance(recall_result.get("items"), list) else []
     recall_buckets = recall_result.get("buckets") if isinstance(recall_result.get("buckets"), dict) else {}
     recall_count = len(recall_items) or sum(
@@ -180,9 +233,9 @@ async def execute_smart_search_profile_advance_pipeline(
                 _persona_kb = {}
         new_discovery = await discover_new_creators(
             query_text=query,
-            platforms=payload.get("new_discovery_platforms") or payload.get("discovery_platforms"),
+            platforms=resolved_platforms,
             platform_hint=_text(payload.get("platform")),
-            market=_text(payload.get("market") or payload.get("country")),
+            market=normalized_market,
             limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
             per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
             search_query_en=query,  # pipeline 入参 query 已是 effective_query(planner 英文 search_query;失效退 rule_v0 英文兜底)

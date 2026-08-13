@@ -39,6 +39,13 @@ from app.domains.kol.profile_recall_product_queries import (
     _normalise_sku,
     resolve_query_text,
 )
+from app.domains.kol.profile_recall_match_evidence import (
+    build_match_evidence,
+    candidate_facets,
+    candidate_set_distribution,
+    product_evidence_terms,
+    why_fit_from_match_evidence,
+)
 from app.domains.kol.profile_recall_precision import (
     HYBRID_METHOD,
     LEXICAL_METHOD,
@@ -496,11 +503,14 @@ def _pool_text_fallback_hits(
     query_text: str,
     candidate_limit: int,
     *,
-    include_relevance_backfill: bool = False,
+    include_relevance_backfill: bool = True,
+    allow_backfill: bool | None = None,
     operator_query_text: str = "",
     filters: dict[str, Any] | None = None,
 ) -> list[RecallHit]:
-    return _storage._pool_text_fallback_hits(
+    if allow_backfill is not None:
+        include_relevance_backfill = bool(allow_backfill)
+    hits = _storage._pool_text_fallback_hits(
         query_text,
         candidate_limit,
         include_relevance_backfill=include_relevance_backfill,
@@ -509,6 +519,9 @@ def _pool_text_fallback_hits(
         get_connection=get_conn,
         lexical_recall=lexical_recall_candidates,
     )
+    if not include_relevance_backfill:
+        return [hit for hit in hits if hit.qdrant_point_id != "pool_relevance_backfill"]
+    return hits
 
 
 def _adoption_profile() -> dict:
@@ -543,6 +556,7 @@ def recall_kol_profiles(
     bucket_policy: dict[str, Any] | None = None,
     allow_backfill: bool = True,
     operator_query_text: str = "",
+    required_product_evidence_terms: Any = None,
 ) -> dict[str, Any]:
     if ratio_policy != "soft":
         raise ValueError("only ratio_policy=soft is supported")
@@ -598,6 +612,17 @@ def recall_kol_profiles(
     )
 
     resolved_text, query_meta = resolve_query_text(query_text=query_text, product_sku=product_sku)
+    if isinstance(required_product_evidence_terms, dict):
+        safe_product_evidence_terms = product_evidence_terms(required_product_evidence_terms)
+    else:
+        raw_product_terms = (
+            required_product_evidence_terms
+            if isinstance(required_product_evidence_terms, (list, tuple, set))
+            else [required_product_evidence_terms]
+        )
+        safe_product_evidence_terms = product_evidence_terms(
+            {"marketing_name": " ".join(str(item or "") for item in raw_product_terms)}
+        )
     # why-fit 人群侧上下文(纯展示):产品线 persona + planner product_focus/target_persona + 原始 query。
     profile_key = str(query_meta.get("query_profile") or "")
     persona_meta = PRODUCT_LINE_PERSONAS.get(profile_key) or {}
@@ -710,6 +735,7 @@ def recall_kol_profiles(
     filtered_unknown_reach_count = 0
     hard_filter_rejected_count = 0
     hard_filter_rejected_by: dict[str, int] = {}
+    filtered_no_match_evidence_count = 0
     for hit in ordered_hits:
         row = rows_by_id.get(hit.kol_pool_id)
         if not row:
@@ -753,6 +779,15 @@ def recall_kol_profiles(
             for field in rejected_fields:
                 hard_filter_rejected_by[field] = hard_filter_rejected_by.get(field, 0) + 1
             continue
+        field_evidence = build_match_evidence(
+            row,
+            evidence,
+            resolved_text,
+            required_product_terms=safe_product_evidence_terms,
+        )
+        if not allow_backfill and not field_evidence:
+            filtered_no_match_evidence_count += 1
+            continue
         bucket = _bucket_for(row, mixed_policy)
         item = _format_item(
             hit,
@@ -766,6 +801,10 @@ def recall_kol_profiles(
             product_label=product_label,
             video_leaning=video_leaning,
         )
+        if not allow_backfill:
+            item["match_evidence"] = list(field_evidence)
+            item["why_fit"] = why_fit_from_match_evidence(field_evidence)
+            item["candidate_facets"] = candidate_facets(row, evidence)
         retrieval_tier = (
             "backfill"
             if hit.qdrant_point_id == "pool_relevance_backfill"
@@ -867,9 +906,26 @@ def recall_kol_profiles(
         0, len(selected_reviewer) - reviewer_take
     ) + len(selected_unknown)
     shortfall = max(0, safe_limit - len(items))
+    evidence_candidate_count = len(all_ranked_candidates)
+    if items:
+        empty_reason = ""
+        evidence_shortfall_reason = "" if len(items) >= safe_limit else "evidence_candidates_exhausted"
+    elif evidence_candidate_count:
+        empty_reason = "quota_excluded_evidence_candidates"
+        evidence_shortfall_reason = empty_reason
+    else:
+        empty_reason = "no_evidence_match" if not allow_backfill else ""
+        evidence_shortfall_reason = empty_reason
+    distribution_rows = {**fallback_rows, **rows_by_id}
 
     return {
         "method": METHOD,
+        "match_status": "matched" if items else "empty",
+        "candidate_set_distribution": candidate_set_distribution(
+            items,
+            distribution_rows,
+            evidence_by_id,
+        ),
         "query": {
             **query_meta,
             "query_text": resolved_text,
@@ -881,6 +937,8 @@ def recall_kol_profiles(
             "product_persona": str(persona_meta.get("persona") or ""),
             "video_leaning_product": bool(video_leaning),
             "search_strategy": str(search_strategy or "balanced").strip().lower(),
+            "allow_backfill": bool(allow_backfill),
+            "required_product_evidence_terms": safe_product_evidence_terms,
         },
         "ratio": {
             "creator_quota": safe_creator_quota,
@@ -929,6 +987,10 @@ def recall_kol_profiles(
             "filtered_excluded_region": excluded_chinese_count,
             "hard_filter_rejected_count": hard_filter_rejected_count,
             "hard_filter_rejected_by": hard_filter_rejected_by,
+            "filtered_no_match_evidence": filtered_no_match_evidence_count,
+            "evidence_gate_enabled": not bool(allow_backfill),
+            "empty_reason": empty_reason,
+            "shortfall_reason": evidence_shortfall_reason,
             "applied_filters": normalized_filters,
             "unsupported_filters": unsupported_filters,
             "fallback_pool_rows": fallback_used_count,
@@ -953,7 +1015,11 @@ def recall_kol_profiles(
             "shortfall": shortfall,
             "result_contract_satisfied": shortfall == 0,
             "result_contract_note": "仅表示数量达到且硬筛选未放宽，不代表检索精准度。",
-            "backfill_policy": "query_relevance_only_hard_filters_never_relaxed",
+            "backfill_policy": (
+                "query_relevance_only_hard_filters_never_relaxed"
+                if allow_backfill
+                else "disabled_evidence_gate"
+            ),
             "bucket_policy": normalized_bucket_policy,
             "bucket_policy_adjusted": bucket_policy_adjusted,
             "business_bucket_counts": {
